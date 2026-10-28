@@ -2556,3 +2556,22 @@ animation effects	Off	Ki
 	Rotate the selected pages clockwise	A kijelölt oldalak forgatása az óramutató járásával megegyezően
 	Extract the selected pages…	A kijelölt oldalak kibontása…
 	Delete the selected pages	A kijelölt oldalak törlése
+
+# Smart cards and tokens (PKCS #11) in the signing dialogs.
+	Use a smart card or token	Intelligens kártya vagy token használata
+	Card driver (PKCS #11)	Kártya-illesztőprogram (PKCS #11)
+	Smart card  ·  	Intelligens kártya  ·  
+	Card PIN	Kártya PIN-kódja
+	No signing certificate was found on a card. Is the card in the reader?	Egyik kártyán sem található aláíró tanúsítvány. Benne van a kártya az olvasóban?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	A PIN-kód csak a kártyához kerül; a PdfCraft nem tárolja.
+	The smart card's digital IDs couldn't be listed: {e}	Az intelligens kártya digitális azonosítóit nem sikerült listázni: {e}
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	Időbélyeg-kiszolgáló
+	Include revocation information when signing (LTV)	Visszavonási adatok beágyazása aláíráskor (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	Az aláírás ekkor a hálózatot használja: az időbélyeg-kiszolgáló megkapja az aláírás kivonatát, a hitelesítésszolgáltatóktól pedig lekérdezi, hogy a tanúsítványokat visszavonták-e. Mindkettővel az aláírások PAdES B-LTA szintűek.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Az időbélyegekhez és a visszavonási adatokhoz az asztali alkalmazás szükséges. Az itteni aláíráshoz kapcsolja ki őket a Beállítások ▸ Aláírások részben.
+	the certificate authorities	a hitelesítésszolgáltatók
+	Asking {server}…	Lekérdezés: {server}…
+	Signing was cancelled; nothing was saved.	Az aláírás megszakítva; semmi sem lett mentve.
+	Signed and saved to {path}, without some revocation information: {problems}	Aláírva és mentve ide: {path}, néhány visszavonási adat nélkül: {problems}
+	The document wasn't signed: {e}	A dokumentum nincs aláírva: {e}

@@ -163,6 +163,11 @@ impl PdfCraftApp {
             a11y_skipped: Default::default(),
             alt_draft: Default::default(),
             os_key_store_ids: false,
+            pkcs11_module: String::new(),
+            timestamp_server: String::new(),
+            embed_ltv: false,
+            http: None,
+            online_signing: None,
             cert_viewer: None,
             space_audit: Vec::new(),
             space_audit_of: None,
@@ -282,6 +287,8 @@ impl PdfCraftApp {
             || self.pending_link.is_some()
             || self.pending_remote_link.is_some()
             || self.updates.open
+            // A signing waiting for the network: the document must not change under it.
+            || self.online_signing.is_some()
     }
 
     pub fn notify(&mut self, msg: impl Into<String>) {
@@ -475,6 +482,7 @@ impl eframe::App for PdfCraftApp {
             }
         }
         self.poll_updates();
+        self.poll_online_signing();
         self.poll_print();
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);

@@ -38,6 +38,7 @@ macro_rules! mcp_usage {
 pdfcraft-cli mcp    [--root DIR] [--compact] [--automation-read-root DIR] [--automation-write-root DIR]
                                                            MCP server on stdin/stdout (opt-in)
                                                            --compact lists a core set of tools plus tool_search and tool_call
+                                                           --network and --card-module PATH as for run (cards with a PIN pad only)
                                                            --automation-read-root / --automation-write-root confine the files the
                                                            agent's tools read (open, combine, import, fonts, certificates…) and
                                                            write (save, export, extract, split, reports…) to DIR, links followed;
@@ -89,6 +90,9 @@ pdfcraft-cli tools                                       automation tools and th
 pdfcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
 pdfcraft-cli run    --script steps.json [--root DIR] [--report]
                       [{\"tool\": \"doc_open\", \"args\": {…}}, …]; --report prints one JSON document for the run
+                      --network lets sign_document use a timestamp server and fetch revocation information;
+                      --card-module PATH picks the smart card driver (default: the first known one installed);
+                      a card's PIN is asked at this terminal
 ",
     mcp_usage!(),
     "\

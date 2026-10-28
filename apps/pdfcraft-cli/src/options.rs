@@ -117,13 +117,19 @@ pub(crate) const RUN_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--script", takes_value: true },
     OptionSpec { name: "--out", takes_value: true },
     OptionSpec { name: "--report", takes_value: false },
+    OptionSpec { name: "--network", takes_value: false },
+    OptionSpec { name: "--card-module", takes_value: true },
 ];
 
 pub(crate) const UI_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--control", takes_value: true }, OptionSpec { name: "--out", takes_value: true }];
 
 #[cfg(feature = "mcp")]
-pub(crate) const MCP_OPTIONS: &[OptionSpec] =
-    &[OptionSpec { name: "--root", takes_value: true }, OptionSpec { name: "--compact", takes_value: false }];
+pub(crate) const MCP_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--root", takes_value: true },
+    OptionSpec { name: "--compact", takes_value: false },
+    OptionSpec { name: "--network", takes_value: false },
+    OptionSpec { name: "--card-module", takes_value: true },
+];
 
 /// The arguments that are not options or their values. Which tokens are values is the spec's
 /// answer: skipping the one after every option made `check-one --edit file.pdf` report "missing
@@ -145,4 +151,14 @@ pub(crate) fn positional<'a>(args: &'a [String], specs: &[OptionSpec]) -> Vec<&'
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn network_takes_no_value_and_card_module_does() {
+        let args: Vec<String> =
+            ["--network", "sign_document", "doc=1", "--card-module", "/x.so", "ltv=true", "--root", "dir", "out=x"].map(String::from).to_vec();
+        assert_eq!(super::positional(&args, super::RUN_OPTIONS), ["sign_document", "doc=1", "ltv=true", "out=x"]);
+    }
 }

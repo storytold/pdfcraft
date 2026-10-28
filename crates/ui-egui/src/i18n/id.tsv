@@ -2795,3 +2795,21 @@ theme	Appearance	Tampilan
 	Rotate the selected pages clockwise	Putar halaman yang dipilih searah jarum jam
 	Extract the selected pages…	Ekstrak halaman yang dipilih…
 	Delete the selected pages	Hapus halaman yang dipilih
+
+# Smart cards and signing online (timestamps, revocation information).
+	Use a smart card or token	Gunakan kartu pintar atau token
+	Card driver (PKCS #11)	Driver kartu (PKCS #11)
+	Smart card  ·  	Kartu pintar  ·  
+	Card PIN	PIN kartu
+	No signing certificate was found on a card. Is the card in the reader?	Tidak ada sertifikat penandatanganan yang ditemukan di kartu. Apakah kartu ada di pembaca?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	PIN hanya dikirim ke kartu; PdfCraft tidak menyimpannya.
+	The smart card's digital IDs couldn't be listed: {e}	ID digital kartu pintar tidak dapat dicantumkan: {e}
+	Timestamp server	Server stempel waktu
+	Include revocation information when signing (LTV)	Sertakan informasi pencabutan saat menandatangani (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	Penandatanganan lalu terhubung ke jaringan: server stempel waktu menerima hash tanda tangan, dan otoritas sertifikat ditanya apakah sertifikat dicabut. Dengan keduanya, tanda tangan menjadi PAdES B-LTA.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Stempel waktu dan informasi pencabutan memerlukan aplikasi desktop. Matikan di Preferensi ▸ Tanda tangan untuk menandatangani di sini.
+	the certificate authorities	otoritas sertifikat
+	Asking {server}…	Menanyakan {server}…
+	Signing was cancelled; nothing was saved.	Penandatanganan dibatalkan; tidak ada yang disimpan.
+	Signed and saved to {path}, without some revocation information: {problems}	Ditandatangani dan disimpan ke {path}, tanpa sebagian informasi pencabutan: {problems}
+	The document wasn't signed: {e}	Dokumen tidak ditandatangani: {e}

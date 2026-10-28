@@ -2557,3 +2557,22 @@ animation effects	Off	オフ
 	Rotate the selected pages clockwise	選択したページを時計回りに回転
 	Extract the selected pages…	選択したページを抽出…
 	Delete the selected pages	選択したページを削除
+
+# Smart cards and tokens (PKCS #11) in the signing dialogs.
+	Use a smart card or token	スマートカードまたはトークンを使用
+	Card driver (PKCS #11)	カードドライバー (PKCS #11)
+	Smart card  ·  	スマートカード · 
+	Card PIN	カードの PIN
+	No signing certificate was found on a card. Is the card in the reader?	署名用の証明書がカードに見つかりません。カードはリーダーに挿入されていますか?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	PIN はカードにのみ送られ、PdfCraft には保存されません。
+	The smart card's digital IDs couldn't be listed: {e}	スマートカードのデジタル ID を一覧表示できませんでした: {e}
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	タイムスタンプサーバー
+	Include revocation information when signing (LTV)	署名時に失効情報を含める (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	署名時にネットワークを使用します。タイムスタンプサーバーには署名のハッシュが送られ、認証局には証明書が失効していないかを問い合わせます。両方を有効にすると、署名は PAdES B-LTA になります。
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	タイムスタンプと失効情報にはデスクトップアプリが必要です。ここで署名するには、環境設定 ▸ 署名 でオフにしてください。
+	the certificate authorities	認証局
+	Asking {server}…	{server} に問い合わせています…
+	Signing was cancelled; nothing was saved.	署名をキャンセルしました。何も保存されていません。
+	Signed and saved to {path}, without some revocation information: {problems}	{path} に署名して保存しました（一部の失効情報なし）: {problems}
+	The document wasn't signed: {e}	文書は署名されませんでした: {e}

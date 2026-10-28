@@ -301,6 +301,36 @@ impl Session {
         Ok(signed)
     }
 
+    /// The document's current state and `opts` with its date filled in, to sign elsewhere (off the
+    /// UI thread, say) with [`pdfcraft_sign::ltv::sign_online`]. Check the result with
+    /// [`Session::check_save`] before writing it.
+    pub fn signing_input(&self, doc: DocId, mut opts: SignOptions) -> Result<(pdfcraft_cos::Document, SignOptions), EditError> {
+        let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
+        if opts.date.is_empty() {
+            opts.date = self.signing_date();
+        }
+        // Without password field values, like every other signed or saved file (#3926).
+        Ok((writable(&editor.cos)?.into_owned(), opts))
+    }
+
+    /// [`Session::sign`] going as far towards PAdES B-LTA as `online` allows (signature
+    /// timestamp, revocation evidence, document timestamp). Returns the signed file and what
+    /// evidence couldn't be fetched. The transport is the caller's.
+    pub fn sign_online(
+        &self,
+        doc: DocId,
+        id: &pdfcraft_sign::DigitalId,
+        opts: SignOptions,
+        online: &pdfcraft_sign::ltv::Online<'_>,
+    ) -> Result<(Arc<Vec<u8>>, Vec<String>), EditError> {
+        let (cos, opts) = self.signing_input(doc, opts)?;
+        let signed = pdfcraft_sign::ltv::sign_online(&cos, id, &opts, online)?;
+        let bytes = Arc::new(signed.bytes);
+        self.check_save(doc, &bytes)?;
+        Ok((bytes, signed.problems))
+    }
+
     /// Append a standalone document timestamp (RFC 3161, `/ETSI.RFC3161`) covering the file's
     /// current state. An empty `date` takes the session clock; the transport is the caller's.
     pub fn timestamp_document(&self, doc: DocId, tsa: &dyn pdfcraft_sign::TimestampAuthority, date: String) -> Result<Arc<Vec<u8>>, EditError> {

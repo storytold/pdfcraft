@@ -8,7 +8,12 @@ use super::{CliError, stdout_line};
 // ---- automation --------------------------------------------------------------------------------
 
 pub(crate) fn automation(args: &[String]) -> Result<pdfcraft_automation::Automation, String> {
-    let a = pdfcraft_automation::Automation::new();
+    let mut a = pdfcraft_automation::Automation::new();
+    // Signing online and with smart cards: only what the user allowed on the command line.
+    if args.iter().any(|a| a == "--network") {
+        a = a.with_network(std::sync::Arc::new(pdfcraft_platform::http::Http));
+    }
+    a = a.with_card(flag(args, "--card-module").map(std::path::PathBuf::from), None);
     match flag(args, "--root") {
         Some(root) => a.with_root(root).map_err(|e| format!("--root {root}: {e}")),
         None => Ok(a),
@@ -114,7 +119,10 @@ pub(crate) fn run(args: &[String]) -> Result<(), CliError> {
     if report && flag(args, "--script").is_none() {
         return Err("run: --report needs --script".to_string().into());
     }
-    let mut auto = automation(args)?;
+    // `run` has the user at a terminal to type a card's PIN (not echoed); the MCP server doesn't.
+    let pin: pdfcraft_automation::signing::PinPrompt =
+        std::sync::Arc::new(|name: &str| rpassword::prompt_password(format!("Card PIN for {name} (not shown while typing): ")).ok());
+    let mut auto = automation(args)?.with_card(flag(args, "--card-module").map(std::path::PathBuf::from), Some(pin));
     if let Some(script) = flag(args, "--script") {
         let text = std::fs::read_to_string(script).map_err(|e| format!("{script}: {e}"))?;
         let steps: Vec<serde_json::Value> = serde_json::from_str(&text).map_err(|e| format!("{script}: {e}"))?;

@@ -2520,3 +2520,22 @@ animation effects	Off	Изключени
 	Rotate the selected pages clockwise	Завъртане на избраните страници по часовниковата стрелка
 	Extract the selected pages…	Извличане на избраните страници…
 	Delete the selected pages	Изтриване на избраните страници
+
+# Smart cards and tokens (PKCS #11) in the signing dialogs.
+	Use a smart card or token	Използване на смарт карта или токен
+	Card driver (PKCS #11)	Драйвер на картата (PKCS #11)
+	Smart card  ·  	Смарт карта  ·  
+	Card PIN	ПИН на картата
+	No signing certificate was found on a card. Is the card in the reader?	Не е намерен сертификат за подписване на карта. Поставена ли е картата в четеца?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	ПИН кодът се изпраща само към картата; PdfCraft не го запазва.
+	The smart card's digital IDs couldn't be listed: {e}	Цифровите идентификатори на смарт картата не можаха да бъдат изброени: {e}
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	Сървър за времеви печати
+	Include revocation information when signing (LTV)	Включване на информация за отмяна при подписване (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	Тогава подписването използва мрежата: сървърът за времеви печати получава хеш на подписа, а удостоверителните органи се питат дали сертификатите са отменени. С двете опции подписите са PAdES B-LTA.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Времевите печати и информацията за отмяна изискват настолното приложение. Изключете ги от Предпочитания ▸ Подписи, за да подпишете тук.
+	the certificate authorities	удостоверителните органи
+	Asking {server}…	Запитване към {server}…
+	Signing was cancelled; nothing was saved.	Подписването е отменено; нищо не е запазено.
+	Signed and saved to {path}, without some revocation information: {problems}	Подписано и запазено в {path} без част от информацията за отмяна: {problems}
+	The document wasn't signed: {e}	Документът не е подписан: {e}

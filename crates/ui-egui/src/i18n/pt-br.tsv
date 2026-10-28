@@ -2842,3 +2842,22 @@ theme	Appearance	Aparência
 	Rotate the selected pages clockwise	Girar as páginas selecionadas no sentido horário
 	Extract the selected pages…	Extrair as páginas selecionadas…
 	Delete the selected pages	Excluir as páginas selecionadas
+
+# Smart cards and tokens (PKCS #11) in the signing dialogs.
+	Use a smart card or token	Usar um cartão inteligente ou token
+	Card driver (PKCS #11)	Driver do cartão (PKCS #11)
+	Smart card  ·  	Cartão inteligente  ·  
+	Card PIN	PIN do cartão
+	No signing certificate was found on a card. Is the card in the reader?	Nenhum certificado de assinatura foi encontrado em um cartão. O cartão está no leitor?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	O PIN vai somente para o cartão; o PdfCraft não o guarda.
+	The smart card's digital IDs couldn't be listed: {e}	Não foi possível listar as IDs digitais do cartão inteligente: {e}
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	Servidor de carimbo do tempo
+	Include revocation information when signing (LTV)	Incluir informações de revogação ao assinar (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	A assinatura passa a usar a rede: o servidor de carimbo do tempo recebe um hash da assinatura e as autoridades certificadoras são consultadas sobre a revogação dos certificados. Com as duas opções, as assinaturas são PAdES B-LTA.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Carimbos do tempo e informações de revogação precisam do aplicativo para desktop. Desative-os em Preferências ▸ Assinaturas para assinar aqui.
+	the certificate authorities	as autoridades certificadoras
+	Asking {server}…	Consultando {server}…
+	Signing was cancelled; nothing was saved.	A assinatura foi cancelada; nada foi salvo.
+	Signed and saved to {path}, without some revocation information: {problems}	Assinado e salvo em {path}, sem algumas informações de revogação: {problems}
+	The document wasn't signed: {e}	O documento não foi assinado: {e}

@@ -2521,3 +2521,22 @@ animation effects	Off	关
 	Rotate the selected pages clockwise	顺时针旋转所选页面
 	Extract the selected pages…	提取所选页面…
 	Delete the selected pages	删除所选页面
+
+# Smart cards and tokens (PKCS #11) in the signing dialogs.
+	Use a smart card or token	使用智能卡或令牌
+	Card driver (PKCS #11)	卡驱动程序 (PKCS #11)
+	Smart card  ·  	智能卡  ·  
+	Card PIN	卡 PIN
+	No signing certificate was found on a card. Is the card in the reader?	未在卡上找到签名证书。卡是否已插入读卡器？
+	The PIN goes only to the card; PdfCraft doesn't keep it.	PIN 只发送到卡上；PdfCraft 不会保存它。
+	The smart card's digital IDs couldn't be listed: {e}	无法列出智能卡的数字 ID：{e}
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	时间戳服务器
+	Include revocation information when signing (LTV)	签名时包含吊销信息 (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	签名时将联网：时间戳服务器会收到签名的哈希值，并向证书颁发机构查询证书是否已吊销。两者都启用时，签名为 PAdES B-LTA。
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	时间戳和吊销信息需要桌面应用。要在此处签名，请在 首选项 ▸ 签名 中将其关闭。
+	the certificate authorities	证书颁发机构
+	Asking {server}…	正在询问 {server}…
+	Signing was cancelled; nothing was saved.	已取消签名；未保存任何内容。
+	Signed and saved to {path}, without some revocation information: {problems}	已签名并保存到 {path}，但缺少部分吊销信息：{problems}
+	The document wasn't signed: {e}	文档未签名：{e}

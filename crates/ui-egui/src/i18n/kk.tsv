@@ -2555,3 +2555,22 @@ animation effects	Off	Өшірулі
 	Rotate the selected pages clockwise	Таңдалған беттерді сағат тілімен бұру
 	Extract the selected pages…	Таңдалған беттерді шығарып алу…
 	Delete the selected pages	Таңдалған беттерді жою
+
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	Уақыт белгісі сервері
+	Include revocation information when signing (LTV)	Қол қою кезінде кері шақыру туралы мәліметті қосу (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	Сонда қол қою желіні пайдаланады: уақыт белгісі сервері қолтаңбаның хешін алады, ал куәландыру орталықтарынан сертификаттардың кері шақырылғаны сұралады. Екеуі де қосулы болса, қолтаңбалар PAdES B-LTA болады.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Уақыт белгілері мен кері шақыру туралы мәліметке жұмыс үстелі қолданбасы қажет. Осы жерде қол қою үшін оларды Баптаулар ▸ Қолтаңбалар бөлімінде өшіріңіз.
+	the certificate authorities	куәландыру орталықтары
+	Asking {server}…	{server} сұралуда…
+	Signing was cancelled; nothing was saved.	Қол қою тоқтатылды; ештеңе сақталмады.
+	Signed and saved to {path}, without some revocation information: {problems}	Қол қойылып, {path} ішіне сақталды, кері шақыру туралы кейбір мәліметсіз: {problems}
+	The document wasn't signed: {e}	Құжатқа қол қойылмады: {e}
+# Smart cards and tokens (PKCS #11) in the signing dialogs.
+	Use a smart card or token	Смарт-картаны немесе токенді пайдалану
+	Card driver (PKCS #11)	Карта драйвері (PKCS #11)
+	Smart card  ·  	Смарт-карта  ·  
+	Card PIN	Картаның PIN коды
+	No signing certificate was found on a card. Is the card in the reader?	Ешбір картадан қол қою сертификаты табылмады. Карта оқу құрылғысында ма?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	PIN код тек картаға жіберіледі; PdfCraft оны сақтамайды.
+	The smart card's digital IDs couldn't be listed: {e}	Смарт-картаның цифрлық ID-лерін тізімдеу мүмкін болмады: {e}

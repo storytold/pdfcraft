@@ -2824,3 +2824,22 @@ key	Space	Space
 	Rotate the selected pages clockwise	Xoay các trang đã chọn theo chiều kim đồng hồ
 	Extract the selected pages…	Trích xuất các trang đã chọn…
 	Delete the selected pages	Xóa các trang đã chọn
+
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	Máy chủ dấu thời gian
+	Include revocation information when signing (LTV)	Đưa thông tin thu hồi vào khi ký (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	Khi đó việc ký sẽ dùng mạng: máy chủ dấu thời gian nhận một giá trị băm của chữ ký, và các tổ chức chứng thực được hỏi xem chứng chỉ có bị thu hồi không. Khi bật cả hai, chữ ký đạt PAdES B-LTA.
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	Dấu thời gian và thông tin thu hồi cần ứng dụng máy tính. Hãy tắt chúng trong Tùy chọn ▸ Chữ ký để ký tại đây.
+	the certificate authorities	các tổ chức chứng thực
+	Asking {server}…	Đang hỏi {server}…
+	Signing was cancelled; nothing was saved.	Đã hủy ký; không có gì được lưu.
+	Signed and saved to {path}, without some revocation information: {problems}	Đã ký và lưu vào {path}, thiếu một số thông tin thu hồi: {problems}
+	The document wasn't signed: {e}	Tài liệu chưa được ký: {e}
+# Smart cards and tokens (PKCS #11) in the signing dialogs.
+	Use a smart card or token	Dùng thẻ thông minh hoặc token
+	Card driver (PKCS #11)	Trình điều khiển thẻ (PKCS #11)
+	Smart card  ·  	Thẻ thông minh  ·  
+	Card PIN	Mã PIN của thẻ
+	No signing certificate was found on a card. Is the card in the reader?	Không tìm thấy chứng chỉ ký nào trên thẻ. Thẻ có trong đầu đọc không?
+	The PIN goes only to the card; PdfCraft doesn't keep it.	Mã PIN chỉ được gửi tới thẻ; PdfCraft không lưu nó.
+	The smart card's digital IDs couldn't be listed: {e}	Không thể liệt kê ID số của thẻ thông minh: {e}

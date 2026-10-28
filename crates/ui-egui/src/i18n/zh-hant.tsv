@@ -2507,3 +2507,14 @@ animation effects	Off	關
 	Rotate the selected pages clockwise	順時針旋轉所選頁面
 	Extract the selected pages…	擷取所選頁面…
 	Delete the selected pages	刪除所選頁面
+
+# Signing online: timestamp servers and revocation information (LTV).
+	Timestamp server	時間戳記伺服器
+	Include revocation information when signing (LTV)	簽署時包含撤銷資訊 (LTV)
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	簽署時將連線：時間戳記伺服器會收到簽章的雜湊值，並向憑證授權單位查詢憑證是否已撤銷。兩者都啟用時，簽章為 PAdES B-LTA。
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	時間戳記與撤銷資訊需要桌面版應用程式。若要在此簽署，請在 偏好設定 ▸ 簽章 中將其關閉。
+	the certificate authorities	憑證授權單位
+	Asking {server}…	正在詢問 {server}…
+	Signing was cancelled; nothing was saved.	已取消簽署；未儲存任何內容。
+	Signed and saved to {path}, without some revocation information: {problems}	已簽署並儲存到 {path}，但缺少部分撤銷資訊：{problems}
+	The document wasn't signed: {e}	文件未簽署：{e}

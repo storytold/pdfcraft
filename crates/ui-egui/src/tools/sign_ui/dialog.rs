@@ -1,6 +1,6 @@
 use super::{
     Align, Appearance, AppearanceLabels, Color32, CornerRadius, KEY_ALGORITHMS, Layout, NewIdDraft, PdfCraftApp, Rect, SavedSig, SignGraphic,
-    SignStep, Stroke, Tokens, icons, sign, theme, vec2, widgets,
+    SignStep, Stroke, Tokens, from_key_store, icons, sign, theme, vec2, widgets,
 };
 
 /// Draw the signing dialogs; returns `true` when the dialog should close.
@@ -64,6 +64,8 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 tl!("Keychain  ·  ").to_string()
             } else if e.path.starts_with("windows:") {
                 tl!("Windows store  ·  ").to_string()
+            } else if e.path.starts_with("pkcs11:") {
+                tl!("Smart card  ·  ").to_string()
             } else {
                 String::new()
             };
@@ -113,7 +115,7 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         });
         ui.add_space(10.0);
     }
-    let removable = d.selected.filter(|&i| ids.get(i).is_some_and(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")));
+    let removable = d.selected.filter(|&i| ids.get(i).is_some_and(|e| !from_key_store(&e.path)));
     ui.horizontal(|ui| {
         if widgets::pill_button(ui, tl!("Configure New Digital ID"), false).clicked() {
             d.step = SignStep::Configure;
@@ -140,17 +142,50 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
 
 fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     title(ui, "Configure a Digital ID for Signing");
+    let known_module = app.pkcs11_module.clone();
     let Some(d) = app.sign_draft.as_mut() else { return true };
     let mut close = false;
     let mut go = false;
     // Browse… is desktop-only.
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut browse = false;
-    widgets::radio_value(ui, &mut d.new_id.create, false, tl!("Use a Digital ID from a file"));
-    widgets::radio_value(ui, &mut d.new_id.create, true, tl!("Create a new Digital ID (self-signed, saved to a password-protected file)"));
-    ui.add_space(8.0);
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    let mut browse_module = false;
     let n = &mut d.new_id;
-    if n.create {
+    if ui.add(widgets::radio(!n.create && !n.card, tl!("Use a Digital ID from a file"))).clicked() {
+        (n.create, n.card) = (false, false);
+    }
+    if ui.add(widgets::radio(n.create && !n.card, tl!("Create a new Digital ID (self-signed, saved to a password-protected file)"))).clicked() {
+        (n.create, n.card) = (true, false);
+    }
+    // A card's driver is a native library: desktop only.
+    #[cfg(not(target_arch = "wasm32"))]
+    if ui.add(widgets::radio(n.card, tl!("Use a smart card or token"))).clicked() {
+        n.card = true;
+        if n.module.is_empty() {
+            n.module = if known_module.is_empty() {
+                sign::pkcs11::candidate_modules().first().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+            } else {
+                known_module
+            };
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = known_module;
+    ui.add_space(8.0);
+    if n.card {
+        egui::Grid::new("id-card").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+            let l = ui.label(tl!("Card driver (PKCS #11)"));
+            ui.horizontal(|ui| {
+                ui.add(crate::widgets::line(&mut n.module).desired_width(300.0)).labelled_by(l.id);
+                #[cfg(not(target_arch = "wasm32"))]
+                if ui.button(tl!("Browse…")).clicked() {
+                    browse_module = true;
+                }
+            });
+            ui.end_row();
+        });
+    } else if n.create {
         egui::Grid::new("new-id").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             for (label, value) in [
                 (tl!("Name"), &mut n.name),
@@ -208,7 +243,7 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             d.error = None;
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::pill_button(ui, if d.new_id.create { tl!("Save") } else { tl!("Continue") }, true).clicked() {
+            if widgets::pill_button(ui, if d.new_id.create && !d.new_id.card { tl!("Save") } else { tl!("Continue") }, true).clicked() {
                 go = true;
             }
             if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
@@ -217,8 +252,14 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         });
     });
     if go {
-        let create = app.sign_draft.as_ref().is_some_and(|d| d.new_id.create);
-        let result = if create { app.create_digital_id() } else { app.import_digital_id() };
+        let (create, card) = app.sign_draft.as_ref().map_or((false, false), |d| (d.new_id.create, d.new_id.card));
+        let result = if card {
+            app.import_card_ids()
+        } else if create {
+            app.create_digital_id()
+        } else {
+            app.import_digital_id()
+        };
         let Some(d) = app.sign_draft.as_mut() else { return true };
         match result {
             Ok(i) => {
@@ -244,8 +285,20 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             }
         });
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if browse_module {
+        let dialog = rfd::AsyncFileDialog::new().add_filter("PKCS #11", &["dll", "so", "dylib"]);
+        let epoch = app.dialog_epoch();
+        app.ask_one(crate::pickers::Ask::File(dialog), None, move |app, p| {
+            if app.dialog_epoch() == epoch
+                && let Some(d) = app.sign_draft.as_mut()
+            {
+                d.new_id.module = p.to_string_lossy().into_owned();
+            }
+        });
+    }
     #[cfg(target_arch = "wasm32")]
-    let _ = browse;
+    let _ = (browse, browse_module);
     close
 }
 
@@ -358,6 +411,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         ),
     );
     let in_os_key_store = entry.path.starts_with("keychain:") || entry.path.starts_with("windows:");
+    let on_card = entry.path.starts_with("pkcs11:");
     let mut close = false;
     let mut go = false;
     #[cfg(not(target_arch = "wasm32"))]
@@ -443,6 +497,15 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 .small()
                 .color(t.text_muted),
             );
+        } else if on_card {
+            let l = ui.label(tl!("Card PIN"));
+            let r = ui.add(crate::widgets::line(&mut d.password).password(true).desired_width(160.0)).labelled_by(l.id);
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                go = true;
+            }
+            ui.end_row();
+            ui.label("");
+            ui.label(egui::RichText::new(tl!("The PIN goes only to the card; PdfCraft doesn't keep it.")).small().color(t.text_muted));
         } else {
             let l = ui.label(tl!("Digital ID password"));
             let r = ui.add(crate::widgets::line(&mut d.password).password(true).desired_width(200.0)).labelled_by(l.id);
@@ -486,4 +549,28 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         }
     }
     close
+}
+
+/// The modal shown while a signing waits for the network. Cancel drops the answer: the signed
+/// file is never written.
+pub(crate) fn online_signing_modal(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    let Some(job) = &app.online_signing else { return };
+    let server = job.server.clone();
+    let mut cancel = false;
+    widgets::show_modal(ctx, "online-signing", |ui| {
+        ui.set_width(420.0);
+        title(ui, "Signing");
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(crate::i18n::fmt(tl!("Asking {server}…"), &[("server", &server)]));
+        });
+        ui.add_space(12.0);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            cancel = widgets::pill_button(ui, tl!("Cancel"), false).clicked();
+        });
+    });
+    if cancel {
+        app.online_signing = None;
+        app.notify(tl!("Signing was cancelled; nothing was saved."));
+    }
 }

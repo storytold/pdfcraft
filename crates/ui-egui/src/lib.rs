@@ -462,6 +462,17 @@ pub struct PdfCraftApp {
     pub alt_draft: a11y_ui::AltDraft,
     /// List the OS key store's signing identities among the digital IDs (the desktop app).
     pub os_key_store_ids: bool,
+    /// The smart card driver (PKCS #11 module) chosen in Configure a Digital ID; empty: none.
+    pub pkcs11_module: String,
+    /// Preferences ▸ Signatures: the RFC 3161 server that timestamps signatures; empty: none.
+    pub timestamp_server: String,
+    /// Preferences ▸ Signatures: embed the chain's revocation information when signing (LTV).
+    pub embed_ltv: bool,
+    /// How to reach timestamp servers and revocation services (the desktop app supplies it);
+    /// `None`: signing never goes online.
+    pub http: Option<std::sync::Arc<dyn sign_ui::Fetch + Send + Sync>>,
+    /// A signing that is waiting for a timestamp server or revocation services.
+    pub(crate) online_signing: Option<sign_ui::OnlineSigning>,
     pub cert_viewer: Option<sign_ui::CertViewer>,
     /// The last space audit.
     pub space_audit: Vec<pdfcraft_engine::optimize::SpaceUse>,

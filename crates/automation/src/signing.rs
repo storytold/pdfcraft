@@ -8,6 +8,17 @@ use serde_json::{Value, json};
 
 use crate::{Args, Automation, Result, ToolError, failed, write_atomic};
 
+/// Asks the user for the PIN of the card holding the named certificate; `None`: not given.
+pub type PinPrompt = std::sync::Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
+/// What the host lets signing use (see [`Automation::with_network`], [`Automation::with_card`]).
+#[derive(Default)]
+pub(crate) struct Host {
+    pub(crate) fetch: Option<std::sync::Arc<dyn sign::ltv::Fetch + Send + Sync>>,
+    pub(crate) card_module: Option<std::path::PathBuf>,
+    pub(crate) pin: Option<PinPrompt>,
+}
+
 fn bad(m: impl Into<String>) -> ToolError {
     ToolError::InvalidArgs(m.into())
 }
@@ -188,6 +199,9 @@ impl Automation {
             #[cfg(not(target_os = "windows"))]
             return Err(failed(format!("windows:{r}: Windows certificate store identities are only available on Windows")));
         }
+        if let Some(r) = a.str("id")?.strip_prefix("pkcs11:") {
+            return self.card_id(&format!("pkcs11:{r}"));
+        }
         let path = self.resolve(a.str("id")?, false)?;
         let bytes = crate::read_input(&path)?;
         sign::pkcs12::open(&bytes, a.opt_str("password")?.unwrap_or("")).map_err(|e| match e {
@@ -196,8 +210,73 @@ impl Automation {
         })
     }
 
+    /// The card driver the host chose, or the first known one installed.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn card_module(&self) -> Result<std::path::PathBuf> {
+        match &self.signing.card_module {
+            Some(m) => Ok(m.clone()),
+            None => sign::pkcs11::candidate_modules()
+                .into_iter()
+                .next()
+                .ok_or_else(|| failed("no smart card driver (PKCS #11 module) is installed; install the card's middleware, or start pdfcraft-cli with --card-module PATH")),
+        }
+    }
+
+    /// Log in to the card holding `reference` with a PIN asked of the user (none on a PIN-pad
+    /// reader). The PIN never passes through a tool argument.
+    fn card_id(&self, reference: &str) -> Result<DigitalId> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let module = self.card_module()?;
+            let certs = sign::pkcs11::identities(&module).map_err(failed)?;
+            let card = certs
+                .iter()
+                .find(|c| sign::pkcs11::reference(&c.certificate) == reference)
+                .ok_or_else(|| bad(format!("{reference}: no such certificate on a card in the reader (see sign_card_ids)")))?;
+            if card.token.pin_final_try {
+                return Err(failed(
+                    "one more wrong PIN would lock this card, so PdfCraft won't try; check or reset the PIN with the card vendor's tools",
+                ));
+            }
+            let pin = if card.token.protected_authentication_path {
+                None
+            } else {
+                let ask = self.signing.pin.as_ref().ok_or_else(|| {
+                    failed("the card PIN can only be typed at a terminal: run `pdfcraft-cli run` from one (this session can't ask for it)")
+                })?;
+                let pin = ask(&card.certificate.display_name()).filter(|p| !p.is_empty()).ok_or_else(|| failed("no card PIN was given"))?;
+                Some(sign::pkcs11::Pin::from(pin))
+            };
+            sign::pkcs11::open(&module, reference, pin).map_err(failed)
+        }
+        #[cfg(target_arch = "wasm32")]
+        Err(failed(format!("{reference}: smart cards are only available on the desktop")))
+    }
+
+    /// The signing certificates on the cards in the readers (no PIN needed to list them).
+    pub(crate) fn sign_card_ids(&self) -> Result<Value> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let module = self.card_module()?;
+            let certs = sign::pkcs11::identities(&module).map_err(failed)?;
+            let ids: Vec<Value> = certs
+                .iter()
+                .filter(|c| c.for_signing)
+                .map(|c| {
+                    json!({
+                        "id": sign::pkcs11::reference(&c.certificate),
+                        "card": { "label": c.token.label, "model": c.token.model, "pin_pad": c.token.protected_authentication_path, "pin_locked": c.token.pin_locked },
+                        "certificate": cert_json(&c.certificate),
+                    })
+                })
+                .collect();
+            Ok(json!({ "module": module.to_string_lossy(), "count": ids.len(), "ids": ids }))
+        }
+        #[cfg(target_arch = "wasm32")]
+        Err(failed("smart cards are only available on the desktop"))
+    }
+
     pub(crate) fn sign_document(&mut self, a: &Args) -> Result<Value> {
-        let id = self.open_id(a)?;
         let doc = self.doc(a)?;
         let doc_id = doc.id;
         let field = a.opt_str("field")?.map(str::to_string);
@@ -258,17 +337,48 @@ impl Automation {
             graphic,
             ..SignOptions::default()
         };
-        let signed = self.session.sign(doc_id, &id, opts).map_err(|e| match e {
+        let tsa = a.opt_str("timestamp_server")?.map(str::trim).filter(|s| !s.is_empty());
+        let ltv = a.opt_bool("ltv")?.unwrap_or(false);
+        let refused = |e| match e {
             // A graphic the signer refuses is the caller's to fix.
             pdfcraft_engine::EditError::Sign(m) if m.starts_with("the signature graphic") => bad(m),
             e => failed(e),
-        })?;
+        };
+        let fetch = match (tsa.is_some() || ltv, self.signing.fetch.clone()) {
+            (false, _) => None,
+            (true, Some(fetch)) => Some(fetch),
+            (true, None) => {
+                return Err(failed(
+                    "timestamp_server and ltv need network access, which this session doesn't have (start pdfcraft-cli with --network)",
+                ));
+            }
+        };
+        // Last, once every other argument is known to be good: a card asks for its PIN here.
+        let id = self.open_id(a)?;
+        let (signed, problems) = if let Some(fetch) = fetch {
+            let online = sign::ltv::Online { tsa, ltv, fetch: &*fetch };
+            self.session.sign_online(doc_id, &id, opts, &online).map_err(refused)?
+        } else {
+            (self.session.sign(doc_id, &id, opts).map_err(refused)?, Vec::new())
+        };
+        let level = match (tsa.is_some(), ltv) {
+            (false, false) => "B-B",
+            (true, false) => "B-T",
+            (false, true) => "B-B with LTV information",
+            (true, true) => "B-LTA",
+        };
         write_atomic(&out, &signed)?;
         let path = out.to_string_lossy().into_owned();
         self.session.mark_signed(doc_id, signed.clone(), Some(path.clone())).map_err(failed)?;
         let doc = self.doc(a)?;
         let newest = doc.signatures.iter().filter(|s| s.signed).max_by_key(|s| s.revision).cloned();
-        Ok(json!({ "path": path, "bytes": signed.len(), "signature": newest.map(|s| self.sig_json(a, &s)).transpose()? }))
+        Ok(json!({
+            "path": path,
+            "bytes": signed.len(),
+            "level": level,
+            "missing_revocation_info": problems,
+            "signature": newest.map(|s| self.sig_json(a, &s)).transpose()?,
+        }))
     }
 
     /// `{"image": path}` (PNG or JPEG), `{"text": name}` (typed in the script font) or

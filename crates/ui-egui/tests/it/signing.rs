@@ -724,3 +724,158 @@ fn signing_preserves_destination_opening_attributes() {
     assert_eq!(xattr::get(&dest, "com.apple.quarantine").unwrap(), Some(b"0082;1234;Preview;".to_vec()));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn smart_card_identities_are_read_each_time_and_the_driver_is_kept() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.pkcs11_module = "C:\\Windows\\System32\\asepkcs.dll".into();
+    for path in ["pkcs11:00ff", "file-id.p12"] {
+        app.digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
+            path: path.into(),
+            name: "Signer".into(),
+            issuer: "Test issuer".into(),
+            email: String::new(),
+            expires: "2030.01.01".into(),
+            unusable: None,
+        });
+    }
+    let saved = app.persist();
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&saved);
+    assert_eq!(restored.digital_ids.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(), ["file-id.p12"]);
+    assert_eq!(restored.pkcs11_module, "C:\\Windows\\System32\\asepkcs.dll");
+}
+
+#[test]
+fn configuring_a_smart_card_with_a_missing_driver_says_so() {
+    let mut h = harness(dir());
+    h.state_mut().start_signing(0, None, None, None);
+    h.run_steps(2);
+    h.get_by_label("Configure a Digital ID for Signing");
+    h.get_by_label("Use a smart card or token").click();
+    h.run_steps(2);
+    assert!(h.state().sign_draft.as_ref().unwrap().new_id.card);
+    h.get_by_label("Card driver (PKCS #11)");
+    h.state_mut().sign_draft.as_mut().unwrap().new_id.module = "/no/such/pkcs11-module.so".into();
+    h.run_steps(1);
+    h.get_by_label("Continue").click();
+    h.run_steps(2);
+    let d = h.state().sign_draft.as_ref().unwrap();
+    assert_eq!(d.step, SignStep::Configure);
+    assert!(d.error.as_ref().unwrap().contains("no PKCS #11 module"), "{:?}", d.error);
+    assert!(h.state().digital_ids.is_empty() && h.state().pkcs11_module.is_empty(), "nothing is kept from a failed attempt");
+}
+
+#[test]
+fn a_smart_card_identity_asks_for_the_card_pin_and_forgets_it() {
+    let mut h = harness(dir());
+    h.state_mut().pkcs11_module = "/no/such/pkcs11-module.so".into();
+    h.state_mut().start_signing(0, None, None, None);
+    h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
+        path: "pkcs11:00ff".into(),
+        name: "Card signer".into(),
+        issuer: "Test Issuing CA".into(),
+        email: String::new(),
+        expires: "2030.01.01".into(),
+        unusable: None,
+    });
+    let draft = h.state_mut().sign_draft.as_mut().unwrap();
+    draft.step = SignStep::Choose;
+    draft.selected = Some(0);
+    h.run_steps(3);
+    h.get_by_label("Continue").click();
+    h.run_steps(3);
+    h.get_by_label("Sign as \"Card signer\"");
+    assert_eq!(h.query_all_by_label("Digital ID password").count(), 0);
+    h.get_by_label("Card PIN");
+    h.get_by_label("The PIN goes only to the card; PdfCraft doesn't keep it.");
+    h.state_mut().sign_draft.as_mut().unwrap().password = "1234".into();
+    support::outside_menus(&h, "Sign").click();
+    h.run_steps(3);
+    let d = h.state().sign_draft.as_ref().unwrap();
+    assert!(d.error.as_ref().unwrap().contains("no PKCS #11 module"), "{:?}", d.error);
+    assert!(d.password.is_empty(), "the PIN is not kept after an attempt");
+}
+
+/// A timestamp server behind a fake network.
+struct FakeTsa(pdfcraft_engine::sign::DigitalId);
+
+impl pdfcraft_engine::sign::ltv::Fetch for FakeTsa {
+    fn get(&self, url: &str) -> Result<Vec<u8>, pdfcraft_engine::sign::SignError> {
+        Err(pdfcraft_engine::sign::SignError::Crypto(format!("{url}: offline")))
+    }
+
+    fn post(&self, _url: &str, _content_type: &str, body: &[u8]) -> Result<Vec<u8>, pdfcraft_engine::sign::SignError> {
+        use pdfcraft_engine::sign::{DigestAlg, Time, timestamp};
+        let q = timestamp::parse_request(body)?;
+        let at = Time { year: 2026, month: 10, day: 22, hour: 12, minute: 0, second: 0 };
+        timestamp::respond(
+            timestamp::TimestampSigner { key: &self.0.key, certificate: &self.0.certificate, chain: &[], digest: DigestAlg::Sha256 },
+            timestamp::TimestampIssuance { query: &q, policy: "1.2.3.4", generation_time: at, serial: 1 },
+        )
+    }
+}
+
+/// Certify invisibly with the test ID from a file, up to clicking Sign.
+fn certify_with_file_id(h: &mut Harness<'static, PdfCraftApp>) {
+    let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
+    assert!(h.state_mut().execute("sign.certify_invisible"));
+    h.run_steps(2);
+    {
+        let d = h.state_mut().sign_draft.as_mut().unwrap();
+        d.new_id.create = false;
+        d.new_id.file = p12.into();
+        d.new_id.file_password = "test".into();
+    }
+    h.run_steps(1);
+    h.get_by_label("Continue").click();
+    h.run_steps(4);
+    h.get_by_label("Continue").click();
+    h.run_steps(2);
+    h.state_mut().sign_draft.as_mut().unwrap().password = "test".into();
+    support::outside_menus(h, "Sign").click();
+}
+
+#[test]
+fn a_timestamp_server_in_preferences_timestamps_the_signature_off_the_ui_thread() {
+    let dir = dir();
+    let out = dir.join("contract_signed.pdf");
+    let mut h = harness(dir);
+    let tsa =
+        pdfcraft_engine::sign::pkcs12::open(&std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/rsa-aes.p12")).unwrap(), "test")
+            .unwrap();
+    h.state_mut().timestamp_server = "http://tsa.test/".into();
+    h.state_mut().http = Some(std::sync::Arc::new(FakeTsa(tsa)));
+    certify_with_file_id(&mut h);
+    for _ in 0..200 {
+        h.run_steps(1);
+        if out.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    h.run_steps(2);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let sig = doc.signatures.iter().find(|x| x.signed).expect("signed");
+    assert!(sig.timestamp, "{:?}", sig.details);
+    assert!(out.exists());
+    // The preference survives a restart.
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&s.persist());
+    assert_eq!(restored.timestamp_server, "http://tsa.test/");
+}
+
+#[test]
+fn signing_online_without_a_network_says_so_and_saves_nothing() {
+    let dir = dir();
+    let out = dir.join("contract_signed.pdf");
+    let mut h = harness(dir);
+    h.state_mut().embed_ltv = true;
+    certify_with_file_id(&mut h);
+    h.run_steps(4);
+    let error = h.state().sign_draft.as_ref().and_then(|d| d.error.clone()).unwrap_or_default();
+    assert!(error.contains("Preferences ▸ Signatures"), "{error:?}");
+    assert!(!out.exists());
+}
