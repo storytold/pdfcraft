@@ -152,7 +152,8 @@ pub fn tools() -> Vec<ToolDef> {
                 "ppi": {"type":"number","minimum":9,"maximum":1600},
                 "quality": {"type":"integer","minimum":1,"maximum":100},
                 "dpi": {"type":"number","minimum":72,"maximum":600},
-                "language": {"type":"string"}, "skip_text_pages": {"type":"boolean"}
+                "language": {"type":"string"}, "skip_text_pages": {"type":"boolean"},
+                "pdfa": {"type":"string","enum":["2b","3b"],"description":"OCR step: save each recognised file as PDF/A, as in ocr_recognize (an optimize step after it rewrites the file: check the result with pdfa_verify)."}
             }), &["paths","out_dir","steps"])),
         t("doc_fix_hairlines", "Fix hairlines", "Print production: strokes narrower than narrower_than points on the page (after every transformation; zero-width lines always) are given width points, in page content and form XObjects; Type 3 glyphs and tiling patterns only when asked, changed in place wherever they are used. Both widths at most 10. Returns fixed (strokes), pages, and elsewhere (glyphs and patterns changed that something outside pages also uses); nothing to fix gives 0 and no edit.")
             .cmd("prepress.hairlines")
@@ -1522,7 +1523,7 @@ pub fn tools() -> Vec<ToolDef> {
             )),
         t("js_enabled", "JavaScript on or off", "Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript: set it with `enabled`, or read it. With JavaScript off, field scripts other than Acrobat's AF calls don't run.")
             .with(schema(json!({ "enabled": { "type": "boolean" } }), &[])),
-        t("ocr_recognize", "Recognize text (OCR)", "Scan & OCR ▸ Recognize text: render pages, read the words in them and add them as invisible text over the page image, so scanned pages become searchable and selectable (a searchable image; the image is not changed). Pages that already have text are skipped unless skip_text_pages or force_ocr say otherwise; words overlapping existing text are omitted and counted as already_on_page. With output_mode \"editable\" nothing is applied: a NEW document of visible text at the recognised boxes is written to out (which must not be the source; empty pages stay blank). engine and strategy choose the readers (an engine that cannot run is an error named up front); the four preprocessing flags clean the raster first. region reads just that part of one page ([x0, y0, x1, y1] in points from the top-left of the displayed page). Returns each page's recognised text, word count or why it was skipped. Needs the engines (ocr_status). Searchable output is undoable as one step.")
+        t("ocr_recognize", "Recognize text (OCR)", "Scan & OCR ▸ Recognize text: render pages, read the words in them and add them as invisible text over the page image, so scanned pages become searchable and selectable (a searchable image; the image is not changed). Pages that already have text are skipped unless skip_text_pages or force_ocr say otherwise; words overlapping existing text are omitted and counted as already_on_page. With output_mode \"editable\" nothing is applied: a NEW document of visible text at the recognised boxes is written to out (which must not be the source; empty pages stay blank). engine and strategy choose the readers (an engine that cannot run is an error named up front); the four preprocessing flags clean the raster first. region reads just that part of one page ([x0, y0, x1, y1] in points from the top-left of the displayed page). Returns each page's recognised text, word count or why it was skipped. With pdfa (\"2b\" or \"3b\"), the document is then converted to PDF/A in the same undo step (as pdfa_convert; the invisible text layer needs no embedded font, ISO 19005-2 6.2.11.4.1) and pdfa reports the level, compliant, refused (why the conversion couldn't be applied, e.g. security that doesn't allow removing the encryption; the words are added anyway) and remaining (what pdfa_verify still finds, e.g. visible text in fonts that aren't embedded). Needs the engines (ocr_status). Searchable output is undoable as one step.")
             .cmd("ocr.recognize")
             .with(schema(
                 json!({
@@ -1542,6 +1543,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "deskew": { "type": "boolean", "description": "Straighten skewed text lines before reading (default false)." },
                     "denoise": { "type": "boolean", "description": "A 3×3 median filter against scan speckle (default false)." },
                     "binarize": { "type": "boolean", "description": "Sauvola binarization: ink to black, paper to white (default false)." },
+                    "pdfa": { "type": "string", "enum": ["2b", "3b"], "description": "Also save as PDF/A at this level (default: no)." },
                 }),
                 &["doc"],
             )),
@@ -1591,6 +1593,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "deskew": { "type": "boolean" },
                     "denoise": { "type": "boolean" },
                     "binarize": { "type": "boolean" },
+                    "pdfa": { "type": "string", "enum": ["2b", "3b"], "description": "Write each file as PDF/A at this level, even when no word was found; each file reports pdfa as in ocr_recognize." },
                 }),
                 &["paths", "folder"],
             )),

@@ -153,6 +153,9 @@ pub struct OcrSettings {
     /// file; an invalid configuration makes the engine unavailable rather than silently
     /// searching the PATH. `None` means the PATH search decides.
     pub tesseract_path: Option<String>,
+    /// Save as PDF/A after recognition (Acrobat's "Make scans PDF/A compliant"): the document is
+    /// converted to this level in the same undoable step, and what it still breaks is reported.
+    pub pdfa: Option<pdfcraft_preflight::Level>,
 }
 
 /// A recognised word whose box is at least this much covered by the page's own text is that
@@ -209,6 +212,7 @@ impl Default for OcrSettings {
             region: None,
             low_confidence_threshold: 60.0,
             tesseract_path: None,
+            pdfa: None,
         }
     }
 }
@@ -1007,13 +1011,40 @@ impl Session {
 
     /// Add the words found by [`OcrJob::run`] as one undoable step. Returns the number of words.
     pub fn apply_ocr(&mut self, id: DocId, found: &[OcrPage]) -> Result<usize, EditError> {
-        let edits: Vec<Edit> =
+        self.apply_ocr_with(id, found, &OcrSettings::default()).map(|a| a.words)
+    }
+
+    /// [`Self::apply_ocr`] with what `settings` ask for after recognition: with
+    /// [`OcrSettings::pdfa`], the document is converted to PDF/A in the same undoable step
+    /// (the text layer is invisible text, which needs no embedded font, ISO 19005-2
+    /// §6.2.11.4.1) and checked afterwards. When the conversion can't be applied (security that
+    /// doesn't allow removing the encryption, a signed file that would need a full rewrite) the
+    /// words are still added and the reason is reported.
+    pub fn apply_ocr_with(&mut self, id: DocId, found: &[OcrPage], settings: &OcrSettings) -> Result<OcrApplied, EditError> {
+        let mut edits: Vec<Edit> =
             found.iter().filter(|p| !p.words.is_empty()).map(|p| Edit::AddOcrText { page: p.page, words: p.words.clone() }).collect();
         let words = found.iter().map(|p| p.words.len()).sum();
-        if !edits.is_empty() {
-            self.apply(id, Edit::Batch { label: "Recognize text".into(), edits })?;
-        }
-        Ok(words)
+        let Some(level) = settings.pdfa else {
+            if !edits.is_empty() {
+                self.apply(id, Edit::Batch { label: "Recognize text".into(), edits })?;
+            }
+            return Ok(OcrApplied { words, pdfa: None });
+        };
+        let without = edits.clone();
+        edits.push(Edit::ConvertPdfA { level });
+        let refused = match self.apply(id, Edit::Batch { label: "Recognize text".into(), edits }) {
+            Ok(()) => None,
+            // Only the conversion can be refused where the words alone are fine.
+            Err(e @ (EditError::NotPermitted(_) | EditError::SignedRewrite(_) | EditError::Invalid(_))) => {
+                if !without.is_empty() {
+                    self.apply(id, Edit::Batch { label: "Recognize text".into(), edits: without })?;
+                }
+                Some(e.to_string())
+            }
+            Err(e) => return Err(e),
+        };
+        let remaining = if refused.is_none() { self.get(id).map(|d| d.pdfa_verify(level)).unwrap_or_default() } else { Vec::new() };
+        Ok(OcrApplied { words, pdfa: Some(OcrPdfA { level, refused, remaining }) })
     }
 
     /// Why a job's result may not be applied to this session any more: the document was closed,
@@ -1049,13 +1080,19 @@ impl Session {
     /// [`Self::apply_ocr`], but only while the document is still the one that was read; a stale
     /// result is refused with a named reason and nothing is written.
     pub fn apply_ocr_checked(&mut self, id: DocId, found: &[OcrPage], guard: &OcrGuard) -> Result<usize, String> {
+        self.apply_ocr_checked_with(id, found, guard, &OcrSettings::default()).map(|a| a.words)
+    }
+
+    /// [`Self::apply_ocr_checked`] with what `settings` ask for after recognition
+    /// ([`OcrSettings::pdfa`]): the conversion is reported beside the words.
+    pub fn apply_ocr_checked_with(&mut self, id: DocId, found: &[OcrPage], guard: &OcrGuard, settings: &OcrSettings) -> Result<OcrApplied, String> {
         if guard.doc != id {
             return Err("the result belongs to another document".into());
         }
         if let Some(why) = self.stale_reason(guard) {
             return Err(why);
         }
-        self.apply_ocr(id, found).map_err(|e| e.to_string())
+        self.apply_ocr_with(id, found, settings).map_err(|e| e.to_string())
     }
 
     /// The editable-text output: a NEW document with the recognized words as VISIBLE text at
@@ -1133,14 +1170,46 @@ impl Session {
 
     /// Recognise text on `pages` and add it, in one call (the CLI and agents use this).
     pub fn recognize_text(&mut self, id: DocId, pages: &[usize], settings: OcrSettings) -> Result<Vec<OcrPage>, String> {
+        self.recognize_text_reporting(id, pages, settings).map(|(found, _)| found)
+    }
+
+    /// [`Self::recognize_text`], also returning what was applied (the words, and the PDF/A
+    /// conversion [`OcrSettings::pdfa`] asked for).
+    pub fn recognize_text_reporting(&mut self, id: DocId, pages: &[usize], settings: OcrSettings) -> Result<(Vec<OcrPage>, OcrApplied), String> {
+        let after = settings.clone();
         let job = self.ocr_job(id, pages, settings).ok_or("no such document")?;
         if let Some(why) = self.get(id).and_then(|d| d.read_only_reason.clone()) {
             return Err(why);
         }
         let recognizers = recognizers(&job.settings)?;
         let found = job.run(&recognizers, |_, _| true);
-        self.apply_ocr(id, &found).map_err(|e| e.to_string())?;
-        Ok(found)
+        let applied = self.apply_ocr_with(id, &found, &after).map_err(|e| e.to_string())?;
+        Ok((found, applied))
+    }
+}
+
+/// What [`Session::apply_ocr_with`] added and changed.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OcrApplied {
+    pub words: usize,
+    /// The PDF/A conversion, when [`OcrSettings::pdfa`] asked for one.
+    pub pdfa: Option<OcrPdfA>,
+}
+
+/// How saving a recognised document as PDF/A went.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OcrPdfA {
+    pub level: pdfcraft_preflight::Level,
+    /// Why the conversion wasn't applied (the words were added without it).
+    pub refused: Option<String>,
+    /// What the converted document still breaks (empty: it complies, as far as PdfCraft checks).
+    pub remaining: Vec<pdfcraft_preflight::Issue>,
+}
+
+impl OcrPdfA {
+    /// Converted, and nothing left that PdfCraft's PDF/A check finds.
+    pub fn compliant(&self) -> bool {
+        self.refused.is_none() && self.remaining.is_empty()
     }
 }
 
@@ -1153,6 +1222,8 @@ pub struct FileResult {
     /// Why the whole file was left alone ("Skip files that already contain text"): a skipped
     /// file is its own result bucket, never counted as an OCR success.
     pub file_skipped: Option<String>,
+    /// The PDF/A conversion ([`OcrSettings::pdfa`]).
+    pub pdfa: Option<OcrPdfA>,
 }
 
 impl FileResult {
@@ -1235,6 +1306,8 @@ pub struct FileJob {
     bytes: Arc<Vec<u8>>,
     /// The pages to read (taken by the caller).
     pub job: Option<OcrJob>,
+    /// What the run was asked for, kept for `finish`: what happens after recognition (PDF/A).
+    settings: OcrSettings,
 }
 
 /// What [`FileJob::open`] found: a file to read, or one the skip-files option passes over
@@ -1263,20 +1336,23 @@ impl FileJob {
                     notes: Vec::new(),
                 })
                 .collect();
-            return Ok(Opened::Skipped(FileResult { bytes, pages, file_skipped: Some("the file already contains text".into()) }));
+            return Ok(Opened::Skipped(FileResult { bytes, pages, file_skipped: Some("the file already contains text".into()), pdfa: None }));
         }
-        Ok(Opened::Read(Box::new(FileJob { session, id, bytes, job: Some(job) })))
+        Ok(Opened::Read(Box::new(FileJob { session, id, bytes, job: Some(job), settings })))
     }
 
     /// Add the words found and save: the searchable file, or the original when nothing was found.
+    /// A file asked to be PDF/A is written converted even when no word was found.
     pub fn finish(mut self, pages: Vec<OcrPage>) -> Result<FileResult, String> {
-        if self.session.apply_ocr(self.id, &pages).map_err(|e| e.to_string())? == 0 {
-            return Ok(FileResult { bytes: self.bytes, pages, file_skipped: None });
+        let settings = self.settings;
+        let applied = self.session.apply_ocr_with(self.id, &pages, &settings).map_err(|e| e.to_string())?;
+        if applied.words == 0 && applied.pdfa.as_ref().is_none_or(|p| p.refused.is_some()) {
+            return Ok(FileResult { bytes: self.bytes, pages, file_skipped: None, pdfa: applied.pdfa });
         }
         // Checked like a save before the caller writes it (#2166).
         let bytes = self.session.save_bytes(self.id).map_err(|e| e.to_string())?;
         self.session.check_save(self.id, &bytes).map_err(|e| e.to_string())?;
-        Ok(FileResult { bytes, pages, file_skipped: None })
+        Ok(FileResult { bytes, pages, file_skipped: None, pdfa: applied.pdfa })
     }
 }
 
@@ -1355,6 +1431,102 @@ mod tests {
         assert!(covered([131.0, 52.0, 170.0, 61.0], &glyphs) < ALREADY_ON_PAGE);
         // A page without text has nothing to cover a word.
         assert_eq!(covered([100.5, 52.0, 134.0, 61.0], &[]), 0.0);
+    }
+
+    /// A scan (a picture of a text page, no text of its own) and the words OCR would find on it.
+    fn scan(s: &mut Session) -> (DocId, Vec<OcrPage>) {
+        let text = s.create_from_text("t", "The quick brown fox jumps over the lazy dog.").unwrap();
+        let id = s.open("text.pdf", None, text, None).unwrap();
+        let png = export::Exporter::new(s.get(id).unwrap()).png(0, 150.0).unwrap();
+        let scan = s.create_from_images_with_resolution(&[("scan.png".into(), png)], crate::ImageResolution::Dpi(150.0)).unwrap();
+        let id = s.open("scan.pdf", None, scan, None).unwrap();
+        let word = |text: &str, x: f64| PlacedWord {
+            text: text.into(),
+            origin: [x, 700.0],
+            across: [40.0, 0.0],
+            up: [0.0, 12.0],
+            confidence: None,
+            source: "ocrs".into(),
+        };
+        let found =
+            vec![OcrPage { page: 0, words: vec![word("quick", 100.0), word("lazy", 300.0)], already_on_page: 0, skipped: None, notes: Vec::new() }];
+        (id, found)
+    }
+
+    fn font_issues(issues: &[pdfcraft_preflight::Issue]) -> Vec<&str> {
+        issues.iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message.as_str()).collect()
+    }
+
+    /// Recognize text ▸ Save as PDF/A: the words and the conversion are one undo step, and the
+    /// result passes the PDF/A-2b check, saved and opened again. The text layer's Helvetica isn't
+    /// embedded, which PDF/A allows for invisible text (ISO 19005-2 §6.2.11.4.1); the same font
+    /// drawn visibly is still reported.
+    #[test]
+    fn recognized_scans_can_be_saved_as_pdfa() {
+        use pdfcraft_preflight::Level;
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let (id, found) = scan(&mut s);
+        assert!(!s.get(id).unwrap().pdfa_verify(Level::A2b).is_empty(), "a plain scan isn't PDF/A");
+        let settings = OcrSettings { pdfa: Some(Level::A2b), ..Default::default() };
+        let a = s.apply_ocr_with(id, &found, &settings).unwrap();
+        let pdfa = a.pdfa.expect("a PDF/A report");
+        assert!(pdfa.compliant(), "{pdfa:#?}");
+        assert_eq!((a.words, pdfa.level), (2, Level::A2b));
+        assert_eq!(s.get(id).unwrap().can_undo(), Some("Recognize text"));
+        let saved = s.save_bytes(id).unwrap();
+        let back = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+        assert_eq!(pdfcraft_preflight::verify(&back, Level::A2b), []);
+        assert_eq!(pdfcraft_preflight::declared(&back).pdfa, Some((2, "B".into())));
+        let mut r = PageRenderer::new(saved, RenderConfig::default());
+        let text = r.render(RenderRequest { page: 0, kind: RequestKind::Text, scale: 1.0, ..Default::default() }).text.unwrap();
+        assert!(text.glyphs.iter().map(|g| g.text.as_str()).collect::<String>().contains("quick"));
+        // One undo takes both back.
+        s.undo(id).unwrap();
+        assert!(!s.get(id).unwrap().pdfa_verify(Level::A2b).is_empty());
+
+        // Text drawn visibly in the same, unembedded font is reported, not hidden.
+        let (id, found) = scan(&mut s);
+        s.apply(
+            id,
+            Edit::AddText { page: 0, text: crate::AddedText { rect: [72.0, 72.0, 200.0, 100.0], text: "Stamped".into(), ..Default::default() } },
+        )
+        .unwrap();
+        let a = s.apply_ocr_with(id, &found, &OcrSettings { pdfa: Some(Level::A3b), ..Default::default() }).unwrap();
+        let pdfa = a.pdfa.unwrap();
+        assert!(pdfa.refused.is_none() && !pdfa.compliant());
+        assert_eq!(font_issues(&pdfa.remaining), ["The font Helvetica isn't embedded"], "{:#?}", pdfa.remaining);
+    }
+
+    /// When the document's security doesn't allow removing the encryption (which PDF/A forbids),
+    /// the words are still added and the refusal is reported; without words, nothing changes.
+    #[test]
+    fn a_pdfa_conversion_the_security_refuses_still_adds_the_words() {
+        let mut s = Session::new();
+        let (plain, found) = scan(&mut s);
+        let mut doc = pdfcraft_cos::Document::open(s.get(plain).unwrap().bytes.clone()).unwrap();
+        doc.set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: "pw",
+            owner_password: "owner",
+            // Changes allowed; printing and copying withheld.
+            permissions: !((1 << 2) | (1 << 4)),
+            encrypt_metadata: true,
+            seed: [7; 32],
+        })
+        .unwrap();
+        let bytes = Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
+        let id = s.open("locked.pdf", None, bytes, Some("pw")).unwrap();
+        let settings = OcrSettings { pdfa: Some(pdfcraft_preflight::Level::A2b), ..Default::default() };
+        let a = s.apply_ocr_with(id, &found, &settings).unwrap();
+        let pdfa = a.pdfa.unwrap();
+        assert!(pdfa.refused.as_deref().is_some_and(|r| r.contains("encryption")), "{pdfa:?}");
+        assert_eq!(a.words, 2);
+        assert_eq!(s.get(id).unwrap().can_undo(), Some("Recognize text"));
+        let none: Vec<OcrPage> = Vec::new();
+        s.undo(id).unwrap();
+        let a = s.apply_ocr_with(id, &none, &settings).unwrap();
+        assert!(a.pdfa.unwrap().refused.is_some());
+        assert_eq!(s.get(id).unwrap().can_undo(), None);
     }
 
     #[test]

@@ -33,6 +33,8 @@ pub struct OcrDraft {
     pub dpi: u32,
     /// Also recognize pages that already have text (pictures on them; their text isn't added again).
     pub text_pages: bool,
+    /// Save the result as PDF/A-2b ("Make scans PDF/A compliant").
+    pub pdfa: bool,
     /// Which engine reads the pages.
     pub engine: EngineChoice,
     /// How two engines' readings combine.
@@ -64,6 +66,7 @@ impl Default for OcrDraft {
             language: "en".into(),
             dpi: 300,
             text_pages: false,
+            pdfa: false,
             engine: EngineChoice::default(),
             strategy: MergeStrategy::default(),
             auto_rotate: false,
@@ -95,6 +98,7 @@ impl OcrDraft {
             skip_text_files: self.skip_text_files,
             skip_text_pages: self.skip_text_pages && !self.text_pages,
             force_ocr: self.force_ocr,
+            pdfa: self.pdfa.then_some(pdfcraft_engine::pdfa::Level::A2b),
             ..Default::default()
         }
     }
@@ -203,6 +207,9 @@ pub struct OcrRun {
     /// What the document looked like when the job started: a result is applied only while it
     /// still does (the dialog closes on Go, so the user can edit, or redact, while this runs).
     pub guard: pdfcraft_engine::ocr::OcrGuard,
+    /// What the run was asked for: what happens after recognition (PDF/A) when the result is
+    /// applied.
+    pub settings: OcrSettings,
     /// Set for a run Edit started on a scanned page, not asked for: it shows no progress, says nothing
     /// when it found no words (a page with text of its own is skipped, and Edit must not make noise),
     /// and its result waits for Read mode and dialogs and is dropped if the document changed.
@@ -352,6 +359,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 ui.add_space(4.0);
                 ui.add(crate::widgets::checkbox(&mut d.text_pages, tl!("Also recognize pages that already have text")))
                     .on_hover_text(tl!("Pictures on those pages are recognized too; words already in the page's text are not added again"));
+                ui.add(crate::widgets::checkbox(&mut d.pdfa, tl!("Save as PDF/A-2b")))
+                    .on_hover_text(tl!("Converts the result to PDF/A-2b for archiving and says what still keeps it from complying"));
                 ui.add(crate::widgets::checkbox(&mut d.auto_rotate, tl!("Straighten pages scanned sideways or upside down")));
                 ui.add(crate::widgets::checkbox(&mut d.deskew, tl!("Straighten skewed text lines")));
                 ui.add(crate::widgets::checkbox(&mut d.denoise, tl!("Remove scan speckle")));
@@ -485,6 +494,10 @@ impl PdfCraftApp {
         // a page with real text and a background picture is left alone.
         settings.skip_text_pages = true;
         settings.native_text_only = true;
+        // Edit only makes the words editable: it never converts the document.
+        settings.pdfa = None;
+        // Edit only makes the words editable: it never converts the document.
+        settings.pdfa = None;
         self.start_ocr_pages(scan.doc, &[scan.page], settings, true);
     }
 
@@ -573,7 +586,7 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         {
             let web = Some(crate::ocr_web::Pages::new(job.steps()));
-            self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable, web });
+            self.ocr_run = Some(OcrRun { doc: id, progress, guard, settings, automatic: auto, editable, web });
             self.poll_ocr();
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -594,6 +607,7 @@ impl PdfCraftApp {
         editable: bool,
     ) {
         let p = progress.clone();
+        let asked = settings.clone();
         // A failure is written on the worker thread: in the UI's language.
         let lang = crate::i18n::current();
         let work = move || {
@@ -617,7 +631,7 @@ impl PdfCraftApp {
         } else {
             std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work).ok();
         }
-        self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable });
+        self.ocr_run = Some(OcrRun { doc: id, progress, guard, settings: asked, automatic: auto, editable });
         self.poll_ocr();
     }
 
@@ -897,7 +911,8 @@ impl PdfCraftApp {
             }
         }
         let Some(run) = self.ocr_run.as_ref() else { return };
-        let (doc, progress, auto, guard, editable) = (run.doc, run.progress.clone(), run.automatic, run.guard.clone(), run.editable);
+        let (doc, progress, auto, guard, editable, settings) =
+            (run.doc, run.progress.clone(), run.automatic, run.guard.clone(), run.editable, run.settings.clone());
         let automatic = auto.is_some();
         let mut s = match progress.lock() {
             Ok(s) => s,
@@ -966,8 +981,9 @@ impl PdfCraftApp {
         let skipped = found.len() - read;
         // The guard refuses a result that no longer fits its document (the user edited, or
         // redacted, while the worker was out); its reason says so.
-        match self.session.apply_ocr_checked(doc, &found, &guard) {
-            Ok(words) => {
+        match self.session.apply_ocr_checked_with(doc, &found, &guard, &settings) {
+            Ok(applied) => {
+                let words = applied.words;
                 if let Some(info) = self.session.get(doc).map(|d| d.info.clone())
                     && let Some(view) = self.views.iter_mut().find(|v| v.id == doc)
                 {
@@ -997,6 +1013,9 @@ impl PdfCraftApp {
                     msg.push_str("; ");
                     msg.push_str(note);
                 }
+                if let Some(pdfa) = &applied.pdfa {
+                    msg.push_str(&pdfa_part(pdfa));
+                }
                 self.notify(msg);
             }
             Err(e) => self.notify_error(e),
@@ -1020,6 +1039,8 @@ pub(crate) fn run_batch_files(
 ) -> String {
     let total = files.len();
     let (mut ok, mut skipped, mut words, mut failed, mut notes) = (0usize, 0usize, 0usize, Vec::new(), Vec::new());
+    // Files written as PDF/A, and the ones that weren't or still break a rule (by name).
+    let (mut pdfa_ok, mut pdfa_not) = (0usize, Vec::new());
     let mut not_run: Option<usize> = None;
     for (i, (name, bytes)) in files.into_iter().enumerate() {
         if progress.lock().map(|s| s.cancel).unwrap_or(false) {
@@ -1036,6 +1057,11 @@ pub(crate) fn run_batch_files(
                 Ok(()) => {
                     ok += 1;
                     words += res.words();
+                    match &res.pdfa {
+                        Some(p) if p.compliant() => pdfa_ok += 1,
+                        Some(_) => pdfa_not.push(name.clone()),
+                        None => {}
+                    }
                     if let Some(note) = low_confidence_note(&name, &res, settings.low_confidence_threshold) {
                         notes.push(note);
                     }
@@ -1045,7 +1071,17 @@ pub(crate) fn run_batch_files(
             Err(e) => failed.push(format!("{name}: {e}")),
         }
     }
-    batch_summary(ok, words, skipped, &failed, &notes, not_run)
+    let mut msg = batch_summary(ok, words, skipped, &failed, &notes, not_run);
+    if pdfa_ok > 0 || !pdfa_not.is_empty() {
+        msg.push_str(&crate::i18n::fmt(tl!("; {n} saved as PDF/A"), &[("n", &pdfa_ok.to_string())]));
+        if !pdfa_not.is_empty() {
+            msg.push_str(&crate::i18n::fmt(
+                tl!("; not PDF/A yet: {list} (open them in Apply PDF standards ▸ Save as PDF/A)"),
+                &[("list", &pdfa_not.join(", "))],
+            ));
+        }
+    }
+    msg
 }
 
 /// The batch's low-confidence note for one file: its words at or under `threshold` (60 by
@@ -1078,6 +1114,22 @@ fn batch_summary(ok: usize, words: usize, skipped: usize, failed: &[String], not
         msg.push_str(note);
     }
     msg
+}
+
+/// How saving as PDF/A went, appended to a Recognize Text summary.
+fn pdfa_part(pdfa: &pdfcraft_engine::ocr::OcrPdfA) -> String {
+    let level = pdfa.level.label();
+    if let Some(why) = &pdfa.refused {
+        crate::i18n::fmt(tl!("; not saved as {level}: {why}"), &[("level", level), ("why", why)])
+    } else if pdfa.remaining.is_empty() {
+        crate::i18n::fmt(tl!("; saved as {level}"), &[("level", level)])
+    } else {
+        let first = pdfa.remaining.first().map(|i| i.said(&crate::i18n::words)).unwrap_or_default();
+        crate::i18n::fmt(
+            tl!("; converted to {level}, but not everything complies yet ({first}); see Apply PDF standards ▸ Save as PDF/A"),
+            &[("level", level), ("first", &first)],
+        )
+    }
 }
 
 /// "Recognize text failed: {e}", in the current language.
@@ -1204,6 +1256,7 @@ mod tests {
                 doc: app.active_ids().unwrap().1,
                 progress,
                 guard,
+                settings: OcrSettings::default(),
                 automatic: automatic.then_some(AutoOcr { page: 0, generation }),
                 editable: false,
             }
@@ -1231,6 +1284,52 @@ mod tests {
         app.poll_ocr();
         assert_eq!(label(&app).as_deref(), Some("Recognize text"));
     }
+    /// Save as PDF/A-2b in the dialog reaches the run: the result is converted in the same undo
+    /// step and the summary says so. A run Edit starts never converts, whatever the dialog says.
+    #[test]
+    fn save_as_pdfa_converts_when_the_result_is_applied() {
+        use pdfcraft_engine::pdfa::Level;
+        let mut app = app_with(scan());
+        app.ocr_draft.pdfa = true;
+        assert_eq!(app.ocr_draft.settings().pdfa, Some(Level::A2b));
+        let id = app.active_ids().unwrap().1;
+        let page = pdfcraft_engine::ocr::OcrPage {
+            page: 0,
+            words: vec![pdfcraft_engine::ocr::PlacedWord {
+                text: "scanned".into(),
+                origin: [1.0, 1.0],
+                across: [5.0, 0.0],
+                up: [0.0, 2.0],
+                confidence: None,
+                source: "ocrs".into(),
+            }],
+            already_on_page: 0,
+            skipped: None,
+            notes: Vec::new(),
+        };
+        let run = |app: &PdfCraftApp, settings: OcrSettings, automatic: bool| OcrRun {
+            doc: id,
+            progress: Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page.clone()])), cancel: false })),
+            guard: app.session.ocr_guard(id).unwrap(),
+            settings,
+            automatic: automatic.then(|| AutoOcr { page: 0, generation: app.session.get(id).unwrap().edit_generation() }),
+            editable: false,
+        };
+        let compliant = |app: &PdfCraftApp| app.session.get(id).unwrap().pdfa_verify(Level::A2b).is_empty();
+        app.mode = Mode::Edit;
+        let mut edit_settings = app.ocr_draft.settings();
+        edit_settings.pdfa = None;
+        app.ocr_run = Some(run(&app, edit_settings, true));
+        app.poll_ocr();
+        assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"));
+        assert!(!compliant(&app), "Edit never converts");
+        app.ocr_run = Some(run(&app, app.ocr_draft.settings(), false));
+        app.poll_ocr();
+        assert!(compliant(&app), "{:?}", app.session.get(id).unwrap().pdfa_verify(Level::A2b));
+        let toast = app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(toast.contains("saved as PDF/A-2b"), "{toast}");
+    }
+
     /// A run's result is for the document as it was when the run started. Once the document has
     /// changed, a result of Edit's is dropped, not applied to whatever page now has its index, and
     /// the page may be judged again.
@@ -1255,7 +1354,14 @@ mod tests {
         };
         let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
         let guard = app.session.ocr_guard(id).unwrap();
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: Some(AutoOcr { page: 0, generation }), editable: false });
+        app.ocr_run = Some(OcrRun {
+            doc: id,
+            progress,
+            guard,
+            settings: OcrSettings::default(),
+            automatic: Some(AutoOcr { page: 0, generation }),
+            editable: false,
+        });
         app.views[0].auto_ocr_tried.insert(0);
         // The document changes while the run is out.
         let img = craft_image_codecs::Image::from_u8(8, 8, craft_image_codecs::ChannelLayout::Rgba, [250, 250, 250, 255].repeat(64)).unwrap();
@@ -1295,7 +1401,7 @@ mod tests {
         let guard = app.session.ocr_guard(id).unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 3, ..Default::default() }));
         poison(&progress);
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, settings: OcrSettings::default(), automatic: None, editable: false });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the next run isn't refused as already running");
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
@@ -1502,7 +1608,7 @@ mod tests {
         };
         let page = OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() };
         let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, settings: OcrSettings::default(), automatic: None, editable: false });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the run is over");
         let toast = app.toast.clone().map(|t| t.0).unwrap_or_default();
@@ -1538,7 +1644,7 @@ mod tests {
         };
         let guard = app.session.ocr_guard(id).unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, settings: OcrSettings::default(), automatic: None, editable: false });
         app.poll_ocr();
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
         assert!(toast.contains("3 characters had no font"), "{toast}");
@@ -1565,7 +1671,7 @@ mod tests {
         let guard = app.session.ocr_guard(id).unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
         app.ocr_draft.output_mode = pdfcraft_engine::ocr::OutputMode::EditableText;
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: true });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, settings: OcrSettings::default(), automatic: None, editable: true });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the run is over");
         assert_eq!(app.session.get(id).unwrap().can_undo(), None, "no invisible layer was written");

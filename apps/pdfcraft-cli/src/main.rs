@@ -84,7 +84,7 @@ pdfcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.jso
 pdfcraft-cli audit  <file.pdf> [--password PW]            find faux redactions (fails when found)
 pdfcraft-cli batch <files or dirs...> --steps convert,ocr,optimize --out-dir DIR
                       [--recursive] [--root DIR] [--stop-on-error]
-                      [--ppi 150] [--quality 60] [--dpi 300] [--language en] [--ocr-all-pages]
+                      [--ppi 150] [--quality 60] [--dpi 300] [--language en] [--ocr-all-pages] [--pdfa 2b|3b]
 pdfcraft-cli tools                                       automation tools and their JSON Schemas
 pdfcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
 pdfcraft-cli run    --script steps.json [--root DIR] [--report]

@@ -2,9 +2,10 @@ use super::{Args, Automation, Result, ToolError, Value, child, failed, json, wit
 
 impl Automation {
     /// The settings every OCR tool shares: dpi, language, the engine/strategy choice, the four
-    /// preprocessing flags, the skip flags and the output mode — each named exactly as its tool
-    /// schema says. An unknown engine, strategy or mode is an honest error, never a silent
-    /// fallback: a tool run must not quietly do something other than what it was asked.
+    /// preprocessing flags, the skip flags, the output mode and the optional PDF/A level — each
+    /// named exactly as its tool schema says. An unknown engine, strategy or mode is an honest
+    /// error, never a silent fallback: a tool run must not quietly do something other than what
+    /// it was asked.
     pub(crate) fn ocr_settings(&self, a: &Args) -> Result<pdfcraft_engine::ocr::OcrSettings> {
         use pdfcraft_engine::ocr::{EngineChoice, MergeStrategy, OutputMode};
         let mut settings = pdfcraft_engine::ocr::OcrSettings::default();
@@ -64,6 +65,12 @@ impl Automation {
             if let Some(on) = a.opt_bool(key)? {
                 *flag = on;
             }
+        }
+        if let Some(l) = a.opt_str("pdfa")? {
+            settings.pdfa = Some(
+                pdfcraft_engine::pdfa::Level::from_id(l)
+                    .ok_or_else(|| ToolError::InvalidArgs(format!("pdfa must be \"2b\" or \"3b\", not {l:?}")))?,
+            );
         }
         Ok(settings)
     }
@@ -199,6 +206,9 @@ impl Automation {
                     ok += 1;
                     words += r.words();
                     let mut entry = json!({ "path": p, "output": target.to_string_lossy(), "words": r.words(), "skipped_pages": skipped_pages });
+                    if let Some(x) = &r.pdfa {
+                        entry["pdfa"] = pdfa_json(x);
+                    }
                     // The batch's low-confidence note: at or under the settings' threshold (60
                     // by default), on 1-based sorted pages.
                     let threshold = settings.low_confidence_threshold;
@@ -268,10 +278,15 @@ impl Automation {
         let recognizers = pdfcraft_engine::ocr::recognizers(&settings).map_err(failed)?;
         match out {
             None => {
-                let (found, out) = self.session.with_own_js_output(id, |s| s.recognize_text(id, &pages, settings)).map_err(failed)?;
+                let ((found, applied), out) =
+                    self.session.with_own_js_output(id, |s| s.recognize_text_reporting(id, &pages, settings)).map_err(failed)?;
                 let warnings = out.errors;
                 let words = found.iter().map(|p| p.words.len()).sum::<usize>();
-                Ok(with_warnings(json!({ "words": words, "pages": Self::ocr_pages_json(&found, copy) }), warnings))
+                let mut v = json!({ "words": words, "pages": Self::ocr_pages_json(&found, copy) });
+                if let Some(x) = &applied.pdfa {
+                    v["pdfa"] = pdfa_json(x);
+                }
+                Ok(with_warnings(v, warnings))
             }
             Some(out) => {
                 let job = self.session.ocr_job(id, &pages, settings).ok_or_else(|| failed("the document could not be read"))?;
@@ -541,6 +556,18 @@ impl Automation {
             .collect();
         Ok(json!({ "available": ocr::available(), "search_dirs": dirs, "languages": langs, "engines": engines }))
     }
+}
+
+/// How `pdfa` went: the level, whether the result passes PdfCraft's PDF/A check, why the
+/// conversion was refused (the words were added without it), and what the result still breaks,
+/// as `pdfa_verify` lists it.
+pub(crate) fn pdfa_json(x: &pdfcraft_engine::ocr::OcrPdfA) -> Value {
+    let remaining: Vec<Value> = x
+        .remaining
+        .iter()
+        .map(|i| json!({ "clause": i.clause, "message": i.message, "page": i.page.map(|p| p + 1), "fixable": i.fixable }))
+        .collect();
+    json!({ "level": x.level.label(), "compliant": x.compliant(), "refused": x.refused, "remaining": remaining })
 }
 
 /// The file name an input is written under: its own file name, or `document.pdf` when it has none.
