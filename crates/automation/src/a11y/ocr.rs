@@ -110,10 +110,15 @@ impl Automation {
 }
 
 /// What `output: "downsampled"` did to the images: how many the recognised pages draw, how many
-/// were resampled, their encoded bytes before and after, and each image above the resolution left
-/// as it is with why.
+/// were resampled, their encoded bytes before and after, each image above the resolution left
+/// as it is with why, and, for a document refused as a whole (a signed one), why under `refused`.
 pub(crate) fn images_json(i: &pdfcraft_engine::ocr::ScanImages) -> Value {
-    json!({ "images": i.images, "downsampled": i.resampled, "bytes_before": i.bytes_before, "bytes_after": i.bytes_after, "skipped": i.skipped })
+    let mut v =
+        json!({ "images": i.images, "downsampled": i.resampled, "bytes_before": i.bytes_before, "bytes_after": i.bytes_after, "skipped": i.skipped });
+    if let Some(why) = &i.refused {
+        v["refused"] = json!(why);
+    }
+    v
 }
 
 /// The file name an input is written under: its own file name, or `document.pdf` when it has none.

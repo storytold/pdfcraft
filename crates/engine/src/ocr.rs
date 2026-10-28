@@ -257,7 +257,7 @@ impl Session {
             edits.push(Edit::DownsampleImages { pages: read, ppi: f64::from(settings.dpi.clamp(72.0, 600.0)) });
         }
         let refused = signed.then(|| ScanImages {
-            skipped: vec!["the document is signed: its images are left as they are, since a smaller file needs a full rewrite, which would break the signatures".into()],
+            refused: Some("the document is signed: its images are left as they are, since a smaller file needs a full rewrite, which would break the signatures".into()),
             ..Default::default()
         });
         if edits.is_empty() {
@@ -466,6 +466,28 @@ mod tests {
         let a = s.apply_ocr_with(id, &found, &settings).unwrap();
         assert_eq!((a.words, a.images), (0, None));
         assert_eq!(s.get(id).unwrap().can_undo(), None);
+    }
+
+    /// A signed document keeps its images, and the report gives the reason once for the
+    /// document, not as an image of its own left as it is: `skipped` lists images only.
+    #[test]
+    fn a_signed_document_is_refused_as_a_whole_not_as_one_skipped_image() {
+        // After the test certificate's start date (2026-10-02).
+        let mut s = Session::new().with_clock(|| 1_800_000_000);
+        let (id, found) = scan_600(&mut s);
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+        let digital_id = pdfcraft_sign::pkcs12::open(&p12, "test").unwrap();
+        let opts = crate::SignOptions { page: 0, rect: Some([20.0, 20.0, 180.0, 60.0]), ..Default::default() };
+        let signed = s.sign(id, &digital_id, opts).unwrap();
+        let id = s.open("signed.pdf", None, signed, None).unwrap();
+        assert!(s.get(id).unwrap().is_signed());
+        let width = s.get(id).unwrap().page_images(0)[0].width;
+        let settings = OcrSettings { output: OcrOutput::Downsampled, dpi: 300.0, ..Default::default() };
+        let images = s.apply_ocr_with(id, &found, &settings).unwrap().images.expect("a report");
+        assert!(images.skipped.is_empty(), "no image was looked at: {:?}", images.skipped);
+        assert!(images.refused.as_deref().is_some_and(|why| why.contains("signed")), "{images:?}");
+        assert_eq!((images.images, images.resampled), (0, 0));
+        assert_eq!(s.get(id).unwrap().page_images(0)[0].width, width, "the images are left as they are");
     }
 
     #[test]

@@ -853,6 +853,17 @@ fn file_writing_tools_are_not_read_only() {
     }
 }
 
+/// Recognize text with `output: "downsampled"` throws image detail away, and the multi-file tool
+/// replaces a file of the same name in its folder (the input itself, given the input's folder),
+/// so neither may tell MCP clients it only adds.
+#[test]
+fn ocr_tools_that_can_lose_image_detail_are_destructive() {
+    for name in ["ocr_recognize", "ocr_recognize_files"] {
+        let t = tools().into_iter().find(|t| t.name == name).unwrap();
+        assert!(!t.read_only && t.destructive, "{name} can downsample images but advertises non-destructive");
+    }
+}
+
 #[test]
 fn open_inspect_render_and_find() {
     let dir = workdir("inspect");
