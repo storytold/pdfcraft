@@ -162,8 +162,9 @@ fn covered(a: [f32; 4], b: [f32; 4]) -> f32 {
 
 /// `lines` (in reading order) as paragraphs: each line goes to the region covering at least half
 /// of it, the regions are read in their rank order, and each region's lines, in the order they
-/// came, make one paragraph. A line in no region is a paragraph of its own, after the regions.
-/// Without regions the page is one paragraph: nothing says where one ends.
+/// came, make one paragraph. A line in no region (a label in a figure, a line the model missed)
+/// is a paragraph of its own, right after the paragraph of the line before it, so it stays among
+/// its neighbours. Without regions the page is one paragraph: nothing says where one ends.
 pub(crate) fn paragraphs(lines: Vec<Line>, regions: &[Region]) -> Vec<Vec<Line>> {
     if lines.is_empty() {
         return Vec::new();
@@ -175,7 +176,10 @@ pub(crate) fn paragraphs(lines: Vec<Line>, regions: &[Region]) -> Vec<Vec<Line>>
     // Stable, so regions of equal rank keep the network's order.
     ranked.sort_by(|a, b| a.rank.total_cmp(&b.rank));
     let mut members: Vec<Vec<Line>> = vec![Vec::new(); ranked.len()];
-    let mut loose: Vec<Vec<Line>> = Vec::new();
+    // Lines in no region, by the region of the last line before them that has one: `loose[0]`
+    // before every region, `loose[i + 1]` after region `i`.
+    let mut loose: Vec<Vec<Line>> = vec![Vec::new(); ranked.len() + 1];
+    let mut slot = 0;
     for line in lines {
         let best = bounds(&line.words).and_then(|b| {
             ranked
@@ -186,12 +190,28 @@ pub(crate) fn paragraphs(lines: Vec<Line>, regions: &[Region]) -> Vec<Vec<Line>>
                 .fold(None, |best: Option<(usize, f32)>, (i, v)| if best.is_none_or(|(_, w)| v > w) { Some((i, v)) } else { best })
                 .filter(|&(_, v)| v >= IN_REGION)
         });
-        match best.and_then(|(i, _)| members.get_mut(i)) {
-            Some(region) => region.push(line),
-            None => loose.push(vec![line]),
+        match best.and_then(|(i, _)| Some((i, members.get_mut(i)?))) {
+            Some((i, region)) => {
+                region.push(line);
+                slot = i.saturating_add(1);
+            }
+            None => {
+                if let Some(after) = loose.get_mut(slot) {
+                    after.push(line);
+                }
+            }
         }
     }
-    members.into_iter().filter(|m| !m.is_empty()).chain(loose).collect()
+    let mut out: Vec<Vec<Line>> = Vec::new();
+    let mut loose = loose.into_iter();
+    out.extend(loose.next().into_iter().flatten().map(|l| vec![l]));
+    for (region, after) in members.into_iter().zip(loose) {
+        if !region.is_empty() {
+            out.push(region);
+        }
+        out.extend(after.into_iter().map(|l| vec![l]));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -309,8 +329,8 @@ mod tests {
     }
 
     /// A line goes to the region that covers most of it, and only if that is at least half of it;
-    /// a line in no region is a paragraph of its own, after the regions. Empty regions make no
-    /// paragraph, and a region without a rank reads last.
+    /// a line in no region is a paragraph of its own. Empty regions make no paragraph, and a
+    /// region without a rank reads last.
     #[test]
     fn a_line_joins_the_region_covering_most_of_it() {
         let lines = vec![
@@ -334,7 +354,25 @@ mod tests {
             region([0.0, 100.0, 100.0, 110.0], f32::NAN), // no rank
         ];
         let got = paragraph_texts(&paragraphs(lines, &regions));
-        assert_eq!(got, [vec!["mostly-b"], vec!["half"], vec!["tie"], vec!["in-d"], vec!["unranked"], vec!["loose"]]);
+        assert_eq!(got, [vec!["mostly-b"], vec!["loose"], vec!["half"], vec!["tie"], vec!["in-d"], vec!["unranked"]]);
+    }
+
+    /// A line in no region stays among its neighbours: right after the paragraph of the line before
+    /// it, or first when no line before it is in a region; each is a paragraph of its own.
+    #[test]
+    fn a_line_in_no_region_stays_among_its_neighbours() {
+        let lines = vec![
+            one_word_line("caption", [0.0, 0.0, 50.0, 10.0]),
+            one_word_line("first", [0.0, 100.0, 50.0, 110.0]),
+            one_word_line("first-again", [0.0, 120.0, 50.0, 130.0]),
+            one_word_line("label", [0.0, 150.0, 50.0, 160.0]),
+            one_word_line("label2", [0.0, 170.0, 50.0, 180.0]),
+            one_word_line("second", [0.0, 200.0, 50.0, 210.0]),
+            one_word_line("footer", [0.0, 300.0, 50.0, 310.0]),
+        ];
+        let regions = [region([0.0, 195.0, 60.0, 215.0], 2.0), region([0.0, 95.0, 60.0, 135.0], 1.0)];
+        let got = paragraph_texts(&paragraphs(lines, &regions));
+        assert_eq!(got, [vec!["caption"], vec!["first", "first-again"], vec!["label"], vec!["label2"], vec!["second"], vec!["footer"]]);
     }
 
     /// Without regions nothing says where a paragraph ends: the page is one, in line order. No
