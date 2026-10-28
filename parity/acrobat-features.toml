@@ -3,6 +3,19 @@
 # Status rules: `shipped` = usable today with at least one cited test; `partial` = part exists (notes say what is
 # missing); `planned` = not started; `na` = Adobe-cloud-only (notes name the local or pluggable alternative).
 # `commands` lists registry ids from crates/engine/src/commands.rs only; `tools` lists crates/automation/src/tools.rs names.
+
+[[feature]]
+id = "create.e-invoice"
+title = "Create structured electronic invoices"
+area = "J"
+tier = "P2"
+milestone = "M10"
+status = "partial"
+commands = []
+tools = ["invoice_calculate"]
+evidence = ["crates/invoice/src/tests.rs::mixed_rates_are_grouped_with_exact_line_and_tax_totals", "crates/automation/tests/it/invoice.rs::invoice_tool_calculates_without_claiming_conformance_or_opening_documents"]
+notes = "Foundation only: read-only EUR/DE draft calculation with bounded decimal-string inputs, per-rate VAT totals and field diagnostics. No complete invoice model, editor, XML export, PDF/A-3 invoice packaging or EN 16931/XRechnung/ZUGFeRD conformance validation. Credits, exemptions, reverse charge and adjustments are not supported. A successful preview is not an electronic invoice."
+
 [schema]
 version = 1
 statuses = ["planned", "partial", "shipped", "na"]

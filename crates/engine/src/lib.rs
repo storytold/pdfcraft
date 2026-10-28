@@ -93,6 +93,8 @@ pub use pdfcraft_forms::{
 
 pub use pdfcraft_a11y as a11y;
 pub use pdfcraft_edit::{BlockKey, BlockStyle, PageImage, RangeStyle, TextBlock, TextLine, block_overlapping, first_undrawable};
+/// Invoice draft arithmetic; no format validation or document mutation.
+pub use pdfcraft_invoice as invoice;
 pub use pdfcraft_measure as measure;
 pub use pdfcraft_xfa::Report as XfaLayout;
 

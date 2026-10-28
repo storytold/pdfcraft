@@ -3,7 +3,7 @@
 //! - **Layer:** L7. Headless: depends on the engine, never on a UI toolkit.
 //! - [`Automation`] is a tool set over an engine [`Session`]: open, inspect, render, extract and
 //!   find text, edit pages and metadata, undo/redo, save, combine, extract and split. Every tool
-//!   has a JSON Schema ([`tools`]) and takes and returns JSON, so the same table drives the MCP
+//!   has a JSON Schema ([`tools()`]) and takes and returns JSON, so the same table drives the MCP
 //!   server ([`mcp`]), `pdfcraft-cli run` and (later) the UI control channel.
 //! - Pages are **1-based** in every tool, as people number them. Rectangles are in PDF points
 //!   with the origin at the top-left of the displayed page.
@@ -21,6 +21,7 @@ mod content;
 mod conventions;
 pub mod file_access;
 mod forms;
+mod invoice;
 mod layers;
 mod links;
 #[cfg(feature = "mcp")]

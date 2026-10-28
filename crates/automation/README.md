@@ -7,6 +7,11 @@ Agent control for PdfCraft: a headless tool table over the engine, and an opt-in
 
 ## API
 
+`invoice_calculate` previews bounded EUR/DE invoice draft arithmetic without opening
+or changing a PDF. Decimal values are strings. It explicitly reports that standards
+validation was not performed and creates no XML/PDF. See the
+[draft contract and example](../../docs/invoice-drafts.md).
+
 ```rust
 let mut a = Automation::new().with_root("/work")?;      // optional: confine all paths
 let doc = a.call("doc_open", &json!({ "path": "in.pdf" }))?;   // Vec<Content>

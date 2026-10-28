@@ -77,6 +77,26 @@ fn schema(props: Value, required: &[&str]) -> Value {
     json!({ "type": "object", "properties": props, "required": required, "additionalProperties": false })
 }
 
+/// Describe the narrow draft subset to CLI/MCP clients; the handler separately
+/// enforces nested limits, numeric grammar and semantic checks at runtime.
+fn invoice_draft() -> Value {
+    let text = json!({"type":"string", "maxLength":1024});
+    let decimal = json!({"type":"string", "maxLength":19, "pattern":"^[0-9]{1,12}(\\.[0-9]{1,6})?$"});
+    let party = schema(json!({"name":text, "country_code":{"type":"string", "enum":["DE"]}}), &["name", "country_code"]);
+    let line = schema(
+        json!({"description":text, "quantity":decimal, "unit_price":decimal, "vat_rate":decimal}),
+        &["description", "quantity", "unit_price", "vat_rate"],
+    );
+    schema(
+        json!({
+            "number":text, "issue_date":{"type":"string", "format":"date", "maxLength":10},
+            "currency":{"type":"string", "enum":["EUR"]}, "seller":party, "buyer":party,
+            "lines":{"type":"array", "minItems":1, "maxItems":1000, "items":line}
+        }),
+        &["number", "issue_date", "currency", "seller", "buyer", "lines"],
+    )
+}
+
 struct T {
     name: &'static str,
     title: &'static str,
@@ -121,6 +141,9 @@ pub fn tools() -> Vec<ToolDef> {
     let save_out = json!({ "type": "string", "description": "File to write. Omit to open the result as a new unsaved document instead." });
     let open = json!({ "type": "boolean", "description": "Also open the result as a new document (default: only when out is omitted)." });
     vec![
+        t("invoice_calculate", "Calculate an invoice draft", "Read-only arithmetic preview for EUR drafts with DE seller/buyer, positive quantities, non-negative unit prices and standard-rated VAT above 0 up to 100% (at most 2 fractional places). Numbers must be decimal strings, not JSON numbers. Round each line net half-up to cents, then round VAT per rate group. Returns field issues and optional totals. No EN 16931, XRechnung, ZUGFeRD, legal or tax validation is performed; no XML/PDF is generated. Unsupported adjustments, credits and exemptions must not be omitted from an input invoice to make it fit. Does not read files or change open documents.")
+            .ro()
+            .with(schema(json!({"draft":invoice_draft()}), &["draft"])),
         t("doc_batch", "Process files and folders", "Run convert, ocr and/or optimize over files and folders, one file at a time. recursive defaults to false. Preserve paths relative to each selected folder inside out_dir; duplicate inputs run once. Skip unsupported files, links and the output subtree. Existing outputs receive numbered names and are never replaced. Continue after per-file errors unless stop_on_error is true. Return completed/failed/skipped counts and per-file results. Discovery is bounded to 10000 entries and 64 folder levels. Convert must be first; each step can appear once. OCR uses installed models. Optimize uses Reduce File Size settings, optionally overriding target ppi (threshold 1.5 times ppi) and JPEG quality; a larger candidate keeps the original bytes. Sources and open documents are unchanged.")
             .with(schema(json!({
                 "paths": {"type":"array","items":{"type":"string"},"minItems":1,"maxItems":1000},
