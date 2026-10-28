@@ -3035,6 +3035,42 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
 
+/// Three pages of `DRAWING_FIXTURE`'s drawing.
+const THREE_DRAWINGS: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 5 0 R 6 0 R] /Count 3 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R >> endobj
+4 0 obj << /Length 44 >> stream
+50 50 m 250 50 l S 150 20 m 150 180 l S
+endstream endobj
+5 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R >> endobj
+6 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// The pages' paths are read only for the page under the pointer, not for every page on screen:
+/// the content widget holds all of them, so its hover tells nothing (a plan's paths take up to
+/// a second to read).
+#[test]
+fn snapping_reads_the_paths_of_the_page_under_the_pointer_only() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("drawings.pdf", None, THREE_DRAWINGS.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("quick", "polyline").unwrap();
+        app.set_option("zoom", "50").unwrap();
+        app
+    });
+    h.run_steps(4);
+    crate::support::settle(&mut h);
+    assert!((0..3).all(|p| h.state().views[0].page_screen_rect(p).is_some()), "all three pages on screen");
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    h.hover_at(at(&h, 150.0, 100.0));
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.snap_cache.cached_pages(), [0], "only the page under the pointer");
+}
+
 /// With Snap to drawing on (F3), the points of connected lines land on the page's paths: an
 /// endpoint and the intersection here; off, they stay where they were clicked.
 #[test]

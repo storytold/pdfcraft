@@ -343,6 +343,11 @@ pub struct SnapCache {
 type CommentPaths = (usize, u64, Vec<usize>, Option<std::sync::Arc<measure::snap::Geometry>>);
 
 impl SnapCache {
+    /// The pages whose paths are kept, oldest first.
+    pub fn cached_pages(&self) -> Vec<usize> {
+        self.paths.iter().map(|(page, ..)| *page).collect()
+    }
+
     /// The paths of `page` as the document is now (`None` when the page can't be read). A page
     /// whose extraction hit a limit says so once, through `notice`.
     pub fn geometry(&mut self, doc: &Document, page: usize, notice: &mut Option<&'static str>) -> Option<std::sync::Arc<measure::snap::Geometry>> {
