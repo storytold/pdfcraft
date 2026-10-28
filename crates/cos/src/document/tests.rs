@@ -1830,6 +1830,72 @@ fn a_decompression_bomb_in_an_xref_stream_is_refused_and_the_file_reconstructed(
     assert!(doc.repair_log().iter().any(|l| l.contains("limit")), "{:?}", doc.repair_log());
 }
 
+/// A chain of cross-reference streams whose sections each stay well under the per-section
+/// limit but together list more than 8,388,607 rows (#5082). Too many rows for the compact
+/// reader, the chain was merged whole; it is now refused and the file rebuilt from object
+/// headers. The bulk rows are set aside (in use at offset 0), so the test holds a few bytes a row.
+#[test]
+fn a_cross_reference_chain_past_the_total_cap_is_refused_and_the_file_reconstructed() {
+    const BULK: usize = 4_200_000;
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for body in
+        ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>"]
+    {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", offsets.len()).as_bytes());
+    }
+    // Objects 4 and 5: /W [1 0 0] rows of type 1 at offset 0, each a set-aside entry.
+    let bulk = pdfcraft_filters::encode_flate(&vec![1u8; BULK]);
+    let size = 16 + 2 * BULK;
+    let mut prev = None;
+    for (num, start) in [(4, 16 + BULK), (5, 16)] {
+        offsets.push(bytes.len());
+        let prev_key = prev.map(|p| format!(" /Prev {p}")).unwrap_or_default();
+        bytes.extend_from_slice(
+            format!(
+                "{num} 0 obj\n<< /Type /XRef /Size {size} /W [1 0 0] /Index [{start} {BULK}]{prev_key} /Filter /FlateDecode /Length {} >>\nstream\n",
+                bulk.len()
+            )
+            .as_bytes(),
+        );
+        bytes.extend_from_slice(&bulk);
+        bytes.extend_from_slice(b"\nendstream\nendobj\n");
+        prev = offsets.last().copied();
+    }
+    // Object 6, the newest section: objects 0 to 6 at their offsets.
+    let x = bytes.len();
+    offsets.push(x);
+    let mut rows = vec![0u8, 0, 0, 0, 0, 255];
+    for o in &offsets {
+        rows.push(1);
+        rows.extend_from_slice(&u32::try_from(*o).unwrap().to_be_bytes());
+        rows.push(0);
+    }
+    bytes.extend_from_slice(
+        format!("6 0 obj\n<< /Type /XRef /Size {size} /Root 1 0 R /W [1 4 1] /Index [0 7] /Prev {} /Length {} >>\nstream\n", offsets[4], rows.len())
+            .as_bytes(),
+    );
+    bytes.extend_from_slice(&rows);
+    bytes.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{x}\n%%EOF\n").as_bytes());
+
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    let log = doc.repair_log();
+    assert!(
+        log.iter().any(|l| l.contains("cross-reference chain lists more than 8388607 entries") && l.contains("rebuilding from object headers")),
+        "{log:?}"
+    );
+    assert!(log.iter().any(|l| l.starts_with("rebuilt cross-reference index")), "{log:?}");
+    assert!(doc.revisions().is_empty());
+    assert_eq!(doc.root(), Some(ObjRef::new(1, 0)));
+    let page = doc.try_get(3).unwrap();
+    assert_eq!(page.as_dict().and_then(|d| d.name(b"Type")), Some(&b"Page"[..]));
+    // The chain read itself is refused at the second bulk section, which each decode within its own limit.
+    let Err(CosError::Syntax { offset, detail }) = doc.read_xref_chain_materialized(&mut Vec::new()) else { panic!("the chain must be refused") };
+    assert_eq!(offset, offsets[3]);
+    assert!(detail.contains("more than 8388607 entries"), "{detail}");
+}
+
 #[test]
 fn a_stream_whose_length_is_itself_and_never_ends_loads_quickly() {
     // From the nightly fuzz job: `6 0 obj << /Length 6 0 R >> stream` with no `endstream`

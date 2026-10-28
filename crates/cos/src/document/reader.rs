@@ -319,6 +319,10 @@ impl Document {
         Ok(Some((section, stream.dict.clone(), true)))
     }
 
+    /// Read the cross-reference chain from `startxref` into one map of entries, newer sections
+    /// winning, with the trailer, the revisions oldest first and the set-aside entries. A chain
+    /// that lists more than [`MAX_XREF_OBJECTS`] rows in all is refused with
+    /// [`CosError::Syntax`], and the caller rebuilds the file from object headers (#5082).
     #[allow(clippy::type_complexity)]
     pub(super) fn read_xref_chain_materialized(
         &self,
