@@ -1,4 +1,6 @@
-use super::layout::{Flow, MIN_STACK, along_baseline, arrange_flow, compatible, continues, from_upright, stacked_down, to_upright, unrolled};
+use super::layout::{
+    Flow, MIN_STACK, across_in_columns, along_baseline, arrange_flow, compatible, continues, from_upright, stacked_down, to_upright, unrolled,
+};
 use super::{
     Affine, BezPath, BlendMode, ClipPath, Context, Device, Glyph, GlyphDrawMode, HashMap, Image, InterpreterCache, InterpreterSettings, PageText,
     Paint, PathDrawMode, Pdf, Rect, Shape, SoftMask, TextFilter, TextGlyph, TransformExt, interpret_page,
@@ -454,6 +456,26 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
             }
         }
     }
+    // A number set across a vertical column (縱中橫) is horizontal glyphs among vertical ones: it
+    // joins the column at its own height, with a box of its own in the column's frame (#3711).
+    // Looked up per glyph while the flows are built, so a map rather than a list: a page can hold
+    // as many of these runs as it has columns (#3812 review).
+    let mut placed: std::collections::HashMap<usize, [f32; 4]> = std::collections::HashMap::new();
+    if let (Some(across), Some(down)) = (quarters.first().cloned(), quarters.get(1).cloned())
+        && !across.is_empty()
+        && !down.is_empty()
+    {
+        placed = across_in_columns(&glyphs, &across, &down, w).into_iter().collect();
+        if !placed.is_empty() {
+            if let Some(q) = quarters.get_mut(0) {
+                q.retain(|i| !placed.contains_key(i));
+            }
+            if let Some(q) = quarters.get_mut(1) {
+                q.extend(placed.keys().copied());
+                q.sort_unstable();
+            }
+        }
+    }
     // A horizontal heading must not force a vertical body back into horizontal line grouping.
     // Group each writing direction independently, then join flows from their topmost position.
     let upright = |quarters: [Vec<usize>; 4]| {
@@ -462,7 +484,13 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
             .enumerate()
             .filter(|(_, ids)| !ids.is_empty())
             .map(|(quarter, ids)| {
-                let rects = ids.iter().map(|&i| to_upright(glyphs[i].2.rect, quarter as u8, w, h)).collect();
+                let rects = ids
+                    .iter()
+                    .map(|&i| match placed.get(&i) {
+                        Some(r) => *r,
+                        None => to_upright(glyphs[i].2.rect, quarter as u8, w, h),
+                    })
+                    .collect();
                 arrange_flow(&glyphs, ids, rects, Some(quarter as u8))
             })
             .collect();
