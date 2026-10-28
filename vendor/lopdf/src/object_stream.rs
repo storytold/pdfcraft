@@ -1,12 +1,59 @@
 use crate::parser;
 use crate::{Document, Error, Object, ObjectId, Result, Stream};
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::num::TryFromIntError;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use log::warn;
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
+
+/// PdfCraft patch: index entries read from one object stream (the same clamp `pdfcraft_cos`
+/// applies to `/N`). Entries past it are ignored, so a huge index block cannot allocate an entry
+/// list or parse a member per entry.
+pub(crate) const MAX_OBJECT_STREAM_MEMBERS: usize = 1_000_000;
+
+/// PdfCraft patch: objects (every member and everything nested in it) one load may build from
+/// all of its object streams together, about one per object of the largest cross-reference
+/// table `pdfcraft_cos` accepts (8,388,607). Each stream is bounded by the decompression limit,
+/// but a file may hold many, and every two decoded bytes can be an object of a hundred bytes or
+/// more; this keeps the worst case near a gigabyte instead of tens.
+pub(crate) const MAX_LOAD_NODES: usize = 1 << 23;
+
+/// PdfCraft patch: the objects parsing may still build, shared by every object stream one load
+/// parses (and by rayon workers, hence atomic). Each member reserves its share before parsing
+/// and refunds what it did not use, so concurrent members cannot overshoot the total.
+pub(crate) struct NodeBudget(AtomicUsize);
+
+impl NodeBudget {
+    pub(crate) fn new(nodes: usize) -> Self {
+        Self(AtomicUsize::new(nodes))
+    }
+
+    /// Take up to `want` nodes and return how many were granted (0 once the budget is spent).
+    fn reserve(&self, want: usize) -> usize {
+        let before = self
+            .0
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                Some(left.saturating_sub(want))
+            })
+            .unwrap_or_else(|left| left);
+        before.min(want)
+    }
+
+    fn refund(&self, nodes: usize) {
+        // The closure always returns `Some`, so the update cannot fail.
+        let _ = self.0.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+            Some(left.saturating_add(nodes))
+        });
+    }
+
+    fn spent(&self) -> bool {
+        self.0.load(Ordering::Relaxed) == 0
+    }
+}
 
 #[derive(Debug)]
 pub struct ObjectStream {
@@ -50,7 +97,18 @@ impl ObjectStream {
     /// Parse an existing object stream without modifying it, rejecting the
     /// decoded content if it would exceed `max_decompressed_size` bytes. `None`
     /// means no limit (the behavior of [`ObjectStream::new`]).
+    ///
+    /// PdfCraft patch: members are built from a budget of `MAX_LOAD_NODES` objects of their own.
     pub fn new_with_limit(stream: &Stream, max_decompressed_size: Option<usize>) -> Result<ObjectStream> {
+        Self::new_within(stream, max_decompressed_size, &NodeBudget::new(MAX_LOAD_NODES))
+    }
+
+    /// PdfCraft patch: [`ObjectStream::new_with_limit`], building members from `budget`, which a
+    /// load shares between all of its object streams. A member that would exceed its share, or
+    /// any member once the budget is spent, is skipped with a warning.
+    pub(crate) fn new_within(
+        stream: &Stream, max_decompressed_size: Option<usize>, budget: &NodeBudget,
+    ) -> Result<ObjectStream> {
         let content = match max_decompressed_size {
             // Object streams are decoded while the document is loaded, so
             // enforcing the limit here bounds the memory a single stream can use.
@@ -75,8 +133,10 @@ impl ObjectStream {
         let index_block = content.get(..first_offset).ok_or(Error::InvalidOffset(first_offset))?;
 
         let numbers_str = std::str::from_utf8(index_block).map_err(|e| Error::InvalidObjectStream(e.to_string()))?;
+        // PdfCraft patch: read at most `MAX_OBJECT_STREAM_MEMBERS` index entries.
         let numbers: Vec<_> = numbers_str
             .split_whitespace()
+            .take(2 * MAX_OBJECT_STREAM_MEMBERS)
             .map(|number| u32::from_str(number).ok())
             .collect();
         let len = numbers.len() / 2 * 2; // Ensure only pairs.
@@ -84,6 +144,9 @@ impl ObjectStream {
         let n = stream.dict.get(b"N").and_then(Object::as_i64)?;
         if numbers.len().try_into().ok() != n.checked_mul(2) {
             warn!("object stream: the object stream dictionary specifies a wrong number of objects")
+        }
+        if usize::try_from(n).is_ok_and(|n| n > MAX_OBJECT_STREAM_MEMBERS) {
+            warn!("object stream: /N {n} exceeds {MAX_OBJECT_STREAM_MEMBERS}; later members are ignored")
         }
 
         // PdfCraft patch: bound members by the next distinct offset and parse each offset
@@ -125,9 +188,20 @@ impl ObjectStream {
                 warn!("only whitespace after offset in object stream");
                 return None;
             }
-            let object = parser::direct_object(&content[start..extent_end])?;
+            // PdfCraft patch: each member builds at most `MAX_OBJECT_NODES` objects, reserved from
+            // the load's budget; once that is spent the remaining members are skipped unparsed.
+            let granted = budget.reserve(parser::MAX_OBJECT_NODES);
+            if granted == 0 {
+                return None;
+            }
+            let nodes = Cell::new(granted);
+            let object = parser::direct_object_within(&content[start..extent_end], &nodes);
+            budget.refund(nodes.get());
+            if object.is_none() && nodes.get() == 0 {
+                warn!("object stream: member {id} exceeds the object budget and was skipped");
+            }
 
-            Some(((id, 0), object))
+            Some(((id, 0), object?))
         };
         #[cfg(feature = "rayon")]
         let objects = numbers[..len]
@@ -141,6 +215,9 @@ impl ObjectStream {
             .enumerate()
             .filter_map(chunks_filter_map)
             .collect();
+        if budget.spent() {
+            warn!("object stream: the object budget is spent; remaining members were skipped");
+        }
 
         Ok(ObjectStream {
             objects,

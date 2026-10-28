@@ -183,8 +183,14 @@ impl Structure for LazyStructure {
     }
 }
 
+/// Nesting `convert` accepts: the same as `pdfcraft_cos`'s parser (each array or dictionary
+/// one level), so every object cos parsed converts. A lower limit would turn deep but valid
+/// nesting into a lazy-reader failure and force the eager lopdf fallback.
+const CONVERT_DEPTH: usize = 128;
+
+// `depth` is the nesting level of the dictionary itself; its values sit one level deeper.
 fn convert_dict(dict: &pdfcraft_cos::Dict, depth: usize) -> Result<Dictionary> {
-    if depth > 100 {
+    if depth > CONVERT_DEPTH {
         return Err(Error::RecursionLimit);
     }
     dict.iter()
@@ -202,7 +208,7 @@ fn convert_dict(dict: &pdfcraft_cos::Dict, depth: usize) -> Result<Dictionary> {
 const PRIVATE_DATA: &[u8] = b"PieceInfo";
 
 fn convert(object: &CosObject, depth: usize) -> Result<Object> {
-    if depth > 100 {
+    if depth > CONVERT_DEPTH {
         return Err(Error::RecursionLimit);
     }
     Ok(match object {
@@ -216,8 +222,8 @@ fn convert(object: &CosObject, depth: usize) -> Result<Object> {
         }
         CosObject::Ref(value) => Object::Reference((value.num, value.generation)),
         CosObject::Array(value) => Object::Array(value.iter().map(|o| convert(o, depth + 1)).collect::<Result<_>>()?),
-        CosObject::Dict(value) => Object::Dictionary(convert_dict(value, depth + 1)?),
-        CosObject::Stream(value) => Object::Stream(lopdf::Stream::new(convert_dict(&value.dict, depth + 1)?, value.raw.to_vec())),
+        CosObject::Dict(value) => Object::Dictionary(convert_dict(value, depth)?),
+        CosObject::Stream(value) => Object::Stream(lopdf::Stream::new(convert_dict(&value.dict, depth)?, value.raw.to_vec())),
     })
 }
 
