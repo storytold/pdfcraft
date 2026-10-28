@@ -104,7 +104,10 @@ config works across the suite) keep the agent to the folders you give it:
 - The roots must be existing folders; a missing one stops the server with an error. Each folder is
   given as `--flag <dir>` or `--flag=<dir>`.
 - `--root DIR` still works and can be combined with these flags. Both then apply: a path must be
-  inside `--root` and inside the matching automation root.
+  inside `--root` and inside the matching automation root. `text_font_files` without
+  `directories` then searches each read root where it meets `--root`: a read root inside `--root`
+  whole, and `--root` itself for a read root that contains it (`--automation-read-root /work` with
+  `--root /work/project` searches `/work/project`).
 
 `pdfcraft-cli mcp` always runs the session in its own process (there is no flag to connect it to a
 running app), so the roots cover every server it starts. The desktop app is not confined by them.

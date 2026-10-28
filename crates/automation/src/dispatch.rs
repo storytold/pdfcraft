@@ -512,8 +512,10 @@ impl Automation {
                         .map(|p| self.resolve(p.as_str().ok_or_else(|| ToolError::InvalidArgs("directory must be a path".into()))?, false))
                         .collect::<Result<Vec<_>>>()?
                 } else if let Some(roots) = &self.roots {
-                    // The installed fonts are outside the roots: look in the read roots instead. A root that
-                    // `--root` also rules out is left out of the search, not an error for the others.
+                    // The installed fonts are outside the roots: look in the read roots instead. Each is
+                    // searched where `--root` also allows it: whole when it lies inside `--root`, and as
+                    // `--root` itself when it contains `--root` (`/work` with `--root /work/project`).
+                    // One with no part inside `--root` is left out, not an error for the others.
                     let (mut read, mut refused) = (Vec::new(), None);
                     for r in roots.read_roots() {
                         match self.resolve(&r.to_string_lossy(), false) {
@@ -522,6 +524,14 @@ impl Automation {
                                 refused.get_or_insert(e);
                             }
                         }
+                    }
+                    // `--root` lies inside a read root exactly when it passes the read check, so it is
+                    // held to the same check as any other path.
+                    if let (Some(_), Some(root)) = (&refused, &self.root)
+                        && !read.contains(root)
+                        && let Ok(path) = self.resolve(&root.to_string_lossy(), false)
+                    {
+                        read.push(path);
                     }
                     if read.is_empty() {
                         return Err(refused
