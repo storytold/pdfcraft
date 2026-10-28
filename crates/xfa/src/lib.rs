@@ -103,7 +103,7 @@ pub use pdf::{CLICK_KEY, LAYOUT_KEY, NODE_KEY, SOM_KEY, Stripped, XfaShape, exis
 pub use picture::typed_date;
 pub use script::{
     FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, ScriptEvent, apply_overrides, data_of, field_grows_with_text,
-    fields_by_som, form_tree, has_scripts, overrides, refresh_value, rerender, set_overrides, template_of,
+    fields_by_som, form_tree, has_scripts, overrides, refresh_value, rerender, script_objects_for, set_overrides, template_of,
 };
 
 #[derive(Debug, thiserror::Error)]

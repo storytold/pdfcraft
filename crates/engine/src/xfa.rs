@@ -661,7 +661,20 @@ impl<'a, 'b> Runner<'a, 'b> {
         self.check_live();
         let event = XfaEvent { activity: ev.activity.clone(), target: ev.som.clone(), new_text: new_text.to_string(), prev_text: String::new() };
         let root = to_js(&self.live().root);
+        // a JavaScript event may call the script objects of its subform, which are defined in front of it
+        let prelude = if ev.formcalc {
+            String::new()
+        } else {
+            match pdfcraft_xfa::script_objects_for(self.tpl, &ev.som, &ev.script) {
+                Ok(prelude) => prelude,
+                Err(why) => {
+                    self.error(format!("{} ({}): {why}", ev.som, ev.activity));
+                    return Ok(None);
+                }
+            }
+        };
         let script = Script {
+            prelude,
             source: ev.script.clone(),
             formcalc: ev.formcalc,
             event,

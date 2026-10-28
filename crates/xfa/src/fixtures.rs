@@ -739,3 +739,39 @@ if (this.rawValue == "1") {
 "##
     .to_string()
 }
+
+/// A form with script objects (`<variables><script name="...">`): `Calc` on the root subform, `Names` on the `page`
+/// subform, and fields that call them from an initialize script. `total` uses `Calc.twice` and the variable `Calc.step`;
+/// `label` uses `Names.greet`, which itself uses `Calc`.
+pub fn script_objects_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <variables>
+  <script name="Calc" contentType="application/x-javascript">
+// a comment that says function not_a_function
+var step = 5;
+function twice(x) { return x * 2 + step; }
+  </script>
+  <script name="Unused" contentType="application/x-javascript">function never() { throw new Error("not defined unless used"); }</script>
+ </variables>
+ <subform name="page" layout="tb">
+  <variables>
+   <script name="Names" contentType="application/x-javascript">function greet(n) { return "Hello " + n + " " + Calc.twice(1); }</script>
+   <script name="Formcalc" contentType="application/x-formcalc">$ = 1</script>
+  </variables>
+  <field name="total" w="2in" h="0.3in"><ui><textEdit/></ui>
+   <event activity="initialize"><script contentType="application/x-javascript">this.rawValue = Calc.twice(10);</script></event>
+  </field>
+  <field name="label" w="2in" h="0.3in"><ui><textEdit/></ui>
+   <event activity="initialize"><script contentType="application/x-javascript">this.rawValue = Names.greet("Ada");</script></event>
+  </field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}

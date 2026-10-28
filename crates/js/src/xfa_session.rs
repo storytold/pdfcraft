@@ -30,9 +30,15 @@ pub fn engines_started() -> u64 {
     ENGINES_STARTED.with(std::cell::Cell::get)
 }
 
+/// The most a script's script objects may add to it.
+pub const MAX_PRELUDE_BYTES: usize = 2 * 1024 * 1024;
+
 /// What one script run needs.
 #[derive(Clone, Debug)]
 pub struct Script {
+    /// The script objects the source calls, defined in front of it (read for what they are: part of the form, not a
+    /// script to size up on its own, though bounded by [`MAX_PRELUDE_BYTES`]).
+    pub prelude: String,
     pub source: String,
     pub formcalc: bool,
     pub event: XfaEvent,
@@ -64,7 +70,11 @@ fn run_script(s: Script, doc: &XfaDoc, started: &dyn Fn()) -> XfaOutcome {
         started();
         return XfaOutcome { error: Some(why), ..Default::default() };
     }
-    crate::xfa::run_here(&s.source, &s.event, doc, s.root, s.limits, started)
+    if s.prelude.len() > MAX_PRELUDE_BYTES {
+        started();
+        return XfaOutcome { error: Some(format!("the form's script objects are too large ({} KiB)", s.prelude.len() / 1024)), ..Default::default() };
+    }
+    crate::xfa::run_here_with(&s.source, &s.prelude, &s.event, doc, s.root, s.limits, started)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

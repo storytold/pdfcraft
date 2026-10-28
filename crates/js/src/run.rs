@@ -36,6 +36,11 @@ pub(crate) fn refuse(source: &str) -> Option<String> {
     if source.len() > MAX_SCRIPT_BYTES {
         return Some(format!("the script is too long ({} KiB; the limit is {} KiB)", source.len() / 1024, MAX_SCRIPT_BYTES / 1024));
     }
+    refuse_nesting(source)
+}
+
+/// [`refuse`] for code with a length limit of its own: only its nesting is checked.
+pub(crate) fn refuse_nesting(source: &str) -> Option<String> {
     let too_deep = || Some("the script is nested too deeply to run safely".to_string());
     let b = source.as_bytes();
     let (mut depth, mut prefix, mut conditionals) = (0usize, 0usize, 0usize);

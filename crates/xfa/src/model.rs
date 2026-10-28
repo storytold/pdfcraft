@@ -416,10 +416,20 @@ impl Default for Occur {
     }
 }
 
+/// A named JavaScript the form keeps under a subform's `<variables>` (a "script object"): its functions are called
+/// through its name, from any script of that subform or below.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ScriptObject {
+    pub name: String,
+    pub text: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Subform {
     pub common: Common,
     pub layout: Layout,
+    /// `<variables><script name="…">`: JavaScript objects the subform's scripts call by name.
+    pub script_objects: Vec<ScriptObject>,
     pub children: Vec<Node>,
     /// `<event activity="…"><script>` on the subform (initialize, calculate, …).
     pub scripts: Vec<Script>,

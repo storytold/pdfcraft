@@ -1485,6 +1485,7 @@ mod session {
     /// default limits and a 3 s timeout.
     fn script(source: &str, formcalc: bool, target: &str, activity: &str) -> Script {
         Script {
+            prelude: String::new(),
             source: source.into(),
             formcalc,
             event: XfaEvent { activity: activity.into(), target: target.into(), ..Default::default() },
@@ -1534,6 +1535,30 @@ mod session {
             assert_eq!(o.error, None, "{o:?}");
         }
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    }
+
+    /// The script objects a form keeps are defined in front of the script, count against their own bound rather
+    /// than the script's size, and a broken or oversized one fails only the scripts that use it.
+    #[test]
+    fn a_scripts_prelude_is_defined_before_it_and_bounded_on_its_own() {
+        let mut s = XfaSession::new(XfaDoc { page_count: 1, ..Default::default() });
+        let mut with = script("Calc.twice(21)", false, "form1[0].page1[0].total[0]", "calculate");
+        with.prelude = "var Calc = { twice: function (x) { return x * 2; } };\n".into();
+        assert_eq!(s.run(with).result.as_deref(), Some("42"));
+        // far past the size a script may have, but within what script objects may add
+        let mut big = script("Big.n", false, "form1[0].page1[0].total[0]", "calculate");
+        big.prelude = format!("var Big = {{ n: 7 }};\n// {}\n", "x".repeat(300 * 1024));
+        let o = s.run(big);
+        assert_eq!(o.result.as_deref(), Some("7"), "{o:?}");
+        let mut huge = script("1", false, "form1[0].page1[0].total[0]", "calculate");
+        huge.prelude = " ".repeat(crate::xfa_session::MAX_PRELUDE_BYTES + 1);
+        let o = s.run(huge);
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("script objects are too large")), "{o:?}");
+        // a script object that does not parse fails the script, not the session
+        let mut broken = script("1", false, "form1[0].page1[0].total[0]", "calculate");
+        broken.prelude = "var Bad = (function () { ;return { ;\n".into();
+        assert!(s.run(broken).error.is_some());
+        assert_eq!(s.run(script("1 + 1", false, "form1[0].page1[0].total[0]", "calculate")).result.as_deref(), Some("2"));
     }
 
     /// A JavaScript or FormCalc script whose engine takes longer to be ready than the script's

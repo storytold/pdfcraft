@@ -32,5 +32,5 @@ pub(crate) use nodes::{child_named, descendants_named, instances, resolve_som};
 pub(crate) use run::run_within_limits;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use run::{ENGINE_START_LIMIT, warm_up};
-pub(crate) use run::{run_here, run_within};
+pub(crate) use run::{run_here_with, run_within};
 pub use run::{run_xfa, run_xfa_within};

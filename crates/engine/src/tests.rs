@@ -6250,6 +6250,20 @@ fn repeated_xfa_print_buttons_run_their_click_script() {
     }
 }
 
+/// A script object (`<variables><script name="Calc">`) is called by its name from the scripts of its subform and below,
+/// from a deeper object to a shallower one, and only the ones a script uses are defined for it.
+#[test]
+fn xfa_scripts_call_the_script_objects_of_their_subform() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::script_objects_template()));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("objects.pdf", None, bytes, None).expect("opens");
+    let value = |n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_else(|| panic!("no field {n}"));
+    assert_eq!(value("total"), vec!["25".to_string()]);
+    assert_eq!(value("label"), vec!["Hello Ada 7".to_string()]);
+    let out = s.take_js_output(id);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+}
+
 #[test]
 fn xfa_scripts_initialize_calculate_validate_toggle_and_add_rows() {
     let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template()));

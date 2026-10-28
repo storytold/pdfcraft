@@ -126,6 +126,20 @@ pub(crate) fn warm_up() {
 
 /// `started` is called once the engine is ready: a time limit on the script runs from then.
 pub(crate) fn run_here(script: &str, event: &XfaEvent, doc: &XfaDoc, root: XfaNode, limits: Limits, started: &dyn Fn()) -> XfaOutcome {
+    run_here_with(script, "", event, doc, root, limits, started)
+}
+
+/// [`run_here`] with `prelude`, the form's script objects, defined first. They are part of the form, so they are not held
+/// to the size a script may have (their own bound is the caller's), only to its nesting.
+pub(crate) fn run_here_with(
+    script: &str,
+    prelude: &str,
+    event: &XfaEvent,
+    doc: &XfaDoc,
+    root: XfaNode,
+    limits: Limits,
+    started: &dyn Fn(),
+) -> XfaOutcome {
     warm_up();
     let mut ctx = match Context::builder().host_hooks(std::rc::Rc::new(crate::CheckedCodeFromStrings)).build() {
         Ok(ctx) => ctx,
@@ -141,6 +155,12 @@ pub(crate) fn run_here(script: &str, event: &XfaEvent, doc: &XfaDoc, root: XfaNo
         install(&mut ctx, event, doc, current)?;
         // Ready for the script: its time starts now, the set-up above not charged to it.
         started();
+        if !prelude.is_empty() {
+            if let Some(why) = crate::run::refuse_nesting(prelude) {
+                return Err(boa_engine::JsNativeError::range().with_message(why).into());
+            }
+            ctx.eval(Source::from_bytes(prelude.as_bytes()))?;
+        }
         ctx.register_global_property(js_string!("__xfa_src"), s(script), Attribute::CONFIGURABLE)?;
         // Direct eval inside a function called on the node: `this` is the node and the
         // completion value is the script's last expression (what a calculate script yields).

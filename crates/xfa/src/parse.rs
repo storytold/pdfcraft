@@ -7,8 +7,8 @@ use roxmltree::Node as XmlNode;
 use crate::XfaError;
 use crate::model::{
     Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout, Margin, Node,
-    Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Rect, RichText, Run, Script, Stroke, Subform, Template, Ui, VAlign,
-    Value,
+    Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Rect, RichText, Run, Script, ScriptObject, Stroke, Subform,
+    Template, Ui, VAlign, Value,
 };
 
 /// Deepest element nesting followed (templates are shallow; hostile ones are not).
@@ -558,6 +558,29 @@ fn parse_script(s: XmlNode, activity: &str) -> Script {
 }
 
 /// `<event activity="…"><script>…</script></event>` children.
+/// The JavaScript objects under `<variables>`: `<script name="LOVUtils" contentType="application/x-javascript">`.
+fn parse_script_objects(n: XmlNode) -> Vec<ScriptObject> {
+    let mut out = Vec::new();
+    for vars in children(n, "variables").take(8) {
+        for s in children(vars, "script").take(64) {
+            let Some(name) = s.attribute("name").map(str::trim).filter(|v| is_js_identifier(v)) else { continue };
+            if !s.attribute("contentType").unwrap_or("").to_ascii_lowercase().contains("javascript") {
+                continue;
+            }
+            let text = text_of(s);
+            if !text.trim().is_empty() {
+                out.push(ScriptObject { name: name.to_string(), text });
+            }
+        }
+    }
+    out
+}
+
+fn is_js_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$') && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
 fn parse_events(n: XmlNode) -> Vec<Script> {
     let mut scripts = Vec::new();
     for ev in children(n, "event").take(64) {
@@ -640,6 +663,7 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subfor
         layout: Layout::parse(n.attribute("layout")),
         children: children_out,
         scripts: parse_events(n),
+        script_objects: parse_script_objects(n),
         page_set,
         occur: parse_occur(child(n, "occur")),
         break_before_page: break_to_page("breakBefore")
