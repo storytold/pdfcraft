@@ -19,23 +19,23 @@ use crate::support::ocr_scan::{self, Score};
 
 /// (fixture file, recogniser, minimum share of all words, minimum share of words with a letter
 /// outside ASCII). The English rows were measured on 2026-10-28 with ocrs on main (Inter,
-/// `200noisy`), less two points; ocrs's alphabet has no accented letters, so its accented floor
-/// is what it reads of them, nothing.
+/// `200noisy`, text at 11 pt), less two points; ocrs's alphabet has no accented letters, so its
+/// accented floor is what it reads of them, nothing.
 const FLOORS: &[(&str, &str, f64, f64)] = &[
-    ("cs-wikipedia.tsv", "en", 0.37, 0.0),
-    ("da-wikipedia.tsv", "en", 0.77, 0.0),
-    ("de-wikipedia.tsv", "en", 0.75, 0.0),
-    ("de.tsv", "en", 0.67, 0.0),
-    ("es-wikipedia.tsv", "en", 0.79, 0.0),
-    ("fi-wikipedia.tsv", "en", 0.64, 0.0),
+    ("cs-wikipedia.tsv", "en", 0.35, 0.0),
+    ("da-wikipedia.tsv", "en", 0.74, 0.0),
+    ("de-wikipedia.tsv", "en", 0.71, 0.0),
+    ("de.tsv", "en", 0.64, 0.0),
+    ("es-wikipedia.tsv", "en", 0.77, 0.0),
+    ("fi-wikipedia.tsv", "en", 0.62, 0.0),
     ("fr-wikipedia.tsv", "en", 0.72, 0.0),
-    ("is-wikipedia.tsv", "en", 0.37, 0.0),
-    ("it-wikipedia.tsv", "en", 0.84, 0.0),
-    ("nl-wikipedia.tsv", "en", 0.88, 0.0),
+    ("is-wikipedia.tsv", "en", 0.38, 0.0),
+    ("it-wikipedia.tsv", "en", 0.79, 0.0),
+    ("nl-wikipedia.tsv", "en", 0.86, 0.0),
     ("no-wikipedia.tsv", "en", 0.74, 0.0),
-    ("pl-wikipedia.tsv", "en", 0.47, 0.0),
-    ("pt-wikipedia.tsv", "en", 0.69, 0.0),
-    ("sv-wikipedia.tsv", "en", 0.51, 0.0),
+    ("pl-wikipedia.tsv", "en", 0.46, 0.0),
+    ("pt-wikipedia.tsv", "en", 0.73, 0.0),
+    ("sv-wikipedia.tsv", "en", 0.52, 0.0),
 ];
 
 fn floor(file: &str, recogniser: &str) -> Option<(f64, f64)> {

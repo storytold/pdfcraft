@@ -1,7 +1,8 @@
 //! Synthetic scans of the OCR ground-truth texts, and how well a recognition reads them.
 //!
 //! Shared by the regression tests (`tests/it/ocr_ground_truth.rs`) and the benchmarks
-//! (`examples/ocr_bench.rs` and `examples/ocr_mdpbench.rs`, which include this file by path).
+//! (`examples/ocr_bench.rs` and `examples/ocr_mdpbench.rs`, which include this file by path),
+//! together with the scoring and the MDPBench file names and predictions the benchmarks share.
 //! The texts live in `tests/data/ocr/<lang>[-<source>].tsv` (`doc<TAB>source<TAB>text`, `#`
 //! comments). Each row is wrapped onto an A4 page in a committed OFL face, then degraded the way
 //! a scanner or a phone camera does it: resolution, blur, sensor noise, a slight skew and JPEG
@@ -127,10 +128,20 @@ pub fn condition(name: &str) -> Option<Condition> {
 
 /// Text size on the page, in points.
 const POINT_SIZE: f32 = 11.0;
+/// Baseline to baseline, in multiples of the point size.
 const LINE_SPACING: f32 = 1.9;
 /// A4, in inches.
 const PAGE: (f32, f32) = (8.27, 11.69);
 const MARGIN: f32 = 0.9;
+
+/// The scale that sets `font` at [`POINT_SIZE`] on a page scanned at `dpi`: an em of
+/// `POINT_SIZE * dpi / 72` pixels. `Font::pt_to_px_scale` takes points at 96 dpi (it multiplies by
+/// 96/72 itself), so the scan resolution goes in as a fraction of 96.
+fn text_scale<F: Font>(font: &F, dpi: f32) -> PxScale {
+    let em = POINT_SIZE * dpi / 72.0;
+    // A face without units per em has no em to scale; its height stands in for it.
+    font.pt_to_px_scale(POINT_SIZE * dpi / 96.0).unwrap_or(PxScale::from(em))
+}
 
 /// The characters of `text` that `face` has no glyph for.
 pub fn missing_glyphs(face: &Face, text: &str) -> Vec<char> {
@@ -150,7 +161,7 @@ pub fn scan(doc: &Doc, face: &Face, cond: Condition, seed: u64) -> Result<Vec<u8
     }
     let dpi = cond.dpi as f32;
     let (w, h) = ((PAGE.0 * dpi) as u32, (PAGE.1 * dpi) as u32);
-    let scale = font.pt_to_px_scale(POINT_SIZE * dpi / 72.0).unwrap_or(PxScale::from(POINT_SIZE * dpi / 72.0));
+    let scale = text_scale(&font, dpi);
     let scaled = font.as_scaled(scale);
     let left = MARGIN * dpi;
     let width = w as f32 - 2.0 * left;
@@ -355,6 +366,41 @@ pub fn score(truth: &str, got: &str) -> Score {
     s
 }
 
+/// The language of an MDPBench page image (`de_book_12.png` is `de`), when `file` is a plain file
+/// name: no directory part, no leading dot, a language of letters, digits and hyphens. The
+/// examples read `DIR/images/<file>` and write `OUT/<recogniser>/<stem>.md`, so a name from an
+/// edited annotation file that is anything else is not read and nothing is written for it.
+pub fn mdpbench_language(file: &str) -> Option<&str> {
+    let plain = !file.starts_with('.') && !file.contains(['/', '\\']) && Path::new(file).file_name().is_some_and(|n| n == file);
+    let (lang, _) = file.split_once('_').filter(|_| plain)?;
+    (!lang.is_empty() && lang.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then_some(lang)
+}
+
+/// Writes one page's prediction for MDPBench's own evaluation to `out/<recogniser>/<image
+/// stem>.md`, one paragraph per line of `text` (the engine currently returns a page as one line,
+/// so a page is one paragraph; see #5171), and returns its path. A page that could not be
+/// read (`text` is `None`) gets an empty prediction: the evaluation skips a page that has none,
+/// which would leave the failures out of the score, while an empty one scores as nothing found.
+pub fn write_prediction(out: &Path, recogniser: &str, file: &str, text: Option<&str>) -> std::io::Result<PathBuf> {
+    let invalid = |what: String| std::io::Error::new(std::io::ErrorKind::InvalidInput, what);
+    if !ocr_language_known(recogniser) {
+        return Err(invalid(format!("{recogniser} is not an OCR language")));
+    }
+    if mdpbench_language(file).is_none() {
+        return Err(invalid(format!("{file} is not an MDPBench image name")));
+    }
+    let stem = file.rsplit_once('.').map_or(file, |(s, _)| s);
+    let dir = out.join(recogniser);
+    let path = dir.join(format!("{stem}.md"));
+    let body = match text {
+        Some(text) => text.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join("\n\n") + "\n",
+        None => String::new(),
+    };
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(&path, body)?;
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,6 +441,56 @@ mod tests {
         assert_eq!((img.width(), img.height()), ((8.27 * 150.0) as u32, (11.69 * 150.0) as u32));
         let missing = Doc { name: "t".into(), source: "s".into(), rows: vec!["Ⴀ".into()] };
         assert!(scan(&missing, face, cond, 7).unwrap_err().contains("no glyph"));
+    }
+
+    #[test]
+    fn the_scan_sets_text_at_its_point_size() {
+        let faces = builtin_faces();
+        let font = FontRef::try_from_slice(&faces[0].bytes).unwrap();
+        for dpi in [150.0, 300.0] {
+            let scaled = font.as_scaled(text_scale(&font, dpi));
+            let em = scaled.h_scale_factor() * font.units_per_em().unwrap();
+            assert!((em - POINT_SIZE * dpi / 72.0).abs() < 0.01, "an em of {em} px at {dpi} dpi");
+        }
+    }
+
+    #[test]
+    fn an_mdpbench_image_name_is_a_plain_file_name() {
+        assert_eq!(mdpbench_language("de_book_12.png"), Some("de"));
+        assert_eq!(mdpbench_language("zh-t_book_1_indoor_light_top.jpg"), Some("zh-t"));
+        let bad = [
+            "../de_book_12.png",
+            "images/de_book_12.png",
+            "..\\de_x.png",
+            "/etc/de_x.png",
+            "de_../../outside.png",
+            "de_x\\..\\..\\outside.png",
+            ".._x.png",
+            "._x.png",
+            "_x.png",
+            "nolang.png",
+            "",
+        ];
+        for name in bad {
+            assert_eq!(mdpbench_language(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_page_that_failed_still_has_a_prediction() {
+        let out = std::env::temp_dir().join(format!("ocr-pred-{}", std::process::id()));
+        let read = write_prediction(&out, "en", "de_book_12.png", Some(" eins \n\nzwei\n")).unwrap();
+        assert_eq!(read, out.join("en").join("de_book_12.md"));
+        assert_eq!(std::fs::read_to_string(&read).unwrap(), "eins\n\nzwei\n");
+        let failed = write_prediction(&out, "en", "de_book_13.png", None).unwrap();
+        assert_eq!(std::fs::read_to_string(&failed).unwrap(), "", "an empty prediction, not none");
+        assert!(write_prediction(&out, "en", "de_../../outside.png", Some("x")).is_err());
+        assert!(write_prediction(&out, "..", "de_book_12.png", Some("x")).is_err());
+        // A prediction that cannot be written is an error, not a page left out.
+        let blocked = out.join("blocked");
+        std::fs::write(&blocked, "a file where the folder should be").unwrap();
+        assert!(write_prediction(&blocked, "en", "de_book_12.png", Some("x")).is_err());
+        std::fs::remove_dir_all(&out).ok();
     }
 
     #[test]

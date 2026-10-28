@@ -15,7 +15,8 @@
 //! the first N pages per language and kind, `--misses` the words that did not come back.
 //! `--out DIR` writes each page's text to `DIR/<OCR language>/<image>.md`, the predictions
 //! MDPBench's own evaluation reads (`pdf_validation.py`, then `tools/calculate_scores.py`); its
-//! scores are the ones published.
+//! scores are the ones published. A page that fails gets an empty prediction (the evaluation
+//! skips pages without one), and a prediction that cannot be written stops the run.
 //!
 //! The scores printed here are a quick check of our own: words found, in three classes, against
 //! the text of the annotated regions. Table cells (from the annotated HTML) are scored on their
@@ -149,7 +150,12 @@ fn pages(dir: &Path) -> Result<Vec<Page>, String> {
     let mut out = Vec::new();
     for p in all.as_array().ok_or("the annotations are not a list")? {
         let Some(file) = p.pointer("/page_info/image_path").and_then(|v| v.as_str()) else { continue };
-        let Some((lang, _)) = file.split_once('_') else { continue };
+        // A name with a directory part would be read from outside `DIR/images` and written
+        // outside `--out`; MDPBench names its images plainly, so such a page is not one of its own.
+        let Some(lang) = ocr_scan::mdpbench_language(file) else {
+            eprintln!("skipped {file:?}: not a plain image file name");
+            continue;
+        };
         let kind = kind(file);
         let regions: Vec<&serde_json::Value> = p.get("layout_dets").and_then(|v| v.as_array()).into_iter().flatten().collect();
         let category = |r: &serde_json::Value| r.get("category_type").and_then(|c| c.as_str()).unwrap_or_default().to_string();
@@ -179,18 +185,6 @@ fn recognise(image: Vec<u8>, language: &str) -> Result<String, String> {
         return Err(format!("page skipped: {why}"));
     }
     Ok(pages.iter().map(|p| p.text()).collect::<Vec<_>>().join("\n"))
-}
-
-/// The text of a page as MDPBench expects a prediction: `OUT/<OCR language>/<image stem>.md`,
-/// one paragraph per recognised line (its matching joins lines that make up one block).
-fn write_markdown(out: &Path, language: &str, file: &str, text: &str) {
-    let dir = out.join(language);
-    let stem = file.rsplit_once('.').map_or(file, |(s, _)| s);
-    let body: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
-    let written = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(dir.join(format!("{stem}.md")), body.join("\n\n") + "\n"));
-    if let Err(e) = written {
-        eprintln!("{}: {e}", dir.display());
-    }
 }
 
 #[derive(Default)]
@@ -251,29 +245,31 @@ fn main() {
     let mut ocr_langs: Vec<String> = if args.ocr.is_empty() { vec!["en".to_string()] } else { args.ocr.clone() };
     ocr_langs.retain(|l| ocr_scan::ocr_language_known(l));
     let ocr_langs: Vec<String> = ocr_langs.into_iter().collect::<BTreeSet<_>>().into_iter().collect();
+    let mut failed = 0usize;
     for page in &chosen {
         let mut ocr_langs = ocr_langs.clone();
         if args.ocr.is_empty() && ocr_scan::ocr_language_known(&page.lang) && !ocr_langs.contains(&page.lang) {
             ocr_langs.push(page.lang.clone());
         }
-        let image = match std::fs::read(args.dir.join("images").join(&page.file)) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("{}: {e}", page.file);
-                continue;
-            }
-        };
+        // A page that cannot be read counts as failed for every recogniser, like one the
+        // recogniser gives up on, rather than dropping out of the run.
+        let image = std::fs::read(args.dir.join("images").join(&page.file)).map_err(|e| e.to_string());
         for language in &ocr_langs {
             let started = Instant::now();
-            let result = recognise(image.clone(), language);
+            let result = image.clone().and_then(|image| recognise(image, language));
             let cell = cells.entry((page.lang.clone(), language.clone(), page.kind)).or_default();
             cell.seconds += started.elapsed().as_secs_f64();
             cell.pages += 1;
+            // MDPBench's evaluation skips a page without a prediction, so a failed page gets an
+            // empty one, and a prediction that cannot be written ends the run.
+            if let Some(out) = &args.out
+                && let Err(e) = ocr_scan::write_prediction(out, language, &page.file, result.as_deref().ok())
+            {
+                eprintln!("{} {language}: cannot write the prediction under {}: {e}", page.file, out.display());
+                std::process::exit(1);
+            }
             match result {
                 Ok(text) => {
-                    if let Some(out) = &args.out {
-                        write_markdown(out, language, &page.file, &text);
-                    }
                     cell.score.add(ocr_scan::score(&page.truth, &text));
                     cell.tables.add(ocr_scan::score(&page.tables, &text));
                     let mut have: BTreeMap<String, usize> = BTreeMap::new();
@@ -290,6 +286,7 @@ fn main() {
                 }
                 Err(e) => {
                     cell.failed += 1;
+                    failed += 1;
                     eprintln!("{} {language}: {e}", page.file);
                 }
             }
@@ -297,9 +294,11 @@ fn main() {
     }
     println!("| Language | OCR | Pages | Kind | Words | Accented words | Numbers & symbols | Table cells: words | s/page |");
     println!("|---|---|---|---|---|---|---|---|---|");
-    let pct = |r: f64| format!("{:.1} %", r * 100.0);
     for ((lang, ocr_lang, kind), c) in &cells {
         let failed = if c.failed > 0 { format!(" ({} failed)", c.failed) } else { String::new() };
+        // The shares are over the pages that were read; with none read there is no share.
+        let read = c.failed < c.pages;
+        let pct = |r: f64| if read { format!("{:.1} %", r * 100.0) } else { "–".to_string() };
         println!(
             "| {lang} | {ocr_lang} | {}{failed} | {kind} | {} | {} | {} | {} | {:.2} |",
             c.pages,
@@ -317,5 +316,8 @@ fn main() {
             let list: Vec<String> = v.iter().take(40).map(|(w, n)| format!("{w} ×{n}")).collect();
             println!("\nMissed in {lang} with {ocr_lang}: {}", list.join(", "));
         }
+    }
+    if failed > 0 && args.out.is_some() {
+        eprintln!("{failed} page readings failed; their predictions are empty, so the official evaluation scores them as nothing found");
     }
 }

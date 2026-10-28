@@ -1,7 +1,7 @@
 # OCR benchmark
 
-> **Last updated:** 2026-10-28 · **Change:** new (ground-truth fixtures, floors for the `en`
-> recogniser, MDPBench with its official evaluation; numbers for `main`)
+> **Last updated:** 2026-10-28 · **Change:** patch (scans at the documented 11 pt, floors and
+> numbers re-measured; empty predictions for failed MDPBench pages; how to leave CDM out)
 
 How well Scan & OCR ▸ Recognize text reads, measured two ways: synthetic scans of committed
 ground-truth texts (reproducible to the pixel, guarded by a test), and real pages from MDPBench
@@ -32,9 +32,9 @@ the `ATTRIBUTION.toml` entry the file needs. The tests never touch the network.
 
 ### Scans
 
-`crates/engine/tests/it/support/ocr_scan.rs` sets each document on an A4 page, 11 pt, in one of
-the committed OFL faces (Inter, JetBrains Mono; `--face FILE` adds another), and scans it under
-four conditions:
+`crates/engine/tests/it/support/ocr_scan.rs` sets each document on an A4 page, 11 pt with
+baselines 1.9 × the point size apart, in one of the committed OFL faces (Inter, JetBrains Mono;
+`--face FILE` adds another), and scans it under four conditions:
 
 | Condition | Resolution | Degradation |
 |---|---|---|
@@ -67,7 +67,7 @@ measured floors for it.
 
 The test catches regressions in rendering, recognition or the text layer: a model alphabet
 shifted by one letter dropped every fixture below its floor (for example `nl-wikipedia.tsv` from
-90 % to 36 % of words).
+90 % to 36 % of words, measured while the scans still set the text at about 14.7 pt).
 
 ### Running it
 
@@ -88,20 +88,20 @@ pages per row:
 
 | Fixture | Words | Accented words | Numbers & symbols |
 |---|---|---|---|
-| de (invoice, letter, delivery note) | 65.7 % | 0 % | 70.6 % |
-| de (Wikipedia) | 73.3 % | 0 % | 78.6 % |
-| fr | 68.8 % | 0 % | 98.8 % |
-| es | 73.2 % | 0 % | 100 % |
-| pt | 69.0 % | 0 % | 87.5 % |
-| it | 80.4 % | 0 % | 89.3 % |
-| nl | 85.2 % | 0 % | 100 % |
-| fi | 64.0 % | 0 % | 74.2 % |
-| cs | 35.1 % | 0 % | 83.0 % |
-| sv | 50.8 % | 0 % | 85.7 % |
-| da | 74.1 % | 0 % | 85.4 % |
-| is | 37.6 % | 0 % | 100 % |
-| no | 73.2 % | 0 % | 92.3 % |
-| pl | 46.2 % | 0 % | 38.2 % |
+| de (invoice, letter, delivery note) | 61.7 % | 0 % | 66.3 % |
+| de (Wikipedia) | 69.9 % | 0 % | 71.4 % |
+| fr | 68.3 % | 0 % | 100 % |
+| es | 72.8 % | 0 % | 95.8 % |
+| pt | 69.1 % | 0 % | 87.5 % |
+| it | 75.4 % | 0 % | 85.7 % |
+| nl | 80.9 % | 0 % | 97.7 % |
+| fi | 61.0 % | 0 % | 75.8 % |
+| cs | 29.9 % | 0 % | 76.1 % |
+| sv | 50.2 % | 0 % | 78.6 % |
+| da | 69.7 % | 0 % | 80.2 % |
+| is | 36.1 % | 0 % | 62.5 % |
+| no | 71.8 % | 0 % | 80.8 % |
+| pl | 43.7 % | 0 % | 39.6 % |
 
 The words `en` reads are the unaccented ones; every word with an accent is lost, so the word
 share follows how many words of a language carry one.
@@ -131,22 +131,40 @@ own: the three word classes of the ground truth against the annotated text regio
 cells (from the annotated HTML) in a column of their own. Results are split into `digital`,
 `photo` (taken from above) and `photo-turned` (taken from the left, the right or below: the text
 lies sideways or upside down, which recognition cannot read without turning the page first). A
-page the recogniser skipped is reported as an error, not scored as empty. The resolution of the
-images is not recorded, so each page is read as if it were A4 wide. `--kind`, `--limit N` and
-`--misses` narrow and explain a run.
+page the recogniser skipped is reported as an error, not scored as empty. Annotated image names
+with a directory part are skipped, so the run reads only from `images/` and writes only under
+`--out`. The resolution of the images is not recorded, so each page is read as if it were A4
+wide. `--kind`, `--limit N` and `--misses` narrow and explain a run.
 
 ### The official evaluation
 
 The quick check is not comparable with published results. `--out DIR` writes each page's text to
-`DIR/<recogniser>/<image stem>.md` (one paragraph per recognised line), which is what MDPBench's
-own evaluation reads. With [Yuliang-Liu/MultimodalOCR](https://github.com/Yuliang-Liu/MultimodalOCR)
-checked out, point `MDPBench/pdf_validation.py`'s configuration at `MDPBench_public.json` and
-`DIR/en/`, run it, then `tools/calculate_scores.py`. It matches predicted and annotated
-elements (OmniDocBench's procedure), scores text by edit distance and tables by TEDS, and
-averages per page.
+`DIR/<recogniser>/<image stem>.md`, which is what MDPBench's own evaluation reads. Each line of
+the recognised text becomes a paragraph; `main` returns a page's words as one line, so for now a
+page is a single paragraph (#5171 keeps the line breaks). The evaluation skips a page that has no prediction, so a page that could not
+be read gets an empty one and counts as nothing found, and a prediction that cannot be written
+stops the run with an error rather than leaving the page out.
 
 We leave out the formula metric, CDM: it needs Node.js, XeLaTeX and ImageMagick, and PdfCraft
-predicts no formulas.
+predicts no formulas. The upstream configuration runs it, so take it out before running. With
+[Yuliang-Liu/MultimodalOCR](https://github.com/Yuliang-Liu/MultimodalOCR) checked out, in
+`MDPBench/`:
+
+1. Copy `configs/end2end.yaml` to `configs/pdfcraft-en.yaml`.
+2. In the copy, set `dataset.ground_truth.data_path` to `MDPBench_public.json` (absolute path)
+   and `dataset.prediction.data_path` to the absolute path of `DIR/en`: you run from the
+   `MDPBench/` checkout, so a path relative to the PdfCraft checkout points nowhere and the
+   evaluation finds no predictions. Delete the `- CDM` line under `display_formula.metric` (its
+   `Edit_dist` stays).
+3. Remove `result/en_result/` if an earlier run left it: the evaluation does not clear it, so
+   files from an earlier run (one that still used CDM, say) stay in the folder the scores are
+   read from. Then run
+   `python pdf_validation.py --config configs/pdfcraft-en.yaml`. The results go to
+   `result/en_result/` (the prediction folder's name plus `_result`).
+4. Run `python tools/calculate_scores.py --result_folder result/en_result`.
+
+It matches predicted and annotated elements (OmniDocBench's procedure), scores text by edit
+distance and tables by TEDS, and averages per page.
 
 ### Numbers on `main`
 
@@ -171,3 +189,10 @@ Read the comparison with care:
 - Skipping CDM drops a component we would score badly on, which flatters our numbers slightly.
 - Photos taken sideways or upside down are in the photo split; `main` does not turn pages before
   reading them, so they come back nearly empty.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-10-28 | patch | The scans set their text at 11 pt as documented (they were 4/3 larger, about 14.7 pt); the `en` floors and the synthetic numbers are re-measured. A failed MDPBench page gets an empty prediction, a prediction that cannot be written stops the run, and annotated image names with a directory part are skipped. The official-evaluation steps say how to leave CDM out. |
+| 2026-10-28 | new | Ground-truth fixtures, floors for the `en` recogniser, MDPBench with its official evaluation; numbers for `main`. |
