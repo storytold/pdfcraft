@@ -346,6 +346,7 @@ impl Document {
         let mut generation_repairs = Vec::new();
         let mut recorded = HashSet::new();
         let mut diagnose = true;
+        let mut merged_rows = 0usize;
         let mut next = Some(first);
         while let Some(off) = next.take() {
             if !visited.insert(off) || visited.len() > 10_000 {
@@ -428,6 +429,19 @@ impl Document {
                     hybrids.insert(x, read);
                 }
             }
+            // Each section's rows are capped, so the chain is too: at most MAX_XREF_OBJECTS rows
+            // merged in all, or the file is rebuilt from object headers, as when one section's
+            // stream decodes past that. This counts rows merged, not the map's size, since a chain
+            // that relists the same objects costs as much to merge. A section's rows (its hybrid
+            // stream's included) never outnumber the rows the compact reader counts for it, and
+            // that reader stops at about a quarter of this cap: no chain within its limit is refused.
+            let Some(total) = merged_rows.checked_add(sect.len()).filter(|total| *total <= MAX_XREF_OBJECTS) else {
+                return Err(CosError::Syntax {
+                    offset: usize::try_from(off).unwrap_or(usize::MAX),
+                    detail: format!("cross-reference chain lists more than {MAX_XREF_OBJECTS} entries"),
+                });
+            };
+            merged_rows = total;
             oddities.extend(odd.into_iter().map(|num| (off, num)));
             for (num, e) in sect {
                 entries.entry(num).or_insert(e);
