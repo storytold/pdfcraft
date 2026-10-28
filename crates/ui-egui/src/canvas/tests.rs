@@ -2047,7 +2047,10 @@ fn a_settled_page_selection_becomes_the_primary_selection() {
     app.open_bytes("two.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two"])).unwrap();
     assert_eq!(app.active, Some(0));
     app.views[0].texts.insert(0, Arc::new(find_test_text("Alpha one")));
+    // The window has the focus.
     let ctx = egui::Context::default();
+    let focus = |ctx: &egui::Context, focused: bool| ctx.run_pass(egui::RawInput { focused, ..Default::default() }, |_| {}).textures_delta.clear();
+    focus(&ctx, true);
     let written = |app: &PdfCraftApp| app.primary_selection.written.clone();
     // A drag: the selection grows on every frame, and nothing is written while it does.
     for head in 1..5 {
@@ -2078,6 +2081,14 @@ fn a_settled_page_selection_becomes_the_primary_selection() {
     app.finish_render_frame(&ctx);
     app.finish_render_frame(&ctx);
     assert_eq!(written(&app), vec!["Alpha".to_owned(), "one".to_owned(), "one".to_owned(), "one".to_owned()]);
+    // Away from the window, another application's selection may be the primary one: a
+    // selection settling meanwhile isn't written.
+    focus(&ctx, false);
+    app.views[0].select_text(0, 0, 4);
+    app.finish_render_frame(&ctx);
+    app.finish_render_frame(&ctx);
+    assert_eq!(written(&app).len(), 4, "nothing written without the focus");
+    focus(&ctx, true);
     // Select All of the whole document reads its pages only when copied: not on selecting.
     assert!(app.views[0].continuous);
     app.views[0].select_all();
