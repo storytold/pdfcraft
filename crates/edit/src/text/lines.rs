@@ -186,7 +186,9 @@ pub fn text_lines(doc: &Document, page: usize) -> Result<Vec<TextLine>, EditErro
 /// The lines `page`'s glyphs show, in content order, without `/ActualText` replacements: what the
 /// page draws, not what its marked-content metadata says the glyphs mean. For checks that must
 /// not trust that metadata (the redaction audit). Takes the page itself, so a caller going
-/// through every page doesn't walk the page tree again for each.
+/// through every page doesn't walk the page tree again for each. Unlike editing lines, these
+/// groups stop at intervening path fills or XObject paints, so text drawn on top of a potential
+/// cover is not joined with text underneath it.
 pub fn glyph_text_lines(doc: &Document, page: &pdfcraft_model::Page) -> Result<Vec<TextLine>, EditError> {
     text_lines_in(doc, page, false)
 }
@@ -204,7 +206,21 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
     let properties = res.get(b"Properties").and_then(|o| doc.dict(o)).unwrap_or_default();
     let shown = interpret(doc, &ops, &res, &mut cache, &mut carry, None, actual_text.then_some(&properties))?;
     let mut last: Option<(usize, Pen)> = None; // the stream piece and where its last run ended
+    let mut next_unchecked_op = 0;
     for mut s in shown {
+        // Audit lines cannot straddle potential covers. Scan each intervening operator once;
+        // ordinary editing lines retain their geometry-based grouping across painted content.
+        if !actual_text {
+            let paints_cover = ops
+                .get(next_unchecked_op..s.op)
+                .unwrap_or_default()
+                .iter()
+                .any(|op| matches!(op.op.as_slice(), b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"Do"));
+            if paints_cover {
+                last = None;
+            }
+            next_unchecked_op = s.op.saturating_add(1);
+        }
         // A single RTL glyph's ActualText (e.g. lam-alef) is an inline ligature, not a
         // separate logical line. Put its letters into visual order before joining the
         // surrounding glyphs; the completed line is recovered to typing order below.

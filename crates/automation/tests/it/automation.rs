@@ -9239,3 +9239,33 @@ fn page_render_draws_stamps_without_an_appearance() {
     let grey = custom.iter().filter(|p| p[0].abs_diff(p[1]) < 24 && p[1].abs_diff(p[2]) < 24).count();
     assert!(grey > 100 && grey == custom.len(), "an unknown name is a grey placeholder: {grey} of {}", custom.len());
 }
+
+/// #4770: audit finds black boxes over all four original text colours, before and after flattening.
+#[test]
+fn audit_coloured_text_before_and_after_flattening() {
+    let dir = workdir("audit-coloured-text");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({"from": "blank", "pages": 1, "width": 595, "height": 842}))["doc"].as_u64().unwrap();
+    for (i, (text, color)) in
+        [("black SECRET", "#000000"), ("grey SECRET", "#888888"), ("blue SECRET", "#1a6ee0"), ("near-black SECRET", "#222222")].iter().enumerate()
+    {
+        let y = 100 + 100 * i;
+        ok(&mut a, "page_add_text", json!({"doc": doc, "page": 1, "text": text, "at": [72, y], "size": 14, "color": color}));
+        ok(
+            &mut a,
+            "comment_add",
+            json!({"doc": doc, "page": 1, "type": "rectangle", "rect": [60, y - 8, 300, y + 24], "fill": "#000000", "color": "#000000"}),
+        );
+    }
+    for flattened in [false, true] {
+        if flattened {
+            ok(&mut a, "doc_flatten", json!({"doc": doc}));
+        }
+        let report = ok(&mut a, "doc_audit_redactions", json!({"doc": doc}));
+        assert_eq!(report["count"], 4, "flattened={flattened}: {report}");
+        let text = report["findings"].as_array().unwrap().iter().map(|f| f["covered_text"].as_str().unwrap()).collect::<Vec<_>>();
+        for expected in ["black SECRET", "grey SECRET", "blue SECRET", "near-black SECRET"] {
+            assert!(text.contains(&expected), "flattened={flattened}: {text:?}");
+        }
+    }
+}

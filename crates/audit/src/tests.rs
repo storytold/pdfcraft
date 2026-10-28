@@ -820,3 +820,109 @@ fn form_entries_past_the_page_allowance_fail_the_audit() {
     let page: Dict = [(b"Contents".to_vec(), Object::Ref(draws)), (b"Resources".to_vec(), Object::Dict(resources))].into_iter().collect();
     assert!(matches!(crate::cover::filled_rects(&doc, &page), Err(crate::AuditError::TooManyForms)));
 }
+
+/// #4770: a dark opaque fill hides every original text colour, not just black.
+#[test]
+fn dark_covers_hide_grey_and_coloured_text() {
+    for color in ["0 0 0", "0.133 0.133 0.133", "0.533 0.533 0.533", "0.102 0.431 0.878", "1 1 1"] {
+        for cover in ["0 g", "0.1 g"] {
+            let content = format!("{color} rg BT /F1 24 Tf 100 700 Td (SECRET) Tj ET {cover} 98 688 94 32 re f");
+            let findings = audit_redactions(&open(one_page(content.as_bytes(), ""))).unwrap();
+            assert_eq!(findings.len(), 1, "text {color}, cover {cover}: {findings:?}");
+            assert_eq!(findings[0].covered_text, "SECRET");
+        }
+    }
+}
+
+/// #4770: the annotation path has the same text-colour-independent dark-cover policy.
+#[test]
+fn dark_square_covers_hide_grey_and_coloured_text() {
+    for color in ["0 0 0", "0.533 0.533 0.533", "0.102 0.431 0.878", "1 1 1"] {
+        let content = format!("{color} rg BT /F1 24 Tf 100 700 Td (SECRET) Tj ET");
+        let annot = "/Annots [<< /Type /Annot /Subtype /Square /Rect [98 688 192 720] /IC [0 0 0] >>]";
+        let findings = audit_redactions(&open(one_page(content.as_bytes(), annot))).unwrap();
+        assert_eq!(findings.len(), 1, "text {color}: {findings:?}");
+        assert_eq!(findings[0].covered_text, "SECRET");
+    }
+}
+
+/// A later coloured run is readable on a dark background, even if an earlier run joins its baseline.
+#[test]
+fn coloured_text_after_a_dark_fill_is_not_covered() {
+    let content = b"0.533 g BT /F1 24 Tf 100 700 Td (LABEL) Tj ET q 0 g 190 688 100 32 re f Q BT /F1 24 Tf 200 700 Td (VISIBLE) Tj ET";
+    let findings = audit_redactions(&open(one_page(content, ""))).unwrap();
+    assert!(findings.is_empty(), "{findings:?}");
+}
+
+/// Earlier hidden coloured runs must still be reported without later readable runs on the box.
+#[test]
+fn coloured_text_cover_reports_only_earlier_runs() {
+    let content = b"0.533 g BT /F1 24 Tf 100 700 Td (SECRET) Tj ET q 0 g 98 688 220 32 re f Q BT /F1 24 Tf 200 700 Td (VISIBLE) Tj ET";
+    let findings = audit_redactions(&open(one_page(content, ""))).unwrap();
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].covered_text, "SECRET");
+}
+
+/// The new dark-cover rule does not widen light-shading detection or drop legacy pale-on-pale findings.
+#[test]
+fn dark_cover_rule_preserves_light_cover_policy() {
+    for (text, cover, expected) in [("0 g", "0.9 g", 0), ("1 g", "1 g", 1)] {
+        let content = format!("{text} BT /F1 24 Tf 100 700 Td (SECRET) Tj ET {cover} 98 688 94 32 re f");
+        let findings = audit_redactions(&open(one_page(content.as_bytes(), ""))).unwrap();
+        assert_eq!(findings.len(), expected, "{findings:?}");
+    }
+}
+
+/// Opacity, geometry and ordering remain prerequisites for the newly recognized text colours.
+#[test]
+fn coloured_text_dark_cover_controls() {
+    for color in ["0.533 g", "0.102 0.431 0.878 rg"] {
+        let text = format!("{color} BT /F1 24 Tf 100 700 Td (SECRET) Tj ET");
+        for content in [format!("0 g 98 688 94 32 re f {text}"), format!("{text} 0 g 400 400 94 32 re f"), format!("{text} 0 g 100 700 1 1 re f")] {
+            assert!(audit_redactions(&open(one_page(content.as_bytes(), ""))).unwrap().is_empty());
+        }
+        let mut b = Builder::new();
+        b.add("<< /Type /Catalog /Pages 2 0 R >>");
+        b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+        b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /ExtGState << /GS << /ca 0.5 >> >> >> >>");
+        b.add_stream(format!("{text} /GS gs 0 g 98 688 94 32 re f").as_bytes());
+        b.add(FONT);
+        assert!(audit_redactions(&open(b.build())).unwrap().is_empty());
+        for extra in ["/CA 0.5", "/F 2", "/F 32"] {
+            let annot = format!("/Annots [<< /Type /Annot /Subtype /Square /Rect [98 688 192 720] /IC [0 0 0] {extra} >>]");
+            assert!(audit_redactions(&open(one_page(text.as_bytes(), &annot))).unwrap().is_empty(), "{extra}");
+        }
+    }
+}
+
+/// Audit grouping must respect intervening fills while the editing API keeps its normal line grouping.
+#[test]
+fn audit_glyph_lines_split_at_intervening_cover_paints() {
+    for fill in ["f", "F", "f*", "B", "B*", "b", "b*"] {
+        let content =
+            format!("0.533 g BT /F1 24 Tf 100 700 Td (SECRET) Tj ET q 0 g 98 688 220 32 re {fill} Q BT /F1 24 Tf 200 700 Td (VISIBLE) Tj ET");
+        let doc = open(one_page(content.as_bytes(), ""));
+        assert_eq!(pdfcraft_edit::text_lines(&doc, 0).unwrap().len(), 1);
+        let pages = pdfcraft_model::pages(&doc);
+        let lines = pdfcraft_edit::glyph_text_lines(&doc, &pages[0]).unwrap();
+        assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["SECRET", "VISIBLE"], "{fill}");
+        let findings = audit_redactions(&doc).unwrap();
+        assert_eq!(findings.len(), 1, "{fill}: {findings:?}");
+        assert_eq!(findings[0].covered_text, "SECRET");
+    }
+}
+
+/// A form's cover has the Do operator's paint position, and must separate earlier and later text too.
+#[test]
+fn coloured_text_cover_in_form_reports_only_earlier_runs() {
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 6 0 R >> /XObject << /X 5 0 R >> >> >>");
+    b.add_stream(b"0.533 g BT /F1 24 Tf 100 700 Td (SECRET) Tj ET /X Do BT /F1 24 Tf 200 700 Td (VISIBLE) Tj ET");
+    b.add_stream_with(b"0 g 98 688 220 32 re f", "/Type /XObject /Subtype /Form /BBox [0 0 612 792]");
+    b.add(FONT);
+    let findings = audit_redactions(&open(b.build())).unwrap();
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].covered_text, "SECRET");
+}

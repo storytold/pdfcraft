@@ -9,12 +9,15 @@ let findings: Vec<Finding> = audit_redactions(&doc)?;  // page, kind, rect, cove
 It reports two kinds of finding:
 
 - **faux redaction**: an opaque filled rectangle painted *after* text it overlaps, dark enough
-  against the text's colour (WCAG contrast below 3) to hide it, while the text is still
-  extractable underneath; opaque filled Square annotations count as covers too;
+  (WCAG contrast against black below 3), regardless of the original text colour, while the
+  text is still extractable underneath; the existing low text-to-cover contrast rule also
+  counts pale-on-pale covers. Opaque filled Square annotations use the same colour rule;
 - **unapplied mark**: a Redact annotation that was marked but never applied.
 
 A properly applied redaction removes the text, so it never flags. Page backgrounds, table
-shading and highlights don't either: they're painted before the text, or light against it.
+shading and highlights are conservatively excluded when painted before the text or light
+against dark text. Audit glyph lines stop at intervening fills and XObject paints, so later
+readable text drawn on a dark box is not reported as hidden underneath it.
 
 A rectangle covers a text line when it hides at least half of one of the line's words, at
 least 40% of the area of the words the line draws, or at least 40% of the line's box together
@@ -26,6 +29,8 @@ Limits, by design and documented rather than hidden:
 - only filled rectangles count as covers, drawn with `re` or as a single `m`/`l` subpath whose
   corners form an axis-aligned rectangle (not other paths, shadings or patterns), and a
   translucent one (`/ca` below 1) is not flagged;
+- the colour/opacity rules are heuristics, not a rendering simulation: blend modes, soft masks
+  and transparency groups are not evaluated; a clean report is not proof of secure redaction;
 - covers inside form XObjects are found, but only text drawn directly in the page content is
   checked under them;
 - annotation rectangles are compared in unrotated user space, so `/Rotate` pages may misalign;

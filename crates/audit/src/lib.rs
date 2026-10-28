@@ -5,9 +5,9 @@
 //! never applied. A properly applied redaction removes the text, so it never flags.
 //!
 //! A rectangle counts as a cover only when it was painted strictly *after* the text it
-//! overlaps, and only when it is dark enough against the text's color to make the text
-//! unreadable (WCAG contrast below 3.0). Page backgrounds, table shading and highlight
-//! marks are therefore not flagged.
+//! overlaps, and when it is dark (WCAG contrast against black below 3.0), regardless of the
+//! original text colour, or has low contrast against that text. Page backgrounds and light table
+//! shading or highlights over dark text are therefore not flagged.
 //!
 //! Detection limits (documented, not hidden): `re` rectangles and single closed `m`/`l`
 //! subpaths whose four corners form an axis-aligned rectangle in user space (#1510) are
@@ -97,7 +97,7 @@ const COVER_FRACTION: f64 = 0.4;
 /// Fraction of one word's area that must lie under a cover to count as hidden on its own, however
 /// long the line around it (see [`covers`]).
 const WORD_FRACTION: f64 = 0.5;
-/// WCAG contrast ratio below which the text is unreadable against the cover.
+/// WCAG threshold for low text-to-cover contrast and for a dark cover's contrast against black.
 const COVER_CONTRAST: f64 = 3.0;
 
 /// Audit every page for faux redactions and unapplied redaction marks. Fails closed: any
@@ -209,7 +209,7 @@ fn audit(doc: &Document, limits: Limits) -> Result<Vec<AuditFinding>, AuditError
             };
             if let Some(covered) = budget.hidden_text(&lines, copying, &cover, |line| match &annot {
                 AnnotationCover::Redact(rect) => covers(rect, line),
-                AnnotationCover::Square { rect, rgb } => covers(rect, line) && contrast(line.color, *rgb) < COVER_CONTRAST,
+                AnnotationCover::Square { rect, rgb } => covers(rect, line) && cover_color_eligible(line.color, *rgb),
             })? {
                 let (kind, rect) = match annot {
                     AnnotationCover::Redact(rect) => (FindingKind::UnappliedMark, rect),
@@ -224,13 +224,19 @@ fn audit(doc: &Document, limits: Limits) -> Result<Vec<AuditFinding>, AuditError
 }
 
 /// A filled rectangle is a faux-redaction cover for a text line iff it was painted strictly
-/// after the start of the line, overlaps it substantially, and is dark enough against the line's
-/// color to make the text unreadable. Light covers (table shading, highlights) over dark text fail
-/// the contrast check and are not flagged. A line can join runs painted before and after the
-/// cover; the later ones are drawn on it in the same low-contrast color, so they are unreadable
-/// too.
+/// after the line, overlaps it substantially, and meets the conservative cover-colour policy.
+/// Audit glyph lines do not join text across intervening fills or form paints, so later readable
+/// text on a dark rectangle is not mistaken for text hidden underneath it.
 fn is_cover(rect: &cover::FilledRect, line: &TextLine) -> bool {
-    rect.pos > line.first_paint_pos() && covers(&rect.rect, line) && contrast(line.color, rect.rgb) < COVER_CONTRAST
+    rect.pos > line.first_paint_pos() && covers(&rect.rect, line) && cover_color_eligible(line.color, rect.rgb)
+}
+
+/// A dark fill can hide any earlier text colour (#4770). Keep the established low-contrast
+/// rule as well, including pale text under a pale cover, and the conservative exclusion of
+/// light shading over dark text. Contrast against black defines "dark" using the same threshold;
+/// this is an audit heuristic, not a simulation of transparency groups or blend modes.
+fn cover_color_eligible(text: [f64; 3], cover: [f64; 3]) -> bool {
+    contrast([0.0; 3], cover) < COVER_CONTRAST || contrast(text, cover) < COVER_CONTRAST
 }
 
 /// Does `cover` hide a substantial part of what `line` draws? Three ways, any is enough:
