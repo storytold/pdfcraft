@@ -1,4 +1,4 @@
-use super::layout::{Flow, along_baseline, arrange_flow, compatible, continues, from_upright, to_upright, unrolled};
+use super::layout::{Flow, MIN_STACK, along_baseline, arrange_flow, compatible, continues, from_upright, stacked_down, to_upright, unrolled};
 use super::{
     Affine, BezPath, BlendMode, ClipPath, Context, Device, Glyph, GlyphDrawMode, HashMap, Image, InterpreterCache, InterpreterSettings, PageText,
     Paint, PathDrawMode, Pdf, Rect, Shape, SoftMask, TextFilter, TextGlyph, TransformExt, interpret_page,
@@ -418,6 +418,40 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
             ids.push(i);
         } else {
             straight.push((*u, vec![i]));
+        }
+    }
+    // Upright glyphs stacked down a column are vertical text written without a vertical font. The
+    // writing direction is down even though each outline is upright, so they are marked as such
+    // and laid out in the quarter turn that reads down and right to left -- where a vertical
+    // font's text already goes -- rather than as the rows their baselines would otherwise make
+    // (#3712). Marking the direction is what makes Copy keep the columns apart as well: it reads
+    // the direction to tell a column of text from a row of cells.
+    let mut glyphs = glyphs;
+    if let Some(upright_ids) = quarters.first().filter(|ids| ids.len() >= MIN_STACK).cloned() {
+        let stacked = stacked_down(&glyphs, &upright_ids);
+        if stacked.iter().any(|s| *s) {
+            let mut down: Vec<usize> = Vec::new();
+            let mut across: Vec<usize> = Vec::new();
+            for (k, &i) in upright_ids.iter().enumerate() {
+                if stacked.get(k).copied().unwrap_or(false) {
+                    if let Some(g) = glyphs.get_mut(i) {
+                        g.0 = 1;
+                        g.1 = [0.0, 1.0];
+                        g.2.direction = [0.0, 1.0];
+                    }
+                    down.push(i);
+                } else {
+                    across.push(i);
+                }
+            }
+            if let Some(q) = quarters.get_mut(0) {
+                *q = across;
+            }
+            if let Some(q) = quarters.get_mut(1) {
+                down.extend(q.iter().copied());
+                down.sort_unstable();
+                *q = down;
+            }
         }
     }
     // A horizontal heading must not force a vertical body back into horizontal line grouping.

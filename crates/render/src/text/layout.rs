@@ -13,6 +13,135 @@ pub(super) struct Flow {
     pub(super) space_before: Vec<bool>,
 }
 
+/// At least this many glyphs stacked down a column before the stack is read as vertical text. Two
+/// below each other happen in horizontal text (a one-character line above another); three in a row,
+/// each touching the one above and on the same centre, do not.
+pub(super) const MIN_STACK: usize = 3;
+
+/// Which upright glyphs are stacked down a column: vertical CJK text written **without** a vertical
+/// font, each character placed on its own, top to bottom (the way OCR text layers over scans of
+/// vertical books, and some converters, write it). Their writing direction is down although the
+/// glyph outlines are upright, so each such run is laid out in the quarter turn that reads down and
+/// right to left -- the frame a vertical font's text already uses. Without this the rows across the
+/// columns are the lines, and a drag down one column takes a character from every column (#3712).
+///
+/// Only CJK, which is written vertically; and only a run of touching glyphs on one centre, so a
+/// horizontal line is never one (its glyphs step sideways) and neither is a column of separate
+/// lines (they do not touch).
+pub(super) fn stacked_down(glyphs: &[Drawn], ids: &[usize]) -> Vec<bool> {
+    let mut stacked = vec![false; ids.len()];
+    let box_of = |k: usize| ids.get(k).and_then(|&i| glyphs.get(i)).map(|g| g.2.rect);
+    let cjk = |k: usize| ids.get(k).and_then(|&i| glyphs.get(i)).is_some_and(|g| g.2.text.chars().any(is_cjk));
+    let follows = |a: usize, b: usize| {
+        let (Some(p), Some(g)) = (box_of(a), box_of(b)) else { return false };
+        let h = (p[3] - p[1]).max(g[3] - g[1]).max(0.1);
+        let w = (p[2] - p[0]).max(g[2] - g[0]).max(0.1);
+        let centre = |r: [f32; 4]| (r[0] + r[2]) / 2.0;
+        // The next glyph begins where this one ends. A gap of its own is a line gap, not a column:
+        // one-character lines centred under each other step down by 1.2 of their height and more,
+        // and they are lines (#3812 review). A column's characters touch -- an OCR layer places
+        // them at the pitch it measured, so a little overlap or a twelfth of a height between them
+        // still counts, and a wider gap than that is left to the lines it looks like.
+        let gap = g[1] - p[3];
+        (centre(g) - centre(p)).abs() <= w * 0.3 && gap > -h * 0.3 && gap <= h * 0.12 && cjk(a) && cjk(b)
+    };
+    // Maximal runs in content order; `ids` is ascending, so neighbours here were drawn in turn.
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0;
+    for end in 1..=ids.len() {
+        if end < ids.len() && follows(end - 1, end) {
+            continue;
+        }
+        runs.push((start, end));
+        if end - start >= MIN_STACK {
+            stacked[start..end].fill(true);
+        }
+        start = end;
+    }
+
+    // A paragraph's last column often holds a character or two, which is under the length a stack
+    // needs to be read as a column on its own. Such a run is read as a column when one that *was*
+    // detected lines up with it: its characters are the same size, its top is the column's top,
+    // and it stands beside the column with nothing of its own line next to it. Nothing fires here
+    // unless the page already has a column, which is what keeps a one-character line or a table
+    // cell out of it (#3812 report).
+    let found: Vec<[f32; 4]> = runs
+        .iter()
+        .filter(|(a, b)| b - a >= MIN_STACK)
+        .filter_map(|(a, b)| {
+            let mut bb = box_of(*a)?;
+            for k in *a..*b {
+                if let Some(r) = box_of(k) {
+                    union(&mut bb, &r);
+                }
+            }
+            Some(bb)
+        })
+        .collect();
+    if !found.is_empty() {
+        // A glyph of the same line beside this one: then it is a line, not a column. A glyph that
+        // is itself part of a column does not count -- the next column's top character sits beside
+        // a short column exactly as a line's neighbour would.
+        // Only a glyph at nearly the same height can be beside this one, so the search looks in
+        // bands of one glyph height instead of at the whole page: scanning every glyph for every
+        // glyph of every short run is quadratic, and a scanned book's text layer can hold tens of
+        // thousands of glyphs (#3812 review).
+        let band = |y: f32, h: f32| (y / h.max(0.1)).floor() as i64;
+        let height = |k: usize| box_of(k).map_or(10.0, |r| (r[3] - r[1]).max(0.1));
+        let unit = (0..ids.len()).map(height).fold(f32::INFINITY, f32::min).max(0.1);
+        let mut bands: std::collections::HashMap<i64, Vec<usize>> = std::collections::HashMap::new();
+        for k in 0..ids.len() {
+            if let Some(r) = box_of(k) {
+                for t in band(r[1], unit)..=band(r[3], unit) {
+                    bands.entry(t).or_default().push(k);
+                }
+            }
+        }
+        let beside = |k: usize, known: &[bool]| {
+            let Some(r) = box_of(k) else { return false };
+            let (rh, rw) = ((r[3] - r[1]).max(0.1), (r[2] - r[0]).max(0.1));
+            // One band either side as well: a neighbour may sit up to 0.3 of a height away.
+            (band(r[1], unit) - 1..=band(r[3], unit) + 1).flat_map(|t| bands.get(&t).map(Vec::as_slice).unwrap_or(&[])).any(|&o| {
+                o != k
+                    && !known.get(o).copied().unwrap_or(false)
+                    && box_of(o).is_some_and(|b| {
+                        let apart = (b[0] - r[2]).max(r[0] - b[2]);
+                        (b[1] - r[1]).abs() <= rh * 0.3 && apart > -rw * 0.3 && apart <= rw * 1.5
+                    })
+            })
+        };
+        // The columns by the band their top falls in, for the same reason.
+        let mut tops: std::collections::HashMap<i64, Vec<[f32; 4]>> = std::collections::HashMap::new();
+        for c in &found {
+            tops.entry(band(c[1], unit)).or_default().push(*c);
+        }
+        // The columns the long runs found: a short run accepted here does not make the next one's
+        // neighbour disappear, and taking the snapshot once keeps this out of the inner loop.
+        let columns_so_far = stacked.clone();
+        for (a, b) in runs.iter().copied().filter(|(a, b)| b - a < MIN_STACK) {
+            let Some(mut bb) = box_of(a) else { continue };
+            for k in a..b {
+                if let Some(r) = box_of(k) {
+                    union(&mut bb, &r);
+                }
+            }
+            let (bw, bh) = ((bb[2] - bb[0]).max(0.1), (bb[3] - bb[1]).max(0.1));
+            let centre = (bb[0] + bb[2]) / 2.0;
+            // A column can only line up with a run at nearly its own top, so the columns are
+            // looked up by top in bands of one glyph height as well.
+            let lines_up = (band(bb[1], unit) - 1..=band(bb[1], unit) + 1).flat_map(|t| tops.get(&t).map(Vec::as_slice).unwrap_or(&[])).any(|c| {
+                let cw = (c[2] - c[0]).max(0.1);
+                let apart = ((c[0] + c[2]) / 2.0 - centre).abs();
+                (bb[1] - c[1]).abs() <= cw * 0.4 && (bw - cw).abs() <= cw * 0.2 && apart > cw * 0.6 && apart <= cw * 5.0
+            });
+            if lines_up && (a..b).all(&cjk) && !(a..b).any(|k| beside(k, &columns_so_far)) && bh <= bw * 2.2 * (b - a) as f32 {
+                stacked[a..b].fill(true);
+            }
+        }
+    }
+    stacked
+}
+
 /// Lay out the page's glyphs `ids`, giving each the box at the same position in `rects`.
 pub(super) fn arrange_flow(glyphs: &[Drawn], ids: Vec<usize>, rects: Vec<[f32; 4]>, quarter: Option<u8>) -> Flow {
     let top = ids.iter().filter_map(|&i| glyphs.get(i)).map(|g| g.2.rect[1]).fold(f32::INFINITY, f32::min);
