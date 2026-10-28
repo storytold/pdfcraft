@@ -3054,6 +3054,37 @@ fn a_snapshot_click_copies_the_whole_page() {
     assert!(*w < page.0 && *hgt < page.1, "{w} × {hgt} is smaller than the page's {page:?}");
 }
 
+/// #2078: a whole page that would be larger than the renderer's 4096-pixel tile at this zoom is
+/// copied whole at a scale that fits, not cut off at 4096 pixels.
+#[test]
+fn a_snapshot_of_a_page_too_large_for_one_tile_is_scaled_to_fit() {
+    let _gpu = gpu();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        // The fixture's page, made 900 × 600 pt (the MediaBox keeps its length, so the xref holds).
+        let wide = String::from_utf8(fixture(1)).unwrap().replace("/MediaBox [0 0 200 300]", "/MediaBox [0 0 900 600]");
+        app.open_bytes("wide.pdf", None, wide.into_bytes()).expect("fixture opens");
+        app.system_clipboard = false;
+        app.set_option("quick", "snapshot").unwrap();
+        app.views[0].fit = pdfcraft_ui_egui::canvas::Fit::None;
+        app.views[0].zoom = 8.0;
+        app
+    });
+    h.run_steps(4);
+    let r = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+    let at = r.intersect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0))).center();
+    h.hover_at(at);
+    h.run_steps(2);
+    h.drag_at(at);
+    h.drop_at(at);
+    h.run_steps(4);
+    let (w, hgt, _) = h.state().last_snapshot.as_ref().expect("a click copies the page");
+    // At 8× the page would be 7200 × 4800 pixels: it comes out whole, 3 : 2, within one tile.
+    assert!(*w <= 4096 && *hgt <= 4096, "{w} × {hgt} fits one tile");
+    assert!(*w >= 4000 && (*w as f32 / *hgt as f32 - 1.5).abs() < 0.01, "{w} × {hgt} is the whole 900 × 600 page");
+}
+
 #[test]
 fn replace_pages_dialog_swaps_page_content() {
     let mut app = PdfCraftApp::new();

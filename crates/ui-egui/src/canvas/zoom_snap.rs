@@ -133,7 +133,12 @@ impl PdfCraftApp {
         let view = &self.views[index];
         let doc = self.session.get(view.id).ok_or("no document")?;
         let ppp = self.ctx.as_ref().map_or(2.0, |c| c.pixels_per_point());
-        let scale = (view.zoom * ppp).clamp(0.5, 8.0);
+        // The renderer draws at most 4096 pixels a side in one tile and would cut a larger area
+        // short, so an area (a whole page at a high zoom, say) that would be larger is copied
+        // whole at the scale that fits instead. 4095 leaves room for rounding up.
+        let longest = (view_rect[2] - view_rect[0]).max(view_rect[3] - view_rect[1]).max(1.0);
+        let at_zoom = (view.zoom * ppp).clamp(0.5, 8.0);
+        let scale = at_zoom.min(4095.0 / longest);
         let tile = Tile {
             x: (view_rect[0] * scale).floor().max(0.0) as u32,
             y: (view_rect[1] * scale).floor().max(0.0) as u32,
