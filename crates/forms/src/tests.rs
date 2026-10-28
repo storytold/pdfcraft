@@ -911,6 +911,99 @@ fn japanese_choices_use_the_unicode_cid_font() {
     assert!(need_appearances(&doc));
 }
 
+/// A field whose `/DA` names a TrueType font embedded in the form's `/DR` (a composite
+/// `Identity-H` font with `/ToUnicode`, as `pdfcraft_fonts::embedding::embed` writes it) is drawn
+/// in that font, with its own codes and widths, including characters Helvetica can't show (#3848).
+#[test]
+fn an_embedded_truetype_dr_font_draws_the_field() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [7 0 R 8 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R] >>".into(),
+        "<< /Fields [7 0 R 8 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font 6 0 R >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Helv 5 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (city) /DA (/PCFull0 12 Tf 0 g) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (right) /Q 2 /DA (/PCFull0 12 Tf 0 g) /Rect [50 650 250 670] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (vertical) /DA (/PCVert 12 Tf 0 g) /Rect [50 600 250 620] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (vbody) /DA (/PCVertBody 12 Tf 0 g) /Rect [50 550 250 570] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (vuse) /DA (/PCVertUse 12 Tf 0 g) /Rect [50 500 250 520] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (hcomment) /DA (/PCComment 12 Tf 0 g) /Rect [50 450 250 470] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (hstring) /DA (/PCString 12 Tf 0 g) /Rect [50 400 250 420] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let fonts_ref = ObjRef::new(6, 0);
+    let mut fonts = doc.get(fonts_ref).as_dict().cloned().unwrap();
+    let name = pdfcraft_fonts::embedding::embed(&mut doc, &mut fonts, pdfcraft_fonts::INTER_REGULAR, "Inter").unwrap();
+    assert_eq!(name, "PCFull0");
+    // The same font written for vertical text, which the horizontal field layout can't use.
+    let mut vertical = doc.resolve(fonts.get(b"PCFull0").unwrap()).as_dict().cloned().unwrap();
+    vertical.set(b"Encoding".to_vec(), Object::name("Identity-V"));
+    let vertical = doc.add(Object::Dict(vertical));
+    fonts.set(b"PCVert".to_vec(), Object::Ref(vertical));
+    // Embedded CMaps that write vertically without saying so in their dictionary: `/WMode 1 def`
+    // in the body only (the dictionary entry is optional, ISO 32000-2 §9.7.5.3), and a parent
+    // `/UseCMap /Identity-V`. And two that write horizontally and only mention it, in a comment
+    // and in a string, which PostScript ignores.
+    let cmap = |wmode: &str| {
+        format!(
+            "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /PCTest def {wmode}
+             1 begincodespacerange <0000> <FFFF> endcodespacerange 1 begincidrange <0000> <FFFF> 0 endcidrange endcmap end end"
+        )
+        .into_bytes()
+    };
+    let mut use_parent = Dict::new();
+    use_parent.set(b"UseCMap".to_vec(), Object::name("Identity-V"));
+    for (name, dict, body) in [
+        ("PCVertBody", Dict::new(), cmap("/WMode 1 def")),
+        ("PCVertUse", use_parent, cmap("")),
+        ("PCComment", Dict::new(), cmap("% /WMode 1 def")),
+        ("PCString", Dict::new(), cmap(r"(/WMode 1 def \) (nested)) pop")),
+    ] {
+        let mut font = doc.resolve(fonts.get(b"PCFull0").unwrap()).as_dict().cloned().unwrap();
+        let encoding = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(dict, body)));
+        font.set(b"Encoding".to_vec(), Object::Ref(encoding));
+        let font = doc.add(Object::Dict(font));
+        fonts.set(name.as_bytes().to_vec(), Object::Ref(font));
+    }
+    doc.set(fonts_ref, Object::Dict(fonts));
+    let text = "Łódź café";
+    set_value(&mut doc, "city", &FieldValue::Text(text.into())).unwrap();
+    set_value(&mut doc, "right", &FieldValue::Text(text.into())).unwrap();
+    for name in ["vertical", "vbody", "vuse", "hcomment", "hstring"] {
+        set_value(&mut doc, name, &FieldValue::Text(text.into())).unwrap();
+    }
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    assert_eq!(field(&all, "city").value, [text]);
+    let w = &field(&all, "city").widgets[0];
+    assert!(ap(&doc, w).contains("/PCFull0 12 Tf"), "{}", ap(&doc, w));
+    let (font, shown) = appearance_text(&doc, w, b"PCFull0");
+    let font = font.as_dict().unwrap();
+    assert_eq!(font.name(b"Subtype"), Some(&b"Type0"[..]));
+    let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, font);
+    assert_eq!(shown.len(), 1);
+    assert_eq!(metrics.decode(&shown[0]), text, "drawn in the embedded font's own codes, not `?` in Helvetica");
+    // Right-aligned by the embedded font's widths: the line ends at the padded right edge
+    // (200 pt wide, no border, 2 pt padding).
+    let right = &field(&all, "right").widgets[0];
+    let (_, shown) = appearance_text(&doc, right, b"PCFull0");
+    let tw: f64 = metrics.codes(&shown[0]).iter().map(|&(code, _)| metrics.width(code)).sum::<f64>() * 12.0;
+    let x = 200.0 - 2.0 - tw;
+    assert!(ap(&doc, right).contains(&format!("1 0 0 1 {} ", crate::appearance::fmt(x))), "x = {x}: {}", ap(&doc, right));
+    for (name, font) in [("hcomment", "PCComment"), ("hstring", "PCString")] {
+        let w = &field(&all, name).widgets[0];
+        assert!(ap(&doc, w).contains(&format!("/{font} 12 Tf")), "{name} is horizontal: {}", ap(&doc, w));
+    }
+    // The vertical fonts keep Helvetica, which draws Ł as `?`; only those widgets are marked.
+    for name in ["vertical", "vbody", "vuse"] {
+        assert!(ap(&doc, &field(&all, name).widgets[0]).contains("/Helv 12 Tf"), "{name}: {}", ap(&doc, &field(&all, name).widgets[0]));
+    }
+    let mut undrawn = undrawn_fields(&doc);
+    undrawn.sort();
+    assert_eq!(undrawn, [("vbody".to_string(), 'Ł'), ("vertical".to_string(), 'Ł'), ("vuse".to_string(), 'Ł')]);
+}
+
 /// Text a field's font can't hold is kept, as Acrobat keeps it: the value is stored as typed, the
 /// appearance draws `?` for those characters, the widget is marked with the first one, and the
 /// form asks other viewers to redraw it (`/NeedAppearances`). Drawable text clears the mark.
@@ -3029,6 +3122,61 @@ fn invalid_appearance_patches_are_refused_before_anything_is_written() {
         ..Default::default()
     };
     assert!(set_props(&mut doc, "name", &props).is_err());
+    assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
+}
+
+/// Field Properties with a font file (#3848): the font is embedded in the form's `/DR` once,
+/// however many fields take it, the fields' `/DA` names it, `look` reads it back, and the
+/// value is drawn in it after save and reopen. Other appearance changes in the same edit apply.
+#[test]
+fn a_font_file_is_embedded_once_and_draws_the_fields_that_take_it() {
+    let mut doc = fixture();
+    let inter = Arc::new(pdfcraft_fonts::INTER_REGULAR.to_vec());
+    let props = FieldProps {
+        font_file: Some(inter.clone()),
+        appearance: Some(LookPatch { text: Some([1.0, 0.0, 0.0]), ..Default::default() }),
+        ..Default::default()
+    };
+    set_props(&mut doc, "name", &props).unwrap();
+    set_props(&mut doc, "address.city", &FieldProps { font_file: Some(inter), ..Default::default() }).unwrap();
+    set_value(&mut doc, "name", &FieldValue::Text("Łucja".into())).unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    for name in ["name", "address.city"] {
+        let l = look(&doc, field(&all, name));
+        assert_eq!(l.font, FieldFont::Embedded(0), "{name}");
+    }
+    assert_eq!(look(&doc, field(&all, "name")).text, [1.0, 0.0, 0.0], "the colour in the same edit applies too");
+    let af = acroform(&doc).unwrap();
+    let dr = doc.resolve(af.get(b"DR").unwrap());
+    let fonts = doc.resolve(dr.as_dict().unwrap().get(b"Font").unwrap());
+    let embedded: Vec<_> = fonts.as_dict().unwrap().iter().filter(|(k, _)| k.starts_with(b"PCFull")).collect();
+    assert_eq!(embedded.len(), 1, "embedded once for both fields");
+    let w = &field(&all, "name").widgets[0];
+    let (font, shown) = appearance_text(&doc, w, b"PCFull0");
+    let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, font.as_dict().unwrap());
+    assert_eq!(shown.iter().map(|s| metrics.decode(s)).collect::<String>(), "Łucja");
+    assert!(undrawn_fields(&doc).is_empty());
+}
+
+/// A font file that isn't a usable font, or one given with a font in the same edit, is refused
+/// before anything is written.
+#[test]
+fn bad_font_files_are_refused_before_anything_is_written() {
+    let mut doc = fixture();
+    let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    // A rename is written before the font is embedded: the font is checked before either.
+    let not_a_font = FieldProps { font_file: Some(Arc::new(b"not a font".to_vec())), name: Some("Renamed".into()), ..Default::default() };
+    assert!(matches!(set_props(&mut doc, "name", &not_a_font), Err(FormError::Invalid(_))));
+    assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
+    let both = FieldProps {
+        font_file: Some(Arc::new(pdfcraft_fonts::INTER_REGULAR.to_vec())),
+        appearance: Some(LookPatch { font: Some(FieldFont::Times), ..Default::default() }),
+        ..Default::default()
+    };
+    assert!(matches!(set_props(&mut doc, "name", &both), Err(FormError::Invalid(_))));
+    assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
+    assert!(matches!(add_form_font(&mut doc, b"not a font"), Err(FormError::Invalid(_))));
     assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
 }
 

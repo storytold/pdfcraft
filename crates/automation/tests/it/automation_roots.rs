@@ -158,6 +158,7 @@ fn tools_that_read_a_path_are_held_to_the_read_root() {
         ("comment_add", json!({"doc": 1, "page": 1, "type": "attachment", "at": [10, 10], "path": secret})),
         ("fill_sign_add", json!({"doc": 1, "page": 1, "type": "signature", "at": [10, 10], "path": pic})),
         ("form_set_image", json!({"doc": 1, "field": "f", "path": pic})),
+        ("form_set_props", json!({"doc": 1, "field": "f", "font_file": pic})),
         ("doc_import_data", json!({"doc": 1, "path": secret})),
         ("doc_watermark", json!({"doc": 1, "file": pic})),
         ("doc_background", json!({"doc": 1, "file": pic})),

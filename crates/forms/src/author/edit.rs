@@ -1,6 +1,8 @@
 use super::look::{BorderStyle, da_string, patch_da, patch_widget_look, redraw_widgets};
 use super::tree::{attach, check_place, child_named, clash, detach, ensure_form, inherited, name_parts, own_inherited};
-use super::{Dict, Document, Field, FieldKind, FieldProps, FormError, MIN_FIELD_SIDE, ObjRef, Object, PdfString, fields, flags, invalid};
+use super::{
+    Dict, Document, Field, FieldKind, FieldProps, FormError, Look, LookPatch, MIN_FIELD_SIDE, ObjRef, Object, PdfString, fields, flags, invalid,
+};
 
 /// Swap width and height, keeping the center. `None` when that is not a usable widget.
 fn swapped_around_center(r: [f64; 4]) -> Option<[f64; 4]> {
@@ -14,6 +16,27 @@ fn swapped_around_center(r: [f64; 4]) -> Option<[f64; 4]> {
     (out.iter().all(|v| v.is_finite()) && out[2] - out[0] >= MIN_FIELD_SIDE && out[3] - out[1] >= MIN_FIELD_SIDE).then_some(out)
 }
 
+/// Refuse a font file given with a font, or one that can't be embedded (licence, embedding
+/// permissions, a static font), before anything is written; [`with_font_file`] embeds it later.
+fn check_font_file(props: &FieldProps) -> Result<(), FormError> {
+    let Some(bytes) = &props.font_file else { return Ok(()) };
+    if props.appearance.is_some_and(|p| p.font.is_some()) {
+        return invalid("give a font file or a font, not both");
+    }
+    pdfcraft_fonts::embedding::validate_document_input(bytes).map_err(FormError::Invalid)?;
+    pdfcraft_fonts::embedding::validate(bytes).map_err(FormError::Invalid)
+}
+
+/// `props` with its font file embedded in the form ([`super::tree::add_form_font`]) as the font
+/// of its look, or of an appearance patch (made if needed); `None` when it has no font file.
+fn with_font_file(doc: &mut Document, props: &FieldProps) -> Result<Option<FieldProps>, FormError> {
+    let Some(bytes) = &props.font_file else { return Ok(None) };
+    let font = super::tree::add_form_font(doc, bytes)?;
+    let look = props.look.map(|l| Look { font, ..l });
+    let appearance = look.is_none().then(|| LookPatch { font: Some(font), ..props.appearance.unwrap_or_default() });
+    Ok(Some(FieldProps { look, appearance, font_file: None, ..props.clone() }))
+}
+
 /// Change a field's properties (General and Options tabs) and redraw it.
 pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<String, FormError> {
     if props.font_size.is_some_and(|size| !size.is_finite() || size < 0.0) {
@@ -25,6 +48,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         }
         patch.validate()?;
     }
+    check_font_file(props)?;
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
     // Refuse a wrong type/index before any other requested property is written.
@@ -71,6 +95,8 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         crate::set_field_actions(doc, name, acts)?;
     }
     let new_name = rename_field(doc, &all, &f, name, props)?;
+    let with_font = with_font_file(doc, props)?;
+    let props = with_font.as_ref().unwrap_or(props);
     // The new default appearance when the size or the look changes.
     let size = props.font_size.unwrap_or_else(|| crate::appearance::parse_da(&f.da).size);
     let new_da = match &props.look {

@@ -19,7 +19,7 @@ mod draft;
 mod properties;
 mod tabs;
 
-pub use draft::{ACTION_KINDS, ActionDraft, FieldDraft, FieldTab};
+pub use draft::{ACTION_KINDS, ActionDraft, FieldDraft, FieldTab, FontPick};
 pub(crate) use draft::{da_font, da_size};
 pub(crate) use properties::body;
 

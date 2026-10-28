@@ -42,6 +42,8 @@ struct Pending {
     export_now: bool,
     props_now: bool,
     field_props_now: bool,
+    /// Field Properties ▸ Appearance ▸ Font asked for a font file.
+    field_font_pick: Option<crate::prepare::FontPick>,
     bulk_field_props_now: bool,
     redact_now: Option<Dialog>,
     import_words: bool,
@@ -296,6 +298,7 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
                 return false;
             };
             let (go, cancel) = crate::prepare::body(ui, d, &t);
+            req.field_font_pick = d.font_pick.take();
             req.apply = go;
             req.field_props_now = req.apply;
             req.close = req.apply || cancel;
@@ -1573,6 +1576,17 @@ fn dialog_footer(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: 
     });
 }
 
+/// Field Properties' font file: open the picker, or read the installed font chosen.
+fn pick_field_font(app: &mut PdfCraftApp, pick: crate::prepare::FontPick) {
+    match pick {
+        crate::prepare::FontPick::Load => app.pick_files(crate::files::FilePurpose::FieldFont, false),
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::prepare::FontPick::Installed(path) => app.use_paths(crate::files::FilePurpose::FieldFont, &[path]),
+        #[cfg(target_arch = "wasm32")]
+        crate::prepare::FontPick::Installed(_) => {}
+    }
+}
+
 /// Acts on what the dialog asked for, once the modal is drawn.
 fn finish_dialog(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: &mut Pending) {
     finish_requests(app, dialog, modal_closed, req);
@@ -1694,6 +1708,9 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
     }
     if req.bulk_field_props_now {
         req.close = app.apply_bulk_field_props();
+    }
+    if let Some(pick) = req.field_font_pick.take() {
+        pick_field_font(app, pick);
     }
     if req.field_props_now
         && let Some(d) = app.field_props.take()

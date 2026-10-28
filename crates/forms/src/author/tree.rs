@@ -1,4 +1,4 @@
-use super::{Dict, Document, Field, FormError, ObjRef, Object, PdfString, invalid};
+use super::{Dict, Document, Field, FieldFont, FormError, ObjRef, Object, PdfString, invalid};
 
 /// The AcroForm dictionary's reference, creating the form (with `/Helv` in `/DR`) if needed.
 pub(crate) fn ensure_form(doc: &mut Document) -> Result<ObjRef, FormError> {
@@ -75,6 +75,47 @@ fn store_form_fonts(doc: &mut Document, af: &mut Dict, mut dr: Dict, fonts: Dict
         Some(dr_ref) => doc.set(dr_ref, Object::Dict(dr)),
         None => af.set(b"DR".to_vec(), Object::Dict(dr)),
     }
+}
+
+/// Embed a TrueType or OpenType font file in the form's `/DR`, for fields to draw their text
+/// with (#3848). The whole program is embedded with a `/ToUnicode` map and widths for every
+/// character it has, so any value the font can show is drawn in it after reopening, here and in
+/// other viewers. Embedding the same file again reuses its resource. Refused, before anything is
+/// written, unless the file is a standalone static font that permits embedding and declares an
+/// open licence, as for text edited on a page (`embedding::validate_document_input`).
+pub fn add_form_font(doc: &mut Document, bytes: &[u8]) -> Result<FieldFont, FormError> {
+    use pdfcraft_fonts::embedding;
+    embedding::validate_document_input(bytes).map_err(FormError::Invalid)?;
+    embedding::validate(bytes).map_err(FormError::Invalid)?;
+    let (_, postscript) = embedding::names(bytes).map_err(FormError::Invalid)?;
+    let r = ensure_form(doc)?;
+    let mut af = doc.get(r).as_dict().cloned().unwrap_or_default();
+    let (dr, mut fonts) = form_fonts(doc, &af);
+    let resource = embedding::embed(doc, &mut fonts, bytes, &postscript).map_err(FormError::Invalid)?;
+    // `embed` names its resources `PCFull<n>`, which is what `FieldFont::Embedded` writes back.
+    let FieldFont::Embedded(n) = FieldFont::of_resource(&resource) else {
+        return invalid(format!("the font was embedded under an unexpected name {resource:?}"));
+    };
+    store_form_fonts(doc, &mut af, dr, fonts);
+    doc.set(r, Object::Dict(af));
+    Ok(FieldFont::Embedded(n))
+}
+
+/// The fonts [`add_form_font`] embedded in the form's `/DR`, with their names (`/BaseFont`, the
+/// font's PostScript name, which tells weights apart), in resource order: what Field Properties
+/// offers beside the standard fonts. At most 256.
+pub fn embedded_form_fonts(doc: &Document) -> Vec<(FieldFont, String)> {
+    let Some(af) = crate::acroform(doc) else { return Vec::new() };
+    let (_, fonts) = form_fonts(doc, &af);
+    fonts
+        .iter()
+        .filter_map(|(key, value)| {
+            let font @ FieldFont::Embedded(_) = FieldFont::of_resource(&String::from_utf8_lossy(key)) else { return None };
+            let name = doc.resolve(value).as_dict()?.name(b"BaseFont").map(|n| String::from_utf8_lossy(n).into_owned())?;
+            Some((font, name))
+        })
+        .take(256)
+        .collect()
 }
 
 /// Filling a field: the form's inline `/DR` fonts become objects (see

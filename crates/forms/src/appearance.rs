@@ -6,9 +6,11 @@
 //! password, quadding, auto font size (`0 Tf`), combo boxes and list boxes (selection shown).
 //!
 //! The `/DA` font is used when the form's `/DR` defines it as a simple font that can encode the
-//! displayed text (using its own encoding and Differences), or as a composite font with a
-//! predefined Unicode CMap such as `UniJIS-UTF16-H`, as Japanese forms use. Otherwise (unsupported
-//! characters, other composite fonts, missing resources) Helvetica is used. Text the chosen font
+//! displayed text (using its own encoding and Differences), as a composite font with a
+//! predefined Unicode CMap such as `UniJIS-UTF16-H`, as Japanese forms use, or as another
+//! horizontal composite font whose `/ToUnicode` gives a code and glyph for every character (an
+//! embedded TrueType or OpenType font, #3848). Otherwise (unsupported characters, vertical
+//! fonts, missing resources) Helvetica is used. Text the chosen font
 //! can't hold (outside WinAnsi in Helvetica, or beyond U+FFFF in a UCS-2 CMap) is drawn as `?`, as
 //! Acrobat keeps a value its field font can't show: the value itself is stored as typed,
 //! [`field_appearance_drawn`] returns the first such character, and the caller marks the widget
@@ -282,7 +284,8 @@ pub fn parse_da(da: &str) -> Da {
 #[derive(Clone, Debug, PartialEq)]
 enum FontText {
     WinAnsi,
-    /// A reused simple font's encoding, including indirect dictionaries and Differences.
+    /// A reused font's own codes: a simple font's encoding (including indirect dictionaries and
+    /// Differences), or a horizontal composite font's `/ToUnicode` and `/W`.
     Simple(Box<Metrics>),
     /// A composite font with a predefined Unicode CMap.
     Unicode(UnicodeCMap),
@@ -341,10 +344,20 @@ fn dr_font(doc: &Document, name: &str) -> Option<(Object, FontText)> {
     let fd = font.as_dict()?;
     match fd.name(b"Subtype") {
         Some(b"Type1" | b"TrueType" | b"MMType1") => {}
-        // Japanese, Chinese and Korean forms: a CID font addressed by Unicode (a non-embedded
-        // `/HeiseiMin-W3` with `/UniJIS-UCS2-H`, say). Embedded CMap streams and Identity-H need
-        // the font's own mapping, so those still fall back to Helvetica.
-        Some(b"Type0") => return Some((entry, FontText::Unicode(UnicodeCMap::from_name(fd.name(b"Encoding")?)?))),
+        Some(b"Type0") => {
+            // Japanese, Chinese and Korean forms: a CID font addressed by Unicode (a non-embedded
+            // `/HeiseiMin-W3` with `/UniJIS-UCS2-H`, say).
+            if let Some(cmap) = fd.name(b"Encoding").and_then(UnicodeCMap::from_name) {
+                return Some((entry, FontText::Unicode(cmap)));
+            }
+            // Any other horizontal composite font (an embedded TrueType or OpenType font with
+            // `Identity-H` or its own CMap, as `pdfcraft_fonts::embedding::embed` writes) is
+            // written through its `/ToUnicode` and measured by its `/W`. A character it has no
+            // code or glyph for fails `can_encode`, and Helvetica stands in. Vertical fonts
+            // (`-V` CMaps, `/WMode 1`) don't fit the horizontal layout and keep Helvetica.
+            let vertical = fd.get(b"Encoding").is_some_and(|e| vertical_cmap(doc, e, 0));
+            return (!vertical).then(|| (entry, FontText::Simple(Box::new(Metrics::from_dict(doc, fd)))));
+        }
         _ => return None,
     }
     // Symbolic fonts (ZapfDingbats, Symbol) can't show WinAnsi text.
@@ -352,6 +365,103 @@ fn dr_font(doc: &Document, name: &str) -> Option<(Object, FontText)> {
         return None;
     }
     Some((entry, FontText::Simple(Box::new(Metrics::from_dict(doc, fd)))))
+}
+
+/// Largest embedded CMap read to find its writing mode, as `pdfcraft_fonts::pdf` reads CMaps.
+const MAX_CMAP_BYTES: usize = 16 << 20;
+
+/// How many `/UseCMap` parents a writing-mode check follows; a longer (or cyclic) chain counts
+/// as vertical, so the field keeps Helvetica.
+const MAX_USECMAP_DEPTH: usize = 4;
+
+/// Whether the composite font encoding `encoding` writes vertically (ISO 32000-2 §9.7.5): a
+/// predefined `-V` CMap, or an embedded CMap with `/WMode 1` in its dictionary or in its body
+/// (`/WMode 1 def`; the dictionary entry is optional), itself or through `/UseCMap`. An embedded
+/// CMap that can't be read counts as vertical, so the field keeps Helvetica.
+fn vertical_cmap(doc: &Document, encoding: &Object, depth: usize) -> bool {
+    if depth > MAX_USECMAP_DEPTH {
+        return true;
+    }
+    match doc.resolve(encoding).as_ref() {
+        Object::Name(n) => n.ends_with(b"-V"),
+        Object::Stream(s) => {
+            if s.dict.get(b"WMode").and_then(|w| doc.resolve(w).as_int()) == Some(1) {
+                return true;
+            }
+            if s.dict.get(b"UseCMap").is_some_and(|parent| vertical_cmap(doc, parent, depth.saturating_add(1))) {
+                return true;
+            }
+            let Ok(body) = s.decoded_within(MAX_CMAP_BYTES) else { return true };
+            body_sets_vertical(&body)
+        }
+        _ => false,
+    }
+}
+
+/// Whether a CMap program says `/WMode 1 def`, reading it as PostScript tokens: comments (`%` to
+/// the end of the line) and strings (`(…)`, nested and escaped, and `<…>`) are skipped, so text
+/// that only mentions it doesn't count.
+fn body_sets_vertical(body: &[u8]) -> bool {
+    let mut bytes = body.iter().copied().peekable();
+    // The last three tokens, and the one being read.
+    let mut last: [Vec<u8>; 3] = Default::default();
+    let mut token = Vec::new();
+    let end = |token: &mut Vec<u8>, last: &mut [Vec<u8>; 3]| -> bool {
+        if token.is_empty() {
+            return false;
+        }
+        last.rotate_left(1);
+        last[2] = std::mem::take(token);
+        last[0] == b"/WMode" && last[1] == b"1" && last[2] == b"def"
+    };
+    while let Some(b) = bytes.next() {
+        let found = match b {
+            b'%' => {
+                let found = end(&mut token, &mut last);
+                while bytes.next_if(|&c| c != b'\n' && c != b'\r').is_some() {}
+                found
+            }
+            b'(' => {
+                let found = end(&mut token, &mut last);
+                let mut depth = 1usize;
+                while depth > 0 {
+                    match bytes.next() {
+                        Some(b'\\') => {
+                            bytes.next();
+                        }
+                        Some(b'(') => depth = depth.saturating_add(1),
+                        Some(b')') => depth = depth.saturating_sub(1),
+                        Some(_) => {}
+                        None => break,
+                    }
+                }
+                found
+            }
+            // `<<` and `>>` are dictionary marks; a single `<` opens a hex string.
+            b'<' | b'>' if bytes.next_if_eq(&b).is_some() => end(&mut token, &mut last),
+            b'<' => {
+                let found = end(&mut token, &mut last);
+                while bytes.next_if(|&c| c != b'>').is_some() {}
+                bytes.next();
+                found
+            }
+            b'/' => {
+                let found = end(&mut token, &mut last);
+                token.push(b'/');
+                found
+            }
+            b'[' | b']' | b'{' | b'}' | b'>' | b')' => end(&mut token, &mut last),
+            c if c.is_ascii_whitespace() || c == 0 => end(&mut token, &mut last),
+            c => {
+                token.push(c);
+                false
+            }
+        };
+        if found {
+            return true;
+        }
+    }
+    end(&mut token, &mut last)
 }
 
 /// A push button's caption, centered in a `width` × `height` box, in the font, size and color its
@@ -687,7 +797,8 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
 
 /// [`field_appearance_as`] with the first character it drew as `?` because the field's font can't
 /// hold it: the form's font is a simple (WinAnsi) font, Helvetica stands in for one PdfCraft can't
-/// write with (an embedded subset, `Identity-H`), or a UCS-2 CMap meets a character beyond U+FFFF.
+/// write that text with (a subset lacking the glyph, a composite font without `/ToUnicode`, a
+/// vertical font), or a UCS-2 CMap meets a character beyond U+FFFF.
 pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>) {
     let (stream, unencodable, _) = field_appearance_fit(doc, f, w, values, format);
     (stream, unencodable)

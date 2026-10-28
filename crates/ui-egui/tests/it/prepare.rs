@@ -272,6 +272,52 @@ fn appearance_tab_restyles_the_field() {
     assert_eq!((l.style, l.font, l.fill), (BorderStyle::Dashed, FieldFont::Courier, Some([1.0, 1.0, 0.8])));
 }
 
+/// Field Properties ▸ Appearance ▸ Font with a font file (#3848): a loaded file shows by its
+/// PostScript name, a file that isn't a usable font is refused with a notice and leaves the choice
+/// alone, OK embeds the font and draws the field in it, and the next time the dialog opens the
+/// embedded font is listed by name beside the standard fonts, which can replace it.
+#[test]
+fn appearance_tab_takes_a_font_file() {
+    use pdfcraft_engine::FieldFont;
+    use pdfcraft_ui_egui::FilePurpose;
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    h.get_by_label("Appearance").click();
+    h.run_steps(2);
+    h.state_mut().use_files(FilePurpose::FieldFont, vec![("Inter.ttf".into(), pdfcraft_fonts::INTER_REGULAR.to_vec())]);
+    h.run_steps(2);
+    assert_eq!(h.state().field_props.as_ref().unwrap().font_file.as_ref().map(|(family, _)| family.as_str()), Some("Inter-Regular"));
+    h.get_by(|n| n.role() == Role::ComboBox && n.value().is_some_and(|v| v == "Inter-Regular"));
+    h.state_mut().use_files(FilePurpose::FieldFont, vec![("notes.ttf".into(), b"not a font".to_vec())]);
+    h.run_steps(2);
+    assert!(h.state().toast.as_ref().unwrap().0.contains("Couldn't use notes.ttf"), "{:?}", h.state().toast);
+    assert!(h.state().field_props.as_ref().unwrap().font_file.is_some(), "a refused file keeps the font chosen before");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let font_of = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().field_look("city").unwrap().font
+    };
+    assert_eq!(font_of(&h), FieldFont::Embedded(0));
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().form_fonts(), [(FieldFont::Embedded(0), "Inter-Regular".to_string())]);
+
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    h.get_by_label("Appearance").click();
+    h.run_steps(2);
+    h.get_by(|n| n.role() == Role::ComboBox && n.value().is_some_and(|v| v == "Inter-Regular")).click();
+    h.run_steps(2);
+    h.get_by_label("Courier").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(font_of(&h), FieldFont::Courier);
+}
+
 #[test]
 fn appearance_tab_keeps_auto_font_size() {
     let mut h = harness();

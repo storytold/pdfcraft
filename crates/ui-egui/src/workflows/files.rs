@@ -26,6 +26,8 @@ pub enum FilePurpose {
     CreateMultipleSeparate,
     /// Find text and redact ▸ Import list: a text file with one word or phrase per line.
     RedactWords,
+    /// Field Properties ▸ Appearance ▸ Font: a font file for the open dialog (#3848).
+    FieldFont,
 }
 
 /// Discover installed document fonts off the GUI thread, only when the picker is opened.
@@ -60,7 +62,7 @@ pub(crate) fn installed_font_files(ctx: &egui::Context) -> Option<Vec<pdfcraft_e
 /// The picker for `purpose`: PDFs, and for Create and Insert also what they convert.
 fn files_picker(purpose: FilePurpose) -> rfd::AsyncFileDialog {
     let dialog = rfd::AsyncFileDialog::new();
-    if matches!(purpose, FilePurpose::TextFont { .. }) {
+    if matches!(purpose, FilePurpose::TextFont { .. } | FilePurpose::FieldFont) {
         return dialog.add_filter("TrueType / OpenType font", &["ttf", "otf"]);
     }
     if purpose == FilePurpose::RedactWords {
@@ -95,7 +97,7 @@ pub struct ReplaceDraft {
 impl FilePurpose {
     /// Insert and Replace edit the active document, at its selection.
     pub(crate) fn edits_active_document(self) -> bool {
-        matches!(self, Self::InsertPages | Self::ReplacePages | Self::TextFont { .. })
+        matches!(self, Self::InsertPages | Self::ReplacePages | Self::TextFont { .. } | Self::FieldFont)
     }
 }
 
@@ -383,7 +385,7 @@ impl PdfCraftApp {
                 self.notify_fmt("{name} is too large for a word list (at most 1 MB).", &[("name", &name)]);
                 return;
             }
-            let read = if matches!(purpose, FilePurpose::TextFont { .. }) {
+            let read = if matches!(purpose, FilePurpose::TextFont { .. } | FilePurpose::FieldFont) {
                 use std::io::Read;
                 std::fs::File::open(p).and_then(|f| {
                     let mut bytes = Vec::new();
@@ -519,6 +521,20 @@ impl PdfCraftApp {
                 {
                     ed.fonts = crate::edit_text_ui::install_source_fonts(&ctx, doc, page);
                     self.views[index].line_editor = Some(ed);
+                }
+            }
+            FilePurpose::FieldFont => {
+                let Some((name, bytes)) = files.into_iter().next() else { return };
+                // Checked now, so the dialog names a font that its OK can embed.
+                use pdfcraft_fonts::embedding;
+                match embedding::validate_document_input(&bytes).and_then(|()| embedding::validate(&bytes)).and_then(|()| embedding::names(&bytes)) {
+                    // Shown by its PostScript name, as the form lists it once embedded.
+                    Ok((_, postscript)) => {
+                        if let Some(d) = self.field_props.as_mut() {
+                            d.font_file = Some((postscript, Arc::new(bytes)));
+                        }
+                    }
+                    Err(e) => self.notify_fmt("Couldn't use {name}: {e}", &[("name", &name), ("e", &e)]),
                 }
             }
             FilePurpose::Combine => self.stage_combine(files),

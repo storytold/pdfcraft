@@ -1,6 +1,6 @@
-use super::draft::{FieldDraft, FieldTab};
+use super::draft::{FieldDraft, FieldTab, FontPick};
 use super::tabs::{actions_tab, calculate_tab, format_tab, validate_tab};
-use super::{BorderStyle, FieldFont, FormFieldKind, theme, widgets};
+use super::{BorderStyle, FieldFont, FieldLook, FormFieldKind, theme, widgets};
 
 /// A check box for a `/Ff` bit (`inverted`: checked when the bit is clear).
 fn flag_box(ui: &mut egui::Ui, flags: &mut u32, bit: u32, inverted: bool, label: &str) {
@@ -12,6 +12,56 @@ fn flag_box(ui: &mut egui::Ui, flags: &mut u32, bit: u32, inverted: bool, label:
             *flags &= !bit;
         }
     }
+}
+
+/// The Appearance tab's font list: the standard fonts, the fonts embedded in the form (by
+/// PostScript name), a font file already chosen, and Load font… and (desktop) Installed fonts…, which set
+/// `pick` for the caller. Choosing a listed font drops a chosen file.
+fn font_menu(
+    ui: &mut egui::Ui,
+    l: &mut FieldLook,
+    fonts: &[(FieldFont, String)],
+    file: &mut Option<(String, std::sync::Arc<Vec<u8>>)>,
+    pick: &mut Option<FontPick>,
+) {
+    let shown = match (&*file, l.font) {
+        (Some((family, _)), _) => family.clone(),
+        (None, FieldFont::Embedded(_)) => fonts.iter().find(|(f, _)| *f == l.font).map_or_else(|| tl!("Custom font").to_string(), |(_, n)| n.clone()),
+        (None, f) => f.label().to_string(),
+    };
+    craft_ui::ComboBox::from_id_salt("field-font").selected_text(shown).show_ui(ui, |ui| {
+        let standard = FieldFont::ALL.into_iter().map(|f| (f, f.label().to_string()));
+        for (f, label) in standard.chain(fonts.iter().cloned()) {
+            if ui.selectable_label(file.is_none() && l.font == f, label).clicked() {
+                l.font = f;
+                *file = None;
+            }
+        }
+        if let Some((family, _)) = file.as_ref() {
+            let _ = ui.selectable_label(true, family.as_str());
+        }
+        ui.separator();
+        if ui.selectable_label(false, tl!("Load font…")).clicked() {
+            *pick = Some(FontPick::Load);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        ui.menu_button(tl!("Installed fonts…"), |ui| match crate::files::installed_font_files(ui.ctx()) {
+            Some(list) if list.is_empty() => {
+                ui.label(tl!("No openly licensed document fonts found. Load a font file."));
+            }
+            Some(list) => {
+                for font in list {
+                    if ui.button(&font.face).clicked() {
+                        *pick = Some(FontPick::Installed(font.path));
+                        ui.close();
+                    }
+                }
+            }
+            None => {
+                ui.label(tl!("Finding document fonts…"));
+            }
+        });
+    });
 }
 
 /// Shared PDF `/Q` picker for text and choice-field Options.
@@ -87,11 +137,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                     ui.end_row();
                     if let Some(l) = d.look.as_mut() {
                         ui.label(tl!("Font:"));
-                        craft_ui::ComboBox::from_id_salt("field-font").selected_text(l.font.label()).show_ui(ui, |ui| {
-                            for f in FieldFont::ALL {
-                                ui.selectable_value(&mut l.font, f, f.label());
-                            }
-                        });
+                        font_menu(ui, l, &d.fonts, &mut d.font_file, &mut d.font_pick);
                         ui.end_row();
                         ui.label(tl!("Text Color:"));
                         if let Some(c) = crate::comments::swatch_grid(ui, Some(l.text)) {

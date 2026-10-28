@@ -447,12 +447,19 @@ impl Automation {
         } else {
             single.into_iter().map(str::to_owned).collect()
         };
+        // A font file is read once, inside the roots, and shared by every field; the edit embeds
+        // it in the form once and checks its licence and embedding permissions.
+        let font_file = match a.opt_str("font_file")? {
+            Some(path) => Some(std::sync::Arc::new(crate::read_font_input(&self.resolve(path, false)?)?)),
+            None => None,
+        };
         let mut edits = Vec::with_capacity(names.len());
         let mut new_name = None;
         for name in &names {
             // Merge appearance changes separately for each field: changing just the border
             // must not copy the first field's fill, font or text colour onto the others.
-            let props = self.field_props_arg(a, name)?;
+            let mut props = self.field_props_arg(a, name)?;
+            props.font_file = font_file.clone();
             if props == FieldProps::default() {
                 return Err(bad("nothing to change"));
             }
@@ -526,6 +533,8 @@ impl Automation {
             font_size: a.opt_num("font_size")?,
             look: None,
             appearance: a.get("appearance").map(look_arg).transpose()?.filter(|p| *p != pdfcraft_engine::FieldLookPatch::default()),
+            // Read once for all the fields, in `form_set_props`.
+            font_file: None,
             format: a.get("format").map(format_arg).transpose()?,
             validate: a.get("validate").map(validate_arg).transpose()?,
             calculate: a.get("calculate").map(calculate_arg).transpose()?,

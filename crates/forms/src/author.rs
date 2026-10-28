@@ -19,6 +19,7 @@ pub use edit::set_props;
 pub use lifecycle::{add_field, delete_field, delete_field_object, duplicate_field};
 pub(crate) use look::button_appearance;
 pub use look::{BorderStyle, CheckStyle, FieldFont, Look, LookPatch, check_style, look, redraw_field, set_button_icon};
+pub use tree::{add_form_font, embedded_form_fonts};
 pub(crate) use tree::{ensure_form, form_fonts_as_objects};
 
 /// The smallest width and height of a field's widget, in points: a smaller one is refused.
@@ -95,6 +96,10 @@ pub struct FieldProps {
     /// Change only these appearance properties. Unlike `look`, this preserves each widget's
     /// other colours, border settings and default appearance, including custom font resources.
     pub appearance: Option<LookPatch>,
+    /// A TrueType or OpenType font file to embed in the form ([`add_form_font`]) and draw the
+    /// field's text with, in the same edit: it replaces the font of `look`, or becomes the font
+    /// of `appearance` (which then must not name one).
+    pub font_file: Option<std::sync::Arc<Vec<u8>>>,
     /// Format, Validate and Calculate tabs (written as Acrobat's AF scripts).
     pub format: Option<crate::af::Format>,
     pub validate: Option<crate::af::Validate>,

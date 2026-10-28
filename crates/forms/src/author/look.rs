@@ -50,7 +50,7 @@ pub(super) fn patch_da(da: &str, size: Option<f64>, patch: &LookPatch) -> String
     let numeric = |s: &str| s.parse::<f64>().is_ok();
     if patch.font.is_some() || size.is_some() {
         let old = appearance::parse_da(da);
-        let font = patch.font.map_or_else(|| old.font.clone(), |f| f.resource().to_string());
+        let font = patch.font.map_or_else(|| old.font.clone(), FieldFont::resource);
         // `parse_da` reads sizes up to 300 points; keep the same bound when writing.
         let size = appearance::fmt(size.unwrap_or(old.size).clamp(0.0, 300.0));
         let at = toks.iter().enumerate().rev().find(|(i, t)| t.as_str() == "Tf" && *i >= 2).map(|(i, _)| i);
@@ -173,16 +173,36 @@ pub enum FieldFont {
     Helvetica,
     Times,
     Courier,
+    /// A TrueType or OpenType font file embedded in the form's `/DR` by [`crate::add_form_font`],
+    /// as the resource `/PCFull<n>` (#3848).
+    Embedded(u32),
 }
 
 impl FieldFont {
+    /// The standard fonts every form offers; embedded fonts depend on the document.
     pub const ALL: [FieldFont; 3] = [FieldFont::Helvetica, FieldFont::Times, FieldFont::Courier];
 
-    fn resource(self) -> &'static str {
+    /// The `/DR` font resource name a `/DA` writes for this font (Acrobat's names for the
+    /// standard fonts).
+    fn resource(self) -> String {
         match self {
-            FieldFont::Helvetica => "Helv",
-            FieldFont::Times => "TiRo",
-            FieldFont::Courier => "Cour",
+            FieldFont::Helvetica => "Helv".into(),
+            FieldFont::Times => "TiRo".into(),
+            FieldFont::Courier => "Cour".into(),
+            FieldFont::Embedded(n) => format!("PCFull{n}"),
+        }
+    }
+
+    /// The font a `/DA` font resource name stands for: Acrobat's standard names and
+    /// PdfCraft's embedded `/PCFull<n>`; any other name reads as Helvetica.
+    pub(super) fn of_resource(name: &str) -> Self {
+        match name {
+            "TiRo" | "Times-Roman" => FieldFont::Times,
+            "Cour" | "Courier" => FieldFont::Courier,
+            _ => match name.strip_prefix("PCFull").filter(|n| n.bytes().all(|b| b.is_ascii_digit())).and_then(|n| n.parse().ok()) {
+                Some(n) => FieldFont::Embedded(n),
+                None => FieldFont::Helvetica,
+            },
         }
     }
 
@@ -191,6 +211,7 @@ impl FieldFont {
             FieldFont::Helvetica => "Helvetica",
             FieldFont::Times => "Times Roman",
             FieldFont::Courier => "Courier",
+            FieldFont::Embedded(_) => "Embedded font",
         }
     }
 }
@@ -288,11 +309,7 @@ pub fn look(doc: &Document, f: &Field) -> Look {
             _ => BorderStyle::Solid,
         },
         text,
-        font: match parsed.font.as_str() {
-            "TiRo" | "Times-Roman" => FieldFont::Times,
-            "Cour" | "Courier" => FieldFont::Courier,
-            _ => FieldFont::Helvetica,
-        },
+        font: FieldFont::of_resource(&parsed.font),
     }
 }
 

@@ -4993,6 +4993,42 @@ fn comments_and_form_data_travel_as_xfdf_fdf_and_text() {
     assert_eq!(r["undo"], "Import all.xfdf");
 }
 
+/// `form_set_props` with `font_file` (#3848): the field draws in the embedded font, so filling it
+/// with letters Helvetica lacks warns of no `?`, before and after save and reopen, in a single
+/// or bulk edit; a file that isn't a usable font changes nothing.
+#[test]
+fn a_font_file_draws_form_fields_through_tools() {
+    let dir = workdir("form-font-file");
+    std::fs::write(dir.join("Inter.ttf"), include_bytes!("../../../../assets/fonts/Inter-Regular.ttf")).unwrap();
+    std::fs::write(dir.join("bad.ttf"), b"not a font").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, 20, 180, 42], "name": "Plain" }));
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, 60, 180, 82], "name": "Fancy" }));
+    let warns = |r: &Value| r["warnings"].as_array().is_some_and(|w| w.iter().any(|w| w.as_str().is_some_and(|w| w.contains('?'))));
+    assert!(warns(&ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "Plain": "Łucja" } }))), "Helvetica can't draw Ł");
+
+    assert!(a.call("form_set_props", &json!({ "doc": doc, "field": "Fancy", "font_file": "bad.ttf" })).is_err());
+    let both = json!({ "doc": doc, "field": "Fancy", "font_file": "Inter.ttf", "appearance": { "font": "times" } });
+    assert!(a.call("form_set_props", &both).is_err(), "a font file and a font at once");
+    // A file larger than a font may be is refused while it is read (as text_font_import does),
+    // not read whole and refused by the font checks afterwards.
+    std::fs::write(dir.join("huge.ttf"), vec![0u8; (16 << 20) + 1]).unwrap();
+    let huge = a.call("form_set_props", &json!({ "doc": doc, "field": "Fancy", "font_file": "huge.ttf" }));
+    assert!(matches!(&huge, Err(ToolError::InvalidArgs(m)) if m.contains("16 MiB")), "{huge:?}");
+
+    let r = ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "Fancy", "font_file": "Inter.ttf" }));
+    assert_eq!(r["undo"], "Change field properties");
+    assert!(!warns(&ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "Fancy": "Łucja" } }))), "drawn in Inter");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "fancy.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "fancy.pdf" }))["doc"].as_u64().unwrap();
+    assert!(!warns(&ok(&mut a, "form_fill", json!({ "doc": reopened, "values": { "Fancy": "Żaneta" } }))), "the font is kept in the file");
+
+    // Bulk: both fields take the font in one step, and the Helvetica one now draws Ł too.
+    ok(&mut a, "form_set_props", json!({ "doc": reopened, "fields": ["Plain", "Fancy"], "font_file": "Inter.ttf" }));
+    assert!(!warns(&ok(&mut a, "form_fill", json!({ "doc": reopened, "values": { "Plain": "Łucja" } }))));
+}
+
 #[test]
 fn natural_image_stamps_through_tools_on_rotated_pages() {
     for degrees in [0, 90, 180, 270] {
