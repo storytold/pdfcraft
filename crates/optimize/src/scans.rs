@@ -38,6 +38,9 @@ pub struct ScanImages {
     pub bytes_after: usize,
     /// Images above the target that were left as they are, each with why.
     pub skipped: Vec<String>,
+    /// Why no image of the document was looked at, when the whole document was refused (a
+    /// signed one): one reason for the document, not one per image, so it is not in `skipped`.
+    pub refused: Option<String>,
 }
 
 /// Resample the images that `pages` draw, where their effective resolution is above `target_ppi`,

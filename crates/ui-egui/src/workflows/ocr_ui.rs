@@ -1028,7 +1028,14 @@ impl PdfCraftApp {
                     });
                 }
                 if let Some(images) = &applied.images {
-                    msg.push_str(&images_part(images.resampled, images.skipped.len()));
+                    if images.resampled > 0 || !images.skipped.is_empty() {
+                        msg.push_str(&images_part(images.resampled, images.skipped.len()));
+                    }
+                    // A signed document is refused as a whole: one reason for the document, not a
+                    // count of images left alone.
+                    if images.refused.is_some() {
+                        msg.push_str(tl!("; the document is signed, so its images were left as they are"));
+                    }
                 }
                 // The pages' own notes (the editable output's unrenderable-character warning,
                 // for one) are part of the result: said here, not dropped.
@@ -1059,7 +1066,7 @@ pub(crate) fn run_batch_files(
 ) -> String {
     let total = files.len();
     let (mut ok, mut skipped, mut words, mut failed, mut notes) = (0usize, 0usize, 0usize, Vec::new(), Vec::new());
-    let (mut resampled, mut left_alone) = (0usize, 0usize);
+    let (mut resampled, mut left_alone, mut signed) = (0usize, 0usize, 0usize);
     let mut not_run: Option<usize> = None;
     for (i, (name, bytes)) in files.into_iter().enumerate() {
         if progress.lock().map(|s| s.cancel).unwrap_or(false) {
@@ -1082,6 +1089,9 @@ pub(crate) fn run_batch_files(
                     if let Some(i) = &res.images {
                         resampled += i.resampled;
                         left_alone += i.skipped.len();
+                        if i.refused.is_some() {
+                            signed += 1;
+                        }
                     }
                 }
                 Err(e) => failed.push(format!("{name}: {e}")),
@@ -1092,6 +1102,11 @@ pub(crate) fn run_batch_files(
     let mut msg = batch_summary(ok, words, skipped, &failed, &notes, not_run);
     if resampled > 0 || left_alone > 0 {
         msg.push_str(&images_part(resampled, left_alone));
+    }
+    if signed == 1 {
+        msg.push_str(tl!("; 1 signed file kept its images"));
+    } else if signed > 1 {
+        msg.push_str(&crate::i18n::fmt(tl!("; {n} signed files kept their images"), &[("n", &signed.to_string())]));
     }
     msg
 }
@@ -1167,6 +1182,19 @@ mod tests {
         let img = craft_image_codecs::Image::from_u8(8, 8, craft_image_codecs::ChannelLayout::Rgba, [250, 250, 250, 255].repeat(64)).unwrap();
         let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
         Session::new().create_from_images(&[("scan.png".into(), png)]).unwrap().to_vec()
+    }
+
+    /// One recognised word on page 1, as a finished run would hand it over.
+    fn scanned_page() -> pdfcraft_engine::ocr::OcrPage {
+        let word = pdfcraft_engine::ocr::PlacedWord {
+            text: "scanned".into(),
+            origin: [10.0, 100.0],
+            across: [60.0, 0.0],
+            up: [0.0, 12.0],
+            confidence: None,
+            source: "ocrs".into(),
+        };
+        pdfcraft_engine::ocr::OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() }
     }
 
     fn app_with(pdf: Vec<u8>) -> PdfCraftApp {
@@ -1395,6 +1423,76 @@ mod tests {
         assert!(app.ocr_run.is_none(), "the run is over");
         assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Add image"), "its result was not applied");
         assert!(!app.views[0].auto_ocr_tried.contains(&0), "the page may be judged again");
+    }
+
+    /// A run the user asked for is held to the same rule: once a page has been moved while it was
+    /// out, its result would put the words on, and downsample the images of, the page that now
+    /// has the index it read. It is dropped, and the user is told why.
+    #[test]
+    fn the_result_of_a_user_run_is_dropped_once_the_document_has_changed() {
+        let blank = Session::new().create_blank(595.0, 842.0, 1).unwrap().to_vec();
+        let mut app = app_with(blank);
+        app.set_option("language", "en").unwrap();
+        app.quick_tool = QuickTool::Select;
+        let id = app.active_ids().unwrap().1;
+        // Page 1 is a 600 dpi scan, page 2 a scan the user did not ask to read.
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(1200, 1200, |x, y| image::Rgb([(x % 251) as u8, (y % 241) as u8, 128])))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let png = Arc::new(png.into_inner());
+        app.session.apply(id, Edit::AddImage { page: 0, rect: Some([0.0, 0.0, 144.0, 144.0]), name: "a.png".into(), bytes: png.clone() }).unwrap();
+        app.session.apply(id, Edit::InsertBlankPage { at: 1, width: 595.0, height: 842.0 }).unwrap();
+        app.session.apply(id, Edit::AddImage { page: 1, rect: Some([0.0, 0.0, 144.0, 144.0]), name: "b.png".into(), bytes: png }).unwrap();
+        let page = scanned_page();
+        let settings = OcrSettings { output: OcrOutput::Downsampled, dpi: 300.0, ..Default::default() };
+        let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
+        let guard = app.session.ocr_guard(id).unwrap();
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, settings, automatic: None, editable: false });
+        // The pages swap places while the run is out.
+        app.session.apply(id, Edit::ReversePages { pages: vec![0, 1] }).unwrap();
+        let label = app.session.get(id).unwrap().can_undo().map(String::from);
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none(), "the run is over");
+        assert_eq!(app.session.get(id).unwrap().can_undo().map(String::from), label, "its result was not applied");
+        let widths: Vec<u32> = (0..2).map(|p| app.session.get(id).unwrap().page_images(p)[0].width).collect();
+        assert_eq!(widths, [1200, 1200], "no page had its image downsampled");
+        let toast = app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(toast.contains("document changed"), "{toast}");
+    }
+
+    /// A signed document keeps its images. The summary says so once, for the document, and
+    /// does not count the refusal as one image left as it is (#5126 review).
+    #[test]
+    fn a_signed_document_is_not_counted_as_one_image_left_as_it_is() {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(1200, 1200, |x, y| image::Rgb([(x % 251) as u8, (y % 241) as u8, 128])))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let mut s = Session::new();
+        let pdf =
+            s.create_from_images_with_resolution(&[("scan.png".into(), png.into_inner())], pdfcraft_engine::ImageResolution::Dpi(600.0)).unwrap();
+        let unsigned = s.open("scan.pdf", None, pdf, None).unwrap();
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+        let digital_id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
+        let opts = pdfcraft_engine::SignOptions { page: 0, rect: Some([20.0, 20.0, 180.0, 60.0]), ..Default::default() };
+        let signed = s.sign(unsigned, &digital_id, opts).unwrap();
+        let mut app = app_with(signed.to_vec());
+        app.set_option("language", "en").unwrap();
+        app.quick_tool = QuickTool::Select;
+        let id = app.active_ids().unwrap().1;
+        assert!(app.session.get(id).unwrap().is_signed());
+        let page = scanned_page();
+        let settings = OcrSettings { output: OcrOutput::Downsampled, dpi: 300.0, ..Default::default() };
+        let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
+        let guard = app.session.ocr_guard(id).unwrap();
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, settings, automatic: None, editable: false });
+        app.poll_ocr();
+        let toast = app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(toast.starts_with("Recognized 1 word"), "{toast}");
+        assert!(!toast.contains("left as they are)"), "the document is not one image: {toast}");
+        assert!(!toast.contains("images downsampled"), "no image was looked at: {toast}");
+        assert!(toast.contains("the document is signed"), "{toast}");
     }
 
     #[test]
