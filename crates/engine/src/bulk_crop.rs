@@ -55,11 +55,12 @@ pub fn detect_content_bounds_rgba(rgba: &[u8], width: usize, height: usize, thre
     let buf = &rgba[..expected_len];
 
     // 1. Scan top-down for min_y
-    let min_y = buf.chunks_exact(row_stride).position(|row| row.chunks_exact(4).any(|px| is_content(px, threshold)))?;
+    let min_y = buf.chunks_exact(row_stride).position(|row| row.as_chunks::<4>().0.iter().any(|px| is_content(px, threshold)))?;
 
     // 2. Scan bottom-up for max_y (only inspecting rows >= min_y)
     let active_from_top = &buf[min_y * row_stride..];
-    let max_y_offset = active_from_top.chunks_exact(row_stride).rposition(|row| row.chunks_exact(4).any(|px| is_content(px, threshold))).unwrap_or(0);
+    let max_y_offset =
+        active_from_top.chunks_exact(row_stride).rposition(|row| row.as_chunks::<4>().0.iter().any(|px| is_content(px, threshold))).unwrap_or(0);
     let max_y = min_y + max_y_offset;
 
     // 3. Scan horizontally only within active vertical band [min_y..=max_y]
@@ -72,10 +73,10 @@ pub fn detect_content_bounds_rgba(rgba: &[u8], width: usize, height: usize, thre
             break; // Full horizontal span already reached
         }
 
-        let pixels = row.chunks_exact(4);
+        let pixels = row.as_chunks::<4>().0;
 
         // Scan left edge up to current min_x
-        for (x, px) in pixels.clone().take(min_x).enumerate() {
+        for (x, px) in pixels.iter().take(min_x).enumerate() {
             if is_content(px, threshold) {
                 min_x = x;
                 break;
@@ -83,7 +84,7 @@ pub fn detect_content_bounds_rgba(rgba: &[u8], width: usize, height: usize, thre
         }
 
         // Scan right edge down to current max_x
-        for (x, px) in pixels.enumerate().skip(max_x).rev() {
+        for (x, px) in pixels.iter().enumerate().skip(max_x).rev() {
             if is_content(px, threshold) {
                 max_x = x;
                 break;
@@ -92,6 +93,102 @@ pub fn detect_content_bounds_rgba(rgba: &[u8], width: usize, height: usize, thre
     }
 
     (min_x <= max_x).then_some([min_x, min_y, max_x, max_y])
+}
+
+/// Converts pixel bounding coordinates in raster view space into unrotated MediaBox
+/// user-space margins `[left, bottom, right, top]` for `BoxSpec::Margins`.
+///
+/// Uses `PageInfo::view_to_user` to transform the raster bounding box corners into
+/// PDF user space, correctly handling `/Rotate` and pages whose existing CropBox
+/// is smaller than their MediaBox. Insets by `padding_pt` and clamps to avoid degenerate crops.
+pub fn content_bounds_to_user_margins(
+    bounds: [usize; 4],
+    raster_w: usize,
+    raster_h: usize,
+    info: &PageInfo,
+    media_box: [f64; 4],
+    padding_pt: f64,
+) -> Option<[f64; 4]> {
+    let [min_x, min_y, max_x, max_y] = bounds;
+    if raster_w == 0
+        || raster_h == 0
+        || !info.width.is_finite()
+        || info.width <= 0.0
+        || !info.height.is_finite()
+        || info.height <= 0.0
+        || !padding_pt.is_finite()
+        || min_x > max_x
+        || max_x >= raster_w
+        || min_y > max_y
+        || max_y >= raster_h
+    {
+        return None;
+    }
+
+    let rw = raster_w as f32;
+    let rh = raster_h as f32;
+
+    // Pixel box in view space points [0..width, 0..height] (y-down)
+    let vx0 = (min_x as f32 / rw) * info.width;
+    let vy0 = (min_y as f32 / rh) * info.height;
+    let vx1 = ((max_x + 1) as f32 / rw) * info.width;
+    let vy1 = ((max_y + 1) as f32 / rh) * info.height;
+
+    // Map all four view-space corners to PDF user space
+    let c1 = info.view_to_user(vx0, vy0);
+    let c2 = info.view_to_user(vx1, vy0);
+    let c3 = info.view_to_user(vx0, vy1);
+    let c4 = info.view_to_user(vx1, vy1);
+
+    let u_min_x = (c1[0].min(c2[0]).min(c3[0]).min(c4[0])) as f64;
+    let u_max_x = (c1[0].max(c2[0]).max(c3[0]).max(c4[0])) as f64;
+    let u_min_y = (c1[1].min(c2[1]).min(c3[1]).min(c4[1])) as f64;
+    let u_max_y = (c1[1].max(c2[1]).max(c3[1]).max(c4[1])) as f64;
+
+    if !u_min_x.is_finite() || !u_max_x.is_finite() || !u_min_y.is_finite() || !u_max_y.is_finite() {
+        return None;
+    }
+
+    let mx0 = media_box[0].min(media_box[2]);
+    let mx1 = media_box[0].max(media_box[2]);
+    let my0 = media_box[1].min(media_box[3]);
+    let my1 = media_box[1].max(media_box[3]);
+
+    let media_w = mx1 - mx0;
+    let media_h = my1 - my0;
+    if media_w <= 0.0 || media_h <= 0.0 {
+        return None;
+    }
+
+    let pad = padding_pt.max(0.0);
+
+    // Margins measured from MediaBox edges in unrotated user space
+    let mut left = ((u_min_x - mx0) - pad).clamp(0.0, media_w);
+    let mut bottom = ((u_min_y - my0) - pad).clamp(0.0, media_h);
+    let mut right = ((mx1 - u_max_x) - pad).clamp(0.0, media_w);
+    let mut top = ((my1 - u_max_y) - pad).clamp(0.0, media_h);
+
+    // Guard against degenerate / overlapping crops
+    let max_horiz = (media_w - MIN_CROP_DIM).max(0.0);
+    if left + right > max_horiz && left + right > 0.0 {
+        let k = max_horiz / (left + right);
+        left *= k;
+        right *= k;
+    }
+
+    let max_vert = (media_h - MIN_CROP_DIM).max(0.0);
+    if bottom + top > max_vert && bottom + top > 0.0 {
+        let k = max_vert / (bottom + top);
+        bottom *= k;
+        top *= k;
+    }
+
+    #[inline]
+    fn floor_2dp(v: f64) -> f64 {
+        ((v + 1e-9) * 100.0).floor() / 100.0
+    }
+
+    Some([floor_2dp(left), floor_2dp(bottom), floor_2dp(right), floor_2dp(top)])
 }
 
 /// Converts pixel bounding coordinates to PDF point margins `[left, bottom, right, top]`
@@ -176,7 +273,7 @@ enum PageScan {
     Error,
 }
 
-fn detect_page_with_renderer(renderer: &mut PageRenderer, info: &PageInfo, page: usize, padding_pt: f64) -> PageScan {
+fn detect_page_with_renderer(renderer: &mut PageRenderer, info: &PageInfo, page: usize, media_box: [f64; 4], padding_pt: f64) -> PageScan {
     let max_dim = info.width.max(info.height).max(1.0);
     let scale = (DETECT_RASTER_SIDE / max_dim).clamp(0.05, 5.0);
 
@@ -186,54 +283,67 @@ fn detect_page_with_renderer(renderer: &mut PageRenderer, info: &PageInfo, page:
     }
 
     match detect_content_bounds_rgba(&shot.rgba, shot.width as usize, shot.height as usize, CONTENT_THRESHOLD) {
-        Some(bounds) => {
-            match content_bounds_to_margins(bounds, shot.width as usize, shot.height as usize, info.width as f64, info.height as f64, padding_pt) {
-                Some(m) => PageScan::Content(m),
-                None => PageScan::Error,
-            }
-        }
+        Some(bounds) => match content_bounds_to_user_margins(bounds, shot.width as usize, shot.height as usize, info, media_box, padding_pt) {
+            Some(m) => PageScan::Content(m),
+            None => PageScan::Error,
+        },
         None => PageScan::Blank,
+    }
+}
+
+/// Detects content margins on a page using the given renderer and page info.
+pub fn detect_page_margins(renderer: &mut PageRenderer, info: &PageInfo, page: usize, media_box: [f64; 4], padding_pt: f64) -> Option<[f64; 4]> {
+    match detect_page_with_renderer(renderer, info, page, media_box, padding_pt) {
+        PageScan::Content(m) => Some(m),
+        _ => None,
     }
 }
 
 impl Session {
     /// Detects content bounds on page `page` (0-based) of document `id` and returns
-    /// margins `[left, bottom, right, top]` in PDF points, including `padding_pt`.
+    /// margins `[left, bottom, right, top]` in PDF points from MediaBox, including `padding_pt`.
     pub fn detect_page_auto_crop(&self, id: DocId, page: usize, padding_pt: f64) -> Option<[f64; 4]> {
         let doc = self.get(id)?;
         let info = doc.info.pages.get(page)?;
+        let boxes = doc.page_boxes();
+        let media =
+            boxes.get(page).map(|b| b[0]).unwrap_or_else(|| [info.crop[0] as f64, info.crop[1] as f64, info.crop[2] as f64, info.crop[3] as f64]);
         let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
         let mut renderer = PageRenderer::new(doc.bytes.clone(), config);
-        match detect_page_with_renderer(&mut renderer, info, page, padding_pt) {
-            PageScan::Content(m) => Some(m),
-            _ => None,
-        }
+        detect_page_margins(&mut renderer, info, page, media, padding_pt)
     }
 
-    /// Calculates the safe union auto-crop margins across `pages` (0-based) of document `id`.
-    ///
-    /// Reuses a single `PageRenderer` instance across all pages. If any page fails to render,
-    /// returns `None` rather than producing an unsafe partial crop that could clip content.
-    pub fn detect_bulk_auto_crop(&self, id: DocId, pages: &[usize], padding_pt: f64) -> Option<[f64; 4]> {
+    /// Detects content bounds on each page in `pages` (0-based) of document `id`,
+    /// returning a list of `(page, margins)` for pages containing non-white content.
+    /// Fails safely (returns `None`) if any page encounters a render error.
+    pub fn detect_pages_auto_crop(&self, id: DocId, pages: &[usize], padding_pt: f64) -> Option<Vec<(usize, [f64; 4])>> {
         let doc = self.get(id)?;
         let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
         let mut renderer = PageRenderer::new(doc.bytes.clone(), config);
+        let boxes = doc.page_boxes();
 
         let mut list = Vec::new();
         for &p in pages {
             let info = doc.info.pages.get(p)?;
-            match detect_page_with_renderer(&mut renderer, info, p, padding_pt) {
-                PageScan::Content(m) => list.push(m),
-                PageScan::Blank => {
-                    // Blank pages do not restrict the content boundary
-                }
-                PageScan::Error => {
-                    // Fail safely to avoid clipping uninspected content
-                    return None;
-                }
+            let media =
+                boxes.get(p).map(|b| b[0]).unwrap_or_else(|| [info.crop[0] as f64, info.crop[1] as f64, info.crop[2] as f64, info.crop[3] as f64]);
+            match detect_page_with_renderer(&mut renderer, info, p, media, padding_pt) {
+                PageScan::Content(m) => list.push((p, m)),
+                PageScan::Blank => {}
+                PageScan::Error => return None,
             }
         }
-        union_margins(&list)
+        Some(list)
+    }
+
+    /// Calculates the safe union auto-crop margins across `pages` (0-based) of document `id`.
+    ///
+    /// Reuses a single `PageRenderer` instance across all pages in a single pass. If any page fails to render,
+    /// returns `None` rather than producing an unsafe partial crop that could clip content.
+    pub fn detect_bulk_auto_crop(&self, id: DocId, pages: &[usize], padding_pt: f64) -> Option<[f64; 4]> {
+        let per_page = self.detect_pages_auto_crop(id, pages, padding_pt)?;
+        let margins: Vec<[f64; 4]> = per_page.into_iter().map(|(_, m)| m).collect();
+        union_margins(&margins)
     }
 }
 
@@ -251,11 +361,8 @@ mod tests {
     fn transparent_pixels_with_rgb_noise_ignored() {
         let mut raster = vec![255; 100 * 100 * 4];
         // Transparent black noise
-        for px in raster.chunks_exact_mut(4) {
-            px[0] = 0;
-            px[1] = 0;
-            px[2] = 0;
-            px[3] = 0;
+        for px in raster.as_chunks_mut::<4>().0 {
+            *px = [0, 0, 0, 0];
         }
         assert_eq!(detect_content_bounds_rgba(&raster, 100, 100, 245), None);
     }
@@ -340,5 +447,37 @@ mod tests {
         let m2 = [20.0, 70.0, 30.0, 80.0];
         let union = union_margins(&[m1, m2]).unwrap();
         assert_eq!(union, [20.0, 40.0, 30.0, 30.0]);
+    }
+
+    #[test]
+    fn user_margins_handles_rotated_and_cropped_pages() {
+        // Page with MediaBox [0, 0, 200, 300] and no rotation:
+        let info_unrotated = PageInfo { width: 200.0, height: 300.0, label: "1".into(), crop: [0.0, 0.0, 200.0, 300.0], rotation: 0 };
+        // Content rectangle from (20, 30) to (79, 69) on 100x100 raster with 0 padding
+        let bounds = [20, 30, 79, 69];
+        let media = [0.0, 0.0, 200.0, 300.0];
+        let m = content_bounds_to_user_margins(bounds, 100, 100, &info_unrotated, media, 0.0).unwrap();
+        // In user space:
+        // left: 20% of 200 = 40.0
+        // right: 20% of 200 = 40.0
+        // top: 30% of 300 = 90.0
+        // bottom: 30% of 300 = 90.0
+        assert_eq!(m, [40.0, 90.0, 40.0, 90.0]);
+
+        // Rotated 90 degrees clockwise:
+        // In PDF user space MediaBox is still [0, 0, 200, 300], but displayed width is 300, height is 200
+        let info_rot90 = PageInfo { width: 300.0, height: 200.0, label: "1".into(), crop: [0.0, 0.0, 200.0, 300.0], rotation: 90 };
+        // In view space on rot90: x corresponds to user space y, y corresponds to user space (200 - x)
+        let m_rot = content_bounds_to_user_margins(bounds, 100, 100, &info_rot90, media, 0.0).unwrap();
+        // Bounding box transformed to user space accurately produces non-degenerate margins
+        assert!(m_rot.iter().all(|&v| v >= 0.0));
+        assert!(m_rot[0] + m_rot[2] < 200.0);
+        assert!(m_rot[1] + m_rot[3] < 300.0);
+
+        // Pre-cropped page: CropBox [20, 30, 180, 270] smaller than MediaBox [0, 0, 200, 300]
+        let info_cropped = PageInfo { width: 160.0, height: 240.0, label: "1".into(), crop: [20.0, 30.0, 180.0, 270.0], rotation: 0 };
+        let m_crop = content_bounds_to_user_margins([0, 0, 99, 99], 100, 100, &info_cropped, media, 0.0).unwrap();
+        // Whole cropped region touched: margins should be relative to MediaBox, i.e. [20.0, 30.0, 20.0, 30.0]
+        assert_eq!(m_crop, [20.0, 30.0, 20.0, 30.0]);
     }
 }

@@ -169,6 +169,48 @@ fn bulk_crop_dialog_clear_crop_and_reset() {
 }
 
 #[test]
+fn bulk_crop_dialog_clear_crop_then_edit_margins_applies_new_crop() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("page.bulk_crop"));
+    h.run_steps(3);
+    // Click Clear crop
+    h.get_by_label("Clear crop").click();
+    h.run_steps(2);
+    assert_eq!(h.state().bulk_crop_draft.blended_margins, [0.0; 4]);
+
+    // Set new margins after Clear crop
+    h.state_mut().bulk_crop_draft.blended_margins = [15.0; 4];
+    h.run_steps(2);
+    h.get_by_label("Crop Pages").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, None);
+    // Margins must apply (300 - 30 = 270, 400 - 30 = 370), not be discarded as Remove
+    assert_eq!(size(&h, 0), (270.0, 370.0));
+    assert_eq!(size(&h, 1), (270.0, 370.0));
+}
+
+#[test]
+fn bulk_crop_dialog_switching_to_page_by_page_marks_pages_edited() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("page.bulk_crop"));
+    h.run_steps(3);
+    h.state_mut().bulk_crop_draft.blended_margins = [25.0; 4];
+    h.run_steps(2);
+
+    // Switch mode to Page by page: radio button click triggers the transition
+    h.get_by_label("Page by page").click();
+    h.run_steps(2);
+    assert_eq!(h.state().bulk_crop_draft.mode, pdfcraft_ui_egui::bulk_crop::BulkCropMode::PageByPage);
+
+    // Confirm: carried-over margins must be applied to the pages
+    h.get_by_label("Crop Pages").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(size(&h, 0), (250.0, 350.0));
+    assert_eq!(size(&h, 1), (250.0, 350.0));
+}
+
+#[test]
 fn duplicate_pages_copies_the_current_page() {
     let mut h = harness();
     assert!(h.state_mut().execute("page.duplicate"));

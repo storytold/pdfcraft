@@ -430,6 +430,7 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             }
             if req.close {
                 app.bulk_crop_draft.seeded = false;
+                app.bulk_crop_scan = None;
             }
             return false;
         }
@@ -1977,6 +1978,7 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
             app.undo();
             app.bulk_crop_draft.was_temporarily_uncropped = false;
         }
+        app.bulk_crop_scan = None;
         app.bulk_crop_draft.seeded = false;
         app.dialog = None;
         app.props_draft = None;

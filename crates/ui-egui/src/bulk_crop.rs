@@ -148,7 +148,7 @@ impl BulkCropDraft {
         let pages = self.target_pages(total_pages);
         match self.mode {
             BulkCropMode::Blended => {
-                if self.revert_pages.len() == pages.len() || self.blended_margins.iter().all(|&v| v == 0.0) {
+                if self.blended_margins.iter().all(|&v| v == 0.0) {
                     Edit::SetPageBox { pages, which: PageBox::Crop, spec: BoxSpec::Remove }
                 } else {
                     Edit::SetPageBox { pages, which: PageBox::Crop, spec: BoxSpec::Margins(self.blended_margins) }
@@ -190,6 +190,58 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     let Some((view_idx, doc_id)) = app.active_ids() else { return (false, true) };
     let total_pages = app.session.get(doc_id).map(|d| d.info.pages.len()).unwrap_or(1).max(1);
 
+    let scan_results = if let Some(scan) = &app.bulk_crop_scan {
+        if scan.doc == doc_id { scan.rx.try_recv().ok().map(|res| (scan.is_explicit, res)) } else { None }
+    } else {
+        None
+    };
+
+    if scan_results.is_some() {
+        app.bulk_crop_scan = None;
+    }
+
+    if let Some((is_explicit, per_page)) = scan_results {
+        for &(p, m) in &per_page {
+            if let Some(slot) = app.bulk_crop_draft.page_margins.get_mut(p) {
+                *slot = m;
+            }
+        }
+        let all_m: Vec<[f64; 4]> = per_page.iter().map(|(_, m)| *m).collect();
+        let odd_m: Vec<[f64; 4]> = per_page.iter().filter(|(p, _)| p % 2 == 0).map(|(_, m)| *m).collect();
+        let even_m: Vec<[f64; 4]> = per_page.iter().filter(|(p, _)| p % 2 != 0).map(|(_, m)| *m).collect();
+
+        let bm = pdfcraft_engine::bulk_crop::union_margins(&all_m).unwrap_or([0.0; 4]);
+        let om = pdfcraft_engine::bulk_crop::union_margins(&odd_m).unwrap_or(bm);
+        let em = pdfcraft_engine::bulk_crop::union_margins(&even_m).unwrap_or(bm);
+
+        match app.bulk_crop_draft.mode {
+            BulkCropMode::Blended => {
+                if is_explicit || app.bulk_crop_draft.blended_margins == [0.0; 4] {
+                    app.bulk_crop_draft.blended_margins = bm;
+                    app.bulk_crop_draft.revert_pages.clear();
+                }
+            }
+            BulkCropMode::OddEven => {
+                if is_explicit || app.bulk_crop_draft.odd_margins == [0.0; 4] {
+                    app.bulk_crop_draft.odd_margins = om;
+                }
+                if is_explicit || app.bulk_crop_draft.even_margins == [0.0; 4] {
+                    app.bulk_crop_draft.even_margins = em;
+                }
+                app.bulk_crop_draft.revert_pages.clear();
+            }
+            BulkCropMode::PageByPage => {
+                if let Some(&(p, m)) = per_page.first() {
+                    app.bulk_crop_draft.edited_pages.insert(p);
+                    app.bulk_crop_draft.revert_pages.remove(&p);
+                    if let Some(slot) = app.bulk_crop_draft.page_margins.get_mut(p) {
+                        *slot = m;
+                    }
+                }
+            }
+        }
+    }
+
     if !app.bulk_crop_draft.seeded {
         let unit = app.units;
         let cur = app.views.get(view_idx).map(|v| v.current).unwrap_or(0).min(total_pages.saturating_sub(1));
@@ -211,51 +263,48 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             })
             .collect();
 
-        let (blended_m, odd_m, even_m, page_auto_m) = if !has_existing_crop {
-            let target: Vec<usize> = (0..total_pages).collect();
-            let bm = app
-                .session
-                .detect_bulk_auto_crop(doc_id, &target, 18.0)
-                .or_else(|| app.session.detect_page_auto_crop(doc_id, cur, 18.0))
-                .unwrap_or([0.0; 4]);
-            let odd_p: Vec<usize> = target.iter().copied().filter(|p| p % 2 == 0).collect();
-            let even_p: Vec<usize> = target.iter().copied().filter(|p| p % 2 != 0).collect();
-            let om = (!odd_p.is_empty()).then(|| app.session.detect_bulk_auto_crop(doc_id, &odd_p, 18.0)).flatten().unwrap_or(bm);
-            let em = (!even_p.is_empty()).then(|| app.session.detect_bulk_auto_crop(doc_id, &even_p, 18.0)).flatten().unwrap_or(bm);
-            let pm = app.session.detect_page_auto_crop(doc_id, cur, 18.0).unwrap_or([0.0; 4]);
-            (bm, om, em, pm)
+        let uncropped = if has_existing_crop {
+            app.apply_edit(Edit::SetPageBox { pages: (0..total_pages).collect(), which: PageBox::Crop, spec: BoxSpec::Remove })
         } else {
-            ([0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4])
+            false
         };
-
-        if has_existing_crop {
-            app.apply_edit(Edit::SetPageBox { pages: (0..total_pages).collect(), which: PageBox::Crop, spec: BoxSpec::Remove });
-        }
 
         let d = &mut app.bulk_crop_draft;
         d.unit = unit;
         d.range_to = total_pages;
         d.revert_pages.clear();
         d.edited_pages.clear();
-        d.original_boxes = boxes;
+        d.original_boxes = boxes.clone();
         d.current_page = cur;
         d.odd_even_tab = if cur % 2 == 0 { OddEvenTab::Odd } else { OddEvenTab::Even };
+        d.was_temporarily_uncropped = uncropped;
 
         if has_existing_crop {
-            d.was_temporarily_uncropped = true;
             let cur_insets = existing_insets.get(cur).copied().unwrap_or([0.0; 4]);
             d.blended_margins = cur_insets;
             d.odd_margins = cur_insets;
             d.even_margins = cur_insets;
             d.page_margins = existing_insets;
+            app.bulk_crop_scan = None;
         } else {
-            d.was_temporarily_uncropped = false;
-            d.blended_margins = blended_m;
-            d.odd_margins = odd_m;
-            d.even_margins = even_m;
+            d.blended_margins = [0.0; 4];
+            d.odd_margins = [0.0; 4];
+            d.even_margins = [0.0; 4];
             d.page_margins = vec![[0.0; 4]; total_pages];
-            if let Some(slot) = d.page_margins.get_mut(cur) {
-                *slot = page_auto_m;
+
+            if let Some(doc) = app.session.get(doc_id) {
+                let pages_data: Vec<_> = (0..total_pages)
+                    .filter_map(|p| {
+                        let info = doc.info.pages.get(p)?.clone();
+                        let media = boxes
+                            .get(p)
+                            .map(|b| b[0])
+                            .unwrap_or_else(|| [info.crop[0] as f64, info.crop[1] as f64, info.crop[2] as f64, info.crop[3] as f64]);
+                        Some((p, info, media))
+                    })
+                    .collect();
+                app.bulk_crop_scan =
+                    Some(crate::BulkCropScan::start(doc_id, doc.bytes.clone(), doc.password.clone(), pages_data, 18.0, false, ui.ctx()));
             }
         }
 
@@ -291,7 +340,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.vertical(|ui| {
             ui.set_width(105.0);
             ui.set_height(COLUMN_HEIGHT);
-            render_thumbnail_strip(ui, view, doc, &mut d.current_page, &mut d.odd_even_tab, d.mode, total_pages, COLUMN_HEIGHT, t);
+            render_thumbnail_strip(ui, view, doc, d, total_pages, COLUMN_HEIGHT, t);
         });
 
         ui.add_space(12.0);
@@ -371,64 +420,32 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.vertical(|ui| {
             ui.set_width(280.0);
             ui.set_height(COLUMN_HEIGHT);
-            render_controls_sidebar(
-                ui,
-                d,
-                total_pages,
-                current_page,
-                COLUMN_HEIGHT,
-                &mut trigger_auto_crop,
-                &mut trigger_reset,
-                &mut trigger_clear_crop,
-                t,
-            );
+            let actions = render_controls_sidebar(ui, d, total_pages, COLUMN_HEIGHT, t);
+            trigger_auto_crop = actions.auto_crop;
+            trigger_reset = actions.reset;
+            trigger_clear_crop = actions.clear_crop;
         });
     });
 
-    // Handle Auto-crop trigger:
-    // - Blended mode: scans all target pages and fits the safe envelope across all pages.
-    // - Odd & Even mode: scans all odd pages for odd margins, and all even pages for even margins.
-    // - Page by Page mode: scans the active page.
-    if trigger_auto_crop {
-        match d.mode {
-            BulkCropMode::Blended => {
-                let pages = d.target_pages(total_pages);
-                if let Some(m) = app.session.detect_bulk_auto_crop(doc_id, &pages, 18.0) {
-                    d.blended_margins = m;
-                } else if let Some(m) = app.session.detect_page_auto_crop(doc_id, current_page, 18.0) {
-                    d.blended_margins = m;
-                }
-            }
-            BulkCropMode::OddEven => {
-                let pages = d.target_pages(total_pages);
-                let odd_p: Vec<usize> = pages.iter().copied().filter(|p| p % 2 == 0).collect();
-                let even_p: Vec<usize> = pages.iter().copied().filter(|p| p % 2 != 0).collect();
-
-                if !odd_p.is_empty() {
-                    if let Some(m) = app.session.detect_bulk_auto_crop(doc_id, &odd_p, 18.0) {
-                        d.odd_margins = m;
-                    } else if let Some(m) = app.session.detect_page_auto_crop(doc_id, odd_p[0], 18.0) {
-                        d.odd_margins = m;
-                    }
-                }
-                if !even_p.is_empty() {
-                    if let Some(m) = app.session.detect_bulk_auto_crop(doc_id, &even_p, 18.0) {
-                        d.even_margins = m;
-                    } else if let Some(m) = app.session.detect_page_auto_crop(doc_id, even_p[0], 18.0) {
-                        d.even_margins = m;
-                    }
-                }
-            }
-            BulkCropMode::PageByPage => {
-                if let Some(m) = app.session.detect_page_auto_crop(doc_id, current_page, 18.0) {
-                    d.edited_pages.insert(current_page);
-                    d.revert_pages.remove(&current_page);
-                    if let Some(slot) = d.page_margins.get_mut(current_page) {
-                        *slot = m;
-                    }
-                }
-            }
-        }
+    if trigger_auto_crop && let Some(doc) = app.session.get(doc_id) {
+        let boxes = doc.page_boxes();
+        let target = match d.mode {
+            BulkCropMode::Blended => d.target_pages(total_pages),
+            BulkCropMode::OddEven => d.target_pages(total_pages),
+            BulkCropMode::PageByPage => vec![current_page],
+        };
+        let pages_data: Vec<_> = target
+            .into_iter()
+            .filter_map(|p| {
+                let info = doc.info.pages.get(p)?.clone();
+                let media = boxes
+                    .get(p)
+                    .map(|b| b[0])
+                    .unwrap_or_else(|| [info.crop[0] as f64, info.crop[1] as f64, info.crop[2] as f64, info.crop[3] as f64]);
+                Some((p, info, media))
+            })
+            .collect();
+        app.bulk_crop_scan = Some(crate::BulkCropScan::start(doc_id, doc.bytes.clone(), doc.password.clone(), pages_data, 18.0, true, ui.ctx()));
     }
 
     // Handle Reset trigger: restores crop margins back to initial state upon opening dialog
@@ -500,7 +517,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         if ui.add_sized(vec2(28.0, 28.0), prev_btn).clicked() && prev_enabled {
             d.current_page = current_page - 1;
             if d.mode == BulkCropMode::OddEven {
-                d.odd_even_tab = if (current_page - 1) % 2 == 0 { OddEvenTab::Odd } else { OddEvenTab::Even };
+                d.odd_even_tab = if (current_page - 1).is_multiple_of(2) { OddEvenTab::Odd } else { OddEvenTab::Even };
             }
         }
 
@@ -516,7 +533,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         if ui.add_sized(vec2(28.0, 28.0), next_btn).clicked() && next_enabled {
             d.current_page = current_page + 1;
             if d.mode == BulkCropMode::OddEven {
-                d.odd_even_tab = if (current_page + 1) % 2 == 0 { OddEvenTab::Odd } else { OddEvenTab::Even };
+                d.odd_even_tab = if (current_page + 1).is_multiple_of(2) { OddEvenTab::Odd } else { OddEvenTab::Even };
             }
         }
 
@@ -551,9 +568,7 @@ fn render_thumbnail_strip(
     ui: &mut egui::Ui,
     view: &mut crate::canvas::DocView,
     doc: &pdfcraft_engine::Document,
-    current_page: &mut usize,
-    odd_even_tab: &mut OddEvenTab,
-    mode: BulkCropMode,
+    d: &mut BulkCropDraft,
     total_pages: usize,
     col_h: f32,
     t: &Tokens,
@@ -571,18 +586,18 @@ fn render_thumbnail_strip(
                     ui.with_layout(Layout::top_down(Align::Center), |ui| {
                         ui.spacing_mut().item_spacing = vec2(0.0, 8.0);
                         for i in 0..total_pages {
-                            let (pw, ph) = doc.info.pages.get(i).map(|p| (p.width as f32, p.height as f32)).unwrap_or((612.0, 792.0));
+                            let (pw, ph) = doc.info.pages.get(i).map(|p| (p.width, p.height)).unwrap_or((612.0, 792.0));
                             let thumb_w = 72.0;
                             let thumb_h = (thumb_w * ph / pw.max(1.0)).clamp(55.0, 100.0);
 
                             let card_size = vec2(thumb_w + 10.0, thumb_h + 10.0);
                             let (card_rect, resp) = ui.allocate_exact_size(card_size, Sense::click());
-                            let is_selected = i == *current_page;
+                            let is_selected = i == d.current_page;
 
                             if resp.clicked() {
-                                *current_page = i;
-                                if mode == BulkCropMode::OddEven {
-                                    *odd_even_tab = if i % 2 == 0 { OddEvenTab::Odd } else { OddEvenTab::Even };
+                                d.current_page = i;
+                                if d.mode == BulkCropMode::OddEven {
+                                    d.odd_even_tab = if i.is_multiple_of(2) { OddEvenTab::Odd } else { OddEvenTab::Even };
                                 }
                             }
 
@@ -619,19 +634,18 @@ fn render_thumbnail_strip(
     );
 }
 
+#[derive(Default)]
+struct SidebarActions {
+    auto_crop: bool,
+    reset: bool,
+    clear_crop: bool,
+}
+
 /// Renders the right controls sidebar card.
-fn render_controls_sidebar(
-    ui: &mut egui::Ui,
-    d: &mut BulkCropDraft,
-    total_pages: usize,
-    current_page: usize,
-    col_h: f32,
-    trigger_auto_crop: &mut bool,
-    trigger_reset: &mut bool,
-    trigger_clear_crop: &mut bool,
-    t: &Tokens,
-) {
+fn render_controls_sidebar(ui: &mut egui::Ui, d: &mut BulkCropDraft, total_pages: usize, col_h: f32, t: &Tokens) -> SidebarActions {
     let panel_w = 280.0;
+    let current_page = d.current_page;
+    let mut actions = SidebarActions::default();
     egui::Frame::new().fill(Color32::WHITE).stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(6)).inner_margin(14.0).show(
         ui,
         |ui| {
@@ -654,27 +668,29 @@ fn render_controls_sidebar(
                     match d.mode {
                         BulkCropMode::PageByPage => {
                             if prev_mode == BulkCropMode::Blended && d.blended_margins.iter().any(|&v| v > 0.0) {
-                                for m in &mut d.page_margins {
+                                for (i, m) in d.page_margins.iter_mut().enumerate() {
                                     *m = d.blended_margins;
+                                    d.edited_pages.insert(i);
+                                    d.revert_pages.remove(&i);
                                 }
                             } else if prev_mode == BulkCropMode::OddEven {
                                 for (i, m) in d.page_margins.iter_mut().enumerate() {
                                     *m = if i % 2 == 0 { d.odd_margins } else { d.even_margins };
+                                    d.edited_pages.insert(i);
+                                    d.revert_pages.remove(&i);
                                 }
                             }
                         }
                         BulkCropMode::OddEven => {
-                            d.odd_even_tab = if current_page % 2 == 0 { OddEvenTab::Odd } else { OddEvenTab::Even };
+                            d.odd_even_tab = if current_page.is_multiple_of(2) { OddEvenTab::Odd } else { OddEvenTab::Even };
                             if prev_mode == BulkCropMode::Blended && d.blended_margins.iter().any(|&v| v > 0.0) {
                                 d.odd_margins = d.blended_margins;
                                 d.even_margins = d.blended_margins;
                             }
                         }
                         BulkCropMode::Blended => {
-                            if let Some(&m) = d.page_margins.get(current_page) {
-                                if m.iter().any(|&v| v > 0.0) {
-                                    d.blended_margins = m;
-                                }
+                            if let Some(&m) = d.page_margins.get(current_page).filter(|m| m.iter().any(|&v| v > 0.0)) {
+                                d.blended_margins = m;
                             }
                         }
                     }
@@ -852,7 +868,7 @@ fn render_controls_sidebar(
                         .corner_radius(CornerRadius::same(4));
 
                     if ui.add_sized(vec2(btn_w, 32.0), reset_btn).on_hover_text(reset_tooltip).clicked() {
-                        *trigger_reset = true;
+                        actions.reset = true;
                     }
 
                     let clear_tooltip = if d.mode == BulkCropMode::PageByPage {
@@ -867,7 +883,7 @@ fn render_controls_sidebar(
                             .corner_radius(CornerRadius::same(4));
 
                     if ui.add_sized(vec2(btn_w, 32.0), clear_btn).on_hover_text(clear_tooltip).clicked() {
-                        *trigger_clear_crop = true;
+                        actions.clear_crop = true;
                     }
 
                     let auto_btn =
@@ -877,12 +893,176 @@ fn render_controls_sidebar(
                             .corner_radius(CornerRadius::same(4));
 
                     if ui.add_sized(vec2(btn_w, 32.0), auto_btn).on_hover_text(tl!("Detect margins automatically from content")).clicked() {
-                        *trigger_auto_crop = true;
+                        actions.auto_crop = true;
                     }
                 });
             });
         },
     );
+
+    actions
+}
+
+/// Renders the top dual tab pill for Odd & Even mode.
+fn render_odd_even_tabs(
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    r: Rect,
+    odd_even_tab: &mut OddEvenTab,
+    current_page: &mut usize,
+    total_pages: usize,
+) {
+    let pill_w = 320.0;
+    let pill_h = 32.0;
+    let pill_rect = Rect::from_center_size(pos2(r.center().x, r.top() + 26.0), vec2(pill_w, pill_h));
+
+    // Pill background container
+    painter.rect_filled(pill_rect, CornerRadius::same(16), Color32::WHITE);
+    painter.rect_stroke(pill_rect, CornerRadius::same(16), Stroke::new(1.0, Color32::from_gray(215)), egui::StrokeKind::Outside);
+
+    let inner_pad = 2.5;
+    let tab_w = (pill_w - inner_pad * 2.0) / 2.0;
+    let tab_h = pill_h - inner_pad * 2.0;
+    let odd_rect = Rect::from_min_size(pos2(pill_rect.left() + inner_pad, pill_rect.top() + inner_pad), vec2(tab_w, tab_h));
+    let even_rect = Rect::from_min_size(pos2(pill_rect.left() + inner_pad + tab_w, pill_rect.top() + inner_pad), vec2(tab_w, tab_h));
+
+    // Interactive hover & clicks on Odd / Even tabs
+    if let Some(ptr) = ui.input(|i| i.pointer.hover_pos()) {
+        if odd_rect.contains(ptr) {
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            if ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary)) {
+                *odd_even_tab = OddEvenTab::Odd;
+                if !(*current_page).is_multiple_of(2) {
+                    *current_page = current_page.saturating_sub(1);
+                }
+            }
+        } else if even_rect.contains(ptr) {
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            if ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary)) {
+                *odd_even_tab = OddEvenTab::Even;
+                if (*current_page).is_multiple_of(2) && *current_page + 1 < total_pages {
+                    *current_page += 1;
+                }
+            }
+        }
+    }
+
+    let is_odd_active = *odd_even_tab == OddEvenTab::Odd;
+
+    // Odd pages tab (active = soft blue fill, inactive = transparent)
+    let odd_fill = if is_odd_active { Color32::from_rgb(219, 234, 254) } else { Color32::TRANSPARENT };
+    let odd_text_color = if is_odd_active { Color32::from_rgb(26, 115, 232) } else { Color32::from_gray(80) };
+    painter.rect_filled(odd_rect, CornerRadius::same(14), odd_fill);
+    painter.text(odd_rect.center(), Align2::CENTER_CENTER, tl!("Odd pages (1, 3, 5, …)"), theme::medium(12.5), odd_text_color);
+
+    // Even pages tab (active = soft blue fill, inactive = transparent)
+    let even_fill = if !is_odd_active { Color32::from_rgb(219, 234, 254) } else { Color32::TRANSPARENT };
+    let even_text_color = if !is_odd_active { Color32::from_rgb(26, 115, 232) } else { Color32::from_gray(80) };
+    painter.rect_filled(even_rect, CornerRadius::same(14), even_fill);
+    painter.text(even_rect.center(), Align2::CENTER_CENTER, tl!("Even pages (2, 4, 6, …)"), theme::medium(12.5), even_text_color);
+}
+
+/// Handles mouse hover, cursor icon updates, and interactive dragging for crop handles.
+#[allow(clippy::too_many_arguments)]
+fn handle_crop_drag(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    crop_rect: Rect,
+    handle_pts: &[(DragHandle, Pos2)],
+    handle_size: f32,
+    id_salt: &'static str,
+    margins: &mut [f64; 4],
+    max_w: f64,
+    max_h: f64,
+    scale: f32,
+    active_drag: &mut Option<ActiveDrag>,
+    handle_dragged: &mut bool,
+) {
+    if response.hovered()
+        && let Some(ptr) = ui.input(|i| i.pointer.hover_pos())
+    {
+        let mut hovered_handle = None;
+        for &(h, pt) in handle_pts {
+            if pt.distance(ptr) <= handle_size + 4.0 {
+                hovered_handle = Some(h);
+                break;
+            }
+        }
+
+        let cursor = match hovered_handle {
+            Some(DragHandle::Nw | DragHandle::Se) => CursorIcon::ResizeNwSe,
+            Some(DragHandle::Ne | DragHandle::Sw) => CursorIcon::ResizeNeSw,
+            Some(DragHandle::N | DragHandle::S) => CursorIcon::ResizeVertical,
+            Some(DragHandle::E | DragHandle::W) => CursorIcon::ResizeHorizontal,
+            None if crop_rect.contains(ptr) => CursorIcon::Move,
+            _ => CursorIcon::Default,
+        };
+        ui.ctx().set_cursor_icon(cursor);
+
+        if response.drag_started()
+            && let Some(handle) = hovered_handle.or_else(|| crop_rect.contains(ptr).then_some(DragHandle::Move))
+        {
+            *active_drag = Some(ActiveDrag { owner_id: id_salt, handle, start_pointer: ptr, start_margins: *margins });
+        }
+    }
+
+    if let Some(drag) = *active_drag
+        && drag.owner_id == id_salt
+    {
+        if ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary)) {
+            if let Some(curr_ptr) = ui.input(|i| i.pointer.latest_pos()) {
+                let delta = curr_ptr - drag.start_pointer;
+                let dx = (delta.x / scale) as f64;
+                let dy = (delta.y / scale) as f64;
+
+                let mut m = drag.start_margins;
+                match drag.handle {
+                    DragHandle::Nw => {
+                        m[0] = (m[0] + dx).clamp(0.0, (max_w - m[2] - MIN_CROP_PT).max(0.0));
+                        m[3] = (m[3] + dy).clamp(0.0, (max_h - m[1] - MIN_CROP_PT).max(0.0));
+                    }
+                    DragHandle::N => {
+                        m[3] = (m[3] + dy).clamp(0.0, (max_h - m[1] - MIN_CROP_PT).max(0.0));
+                    }
+                    DragHandle::Ne => {
+                        m[2] = (m[2] - dx).clamp(0.0, (max_w - m[0] - MIN_CROP_PT).max(0.0));
+                        m[3] = (m[3] + dy).clamp(0.0, (max_h - m[1] - MIN_CROP_PT).max(0.0));
+                    }
+                    DragHandle::E => {
+                        m[2] = (m[2] - dx).clamp(0.0, (max_w - m[0] - MIN_CROP_PT).max(0.0));
+                    }
+                    DragHandle::Se => {
+                        m[2] = (m[2] - dx).clamp(0.0, (max_w - m[0] - MIN_CROP_PT).max(0.0));
+                        m[1] = (m[1] - dy).clamp(0.0, (max_h - m[3] - MIN_CROP_PT).max(0.0));
+                    }
+                    DragHandle::S => {
+                        m[1] = (m[1] - dy).clamp(0.0, (max_h - m[3] - MIN_CROP_PT).max(0.0));
+                    }
+                    DragHandle::Sw => {
+                        m[0] = (m[0] + dx).clamp(0.0, (max_w - m[2] - MIN_CROP_PT).max(0.0));
+                        m[1] = (m[1] - dy).clamp(0.0, (max_h - m[3] - MIN_CROP_PT).max(0.0));
+                    }
+                    DragHandle::W => {
+                        m[0] = (m[0] + dx).clamp(0.0, (max_w - m[2] - MIN_CROP_PT).max(0.0));
+                    }
+                    DragHandle::Move => {
+                        let clamped_dx = dx.clamp(-m[0], m[2]);
+                        let clamped_dy = dy.clamp(-m[3], m[1]);
+                        m[0] += clamped_dx;
+                        m[2] -= clamped_dx;
+                        m[3] += clamped_dy;
+                        m[1] -= clamped_dy;
+                    }
+                };
+                if *margins != m {
+                    *margins = m;
+                    *handle_dragged = true;
+                }
+            }
+        } else {
+            *active_drag = None;
+        }
+    }
 }
 
 /// Renders the visual page preview with interactive crop handles.
@@ -917,54 +1097,7 @@ fn render_interactive_preview(
 
     // Render Dual Tabs for Odd & Even mode at the top of the canvas
     if is_odd_even {
-        let pill_w = 320.0;
-        let pill_h = 32.0;
-        let pill_rect = Rect::from_center_size(pos2(r.center().x, r.top() + 26.0), vec2(pill_w, pill_h));
-
-        // Pill background container
-        painter.rect_filled(pill_rect, CornerRadius::same(16), Color32::WHITE);
-        painter.rect_stroke(pill_rect, CornerRadius::same(16), Stroke::new(1.0, Color32::from_gray(215)), egui::StrokeKind::Outside);
-
-        let inner_pad = 2.5;
-        let tab_w = (pill_w - inner_pad * 2.0) / 2.0;
-        let tab_h = pill_h - inner_pad * 2.0;
-        let odd_rect = Rect::from_min_size(pos2(pill_rect.left() + inner_pad, pill_rect.top() + inner_pad), vec2(tab_w, tab_h));
-        let even_rect = Rect::from_min_size(pos2(pill_rect.left() + inner_pad + tab_w, pill_rect.top() + inner_pad), vec2(tab_w, tab_h));
-
-        // Interactive hover & clicks on Odd / Even tabs
-        if let Some(ptr) = ui.input(|i| i.pointer.hover_pos()) {
-            if odd_rect.contains(ptr) {
-                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-                if ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary)) {
-                    *odd_even_tab = OddEvenTab::Odd;
-                    if *current_page % 2 != 0 {
-                        *current_page = current_page.saturating_sub(1);
-                    }
-                }
-            } else if even_rect.contains(ptr) {
-                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-                if ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary)) {
-                    *odd_even_tab = OddEvenTab::Even;
-                    if *current_page % 2 == 0 && *current_page + 1 < total_pages {
-                        *current_page += 1;
-                    }
-                }
-            }
-        }
-
-        let is_odd_active = *odd_even_tab == OddEvenTab::Odd;
-
-        // Odd pages tab (active = soft blue fill, inactive = transparent)
-        let odd_fill = if is_odd_active { Color32::from_rgb(219, 234, 254) } else { Color32::TRANSPARENT };
-        let odd_text_color = if is_odd_active { Color32::from_rgb(26, 115, 232) } else { Color32::from_gray(80) };
-        painter.rect_filled(odd_rect, CornerRadius::same(14), odd_fill);
-        painter.text(odd_rect.center(), Align2::CENTER_CENTER, tl!("Odd pages (1, 3, 5, …)"), theme::medium(12.5), odd_text_color);
-
-        // Even pages tab (active = soft blue fill, inactive = transparent)
-        let even_fill = if !is_odd_active { Color32::from_rgb(219, 234, 254) } else { Color32::TRANSPARENT };
-        let even_text_color = if !is_odd_active { Color32::from_rgb(26, 115, 232) } else { Color32::from_gray(80) };
-        painter.rect_filled(even_rect, CornerRadius::same(14), even_fill);
-        painter.text(even_rect.center(), Align2::CENTER_CENTER, tl!("Even pages (2, 4, 6, …)"), theme::medium(12.5), even_text_color);
+        render_odd_even_tabs(ui, &painter, r, odd_even_tab, current_page, total_pages);
     }
 
     // Dynamic aspect ratio based on actual PDF page dimensions
@@ -988,7 +1121,6 @@ fn render_interactive_preview(
     painter.rect_stroke(page_rect, CornerRadius::ZERO, Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Outside);
 
     // Render page raster (blended when multiple pages)
-    // Use higher dynamic opacity (95..160) so text outlines from all pages stand out with crisp contrast through the paper
     let alpha = if pages.len() <= 1 {
         255
     } else {
@@ -1049,91 +1181,5 @@ fn render_interactive_preview(
         painter.rect_stroke(h_rect, CornerRadius::same(1), Stroke::new(1.0, crop_stroke_color), egui::StrokeKind::Outside);
     }
 
-    // Pointer hover & drag start (scoped to this widget's rect)
-    if response.hovered() {
-        if let Some(ptr) = ui.input(|i| i.pointer.hover_pos()) {
-            let mut hovered_handle = None;
-            for &(h, pt) in &handle_pts {
-                if pt.distance(ptr) <= handle_size + 4.0 {
-                    hovered_handle = Some(h);
-                    break;
-                }
-            }
-
-            let cursor = match hovered_handle {
-                Some(DragHandle::Nw | DragHandle::Se) => CursorIcon::ResizeNwSe,
-                Some(DragHandle::Ne | DragHandle::Sw) => CursorIcon::ResizeNeSw,
-                Some(DragHandle::N | DragHandle::S) => CursorIcon::ResizeVertical,
-                Some(DragHandle::E | DragHandle::W) => CursorIcon::ResizeHorizontal,
-                None if crop_rect.contains(ptr) => CursorIcon::Move,
-                _ => CursorIcon::Default,
-            };
-            ui.ctx().set_cursor_icon(cursor);
-
-            if response.drag_started() {
-                if let Some(handle) = hovered_handle.or_else(|| crop_rect.contains(ptr).then_some(DragHandle::Move)) {
-                    *active_drag = Some(ActiveDrag { owner_id: id_salt, handle, start_pointer: ptr, start_margins: *margins });
-                }
-            }
-        }
-    }
-
-    // Handle active drag (only if owned by this preview instance)
-    if let Some(drag) = *active_drag {
-        if drag.owner_id == id_salt {
-            if ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary)) {
-                if let Some(curr_ptr) = ui.input(|i| i.pointer.latest_pos()) {
-                    let delta = curr_ptr - drag.start_pointer;
-                    let dx = (delta.x / scale) as f64;
-                    let dy = (delta.y / scale) as f64;
-
-                    let mut m = drag.start_margins;
-                    match drag.handle {
-                        DragHandle::Nw => {
-                            m[0] = (m[0] + dx).clamp(0.0, (max_w - m[2] - MIN_CROP_PT).max(0.0));
-                            m[3] = (m[3] + dy).clamp(0.0, (max_h - m[1] - MIN_CROP_PT).max(0.0));
-                        }
-                        DragHandle::N => {
-                            m[3] = (m[3] + dy).clamp(0.0, (max_h - m[1] - MIN_CROP_PT).max(0.0));
-                        }
-                        DragHandle::Ne => {
-                            m[2] = (m[2] - dx).clamp(0.0, (max_w - m[0] - MIN_CROP_PT).max(0.0));
-                            m[3] = (m[3] + dy).clamp(0.0, (max_h - m[1] - MIN_CROP_PT).max(0.0));
-                        }
-                        DragHandle::E => {
-                            m[2] = (m[2] - dx).clamp(0.0, (max_w - m[0] - MIN_CROP_PT).max(0.0));
-                        }
-                        DragHandle::Se => {
-                            m[2] = (m[2] - dx).clamp(0.0, (max_w - m[0] - MIN_CROP_PT).max(0.0));
-                            m[1] = (m[1] - dy).clamp(0.0, (max_h - m[3] - MIN_CROP_PT).max(0.0));
-                        }
-                        DragHandle::S => {
-                            m[1] = (m[1] - dy).clamp(0.0, (max_h - m[3] - MIN_CROP_PT).max(0.0));
-                        }
-                        DragHandle::Sw => {
-                            m[0] = (m[0] + dx).clamp(0.0, (max_w - m[2] - MIN_CROP_PT).max(0.0));
-                            m[1] = (m[1] - dy).clamp(0.0, (max_h - m[3] - MIN_CROP_PT).max(0.0));
-                        }
-                        DragHandle::W => {
-                            m[0] = (m[0] + dx).clamp(0.0, (max_w - m[2] - MIN_CROP_PT).max(0.0));
-                        }
-                        DragHandle::Move => {
-                            let clamped_dx = dx.clamp(-m[0], m[2]);
-                            let clamped_dy = dy.clamp(-m[3], m[1]);
-                            m[0] += clamped_dx;
-                            m[2] -= clamped_dx;
-                            m[3] += clamped_dy;
-                            m[1] -= clamped_dy;
-                        }
-                    };
-                    if *margins != m {
-                        *margins = m;
-                        *handle_dragged = true;
-                    }
-                }
-            } else {
-                *active_drag = None;
-            }
-        }
-    }
+    handle_crop_drag(ui, &response, crop_rect, &handle_pts, handle_size, id_salt, margins, max_w, max_h, scale, active_drag, handle_dragged);
 }
