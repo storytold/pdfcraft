@@ -1,9 +1,9 @@
 use super::geometry::{drawn_text_box_rect, page_rotation, text_box_rect};
 use super::paint::{edited_in_view, new_comment};
-use super::state::{ComposerKind, PageCx};
+use super::state::{ComposerKind, InlineText, PageCx};
 use super::{
-    Color32, CommentPrefs, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NoteIcon, PagePointer, QuickTool, Shape, Tokens, pos2,
-    theme,
+    Color32, CommentPrefs, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NewAnnotation, NoteIcon, PagePointer, QuickTool, Rect,
+    SELECT_BLUE, Shape, Stroke, Tokens, color32, pos2, theme, vec2,
 };
 
 /// The floating composer card (new note, new text box, edit). Returns the edit to apply.
@@ -220,7 +220,7 @@ pub(crate) fn inline_text(
         Some(_) => {
             // The comment where the page lists it now; the editor follows it there.
             let target = it.target(info).and_then(|a| Some((a, doc.comment_props(it.page, a.index)?)));
-            if let (Some((a, _)), Some(t)) = (target, view.comments.inline.as_mut()) {
+            if let (Some((a, _)), Some(t)) = (target.as_ref(), view.comments.inline.as_mut()) {
                 t.index = Some(a.index);
             }
             target.map(|(a, p)| (p.color.unwrap_or([0.0; 3]), p.font_size.unwrap_or(12.0), p.fill, Some(xf.user_rect(info, it.page, a.rect))))

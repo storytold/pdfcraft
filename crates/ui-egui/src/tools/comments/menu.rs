@@ -1,5 +1,4 @@
-use super::paint::edit_anchor;
-use super::state::{Composer, ComposerKind};
+use super::state::{Composer, ComposerKind, start_editing};
 use super::{
     Annotation, Color32, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Rect, ReviewState, Rgb, SELECT_BLUE, SWATCHES, Sense, Stroke, color32,
     icons, theme, tool_for, vec2,

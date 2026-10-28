@@ -2,8 +2,8 @@ use super::geometry::{
     CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, handle_pos, is_markup, point_handle, reaches_points, reshapable, reshaped, resizable,
     resized, snapped_caret,
 };
-use super::paint::{drawn_shape, edit_anchor, erase, new_comment};
-use super::state::{Composer, ComposerKind, Gesture, PageCx};
+use super::paint::{drawn_shape, erase, new_comment};
+use super::state::{Composer, ComposerKind, Gesture, InlineText, PageCx, start_editing};
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, vec2};
 use crate::page_cursor::{Layer, Subject};
 use crate::page_router::{CommentPart, Hit, Owner, PagePress};

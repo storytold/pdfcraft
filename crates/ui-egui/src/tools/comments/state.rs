@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use super::geometry::{corner_ratio, is_markup, resized};
+use super::paint::edit_anchor;
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect};
 
 /// The user's login name, which Acrobat uses as the default comment author.
