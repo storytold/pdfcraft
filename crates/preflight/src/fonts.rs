@@ -8,8 +8,9 @@
 //! each font is used.
 //!
 //! The walk is the evidence for an exemption, so it errs towards "visible": a font is excused
-//! only if every use found is invisible, every content stream was read, and no font list the
-//! walk doesn't follow (patterns, Type 3 glyphs, form fields' default resources) names it.
+//! only if every use found is invisible, every content stream was read and parsed cleanly, and
+//! no font list the walk doesn't follow (patterns, Type 3 glyphs, form fields' default
+//! resources) names it.
 
 use std::collections::{HashMap, HashSet};
 
@@ -125,7 +126,13 @@ impl Walk<'_> {
     /// graphics state, §8.10.1).
     fn content(&mut self, data: &[u8], res: &Dict, state: &mut State, stack: &mut Vec<State>, page: Option<usize>) {
         let doc = self.doc;
-        for op in pdfcraft_content::parse(data).ops {
+        let parsed = pdfcraft_content::parse(data);
+        // Bytes the parser couldn't read, or an inline image whose end is a guess, leave the
+        // operators after them uncertain: one of them may draw a font visibly.
+        if parsed.skipped != 0 || parsed.ambiguous_images != 0 {
+            self.out.complete = false;
+        }
+        for op in parsed.ops {
             match op.op.as_slice() {
                 b"q" => stack.push(state.clone()),
                 b"Q" => {

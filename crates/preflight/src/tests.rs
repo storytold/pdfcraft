@@ -570,6 +570,12 @@ fn a_font_is_excused_only_on_complete_evidence() {
         "",
     );
     assert_eq!(font_messages(&broken).len(), 1, "unreadable content may draw it visibly");
+    // Content that decodes but doesn't parse cleanly: a stray byte, or an inline image whose
+    // end is a guess. The operators after them are uncertain.
+    for content in ["BT 3 Tr /F1 1 Tf (a) Tj ET ]", "BT 3 Tr /F1 1 Tf (a) Tj ET BI /W 4 /H 1 /BPC 8 /CS /G ID abc"] {
+        let doc = drawing(content, "/Font << /F1 5 0 R >>", &[helvetica]);
+        assert_eq!(font_messages(&doc).len(), 1, "{content}");
+    }
     // A form that draws itself, and two that draw each other.
     let cycle = drawing(
         "BT 3 Tr ET /A Do",

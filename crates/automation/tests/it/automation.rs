@@ -7519,8 +7519,8 @@ fn ocr_tools_make_a_scan_searchable() {
 }
 
 /// `pdfa` saves the recognised scan as PDF/A in the OCR undo step: the result passes
-/// `pdfa_verify`, saved and opened again, single and in multiple files, and the text is still
-/// found. An unknown level is refused before anything is read.
+/// `pdfa_verify`, saved and opened again, single, in multiple files and as a `doc_batch` step,
+/// and the text is still found. An unknown level is refused before anything is read.
 #[test]
 fn ocr_recognize_can_save_the_scan_as_pdfa() {
     let dir = workdir("ocr-pdfa");
@@ -7553,6 +7553,17 @@ fn ocr_recognize_can_save_the_scan_as_pdfa() {
     assert_eq!(r["files"][0]["pdfa"]["compliant"], true, "{r}");
     let out = ok(&mut a, "doc_open", json!({ "path": "out/scan.pdf" }))["doc"].as_u64().unwrap();
     assert_eq!(ok(&mut a, "pdfa_verify", json!({ "doc": out, "level": "3b" }))["compliant"], true);
+    // As a `doc_batch` step: the log reports the check, and the written file passes it.
+    let r = ok(&mut a, "doc_batch", json!({ "paths": ["scan.pdf"], "steps": ["ocr"], "out_dir": "batch", "pdfa": "2b" }));
+    assert_eq!(r["completed"], 1, "{r}");
+    let step = &r["files"][0]["steps"][0];
+    assert_eq!(step["pdfa"]["level"], "PDF/A-2b", "{r}");
+    assert_eq!(step["pdfa"]["compliant"], true, "{r}");
+    let batched = ok(&mut a, "doc_open", json!({ "path": "batch/scan.pdf" }))["doc"].as_u64().unwrap();
+    let v = ok(&mut a, "pdfa_verify", json!({ "doc": batched }));
+    assert_eq!(v["compliant"], true, "{v}");
+    assert_eq!(v["declared"]["pdfa"], "PDF/A-2b");
+    assert_eq!(ok(&mut a, "text_find", json!({ "doc": batched, "query": "searchable" }))["count"], 1);
 }
 
 /// #1028: `skip_text_pages: false` reads a picture on a page that has its own text, and the
