@@ -17,6 +17,10 @@ pub use pdfcraft_fonts::helvetica_width;
 /// The model files, as named in ATTRIBUTION.toml.
 pub const DETECTION_MODEL: &str = "text-detection.onnx";
 pub const RECOGNITION_MODEL: &str = "text-recognition.onnx";
+/// Their SHA-256s, as in ATTRIBUTION.toml. [`Ocr::from_bytes`] loads nothing else: rten's ONNX
+/// parser can spin forever on bytes that aren't a model (64 × 0xff does).
+pub const DETECTION_MODEL_SHA256: &str = "a917b23dbd9524b465df7e922641b3ff2981623df4ded5a0234004ef2fee7cfe";
+pub const RECOGNITION_MODEL_SHA256: &str = "86c145c2edb96c8caed5b1ebb8f44d706408922211451c309c625157dd6061c5";
 
 /// The recognition model's alphabet, as it was trained (ocrs-models' `DEFAULT_ALPHABET`): its
 /// output classes follow this order. The ocrs crate's own copy has an `E` where the training had
@@ -38,6 +42,11 @@ pub enum OcrError {
     Recognize(String),
     #[error("the image is empty")]
     EmptyImage,
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Where the two model files are.
@@ -118,10 +127,15 @@ impl Ocr {
     }
 
     /// Load the models from the contents of their files, where there is no file system (the web
-    /// build downloads them).
+    /// build downloads them). Bytes that aren't the files ATTRIBUTION.toml names are an error.
     pub fn from_bytes(detection: Vec<u8>, recognition: Vec<u8>) -> Result<Ocr, OcrError> {
-        let load = |name: &str, data: Vec<u8>| rten::Model::load(data).map_err(|e| OcrError::Load(name.into(), e.to_string()));
-        Self::with_models(load(DETECTION_MODEL, detection)?, load(RECOGNITION_MODEL, recognition)?)
+        let load = |name: &str, sha256: &str, data: Vec<u8>| {
+            if sha256_hex(&data) != sha256 {
+                return Err(OcrError::Load(name.into(), "not the expected model file (SHA-256 differs)".into()));
+            }
+            rten::Model::load(data).map_err(|e| OcrError::Load(name.into(), e.to_string()))
+        };
+        Self::with_models(load(DETECTION_MODEL, DETECTION_MODEL_SHA256, detection)?, load(RECOGNITION_MODEL, RECOGNITION_MODEL_SHA256, recognition)?)
     }
 
     fn with_models(detection: rten::Model, recognition: rten::Model) -> Result<Ocr, OcrError> {
@@ -503,8 +517,8 @@ mod tests {
     /// The web build loads the models from downloaded bytes; they read the same text.
     #[test]
     fn reads_rendered_text_with_models_from_bytes() {
-        let Some(models) = Models::find() else {
-            eprintln!("skipped: OCR models not installed");
+        let Some(models) = Models::find().filter(|m| m.detection.ends_with(DETECTION_MODEL)) else {
+            eprintln!("skipped: ONNX OCR models not installed");
             return;
         };
         let ocr = Ocr::from_bytes(std::fs::read(&models.detection).unwrap(), std::fs::read(&models.recognition).unwrap()).unwrap();
@@ -571,6 +585,19 @@ mod tests {
     fn models_from_bad_bytes_are_an_error() {
         for (detection, recognition) in [(Vec::new(), Vec::new()), (b"<!doctype html>".to_vec(), b"RTEN".to_vec()), (vec![0xff; 64], vec![0; 64])] {
             assert!(matches!(Ocr::from_bytes(detection, recognition), Err(OcrError::Load(..))));
+        }
+    }
+
+    /// The hashes [`Ocr::from_bytes`] checks are the ones `cargo xtask models` verifies.
+    #[test]
+    fn model_hashes_match_attribution() {
+        let manifest = include_str!("../../../ATTRIBUTION.toml");
+        for (file, sha256) in [(DETECTION_MODEL, DETECTION_MODEL_SHA256), (RECOGNITION_MODEL, RECOGNITION_MODEL_SHA256)] {
+            let entry = manifest
+                .split("[[fetched]]")
+                .find(|e| e.contains(&format!("file = \"{file}\"")))
+                .unwrap_or_else(|| panic!("{file} is not in ATTRIBUTION.toml"));
+            assert!(entry.lines().any(|l| l == format!("sha256 = \"{sha256}\"")), "{file}: SHA-256 differs from ATTRIBUTION.toml");
         }
     }
 
