@@ -2794,3 +2794,9 @@ theme	Appearance	स्वरूप
 	Rotate the selected pages clockwise	चयनित पृष्ठों को दक्षिणावर्त घुमाएँ
 	Extract the selected pages…	चयनित पृष्ठ निकालें…
 	Delete the selected pages	चयनित पृष्ठ हटाएँ
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	स्तर प्रबंधित करें
+	Bring to front	सबसे आगे लाएँ
+	Bring forward	एक स्तर आगे
+	Send backward	एक स्तर पीछे
+	Send to back	सबसे पीछे भेजें

@@ -2520,3 +2520,9 @@ animation effects	Off	Изключени
 	Rotate the selected pages clockwise	Завъртане на избраните страници по часовниковата стрелка
 	Extract the selected pages…	Извличане на избраните страници…
 	Delete the selected pages	Изтриване на избраните страници
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Управление на нивата
+	Bring to front	Най-отпред
+	Bring forward	Напред с едно ниво
+	Send backward	Назад с едно ниво
+	Send to back	Най-отзад

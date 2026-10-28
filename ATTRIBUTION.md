@@ -4,7 +4,7 @@
 
 Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with the SHA-256 of every asset but the translation catalogs, is [ATTRIBUTION.toml](ATTRIBUTION.toml). Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).
 
-## In this repository (289)
+## In this repository (291)
 
 | Asset | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
@@ -52,6 +52,8 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `assets/icons/arrow-left-right.svg` | Lucide icon "arrow-left-right" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/arrow-left-right.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/arrow-up-down.svg` | Lucide icon "arrow-up-down" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/arrow-up-down.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/arrow-up-right.svg` | Lucide icon "arrow-up-right" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/arrow-up-right.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
+| `assets/icons/arrow-down-to-line.svg` | PdfCraft level-arrange arrow down (contributor artwork) | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: created for PdfCraft as the send-to-back level action, hand-authored 2026-10-28; not derived from any external icon set | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
+| `assets/icons/arrow-up-to-line.svg` | PdfCraft level-arrange arrow up (contributor artwork) | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: created for PdfCraft as the bring-to-front level action, hand-authored 2026-10-28; not derived from any external icon set | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/badge-check.svg` | Lucide icon "badge-check" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/badge-check.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/bandage.svg` | Lucide icon "bandage" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/bandage.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/bell.svg` | Lucide icon "bell" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/bell.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |

@@ -2794,3 +2794,9 @@ theme	Appearance	모양
 	Rotate the selected pages clockwise	선택한 페이지를 시계 방향으로 회전
 	Extract the selected pages…	선택한 페이지 추출…
 	Delete the selected pages	선택한 페이지 삭제
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	레벨 관리
+	Bring to front	맨 앞으로
+	Bring forward	한 레벨 앞으로
+	Send backward	한 레벨 뒤로
+	Send to back	맨 뒤로

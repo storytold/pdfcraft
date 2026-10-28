@@ -4958,6 +4958,26 @@ fn disjoint_style_ranges_preserve_unselected_runs_and_validate_utf8_atomically()
 }
 
 #[test]
+fn resizing_a_mixed_style_paragraph_reflows_its_text_without_hard_row_breaks() {
+    let mut doc = mixed_region_page();
+    let source = text::text_blocks(&doc, 0).unwrap()[1].clone();
+    assert_eq!(source.rows.len(), 3);
+    // The width handle passes the paragraph's own text (rows joined with spaces). A width-only
+    // rewrite must reflow it, not keep the old rows as hard breaks.
+    let style = BlockStyle { width: Some(600.0), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 1, Some(&source.text), &style).unwrap();
+    let reopened = reopen(&doc);
+    let after = text::text_blocks(&reopened, 0).unwrap()[1].clone();
+    assert_eq!(after.rows.len(), 1, "widening joins the old rows: {:?}", after.editor_text);
+    assert_eq!(after.text, source.text);
+    let lines = text::text_lines(&reopened, 0).unwrap();
+    let bold = lines.iter().find(|l| l.text == "bold").unwrap();
+    assert_eq!(bold.base_font, source.base_font, "the styled run keeps its face");
+    let italic = lines.iter().find(|l| l.text == "Italic footer").unwrap();
+    assert_eq!((italic.base_font.as_str(), italic.size), ("Courier-Oblique", 8.0));
+}
+
+#[test]
 fn centered_mixed_size_title_keeps_three_rows_when_changed() {
     let mut doc = mixed_region_page();
     let title = text::text_blocks(&doc, 0).unwrap()[0].clone();
@@ -7748,4 +7768,183 @@ fn an_icon_inside_a_full_page_background_scope_is_still_selectable_and_deletable
     assert!(!content.contains("10 10 20 20"), "only the icon goes: {content}");
     assert_eq!(page_graphics(&doc, 0).unwrap(), Vec::new());
     assert_eq!(images::page_images(&doc, 0).unwrap().len(), 1, "the picture is untouched");
+}
+
+/// The x positions of the square fills in a page's content, in painting order.
+fn squares(doc: &Document) -> Vec<f64> {
+    let content = String::from_utf8_lossy(&page_content_bytes(doc, 0)).into_owned();
+    content
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .windows(5)
+        .filter(|w| w[1] == "0" && w[2] == "10" && w[3] == "10" && w[4] == "re")
+        .filter_map(|w| w[0].parse().ok())
+        .collect()
+}
+
+fn three_squares() -> Document {
+    text_page("q 0 0 10 10 re f Q q 20 0 10 10 re f Q q 40 0 10 10 re f Q")
+}
+
+#[test]
+fn restacking_a_graphic_moves_only_it_between_levels() {
+    let graphic = |index| ObjectTarget { kind: ObjectKind::Graphic, index };
+
+    let mut doc = three_squares();
+    restack_object(&mut doc, 0, graphic(0), Restack::Forward).unwrap();
+    assert_eq!(squares(&doc), [20.0, 0.0, 40.0]);
+
+    let mut doc = three_squares();
+    restack_object(&mut doc, 0, graphic(2), Restack::Backward).unwrap();
+    assert_eq!(squares(&doc), [0.0, 40.0, 20.0]);
+
+    let mut doc = three_squares();
+    restack_object(&mut doc, 0, graphic(0), Restack::Front).unwrap();
+    assert_eq!(squares(&doc), [20.0, 40.0, 0.0]);
+
+    let mut doc = three_squares();
+    restack_object(&mut doc, 0, graphic(2), Restack::Back).unwrap();
+    assert_eq!(squares(&doc), [40.0, 0.0, 20.0]);
+
+    // Already at an end: nothing changes.
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    restack_object(&mut doc, 0, graphic(0), Restack::Back).unwrap();
+    restack_object(&mut doc, 0, graphic(2), Restack::Front).unwrap();
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
+
+    // The inventory still matches the page after saving and reopening.
+    let doc = reopen(&doc);
+    assert_eq!(squares(&doc), [40.0, 0.0, 20.0]);
+    assert_eq!(editable_objects(&doc, 0).unwrap().len(), 3);
+}
+
+#[test]
+fn restacking_a_paragraph_takes_its_colour_and_box_along() {
+    let mut doc = text_page(
+        "q 1 0 0 rg 0 0 30 30 re f Q \
+         q 0 0 50 50 re W n 0 0 1 rg BT /F1 12 Tf 50 600 Td (Low) Tj ET Q \
+         q 0 0 60 60 re W n BT /F1 12 Tf 150 600 Td (High) Tj ET Q",
+    );
+    assert_eq!(editable_objects(&doc, 0).unwrap().iter().filter(|o| o.target.kind == ObjectKind::Text).count(), 2);
+    restack_object(&mut doc, 0, ObjectTarget { kind: ObjectKind::Text, index: 0 }, Restack::Front).unwrap();
+    let doc = reopen(&doc);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["High", "Low"]);
+    // Both paragraphs keep their place and colour.
+    assert!(lines.iter().any(|l| l.text == "Low" && (l.rect[0] - 50.0).abs() < 0.01), "{lines:?}");
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("0 0 1 rg"), "{content}");
+    assert!(content.contains("50 50 re"), "{content}");
+}
+
+#[test]
+fn restacking_an_added_item_keeps_it_editable_and_in_place() {
+    let mut doc = text_page("BT /F1 12 Tf 40 400 Td (Native) Tj ET");
+    added::add_content(
+        &mut doc,
+        0,
+        &Content::Text(added::AddedText { text: "Added label".into(), rect: [50.0, 300.0, 200.0, 330.0], ..Default::default() }),
+    )
+    .unwrap();
+    let before: std::collections::BTreeMap<_, _> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| (l.text.clone(), l.rect)).collect();
+    let added_target = editable_objects(&doc, 0).unwrap().iter().find(|o| o.target.kind == ObjectKind::Added).unwrap().target;
+    restack_object(&mut doc, 0, added_target, Restack::Back).unwrap();
+    let after = text::text_lines(&doc, 0).unwrap();
+    for line in &after {
+        let old = before.get(&line.text).unwrap_or_else(|| panic!("{} vanished", line.text));
+        assert!(close(line.rect, *old), "{} moved: {:?} -> {:?}", line.text, old, line.rect);
+    }
+    assert_eq!(after.first().map(|l| l.text.as_str()), Some("Added label"), "it is the first content now");
+    assert_eq!(added::list_added(&doc).iter().filter(|a| a.page == 0).count(), 1);
+    // Still editable: moving it now shifts only its own text.
+    let target = editable_objects(&doc, 0).unwrap().iter().find(|o| o.target.kind == ObjectKind::Added).unwrap().target;
+    move_objects(&mut doc, 0, &[target], [10.0, 0.0]).unwrap();
+    let moved = text::text_lines(&doc, 0).unwrap();
+    assert!(moved.iter().any(|l| l.text == "Added label" && (l.rect[0] - 60.0).abs() < 0.01), "{moved:?}");
+}
+
+#[test]
+fn restacking_refuses_an_unknown_object_and_a_shared_text_object() {
+    let mut doc = text_page("BT /F1 12 Tf 50 600 Td (One) Tj 0 -200 Td (Two) Tj ET");
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(restack_object(&mut doc, 0, ObjectTarget { kind: ObjectKind::Text, index: 9 }, Restack::Front).is_err());
+    assert!(restack_object(&mut doc, 0, ObjectTarget { kind: ObjectKind::Text, index: 0 }, Restack::Front).is_err());
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
+}
+
+#[test]
+fn restacking_an_image_keeps_its_place_in_scoped_and_shared_content() {
+    let rects = |doc: &Document| images::page_images(doc, 0).unwrap().into_iter().map(|i| i.rect).collect::<Vec<_>>();
+    for content in
+        ["q 200 0 0 100 100 100 cm /Im0 Do Q q 200 0 0 100 300 100 cm /Im0 Do Q", "200 0 0 100 100 100 cm /Im0 Do 200 0 0 100 300 100 cm /Im0 Do"]
+    {
+        let mut doc = image_page_with(content);
+        let before = rects(&doc);
+        assert_eq!(before.len(), 2, "{content}");
+        restack_object(&mut doc, 0, ObjectTarget { kind: ObjectKind::Image, index: 0 }, Restack::Forward).unwrap();
+        let doc = reopen(&doc);
+        let after = rects(&doc);
+        let mut sorted_before = before.clone();
+        sorted_before.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        let mut sorted_after = after.clone();
+        sorted_after.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        assert_eq!(sorted_after, sorted_before, "{content}");
+        assert_eq!(after[0], before[1], "the second picture is drawn first now: {content}");
+    }
+}
+
+#[test]
+fn restacking_a_group_keeps_its_order_and_crosses_one_level() {
+    let graphic = |index| ObjectTarget { kind: ObjectKind::Graphic, index };
+    let four = || text_page("q 0 0 10 10 re f Q q 20 0 10 10 re f Q q 40 0 10 10 re f Q q 60 0 10 10 re f Q");
+
+    let mut doc = four();
+    restack_objects(&mut doc, 0, &[graphic(0), graphic(2)], Restack::Forward).unwrap();
+    assert_eq!(squares(&doc), [20.0, 60.0, 0.0, 40.0]);
+
+    let mut doc = four();
+    restack_objects(&mut doc, 0, &[graphic(2), graphic(3)], Restack::Backward).unwrap();
+    assert_eq!(squares(&doc), [0.0, 40.0, 60.0, 20.0]);
+
+    let mut doc = four();
+    restack_objects(&mut doc, 0, &[graphic(2), graphic(0)], Restack::Front).unwrap();
+    assert_eq!(squares(&doc), [20.0, 60.0, 0.0, 40.0]);
+
+    let mut doc = four();
+    restack_objects(&mut doc, 0, &[graphic(2), graphic(1)], Restack::Back).unwrap();
+    assert_eq!(squares(&doc), [20.0, 40.0, 0.0, 60.0]);
+
+    // Already there, one target unknown, or nothing selected: no change.
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    restack_objects(&mut doc, 0, &[graphic(0), graphic(1)], Restack::Back).unwrap();
+    restack_objects(&mut doc, 0, &[graphic(2), graphic(3)], Restack::Front).unwrap();
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
+    assert!(restack_objects(&mut doc, 0, &[graphic(1), graphic(9)], Restack::Front).is_err());
+    assert!(restack_objects(&mut doc, 0, &[], Restack::Front).is_err());
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
+}
+
+/// Moving a paragraph across another one drawn in the same content stream takes the whole
+/// `BT … ET` object along: it must not insert its operators inside the neighbour's text object,
+/// which would join both paragraphs on one row.
+#[test]
+fn restacking_a_paragraph_between_paragraphs_keeps_both_whole() {
+    let mut doc = text_page("BT /F1 18 Tf 40 430 Td (Group headline) Tj ET BT /F1 12 Tf 240 90 Td (Keep here) Tj ET");
+    let before: Vec<_> = editable_objects(&doc, 0).unwrap().into_iter().map(|o| (o.text, o.rect)).collect();
+    restack_object(&mut doc, 0, ObjectTarget { kind: ObjectKind::Text, index: 1 }, Restack::Backward).unwrap();
+    let after = editable_objects(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2, "both paragraphs stay separate: {after:?}");
+    for (text, rect) in &before {
+        let object = after.iter().find(|o| o.text == *text).unwrap_or_else(|| panic!("{text:?} vanished"));
+        assert!(close(object.rect, *rect), "{text:?} moved: {rect:?} -> {:?}", object.rect);
+    }
+    assert_eq!(after[0].text.as_deref(), Some("Keep here"), "it is painted first now");
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert_eq!(content.matches("(Keep here) Tj").count(), 1, "{content}");
+    assert_eq!(content.matches("(Group headline) Tj").count(), 1, "{content}");
+    // And forward again, from the first level.
+    restack_object(&mut doc, 0, ObjectTarget { kind: ObjectKind::Text, index: 0 }, Restack::Forward).unwrap();
+    let back = editable_objects(&doc, 0).unwrap();
+    assert_eq!(back.len(), 2);
+    assert_eq!(back[0].text.as_deref(), Some("Group headline"));
 }

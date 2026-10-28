@@ -41,6 +41,11 @@ pub struct PageImage {
 }
 
 impl PageImage {
+    /// The `Do` operator that draws it, in the page's streams joined.
+    pub(crate) fn paint_op(&self) -> usize {
+        self.op
+    }
+
     /// Whether a user-space point belongs to the placed artwork and every active clip.
     pub fn contains(&self, point: [f64; 2]) -> bool {
         if !point.iter().all(|v| v.is_finite()) {

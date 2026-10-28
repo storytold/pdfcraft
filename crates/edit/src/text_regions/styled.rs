@@ -98,6 +98,9 @@ pub(crate) fn rewrite_styled_block(
     let first = block.lines.first().and_then(|i| lines.get(*i)).ok_or_else(|| EditError::Invalid("the paragraph has no source runs".into()))?;
     let draft = match text {
         Some(t) if t != block.text => t,
+        // A width change with the text untouched reflows the paragraph's own text, whose rows
+        // join with spaces; the editor text's row breaks would become hard breaks and distort it.
+        _ if style.width.is_some() => &block.text,
         _ => &block.editor_text,
     };
     if draft.len() > 4_000_000 {

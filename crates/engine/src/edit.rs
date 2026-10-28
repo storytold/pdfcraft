@@ -407,6 +407,20 @@ pub enum Edit {
         objects: Vec<ObjectTarget>,
         offset: [f64; 2],
     },
+    /// Raise, lower, front or back one object on `page` (a kind/index reference from
+    /// `Document::editable_objects`). Its own drawing moves; the rest of the content is copied.
+    RestackObject {
+        page: usize,
+        object: ObjectTarget,
+        direction: crate::Restack,
+    },
+    /// Restack several objects together: their paint order is kept, and the group moves one
+    /// level, to the front or to the back as a unit.
+    RestackObjects {
+        page: usize,
+        objects: Vec<ObjectTarget>,
+        direction: crate::Restack,
+    },
     /// Edit text in a paragraph box: replace paragraph `block` (from `Document::text_blocks`),
     /// rewrapped to the box's width.
     EditTextBlock {

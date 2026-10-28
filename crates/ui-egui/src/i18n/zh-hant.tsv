@@ -2507,3 +2507,9 @@ animation effects	Off	關
 	Rotate the selected pages clockwise	順時針旋轉所選頁面
 	Extract the selected pages…	擷取所選頁面…
 	Delete the selected pages	刪除所選頁面
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	管理階層
+	Bring to front	移至最上層
+	Bring forward	上移一層
+	Send backward	下移一層
+	Send to back	移至最下層

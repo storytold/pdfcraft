@@ -2563,3 +2563,9 @@ animation effects	Off	Ανενεργά
 	Rotate the selected pages clockwise	Περιστροφή των επιλεγμένων σελίδων δεξιόστροφα
 	Extract the selected pages…	Εξαγωγή των επιλεγμένων σελίδων…
 	Delete the selected pages	Διαγραφή των επιλεγμένων σελίδων
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Διαχείριση επιπέδων
+	Bring to front	Στο προσκήνιο
+	Bring forward	Ένα επίπεδο μπροστά
+	Send backward	Ένα επίπεδο πίσω
+	Send to back	Στο παρασκήνιο

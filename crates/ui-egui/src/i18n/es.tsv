@@ -2881,3 +2881,9 @@ theme	Appearance	Aspecto
 	Rotate the selected pages clockwise	Girar las páginas seleccionadas en sentido horario
 	Extract the selected pages…	Extraer las páginas seleccionadas…
 	Delete the selected pages	Eliminar las páginas seleccionadas
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Gestionar niveles
+	Bring to front	Traer al frente
+	Bring forward	Traer un nivel adelante
+	Send backward	Enviar un nivel atrás
+	Send to back	Enviar al fondo

@@ -46,6 +46,13 @@ fn page_of(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditErro
     pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))
 }
 
+impl PageGraphic {
+    /// The painted paths it groups, as operator ranges (zero-based, end exclusive).
+    pub(crate) fn run_ranges(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.runs.iter().map(|(start, end, _)| (*start, *end))
+    }
+}
+
 fn joined(streams: &[(Object, Vec<u8>)]) -> Pieces {
     Pieces::join(&streams.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>())
 }

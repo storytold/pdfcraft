@@ -251,6 +251,18 @@ impl Edit {
             Edit::EditTextLine { .. } | Edit::EditTextBlock { .. } => Label::of("Edit text"),
             Edit::RegisterTextFont { .. } => Label::of("Load document font"),
             Edit::MoveObjects { objects, .. } => plural("Move object", "Move objects", objects.len()),
+            Edit::RestackObject { direction, .. } => Label::of(match direction {
+                crate::Restack::Front => "Bring to front",
+                crate::Restack::Forward => "Bring forward",
+                crate::Restack::Backward => "Send backward",
+                crate::Restack::Back => "Send to back",
+            }),
+            Edit::RestackObjects { direction, .. } => Label::of(match direction {
+                crate::Restack::Front => "Bring objects to front",
+                crate::Restack::Forward => "Bring objects forward",
+                crate::Restack::Backward => "Send objects backward",
+                crate::Restack::Back => "Send objects to back",
+            }),
             Edit::EditPageImage { change, .. } => Label::of(match change {
                 ImageEdit::Move(_) => "Move image",
                 ImageEdit::Rotate(_) | ImageEdit::RotateBy(_) => "Rotate image",

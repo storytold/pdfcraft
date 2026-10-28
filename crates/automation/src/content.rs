@@ -339,6 +339,63 @@ impl Automation {
         Ok(result)
     }
 
+    /// Raise, lower, bring to front or send to back one object or a group (kind/index references
+    /// from `object_list`). Only their own drawing changes place in the page's paint order.
+    pub(crate) fn object_restack(&mut self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::{ObjectKind, ObjectTarget, Restack};
+        let page = self.page(a)?;
+        let parse = |row: &Value| -> Result<ObjectTarget> {
+            let row = row.as_object().ok_or_else(|| bad("each object must contain kind and index"))?;
+            let kind = match row.get("kind").and_then(Value::as_str) {
+                Some("added") => ObjectKind::Added,
+                Some("text") => ObjectKind::Text,
+                Some("image") => ObjectKind::Image,
+                Some("graphic") => ObjectKind::Graphic,
+                _ => return Err(bad("kind must be added, text, image or graphic (see object_list)")),
+            };
+            let index = row
+                .get("index")
+                .and_then(Value::as_u64)
+                .and_then(|i| i.checked_sub(1))
+                .and_then(|i| usize::try_from(i).ok())
+                .ok_or_else(|| bad("index must be a positive integer from object_list"))?;
+            Ok(ObjectTarget { kind, index })
+        };
+        let mut targets = match a.get("objects") {
+            Some(Value::Array(rows)) => {
+                if rows.is_empty() || rows.len() > 1_000 {
+                    return Err(bad("objects must contain 1–1000 references from object_list"));
+                }
+                rows.iter().map(parse).collect::<Result<Vec<_>>>()?
+            }
+            Some(_) => return Err(bad("objects must be an array of kind and index references")),
+            None => vec![parse(&json!({"kind": a.get("kind"), "index": a.get("index")}))?],
+        };
+        targets.dedup();
+        let (direction, name) = match a.get("direction").and_then(Value::as_str) {
+            Some("front") => (Restack::Front, "front"),
+            Some("forward") => (Restack::Forward, "forward"),
+            Some("backward") => (Restack::Backward, "backward"),
+            Some("back") => (Restack::Back, "back"),
+            _ => return Err(bad("direction must be front, forward, backward or back")),
+        };
+        let doc = self.doc(a)?;
+        if let Some(g) = a.get("generation") {
+            let g = g.as_u64().ok_or_else(|| bad("generation must be a non-negative integer from object_list"))?;
+            if g != doc.edit_generation() {
+                return Err(failed("the document changed; call object_list again before restacking"));
+            }
+        }
+        let edit = if targets.len() == 1 {
+            Edit::RestackObject { page, object: targets[0], direction }
+        } else {
+            Edit::RestackObjects { page, objects: targets, direction }
+        };
+        let mut result = self.apply(a, edit)?;
+        result["direction"] = json!(name);
+        Ok(result)
+    }
+
     /// Delete one inline vector graphic (a kind "graphic" index from `object_list`). Only its
     /// own paths go; text, pictures, Forms and the graphics state around it stay.
     pub(crate) fn graphic_delete(&mut self, a: &Args) -> Result<Value> {

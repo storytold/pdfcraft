@@ -2555,3 +2555,9 @@ animation effects	Off	Өшірулі
 	Rotate the selected pages clockwise	Таңдалған беттерді сағат тілімен бұру
 	Extract the selected pages…	Таңдалған беттерді шығарып алу…
 	Delete the selected pages	Таңдалған беттерді жою
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Деңгейлерді басқару
+	Bring to front	Ең алдыға
+	Bring forward	Бір деңгей алға
+	Send backward	Бір деңгей артқа
+	Send to back	Ең артқа

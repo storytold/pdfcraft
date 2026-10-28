@@ -2749,3 +2749,9 @@ certificate	Version	وەشان
 	Rotate the selected pages clockwise	پەڕە هەڵبژێردراوەکان بە ئاڕاستەی میلی کاتژمێر بسوڕێنە
 	Extract the selected pages…	پەڕە هەڵبژێردراوەکان دەربهێنە…
 	Delete the selected pages	پەڕە هەڵبژێردراوەکان بسڕەوە
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	بەڕێوەبردنی چینەکان
+	Bring to front	بۆ پێشەوە
+	Bring forward	چینێک بۆ پێشەوە
+	Send backward	چینێک بۆ دواوە
+	Send to back	بۆ دواوە

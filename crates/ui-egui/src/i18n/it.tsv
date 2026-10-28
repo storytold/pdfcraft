@@ -2789,3 +2789,9 @@ certificate	SHA-256 digest	Impronta SHA-256
 	Rotate the selected pages clockwise	Ruota le pagine selezionate in senso orario
 	Extract the selected pages…	Estrai le pagine selezionate…
 	Delete the selected pages	Elimina le pagine selezionate
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Gestione livelli
+	Bring to front	Porta in primo piano
+	Bring forward	Porta avanti di un livello
+	Send backward	Porta indietro di un livello
+	Send to back	Porta in fondo

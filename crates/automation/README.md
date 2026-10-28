@@ -133,11 +133,20 @@ claude mcp add pdfcraft -- pdfcraft-cli mcp --root <dir>
 
 ## Moving several page objects
 
-`object_list {doc, page}` inventories recognised paragraphs, Image/Form artwork and added items
-with generation-scoped kind/index references. `object_move {doc, page, objects, offset, generation?}`
-moves 1–1000 references atomically in displayed points (right/down), preserving source glyph bytes
-and fonts. A refusal changes nothing; success is one undo step. See
-[the selection and movement guide](../../docs/editing-multiple-objects.md) for limits and examples.
+`object_list {doc, page}` inventories recognised paragraphs, Image/Form artwork, inline vector
+graphics and added items with generation-scoped kind/index references.
+`object_move {doc, page, objects, offset, generation?}` moves 1–1000 references atomically in
+displayed points (right/down), preserving source glyph bytes, fonts and vector artwork.
+`graphic_resize {doc, page, index, rect, generation?}` gives one inline vector icon or logo a new
+displayed box, scaling its paths about the old box's top-left corner while stroke widths keep
+their size. `graphic_delete {doc, page, index, generation?}` removes one inline vector icon or
+logo, leaving text, pictures, Forms and neighbouring artwork. `object_restack {doc, page, kind,
+index, direction, generation?}` brings one object to the front or sends it to the back, or raises
+or lowers it one level (`direction` `front`, `forward`, `backward`, `back`); give `objects` (a
+1–1000-item array of `{kind, index}`) instead to move a group together, keeping its own order.
+Only the objects' drawings move in the page's paint order, so geometry, fonts, colours and clips
+stay. A refusal changes nothing; success is one undo step. See [the selection and movement
+guide](../../docs/editing-multiple-objects.md) for limits and examples.
 
 ## Accessibility review record
 

@@ -2823,3 +2823,9 @@ certificate	Version	Version
 	Rotate the selected pages clockwise	Faire pivoter les pages sélectionnées dans le sens horaire
 	Extract the selected pages…	Extraire les pages sélectionnées…
 	Delete the selected pages	Supprimer les pages sélectionnées
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Gérer les niveaux
+	Bring to front	Mettre au premier plan
+	Bring forward	Avancer d’un plan
+	Send backward	Reculer d’un plan
+	Send to back	Mettre à l’arrière-plan

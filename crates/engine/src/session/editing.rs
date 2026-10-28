@@ -398,6 +398,8 @@ impl Session {
                     | Edit::ReplaceImage { .. }
                     | Edit::PasteContent { .. }
             ) || matches!(e, Edit::MoveObjects { objects, .. } if objects.iter().any(|o| o.kind == ObjectKind::Added))
+                || matches!(e, Edit::RestackObject { object, .. } if object.kind == ObjectKind::Added)
+                || matches!(e, Edit::RestackObjects { objects, .. } if objects.iter().any(|o| o.kind == ObjectKind::Added))
         });
         let touches_marks = edit.is_none_or(|e| {
             matches!(e, Edit::AddHeaderFooter { .. } | Edit::AddWatermark { .. } | Edit::AddBackground { .. } | Edit::RemoveMarks { .. })

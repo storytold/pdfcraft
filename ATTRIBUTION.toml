@@ -468,6 +468,30 @@ usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
 sha256 = "59fb769ed094d290ac57d4154e5e86c27e33b4c250a59fd04d2f9b0ea842bf65"
 
 [[asset]]
+path = "assets/icons/arrow-down-to-line.svg"
+title = "PdfCraft level-arrange arrow down (contributor artwork)"
+author = "PdfCraft contributors"
+source = "Contributor-original: created for PdfCraft as the send-to-back level action, hand-authored 2026-10-28; not derived from any external icon set"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+sha256 = "c2eb22b45d08ce23ce331544c7ba5c6aa725fce5c28f9dfbba41b63a0d3418cf"
+
+
+[[asset]]
+path = "assets/icons/arrow-up-to-line.svg"
+title = "PdfCraft level-arrange arrow up (contributor artwork)"
+author = "PdfCraft contributors"
+source = "Contributor-original: created for PdfCraft as the bring-to-front level action, hand-authored 2026-10-28; not derived from any external icon set"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+sha256 = "6899666d0e09b6ea922bc7e2192d42b782c6a94b4d6a837c296317535f0fa5fa"
+
+
+[[asset]]
 path = "assets/icons/badge-check.svg"
 title = "Lucide icon \"badge-check\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"
