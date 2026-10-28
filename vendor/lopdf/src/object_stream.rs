@@ -34,20 +34,25 @@ impl NodeBudget {
 
     /// Take up to `want` nodes and return how many were granted (0 once the budget is spent).
     fn reserve(&self, want: usize) -> usize {
-        let before = self
-            .0
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
-                Some(left.saturating_sub(want))
-            })
-            .unwrap_or_else(|left| left);
-        before.min(want)
+        // A compare-exchange loop rather than `fetch_update`, which newer toolchains deprecate
+        // in favour of a `try_update` older than this crate's minimum Rust version.
+        let mut left = self.0.load(Ordering::Relaxed);
+        loop {
+            let take = left.min(want);
+            match self
+                .0
+                .compare_exchange_weak(left, left - take, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => return take,
+                Err(now) => left = now,
+            }
+        }
     }
 
+    /// Give back nodes [`Self::reserve`] granted and parsing did not use. Refunds never exceed
+    /// what was taken, so the count stays within the starting budget and cannot overflow.
     fn refund(&self, nodes: usize) {
-        // The closure always returns `Some`, so the update cannot fail.
-        let _ = self.0.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
-            Some(left.saturating_add(nodes))
-        });
+        self.0.fetch_add(nodes, Ordering::Relaxed);
     }
 
     fn spent(&self) -> bool {
