@@ -561,6 +561,11 @@ pub struct Style {
     pub width: f64,
     /// Interior fill for rectangles and ovals (`/IC`), background for text boxes.
     pub fill: Option<Rgb>,
+    /// The fill's own opacity, 0–1 (`/ca`), where it differs from `opacity` (which is then the
+    /// line's or border's); `None`: as `opacity`.
+    pub fill_opacity: Option<f64>,
+    /// A text box's text's own opacity, 0–1 (`/PCTextOpacity`); `None`: as the fill's.
+    pub text_opacity: Option<f64>,
 }
 
 /// The style properties changed by one annotation edit. `None` leaves a property unchanged.
@@ -588,11 +593,6 @@ pub struct TextReplacement<'a> {
     pub caret: &'a Style,
     pub strike_meta: &'a Meta,
     pub caret_meta: &'a Meta,
-    /// The fill's own opacity, 0–1 (`/ca`), where it differs from `opacity` (which is then the
-    /// line's or border's); `None`: as `opacity`.
-    pub fill_opacity: Option<f64>,
-    /// A text box's text's own opacity, 0–1 (`/PCTextOpacity`); `None`: as the fill's.
-    pub text_opacity: Option<f64>,
 }
 
 impl Default for Style {

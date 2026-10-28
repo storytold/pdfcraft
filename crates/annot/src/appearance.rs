@@ -922,6 +922,7 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
 
 fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -> Option<Stream> {
     let d = context.dict;
+    let parts = context.parts;
     let rect = context.rect;
     let stroke = context.stroke;
     let mut c = std::mem::take(&mut drawing.content);
