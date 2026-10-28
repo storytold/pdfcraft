@@ -131,6 +131,35 @@ impl PdfCraftApp {
         true
     }
 
+    /// Puts the text selected on the active page in the primary selection, where a middle click
+    /// pastes it (#4821), once the selection has held still for a frame, so a drag doesn't write
+    /// it on every frame. A document whose security refuses copying gives none, and says nothing:
+    /// the user only selected text.
+    pub(crate) fn publish_primary_selection(&mut self, ctx: &egui::Context) {
+        use crate::platform::primary_selection::PrimarySelection;
+        if !PrimarySelection::SUPPORTED {
+            return;
+        }
+        let view = self.active.and_then(|i| self.views.get(i));
+        let now = view.and_then(|v| Some((v.id, v.page_selection()?)));
+        let primary = &mut self.primary_selection;
+        let settled = primary.seen == now;
+        primary.seen = now;
+        if !settled {
+            // Settle on the next frame even if nothing else draws one.
+            ctx.request_repaint();
+            return;
+        }
+        let Some((id, _)) = now.filter(|_| now != primary.written_key) else { return };
+        primary.written_key = now;
+        if !self.session.get(id).is_none_or(pdfcraft_engine::Document::allows_copying) {
+            return;
+        }
+        if let Some(text) = view.and_then(DocView::selected_text) {
+            self.primary_selection.set(text);
+        }
+    }
+
     /// The clipboard text of a whole-document copy, once its pages are read; dropped with the
     /// document it was copied from, and by any later copy (a text field's, a comment's), which
     /// it must not replace. Run at the end of the frame, so it sees this frame's copies.
