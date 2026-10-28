@@ -449,7 +449,7 @@ impl PdfCraftApp {
             "edit.redo" => self.redo(),
             "edit.find" => {
                 if let Some(i) = active {
-                    self.views[i].open_find();
+                    self.views[i].open_find_for_selection();
                 }
             }
             "comment.list" => self.choose_right_panel(Some(RightPanel::Comments)),
