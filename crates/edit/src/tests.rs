@@ -10580,3 +10580,18 @@ fn reading_deeply_nested_marked_content_with_many_state_changes_is_quick() {
     assert!(took < std::time::Duration::from_secs(5), "{took:?}");
     eprintln!("deep nesting scan took {took:?}");
 }
+
+/// #4957: only the outermost watermark scope is cut, however many watermark scopes nest inside it,
+/// and once it closes the next watermark is outermost again, inside other marked content or not.
+#[test]
+fn nested_and_repeated_foreign_watermarks_are_cut_at_the_outermost_scope() {
+    use crate::ForeignWatermarks;
+    let wm = "/Artifact <</Subtype /Watermark>> BDC";
+    let content = format!(
+        "(a) Tj {wm} q {wm} {wm} /Span BMC {wm} EMC EMC EMC EMC Q EMC (b) Tj /Span BMC {wm} {wm} EMC EMC (c) Tj EMC /Span BMC /Span BMC {wm} EMC EMC EMC (d) Tj"
+    );
+    let mut doc = page_of_streams(&[&content], "");
+    let result = remove_foreign_watermarks(&mut doc, &[0]).unwrap();
+    assert_eq!(result, ForeignWatermarks { removed: 3, blocked: vec![] });
+    assert_eq!(streams(&doc, 0), ["(a) Tj  (b) Tj /Span BMC  (c) Tj EMC /Span BMC /Span BMC  EMC EMC (d) Tj"]);
+}

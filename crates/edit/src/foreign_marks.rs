@@ -169,6 +169,9 @@ fn scan_page(doc: &Document, page: &pdfcraft_model::Page, pieces: &Pieces) -> Sc
     }
     let (mut depth, mut stack, mut spans, mut unsafe_left) = (0usize, Vec::<Scope>::new(), Vec::<Range<usize>>::new(), 0usize);
     let (mut text, mut path) = (false, false);
+    // Watermark scopes on `stack`, so telling whether one closing is the outermost is one compare,
+    // however many other scopes are open.
+    let mut open_watermarks = 0usize;
     // For each `q` depth, the count of the operator that last changed state there. A scope is
     // affected when it was opened before the last change at its own depth: one lookup, however
     // many scopes are open.
@@ -201,6 +204,9 @@ fn scan_page(doc: &Document, page: &pdfcraft_model::Page, pieces: &Pieces) -> Sc
                     return Scan::Uncertain;
                 }
                 let watermark = name == b"BDC" && opens_watermark(doc, properties.as_ref(), op);
+                if watermark {
+                    open_watermarks = open_watermarks.saturating_add(1);
+                }
                 stack.push(Scope { watermark, depth, floor: depth, start: op.span.start, opened: count, text, path });
             }
             b"EMC" => {
@@ -208,7 +214,10 @@ fn scan_page(doc: &Document, page: &pdfcraft_model::Page, pieces: &Pieces) -> Sc
                 if let Some(parent) = stack.last_mut() {
                     parent.floor = parent.floor.min(scope.floor);
                 }
-                if scope.watermark && !stack.iter().any(|s| s.watermark) {
+                if scope.watermark {
+                    open_watermarks = open_watermarks.saturating_sub(1);
+                }
+                if scope.watermark && open_watermarks == 0 {
                     // Where a text object or a path was open around it, it would change that
                     // object's matrix or that path (`q … Q` restores neither), so such a scope is
                     // never cut: nor one that closes or opens one, or changes state after it.
