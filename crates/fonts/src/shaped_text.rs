@@ -358,7 +358,7 @@ fn type3_font(clusters: &[&ShapedCluster], outlines: &HashMap<(ShapedScript, u32
     let family = match clusters.first().map(|c| c.script).filter(|s| clusters.iter().all(|c| c.script == *s)) {
         Some(script) => script.font().map_or(
             match script {
-                ShapedScript::Arabic => "Arabic",
+                ShapedScript::Arabic | ShapedScript::ArabicBold => "Arabic",
                 ShapedScript::Hebrew => "Hebrew",
                 ShapedScript::Thai => "Thai",
             },

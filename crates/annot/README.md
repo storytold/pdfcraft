@@ -13,12 +13,16 @@ Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `pdfcraft-cos`,
   and restyled comments look the same in every viewer. Highlights multiply (`/BM /Multiply`).
   A line's leader lines (`/LL`, `/LLE`, `/LLO`) and caption (`/Cap`, `/CP`, `/CO`) are drawn as
   ISO 32000-2 Table 178 places them, the caption in black Helvetica 10.
-  Note icons are PdfCraft's own drawings. Text boxes use standard Helvetica (WinAnsi), with
-  line breaking by Helvetica's standard-14 metrics. Thai in a text box, callout or Fill & Sign
-  text is shaped and drawn from the craft-fonts Thai face with Add text's writer
+  Note icons are PdfCraft's own drawings. Text boxes, callouts and Fill & Sign text use standard
+  Helvetica for WinAnsi text, with line breaking by Helvetica's standard-14 metrics. Thai is
+  shaped and drawn from the craft-fonts Thai face with Add text's writer
   (`pdfcraft_fonts::shaped_text`: Type 3 glyphs with a ToUnicode map), the box sized to the ink
   of its stacked marks and descenders; a build without a Thai face refuses it
-  (`AnnotError::Undrawable`) instead of drawing `?`. Other text it can't
+  (`AnnotError::Undrawable`) instead of drawing `?`. Arabic and Hebrew (and Thai beside them) use
+  their optional craft-fonts faces with OpenType shaping, bidirectional layout and self-contained
+  Type 3 outlines (`pdfcraft_fonts::appearance_text`). ToUnicode and per-line ActualText retain
+  typing order, including marks, ligatures and mixed Latin/digits. Wrapping preserves spaces and
+  breaks long words only at grapheme boundaries. Other text it can't
   draw (in a text box, callout, Fill & Sign text, line caption, measurement label or dynamic
   stamp's by-line; `appearance::undrawable_text`) is kept as typed and drawn as `?`, and the comment is marked with
   the first such character (`pdfcraft_fonts::UNDRAWN_MARK`) so the engine reports the edit and
