@@ -3990,6 +3990,67 @@ fn dragging_the_rotate_knob_turns_a_page_image() {
     assert!((turned[2] - turned[0] - hh).abs() < 1.5 && (turned[3] - turned[1] - w).abs() < 1.5, "{before:?} -> {turned:?}");
 }
 
+/// The midpoints of a selected picture's sides are extra grips: they stretch one axis and keep
+/// the other, unlike the corners, which keep the picture's proportions.
+#[test]
+fn dragging_a_side_grip_of_a_page_image_stretches_one_axis() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    // A smaller picture in the middle of the page, so every grip is on the page.
+    let full = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    let (qw, qh) = ((full[2] - full[0]) / 4.0, (full[3] - full[1]) / 4.0);
+    let (mx, my) = ((full[0] + full[2]) / 2.0, (full[1] + full[3]) / 2.0);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage {
+        page: 0,
+        index: 0,
+        change: pdfcraft_engine::ImageEdit::Move([mx - qw, my - qh, mx + qw, my + qh]),
+    });
+    h.run_steps(4);
+    let before = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let page = &h.state().session.get(id).unwrap().info.pages[0];
+    let (pw, ph) = (page.width as f32, page.height as f32);
+    let at = |x: f64, y: f64| egui::pos2(r.left() + (x as f32) / pw * r.width(), r.top() + ((ph as f64 - y) as f32) / ph * r.height());
+    // Select the picture.
+    let centre = at((before[0] + before[2]) / 2.0, (before[1] + before[3]) / 2.0);
+    h.hover_at(centre);
+    h.run_steps(1);
+    h.drag_at(centre);
+    h.run_steps(1);
+    h.drop_at(centre);
+    h.run_steps(2);
+    assert!(h.state().views[0].image_selection.is_some(), "selected");
+    // Its right side's midpoint: drag it left five points; only the width changes.
+    let grip = at(before[2], (before[1] + before[3]) / 2.0);
+    let to = at(before[2] - 5.0, (before[1] + before[3]) / 2.0);
+    h.hover_at(grip);
+    h.run_steps(1);
+    h.drag_at(grip);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(grip + (to - grip) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(4);
+    let doc = h.state().session.get(id).unwrap();
+    assert_eq!(doc.can_undo(), Some("Move image"), "a picture resize is the same placement edit as a move");
+    let after = doc.page_images(0)[0].rect;
+    assert!((after[0] - before[0]).abs() < 0.1 && (after[1] - before[1]).abs() < 0.1, "{before:?} -> {after:?}");
+    assert!((after[3] - before[3]).abs() < 0.1, "the height is unchanged: {before:?} -> {after:?}");
+    assert!((after[2] - (before[2] - 5.0)).abs() < 0.2, "the checked side followed the pointer: {before:?} -> {after:?}");
+}
+
 #[test]
 fn editing_existing_form_artwork_on_the_page() {
     use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_incremental};

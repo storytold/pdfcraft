@@ -125,9 +125,6 @@ pub fn move_objects(doc: &mut Document, page: usize, targets: &[ObjectTarget], o
         }
         let object =
             inventory.get(target).ok_or_else(|| EditError::Invalid("a selected object no longer exists; select the objects again".into()))?;
-        if target.kind == ObjectKind::Graphic {
-            return Err(EditError::Invalid("graphics can be selected and deleted, but not moved or resized".into()));
-        }
         let r = object.rect;
         if !valid_rect([r[0] + offset[0], r[1] + offset[1], r[2] + offset[0], r[3] + offset[1]]) {
             return Err(EditError::Invalid("the object move is too large".into()));
@@ -138,6 +135,7 @@ pub fn move_objects(doc: &mut Document, page: usize, targets: &[ObjectTarget], o
     crate::text::translate_blocks(&mut work, page, &indexes(ObjectKind::Text), offset)?;
     crate::images::translate_images(&mut work, page, &indexes(ObjectKind::Image), offset)?;
     translate_added(&mut work, page, &indexes(ObjectKind::Added), offset)?;
+    crate::graphics::translate_graphics(&mut work, page, &indexes(ObjectKind::Graphic), offset)?;
     // Placement operators add to size/depth/work budgets, and moving paragraphs can change
     // their grouping. Keep the resulting inventory usable; refuse before swapping otherwise.
     editable_objects(&work, page)?;

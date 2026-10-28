@@ -1,12 +1,23 @@
 use super::*;
 
+/// What a drag on a selected picture does: move it, resize from a corner (keeping its aspect
+/// ratio) or stretch one axis from a side's midpoint (no aspect ratio).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DragKind {
+    Move,
+    /// The fixed opposite corner.
+    Corner(Pos2),
+    /// The side's grip: 4 top, 5 right, 6 bottom, 7 left.
+    Side(usize),
+}
+
 /// A selected page image, and what the pointer is doing to it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageSelection {
     pub page: usize,
     pub index: usize,
-    /// Dragging: the start point and, for a corner, the opposite corner (screen).
-    drag: Option<(Pos2, Option<Pos2>)>,
+    /// Dragging: the start point and what the drag does (screen).
+    drag: Option<(Pos2, DragKind)>,
     /// Crop mode (Acrobat's crop handles): the box kept so far.
     pub crop: Option<CropMode>,
     /// The drag is turning the picture by its rotate handle (the `drag` start is then unused).
@@ -237,7 +248,7 @@ pub(crate) fn image_owns_pointer(ui: &egui::Ui, xf: &PageXform, ptr: &PagePointe
     let b = xf.user_rect(info, page, rect.map(|v| v as f32));
     let p = if ptr.primary_down { ptr.origin } else { ptr.pos };
     let knob = rotate_knob(b, ui.clip_rect()).0;
-    p.is_some_and(|p| [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom(), knob].iter().any(|c| c.distance(p) < 8.0))
+    p.is_some_and(|p| image_grips(b).iter().chain(std::iter::once(&knob)).any(|c| c.distance(p) < 8.0))
 }
 
 /// What a right-click on a selected image asks for.
@@ -255,6 +266,33 @@ pub(crate) enum ImageAction {
     Link(usize, usize),
     /// Open Recognize Text for the picture's page.
     Recognize(usize),
+}
+
+/// The picture's resize grips: the four corners, then the midpoints of the top, right, bottom
+/// and left sides.
+fn image_grips(b: Rect) -> [Pos2; 8] {
+    [
+        b.left_top(),
+        b.right_top(),
+        b.left_bottom(),
+        b.right_bottom(),
+        Pos2::new(b.center().x, b.top()),
+        Pos2::new(b.right(), b.center().y),
+        Pos2::new(b.center().x, b.bottom()),
+        Pos2::new(b.left(), b.center().y),
+    ]
+}
+
+/// The smallest side a picture resize may leave (screen pixels).
+const MIN_RESIZE: f32 = 2.0;
+
+fn grip_cursor(grip: usize) -> egui::CursorIcon {
+    match grip {
+        0 | 3 => egui::CursorIcon::ResizeNwSe,
+        1 | 2 => egui::CursorIcon::ResizeNeSw,
+        4 | 6 => egui::CursorIcon::ResizeVertical,
+        _ => egui::CursorIcon::ResizeHorizontal,
+    }
 }
 
 /// Where the rotate knob sits, and the edge point its stem starts from: above the middle of the
@@ -338,9 +376,8 @@ pub(crate) fn image_input(
         if view.image_selection.as_ref().is_some_and(|s| s.crop.is_some()) {
             return crop_input(ui, resp, xf, ptr, page, info, view, i, b, allow_interaction);
         }
-        let corners = [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()];
         let handles = |rect: Rect| {
-            for c in [rect.left_top(), rect.right_top(), rect.left_bottom(), rect.right_bottom()] {
+            for c in image_grips(rect) {
                 painter.rect(
                     Rect::from_center_size(c, egui::vec2(8.0, 8.0)),
                     CornerRadius::ZERO,
@@ -374,8 +411,8 @@ pub(crate) fn image_input(
             painter.rect_stroke(b, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
             handles(b);
         }
-        if allow_interaction && let Some(corner) = hover_pos.and_then(|p| corners.iter().position(|c| c.distance(p) < 8.0)) {
-            ui.ctx().set_cursor_icon(if matches!(corner, 0 | 3) { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
+        if allow_interaction && let Some(grip) = hover_pos.and_then(|p| image_grips(b).iter().position(|c| c.distance(p) < 8.0)) {
+            ui.ctx().set_cursor_icon(grip_cursor(grip));
         }
         // The rotate handle: a knob above the top edge, joined to it by a short stem.
         let (knob, stem) = rotate_knob(b, ui.clip_rect());
@@ -392,18 +429,21 @@ pub(crate) fn image_input(
             && o.distance(knob) < 8.0
         {
             if let Some(s) = view.image_selection.as_mut() {
-                s.drag = Some((o, None));
+                s.drag = Some((o, DragKind::Move));
                 s.turning = true;
             }
         } else if allow_interaction
             && resp.drag_started()
             && let Some(o) = ptr.origin
         {
-            let corner = corners.iter().position(|c| c.distance(o) < 8.0);
-            if corner.is_some() || image_contains(i, o) {
-                let opposite = corner.map(|k| corners[3 - k]);
-                if let Some(s) = view.image_selection.as_mut() {
-                    s.drag = Some((o, opposite));
+            let grips = image_grips(b);
+            let grip = grips.iter().position(|c| c.distance(o) < 8.0);
+            if let Some(s) = view.image_selection.as_mut() {
+                match grip {
+                    Some(0..=3) => s.drag = Some((o, DragKind::Corner(grips[3 - grip.unwrap_or(0)]))),
+                    Some(k) => s.drag = Some((o, DragKind::Side(k))),
+                    None if image_contains(i, o) => s.drag = Some((o, DragKind::Move)),
+                    None => {}
                 }
             }
         }
@@ -436,12 +476,12 @@ pub(crate) fn image_input(
             }
             return true;
         }
-        if let Some((start, opposite)) = view.image_selection.as_ref().and_then(|s| s.drag)
+        if let Some((start, kind)) = view.image_selection.as_ref().and_then(|s| s.drag)
             && let Some(p) = hover_pos
         {
-            let preview = match opposite {
+            let preview = match kind {
                 // Resize from the opposite corner, keeping the aspect ratio.
-                Some(fixed) => {
+                DragKind::Corner(fixed) => {
                     let (w0, h0) = (b.width().max(1.0), b.height().max(1.0));
                     // Use the axis with the larger relative pointer change. Taking the maximum
                     // absolute size freezes shrinking when the other axis hasn't moved. Measure
@@ -455,7 +495,18 @@ pub(crate) fn image_input(
                     let y = if start.y < fixed.y { fixed.y - h } else { fixed.y };
                     Rect::from_min_size(Pos2::new(x, y), egui::vec2(w, h))
                 }
-                None => b.translate(p - start),
+                DragKind::Side(k) => {
+                    let d = p - start;
+                    let mut out = b;
+                    match k {
+                        4 => out.min.y = (b.top() + d.y).min(b.bottom() - MIN_RESIZE),
+                        6 => out.max.y = (b.bottom() + d.y).max(b.top() + MIN_RESIZE),
+                        7 => out.min.x = (b.left() + d.x).min(b.right() - MIN_RESIZE),
+                        _ => out.max.x = (b.right() + d.x).max(b.left() + MIN_RESIZE),
+                    }
+                    out
+                }
+                DragKind::Move => b.translate(p - start),
             };
             // Move/resize the full placement by the visible frame's change. The engine
             // transforms an isolated crop together with its image, preserving its contents.
@@ -496,10 +547,12 @@ pub(crate) fn image_input(
                         Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::Move(user_box(xf, info, page, target)) });
                 }
             }
-            ui.ctx().set_cursor_icon(match opposite {
-                Some(fixed) if (start.x - fixed.x) * (start.y - fixed.y) < 0.0 => egui::CursorIcon::ResizeNeSw,
-                Some(_) => egui::CursorIcon::ResizeNwSe,
-                None => egui::CursorIcon::Move,
+            ui.ctx().set_cursor_icon(match kind {
+                DragKind::Corner(fixed) if (start.x - fixed.x) * (start.y - fixed.y) < 0.0 => egui::CursorIcon::ResizeNeSw,
+                DragKind::Corner(_) => egui::CursorIcon::ResizeNwSe,
+                DragKind::Side(4 | 6) => egui::CursorIcon::ResizeVertical,
+                DragKind::Side(_) => egui::CursorIcon::ResizeHorizontal,
+                DragKind::Move => egui::CursorIcon::Move,
             });
             return true;
         }
