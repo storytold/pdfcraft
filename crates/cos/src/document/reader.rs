@@ -328,6 +328,17 @@ impl Document {
         &self,
         log: &mut Vec<String>,
     ) -> Result<(BTreeMap<u32, XrefEntry>, Dict, Vec<Revision>, Vec<(u64, u32)>, Vec<String>), CosError> {
+        self.read_xref_chain_materialized_with_limit(log, MAX_XREF_OBJECTS)
+    }
+
+    /// [`Self::read_xref_chain_materialized`] refusing a chain past `row_limit` rows in all
+    /// instead of [`MAX_XREF_OBJECTS`], so tests can reach the limit with a few rows.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn read_xref_chain_materialized_with_limit(
+        &self,
+        log: &mut Vec<String>,
+        row_limit: usize,
+    ) -> Result<(BTreeMap<u32, XrefEntry>, Dict, Vec<Revision>, Vec<(u64, u32)>, Vec<String>), CosError> {
         let data = &self.data;
         let tail_start = data.len().saturating_sub(4096);
         let sx = rfind(data, b"startxref", tail_start).ok_or(CosError::Syntax { offset: data.len(), detail: "no startxref".into() })?;
@@ -433,19 +444,19 @@ impl Document {
                     hybrids.insert(x, read);
                 }
             }
-            // Each section's rows are capped, so the chain is too: at most MAX_XREF_OBJECTS rows
-            // merged in all, or the file is rebuilt from object headers, as when one section's
-            // stream decodes past that. This counts rows merged, not the map's size, since a chain
-            // that relists the same objects costs as much to merge. Rows set aside count too: they
-            // are kept for the whole chain, and a section can set aside nearly all it lists. A
-            // section's rows (its hybrid stream's included) never outnumber the rows the compact
-            // reader counts for it, and that reader stops at about a quarter of this cap: no chain
-            // within its limit is refused.
+            // Each section's rows are capped, so the chain is too: at most `row_limit` rows
+            // (MAX_XREF_OBJECTS outside tests) merged in all, or the file is rebuilt from object
+            // headers, as when one section's stream decodes past that. This counts rows merged,
+            // not the map's size, since a chain that relists the same objects costs as much to
+            // merge. Rows set aside count too: they are kept for the whole chain, and a section can
+            // set aside nearly all it lists. A section's rows (its hybrid stream's included) never
+            // outnumber the rows the compact reader counts for it, and that reader stops at about
+            // a quarter of MAX_XREF_OBJECTS: no chain within its limit is refused.
             let rows = sect.len().saturating_add(odd.len());
-            let Some(total) = merged_rows.checked_add(rows).filter(|total| *total <= MAX_XREF_OBJECTS) else {
+            let Some(total) = merged_rows.checked_add(rows).filter(|total| *total <= row_limit) else {
                 return Err(CosError::Syntax {
                     offset: usize::try_from(off).unwrap_or(usize::MAX),
-                    detail: format!("cross-reference chain lists more than {MAX_XREF_OBJECTS} entries"),
+                    detail: format!("cross-reference chain lists more than {row_limit} entries"),
                 });
             };
             merged_rows = total;

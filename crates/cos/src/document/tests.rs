@@ -1896,6 +1896,74 @@ fn a_cross_reference_chain_past_the_total_cap_is_refused_and_the_file_reconstruc
     assert!(detail.contains("more than 8388607 entries"), "{detail}");
 }
 
+/// Three classic tables listing 2, 1 and 1 rows, newest first: objects 1 and 2, then object 3
+/// (or object 1 again when `overlap`), then object 4.
+fn three_table_chain(overlap: bool) -> (Vec<u8>, usize) {
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (num, body) in
+        ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Value 3 >>", "<< /Value 4 >>"].iter().enumerate()
+    {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", num + 1).as_bytes());
+    }
+    let older = bytes.len();
+    bytes.extend_from_slice(format!("xref\n4 1\n{:010} 00000 n \ntrailer << /Size 5 /Root 1 0 R >>\n", offsets[3]).as_bytes());
+    let middle = bytes.len();
+    let middle_num = if overlap { 1 } else { 3 };
+    bytes.extend_from_slice(
+        format!("xref\n{middle_num} 1\n{:010} 00000 n \ntrailer << /Size 5 /Root 1 0 R /Prev {older} >>\n", offsets[middle_num - 1]).as_bytes(),
+    );
+    let newer = bytes.len();
+    bytes.extend_from_slice(
+        format!(
+            "xref\n1 1\n{:010} 00000 n \n2 1\n{:010} 00000 n \ntrailer << /Size 5 /Root 1 0 R /Prev {middle} >>\nstartxref\n{newer}\n%%EOF\n",
+            offsets[0], offsets[1],
+        )
+        .as_bytes(),
+    );
+    (bytes, older)
+}
+
+/// The chain's row limit counts every row merged (#5082): four rows over three sections pass a
+/// limit of 4 and are refused at the oldest section by a limit of 3, both when the sections
+/// list different objects and when one relists an object a newer section has (a map of three
+/// entries, but four rows merged).
+#[test]
+fn the_chain_row_limit_counts_disjoint_and_relisted_rows() {
+    for overlap in [false, true] {
+        let (bytes, older) = three_table_chain(overlap);
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        let (entries, ..) = doc.read_xref_chain_materialized_with_limit(&mut Vec::new(), 4).unwrap();
+        assert_eq!(entries.len(), if overlap { 3 } else { 4 });
+        let Err(CosError::Syntax { offset, detail }) = doc.read_xref_chain_materialized_with_limit(&mut Vec::new(), 3) else {
+            panic!("four rows must be refused by a limit of 3 (overlap: {overlap})")
+        };
+        assert_eq!(offset, older);
+        assert!(detail.contains("more than 3 entries"), "{detail}");
+    }
+}
+
+/// Rows set aside count against the chain's row limit (#5082): a hybrid file whose table puts
+/// object 3 at an offset while its /XRefStm puts it in an object stream merges six rows and sets
+/// one aside, so a limit of 7 passes and a limit of 6 refuses it.
+#[test]
+fn the_chain_row_limit_counts_hybrid_rows_set_aside() {
+    let mut bytes = object_stream_file("3 0 ", "<< /Hidden (yes) >>", 0);
+    // Object 3's row in the table (`xref\n0 6\n`, 20-byte rows): free, now in use at offset 9.
+    let row = find(&bytes, b"xref\n0 6\n", 0, bytes.len()).unwrap() + 9 + 3 * 20;
+    assert_eq!(&bytes[row..row + 20], b"0000000000 65535 f \n");
+    bytes[row..row + 20].copy_from_slice(b"0000000009 00000 n \n");
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    let (entries, _, _, oddities, _) = doc.read_xref_chain_materialized_with_limit(&mut Vec::new(), 7).unwrap();
+    assert_eq!(entries.len(), 6);
+    assert_eq!(oddities.iter().map(|(_, num)| *num).collect::<Vec<_>>(), vec![3]);
+    let Err(CosError::Syntax { detail, .. }) = doc.read_xref_chain_materialized_with_limit(&mut Vec::new(), 6) else {
+        panic!("six rows and one set aside must be refused by a limit of 6")
+    };
+    assert!(detail.contains("more than 6 entries"), "{detail}");
+}
+
 #[test]
 fn a_stream_whose_length_is_itself_and_never_ends_loads_quickly() {
     // From the nightly fuzz job: `6 0 obj << /Length 6 0 R >> stream` with no `endstream`
