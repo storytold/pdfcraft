@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use rten_imageproc::{RectF, RotatedRect};
 
-use super::{Line, MAX_PIXELS, MAX_SIDE, OcrError, OcrImage, RecognizeOptions, Recognizer, Word};
+use super::{Line, MAX_PIXELS, MAX_SIDE, OcrError, OcrImage, Paragraph, RecognizeOptions, Recognizer, Word};
 
 /// The validated byte length of a `width` × `height` RGBA raster, with the same caps
 /// [`OcrImage::new`] applies: zero sides are empty, sides over [`MAX_SIDE`] or totals over
@@ -34,6 +34,9 @@ pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
 /// The model files, as named in ATTRIBUTION.toml.
 pub const DETECTION_MODEL: &str = "text-detection.onnx";
 pub const RECOGNITION_MODEL: &str = "text-recognition.onnx";
+/// The layout model (optional: without it, a page's lines are ordered by their position alone and
+/// make one paragraph).
+pub const LAYOUT_MODEL: &str = "doclayout.onnx";
 /// Their SHA-256s, as in ATTRIBUTION.toml. [`Ocr::from_bytes`] loads nothing else: rten's ONNX
 /// parser can spin forever on bytes that aren't a model (64 × 0xff does).
 pub const DETECTION_MODEL_SHA256: &str = "a917b23dbd9524b465df7e922641b3ff2981623df4ded5a0234004ef2fee7cfe";
@@ -69,6 +72,12 @@ impl Models {
 
     /// Look for the models: `$PDFCRAFT_MODELS`, then `models/` beside the executable (and
     /// `Resources/models` in a macOS bundle), then the source tree's `assets/models/`.
+    /// Where the layout model ([`LAYOUT_MODEL`]) is: the first of [`Models::search_dirs`] that
+    /// has it.
+    pub fn find_layout() -> Option<PathBuf> {
+        Self::search_dirs().into_iter().map(|d| d.join(LAYOUT_MODEL)).find(|p| p.is_file())
+    }
+
     pub fn find() -> Option<Models> {
         Self::search_dirs().iter().find_map(|d| Self::in_dir(d))
     }
@@ -134,6 +143,7 @@ pub struct Ocr {
     /// The detection model's fixed input size, (width, height) pixels, when it declares one: a
     /// page much larger than that is detected in tiles.
     pub(crate) detector_input: Option<(u32, u32)>,
+    layout: Option<crate::regions::Layout>,
 }
 
 impl Ocr {
@@ -163,26 +173,47 @@ impl Ocr {
             ..Default::default()
         };
         let engine = ocrs::OcrEngine::new(params).map_err(|e| OcrError::Load("ocr engine".into(), e.to_string()))?;
-        Ok(Ocr { engine, detector_input })
+        Ok(Ocr { engine, detector_input, layout: None })
     }
 
-    /// Load the models found by [`Models::find`].
+    /// Load the models found by [`Models::find`], and the layout model ([`LAYOUT_MODEL`]) from
+    /// the first search directory that has it, if any does.
     pub fn find() -> Result<Ocr, OcrError> {
-        Self::load(&Models::find().ok_or(OcrError::NoModels)?)
+        let ocr = Self::load(&Models::find().ok_or(OcrError::NoModels)?)?;
+        match Models::find_layout() {
+            Some(path) => ocr.with_layout(&path),
+            None => Ok(ocr),
+        }
+    }
+
+    /// This recogniser with the layout model at `path`. An installed model that does not load
+    /// is an error, as for the other two: a damaged installation is reported, not worked round.
+    fn with_layout(self, path: &Path) -> Result<Ocr, OcrError> {
+        Ok(Ocr { layout: Some(crate::regions::Layout::load(path)?), ..self })
     }
 
     /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels.
     /// The lines come in reading order: split at column gutters, each column top to bottom.
-    pub fn recognize(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Line>, OcrError> {
+    /// With the layout model they are then read region by region, each region a paragraph;
+    /// without it the page is one paragraph.
+    pub fn recognize(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Paragraph>, OcrError> {
         if pixels.is_empty() {
             return Err(OcrError::EmptyImage);
         }
         let want = checked_len(width, height)?;
+        // The sides are capped by [`checked_len`], so these products cannot wrap. A picture
+        // whose bytes match neither 1, 3 nor 4 of them is an error: ocrs multiplies the sides
+        // itself and slices the pixels by the product.
+        let area = want / 4;
+        let channels = [4usize, 3, 1].into_iter().find(|&c| area * c == pixels.len());
+        let Some(channels) = channels else {
+            return Err(OcrError::Recognize(format!("{} bytes are not a {width} × {height} picture (1, 3 or 4 bytes a pixel)", pixels.len())));
+        };
         // ocrs wants 1 or 3 channels.
-        let rgb: std::borrow::Cow<[u8]> = if pixels.len() == want {
-            pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into()
+        let (rgb, channels): (std::borrow::Cow<[u8]>, usize) = if channels == 4 {
+            (pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into(), 3)
         } else {
-            pixels.into()
+            (pixels.into(), channels)
         };
         let err = |e: &dyn std::fmt::Display| OcrError::Recognize(e.to_string());
         let source = ocrs::ImageSource::from_bytes(&rgb, (width, height)).map_err(|e| err(&e))?;
@@ -192,7 +223,7 @@ impl Ocr {
         let before: Vec<Option<RectF>> = lines.iter_mut().map(|l| pad_line(l)).collect();
         let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
         use ocrs::TextItem;
-        Ok(crate::layout::reading_order(
+        let lines = crate::layout::reading_order(
             read.into_iter()
                 .zip(before)
                 .filter_map(|(line, before)| line.map(|l| (l, before)))
@@ -208,7 +239,14 @@ impl Ocr {
                 })
                 .filter(|l| !l.words.is_empty())
                 .collect(),
-        ))
+        );
+        let regions = match &self.layout {
+            // The layout only orders what was read: if it fails, the page keeps the geometric
+            // order rather than losing its text.
+            Some(model) => model.regions(&rgb, channels, width as usize, height as usize).unwrap_or_default(),
+            None => Vec::new(),
+        };
+        Ok(crate::layout::paragraphs(lines, &regions).into_iter().map(|lines| Paragraph { lines }).collect())
     }
 
     /// The words in a page, `rgb` (1 or 3 bytes per pixel) prepared as `page`. A page at least
@@ -296,7 +334,11 @@ impl Recognizer for OcrsRecognizer {
         LANGUAGES.iter().map(|(c, n)| ((*c).to_string(), (*n).to_string())).collect()
     }
 
-    fn recognize(&self, image: &OcrImage, _options: &RecognizeOptions) -> Result<Vec<Line>, OcrError> {
+    fn recognize(&self, image: &OcrImage, options: &RecognizeOptions) -> Result<Vec<Line>, OcrError> {
+        Ok(self.paragraphs(image, options)?.into_iter().flat_map(|p| p.lines).collect())
+    }
+
+    fn paragraphs(&self, image: &OcrImage, _options: &RecognizeOptions) -> Result<Vec<Paragraph>, OcrError> {
         self.engine.recognize(image.rgba(), image.width(), image.height())
     }
 }

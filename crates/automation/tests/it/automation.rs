@@ -9333,6 +9333,7 @@ fn ocr_tools_make_a_scan_searchable() {
     assert_eq!(status["languages"][0]["code"], "en");
     assert_eq!(status["engines"][0]["id"], "ocrs", "{status}");
     assert!(status["engines"][1]["id"] == "tesseract" && status["engines"][1]["available"].is_boolean(), "{status}");
+    assert!(status["layout"].is_boolean(), "{status}");
     if status["available"] != true {
         eprintln!("skipped: OCR models not installed");
         return;

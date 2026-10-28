@@ -6,7 +6,12 @@
 //! then orders the pieces by recursive XY cuts: the page is cut at its widest empty band,
 //! across or down, and each part in turn, so a heading over the columns comes first, then each
 //! column from top to bottom.
+//!
+//! With the layout model installed, [`paragraphs`] then puts the lines into the page's regions
+//! (paragraphs, headings, captions, table cells) and reads the regions in the model's order, each
+//! region one paragraph.
 
+use crate::regions::Region;
 use crate::{Line, Word};
 
 /// A gap between two words wider than this many line heights separates columns. A word space is
@@ -18,6 +23,9 @@ const MIN_CUT_DOWN: f32 = 0.6;
 const MIN_CUT_ACROSS: f32 = 0.3;
 /// Pages with more pieces than this keep the line finder's order.
 const MAX_PIECES: usize = 20_000;
+/// A line belongs to the region that covers at least this much of its box (the one covering the
+/// most, if several do).
+const IN_REGION: f32 = 0.5;
 
 fn height(r: [f32; 4]) -> f32 {
     (r[3] - r[1]).max(1.0)
@@ -140,6 +148,52 @@ pub(crate) fn reading_order(lines: Vec<Line>) -> Vec<Line> {
     order.into_iter().filter_map(|i| slots.get_mut(i).and_then(Option::take)).collect()
 }
 
+/// The part of `a`'s area that `b` covers, from 0 to 1 (0 for an empty or broken `a`).
+fn covered(a: [f32; 4], b: [f32; 4]) -> f32 {
+    // `max(0.0)` also turns a NaN side into 0.
+    let area = |r: [f32; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
+    let whole = area(a);
+    if !whole.is_finite() || whole <= 0.0 {
+        return 0.0;
+    }
+    let inside = area([a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])]);
+    if inside.is_finite() { (inside / whole).min(1.0) } else { 0.0 }
+}
+
+/// `lines` (in reading order) as paragraphs: each line goes to the region covering at least half
+/// of it, the regions are read in their rank order, and each region's lines, in the order they
+/// came, make one paragraph. A line in no region is a paragraph of its own, after the regions.
+/// Without regions the page is one paragraph: nothing says where one ends.
+pub(crate) fn paragraphs(lines: Vec<Line>, regions: &[Region]) -> Vec<Vec<Line>> {
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    if regions.is_empty() || lines.len() > MAX_PIECES {
+        return vec![lines];
+    }
+    let mut ranked: Vec<&Region> = regions.iter().collect();
+    // Stable, so regions of equal rank keep the network's order.
+    ranked.sort_by(|a, b| a.rank.total_cmp(&b.rank));
+    let mut members: Vec<Vec<Line>> = vec![Vec::new(); ranked.len()];
+    let mut loose: Vec<Vec<Line>> = Vec::new();
+    for line in lines {
+        let best = bounds(&line.words).and_then(|b| {
+            ranked
+                .iter()
+                .enumerate()
+                .map(|(i, r)| (i, covered(b, r.rect)))
+                // The first of equally good regions wins: `max_by` would take the last.
+                .fold(None, |best: Option<(usize, f32)>, (i, v)| if best.is_none_or(|(_, w)| v > w) { Some((i, v)) } else { best })
+                .filter(|&(_, v)| v >= IN_REGION)
+        });
+        match best.and_then(|(i, _)| members.get_mut(i)) {
+            Some(region) => region.push(line),
+            None => loose.push(vec![line]),
+        }
+    }
+    members.into_iter().filter(|m| !m.is_empty()).chain(loose).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,5 +277,81 @@ mod tests {
         ];
         let got = reading_order(lines);
         assert_eq!(got.len(), 3);
+    }
+
+    fn region(rect: [f32; 4], rank: f32) -> Region {
+        Region { label: "text", rect, rank }
+    }
+
+    fn paragraph_texts(paragraphs: &[Vec<Line>]) -> Vec<Vec<String>> {
+        paragraphs.iter().map(|p| texts(p)).collect()
+    }
+
+    fn one_word_line(text: &str, rect: [f32; 4]) -> Line {
+        Line { words: vec![word(text, rect[0], rect[1], rect[2], rect[3])] }
+    }
+
+    /// Lines are read region by region, in the regions' rank: a sidebar the model ranks after the
+    /// main text comes after it, though the XY cuts put it first, and each region is one paragraph
+    /// whose lines keep their order.
+    #[test]
+    fn lines_are_read_region_by_region_in_rank_order() {
+        let lines = vec![
+            one_word_line("aside1", [0.0, 0.0, 90.0, 20.0]),
+            one_word_line("aside2", [0.0, 30.0, 90.0, 50.0]),
+            one_word_line("main1", [120.0, 0.0, 400.0, 20.0]),
+            one_word_line("main2", [120.0, 30.0, 400.0, 50.0]),
+            one_word_line("main3", [120.0, 60.0, 400.0, 80.0]),
+        ];
+        // The network lists the aside first but ranks it after the main text.
+        let regions = [region([-5.0, -5.0, 95.0, 55.0], 7.0), region([110.0, -5.0, 410.0, 85.0], 2.0)];
+        assert_eq!(paragraph_texts(&paragraphs(lines, &regions)), [vec!["main1", "main2", "main3"], vec!["aside1", "aside2"]]);
+    }
+
+    /// A line goes to the region that covers most of it, and only if that is at least half of it;
+    /// a line in no region is a paragraph of its own, after the regions. Empty regions make no
+    /// paragraph, and a region without a rank reads last.
+    #[test]
+    fn a_line_joins_the_region_covering_most_of_it() {
+        let lines = vec![
+            // 60 % in region B, 40 % in region A.
+            one_word_line("mostly-b", [0.0, 0.0, 100.0, 10.0]),
+            // 40 % in region A: loose.
+            one_word_line("loose", [100.0, 62.0, 200.0, 82.0]),
+            // Exactly half in region A: in.
+            one_word_line("half", [10.0, 50.0, 110.0, 60.0]),
+            // Equally in C and D: the first in rank order, C.
+            one_word_line("tie", [10.0, 200.0, 110.0, 210.0]),
+            one_word_line("in-d", [100.0, 200.0, 190.0, 210.0]),
+            one_word_line("unranked", [10.0, 100.0, 90.0, 110.0]),
+        ];
+        let regions = [
+            region([60.0, -10.0, 200.0, 70.0], 1.0),      // A
+            region([-10.0, -10.0, 60.0, 20.0], 0.0),      // B
+            region([-10.0, 195.0, 60.0, 215.0], 3.0),     // C
+            region([60.0, 195.0, 200.0, 215.0], 4.0),     // D
+            region([0.0, 900.0, 10.0, 910.0], 5.0),       // empty
+            region([0.0, 100.0, 100.0, 110.0], f32::NAN), // no rank
+        ];
+        let got = paragraph_texts(&paragraphs(lines, &regions));
+        assert_eq!(got, [vec!["mostly-b"], vec!["half"], vec!["tie"], vec!["in-d"], vec!["unranked"], vec!["loose"]]);
+    }
+
+    /// Without regions nothing says where a paragraph ends: the page is one, in line order. No
+    /// lines make no paragraph, and broken boxes neither panic nor lose a line.
+    #[test]
+    fn without_regions_the_page_is_one_paragraph() {
+        let lines = || vec![one_word_line("a", [0.0, 0.0, 10.0, 10.0]), one_word_line("b", [0.0, 20.0, 10.0, 30.0])];
+        assert_eq!(paragraph_texts(&paragraphs(lines(), &[])), [vec!["a", "b"]]);
+        assert!(paragraphs(Vec::new(), &[region([0.0, 0.0, 10.0, 10.0], 0.0)]).is_empty());
+        let odd = vec![
+            one_word_line("nan", [f32::NAN, 0.0, 10.0, 10.0]),
+            Line { words: vec![] },
+            one_word_line("flat", [0.0, 5.0, 10.0, 5.0]),
+            one_word_line("inf", [f32::NEG_INFINITY, 0.0, f32::INFINITY, 10.0]),
+        ];
+        let regions = [region([0.0, 0.0, 10.0, 10.0], 0.0), region([f32::NAN, 0.0, f32::INFINITY, 10.0], 1.0)];
+        let got = paragraphs(odd, &regions);
+        assert_eq!(got.iter().map(Vec::len).sum::<usize>(), 4);
     }
 }
