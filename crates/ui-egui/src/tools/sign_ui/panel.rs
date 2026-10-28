@@ -372,6 +372,10 @@ pub const MAX_CERTIFICATE_FILE_BYTES: u64 = 8 << 20;
 #[cfg(not(target_arch = "wasm32"))]
 pub const MAX_CERTIFICATE_FILES: usize = 2000;
 
+/// The most bytes one Import certificates… reads in all, whatever the number of files.
+#[cfg(not(target_arch = "wasm32"))]
+pub const MAX_CERTIFICATE_IMPORT_BYTES: u64 = 32 << 20;
+
 /// Import certificates…: the certificates read from a file and which of them to trust. Nothing is
 /// trusted until the user confirms, since a trusted root vouches for every signature under it.
 #[derive(Clone, Debug)]
@@ -382,19 +386,34 @@ pub struct CertImport {
     pub certs: Vec<Certificate>,
     /// Whether each of `certs` is ticked to be trusted.
     pub chosen: Vec<bool>,
+    /// Each of `certs`' SHA-256 fingerprint as shown, computed once rather than every frame.
+    pub fingerprints: Vec<String>,
 }
 
 impl CertImport {
-    /// The certificates in `bytes` (DER, PEM or a `.p7b`/`.p7c` bundle) from `file`, all ticked.
-    pub fn read(file: &str, bytes: &[u8]) -> Result<CertImport, String> {
-        let mut certs: Vec<Certificate> = Vec::new();
-        for c in sign::x509::load_certificates(bytes).map_err(|e| e.to_string())? {
-            if !certs.iter().any(|x| x.raw == c.raw) {
-                certs.push(c);
-            }
+    /// An empty list read from `file`.
+    pub fn new(file: &str) -> CertImport {
+        CertImport { file: file.to_string(), certs: Vec::new(), chosen: Vec::new(), fingerprints: Vec::new() }
+    }
+
+    /// Add `c` unless it is listed already. Authorities start ticked, end-entity certificates
+    /// don't: trusting a person's certificate is the rarer, deliberate choice.
+    pub fn push(&mut self, c: Certificate) {
+        if self.certs.iter().any(|x| x.raw == c.raw) {
+            return;
         }
-        let chosen = vec![true; certs.len()];
-        Ok(CertImport { file: file.to_string(), certs, chosen })
+        self.chosen.push(c.is_ca);
+        self.fingerprints.push(hex(&sign::keys::DigestAlg::Sha256.digest(&[&c.raw])));
+        self.certs.push(c);
+    }
+
+    /// The certificates in `bytes` (DER, PEM or a `.p7b`/`.p7c` bundle) from `file`.
+    pub fn read(file: &str, bytes: &[u8]) -> Result<CertImport, String> {
+        let mut v = CertImport::new(file);
+        for c in sign::x509::load_certificates(bytes).map_err(|e| e.to_string())? {
+            v.push(c);
+        }
+        Ok(v)
     }
 
     /// Read `path`, refusing a file too large to be a certificate file before reading it.
@@ -403,33 +422,47 @@ impl CertImport {
         Self::from_files(std::slice::from_ref(&path.to_path_buf()))
     }
 
-    /// Read every file in `paths` into one list, each certificate once. A file that is too large
-    /// or holds no readable certificate refuses the whole import, naming it.
+    /// Read every file in `paths` into one list, each certificate once. Sizes are checked for
+    /// every file, and for all of them together, before any is read; a file that is too large or
+    /// holds no readable certificate refuses the whole import, naming it.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn from_files(paths: &[std::path::PathBuf]) -> Result<CertImport, String> {
         if paths.len() > MAX_CERTIFICATE_FILES {
             return Err(format!("{} files: choose at most {MAX_CERTIFICATE_FILES}", paths.len()));
         }
-        let mut all = CertImport { file: String::new(), certs: Vec::new(), chosen: Vec::new() };
+        let mut total: u64 = 0;
         for path in paths {
             let file = path.display().to_string();
             let len = std::fs::metadata(path).map_err(|e| format!("{file}: {e}"))?.len();
             if len > MAX_CERTIFICATE_FILE_BYTES {
                 return Err(format!("{file}: too large for a certificate file"));
             }
-            let bytes = std::fs::read(path).map_err(|e| format!("{file}: {e}"))?;
-            let one = Self::read(&file, &bytes).map_err(|e| format!("{file}: {e}"))?;
-            for c in one.certs {
-                if !all.certs.iter().any(|x| x.raw == c.raw) {
-                    all.certs.push(c);
-                    all.chosen.push(true);
-                }
-            }
+            total = total.saturating_add(len);
         }
-        all.file = match paths {
+        if total > MAX_CERTIFICATE_IMPORT_BYTES {
+            return Err(format!("{} files: together too large to be certificate files", paths.len()));
+        }
+        let label = match paths {
             [one] => one.display().to_string(),
             _ => format!("{} files", paths.len()),
         };
+        let mut all = CertImport::new(&label);
+        for path in paths {
+            let file = path.display().to_string();
+            // Read no more than the size checked above, should the file have grown since.
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(
+                &mut std::io::Read::take(std::fs::File::open(path).map_err(|e| format!("{file}: {e}"))?, MAX_CERTIFICATE_FILE_BYTES + 1),
+                &mut bytes,
+            )
+            .map_err(|e| format!("{file}: {e}"))?;
+            if bytes.len() as u64 > MAX_CERTIFICATE_FILE_BYTES {
+                return Err(format!("{file}: too large for a certificate file"));
+            }
+            for c in Self::read(&file, &bytes).map_err(|e| format!("{file}: {e}"))?.certs {
+                all.push(c);
+            }
+        }
         Ok(all)
     }
 
@@ -477,7 +510,7 @@ pub(crate) fn import_dialog(ui: &mut egui::Ui, v: &mut CertImport, trusted: &[Ce
                     tl!("Valid from {from} to {to}"),
                     &[("from", &c.not_before.to_string()), ("to", &c.not_after.to_string())],
                 )));
-                ui.label(muted(format!("SHA-256 {}", hex(&sign::keys::DigestAlg::Sha256.digest(&[&c.raw])))));
+                ui.label(muted(format!("SHA-256 {}", v.fingerprints.get(i).map(String::as_str).unwrap_or_default())));
             });
             ui.add_space(6.0);
         }
