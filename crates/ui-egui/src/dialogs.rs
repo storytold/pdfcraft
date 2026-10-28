@@ -39,6 +39,7 @@ struct Pending {
     link_command: Option<&'static str>,
     protect_now: bool,
     boxes_now: bool,
+    bulk_crop_now: bool,
     marks_now: bool,
     export_now: bool,
     props_now: bool,
@@ -126,6 +127,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
         ui.set_width(match dialog {
             Dialog::Properties(_) => 640.0,
             Dialog::Print => 820.0,
+            Dialog::BulkCrop => 980.0,
             Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
             Dialog::About => 780.0,
             Dialog::PinTool => 540.0,
@@ -414,6 +416,21 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.apply = go;
             req.boxes_now = req.apply;
             req.close = req.apply || cancel;
+            return false;
+        }
+        Dialog::BulkCrop => {
+            ui.set_width(980.0);
+            let (go, cancel) = crate::bulk_crop::body(ui, app, &t);
+            req.apply = go;
+            req.bulk_crop_now = req.apply;
+            req.close = req.apply || cancel;
+            if cancel && app.bulk_crop_draft.was_temporarily_uncropped {
+                app.undo();
+                app.bulk_crop_draft.was_temporarily_uncropped = false;
+            }
+            if req.close {
+                app.bulk_crop_draft.seeded = false;
+            }
             return false;
         }
         Dialog::Protect => {
@@ -1918,6 +1935,18 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
         app.apply_edit(edit);
         app.boxes_draft.seeded = None;
     }
+    if req.bulk_crop_now
+        && let Some((_, id)) = app.active_ids()
+    {
+        let count = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
+        if app.bulk_crop_draft.was_temporarily_uncropped {
+            app.undo();
+            app.bulk_crop_draft.was_temporarily_uncropped = false;
+        }
+        let edit = app.bulk_crop_draft.build_edit(count);
+        app.apply_edit(edit);
+        app.bulk_crop_draft.seeded = false;
+    }
     if req.protect_now && app.apply_edit(app.protect_draft.edit()) {
         app.protect_draft = Default::default();
         app.notify_tr("Password protection will be applied when you save");
@@ -1944,6 +1973,11 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     if modal_closed || req.close || replaces {
         // Only now: the number in Preferences can pass through 0 on its way to the one wanted.
         app.recent.truncate(app.recent_limit);
+        if app.bulk_crop_draft.was_temporarily_uncropped && !req.bulk_crop_now {
+            app.undo();
+            app.bulk_crop_draft.was_temporarily_uncropped = false;
+        }
+        app.bulk_crop_draft.seeded = false;
         app.dialog = None;
         app.props_draft = None;
         app.view_draft = None;

@@ -2801,6 +2801,29 @@ fn duplicating_and_cropping_through_tools() {
 }
 
 #[test]
+fn bulk_crop_through_tools() {
+    let dir = workdir("bulk-crop");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // Bulk crop all pages with uniform margins [10, 20, 10, 20]
+    let r = ok(&mut a, "page_bulk_crop", json!({ "doc": doc, "margins": [10, 20, 10, 20] }));
+    assert_eq!(r["page_sizes"][0], json!([180.0, 260.0]));
+    assert_eq!(r["page_sizes"][1], json!([180.0, 260.0]));
+    // Bulk crop odd and even pages with alternating margins
+    let r = ok(
+        &mut a,
+        "page_bulk_crop",
+        json!({
+            "doc": doc,
+            "odd_margins": [15, 20, 5, 20],
+            "even_margins": [5, 20, 15, 20]
+        }),
+    );
+    assert_eq!(r["page_sizes"][0], json!([180.0, 260.0]));
+    assert_eq!(r["page_sizes"][1], json!([180.0, 260.0]));
+}
+
+#[test]
 fn headers_watermarks_and_backgrounds_through_tools() {
     let dir = workdir("marks");
     let mut a = auto(&dir);

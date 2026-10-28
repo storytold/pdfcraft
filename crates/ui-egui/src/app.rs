@@ -267,6 +267,7 @@ impl PdfCraftApp {
             protect_draft: Default::default(),
             text_style_draft: Default::default(),
             boxes_draft: Default::default(),
+            bulk_crop_draft: Default::default(),
             marks_draft: Default::default(),
             unmarked_page: Default::default(),
             export_draft: Default::default(),

@@ -83,6 +83,92 @@ fn set_page_boxes_dialog_applies_margins_to_the_chosen_pages() {
 }
 
 #[test]
+fn bulk_crop_dialog_applies_margins_across_pages() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("page.bulk_crop"));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::BulkCrop));
+    h.get_by_label("Bulk Crop Pages");
+    h.state_mut().bulk_crop_draft.blended_margins = [20.0; 4];
+    h.run_steps(2);
+    h.get_by_label("Crop Pages").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(size(&h, 0), (260.0, 360.0));
+    assert_eq!(size(&h, 1), (260.0, 360.0));
+}
+
+#[test]
+fn bulk_crop_dialog_subsequent_crop_preserves_untouched_pages() {
+    let mut h = harness();
+    // 1. Initial crop of 20pt on all pages
+    assert!(h.state_mut().execute("page.bulk_crop"));
+    h.run_steps(3);
+    h.state_mut().bulk_crop_draft.blended_margins = [20.0; 4];
+    h.run_steps(2);
+    h.get_by_label("Crop Pages").click();
+    h.run_steps(4);
+    assert_eq!(size(&h, 0), (260.0, 360.0));
+    assert_eq!(size(&h, 1), (260.0, 360.0));
+
+    // 2. Open bulk crop again: existing 20pt insets are loaded into handles
+    assert!(h.state_mut().execute("page.bulk_crop"));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::BulkCrop));
+    assert_eq!(h.state().bulk_crop_draft.blended_margins, [20.0; 4]);
+
+    // 3. Switch to Page-by-Page mode and edit only page 1
+    h.state_mut().bulk_crop_draft.mode = pdfcraft_ui_egui::bulk_crop::BulkCropMode::PageByPage;
+    h.state_mut().bulk_crop_draft.edited_pages.insert(1);
+    h.state_mut().bulk_crop_draft.page_margins[1] = [30.0; 4];
+    h.run_steps(2);
+    h.get_by_label("Crop Pages").click();
+    h.run_steps(4);
+
+    // Page 0 must preserve its existing crop and NOT reset to 300x400
+    assert_eq!(size(&h, 0), (260.0, 360.0));
+    // Page 1 gets the updated 30pt crop: 300 - 60 = 240, 400 - 60 = 340
+    assert_eq!(size(&h, 1), (240.0, 340.0));
+}
+
+#[test]
+fn bulk_crop_dialog_clear_crop_and_reset() {
+    let mut h = harness();
+    // 1. Initial crop of 20pt
+    assert!(h.state_mut().execute("page.bulk_crop"));
+    h.run_steps(3);
+    h.state_mut().bulk_crop_draft.blended_margins = [20.0; 4];
+    h.run_steps(2);
+    h.get_by_label("Crop Pages").click();
+    h.run_steps(4);
+    assert_eq!(size(&h, 0), (260.0, 360.0));
+
+    // 2. Open bulk crop again
+    assert!(h.state_mut().execute("page.bulk_crop"));
+    h.run_steps(3);
+    assert_eq!(h.state().bulk_crop_draft.blended_margins, [20.0; 4]);
+
+    // 3. Click Clear crop: removes crop to full sheet
+    h.get_by_label("Clear crop").click();
+    h.run_steps(2);
+    assert_eq!(h.state().bulk_crop_draft.blended_margins, [0.0; 4]);
+
+    // 4. Click Reset: restores initial 20pt crop
+    h.get_by_label("Reset").click();
+    h.run_steps(2);
+    assert_eq!(h.state().bulk_crop_draft.blended_margins, [20.0; 4]);
+
+    // 5. Clear crop and confirm
+    h.get_by_label("Clear crop").click();
+    h.run_steps(2);
+    h.get_by_label("Crop Pages").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(size(&h, 0), (300.0, 400.0));
+    assert_eq!(size(&h, 1), (300.0, 400.0));
+}
+
+#[test]
 fn duplicate_pages_copies_the_current_page() {
     let mut h = harness();
     assert!(h.state_mut().execute("page.duplicate"));
