@@ -42,21 +42,33 @@ pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterRe
     // decoder refuses (CIEJab, enum 19, in a veraPDF fixture; YCbCr, PhotoYCC, …) made the whole
     // image fail, so the page drew blank (#3306). Then it is decoded as if it had no colour
     // specification, as MuPDF and Poppler draw it: grey, RGB or CMYK by its component count.
+    //
+    // PdfCraft patch (29): the header is read at full resolution first, because
+    // `target_resolution` shrinks `width()` and `height()` but each tile's coefficients are still
+    // allocated at full size (review on #5086); see `MAX_PIXELS`.
+    let full_resolution = DecodeSettings {
+        target_resolution: None,
+        ..settings
+    };
     let repaired;
-    let image = match hayro_jpeg2000::Image::new(data, &settings) {
-        Ok(image) => image,
+    let (source, full) = match hayro_jpeg2000::Image::new(data, &full_resolution) {
+        Ok(image) => (data, image),
         Err(_) => {
             repaired = without_refused_enumerated_colour(data)?;
-            hayro_jpeg2000::Image::new(&repaired, &settings).ok()?
+            let image = hayro_jpeg2000::Image::new(&repaired, &full_resolution).ok()?;
+            (repaired.as_slice(), image)
         }
+    };
+    if u64::from(full.width()) * u64::from(full.height()) > MAX_PIXELS {
+        return None;
+    }
+    let image = match settings.target_resolution {
+        Some(_) => hayro_jpeg2000::Image::new(source, &settings).ok()?,
+        None => full,
     };
 
     let width = image.width();
     let height = image.height();
-    // PdfCraft patch (29): see `MAX_PIXELS`.
-    if u64::from(width) * u64::from(height) > MAX_PIXELS {
-        return None;
-    }
     // PdfCraft patch: (#3179) a resolved palette gives colours, decoded to 8 bits like every
     // sample; the codestream's precision is that of the indices (1 bit, say), and rescaling the
     // colours to it kept only 0 or 255 per channel (review on #3184).
