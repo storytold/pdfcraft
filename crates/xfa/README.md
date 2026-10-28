@@ -67,7 +67,12 @@ and mapping checks. Other or missing encodings are replaced without modifying th
 its measured standard-font advance, preserving wrapping, alignment and link bounds. Other spans
 keep their standard face. This is a Regular fallback, not source-font/style fidelity or complex
 script shaping; uncovered spans keep the existing question-mark warning. Field appearances
-remain the forms crate's responsibility. Previously saved layouts need a relayout to benefit.
+remain the forms crate's responsibility. This covers fixed Latin Extended, Greek and Cyrillic
+text as well as symbols such as `►`, when every character in the affected span is covered by
+Inter. It does not fix Unicode values in editable fields. CJK, Arabic and Hebrew text require
+other fonts and, where applicable, shaping. A span containing an uncovered character retains
+the existing fallback and warning. Issue #4938 therefore remains only partially addressed.
+Previously saved layouts need a relayout to benefit.
 
 Layout measures each container once per (node, width): width-less containers would otherwise
 be measured exponentially often in their nesting. A measurement budget backs this up.
