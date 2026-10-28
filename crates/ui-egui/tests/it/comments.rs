@@ -2657,3 +2657,45 @@ fn text_comments_can_save_a_zero_width_default() {
     assert_eq!(restored.comment_prefs.style(CommentTool::TextBox).width, 0.0);
     assert_eq!(restored.comment_prefs.style(CommentTool::Callout).width, 0.0);
 }
+
+#[test]
+fn comments_panel_keeps_arabic_comment_and_reply_in_logical_order() {
+    let mut h = harness(|app| app.set_option("panel", "comments").unwrap());
+    field(&h, "Add a comment").click();
+    h.run_steps(2);
+    field(&h, "Add a comment").type_text("مرحبا بالعالم");
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+
+    let first = comments(&h);
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].contents.as_deref(), Some("مرحبا بالعالم"));
+
+    field(&h, "Add a reply").click();
+    h.run_steps(2);
+    field(&h, "Add a reply").type_text("أوافق تماما");
+    h.run_steps(1);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+
+    let all = comments(&h);
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[1].contents.as_deref(), Some("أوافق تماما"));
+}
+
+#[test]
+fn sticky_note_composer_posts_arabic_comment_in_logical_order() {
+    let mut h = harness(|app| app.set_option("quick", "note").unwrap());
+    click_pt(&mut h, (250.0, 180.0));
+    assert!(h.state().views[0].comments.composer.is_some(), "the composer opened");
+    field(&h, "Add a comment").type_text("ملاحظة باللغة العربية");
+    h.run_steps(2);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+
+    let all = comments(&h);
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].contents.as_deref(), Some("ملاحظة باللغة العربية"));
+    assert!(h.state().views[0].comments.composer.is_none());
+}
