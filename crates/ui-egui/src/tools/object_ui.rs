@@ -161,6 +161,21 @@ fn leave_single(view: &mut DocView) {
     view.block_drag = None;
 }
 
+/// A graphic covering nearly the whole page is background artwork: a click should reach the
+/// smaller icon or text on top of it, never select and delete the page's background.
+fn background_graphic(info: &DocInfo, page: usize, graphic: &EditableObject) -> bool {
+    let p = &info.pages[page];
+    let [x0, y0, x1, y1] = p.crop;
+    let page_area = f64::from((x1 - x0).max(0.0)) * f64::from((y1 - y0).max(0.0));
+    let width = (graphic.rect[2].min(f64::from(x1)) - graphic.rect[0].max(f64::from(x0))).max(0.0);
+    let height = (graphic.rect[3].min(f64::from(y1)) - graphic.rect[1].max(f64::from(y0))).max(0.0);
+    page_area > 0.0 && width * height >= page_area * 0.9
+}
+
+fn area(o: &EditableObject) -> f64 {
+    (o.rect[2] - o.rect[0]).max(0.0) * (o.rect[3] - o.rect[1]).max(0.0)
+}
+
 /// Returns true while group selection owns the interaction. Ordinary clicks still reach the
 /// single-object text/resize tools. A text draft is finished or discarded through its editor.
 pub(crate) fn page_input(
@@ -283,10 +298,19 @@ fn input(
     };
     let additive = modified(ui);
     // A page-sized background image must not hide editable labels or added notes.
-    // Within each kind, prefer the last object as the ordinary single-item tools do.
+    // Within each kind, prefer the last object as the ordinary single-item tools do. Vector
+    // graphics come last (text and pictures printed over artwork stay reachable), and among
+    // them the smallest wins, so a small icon is picked before a larger group around it.
     let hit = [ObjectKind::Added, ObjectKind::Text, ObjectKind::Image]
         .into_iter()
-        .find_map(|kind| objects.iter().rev().find(|o| o.target.kind == kind && screen(xf, info, page, o).expand(2.0).contains(p)));
+        .find_map(|kind| objects.iter().rev().find(|o| o.target.kind == kind && screen(xf, info, page, o).expand(2.0).contains(p)))
+        .or_else(|| {
+            objects
+                .iter()
+                .filter(|o| o.target.kind == ObjectKind::Graphic && !background_graphic(info, page, o))
+                .filter(|o| screen(xf, info, page, o).expand(2.0).contains(p))
+                .min_by(|a, b| area(a).total_cmp(&area(b)))
+        });
     if additive {
         if s.page != Some(page) {
             s.clear();
@@ -308,6 +332,17 @@ fn input(
         } else {
             s.gesture = Some(Gesture { start: p, now: p, marquee: true, additive: true });
         }
+        leave_single(view);
+        view.current = page;
+        return true;
+    }
+    // Vector graphics have no single-object tool of their own. An ordinary click selects one
+    // here (Delete or Backspace then removes it); dragging it does not move it, because moving
+    // paths is not supported yet.
+    if let Some(object) = hit.filter(|o| o.target.kind == ObjectKind::Graphic) {
+        s.clear();
+        s.page = Some(page);
+        s.selected.push(object.clone());
         leave_single(view);
         view.current = page;
         return true;
@@ -427,15 +462,17 @@ pub(crate) fn delete_keys(ctx: &egui::Context, view: &mut DocView) {
 /// The edit that deletes `targets` (indexes into one inventory of `page`) as one undo step.
 /// Each deletion renumbers only what follows it in its own inventory, so paragraphs and images
 /// go from the last to the first, and added content, which the source inventories leave out,
-/// after them.
+/// after them. Graphics go before text and images: removing the text from a shared scope can
+/// regroup its paths, which would move the graphic index the selection still names.
 fn delete_edit(page: usize, mut targets: Vec<ObjectTarget>) -> Option<Edit> {
-    targets.sort_by_key(|t| (t.kind == ObjectKind::Added, std::cmp::Reverse(t.index)));
+    targets.sort_by_key(|t| (t.kind != ObjectKind::Graphic, t.kind == ObjectKind::Added, std::cmp::Reverse(t.index)));
     targets.dedup();
     let mut edits: Vec<Edit> = targets
         .into_iter()
         .map(|t| match t.kind {
             ObjectKind::Text => Edit::EditTextBlock { page, block: t.index, text: String::new(), style: pdfcraft_engine::BlockStyle::default() },
             ObjectKind::Image => Edit::EditPageImage { page, index: t.index, change: pdfcraft_engine::ImageEdit::Delete },
+            ObjectKind::Graphic => Edit::DeletePageGraphic { page, index: t.index },
             ObjectKind::Added => Edit::DeleteContent { page, index: t.index },
         })
         .collect();
@@ -475,6 +512,9 @@ pub(crate) fn move_error(error: &pdfcraft_engine::EditError) -> String {
     match detail.as_str() {
         "vertical text cannot be moved in a group" => tl!("Vertical text cannot be moved with this selection.").into(),
         "text used as a clipping path cannot be moved in a group" => tl!("Text used as a clipping path cannot be moved with this selection.").into(),
+        "graphics can be selected and deleted, but not moved or resized" => {
+            tl!("Vector graphics can be selected and deleted, but not moved or resized yet.").into()
+        }
         _ => tl!("These objects could not be moved. Select them again and try a smaller move.").into(),
     }
 }
@@ -489,9 +529,18 @@ mod tests {
 
     /// Deleting renumbers what follows in the same inventory, so the batch takes each inventory
     /// from its last item to its first, and added content (outside the source inventories) last.
+    /// Graphics go first, before a text edit can regroup the paths around them.
     #[test]
     fn several_objects_delete_last_first_in_one_step() {
-        let targets = vec![t(ObjectKind::Added, 0), t(ObjectKind::Text, 1), t(ObjectKind::Image, 0), t(ObjectKind::Text, 3), t(ObjectKind::Added, 2)];
+        let targets = vec![
+            t(ObjectKind::Added, 0),
+            t(ObjectKind::Text, 1),
+            t(ObjectKind::Image, 0),
+            t(ObjectKind::Graphic, 2),
+            t(ObjectKind::Text, 3),
+            t(ObjectKind::Graphic, 4),
+            t(ObjectKind::Added, 2),
+        ];
         let Some(Edit::Batch { label, edits }) = delete_edit(0, targets) else { panic!("several objects make one batch") };
         assert_eq!(label, "Delete content");
         let order: Vec<(char, usize)> = edits
@@ -502,11 +551,12 @@ mod tests {
                     ('t', *block)
                 }
                 Edit::EditPageImage { index, change: pdfcraft_engine::ImageEdit::Delete, .. } => ('i', *index),
+                Edit::DeletePageGraphic { index, .. } => ('g', *index),
                 Edit::DeleteContent { index, .. } => ('a', *index),
                 other => panic!("unexpected {}", other.label().wording),
             })
             .collect();
-        assert_eq!(order, [('t', 3), ('t', 1), ('i', 0), ('a', 2), ('a', 0)]);
+        assert_eq!(order, [('g', 4), ('g', 2), ('t', 3), ('t', 1), ('i', 0), ('a', 2), ('a', 0)]);
     }
 
     #[test]

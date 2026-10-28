@@ -8,8 +8,20 @@ use pdfcraft_render::DocInfo;
 use crate::canvas::{DocView, PageXform};
 use crate::page_pointer::PagePointer;
 
-/// A crop rectangle being dragged: (page, start on screen).
-pub type CropDrag = Option<(usize, Pos2)>;
+/// A crop rectangle being dragged: (page, start in the page's view space). Keeping the start
+/// as a document point, rather than a screen position, anchors it to the content: scrolling or
+/// zooming while the drag is held moves the rectangle's start with the page.
+pub type CropDrag = Option<(usize, (f32, f32))>;
+
+/// The page point under a screen position, in view space.
+fn to_view(xf: &PageXform, p: Pos2) -> (f32, f32) {
+    xf.screen_to_view(p)
+}
+
+/// A view-space point back on screen, through the page's current placement.
+fn from_view(xf: &PageXform, p: (f32, f32)) -> Pos2 {
+    xf.norm_to_screen(p.0 / xf.pw, p.1 / xf.ph)
+}
 
 fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
     let (vx, vy) = xf.screen_to_view(p);
@@ -39,14 +51,17 @@ pub(crate) fn page_input(
     if resp.drag_started()
         && let Some(o) = origin.filter(|o| xf.rect.contains(*o))
     {
-        view.crop_drag = Some((page, o));
+        view.crop_drag = Some((page, to_view(xf, o)));
     }
     if let Some((p, start)) = view.crop_drag
         && p == page
         && let Some(end) = pointer
     {
+        // The start stays on the document point it began at while the page scrolls under the
+        // pointer; only the moving end follows the pointer, clamped to the page.
+        let start = from_view(xf, start);
         let end = Pos2::new(end.x.clamp(xf.rect.left(), xf.rect.right()), end.y.clamp(xf.rect.top(), xf.rect.bottom()));
-        let r = Rect::from_two_pos(start, end);
+        let r = Rect::from_two_pos(start, end).intersect(xf.rect);
         // Dim what will be cut away.
         let painter = ui.painter();
         for band in [

@@ -9175,3 +9175,59 @@ fn page_render_draws_stamps_without_an_appearance() {
     let grey = custom.iter().filter(|p| p[0].abs_diff(p[1]) < 24 && p[1].abs_diff(p[2]) < 24).count();
     assert!(grey > 100 && grey == custom.len(), "an unknown name is a grey placeholder: {grey} of {}", custom.len());
 }
+
+#[test]
+fn a_vector_graphic_lists_deletes_and_round_trips_through_tools() {
+    use pdfcraft_cos::{Dict, Document, Object, Stream, write_full};
+    let dir = workdir("vector-graphics");
+    let mut cos = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&cos)[0].clone();
+    let content = "q 1 0 0 1 20 200 cm 0 0 0 rg 0 0 10 20 re f 20 0 10 20 re f Q \
+                   q 1 0 0 1 120 200 cm .5 .5 .5 rg 0 0 20 20 re f Q \
+                   BT /F1 12 Tf 20 100 Td (Keep me) Tj ET";
+    let contents = cos.add(Object::Stream(Stream::flate(Dict::new(), content.as_bytes())));
+    cos.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Ref(contents))).unwrap();
+    std::fs::write(dir.join("graphics.pdf"), write_full(&cos, &Default::default()).unwrap()).unwrap();
+
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"graphics.pdf"}))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    let graphics: Vec<_> = before["objects"].as_array().unwrap().iter().filter(|o| o["kind"] == "graphic").collect();
+    assert_eq!(graphics.len(), 2, "{before}");
+    assert!(graphics.iter().all(|o| o["type"] == "graphic" && o["text"].is_null()));
+    assert_eq!(before["objects"].as_array().unwrap().iter().filter(|o| o["kind"] == "text").count(), 1);
+    let pixels = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72})).unwrap();
+
+    // The generation and reference are required to belong to the listed inventory.
+    let graphic = graphics[0].clone();
+    let object = json!({"kind":"graphic","index":graphic["index"]});
+    assert!(a.call("graphic_delete", &json!({"doc":doc,"page":1,"index":99})).is_err());
+    assert!(a.call("object_move", &json!({"doc":doc,"page":1,"generation":before["generation"],"objects":[object],"offset":[4,5]})).is_err());
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1})), before, "refusals change nothing");
+
+    let deleted = ok(&mut a, "graphic_delete", json!({"doc":doc,"page":1,"generation":before["generation"],"index":graphic["index"]}));
+    assert_eq!(deleted["index"], graphic["index"]);
+    assert_eq!(deleted["rect"], graphic["rect"]);
+    let after = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    assert_eq!(after["objects"].as_array().unwrap().iter().filter(|o| o["kind"] == "graphic").count(), 1, "{after}");
+    assert_eq!(after["objects"].as_array().unwrap().iter().filter(|o| o["kind"] == "text").count(), 1, "the caption stays");
+    assert_ne!(a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72})).unwrap(), pixels, "the removed icon no longer renders");
+    assert!(
+        a.call("graphic_delete", &json!({"doc":doc,"page":1,"generation":before["generation"],"index":graphic["index"]})).is_err(),
+        "a stale generation is refused"
+    );
+
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["objects"], before["objects"], "undo restores the icon");
+    assert_eq!(a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72})).unwrap(), pixels);
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"out/deleted.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"out/deleted.pdf"}))["doc"].as_u64().unwrap();
+    let saved = ok(&mut a, "object_list", json!({"doc":reopened,"page":1}));
+    assert_eq!(saved["objects"].as_array().unwrap().iter().filter(|o| o["kind"] == "graphic").count(), 1);
+    assert!(page_text(&mut a, reopened)[0].contains("Keep me"));
+    assert_eq!(
+        a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":72})).unwrap(),
+        a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72})).unwrap()
+    );
+}

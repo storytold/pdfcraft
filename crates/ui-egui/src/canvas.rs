@@ -1319,6 +1319,15 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         }
     }
     let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
+    // A crop drag needs the wheel too: the page must scroll while the button stays down so a
+    // rectangle can span more than the visible part of a page.
+    let crop_wheel = tool == QuickTool::Crop
+        && view.crop_drag.is_some()
+        && navigation_enabled
+        && unobstructed
+        && !single_paging
+        && ui.rect_contains_pointer(avail);
+    let deferred_wheel = selection_wheel || crop_wheel;
     let out = page_scroll(ui, scroll, egui::Id::unique(("page-view-scope", view.id)), |ui, viewport| {
         // egui's drag responses accept every pointer button. Keep a wheel gesture from also
         // selecting text, drawing a mark, or panning with the Hand tool.
@@ -1332,8 +1341,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         // (#531), accelerated wheel surplus (#1072), and a drawing's edge scroll; positive y
         // moves the content down. All scroll without easing, unlike egui's wheel default.
         // ScrollArea ignores wheel input during a widget drag. Defer the wheel contribution
-        // until after the text widgets when a selection owns that drag.
-        let wheel_delta = if selection_wheel { Vec2::ZERO } else { precise_scroll + boost_extra };
+        // until after the text widgets when a selection or crop drag owns that drag.
+        let wheel_delta = if deferred_wheel { Vec2::ZERO } else { precise_scroll + boost_extra };
         let delta = auto_delta + edge_delta - vec2(0.0, key_scroll) + wheel_delta + glide;
         if delta != Vec2::ZERO && delta.is_finite() {
             ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
@@ -2103,12 +2112,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
             crate::calc_order_ui::paint_trace(ui, painter, visible, &view.calc_order, generation, selected);
         }
-        // ScrollArea ignores the wheel while any widget is dragged, so a text-selection drag
-        // scrolls the page itself (#721). After the page loop, so it keeps scrolling once the
-        // pointer leaves the selection's page for the gap or the next page; over the whole
-        // document area, like #759. Combine direct and smoothed motion in one request so mixed
-        // Point and Line events retain their full contribution.
-        if selection_wheel {
+        // ScrollArea ignores the wheel while any widget is dragged, so a text-selection or crop
+        // drag scrolls the page itself (#721). After the page loop, so it keeps scrolling
+        // once the pointer leaves the selection's page for the gap or the next page; over the
+        // whole document area, like #759. Combine direct and smoothed motion in one request so
+        // mixed Point and Line events retain their full contribution.
+        if deferred_wheel {
             let smooth =
                 if view.precise_scroll_until == 0.0 { ui.input_mut(|input| std::mem::take(&mut input.smooth_scroll_delta)) } else { Vec2::ZERO };
             let delta = precise_scroll + boost_extra + smooth;

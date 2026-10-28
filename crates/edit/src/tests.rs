@@ -7457,3 +7457,114 @@ fn a_run_of_spaces_in_a_subset_without_a_space_glyph_keeps_its_width() {
     let content = String::from_utf8_lossy(&page_content_bytes(&reopen(&doc), 0)).into_owned();
     assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
 }
+
+/// The separate fill operators of one icon (Chrome prints each bar of a menu icon as its own
+/// path) group into one graphic when a pure-graphics `q … Q` holds them, and deleting it takes
+/// the whole scope with its saved state while the text and other artwork stay.
+#[test]
+fn vector_icons_group_into_one_graphic_and_delete_as_a_whole() {
+    let icon = "q 1 0 0 1 100 100 cm 0 0 10 20 re f 20 0 10 20 re f 40 0 10 20 re f Q";
+    let mut doc = text_page(&format!("BT /F1 12 Tf 50 600 Td (Keep) Tj ET {icon} q 300 300 20 20 re f Q"));
+    let objects = editable_objects(&doc, 0).unwrap();
+    let graphics: Vec<_> = objects.iter().filter(|o| o.target.kind == ObjectKind::Graphic).collect();
+    assert_eq!(graphics.len(), 2, "{objects:?}");
+    assert!(close(graphics[0].rect, [100.0, 100.0, 150.0, 120.0]), "{:?}", graphics[0].rect);
+    assert!(close(graphics[1].rect, [300.0, 300.0, 320.0, 320.0]), "{:?}", graphics[1].rect);
+    assert_eq!(objects.iter().filter(|o| o.target.kind == ObjectKind::Text).count(), 1);
+    delete_graphic(&mut doc, 0, 0).unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(!content.contains("0 0 10 20"), "{content}");
+    assert!(content.contains("(Keep)"), "{content}");
+    assert!(content.contains("300 300 20 20"), "{content}");
+    let after = editable_objects(&doc, 0).unwrap();
+    assert_eq!(after.iter().filter(|o| o.target.kind == ObjectKind::Graphic).count(), 1, "{after:?}");
+    assert_eq!(after.iter().filter(|o| o.target.kind == ObjectKind::Text).count(), 1);
+}
+
+/// Paths painted in a scope that also holds text (or an image) are one graphic each, and a
+/// clip-only run (`re W n`) is not selectable artwork at all.
+#[test]
+fn paths_in_a_shared_scope_are_one_graphic_each_and_clips_are_not() {
+    let doc = text_page("q 0 0 30 30 re f BT /F1 12 Tf 50 600 Td (A) Tj ET q 100 100 10 10 re f Q");
+    let objects = editable_objects(&doc, 0).unwrap();
+    let graphics: Vec<_> = objects.iter().filter(|o| o.target.kind == ObjectKind::Graphic).collect();
+    assert_eq!(graphics.len(), 2, "{objects:?}");
+    assert!(close(graphics[0].rect, [0.0, 0.0, 30.0, 30.0]), "{:?}", graphics[0].rect);
+    assert!(close(graphics[1].rect, [100.0, 100.0, 110.0, 110.0]), "{:?}", graphics[1].rect);
+    let doc = image_page_with("q 10 10 20 20 re W n Q q 100 100 200 100 cm /Im0 Do");
+    assert!(page_graphics(&doc, 0).unwrap().is_empty(), "{:?}", page_graphics(&doc, 0));
+    assert_eq!(images::page_images(&doc, 0).unwrap().len(), 1, "the image is still listed");
+}
+
+/// A path covering the page is background artwork, not an object to click; smaller paths
+/// printed inside the same content stay selectable.
+#[test]
+fn a_page_sized_background_path_is_not_selectable_but_smaller_ones_are() {
+    let doc = image_page_with("0 0 600 800 re f q 10 10 20 20 re f Q 100 100 200 100 cm /Im0 Do");
+    let graphics = page_graphics(&doc, 0).unwrap();
+    assert_eq!(graphics.len(), 1, "{graphics:?}");
+    assert!(close(graphics[0].rect, [10.0, 10.0, 30.0, 30.0]), "{:?}", graphics[0].rect);
+}
+
+/// Deleting a path painted in a shared scope removes only its path and paint operators: the
+/// colour set before it stays in effect for the content that follows.
+#[test]
+fn deleting_a_shared_path_keeps_the_state_around_it() {
+    let mut doc = text_page("1 0 0 rg 0 0 20 20 re f 0 1 0 rg 35 0 20 20 re f BT /F1 12 Tf 50 600 Td (T) Tj ET");
+    delete_graphic(&mut doc, 0, 0).unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("1 0 0 rg"), "{content}");
+    assert!(content.contains("0 1 0 rg 35 0 20 20"), "{content}");
+    assert!(!content.contains("0 0 20 20"), "{content}");
+    let graphics = page_graphics(&doc, 0).unwrap();
+    assert_eq!(graphics.len(), 1, "{graphics:?}");
+    assert!(close(graphics[0].rect, [35.0, 0.0, 55.0, 20.0]), "{:?}", graphics[0].rect);
+}
+
+/// Marked content (Chrome wraps each region in `/Div <</MCID n>> BDC … EMC`, often opening it
+/// outside the icon's own scope) stays balanced: deleting a graphic keeps its tags.
+#[test]
+fn deleting_a_graphic_keeps_marked_content_balanced() {
+    let content =
+        "q /Div <</MCID 0>> BDC 0 0 60 60 re f Q q 1 0 0 1 10 10 cm /P <</MCID 1>> BDC 0 0 20 20 re f EMC Q BT /F1 12 Tf 50 600 Td (T) Tj ET";
+    let mut doc = text_page(content);
+    let before = page_content_bytes(&doc, 0);
+    let tags = |bytes: &[u8]| String::from_utf8_lossy(bytes).split_whitespace().filter(|t| matches!(*t, "BDC" | "EMC")).count();
+    assert_eq!(tags(&before), 3, "{}", String::from_utf8_lossy(&before));
+    delete_graphic(&mut doc, 0, 1).unwrap();
+    let doc = reopen(&doc);
+    let after = page_content_bytes(&doc, 0);
+    assert_eq!(tags(&after), tags(&before), "marked content stays balanced: {}", String::from_utf8_lossy(&after));
+    let graphics = page_graphics(&doc, 0).unwrap();
+    assert_eq!(graphics.len(), 1, "{graphics:?}");
+    assert!(close(graphics[0].rect, [0.0, 0.0, 60.0, 60.0]), "{:?}", graphics[0].rect);
+}
+
+/// A graphic in the mixed inventory is refused by a group move, leaving the document untouched.
+#[test]
+fn a_selected_graphic_refuses_the_group_move_and_changes_nothing() {
+    let mut doc = text_page("BT /F1 12 Tf 50 600 Td (T) Tj ET q 100 100 20 20 re f Q");
+    let target = editable_objects(&doc, 0).unwrap().iter().find(|o| o.target.kind == ObjectKind::Graphic).unwrap().target;
+    let original = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(move_objects(&mut doc, 0, &[target], [10.0, 5.0]).unwrap_err().to_string().contains("not moved"));
+    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), original);
+}
+
+/// A full-page background painted inside the same pure scope as an icon does not hide it: the
+/// background is left out, the icon is listed on its own, and deleting it keeps the background.
+#[test]
+fn an_icon_inside_a_full_page_background_scope_is_still_selectable_and_deletable() {
+    let mut doc = image_page_with("q 0 0 600 800 re f 1 0 0 rg 10 10 20 20 re f Q q 100 100 200 100 cm /Im0 Do");
+    let graphics = page_graphics(&doc, 0).unwrap();
+    assert_eq!(graphics.len(), 1, "{graphics:?}");
+    assert!(close(graphics[0].rect, [10.0, 10.0, 30.0, 30.0]), "{:?}", graphics[0].rect);
+    delete_graphic(&mut doc, 0, 0).unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("0 0 600 800 re f"), "the background stays: {content}");
+    assert!(!content.contains("10 10 20 20"), "only the icon goes: {content}");
+    assert_eq!(page_graphics(&doc, 0).unwrap(), Vec::new());
+    assert_eq!(images::page_images(&doc, 0).unwrap().len(), 1, "the picture is untouched");
+}
