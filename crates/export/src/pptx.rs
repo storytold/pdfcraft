@@ -127,7 +127,7 @@ pub fn pptx(pages: &[Page], title: &str) -> Vec<u8> {
     let mut slides: Vec<(String, String)> = Vec::new(); // (slide_xml, slide_rels)
 
     for p in pages {
-        let (tables, consumed) = crate::tables(&p.blocks);
+        let (tables, consumed) = crate::tables(&p.blocks, &p.rules);
         let title_idx = p
             .blocks
             .iter()
