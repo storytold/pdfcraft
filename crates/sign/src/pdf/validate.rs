@@ -1,4 +1,4 @@
-use super::changes::classify_changes;
+use super::changes::{Own, classify_changes};
 use super::listing::{DigestCache, list, nums, sig_fields, text};
 use super::types::{Detail, Fill, Modification, Status, TrustStore};
 use super::{
@@ -11,6 +11,8 @@ struct SignatureValidation<'a> {
     trust: &'a TrustStore,
     info: &'a mut SignatureInfo,
     cache: &'a DigestCache,
+    /// The signature's own field and dictionary (see [`Own`]).
+    own: Own,
 }
 
 struct VerifiedSignature<'a> {
@@ -76,7 +78,7 @@ fn set_certification(doc: &Document, v: &Dict, info: &mut SignatureInfo) {
     }
 }
 
-pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, info: &mut SignatureInfo, cache: &DigestCache) {
+pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, info: &mut SignatureInfo, cache: &DigestCache, own: Own) {
     // A document timestamp can also be the value of a signature field (Documenso writes
     // `Timestamp_1` that way). Its `/Contents` is a bare RFC 3161 token, not a signature over the
     // document, so it must not be read as one.
@@ -123,7 +125,7 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
         info.details.push(Detail::of("PdfCraft can't check this signature yet: {}.", Fill::Reason(why.to_owned())));
     };
     if info.sub_filter.as_deref() == Some("adbe.x509.rsa_sha1") {
-        return validate_x509_rsa_sha1(SignatureValidation { doc, bytes, trust, info, cache }, v, (l0, o1, covered), &contents);
+        return validate_x509_rsa_sha1(SignatureValidation { doc, bytes, trust, info, cache, own }, v, (l0, o1, covered), &contents);
     }
     let sd = match SignedData::parse(&contents) {
         Ok(sd) => sd,
@@ -234,7 +236,7 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
         }
     }
     finish_validation(
-        SignatureValidation { doc, bytes, trust, info, cache },
+        SignatureValidation { doc, bytes, trust, info, cache, own },
         VerifiedSignature { covered, certificate: cert, embedded: &sd.certificates, cms_time: s.signing_time, unverified_time },
     );
 }
@@ -242,7 +244,7 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
 /// The verdict once the signature value has been checked: chain and trust, the signing time
 /// against the certificate's validity, and what later revisions changed.
 fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignature<'_>) {
-    let SignatureValidation { doc, bytes, trust, info, cache } = context;
+    let SignatureValidation { doc, bytes, trust, info, cache, own } = context;
     let VerifiedSignature { covered, certificate: cert, embedded, cms_time, unverified_time } = verified;
     info.signing_time = cms_time.or_else(|| info.date.as_deref().and_then(Time::from_pdf));
     let mut pool = embedded.to_vec();
@@ -282,9 +284,9 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
         match (old, signed) {
             (Some(old), Some(v)) => {
                 set_certification(&old, &v, info);
-                classify_changes(doc, Some(old), info.certify)
+                classify_changes(doc, Some(old), info.certify, Some(own))
             }
-            _ => classify_changes(doc, None, info.certify),
+            _ => classify_changes(doc, None, info.certify, Some(own)),
         }
     };
     let mut problems = false;
@@ -552,7 +554,7 @@ pub(super) fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, inf
     info.modification = if covered == bytes.len() || bytes[covered..].iter().all(|b| b.is_ascii_whitespace() || *b == 0) {
         Modification::None
     } else {
-        classify_changes(doc, cache.revision(doc, bytes, covered), None)
+        classify_changes(doc, cache.revision(doc, bytes, covered), None, None)
     };
     match &info.modification {
         Modification::None => info.details.push(Detail::plain("This document has not been modified since this timestamp was applied.")),
@@ -631,7 +633,7 @@ pub(crate) fn signature_contents(doc: &Document) -> Vec<Vec<u8>> {
 /// signature as a DER OCTET STRING over the SHA-1 digest of the byte ranges, and `/Cert` holds the
 /// signer's certificate (then any others) as DER byte strings.
 fn validate_x509_rsa_sha1(context: SignatureValidation<'_>, v: &Dict, (l0, o1, covered): (usize, usize, usize), contents: &[u8]) {
-    let SignatureValidation { doc, bytes, trust, info, cache } = context;
+    let SignatureValidation { doc, bytes, trust, info, cache, own } = context;
     let fail = |info: &mut SignatureInfo, why: Detail| {
         info.status = Status::Invalid;
         info.details.push(why);
@@ -679,7 +681,7 @@ fn validate_x509_rsa_sha1(context: SignatureValidation<'_>, v: &Dict, (l0, o1, c
     info.details.push(Detail::plain("The signature uses the legacy adbe.x509.rsa_sha1 format."));
     info.details.extend(DigestAlg::Sha1.weakness().map(Detail::plain));
     finish_validation(
-        SignatureValidation { doc, bytes, trust, info, cache },
+        SignatureValidation { doc, bytes, trust, info, cache, own },
         VerifiedSignature { covered, certificate: cert, embedded: &certs, cms_time: None, unverified_time: None },
     );
 }

@@ -475,7 +475,8 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
             details: Vec::new(),
         };
         if let Some(v) = v {
-            validate_into(doc, bytes, trust, &v, &mut info, cache);
+            let own = super::changes::Own { field: f.r, value: f.dict.get(b"V").and_then(Object::as_ref) };
+            validate_into(doc, bytes, trust, &v, &mut info, cache, own);
         }
         out.push(info);
     }
