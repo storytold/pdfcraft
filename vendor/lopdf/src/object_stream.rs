@@ -190,7 +190,10 @@ impl ObjectStream {
             }
             // PdfCraft patch: each member builds at most `MAX_OBJECT_NODES` objects, reserved from
             // the load's budget; once that is spent the remaining members are skipped unparsed.
-            let granted = budget.reserve(parser::MAX_OBJECT_NODES);
+            // Every object takes at least one byte, so a member reserves no more than its length:
+            // members parsed in parallel then can't hold the whole budget between them and starve
+            // the rest of an ordinary file.
+            let granted = budget.reserve(parser::MAX_OBJECT_NODES.min(extent_end - start));
             if granted == 0 {
                 return None;
             }
