@@ -8088,6 +8088,18 @@ evidence = ["crates/print/src/tests.rs::page_selection", "crates/automation/test
 notes = "all, current, ranges with labels and open ends"
 
 [[feature]]
+id = "print.current-view"
+title = "Print the current view (the part of the page in the window)"
+area = "L"
+tier = "P2"
+milestone = "M10"
+status = "shipped"
+commands = ["print.dialog"]
+tools = ["doc_print"]
+evidence = ["crates/print/src/tests.rs::a_crop_prints_at_size_as_though_it_were_the_page", "crates/ui-egui/src/workflows/print_ui.rs::the_current_view_prints_the_part_of_the_page_in_view", "crates/ui-egui/src/workflows/print_ui.rs::the_visible_part_is_measured_as_the_page_reads", "crates/ui-egui/tests/it/print.rs::current_view_prints_the_part_of_the_page_in_the_window", "crates/automation/tests/it/automation.rs::doc_print_prints_only_the_region_asked_for"]
+notes = "Pages to Print ▸ Current view prints the part of the current page showing in the document window when the dialog opens, at Size (fit, actual, shrink or custom), turned and fitted by the part's own shape (#5097); choosing another handling prints the whole current page. Headless: doc_print region, [x0, y0, x1, y1] from each printed page's top-left. Acrobat's option is assumed from descriptions, not observed. Missing: Acrobat's selected graphic (a marquee, #2051); in continuous scrolling only the current page's part prints; the preview renders the whole page within its size cap, so a small part looks soft there (the print itself stays vector)."
+
+[[feature]]
 id = "print.odd-even-reverse"
 title = "Odd/even pages and reverse order"
 area = "L"

@@ -7,6 +7,8 @@ pub enum Which {
     Range,
     /// The pages picked in the Pages panel or the organize grid when the dialog opened.
     Selected,
+    /// The part of the current page in the document window ([`PrintDraft::view`]), at Size.
+    View,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,6 +95,10 @@ pub struct PrintDraft {
     /// The sheet shown in the preview (0-based).
     pub sheet: usize,
     pub current_page: usize,
+    /// Print ▸ Current view (#5097): the page in the document window when the dialog opened and
+    /// the part of it showing (display space, points up from its bottom-left corner); `None` when
+    /// none of it showed.
+    pub view: Option<(usize, [f64; 4])>,
     /// The printer driver's own options and the printer they were read for (Properties…, CUPS).
     pub driver_options: Option<(String, Vec<spool::PrinterOption>)>,
     /// Driver options set away from the printer's defaults, for `driver_options`' printer.
@@ -153,6 +159,7 @@ impl Default for PrintDraft {
             paper_before_label: None,
             sheet: 0,
             current_page: 0,
+            view: None,
             driver_options: None,
             driver_choices: Default::default(),
             show_driver_options: false,
@@ -173,6 +180,10 @@ impl PrintDraft {
         let leaving_label = self.handling == Handling::Label && handling != Handling::Label;
         self.handling = handling;
         self.sheet = 0;
+        // The current view prints at Size; any other handling takes the whole page.
+        if handling != Handling::Size && self.which == Which::View {
+            self.which = Which::Current;
+        }
         if handling == Handling::Label {
             // A label goes on label stock.
             if self.paper != print::LABEL_PAPER {
@@ -193,7 +204,7 @@ impl PrintDraft {
             return Err("Cut and stack needs Two-sided: Off. Print single-sided sheets.".into());
         }
         let range = match self.which {
-            Which::All | Which::Selected | Which::Current => None,
+            Which::All | Which::Selected | Which::Current | Which::View => None,
             Which::Range => Some(self.range.clone()),
         };
         // Selected and Current are positions, not a typed range: a range would read numbers as
@@ -201,6 +212,10 @@ impl PrintDraft {
         let pages = match self.which {
             Which::Selected => print::select_listed(count, &self.selected, self.subset, self.reverse),
             Which::Current => print::select_listed(count, &[self.current_page], self.subset, self.reverse),
+            Which::View => {
+                let Some((page, _)) = self.view else { return Err("None of the current page is in view.".into()) };
+                print::select_listed(count, &[page], self.subset, self.reverse)
+            }
             Which::All | Which::Range => print::select_pages(count, range.as_deref(), labels, self.subset, self.reverse),
         }
         // What the person got wrong about what to print is said in their language: the engine hands
@@ -221,6 +236,21 @@ impl PrintDraft {
             Handling::Poster => Layout::Poster { scale: self.poster_scale, overlap: self.overlap, cut_marks: self.cut_marks },
             Handling::Label => Layout::Label { flip: self.label_flip },
         };
+        // Label reads the printed areas found for it, Current view the part of the page in view.
+        let crops = match (self.which, self.handling) {
+            (Which::View, Handling::Size) => {
+                let mut crops = vec![None; count];
+                if let Some((page, rect)) = self.view
+                    && let Some(slot) = crops.get_mut(page)
+                {
+                    *slot = Some(print::Crop { rect, text_up: false });
+                }
+                crops
+            }
+            (Which::View, _) => return Err("Current view prints at Size. Choose Size under Page Sizing & Handling.".into()),
+            (_, Handling::Label) => self.crops.clone(),
+            _ => Vec::new(),
+        };
         Ok(print::Settings {
             pages,
             paper: PAPERS[self.paper.min(PAPERS.len() - 1)].1,
@@ -228,7 +258,7 @@ impl PrintDraft {
             layout,
             content: self.content,
             raster: self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale }),
-            crops: self.crops.clone(),
+            crops,
             margin: self.margins.points(self.custom_margin),
         })
     }

@@ -9338,6 +9338,39 @@ fn doc_print_keeps_the_margin_asked_for() {
     assert!(!dir.join("x.pdf").exists());
 }
 
+/// Print ▸ Current view (#5097): `region` prints that part of each page as though it were the
+/// page. It is measured from the top-left, as other tools take rectangles, and needs a Size
+/// layout and some of the page.
+#[test]
+fn doc_print_prints_only_the_region_asked_for() {
+    let dir = workdir("print-region");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // The top half of the 200 × 300 page, 200 × 150, on landscape Letter: min(756 / 200, 576 / 150).
+    ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "region": [200, 150, 0, 0], "path": "top.pdf" }));
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("top.pdf")).unwrap())).unwrap();
+    let page = pdfcraft_model::pages(&saved).remove(0);
+    let contents = pdfcraft_cos::DecodeBudget::page().decode_contents(&saved, page.dict.get(b"Contents").unwrap());
+    let data: Vec<u8> = contents.into_iter().flat_map(Result::unwrap).collect();
+    let m: Vec<f64> = String::from_utf8_lossy(&data).split_whitespace().skip(1).take(6).map(|n| n.parse().unwrap()).collect();
+    // Centred, so the half's bottom-left corner (0, 150) lands at (18, 22.5).
+    assert!((m[0] - 3.78).abs() < 1e-6 && (m[4] - 18.0).abs() < 1e-6 && (m[5] - (22.5 - 3.78 * 150.0)).abs() < 1e-6, "{m:?}");
+    for args in [
+        json!({ "region": [0, 0, 200, 150], "layout": "multiple" }),
+        json!({ "region": [250, 0, 400, 150] }),
+        json!({ "region": [0, 0, 200, 0.5] }),
+        json!({ "region": [0, 0, 200] }),
+        json!({ "region": "top" }),
+    ] {
+        let mut args = args;
+        args["doc"] = json!(doc);
+        args["path"] = json!("x.pdf");
+        let refused = a.call("doc_print", &args);
+        assert!(matches!(refused, Err(ToolError::InvalidArgs(_))), "{args}: {refused:?}");
+    }
+    assert!(!dir.join("x.pdf").exists());
+}
+
 /// Without a root, `write_output` still writes through a staging file (#2166): the folder is
 /// made, nothing is left beside the file, and a folder at the path is refused.
 #[test]

@@ -292,6 +292,11 @@ pub(crate) fn body(
             ui.horizontal(|ui| {
                 widgets::radio_value(ui, &mut d.which, Which::All, tl!("All"));
                 widgets::radio_value(ui, &mut d.which, Which::Current, tl!("Current page"));
+                // Offered when some of the current page showed as the dialog opened (#5097).
+                let view = ui.add_enabled_ui(d.view.is_some(), |ui| widgets::radio_value(ui, &mut d.which, Which::View, tl!("Current view")));
+                if view.inner.clicked() {
+                    d.set_handling(Handling::Size);
+                }
                 let pages = widgets::radio_value(ui, &mut d.which, Which::Range, tl!("Pages"));
                 let r = ui.add_enabled(
                     d.which == Which::Range,

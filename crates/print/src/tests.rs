@@ -255,6 +255,39 @@ fn the_chosen_margin_frames_fitted_pages_grids_and_booklets() {
     assert!(layout(&sizes, &with(Layout::Size(SizeMode::Fit), 305.0)).is_ok());
 }
 
+/// Print ▸ Current view (#5097): at Size a crop prints as though it were the page, fitted and
+/// turned by its own shape and clipped to it. A crop under a point wide, or off the page, prints
+/// the whole page; Multiple, Booklet and Poster don't read crops.
+#[test]
+fn a_crop_prints_at_size_as_though_it_were_the_page() {
+    let sizes = [(200.0, 300.0)];
+    let with = |layout_: Layout, rect: Option<[f64; 4]>| Settings {
+        crops: rect.map(|rect| vec![Some(Crop { rect, text_up: false })]).unwrap_or_default(),
+        ..settings(vec![0], layout_)
+    };
+    let fit = Layout::Size(SizeMode::Fit);
+    // The top half, 200 × 150, is wider than tall: a landscape sheet, fitted to 756 × 576.
+    let top = [0.0, 150.0, 200.0, 300.0];
+    let sheet = layout(&sizes, &with(fit, Some(top))).unwrap().remove(0);
+    let [a, _, _, _, e, f] = sheet.placed[0].matrix.0;
+    let s = (756.0_f64 / 200.0).min(576.0 / 150.0);
+    assert_eq!(sheet.size, (792.0, 612.0));
+    assert_eq!(sheet.placed[0].clip, top);
+    // The crop's corner lands where a centred 200 × 150 page's would.
+    assert!(close(a, s) && close(e, (792.0 - 200.0 * s) / 2.0) && close(f, (612.0 - 150.0 * s) / 2.0 - 150.0 * s), "{:?}", sheet.placed[0]);
+    // Actual size keeps it at 100%, centred.
+    let [a, _, _, _, e, f] = layout(&sizes, &with(Layout::Size(SizeMode::Actual), Some(top))).unwrap()[0].placed[0].matrix.0;
+    assert!(close(a, 1.0) && close(e, 296.0) && close(f, 231.0 - 150.0), "{a} {e} {f}");
+    // Too thin, not a number or off the page: the whole page, as without a crop.
+    for rect in [[10.0, 10.0, 10.5, 200.0], [f64::NAN; 4], [300.0, 400.0, 500.0, 600.0]] {
+        assert_eq!(layout(&sizes, &with(fit, Some(rect))), layout(&sizes, &with(fit, None)), "{rect:?}");
+    }
+    let booklet = Layout::Booklet { subset: BookletSubset::BothSides, binding: Binding::Left };
+    for other in [Layout::multiple(2), booklet, Layout::Poster { scale: 200.0, overlap: 18.0, cut_marks: true }] {
+        assert_eq!(layout(&sizes, &with(other, Some(top))), layout(&sizes, &with(other, None)), "{other:?}");
+    }
+}
+
 #[test]
 fn posters_tile_with_overlap() {
     // A 200×300 page at 400% = 800×1200 on Letter with 18 pt margins (576×756 tiles), overlap 36.

@@ -148,6 +148,14 @@ fn fit_scale((dw, dh): (f64, f64), (cw, ch): (f64, f64)) -> f64 {
     if dw <= 0.0 || dh <= 0.0 { 1.0 } else { (cw / dw).min(ch / dh) }
 }
 
+/// The part of page `p` its [`Settings::crops`] entry keeps, cut to the page and at least a point
+/// each way; `None` keeps the whole page.
+fn crop_rect(settings: &Settings, p: usize, (w, h): (f64, f64)) -> Option<[f64; 4]> {
+    let c = settings.crops.get(p).copied().flatten()?;
+    let r = [c.rect[0].max(0.0), c.rect[1].max(0.0), c.rect[2].min(w), c.rect[3].min(h)];
+    (r[2] - r[0] > 1.0 && r[3] - r[1] > 1.0).then_some(r)
+}
+
 /// Lay out the sheets for `settings` given each source page's display size.
 pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, PrintError> {
     let pages: Vec<usize> = settings.pages.iter().copied().filter(|p| *p < sizes.len()).collect();
@@ -164,7 +172,9 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
             // Only fitting reads the margin: actual size and a custom scale centre the page as it is.
             let m = if matches!(mode, SizeMode::Fit | SizeMode::Shrink) { sheet_margin(settings)? } else { MARGIN };
             for &p in &pages {
-                let d = sizes[p];
+                // A crop (Print ▸ Current view, #5097) prints as though it were the whole page.
+                let rect = crop_rect(settings, p, sizes[p]).unwrap_or([0.0, 0.0, sizes[p].0, sizes[p].1]);
+                let d = (rect[2] - rect[0], rect[3] - rect[1]);
                 let size = oriented(paper, settings.orientation, d.0 > d.1);
                 let fit = fit_scale(d, (size.0 - 2.0 * m, size.1 - 2.0 * m));
                 let s = match mode {
@@ -174,7 +184,7 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                     SizeMode::Custom(pct) if pct.is_finite() && pct > 0.0 => pct / 100.0,
                     SizeMode::Custom(_) => return Err(PrintError::Invalid("the scale must be more than 0%".into())),
                 };
-                sheets.push(Sheet { size, placed: vec![place_in(p, d, [0.0, 0.0, size.0, size.1], s, false)], ..Sheet::default() });
+                sheets.push(Sheet { size, placed: vec![place_crop(p, rect, [0.0, 0.0, size.0, size.1], s, 0)], ..Sheet::default() });
             }
         }
         Layout::Label { flip } => {
@@ -350,10 +360,7 @@ fn layout_labels(sizes: &[(f64, f64)], pages: &[usize], paper: (f64, f64), orien
         .map(|&p| {
             let d = sizes[p];
             let crop = settings.crops.get(p).copied().flatten();
-            let rect = crop
-                .map(|c| [c.rect[0].max(0.0), c.rect[1].max(0.0), c.rect[2].min(d.0), c.rect[3].min(d.1)])
-                .filter(|r| r[2] - r[0] > 1.0 && r[3] - r[1] > 1.0)
-                .unwrap_or([0.0, 0.0, d.0, d.1]);
+            let rect = crop_rect(settings, p, d).unwrap_or([0.0, 0.0, d.0, d.1]);
             let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
             let turn = (w > h) != (cell[2] - cell[0] > cell[3] - cell[1]);
             let mut quarter = match (turn, crop.is_some_and(|c| c.text_up)) {
