@@ -1468,6 +1468,12 @@ fn up_and_down_turn_pages_in_single_page_view() {
     assert_eq!(press(&mut h, Key::ArrowUp, 1), 1);
     assert_eq!(press(&mut h, Key::ArrowUp, 1), 0);
     assert_eq!(press(&mut h, Key::ArrowUp, 1), 0, "nothing before the first page");
+    // J / K do the same (#3247).
+    assert_eq!(press(&mut h, Key::J, 1), 1);
+    assert_eq!(press(&mut h, Key::J, 1), 2);
+    assert_eq!(press(&mut h, Key::K, 1), 1);
+    assert_eq!(press(&mut h, Key::K, 1), 0);
+    assert_eq!(press(&mut h, Key::K, 1), 0, "nothing before the first page");
     // A page taller than the window scrolls first, then turns at its bottom.
     h.state_mut().views[0].fit = Fit::Width;
     h.run_steps(4);
@@ -2370,6 +2376,11 @@ fn j_and_k_scroll_like_the_arrow_keys() {
         press(&mut h, m, Key::J);
         assert!((top(&h) - start).abs() < 0.5, "{m:?} + J doesn't scroll");
     }
+    // Shift let go in the same frame: the frame reads no modifiers, but J came with Shift.
+    h.event(egui::Event::Key { key: Key::J, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::SHIFT });
+    h.event(egui::Event::Key { key: Key::J, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::SHIFT });
+    h.run_steps(2);
+    assert!((top(&h) - start).abs() < 0.5, "a J pressed with Shift doesn't scroll, whatever the frame's modifiers");
     // ⌘J is the JavaScript Console's, and doesn't scroll either.
     press(&mut h, Modifiers::COMMAND, Key::J);
     assert!((top(&h) - start).abs() < 0.5, "⌘J doesn't scroll");
