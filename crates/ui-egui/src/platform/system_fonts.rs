@@ -4,8 +4,8 @@
 //! only draws characters none of them has, such as an Arabic file name in a build without
 //! craft-fonts, or the Simplified Chinese interface in a build without a `Hans` face (#826). A
 //! few more installed faces, [`devanagari_fallback`], [`telugu_fallback`], [`sinhala_fallback`],
-//! [`tamil_fallback`], [`hebrew_fallback`] and [`hangul_fallback`], draw Hindi, Telugu, Sinhala,
-//! Tamil, Hebrew and Korean when one is installed. It is read at runtime and never embedded or
+//! [`tamil_fallback`], [`hebrew_fallback`], [`hangul_fallback`] and [`thai_fallback`], draw Hindi, Telugu, Sinhala,
+//! Tamil, Hebrew, Korean and Thai when one is installed. It is read at runtime and never embedded or
 //! shipped (AGENTS.md §1.4), and `PDFCRAFT_SYSTEM_FONTS=0` turns it off (published screenshots do).
 
 use std::path::{Path, PathBuf};
@@ -34,6 +34,8 @@ const SINHALA_PROBE: char = '\u{0D9A}';
 const TAMIL_PROBE: char = '\u{0B95}';
 /// Hebrew letter alef: the face must have it to cover Hebrew.
 const HEBREW_PROBE: char = '\u{05D0}';
+/// Thai letter ko kai (ก): the face must have it to cover Thai.
+const THAI_PROBE: char = '\u{0E01}';
 /// Hangul syllable hih (힣, U+D7A3), the last of the 11,172 modern syllables: a face with it has
 /// the whole block. Droid Sans Fallback, for one, has 가 but few other syllables.
 const HANGUL_PROBE: char = '\u{D7A3}';
@@ -120,6 +122,13 @@ pub fn hebrew_fallback() -> Option<Arc<FontData>> {
 pub fn hangul_fallback() -> Option<Arc<FontData>> {
     static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
     CACHE.get_or_init(|| script_fallback(&hangul_candidates(), HANGUL_PROBE)).clone()
+}
+
+/// The installed fallback face for Thai, read once. `None` when it is turned off or no
+/// candidate is installed; the interface then draws what the embedded faces can.
+pub fn thai_fallback() -> Option<Arc<FontData>> {
+    static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
+    CACHE.get_or_init(|| script_fallback(&thai_candidates(), THAI_PROBE)).clone()
 }
 
 fn script_fallback(candidates: &[PathBuf], probe: char) -> Option<Arc<FontData>> {
@@ -298,6 +307,39 @@ fn hebrew_candidates() -> Vec<PathBuf> {
             "TTF/DejaVuSans.ttf",
             "dejavu/DejaVuSans.ttf",
             "dejavu-sans-fonts/DejaVuSans.ttf",
+        ])
+    }
+}
+
+/// Well-known locations of Thai faces, best first.
+fn thai_candidates() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        ["leelawdb.ttf", "leelawad.ttf", "leelauib.ttf", "leelaui.ttf", "tahoma.ttf"].iter().map(|f| windows_fonts().join(f)).collect()
+    } else if cfg!(target_os = "macos") {
+        [
+            "/System/Library/Fonts/Supplemental/Thonburi.ttc",
+            "/System/Library/Fonts/Supplemental/Ayuthaya.ttf",
+            "/System/Library/Fonts/Supplemental/Krub.ttc",
+            "/System/Library/Fonts/Supplemental/Sathu.ttf",
+            "/System/Library/Fonts/Supplemental/Silom.ttf",
+            "/Library/Fonts/Arial Unicode.ttf",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect()
+    } else {
+        unix_fonts(&[
+            "google-noto/NotoSansThai-Regular.ttf",
+            "google-noto/NotoSansThaiUI-Regular.ttf",
+            "google-noto-vf/NotoSansThai[wght].ttf",
+            "google-noto-vf/NotoSansThai-UI[wght].ttf",
+            "truetype/noto/NotoSansThai-Regular.ttf",
+            "truetype/noto/NotoSansThaiUI-Regular.ttf",
+            "noto/NotoSansThai-Regular.ttf",
+            "noto/NotoSansThaiUI-Regular.ttf",
+            "truetype/thai/Loma.ttf",
+            "truetype/tlwg/Loma.ttf",
+            "fonts-tlwg-loma/Loma.ttf",
         ])
     }
 }
@@ -541,12 +583,20 @@ mod tests {
         assert!(script_fallback(&candidates, SINHALA_PROBE).is_none());
         assert!(script_fallback(&candidates, TAMIL_PROBE).is_none());
         assert!(script_fallback(&candidates, HEBREW_PROBE).is_none());
+        assert!(script_fallback(&candidates, THAI_PROBE).is_none());
     }
 
     #[test]
     fn script_candidates_are_absolute_font_files() {
-        for list in [devanagari_candidates(), telugu_candidates(), sinhala_candidates(), tamil_candidates(), hebrew_candidates(), hangul_candidates()]
-        {
+        for list in [
+            devanagari_candidates(),
+            telugu_candidates(),
+            sinhala_candidates(),
+            tamil_candidates(),
+            hebrew_candidates(),
+            hangul_candidates(),
+            thai_candidates(),
+        ] {
             assert!(!list.is_empty());
             assert!(list.iter().all(|p| p.is_absolute() || cfg!(windows)), "{list:?}");
             assert!(list.iter().all(|p| p.extension().is_some_and(|e| e == "ttf" || e == "ttc")), "{list:?}");
@@ -563,6 +613,18 @@ mod tests {
         // Inter has no Hangul.
         let inter = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
         assert_eq!(face_with(inter, HANGUL_PROBE), None);
+    }
+
+    #[test]
+    fn thai_candidates_are_font_files() {
+        let list = thai_candidates();
+        assert!(!list.is_empty());
+        for path in list {
+            assert!(path.extension().is_some_and(|e| e == "ttf" || e == "ttc"), "{path:?}");
+        }
+        // Inter has no Thai.
+        let inter = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+        assert_eq!(face_with(inter, THAI_PROBE), None);
     }
 
     /// Retune tripwires, deliberately separate from `the_macos_devanagari_list_is_apples_layout` below: these assert that three
