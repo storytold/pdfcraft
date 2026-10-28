@@ -1,4 +1,4 @@
-use super::geometry::{HANDLES, handle_pos, is_markup, reaches_points, reshapable, reshaped, resizable};
+use super::geometry::{HANDLES, handle_pos, held, is_markup, reaches_points, reshapable, reshaped, resizable};
 use super::state::{CommentView, Gesture, PageCx, SETTLE_SECS};
 use super::{
     Annotation, Color32, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NewAnnotation, Pos2, QuickTool, Rect, SELECT_BLUE, Shape,
@@ -191,7 +191,7 @@ fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, poin
 
 /// Whether a click at `p` (on screen) closes the polygon or cloud drawn so far (`points`, user
 /// space): on its first point again, once it has three.
-fn closes_at(cx: &PageCx<'_>, tool: CommentTool, points: &[[f64; 2]], p: Pos2) -> bool {
+pub(super) fn closes_at(cx: &PageCx<'_>, tool: CommentTool, points: &[[f64; 2]], p: Pos2) -> bool {
     points.len() >= 3 && tool != CommentTool::PolyLine && cx.to_screen(points[0]).distance(p) <= 6.0
 }
 
