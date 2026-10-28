@@ -2284,6 +2284,8 @@ fn the_hand_tool_zooms_with_the_wheel_when_the_preference_says_so() {
 fn the_hand_tool_wheel_zooms_only_over_the_pages() {
     let mut h = harness();
     h.state_mut().set_option("hand-wheel-zoom", "true").unwrap();
+    h.state_mut().set_option("left", "closed").unwrap();
+    h.state_mut().set_option("panel", "none").unwrap();
     h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
     h.run_steps(8);
     let view = h.state().active.unwrap();
@@ -2305,7 +2307,14 @@ fn the_hand_tool_wheel_zooms_only_over_the_pages() {
     assert_eq!(notch(&mut h, pages.center()), egui::Modifiers::COMMAND, "over the pages it zooms");
     assert_eq!(notch(&mut h, egui::pos2(pages.center().x, pages.top() - 20.0)), egui::Modifiers::NONE, "above them it scrolls");
     assert_eq!(notch(&mut h, egui::pos2(pages.right() + 5.0, pages.center().y)), egui::Modifiers::NONE, "beside them it scrolls");
-    // Nor in the page grid, or with a dialog open.
+    // Over a menu open above the pages, the menu has the wheel.
+    crate::support::open_menu(&mut h, "View");
+    let row = crate::support::menu_row(&h, "Page display").rect().center();
+    assert!(pages.contains(row), "the menu is over the pages: {row:?} in {pages:?}");
+    assert_eq!(notch(&mut h, row), egui::Modifiers::NONE, "a menu over the pages scrolls");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    // Nor with a dialog open.
     h.state_mut().dialog = Some(Dialog::Preferences);
     assert_eq!(notch(&mut h, pages.center()), egui::Modifiers::NONE, "a dialog has the wheel");
 }

@@ -279,3 +279,31 @@ fn export_to_word_html_and_rtf() {
     }
     assert!(std::fs::read_to_string(dir.join("e.html")).unwrap().contains("Exported words"));
 }
+
+/// #1399: with the Hand tool zooming with the wheel, a notch over either half of a side-by-side
+/// comparison zooms: the old file's half on the left belongs to another tab than the one shown.
+#[test]
+fn the_hand_tool_wheel_zooms_over_either_half_of_a_comparison() {
+    let mut h = side_by_side();
+    h.state_mut().set_option("hand-wheel-zoom", "true").unwrap();
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
+    h.run_steps(4);
+    let halves: Vec<egui::Rect> = h.state().views.iter().map(|v| v.viewport_rect()).collect();
+    assert_eq!(halves.len(), 2);
+    assert!(halves[0].right() <= halves[1].left() + 1.0, "side by side: {halves:?}");
+    for (half, rect) in halves.iter().enumerate() {
+        let ctx = h.ctx.clone();
+        let mut raw = egui::RawInput::default();
+        raw.events.push(egui::Event::PointerMoved(rect.center()));
+        raw.events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        });
+        h.state_mut().prepare_raw_input(&ctx, &mut raw);
+        let zooms = raw.events.iter().any(|e| matches!(e, egui::Event::MouseWheel { modifiers, .. } if *modifiers == egui::Modifiers::COMMAND));
+        assert!(zooms, "half {half} ({rect:?}) zooms");
+    }
+}
