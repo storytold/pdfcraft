@@ -32,7 +32,7 @@ pub(crate) use common::date_pattern;
 pub use common::formatted_value;
 use common::{collect_names, collect_values};
 pub(crate) use items::UNDERLINE_DROP;
-pub use items::{Action, BorderShape, Form, Item, Page, Rounded, Turned, Widget, WidgetBorder, WidgetKind};
+pub use items::{Action, BorderShape, EllipseArc, Form, Item, Page, Rounded, Turned, Widget, WidgetBorder, WidgetKind};
 
 /// Most pages a form may lay out to.
 pub const MAX_PAGES: usize = 500;
