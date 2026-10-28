@@ -1,4 +1,4 @@
-use super::*;
+use super::{Document, EditError, Object, Rgb, added};
 
 /// The kinds of page marks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,6 +31,7 @@ pub struct HeaderFooter {
     pub text: [String; 6],
     /// The standard face the text is drawn in (#3754): Helvetica (the default), Times or Courier.
     pub font: added::Family,
+    pub font_name: Option<String>,
     pub font_size: f64,
     pub color: Rgb,
     pub underline: bool,
@@ -50,6 +51,7 @@ impl Default for HeaderFooter {
         Self {
             text: Default::default(),
             font: added::Family::Helvetica,
+            font_name: None,
             font_size: 8.0,
             color: [0.0; 3],
             underline: false,
@@ -67,7 +69,20 @@ impl HeaderFooter {
     /// (and a `\r` that would be drawn is refused too). The dialog asks this too, so its preview
     /// never offers text that applying refuses (#2013).
     pub fn first_undrawable(&self) -> Option<char> {
-        self.text.iter().flat_map(|t| t.lines()).find_map(pdfcraft_fonts::first_non_win_ansi)
+        for text in &self.text {
+            for line in text.lines() {
+                for c in line.chars() {
+                    if added::is_thai(c) {
+                        if !pdfcraft_fonts::thai_has(c) {
+                            return Some(c);
+                        }
+                    } else if !pdfcraft_fonts::win_ansi_encodable(c) {
+                        return Some(c);
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// The room the header and the footer take at the top and the bottom of a page, in points:
@@ -142,10 +157,21 @@ impl Watermark {
     /// The first character of a text watermark [`add_watermark`] would refuse, because the
     /// standard fonts can't draw it (#125). A picture watermark draws no text.
     pub fn first_undrawable(&self) -> Option<char> {
-        match self.source {
-            Some(_) => None,
-            None => self.text.trim().lines().find_map(pdfcraft_fonts::first_non_win_ansi),
+        if self.source.is_some() {
+            return None;
         }
+        for line in self.text.trim().lines() {
+            for c in line.chars() {
+                if added::is_thai(c) {
+                    if !pdfcraft_fonts::thai_has(c) {
+                        return Some(c);
+                    }
+                } else if !pdfcraft_fonts::win_ansi_encodable(c) {
+                    return Some(c);
+                }
+            }
+        }
+        None
     }
 }
 

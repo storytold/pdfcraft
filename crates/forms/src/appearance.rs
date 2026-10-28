@@ -796,6 +796,62 @@ pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow>
     field_appearance_fit(DocArg::Ro(doc), f, w, &f.value, true).2
 }
 
+type ClusterKey = (pdfcraft_fonts::ShapedScript, String, Vec<(u32, u64, u64)>, u64);
+
+fn cluster_key(c: &pdfcraft_fonts::ShapedCluster) -> ClusterKey {
+    (c.script, c.text.clone(), c.glyphs.iter().map(|(id, [x, y])| (*id, x.to_bits(), y.to_bits())).collect(), c.advance.to_bits())
+}
+
+fn prepare_thai_field_font(
+    doc: &mut DocArg<'_>,
+    f: &Field,
+    text: &str,
+) -> (Option<pdfcraft_cos::ObjRef>, std::collections::HashMap<ClusterKey, usize>) {
+    let has_thai = text.chars().any(is_thai) || f.options.iter().any(|(_, d)| d.chars().any(is_thai));
+    let mut keys: Vec<pdfcraft_fonts::ShapedCluster> = Vec::new();
+    let mut cluster_map: std::collections::HashMap<ClusterKey, usize> = std::collections::HashMap::new();
+    if has_thai {
+        let mut sample_strings: Vec<&str> = Vec::new();
+        let comb = f.has(flags::COMB) && !f.has(flags::MULTILINE) && !f.has(flags::PASSWORD) && f.max_len.is_some_and(|m| m > 0);
+        let comb_cells: Vec<String>;
+        if f.kind == FieldKind::List {
+            sample_strings.extend(f.options.iter().map(|(_, d)| d.as_str()));
+        } else if comb {
+            let cells = f.max_len.unwrap_or(1).max(1);
+            comb_cells = comb_units(text, cells);
+            sample_strings.extend(comb_cells.iter().map(|s| s.as_str()));
+            sample_strings.push(text);
+        } else {
+            sample_strings.push(text);
+        }
+        for s in sample_strings {
+            for line in s.split(['\n', '\r']) {
+                if line.chars().any(is_thai)
+                    && let Ok(clusters) = pdfcraft_fonts::shape_thai(line)
+                {
+                    for c in clusters {
+                        if let std::collections::hash_map::Entry::Vacant(e) = cluster_map.entry(cluster_key(&c)) {
+                            e.insert(keys.len());
+                            keys.push(c);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let t3_font = if !keys.is_empty() {
+        if let DocArg::Rw(doc_mut) = doc {
+            let key_refs: Vec<&pdfcraft_fonts::ShapedCluster> = keys.iter().collect();
+            pdfcraft_fonts::type3_for_clusters(doc_mut, &key_refs).ok()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    (t3_font, cluster_map)
+}
+
 /// [`field_appearance_drawn`], and whether the text drawn is cut off by the box.
 fn field_appearance_fit(mut doc: DocArg<'_>, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>, Option<Overflow>) {
     // The Format event: what is shown, not what is stored.
@@ -830,65 +886,15 @@ fn field_appearance_fit(mut doc: DocArg<'_>, f: &Field, w: &Widget, values: &[St
             enc.can_encode(&text)
         }
     };
-    let has_thai = text.chars().any(is_thai) || f.options.iter().any(|(_, d)| d.chars().any(is_thai));
-    let mut keys: Vec<pdfcraft_fonts::ShapedCluster> = Vec::new();
-    type ClusterKey = (pdfcraft_fonts::ShapedScript, String, Vec<(u32, u64, u64)>, u64);
-    let mut cluster_map: std::collections::HashMap<ClusterKey, usize> = std::collections::HashMap::new();
-    if has_thai {
-        let mut sample_strings: Vec<&str> = Vec::new();
-        let comb = f.has(flags::COMB) && !f.has(flags::MULTILINE) && !f.has(flags::PASSWORD) && f.max_len.is_some_and(|m| m > 0);
-        let comb_cells: Vec<String>;
-        if f.kind == FieldKind::List {
-            sample_strings.extend(f.options.iter().map(|(_, d)| d.as_str()));
-        } else if comb {
-            let cells = f.max_len.unwrap_or(1).max(1);
-            comb_cells = comb_units(&text, cells);
-            sample_strings.extend(comb_cells.iter().map(|s| s.as_str()));
-            sample_strings.push(&text);
-        } else {
-            sample_strings.push(&text);
-        }
-        for s in sample_strings {
-            for line in s.split(['\n', '\r']) {
-                if line.chars().any(is_thai)
-                    && let Ok(clusters) = pdfcraft_fonts::shape_thai(line)
-                {
-                    for c in clusters {
-                        let key = (
-                            c.script,
-                            c.text.clone(),
-                            c.glyphs.iter().map(|(id, [x, y])| (*id, x.to_bits(), y.to_bits())).collect(),
-                            c.advance.to_bits(),
-                        );
-                        if let std::collections::hash_map::Entry::Vacant(e) = cluster_map.entry(key) {
-                            e.insert(keys.len());
-                            keys.push(c);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    let t3_font = if !keys.is_empty() {
-        if let DocArg::Rw(doc_mut) = &mut doc {
-            let key_refs: Vec<&pdfcraft_fonts::ShapedCluster> = keys.iter().collect();
-            pdfcraft_fonts::type3_for_clusters(doc_mut, &key_refs).ok()
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let (t3_font, cluster_map) = prepare_thai_field_font(&mut doc, f, &text);
     let doc_ref = doc.doc();
     let (font_name, font_obj, enc) = match dr_font(doc_ref, &da.font).filter(|(_, enc)| can_show(enc)) {
         Some((o, enc)) => (da.font.clone(), o, enc),
         None => {
-            if text.chars().any(is_thai) {
-                if let Some((o, enc)) = dr_font(doc_ref, "Thai").filter(|(_, enc)| can_show(enc)) {
-                    ("Thai".to_string(), o, enc)
-                } else {
-                    ("Helv".to_string(), helvetica(), FontText::WinAnsi)
-                }
+            if text.chars().any(is_thai)
+                && let Some((o, enc)) = dr_font(doc_ref, "Thai").filter(|(_, enc)| can_show(enc))
+            {
+                ("Thai".to_string(), o, enc)
             } else {
                 ("Helv".to_string(), helvetica(), FontText::WinAnsi)
             }
@@ -914,13 +920,7 @@ fn field_appearance_fit(mut doc: DocArg<'_>, f: &Field, w: &Widget, values: &[St
             let mut pen = x;
             body.extend(format!("/{} {} Tf ", thai_font_res_name, n(size)).bytes());
             for c in clusters {
-                let key = (
-                    c.script,
-                    c.text.clone(),
-                    c.glyphs.iter().map(|(id, [gx, gy])| (*id, gx.to_bits(), gy.to_bits())).collect(),
-                    c.advance.to_bits(),
-                );
-                if let Some(&k) = cluster_map.get(&key) {
+                if let Some(&k) = cluster_map.get(&cluster_key(&c)) {
                     let code = (k % 240 + 1) as u8;
                     body.extend(format!("1 0 0 1 {} {} Tm ", n(pen), n(y)).bytes());
                     body.extend(literal(&[code]));

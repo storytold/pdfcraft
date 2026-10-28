@@ -3068,7 +3068,12 @@ fn secondary_indexes_load_once_and_follow_edit_scopes() {
         assert!(doc.links().is_empty());
         assert_eq!(secondary_scan_counts(), (1, 1), "repeated reads reuse the link list");
     }
+    metadata_and_comment_edits_keep_the_indexes(&mut session, id);
+    link_edits_rebuild_only_the_link_list(&mut session, id);
+    content_and_marker_edits_rebuild_the_markers(&mut session, id);
+}
 
+fn metadata_and_comment_edits_keep_the_indexes(session: &mut Session, id: DocId) {
     session.apply(id, Edit::SetInfo { key: "Title".into(), value: "Changed".into() }).unwrap();
     assert!(session.get(id).unwrap().links().is_empty());
     assert!(session.get(id).unwrap().marks().is_empty());
@@ -3077,7 +3082,9 @@ fn secondary_indexes_load_once_and_follow_edit_scopes() {
     session.apply(id, rect_comment(0, [20.0, 20.0, 60.0, 60.0])).unwrap();
     assert!(session.get(id).unwrap().links().is_empty());
     assert_eq!(secondary_scan_counts(), (1, 2), "comment edits invalidate the annotation-position link index");
+}
 
+fn link_edits_rebuild_only_the_link_list(session: &mut Session, id: DocId) {
     session
         .apply(
             id,
@@ -3101,7 +3108,9 @@ fn secondary_indexes_load_once_and_follow_edit_scopes() {
     session.apply(id, Edit::DeleteAnnotation { page: 0, index: 0 }).unwrap();
     assert_eq!(session.get(id).unwrap().links()[0].index, 0, "deleting an earlier annotation shifts link indexes");
     assert_eq!(secondary_scan_counts(), (1, 6), "comment deletion rebuilds annotation-position indexes");
+}
 
+fn content_and_marker_edits_rebuild_the_markers(session: &mut Session, id: DocId) {
     session
         .apply(id, Edit::AddText { page: 0, text: AddedText { rect: [20.0, 250.0, 100.0, 280.0], text: "Added".into(), ..Default::default() } })
         .unwrap();
@@ -3408,6 +3417,70 @@ fn pages_export_as_png_jpeg_and_tiff() {
     let compression = tags.get_tag_u32(tiff::tags::Tag::Compression).unwrap();
     let predictor = tags.get_tag_u32(tiff::tags::Tag::Predictor).unwrap();
     assert_eq!((compression, predictor), (5, 1), "LZW, without a predictor");
+}
+
+/// Export ▸ Image draws several pages at once: each file is the one exporting that page alone
+/// writes, handed over in the order asked for, whatever the number of pages drawn at once.
+#[test]
+fn pages_exported_at_once_are_the_files_each_page_exports_alone_in_order() {
+    use crate::export::{Exporter, ImageFormat};
+    let (s, id) = session_with(12);
+    let pages = [3, 0, 11, 5, 5, 7, 1, 2, 10, 9, 8, 6, 4];
+    for format in [ImageFormat::Png, ImageFormat::Jpeg { quality: 85 }, ImageFormat::Tiff] {
+        let alone: Vec<(usize, Vec<u8>)> = pages.iter().map(|&p| (p, Exporter::new(s.get(id).unwrap()).image(p, 96.0, format).unwrap())).collect();
+        for workers in [1, 2, 4, 8] {
+            let mut got = Vec::new();
+            let mut ex = Exporter::new(s.get(id).unwrap());
+            ex.images_on(workers, &pages, 96.0, format, |p, img| {
+                got.push((p, img));
+                Ok(())
+            })
+            .unwrap();
+            assert!(got == alone, "{} with {workers} workers", format.label());
+        }
+        let mut got = Vec::new();
+        Exporter::new(s.get(id).unwrap())
+            .images(&pages, 96.0, format, |p, img| {
+                got.push((p, img));
+                Ok(())
+            })
+            .unwrap();
+        assert!(got == alone, "{}", format.label());
+    }
+}
+
+/// A page that can't be exported, or a file that can't be written, stops the export there with
+/// its error: every page before it is handed over, none after it.
+#[test]
+fn exporting_pages_at_once_stops_at_the_first_error() {
+    use crate::export::{Exporter, ImageFormat};
+    let (s, id) = session_with(6);
+    for workers in [1, 4] {
+        let mut ex = Exporter::new(s.get(id).unwrap());
+        let mut got = Vec::new();
+        let result = ex.images_on(workers, &[0, 1, 99, 2, 3], 72.0, ImageFormat::Png, |p, _| {
+            got.push(p);
+            Ok(())
+        });
+        assert_eq!(result, Err("page 100 does not exist".to_string()), "{workers} workers");
+        assert_eq!(got, [0, 1], "{workers} workers");
+
+        let mut got = Vec::new();
+        let result = ex.images_on(workers, &[0, 1, 2, 3, 4, 5], 72.0, ImageFormat::Png, |p, _| {
+            got.push(p);
+            if p == 2 { Err("disk full".to_string()) } else { Ok(()) }
+        });
+        assert_eq!(result, Err("disk full".to_string()), "{workers} workers");
+        assert_eq!(got, [0, 1, 2], "{workers} workers");
+        // The exporter is still usable afterwards.
+        assert!(ex.image(5, 72.0, ImageFormat::Png).is_ok());
+    }
+    // A panicking sink stops the workers rather than leaving them waiting for it.
+    let mut ex = Exporter::new(s.get(id).unwrap());
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ex.images_on(4, &[0, 1, 2, 3, 4, 5], 72.0, ImageFormat::Png, |p, _| if p == 1 { panic!("sink") } else { Ok(()) })
+    }));
+    assert!(panicked.is_err());
 }
 
 /// A TIFF's resolution unit (2 = inch) and its horizontal and vertical resolution.
@@ -8042,7 +8115,12 @@ fn undo_and_redo_roll_back_on_a_refresh_panic_or_error() {
     // Redo now succeeds cleanly.
     assert_eq!(s.redo(id).unwrap().as_str(), "Rotate page");
     assert_eq!(s.get(id).unwrap().info.pages[0].rotation, 90);
+    rolls_back_metadata_scope(&mut s, id);
+    rolls_back_protection_keys(&mut s, id);
+}
 
+/// Undo/redo of a metadata edit rolled back after a refresh panic.
+fn rolls_back_metadata_scope(s: &mut Session, id: DocId) {
     // 5. Metadata scope: a panic after `doc.info.title` was written rolls back `info.title` and keeps `edit_notices`.
     s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Draft".into() }).unwrap();
     let notice = TextNotice { field: None, page: 0, ch: '☺', redrawn_elsewhere: false };
@@ -8060,7 +8138,10 @@ fn undo_and_redo_roll_back_on_a_refresh_panic_or_error() {
     assert_eq!(s.get(id).unwrap().info.title, None);
     assert_eq!(s.redo(id).unwrap().as_str(), "Change Title");
     assert_eq!(s.get(id).unwrap().info.title.as_deref(), Some("Draft"));
+}
 
+/// Undo/redo of a protection edit rolled back after a refresh panic.
+fn rolls_back_protection_keys(s: &mut Session, id: DocId) {
     // 6. Protection keys: undo/redo rollback restores `editor.keys` and `doc.password` before re-inspecting.
     let protect = Protection { open_password: Some("u".into()), permissions_password: Some("o".into()), ..Protection::default() };
     s.apply(id, Edit::Protect(protect)).unwrap();

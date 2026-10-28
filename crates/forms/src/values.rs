@@ -1,6 +1,9 @@
 use super::appearances::{declares_pdfa, need_appearances};
 use super::read::{acroform, field_flags, fields, page_refs};
-use super::*;
+use super::{
+    Dict, Document, Field, FieldEvent, FieldKind, FieldValue, FormError, NoScripts, ObjRef, Object, PdfString, Scripts, af, appearance, author,
+    calc_order, flags, invalid, name_obj, scripting,
+};
 
 // ── writing ─────────────────────────────────────────────────────────────────────────────────
 

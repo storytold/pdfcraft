@@ -1,4 +1,4 @@
-use super::*;
+use super::CliError;
 
 pub(crate) fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)

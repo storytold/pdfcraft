@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Color32, CornerRadius, DocInfo, DocView, Edit, PdfCraftApp, Pos2, QuickTool, Rect, Sense, SnapshotKind, Stroke, Tokens, comments, icons, theme,
+    vec2,
+};
 
 /// Whether `p` lies in the bottom-left quadrant of `area`, where the page size shows (#1855).
 pub(super) fn in_size_hint_zone(area: Rect, p: Pos2) -> bool {

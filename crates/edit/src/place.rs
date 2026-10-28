@@ -1,5 +1,5 @@
 use super::marks::{MarkKind, matrix_number, n};
-use super::*;
+use super::{Dict, Document, EditError, ObjRef, Object, Stream, literal, win_ansi};
 
 pub(crate) fn page_list(doc: &Document) -> Vec<pdfcraft_model::Page> {
     pdfcraft_model::pages(doc)
@@ -28,7 +28,13 @@ pub(crate) fn contents(doc: &mut Document, page: &pdfcraft_model::Page) -> Resul
 }
 
 /// Add the font (and an opacity state) to the page's own resources.
-pub(crate) fn add_resources(doc: &mut Document, page: &pdfcraft_model::Page, opacity: Option<f64>, content: Option<&[u8]>) -> Result<(), EditError> {
+pub(crate) fn add_resources(
+    doc: &mut Document,
+    page: &pdfcraft_model::Page,
+    opacity: Option<f64>,
+    content: Option<&[u8]>,
+    extra_fonts: Option<&Dict>,
+) -> Result<(), EditError> {
     let mut faces: Vec<(Vec<u8>, &str)> = Vec::new();
     for (name, base) in [(&b"PCHelv"[..], "Helvetica"), (b"PCTimes", "Times-Roman"), (b"PCCour", "Courier")] {
         // Helvetica always (marks use it); the others only when the content names them.
@@ -37,7 +43,7 @@ pub(crate) fn add_resources(doc: &mut Document, page: &pdfcraft_model::Page, opa
         }
         faces.push((name.to_vec(), base));
     }
-    add_page_resources(doc, page, opacity, &faces)
+    add_page_resources(doc, page, opacity, &faces, extra_fonts)
 }
 
 /// The fonts a page draws with: its own resources' or the ones it inherits.
@@ -75,6 +81,7 @@ pub(crate) fn add_page_resources(
     page: &pdfcraft_model::Page,
     opacity: Option<f64>,
     faces: &[(Vec<u8>, &str)],
+    extra_fonts: Option<&Dict>,
 ) -> Result<(), EditError> {
     let mut res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
@@ -85,6 +92,11 @@ pub(crate) fn add_page_resources(
         font.set(b"BaseFont".to_vec(), Object::name(base));
         font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
         fonts.set(name.clone(), Object::Dict(font));
+    }
+    if let Some(extra) = extra_fonts {
+        for (k, v) in extra.iter() {
+            fonts.set(k.clone(), v.clone());
+        }
     }
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     if let Some(o) = opacity {
@@ -386,7 +398,7 @@ pub fn stamp(doc: &mut Document, page: usize, tag: &str, content: Vec<u8>) -> Re
     let all = page_list(doc);
     check(&[page], all.len())?;
     check_on_top(doc, &all[page])?;
-    add_resources(doc, &all[page], None, Some(&content))?;
+    add_resources(doc, &all[page], None, Some(&content), None)?;
     let p = page_list(doc).swap_remove(page);
     place_tagged(doc, &p, tag, content, false)
 }

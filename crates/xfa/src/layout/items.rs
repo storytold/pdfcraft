@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, Face, HAlign, Rect, Span};
 
 /// How far below its baseline an underline is drawn, in the text's size: an underline is the
 /// level line pushed just before its span, this far below it (the PDF writer tells it apart from

@@ -63,7 +63,7 @@ impl PageRange {
                 Subset::Even => tl!("Even pages only"),
                 Subset::Odd => tl!("Odd pages only"),
             };
-            egui::ComboBox::from_id_salt("mark-subset").selected_text(label).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("mark-subset").selected_text(label).show_ui(ui, |ui| {
                 ui.selectable_value(&mut self.subset, Subset::All, tl!("All pages in range"));
                 ui.selectable_value(&mut self.subset, Subset::Even, tl!("Even pages only"));
                 ui.selectable_value(&mut self.subset, Subset::Odd, tl!("Odd pages only"));
@@ -226,8 +226,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
         MarkKind::HeaderFooter => {
             ui.horizontal(|ui| {
                 // The standard faces a header can be drawn in (#3754).
+                ui.label(tl!("Font:"));
                 let current_font_name = d.hf.font_name.clone().unwrap_or_else(|| d.hf.font.label().to_string());
-                egui::ComboBox::from_id_salt("hf-font-selector").selected_text(&current_font_name).width(160.0).show_ui(ui, |ui| {
+                craft_ui::ComboBox::from_id_salt("hf-font").selected_text(&current_font_name).width(160.0).show_ui(ui, |ui| {
                     ui.label(egui::RichText::new(tl!("Standard fonts")).small().color(t.text_muted));
                     for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
                         let selected = d.hf.font_name.is_none() && d.hf.font == f;
@@ -298,7 +299,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 }
             });
             ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("hf-page-format").selected_text(PAGE_FORMATS[d.page_format].trim_matches(['<', '>'])).show_ui(
+                craft_ui::ComboBox::from_id_salt("hf-page-format").selected_text(PAGE_FORMATS[d.page_format].trim_matches(['<', '>'])).show_ui(
                     ui,
                     |ui| {
                         for (k, f) in PAGE_FORMATS.iter().enumerate() {
@@ -310,7 +311,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     d.hf.text[d.focused_box].push_str(PAGE_FORMATS[d.page_format]);
                 }
                 ui.add_space(12.0);
-                egui::ComboBox::from_id_salt("hf-date-format").selected_text(DATE_FORMATS[d.date_format].trim_matches(['<', '>'])).show_ui(
+                craft_ui::ComboBox::from_id_salt("hf-date-format").selected_text(DATE_FORMATS[d.date_format].trim_matches(['<', '>'])).show_ui(
                     ui,
                     |ui| {
                         for (k, f) in DATE_FORMATS.iter().enumerate() {
@@ -352,18 +353,21 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                                 ui.label(tl!("Thai fonts"));
                                 let current_title =
                                     pdfcraft_fonts::active_thai_font_entry().map(|e| e.name).unwrap_or_else(|| "TlwgTypewriter".to_string());
-                                egui::ComboBox::from_id_salt("wm-thai-font-selector").selected_text(current_title).width(180.0).show_ui(ui, |ui| {
-                                    for entry in &thai_fonts {
-                                        let selected = pdfcraft_fonts::active_thai_font_entry()
-                                            .as_ref()
-                                            .is_some_and(|curr| curr.file_name.eq_ignore_ascii_case(&entry.file_name));
-                                        if ui.selectable_label(selected, &entry.name).clicked()
-                                            && pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok()
-                                        {
-                                            ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
+                                craft_ui::ComboBox::from_id_salt("wm-thai-font-selector").selected_text(current_title).width(180.0).show_ui(
+                                    ui,
+                                    |ui| {
+                                        for entry in &thai_fonts {
+                                            let selected = pdfcraft_fonts::active_thai_font_entry()
+                                                .as_ref()
+                                                .is_some_and(|curr| curr.file_name.eq_ignore_ascii_case(&entry.file_name));
+                                            if ui.selectable_label(selected, &entry.name).clicked()
+                                                && pdfcraft_fonts::set_active_thai_font_by_path(&entry.path).is_ok()
+                                            {
+                                                ui.ctx().set_fonts(crate::theme::installed_font_definitions(crate::theme::CjkPreference::Default));
+                                            }
                                         }
-                                    }
-                                });
+                                    },
+                                );
                             });
                         }
                     }

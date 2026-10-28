@@ -1,5 +1,5 @@
 use super::error::{Result, ToolError};
-use super::*;
+use super::{Document, Value, comments, json};
 
 /// How far from the page's corner a bookmark's position may be given, in points (a PDF page is at
 /// most 14 400 across).

@@ -6,8 +6,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
 use pdfcraft_engine::{Edit, LinkAction, LinkHighlight, LinkItem, LinkStyle};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{DocView, PageXform};
-use crate::page_pointer::PagePointer;
+use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
 
@@ -57,17 +56,8 @@ fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
 }
 
 /// Link tool input on one page. Returns `true` when the gesture belongs to the tool.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn page_input(
-    ui: &egui::Ui,
-    resp: &egui::Response,
-    xf: &PageXform,
-    ptr: &PagePointer,
-    page: usize,
-    info: &DocInfo,
-    links: &[LinkItem],
-    view: &mut DocView,
-) -> bool {
+pub(crate) fn page_input(cx: PageToolContext<'_>, links: &[LinkItem], view: &mut DocView) -> bool {
+    let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
     let pointer = ptr.pos;
     let lv = &mut view.links;
     if let Some((dp, start)) = lv.drag
@@ -229,7 +219,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize, t: &Token
     widgets::section_title(ui, tl!("Link Appearance"));
     egui::Grid::new("link-appearance").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
         ui.label(tl!("Link Type:"));
-        egui::ComboBox::from_id_salt("link-type")
+        craft_ui::ComboBox::from_id_salt("link-type")
             .selected_text(if d.style.visible { tl!("Visible Rectangle") } else { tl!("Invisible Rectangle") })
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut d.style.visible, true, tl!("Visible Rectangle"));
@@ -237,7 +227,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize, t: &Token
             });
         ui.end_row();
         ui.label(tl!("Highlight Style:"));
-        egui::ComboBox::from_id_salt("link-hl").selected_text(tl!(d.style.highlight.label())).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("link-hl").selected_text(tl!(d.style.highlight.label())).show_ui(ui, |ui| {
             for h in LinkHighlight::ALL {
                 ui.selectable_value(&mut d.style.highlight, h, tl!(h.label()));
             }
@@ -245,7 +235,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize, t: &Token
         ui.end_row();
         if d.style.visible {
             ui.label(tl!("Line Thickness:"));
-            egui::ComboBox::from_id_salt("link-w")
+            craft_ui::ComboBox::from_id_salt("link-w")
                 .selected_text(if d.style.width <= 1.0 {
                     tl!("Thin")
                 } else if d.style.width <= 2.0 {
@@ -267,7 +257,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize, t: &Token
             } else {
                 0
             };
-            egui::ComboBox::from_id_salt("link-s").selected_text(tl!(["Solid", "Dashed", "Underline"][style])).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("link-s").selected_text(tl!(["Solid", "Dashed", "Underline"][style])).show_ui(ui, |ui| {
                 for (k, l) in ["Solid", "Dashed", "Underline"].iter().enumerate() {
                     ui.selectable_value(&mut style, k, tl!(l));
                 }

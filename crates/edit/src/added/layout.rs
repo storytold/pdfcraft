@@ -1,5 +1,8 @@
 use super::types::{AddedImage, AddedText};
-use super::*;
+use super::{
+    Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedCluster, ShapedScript, shape_arabic, shape_hebrew,
+    shape_thai,
+};
 
 pub(super) fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
     o.map(|o| doc.resolve(o)).and_then(|a| a.as_array().map(|a| a.iter().filter_map(Object::as_f64).collect())).unwrap_or_default()
@@ -99,7 +102,7 @@ fn thai_lines(t: &AddedText, para: &str, width: f64) -> Result<Vec<String>, Edit
     Ok(lines)
 }
 
-pub(super) fn is_thai(c: char) -> bool {
+pub(crate) fn is_thai(c: char) -> bool {
     matches!(u32::from(c), 0x0E00..=0x0E7F)
 }
 
@@ -206,18 +209,21 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
         // Arabic and Hebrew letters take their face; so do spaces and punctuation between them
         // (Hebrew's when they follow Hebrew), which the shaper then mirrors. Latin text (and what
         // the faces lack) keeps the item's font.
+        let line_has_thai = line.chars().any(is_thai);
         let mut segments: Vec<(Option<ShapedScript>, String)> = Vec::new();
         for c in text.chars().filter(|c| !is_bidi_control(*c)) {
             let after_hebrew = segments.last().is_some_and(|(kind, _)| *kind == Some(ShapedScript::Hebrew));
-            let script = if is_thai(c) {
-                Some(ShapedScript::Thai)
-            } else if is_hebrew(c) || (run_rtl && after_hebrew && !c.is_alphanumeric() && pdfcraft_fonts::hebrew_has(c)) {
-                Some(ShapedScript::Hebrew)
-            } else if is_arabic(c) || (run_rtl && !c.is_alphanumeric() && pdfcraft_fonts::arabic_has(c)) {
-                Some(ShapedScript::Arabic)
-            } else {
-                None
-            };
+            let after_thai = segments.last().is_some_and(|(kind, _)| *kind == Some(ShapedScript::Thai));
+            let script =
+                if is_thai(c) || ((line_has_thai || after_thai) && (c.is_ascii_digit() || (after_thai && c == ' ')) && pdfcraft_fonts::thai_has(c)) {
+                    Some(ShapedScript::Thai)
+                } else if is_hebrew(c) || (run_rtl && after_hebrew && !c.is_alphanumeric() && pdfcraft_fonts::hebrew_has(c)) {
+                    Some(ShapedScript::Hebrew)
+                } else if is_arabic(c) || (run_rtl && !c.is_alphanumeric() && pdfcraft_fonts::arabic_has(c)) {
+                    Some(ShapedScript::Arabic)
+                } else {
+                    None
+                };
             match segments.last_mut() {
                 Some((kind, s)) if *kind == script => s.push(c),
                 _ => segments.push((script, c.to_string())),
@@ -278,7 +284,7 @@ pub(super) fn hebrew_error(e: GlyphError, text: &str) -> EditError {
     })
 }
 
-pub(super) fn thai_error(e: GlyphError, text: &str) -> EditError {
+pub(crate) fn thai_error(e: GlyphError, text: &str) -> EditError {
     EditError::Invalid(match e {
         GlyphError::NoFont => {
             "Thai text needs a Thai font in this build; rebuild with CRAFT_FONTS_DIR pointing to craft-fonts with a Thai face".into()

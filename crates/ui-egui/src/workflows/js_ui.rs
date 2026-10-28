@@ -332,7 +332,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             (selected, picker)
         };
         let before = app.language.clone();
-        egui::ComboBox::from_id_salt("interface-language")
+        craft_ui::ComboBox::from_id_salt("interface-language")
             .selected_text(selected)
             .show_ui(ui, |ui| {
                 if ui.selectable_value(&mut app.language, crate::i18n::AUTO.to_string(), tl!("Auto")).clicked() {
@@ -359,7 +359,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         let auto_percent = ui_scale::percent(ui_scale::drawn(None, app.system_text_scale, native));
         let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &auto_percent.to_string())]);
         let selected = app.ui_scale.map_or_else(|| auto.clone(), |f| format!("{}%", ui_scale::percent(f)));
-        egui::ComboBox::from_id_salt("interface-size")
+        craft_ui::ComboBox::from_id_salt("interface-size")
             .selected_text(selected)
             .show_ui(ui, |ui| {
                 if ui.selectable_value(&mut app.ui_scale, None, auto).clicked() {
@@ -485,7 +485,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Replace document colours"));
         let mode = app.reading_colors.mode_name();
-        egui::ComboBox::from_id_salt("reading-colors")
+        craft_ui::ComboBox::from_id_salt("reading-colors")
             .selected_text(tl!(reading_mode_label(mode)))
             .show_ui(ui, |ui| {
                 for (m, label) in [
@@ -590,7 +590,7 @@ fn date_format(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
         let label = ui.label(tl!("Fill & Sign dates"));
         let current = app.session.date_format().to_string();
         let selected = if DATE_FORMATS.contains(&current.as_str()) { sample(app, &current) } else { tl!("Custom").to_string() };
-        egui::ComboBox::from_id_salt("date-format")
+        craft_ui::ComboBox::from_id_salt("date-format")
             .selected_text(selected)
             .width(240.0)
             .show_ui(ui, |ui| {
@@ -652,7 +652,7 @@ fn date_format(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
             let names = DATE_LANGUAGES.iter().map(|l| (l, date_language_picker_name(l, drawable))).collect::<Vec<_>>();
             (follow, selected, current, names)
         };
-        egui::ComboBox::from_id_salt("date-language")
+        craft_ui::ComboBox::from_id_salt("date-language")
             .selected_text(selected)
             .width(240.0)
             .show_ui(ui, |ui| {

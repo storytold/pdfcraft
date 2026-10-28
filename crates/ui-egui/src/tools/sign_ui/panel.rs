@@ -1,5 +1,5 @@
 use super::dialog::title;
-use super::*;
+use super::{Align, Certificate, Color32, Layout, SignatureInfo, SignatureStatus, Tokens, icons, sign, theme, widgets};
 
 /// The message bar for signed documents: (icon, colour, template, argument).
 /// The template renders through [`crate::i18n::tr_fmt`] at the call site, so the bar follows
