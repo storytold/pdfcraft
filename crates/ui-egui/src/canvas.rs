@@ -1175,6 +1175,7 @@ struct PageEnv<'a> {
     info: &'a DocInfo,
     initials: &'a Option<crate::fill_sign::SavedSig>,
     key_scroll: f32,
+    key_side: f32,
     middle_gesture: bool,
     modal: bool,
     navigation_enabled: bool,
@@ -1613,6 +1614,7 @@ fn draw_pages(
         hand,
         info,
         key_scroll,
+        key_side,
         middle_gesture,
         modal,
         navigation_enabled,
@@ -1795,6 +1797,7 @@ fn draw_pages(
         page_action: _,
         primary_down: _,
         refused,
+        row_on_screen: _,
         stamp_placed,
     } = page_out;
     let mut page_action: Option<PageMenuAction> = None;
@@ -1848,7 +1851,8 @@ fn draw_pages(
         view.current = current;
     }
     // The row as it is now: in continuous view the current page may have changed above.
-    out.row_on_screen = shown_row(view, env.rects).iter().filter_map(|&i| env.rects.get(i)).map(|r| r.translate(origin.to_vec2())).reduce(Rect::union);
+    let row_on_screen =
+        shown_row(view, env.rects).iter().filter_map(|&i| env.rects.get(i)).map(|r| r.translate(origin.to_vec2())).reduce(Rect::union);
     resp.context_menu(|ui| {
         let is_crop_over_image = tool == QuickTool::EditText
             && view.image_selection.clone().is_some_and(|sel| {
@@ -2024,6 +2028,7 @@ fn draw_pages(
         page_action,
         primary_down: ptr.primary_down,
         refused,
+        row_on_screen,
         stamp_placed,
     };
     (wanted, visible_now)
@@ -2504,7 +2509,7 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
         let (left, right) = (r.left() - SIDE, r.right() + SIDE);
         // Turned by → / ← at an edge (`goto_side`): a page or spread wider than the window starts at
         // the edge the reader comes from.
-        let row = shown_row(view).iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union).unwrap_or(r);
+        let row = shown_row(view, rects).iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union).unwrap_or(r);
         let (row_left, row_right) = (row.left() - SIDE, row.right() + SIDE);
         let target = match side {
             Some(from_right) if row_right - row_left > w => {
@@ -2772,6 +2777,7 @@ struct GlideCx {
     now: f64,
     may_glide: bool,
     key_scroll: f32,
+    key_side: f32,
     auto_delta: Vec2,
     zoom_delta: f32,
     edge_delta: Vec2,
@@ -2785,7 +2791,7 @@ struct GlideCx {
 /// automatic flash uses `goto`, not these deltas, so its programmatic scroll is never mistaken for
 /// a reader action. Returns this frame's glide.
 fn step_glide(ui: &egui::Ui, view: &mut DocView, avail: Rect, cx: &GlideCx) -> Vec2 {
-    let GlideCx { now, may_glide, key_scroll, auto_delta, zoom_delta, edge_delta, wheel_scrolled } = *cx;
+    let GlideCx { now, may_glide, key_scroll, key_side, auto_delta, zoom_delta, edge_delta, wheel_scrolled } = *cx;
     let over_page = ui.rect_contains_pointer(avail);
     ui.input(|i| view.fling.read(&i.events, now, may_glide && over_page));
     let interrupted = glide_interrupted(ui);
@@ -2972,7 +2978,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         read_wheel(ui, view, avail, single_paging, edge_turned, wheel_enabled, animates);
     let may_glide = !paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates;
     let wheel_scrolled = precise_scroll != Vec2::ZERO || line_base != Vec2::ZERO || coarse_scroll != Vec2::ZERO || has_page;
-    let motion = GlideCx { now, may_glide, key_scroll, auto_delta, zoom_delta, edge_delta, wheel_scrolled };
+    let motion = GlideCx { now, may_glide, key_scroll, key_side, auto_delta, zoom_delta, edge_delta, wheel_scrolled };
     let glide = step_glide(ui, view, avail, &motion);
     // The wheel may have turned the page above: draw the row it turned to. Measured from the old
     // row, the jump to the new page scrolled both out of view, a blank frame on every turn forward.
@@ -3079,6 +3085,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         info,
         initials: &initials,
         key_scroll,
+        key_side,
         middle_gesture,
         modal,
         navigation_enabled,
