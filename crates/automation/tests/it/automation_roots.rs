@@ -160,6 +160,26 @@ fn font_discovery_searches_every_read_root() {
     }
 }
 
+/// The most read roots a scan takes still leave it room to look inside them: the roots do not use
+/// up the scan's budget for files and folders.
+#[test]
+fn font_discovery_looks_inside_roots_when_given_the_most_roots() {
+    let base = folders("fonts-many");
+    let roots: Vec<PathBuf> = (0..4096).map(|i| base.join(format!("r{i}"))).collect();
+    for r in &roots {
+        std::fs::create_dir_all(r).unwrap();
+    }
+    let fonts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts");
+    std::fs::copy(fonts.join("Inter-Regular.ttf"), roots[0].join("Inter-Regular.ttf")).unwrap();
+    std::fs::copy(fonts.join("JetBrainsMono-Regular.ttf"), roots[4095].join("JetBrainsMono-Regular.ttf")).unwrap();
+    let roots = AutomationRoots::with_folders(&roots, &[]).unwrap();
+    let mut server = McpServer::new(Automation::new().with_automation_roots(roots).with_clock(|| 1_700_000_000));
+    let found = ok(&mut server, "text_font_files", json!({}));
+    for family in ["Inter", "JetBrains Mono"] {
+        assert!(found["fonts"].as_array().is_some_and(|f| f.iter().any(|f| f["family"] == family)), "{family}: {found}");
+    }
+}
+
 /// A read root that contains `--root` is searched where the two meet: `--root` itself, and
 /// nothing of the read root outside it.
 #[test]
