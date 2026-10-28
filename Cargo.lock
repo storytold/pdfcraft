@@ -4526,6 +4526,7 @@ dependencies = [
  "pdfcraft-cos",
  "skrifa 0.44.0",
  "unicode-bidi",
+ "unicode-segmentation",
 ]
 
 [[package]]

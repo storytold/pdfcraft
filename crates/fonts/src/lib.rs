@@ -7,6 +7,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod appearance_text;
 #[cfg(test)]
 mod cjk_scripts;
 mod craft;
@@ -32,7 +33,8 @@ pub use script::{
     script_missing, script_outline,
 };
 pub use shaping::{
-    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, face_glyph, hebrew_has, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, thai_has,
+    ShapedCluster, ShapedScript, arabic_bold_available, arabic_glyph, arabic_has, face_glyph, hebrew_has, shape_arabic, shape_arabic_bold,
+    shape_hebrew, shape_thai, shaped_bounds, shaped_glyph, thai_has,
 };
 pub use std14::{Match as Std14Match, Std14};
 

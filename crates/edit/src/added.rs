@@ -7,6 +7,9 @@
 //! content. Boxes are in display space (points, origin at the bottom-left of the page as shown,
 //! after `/UserUnit` and `/Rotate`), so items stay upright on rotated pages; an item records the
 //! `/UserUnit` it was written for.
+//!
+//! Family, bold and italic choices apply to Latin pieces. Arabic uses the configured document
+//! script face (currently Regular); those choices do not synthesize Arabic font styles.
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use pdfcraft_fonts::{GlyphError, GlyphOutline, ShapedScript, Std14, literal, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, win_ansi};
@@ -21,14 +24,14 @@ mod types;
 
 pub(crate) use draw::thai_glyph_resources;
 #[cfg(test)]
-use draw::{GLYPHS_PER_FONT, LaidLine, draw_laid_shaped};
-#[cfg(test)]
-use layout::Piece;
+use draw::{GLYPHS_PER_FONT, LaidLine, draw, draw_laid_shaped, draw_shaped, laid_lines};
 #[cfg(test)]
 pub(crate) use layout::WRAP_CALLS;
 #[cfg(test)]
 pub(crate) use layout::shaped_width;
 pub use layout::{PASTE_STEP, first_undrawable, lines, paste_place, paste_rect, text_rect, text_width};
+#[cfg(test)]
+use layout::{Piece, is_bidi_control, line_extents, shaped_layout, wrapped};
 #[cfg(test)]
 use pdfcraft_fonts::ShapedCluster;
 pub use store::{add_content, delete_content, isolate_content, list_added, scan_markers, update_content};
