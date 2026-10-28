@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, DocInfo, DocView, Edit, HashMap, PageText, Pos2, Range, Rect, comments, pos2};
 
 /// A text selection on one page.
 #[derive(Clone, Copy, Debug, PartialEq)]

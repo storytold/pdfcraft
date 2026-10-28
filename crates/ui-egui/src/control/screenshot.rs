@@ -1,4 +1,4 @@
-use super::*;
+use super::{Control, Host, Pending, Reply, Sender, json};
 
 /// Screenshot admission limits: bounded requests, per-image bytes and aggregate retained bytes.
 const MAX_PENDING_SCREENSHOTS: usize = 4;

@@ -1,6 +1,6 @@
 use super::fallback::is_type3_fallback;
 use super::rewrite::vertical_advance;
-use super::*;
+use super::{Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, Rc};
 
 /// Text and graphics state captured for rewriting.
 #[derive(Clone, Debug, PartialEq)]
@@ -472,6 +472,280 @@ type CachedFont = (Rc<Metrics>, Option<String>, Result<Option<f64>, String>);
 /// A `Do` met while interpreting: its operator index, XObject name and the state there.
 type Invocation = (usize, Vec<u8>, Ts);
 
+#[derive(Default)]
+struct MarkedContent {
+    regions: Vec<Option<usize>>,
+    layers: Vec<Option<Vec<u8>>>,
+    actual_text: Vec<Option<(usize, usize, String)>>,
+}
+
+impl MarkedContent {
+    fn begin(&mut self, doc: &Document, op: &Op, index: usize, logical_text: Option<&Dict>, shown_count: usize) {
+        // Marked text paragraphs/headings are authoritative boundaries. Ignore artifacts and
+        // inner spans, which inherit their enclosing region.
+        let region = matches!(op.name(0), Some(b"P" | b"H" | b"H1" | b"H2" | b"H3" | b"H4" | b"H5" | b"H6" | b"LI" | b"TD" | b"TH"));
+        self.regions.push(if region { Some(index) } else { self.regions.last().copied().flatten() });
+        // A layer named in the resources is told apart by its name, an inline one by where it opens.
+        let layer = op.is("BDC") && op.name(0) == Some(b"OC".as_slice());
+        self.layers
+            .push(layer.then(|| op.operands.get(1).and_then(Object::as_name).map_or_else(|| format!("@{index}").into_bytes(), <[u8]>::to_vec)));
+        // The property list is inline or named in the resources' /Properties (§14.6.2).
+        let list = logical_text.and_then(|properties| match op.operands.get(1) {
+            Some(Object::Name(name)) => properties.get(name).and_then(|object| doc.dict(object)),
+            other => other.and_then(Object::as_dict).cloned(),
+        });
+        let logical = list.as_ref().and_then(|dict| dict.get(b"ActualText")).and_then(|value| match value {
+            Object::String(value) if value.bytes.len() <= 4_000_000 => Some(value.to_text()),
+            _ => None,
+        });
+        self.actual_text.push(logical.map(|text| (shown_count, index, text)));
+    }
+
+    fn end(&mut self, index: usize, shown: &mut Vec<Shown>) {
+        self.regions.pop();
+        self.layers.pop();
+        if let Some(Some((start, open, logical))) = self.actual_text.pop() {
+            let tail = shown.split_off(start.min(shown.len()));
+            let mut items = tail.into_iter();
+            if let Some(mut first) = items.next() {
+                for item in items {
+                    first.glyph_count = first.glyph_count.saturating_add(item.glyph_count);
+                    first.extra_ops.push(item.op);
+                    first.extra_ops.extend(item.extra_ops);
+                    first.rect = [
+                        first.rect[0].min(item.rect[0]),
+                        first.rect[1].min(item.rect[1]),
+                        first.rect[2].max(item.rect[2]),
+                        first.rect[3].max(item.rect[3]),
+                    ];
+                    first.frame = union(first.frame, item.frame);
+                    first.ink.extend(item.ink);
+                }
+                first.extra_ops.extend([open, index]);
+                // Only right-to-left ActualText is already in typing order and must stay out of
+                // bidi recovery. Word and Chrome also wrap Latin ligatures mid-word.
+                first.logical_order = logical.chars().any(crate::bidi::is_rtl);
+                first.actual_text = true;
+                first.text = logical;
+                first.start_x = first.rect[0];
+                first.end_x = first.rect[2];
+                first.end_y = first.baseline;
+                first.advance = (first.end_x - first.start_x) / first.tm.then(&first.state.ctm).0[0].abs().max(1e-6);
+                shown.push(first);
+            }
+        }
+    }
+}
+
+struct TextRunState<'a> {
+    ts: &'a mut Ts,
+    tm: &'a mut Matrix,
+    tlm: &'a mut Matrix,
+    at_bt: &'a (usize, Ts),
+    bt: usize,
+    marked: &'a MarkedContent,
+    carry: &'a mut Carry,
+    out: &'a mut Vec<Shown>,
+}
+
+fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), EditError> {
+    let ts = &mut *state.ts;
+    let tm = &mut *state.tm;
+    let tlm = &mut *state.tlm;
+    let at_bt = state.at_bt;
+    let bt = state.bt;
+    let marked = state.marked;
+    let carry = &mut *state.carry;
+    let out = &mut *state.out;
+    if matches!(op.op.as_slice(), b"'" | b"\"") {
+        if op.is("\"") {
+            ts.word_spacing = op.num(0).unwrap_or(ts.word_spacing);
+            ts.char_spacing = op.num(1).unwrap_or(ts.char_spacing);
+        }
+        *tlm = Matrix([1.0, 0.0, 0.0, 1.0, 0.0, -ts.leading]).then(tlm);
+        *tm = *tlm;
+    }
+    let Some((name, m)) = ts.font.clone() else { return Ok(()) };
+    // Pieces: strings, and TJ number adjustments.
+    let pieces: Vec<Object> = match op.op.as_slice() {
+        // A surplus array (`[(A)] [(B)] TJ`) is malformed, but the operator still
+        // takes the one immediately before it, as the renderer and every other
+        // reader here do (#3569) -- not the first, which a reader counting operands
+        // from the front of a surplus list would otherwise take.
+        b"TJ" => op.operands.last().and_then(Object::as_array).cloned().unwrap_or_default(),
+        _ => op.operands.last().cloned().into_iter().collect(),
+    };
+    // Tc is already included in the pen advance; TJ may encode tracking instead.
+    let tracking = if op.is("TJ") { tj_tracking(&pieces, &m, ts.size, ts.scale) } else { 0.0 };
+    let trm0 = tm.then(&ts.ctm);
+    let start = trm0.apply(0.0, ts.rise);
+    let mut text = String::new();
+    let mut decodable = true;
+    let mut x_text = 0.0;
+    // Vertical text (§9.4.4): the pen moves along y instead, and each glyph is centred
+    // on it horizontally; `half` is half the widest glyph.
+    let vertical = ts.vertical;
+    let (mut y_text, mut half) = (0.0, 0.0_f64);
+    // Where each word's glyphs start and end along the run (text space), and whether
+    // the next glyph continues the last word.
+    let mut words: Vec<(f64, f64)> = Vec::new();
+    let mut in_word = false;
+    let mut glyph_count = 0_usize;
+    for p in &pieces {
+        match p {
+            Object::String(s) => {
+                for (code, len) in m.codes(&s.bytes) {
+                    glyph_count = glyph_count.saturating_add(1);
+                    let shown = m.text_of(code);
+                    let blank = m.is_space(code, len) || shown.as_deref().is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
+                    match shown {
+                        Some(t) => {
+                            carry.text_left = carry
+                                .text_left
+                                .checked_sub(t.len())
+                                .ok_or_else(|| EditError::Invalid("the page's text is too large to read".into()))?;
+                            text.push_str(&t);
+                        }
+                        None => decodable = false,
+                    }
+                    let spacing = ts.char_spacing + if m.is_space(code, len) { ts.word_spacing } else { 0.0 };
+                    if let Some(w1) = vertical {
+                        half = half.max((m.width(code) * ts.size * ts.scale).abs() / 2.0);
+                        if !blank {
+                            let ink_end = y_text + w1 * ts.size;
+                            let (lo, hi) = (y_text.min(ink_end), y_text.max(ink_end));
+                            match words.last_mut() {
+                                Some(word) if in_word => *word = (word.0.min(lo), word.1.max(hi)),
+                                _ => words.push((lo, hi)),
+                            }
+                        }
+                        in_word = !blank;
+                        y_text += w1 * ts.size + spacing;
+                        continue;
+                    }
+                    if !blank {
+                        let ink_end = x_text + m.width(code) * ts.size * ts.scale;
+                        // A negative font size or `Tz` runs the glyphs backwards:
+                        // the word is the union of its glyphs, whichever way they go.
+                        let (lo, hi) = (x_text.min(ink_end), x_text.max(ink_end));
+                        match words.last_mut() {
+                            Some(word) if in_word => *word = (word.0.min(lo), word.1.max(hi)),
+                            _ => words.push((lo, hi)),
+                        }
+                    }
+                    in_word = !blank;
+                    let w = m.width(code) * ts.size + ts.char_spacing + if m.is_space(code, len) { ts.word_spacing } else { 0.0 };
+                    x_text += w * ts.scale;
+                }
+            }
+            other => {
+                if let Some(n) = other.as_f64() {
+                    if vertical.is_some() {
+                        // Down by n/1000 em, not scaled by `Tz`.
+                        let dy = -n / 1000.0 * ts.size;
+                        if -dy > ts.size * 0.2 && !text.ends_with(' ') {
+                            text.push(' ');
+                        }
+                        if dy.abs() > ts.size.abs() * 0.2 {
+                            in_word = false;
+                        }
+                        y_text += dy;
+                        continue;
+                    }
+                    let dx = -n / 1000.0 * ts.size * ts.scale;
+                    // A large gap inside TJ reads as a space.
+                    if dx - tracking > (ts.size * ts.scale).abs() * 0.2 && !text.ends_with(' ') {
+                        text.push(' ');
+                    }
+                    // Tracking and kerning keep a word together; a larger jump
+                    // ends it (whatever the sign of the size or `Tz`).
+                    if dx - tracking > (ts.size * ts.scale).abs() * 0.2 || dx < -(ts.size * ts.scale).abs() * 0.2 {
+                        in_word = false;
+                    }
+                    x_text += dx;
+                }
+            }
+        }
+    }
+    *tm = Matrix([1.0, 0.0, 0.0, 1.0, x_text, y_text]).then(tm);
+    let end = tm.then(&ts.ctm).apply(0.0, ts.rise);
+    // The box from `a` to `b` along the run: from descent to ascent across it, or for
+    // vertical text, the widest glyph's width centred on the pen.
+    let span = |a: f64, b: f64| match vertical {
+        Some(_) => [trm0.apply(-half, ts.rise + a), trm0.apply(half, ts.rise + a), trm0.apply(-half, ts.rise + b), trm0.apply(half, ts.rise + b)],
+        None => [
+            trm0.apply(a, ts.rise + m.descent * ts.size),
+            trm0.apply(b, ts.rise + m.descent * ts.size),
+            trm0.apply(a, ts.rise + m.ascent * ts.size),
+            trm0.apply(b, ts.rise + m.ascent * ts.size),
+        ],
+    };
+    let corners = span(0.0, if vertical.is_some() { y_text } else { x_text });
+    let rect = corners.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
+    // The same corners along and across the baseline: the run's own box, not its
+    // upright bounding box turned (which is wider by the box's height on a slant).
+    let dir = direction(&trm0);
+    let frame = corners
+        .iter()
+        .map(|&p| to_frame(dir, p))
+        .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
+    let ink = words
+        .iter()
+        .map(|&(a, b)| {
+            span(a, b).iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p.0), r[1].min(p.1), r[2].max(p.0), r[3].max(p.1)])
+        })
+        .collect();
+    let size_user = (trm0.0[2].powi(2) + trm0.0[3].powi(2)).sqrt() * ts.size;
+    // A numeric-only TJ adjusts the current text matrix but paints no glyphs.
+    // It must not create a phantom editable line or enlarge its neighbours' boxes.
+    if !pieces.iter().any(|p| matches!(p, Object::String(s) if !s.bytes.is_empty())) {
+        return Ok(());
+    }
+    out.push(Shown {
+        op: i,
+        extra_ops: Vec::new(),
+        glyph_count,
+        // Vertical text: the TJ adjustment that undoes the run is n = -1000 y / size; the
+        // preview divides by size × `Tz`, so `Tz` is put back here.
+        advance: if vertical.is_some() { y_text * ts.scale } else { x_text },
+        tracking: 0.0,
+        tm: Matrix([
+            tm.0[0],
+            tm.0[1],
+            tm.0[2],
+            tm.0[3],
+            tm.0[4] - x_text * tm.0[0] - y_text * tm.0[2],
+            tm.0[5] - x_text * tm.0[1] - y_text * tm.0[3],
+        ]),
+        state: ts.clone(),
+        tlm: *tlm,
+        bt_op: at_bt.0,
+        bt_state: at_bt.1.clone(),
+        text,
+        rect,
+        frame,
+        ink,
+        baseline: start.1,
+        start_x: start.0,
+        end_x: end.0,
+        end_y: end.1,
+        bt,
+        font: name,
+        base_font: m.base_font.clone(),
+        face: ts.face.clone(),
+        size: if size_user > 0.0 { size_user } else { ts.size },
+        bold: m.bold,
+        italic: m.italic,
+        visual_order: m.visual_order,
+        decodable,
+        scope: marked.regions.last().copied().flatten(),
+        paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
+        logical_order: false,
+        actual_text: false,
+    });
+    Ok(())
+}
+
 pub(super) fn interpret(
     doc: &Document,
     ops: &[Op],
@@ -490,66 +764,17 @@ pub(super) fn interpret(
     let mut stack: Vec<Ts> = std::mem::take(&mut carry.stack);
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     let mut bt = 0usize;
-    let mut marked = std::mem::take(&mut carry.marked);
-    let mut layers = std::mem::take(&mut carry.layers);
-    let mut actual: Vec<Option<(usize, usize, String)>> = Vec::new();
+    let mut marked =
+        MarkedContent { regions: std::mem::take(&mut carry.marked), layers: std::mem::take(&mut carry.layers), ..MarkedContent::default() };
     for (i, op) in ops.iter().enumerate() {
         match op.op.as_slice() {
             // No depth cap: every `EMC` pops, so a capped push would pair it with the enclosing
             // sequence (#3573). Both stacks stay bounded by the number of operators.
             b"BMC" | b"BDC" => {
-                // Marked text paragraphs/headings are authoritative boundaries. Ignore
-                // artifacts and inner spans, which inherit their enclosing region.
-                let region = matches!(op.name(0), Some(b"P" | b"H" | b"H1" | b"H2" | b"H3" | b"H4" | b"H5" | b"H6" | b"LI" | b"TD" | b"TH"));
-                marked.push(if region { Some(i) } else { marked.last().copied().flatten() });
-                // A layer named in the resources is told apart by its name, an inline one by where it opens.
-                let layer = op.is("BDC") && op.name(0) == Some(b"OC".as_slice());
-                layers.push(layer.then(|| op.operands.get(1).and_then(Object::as_name).map_or_else(|| format!("@{i}").into_bytes(), <[u8]>::to_vec)));
-                // The property list is inline or named in the resources' /Properties (§14.6.2).
-                let list = logical_text.and_then(|properties| match op.operands.get(1) {
-                    Some(Object::Name(n)) => properties.get(n).and_then(|o| doc.dict(o)),
-                    other => other.and_then(Object::as_dict).cloned(),
-                });
-                let logical = list.as_ref().and_then(|d| d.get(b"ActualText")).and_then(|s| match s {
-                    Object::String(s) if s.bytes.len() <= 4_000_000 => Some(s.to_text()),
-                    _ => None,
-                });
-                actual.push(logical.map(|s| (out.len(), i, s)));
+                marked.begin(doc, op, i, logical_text, out.len());
             }
             b"EMC" => {
-                marked.pop();
-                layers.pop();
-                if let Some(Some((start, open, logical))) = actual.pop() {
-                    let tail = out.split_off(start.min(out.len()));
-                    let mut items = tail.into_iter();
-                    if let Some(mut first) = items.next() {
-                        for shown in items {
-                            first.glyph_count = first.glyph_count.saturating_add(shown.glyph_count);
-                            first.extra_ops.push(shown.op);
-                            first.extra_ops.extend(shown.extra_ops);
-                            first.rect = [
-                                first.rect[0].min(shown.rect[0]),
-                                first.rect[1].min(shown.rect[1]),
-                                first.rect[2].max(shown.rect[2]),
-                                first.rect[3].max(shown.rect[3]),
-                            ];
-                            first.frame = union(first.frame, shown.frame);
-                            first.ink.extend(shown.ink);
-                        }
-                        first.extra_ops.extend([open, i]);
-                        // Only right-to-left ActualText is already in typing order and must stay
-                        // out of the line's bidi recovery. Word and Chrome wrap Latin ligatures
-                        // (`fi`, `fl`) in ActualText spans mid-word; those keep joining their line.
-                        first.logical_order = logical.chars().any(crate::bidi::is_rtl);
-                        first.actual_text = true;
-                        first.text = logical;
-                        first.start_x = first.rect[0];
-                        first.end_x = first.rect[2];
-                        first.end_y = first.baseline;
-                        first.advance = (first.end_x - first.start_x) / first.tm.then(&first.state.ctm).0[0].abs().max(1e-6);
-                        out.push(first);
-                    }
-                }
+                marked.end(i, &mut out);
             }
             b"q" => stack.push(ts.clone()),
             b"Q" => {
@@ -650,207 +875,16 @@ pub(super) fn interpret(
                 tm = tlm;
             }
             b"Tj" | b"TJ" | b"'" | b"\"" => {
-                if matches!(op.op.as_slice(), b"'" | b"\"") {
-                    if op.is("\"") {
-                        ts.word_spacing = op.num(0).unwrap_or(ts.word_spacing);
-                        ts.char_spacing = op.num(1).unwrap_or(ts.char_spacing);
-                    }
-                    tlm = Matrix([1.0, 0.0, 0.0, 1.0, 0.0, -ts.leading]).then(&tlm);
-                    tm = tlm;
-                }
-                let Some((name, m)) = ts.font.clone() else { continue };
-                // Pieces: strings, and TJ number adjustments.
-                let pieces: Vec<Object> = match op.op.as_slice() {
-                    // A surplus array (`[(A)] [(B)] TJ`) is malformed, but the operator still
-                    // takes the one immediately before it, as the renderer and every other
-                    // reader here do (#3569) -- not the first, which a reader counting operands
-                    // from the front of a surplus list would otherwise take.
-                    b"TJ" => op.operands.last().and_then(Object::as_array).cloned().unwrap_or_default(),
-                    _ => op.operands.last().cloned().into_iter().collect(),
-                };
-                // Tc is already included in the pen advance; TJ may encode tracking instead.
-                let tracking = if op.is("TJ") { tj_tracking(&pieces, &m, ts.size, ts.scale) } else { 0.0 };
-                let trm0 = tm.then(&ts.ctm);
-                let start = trm0.apply(0.0, ts.rise);
-                let mut text = String::new();
-                let mut decodable = true;
-                let mut x_text = 0.0;
-                // Vertical text (§9.4.4): the pen moves along y instead, and each glyph is centred
-                // on it horizontally; `half` is half the widest glyph.
-                let vertical = ts.vertical;
-                let (mut y_text, mut half) = (0.0, 0.0_f64);
-                // Where each word's glyphs start and end along the run (text space), and whether
-                // the next glyph continues the last word.
-                let mut words: Vec<(f64, f64)> = Vec::new();
-                let mut in_word = false;
-                let mut glyph_count = 0_usize;
-                for p in &pieces {
-                    match p {
-                        Object::String(s) => {
-                            for (code, len) in m.codes(&s.bytes) {
-                                glyph_count = glyph_count.saturating_add(1);
-                                let shown = m.text_of(code);
-                                let blank =
-                                    m.is_space(code, len) || shown.as_deref().is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
-                                match shown {
-                                    Some(t) => {
-                                        carry.text_left = carry
-                                            .text_left
-                                            .checked_sub(t.len())
-                                            .ok_or_else(|| EditError::Invalid("the page's text is too large to read".into()))?;
-                                        text.push_str(&t);
-                                    }
-                                    None => decodable = false,
-                                }
-                                let spacing = ts.char_spacing + if m.is_space(code, len) { ts.word_spacing } else { 0.0 };
-                                if let Some(w1) = vertical {
-                                    half = half.max((m.width(code) * ts.size * ts.scale).abs() / 2.0);
-                                    if !blank {
-                                        let ink_end = y_text + w1 * ts.size;
-                                        let (lo, hi) = (y_text.min(ink_end), y_text.max(ink_end));
-                                        match words.last_mut() {
-                                            Some(word) if in_word => *word = (word.0.min(lo), word.1.max(hi)),
-                                            _ => words.push((lo, hi)),
-                                        }
-                                    }
-                                    in_word = !blank;
-                                    y_text += w1 * ts.size + spacing;
-                                    continue;
-                                }
-                                if !blank {
-                                    let ink_end = x_text + m.width(code) * ts.size * ts.scale;
-                                    // A negative font size or `Tz` runs the glyphs backwards:
-                                    // the word is the union of its glyphs, whichever way they go.
-                                    let (lo, hi) = (x_text.min(ink_end), x_text.max(ink_end));
-                                    match words.last_mut() {
-                                        Some(word) if in_word => *word = (word.0.min(lo), word.1.max(hi)),
-                                        _ => words.push((lo, hi)),
-                                    }
-                                }
-                                in_word = !blank;
-                                let w = m.width(code) * ts.size + ts.char_spacing + if m.is_space(code, len) { ts.word_spacing } else { 0.0 };
-                                x_text += w * ts.scale;
-                            }
-                        }
-                        other => {
-                            if let Some(n) = other.as_f64() {
-                                if vertical.is_some() {
-                                    // Down by n/1000 em, not scaled by `Tz`.
-                                    let dy = -n / 1000.0 * ts.size;
-                                    if -dy > ts.size * 0.2 && !text.ends_with(' ') {
-                                        text.push(' ');
-                                    }
-                                    if dy.abs() > ts.size.abs() * 0.2 {
-                                        in_word = false;
-                                    }
-                                    y_text += dy;
-                                    continue;
-                                }
-                                let dx = -n / 1000.0 * ts.size * ts.scale;
-                                // A large gap inside TJ reads as a space.
-                                if dx - tracking > (ts.size * ts.scale).abs() * 0.2 && !text.ends_with(' ') {
-                                    text.push(' ');
-                                }
-                                // Tracking and kerning keep a word together; a larger jump
-                                // ends it (whatever the sign of the size or `Tz`).
-                                if dx - tracking > (ts.size * ts.scale).abs() * 0.2 || dx < -(ts.size * ts.scale).abs() * 0.2 {
-                                    in_word = false;
-                                }
-                                x_text += dx;
-                            }
-                        }
-                    }
-                }
-                tm = Matrix([1.0, 0.0, 0.0, 1.0, x_text, y_text]).then(&tm);
-                let end = tm.then(&ts.ctm).apply(0.0, ts.rise);
-                // The box from `a` to `b` along the run: from descent to ascent across it, or for
-                // vertical text, the widest glyph's width centred on the pen.
-                let span = |a: f64, b: f64| match vertical {
-                    Some(_) => {
-                        [trm0.apply(-half, ts.rise + a), trm0.apply(half, ts.rise + a), trm0.apply(-half, ts.rise + b), trm0.apply(half, ts.rise + b)]
-                    }
-                    None => [
-                        trm0.apply(a, ts.rise + m.descent * ts.size),
-                        trm0.apply(b, ts.rise + m.descent * ts.size),
-                        trm0.apply(a, ts.rise + m.ascent * ts.size),
-                        trm0.apply(b, ts.rise + m.ascent * ts.size),
-                    ],
-                };
-                let corners = span(0.0, if vertical.is_some() { y_text } else { x_text });
-                let rect = corners
-                    .iter()
-                    .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
-                // The same corners along and across the baseline: the run's own box, not its
-                // upright bounding box turned (which is wider by the box's height on a slant).
-                let dir = direction(&trm0);
-                let frame = corners
-                    .iter()
-                    .map(|&p| to_frame(dir, p))
-                    .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
-                let ink = words
-                    .iter()
-                    .map(|&(a, b)| {
-                        span(a, b)
-                            .iter()
-                            .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p.0), r[1].min(p.1), r[2].max(p.0), r[3].max(p.1)])
-                    })
-                    .collect();
-                let size_user = (trm0.0[2].powi(2) + trm0.0[3].powi(2)).sqrt() * ts.size;
-                // A numeric-only TJ adjusts the current text matrix but paints no glyphs.
-                // It must not create a phantom editable line or enlarge its neighbours' boxes.
-                if !pieces.iter().any(|p| matches!(p, Object::String(s) if !s.bytes.is_empty())) {
-                    continue;
-                }
-                out.push(Shown {
-                    op: i,
-                    extra_ops: Vec::new(),
-                    glyph_count,
-                    // Vertical text: the TJ adjustment that undoes the run is n = -1000 y / size; the
-                    // preview divides by size × `Tz`, so `Tz` is put back here.
-                    advance: if vertical.is_some() { y_text * ts.scale } else { x_text },
-                    tracking: 0.0,
-                    tm: Matrix([
-                        tm.0[0],
-                        tm.0[1],
-                        tm.0[2],
-                        tm.0[3],
-                        tm.0[4] - x_text * tm.0[0] - y_text * tm.0[2],
-                        tm.0[5] - x_text * tm.0[1] - y_text * tm.0[3],
-                    ]),
-                    state: ts.clone(),
-                    tlm,
-                    bt_op: at_bt.0,
-                    bt_state: at_bt.1.clone(),
-                    text,
-                    rect,
-                    frame,
-                    ink,
-                    baseline: start.1,
-                    start_x: start.0,
-                    end_x: end.0,
-                    end_y: end.1,
-                    bt,
-                    font: name,
-                    base_font: m.base_font.clone(),
-                    face: ts.face.clone(),
-                    size: if size_user > 0.0 { size_user } else { ts.size },
-                    bold: m.bold,
-                    italic: m.italic,
-                    visual_order: m.visual_order,
-                    decodable,
-                    scope: marked.last().copied().flatten(),
-                    paint: Paint { layers: layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
-                    logical_order: false,
-                    actual_text: false,
-                });
+                let mut state = TextRunState { ts: &mut ts, tm: &mut tm, tlm: &mut tlm, at_bt: &at_bt, bt, marked: &marked, carry, out: &mut out };
+                show_text(op, i, &mut state)?;
             }
             _ => {}
         }
     }
     carry.ts = ts;
     carry.stack = stack;
-    carry.marked = marked;
-    carry.layers = layers;
+    carry.marked = marked.regions;
+    carry.layers = marked.layers;
     positioned_tracking(&mut out);
     Ok(out)
 }

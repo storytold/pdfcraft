@@ -2,7 +2,7 @@ use super::model::{
     MAX_ALERTS, MAX_CONSOLE, MAX_DEPTH, MAX_EFFECTS, MAX_NODES, MAX_PAYLOAD, MAX_VALUE, XfaDoc, XfaEffect, XfaKind, XfaNode, clip, clip_value,
     effect_key, payload,
 };
-use super::*;
+use super::{Context, HashMap, JsResult, RefCell, error};
 
 /// One node of the flattened form, shared by the JavaScript and FormCalc engines.
 pub(crate) struct HNode {

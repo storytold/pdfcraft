@@ -26,6 +26,22 @@ pub struct TimestampQuery {
     pub certificate_request: bool,
 }
 
+/// Identity and digest algorithm used by a timestamp authority to sign tokens.
+pub struct TimestampSigner<'a> {
+    pub key: &'a PrivateKey,
+    pub certificate: &'a Certificate,
+    pub chain: &'a [Certificate],
+    pub digest: DigestAlg,
+}
+
+/// Issuance details for one timestamp response.
+pub struct TimestampIssuance<'a> {
+    pub query: &'a TimestampQuery,
+    pub policy: &'a str,
+    pub generation_time: Time,
+    pub serial: u64,
+}
+
 impl TimestampQuery {
     pub fn new(digest: DigestAlg, imprint: Vec<u8>) -> Result<Self, SignError> {
         if imprint.len() != digest.digest(&[&[]]).len() {
@@ -186,17 +202,9 @@ pub fn parse_response(bytes: &[u8], query: &TimestampQuery) -> Result<TimestampT
 
 /// The TSA side: sign a `TimeStampResp` for `query` at `gen_time`. Used by deterministic test
 /// authorities and a locally configured stamping identity, never implied to be a remote TSA.
-#[allow(clippy::too_many_arguments)]
-pub fn respond(
-    key: &PrivateKey,
-    cert: &Certificate,
-    chain: &[Certificate],
-    alg: DigestAlg,
-    query: &TimestampQuery,
-    policy: &str,
-    gen_time: Time,
-    serial: u64,
-) -> Result<Vec<u8>, SignError> {
+pub fn respond(signer: TimestampSigner<'_>, issuance: TimestampIssuance<'_>) -> Result<Vec<u8>, SignError> {
+    let TimestampSigner { key, certificate: cert, chain, digest: alg } = signer;
+    let TimestampIssuance { query, policy, generation_time: gen_time, serial } = issuance;
     let mut info = vec![
         der::int(1),
         der::try_oid(policy)?,

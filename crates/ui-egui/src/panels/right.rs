@@ -1,6 +1,8 @@
 use super::bookmarks::{BmAction, OutlineCtx, outline_item, outline_matches};
 use super::pages::{page_tools, pages, thumbnail_size};
-use super::*;
+use super::{
+    Align, Align2, Color32, DocInfo, FieldKind, Layout, Nav, PdfCraftApp, Rect, RightPanel, Sense, Stroke, Tokens, human_size, icons, theme, vec2,
+};
 
 /// Draw the selected right-hand panel and apply its navigation, layer, bookmark or edit actions.
 pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
@@ -205,7 +207,20 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         }
                     }
                     RightPanel::Pages => pages(ui, &t, info, view, modal, bm_editable, &mut nav),
-                    RightPanel::Fields => field_properties = fields(ui, &t, info, &doc.form, preparing, &mut view.prepare, &mut nav, &mut panel_edit),
+                    RightPanel::Fields => {
+                        field_properties = fields(
+                            ui,
+                            FieldsPanel {
+                                theme: &t,
+                                info,
+                                form: doc.form.as_slice(),
+                                preparing,
+                                selection: &mut view.prepare,
+                                nav: &mut nav,
+                                edit: &mut panel_edit,
+                            },
+                        );
+                    }
                     RightPanel::Layers => {
                         if info.layers.is_empty() {
                             empty(ui, &t, "layers", "This document has no layers.");
@@ -445,17 +460,18 @@ fn empty(ui: &mut egui::Ui, t: &Tokens, icon: &str, text: &str) {
 
 /// The Fields panel: fields by page, in tab order. While preparing a form, each field can move
 /// earlier or later in its page's tab order (Acrobat: Order Tabs Manually).
-#[allow(clippy::too_many_arguments)]
-fn fields(
-    ui: &mut egui::Ui,
-    t: &Tokens,
-    info: &DocInfo,
-    form: &[pdfcraft_engine::FormField],
+struct FieldsPanel<'a> {
+    theme: &'a Tokens,
+    info: &'a DocInfo,
+    form: &'a [pdfcraft_engine::FormField],
     preparing: bool,
-    selection: &mut crate::prepare::PrepareView,
-    nav: &mut Option<Nav>,
-    edit: &mut Option<pdfcraft_engine::Edit>,
-) -> Option<(String, usize)> {
+    selection: &'a mut crate::prepare::PrepareView,
+    nav: &'a mut Option<Nav>,
+    edit: &'a mut Option<pdfcraft_engine::Edit>,
+}
+
+fn fields(ui: &mut egui::Ui, panel: FieldsPanel<'_>) -> Option<(String, usize)> {
+    let FieldsPanel { theme: t, info, form, preparing, selection, nav, edit } = panel;
     let mut properties = None;
     if info.fields.is_empty() {
         empty(ui, t, "text-cursor-input", "This document has no form fields.");

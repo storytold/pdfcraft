@@ -1,4 +1,4 @@
-use super::*;
+use super::{Dict, Document, HashMap, ObjRef, Object, OrganizeError, named_dest};
 
 /// Keys that must not be followed when copying: they point back up or across the source
 /// document, and following them would drag in unrelated objects.

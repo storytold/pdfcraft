@@ -63,7 +63,7 @@ impl PageRange {
                 Subset::Even => tl!("Even pages only"),
                 Subset::Odd => tl!("Odd pages only"),
             };
-            egui::ComboBox::from_id_salt("mark-subset").selected_text(label).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("mark-subset").selected_text(label).show_ui(ui, |ui| {
                 ui.selectable_value(&mut self.subset, Subset::All, tl!("All pages in range"));
                 ui.selectable_value(&mut self.subset, Subset::Even, tl!("Even pages only"));
                 ui.selectable_value(&mut self.subset, Subset::Odd, tl!("Odd pages only"));
@@ -227,7 +227,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
             ui.horizontal(|ui| {
                 // The standard faces a header can be drawn in (#3754).
                 ui.label(tl!("Font:"));
-                egui::ComboBox::from_id_salt("hf-font").selected_text(d.hf.font.label()).width(100.0).show_ui(ui, |ui| {
+                craft_ui::ComboBox::from_id_salt("hf-font").selected_text(d.hf.font.label()).width(100.0).show_ui(ui, |ui| {
                     for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
                         ui.selectable_value(&mut d.hf.font, f, f.label());
                     }
@@ -267,7 +267,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 }
             });
             ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("hf-page-format").selected_text(PAGE_FORMATS[d.page_format].trim_matches(['<', '>'])).show_ui(
+                craft_ui::ComboBox::from_id_salt("hf-page-format").selected_text(PAGE_FORMATS[d.page_format].trim_matches(['<', '>'])).show_ui(
                     ui,
                     |ui| {
                         for (k, f) in PAGE_FORMATS.iter().enumerate() {
@@ -279,7 +279,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     d.hf.text[d.focused_box].push_str(PAGE_FORMATS[d.page_format]);
                 }
                 ui.add_space(12.0);
-                egui::ComboBox::from_id_salt("hf-date-format").selected_text(DATE_FORMATS[d.date_format].trim_matches(['<', '>'])).show_ui(
+                craft_ui::ComboBox::from_id_salt("hf-date-format").selected_text(DATE_FORMATS[d.date_format].trim_matches(['<', '>'])).show_ui(
                     ui,
                     |ui| {
                         for (k, f) in DATE_FORMATS.iter().enumerate() {

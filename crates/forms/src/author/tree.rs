@@ -1,4 +1,4 @@
-use super::*;
+use super::{Dict, Document, Field, FormError, ObjRef, Object, PdfString, invalid};
 
 /// The AcroForm dictionary's reference, creating the form (with `/Helv` in `/DR`) if needed.
 pub(crate) fn ensure_form(doc: &mut Document) -> Result<ObjRef, FormError> {

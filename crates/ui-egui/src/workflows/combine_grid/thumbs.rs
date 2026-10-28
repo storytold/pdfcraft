@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, HashMap, RenderConfig, RenderPool, RenderRequest, Retiring, TextureHandle};
 
 /// Render threads for thumbnails at once, counting those of retired pools until they exit.
 pub(super) const MAX_THREADS: usize = 3;

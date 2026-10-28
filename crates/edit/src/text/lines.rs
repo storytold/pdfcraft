@@ -1,6 +1,6 @@
 use super::fallback::{same_font, same_paint};
 use super::interp::{Carry, Origin, Pen, Shown, TextState, Ts, direction, interpret, to_frame, union};
-use super::*;
+use super::{DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Object, Op, Pieces, Stream, TextLine, parse, serialize_ops};
 
 impl TextLine {
     /// The baseline's height in user space.

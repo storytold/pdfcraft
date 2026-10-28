@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    AddedContent, Arc, Edit, EditError, FieldValue, ImageEdit, NewAnnotation, Shape, a11y, copy_image, decode_data_file, embed_image, fit_picture,
+    image_content_type, is_xfa_data_file, js, mark_source, measure, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
+};
 
 /// Whether the opening password allows an edit (§7.6.4.2, Table 22).
 pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), EditError> {
@@ -328,7 +331,19 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             // One `/NM` each: the caret replies to the strikeout, and XFDF names that reply by
             // the strikeout's `/NM` (#2666).
             let (strike_meta, caret_meta) = (cx.meta(), cx.meta());
-            pdfcraft_annot::add_text_replacement(doc, *page, quads, text, author, strike, caret, &strike_meta, &caret_meta)?;
+            pdfcraft_annot::add_text_replacement(
+                doc,
+                pdfcraft_annot::TextReplacement {
+                    page: *page,
+                    quads,
+                    replacement: text,
+                    author,
+                    strike,
+                    caret,
+                    strike_meta: &strike_meta,
+                    caret_meta: &caret_meta,
+                },
+            )?;
         }
         Edit::MarkAnnotation { page, index, marked, author } => {
             pdfcraft_annot::set_marked(doc, *page, *index, *marked, author, &cx.meta())?;
@@ -338,7 +353,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::ReshapeAnnotation { page, index, points } => pdfcraft_annot::set_points(doc, *page, *index, points, &cx.meta())?,
         Edit::ResizeAnnotation { page, index, rect } => pdfcraft_annot::set_rect(doc, *page, *index, *rect, &cx.meta())?,
         Edit::StyleAnnotation { page, index, color, opacity, width, endings } => {
-            pdfcraft_annot::set_style(doc, *page, *index, *color, *opacity, *width, endings.as_deref(), &cx.meta())?;
+            pdfcraft_annot::set_style(
+                doc,
+                *page,
+                *index,
+                pdfcraft_annot::StyleChange { color: *color, opacity: *opacity, width: *width, endings: endings.clone() },
+                &cx.meta(),
+            )?;
         }
         Edit::FillAnnotation { page, index, fill } => pdfcraft_annot::set_fill(doc, *page, *index, *fill, &cx.meta())?,
         Edit::FontSizeAnnotation { page, index, size } => pdfcraft_annot::set_font_size(doc, *page, *index, *size, &cx.meta())?,

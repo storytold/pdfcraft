@@ -1,5 +1,5 @@
 use super::layout::norm;
-use super::*;
+use super::{Content, MarkKind, ObjRef, Std14};
 
 pub(super) const TAG: &str = "Added";
 

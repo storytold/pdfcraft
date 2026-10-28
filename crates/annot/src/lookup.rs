@@ -1,6 +1,6 @@
 use super::info::text_value;
 use super::types::{FLAG_HIDDEN, FLAG_NO_ROTATE, FLAG_NO_VIEW, Shape};
-use super::*;
+use super::{AnnotError, Dict, Document, ObjRef, Object, appearance};
 
 // ── pages and /Annots ───────────────────────────────────────────────────────────────────────
 

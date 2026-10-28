@@ -112,56 +112,64 @@ impl PdfCraftApp {
         }
     }
 
+    /// Why the command can't run right now, for the user.
+    fn disabled_reason(&self, spec: &CommandSpec) -> String {
+        match spec.needs {
+            commands::Needs::Undo => tl!("Nothing to undo").to_string(),
+            commands::Needs::Redo => tl!("Nothing to redo").to_string(),
+            commands::Needs::FillForms if self.active.is_some() => tl!("This document has no form fields you can fill in").to_string(),
+            commands::Needs::HasComments if self.active.is_some() => tl!("This document has no comments to flatten").to_string(),
+            commands::Needs::HasFields if self.active.is_some() => tl!("This document has no form fields to flatten").to_string(),
+            commands::Needs::HasRedactions if self.active.is_some() => {
+                tl!("There are no redaction marks (mark text, areas or pages first)").to_string()
+            }
+            commands::Needs::Marks(k) if self.active.is_some() => {
+                let kind = match k {
+                    pdfcraft_engine::MarkKind::HeaderFooter => tl!("header or footer"),
+                    pdfcraft_engine::MarkKind::Watermark => tl!("watermark"),
+                    pdfcraft_engine::MarkKind::Background => tl!("background"),
+                };
+                crate::i18n::fmt(tl!("This document has no {kind} to change"), &[("kind", kind)])
+            }
+            // Restricted documents ask for their permissions password instead, so only an
+            // unprotected or a read-only document gets here.
+            commands::Needs::Security | commands::Needs::ProtectedSecurity if self.active.is_some() => {
+                match self.active_ids().and_then(|(_, id)| self.session.get(id)) {
+                    Some(d) if !d.allows_security_change() => crate::i18n::fmt(tl!("{name} is read-only"), &[("name", &d.name)]),
+                    _ => tl!("This document isn't password-protected").to_string(),
+                }
+            }
+            commands::Needs::Unlock if self.active.is_some() => tl!("This document has no restrictions to lift").to_string(),
+            commands::Needs::Assembly | commands::Needs::Modification | commands::Needs::Annotate if self.active.is_some() => {
+                tl!("The document's security settings don't allow this change").to_string()
+            }
+            commands::Needs::Copying if self.active.is_some() => crate::copy_refused().to_string(),
+            commands::Needs::Printing if self.active.is_some() => crate::print_refused().to_string(),
+            commands::Needs::TwoPageView if self.active.is_some() => tl!("Switch to two-page view first to show the cover page").to_string(),
+            _ => tl!("Open a document first").to_string(),
+        }
+    }
+
     fn execute_unguarded(&mut self, id: &str) -> bool {
         let Some(spec) = commands::command(id) else { return false };
         if !self.command_enabled(spec) {
-            let why = match spec.needs {
-                commands::Needs::Undo => tl!("Nothing to undo").to_string(),
-                commands::Needs::Redo => tl!("Nothing to redo").to_string(),
-                commands::Needs::FillForms if self.active.is_some() => tl!("This document has no form fields you can fill in").to_string(),
-                commands::Needs::HasComments if self.active.is_some() => tl!("This document has no comments to flatten").to_string(),
-                commands::Needs::HasFields if self.active.is_some() => tl!("This document has no form fields to flatten").to_string(),
-                commands::Needs::HasRedactions if self.active.is_some() => {
-                    tl!("There are no redaction marks (mark text, areas or pages first)").to_string()
-                }
-                commands::Needs::Marks(k) if self.active.is_some() => {
-                    let kind = match k {
-                        pdfcraft_engine::MarkKind::HeaderFooter => tl!("header or footer"),
-                        pdfcraft_engine::MarkKind::Watermark => tl!("watermark"),
-                        pdfcraft_engine::MarkKind::Background => tl!("background"),
-                    };
-                    crate::i18n::fmt(tl!("This document has no {kind} to change"), &[("kind", kind)])
-                }
-                // Restricted documents ask for their permissions password instead, so only an
-                // unprotected or a read-only document gets here.
-                commands::Needs::Security | commands::Needs::ProtectedSecurity if self.active.is_some() => {
-                    match self.active_ids().and_then(|(_, id)| self.session.get(id)) {
-                        Some(d) if !d.allows_security_change() => crate::i18n::fmt(tl!("{name} is read-only"), &[("name", &d.name)]),
-                        _ => tl!("This document isn't password-protected").to_string(),
-                    }
-                }
-                commands::Needs::Unlock if self.active.is_some() => tl!("This document has no restrictions to lift").to_string(),
-                commands::Needs::Assembly | commands::Needs::Modification | commands::Needs::Annotate if self.active.is_some() => {
-                    tl!("The document's security settings don't allow this change").to_string()
-                }
-                commands::Needs::Copying if self.active.is_some() => crate::copy_refused().to_string(),
-                commands::Needs::Printing if self.active.is_some() => crate::print_refused().to_string(),
-                commands::Needs::TwoPageView if self.active.is_some() => tl!("Switch to two-page view first to show the cover page").to_string(),
-                _ => tl!("Open a document first").to_string(),
-            };
+            let why = self.disabled_reason(spec);
             self.notify(why);
             return false;
         }
         let active = self.active;
         let targets = active.map(|i| self.views[i].target_pages()).unwrap_or_default();
+        self.run_file_command(id, active)
+            .or_else(|| self.run_view_command(id, active))
+            .or_else(|| self.run_page_command(id, active, targets))
+            .or_else(|| self.run_edit_command(id, active))
+            .or_else(|| self.run_form_command(id, active))
+            .or_else(|| self.run_secure_command(id, active))
+            .unwrap_or(false)
+    }
+
+    fn run_file_command(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
-            "ui.dock.reset" => {
-                if let Err(error) = crate::side_panels::command(self, true, &serde_json::Value::Null) {
-                    self.notify(error);
-                }
-            }
-            "view.side_panel" => self.toggle_side_panel(),
-            "view.tools_pane" => self.left_open = !self.left_open,
             "file.open" => self.open_dialog(),
             "file.open_recent" => match self.recent.first().map(|r| r.path.clone()) {
                 // The palette runs commands without a submenu: open the most recent file.
@@ -171,7 +179,6 @@ impl PdfCraftApp {
             "file.clear_recent" if self.recent.is_empty() => self.notify_tr("No recent files"),
             "file.clear_recent" => self.recent.clear(),
             "file.pin_folder" => self.pin_folder_dialog(),
-            "page.combine" => self.open_combine_tab(),
             "file.save" => {
                 self.save_active(SaveTarget::InPlace);
             }
@@ -198,35 +205,58 @@ impl PdfCraftApp {
                 self.protect_draft = Default::default();
                 self.dialog = Some(Dialog::Protect);
             }
-            "edit.attach" => self.attach_file_dialog(),
             "protect.remove" => {
                 if self.apply_edit(Edit::RemoveProtection) {
                     self.notify_tr("Security will be removed when you save");
                 }
-            }
-            "page.number" => {
-                if let Some(i) = active {
-                    let v = &self.views[i];
-                    let pages: Vec<usize> = if v.selected.is_empty() { vec![v.current] } else { v.selected.iter().copied().collect() };
-                    let (lo, hi) = (pages.iter().min().copied().unwrap_or(0), pages.iter().max().copied().unwrap_or(0));
-                    self.number_draft = crate::NumberDraft { from: lo + 1, to: hi + 1, ..self.number_draft.clone() };
-                }
-                self.dialog = Some(Dialog::NumberPages);
             }
             link if pdfcraft_engine::links::for_command(link).is_some() => {
                 if let Some(l) = pdfcraft_engine::links::for_command(link) {
                     self.open_url(l.url);
                 }
             }
-            "bookmark.add" => self.bookmark_action(crate::panels::BmAction::New),
-            "bookmark.from_structure" => self.bookmark_action(crate::panels::BmAction::FromStructure),
-            "edit.undo" => self.undo(),
-            "edit.redo" => self.redo(),
-            "edit.find" => {
-                if let Some(i) = active {
-                    self.views[i].open_find();
+            "app.preferences" => self.dialog = Some(Dialog::Preferences),
+            "protect.remove_hidden" => self.open_remove_hidden(),
+            "print.dialog" => self.open_print(),
+            "optimize.advanced" => self.dialog = Some(Dialog::Optimize),
+            "doc.compare" => self.dialog = Some(Dialog::CompareFiles),
+            "standards.pdfa" => {
+                self.pdfa.issues = None;
+                self.dialog = Some(Dialog::PdfA);
+            }
+            "actions.wizard" | "actions.distribution" | "actions.optimize_scans" => {
+                self.wizard.editing = None;
+                match id {
+                    "actions.distribution" => self.wizard.selected = Some("Prepare for Distribution".into()),
+                    "actions.optimize_scans" => self.wizard.selected = Some("Optimize Scanned Documents".into()),
+                    _ => {}
+                }
+                self.dialog = Some(Dialog::ActionWizard);
+            }
+            "create.blank" => self.create_blank(),
+            "create.file" => self.open_dialog(),
+            "create.multiple" => self.create_multiple_dialog(),
+            "create.multiple_separate" => self.create_multiple_separate_dialog(),
+            "create.images" => self.create_from_images_dialog(),
+            "create.clipboard" => self.create_from_clipboard(),
+            "optimize.reduce" => self.reduce_file_size(),
+            "help.shortcuts" => self.dialog = Some(Dialog::Shortcuts),
+            "help.about" => self.dialog = Some(Dialog::About),
+            "help.check_updates" => self.check_for_updates(),
+            _ => return None,
+        }
+        Some(true)
+    }
+
+    fn run_view_command(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
+        match id {
+            "ui.dock.reset" => {
+                if let Err(error) = crate::side_panels::command(self, true, &serde_json::Value::Null) {
+                    self.notify(error);
                 }
             }
+            "view.side_panel" => self.toggle_side_panel(),
+            "view.tools_pane" => self.left_open = !self.left_open,
             "view.focus_page_input" => {
                 if let (Some(ctx), Some(view)) = (self.ctx.clone(), active.and_then(|i| self.views.get_mut(i))) {
                     // The page box in the toolbar (chrome.rs); select its label so typing replaces it.
@@ -287,7 +317,7 @@ impl PdfCraftApp {
             "view.read_mode" => self.switch_mode(if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
             "view.previous_view" | "view.next_view" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
-                    return v.view_history(id == "view.next_view");
+                    return Some(v.view_history(id == "view.next_view"));
                 }
             }
             "view.next_tab" => self.step_tab(true),
@@ -300,54 +330,33 @@ impl PdfCraftApp {
             "view.theme.system" => self.set_theme_preference(ThemePreference::System),
             "view.theme.light" => self.set_theme_preference(ThemePreference::Light),
             "view.theme.dark" => self.set_theme_preference(ThemePreference::Dark),
-            "comment.list" => self.choose_right_panel(Some(RightPanel::Comments)),
-            tool if crate::comments::CommentTool::from_command(tool).is_some() => {
-                let Some(tool) = crate::comments::CommentTool::from_command(tool) else { return false };
-                self.comment_prefs.group_tool[tool.group()] = tool;
-                self.quick_tool = crate::QuickTool::Comment(tool);
-                // Acrobat opens the Comments panel with the commenting tools, unless the user closed it.
-                if self.right.is_none() && !self.comments_panel_closed {
-                    self.choose_right_panel(Some(RightPanel::Comments));
-                }
-                // A text selection made before picking a markup tool is marked right away.
-                if let (Some(kind), Some(i)) = (tool.markup(), active)
-                    && let Some(doc) = self.session.get(self.views[i].id)
+            "view.fit_visible" => {
+                if let Some(i) = self.active
+                    && let Err(e) = self.fit_visible(i)
                 {
-                    let info = &doc.info;
-                    if let Some((page, quads)) = self.views[i].selection_quads(info) {
-                        self.views[i].clear_selection();
-                        let style = self.comment_prefs.style(tool);
-                        let author = self.comment_prefs.author.clone();
-                        let shape = pdfcraft_engine::Shape::TextMarkup { kind, quads };
-                        self.apply_edit(Edit::AddAnnotation(pdfcraft_engine::NewAnnotation { page, shape, style, contents: String::new(), author }));
-                    }
+                    self.notify_fmt("Couldn't fit the visible content: {e}", &[("e", &e.to_string())]);
                 }
             }
-            "form.fields" => self.choose_right_panel(Some(RightPanel::Fields)),
-            "form.calculation_order" => {
-                self.left = crate::LeftPanel::CalculationOrder;
-                // The page edits the fields, so Preview ends; the page grid closes, as for a tool.
-                self.form_preview = false;
-                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
-                    v.organize = false;
-                }
-                self.reveal_tools();
-            }
-            "comment.flatten" => {
-                self.apply_edit(Edit::Flatten { comments: true, fields: false });
-            }
-            "form.flatten" => {
-                // Flatten what's typed in a field too (#166); a refused value flattens nothing.
-                if self.commit_form_typing() {
-                    self.apply_edit(Edit::Flatten { comments: false, fields: true });
-                }
-            }
-            "form.clear" => {
+            "view.marquee_zoom" => self.quick_tool = crate::QuickTool::MarqueeZoom,
+            _ => return None,
+        }
+        Some(true)
+    }
+
+    fn run_page_command(&mut self, id: &str, active: Option<usize>, targets: Vec<usize>) -> Option<bool> {
+        match id {
+            "page.combine" => self.open_combine_tab(),
+            "page.number" => {
                 if let Some(i) = active {
-                    self.views[i].forms.focus = None;
+                    let v = &self.views[i];
+                    let pages: Vec<usize> = if v.selected.is_empty() { vec![v.current] } else { v.selected.iter().copied().collect() };
+                    let (lo, hi) = (pages.iter().min().copied().unwrap_or(0), pages.iter().max().copied().unwrap_or(0));
+                    self.number_draft = crate::NumberDraft { from: lo + 1, to: hi + 1, ..self.number_draft.clone() };
                 }
-                self.apply_edit(Edit::ResetForm { names: None });
+                self.dialog = Some(Dialog::NumberPages);
             }
+            "bookmark.add" => self.bookmark_action(crate::panels::BmAction::New),
+            "bookmark.from_structure" => self.bookmark_action(crate::panels::BmAction::FromStructure),
             "page.organize" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     if v.organize {
@@ -376,6 +385,80 @@ impl PdfCraftApp {
             }
             "page.insert" => self.insert_from_file_dialog(),
             "page.replace" => self.replace_pages_dialog(),
+            "page.copy" => self.copy_pages(false),
+            "page.cut" => self.copy_pages(true),
+            "page.paste" => self.paste_pages(),
+            "page.duplicate" => {
+                self.apply_edit(Edit::DuplicatePages { pages: targets, at: None });
+            }
+            // Two or more selected pages reverse among themselves; otherwise the whole document.
+            "page.reverse" => {
+                let all = active.and_then(|i| self.views.get(i)).map_or(0, |v| v.page_count());
+                let pages = if targets.len() >= 2 { targets } else { (0..all).collect() };
+                self.apply_edit(Edit::ReversePages { pages });
+            }
+            "page.crop" => {
+                self.quick_tool = crate::QuickTool::Crop;
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.organize = false;
+                }
+                self.notify_tr("Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes");
+            }
+            "page.boxes" => {
+                self.boxes_draft.seeded = None;
+                self.dialog = Some(Dialog::PageBoxes);
+            }
+            "page.extract" => self.open_extract_dialog(),
+            "page.rotate_dialog" => {
+                if let Some(i) = active {
+                    let n = self.session.get(self.views[i].id).map_or(1, |d| d.info.pages.len());
+                    self.rotate_draft.to = n;
+                    self.rotate_draft.which = if self.views[i].selected.is_empty() { 0 } else { 1 };
+                }
+                self.dialog = Some(Dialog::RotatePages);
+            }
+            "page.split" => self.dialog = Some(Dialog::Split),
+            _ => return None,
+        }
+        Some(true)
+    }
+
+    fn run_edit_command(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
+        match id {
+            "edit.attach" => self.attach_file_dialog(),
+            "edit.undo" => self.undo(),
+            "edit.redo" => self.redo(),
+            "edit.find" => {
+                if let Some(i) = active {
+                    self.views[i].open_find();
+                }
+            }
+            "comment.list" => self.choose_right_panel(Some(RightPanel::Comments)),
+            tool if crate::comments::CommentTool::from_command(tool).is_some() => {
+                let Some(tool) = crate::comments::CommentTool::from_command(tool) else { return Some(false) };
+                self.comment_prefs.group_tool[tool.group()] = tool;
+                self.quick_tool = crate::QuickTool::Comment(tool);
+                // Acrobat opens the Comments panel with the commenting tools, unless the user closed it.
+                if self.right.is_none() && !self.comments_panel_closed {
+                    self.choose_right_panel(Some(RightPanel::Comments));
+                }
+                // A text selection made before picking a markup tool is marked right away.
+                if let (Some(kind), Some(i)) = (tool.markup(), active)
+                    && let Some(doc) = self.session.get(self.views[i].id)
+                {
+                    let info = &doc.info;
+                    if let Some((page, quads)) = self.views[i].selection_quads(info) {
+                        self.views[i].clear_selection();
+                        let style = self.comment_prefs.style(tool);
+                        let author = self.comment_prefs.author.clone();
+                        let shape = pdfcraft_engine::Shape::TextMarkup { kind, quads };
+                        self.apply_edit(Edit::AddAnnotation(pdfcraft_engine::NewAnnotation { page, shape, style, contents: String::new(), author }));
+                    }
+                }
+            }
+            "comment.flatten" => {
+                self.apply_edit(Edit::Flatten { comments: true, fields: false });
+            }
             "edit.header_footer"
             | "edit.watermark"
             | "edit.background"
@@ -416,15 +499,7 @@ impl PdfCraftApp {
             }
             "export.image" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Image)),
             "export.text" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Text)),
-            "a11y.check" => self.start_accessibility_check(),
-            "a11y.find_untagged" => self.find_untagged_content(),
             "ocr.recognize" => self.dialog = Some(Dialog::RecognizeText),
-            "tools.js_console" => self.dialog = Some(Dialog::JsConsole),
-            "tools.document_js" => {
-                self.doc_js = Default::default();
-                self.dialog = Some(Dialog::DocumentJs);
-            }
-            "app.preferences" => self.dialog = Some(Dialog::Preferences),
             "ocr.recognize_batch" => self.ocr_files_dialog(),
             "edit.edit_text" => {
                 self.quick_tool = crate::QuickTool::EditText;
@@ -440,16 +515,6 @@ impl PdfCraftApp {
                     self.choose_right_panel(Some(crate::RightPanel::Search));
                 }
             }
-            "a11y.report" => self.show_accessibility_report(),
-            "a11y.autotag" => {
-                if self.apply_edit(pdfcraft_engine::Edit::AutoTagText) {
-                    self.choose_right_panel(Some(RightPanel::Tags));
-                }
-            }
-            "a11y.alt_text" => self.start_alt_text(),
-            "a11y.autotag_fields" => self.autotag_form_fields(),
-            "a11y.tags" => self.choose_right_panel(Some(RightPanel::Tags)),
-            "a11y.reading_options" => self.dialog = Some(Dialog::Properties(crate::PropsTab::Advanced)),
             "export.all_images" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::AllImages)),
             "edit.text" => {
                 self.quick_tool = crate::QuickTool::AddText;
@@ -463,6 +528,183 @@ impl PdfCraftApp {
             }
             "edit.links_from_urls" => self.links_from_urls(),
             "edit.remove_links" => self.remove_all_links(),
+            "comment.import" | "form.import_data" => self.import_data_dialog(),
+            "comment.stamp" => {
+                self.left = crate::LeftPanel::Tool("stamp");
+                self.reveal_tools();
+            }
+            "comment.export" => self.export_data_dialog(true, false),
+            "comment.summarize" => self.dialog = Some(Dialog::SummarizeComments),
+            "edit.column_select" => self.quick_tool = crate::QuickTool::ColumnSelect,
+            "edit.snapshot" => {
+                self.quick_tool = crate::QuickTool::Snapshot;
+                self.notify_tr("Drag a rectangle around the area to copy");
+            }
+            "edit.copy" => {
+                if let (Some(i), Some(ctx)) = (active, self.ctx.clone()) {
+                    return Some(self.copy_selected_text(i, &ctx));
+                }
+                return Some(false);
+            }
+            "comment.hide_all" => {
+                if let Some(i) = active {
+                    let id = self.views[i].id;
+                    let hide = !self.session.get(id).is_some_and(|d| d.comments_hidden());
+                    if self.session.set_hide_comments(id, hide) {
+                        self.views[i].invalidate_content();
+                    }
+                }
+            }
+            "export.docx" => self.export_office_dialog(pdfcraft_engine::compare::OfficeFormat::Docx),
+            "export.pptx" => self.export_office_dialog(pdfcraft_engine::compare::OfficeFormat::Pptx),
+            "export.html" => self.export_office_dialog(pdfcraft_engine::compare::OfficeFormat::Html),
+            "export.rtf" => self.export_office_dialog(pdfcraft_engine::compare::OfficeFormat::Rtf),
+            "ocr.enhance_camera" => {
+                // The corners start on the document's edges when they can be found, else
+                // inset on the current page (camera_ui::page_input).
+                self.quick_tool = crate::QuickTool::EnhanceCamera;
+                if let Some(i) = self.active
+                    && let Some(view) = self.views.get_mut(i)
+                    && let Some(page) = self.session.get(view.id).and_then(|d| d.info.pages.get(view.current).cloned())
+                {
+                    view.camera_done = None;
+                    view.camera = self.session.detect_camera_corners(view.id, view.current).map(|found| crate::camera_ui::CameraQuad {
+                        page: view.current,
+                        corners: found.map(|[x, y]| page.user_to_view(x as f32, y as f32)),
+                        grab: None,
+                    });
+                }
+                self.notify_tr("Drag the corners onto the document's edges, then choose Enhance page.");
+            }
+            _ => return None,
+        }
+        Some(true)
+    }
+
+    fn run_form_command(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
+        match id {
+            "form.fields" => self.choose_right_panel(Some(RightPanel::Fields)),
+            "form.calculation_order" => {
+                self.left = crate::LeftPanel::CalculationOrder;
+                // The page edits the fields, so Preview ends; the page grid closes, as for a tool.
+                self.form_preview = false;
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.organize = false;
+                }
+                self.reveal_tools();
+            }
+            "form.flatten" => {
+                // Flatten what's typed in a field too (#166); a refused value flattens nothing.
+                if self.commit_form_typing() {
+                    self.apply_edit(Edit::Flatten { comments: false, fields: true });
+                }
+            }
+            "form.clear" => {
+                if let Some(i) = active {
+                    self.views[i].forms.focus = None;
+                }
+                self.apply_edit(Edit::ResetForm { names: None });
+            }
+            "form.tab_order.row" | "form.tab_order.column" | "form.tab_order.structure" => {
+                let order = match id {
+                    "form.tab_order.row" => pdfcraft_engine::TabOrder::Row,
+                    "form.tab_order.column" => pdfcraft_engine::TabOrder::Column,
+                    _ => pdfcraft_engine::TabOrder::Structure,
+                };
+                let n = active.and_then(|i| self.session.get(self.views[i].id)).map_or(0, |d| d.info.pages.len());
+                self.apply_edit(Edit::SetTabOrder { pages: (0..n).collect(), order });
+            }
+            "sign.digital" | "sign.certify" => {
+                let certify = id == "sign.certify";
+                self.quick_tool = crate::QuickTool::SignArea { certify };
+                self.notify_tr("Drag to draw the area where the signature should appear.");
+            }
+            "sign.certify_invisible" => {
+                let page = active.map_or(0, |i| self.views[i].current);
+                self.start_signing(page, None, None, Some(2));
+            }
+            "sign.validate" => {
+                let certs = self.session.trusted_certificates().to_vec();
+                self.apply_trusted_certificates(certs);
+                self.choose_right_panel(Some(RightPanel::Signatures));
+            }
+            "sign.panel" => self.choose_right_panel(Some(RightPanel::Signatures)),
+            "form.export_data" => self.export_data_dialog(false, true),
+            "form.merge_data" => self.merge_data_dialog(),
+            "form.prepare" => {
+                self.left = crate::LeftPanel::Tool("form");
+                self.reveal_tools();
+                self.choose_right_panel(Some(RightPanel::Fields));
+                // Like Acrobat, a document without fields gets them detected on the way in.
+                if let Some((_, id)) = self.active_ids()
+                    && self.session.get(id).is_some_and(|d| d.form.is_empty() && d.editable())
+                {
+                    self.detect_fields();
+                }
+            }
+            "form.detect" => self.detect_fields(),
+            "form.field.properties" => {
+                if let Some((name, w)) = active.and_then(|i| self.views[i].prepare.selected.clone()) {
+                    self.open_field_props(&name, w);
+                }
+            }
+            field if crate::prepare::FieldTool::from_command(field).is_some() => {
+                let Some(tool) = crate::prepare::FieldTool::from_command(field) else { return Some(false) };
+                self.quick_tool = crate::QuickTool::Field(tool);
+                self.left = crate::LeftPanel::Tool("form");
+                self.reveal_tools();
+                if let Some(i) = active {
+                    self.views[i].forms.focus = None;
+                }
+                self.notify_fmt(
+                    "Click on the page to add a {tool}, or drag to set its size",
+                    &[("tool", &crate::i18n::in_sentence(tl!(tool.label())))],
+                );
+            }
+            "sign.fill.signature.remove" => self.signature = None,
+            "sign.fill.initials.remove" => self.initials = None,
+            "sign.fill.signature.change" | "sign.fill.initials.change" => {
+                let initials = id == "sign.fill.initials.change";
+                let saved = if initials { self.initials.as_ref() } else { self.signature.as_ref() };
+                self.signature_draft = saved.map_or_else(
+                    || crate::fill_sign::SigDraft::new(initials, &self.comment_prefs.author),
+                    |s| crate::fill_sign::SigDraft::from_saved(initials, s),
+                );
+                self.dialog = Some(Dialog::Signature);
+            }
+            fill if crate::fill_sign::FillTool::from_command(fill).is_some() => {
+                let Some(tool) = crate::fill_sign::FillTool::from_command(fill) else { return Some(false) };
+                self.quick_tool = crate::QuickTool::Fill(tool);
+                let initials = tool == crate::fill_sign::FillTool::Initials;
+                if (tool == crate::fill_sign::FillTool::Signature && self.signature.is_none()) || (initials && self.initials.is_none()) {
+                    self.signature_draft = crate::fill_sign::SigDraft::new(initials, &self.comment_prefs.author);
+                    self.dialog = Some(Dialog::Signature);
+                }
+            }
+            _ => return None,
+        }
+        Some(true)
+    }
+
+    fn run_secure_command(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
+        match id {
+            "a11y.check" => self.start_accessibility_check(),
+            "a11y.find_untagged" => self.find_untagged_content(),
+            "tools.js_console" => self.dialog = Some(Dialog::JsConsole),
+            "tools.document_js" => {
+                self.doc_js = Default::default();
+                self.dialog = Some(Dialog::DocumentJs);
+            }
+            "a11y.report" => self.show_accessibility_report(),
+            "a11y.autotag" => {
+                if self.apply_edit(pdfcraft_engine::Edit::AutoTagText) {
+                    self.choose_right_panel(Some(RightPanel::Tags));
+                }
+            }
+            "a11y.alt_text" => self.start_alt_text(),
+            "a11y.autotag_fields" => self.autotag_form_fields(),
+            "a11y.tags" => self.choose_right_panel(Some(RightPanel::Tags)),
+            "a11y.reading_options" => self.dialog = Some(Dialog::Properties(crate::PropsTab::Advanced)),
             "redact.mark" => {
                 self.quick_tool = crate::QuickTool::Redact;
                 self.left = crate::LeftPanel::Tool("redact");
@@ -502,205 +744,13 @@ impl PdfCraftApp {
                     self.dialog = Some(Dialog::RedactApply);
                 }
             }
-            "protect.remove_hidden" => self.open_remove_hidden(),
-            "print.dialog" => self.open_print(),
             "redact.sanitize" => self.dialog = Some(Dialog::Sanitize),
             "redact.clear" => {
                 self.apply_edit(Edit::ClearRedactions);
             }
-            "form.tab_order.row" | "form.tab_order.column" | "form.tab_order.structure" => {
-                let order = match id {
-                    "form.tab_order.row" => pdfcraft_engine::TabOrder::Row,
-                    "form.tab_order.column" => pdfcraft_engine::TabOrder::Column,
-                    _ => pdfcraft_engine::TabOrder::Structure,
-                };
-                let n = active.and_then(|i| self.session.get(self.views[i].id)).map_or(0, |d| d.info.pages.len());
-                self.apply_edit(Edit::SetTabOrder { pages: (0..n).collect(), order });
-            }
-            "comment.import" | "form.import_data" => self.import_data_dialog(),
-            "comment.stamp" => {
-                self.left = crate::LeftPanel::Tool("stamp");
-                self.reveal_tools();
-            }
-            "comment.export" => self.export_data_dialog(true, false),
-            "comment.summarize" => self.dialog = Some(Dialog::SummarizeComments),
-            "sign.digital" | "sign.certify" => {
-                let certify = id == "sign.certify";
-                self.quick_tool = crate::QuickTool::SignArea { certify };
-                self.notify_tr("Drag to draw the area where the signature should appear.");
-            }
-            "sign.certify_invisible" => {
-                let page = active.map_or(0, |i| self.views[i].current);
-                self.start_signing(page, None, None, Some(2));
-            }
-            "sign.validate" => {
-                let certs = self.session.trusted_certificates().to_vec();
-                self.apply_trusted_certificates(certs);
-                self.choose_right_panel(Some(RightPanel::Signatures));
-            }
-            "sign.panel" => self.choose_right_panel(Some(RightPanel::Signatures)),
-            "optimize.advanced" => self.dialog = Some(Dialog::Optimize),
-            "view.fit_visible" => {
-                if let Some(i) = self.active
-                    && let Err(e) = self.fit_visible(i)
-                {
-                    self.notify_fmt("Couldn't fit the visible content: {e}", &[("e", &e.to_string())]);
-                }
-            }
-            "view.marquee_zoom" => self.quick_tool = crate::QuickTool::MarqueeZoom,
-            "edit.column_select" => self.quick_tool = crate::QuickTool::ColumnSelect,
-            "edit.snapshot" => {
-                self.quick_tool = crate::QuickTool::Snapshot;
-                self.notify_tr("Drag a rectangle around the area to copy");
-            }
-            "edit.copy" => {
-                if let (Some(i), Some(ctx)) = (active, self.ctx.clone()) {
-                    return self.copy_selected_text(i, &ctx);
-                }
-                return false;
-            }
-            "page.copy" => self.copy_pages(false),
-            "page.cut" => self.copy_pages(true),
-            "page.paste" => self.paste_pages(),
-            "comment.hide_all" => {
-                if let Some(i) = active {
-                    let id = self.views[i].id;
-                    let hide = !self.session.get(id).is_some_and(|d| d.comments_hidden());
-                    if self.session.set_hide_comments(id, hide) {
-                        self.views[i].invalidate_content();
-                    }
-                }
-            }
-            "form.export_data" => self.export_data_dialog(false, true),
-            "form.merge_data" => self.merge_data_dialog(),
-            "export.docx" => self.export_office_dialog(pdfcraft_engine::compare::OfficeFormat::Docx),
-            "export.pptx" => self.export_office_dialog(pdfcraft_engine::compare::OfficeFormat::Pptx),
-            "export.html" => self.export_office_dialog(pdfcraft_engine::compare::OfficeFormat::Html),
-            "export.rtf" => self.export_office_dialog(pdfcraft_engine::compare::OfficeFormat::Rtf),
-            "form.prepare" => {
-                self.left = crate::LeftPanel::Tool("form");
-                self.reveal_tools();
-                self.choose_right_panel(Some(RightPanel::Fields));
-                // Like Acrobat, a document without fields gets them detected on the way in.
-                if let Some((_, id)) = self.active_ids()
-                    && self.session.get(id).is_some_and(|d| d.form.is_empty() && d.editable())
-                {
-                    self.detect_fields();
-                }
-            }
-            "form.detect" => self.detect_fields(),
-            "doc.compare" => self.dialog = Some(Dialog::CompareFiles),
-            "standards.pdfa" => {
-                self.pdfa.issues = None;
-                self.dialog = Some(Dialog::PdfA);
-            }
-            "actions.wizard" | "actions.distribution" | "actions.optimize_scans" => {
-                self.wizard.editing = None;
-                match id {
-                    "actions.distribution" => self.wizard.selected = Some("Prepare for Distribution".into()),
-                    "actions.optimize_scans" => self.wizard.selected = Some("Optimize Scanned Documents".into()),
-                    _ => {}
-                }
-                self.dialog = Some(Dialog::ActionWizard);
-            }
-            "form.field.properties" => {
-                if let Some((name, w)) = active.and_then(|i| self.views[i].prepare.selected.clone()) {
-                    self.open_field_props(&name, w);
-                }
-            }
-            field if crate::prepare::FieldTool::from_command(field).is_some() => {
-                let Some(tool) = crate::prepare::FieldTool::from_command(field) else { return false };
-                self.quick_tool = crate::QuickTool::Field(tool);
-                self.left = crate::LeftPanel::Tool("form");
-                self.reveal_tools();
-                if let Some(i) = active {
-                    self.views[i].forms.focus = None;
-                }
-                self.notify_fmt(
-                    "Click on the page to add a {tool}, or drag to set its size",
-                    &[("tool", &crate::i18n::in_sentence(tl!(tool.label())))],
-                );
-            }
-            "sign.fill.signature.remove" => self.signature = None,
-            "sign.fill.initials.remove" => self.initials = None,
-            "sign.fill.signature.change" | "sign.fill.initials.change" => {
-                let initials = id == "sign.fill.initials.change";
-                let saved = if initials { self.initials.as_ref() } else { self.signature.as_ref() };
-                self.signature_draft = saved.map_or_else(
-                    || crate::fill_sign::SigDraft::new(initials, &self.comment_prefs.author),
-                    |s| crate::fill_sign::SigDraft::from_saved(initials, s),
-                );
-                self.dialog = Some(Dialog::Signature);
-            }
-            fill if crate::fill_sign::FillTool::from_command(fill).is_some() => {
-                let Some(tool) = crate::fill_sign::FillTool::from_command(fill) else { return false };
-                self.quick_tool = crate::QuickTool::Fill(tool);
-                let initials = tool == crate::fill_sign::FillTool::Initials;
-                if (tool == crate::fill_sign::FillTool::Signature && self.signature.is_none()) || (initials && self.initials.is_none()) {
-                    self.signature_draft = crate::fill_sign::SigDraft::new(initials, &self.comment_prefs.author);
-                    self.dialog = Some(Dialog::Signature);
-                }
-            }
-            "create.blank" => self.create_blank(),
-            "create.file" => self.open_dialog(),
-            "create.multiple" => self.create_multiple_dialog(),
-            "create.multiple_separate" => self.create_multiple_separate_dialog(),
-            "create.images" => self.create_from_images_dialog(),
-            "create.clipboard" => self.create_from_clipboard(),
-            "optimize.reduce" => self.reduce_file_size(),
-            "page.duplicate" => {
-                self.apply_edit(Edit::DuplicatePages { pages: targets, at: None });
-            }
-            // Two or more selected pages reverse among themselves; otherwise the whole document.
-            "page.reverse" => {
-                let all = active.and_then(|i| self.views.get(i)).map_or(0, |v| v.page_count());
-                let pages = if targets.len() >= 2 { targets } else { (0..all).collect() };
-                self.apply_edit(Edit::ReversePages { pages });
-            }
-            "ocr.enhance_camera" => {
-                // The corners start on the document's edges when they can be found, else
-                // inset on the current page (camera_ui::page_input).
-                self.quick_tool = crate::QuickTool::EnhanceCamera;
-                if let Some(i) = self.active
-                    && let Some(view) = self.views.get_mut(i)
-                    && let Some(page) = self.session.get(view.id).and_then(|d| d.info.pages.get(view.current).cloned())
-                {
-                    view.camera_done = None;
-                    view.camera = self.session.detect_camera_corners(view.id, view.current).map(|found| crate::camera_ui::CameraQuad {
-                        page: view.current,
-                        corners: found.map(|[x, y]| page.user_to_view(x as f32, y as f32)),
-                        grab: None,
-                    });
-                }
-                self.notify_tr("Drag the corners onto the document's edges, then choose Enhance page.");
-            }
-            "page.crop" => {
-                self.quick_tool = crate::QuickTool::Crop;
-                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
-                    v.organize = false;
-                }
-                self.notify_tr("Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes");
-            }
-            "page.boxes" => {
-                self.boxes_draft.seeded = None;
-                self.dialog = Some(Dialog::PageBoxes);
-            }
-            "page.extract" => self.open_extract_dialog(),
-            "page.rotate_dialog" => {
-                if let Some(i) = active {
-                    let n = self.session.get(self.views[i].id).map_or(1, |d| d.info.pages.len());
-                    self.rotate_draft.to = n;
-                    self.rotate_draft.which = if self.views[i].selected.is_empty() { 0 } else { 1 };
-                }
-                self.dialog = Some(Dialog::RotatePages);
-            }
-            "page.split" => self.dialog = Some(Dialog::Split),
-            "help.shortcuts" => self.dialog = Some(Dialog::Shortcuts),
-            "help.about" => self.dialog = Some(Dialog::About),
-            "help.check_updates" => self.check_for_updates(),
-            _ => return false,
+            _ => return None,
         }
-        true
+        Some(true)
     }
 
     /// Shows the next tab (or the previous one) in the strip's order, wrapping around at either

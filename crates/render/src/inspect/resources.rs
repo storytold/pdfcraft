@@ -3,7 +3,7 @@ use super::core::inspect;
 use super::core::{Inspector, load_options};
 use super::model::{Attachment, AttachmentSource, FontInfo, Layer, PageTransition, TransitionStyle};
 use super::navigation::NameTreeSeen;
-use super::*;
+use super::{AssertUnwindSafe, Dictionary, DocInfo, Document, HashSet, Object, ObjectId, catch_unwind};
 
 /// Decoded bytes read from an XFA form's configuration packet (or a whole-XDP `/XFA` stream) to
 /// find `dynamicRender`. Designer's packets are a few kilobytes; a whole XDP can hold the template.

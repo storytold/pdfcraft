@@ -1,4 +1,4 @@
-use super::*;
+use super::HashSet;
 
 /// What kind of template object a node is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,5 +1,5 @@
 use super::copy::WIDGET_KEYS;
-use super::*;
+use super::{Dict, Document, HashMap, HashSet, ObjRef, Object, OrganizeError, walk};
 
 /// Rename the top-level fields about to be registered in `dst` whose fully-qualified names
 /// (`parent.T.child`) are already taken, so each imported field stays its own field instead of

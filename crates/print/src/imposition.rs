@@ -1,7 +1,7 @@
 use super::error::PrintError;
 use super::settings::{Content, Settings};
 use super::sheets::{Sheet, layout};
-use super::*;
+use super::{DecodeBudget, Dict, Document, Matrix, ObjRef, Object, SaveOptions, Stream, write_full};
 
 // Model-derived transforms and clipping bounds need their full PDF decimal precision.
 fn geometry_number(value: f64) -> String {

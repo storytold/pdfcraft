@@ -1,7 +1,7 @@
 use super::dispatch::Content;
 use super::error::{Result, ToolError, failed};
 use super::json::{Args, one_based};
-use super::*;
+use super::{Arc, Automation, DocId, HashMap, PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind, Value, commands, json, tools};
 
 /// Default and maximum resolution for `page_render`.
 pub(crate) const DEFAULT_DPI: f64 = 96.0;

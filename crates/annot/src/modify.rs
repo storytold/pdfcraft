@@ -6,8 +6,9 @@ use super::info::{line_endings_of, text_value};
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, page_ref, set_annots};
 use super::types::{
     FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb, Shape, Style,
+    StyleChange, TextReplacement,
 };
-use super::*;
+use super::{AnnotError, Dict, Document, HashMap, HashSet, ObjRef, Object, PdfString, appearance};
 
 /// A comment another program drew, whose text the standard fonts can't draw. Redrawing it would
 /// replace those characters with `?`, so the edit is refused before the dictionary changes.
@@ -499,17 +500,8 @@ fn border_width_of(d: &Dict) -> f64 {
 }
 
 /// Change a comment's colour, opacity, line width and/or line endings, and redraw it.
-#[allow(clippy::too_many_arguments)]
-pub fn set_style(
-    doc: &mut Document,
-    page: usize,
-    index: usize,
-    color: Option<Rgb>,
-    opacity: Option<f64>,
-    width: Option<f64>,
-    endings: Option<&[LineEnding]>,
-    meta: &Meta,
-) -> Result<(), AnnotError> {
+pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
+    let StyleChange { color, opacity, width, endings } = change;
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
     let d = annot_dict(doc, r);
@@ -521,7 +513,7 @@ pub fn set_style(
     if color.is_some_and(|c| !finite(&c)) || opacity.is_some_and(|o| !o.is_finite()) || width.is_some_and(|w| !w.is_finite()) {
         return Err(AnnotError::Invalid("invalid style".into()));
     }
-    if let Some(ends) = endings {
+    if let Some(ends) = &endings {
         let callout = subtype == "FreeText" && d.contains(b"CL");
         let pair = matches!(subtype.as_str(), "Line" | "PolyLine");
         if (callout && ends.len() != 1) || (pair && ends.len() != 2) || (!callout && !pair) {
@@ -691,18 +683,8 @@ fn pair_points(d: &Dict, key: &[u8]) -> Option<Vec<[f64; 2]>> {
 /// to, so one id for both writes `inreplyto` equal to the caret's own `name`, and a reader that
 /// resolves names (Acrobat, and our own importer) loses the pair. `caret_meta` is a second id
 /// from the caller, so the edit stays deterministic.
-#[allow(clippy::too_many_arguments)]
-pub fn add_text_replacement(
-    doc: &mut Document,
-    page: usize,
-    quads: &[[f64; 8]],
-    replacement: &str,
-    author: &str,
-    strike: &Style,
-    caret: &Style,
-    meta: &Meta,
-    caret_meta: &Meta,
-) -> Result<usize, AnnotError> {
+pub fn add_text_replacement(doc: &mut Document, replacement: TextReplacement<'_>) -> Result<usize, AnnotError> {
+    let TextReplacement { page, quads, replacement, author, strike, caret, strike_meta: meta, caret_meta } = replacement;
     let last = *quads.last().ok_or_else(|| AnnotError::Invalid("select the text to replace first".into()))?;
     let s = add_annotation(
         doc,

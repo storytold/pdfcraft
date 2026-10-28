@@ -5,7 +5,7 @@ use super::place::{
     END, Isolation, add_page_resources, add_resources, begin, check, check_on_top, contents, free_font_name, isolation, page_fonts, page_list, place,
     place_inside_wrapper, stream_tag, text_op, undrawable, wrapper_role,
 };
-use super::*;
+use super::{Document, EditError, Object, added, helvetica_width};
 
 /// Add a header and footer to `pages` (0-based). With `replace`, existing headers and footers on
 /// those pages are removed first (Acrobat's Replace Existing).

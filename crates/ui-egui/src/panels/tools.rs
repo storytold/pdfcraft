@@ -1,5 +1,8 @@
 use super::edit::{actions_menu, edit_panel, stamp_palette};
-use super::*;
+use super::{
+    Align2, Availability, Color32, CornerRadius, LeftPanel, PdfCraftApp, Rect, Sense, Stroke, TOOL_GROUPS, Tokens, ToolGroup, catalog, icons, theme,
+    vec2, widgets,
+};
 
 const COLLAPSED_TOOLS: usize = 14;
 

@@ -1,4 +1,4 @@
-use super::*;
+use super::{Align, Align2, Color32, CornerRadius, DocInfo, Layout, Nav, Rect, Sense, Stroke, Tokens, icons, pos2, theme, vec2};
 
 /// Page tools in the Pages panel's header (#4415): a menu, as Bookmark options is in its panel,
 /// to insert a blank page or pages from a file, rotate, extract and delete. Each runs its

@@ -1,6 +1,6 @@
 use super::device::{DIRECTION_TOLERANCE, Drawn, WORD_GAP};
 use super::order::{NONE, REDRAW_CANDIDATES, Run, Scratch, Seg, fingerprint, place_glyphs, redraws, restarts_run, reverse_rtl};
-use super::*;
+use super::{HashMap, PageText, TextGlyph};
 
 /// Glyphs in reading order, as indices into the page's glyphs, with their lines and word gaps.
 pub(super) struct Flow {

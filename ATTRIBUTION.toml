@@ -3356,30 +3356,30 @@ usage = "1x + 2x HiDPI 16-colour palette TIFF copied into the macOS DMG by packa
 sha256 = "f46881724a6621f3686a612a79dbdce4f7dbe9e2025610e44c9a094341334c2c"
 
 [[fetched]]
-file = "text-detection.rten"
-url = "https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.rten"
+file = "text-detection.onnx"
+url = "https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.onnx"
 title = "Ocrs text detection model"
 author = "Robert Knight (ocrs-models; trained on HierText, CC-BY-SA-4.0)"
-source = "https://github.com/robertknight/ocrs-models (the models ocrs downloads; model card: https://huggingface.co/robertknight/ocrs, cc-by-sa-4.0)"
+source = "https://github.com/robertknight/ocrs/blob/0c826441362a701c55560fefc17bf356b6d1037e/ocrs/examples/download-models.sh (author-published ONNX models; model card: https://huggingface.co/robertknight/ocrs/blob/df0edd170279ab971b53e094c627255a87e1a503/README.md, cc-by-sa-4.0)"
 licence = "CC-BY-SA-4.0"
 licence_url = "https://creativecommons.org/licenses/by-sa/4.0/legalcode.txt"
 licence_sha256 = "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1cf5"
 kind = "model"
 usage = "Scan & OCR: finds words on page images (cargo xtask models)"
-sha256 = "f15cfb56bd02c4bf478a20343986504a1f01e1665c2b3a0ad66340f054b1b5ca"
+sha256 = "a917b23dbd9524b465df7e922641b3ff2981623df4ded5a0234004ef2fee7cfe"
 
 [[fetched]]
-file = "text-recognition.rten"
-url = "https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.rten"
+file = "text-recognition.onnx"
+url = "https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.onnx"
 title = "Ocrs text recognition model"
 author = "Robert Knight (ocrs-models; trained on HierText, CC-BY-SA-4.0)"
-source = "https://github.com/robertknight/ocrs-models (the models ocrs downloads; model card: https://huggingface.co/robertknight/ocrs, cc-by-sa-4.0)"
+source = "https://github.com/robertknight/ocrs/blob/0c826441362a701c55560fefc17bf356b6d1037e/ocrs/examples/download-models.sh (author-published ONNX models; model card: https://huggingface.co/robertknight/ocrs/blob/df0edd170279ab971b53e094c627255a87e1a503/README.md, cc-by-sa-4.0)"
 licence = "CC-BY-SA-4.0"
 licence_url = "https://creativecommons.org/licenses/by-sa/4.0/legalcode.txt"
 licence_sha256 = "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1cf5"
 kind = "model"
 usage = "Scan & OCR: reads the words it finds (cargo xtask models)"
-sha256 = "e484866d4cce403175bd8d00b128feb08ab42e208de30e42cd9889d8f1735a6e"
+sha256 = "86c145c2edb96c8caed5b1ebb8f44d706408922211451c309c625157dd6061c5"
 
 [[build_input]]
 name = "craft-fonts"

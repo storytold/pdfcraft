@@ -3601,13 +3601,17 @@ fn dotted_field_names_are_made_with_parent_fields() {
     })
     .unwrap();
 
+    invalid_dotted_field_names_are_rejected(&mut doc, &text);
+}
+
+fn invalid_dotted_field_names_are_rejected(doc: &mut Document, text: &NewField) {
     for bad in ["MASTER", "MASTER.street1.x", "MASTER..x", ".x", "x.", "MASTER. "] {
-        assert!(add_field(&mut doc, 0, [300.0, 200.0, 450.0, 220.0], &text, Some(bad)).is_err(), "{bad:?}");
-        assert!(set_props(&mut doc, "name", &FieldProps { name: Some(bad.into()), ..FieldProps::default() }).is_err(), "{bad:?}");
+        assert!(add_field(doc, 0, [300.0, 200.0, 450.0, 220.0], text, Some(bad)).is_err(), "{bad:?}");
+        assert!(set_props(doc, "name", &FieldProps { name: Some(bad.into()), ..FieldProps::default() }).is_err(), "{bad:?}");
     }
     let deep = vec!["p"; 33].join(".");
-    assert!(add_field(&mut doc, 0, [300.0, 200.0, 450.0, 220.0], &text, Some(&deep)).is_err(), "too deep");
-    assert!(set_props(&mut doc, "name", &FieldProps { name: Some("MASTER.street1".into()), ..FieldProps::default() }).is_err(), "taken");
+    assert!(add_field(doc, 0, [300.0, 200.0, 450.0, 220.0], text, Some(&deep)).is_err(), "too deep");
+    assert!(set_props(doc, "name", &FieldProps { name: Some("MASTER.street1".into()), ..FieldProps::default() }).is_err(), "taken");
 }
 
 /// Review on #2957: a parent left empty by a move keeps its name from the next default name
@@ -3801,95 +3805,134 @@ fn existing_form_fonts_are_kept_and_an_unchanged_resource_dictionary_is_not_rewr
 /// - Helv, TiRo and Cour are there.
 #[test]
 fn every_shape_of_form_fonts_ends_as_objects() {
-    let font = |base: &str| format!("<< /Type /Font /Subtype /Type1 /BaseFont /{base} >>");
     let mut cases = 0;
     for dr_shape in ["missing", "inline", "object"] {
         for font_shape in ["missing", "inline", "object", "number"] {
             for helv in ["missing", "inline", "object", "dangling", "null", "number"] {
                 for mine in ["missing", "inline", "object"] {
-                    if dr_shape == "missing" && (font_shape != "missing" || helv != "missing" || mine != "missing") {
-                        continue;
-                    }
-                    if matches!(font_shape, "missing" | "number") && (helv != "missing" || mine != "missing") {
+                    let case = FontShapeCase::new(dr_shape, font_shape, helv, mine);
+                    if !case.is_valid() {
                         continue;
                     }
                     cases += 1;
-                    let what = format!("/DR {dr_shape}, /Font {font_shape}, /Helv {helv}, /Mine {mine}");
-                    let mut entries = String::new();
-                    match helv {
-                        "inline" => entries += &format!("/Helv {} ", font("Arial")),
-                        "object" => entries += "/Helv 7 0 R ",
-                        "dangling" => entries += "/Helv 99 0 R ",
-                        "null" => entries += "/Helv null ",
-                        "number" => entries += "/Helv 3 ",
-                        _ => {}
-                    }
-                    match mine {
-                        "inline" => entries += &format!("/Mine {} ", font("Symbol")),
-                        "object" => entries += "/Mine 8 0 R ",
-                        _ => {}
-                    }
-                    let fonts_value = match font_shape {
-                        "inline" => format!("<< {entries}>>"),
-                        "object" => "6 0 R".into(),
-                        "number" => "7".into(),
-                        _ => String::new(),
-                    };
-                    let dr_dict = if fonts_value.is_empty() { "<< >>".to_string() } else { format!("<< /Font {fonts_value} >>") };
-                    let dr_value = match dr_shape {
-                        "inline" => dr_dict.clone(),
-                        "object" => "5 0 R".into(),
-                        _ => String::new(),
-                    };
-                    let af = if dr_value.is_empty() { "<< /Fields [] >>".to_string() } else { format!("<< /Fields [] /DR {dr_value} >>") };
-                    let mut doc = document(&[
-                        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
-                        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
-                        "<< /Type /Page /Parent 2 0 R >>".into(),
-                        af,
-                        if dr_shape == "object" { dr_dict } else { "null".into() },
-                        if font_shape == "object" { format!("<< {entries}>>") } else { "null".into() },
-                        font("Helvetica-Oblique"),
-                        font("ZapfDingbats"),
-                    ]);
-                    add_field(&mut doc, 0, [40.0, 600.0, 300.0, 630.0], &NewField::Text { multiline: false }, Some("name"))
-                        .unwrap_or_else(|e| panic!("{what}: {e}"));
-                    let doc = reopen(&doc);
-                    let af = acroform(&doc).unwrap();
-                    let dr = doc.resolve(af.get(b"DR").unwrap_or_else(|| panic!("{what}: no /DR")));
-                    let fonts = dr_fonts(&doc);
-                    for (name, value) in fonts.iter() {
-                        assert!(value.as_dict().is_none(), "{what}: {} is inline", String::from_utf8_lossy(name));
-                    }
-                    for name in ["Helv", "TiRo", "Cour"] {
-                        assert!(fonts.contains(name.as_bytes()), "{what}: no {name}");
-                    }
-                    let base =
-                        |name: &[u8]| fonts.reference(name).and_then(|r| doc.get(r).as_dict().and_then(|f| f.name(b"BaseFont").map(<[u8]>::to_vec)));
-                    match helv {
-                        "inline" => assert_eq!(base(b"Helv").as_deref(), Some(&b"Arial"[..]), "{what}"),
-                        "object" => assert_eq!(fonts.reference(b"Helv"), Some(pdfcraft_cos::ObjRef::new(7, 0)), "{what}"),
-                        "dangling" => assert_eq!(fonts.reference(b"Helv"), Some(pdfcraft_cos::ObjRef::new(99, 0)), "{what}"),
-                        "null" => assert_eq!(fonts.get(b"Helv"), Some(&Object::Null), "{what}"),
-                        "number" => assert_eq!(fonts.get(b"Helv"), Some(&Object::Int(3)), "{what}"),
-                        _ => assert_eq!(base(b"Helv").as_deref(), Some(&b"Helvetica"[..]), "{what}"),
-                    }
-                    match mine {
-                        "inline" => assert_eq!(base(b"Mine").as_deref(), Some(&b"Symbol"[..]), "{what}"),
-                        "object" => assert_eq!(fonts.reference(b"Mine"), Some(pdfcraft_cos::ObjRef::new(8, 0)), "{what}"),
-                        _ => assert!(!fonts.contains(b"Mine"), "{what}"),
-                    }
-                    if dr_shape == "object" {
-                        assert_eq!(af.reference(b"DR"), Some(pdfcraft_cos::ObjRef::new(5, 0)), "{what}: /DR stays its object");
-                    }
-                    if font_shape == "object" {
-                        assert_eq!(dr.as_dict().unwrap().reference(b"Font"), Some(pdfcraft_cos::ObjRef::new(6, 0)), "{what}: /Font stays its object");
-                    }
+                    assert_font_shape_case(&case);
                 }
             }
         }
     }
     assert_eq!(cases, 1 + 2 * (2 + 2 * 6 * 3), "every shape was tried");
+}
+
+struct FontShapeCase<'a> {
+    dr: &'a str,
+    fonts: &'a str,
+    helv: &'a str,
+    mine: &'a str,
+    description: String,
+}
+
+impl<'a> FontShapeCase<'a> {
+    fn new(dr: &'a str, fonts: &'a str, helv: &'a str, mine: &'a str) -> Self {
+        Self { dr, fonts, helv, mine, description: format!("/DR {dr}, /Font {fonts}, /Helv {helv}, /Mine {mine}") }
+    }
+
+    fn is_valid(&self) -> bool {
+        let only_default_dr = self.dr == "missing" && self.fonts == "missing" && self.helv == "missing" && self.mine == "missing";
+        let invalid_fonts = matches!(self.fonts, "missing" | "number") && (self.helv != "missing" || self.mine != "missing");
+        !(self.dr == "missing" && !only_default_dr || invalid_fonts)
+    }
+}
+
+fn assert_font_shape_case(case: &FontShapeCase<'_>) {
+    let mut doc = font_shape_document(case);
+    add_field(&mut doc, 0, [40.0, 600.0, 300.0, 630.0], &NewField::Text { multiline: false }, Some("name"))
+        .unwrap_or_else(|e| panic!("{}: {e}", case.description));
+    let doc = reopen(&doc);
+    let acro = acroform(&doc).unwrap();
+    let dr = doc.resolve(acro.get(b"DR").unwrap_or_else(|| panic!("{}: no /DR", case.description)));
+    let fonts = dr_fonts(&doc);
+    assert_font_entries_are_references(&fonts, &case.description);
+    assert_required_form_fonts(&fonts, &case.description);
+    assert_requested_font_shapes(&doc, &acro, &dr, &fonts, case);
+}
+
+fn font_shape_document(case: &FontShapeCase<'_>) -> Document {
+    let mut entries = String::new();
+    match case.helv {
+        "inline" => entries += &format!("/Helv {} ", form_font("Arial")),
+        "object" => entries += "/Helv 7 0 R ",
+        "dangling" => entries += "/Helv 99 0 R ",
+        "null" => entries += "/Helv null ",
+        "number" => entries += "/Helv 3 ",
+        _ => {}
+    }
+    match case.mine {
+        "inline" => entries += &format!("/Mine {} ", form_font("Symbol")),
+        "object" => entries += "/Mine 8 0 R ",
+        _ => {}
+    }
+    let fonts_value = match case.fonts {
+        "inline" => format!("<< {entries}>>"),
+        "object" => "6 0 R".into(),
+        "number" => "7".into(),
+        _ => String::new(),
+    };
+    let dr_dict = if fonts_value.is_empty() { "<< >>".to_string() } else { format!("<< /Font {fonts_value} >>") };
+    let dr_value = match case.dr {
+        "inline" => dr_dict.clone(),
+        "object" => "5 0 R".into(),
+        _ => String::new(),
+    };
+    let acroform = if dr_value.is_empty() { "<< /Fields [] >>".to_string() } else { format!("<< /Fields [] /DR {dr_value} >>") };
+    document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        acroform,
+        if case.dr == "object" { dr_dict } else { "null".into() },
+        if case.fonts == "object" { format!("<< {entries}>>") } else { "null".into() },
+        form_font("Helvetica-Oblique"),
+        form_font("ZapfDingbats"),
+    ])
+}
+
+fn form_font(base: &str) -> String {
+    format!("<< /Type /Font /Subtype /Type1 /BaseFont /{base} >>")
+}
+
+fn assert_font_entries_are_references(fonts: &Dict, description: &str) {
+    for (name, value) in fonts.iter() {
+        assert!(value.as_dict().is_none(), "{description}: {} is inline", String::from_utf8_lossy(name));
+    }
+}
+
+fn assert_required_form_fonts(fonts: &Dict, description: &str) {
+    for name in ["Helv", "TiRo", "Cour"] {
+        assert!(fonts.contains(name.as_bytes()), "{description}: no {name}");
+    }
+}
+
+fn assert_requested_font_shapes(doc: &Document, acro: &Dict, dr: &Object, fonts: &Dict, case: &FontShapeCase<'_>) {
+    let base = |name: &[u8]| fonts.reference(name).and_then(|r| doc.get(r).as_dict().and_then(|f| f.name(b"BaseFont").map(<[u8]>::to_vec)));
+    match case.helv {
+        "inline" => assert_eq!(base(b"Helv").as_deref(), Some(&b"Arial"[..]), "{}", case.description),
+        "object" => assert_eq!(fonts.reference(b"Helv"), Some(pdfcraft_cos::ObjRef::new(7, 0)), "{}", case.description),
+        "dangling" => assert_eq!(fonts.reference(b"Helv"), Some(pdfcraft_cos::ObjRef::new(99, 0)), "{}", case.description),
+        "null" => assert_eq!(fonts.get(b"Helv"), Some(&Object::Null), "{}", case.description),
+        "number" => assert_eq!(fonts.get(b"Helv"), Some(&Object::Int(3)), "{}", case.description),
+        _ => assert_eq!(base(b"Helv").as_deref(), Some(&b"Helvetica"[..]), "{}", case.description),
+    }
+    match case.mine {
+        "inline" => assert_eq!(base(b"Mine").as_deref(), Some(&b"Symbol"[..]), "{}", case.description),
+        "object" => assert_eq!(fonts.reference(b"Mine"), Some(pdfcraft_cos::ObjRef::new(8, 0)), "{}", case.description),
+        _ => assert!(!fonts.contains(b"Mine"), "{}", case.description),
+    }
+    if case.dr == "object" {
+        assert_eq!(acro.reference(b"DR"), Some(pdfcraft_cos::ObjRef::new(5, 0)), "{}: /DR stays its object", case.description);
+    }
+    if case.fonts == "object" {
+        assert_eq!(dr.as_dict().unwrap().reference(b"Font"), Some(pdfcraft_cos::ObjRef::new(6, 0)), "{}: /Font stays its object", case.description);
+    }
 }
 
 /// #3441 (review follow-up): filling a field converts the form's inline `/DR` fonts, so a form

@@ -121,7 +121,7 @@ fn image_row(ui: &mut egui::Ui, id: &str, title: &str, s: &mut ImageSettings) {
             Compression::Flate => tl!("ZIP"),
             Compression::Retain => tl!("Retain existing"),
         };
-        egui::ComboBox::from_id_salt((id, "compression")).selected_text(label).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt((id, "compression")).selected_text(label).show_ui(ui, |ui| {
             let q = match s.compression {
                 Compression::Jpeg(q) => q,
                 _ => 60,
@@ -133,7 +133,7 @@ fn image_row(ui: &mut egui::Ui, id: &str, title: &str, s: &mut ImageSettings) {
         if let Compression::Jpeg(q) = &mut s.compression {
             ui.label(tl!("Quality"));
             let name = QUALITIES.iter().min_by_key(|(_, v)| (*v as i32 - *q as i32).abs()).map_or(tl!("Medium"), |(n, _)| tl!(n));
-            egui::ComboBox::from_id_salt((id, "quality")).selected_text(name).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt((id, "quality")).selected_text(name).show_ui(ui, |ui| {
                 for (n, v) in QUALITIES {
                     ui.selectable_value(q, v, tl!(n));
                 }
@@ -165,7 +165,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
             Preset::Mobile => tl!("Mobile"),
         };
         let current = Preset::of(&d.settings);
-        egui::ComboBox::from_id_salt("optimize-preset").selected_text(current.map_or(tl!("Custom"), name)).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("optimize-preset").selected_text(current.map_or(tl!("Custom"), name)).show_ui(ui, |ui| {
             for p in Preset::ALL {
                 if ui.selectable_label(current == Some(p), name(p)).clicked() {
                     d.settings = p.settings();
@@ -178,7 +178,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
             Compatibility::Retain => tl!("Retain existing").to_string(),
             _ => format!("PDF {}", c.name()),
         };
-        egui::ComboBox::from_id_salt("optimize-compatibility").selected_text(compat_label(d.settings.compatibility)).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("optimize-compatibility").selected_text(compat_label(d.settings.compatibility)).show_ui(ui, |ui| {
             for c in Compatibility::ALL {
                 ui.selectable_value(&mut d.settings.compatibility, c, compat_label(c));
             }

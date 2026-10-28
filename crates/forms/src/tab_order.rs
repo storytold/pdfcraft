@@ -1,5 +1,5 @@
 use super::read::{fields, page_refs};
-use super::*;
+use super::{Document, Field, FormError, ObjRef, Object, invalid};
 
 /// A page's tab order (`/Tabs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

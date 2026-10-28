@@ -1,6 +1,9 @@
 use super::look::redraw_field;
 use super::tree::{add_to_page, attach, clash, detach, ensure_form, free_name, name_parts, top_names};
-use super::*;
+use super::{
+    Dict, Document, Field, FieldKind, FormError, MIN_FIELD_SIDE, NewField, ObjRef, Object, PdfString, Widget, appearance, fields, flags, invalid,
+    page_refs, rgb,
+};
 
 fn widget_dict(page: ObjRef, rect: [f64; 4]) -> Dict {
     let mut d = Dict::new();

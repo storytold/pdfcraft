@@ -1,5 +1,5 @@
 use super::listing::{mk_rotation, nums, sig_fields};
-use super::*;
+use super::{Certificate, Dict, DigestAlg, DigitalId, Document, HashSet, Object, PdfString, SaveOptions, SignError, SignedData, Stream};
 
 // ── signing ─────────────────────────────────────────────────────────────────────────────────
 

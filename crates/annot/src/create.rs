@@ -1,8 +1,10 @@
 use super::draw::draw_appearance;
 use super::lookup::{annot_dict, annot_ref, annots, fill_sign_shape, page_ref, set_annots};
 use super::modify::{n, rich_text};
-use super::types::{FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, Rgb, Shape, StampGroup, Style};
-use super::*;
+use super::types::{
+    FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup, Style,
+};
+use super::{AnnotError, Dict, Document, ObjRef, Object, PdfString, appearance};
 
 pub(crate) fn num_array(v: &[f64]) -> Object {
     Object::Array(v.iter().map(|x| Object::Real(*x)).collect())
@@ -203,16 +205,12 @@ pub fn callout_attach(rect: [f64; 4], knee: [f64; 2]) -> [f64; 2] {
 pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> Result<usize, AnnotError> {
     let page = page_ref(doc, new.page)?;
     let style = &new.style;
-    if !finite(&style.color) || !style.opacity.is_finite() || !style.width.is_finite() {
-        return Err(AnnotError::Invalid("invalid style".into()));
-    }
+    validate_style(style)?;
     let rect = rect_for(&new.shape, style)?;
     let mut d = base_dict(new.shape.subtype(), rect, page, &new.contents, &new.author, meta);
     d.set(b"Subj".to_vec(), PdfString::text(subject(&new.shape)));
     let opacity = style.opacity.clamp(0.0, 1.0);
-    if opacity < 1.0 {
-        d.set(b"CA".to_vec(), Object::Real(opacity));
-    }
+    set_non_opaque_style(&mut d, opacity);
     let border = |d: &mut Dict| {
         let mut bs = Dict::new();
         bs.set(b"W".to_vec(), Object::Real(style.width.max(0.0)));
@@ -232,24 +230,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             d.set(b"C".to_vec(), rgb(style.color));
             d.set(b"QuadPoints".to_vec(), num_array(&quads.concat()));
         }
-        Shape::Redact { quads, overlay, look } => {
-            d.set(b"C".to_vec(), rgb(style.color));
-            d.set(b"IC".to_vec(), rgb(style.fill.unwrap_or([0.0, 0.0, 0.0])));
-            d.set(b"QuadPoints".to_vec(), num_array(&quads.concat()));
-            if !overlay.is_empty() {
-                d.set(b"OverlayText".to_vec(), PdfString::text(overlay));
-                let [r, g, b] = look.color.map(|x| x.clamp(0.0, 1.0));
-                let size = if look.size > 0.0 { look.size.min(400.0) } else { 0.0 };
-                d.set(
-                    b"DA".to_vec(),
-                    PdfString::literal(format!("{} {} {} rg /{} {} Tf", n(r), n(g), n(b), look.font.resource(), n(size)).into_bytes()),
-                );
-                d.set(b"Q".to_vec(), Object::Int(look.align.min(2) as i64));
-                if look.repeat {
-                    d.set(b"Repeat".to_vec(), Object::Bool(true));
-                }
-            }
-        }
+        Shape::Redact { quads, overlay, look } => set_redaction_properties(&mut d, style, quads, overlay, look),
         Shape::Rectangle { .. } | Shape::Oval { .. } => {
             d.set(b"C".to_vec(), rgb(style.color));
             if let Some(f) = style.fill {
@@ -426,20 +407,53 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
     let mut list = annots(doc, page);
     let index = list.len();
     list.push(Object::Ref(r));
-    if let Some(pr) = popup {
-        let mut p = Dict::new();
-        p.set(b"Type".to_vec(), Object::name("Annot"));
-        p.set(b"Subtype".to_vec(), Object::name("Popup"));
-        p.set(b"Rect".to_vec(), num_array(&pr));
-        p.set(b"Parent".to_vec(), Object::Ref(r));
-        p.set(b"Open".to_vec(), Object::Bool(false));
-        p.set(b"F".to_vec(), Object::Int(FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE));
-        let pref = doc.add(Object::Dict(p));
-        doc.update_dict(r, |d| d.set(b"Popup".to_vec(), Object::Ref(pref)))?;
-        list.push(Object::Ref(pref));
-    }
+    add_popup(doc, r, popup, &mut list)?;
     set_annots(doc, page, list)?;
     Ok(index)
+}
+
+fn validate_style(style: &Style) -> Result<(), AnnotError> {
+    if !finite(&style.color) || !style.opacity.is_finite() || !style.width.is_finite() {
+        return Err(AnnotError::Invalid("invalid style".into()));
+    }
+    Ok(())
+}
+
+fn set_redaction_properties(dict: &mut Dict, style: &Style, quads: &[[f64; 8]], overlay: &str, look: &OverlayLook) {
+    dict.set(b"C".to_vec(), rgb(style.color));
+    dict.set(b"IC".to_vec(), rgb(style.fill.unwrap_or([0.0, 0.0, 0.0])));
+    dict.set(b"QuadPoints".to_vec(), num_array(&quads.concat()));
+    if !overlay.is_empty() {
+        dict.set(b"OverlayText".to_vec(), PdfString::text(overlay));
+        let [r, g, b] = look.color.map(|x| x.clamp(0.0, 1.0));
+        let size = if look.size > 0.0 { look.size.min(400.0) } else { 0.0 };
+        dict.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg /{} {} Tf", n(r), n(g), n(b), look.font.resource(), n(size)).into_bytes()));
+        dict.set(b"Q".to_vec(), Object::Int(look.align.min(2) as i64));
+        if look.repeat {
+            dict.set(b"Repeat".to_vec(), Object::Bool(true));
+        }
+    }
+}
+
+fn set_non_opaque_style(dict: &mut Dict, opacity: f64) {
+    if opacity < 1.0 {
+        dict.set(b"CA".to_vec(), Object::Real(opacity));
+    }
+}
+
+fn add_popup(doc: &mut Document, parent: ObjRef, rect: Option<[f64; 4]>, annots: &mut Vec<Object>) -> Result<(), AnnotError> {
+    let Some(rect) = rect else { return Ok(()) };
+    let mut popup = Dict::new();
+    popup.set(b"Type".to_vec(), Object::name("Annot"));
+    popup.set(b"Subtype".to_vec(), Object::name("Popup"));
+    popup.set(b"Rect".to_vec(), num_array(&rect));
+    popup.set(b"Parent".to_vec(), Object::Ref(parent));
+    popup.set(b"Open".to_vec(), Object::Bool(false));
+    popup.set(b"F".to_vec(), Object::Int(FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE));
+    let popup_ref = doc.add(Object::Dict(popup));
+    doc.update_dict(parent, |dict| dict.set(b"Popup".to_vec(), Object::Ref(popup_ref)))?;
+    annots.push(Object::Ref(popup_ref));
+    Ok(())
 }
 
 /// Counterrotate a newly placed picture stamp's appearance into displayed-page axes.

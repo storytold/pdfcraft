@@ -1,6 +1,8 @@
 use super::interp::Ts;
 use super::lines::page_dict;
-use super::*;
+use super::{
+    CraftFont, Dict, Document, EditError, GlyphError, HashMap, Metrics, Object, Op, PdfString, Stream, TextLine, japanese_glyph_from, parse,
+};
 
 /// Text → the runs that show it: each run's font resource name and the bytes shown in that font.
 pub(super) type Encoder = Box<dyn Fn(&str) -> Option<Vec<(String, Vec<u8>)>>>;

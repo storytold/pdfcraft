@@ -1,4 +1,4 @@
-use super::*;
+use super::{Color32, DocInfo, DocView, Pos2, Rect, pos2, vec2};
 
 impl DocView {
     /// Where `page` is drawn on screen this frame (`None` when it is not on screen).

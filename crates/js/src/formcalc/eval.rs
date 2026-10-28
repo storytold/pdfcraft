@@ -1,6 +1,9 @@
 use super::ast::{Expr, Stmt};
 use super::value::{Val, is_numeric_text, num_text};
-use super::*;
+use super::{
+    CALLS_TOO_DEEP, Flow, Func, HashMap, HashSet, Interp, LIST_TOO_LONG, LOOPED_TOO_MUCH, MAX_LIST, R, Rc, TOO_DEEP, XfaEffect, child_named, clip,
+    descendants_named, instances, reset_names, resolve_som,
+};
 
 impl Interp<'_> {
     // ── expressions
