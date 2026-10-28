@@ -84,7 +84,8 @@ pub(crate) fn directional_runs(text: &str) -> Vec<(&str, bool)> {
         }
         i = end.max(i + 1);
     }
-    // A mark or joiner after a character left out of a run goes with that character, not alone.
+    // Consecutive characters with the same flag make one run. A mark or joiner left out of a
+    // right-to-left run keeps the flag of the character before it, so it is never split off alone.
     let mut runs: Vec<(&str, bool)> = Vec::new();
     let mut start = 0;
     for (index, (at, _)) in chars.iter().enumerate() {
