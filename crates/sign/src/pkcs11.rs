@@ -25,7 +25,7 @@ use cryptoki::session::{Session, UserType};
 use cryptoki::slot::Slot;
 use cryptoki::types::AuthPin;
 
-use crate::keys::{DigestAlg, ExternalKey, PrivateKey, PublicKey};
+use crate::keys::{DigestAlg, ExternalKey, PrivateKey};
 use crate::{Certificate, DigitalId, SignError};
 
 /// Loads a PKCS #11 module and initializes it for multi-threaded use.
@@ -82,6 +82,13 @@ fn modules() -> Vec<Pkcs11> {
     out
 }
 
+/// A session on this slot. Some modules (SoftHSM among them) only take a login on a
+/// read-write session, so that is what is tried first; write-protected tokens refuse a
+/// RW session and get a read-only one (reads work the same, login then can't).
+fn open_session(client: &Pkcs11, slot: Slot) -> Result<Session, SignError> {
+    client.open_rw_session(slot).or_else(|_| client.open_ro_session(slot)).map_err(|e| SignError::Crypto(format!("session: {e}")))
+}
+
 /// The X.509 certificate objects on this session the app could use.
 fn token_certificates(session: &Session) -> Vec<(Certificate, Vec<u8>)> {
     let Ok(objects) = session.find_objects(&[Attribute::Class(ObjectClass::CERTIFICATE)]) else { return Vec::new() };
@@ -102,9 +109,9 @@ fn token_certificates(session: &Session) -> Vec<(Certificate, Vec<u8>)> {
             continue;
         }
         let Ok(certificate) = Certificate::parse(&value) else { continue };
-        // Keys PdfCraft can't represent yet (GOST, Ed25519 on tokens) are left for their
-        // stage; an identity must be able to sign.
-        if matches!(certificate.public_key, PublicKey::Unsupported { .. }) {
+        // Only keys PdfCraft signs with (RSA, P-256, P-384); Ed25519, P-521 and brainpool
+        // tokens would list only to fail at sign time with a misleading message.
+        if certificate.public_key.store_signing_key().is_none() {
             continue;
         }
         out.push((certificate, id));
@@ -159,7 +166,7 @@ pub fn list() -> Result<Vec<DigitalId>, SignError> {
             let token_label = trimmed_label(token.label());
             let login_required = token.login_required();
             // Some modules (SoftHSM among them) only take a login on a read-write session.
-            let Ok(session) = client.open_rw_session(slot) else { continue };
+            let Ok(session) = open_session(&client, slot) else { continue };
             for (certificate, id) in token_certificates(&session) {
                 if session_key(&session, &id).is_none() && !login_required {
                     // No visible key: without login, keys are hidden (CKA_PRIVATE), so a
@@ -199,19 +206,18 @@ pub fn find_with_pin(reference_or_name: &str, pin: Option<&str>) -> Result<Digit
         for slot in slots {
             let Ok(token) = client.get_token_info(slot) else { continue };
             let login_required = token.login_required();
-            let Ok(session) = client.open_rw_session(slot) else { continue };
-            if let Some(pin) = pin {
-                // Log in before the search when the token wants it: the private keys are
-                // hidden (CKA_PRIVATE) until then. A wrong PIN surfaces at the sign call,
-                // so a lookup that finds nothing shouldn't mask why.
-                if login_required {
-                    let _ = login(&session, pin);
-                }
-            }
+            let Ok(session) = open_session(&client, slot) else { continue };
             for (certificate, id) in token_certificates(&session) {
                 let by_name = certificate.subject.common_name() == Some(reference_or_name.trim_start_matches("pkcs11:"));
                 if reference(&certificate) != reference_or_name && !by_name {
                     continue;
+                }
+                // Log in only on the token that holds the certificate: the private keys
+                // are hidden (CKA_PRIVATE) until then, and a wrong PIN must not burn
+                // failed-login attempts on unrelated tokens. The error propagates, so a
+                // wrong PIN doesn't reach the sign call either.
+                if login_required && let Some(pin) = pin {
+                    login(&session, pin)?;
                 }
                 if session_key(&session, &id).is_none() && !login_required {
                     continue; // The key isn't there and can't be hiding behind a login.
@@ -279,7 +285,7 @@ impl Pkcs11Key {
     fn sign_once(&self, alg: DigestAlg, msg: &[u8]) -> Result<Vec<u8>, SignError> {
         let Ok(token) = self.module.get_token_info(self.slot) else { return Err(SignError::Crypto("the token is not present".into())) };
         // Some modules (SoftHSM among them) only take a login on a read-write session.
-        let session = self.module.open_rw_session(self.slot).map_err(|e| SignError::Crypto(format!("session: {e}")))?;
+        let session = open_session(&self.module, self.slot)?;
         if token.login_required() {
             let pin = self.pin.lock().ok().and_then(|p| p.clone());
             if let Some(pin) = pin {
