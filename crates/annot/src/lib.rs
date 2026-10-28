@@ -41,7 +41,7 @@ pub use modify::{
 };
 pub use types::{
     AttachIcon, FillMark, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont, OverlayLook, ReviewState, Rgb, Shape,
-    StampGroup, StampKind, Style, rect_quad,
+    StampGroup, StampKind, Style, StyleChange, TextReplacement, rect_quad,
 };
 
 pub mod appearance;

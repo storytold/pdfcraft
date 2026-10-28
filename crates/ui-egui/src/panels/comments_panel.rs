@@ -285,7 +285,7 @@ pub(crate) fn show(
         }
         let thread = replies_of(a);
         let rotation = info.pages.get(a.page).map_or(0, |p| p.rotation);
-        if let Some(e) = card(ui, t, a, rotation, thread, info, view, prefs, allowed, nav) {
+        if let Some(e) = card(ui, view, CardContext { theme: t, annotation: a, rotation, thread, info, prefs, allowed, nav }) {
             edit = Some(e);
         }
     }
@@ -294,20 +294,20 @@ pub(crate) fn show(
 
 /// Draw one comment thread card, including author, body or inline editor, replies, status and per-comment
 /// actions; returns an edit to apply.
-#[allow(clippy::too_many_arguments)]
-fn card(
-    ui: &mut egui::Ui,
-    t: &Tokens,
-    a: &Annotation,
+struct CardContext<'a> {
+    theme: &'a Tokens,
+    annotation: &'a Annotation,
     // The clockwise `/Rotate` of the comment's page.
     rotation: u16,
-    thread: &[&Annotation],
-    info: &DocInfo,
-    view: &mut DocView,
-    prefs: &CommentPrefs,
+    thread: &'a [&'a Annotation],
+    info: &'a DocInfo,
+    prefs: &'a CommentPrefs,
     allowed: bool,
-    nav: &mut Option<Nav>,
-) -> Option<Edit> {
+    nav: &'a mut Option<Nav>,
+}
+
+fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Option<Edit> {
+    let CardContext { theme: t, annotation: a, rotation, thread, info, prefs, allowed, nav } = context;
     let mut edit = None;
     let key = (a.page, a.index);
     let selected = view.comments.selected == Some(key);

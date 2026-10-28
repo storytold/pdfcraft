@@ -1,5 +1,5 @@
 use super::create::normalize;
-use super::*;
+use super::{ObjRef, appearance};
 
 pub type Rgb = [f64; 3];
 
@@ -561,6 +561,33 @@ pub struct Style {
     pub width: f64,
     /// Interior fill for rectangles and ovals (`/IC`), background for text boxes.
     pub fill: Option<Rgb>,
+}
+
+/// The style properties changed by one annotation edit. `None` leaves a property unchanged.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StyleChange {
+    pub color: Option<Rgb>,
+    pub opacity: Option<f64>,
+    pub width: Option<f64>,
+    pub endings: Option<Vec<LineEnding>>,
+}
+
+impl StyleChange {
+    pub fn new(color: Option<Rgb>, opacity: Option<f64>, width: Option<f64>, endings: Option<Vec<LineEnding>>) -> Self {
+        Self { color, opacity, width, endings }
+    }
+}
+
+/// Inputs for replacing selected text with a grouped strikeout and caret annotation.
+pub struct TextReplacement<'a> {
+    pub page: usize,
+    pub quads: &'a [[f64; 8]],
+    pub replacement: &'a str,
+    pub author: &'a str,
+    pub strike: &'a Style,
+    pub caret: &'a Style,
+    pub strike_meta: &'a Meta,
+    pub caret_meta: &'a Meta,
 }
 
 impl Default for Style {

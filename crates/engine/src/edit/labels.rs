@@ -1,4 +1,4 @@
-use super::*;
+use super::{Edit, FillMark, ImageEdit, Label, LineEnding, MarkKind, Markup, PageBox, ReviewState, Shape, field_table};
 
 /// Every wording [`Edit::label`] can produce, for an interface to translate. `Edit::Batch` is not
 /// here: its wording is only the hole, because a batch carries its name as text (see

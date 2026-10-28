@@ -1,6 +1,8 @@
 use super::commands::{parse_dpi, read};
 use super::options::{AUDIT_OPTIONS, CHECK_ONE_OPTIONS, CHECK_OPTIONS, flag, positional, validate_options};
-use super::*;
+use super::{
+    Arc, CliError, Command, Duration, Instant, PageRenderer, Path, PathBuf, RenderConfig, RenderRequest, RequestKind, Stdio, inspect, stdout_line,
+};
 
 /// Audit a document for faux redactions. Prints the findings as JSON; fails when any are
 /// found so scripts and CI can gate on it, and when the audit itself cannot run.

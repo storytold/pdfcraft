@@ -2,7 +2,7 @@ use super::document::{field_object, get_field, get_nth_field_name, noop, num_fie
 use super::format::{printd, printf, printx, scand};
 use super::host::{arg, function, host, s, text, text_line};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, Event, Panel, Request};
-use super::*;
+use super::{Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, js_string};
 
 // ── app, util, console ──────────────────────────────────────────────────────────────────────
 

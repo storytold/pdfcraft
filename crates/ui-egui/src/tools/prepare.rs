@@ -10,9 +10,8 @@ use pdfcraft_engine::form_scripts::{CalcOp, Calculate, DATE_PRESETS, Format, TIM
 use pdfcraft_engine::{BorderStyle, Document, Edit, FieldFont, FieldLook, FieldProps, FormField, FormFieldKind, NewField};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{DocView, PageXform};
+use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::comments;
-use crate::page_pointer::PagePointer;
 use crate::theme;
 use crate::widgets;
 
@@ -253,19 +252,8 @@ pub(crate) struct Outcome {
 }
 
 /// Pointer input on one page while preparing a form.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn page_input(
-    ui: &egui::Ui,
-    resp: &egui::Response,
-    xf: &PageXform,
-    ptr: &PagePointer,
-    page: usize,
-    info: &DocInfo,
-    form: &[FormField],
-    tool: Option<FieldTool>,
-    allowed: bool,
-    view: &mut DocView,
-) -> Outcome {
+pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], tool: Option<FieldTool>, allowed: bool, view: &mut DocView) -> Outcome {
+    let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
     let mut out = Outcome { consumed: false, properties: false, placed: false, table: None };
     let pointer = ptr.pos;
     let prep = &mut view.prepare;
@@ -556,17 +544,10 @@ pub fn arrange(form: &[FormField], anchor: &(String, usize), others: &[(String, 
 
 /// Fields with their light-blue fill and name tags, the selection with its handles, and the
 /// rectangle being drawn or dragged to the pages' `pointer`.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn paint_page(
-    ui: &egui::Ui,
-    painter: &egui::Painter,
-    xf: &PageXform,
-    page: usize,
-    info: &DocInfo,
-    form: &[FormField],
-    view: &DocView,
-    pointer: Option<Pos2>,
-) {
+pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], view: &DocView) {
+    let PageToolContext { ui, xf, page, info, ptr, .. } = cx;
+    let painter = ui.painter();
+    let pointer = ptr.pos;
     let prep = &view.prepare;
     let grab = prep.grab.filter(|(gp, ..)| *gp == page);
     let zoom = xf.zoom().clamp(0.5, 3.0);

@@ -2,7 +2,10 @@ use super::host::host;
 use super::instances::instance_manager;
 use super::model::{MAX_DEPTH, XfaDoc, XfaEffect, XfaEvent, clip, reset_names};
 use super::nodes::{node_index, node_object, noop, resolve_som, resolver, sink};
-use super::*;
+use super::{
+    Attribute, Context, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, arg, js_string, platform, printd, printf, printx, s, scand,
+    text,
+};
 
 // ── xfa.host, xfa.layout, xfa.event, app, console ───────────────────────────────────────────
 

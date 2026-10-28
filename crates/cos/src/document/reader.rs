@@ -3,7 +3,7 @@ use super::state::SECTION_READS;
 use super::xref::{
     MAX_COMPACT_XREF_BYTES, MAX_COMPACT_XREF_ROWS, Revision, XrefEntry, XrefIndex, XrefRange, XrefRevisionSection, XrefSection, XrefSectionData,
 };
-use super::*;
+use super::{Arc, BTreeMap, CosError, Dict, Document, HashMap, HashSet, Lexer, ObjRef, Object, is_whitespace, parse_indirect, parse_indirect_shared};
 
 impl Document {
     #[allow(clippy::type_complexity)]

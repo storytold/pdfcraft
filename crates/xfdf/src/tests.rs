@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use pdfcraft_annot::{Markup, Meta, NewAnnotation, Shape, Style, add_annotation, add_reply, add_text_replacement, summaries};
+use pdfcraft_annot::{Markup, Meta, NewAnnotation, Shape, Style, TextReplacement, add_annotation, add_reply, add_text_replacement, summaries};
 use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
 use pdfcraft_forms::{NewField, add_field, fields, set_value};
 
@@ -151,7 +151,20 @@ fn a_replace_text_pair_survives_an_xfdf_round_trip() {
     let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
     let style = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
     let meta = |id: &str| Meta { date: Some("D:20261001120000Z".into()), id: id.into() };
-    add_text_replacement(&mut src, 0, &quads, "new words", "Ada", &style, &style, &meta("strike"), &meta("caret")).unwrap();
+    add_text_replacement(
+        &mut src,
+        TextReplacement {
+            page: 0,
+            quads: &quads,
+            replacement: "new words",
+            author: "Ada",
+            strike: &style,
+            caret: &style,
+            strike_meta: &meta("strike"),
+            caret_meta: &meta("caret"),
+        },
+    )
+    .unwrap();
     assert_eq!(summaries(&src).len(), 2, "a strikeout and a caret");
 
     let xfdf = export_xfdf(&src, true, false, "a.pdf");

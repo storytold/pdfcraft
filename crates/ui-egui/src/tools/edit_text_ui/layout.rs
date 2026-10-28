@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, BTreeMap, Color32, FontFamily, FontId, LineEditor, Rect};
 
 /// The look shown for a paragraph: the family and weight guessed from its PDF font name.
 fn source_look(base_font: &str, size: f64, color: [f64; 3], detected_bold: bool, detected_italic: bool) -> pdfcraft_engine::AddedText {

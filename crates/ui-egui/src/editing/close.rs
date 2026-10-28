@@ -1,5 +1,5 @@
+use super::PdfCraftApp;
 use super::save::SaveTarget;
-use super::*;
 
 /// What the user was doing when we asked whether to save.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

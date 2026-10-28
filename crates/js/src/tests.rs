@@ -1017,6 +1017,14 @@ mod formcalc {
 
     #[test]
     fn built_in_functions_cover_the_common_set() {
+        assert_numeric_and_logical_builtins();
+        assert_string_builtins();
+        assert_format_and_date_builtins();
+        assert_financial_and_unit_builtins();
+        assert_builtin_errors();
+    }
+
+    fn assert_numeric_and_logical_builtins() {
         assert_eq!(calc("Abs(-2.5)"), "2.5");
         assert_eq!(calc(r#"Decode("a%2Fb", "url")"#), "a/b");
         assert_eq!(calc(r#"Decode("a%+fb", "url")"#), "a%+fb");
@@ -1034,6 +1042,9 @@ mod formcalc {
         assert_eq!(calc(r#"Within(5, 1, 10)"#), "1");
         assert_eq!(calc(r#"HasValue("")"#), "0");
         assert_eq!(calc(r#"HasValue("x")"#), "1");
+    }
+
+    fn assert_string_builtins() {
         assert_eq!(calc(r#"At("abcd", "c")"#), "3");
         assert_eq!(calc(r#"Left("hello", 2)"#), "he");
         assert_eq!(calc(r#"Right("hello", 2)"#), "lo");
@@ -1050,6 +1061,11 @@ mod formcalc {
         assert_eq!(calc(r#"WordNum(42)"#), "Forty-Two");
         assert_eq!(calc(r#"WordNum(1.999, 2)"#), "Two Dollars And 00 Cents");
         assert_eq!(calc(r#"WordNum(1.01, 2)"#), "One Dollar And 01 Cent");
+        assert_eq!(calc(r#"Encode("a b&c", "url")"#), "a%20b%26c");
+        assert_eq!(calc(r#"Decode("a%20b", "url")"#), "a b");
+    }
+
+    fn assert_format_and_date_builtins() {
         assert_eq!(calc(r#"Format("zzz,zz9.99", 1234.5)"#), "1,234.50");
         assert_eq!(calc(r#"Format("$z,zz9.99", -5)"#), "-$5.00");
         assert_eq!(calc(r#"Format("MM/DD/YYYY", "2024-02-29")"#), "02/29/2024");
@@ -1065,6 +1081,9 @@ mod formcalc {
         assert_eq!(calc(r#"IsoTime2Num("12:30:45.250")"#), "45045250");
         assert_eq!(calc(r#"IsoTime2Num("T12:30:45")"#), "45045000");
         assert_eq!(calc(r#"Num2Time(3661000)"#), "01:01:01");
+    }
+
+    fn assert_financial_and_unit_builtins() {
         assert_eq!(calc("Round(Pmt(10000, 0.01, 12), 2)"), "888.49");
         assert_eq!(calc("Round(FV(100, 0.01, 12), 2)"), "1268.25");
         assert_eq!(calc("Round(PV(100, 0.01, 12), 2)"), "1125.51");
@@ -1073,8 +1092,9 @@ mod formcalc {
         assert_eq!(calc(r#"UnitValue("72points", "in")"#), "1");
         assert_eq!(calc(r#"UnitValue("25.4millimeters", "inches")"#), "1");
         assert_eq!(calc(r#"UnitValue("1in", "points")"#), "72");
-        assert_eq!(calc(r#"Encode("a b&c", "url")"#), "a%20b%26c");
-        assert_eq!(calc(r#"Decode("a%20b", "url")"#), "a b");
+    }
+
+    fn assert_builtin_errors() {
         assert!(go(r#"Get("http://example.com")"#, "form1[0].page1[0].total[0]", "calculate").error.unwrap().contains("network"));
         assert!(go("Nope(1)", "form1[0].page1[0].total[0]", "calculate").error.unwrap().contains("unknown function"));
     }
@@ -1147,6 +1167,13 @@ s"#
 
     #[test]
     fn form_objects_resolve_assign_and_record_effects() {
+        assert_formcalc_reads_fields_and_rows();
+        assert_formcalc_reads_runtime_properties();
+        assert_formcalc_records_primary_effects();
+        assert_formcalc_updates_instances_and_records_requests();
+    }
+
+    fn assert_formcalc_reads_fields_and_rows() {
         // Fields deref to their values; `$` is the current field.
         assert_eq!(calc("qty * price"), "10");
         assert_eq!(calc("$.name"), "total");
@@ -1170,7 +1197,6 @@ s"#
         assert_eq!(in_row("Sum(row[*].amount)"), "15");
         assert_eq!(in_row("row[1].amount"), "5");
         assert_eq!(in_row("row[-1].amount"), "10");
-        // Past the ends there is no object, so a property of it is an error (as in Acrobat).
         let past = go("row[+1].amount", "form1[0].page1[0].table[0].row[1].amount[0]", "calculate");
         assert!(past.error.unwrap().contains("no object"));
         assert_eq!(in_row("Exists(row[-5])"), "0");
@@ -1182,12 +1208,18 @@ s"#
         assert_eq!(calc("table._row.count"), "2");
         assert_eq!(calc("Exists(qty) & not Exists(nothing)"), "1");
         assert_eq!(calc("HasValue(total)"), "0");
+    }
+
+    fn assert_formcalc_reads_runtime_properties() {
         assert_eq!(calc("$host.numPages"), "3");
         assert_eq!(calc("$layout.pageCount()"), "3");
         assert_eq!(calc("$event.name"), "calculate");
         assert_eq!(calc("xfa.resolveNode(\"page1.price\").rawValue"), "2.5");
         assert_eq!(calc("$.border.fill.color.value"), "");
         assert!(go("nothing + 1", "form1[0].page1[0].total[0]", "calculate").error.unwrap().contains("unknown name"));
+    }
+
+    fn assert_formcalc_records_primary_effects() {
         // Assignment to a field (by name and by path), a property and a variable.
         let o = go(
             r#"page1.qty = 6
@@ -1215,7 +1247,9 @@ table._row.count"#,
                 XfaEffect::AddInstance { som: "form1[0].page1[0].table[0].row[2]".into() },
             ]
         );
-        // Instance managers: remove, setInstances, count assignment, and the floor of one.
+    }
+
+    fn assert_formcalc_updates_instances_and_records_requests() {
         let o = go(
             "table._row.removeInstance(0)\ntable._row.setInstances(1)\ntable._row.count = 0\ntable._row.count",
             "form1[0].page1[0].go[0]",
@@ -1238,7 +1272,7 @@ $host.gotoURL("https://example.org")"#,
         );
         assert_eq!(
             o.effects,
-            vec![XfaEffect::ResetData(vec!["qty".into(), "price".into()]), XfaEffect::Print, XfaEffect::LaunchUrl("https://example.org".into())]
+            vec![XfaEffect::ResetData(vec!["qty".into(), "price".into()]), XfaEffect::Print, XfaEffect::LaunchUrl("https://example.org".into()),]
         );
     }
 
@@ -1279,58 +1313,79 @@ $host.gotoURL("https://example.org")"#,
 
     #[test]
     fn hostile_formcalc_scripts_end_with_an_error_and_bounded_output() {
-        let total = "form1[0].page1[0].total[0]";
-        let fast = Limits { loop_iterations: 10_000, recursion: 32 };
-        let ev = XfaEvent { activity: "calculate".into(), target: total.into(), ..Default::default() };
-        let doc = XfaDoc::default();
-        let run = |s: &str| run_formcalc(s, &ev, &doc, &form(), fast);
-        assert!(run("while (1) do endwhile").error.unwrap().contains("looped"));
-        assert!(run("for i = 1 upto 1000000 do endfor").error.unwrap().contains("looped"));
-        assert!(run("func f(n) do f(n + 1) endfunc\nf(1)").error.unwrap().contains("nested"));
-        assert!(run(&format!("{}1{}", "(".repeat(500), ")".repeat(500))).error.is_some());
+        assert_hostile_control_flow_is_bounded();
+        assert_hostile_numeric_inputs_are_safe();
+        assert_hostile_outputs_are_bounded();
+        assert_hostile_nesting_is_bounded();
+        assert_hostile_deadlines_and_parse_errors();
+        assert_hostile_instance_growth_is_bounded();
+        assert_hostile_message_count_is_bounded();
+        assert_hostile_small_stack_is_safe();
+    }
+
+    fn assert_hostile_control_flow_is_bounded() {
+        assert!(run_hostile_formcalc("while (1) do endwhile").error.unwrap().contains("looped"));
+        assert!(run_hostile_formcalc("for i = 1 upto 1000000 do endfor").error.unwrap().contains("looped"));
+        assert!(run_hostile_formcalc("func f(n) do f(n + 1) endfunc\nf(1)").error.unwrap().contains("nested"));
+        assert!(run_hostile_formcalc(&format!("{}1{}", "(".repeat(500), ")".repeat(500))).error.is_some());
         // A 120k-term chain is refused at parse time (its tree would be as deep as it is long).
-        assert!(run(&format!("1{}", "+1".repeat(120_000))).error.unwrap().contains("too long"));
-        assert!(run(&format!("$form{}", ".a".repeat(120_000))).error.unwrap().contains("too long"));
-        assert!(run("nothing.x = 1").error.unwrap().contains("unknown name"));
-        assert!(run("$form.nothing = 1").error.unwrap().contains("no nothing"));
+        assert!(run_hostile_formcalc(&format!("1{}", "+1".repeat(120_000))).error.unwrap().contains("too long"));
+        assert!(run_hostile_formcalc(&format!("$form{}", ".a".repeat(120_000))).error.unwrap().contains("too long"));
+        assert!(run_hostile_formcalc("nothing.x = 1").error.unwrap().contains("unknown name"));
+        assert!(run_hostile_formcalc("$form.nothing = 1").error.unwrap().contains("no nothing"));
         // Values go into fields only: a subform or the form itself is refused, nothing is recorded.
-        let o = run("details = \"junk\"");
+        let o = run_hostile_formcalc("details = \"junk\"");
         assert!(o.error.unwrap().contains("not a field"));
         assert!(o.effects.is_empty());
-        assert!(run("$form = \"junk\"").error.unwrap().contains("not a field"));
+        assert!(run_hostile_formcalc("$form = \"junk\"").error.unwrap().contains("not a field"));
+    }
+
+    fn assert_hostile_numeric_inputs_are_safe() {
         // Hostile numbers into the string functions.
-        assert_eq!(run(r#"Stuff("abc", 2, 1e300, "X")"#).result.as_deref(), Some("aX"));
-        assert_eq!(run(r#"Stuff("abc", -1e300, 1, "X")"#).result.as_deref(), Some("Xbc"));
-        assert_eq!(run(r#"Substr("abc", 1e300, 1e300)"#).result.as_deref(), Some(""));
-        assert_eq!(run(r#"Left("abc", -1e300)"#).result.as_deref(), Some(""));
-        assert!(run(r#"Str(1e300, 1e300, 1e300)"#).error.is_none());
-        assert!(run(r#"Round(1e300, 1e300)"#).error.is_none());
-        assert!(run(r#"Choose(1e300, 1)"#).error.is_none());
+        assert_eq!(run_hostile_formcalc(r#"Stuff("abc", 2, 1e300, "X")"#).result.as_deref(), Some("aX"));
+        assert_eq!(run_hostile_formcalc(r#"Stuff("abc", -1e300, 1, "X")"#).result.as_deref(), Some("Xbc"));
+        assert_eq!(run_hostile_formcalc(r#"Substr("abc", 1e300, 1e300)"#).result.as_deref(), Some(""));
+        assert_eq!(run_hostile_formcalc(r#"Left("abc", -1e300)"#).result.as_deref(), Some(""));
+        assert!(run_hostile_formcalc(r#"Str(1e300, 1e300, 1e300)"#).error.is_none());
+        assert!(run_hostile_formcalc(r#"Round(1e300, 1e300)"#).error.is_none());
+        assert!(run_hostile_formcalc(r#"Choose(1e300, 1)"#).error.is_none());
+    }
+
+    fn assert_hostile_outputs_are_bounded() {
         // Strings can't grow past the cap through any function, and messages and values are clipped.
         assert!(
-            run("var s = Space(1000000)\nfor i = 1 upto 10 do s = Encode(Replace(s, \" \", \"&\"), \"html\") endfor\nLen(s)")
+            run_hostile_formcalc("var s = Space(1000000)\nfor i = 1 upto 10 do s = Encode(Replace(s, \" \", \"&\"), \"html\") endfor\nLen(s)")
                 .error
                 .unwrap()
                 .contains("too long")
         );
-        assert!(run("Upper(Concat(Space(600000), Space(600000)))").error.unwrap().contains("too long"));
-        let o = run("$host.messageBox(Space(100000))");
+        assert!(run_hostile_formcalc("Upper(Concat(Space(600000), Space(600000)))").error.unwrap().contains("too long"));
+        let o = run_hostile_formcalc("$host.messageBox(Space(100000))");
         assert!(matches!(o.effects.as_slice(), [XfaEffect::MessageBox(m)] if m.chars().count() <= 4100), "{:?}", o.effects.len());
-        let o = run("qty = Space(100000)");
+        let o = run_hostile_formcalc("qty = Space(100000)");
         assert!(matches!(o.effects.as_slice(), [XfaEffect::SetValue { value, .. }] if value.chars().count() == 65_536), "{:?}", o.effects.len());
         assert!(o.notes.iter().any(|n| n.contains("cut")), "{:?}", o.notes);
+    }
+
+    fn assert_hostile_nesting_is_bounded() {
         // A comment of dashes is not deep nesting.
-        assert_eq!(run(&format!("; {}\n1 + 1", "-".repeat(70))).result.as_deref(), Some("2"));
+        assert_eq!(run_hostile_formcalc(&format!("; {}\n1 + 1", "-".repeat(70))).result.as_deref(), Some("2"));
         // Parentheses don't reset the chain count: a tree is never deeper than the cap.
         let mut nested = "1+1+1+1+1+1+1+1+1+1".to_string();
         for _ in 0..30 {
             nested = format!("({nested}{})", "+1".repeat(40));
         }
-        assert!(run(&nested).error.unwrap().contains("too long"));
-        assert_eq!(run("(1+2)*(3+4) + (5+6)").result.as_deref(), Some("32"));
+        assert!(run_hostile_formcalc(&nested).error.unwrap().contains("too long"));
+        assert_eq!(run_hostile_formcalc("(1+2)*(3+4) + (5+6)").result.as_deref(), Some("32"));
         // Nested statements inside recursion count against the depth limit.
         let deep = format!("func f(n) do\n{}return f(n - 1)\n{}endfunc\nf(1000)", "if (n > 0) then\n".repeat(20), "endif\n".repeat(20));
-        assert!(run(&deep).error.unwrap().contains("nested"));
+        assert!(run_hostile_formcalc(&deep).error.unwrap().contains("nested"));
+    }
+
+    fn assert_hostile_deadlines_and_parse_errors() {
+        let total = "form1[0].page1[0].total[0]";
+        let ev = XfaEvent { activity: "calculate".into(), target: total.into(), ..Default::default() };
+        let doc = XfaDoc::default();
         // A deadline already passed stops the script at its first look at the clock.
         let o = crate::formcalc::run_formcalc_at(
             "for i = 1 upto 100000 do Eval(\"1\") endfor",
@@ -1341,29 +1396,40 @@ $host.gotoURL("https://example.org")"#,
             Some(std::time::Duration::ZERO),
         );
         assert!(o.error.unwrap().contains("too long"));
-        assert!(run(&format!("{}1{}", "-".repeat(5000), "")).error.is_some());
-        assert!(run("var s = \"x\"\nfor i = 1 upto 100 do s = Concat(s, s) endfor\nLen(s)").error.unwrap().contains("too long"));
-        assert!(run("Space(1e12)").error.is_none());
-        assert!(run("Replace(Space(100000), \" \", Space(100000))").error.unwrap().contains("too long"));
-        assert_eq!(run(r#"Format("YYYY-MM-DD", 1e300)"#).error, None);
-        assert_eq!(run(r#"Date2Num("99999999999999999999-01-01", "YYYYYYYYYYYYYYYYYYYY-MM-DD")"#).error, None);
-        assert_eq!(run(r#"Time2Num("99999999999999999999:0:0")"#).error, None);
-        assert_eq!(run(r#"Num2Date(1e300, "YYYY")"#).result.as_deref(), Some(""));
-        assert!(run("for i = 1 upto 1000 do nothing endfor").error.unwrap().contains("unknown name"));
-        assert!(run("\"unterminated").error.unwrap().contains("unterminated"));
-        assert!(run("1 ) 2").error.is_some());
-        assert!(run("Eval(\"Eval(\"\"Eval(\"\"\"\"1\"\"\"\")\"\")\")").error.is_none());
+        assert!(run_hostile_formcalc(&format!("{}1{}", "-".repeat(5000), "")).error.is_some());
+        assert!(run_hostile_formcalc("var s = \"x\"\nfor i = 1 upto 100 do s = Concat(s, s) endfor\nLen(s)").error.unwrap().contains("too long"));
+        assert!(run_hostile_formcalc("Space(1e12)").error.is_none());
+        assert!(run_hostile_formcalc("Replace(Space(100000), \" \", Space(100000))").error.unwrap().contains("too long"));
+        assert_eq!(run_hostile_formcalc(r#"Format("YYYY-MM-DD", 1e300)"#).error, None);
+        assert_eq!(run_hostile_formcalc(r#"Date2Num("99999999999999999999-01-01", "YYYYYYYYYYYYYYYYYYYY-MM-DD")"#).error, None);
+        assert_eq!(run_hostile_formcalc(r#"Time2Num("99999999999999999999:0:0")"#).error, None);
+        assert_eq!(run_hostile_formcalc(r#"Num2Date(1e300, "YYYY")"#).result.as_deref(), Some(""));
+        assert!(run_hostile_formcalc("for i = 1 upto 1000 do nothing endfor").error.unwrap().contains("unknown name"));
+        assert!(run_hostile_formcalc("\"unterminated").error.unwrap().contains("unterminated"));
+        assert!(run_hostile_formcalc("1 ) 2").error.is_some());
+        assert!(run_hostile_formcalc("Eval(\"Eval(\"\"Eval(\"\"\"\"1\"\"\"\")\"\")\")").error.is_none());
+    }
+
+    fn assert_hostile_instance_growth_is_bounded() {
         // Adding rows forever stops at the instance cap with the effects it managed.
-        let o = run("for i = 1 upto 100000 do table._row.addInstance(1) endfor\ntable._row.count");
+        let o = run_hostile_formcalc("for i = 1 upto 100000 do table._row.addInstance(1) endfor\ntable._row.count");
         assert!(o.error.unwrap().contains("looped"));
         assert!(o.effects.iter().filter(|e| matches!(e, XfaEffect::AddInstance { .. })).count() <= 1000, "{}", o.effects.len());
-        let o = run("for i = 1 upto 5000 do table._row.addInstance(1) endfor\ntable._row.count");
+        let o = run_hostile_formcalc("for i = 1 upto 5000 do table._row.addInstance(1) endfor\ntable._row.count");
         assert_eq!(o.error, None);
         assert_eq!(o.result.as_deref(), Some("1002"));
+    }
+
+    fn assert_hostile_message_count_is_bounded() {
         // Message boxes past the cap are dropped and noted.
-        let o = run("for i = 1 upto 500 do $host.messageBox(i) endfor");
+        let o = run_hostile_formcalc("for i = 1 upto 500 do $host.messageBox(i) endfor");
         assert_eq!(o.effects.iter().filter(|e| matches!(e, XfaEffect::MessageBox(_))).count(), 100);
         assert!(!o.notes.is_empty());
+    }
+
+    fn assert_hostile_small_stack_is_safe() {
+        let ev = XfaEvent { activity: "calculate".into(), target: "form1[0].page1[0].total[0]".into(), ..Default::default() };
+        let doc = XfaDoc::default();
         // On a small stack (the wasm build's), the limits stop the script before the stack does.
         let small = std::thread::Builder::new()
             .stack_size(1 << 20)
@@ -1399,6 +1465,13 @@ $host.gotoURL("https://example.org")"#,
             std::time::Duration::from_millis(200),
         );
         assert!(o.abandoned || o.error.is_some(), "{o:?}");
+    }
+
+    fn run_hostile_formcalc(script: &str) -> XfaOutcome {
+        let ev = XfaEvent { activity: "calculate".into(), target: "form1[0].page1[0].total[0]".into(), ..Default::default() };
+        let doc = XfaDoc::default();
+        let fast = Limits { loop_iterations: 10_000, recursion: 32 };
+        run_formcalc(script, &ev, &doc, &form(), fast)
     }
 }
 

@@ -2,7 +2,10 @@ use super::layout::{
     Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_thai, latin_width, lines, norm, shaped_layout, text_rect, thai_error, wrapped,
 };
 use super::types::{AddedText, Align, Family};
-use super::*;
+use super::{
+    Content, Dict, Document, EditError, GlyphError, GlyphOutline, HashMap, HashSet, ObjRef, Object, PdfString, ShapedCluster, ShapedScript, Stream,
+    literal, matrix_number, n, shaped_glyph, win_ansi,
+};
 
 fn font_name(base: &str) -> String {
     format!("PCF{}", base.replace('-', ""))

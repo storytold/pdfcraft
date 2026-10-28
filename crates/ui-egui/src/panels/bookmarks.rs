@@ -1,4 +1,4 @@
-use super::*;
+use super::{DocInfo, Nav, OutlineItem, Rect, Sense, Tokens, icons, pos2, theme, vec2};
 
 /// What the user asked to do with a bookmark (applied after the panel is drawn).
 #[derive(Clone, Debug, PartialEq)]

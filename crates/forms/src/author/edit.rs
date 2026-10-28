@@ -1,6 +1,6 @@
 use super::look::{BorderStyle, da_string, patch_da, patch_widget_look, redraw_widgets};
 use super::tree::{attach, check_place, child_named, clash, detach, ensure_form, inherited, name_parts, own_inherited};
-use super::*;
+use super::{Dict, Document, Field, FieldKind, FieldProps, FormError, MIN_FIELD_SIDE, ObjRef, Object, PdfString, fields, flags, invalid};
 
 /// Swap width and height, keeping the center. `None` when that is not a usable widget.
 fn swapped_around_center(r: [f64; 4]) -> Option<[f64; 4]> {
@@ -70,59 +70,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     if let Some(acts) = &props.actions {
         crate::set_field_actions(doc, name, acts)?;
     }
-    let mut new_name = name.to_string();
-    if let Some(n) = props.name.as_deref().map(str::trim).filter(|n| *n != f.name) {
-        // A full name under the same parents only renames the field's own part (the editor
-        // shows nested fields by their full name): it isn't moved, so it keeps its place and
-        // goes on inheriting from its parents.
-        let n = match (n.rsplit_once('.'), f.name.rsplit_once('.')) {
-            (Some((parents, own)), Some((current, _))) if parents == current => own,
-            _ => n,
-        };
-        if n.contains('.') {
-            // A full name: the field moves under the parent fields it names (#2696).
-            let parts = name_parts(n)?;
-            if let Some(why) = all.iter().filter(|x| x.obj != f.obj).find_map(|x| clash(n, &x.name)) {
-                return invalid(why);
-            }
-            let af = ensure_form(doc)?;
-            // Checked before anything changes, so a refused move leaves the field as it was.
-            let add = inherited(doc, f.obj);
-            check_place(doc, af, f.obj, &parts, &add)?;
-            // From here a failure (a write that `check_place` couldn't foresee) would leave the
-            // field half moved in `doc`. The engine runs every edit on a copy of the document and
-            // keeps it only when the edit succeeds (`Session::apply`), so the open document never
-            // sees that.
-            own_inherited(doc, f.obj, &add)?;
-            detach(doc, f.obj)?;
-            attach(doc, af, f.obj, &parts)?;
-            new_name = n.to_string();
-        } else {
-            if n.is_empty() {
-                return invalid("field names can't be empty");
-            }
-            // Rename the terminal part (the field's own /T). The parents' part stays, so the name
-            // that must be free is the full one: `MASTER.a` renamed to `b` takes `MASTER.b` (ISO
-            // 32000-2 §12.7.4.2). The field itself is no clash when it keeps its own name.
-            let prefix = f.name.rsplit_once('.').map(|(p, _)| format!("{p}.")).unwrap_or_default();
-            new_name = format!("{prefix}{n}");
-            if let Some(why) = all.iter().filter(|x| x.obj != f.obj).find_map(|x| clash(&new_name, &x.name)) {
-                return invalid(why);
-            }
-            // A node of that name beside it that isn't a terminal field, such as a parent
-            // field left empty by a move.
-            let af = ensure_form(doc)?;
-            let parent = doc.get(f.obj).as_dict().and_then(|d| d.reference(b"Parent"));
-            if child_named(doc, af, parent, n).is_some_and(|r| r != f.obj) {
-                return invalid(format!("a field named {new_name:?} already exists"));
-            }
-            doc.update_dict(f.obj, |d| d.set(b"T".to_vec(), PdfString::text(n)))?;
-        }
-        // Calculations read the field by its new name, unless another field keeps the old one.
-        if all.iter().filter(|x| x.name == f.name).count() == 1 {
-            rename_in_calculations(doc, &all, &f.name, &new_name)?;
-        }
-    }
+    let new_name = rename_field(doc, &all, &f, name, props)?;
     // The new default appearance when the size or the look changes.
     let size = props.font_size.unwrap_or_else(|| crate::appearance::parse_da(&f.da).size);
     let new_da = match &props.look {
@@ -248,51 +196,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
             }
         }
     }
-    if let Some(l) = &props.look {
-        let arr = |c: [f64; 3]| Object::Array(c.iter().map(|v| Object::Real(v.clamp(0.0, 1.0))).collect());
-        for w in &f.widgets {
-            // Resolved first: an indirect /MK keeps its mark, rotation and other entries.
-            let mut mk = doc.get(w.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned())).flatten().unwrap_or_default();
-            doc.update_dict(w.obj, |d| {
-                match l.border {
-                    Some(c) => mk.set(b"BC".to_vec(), arr(c)),
-                    None => {
-                        mk.remove(b"BC");
-                    }
-                }
-                match l.fill {
-                    Some(c) => mk.set(b"BG".to_vec(), arr(c)),
-                    None => {
-                        mk.remove(b"BG");
-                    }
-                }
-                d.set(b"MK".to_vec(), Object::Dict(mk));
-                let mut bs = Dict::new();
-                bs.set(b"W".to_vec(), Object::Real(l.width.clamp(0.0, 12.0)));
-                bs.set(b"S".to_vec(), Object::name(l.style.code()));
-                if l.style == BorderStyle::Dashed {
-                    bs.set(b"D".to_vec(), Object::Array(vec![Object::Int(3)]));
-                }
-                d.set(b"BS".to_vec(), Object::Dict(bs));
-            })?;
-        }
-    }
-    if let Some(style) = props.check_style {
-        for w in &f.widgets {
-            // Resolved first: an indirect /MK keeps its colours.
-            let mut mk = doc.get(w.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned())).flatten().unwrap_or_default();
-            mk.set(b"CA".to_vec(), PdfString::text(style.code()));
-            doc.update_dict(w.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
-        }
-    }
-    if let Some((wi, r)) = props.rect {
-        let w = f.widgets.get(wi).ok_or_else(|| FormError::Invalid(format!("{name} has no widget {}", wi + 1)))?;
-        let r = [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])];
-        if !r.iter().all(|v| v.is_finite()) || r[2] - r[0] < MIN_FIELD_SIDE || r[3] - r[1] < MIN_FIELD_SIDE {
-            return invalid("the field is too small");
-        }
-        doc.update_dict(w.obj, |d| d.set(b"Rect".to_vec(), Object::Array(r.iter().map(|v| Object::Real(*v)).collect())))?;
-    }
+    apply_widget_style_props(doc, &f, name, props)?;
     if props.format.is_some() || props.validate.is_some() || props.calculate.is_some() {
         if !matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
             return invalid("only text fields and drop-down lists have format, validate and calculate scripts");
@@ -341,6 +245,127 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
             }
         })?;
     }
+    let only = apply_late_widget_props(doc, &f, props, &new_da, rotated_rect)?;
+    redraw_widgets(doc, &new_name, only)?;
+    if props.calculate.is_some() {
+        crate::recalculate(doc)?;
+    }
+    Ok(new_name)
+}
+
+fn rename_field(doc: &mut Document, all: &[Field], f: &Field, name: &str, props: &FieldProps) -> Result<String, FormError> {
+    let mut new_name = name.to_string();
+    if let Some(n) = props.name.as_deref().map(str::trim).filter(|n| *n != f.name) {
+        // A full name under the same parents only renames the field's own part (the editor
+        // shows nested fields by their full name): it isn't moved, so it keeps its place and
+        // goes on inheriting from its parents.
+        let n = match (n.rsplit_once('.'), f.name.rsplit_once('.')) {
+            (Some((parents, own)), Some((current, _))) if parents == current => own,
+            _ => n,
+        };
+        if n.contains('.') {
+            // A full name: the field moves under the parent fields it names (#2696).
+            let parts = name_parts(n)?;
+            if let Some(why) = all.iter().filter(|x| x.obj != f.obj).find_map(|x| clash(n, &x.name)) {
+                return invalid(why);
+            }
+            let af = ensure_form(doc)?;
+            // Checked before anything changes, so a refused move leaves the field as it was.
+            let add = inherited(doc, f.obj);
+            check_place(doc, af, f.obj, &parts, &add)?;
+            // From here a failure (a write that `check_place` couldn't foresee) would leave the
+            // field half moved in `doc`. The engine runs every edit on a copy of the document and
+            // keeps it only when the edit succeeds (`Session::apply`), so the open document never
+            // sees that.
+            own_inherited(doc, f.obj, &add)?;
+            detach(doc, f.obj)?;
+            attach(doc, af, f.obj, &parts)?;
+            new_name = n.to_string();
+        } else {
+            if n.is_empty() {
+                return invalid("field names can't be empty");
+            }
+            // Rename the terminal part (the field's own /T). The parents' part stays, so the name
+            // that must be free is the full one: `MASTER.a` renamed to `b` takes `MASTER.b` (ISO
+            // 32000-2 §12.7.4.2). The field itself is no clash when it keeps its own name.
+            let prefix = f.name.rsplit_once('.').map(|(p, _)| format!("{p}.")).unwrap_or_default();
+            new_name = format!("{prefix}{n}");
+            if let Some(why) = all.iter().filter(|x| x.obj != f.obj).find_map(|x| clash(&new_name, &x.name)) {
+                return invalid(why);
+            }
+            // A node of that name beside it that isn't a terminal field, such as a parent
+            // field left empty by a move.
+            let af = ensure_form(doc)?;
+            let parent = doc.get(f.obj).as_dict().and_then(|d| d.reference(b"Parent"));
+            if child_named(doc, af, parent, n).is_some_and(|r| r != f.obj) {
+                return invalid(format!("a field named {new_name:?} already exists"));
+            }
+            doc.update_dict(f.obj, |d| d.set(b"T".to_vec(), PdfString::text(n)))?;
+        }
+        // Calculations read the field by its new name, unless another field keeps the old one.
+        if all.iter().filter(|x| x.name == f.name).count() == 1 {
+            rename_in_calculations(doc, all, &f.name, &new_name)?;
+        }
+    }
+    Ok(new_name)
+}
+
+fn apply_widget_style_props(doc: &mut Document, f: &Field, name: &str, props: &FieldProps) -> Result<(), FormError> {
+    if let Some(l) = &props.look {
+        let arr = |c: [f64; 3]| Object::Array(c.iter().map(|v| Object::Real(v.clamp(0.0, 1.0))).collect());
+        for w in &f.widgets {
+            // Resolved first: an indirect /MK keeps its mark, rotation and other entries.
+            let mut mk = doc.get(w.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned())).flatten().unwrap_or_default();
+            doc.update_dict(w.obj, |d| {
+                match l.border {
+                    Some(c) => mk.set(b"BC".to_vec(), arr(c)),
+                    None => {
+                        mk.remove(b"BC");
+                    }
+                }
+                match l.fill {
+                    Some(c) => mk.set(b"BG".to_vec(), arr(c)),
+                    None => {
+                        mk.remove(b"BG");
+                    }
+                }
+                d.set(b"MK".to_vec(), Object::Dict(mk));
+                let mut bs = Dict::new();
+                bs.set(b"W".to_vec(), Object::Real(l.width.clamp(0.0, 12.0)));
+                bs.set(b"S".to_vec(), Object::name(l.style.code()));
+                if l.style == BorderStyle::Dashed {
+                    bs.set(b"D".to_vec(), Object::Array(vec![Object::Int(3)]));
+                }
+                d.set(b"BS".to_vec(), Object::Dict(bs));
+            })?;
+        }
+    }
+    if let Some(style) = props.check_style {
+        for w in &f.widgets {
+            // Resolved first: an indirect /MK keeps its colours.
+            let mut mk = doc.get(w.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned())).flatten().unwrap_or_default();
+            mk.set(b"CA".to_vec(), PdfString::text(style.code()));
+            doc.update_dict(w.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
+        }
+    }
+    if let Some((wi, r)) = props.rect {
+        let w = f.widgets.get(wi).ok_or_else(|| FormError::Invalid(format!("{name} has no widget {}", wi + 1)))?;
+        let r = [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])];
+        if !r.iter().all(|v| v.is_finite()) || r[2] - r[0] < MIN_FIELD_SIDE || r[3] - r[1] < MIN_FIELD_SIDE {
+            return invalid("the field is too small");
+        }
+        doc.update_dict(w.obj, |d| d.set(b"Rect".to_vec(), Object::Array(r.iter().map(|v| Object::Real(*v)).collect())))?;
+    }
+    Ok(())
+}
+
+fn apply_late_widget_props(
+    doc: &mut Document,
+    f: &Field,
+    props: &FieldProps,
+    new_da: &str,
+    rotated_rect: Option<Option<[f64; 4]>>,
+) -> Result<Option<usize>, FormError> {
     // A complete look replaces widget /DA overrides. Partial changes were patched above
     // against each override, including size-only changes that keep its font and colour.
     if props.look.is_some() {
@@ -348,7 +373,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
             if w.obj != f.obj {
                 doc.update_dict(w.obj, |d| {
                     if d.contains(b"DA") {
-                        d.set(b"DA".to_vec(), PdfString::literal(new_da.clone().into_bytes()));
+                        d.set(b"DA".to_vec(), PdfString::literal(new_da.to_owned().into_bytes()));
                     }
                 })?;
             }
@@ -385,11 +410,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     }
     // A label-only edit must not replace another widget's custom appearances.
     let only = props.caption.as_ref().filter(|_| *props == (FieldProps { caption: props.caption.clone(), ..Default::default() })).map(|(wi, _)| *wi);
-    redraw_widgets(doc, &new_name, only)?;
-    if props.calculate.is_some() {
-        crate::recalculate(doc)?;
-    }
-    Ok(new_name)
+    Ok(only)
 }
 
 /// Name field `old` `new` in each field's Calculate script that reads it

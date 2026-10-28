@@ -7,7 +7,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
 use pdfcraft_engine::{Added, AddedContent, AddedText, Edit};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{DocView, PageXform};
+use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_pointer::PagePointer;
 use crate::theme::Tokens;
 use crate::widgets;
@@ -345,20 +345,15 @@ pub(crate) fn select_grabs(xf: &PageXform, ptr: &PagePointer, page: usize, info:
 
 /// Pointer input on one page in Edit mode (`adding_text` with the Text tool). `true` when it
 /// used the input.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn page_input(
-    ui: &egui::Ui,
-    resp: &egui::Response,
-    xf: &PageXform,
-    ptr: &PagePointer,
-    page: usize,
-    info: &DocInfo,
+    cx: PageToolContext<'_>,
     added: &[Added],
     adding_text: bool,
     edit_on_click: bool,
     style: &AddedText,
     view: &mut DocView,
 ) -> bool {
+    let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
     let mut consumed = false;
     let pointer = ptr.pos;
     let cv = &mut view.content;
