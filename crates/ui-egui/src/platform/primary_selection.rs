@@ -108,7 +108,8 @@ impl Worker {
 }
 
 #[cfg(any(test, all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")))))]
-/// How long after a worker was started another may replace it.
+/// How long before trying again: to replace a stopped worker (from when it was started), or to
+/// write again a selection the display refused.
 const RETRY: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[cfg(any(test, all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")))))]
@@ -135,10 +136,16 @@ fn spawn_worker() -> Option<Worker> {
                 return;
             }
         };
-        while woken.recv().is_ok() {
+        // Woken for each selection, and every `RETRY` to write again one the display refused.
+        while !matches!(woken.recv_timeout(RETRY), Err(std::sync::mpsc::RecvTimeoutError::Disconnected)) {
             let Some(text) = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() else { continue };
-            if let Err(e) = clipboard.set().clipboard(LinuxClipboardKind::Primary).text(text) {
+            if let Err(e) = clipboard.set().clipboard(LinuxClipboardKind::Primary).text(text.clone()) {
                 log::debug!("couldn't set the primary selection: {e}");
+                // Tried again later, unless a newer selection has taken its place meanwhile.
+                let mut latest = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if latest.is_none() {
+                    *latest = Some(text);
+                }
             }
         }
     });
