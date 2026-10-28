@@ -1,8 +1,10 @@
-use super::geometry::{HANDLES, grabs_points, handle_pos, is_markup, reshapable, reshaped, resizable};
+use super::geometry::{
+    HANDLES, TURN_HANDLE_REACH, grabs_points, handle_pos, is_markup, reshapable, reshaped, resizable, turn_degrees, turn_handle, turnable,
+};
 use super::state::{Gesture, PageCx, SETTLE_SECS};
 use super::{
-    Annotation, Color32, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NewAnnotation, Pos2, QuickTool, Rect, SELECT_BLUE, Shape,
-    Stroke, color32, vec2,
+    Annotation, Color32, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NewAnnotation, Pos2, QuickTool, Rect, SELECT_BLUE, Sense,
+    Shape, Stroke, color32, icons, vec2,
 };
 
 /// Paint comment selection, hover and gesture previews on a page.

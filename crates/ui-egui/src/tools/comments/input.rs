@@ -231,45 +231,9 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
     if resp.drag_stopped()
         && let Some(p) = pointer
     {
-        match cv.gesture.clone() {
-            Some(Gesture::Move { page, index, from }) if page == cx.page => {
-                cv.gesture = None;
-                let (a, b) = (cx.to_user(from), cx.to_user(p));
-                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-                if from.distance(p) >= 2.0 {
-                    view.pending_edit = Some(Edit::MoveAnnotation { page, index, dx, dy });
-                }
-            }
-            Some(Gesture::Resize { page, index, handle, from, aspect_ratio }) if page == cx.page => {
-                cv.gesture = None;
-                if let Some(a) = cx.get(index) {
-                    let from_rect = cx.screen_rect(a);
-                    let shift = ui.input(|i| i.modifiers.shift);
-                    let r = resized(from_rect, handle, p - from, corner_ratio(from_rect, aspect_ratio, shift));
-                    let rect = a.rect_for_shown(cx.rect_to_user(r), cx.rotation());
-                    if r.width() >= 4.0 && r.height() >= 4.0 {
-                        view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect });
-                    }
-                }
-            }
-            Some(Gesture::Reshape { page, index, point, points }) if page == cx.page => {
-                cv.gesture = None;
-                let shift = ui.input(|i| i.modifiers.shift);
-                let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
-                if moved {
-                    view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, cx.to_user(p), shift) });
-                }
-            }
-            Some(Gesture::Rotate { page, index, centre, from, quarter }) if page == cx.page => {
-                cv.gesture = None;
-                let degrees = turn_degrees(centre, from, p, ui.input(|i| i.modifiers.shift), quarter);
-                if degrees.abs() >= 0.5 {
-                    view.pending_edit = Some(Edit::RotateAnnotation { page, index, degrees });
-                }
-            }
-            _ => {}
-        }
+        finish_select_gesture(ui, cx, view, p);
     }
+    let cv = &mut view.comments;
     // (egui clears the press origin on release, so clicks are located by the pointer.)
     let on_page = pointer.is_some_and(|p| cx.xf.rect.contains(p));
     if resp.clicked() && on_page {
@@ -300,6 +264,49 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
         consumed = true;
     }
     consumed
+}
+
+/// The end of a move, resize, reshape or turn the Select tool began on this page: the edit it
+/// makes, for the pointer released at `p`.
+fn finish_select_gesture(ui: &egui::Ui, cx: &PageCx<'_>, view: &mut DocView, p: Pos2) {
+    match view.comments.gesture.clone() {
+        Some(Gesture::Move { page, index, from }) if page == cx.page => {
+            view.comments.gesture = None;
+            let (a, b) = (cx.to_user(from), cx.to_user(p));
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            if from.distance(p) >= 2.0 {
+                view.pending_edit = Some(Edit::MoveAnnotation { page, index, dx, dy });
+            }
+        }
+        Some(Gesture::Resize { page, index, handle, from, aspect_ratio }) if page == cx.page => {
+            view.comments.gesture = None;
+            if let Some(a) = cx.get(index) {
+                let from_rect = cx.screen_rect(a);
+                let shift = ui.input(|i| i.modifiers.shift);
+                let r = resized(from_rect, handle, p - from, corner_ratio(from_rect, aspect_ratio, shift));
+                let rect = a.rect_for_shown(cx.rect_to_user(r), cx.rotation());
+                if r.width() >= 4.0 && r.height() >= 4.0 {
+                    view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect });
+                }
+            }
+        }
+        Some(Gesture::Reshape { page, index, point, points }) if page == cx.page => {
+            view.comments.gesture = None;
+            let shift = ui.input(|i| i.modifiers.shift);
+            let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
+            if moved {
+                view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, cx.to_user(p), shift) });
+            }
+        }
+        Some(Gesture::Rotate { page, index, centre, from, quarter }) if page == cx.page => {
+            view.comments.gesture = None;
+            let degrees = turn_degrees(centre, from, p, ui.input(|i| i.modifiers.shift), quarter);
+            if degrees.abs() >= 0.5 {
+                view.pending_edit = Some(Edit::RotateAnnotation { page, index, degrees });
+            }
+        }
+        _ => {}
+    }
 }
 
 /// After text selection ran: a markup tool turns a finished selection into a comment; Replace

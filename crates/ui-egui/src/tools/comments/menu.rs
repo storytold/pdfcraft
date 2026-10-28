@@ -1,3 +1,4 @@
+use super::geometry::turnable;
 use super::paint::edit_anchor;
 use super::state::{Composer, ComposerKind};
 use super::{

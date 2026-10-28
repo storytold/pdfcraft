@@ -58,6 +58,22 @@ impl<'a> Inspector<'a> {
 
     // ── annotations ─────────────────────────────────────────────────────────────────────────
 
+    /// A turned box's angle and own box (`/PCAngle`, `/PCBox`): squares, circles and text boxes
+    /// other than callouts. Keep in step with `pdfcraft_annot::appearance::turned_box`.
+    fn turn(&self, d: &Dictionary, subtype: &str) -> Option<(f32, [f32; 4])> {
+        if !matches!(subtype, "Square" | "Circle" | "FreeText") || d.get(b"CL").is_ok() {
+            return None;
+        }
+        let angle = d.get(b"PCAngle").ok().and_then(|a| self.resolve(a).as_float().ok()).filter(|a| a.is_finite() && *a != 0.0)?;
+        match d.get(b"PCBox").map(|o| self.resolve(o)) {
+            Ok(Object::Array(v)) if v.len() == 4 => {
+                let v: Vec<f32> = v.iter().filter_map(|o| o.as_float().ok()).filter(|x| x.is_finite()).collect();
+                (v.len() == 4).then(|| (angle, [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])]))
+            }
+            _ => None,
+        }
+    }
+
     /// `text_budget` is what is left of [`MAX_LINK_ATTACHMENT_TEXT_BYTES`].
     pub(super) fn annotations(&self, info: &mut DocInfo, text_budget: &mut usize) {
         let mut pages: Vec<(ObjectId, usize)> = self.page_index.iter().map(|(&id, &page)| (id, page)).collect();
@@ -158,19 +174,7 @@ impl<'a> Inspector<'a> {
                 }
                 _ => Vec::new(),
             };
-            // Keep in step with `pdfcraft_annot::appearance::turned_box`.
-            let angle = d.get(b"PCAngle").ok().and_then(|a| self.resolve(a).as_float().ok()).filter(|a| a.is_finite() && *a != 0.0);
-            let own = match d.get(b"PCBox").map(|o| self.resolve(o)) {
-                Ok(Object::Array(v)) if v.len() == 4 => {
-                    let v: Vec<f32> = v.iter().filter_map(|o| o.as_float().ok()).filter(|x| x.is_finite()).collect();
-                    (v.len() == 4).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
-                }
-                _ => None,
-            };
-            let turn = match (angle, own) {
-                (Some(a), Some(b)) if matches!(subtype.as_str(), "Square" | "Circle" | "FreeText") && d.get(b"CL").is_err() => Some((a, b)),
-                _ => None,
-            };
+            let turn = self.turn(d, &subtype);
             let annotation = Annotation {
                 page,
                 subtype,
