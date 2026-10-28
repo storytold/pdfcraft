@@ -17,6 +17,12 @@ impl ImageColorSpace {
     }
 }
 
+/// PdfCraft patch (29): the most pixels a codestream may decode to (2^28, the renderer's
+/// `MAX_IMAGE_PIXELS` and hayro-interpret's `image_size_ok`). Its size comes from the SIZ marker,
+/// not the image dictionary, and the decoder allocates it infallibly: a tiny file could ask for
+/// tens of gigabytes and abort the process (#5078).
+const MAX_PIXELS: u64 = 1 << 28;
+
 pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterResult<'static>> {
     use crate::object::stream::ImageColorSpace;
 
@@ -47,6 +53,10 @@ pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterRe
 
     let width = image.width();
     let height = image.height();
+    // PdfCraft patch (29): see `MAX_PIXELS`.
+    if u64::from(width) * u64::from(height) > MAX_PIXELS {
+        return None;
+    }
     // PdfCraft patch: (#3179) a resolved palette gives colours, decoded to 8 bits like every
     // sample; the codestream's precision is that of the indices (1 bit, say), and rescaling the
     // colours to it kept only 0 or 255 per channel (review on #3184).
