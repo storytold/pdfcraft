@@ -267,6 +267,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-11-16 (M5, #3741):** Ctrl+M opens Comments on Windows/Linux and repeated activation keeps it open. macOS leaves Command+M unbound for Minimize. Dispatch, menus, palette, shortcut help and control/headless metadata resolve the platform-specific registry binding. Mapping and real-input regressions are retained through the rebase; estimates unchanged.
 - **2026-11-03 (M3, #3669):** A drag across a table selects its rows, as Preview does, instead of reading order's detour down each column; a cell padded with spaces reads with the next cell of its row. Synthetic render and UI drag regressions; estimates unchanged.
+- **2026-10-28 (M10, OCR layout):** Recognize text reads a page region by region and breaks it into paragraphs with the optional PP-DocLayoutV3 layout model (Apache-2.0, ~130 MB, fetched by `cargo xtask models`): MDPBench DE/ES/FR 43.5 → 47.0, about 0.8 s a page more. Tables and formulas are still read as plain text. Estimates unchanged.
 
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 
