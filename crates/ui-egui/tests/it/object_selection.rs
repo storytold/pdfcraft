@@ -424,14 +424,46 @@ fn graphics_harness() -> Harness<'static, PdfCraftApp> {
     h
 }
 
+/// Where a user-space box is drawn on screen (the graphics fixture page is 400 points wide).
+fn graphic_on_screen(h: &Harness<'static, PdfCraftApp>, r: [f64; 4]) -> egui::Rect {
+    let s = h.state();
+    let page = s.views[0].page_screen_rect(0).expect("on screen");
+    let k = page.width() / 400.0;
+    let info = &s.session.get(s.views[0].id).unwrap().info;
+    let height = info.pages[0].height;
+    let p = |x: f64, y: f64| page.min + egui::vec2(x as f32 * k, (height - y as f32) * k);
+    egui::Rect::from_two_pos(p(r[0], r[1]), p(r[2], r[3]))
+}
+
+/// Accent-blue pixels in the ring just outside `r`: the faint outline that says the graphic can
+/// be selected.
+fn blue_ring(pixels: &image::RgbaImage, r: egui::Rect) -> usize {
+    let outer = r.expand(4.0);
+    let inner = r.shrink(2.0);
+    let (x0, y0, x1, y1) = (outer.left().max(0.0) as u32, outer.top().max(0.0) as u32, outer.right() as u32, outer.bottom() as u32);
+    (y0..y1.min(pixels.height()))
+        .flat_map(|y| (x0..x1.min(pixels.width())).map(move |x| (x, y)))
+        .filter(|(x, y)| !inner.contains(egui::pos2(*x as f32 + 0.5, *y as f32 + 0.5)))
+        .filter(|(x, y)| {
+            let [r, g, b, _] = pixels.get_pixel(*x, *y).0;
+            b as u16 > r as u16 + 30 && b > 200 && g < b
+        })
+        .count()
+}
+
 /// An inline vector icon has no single-object tool of its own: an ordinary click selects it and
-/// Delete removes only its paths, leaving the caption selectable and undoable.
+/// Delete removes only its paths, leaving the caption selectable and undoable. Before the click
+/// its faint blue box says it is there and selectable.
 #[test]
 fn clicking_an_inline_vector_icon_selects_and_deletes_only_it() {
     use pdfcraft_engine::ObjectKind;
+    let _gpu = crate::gpu();
     let mut h = graphics_harness();
     let before = objects(&h);
-    let icon = before.iter().find(|o| o.target.kind == ObjectKind::Graphic).expect("the inline icon is listed").target;
+    let icon_object = before.iter().find(|o| o.target.kind == ObjectKind::Graphic).expect("the inline icon is listed");
+    let icon = icon_object.target;
+    let outlined = blue_ring(&h.render().unwrap(), graphic_on_screen(&h, icon_object.rect));
+    assert!(outlined > 40, "the icon is boxed before it is selected ({outlined} blue pixels)");
     let p = at(&h, 60.0, 150.0);
     click(&mut h, p, Modifiers::NONE);
     h.get_by_label("1 object selected");
