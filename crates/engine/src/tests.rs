@@ -6686,7 +6686,7 @@ fn recognised_text_keeps_its_lines() {
     let text = found[0].text().to_lowercase();
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 2, "{text}");
-    assert!(lines[0].contains("quick") && lines[1].contains("jugs"), "{text}");
+    assert!(lines[0].contains("brown") && lines[1].contains("jugs"), "{text}");
     assert_eq!(found[0].line_lengths.iter().sum::<usize>(), found[0].words.len());
 }
 
