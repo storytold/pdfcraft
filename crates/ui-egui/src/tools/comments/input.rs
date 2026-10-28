@@ -4,7 +4,7 @@ use super::geometry::{
 };
 use super::paint::{drawn_shape, edit_anchor, erase, new_comment};
 use super::state::{Composer, ComposerKind, Gesture, PageCx, nearest_corner};
-use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, vec2};
+use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, SnapHit, vec2};
 use crate::page_cursor::{Layer, Subject};
 use crate::page_router::{CommentPart, Hit, Owner};
 
@@ -282,48 +282,11 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
         cv.anchor_shown = Some((cx.page, cx.to_user(anchor.at + (moved - *from)), anchor.name));
     }
     if resp.drag_stopped()
-        && let Some(p) = pointer
+        && let Some(p) = pointer.map(|p| dragged.map_or(p, |(p, _)| p))
     {
-        let p = dragged.map_or(p, |(p, _)| p);
-        match cv.gesture.clone() {
-            Some(Gesture::Move { page, index, from }) if page == cx.page => {
-                cv.gesture = None;
-                cv.move_anchor = None;
-                cv.anchor_shown = None;
-                let (a, b) = (cx.to_user(from), cx.to_user(p));
-                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-                if from.distance(p) >= 2.0 {
-                    view.pending_edit = Some(Edit::MoveAnnotation { page, index, dx, dy });
-                }
-            }
-            Some(Gesture::Resize { page, index, handle, from, aspect_ratio }) if page == cx.page => {
-                cv.gesture = None;
-                if let Some(a) = cx.get(index) {
-                    let from_rect = cx.screen_rect(a);
-                    let shift = ui.input(|i| i.modifiers.shift);
-                    let r = resized(from_rect, handle, p - from, corner_ratio(from_rect, aspect_ratio, shift));
-                    let rect = a.rect_for_shown(cx.rect_to_user(r), cx.rotation());
-                    if r.width() >= 4.0 && r.height() >= 4.0 {
-                        view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect });
-                    }
-                }
-            }
-            Some(Gesture::Reshape { page, index, point, points }) if page == cx.page => {
-                cv.gesture = None;
-                let shift = ui.input(|i| i.modifiers.shift);
-                let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
-                // The target itself when it snapped, not its round trip through the screen.
-                let to = match dragged {
-                    Some((_, Some((u, _)))) => u,
-                    _ => cx.to_user(p),
-                };
-                if moved {
-                    view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, to, shift) });
-                }
-            }
-            _ => {}
-        }
+        finish_select_gesture(ui, cx, view, p, dragged);
     }
+    let cv = &mut view.comments;
     // (egui clears the press origin on release, so clicks are located by the pointer.)
     let on_page = pointer.is_some_and(|p| cx.xf.rect.contains(p));
     if resp.clicked() && on_page {
@@ -354,6 +317,50 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
         consumed = true;
     }
     consumed
+}
+
+/// The end of a gesture the Select tool began on this page (a move, a resize, a reshape, …): the
+/// edit it makes, for the pointer released at `p`, and where it snapped (`dragged`, see
+/// `select_input`).
+fn finish_select_gesture(ui: &egui::Ui, cx: &PageCx<'_>, view: &mut DocView, p: Pos2, dragged: Option<(Pos2, Option<SnapHit>)>) {
+    match view.comments.gesture.clone() {
+        Some(Gesture::Move { page, index, from }) if page == cx.page => {
+            view.comments.gesture = None;
+            view.comments.move_anchor = None;
+            view.comments.anchor_shown = None;
+            let (a, b) = (cx.to_user(from), cx.to_user(p));
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            if from.distance(p) >= 2.0 {
+                view.pending_edit = Some(Edit::MoveAnnotation { page, index, dx, dy });
+            }
+        }
+        Some(Gesture::Resize { page, index, handle, from, aspect_ratio }) if page == cx.page => {
+            view.comments.gesture = None;
+            if let Some(a) = cx.get(index) {
+                let from_rect = cx.screen_rect(a);
+                let shift = ui.input(|i| i.modifiers.shift);
+                let r = resized(from_rect, handle, p - from, corner_ratio(from_rect, aspect_ratio, shift));
+                let rect = a.rect_for_shown(cx.rect_to_user(r), cx.rotation());
+                if r.width() >= 4.0 && r.height() >= 4.0 {
+                    view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect });
+                }
+            }
+        }
+        Some(Gesture::Reshape { page, index, point, points }) if page == cx.page => {
+            view.comments.gesture = None;
+            let shift = ui.input(|i| i.modifiers.shift);
+            let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
+            // The target itself when it snapped, not its round trip through the screen.
+            let to = match dragged {
+                Some((_, Some((u, _)))) => u,
+                _ => cx.to_user(p),
+            };
+            if moved {
+                view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, to, shift) });
+            }
+        }
+        _ => {}
+    }
 }
 
 /// After text selection ran: a markup tool turns a finished selection into a comment; Replace

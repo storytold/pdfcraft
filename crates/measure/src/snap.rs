@@ -621,6 +621,83 @@ impl Walker<'_> {
         self.geometry.unreadable = self.geometry.unreadable.saturating_add(1);
         self.bytes = self.bytes.saturating_add(remaining);
     }
+    /// A painting operator (`S`, `f`, `B` …): the path built so far joins the page's geometry (a
+    /// fill closes every open subpath first), with its subpaths' centres. `false` when the open
+    /// subpaths to close overflowed, which ends the walk.
+    fn paint(
+        &mut self,
+        paint: &str,
+        path: &mut Geometry,
+        subpaths: &mut Vec<Subpath>,
+        closures: &mut Vec<[Point; 2]>,
+        current: Option<Point>,
+        start: Option<Point>,
+    ) -> bool {
+        if matches!(paint, "f" | "F" | "f*" | "B" | "B*" | "b" | "b*") {
+            if !remember_close(closures, current, start) {
+                return false;
+            }
+            // Filling implicitly closes every open subpath, not just the last one.
+            // Stroke-only S leaves its open subpaths unchanged.
+            for [a, b] in closures.drain(..) {
+                if self.geometry.segments.len().saturating_add(path.segments.len()) >= self.geometry.cap {
+                    path.truncated = true;
+                    break;
+                }
+                path.edge(a, b);
+            }
+        } else if paint == "s"
+            && let (Some(a), Some(b)) = (current, start)
+        {
+            path.edge(a, b);
+        }
+        let filled = !matches!(paint, "S" | "s");
+        let closes_last = paint == "s";
+        let count = subpaths.len();
+        for (i, sp) in subpaths.drain(..).enumerate() {
+            let sp = if closes_last && i + 1 == count { Subpath { closed: true, ..sp } } else { sp };
+            if let Some(c) = sp.centre(filled) {
+                path.centres.push(c);
+            }
+        }
+        self.geometry.segments.append(&mut path.segments);
+        self.geometry.endpoints.append(&mut path.endpoints);
+        self.geometry.midpoints.append(&mut path.midpoints);
+        self.geometry.centres.append(&mut path.centres);
+        self.geometry.truncated |= path.truncated;
+        closures.clear();
+        true
+    }
+    /// A form XObject `o` drawn by `Do` under `matrix`, with its own resources or else
+    /// `resources`; one already being walked (a form drawing itself) is skipped.
+    fn form(&mut self, o: &Object, resources: &Dict, matrix: Matrix, depth: usize) -> Result<()> {
+        let r = o.as_ref();
+        if r.is_some_and(|r| self.seen.contains(&r)) {
+            return Ok(());
+        }
+        let form = self.doc.resolve(o);
+        if let Object::Stream(s) = form.as_ref()
+            && s.dict.name(b"Subtype") == Some(b"Form")
+        {
+            let m = s
+                .dict
+                .get(b"Matrix")
+                .map(|m| self.doc.resolve(m))
+                .and_then(|o| o.as_array().and_then(|a| Matrix::from_operands(a)))
+                .unwrap_or_default()
+                .then(&matrix);
+            let own = s.dict.get(b"Resources").map(|o| self.doc.resolve(o));
+            let res = own.as_ref().and_then(|o| o.as_dict()).unwrap_or(resources);
+            if let Some(r) = r {
+                self.seen.insert(r);
+            }
+            self.walk(o, res, m, depth + 1)?;
+            if let Some(r) = r {
+                self.seen.remove(&r);
+            }
+        }
+        Ok(())
+    }
     fn ops(&mut self, data: &[u8], resources: &Dict, initial: Matrix, depth: usize) -> Result<()> {
         self.bytes = self.bytes.saturating_add(data.len());
         self.streams = self.streams.saturating_add(1);
@@ -755,41 +832,11 @@ impl Walker<'_> {
                     }
                 }
                 "S" | "s" | "f" | "F" | "f*" | "B" | "B*" | "b" | "b*" => {
-                    let paint = String::from_utf8_lossy(&op.op);
-                    if matches!(paint.as_ref(), "f" | "F" | "f*" | "B" | "B*" | "b" | "b*") {
-                        if !remember_close(&mut closures, current, start) {
-                            self.geometry.truncated = true;
-                            break;
-                        }
-                        // Filling implicitly closes every open subpath, not just the last one.
-                        // Stroke-only S leaves its open subpaths unchanged.
-                        for [a, b] in closures.drain(..) {
-                            if self.geometry.segments.len().saturating_add(path.segments.len()) >= self.geometry.cap {
-                                path.truncated = true;
-                                break;
-                            }
-                            path.edge(a, b);
-                        }
-                    } else if paint == "s"
-                        && let (Some(a), Some(b)) = (current, start)
-                    {
-                        path.edge(a, b);
+                    let paint = String::from_utf8_lossy(&op.op).into_owned();
+                    if !self.paint(&paint, &mut path, &mut subpaths, &mut closures, current, start) {
+                        self.geometry.truncated = true;
+                        break;
                     }
-                    let filled = !matches!(paint.as_ref(), "S" | "s");
-                    let closes_last = paint == "s";
-                    let count = subpaths.len();
-                    for (i, sp) in subpaths.drain(..).enumerate() {
-                        let sp = if closes_last && i + 1 == count { Subpath { closed: true, ..sp } } else { sp };
-                        if let Some(c) = sp.centre(filled) {
-                            path.centres.push(c);
-                        }
-                    }
-                    self.geometry.segments.append(&mut path.segments);
-                    self.geometry.endpoints.append(&mut path.endpoints);
-                    self.geometry.midpoints.append(&mut path.midpoints);
-                    self.geometry.centres.append(&mut path.centres);
-                    self.geometry.truncated |= path.truncated;
-                    closures.clear();
                     current = None;
                     start = None;
                 }
@@ -809,31 +856,7 @@ impl Walker<'_> {
                             resources.get(b"XObject").map(|o| self.doc.resolve(o))
                         });
                         if let Some(o) = xobjects.as_ref().and_then(|o| o.as_dict()).and_then(|d| d.get(name)) {
-                            let r = o.as_ref();
-                            if r.is_some_and(|r| self.seen.contains(&r)) {
-                                continue;
-                            }
-                            let form = self.doc.resolve(o);
-                            if let Object::Stream(s) = form.as_ref()
-                                && s.dict.name(b"Subtype") == Some(b"Form")
-                            {
-                                let m = s
-                                    .dict
-                                    .get(b"Matrix")
-                                    .map(|m| self.doc.resolve(m))
-                                    .and_then(|o| o.as_array().and_then(|a| Matrix::from_operands(a)))
-                                    .unwrap_or_default()
-                                    .then(&matrix);
-                                let own = s.dict.get(b"Resources").map(|o| self.doc.resolve(o));
-                                let res = own.as_ref().and_then(|o| o.as_dict()).unwrap_or(resources);
-                                if let Some(r) = r {
-                                    self.seen.insert(r);
-                                }
-                                self.walk(o, res, m, depth + 1)?;
-                                if let Some(r) = r {
-                                    self.seen.remove(&r);
-                                }
-                            }
+                            self.form(o, resources, matrix, depth)?;
                         }
                     }
                 }

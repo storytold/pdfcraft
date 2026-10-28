@@ -173,6 +173,7 @@ fn snap_to_content(
     view_xy: [f32; 2],
     pixels_per_unit: f32,
     point: Point,
+    targets: measure::snap::SnapOptions,
 ) -> Option<(Point, measure::snap::SnapKind)> {
     if state.paths.as_ref().is_none_or(|(p, g, _)| *p != page || *g != doc.edit_generation()) {
         state.paths = Some((page, doc.edit_generation(), doc.measurement_paths(page)));
@@ -190,8 +191,6 @@ fn snap_to_content(
             .measurement_to_user(page, [f64::from(view_xy[0]) + state.sensitivity / f64::from(pixels_per_unit), f64::from(view_xy[1])])
             .map(|p| measure::distance(point, p))
             .unwrap_or(state.sensitivity / f64::from(pixels_per_unit));
-        // The snap targets are the user's choice for commenting and measuring alike.
-        let targets = cx.prefs.snap_targets;
         if targets.intersections && paths.intersection_limited(point, tolerance) {
             state.error = Some(tl!("This area has too many overlapping paths; intersection snapping is limited.").into());
         }
@@ -242,7 +241,8 @@ pub(crate) fn page_input(
         let mut point = [f64::from(x), f64::from(y)];
         let mut snapped = None;
         if state.snap_enabled {
-            snapped = snap_to_content(state, doc, page, [vx, vy], xf.zoom().max(1e-6), point);
+            // The snap targets are the user's choice for commenting and measuring alike.
+            snapped = snap_to_content(state, doc, page, [vx, vy], xf.zoom().max(1e-6), point, cx.prefs.snap_targets);
         }
         if let Some((snapped_point, kind)) = snapped {
             point = snapped_point;

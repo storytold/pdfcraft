@@ -41,7 +41,7 @@ pub(crate) use input::{describe, fill_grabs, hit, keys, nudge_keys, page_after_t
 pub use menu::{CanvasAction, fill_picker, recent_custom_colours, remember_custom_colour, status_badge, swatch_grid};
 #[cfg(test)]
 use menu::{RECENT_CUSTOM, same_colour};
-pub(crate) use menu::{attachment_items, context_menu, quick_bar_controls};
+pub(crate) use menu::{attachment_items, context_menu, quick_bar_controls, snap_button, snap_target_boxes, take_snap_tabs};
 pub(crate) use paint::paint_page;
 #[cfg(test)]
 use paint::{changing_points, drawn_shape, edited_in_view};

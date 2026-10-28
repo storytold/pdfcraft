@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
-use super::geometry::{corner_ratio, is_markup, resized};
-use super::{Annotation, CommentPrefs, CommentTool, DocInfo, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect};
+use super::geometry::{corner_ratio, handle_pos, is_markup, reshapable, resized};
+use super::{
+    Annotation, CommentPrefs, CommentTool, DocInfo, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect, SNAP_SENSITIVITY, SnapCache, SnapHit,
+};
+use pdfcraft_engine::measure;
 
 /// The user's login name, which Acrobat uses as the default comment author.
 pub(super) fn login_name() -> String {
@@ -648,7 +651,7 @@ pub(crate) struct Anchor {
 }
 
 /// An anchor's name as shown, in the reader's language.
-fn anchor_label(name: &str) -> &'static str {
+pub(super) fn anchor_label(name: &str) -> &'static str {
     match name {
         "Bottom left" => tl!("Bottom left"),
         "Left" => tl!("Left"),
