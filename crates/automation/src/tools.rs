@@ -146,7 +146,8 @@ pub fn tools() -> Vec<ToolDef> {
                 "ppi": {"type":"number","minimum":9,"maximum":1600},
                 "quality": {"type":"integer","minimum":1,"maximum":100},
                 "dpi": {"type":"number","minimum":72,"maximum":600},
-                "language": {"type":"string"}, "skip_text_pages": {"type":"boolean"}
+                "language": {"type":"string"}, "skip_text_pages": {"type":"boolean"},
+                "output": {"type":"string","enum":["exact","downsampled"],"description":"OCR output, as in ocr_recognize (default exact)."}
             }), &["paths","out_dir","steps"])),
         t("attachment_add", "Attach a file", "Attach the file at path to the document (document level, the Attachments panel; not a paper-clip comment on a page). name defaults to the file's name; the attachment's key, unique in the document, is returned. Undoable.")
             .cmd("edit.attach")
@@ -1373,7 +1374,7 @@ pub fn tools() -> Vec<ToolDef> {
             )),
         t("js_enabled", "JavaScript on or off", "Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript: set it with `enabled`, or read it. With JavaScript off, field scripts other than Acrobat's AF calls don't run.")
             .with(schema(json!({ "enabled": { "type": "boolean" } }), &[])),
-        t("ocr_recognize", "Recognize text (OCR)", "Scan & OCR ▸ Recognize text: render pages, read the words in them and add them as invisible text over the page image, so scanned pages become searchable and selectable (a searchable image; the image is not changed). Pages that already have text are skipped unless skip_text_pages is false; then pictures on those pages are read too, and recognised words that the page's own text already has (an earlier OCR layer included) are left out and counted as already_on_page. Returns each page's recognised text (left out when the document's security doesn't allow copying), word count or why it was skipped. Needs the OCR models (ocr_status). Undoable as one step.")
+        t("ocr_recognize", "Recognize text (OCR)", "Scan & OCR ▸ Recognize text: render pages, read the words in them and add them as invisible text over the page image, so scanned pages become searchable and selectable. output \"exact\" (default, Searchable Image (Exact)) leaves the page images as they are; \"downsampled\" (Searchable Image) also resamples the images on the pages that were read down to dpi where they are finer (more than 5% above), in place and in the same undo step: same object and placement (the text still lines up), colour space, decode array and masks kept, JPEG stays JPEG, black-and-white stays 1-bit and lossless; an image also drawn larger elsewhere is measured there; images that can't be handled (CMYK, indexed, 16-bit, JPEG 2000, JBIG2, CCITT, colour-key masks) are left as they are and listed under images.skipped with why. Pages that already have text are skipped unless skip_text_pages is false; then pictures on those pages are read too, and recognised words that the page's own text already has (an earlier OCR layer included) are left out and counted as already_on_page. Returns each page's recognised text (left out when the document's security doesn't allow copying), word count or why it was skipped. Needs the OCR models (ocr_status). Undoable as one step.")
             .cmd("ocr.recognize")
             .with(schema(
                 json!({
@@ -1382,6 +1383,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "dpi": { "type": "number", "minimum": 72, "maximum": 600, "description": "Resolution pages are read at (default 300; a scanned page is read at most at its own resolution)." },
                     "language": { "type": "string", "enum": ["en"], "description": "Document language (default en)." },
                     "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true). false also reads pictures on such pages, without adding their text again." },
+                    "output": { "type": "string", "enum": ["exact", "downsampled"], "description": "exact (default): the images are not changed. downsampled: images on the pages read are reduced to dpi where finer; the result has an images report." },
                 }),
                 &["doc"],
             )),
@@ -1394,6 +1396,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "dpi": { "type": "number", "minimum": 72, "maximum": 600 },
                     "language": { "type": "string", "enum": ["en"] },
                     "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true); see ocr_recognize." },
+                    "output": { "type": "string", "enum": ["exact", "downsampled"], "description": "As in ocr_recognize (default exact); with downsampled each file reports images." },
                 }),
                 &["paths", "folder"],
             )),

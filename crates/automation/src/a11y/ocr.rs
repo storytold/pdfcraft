@@ -2,7 +2,8 @@ use super::{Args, Automation, Result, ToolError, Value, child, failed, json, wri
 
 impl Automation {
     /// Recognition settings from the arguments: `dpi` (clamped to 72–600), `language` (refused
-    /// unless the models read it) and `skip_text_pages`, each left at its default when absent.
+    /// unless the models read it), `skip_text_pages` and `output` (`exact` or `downsampled`),
+    /// each left at its default when absent.
     pub(crate) fn ocr_settings(&self, a: &Args) -> Result<pdfcraft_engine::ocr::OcrSettings> {
         let mut settings = pdfcraft_engine::ocr::OcrSettings::default();
         if let Some(d) = a.opt_num("dpi")? {
@@ -16,6 +17,10 @@ impl Automation {
         }
         if let Some(s) = a.opt_bool("skip_text_pages")? {
             settings.skip_text_pages = s;
+        }
+        if let Some(o) = a.opt_str("output")? {
+            settings.output = pdfcraft_engine::ocr::OcrOutput::from_name(o)
+                .ok_or_else(|| ToolError::InvalidArgs(format!("output must be \"exact\" or \"downsampled\", not {o:?}")))?;
         }
         Ok(settings)
     }
@@ -57,7 +62,11 @@ impl Automation {
                     let target = child(&folder, &name);
                     write_atomic(&target, &r.bytes)?;
                     let skipped: Vec<usize> = r.pages.iter().filter(|p| p.skipped.is_some()).map(|p| p.page + 1).collect();
-                    json!({ "path": p, "output": target.to_string_lossy(), "words": r.words(), "skipped_pages": skipped })
+                    let mut v = json!({ "path": p, "output": target.to_string_lossy(), "words": r.words(), "skipped_pages": skipped });
+                    if let Some(i) = &r.images {
+                        v["images"] = images_json(i);
+                    }
+                    v
                 }
                 Err(e) => json!({ "path": p, "error": e }),
             });
@@ -74,7 +83,7 @@ impl Automation {
         // Recognizing needs only permission to change the document; the words it found are
         // returned only when copying is allowed too.
         let (id, copy) = (doc.id, doc.allows_copying());
-        let found = self.session.recognize_text(id, &pages, settings).map_err(failed)?;
+        let (found, applied) = self.session.recognize_text_reporting(id, &pages, settings).map_err(failed)?;
         let list: Vec<Value> = found
             .iter()
             .map(|p| match &p.skipped {
@@ -83,7 +92,11 @@ impl Automation {
                 None => json!({ "page": p.page + 1, "words": p.words.len(), "already_on_page": p.already_on_page }),
             })
             .collect();
-        Ok(json!({ "words": found.iter().map(|p| p.words.len()).sum::<usize>(), "pages": list }))
+        let mut out = json!({ "words": found.iter().map(|p| p.words.len()).sum::<usize>(), "pages": list });
+        if let Some(i) = &applied.images {
+            out["images"] = images_json(i);
+        }
+        Ok(out)
     }
 
     /// Whether text recognition's models are installed, the directories searched for them (in
@@ -94,6 +107,13 @@ impl Automation {
         let langs: Vec<Value> = ocr::LANGUAGES.iter().map(|(c, n)| json!({ "code": c, "name": n })).collect();
         Ok(json!({ "available": ocr::available(), "search_dirs": dirs, "languages": langs }))
     }
+}
+
+/// What `output: "downsampled"` did to the images: how many the recognised pages draw, how many
+/// were resampled, their encoded bytes before and after, and each image above the resolution left
+/// as it is with why.
+pub(crate) fn images_json(i: &pdfcraft_engine::ocr::ScanImages) -> Value {
+    json!({ "images": i.images, "downsampled": i.resampled, "bytes_before": i.bytes_before, "bytes_after": i.bytes_after, "skipped": i.skipped })
 }
 
 /// The file name an input is written under: its own file name, or `document.pdf` when it has none.
