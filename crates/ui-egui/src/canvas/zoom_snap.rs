@@ -139,6 +139,10 @@ impl PdfCraftApp {
         let longest = (view_rect[2] - view_rect[0]).max(view_rect[3] - view_rect[1]).max(1.0);
         let at_zoom = (view.zoom * ppp).clamp(0.5, 8.0);
         let scale = at_zoom.min(4095.0 / longest);
+        // Below this the renderer draws at 0.01 anyway, which would cut the area short again.
+        if scale < 0.01 {
+            return Err("the area is too large to copy".into());
+        }
         let tile = Tile {
             x: (view_rect[0] * scale).floor().max(0.0) as u32,
             y: (view_rect[1] * scale).floor().max(0.0) as u32,
