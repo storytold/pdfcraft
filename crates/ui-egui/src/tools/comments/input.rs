@@ -434,7 +434,7 @@ impl Gestures<'_> {
         {
             let p = clamp_to(page_rect, p);
             if matches!(*tool, CommentTool::Ink | CommentTool::Eraser) {
-                let u = cx.snapped(p).0;
+                let u = cx.to_user(p);
                 let last = points.last().map(|l| cx.to_screen(*l)).unwrap_or(p);
                 if last.distance(p) >= 1.5 {
                     points.push(u);
@@ -503,7 +503,7 @@ impl Gestures<'_> {
             && over_page
             && let Some(p) = pointer
         {
-            let u = cx.to_user(p);
+            let u = cx.snapped(p).0;
             match cv.gesture.as_mut() {
                 Some(Gesture::Draw { page, tool: t, points }) if *page == cx.page && *t == tool => {
                     // Clicking the first point again closes a polygon.
