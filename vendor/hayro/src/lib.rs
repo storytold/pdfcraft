@@ -928,8 +928,106 @@ mod hairline_tests {
                 .count()
         };
         let at_width = stem(&render_at(LINE_AND_TEXT, 1.0, false));
-        assert!(at_width >= 4, "the stroked stem is wider than a hairline: {at_width}");
-        assert_eq!(stem(&render_at(LINE_AND_TEXT, 1.0, true)), at_width, "text outlines keep their width");
+        assert!(
+            at_width >= 4,
+            "the stroked stem is wider than a hairline: {at_width}"
+        );
+        assert_eq!(
+            stem(&render_at(LINE_AND_TEXT, 1.0, true)),
+            at_width,
+            "text outlines keep their width"
+        );
+    }
+
+    /// `fixture` with a Type 3 font `/F2` too, whose "a" is a vertical stroke 100 glyph units
+    /// wide (4 pt at 40 pt).
+    fn fixture_type3(body: &str) -> Vec<u8> {
+        let glyph = "1000 0 d0 100 w 500 0 m 500 1000 l S";
+        let objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 100 100] >>".to_vec(),
+            b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] \
+/CharProcs << /a 6 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] >>"
+                .to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F2 3 0 R >> >> >>"
+                .to_vec(),
+            format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()).into_bytes(),
+            format!("<< /Length {} >>\nstream\n{glyph}\nendstream", glyph.len()).into_bytes(),
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            out.extend_from_slice(o);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes(),
+        );
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objs.len() + 1
+            )
+            .as_bytes(),
+        );
+        out
+    }
+
+    #[test]
+    fn hairline_strokes_leave_type3_glyph_strokes_alone() {
+        let render_type3 = |hairline_strokes: bool| {
+            let pdf = Pdf::new(fixture_type3("BT /F2 40 Tf 20 20 Td (a) Tj ET")).unwrap();
+            let settings = RenderSettings {
+                bg_color: WHITE,
+                hairline_strokes,
+                ..RenderSettings::default()
+            };
+            render(
+                pdf.pages().get(0).expect("one page"),
+                &RenderCache::new(),
+                &InterpreterSettings::default(),
+                &settings,
+            )
+        };
+        // The glyph's bar across row y = 50 (from the bottom): 4 pt wide at its width.
+        let bar = |pixmap: &Pixmap| {
+            (0..pixmap.width())
+                .filter(|&x| pixmap.sample(x, 50).r < 240)
+                .count()
+        };
+        let at_width = bar(&render_type3(false));
+        assert!(
+            at_width >= 4,
+            "the glyph's stroke is wider than a hairline: {at_width}"
+        );
+        assert_eq!(
+            bar(&render_type3(true)),
+            at_width,
+            "a Type 3 glyph's strokes keep their width"
+        );
+    }
+
+    #[test]
+    fn hairline_strokes_off_the_canvas_are_not_dashed() {
+        // A finely dashed line far below the page, and one across it.
+        let body = "[0.5 0.5] 0 d 1 w 0 -5000 m 100 -5000 l S 0 50 m 100 50 l S";
+        let before = crate::renderer::HAIRLINE_PATHS.with(std::cell::Cell::get);
+        let pixmap = render_at(body, 1.0, true);
+        let dashed = crate::renderer::HAIRLINE_PATHS.with(std::cell::Cell::get) - before;
+        assert_eq!(
+            dashed, 1,
+            "only the stroke on the canvas is dashed and mapped"
+        );
+        assert!(
+            (0..100).any(|x| inked_rows(&pixmap, x) >= 1),
+            "and it is drawn"
+        );
     }
 
     /// One device pixel whichever way the matrix scales. Under `10 0 0 1 0 0 cm` no width in
@@ -948,16 +1046,32 @@ mod hairline_tests {
         };
         let at_width = render_at(body, 1.0, false);
         let rows = inked_rows(&at_width, 65);
-        assert!((12..=14).contains(&rows), "a 12 pt line at its width: {rows} rows");
+        assert!(
+            (12..=14).contains(&rows),
+            "a 12 pt line at its width: {rows} rows"
+        );
         assert_eq!(inked_rows(&at_width, 55), 0, "a gap between dashes");
         let cols = inked_cols(&at_width, 100 - 30);
-        assert!((12..=14).contains(&cols), "1.2 pt scaled tenfold: {cols} columns");
+        assert!(
+            (12..=14).contains(&cols),
+            "1.2 pt scaled tenfold: {cols} columns"
+        );
 
         let hairline = render_at(body, 1.0, true);
         let rows = inked_rows(&hairline, 65);
-        assert!((1..=2).contains(&rows), "a horizontal hairline: {rows} rows");
-        assert_eq!(inked_rows(&hairline, 55), 0, "dashes keep their user-space lengths");
+        assert!(
+            (1..=2).contains(&rows),
+            "a horizontal hairline: {rows} rows"
+        );
+        assert_eq!(
+            inked_rows(&hairline, 55),
+            0,
+            "dashes keep their user-space lengths"
+        );
         let cols = inked_cols(&hairline, 100 - 30);
-        assert!((1..=2).contains(&cols), "a vertical hairline: {cols} columns");
+        assert!(
+            (1..=2).contains(&cols),
+            "a vertical hairline: {cols} columns"
+        );
     }
 }
