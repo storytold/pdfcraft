@@ -24,6 +24,14 @@ Layer L4. Create a PDF (Acrobat's Create a PDF tool), execution plan M10.2:
 
 Every function returns a `pdfcraft_cos::Document`; the caller writes it.
 
+TIFF imports normalize each directory's Orientation tag before embedding it, including mirrored and transposed images.
+Color samples and soft masks use the same transform; one-bit scans stay packed, with byte-aligned rows.
+Transposed directories swap both pixel dimensions and resolution axes so their physical size stays correct.
+Missing or invalid orientation tags retain the stored order.
+Orientation processing caps its live source, destination and alpha pixel buffers at 2 GiB and refuses larger work before allocating the destination.
+The existing per-file decoded-page budget, 16-bit high-byte conversion and unsupported TIFF color-space limits remain.
+Associated-alpha color handling is a separate contribution (#4679).
+
 Image export and Save Image As apply each lossless image's Decode pair before converting its color components.
 Indexed Decode values select palette entries after rounding and clipping. Color-key masks compare the original samples.
 Missing, null or malformed Decode arrays keep the default mapping.

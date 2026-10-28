@@ -5,6 +5,7 @@
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 mod extract;
+mod tiff_orientation;
 mod upright_image;
 pub use extract::{ExtractedImage, ImageExport, extract_images, image_file};
 use pdfcraft_fonts::{literal, win_ansi, wrap};
@@ -440,6 +441,7 @@ fn tiff_pages_within(name: &str, bytes: &[u8], wanted: usize, budget: usize) -> 
     loop {
         let (w, h) = dec.dimensions().map_err(|e| bad(e.to_string()))?;
         let ct = dec.colortype().map_err(|e| bad(e.to_string()))?;
+        let orientation = dec.get_tag_u32(Tag::Orientation).unwrap_or(1);
         let unit = dec.get_tag_u32(Tag::ResolutionUnit).unwrap_or(2);
         let res = |t: Tag, dec: &mut Decoder<std::io::Cursor<&[u8]>>| -> f64 {
             // Resolutions are rationals.
@@ -458,7 +460,7 @@ fn tiff_pages_within(name: &str, bytes: &[u8], wanted: usize, budget: usize) -> 
             DecodingResult::U16(v) => v.iter().map(|x| (x >> 8) as u8).collect(),
             _ => return Err(bad("this TIFF sample format isn't supported".into())),
         };
-        let page = match ct {
+        let mut page = match ct {
             C::Gray(1) => {
                 // Bilevel scans stay 1 bit per pixel (0 = black after the decoder's inversion).
                 let mut d = Dict::new();
@@ -484,13 +486,19 @@ fn tiff_pages_within(name: &str, bytes: &[u8], wanted: usize, budget: usize) -> 
                 d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
                 Embedded { dict: d, data, filtered: false, smask: None, icc: None, px: (w, h), dpi }
             }
-            C::RGBA(8 | 16) => rgba_image(&data, (w, h), dpi),
+            C::RGBA(8 | 16) => {
+                let page = rgba_image(&data, (w, h), dpi);
+                drop(data);
+                page
+            }
             C::GrayA(8 | 16) => {
                 let rgba: Vec<u8> = data.as_chunks::<2>().0.iter().flat_map(|p| [p[0], p[0], p[0], p[1]]).collect();
+                drop(data);
                 rgba_image(&rgba, (w, h), dpi)
             }
             other => return Err(bad(format!("{other:?} TIFF images aren't supported yet"))),
         };
+        tiff_orientation::orient(&mut page, orientation).map_err(|e| bad(e.into()))?;
         kept = kept.saturating_add(page.data.len()).saturating_add(page.smask.as_ref().map_or(0, |(_, alpha)| alpha.len()));
         if kept > budget {
             return Err(bad(format!("the TIFF's pages take more than {} MiB together", budget >> 20)));

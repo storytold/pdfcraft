@@ -6872,8 +6872,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["create.images"]
 tools = ["doc_create"]
-evidence = ["crates/create/src/tests.rs::jpeg_2000_images_are_embedded_as_is", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::embedded_icc_profiles_tag_the_image_colour_space"]
-notes = "PNG, JPEG, TIFF (multi-page), GIF (first frame), BMP, and JPEG 2000 (JP2 or codestream, embedded as JPXDecode with its capture resolution). JPEG and PNG ICC profiles are kept as /ICCBased; TIFF profiles are not read yet"
+evidence = ["crates/create/src/tests.rs::jpeg_2000_images_are_embedded_as_is", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::embedded_icc_profiles_tag_the_image_colour_space", "crates/create/src/tests.rs::tiff_orientation_preserves_pixels_dimensions_and_per_page_resolution", "crates/automation/tests/it/automation.rs::oriented_tiff_creation_and_added_images_survive_save_reopen", "crates/create/src/tests.rs::tiff_orientation_transforms_gray_cmyk_and_alpha_planes", "crates/create/src/tests.rs::tiff_orientation_defaults_when_missing_or_invalid"]
+notes = "PNG, JPEG, TIFF (multi-page), GIF (first frame), BMP, and JPEG 2000 (JP2 or codestream, embedded as JPXDecode with its capture resolution). TIFF directory orientations normalize color and alpha together and swap resolution axes when transposed. Missing or invalid orientation keeps stored order; orientation pixel buffers are capped at 2 GiB. JPEG and PNG ICC profiles are kept as /ICCBased; TIFF profiles are not read yet; 16-bit TIFF samples still keep their high byte"
 
 [[feature]]
 id = "create.from-multipage-tiff"
@@ -6884,8 +6884,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["create.images", "create.file"]
 tools = ["doc_create"]
-evidence = ["crates/create/src/tests.rs::bmp_gif_and_multi_page_tiff_images", "crates/create/src/tests.rs::bigtiff_images_become_pages"]
-notes = "every page; 1-bit scans stay 1-bit; resolution from the TIFF; classic TIFF and BigTIFF"
+evidence = ["crates/create/src/tests.rs::bmp_gif_and_multi_page_tiff_images", "crates/create/src/tests.rs::bigtiff_images_become_pages", "crates/create/src/tests.rs::tiff_orientation_preserves_pixels_dimensions_and_per_page_resolution", "crates/create/src/tests.rs::tiff_orientation_keeps_bilevel_rows_packed_with_clean_padding", "crates/create/src/tests.rs::tiff_orientation_transforms_gray_cmyk_and_alpha_planes", "crates/create/src/tests.rs::tiff_orientation_defaults_when_missing_or_invalid", "crates/create/src/tiff_orientation.rs::malformed_layouts_and_transient_limits_fail_before_allocating"]
+notes = "every page; 1-bit scans stay 1-bit; resolution from the TIFF; all eight per-directory orientations, including one-bit row padding and soft masks; classic TIFF and BigTIFF. Missing or invalid orientation keeps stored order; unsupported sample/color formats and high-byte-only 16-bit conversion remain"
 
 [[feature]]
 id = "create.from-text"

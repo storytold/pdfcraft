@@ -2740,6 +2740,68 @@ fn exporting_images_and_text_through_tools() {
 }
 
 #[test]
+fn oriented_tiff_creation_and_added_images_survive_save_reopen() {
+    // Contributor-original 3x2 RGB TIFF: RGB / YMC, orientation 6 (clockwise).
+    // Every offset points into this generated buffer; no fixture files are committed.
+    let entries: [(u16, u16, u32, u32); 11] = [
+        (256, 4, 1, 3),
+        (257, 4, 1, 2),
+        (258, 3, 3, 146),
+        (259, 3, 1, 1),
+        (262, 3, 1, 2),
+        (273, 4, 1, 152),
+        (274, 3, 1, 6),
+        (277, 3, 1, 3),
+        (278, 4, 1, 2),
+        (279, 4, 1, 18),
+        (296, 3, 1, 2),
+    ];
+    let mut tiff = b"II*\0\x08\0\0\0".to_vec();
+    tiff.extend_from_slice(&11u16.to_le_bytes());
+    for (tag, kind, count, value) in entries {
+        tiff.extend_from_slice(&tag.to_le_bytes());
+        tiff.extend_from_slice(&kind.to_le_bytes());
+        tiff.extend_from_slice(&count.to_le_bytes());
+        tiff.extend_from_slice(&value.to_le_bytes());
+    }
+    tiff.extend_from_slice(&[0, 0, 0, 0, 8, 0, 8, 0, 8, 0]);
+    tiff.extend_from_slice(&[255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0, 255, 0, 255, 0, 255, 255]);
+    let dir = workdir("oriented-tiff");
+    std::fs::write(dir.join("scan.tif"), &tiff).unwrap();
+    let mut a = auto(&dir);
+    let created = ok(&mut a, "doc_create", json!({"from":"images", "paths":["scan.tif"]}))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({"doc":created}));
+    assert_eq!((info["pages"][0]["width"].as_f64(), info["pages"][0]["height"].as_f64()), (Some(2.0), Some(3.0)));
+    ok(&mut a, "doc_save", json!({"doc":created, "path":"created.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"created.pdf"}))["doc"].as_u64().unwrap();
+    let rendered = a.call("page_render", &json!({"doc":reopened, "page":1, "dpi":72})).unwrap();
+    let Content::Png { data, width, height } = &rendered[0] else { panic!("rendered PNG") };
+    assert_eq!((*width, *height), (2, 3));
+    let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+    let frame = reader.next_frame(&mut pixels).unwrap();
+    let channels = match frame.color_type {
+        png::ColorType::Rgb => 3,
+        png::ColorType::Rgba => 4,
+        other => panic!("{other:?}"),
+    };
+    let expected = [[255, 255, 0], [255, 0, 0], [255, 0, 255], [0, 255, 0], [0, 255, 255], [0, 0, 255]];
+    for (pixel, color) in pixels.chunks_exact(channels).zip(expected) {
+        assert_eq!(&pixel[..3], &color);
+    }
+    let target = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_image", json!({"doc":target,"page":1,"path":"scan.tif","rect":[0,0,2,3]}));
+    ok(&mut a, "doc_save", json!({"doc":target,"path":"added.pdf"}));
+    let added = ok(&mut a, "doc_open", json!({"path":"added.pdf"}))["doc"].as_u64().unwrap();
+    let rendered = a.call("page_render", &json!({"doc":added,"page":1,"dpi":72})).unwrap();
+    let pixels = png_pixels(&rendered[0]);
+    for (i, color) in expected.into_iter().enumerate() {
+        assert_eq!(&pixel(&pixels, (i % 2) as u32, (i / 2) as u32)[..3], &color);
+    }
+    assert_eq!(std::fs::read(dir.join("scan.tif")).unwrap(), tiff, "source file stays untouched");
+}
+
+#[test]
 fn accessibility_character_encoding_accepts_identity_cjk_through_tools() {
     use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, SaveOptions, Stream, write_full};
     use std::sync::Arc;

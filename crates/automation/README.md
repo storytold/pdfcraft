@@ -229,3 +229,8 @@ behavior. Back/Forward
 returns to page tops, does not restore zoom, does not switch documents, and is not saved across
 restarts. Standalone engine/MCP sessions have no viewport, so they do not have a separate
 navigation-history tool; use the opt-in UI control channel to navigate the displayed document.
+
+TIFF images passed to `doc_create` or `page_add_image` follow each image directory's Orientation tag, including mirroring.
+Saving and reopening preserve the normalized pixels and physical dimensions; the source TIFF is unchanged.
+The shared import path retains packed one-bit samples and transforms an image's soft mask with its color plane.
+Missing or invalid orientation tags keep the stored pixel order.

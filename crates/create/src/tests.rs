@@ -206,6 +206,148 @@ fn bmp_gif_and_multi_page_tiff_images() {
     assert!(matches!(from_images(&[("x.webp".into(), b"RIFF0000WEBP".to_vec())]), Err(CreateError::Image(..))));
 }
 
+/// Contributor-original six-pixel TIFF pages, each with its own orientation and unequal DPI.
+fn oriented_rgb_tiff(orientations: &[u16]) -> Vec<u8> {
+    use tiff::encoder::{Rational, TiffEncoder, colortype::RGB8};
+    use tiff::tags::Tag;
+    let mut out = std::io::Cursor::new(Vec::new());
+    {
+        let mut encoder = TiffEncoder::new(&mut out).unwrap();
+        for &orientation in orientations {
+            let mut page = encoder.new_image::<RGB8>(3, 2).unwrap();
+            page.encoder().write_tag(Tag::Orientation, orientation).unwrap();
+            page.encoder().write_tag(Tag::XResolution, Rational { n: 144, d: 1 }).unwrap();
+            page.encoder().write_tag(Tag::YResolution, Rational { n: 72, d: 1 }).unwrap();
+            page.encoder().write_tag(Tag::ResolutionUnit, 2u16).unwrap();
+            page.write_data(&[1, 0, 0, 2, 0, 0, 3, 0, 0, 4, 0, 0, 5, 0, 0, 6, 0, 0]).unwrap();
+        }
+    }
+    out.into_inner()
+}
+
+#[test]
+fn tiff_orientation_preserves_pixels_dimensions_and_per_page_resolution() {
+    // Stored rows: ABC / DEF. TIFF 6.0 Orientation defines the displayed row/column origins.
+    let expected = [
+        [1, 2, 3, 4, 5, 6],
+        [3, 2, 1, 6, 5, 4],
+        [6, 5, 4, 3, 2, 1],
+        [4, 5, 6, 1, 2, 3],
+        [1, 4, 2, 5, 3, 6],
+        [4, 1, 5, 2, 6, 3],
+        [6, 3, 5, 2, 4, 1],
+        [3, 6, 2, 5, 1, 4],
+    ];
+    let bytes = oriented_rgb_tiff(&[1, 2, 3, 4, 5, 6, 7, 8]);
+    let doc = reopen(&from_images(&[("oriented.tif".into(), bytes.clone())]).unwrap());
+    assert_eq!(pages(&doc).len(), 8);
+    let exported = extract_images(&doc, &(0..8).collect::<Vec<_>>(), 0);
+    assert!(exported.skipped.is_empty());
+    for (i, expected) in expected.into_iter().enumerate() {
+        let swapped = i >= 4;
+        assert_eq!(media(&pages(&doc)[i]), if swapped { [0.0, 0.0, 2.0, 1.5] } else { [0.0, 0.0, 1.5, 2.0] });
+        let pixels = exported_png_pixels(&exported.images[i].data);
+        assert_eq!(pixels.as_chunks::<3>().0.iter().map(|p| p[0]).collect::<Vec<_>>(), expected, "orientation {}", i + 1);
+        let image = image_of(&doc, i);
+        assert_eq!((image.int(b"Width"), image.int(b"Height")), if swapped { (Some(2), Some(3)) } else { (Some(3), Some(2)) });
+    }
+    // The first-page XObject path used by added images follows the same orientation.
+    let rotated = oriented_rgb_tiff(&[6]);
+    let mut doc = Document::new_empty();
+    let (image, size) = image_xobject(&mut doc, "rotated.tif", &rotated).unwrap();
+    assert_eq!(size, (2.0, 1.5));
+    let (_, bytes) = image_file(&doc, image).unwrap();
+    assert_eq!(exported_png_pixels(&bytes).as_chunks::<3>().0.iter().map(|p| p[0]).collect::<Vec<_>>(), expected[5]);
+}
+
+#[test]
+fn tiff_orientation_transforms_gray_cmyk_and_alpha_planes() {
+    use tiff::encoder::{TiffEncoder, colortype};
+    use tiff::tags::Tag;
+    let mut out = std::io::Cursor::new(Vec::new());
+    {
+        let mut encoder = TiffEncoder::new(&mut out).unwrap();
+        let mut gray = encoder.new_image::<colortype::Gray16>(3, 2).unwrap();
+        gray.encoder().write_tag(Tag::Orientation, 5u16).unwrap();
+        gray.write_data(&[256, 512, 768, 1024, 1280, 1536]).unwrap();
+        let mut cmyk = encoder.new_image::<colortype::CMYK8>(3, 2).unwrap();
+        cmyk.encoder().write_tag(Tag::Orientation, 8u16).unwrap();
+        cmyk.write_data(&[1, 10, 20, 30, 2, 10, 20, 30, 3, 10, 20, 30, 4, 10, 20, 30, 5, 10, 20, 30, 6, 10, 20, 30]).unwrap();
+        let mut alpha = encoder.new_image::<colortype::RGBA8>(3, 2).unwrap();
+        alpha.encoder().write_tag(Tag::Orientation, 6u16).unwrap();
+        alpha.encoder().write_tag(Tag::ExtraSamples, &[2u16][..]).unwrap();
+        alpha.write_data(&[1, 0, 0, 10, 2, 0, 0, 20, 3, 0, 0, 30, 4, 0, 0, 40, 5, 0, 0, 50, 6, 0, 0, 60]).unwrap();
+    }
+    let pages = tiff_pages("planes.tif", &out.into_inner(), usize::MAX).unwrap();
+    assert_eq!(pages[0].data, [1, 4, 2, 5, 3, 6]);
+    assert_eq!(pages[1].data, [3, 6, 2, 5, 1, 4].into_iter().flat_map(|n| [n, 10, 20, 30]).collect::<Vec<_>>());
+    assert_eq!(pages[2].data, [4, 1, 5, 2, 6, 3].into_iter().flat_map(|n| [n, 0, 0]).collect::<Vec<_>>());
+    let (mask, alpha) = pages[2].smask.as_ref().unwrap();
+    assert_eq!(alpha, &[40, 10, 50, 20, 60, 30]);
+    assert_eq!((mask.int(b"Width"), mask.int(b"Height")), (Some(2), Some(3)));
+}
+
+/// A 3x2 black-is-zero TIFF with deliberately nonzero row-padding bits.
+fn oriented_bilevel_tiff(orientation: u16) -> Vec<u8> {
+    let entries: [(u16, u16, u32, u32); 10] = [
+        (256, 4, 1, 3),
+        (257, 4, 1, 2),
+        (258, 3, 1, 1),
+        (259, 3, 1, 1),
+        (262, 3, 1, 1),
+        (273, 4, 1, 134),
+        (274, 3, 1, u32::from(orientation)),
+        (277, 3, 1, 1),
+        (278, 4, 1, 2),
+        (279, 4, 1, 2),
+    ];
+    let mut bytes = b"II*\0\x08\0\0\0".to_vec();
+    bytes.extend_from_slice(&10u16.to_le_bytes());
+    for (tag, kind, count, value) in entries {
+        bytes.extend_from_slice(&tag.to_le_bytes());
+        bytes.extend_from_slice(&kind.to_le_bytes());
+        bytes.extend_from_slice(&count.to_le_bytes());
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes.extend_from_slice(&[0, 0, 0, 0, 0b1001_1111, 0b0111_1111]);
+    bytes
+}
+
+#[test]
+fn tiff_orientation_keeps_bilevel_rows_packed_with_clean_padding() {
+    let bytes = oriented_bilevel_tiff(6);
+    let pages = tiff_pages("bilevel.tif", &bytes, 1).unwrap();
+    assert_eq!(pages[0].px, (2, 3));
+    assert_eq!(pages[0].dict.int(b"BitsPerComponent"), Some(1));
+    assert_eq!(pages[0].data, [0x40, 0x80, 0x80]);
+    let doc = reopen(&from_images(&[("bilevel.tif".into(), bytes)]).unwrap());
+    let exported = extract_images(&doc, &[0], 0);
+    assert_eq!(exported_png_pixels(&exported.images[0].data), [0, 255, 255, 0, 255, 0].into_iter().flat_map(|n| [n, n, n]).collect::<Vec<_>>());
+}
+
+#[test]
+fn tiff_orientation_defaults_when_missing_or_invalid() {
+    let expected = tiff_pages("normal.tif", &oriented_rgb_tiff(&[1]), 1).unwrap().remove(0);
+    for orientation in [0, 9, u16::MAX] {
+        let page = tiff_pages("invalid.tif", &oriented_rgb_tiff(&[orientation]), 1).unwrap().remove(0);
+        assert_eq!((page.data, page.px, page.dpi), (expected.data.clone(), expected.px, expected.dpi));
+    }
+    for malformed in [false, true] {
+        let mut bytes = oriented_rgb_tiff(&[6]);
+        let ifd = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+        let count = usize::from(u16::from_le_bytes(bytes[ifd..ifd + 2].try_into().unwrap()));
+        let tag = bytes[ifd + 2..ifd + 2 + 12 * count].as_chunks_mut::<12>().0.iter_mut().find(|entry| entry[..2] == 274u16.to_le_bytes()).unwrap();
+        if malformed {
+            tag[2..4].copy_from_slice(&2u16.to_le_bytes()); // ASCII, not a convertible integer.
+            tag[8..12].copy_from_slice(b"6\0\0\0");
+        } else {
+            tag[..2].copy_from_slice(&65000u16.to_le_bytes()); // Missing tag.
+        }
+        let page = tiff_pages("default.tif", &bytes, 1).unwrap().remove(0);
+        assert_eq!((page.data, page.px, page.dpi), (expected.data.clone(), expected.px, expected.dpi));
+    }
+}
+
 /// #665 lifted the tiff crate's 256 MiB decode limit; a few bytes claiming a 60000x60000 page
 /// (3.6 GB of gray pixels) must still be refused, not allocated.
 #[test]
