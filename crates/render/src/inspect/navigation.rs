@@ -72,6 +72,17 @@ impl<'a> Inspector<'a> {
         catalog.get(b"Dests").ok().and_then(|o| self.dict(o)).and_then(|d| d.get(key).ok())
     }
 
+    /// The destination whose key, read as a text string (UTF-16 or PDFDocEncoding), is `name`:
+    /// a name tree key, then a key of the PDF 1.1 `/Dests` dictionary, whose names older files
+    /// write in PDFDocEncoding rather than UTF-8.
+    fn named_dest_by_text(&self, name: &str) -> Option<&'a Object> {
+        if let Some((_, dest)) = self.named.iter().find(|(key, _)| text_string(key) == name) {
+            return Some(dest);
+        }
+        let dests = self.doc.catalog().ok()?.get(b"Dests").ok().and_then(|o| self.dict(o))?;
+        dests.iter().find(|(key, _)| text_string(key) == name).map(|(_, dest)| dest)
+    }
+
     /// A name tree's leaves keyed by their raw key bytes (first occurrence wins).
     pub(super) fn name_tree_raw(
         &self,
@@ -452,7 +463,7 @@ fn label_work(left: &mut usize, count: usize) -> Result<(), &'static str> {
 pub fn named_destination(bytes: Arc<Vec<u8>>, password: Option<&str>, name: &str) -> Option<(usize, DestView)> {
     let find = |doc: &dyn Structure| {
         let insp = Inspector::new(doc);
-        let dest = insp.named_dest(name.as_bytes()).or_else(|| insp.named.iter().find(|(key, _)| text_string(key) == name).map(|(_, dest)| *dest))?;
+        let dest = insp.named_dest(name.as_bytes()).or_else(|| insp.named_dest_by_text(name))?;
         insp.dest(dest, 1).filter(|(page, _)| *page < insp.page_ids.len())
     };
     let lazy = catch_unwind(AssertUnwindSafe(|| {
@@ -546,6 +557,10 @@ mod open_dest_tests {
         // A key written as UTF-16 or in PDFDocEncoding matches the text it reads as.
         assert_eq!(named("/Names << /Dests << /Names [<FEFF0074006800E9> [4 0 R /Fit]] >> >>", &[], "thé"), Some((1, DestView::Fit)));
         assert_eq!(named("/Names << /Dests << /Names [(th\\351) [5 0 R /Fit]] >> >>", &[], "thé"), Some((2, DestView::Fit)));
+        // So does a catalog /Dests name written in PDFDocEncoding, as older files have them, but
+        // a name written as UTF-8 comes first.
+        assert_eq!(named("/Dests << /th#E9 [4 0 R /Fit] >>", &[], "thé"), Some((1, DestView::Fit)));
+        assert_eq!(named("/Dests << /th#E9 [4 0 R /Fit] /th#C3#A9 [5 0 R /Fit] >>", &[], "thé"), Some((2, DestView::Fit)));
         // A name that isn't there, one past the last page, one that names itself, no names at
         // all, and bytes that aren't a PDF.
         assert_eq!(named(tree, &nodes, "missing"), None);
