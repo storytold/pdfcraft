@@ -2409,6 +2409,36 @@ fn a_font_only_drawn_invisibly_needs_no_program() {
     assert_eq!(font_messages(&unused).len(), 1);
 }
 
+/// A page's content split over several streams is one stream (§7.8.2), cut between tokens: an
+/// operator may take its operands from the piece before it. A font drawn only in rendering mode 3
+/// stays invisible when the `3` ends one piece and `Tr` starts the next, and a piece that ends in
+/// the middle of an operator doesn't make the reading incomplete.
+#[test]
+fn page_content_split_over_streams_is_read_as_one() {
+    let helvetica = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+    let split = |first: &str, second: &str| {
+        let stream = |s: &str| format!("<< /Length {} >>\nstream\n{s}\nendstream", s.len());
+        let (a, b) = (stream(first), stream(second));
+        build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] /Resources << /Font << /F1 6 0 R >> >> >>",
+                a.as_str(),
+                b.as_str(),
+                helvetica,
+            ],
+            "",
+        )
+    };
+    // The mode's operand ends one piece, its operator starts the next.
+    assert_eq!(font_messages(&split("BT /F1 1 Tf 3", "Tr (Hello) Tj ET")), []);
+    // A piece that ends in operands, with the font drawn invisibly throughout.
+    assert_eq!(font_messages(&split("BT 3 Tr /F1 1 Tf (x) Tj 10", "20 Td (y) Tj ET")), []);
+    // Drawn visibly across the cut, the font is still reported.
+    assert_eq!(font_messages(&split("BT /F1 1 Tf 0", "Tr (Hello) Tj ET")).len(), 1);
+}
+
 /// Fonts written straight into a page's resources (as PdfCraft's own Add text writes /PCHelv)
 /// are no objects of their own, so the object scan never saw them: drawn visibly they are now
 /// reported, with their page; drawn only invisibly they pass.
@@ -2449,6 +2479,12 @@ fn a_font_is_excused_only_on_complete_evidence() {
         "",
     );
     assert_eq!(font_messages(&broken).len(), 1, "unreadable content may draw it visibly");
+    // Content that decodes but doesn't parse cleanly: a stray byte, or an inline image whose
+    // end is a guess. The operators after them are uncertain.
+    for content in ["BT 3 Tr /F1 1 Tf (a) Tj ET ]", "BT 3 Tr /F1 1 Tf (a) Tj ET BI /W 4 /H 1 /BPC 8 /CS /G ID abc"] {
+        let doc = drawing(content, "/Font << /F1 5 0 R >>", &[helvetica]);
+        assert_eq!(font_messages(&doc).len(), 1, "{content}");
+    }
     // A form that draws itself, and two that draw each other.
     let cycle = drawing(
         "BT 3 Tr ET /A Do",

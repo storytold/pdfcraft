@@ -8,8 +8,9 @@
 //! each font is used.
 //!
 //! The walk is the evidence for an exemption, so it errs towards "visible": a font is excused
-//! only if every use found is invisible, every content stream was read, and no font list the
-//! walk doesn't follow (patterns, Type 3 glyphs, form fields' default resources) names it.
+//! only if every use found is invisible, every content stream was read and parsed cleanly, and
+//! no font list the walk doesn't follow (patterns, Type 3 glyphs, form fields' default
+//! resources) names it.
 
 use std::collections::{HashMap, HashSet};
 
@@ -90,12 +91,12 @@ pub(crate) fn font_use(doc: &Document) -> FontUse {
         if let Some(contents) = page.dict.get(b"Contents") {
             match w.budget.decode_contents(doc, contents).into_iter().collect::<Result<Vec<_>, _>>() {
                 Ok(pieces) => {
-                    // Content split over streams is one stream (§7.8.2): the state carries over.
+                    // Content split over streams is one stream (§7.8.2), cut between tokens: it is
+                    // joined at a space and read as one, so an operator can take its operands from
+                    // the piece before it, and the state carries over.
+                    let data = pieces.join(&b'\n');
                     let mut state = State { font: None, mode: 0 };
-                    let mut stack = Vec::new();
-                    for data in pieces {
-                        w.content(&data, &res, &mut state, &mut stack, Some(i));
-                    }
+                    w.content(&data, &res, &mut state, &mut Vec::new(), Some(i));
                 }
                 Err(_) => w.out.complete = false,
             }
@@ -125,7 +126,13 @@ impl Walk<'_> {
     /// graphics state, §8.10.1).
     fn content(&mut self, data: &[u8], res: &Dict, state: &mut State, stack: &mut Vec<State>, page: Option<usize>) {
         let doc = self.doc;
-        for op in pdfcraft_content::parse(data).ops {
+        let parsed = pdfcraft_content::parse(data);
+        // Bytes the parser couldn't read, or an inline image whose end is a guess, leave the
+        // operators after them uncertain: one of them may draw a font visibly.
+        if parsed.skipped != 0 || parsed.ambiguous_images != 0 {
+            self.out.complete = false;
+        }
+        for op in parsed.ops {
             match op.op.as_slice() {
                 b"q" => stack.push(state.clone()),
                 b"Q" => {
