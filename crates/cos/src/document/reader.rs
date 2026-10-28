@@ -820,9 +820,9 @@ const STARTXREF_TAIL: usize = 4096;
 /// keyword wins wherever it is: an earlier one could belong to a superseded revision. The
 /// trailing bytes stay in the file (an incremental save appends after them).
 ///
-/// Objects after that `startxref` are different: an update that never got its cross-reference
-/// section (a save cut short, a second file glued on), whose objects the last complete table
-/// cannot reach. The error then says so, and the caller rebuilds the table from object headers
+/// Objects after that `startxref` keyword, before or after its `%%EOF`, are different: an update
+/// that never got its cross-reference section (a save cut short, a second file glued on), whose
+/// objects the last complete table cannot reach. The error then says so, and the caller rebuilds the table from object headers
 /// as it does for a file with no `startxref` at all.
 pub(super) fn find_startxref(data: &[u8]) -> Result<usize, CosError> {
     let tail_start = data.len().saturating_sub(STARTXREF_TAIL);
@@ -830,9 +830,9 @@ pub(super) fn find_startxref(data: &[u8]) -> Result<usize, CosError> {
         return Ok(sx);
     }
     let sx = rfind(data, b"startxref", 0).ok_or(CosError::Syntax { offset: data.len(), detail: "no startxref".into() })?;
-    // The trailing data starts after the `%%EOF` of that startxref (or after the keyword when
-    // the marker is missing; the offset digits that follow are no object header).
-    let after = find(data, b"%%EOF", sx, sx.saturating_add(64)).map_or(sx.saturating_add(9), |p| p.saturating_add(5));
+    // Scan from the end of the keyword, not from its `%%EOF`, so an object between the two is
+    // seen too. The offset digits and the marker that follow are no object header.
+    let after = sx.saturating_add(b"startxref".len());
     if !object_headers(data.get(after..).unwrap_or(&[])).is_empty() {
         return Err(CosError::Syntax {
             offset: sx,

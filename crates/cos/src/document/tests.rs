@@ -1346,3 +1346,15 @@ fn objects_after_the_last_startxref_still_rebuild_the_table() {
     assert!(doc.repair_log().iter().any(|l| l.contains("objects follow it")), "{:?}", doc.repair_log());
     assert!(matches!(&*doc.get(ObjRef::new(3, 0)), Object::String(s) if s.bytes == b"newer"));
 }
+
+#[test]
+fn an_object_between_the_last_startxref_and_its_eof_still_rebuilds_the_table() {
+    let mut bytes = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    let eof = bytes.windows(5).rposition(|w| w == b"%%EOF").unwrap();
+    bytes.splice(eof..eof, b"3 0 obj\n(newer)\nendobj\n".iter().copied());
+    bytes.extend(std::iter::repeat_n(b'\n', 5000));
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert!(doc.revisions().is_empty(), "rebuilt: {:?}", doc.repair_log());
+    assert!(doc.repair_log().iter().any(|l| l.contains("objects follow it")), "{:?}", doc.repair_log());
+    assert!(matches!(&*doc.get(ObjRef::new(3, 0)), Object::String(s) if s.bytes == b"newer"));
+}
