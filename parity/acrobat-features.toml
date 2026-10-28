@@ -5513,11 +5513,11 @@ title = "Encrypt only file attachments"
 area = "G"
 tier = "P2"
 milestone = "M8"
-status = "planned"
+status = "shipped"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["doc_protect"]
+evidence = ["crates/cos/tests/it/encryption.rs::only_attachments_are_encrypted_when_asked"]
+notes = "doc_protect attachments_only: /EFF /StdCF with /StmF and /StrF /Identity, AES-128 and AES-256 only. Missing: a checkbox in the Protect dialog (no UI command yet)."
 
 [[feature]]
 id = "protect.password-strength"

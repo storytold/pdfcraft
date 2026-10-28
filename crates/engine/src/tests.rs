@@ -8803,3 +8803,12 @@ fn need_appearances_buttons_are_displayed_from_their_captions() {
         assert!(ink(&shown, inside(x, 100)) > 700, "the file's square at {x}");
     }
 }
+
+#[test]
+fn attachments_only_protection_needs_an_aes_level() {
+    let p = |algorithm| Protection { algorithm, attachments_only: true, ..protection(Some("pw"), None) };
+    assert!(p(pdfcraft_cos::Algorithm::Aes256).validate().is_ok());
+    assert!(p(pdfcraft_cos::Algorithm::Aes128).validate().is_ok());
+    assert!(p(pdfcraft_cos::Algorithm::Rc4_128).validate().is_err());
+    assert!(p(pdfcraft_cos::Algorithm::Rc4_40).validate().is_err());
+}

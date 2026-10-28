@@ -152,31 +152,78 @@ pub(crate) enum Pass {
 
 /// Decrypt or encrypt every string and stream in an indirect object, except a signature
 /// dictionary's `/Contents` (see [`is_signature_dict`]).
-pub(crate) fn transform(h: &SecurityHandler, o: &Object, num: u32, generation: u16, pass: Pass) -> Object {
+/// `attachment`: the stream is a file specification's embedded file even without `/Type`, so an
+/// explicit crypt filter on it is kept when attachment-only protection replaces the old handler.
+pub(crate) fn transform(h: &SecurityHandler, o: &Object, num: u32, generation: u16, pass: Pass, attachment: bool) -> Object {
     let decrypt = pass == Pass::Decrypt;
     let strings = |s: &PdfString| {
         let bytes = if decrypt { h.decrypt_string(num, generation, &s.bytes) } else { h.encrypt_string(num, generation, &s.bytes) };
         PdfString { bytes, hex: s.hex || !decrypt }
     };
-    walk(o, &strings, h, num, generation, pass)
+    walk(o, &strings, h, num, generation, pass, attachment)
 }
 
-fn walk(o: &Object, strings: &dyn Fn(&PdfString) -> PdfString, h: &SecurityHandler, num: u32, generation: u16, pass: Pass) -> Object {
+/// Only embedded files use a crypt filter: the stream filter is `/Identity`.
+fn attachments_only(h: &SecurityHandler) -> bool {
+    !h.dict().ef_f.is_empty() && matches!(h.dict().stm_f.as_slice(), b"" | b"Identity")
+}
+
+/// The numbers of the streams that file specifications (`/EF`) hold as embedded files, found
+/// anywhere in the document: `/Type` is optional on an embedded file stream. Empty unless the
+/// document is being converted to attachment-only protection, the one case that needs them.
+pub(crate) fn embedded_file_targets(doc: &Document) -> std::collections::HashSet<u32> {
+    let mut found = std::collections::HashSet::new();
+    let (Some(h), _) = doc.output_security() else { return found };
+    if !doc.encryption_changed() || !attachments_only(h) {
+        return found;
+    }
+    for (_, object) in doc.scan_objects_checked() {
+        let Ok(object) = object else { continue };
+        let mut stack: Vec<(&Object, usize)> = vec![(&object, 0)];
+        while let Some((o, depth)) = stack.pop() {
+            // Bounded: a file specification sits a few levels down a name tree.
+            if depth > 32 {
+                continue;
+            }
+            match o {
+                Object::Dict(d) => {
+                    if let Some(Object::Dict(ef)) = d.get(b"EF") {
+                        found.extend(ef.iter().filter_map(|(_, v)| v.as_ref()).map(|r| r.num));
+                    }
+                    stack.extend(d.iter().map(|(_, v)| (v, depth + 1)));
+                }
+                Object::Array(a) => stack.extend(a.iter().map(|v| (v, depth + 1))),
+                _ => {}
+            }
+        }
+    }
+    found
+}
+
+fn walk(
+    o: &Object,
+    strings: &dyn Fn(&PdfString) -> PdfString,
+    h: &SecurityHandler,
+    num: u32,
+    generation: u16,
+    pass: Pass,
+    attachment: bool,
+) -> Object {
     let decrypt = pass == Pass::Decrypt;
     match o {
         Object::String(s) => Object::String(strings(s)),
-        Object::Array(a) => Object::Array(a.iter().map(|x| walk(x, strings, h, num, generation, pass)).collect()),
+        Object::Array(a) => Object::Array(a.iter().map(|x| walk(x, strings, h, num, generation, pass, attachment)).collect()),
         Object::Dict(d) if is_signature_dict(d) => Object::Dict(
             d.iter()
                 .map(|(k, v)| match (k.as_slice(), v) {
                     (b"Contents", Object::String(_)) => (k.clone(), v.clone()),
-                    _ => (k.clone(), walk(v, strings, h, num, generation, pass)),
+                    _ => (k.clone(), walk(v, strings, h, num, generation, pass, attachment)),
                 })
                 .collect(),
         ),
-        Object::Dict(d) => Object::Dict(d.iter().map(|(k, v)| (k.clone(), walk(v, strings, h, num, generation, pass))).collect()),
+        Object::Dict(d) => Object::Dict(d.iter().map(|(k, v)| (k.clone(), walk(v, strings, h, num, generation, pass, attachment))).collect()),
         Object::Stream(s) => {
-            let mut dict: Dict = s.dict.iter().map(|(k, v)| (k.clone(), walk(v, strings, h, num, generation, pass))).collect();
+            let mut dict: Dict = s.dict.iter().map(|(k, v)| (k.clone(), walk(v, strings, h, num, generation, pass, attachment))).collect();
             let ty = s.dict.name(b"Type");
             // Cross-reference streams are never encrypted (§7.5.8), but only reading may trust the
             // label: a stream a producer calls /XRef stays plaintext if writing believes it, and the
@@ -185,7 +232,11 @@ fn walk(o: &Object, strings: &dyn Fn(&PdfString) -> PdfString, h: &SecurityHandl
                 return Object::Stream(Stream { dict, raw: s.raw.clone() });
             }
             let mut named = named_crypt_filter(&s.dict);
-            if pass == Pass::EncryptReplacing && named.as_deref().is_some_and(|n| !h.dict().crypt_filters.iter().any(|(f, _)| f == n)) {
+            // Under attachment-only protection only embedded files use `/StdCF`: a page stream that
+            // names it would stay encrypted though everything else is meant to stay readable.
+            let foreign =
+                |n: &[u8]| !h.dict().crypt_filters.iter().any(|(f, _)| f == n) || (attachments_only(h) && ty != Some(b"EmbeddedFile") && !attachment);
+            if pass == Pass::EncryptReplacing && named.as_deref().is_some_and(foreign) {
                 drop_crypt_filter(&mut dict);
                 named = None;
             }

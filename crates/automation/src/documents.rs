@@ -610,6 +610,7 @@ impl Automation {
                 Some(o) => return Err(ToolError::InvalidArgs(format!("unknown compatibility {o:?}"))),
             },
             encrypt_metadata: a.opt_bool("encrypt_metadata")?.unwrap_or(d.encrypt_metadata),
+            attachments_only: a.opt_bool("attachments_only")?.unwrap_or(d.attachments_only),
         };
         let mut out = self.apply(a, Edit::Protect(p))?;
         out["security"] = security(self.doc(a)?);

@@ -699,7 +699,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 encrypt_metadata: p.encrypt_metadata,
                 seed,
             };
-            doc.set_encryption(&params).map_err(|e| EditError::Protection(e.to_string()))?;
+            let applied = if p.attachments_only { doc.set_attachment_encryption(&params) } else { doc.set_encryption(&params) };
+            applied.map_err(|e| EditError::Protection(e.to_string()))?;
         }
         Edit::RemoveProtection => {
             if doc.output_handler().is_none() {

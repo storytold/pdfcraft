@@ -904,6 +904,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "accessibility": { "type": "boolean", "description": "Allow screen readers to read the text (needs permissions_password; default true)." },
                 "compatibility": { "type": "string", "enum": ["aes-256", "aes-128", "rc4-128", "rc4-40"], "description": "Default aes-256 (Acrobat X and later)." },
                 "encrypt_metadata": { "type": "boolean", "description": "Default true." },
+                "attachments_only": { "type": "boolean", "description": "Encrypt only embedded file attachments; pages, text and metadata stay readable. AES compatibility levels only. Default false." },
             }),
             &["doc"],
         )),

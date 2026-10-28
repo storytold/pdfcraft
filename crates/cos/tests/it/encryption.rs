@@ -494,3 +494,151 @@ fn a_stream_labelled_xref_is_encrypted_when_saved() {
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(SECRET.len()).any(|w| w == SECRET.as_bytes()), "the labelled stream was written in the clear");
 }
+
+const ATTACHED: &[u8] = b"ATTACHED-SECRET payload";
+
+/// The fixture with one embedded file, attached through the catalog's `/Names`.
+fn with_attachment() -> Document {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    let mut d = pdfcraft_cos::Dict::new();
+    d.set(b"Type".to_vec(), Object::name("EmbeddedFile"));
+    let ef = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(d, ATTACHED.to_vec())));
+    let mut files = pdfcraft_cos::Dict::new();
+    files.set(b"F".to_vec(), Object::Ref(ef));
+    let mut spec = pdfcraft_cos::Dict::new();
+    spec.set(b"Type".to_vec(), Object::name("Filespec"));
+    spec.set(b"F".to_vec(), Object::String(PdfString::literal(b"a.txt".to_vec())));
+    spec.set(b"EF".to_vec(), Object::Dict(files));
+    let mut tree = pdfcraft_cos::Dict::new();
+    tree.set(b"Names".to_vec(), Object::Array(vec![Object::String(PdfString::literal(b"a.txt".to_vec())), Object::Dict(spec)]));
+    let mut names = pdfcraft_cos::Dict::new();
+    names.set(b"EmbeddedFiles".to_vec(), Object::Dict(tree));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"Names".to_vec(), Object::Dict(names))).unwrap();
+    doc
+}
+
+fn attached_bytes(doc: &Document) -> Vec<u8> {
+    let root = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+    let names = doc.resolve(root.get(b"Names").unwrap()).as_dict().cloned().unwrap();
+    let tree = doc.resolve(names.get(b"EmbeddedFiles").unwrap()).as_dict().cloned().unwrap();
+    let spec = doc.resolve(&tree.get(b"Names").unwrap().as_array().unwrap()[1]).as_dict().cloned().unwrap();
+    let ef = doc.resolve(spec.get(b"EF").unwrap()).as_dict().cloned().unwrap();
+    match doc.resolve(ef.get(b"F").unwrap()).as_ref() {
+        Object::Stream(s) => s.decoded().unwrap().to_vec(),
+        _ => panic!("no embedded file stream"),
+    }
+}
+
+#[test]
+fn only_attachments_are_encrypted_when_asked() {
+    for alg in [Algorithm::Aes128, Algorithm::Aes256] {
+        let mut doc = with_attachment();
+        let params =
+            NewEncryption { algorithm: alg, user_password: "user", owner_password: "owner", permissions: -1, encrypt_metadata: true, seed: [7; 32] };
+        doc.set_attachment_encryption(&params).unwrap();
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        let raw = String::from_utf8_lossy(&bytes);
+        assert!(!raw.contains("ATTACHED-SECRET"), "{alg:?}: attachment left in clear");
+        assert!(raw.contains("Secret page"), "{alg:?}: page content must stay readable");
+        assert!(raw.contains("/EFF/StdCF") || raw.contains("/EFF /StdCF"), "{alg:?}: no /EFF");
+        assert!(raw.contains("/StmF/Identity") || raw.contains("/StmF /Identity"), "{alg:?}: no /StmF /Identity");
+        assert!(raw.contains("/AuthEvent/EFOpen") || raw.contains("/AuthEvent /EFOpen"), "{alg:?}: password asked for at attachment access");
+        // Read back through the existing reader, which honours /EFF.
+        assert!(matches!(Document::open(Arc::new(bytes.clone())), Err(CosError::NeedsPassword)), "{alg:?}");
+        let doc = Document::open_with_password(Arc::new(bytes), Some("user")).unwrap();
+        assert_eq!(content(&doc), SECRET);
+        assert_eq!(title(&doc).as_deref(), Some("Quarterly numbers"));
+        assert_eq!(attached_bytes(&doc), ATTACHED, "{alg:?}");
+    }
+}
+
+/// A page stream that selects `/StdCF` itself is not an attachment: converting to attachment-only
+/// protection drops the selector, or the page would stay unreadable without the password.
+#[test]
+fn attachment_only_protection_frees_a_page_stream_that_names_the_crypt_filter() {
+    let mut doc = Document::open(Arc::new(fixture_with(" /Filter /Crypt /DecodeParms << /Name /StdCF >>"))).unwrap();
+    doc.set_attachment_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes256,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("Secret page"), "the page stays readable");
+    assert_eq!(content(&Document::open_with_password(Arc::new(bytes), Some("user")).unwrap()), SECRET);
+}
+
+/// An embedded file stream needs no `/Type`, or has it behind a reference: it is still the file
+/// specification's attachment, so converting to attachment-only protection keeps it encrypted
+/// even when it names the crypt filter itself.
+#[test]
+fn attachment_only_protection_finds_attachments_by_their_file_specification() {
+    for ty in [None, Some("indirect")] {
+        let mut doc = Document::open(Arc::new(fixture())).unwrap();
+        let mut d = pdfcraft_cos::Dict::new();
+        d.set(b"Filter".to_vec(), Object::name("Crypt"));
+        let mut parms = pdfcraft_cos::Dict::new();
+        parms.set(b"Name".to_vec(), Object::name("StdCF"));
+        d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        if ty.is_some() {
+            let name = doc.add(Object::name("EmbeddedFile"));
+            d.set(b"Type".to_vec(), Object::Ref(name));
+        }
+        let stream = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(d, ATTACHED.to_vec())));
+        let mut files = pdfcraft_cos::Dict::new();
+        files.set(b"F".to_vec(), Object::Ref(stream));
+        let mut spec = pdfcraft_cos::Dict::new();
+        spec.set(b"EF".to_vec(), Object::Dict(files));
+        let mut names = pdfcraft_cos::Dict::new();
+        names.set(b"Names".to_vec(), Object::Array(vec![Object::String(PdfString::literal(b"a.txt".to_vec())), Object::Dict(spec)]));
+        let mut root_names = pdfcraft_cos::Dict::new();
+        root_names.set(b"EmbeddedFiles".to_vec(), Object::Dict(names));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"Names".to_vec(), Object::Dict(root_names))).unwrap();
+        doc.set_attachment_encryption(&NewEncryption {
+            algorithm: Algorithm::Aes256,
+            user_password: "user",
+            owner_password: "owner",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [7; 32],
+        })
+        .unwrap();
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        let raw = String::from_utf8_lossy(&bytes);
+        assert!(!raw.contains("ATTACHED-SECRET"), "{ty:?}: the attachment is left in clear");
+        assert!(raw.contains("Secret page"), "{ty:?}: the page stays readable");
+    }
+}
+
+#[test]
+fn encrypting_everything_still_covers_attachments() {
+    let mut doc = with_attachment();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes256,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).contains("Secret page"));
+    assert!(!String::from_utf8_lossy(&bytes).contains("/EFF"));
+}
+
+#[test]
+fn attachments_only_refuses_rc4() {
+    for alg in [Algorithm::Rc4_40, Algorithm::Rc4_128] {
+        let mut doc = with_attachment();
+        let params =
+            NewEncryption { algorithm: alg, user_password: "user", owner_password: "owner", permissions: -1, encrypt_metadata: true, seed: [7; 32] };
+        assert!(matches!(doc.set_attachment_encryption(&params), Err(CosError::Security(_))), "{alg:?}");
+        assert!(doc.output_handler().is_none(), "{alg:?}: a refused call must leave the document unprotected");
+    }
+}

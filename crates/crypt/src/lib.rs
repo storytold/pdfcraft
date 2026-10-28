@@ -708,5 +708,20 @@ pub fn create(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, Cry
     }
 }
 
+/// Like [`create`], but only embedded file streams are encrypted (`/EFF` names the standard
+/// filter; `/StmF` and `/StrF` are `/Identity`, §7.6.6). Needs crypt filters, so RC4-40 and
+/// RC4-128 (V < 4) are refused rather than silently encrypting everything.
+pub fn create_attachments_only(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, CryptError> {
+    if matches!(params.algorithm, Algorithm::Rc4_40 | Algorithm::Rc4_128) {
+        return Err(CryptError::Unsupported("encrypting only attachments needs AES (crypt filters)".into()));
+    }
+    let h = create(params, id0)?;
+    let mut dict = h.dict.clone();
+    dict.stm_f = b"Identity".to_vec();
+    dict.str_f = b"Identity".to_vec();
+    dict.ef_f = b"StdCF".to_vec();
+    Ok(SecurityHandler::new(dict, h.key, h.auth, h.recovered_user))
+}
+
 #[cfg(test)]
 mod tests;

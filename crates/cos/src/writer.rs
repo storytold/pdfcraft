@@ -133,11 +133,18 @@ fn write_stream(s: &Stream, out: &mut Vec<u8>) {
 
 /// The object as written: encrypted with its (output) number when the document is encrypted,
 /// except the `/Encrypt` dictionary itself (`source_num` is its number in the source document).
-fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &'a Object) -> Cow<'a, Object> {
+fn prepared<'a>(
+    doc: &Document,
+    source_num: u32,
+    num: u32,
+    generation: u16,
+    o: &'a Object,
+    attachments: &std::collections::HashSet<u32>,
+) -> Cow<'a, Object> {
     match doc.output_security() {
         (Some(h), encrypt_num) if Some(source_num) != encrypt_num => {
             let pass = if doc.encryption_changed() { crate::security::Pass::EncryptReplacing } else { crate::security::Pass::Encrypt };
-            Cow::Owned(crate::security::transform(h, o, num, generation, pass))
+            Cow::Owned(crate::security::transform(h, o, num, generation, pass, attachments.contains(&source_num)))
         }
         _ => Cow::Borrowed(o),
     }
@@ -220,6 +227,7 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     let mut out = Vec::new();
     let mut offsets: BTreeMap<u32, (u64, u16, bool)> = BTreeMap::new(); // num → (offset, gen, in use)
     let unlinked = if opts.drop_unlinked { unlinked_additions(&doc) } else { HashSet::new() };
+    let attachments = crate::security::embedded_file_targets(&doc);
     for (num, generation, obj) in doc.overlay_entries() {
         match obj {
             // Written as free, so `/Size` still covers every number this document handed out. The
@@ -229,7 +237,7 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
             }
             Some(o) => {
                 offsets.insert(num, (base + out.len() as u64, generation, true));
-                write_indirect(num, generation, &prepared(&doc, num, num, generation, &o), &mut out);
+                write_indirect(num, generation, &prepared(&doc, num, num, generation, &o, &attachments), &mut out);
             }
             None => {
                 offsets.insert(num, (0, generation, false));
@@ -326,6 +334,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     // readers accept it. qpdf keeps the catalog out of object streams too. Verified with
     // Acrobat DC on macOS (#774).
     let root_outside = if reader.document.output_security().0.is_some() { trailer_in.reference(b"Root") } else { None };
+    let attachments = crate::security::embedded_file_targets(&reader.document);
     let mut rows: BTreeMap<u32, Row> = BTreeMap::new();
     // Keep only references, not renamed copies of the entire object graph. Standalone
     // objects still precede object streams, preserving the established output order.
@@ -338,7 +347,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         } else {
             let o = renumber(&*reread(&mut reader, *r, *is_stream)?, &map);
             rows.insert(num, Row::InFile(out.len() as u64, 0));
-            write_indirect(num, 0, &prepared(&reader.document, r.num, num, 0, &o), &mut out);
+            write_indirect(num, 0, &prepared(&reader.document, r.num, num, 0, &o, &attachments), &mut out);
         }
     }
     // Object streams take the numbers after the last object. Their contents are not encrypted
@@ -436,7 +445,7 @@ impl ObjectStreamBatch {
         d.set(b"First".to_vec(), Object::Int(first as i64));
         let stm = Object::Stream(Stream::flate(d, &header));
         rows.insert(*next, Row::InFile(out.len() as u64, 0));
-        write_indirect(*next, 0, &prepared(doc, u32::MAX, *next, 0, &stm), out);
+        write_indirect(*next, 0, &prepared(doc, u32::MAX, *next, 0, &stm, &Default::default()), out);
         *next = following;
         Ok(())
     }

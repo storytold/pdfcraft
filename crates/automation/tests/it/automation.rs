@@ -2283,6 +2283,31 @@ fn protecting_through_tools() {
     ok(&mut c, "doc_open", json!({ "path": "open.pdf" }));
 }
 
+/// `attachments_only` reaches the encryption: the saved file reports "Attachments only", not a
+/// whole-document AES level, and a compatibility level that can't do it is refused.
+#[test]
+fn protecting_only_the_attachments_through_tools() {
+    let dir = workdir("protect-attachments");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let method = |path: &str| {
+        let mut b = auto(&dir);
+        let d = ok(&mut b, "doc_open", json!({ "path": path, "password": "open" }))["doc"].as_u64().unwrap();
+        ok(&mut b, "doc_info", json!({ "doc": d }))["security"]["method"].as_str().unwrap_or_default().to_string()
+    };
+    ok(&mut a, "doc_protect", json!({ "doc": doc, "open_password": "open", "attachments_only": true }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "attachments.pdf" }));
+    assert_eq!(method("attachments.pdf"), "Attachments only");
+    ok(&mut a, "doc_protect", json!({ "doc": doc, "open_password": "open", "attachments_only": false }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "everything.pdf" }));
+    assert!(method("everything.pdf").starts_with("AES"), "without the option the whole document is encrypted");
+    for compatibility in ["rc4-128", "rc4-40"] {
+        let refused =
+            a.call("doc_protect", &json!({ "doc": doc, "open_password": "open", "attachments_only": true, "compatibility": compatibility }));
+        assert!(matches!(refused, Err(ToolError::Failed(_))), "{compatibility}: {refused:?}");
+    }
+}
+
 /// A document that allows changes but not copying: the tools that return a page's text refuse,
 /// or leave the text out where the tool also changes the page (a restyled paragraph, recognized
 /// words).
