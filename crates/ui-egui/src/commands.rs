@@ -140,7 +140,9 @@ impl PdfCraftApp {
                 }
             }
             commands::Needs::Unlock if self.active.is_some() => tl!("This document has no restrictions to lift").to_string(),
-            commands::Needs::Assembly | commands::Needs::Modification | commands::Needs::Annotate if self.active.is_some() => {
+            commands::Needs::Assembly | commands::Needs::PageExtraction | commands::Needs::Modification | commands::Needs::Annotate
+                if self.active.is_some() =>
+            {
                 tl!("The document's security settings don't allow this change").to_string()
             }
             commands::Needs::Copying if self.active.is_some() => crate::copy_refused().to_string(),

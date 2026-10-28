@@ -116,6 +116,13 @@ impl Permissions {
     pub fn assemble(&self) -> bool {
         self.bit(11) || self.bit(4)
     }
+    /// Take pages out into another document (Extract, Split, a source of Combine or Insert
+    /// Pages): bit 11 itself. Bit 4 alone, which [`Self::assemble`] also accepts, is what
+    /// "Any except extracting pages" sets: the pages may change in place, but not leave the
+    /// document for a new file without its protection (#5081).
+    pub fn extract_pages(&self) -> bool {
+        self.bit(11)
+    }
     pub fn print_high_quality(&self) -> bool {
         self.bit(12)
     }

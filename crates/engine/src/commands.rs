@@ -18,8 +18,10 @@ pub enum Needs {
     Nothing,
     /// A document is open.
     Document,
-    /// The open document's security allows page changes (insert, delete, rotate, extract…).
+    /// The open document's security allows page changes (insert, delete, rotate…).
     Assembly,
+    /// The open document's security allows taking pages out into new files (extract, split).
+    PageExtraction,
     /// The open document's security allows content and metadata changes.
     Modification,
     /// The open document's security allows adding and changing comments.
@@ -389,8 +391,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.boxes", "Set page boxes…", PAGES, None, Assembly, "square-dashed-mouse-pointer"),
     c("page.insert", "Insert pages from file…", PAGES, None, Assembly, "file-input"),
     c("page.replace", "Replace pages…", PAGES, None, Assembly, "replace"),
-    c("page.extract", "Extract pages…", PAGES, None, Assembly, "file-output"),
-    c("page.split", "Split document…", PAGES, None, Assembly, "scissors"),
+    c("page.extract", "Extract pages…", PAGES, None, PageExtraction, "file-output"),
+    c("page.split", "Split document…", PAGES, None, PageExtraction, "scissors"),
     c("page.number", "Number pages…", PAGES, None, Assembly, "hash"),
     c("help.shortcuts", "Keyboard shortcuts", HELP, None, Nothing, "circle-help"),
     c("help.discord", "Join the ArtCraft Discord", HELP, None, Nothing, "messages-square"),
@@ -417,6 +419,7 @@ pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) 
         Nothing => true,
         Document | TwoPageView => doc.is_some(),
         Assembly => doc.is_some_and(|d| d.allows_assembly()),
+        PageExtraction => doc.is_some_and(|d| d.allows_page_extraction()),
         Modification => doc.is_some_and(|d| d.allows_modification()),
         Annotate => doc.is_some_and(|d| d.allows_annotation()),
         Copying => doc.is_some_and(|d| d.allows_copying()),

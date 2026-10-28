@@ -25,9 +25,31 @@ pub(crate) fn open_source_with(name: &str, bytes: &Arc<Vec<u8>>, password: Optio
     source_document(bytes, password).map_err(|p| EditError::Source(format!("{name}: {p}")))
 }
 
+/// [`open_source`] for pages inserted into `dest`. A source that withholds page extraction but
+/// allows assembly is accepted when `dest` will be saved under the very same protection (file
+/// key and `/Encrypt` values), as when pages cut or copied from a document are pasted back into
+/// it: they never leave its protection (#5081).
+pub(crate) fn open_source_into(name: &str, bytes: &Arc<Vec<u8>>, dest: &pdfcraft_cos::Document) -> Result<pdfcraft_cos::Document, EditError> {
+    let same_protection = |src: &pdfcraft_cos::Document| match (src.security(), dest.output_handler()) {
+        (Some(s), Some(d)) => s.file_key() == d.file_key() && s.dict() == d.dict(),
+        _ => false,
+    };
+    let permitted = |src: &pdfcraft_cos::Document| src.permissions().is_none_or(|p| p.extract_pages() || (p.assemble() && same_protection(src)));
+    source_document_if(bytes, None, permitted).map_err(|p| EditError::Source(format!("{name}: {p}")))
+}
+
 fn source_document(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Result<pdfcraft_cos::Document, SourceProblem> {
+    source_document_if(bytes, password, |d| d.permissions().is_none_or(|p| p.extract_pages()))
+}
+
+/// Open `bytes` as a page source, refused as [`SourceProblem::NotPermitted`] unless `permitted`.
+fn source_document_if(
+    bytes: &Arc<Vec<u8>>,
+    password: Option<&str>,
+    permitted: impl Fn(&pdfcraft_cos::Document) -> bool,
+) -> Result<pdfcraft_cos::Document, SourceProblem> {
     match std::panic::catch_unwind(|| pdfcraft_cos::Document::open_with_password(bytes.clone(), password)) {
-        Ok(Ok(d)) if d.permissions().is_some_and(|p| !p.assemble()) => Err(SourceProblem::NotPermitted),
+        Ok(Ok(d)) if !permitted(&d) => Err(SourceProblem::NotPermitted),
         Ok(Ok(d)) => Ok(d),
         Ok(Err(pdfcraft_cos::CosError::NeedsPassword)) => Err(SourceProblem::Password),
         Ok(Err(pdfcraft_cos::CosError::WrongPassword)) => Err(SourceProblem::WrongPassword),

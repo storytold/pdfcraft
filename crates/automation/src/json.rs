@@ -226,7 +226,7 @@ pub(crate) fn security(d: &Document) -> Value {
                 "method": s.method,
                 "pending": s.pending,
                 "printing": if !p.print() { "none" } else if p.print_high_quality() { "high" } else { "low" },
-                "modify": p.modify(), "assemble": p.assemble(), "copy": p.copy(), "annotate": p.annotate(),
+                "modify": p.modify(), "assemble": p.assemble(), "extract_pages": p.extract_pages(), "copy": p.copy(), "annotate": p.annotate(),
                 "fill_forms": p.fill_forms(), "accessibility": p.extract_for_accessibility(),
             })
         }

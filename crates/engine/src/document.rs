@@ -349,9 +349,15 @@ impl Document {
         if self.allows_copying() { Ok(()) } else { Err(EditError::NotPermitted("copying text and images")) }
     }
 
-    /// Page changes (insert, delete, rotate, move, extract) are allowed.
+    /// Page changes (insert, delete, rotate, move) are allowed.
     pub fn allows_assembly(&self) -> bool {
         self.editable() && self.permissions().is_none_or(|p| p.assemble())
+    }
+
+    /// Pages may be taken out into new files (Extract, Split): not under "Any except extracting
+    /// pages", which allows the page changes above (#5081).
+    pub fn allows_page_extraction(&self) -> bool {
+        self.editable() && self.permissions().is_none_or(|p| p.extract_pages())
     }
 
     /// Redaction marks waiting to be applied.
