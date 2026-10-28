@@ -1759,3 +1759,70 @@ fn truetype_without_an_encoding_reads_its_codes_as_win_ansi() {
     assert_eq!(ocr_layer_text(4, false), expected, "symbolic, no /ToUnicode");
     assert_eq!(ocr_layer_text(32, true), expected, "nonsymbolic, /ToUnicode for ASCII only");
 }
+
+/// #3713: a Chinese label spread to the width of a longer one (分散對齊, as on Taiwanese forms)
+/// is one show with character spacing, so every gap of the label is the same, while the value
+/// beside it has none. The line's typical gap is therefore the value's zero, and from half a
+/// line height upwards each of the label's gaps read as a word gap: 「受文者」 copied as
+/// 「受 文 者」 and Find no longer matched it. A repeated gap is spacing, whatever its width.
+#[test]
+fn a_chinese_label_spread_by_character_spacing_keeps_its_characters_together() {
+    // `Tc` is added after every glyph of the string (ISO 32000-2 §9.3.2), so the gap before
+    // the value is the spacing too; the value's own glyphs follow at `0 Tc`.
+    let line = |tc: f32| {
+        let mut v = Vec::new();
+        let mut x = 0.0;
+        for ch in ["受", "文", "者"] {
+            v.push(em_box(ch, x, 0.0, x + 12.0, 12.0));
+            x += 12.0 + tc;
+        }
+        for ch in ["如", "正", "本"] {
+            v.push(em_box(ch, x, 0.0, x + 12.0, 12.0));
+            x += 12.0;
+        }
+        layout(v).plain_text()
+    };
+    // A tenth of the font size up to a whole em: the issue's nine steps, the last three of
+    // which used to break.
+    for tc in [1.2, 2.4, 3.0, 3.6, 4.2, 4.8, 6.0, 9.0, 12.0] {
+        assert_eq!(line(tc), "受文者如正本", "{tc} pt of character spacing");
+    }
+
+    // A gap that stands on its own is still a word gap: two cells of a row, two character
+    // widths apart, keep the space between them.
+    let mut v = Vec::new();
+    for (i, ch) in ["姓", "名"].iter().enumerate() {
+        let x = i as f32 * 12.0;
+        v.push(em_box(ch, x, 0.0, x + 12.0, 12.0));
+    }
+    for (i, ch) in ["王", "小", "明"].iter().enumerate() {
+        let x = 48.0 + i as f32 * 12.0;
+        v.push(em_box(ch, x, 0.0, x + 12.0, 12.0));
+    }
+    assert_eq!(layout(v).plain_text(), "姓名 王小明");
+}
+
+/// Korean is written with spaces between words (띄어쓰기), and a file may write them as
+/// position rather than as space characters, so the rule for Chinese and Japanese -- where a
+/// gap between two characters is never a word gap -- must not reach Hangul (#3722 review).
+#[test]
+fn korean_words_separated_by_position_keep_their_spaces() {
+    let line = |gap: f32| {
+        let mut v = Vec::new();
+        let mut x = 0.0;
+        for word in ["안녕", "하세요", "여러분"] {
+            for ch in word.chars() {
+                v.push(em_box(&ch.to_string(), x, 0.0, x + 12.0, 12.0));
+                x += 12.0;
+            }
+            x += gap;
+        }
+        layout(v).plain_text()
+    };
+    // Half the line height upwards is a word gap, as it was before the Chinese rule changed.
+    for gap in [6.0, 7.0, 9.0, 12.0] {
+        assert_eq!(line(gap), "안녕 하세요 여러분", "{gap} pt between the words");
+    }
+    // Below that it is letter spacing, which is unchanged.
+    assert_eq!(line(3.0), "안녕하세요여러분");
+}

@@ -105,7 +105,9 @@ pub(super) struct Scratch {
     /// The current segment's glyphs in visual reading order, and its forced word breaks.
     pub(super) placed: Vec<usize>,
     pub(super) breaks: Vec<usize>,
-    /// The gaps between the current segment's glyphs, and its glyphs in logical order when it has right-to-left text.
+    /// The gaps between the current segment's glyphs, in pair order and sorted, and its glyphs in logical order when it
+    /// has right-to-left text.
+    pub(super) pair_gaps: Vec<f32>,
     pub(super) gaps: Vec<f32>,
     pub(super) logical: Vec<usize>,
     /// `placed` with the marks merged in, built before it is swapped in.
