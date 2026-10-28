@@ -51,7 +51,7 @@ another. Edits never touch the original bytes.
   streams, hybrid-reference files (`/XRefStm`), and object streams.
 - **Repair.** A file whose xref is wrong or missing is reconstructed by scanning for `obj`
   headers. Repairs are *recorded*, never silent, so the UI can say the file was damaged.
-  `startxref` is looked for in the last 4 KiB first and then anywhere in the file, so data after
+  `startxref` is looked for in the last 4 KiB first and then anywhere in the file (there only with its offset and `%%EOF`), so data after
   the final `%%EOF` (a web page glued to a served PDF) is not a reason to rebuild.
 - **Tolerant, never fatal.** The lexer works on a byte slice and a position; it allocates nothing
   for skipped data, bounds-checks every index, and caps nesting depth. Malformed input yields

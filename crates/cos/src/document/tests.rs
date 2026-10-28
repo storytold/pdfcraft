@@ -1358,3 +1358,22 @@ fn an_object_between_the_last_startxref_and_its_eof_still_rebuilds_the_table() {
     assert!(doc.repair_log().iter().any(|l| l.contains("objects follow it")), "{:?}", doc.repair_log());
     assert!(matches!(&*doc.get(ObjRef::new(3, 0)), Object::String(s) if s.bytes == b"newer"));
 }
+
+/// A `startxref` before the tail is taken only as a whole footer: the keyword, an offset and
+/// `%%EOF`. Text in the trailing data that names a valid but older offset after the keyword would
+/// otherwise read that older table and drop the newer revision without a note.
+#[test]
+fn a_startxref_in_trailing_text_without_its_eof_does_not_read_an_older_table() {
+    let base = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    let older = base.windows(9).rposition(|w| w == b"startxref").unwrap();
+    let older = std::str::from_utf8(&base[older + 9..]).unwrap().split_whitespace().next().unwrap().to_string();
+    let mut edited = Document::open(Arc::new(base)).unwrap();
+    edited.update_dict(ObjRef::new(1, 0), |dict| dict.set(b"Lang".to_vec(), Object::String(crate::PdfString::literal("en")))).unwrap();
+    let mut bytes = crate::write_incremental(&edited, &crate::SaveOptions::default()).unwrap();
+    bytes.extend_from_slice(format!("\n<html><pre>see startxref {older} in the log").as_bytes());
+    bytes.extend(std::iter::repeat_n(b' ', 5000));
+    bytes.extend_from_slice(b"</pre></html>\n");
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert!(doc.repair_log().iter().any(|l| l.contains("object headers")), "{:?}", doc.repair_log());
+    assert!(matches!(doc.get(ObjRef::new(1, 0)).as_dict().and_then(|d| d.get(b"Lang")), Some(Object::String(_))), "the newer revision is kept");
+}

@@ -820,6 +820,9 @@ const STARTXREF_TAIL: usize = 4096;
 /// keyword wins wherever it is: an earlier one could belong to a superseded revision. The
 /// trailing bytes stay in the file (an incremental save appends after them).
 ///
+/// Found before the tail, the keyword counts only with its offset and `%%EOF` after it: text in
+/// the trailing data that mentions `startxref` and a number is no footer.
+///
 /// Objects after that `startxref` keyword, before or after its `%%EOF`, are different: an update
 /// that never got its cross-reference section (a save cut short, a second file glued on), whose
 /// objects the last complete table cannot reach. The error then says so, and the caller rebuilds the table from object headers
@@ -839,7 +842,29 @@ pub(super) fn find_startxref(data: &[u8]) -> Result<usize, CosError> {
             detail: format!("startxref is {} bytes before the end of the file and objects follow it", data.len().saturating_sub(sx)),
         });
     }
+    // Out here the keyword could be text in the trailing data, so only a whole footer counts.
+    if !is_footer(data, sx) {
+        return Err(CosError::Syntax {
+            offset: sx,
+            detail: format!("startxref is {} bytes before the end of the file and no offset and %%EOF follow it", data.len().saturating_sub(sx)),
+        });
+    }
     Ok(sx)
+}
+
+/// Whether a whole footer starts at `sx`: the `startxref` keyword, an offset and `%%EOF`, with
+/// whitespace between them.
+fn is_footer(data: &[u8], sx: usize) -> bool {
+    let skip = |mut i: usize, keep: fn(u8) -> bool| {
+        while data.get(i).is_some_and(|&b| keep(b)) {
+            i = i.saturating_add(1);
+        }
+        i
+    };
+    let digits = skip(sx.saturating_add(b"startxref".len()), is_whitespace);
+    let end = skip(digits, |b| b.is_ascii_digit());
+    let eof = skip(end, is_whitespace);
+    end > digits && data.get(eof..).is_some_and(|rest| rest.starts_with(b"%%EOF"))
 }
 
 pub(super) fn rfind(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
