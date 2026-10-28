@@ -398,6 +398,20 @@ fn helvetica() -> Object {
     Object::Dict(f)
 }
 
+/// Only a declared standard face/recognized alias is reused by the mixed-script fallback.
+/// A house face merely containing "Mono" or "Serif" is not silently claimed to be standard.
+fn standard_latin_face(doc: &Document, name: &str) -> pdfcraft_fonts::Std14 {
+    use pdfcraft_fonts::{Std14, Std14Match};
+    dr_font(doc, name)
+        .and_then(|(font, _)| {
+            let font = doc.resolve(&font);
+            let base = std::str::from_utf8(font.as_dict()?.name(b"BaseFont")?).ok()?;
+            Std14::recognise(base)
+        })
+        .filter(|(font, matched)| *matched == Std14Match::Alias && !matches!(font, Std14::Symbol | Std14::ZapfDingbats))
+        .map_or(Std14::Helvetica, |(font, _)| font)
+}
+
 fn color_array(doc: &Document, mk: Option<&Dict>, key: &[u8]) -> Option<String> {
     let a = doc.resolve(mk?.get(key)?);
     let v: Vec<f64> = a.as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
@@ -675,7 +689,25 @@ fn top_index(doc: &Document, wd: &Dict, field: Option<&Dict>) -> usize {
 pub(crate) fn list_rows_of(doc: &Document, f_da: &str, field: Option<&Dict>, wd: &Dict) -> ListRows {
     let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(f_da));
     let size = if da.size > 0.0 { da.size } else { 12.0 };
-    ListRows { top: top_index(doc, wd, field), inset: 2.0 + border_width(doc, wd), row: size * 1.15, size }
+    let mut row = size * 1.15;
+    if let Some(options) = field.and_then(|field| field.get(b"Opt")).map(|o| doc.resolve(o))
+        && let Some(options) = options.as_array()
+    {
+        for option in options {
+            let option = doc.resolve(option);
+            let display = option.as_string().or_else(|| option.as_array().and_then(|a| a.last()).and_then(Object::as_string));
+            if let Some(display) = display {
+                let text = display.to_text();
+                if pdfcraft_fonts::appearance_text::has_shaped_text(&text)
+                    && pdfcraft_fonts::appearance_text::can_shape(&text)
+                    && let Ok(lines) = pdfcraft_fonts::appearance_text::wrap(&text, size, 1.0e100)
+                {
+                    row = lines.iter().map(|l| (l.ascent + l.descent) * size).fold(row, f64::max);
+                }
+            }
+        }
+    }
+    ListRows { top: top_index(doc, wd, field), inset: 2.0 + border_width(doc, wd), row, size }
 }
 
 /// The rows of list box `f` as drawn in widget `w`.
@@ -765,6 +797,18 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
         values.first().cloned().unwrap_or_default()
     };
     let text = if f.has(flags::PASSWORD) { "*".repeat(text.chars().count()) } else { text };
+    // Complex-script fallback is an embedded appearance, independent of the viewer's fonts.
+    // Passwords reach this check only after masking, so ActualText never exposes their value.
+    let shaped_values: Vec<&str> =
+        if f.kind == FieldKind::List { f.options.iter().map(|(_, display)| display.as_str()).collect() } else { vec![text.as_str()] };
+    if shaped_values.iter().any(|s| pdfcraft_fonts::appearance_text::has_shaped_text(s))
+        && shaped_values.iter().all(|s| pdfcraft_fonts::appearance_text::can_shape(s))
+        && let Some(stream) = shaped_field(doc, f, values, &text, &wd, &da, place)
+    {
+        // The shaped layout wraps within the box and shrinks an auto-sized value to fit it; it
+        // does not report a cut-off value (#4018) yet.
+        return (stream, shaped_values.iter().find_map(|s| pdfcraft_fonts::appearance_text::first_undrawable(s)), None);
+    }
     let can_show = |enc: &FontText| {
         if f.kind == FieldKind::List {
             f.options.iter().all(|(_, display)| enc.can_encode(display))
@@ -912,6 +956,111 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     // Nothing drawn is nothing cut, however small the box.
     let overflow = overflow.filter(|_| !text.is_empty());
     (Stream::flate(d, &content), unencodable, overflow)
+}
+
+fn shaped_field(doc: &Document, f: &Field, values: &[String], text: &str, wd: &Dict, da: &Da, place: Placement) -> Option<Stream> {
+    use pdfcraft_fonts::appearance_text::{comb_with_latin, draw_positioned, wrap_with_latin};
+    let latin = standard_latin_face(doc, &da.font);
+    let wrap = |text: &str, size, width| wrap_with_latin(text, size, width, latin);
+    let comb = |text: &str, size, cells| comb_with_latin(text, size, cells, latin);
+    let (width, height) = (place.layout_w, place.layout_h);
+    let (mut frame, bw) = frame(doc, wd, width, height);
+    let pad = 2.0 + bw;
+    let inner_w = (width - 2.0 * pad).max(1.0);
+    let q = wd.get(b"Q").and_then(|o| doc.resolve(o).as_int()).unwrap_or(f.quadding);
+    let x_for = |line_width: f64| match q {
+        1 => pad + (inner_w - line_width) / 2.0,
+        2 => width - pad - line_width,
+        _ => pad,
+    };
+    let one_line = |s: &str| s.chars().map(|c| if matches!(c, '\r' | '\n') { ' ' } else { c }).collect::<String>();
+    let measure = |s: &str, size: f64| wrap(s, size, 1.0e100).ok().map(|ls| ls.iter().map(|l| l.width).fold(0.0, f64::max));
+    let mut size = da.size;
+    let mut lines = Vec::new();
+    let mut positions = Vec::new();
+    if f.kind == FieldKind::List {
+        let fobj = doc.get(f.obj);
+        let rows = list_rows_of(doc, &f.da, fobj.as_dict(), wd);
+        size = rows.size;
+        let mut y = height - rows.inset;
+        for (export, display) in f.options.iter().skip(rows.top) {
+            if y - rows.row < 0.0 {
+                break;
+            }
+            if values.contains(export) {
+                frame.push_str(&format!("0.6 0.75 0.86 rg\n{} {} {} {} re f\n", n(bw), n(y - rows.row), n(width - 2.0 * bw), n(rows.row)));
+            }
+            let line = wrap(&one_line(display), size, 1.0e100).ok()?.into_iter().next()?;
+            positions.push([x_for(line.width), y - line.ascent * size]);
+            lines.push(line);
+            y -= rows.row;
+        }
+    } else if f.kind == FieldKind::Text && f.has(flags::MULTILINE) {
+        if size == 0.0 {
+            size = auto_text_size_by(
+                inner_w,
+                height - 2.0 * pad,
+                true,
+                |size| measure(text, size).unwrap_or(f64::INFINITY),
+                |size| wrap(text, size, inner_w).map_or(f64::INFINITY, |ls| pdfcraft_fonts::appearance_text::height(&ls, size)),
+            );
+        }
+        let mut top = height - pad;
+        for line in wrap(text, size, inner_w).ok()? {
+            let y = top - size * line.ascent;
+            if y < -size {
+                break;
+            }
+            positions.push([x_for(line.width), y]);
+            top = y - size * line.descent;
+            lines.push(line);
+        }
+    } else {
+        let text = one_line(text);
+        let is_comb = f.has(flags::COMB) && !f.has(flags::PASSWORD) && f.max_len.is_some_and(|n| n > 0);
+        if size == 0.0 {
+            let measured = if is_comb { comb(&text, 12.0, f.max_len.unwrap_or(1).max(1)).ok()?.0 } else { wrap(&text, 12.0, 1.0e100).ok()? };
+            let ascent = measured.iter().map(|l| l.ascent).fold(0.9, f64::max);
+            let descent = measured.iter().map(|l| l.descent).fold(0.3, f64::max);
+            size = ((height - 2.0 * pad) / (ascent + descent)).clamp(4.0, 12.0);
+            if !is_comb {
+                let tw = measure(&text, size)?;
+                if tw > inner_w {
+                    size = (size * inner_w / tw).max(4.0);
+                }
+            }
+        }
+        if is_comb {
+            let cells = f.max_len.unwrap_or(1).max(1);
+            let cell_width = width / cells as f64;
+            let (comb_lines, slots) = comb(&text, size, cells).ok()?;
+            let ascent = comb_lines.iter().map(|l| l.ascent).fold(0.9, f64::max);
+            let descent = comb_lines.iter().map(|l| l.descent).fold(0.3, f64::max);
+            let y = (height + (descent - ascent) * size) / 2.0;
+            for (line, slot) in comb_lines.into_iter().zip(slots) {
+                positions.push([cell_width * slot as f64 + (cell_width - line.width) / 2.0, y]);
+                lines.push(line);
+            }
+        } else {
+            let line = wrap(&text, size, 1.0e100).ok()?.into_iter().next()?;
+            let y = (height + (line.descent - line.ascent) * size) / 2.0;
+            positions.push([x_for(line.width), y]);
+            lines.push(line);
+        }
+    }
+    let (text, fonts) = draw_positioned(&lines, size, &positions, None).ok()?;
+    let mut content = frame.into_bytes();
+    content.extend(format!("/Tx BMC\nq\n{} {} {} {} re W n\n{}\n", n(bw), n(bw), n(width - 2.0 * bw), n(height - 2.0 * bw), da.color).bytes());
+    content.extend(text);
+    content.extend_from_slice(b"Q\nEMC\n");
+    let mut resources = Dict::new();
+    resources.set(b"Font".to_vec(), Object::Dict(fonts));
+    let mut dict = Dict::new();
+    dict.set(b"Type".to_vec(), Object::name("XObject"));
+    dict.set(b"Subtype".to_vec(), Object::name("Form"));
+    set_form_box(&mut dict, place);
+    dict.set(b"Resources".to_vec(), Object::Dict(resources));
+    Some(Stream::flate(dict, &content))
 }
 
 /// On/Off appearances for a check box or radio button that has none (a check mark or a dot,

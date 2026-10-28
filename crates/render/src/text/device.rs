@@ -15,7 +15,13 @@ pub(super) const WORD_GAP: f32 = 0.15;
 
 /// A glyph with its writing direction to the nearest quarter turn (right, down, left, up) and as
 /// a unit vector.
-pub(super) type Drawn = (usize, [f64; 2], TextGlyph);
+pub(super) type Drawn = (usize, [f64; 2], TextGlyph, Option<GlyphPosition>);
+
+#[derive(Clone, Copy)]
+pub(super) struct GlyphPosition {
+    pub(super) baseline: [f64; 2],
+    pub(super) advances: bool,
+}
 
 pub(super) struct TextDevice {
     /// Every glyph in content order.
@@ -23,12 +29,14 @@ pub(super) struct TextDevice {
     /// How many marked content sequences are open.
     depth: usize,
     /// The outermost open `/ActualText` replacement: its depth, text and the glyphs drawn inside
-    /// it (with no text of their own yet).
+    /// it, retaining any source Unicode and geometry needed to prove a precise mapping.
     actual: Option<(usize, String, Vec<Drawn>)>,
     /// Every `/ActualText` replacement made on the page.
     pub(super) replaced: Vec<Replaced>,
     /// Visible page bounds in view space (`intersected_crop_box` after `initial_transform`).
     page: Rect,
+    /// Proven logical clusters, expanded only after the merged span has been laid out.
+    precise: HashMap<usize, Vec<TextGlyph>>,
     filter: TextFilter,
     excluded_depth: Option<usize>,
     actual_filtered: bool,
@@ -78,8 +86,8 @@ fn redraw_tolerance(rect: &[f32; 4]) -> f32 {
 
 /// One glyph carrying `text`, boxed around `drawn` in their writing direction; `None` when they
 /// span several lines or writing directions (one box would break selection and line grouping).
-fn merge(drawn: &[Drawn], text: String) -> Option<Drawn> {
-    let first = drawn.first()?;
+pub(super) fn merge(drawn: &[Drawn], text: String) -> Option<Drawn> {
+    let first = drawn.iter().find(|d| d.3.is_some_and(|p| p.advances)).or_else(|| drawn.first())?;
     let (quarter, u) = (first.0, first.1);
     // Across the line: from the writing direction a quarter turn towards the line's bottom.
     let n = [-u[1], u[0]];
@@ -102,7 +110,7 @@ fn merge(drawn: &[Drawn], text: String) -> Option<Drawn> {
     let rect = quad.iter().fold([f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY], |r, p| {
         [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])]
     });
-    Some((quarter, u, TextGlyph { text, rect, quad, direction: first.2.direction }))
+    Some((quarter, u, TextGlyph { text, rect, quad, direction: first.2.direction }, None))
 }
 
 impl TextDevice {
@@ -113,6 +121,7 @@ impl TextDevice {
             actual: None,
             replaced: Vec::new(),
             page: Rect::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::INFINITY),
+            precise: HashMap::new(),
             filter: TextFilter::default(),
             excluded_depth: None,
             actual_filtered: false,
@@ -129,12 +138,13 @@ impl TextDevice {
     ///
     /// A replacement spanning several lines or writing directions stays per glyph (each glyph's own
     /// Unicode). An empty one (a soft hyphen at a line break, say) stands for no text at all.
+    /// Proven ToUnicode clusters are restored only after layout, for precise logical selection.
     fn end_actual_text(&mut self) {
         let Some((_, text, drawn)) = self.actual.take() else { return };
         let cropped = std::mem::take(&mut self.actual_cropped);
         if std::mem::take(&mut self.actual_filtered) {
-            // ActualText has no mapping from replacement words to individual glyphs. A mixed
-            // span cannot be filtered honestly; a wholly excluded span can simply be omitted.
+            // ActualText has no guaranteed semantic-subspan mapping. A mixed span cannot be
+            // filtered honestly; a wholly excluded span can simply be omitted.
             self.partial_replacement |= !drawn.is_empty();
             return;
         }
@@ -150,6 +160,9 @@ impl TextDevice {
         let at = if text.chars().all(char::is_control) {
             None
         } else {
+            if let Some(parts) = super::actual_text_map::precise(&drawn, &text) {
+                self.precise.insert(self.glyphs.len(), parts);
+            }
             self.glyphs.push(glyph);
             Some(self.glyphs.len() - 1)
         };
@@ -216,11 +229,15 @@ impl TextDevice {
         }
         redraws.sort_by_key(|(range, _)| range.start);
         let glyphs = std::mem::take(&mut self.glyphs);
+        let mut precise = std::mem::take(&mut self.precise);
         let mut redraws = redraws.into_iter().peekable();
         let mut text_left = MAX_REDRAW_TEXT;
         let mut i = 0;
         while let Some(g) = glyphs.get(i) {
             let Some((range, k)) = redraws.next_if(|(range, _)| range.start == i) else {
+                if let Some(parts) = precise.remove(&i) {
+                    self.precise.insert(self.glyphs.len(), parts);
+                }
                 self.glyphs.push(g.clone());
                 i += 1;
                 continue;
@@ -239,8 +256,14 @@ impl TextDevice {
             #[cfg(test)]
             REDRAW_TEXT_BYTES.with(|c| c.set(c.get() + text.len()));
             if !text.chars().all(char::is_control) {
+                let parts = super::actual_text_map::precise(run, &text);
                 match merge(run, text) {
-                    Some(glyph) => self.glyphs.push(glyph),
+                    Some(glyph) => {
+                        if let Some(parts) = parts {
+                            self.precise.insert(self.glyphs.len(), parts);
+                        }
+                        self.glyphs.push(glyph);
+                    }
                     None => self.glyphs.extend_from_slice(run),
                 }
             }
@@ -294,6 +317,11 @@ impl<'a> Device<'a> for TextDevice {
             let kind = if matches!(glyph, Glyph::Type3(_)) { "t3" } else { "ol" };
             eprintln!("{kind} {text:?} transform={:?} glyph_transform={:?}", transform.as_coeffs(), glyph_transform.as_coeffs());
         }
+        let declared_advance = match glyph {
+            Glyph::Outline(g) => g.advance_width().map(f64::from),
+            Glyph::Type3(g) => g.advance_width().map(f64::from),
+        };
+        let advances = declared_advance.is_some_and(|a| a.is_finite() && a > 0.0);
         let advance = match glyph {
             Glyph::Outline(g) => {
                 g.advance_width().filter(|a| *a > 0.0).map(f64::from).unwrap_or_else(|| g.outline().bounding_box().width().max(500.0))
@@ -316,7 +344,12 @@ impl<'a> Device<'a> for TextDevice {
         } else {
             3
         };
-        let em = Rect::new(0.0, -200.0, advance, 800.0);
+        // A source cluster may put its Unicode on a zero-advance dot/mark before its
+        // advancing base. Retain that component's actual ink rather than inventing a wide em.
+        let em = match glyph {
+            Glyph::Outline(g) if replaced && !advances => g.outline().bounding_box(),
+            _ => Rect::new(0.0, -200.0, advance, 800.0),
+        };
         let corners = if matches!(glyph, Glyph::Outline(g) if g.is_vertical()) {
             [(em.x0, em.y1), (em.x0, em.y0), (em.x1, em.y0), (em.x1, em.y1)]
         } else {
@@ -345,9 +378,11 @@ impl<'a> Device<'a> for TextDevice {
             quad: corners.map(|p| [p.x as f32, p.y as f32]),
             direction: direction.map(|d| d as f32),
         };
+        let origin = t * kurbo::Point::ORIGIN;
+        let position = GlyphPosition { baseline: [origin.x, origin.y], advances };
         match &mut self.actual {
-            Some((_, _, drawn)) => drawn.push((dir, direction, glyph)),
-            None => self.glyphs.push((dir, direction, glyph)),
+            Some((_, _, drawn)) => drawn.push((dir, direction, glyph, Some(position))),
+            None => self.glyphs.push((dir, direction, glyph, Some(position))),
         }
     }
     fn draw_image(&mut self, _: Image<'a, '_>, _: Affine) {}
@@ -402,6 +437,7 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
         return Err("a replacement text span mixes included and excluded content; disable the exclusions to count this page".into());
     }
     let glyphs = dev.glyphs;
+    let mut precise = dev.precise;
     // Text on a curved path: glyphs that each continue the previous one's line while the
     // direction turns. Each such run is one line.
     let turned = |u: [f64; 2]| u[0].abs().min(u[1].abs()) > DIRECTION_TOLERANCE;
@@ -424,7 +460,7 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
         start = end;
     }
     let mut quarters: [Vec<usize>; 4] = Default::default();
-    for (i, (quarter, u, _)) in glyphs.iter().enumerate() {
+    for (i, (quarter, u, _, _)) in glyphs.iter().enumerate() {
         if in_curve[i] {
             continue;
         }
@@ -490,13 +526,16 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
     let mut emit = |text: &mut PageText, ids: &[usize], line_of: &[u32], space_before: &[bool], quarter: Option<u8>| {
         let offset = text.line_of.last().map_or(0, |line| line.saturating_add(1));
         for ((&i, &line), &space) in ids.iter().zip(line_of).zip(space_before) {
-            let Some(mut g) = slots.get_mut(i).and_then(Option::take) else { continue };
-            if let Some(quarter) = quarter {
-                g.rect = from_upright(to_upright(g.rect, quarter, w, h), quarter, w, h);
+            let Some(g) = slots.get_mut(i).and_then(Option::take) else { continue };
+            let parts = precise.remove(&i).unwrap_or_else(|| vec![g]);
+            for (part, mut g) in parts.into_iter().enumerate() {
+                if let Some(quarter) = quarter {
+                    g.rect = from_upright(to_upright(g.rect, quarter, w, h), quarter, w, h);
+                }
+                text.glyphs.push(g);
+                text.line_of.push(line.saturating_add(offset));
+                text.space_before.push(part == 0 && space);
             }
-            text.glyphs.push(g);
-            text.line_of.push(line.saturating_add(offset));
-            text.space_before.push(space);
         }
     };
     for flow in flows {

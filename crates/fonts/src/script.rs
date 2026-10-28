@@ -160,7 +160,11 @@ pub fn japanese_glyph_from(face: &crate::CraftFont, ch: char) -> Result<GlyphOut
 
 /// Glyph `gid` of `font` in em units with advance `width`, bounded like [`japanese_glyph`].
 pub(crate) fn bounded_outline(font: &FontRef, gid: GlyphId, width: f64) -> Result<GlyphOutline, GlyphError> {
-    let loc = LocationRef::default();
+    bounded_outline_at(font, gid, width, LocationRef::default())
+}
+
+/// [`bounded_outline`] at a variation location (a variable face's bold instance).
+pub(crate) fn bounded_outline_at(font: &FontRef, gid: GlyphId, width: f64, loc: LocationRef<'_>) -> Result<GlyphOutline, GlyphError> {
     let scale = 1.0 / font.metrics(Size::unscaled(), loc).units_per_em.max(1) as f64;
     let Some(glyph) = font.outline_glyphs().get(gid) else { return Err(GlyphError::Missing) };
     let mut pen = Flatten::new(scale);

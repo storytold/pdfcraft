@@ -4454,6 +4454,7 @@ dependencies = [
  "pdfcraft-cos",
  "skrifa 0.44.0",
  "unicode-bidi",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -4628,6 +4629,7 @@ dependencies = [
  "serde",
  "skrifa 0.44.0",
  "thiserror 2.0.21",
+ "unicode-bidi",
 ]
 
 [[package]]

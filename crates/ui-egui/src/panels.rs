@@ -48,3 +48,34 @@ pub fn human_size(n: usize) -> String {
 pub fn byte_count(n: usize) -> String {
     crate::i18n::trn(crate::i18n::current(), n as u64, "{n} byte", "{n} bytes")
 }
+
+#[cfg(test)]
+mod tool_items {
+    use super::edit::{EDIT_CARET_INSET, edit_label_width};
+    use super::tools::{CARET_GAP, LABEL_INSET, item_label_width};
+    use egui::{Rect, pos2};
+
+    /// A right-to-left label ends where its width does: for an item that opens a menu (Header
+    /// and footer, Watermark) that edge must clear the caret before the chip, which covered the
+    /// first letter of the Arabic label. Items without a menu keep the width they had.
+    #[test]
+    fn a_label_at_its_full_width_clears_the_menu_caret() {
+        let body = Rect::from_min_max(pos2(15.0, 0.0), pos2(257.0, 34.0));
+        let chip = Rect::from_min_max(pos2(215.0, 9.0), pos2(247.0, 25.0));
+        let label_end = |menu| body.left() + LABEL_INSET + item_label_width(body, chip, menu);
+        let caret_left = chip.left() - CARET_GAP - 3.5;
+        assert!(label_end(true) < caret_left, "the label reaches {} and the caret starts at {caret_left}", label_end(true));
+        assert_eq!(item_label_width(body, chip, false), chip.left() - body.left() - 42.0);
+    }
+
+    /// The Edit panel's rows (Header and footer, Watermark, Background) put the caret near the
+    /// row's end instead of before a chip; their label must clear it too.
+    #[test]
+    fn an_edit_panel_label_at_its_full_width_clears_the_menu_caret() {
+        let row = egui::Rect::from_min_max(pos2(15.0, 0.0), pos2(257.0, 34.0));
+        let label_end = |menu| row.left() + LABEL_INSET + edit_label_width(row.width(), menu);
+        let caret_left = row.right() - EDIT_CARET_INSET - 3.5;
+        assert!(label_end(true) < caret_left, "the label reaches {} and the caret starts at {caret_left}", label_end(true));
+        assert_eq!(edit_label_width(row.width(), false), row.width() - 42.0);
+    }
+}
