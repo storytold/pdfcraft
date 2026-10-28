@@ -172,6 +172,7 @@ impl Ocr {
     }
 
     /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels.
+    /// The lines come in reading order: split at column gutters, each column top to bottom.
     pub fn recognize(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Line>, OcrError> {
         if pixels.is_empty() {
             return Err(OcrError::EmptyImage);
@@ -191,22 +192,23 @@ impl Ocr {
         let before: Vec<Option<RectF>> = lines.iter_mut().map(|l| pad_line(l)).collect();
         let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
         use ocrs::TextItem;
-        Ok(read
-            .into_iter()
-            .zip(before)
-            .filter_map(|(line, before)| line.map(|l| (l, before)))
-            .map(|(line, before)| Line {
-                words: line
-                    .words()
-                    .map(|w| {
-                        let r = w.bounding_rect();
-                        Word::new(w.to_string(), clip([r.left() as f32, r.top() as f32, r.right() as f32, r.bottom() as f32], before), "ocrs")
-                    })
-                    .filter(|w| !w.text.trim().is_empty())
-                    .collect(),
-            })
-            .filter(|l| !l.words.is_empty())
-            .collect())
+        Ok(crate::layout::reading_order(
+            read.into_iter()
+                .zip(before)
+                .filter_map(|(line, before)| line.map(|l| (l, before)))
+                .map(|(line, before)| Line {
+                    words: line
+                        .words()
+                        .map(|w| {
+                            let r = w.bounding_rect();
+                            Word::new(w.to_string(), clip([r.left() as f32, r.top() as f32, r.right() as f32, r.bottom() as f32], before), "ocrs")
+                        })
+                        .filter(|w| !w.text.trim().is_empty())
+                        .collect(),
+                })
+                .filter(|l| !l.words.is_empty())
+                .collect(),
+        ))
     }
 
     /// The words in a page, `rgb` (1 or 3 bytes per pixel) prepared as `page`. A page at least
