@@ -140,6 +140,10 @@ impl PdfCraftApp {
         if !PrimarySelection::SUPPORTED {
             return;
         }
+        // A selection that waited for a stopped worker to be replaced.
+        if let Some(wait) = self.primary_selection.retry() {
+            ctx.request_repaint_after(wait);
+        }
         let view = self.active.and_then(|i| self.views.get(i));
         let now = view.and_then(|v| Some((v.id, v.page_selection()?)));
         let primary = &mut self.primary_selection;

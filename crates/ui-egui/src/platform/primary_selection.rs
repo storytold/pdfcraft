@@ -21,10 +21,14 @@ pub(crate) struct PrimarySelection {
     pub(crate) written_key: Option<(DocId, SelectionKey)>,
     #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
     worker: Option<Worker>,
-    /// When the last worker was found stopped: a new one is started no sooner than [`RETRY`]
+    /// When the last worker was started: a stopped one is replaced no sooner than [`RETRY`]
     /// after, so a desktop with no clipboard isn't asked again on every selection.
     #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
-    stopped: Option<std::time::Instant>,
+    started: Option<std::time::Instant>,
+    /// A selection made while a stopped worker waits to be replaced: written by the next one
+    /// ([`PrimarySelection::retry`]).
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
+    pending: Option<String>,
     /// Tests: what was written, oldest first.
     #[cfg(test)]
     pub(crate) written: Vec<String>,
@@ -45,28 +49,38 @@ impl PrimarySelection {
             if let Some(worker) = &self.worker {
                 match worker.send(text) {
                     Ok(()) => return,
-                    // The thread stopped (no clipboard then, or it failed): start another.
+                    // The thread stopped (no clipboard then, or it failed): another takes over.
                     Err(back) => {
                         text = back;
                         self.worker = None;
-                        self.stopped = Some(std::time::Instant::now());
                     }
                 }
             }
-            if !may_start(self.stopped.map(|at| at.elapsed())) {
-                log::debug!("no primary selection to write");
-                return;
-            }
-            self.worker = spawn_worker();
-            if let Some(worker) = &self.worker
-                && worker.send(text).is_err()
-            {
-                self.worker = None;
-                self.stopped = Some(std::time::Instant::now());
-            }
+            self.pending = Some(text);
+            self.retry();
         }
         #[cfg(not(any(test, all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32"))))))]
         drop(text);
+    }
+
+    /// Write a selection made while a stopped worker waited to be replaced, once one may start.
+    /// Run every frame; says how long until it may, so a frame can be drawn then.
+    pub(crate) fn retry(&mut self) -> Option<std::time::Duration> {
+        #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
+        if self.pending.is_some() && self.worker.is_none() {
+            let since = self.started.map(|at| at.elapsed());
+            if !may_start(since) {
+                return since.map(|since| RETRY.saturating_sub(since));
+            }
+            self.started = Some(std::time::Instant::now());
+            self.worker = spawn_worker();
+            if let (Some(worker), Some(text)) = (&self.worker, self.pending.take())
+                && worker.send(text).is_err()
+            {
+                self.worker = None;
+            }
+        }
+        None
     }
 }
 
@@ -94,12 +108,11 @@ impl Worker {
 }
 
 #[cfg(any(test, all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")))))]
-/// How long after a worker is found stopped another may be started.
+/// How long after a worker was started another may replace it.
 const RETRY: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[cfg(any(test, all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")))))]
-/// Whether a worker may be started, given how long ago the last one was found stopped (`None`:
-/// none was).
+/// Whether a worker may be started, given how long ago the last one was (`None`: none was).
 fn may_start(since_stopped: Option<std::time::Duration>) -> bool {
     since_stopped.is_none_or(|since| since >= RETRY)
 }
