@@ -9608,10 +9608,10 @@ fn spaces_after_a_rows_last_word_do_not_move_its_alignment() {
     }
 }
 
-/// A justified row runs from the paragraph's left edge to the margin. Word spacing reaches only
-/// the spaces between its words: the spaces before its first word and after its last are left
-/// out of a stretched row (as before #4199), so the reopened rows stay inside the paragraph and
-/// can be edited again in place.
+/// A justified row ends at the margin. Word spacing reaches only the spaces between its words:
+/// the spaces before its first word and after its last are left out of a stretched row (as
+/// before #4199), so the reopened rows stay inside the paragraph and can be edited again in
+/// place. The ones before its first word still indent it: the row starts their width in (#4487).
 #[test]
 fn a_justified_row_keeps_its_indent_and_ends_at_the_margin() {
     let style = text::BlockStyle {
@@ -9626,8 +9626,13 @@ fn a_justified_row_keeps_its_indent_and_ends_at_the_margin() {
         let mut doc = reopen(&doc);
         let lines = text::text_lines(&doc, 0).unwrap();
         let first = lines.iter().find(|l| l.text.contains("Pack")).unwrap();
-        assert_eq!(first.text, "Pack my box with five dozen jugs", "{typed:?}");
+        assert_eq!(first.text, "    Pack my box with five dozen jugs", "{typed:?}");
         assert!((first.rect[0] - 72.0).abs() < 0.5, "{typed:?}: {:?}", first.rect);
+        // The first word starts after four Helvetica spaces at 12 pt (4 × 0.278 × 12), and the
+        // last one ends at the margin.
+        let ink = |f: fn(&[f64; 4]) -> f64| first.ink.iter().map(f).collect::<Vec<_>>();
+        assert!(ink(|i| i[0]).first().is_some_and(|x| (x - (72.0 + 4.0 * 0.278 * 12.0)).abs() < 0.5), "indented: {typed:?}: {:?}", first.ink);
+        assert!(ink(|i| i[2]).last().is_some_and(|x| (x - 372.0).abs() < 0.5), "ends at the margin: {typed:?}: {:?}", first.ink);
         assert!(lines.iter().all(|l| l.rect[0] >= 72.0 - 0.5 && l.rect[2] <= 372.5), "{typed:?}: {lines:?}");
         let blocks = text::text_blocks(&doc, 0).unwrap();
         assert_eq!(blocks.len(), 1, "{typed:?}: {blocks:?}");
@@ -9638,8 +9643,8 @@ fn a_justified_row_keeps_its_indent_and_ends_at_the_margin() {
 }
 
 /// A justified paragraph whose first row was typed with an indent is edited again through the
-/// styled path (a draft with a line break): its rows keep their scaling and stay one paragraph
-/// inside its width.
+/// styled path (a draft with a line break): its rows keep their scaling and their indent (#4487),
+/// and stay one paragraph inside its width.
 #[test]
 fn a_justified_paragraph_with_an_indent_edits_again_at_its_own_scale() {
     let style = text::BlockStyle {
@@ -9652,7 +9657,7 @@ fn a_justified_paragraph_with_an_indent_edits_again_at_its_own_scale() {
     text::rewrite_block(&mut doc, 0, 0, Some("    aaa bbb ccc  \nddd"), &style).unwrap();
     let mut doc = reopen(&doc);
     let draft = text::text_blocks(&doc, 0).unwrap()[0].editor_text.replacen("ccc", "cc", 1);
-    assert!(draft.contains('\n'), "{draft:?}");
+    assert!(draft.contains('\n') && draft.starts_with("    aaa"), "{draft:?}");
     text::replace_block(&mut doc, 0, 0, &draft).unwrap();
     let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
     let scales: Vec<&str> = content.lines().filter(|l| l.ends_with(" Tz")).collect();
@@ -9662,6 +9667,7 @@ fn a_justified_paragraph_with_an_indent_edits_again_at_its_own_scale() {
     assert_eq!(blocks.len(), 1, "{blocks:?}");
     let lines = text::text_lines(&doc, 0).unwrap();
     assert!(lines.iter().all(|l| l.rect[0] >= 72.0 - 0.5 && l.rect[2] <= 372.5), "{lines:?}");
+    assert!(lines.first().is_some_and(|l| l.text.starts_with("    aaa")), "the indent is kept: {lines:?}");
 }
 
 /// A paragraph drawn at `0 Tz` has no width to justify into: nothing is divided by it. The
