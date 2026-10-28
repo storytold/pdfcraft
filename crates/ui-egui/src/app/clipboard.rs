@@ -140,10 +140,11 @@ impl PdfCraftApp {
         if !PrimarySelection::SUPPORTED {
             return;
         }
-        // Away from the window, another application's selection may be the primary one now: a
-        // write still being retried would take it back.
+        // Away from the window, another application's selection may be the primary one now:
+        // nothing is written, and a write still waiting would take it back.
         if !ctx.input(|i| i.focused) {
             self.primary_selection.cancel_retries();
+            return;
         }
         // A selection that waited for a stopped worker to be replaced.
         if let Some(wait) = self.primary_selection.retry() {

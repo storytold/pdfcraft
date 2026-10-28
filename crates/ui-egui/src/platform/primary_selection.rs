@@ -63,14 +63,14 @@ impl PrimarySelection {
         drop(text);
     }
 
-    /// Drop the selections waiting to be tried again: once the window loses the focus, the user
-    /// may have selected text elsewhere, which a late retry must not replace.
+    /// Drop the selections waiting to be written or tried again: once the window loses the focus,
+    /// the user may have selected text elsewhere, which a late write must not replace.
     pub(crate) fn cancel_retries(&mut self) {
         #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
         {
             self.pending = None;
             if let Some(worker) = &self.worker {
-                worker.forget_refused();
+                worker.cancel();
             }
         }
     }
@@ -104,6 +104,9 @@ struct Worker {
     /// A selection the display refused, tried again every [`RETRY`] until it is written, a newer
     /// one replaces it, or the window loses the focus ([`PrimarySelection::cancel_retries`]).
     refused: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    /// Bumped when the window loses the focus: a write under way then that fails isn't kept for
+    /// another try.
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicU64>,
     wake: std::sync::mpsc::SyncSender<()>,
 }
 
@@ -121,8 +124,11 @@ impl Worker {
         }
     }
 
-    /// Forget a selection the display refused: it is not tried again.
-    fn forget_refused(&self) {
+    /// Forget what waits to be written, a selection the display refused included, and keep a
+    /// write under way from being tried again.
+    fn cancel(&self) {
+        self.cancelled.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.latest.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
         self.refused.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
     }
 }
@@ -147,8 +153,9 @@ fn spawn_worker() -> Option<Worker> {
     use arboard::{LinuxClipboardKind, SetExtLinux};
     let latest = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
     let refused = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let (wake, woken) = std::sync::mpsc::sync_channel::<()>(1);
-    let (slot, failed) = (latest.clone(), refused.clone());
+    let (slot, failed, generation) = (latest.clone(), refused.clone(), cancelled.clone());
     let spawned = std::thread::Builder::new().name("primary-selection".into()).spawn(move || {
         let mut clipboard = match arboard::Clipboard::new() {
             Ok(c) => c,
@@ -160,6 +167,7 @@ fn spawn_worker() -> Option<Worker> {
         // Woken for each selection, and every `RETRY` to write again one the display refused. A
         // new selection replaces a refused one.
         while !matches!(woken.recv_timeout(RETRY), Err(std::sync::mpsc::RecvTimeoutError::Disconnected)) {
+            let started = generation.load(std::sync::atomic::Ordering::SeqCst);
             let new = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
             let mut refused = failed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some(text) = new.or_else(|| refused.take()) else { continue };
@@ -167,12 +175,17 @@ fn spawn_worker() -> Option<Worker> {
             drop(refused);
             if let Err(e) = clipboard.set().clipboard(LinuxClipboardKind::Primary).text(text.clone()) {
                 log::debug!("couldn't set the primary selection: {e}");
-                *failed.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(text);
+                // Under the lock `cancel` takes after bumping the generation, so a cancel either
+                // sees this text and drops it, or has bumped it already and this keeps nothing.
+                let mut refused = failed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if generation.load(std::sync::atomic::Ordering::SeqCst) == started {
+                    *refused = Some(text);
+                }
             }
         }
     });
     match spawned {
-        Ok(_) => Some(Worker { latest, refused, wake }),
+        Ok(_) => Some(Worker { latest, refused, cancelled, wake }),
         Err(e) => {
             log::debug!("no primary selection thread: {e}");
             None
