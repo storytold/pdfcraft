@@ -2633,6 +2633,8 @@ fn follow_link(
 fn finish_sign_requests(app: &mut PdfCraftApp, index: usize, mut tool: QuickTool) -> QuickTool {
     if let Some(done) = app.views[index].marquee_done.take() {
         app.finish_marquee(index, done);
+        // Print area hands the page back to Select once its rectangle is drawn.
+        tool = app.quick_tool;
     }
     // A signature rectangle was drawn, or an empty signature field clicked.
     let drawn = app.views[index].sign.drawn.take();
@@ -2782,7 +2784,8 @@ fn tool_selects_text(tool: QuickTool, preparing: bool) -> bool {
         | QuickTool::Link
         | QuickTool::SignArea { .. }
         | QuickTool::MarqueeZoom
-        | QuickTool::Snapshot => false,
+        | QuickTool::Snapshot
+        | QuickTool::PrintArea => false,
     }
 }
 

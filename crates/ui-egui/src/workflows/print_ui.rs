@@ -146,7 +146,11 @@ impl PdfCraftApp {
         let default = default_printer(&printers);
         let current = self.views[i].current;
         let selected: Vec<usize> = self.views[i].selected.iter().copied().collect();
-        let keep = std::mem::take(&mut self.print_draft);
+        let mut keep = std::mem::take(&mut self.print_draft);
+        // A selected area belongs to the print it was dragged for.
+        if keep.handling == Handling::Area {
+            keep.handling = Handling::Size;
+        }
         // The printer picked last time, Save as PDF included, while it is still listed (#3537).
         let picked = keep.printer_picked && offered(keep.printer.as_deref(), &printers);
         let printer = if picked { keep.printer.clone() } else { default };
@@ -172,6 +176,27 @@ impl PdfCraftApp {
             ..keep
         };
         self.dialog = Some(crate::Dialog::Print);
+    }
+
+    /// Print ▸ Pages to Print ▸ Area…: open Print for `page` with only `view_rect` (page view points,
+    /// top-left origin) on the sheet, fitted like a label.
+    pub(crate) fn open_print_area(&mut self, page: usize, view_rect: [f32; 4]) {
+        let Some((i, id)) = self.active_ids() else { return };
+        let Some(doc) = self.session.get(id) else { return };
+        let count = doc.info.pages.len();
+        let Some(h) = doc.info.pages.get(page).map(|p| f64::from(p.height)) else { return };
+        self.quick_tool = crate::QuickTool::Select;
+        self.views[i].current = page;
+        self.open_print();
+        // View space runs down from the top; display space runs up.
+        let rect = [f64::from(view_rect[0]), h - f64::from(view_rect[3]), f64::from(view_rect[2]), h - f64::from(view_rect[1])];
+        let d = &mut self.print_draft;
+        d.which = Which::Current;
+        d.current_page = page;
+        d.handling = Handling::Area;
+        d.crops = (0..count).map(|p| (p == page).then_some(print::Crop { rect, text_up: false })).collect();
+        d.crop_pages = Some(vec![page]);
+        d.sheet = 0;
     }
 
     /// Label printing: find each printed page's printed area (a quick low-resolution render, as

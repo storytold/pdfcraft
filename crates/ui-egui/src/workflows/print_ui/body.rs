@@ -258,22 +258,40 @@ pub(crate) fn body(
             }
             ui.add_space(6.0);
             widgets::section_title(ui, tl!("Pages to Print"));
+            // A selected area prints its page only, so none of the page choices shows as picked.
+            let area = d.handling == Handling::Area;
+            let mut shown = (!area).then_some(d.which);
             ui.horizontal(|ui| {
-                widgets::radio_value(ui, &mut d.which, Which::All, tl!("All"));
-                widgets::radio_value(ui, &mut d.which, Which::Current, tl!("Current page"));
-                let pages = widgets::radio_value(ui, &mut d.which, Which::Range, tl!("Pages"));
+                widgets::radio_value(ui, &mut shown, Some(Which::All), tl!("All"));
+                widgets::radio_value(ui, &mut shown, Some(Which::Current), tl!("Current page"));
+                let pages = widgets::radio_value(ui, &mut shown, Some(Which::Range), tl!("Pages"));
                 let r = ui.add_enabled(
-                    d.which == Which::Range,
+                    shown == Some(Which::Range),
                     crate::widgets::line(&mut d.range).hint_text(format!("1-{}", sizes.len())).desired_width(110.0),
                 ).labelled_by(pages.id);
                 if r.gained_focus() {
-                    d.which = Which::Range;
+                    shown = Some(Which::Range);
+                }
+                // Area…: the dialog steps aside while a rectangle is dragged on the page, then comes back.
+                if ui.add(widgets::radio(area, tl!("Area…"))).on_hover_text(tl!("Drag a rectangle around the area to print")).clicked() {
+                    d.pick_area = true;
                 }
             });
+            if let Some(w) = shown
+                && (area || w != d.which)
+            {
+                d.which = w;
+                if area {
+                    d.set_handling(Handling::Size);
+                }
+            }
             // Offered only when pages were picked before the dialog opened.
             if !d.selected.is_empty() {
                 let label = format!("{} ({})", tl!("Selected pages"), d.selected.len());
-                widgets::radio_value(ui, &mut d.which, Which::Selected, label);
+                // The area belongs to its one page: the selected pages print whole.
+                if widgets::radio_value(ui, &mut d.which, Which::Selected, label).clicked() && area {
+                    d.set_handling(Handling::Size);
+                }
             }
             ui.horizontal(|ui| {
                 ui.label(tl!("More options:"));
@@ -290,13 +308,17 @@ pub(crate) fn body(
             ui.add_space(6.0);
             widgets::section_title(ui, tl!("Page Sizing & Handling"));
             ui.horizontal_wrapped(|ui| {
+                let area = (d.handling == Handling::Area).then_some((Handling::Area, tl!("Selected area")));
                 for (h, label) in [
                     (Handling::Size, tl!("Size")),
                     (Handling::Poster, tl!("Poster")),
                     (Handling::Multiple, tl!("Multiple")),
                     (Handling::Booklet, tl!("Booklet")),
                     (Handling::Label, tl!("Label")),
-                ] {
+                ]
+                .into_iter()
+                .chain(area)
+                {
                     if widgets::mode_tab(ui, label, d.handling == h).clicked() {
                         d.set_handling(h);
                     }
@@ -323,6 +345,14 @@ pub(crate) fn body(
                     ui.add(widgets::checkbox(&mut d.label_flip, tl!("Turn upside down (180°)")));
                     ui.label(
                         egui::RichText::new(tl!("Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet."))
+                            .small()
+                            .color(t.text_muted),
+                    );
+                }
+                Handling::Area => {
+                    ui.add(widgets::checkbox(&mut d.label_flip, tl!("Turn upside down (180°)")));
+                    ui.label(
+                        egui::RichText::new(tl!("Prints only the area you dragged on the page, fitted to the sheet without stretching."))
                             .small()
                             .color(t.text_muted),
                     );
@@ -544,5 +574,5 @@ pub(crate) fn body(
             cancel = true;
         }
     });
-    (go, cancel)
+    (go, cancel || d.pick_area)
 }
