@@ -828,7 +828,7 @@ fn date_data_pictures_preserve_impossible_dates() {
 /// PDF fields, datasets writer and incremental save/reopen, with a valid leap-day control.
 #[test]
 fn date_data_pictures_preserve_calendar_values_through_save() {
-    for (stored, shown) in [("19000229", "19000229"), ("20260431", "20260431"), ("20000229", "02/29/2000")] {
+    for (stored, shown) in [("2001-02-30", "2001-02-30"), ("19000229", "19000229"), ("20260431", "20260431"), ("20000229", "02/29/2000")] {
         let xml = bound_date_template(&format!(
             "<form><page><due>{stored}</due><when>2026-10-18</when><unbound keep=\"yes\">untouched</unbound></page></form>"
         ));
