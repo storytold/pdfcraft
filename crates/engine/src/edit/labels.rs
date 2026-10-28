@@ -119,6 +119,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Flip image",
     "Replace image",
     "Delete image",
+    "Delete graphic",
     "Bring to front",
     "Bring forward",
     "Send backward",

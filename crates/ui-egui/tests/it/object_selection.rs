@@ -385,3 +385,64 @@ fn modifier_selection_picks_foreground_text_and_added_items_over_background_artw
         assert!(new.rect.iter().enumerate().all(|(i, value)| (value - old.rect[i] - shift[i % 2]).abs() < 0.01), "{old:?} -> {new:?}");
     }
 }
+
+/// A page with one inline vector icon (two filled bars in their own `q … Q`) and a caption.
+fn graphics_fixture() -> Vec<u8> {
+    let stream = |body: &str, dict: &str| format!("<< {dict} /Length {} >>\nstream\n{body}\nendstream", body.len());
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 500] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_string(),
+        stream("q 1 0 0 1 40 340 cm .2 .2 .2 rg 0 0 20 20 re f 30 0 20 20 re f Q BT /F1 12 Tf 40 100 Td (Keep here) Tj ET", ""),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    out
+}
+
+fn graphics_harness() -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("graphics.pdf", None, graphics_fixture()).unwrap();
+        app.set_option("zoom", "100").unwrap();
+        assert!(app.execute("edit.edit_text"));
+        app
+    });
+    crate::support::settle(&mut h);
+    h
+}
+
+/// An inline vector icon has no single-object tool of its own: an ordinary click selects it and
+/// Delete removes only its paths, leaving the caption selectable and undoable.
+#[test]
+fn clicking_an_inline_vector_icon_selects_and_deletes_only_it() {
+    use pdfcraft_engine::ObjectKind;
+    let mut h = graphics_harness();
+    let before = objects(&h);
+    let icon = before.iter().find(|o| o.target.kind == ObjectKind::Graphic).expect("the inline icon is listed").target;
+    let p = at(&h, 60.0, 150.0);
+    click(&mut h, p, Modifiers::NONE);
+    h.get_by_label("1 object selected");
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    let after = objects(&h);
+    assert!(!after.iter().any(|o| o.target.kind == ObjectKind::Graphic), "{after:?}");
+    assert!(after.iter().any(|o| o.text.as_deref() == Some("Keep here")), "the caption stays");
+    let app = h.state();
+    assert_eq!(app.session.get(app.views[0].id).unwrap().can_undo(), Some("Delete graphic"));
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(4);
+    assert!(objects(&h).iter().any(|o| o.target == icon), "undo restores the icon");
+}

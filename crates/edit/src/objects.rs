@@ -19,6 +19,7 @@ pub enum ObjectKind {
     Added,
     Text,
     Image,
+    Graphic,
 }
 
 impl ObjectKind {
@@ -27,6 +28,7 @@ impl ObjectKind {
             Self::Added => "added",
             Self::Text => "text",
             Self::Image => "image",
+            Self::Graphic => "graphic",
         }
     }
 }
@@ -89,6 +91,14 @@ pub fn editable_objects(doc: &Document, page: usize) -> Result<Vec<EditableObjec
             text: None,
         });
     }
+    for (index, graphic) in crate::graphics::page_graphics(doc, page)?.into_iter().enumerate() {
+        objects.push(EditableObject {
+            target: ObjectTarget { kind: ObjectKind::Graphic, index },
+            rect: graphic.rect,
+            content_type: "graphic",
+            text: None,
+        });
+    }
     if objects.len() > MAX_PAGE_OBJECTS {
         return Err(EditError::Invalid("this page has too many objects to select together".into()));
     }
@@ -115,6 +125,9 @@ pub fn move_objects(doc: &mut Document, page: usize, targets: &[ObjectTarget], o
         }
         let object =
             inventory.get(target).ok_or_else(|| EditError::Invalid("a selected object no longer exists; select the objects again".into()))?;
+        if target.kind == ObjectKind::Graphic {
+            return Err(EditError::Invalid("graphics can be selected and deleted, but not moved or resized".into()));
+        }
         let r = object.rect;
         if !valid_rect([r[0] + offset[0], r[1] + offset[1], r[2] + offset[0], r[3] + offset[1]]) {
             return Err(EditError::Invalid("the object move is too large".into()));
