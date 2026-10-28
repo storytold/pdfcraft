@@ -150,6 +150,10 @@ impl PdfCraftApp {
             ctx.request_repaint();
             return;
         }
+        if now.is_none() {
+            // The selection is gone, its text stays: selecting it again writes it again.
+            primary.written_key = None;
+        }
         let Some((id, _)) = now.filter(|_| now != primary.written_key) else { return };
         primary.written_key = now;
         if !self.session.get(id).is_none_or(pdfcraft_engine::Document::allows_copying) {

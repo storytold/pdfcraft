@@ -11,19 +11,16 @@ use pdfcraft_engine::DocId;
 
 use crate::canvas::SelectionKey;
 
-/// The primary selection's writer, kept for the app's lifetime: on X11 the selection is served
-/// only while a clipboard handle lives.
+/// The primary selection's writer, kept for the app's lifetime.
 #[derive(Default)]
 pub(crate) struct PrimarySelection {
     /// The page selection seen on the last frame: it is written once it holds still.
     pub(crate) seen: Option<(DocId, SelectionKey)>,
-    /// The page selection written last.
+    /// The page selection written last, until the selection clears: the same text selected again
+    /// takes the primary selection back from whichever application took it meanwhile.
     pub(crate) written_key: Option<(DocId, SelectionKey)>,
     #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
-    clipboard: Option<arboard::Clipboard>,
-    /// The system has no clipboard to write (no display, no data-control or X11): don't ask again.
-    #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
-    unavailable: bool,
+    worker: Option<std::sync::mpsc::Sender<String>>,
     /// Tests: what was written, oldest first.
     #[cfg(test)]
     pub(crate) written: Vec<String>,
@@ -40,26 +37,52 @@ impl PrimarySelection {
         self.written.push(text);
         #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
         {
-            use arboard::{LinuxClipboardKind, SetExtLinux};
-            if self.unavailable {
-                return;
+            if self.worker.is_none() {
+                self.worker = spawn_worker();
             }
-            if self.clipboard.is_none() {
-                match arboard::Clipboard::new() {
-                    Ok(c) => self.clipboard = Some(c),
-                    Err(e) => {
-                        log::debug!("no primary selection: {e}");
-                        self.unavailable = true;
-                        return;
-                    }
-                }
-            }
-            let Some(clipboard) = self.clipboard.as_mut() else { return };
-            if let Err(e) = clipboard.set().clipboard(LinuxClipboardKind::Primary).text(text) {
-                log::debug!("couldn't set the primary selection: {e}");
+            if let Some(worker) = &self.worker
+                && worker.send(text).is_err()
+            {
+                // The worker found no clipboard and stopped: don't start another.
+                log::debug!("no primary selection to write");
             }
         }
         #[cfg(not(any(test, all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32"))))))]
         drop(text);
+    }
+}
+
+/// A thread that owns the clipboard and writes what it is sent, the latest first: connecting to
+/// the display and setting the selection make round trips to the compositor or X server, which
+/// must never hold up a frame. Holding the clipboard also keeps the selection served on X11. It
+/// stops when the app drops its sender, or when there is no clipboard to write.
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_arch = "wasm32")), not(test)))]
+fn spawn_worker() -> Option<std::sync::mpsc::Sender<String>> {
+    use arboard::{LinuxClipboardKind, SetExtLinux};
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let spawned = std::thread::Builder::new().name("primary-selection".into()).spawn(move || {
+        let mut clipboard = match arboard::Clipboard::new() {
+            Ok(c) => c,
+            Err(e) => {
+                log::debug!("no primary selection: {e}");
+                return;
+            }
+        };
+        while let Ok(mut text) = rx.recv() {
+            // Selections sent while the last one was written are out of date but the newest.
+            while let Ok(newer) = rx.try_recv() {
+                text = newer;
+            }
+            if let Err(e) = clipboard.set().clipboard(LinuxClipboardKind::Primary).text(text) {
+                log::debug!("couldn't set the primary selection: {e}");
+            }
+        }
+    });
+    match spawned {
+        Ok(_) => Some(tx),
+        Err(e) => {
+            log::debug!("no primary selection thread: {e}");
+            None
+        }
     }
 }
