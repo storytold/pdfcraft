@@ -559,6 +559,8 @@ impl Automation {
         self.apply(a, edit)
     }
 
+    /// The export tools (`doc_export_text`, `doc_export_all_images`, `doc_export_images`): write
+    /// the document's text, its images, or page renders under the root.
     pub(crate) fn export(&mut self, tool: &str, a: &Args) -> Result<Value> {
         let doc = self.doc_to_copy(a)?;
         let pages = match a.opt_ints("pages")? {

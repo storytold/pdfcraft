@@ -137,6 +137,8 @@ struct ExportTask<'a> {
     lang: crate::i18n::Lang,
 }
 
+/// Run one export, handing each file it makes to `sink` by name, and return the message that
+/// says how it went. The status shows how many pages are done while it runs.
 fn run(task: ExportTask<'_>, mut sink: impl FnMut(&str, Vec<u8>) -> Result<(), String>) -> String {
     let ExportTask { src, kind, dpi, format, min_side, pages, stem, status, lang } = task;
     // May run on a worker thread: messages are drawn in the UI's language.
