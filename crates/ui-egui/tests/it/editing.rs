@@ -3085,6 +3085,50 @@ fn a_snapshot_of_a_page_too_large_for_one_tile_is_scaled_to_fit() {
     assert!(*w >= 4000 && (*w as f32 / *hgt as f32 - 1.5).abs() < 0.01, "{w} × {hgt} is the whole 900 × 600 page");
 }
 
+/// #2078: a snapshot copies the page as it is shown, so a comment the viewer draws for lack of an
+/// appearance of its own (a red square here) is in the copy too.
+#[test]
+fn a_snapshot_copies_comments_the_viewer_draws() {
+    let _gpu = gpu();
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Annots [5 0 R] >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+        "<< /Type /Annot /Subtype /Square /Rect [20 20 180 280] /C [1 0 0] /IC [1 0 0] /BS << /W 4 >> /F 4 >>",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("square.pdf", None, bytes).expect("fixture opens");
+        app.system_clipboard = false;
+        app.set_option("quick", "snapshot").unwrap();
+        app
+    });
+    h.run_steps(4);
+    let r = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+    h.hover_at(r.center());
+    h.run_steps(2);
+    h.drag_at(r.center());
+    h.drop_at(r.center());
+    h.run_steps(4);
+    let (_, _, rgba) = h.state().last_snapshot.as_ref().expect("a click copies the page");
+    let red = rgba.chunks_exact(4).filter(|p| p[0] > 200 && p[1] < 80 && p[2] < 80).count();
+    assert!(red > 100, "the square comment is in the copy ({red} red pixels)");
+}
+
 #[test]
 fn replace_pages_dialog_swaps_page_content() {
     let mut app = PdfCraftApp::new();

@@ -153,7 +153,8 @@ impl PdfCraftApp {
             return Err("the area is too large at this zoom".into());
         }
         let config = RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..RenderConfig::default() };
-        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
+        // What the page view shows: comments without an appearance of their own are drawn too.
+        let mut r = pdfcraft_render::PageRenderer::new(doc.display.clone(), config);
         let out = r.render(RenderRequest { page, kind: RequestKind::Pixels, tile: Some(tile), scale, tag: 0, preview: false });
         if let Some(e) = out.error {
             return Err(e);
