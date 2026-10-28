@@ -1759,3 +1759,249 @@ fn truetype_without_an_encoding_reads_its_codes_as_win_ansi() {
     assert_eq!(ocr_layer_text(4, false), expected, "symbolic, no /ToUnicode");
     assert_eq!(ocr_layer_text(32, true), expected, "nonsymbolic, /ToUnicode for ASCII only");
 }
+
+/// #3712: vertical CJK written without a vertical font -- each character upright and placed on
+/// its own, top to bottom, columns right to left, as OCR text layers over scans of vertical
+/// books write it. The rows across the columns share a baseline each, so they became the lines:
+/// a drag down one column took a character from every column, and the page read across.
+#[test]
+fn upright_glyphs_stacked_down_a_column_read_as_vertical_text() {
+    use lopdf::{Document, Object, Stream, dictionary};
+
+    let columns = ["春天來得很早，", "山上開滿櫻花。", "遊客慢慢上山。"];
+    let chars: Vec<char> = {
+        let mut c: Vec<char> = columns.concat().chars().collect();
+        c.sort_unstable();
+        c.dedup();
+        c
+    };
+    let cid = |ch: char| chars.iter().position(|c| *c == ch).unwrap_or(0) + 1;
+
+    // One page holding `body`, with /CH a CID font whose `/ToUnicode` maps this page's
+    // characters and /F1 Helvetica.
+    let render = |body: String| {
+        let mut doc = Document::with_version("1.7");
+        let bfchar: String = chars
+            .iter()
+            .map(|ch| {
+                let utf16: Vec<String> = ch.to_string().encode_utf16().map(|u| format!("{u:04X}")).collect();
+                format!("<{:04X}> <{}>", cid(*ch), utf16.concat())
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let cmap = format!(
+            "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /TestStacked def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange {} beginbfchar {bfchar} endbfchar endcmap CMapName currentdict /CMap defineresource pop end end",
+            chars.len()
+        );
+        let to_unicode = doc.add_object(Stream::new(dictionary! {}, cmap.into_bytes()));
+        let descendant = doc.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "CIDFontType0", "BaseFont" => "TestStacked", "DW" => 1000,
+            "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 },
+        });
+        let cjk_font = doc.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "TestStacked", "Encoding" => "Identity-H",
+            "DescendantFonts" => vec![Object::Reference(descendant)], "ToUnicode" => to_unicode,
+        });
+        let latin = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let content = doc.add_object(Stream::new(dictionary! {}, body.into_bytes()));
+        let pages = doc.new_object_id();
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages, "Contents" => content,
+            "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(300), Object::Integer(300)],
+            "Resources" => dictionary! {"Font" => dictionary! {"CH" => cjk_font, "F1" => latin}},
+        });
+        doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+        let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+        doc.trailer.set("Root", catalog);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+        extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap()
+    };
+
+    // `columns` down the page, `gap` points apart, 12 pt characters touching; `across`: the
+    // same characters in rows instead, to show horizontal text is untouched.
+    let page = |gap: f64, across: bool| {
+        let mut body = String::from("BT /CH 12 Tf ");
+        for (i, col) in columns.iter().enumerate() {
+            for (j, ch) in col.chars().enumerate() {
+                let (x, y) =
+                    if across { (40.0 + 12.0 * j as f64, 250.0 - 18.0 * i as f64) } else { (250.0 - gap * i as f64, 250.0 - 12.0 * j as f64) };
+                body += &format!("1 0 0 1 {x} {y} Tm <{:04X}> Tj ", cid(ch));
+            }
+        }
+        body += "ET";
+        render(body)
+    };
+
+    // Right to left: the rightmost column is the first line, at every column spacing.
+    for gap in [18.0, 24.0, 36.0, 48.0] {
+        let text = page(gap, false);
+        assert_eq!(text.plain_text(), columns.join("\n"), "columns {gap} pt apart");
+        // A search inside one column stays in it, which is what the drag follows.
+        assert_eq!(text.find("天來得"), vec![1..4], "{gap} pt apart");
+        let rects = text.line_rects(1..4);
+        assert_eq!(rects.len(), 1, "one highlight, down the column: {rects:?}");
+        assert!(rects[0][3] - rects[0][1] > rects[0][2] - rects[0][0], "taller than wide: {rects:?}");
+    }
+
+    // The same characters in rows are read as rows: horizontal CJK is untouched.
+    assert_eq!(page(18.0, true).plain_text(), columns.join("\n"), "rows stay rows");
+
+    // What Copy puts on the clipboard for a drag over the whole page: the columns as lines,
+    // right to left, not the cells of a row joined by tabs (which is what it gave while the
+    // glyphs' writing direction said they ran across).
+    let text = page(18.0, false);
+    let all = text.glyphs_in([0.0, 0.0, 300.0, 300.0]);
+    assert_eq!(text.column_text(&all), columns.join("\n"));
+
+    // A paragraph's last column often holds one or two characters, which is under the length a
+    // stack needs on its own. Such a column is read as one when a detected column lines up
+    // with it, so it keeps its place rather than coming out before the rest (#3812 report).
+    let mixed = |cols: &[&str]| {
+        let mut body = String::from("BT /CH 12 Tf ");
+        for (i, col) in cols.iter().enumerate() {
+            for (j, ch) in col.chars().enumerate() {
+                let (x, y) = (250.0 - 18.0 * i as f64, 250.0 - 12.0 * j as f64);
+                body += &format!("1 0 0 1 {x} {y} Tm <{:04X}> Tj ", cid(ch));
+            }
+        }
+        body += "ET";
+        render(body).plain_text()
+    };
+    assert_eq!(mixed(&["春天來得很早，山", "上。"]), "春天來得很早，山\n上。");
+    assert_eq!(mixed(&["春天來得很早，山上", "。"]), "春天來得很早，山上\n。");
+    assert_eq!(mixed(&["春天來得很早，", "山。", "遊客慢慢上山。"]), "春天來得很早，\n山。\n遊客慢慢上山。");
+
+    // Centred one-character lines are lines, not a column: they step down by more than their
+    // own height, so there is a gap between them where a column has none. They keep their
+    // horizontal writing direction, and a word beside the first of them reads with it (#3812
+    // review).
+    for pitch in [1.2, 1.35, 1.5] {
+        let mut body = String::from("BT /F1 12 Tf 1 0 0 1 116 250 Tm (and) Tj ET BT /CH 12 Tf ");
+        for (j, ch) in "春天來".chars().enumerate() {
+            let y = 250.0 - 12.0 * pitch * j as f64;
+            body += &format!("1 0 0 1 100 {y} Tm <{:04X}> Tj ", cid(ch));
+        }
+        body += "ET";
+        let text = render(body);
+        assert!(text.glyphs.iter().all(|g| g.direction[1].abs() < 0.5), "lines, not a column, at pitch {pitch}");
+        assert_eq!(text.plain_text(), "春 and\n天\n來", "pitch {pitch}");
+    }
+}
+
+/// #3711: a number set across a vertical column (縱中橫, tate-chu-yoko), as in
+/// 「2026年10月21日」. The digits are horizontal glyphs among vertical ones, so the split by
+/// writing direction made them a flow of their own, written out before or after all the
+/// vertical text: a drag down the column missed them, and one that began on them selected
+/// another part of the page.
+#[test]
+fn a_number_set_across_a_vertical_column_stays_in_it() {
+    use lopdf::{Document, Object, Stream, dictionary};
+
+    // Two columns, read right to left, each with numbers set across: the right one starts with
+    // a number (so it is not between two of the column's characters) and the left has one in
+    // the middle. `heading`: a horizontal line above them, which must stay a line of its own.
+    let render = |body: String| {
+        let chars: Vec<char> = "年月日出版第頁共有三段".chars().collect();
+        let cid = |ch: char| chars.iter().position(|c| *c == ch).unwrap_or(0) + 1;
+        let mut doc = Document::with_version("1.7");
+        let bfchar: String = chars
+            .iter()
+            .map(|ch| {
+                let utf16: Vec<String> = ch.to_string().encode_utf16().map(|u| format!("{u:04X}")).collect();
+                format!("<{:04X}> <{}>", cid(*ch), utf16.concat())
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let cmap = format!(
+            "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /TestTcy def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange {} beginbfchar {bfchar} endbfchar endcmap CMapName currentdict /CMap defineresource pop end end",
+            chars.len()
+        );
+        let to_unicode = doc.add_object(Stream::new(dictionary! {}, cmap.into_bytes()));
+        let descendant = doc.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "CIDFontType2", "BaseFont" => "TestTcy", "DW" => 1000, "CIDToGIDMap" => "Identity",
+            "DW2" => vec![Object::Integer(880), Object::Integer(-1000)],
+            "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 },
+        });
+        let vertical = doc.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "TestTcy", "Encoding" => "Identity-V",
+            "DescendantFonts" => vec![Object::Reference(descendant)], "ToUnicode" => to_unicode,
+        });
+        let latin = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let content = doc.add_object(Stream::new(dictionary! {}, body.into_bytes()));
+        let pages = doc.new_object_id();
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages, "Contents" => content,
+            "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(300), Object::Integer(300)],
+            "Resources" => dictionary! {"Font" => dictionary! {"CV" => vertical, "F1" => latin}},
+        });
+        doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+        let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+        doc.trailer.set("Root", catalog);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+        extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap()
+    };
+
+    // One column: vertical runs of CJK and horizontal numbers, top to bottom. `pitch`: extra
+    // space left after each part, for a column with a hole in it.
+    let column = |x: f64, parts: &[(&str, bool)], extra: f64| {
+        let cjk: Vec<char> = "年月日出版第頁共有三段".chars().collect();
+        let code = |ch: char| cjk.iter().position(|c| *c == ch).unwrap_or(0) + 1;
+        let mut out = String::new();
+        let mut y = 250.0;
+        for (text, across) in parts {
+            if *across {
+                let width = 4.45 * text.len() as f64;
+                out += &format!("BT /F1 8 Tf 1 0 0 1 {} {} Tm ({text}) Tj ET ", x - width / 2.0, y - 9.0);
+                y -= 12.0 + extra;
+            } else {
+                let codes: String = text.chars().map(|c| format!("{:04X}", code(c))).collect();
+                out += &format!("BT /CV 12 Tf 1 0 0 1 {x} {y} Tm <{codes}> Tj ET ");
+                y -= 12.0 * text.chars().count() as f64 + extra;
+            }
+        }
+        out
+    };
+    let page = |heading: bool| {
+        let mut body = String::new();
+        if heading {
+            body += "BT /F1 14 Tf 1 0 0 1 150 280 Tm (Report 2026) Tj ET ";
+        }
+        body += &column(250.0, &[("2026", true), ("年", false), ("10", true), ("月", false), ("21", true), ("日出版", false)], 0.0);
+        body += &column(220.0, &[("第", false), ("12", true), ("頁共有三段", false)], 0.0);
+        render(body)
+    };
+
+    let text = page(false);
+    assert_eq!(text.plain_text(), "2026年10月21日出版\n第12頁共有三段");
+    // A number is part of its column, so a search across the join matches and highlights once.
+    assert_eq!(text.find("年10月"), vec![4..8]);
+    assert_eq!(text.line_rects(4..8).len(), 1, "one highlight down the column");
+    // And a drag over the whole page copies the columns as lines, right to left.
+    let all = text.glyphs_in([0.0, 0.0, 300.0, 300.0]);
+    assert_eq!(text.column_text(&all), "2026年10月21日出版\n第12頁共有三段");
+
+    // A horizontal line above the columns stays a line of its own: it is longer than a number
+    // set across, so its last letters do not join the column below it.
+    assert_eq!(page(true).plain_text(), "Report 2026\n2026年10月21日出版\n第12頁共有三段");
+
+    // A number set high or low in its cell overlaps the character beside it, so the hole it is
+    // given has to reach that character and not stop at the number's own edge: it stopped
+    // short, and the layout read what was left as a word space -- 「第12 頁共有三段」 (#3812
+    // report).
+    let high = render(
+        "BT /CV 12 Tf 1 0 0 1 220 250 Tm <0006> Tj ET BT /F1 9 Tf 1 0 0 1 215 232 Tm (12) Tj ET \
+         BT /CV 12 Tf 1 0 0 1 220 226 Tm <000700080009000A000B> Tj ET"
+            .to_string(),
+    );
+    assert_eq!(high.plain_text(), "第12頁共有三段");
+
+    // A number centred on a column but far from every one of its characters -- in a hole in the
+    // column rather than beside a character -- is not part of it (#3812 review). Here the
+    // column's characters are 48 pt apart and the number sits in the middle of that hole.
+    let holed = render(column(250.0, &[("年", false), ("12", true), ("月", false)], 48.0));
+    assert_eq!(holed.plain_text(), "年\n月\n12", "a number in a hole is not in the column: {:?}", holed.plain_text());
+}
