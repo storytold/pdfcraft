@@ -2342,6 +2342,47 @@ fn arrow_keys_follow_the_scroll_speed_preference() {
     assert!(fast * 3 < normal * 2 && normal * 3 < slow * 2, "presses to page 2: slow {slow}, normal {normal}, fast {fast}");
 }
 
+/// #3247: J and K scroll like ↓ and ↑, as in vim: as plain letters only, and not while a text
+/// field has the keyboard.
+#[test]
+fn j_and_k_scroll_like_the_arrow_keys() {
+    use egui::{Key, Modifiers};
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(4);
+    let top = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).expect("page 1 on screen").top();
+    let press = |h: &mut Harness<'static, PdfCraftApp>, m: Modifiers, k: Key| {
+        h.key_press_modifiers(m, k);
+        h.run_steps(2);
+    };
+    let (start, tool) = (top(&h), h.state().quick_tool);
+    press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    let down = top(&h);
+    assert!(down < start - 1.0, "↓ scrolls: {start} → {down}");
+    press(&mut h, Modifiers::NONE, Key::ArrowUp);
+    assert!((top(&h) - start).abs() < 0.5, "↑ scrolls back");
+
+    press(&mut h, Modifiers::NONE, Key::J);
+    assert!((top(&h) - down).abs() < 0.5, "J scrolls as far as ↓: {} against {down}", top(&h));
+    press(&mut h, Modifiers::NONE, Key::K);
+    assert!((top(&h) - start).abs() < 0.5, "K scrolls back as far as ↑");
+    for m in [Modifiers::SHIFT, Modifiers::ALT, Modifiers::COMMAND] {
+        press(&mut h, m, Key::J);
+        assert!((top(&h) - start).abs() < 0.5, "{m:?} + J doesn't scroll");
+    }
+    assert_eq!(h.state().quick_tool, tool, "J and K choose no tool");
+
+    // With the Find field holding the keyboard, J is the field's, not a scroll; once Find is
+    // closed, the same J scrolls again.
+    assert!(h.state_mut().execute("edit.find"));
+    h.run_steps(3);
+    press(&mut h, Modifiers::NONE, Key::J);
+    assert!((top(&h) - start).abs() < 0.5, "J doesn't scroll while the Find field has the keyboard");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    press(&mut h, Modifiers::NONE, Key::J);
+    assert!((top(&h) - down).abs() < 0.5, "with Find closed, J scrolls again");
+}
+
 /// #2665: next to a very wide page the normal pages sit far to its right, outside the window.
 /// Going to one changed the page counter but kept the horizontal scroll, so it stayed out of
 /// sight; as in Acrobat, it is brought into view.

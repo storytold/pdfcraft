@@ -426,9 +426,14 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
         let line = KEY_SCROLL_LINE * speed.factor();
         let screen = (view.viewport_h - KEY_SCROLL_LINE).max(KEY_SCROLL_LINE);
         let steps = [(Key::ArrowDown, line), (Key::ArrowUp, -line), (Key::PageDown, screen), (Key::PageUp, -screen)];
+        // J / K are ↓ / ↑ as in vim (#3247): plain letters only, and not where the arrows are
+        // taken (a focused radio button). H stays the Hand tool, so there is no H / L.
+        let plain = ctx.input(|i| i.modifiers.is_none());
+        let vim = |k| arrows && plain && ctx.input(|i| i.key_pressed(k));
         for (k, by) in steps {
             let arrow = matches!(k, Key::ArrowDown | Key::ArrowUp);
-            if !key(k) || !(scrolls || arrow) {
+            let hit = key(k) || (k == Key::ArrowDown && vim(Key::J)) || (k == Key::ArrowUp && vim(Key::K));
+            if !hit || !(scrolls || arrow) {
                 continue;
             }
             let forward = k == Key::ArrowDown;
