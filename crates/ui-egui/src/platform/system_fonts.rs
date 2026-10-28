@@ -314,9 +314,10 @@ fn hebrew_candidates() -> Vec<PathBuf> {
 /// Well-known locations of Thai faces, best first.
 fn thai_candidates() -> Vec<PathBuf> {
     if cfg!(windows) {
-        ["leelawdb.ttf", "leelawad.ttf", "leelauib.ttf", "leelaui.ttf", "tahoma.ttf"].iter().map(|f| windows_fonts().join(f)).collect()
+        ["leelawui.ttf", "leelauib.ttf", "leelawad.ttf", "leelawdb.ttf", "tahoma.ttf"].iter().map(|f| windows_fonts().join(f)).collect()
     } else if cfg!(target_os = "macos") {
         [
+            "/System/Library/Fonts/Thonburi.ttc",
             "/System/Library/Fonts/Supplemental/Thonburi.ttc",
             "/System/Library/Fonts/Supplemental/Ayuthaya.ttf",
             "/System/Library/Fonts/Supplemental/Krub.ttc",
@@ -332,6 +333,7 @@ fn thai_candidates() -> Vec<PathBuf> {
             "google-noto/NotoSansThai-Regular.ttf",
             "google-noto/NotoSansThaiUI-Regular.ttf",
             "google-noto-vf/NotoSansThai[wght].ttf",
+            "google-noto-vf/NotoSansThai[wdth,wght].ttf",
             "google-noto-vf/NotoSansThai-UI[wght].ttf",
             "truetype/noto/NotoSansThai-Regular.ttf",
             "truetype/noto/NotoSansThaiUI-Regular.ttf",
