@@ -358,20 +358,7 @@ fn a_signed_field_renamed_through_its_parent_is_not_the_signed_one() {
         b"<< /FT /Sig /T (Sigs) /Kids [7 0 R] >>",
         b"<< /Type /Annot /Subtype /Widget /T (A) /Parent 6 0 R /Rect [150 20 280 70] /P 3 0 R /F 4 >>",
     ];
-    let mut base = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, o) in objs.iter().enumerate() {
-        offsets.push(base.len());
-        base.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
-        base.extend_from_slice(o);
-        base.extend_from_slice(b"\nendobj\n");
-    }
-    let xref = base.len();
-    base.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-    for o in offsets {
-        base.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    base.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let base = write_pdf(&objs);
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
     let trust = TrustStore { certs: vec![id.certificate.clone()] };
     let signed = pdfcraft_sign::sign(&open(&base), &id, &SignOptions { field: Some("Sigs.A".into()), ..opts() }).unwrap();
