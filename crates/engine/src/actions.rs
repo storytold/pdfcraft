@@ -30,6 +30,8 @@ pub enum Step {
     DetectFormFields,
     /// Run a JavaScript (console context).
     RunJavaScript(String),
+    /// Export the processed PDF to Word (.docx). Must be the last step.
+    ExportWord,
 }
 
 impl Step {
@@ -48,6 +50,7 @@ impl Step {
             Step::SetTitle(String::new()),
             Step::DetectFormFields,
             Step::RunJavaScript(String::new()),
+            Step::ExportWord,
         ]
     }
 
@@ -66,6 +69,7 @@ impl Step {
             Step::SetTitle(_) => "set_title",
             Step::DetectFormFields => "detect_form_fields",
             Step::RunJavaScript(_) => "run_javascript",
+            Step::ExportWord => "export_word",
         }
     }
 
@@ -83,6 +87,7 @@ impl Step {
             Step::SetTitle(_) => "Set document title",
             Step::DetectFormFields => "Detect form fields",
             Step::RunJavaScript(_) => "Run a JavaScript",
+            Step::ExportWord => "Export to Word",
         }
     }
 
@@ -121,6 +126,16 @@ pub struct Action {
     pub builtin: bool,
 }
 
+impl Action {
+    /// Export produces the final result, so it cannot precede another step.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.steps.iter().rev().skip(1).any(|s| matches!(s, Step::ExportWord)) {
+            return Err("Export to Word must be the last step.");
+        }
+        Ok(())
+    }
+}
+
 /// The built-in actions.
 pub fn builtin() -> Vec<Action> {
     let a = |name: &str, description: &str, steps: Vec<Step>| Action { name: name.into(), description: description.into(), steps, builtin: true };
@@ -150,6 +165,11 @@ fn apply_step(s: &mut Session, id: DocId, step: &Step, log: &mut Vec<String>) ->
     let pages = s.get(id).map_or(0, |d| d.info.pages.len());
     let all: Vec<usize> = (0..pages).collect();
     let edit = match step {
+        Step::ExportWord => {
+            // The final export happens after all PDF edits, in run_on.
+            log.push(step.label().to_string());
+            return Ok(None);
+        }
         Step::RecognizeText => {
             let found = s.recognize_text(id, &[], crate::ocr::OcrSettings::default()).map_err(EditError::Invalid)?;
             log.push(format!("Recognize text: {} words", found.iter().map(|p| p.words.len()).sum::<usize>()));
@@ -204,7 +224,10 @@ fn apply_step(s: &mut Session, id: DocId, step: &Step, log: &mut Vec<String>) ->
 }
 
 /// Run `action` on one file. `progress(step, steps)` is called before each step.
+/// Results remain PDF unless the last step is Export to Word; then `name` ends in `.docx`.
+/// Word export honours copying restrictions and refuses a truncated export.
 pub fn run_on(action: &Action, name: &str, bytes: Arc<Vec<u8>>, mut progress: impl FnMut(usize, usize)) -> Result<FileResult, String> {
+    action.validate().map_err(str::to_string)?;
     let mut s = Session::new();
     let mut id = s.open(name, None, bytes, None).map_err(|e| e.to_string())?;
     if let Some(why) = s.get(id).and_then(|d| d.read_only_reason.clone()) {
@@ -218,6 +241,17 @@ pub fn run_on(action: &Action, name: &str, bytes: Arc<Vec<u8>>, mut progress: im
         }
     }
     let d = s.get(id).ok_or("the document was lost")?;
+    if matches!(action.steps.last(), Some(Step::ExportWord)) {
+        d.check_copying().map_err(|e| e.to_string())?;
+        let export = crate::guard(|| d.export_office_checked(crate::compare::OfficeFormat::Docx))?;
+        if !export.truncated_pages.is_empty() {
+            // The UI shows success/failure, not the step log: never silently publish a
+            // partial Word file when the exporter's hostile-input limits are reached.
+            return Err("Export to Word: some page text or images exceed export limits; no Word file was written".into());
+        }
+        let stem = std::path::Path::new(name).file_stem().and_then(|s| s.to_str()).filter(|s| !s.is_empty()).unwrap_or("document");
+        return Ok(FileResult { name: format!("{stem}.docx"), bytes: Arc::new(export.bytes), log });
+    }
     // A signed file keeps its signatures: incremental. Otherwise a clean full rewrite.
     let bytes = if d.is_signed() { s.save_bytes(id) } else { s.save_full_bytes(id) }.map_err(|e| e.to_string())?;
     Ok(FileResult { name: name.to_string(), bytes, log })
