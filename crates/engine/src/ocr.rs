@@ -820,6 +820,8 @@ impl OcrSteps {
         }
     }
 
+    // The `Err` side is a finished page rather than a rare failure, so it is not worth a `Box`.
+    #[allow(clippy::result_large_err)]
     fn prepare(&mut self, page: usize, info: PageInfo) -> Result<OcrShot, OcrPage> {
         let settings = &self.job.settings;
         let skip = |why: &str| OcrPage {
@@ -1435,7 +1437,7 @@ mod tests {
             |t: &str| PlacedWord { text: t.into(), origin: [0.0, 0.0], across: [1.0, 0.0], up: [0.0, 1.0], confidence: None, source: "test".into() };
         let page = |words: &[&str], line_lengths: Vec<usize>| OcrPage {
             paragraph_lengths: Vec::new(),
-            line_lengths: Vec::new(),
+            line_lengths,
             page: 0,
             words: words.iter().copied().map(word).collect(),
             already_on_page: 0,
