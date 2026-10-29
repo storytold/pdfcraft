@@ -1,7 +1,7 @@
 use super::host::{HNode, XHost, host};
 use super::model::{MAX_ADDED, MAX_DEPTH, MAX_NODES, XfaEffect};
 use super::nodes::{instances, node_object};
-use super::*;
+use super::{Attribute, Context, JsArray, JsObject, JsResult, JsValue, NativeFunction, ObjectInitializer, arg, function, js_string, s, text};
 
 pub(super) fn list_object(ctx: &mut Context, items: &[usize]) -> JsResult<JsValue> {
     let vals: Vec<JsValue> = items.iter().map(|i| JsValue::from(*i as f64)).collect();

@@ -1,4 +1,4 @@
-use super::*;
+use super::{HashSet, Message};
 
 /// What kind of template object a node is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,7 +95,8 @@ pub enum XfaEffect {
     RemoveInstance {
         som: String,
     },
-    MessageBox(String),
+    /// `xfa.host.messageBox(…)`, or `app.alert(…)` in an XFA form's script.
+    MessageBox(Message),
     /// `xfa.host.resetData()`: the named fields, or every field when empty.
     ResetData(Vec<String>),
     /// `app.execMenuItem("ShowHide…")`: show or hide a side panel.
@@ -209,7 +210,8 @@ pub(super) fn payload(e: &XfaEffect) -> usize {
             som.len().saturating_add(s.len())
         }
         XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } => som.len(),
-        XfaEffect::MessageBox(s) | XfaEffect::LaunchUrl(s) | XfaEffect::SetFocus(s) => s.len(),
+        XfaEffect::MessageBox(m) => m.bytes(),
+        XfaEffect::LaunchUrl(s) | XfaEffect::SetFocus(s) => s.len(),
         XfaEffect::ResetData(names) => names.iter().fold(0usize, |n, s| n.saturating_add(s.len()).saturating_add(std::mem::size_of::<String>())),
         XfaEffect::Print | XfaEffect::SaveAs | XfaEffect::Beep | XfaEffect::Recalculate | XfaEffect::Relayout | XfaEffect::ShowPanel(_) => 0,
     }

@@ -4,7 +4,8 @@ use super::geometry::{
 };
 use super::paint::{drawn_shape, edit_anchor, erase, new_comment};
 use super::state::{Composer, ComposerKind, Gesture, PageCx};
-use super::*;
+use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, vec2};
+use crate::page_cursor::{Layer, Subject};
 
 /// Comment input on one page, before text selection runs. Returns `true` when the pointer
 /// gesture belongs to commenting (text selection must ignore it).
@@ -31,247 +32,15 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
         cv.context_at = Some((cx.page, cx.to_user(p)));
         cv.selected = cx.hit(p).map(|a| (cx.page, a.index));
     }
+    let gestures = Gestures { ui, resp, cx, pointer, origin, page_rect, pressed_here, over_page };
     match cx.tool {
-        // The shape just drawn is selected with its handles showing: they resize it without a
-        // trip to the Select tool (#2338). Anywhere else the tool keeps drawing.
         QuickTool::Comment(_) if draw_grab => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
-        QuickTool::Comment(tool) if tool.draws() => {
-            if !cx.allowed {
-                return false;
-            }
-            if over_page {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-            }
-            if resp.drag_started()
-                && pressed_here
-                && let Some(o) = origin
-            {
-                cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
-                cv.selected = None;
-            }
-            if let Some(Gesture::Draw { page, tool, points }) = cv.gesture.as_mut()
-                && *page == cx.page
-                && let Some(p) = pointer
-            {
-                let p = clamp_to(page_rect, p);
-                let u = cx.to_user(p);
-                if matches!(*tool, CommentTool::Ink | CommentTool::Eraser) {
-                    let last = points.last().map(|l| cx.to_screen(*l)).unwrap_or(p);
-                    if last.distance(p) >= 1.5 {
-                        points.push(u);
-                    }
-                } else {
-                    points.truncate(1);
-                    points.push(u);
-                }
-            }
-            if resp.drag_stopped()
-                && let Some(Gesture::Draw { page, tool, points }) = cv.gesture.clone()
-                && page == cx.page
-            {
-                cv.gesture = None;
-                if tool == CommentTool::Eraser {
-                    view.pending_edit = erase(cx, &points);
-                } else if let Some(shape) = drawn_shape(tool, &points) {
-                    let now = ui.input(|i| i.time);
-                    cv.settle(now, page, tool, &points);
-                    view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
-                }
-            }
-            // A quick press/release does not start an egui drag, but Acrobat's Draw tool treats
-            // it as a one-point ink stroke (a dot). The appearance uses round line caps, so a
-            // single PDF point is visible and remains editable like any other drawing.
-            if tool == CommentTool::Ink
-                && resp.clicked()
-                && over_page
-                && let Some(p) = pointer
-                && let Some(shape) = drawn_shape(tool, &[cx.to_user(p)])
-            {
-                cv.selected = None;
-                let now = ui.input(|i| i.time);
-                cv.settle(now, cx.page, tool, &[cx.to_user(p)]);
-                view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
-            }
-            true
-        }
-        QuickTool::Comment(tool) if tool.clicks_points() => {
-            if !cx.allowed {
-                return false;
-            }
-            if over_page {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-            }
-            let finish = resp.double_clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter));
-            // Backspace (or Delete) takes back the last point, e.g. after a wrong click; Undo does too.
-            // Only while a drawing is in progress: otherwise Delete belongs to the selected comment.
-            if matches!(cv.gesture, Some(Gesture::Draw { page, .. }) if page == cx.page)
-                && !ui.ctx().egui_wants_keyboard_input()
-                && ui.input_mut(|i| {
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace) || i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
-                })
-            {
-                cv.undo_point();
-                return true;
-            }
-            if resp.clicked()
-                && over_page
-                && let Some(p) = pointer
-            {
-                let u = cx.to_user(p);
-                match cv.gesture.as_mut() {
-                    Some(Gesture::Draw { page, tool: t, points }) if *page == cx.page && *t == tool => {
-                        // Clicking the first point again closes a polygon.
-                        let closes = points.len() >= 3 && tool != CommentTool::PolyLine && cx.to_screen(points[0]).distance(p) <= 6.0;
-                        let repeat = points.last().is_some_and(|l| cx.to_screen(*l).distance(p) < 2.0);
-                        if closes {
-                            let pts = std::mem::take(points);
-                            cv.gesture = None;
-                            if let Some(shape) = drawn_shape(tool, &pts) {
-                                view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
-                            }
-                            return true;
-                        }
-                        if !repeat {
-                            points.push(u);
-                        }
-                    }
-                    _ => {
-                        cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![u] });
-                        cv.selected = None;
-                    }
-                }
-            }
-            if finish
-                && let Some(Gesture::Draw { page, tool: t, points }) = cv.gesture.clone()
-                && page == cx.page
-                && t == tool
-            {
-                cv.gesture = None;
-                if let Some(shape) = drawn_shape(tool, &points) {
-                    view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
-                }
-            }
-            true
-        }
-        QuickTool::Comment(CommentTool::Callout) => {
-            // Drag from what the callout points at to where its text box goes.
-            if !cx.allowed {
-                return false;
-            }
-            if over_page {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-            }
-            if resp.drag_started()
-                && pressed_here
-                && let Some(o) = origin
-            {
-                cv.gesture = Some(Gesture::Draw { page: cx.page, tool: CommentTool::Callout, points: vec![cx.to_user(o)] });
-                cv.selected = None;
-            }
-            if let Some(Gesture::Draw { page, points, .. }) = cv.gesture.as_mut()
-                && *page == cx.page
-                && let Some(p) = pointer
-            {
-                points.truncate(1);
-                points.push(cx.to_user(clamp_to(page_rect, p)));
-            }
-            if resp.drag_stopped()
-                && let Some(Gesture::Draw { page, points, .. }) = cv.gesture.clone()
-                && page == cx.page
-            {
-                cv.gesture = None;
-                if let [point, at] = points[..]
-                    && (point[0] - at[0]).hypot(point[1] - at[1]) >= 8.0
-                {
-                    cv.composer = Some(Composer { page, at, kind: ComposerKind::Callout { point }, text: String::new(), focus: true });
-                }
-            }
-            true
-        }
-        QuickTool::Comment(CommentTool::Attach) => {
-            if !cx.allowed {
-                return false;
-            }
-            if over_page {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-            }
-            if resp.clicked()
-                && over_page
-                && let Some(p) = pointer
-            {
-                cv.attach_at = Some((cx.page, cx.to_user(p)));
-                cv.selected = None;
-            }
-            true
-        }
-        QuickTool::Comment(CommentTool::Caret) => {
-            if !cx.allowed {
-                return false;
-            }
-            if over_page {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
-            }
-            if resp.clicked()
-                && over_page
-                && let Some(p) = pointer
-            {
-                let (vx, vy) = cx.xf.screen_to_view(p);
-                let snapped = cx.info.pages.get(cx.page).zip(caret_text.as_deref()).and_then(|(page, t)| snapped_caret(page, t, vx, vy));
-                let (at, size) = snapped.unwrap_or_else(|| (cx.to_user(p), CARET_SIZE));
-                cv.composer = Some(Composer { page: cx.page, at, kind: ComposerKind::Caret { size }, text: String::new(), focus: true });
-                cv.selected = None;
-            }
-            true
-        }
-        QuickTool::Comment(tool @ (CommentTool::Note | CommentTool::TextBox)) => {
-            if !cx.allowed {
-                return false;
-            }
-            if over_page {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-            }
-            // A text box also takes a drag, as in Acrobat: the box is drawn at that size and its
-            // text wraps inside it (#2669).
-            if tool == CommentTool::TextBox {
-                if resp.drag_started()
-                    && pressed_here
-                    && let Some(o) = origin
-                {
-                    cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
-                    cv.selected = None;
-                }
-                if let Some(Gesture::Draw { page, points, .. }) = cv.gesture.as_mut()
-                    && *page == cx.page
-                    && let Some(p) = pointer
-                {
-                    points.truncate(1);
-                    points.push(cx.to_user(clamp_to(page_rect, p)));
-                }
-                if resp.drag_stopped()
-                    && let Some(Gesture::Draw { page, points, .. }) = cv.gesture.clone()
-                    && page == cx.page
-                {
-                    cv.gesture = None;
-                    if let (Some(first), Some(last)) = (points.first(), points.last()) {
-                        let r = Rect::from_two_pos(cx.to_screen(*first), cx.to_screen(*last));
-                        // A drag of a few pixels is a click: the box fits its text.
-                        let drawn =
-                            (r.width() >= 6.0 && r.height() >= 6.0).then(|| cx.info.pages.get(page)).flatten().map(|p| drawn_box(p, *first, *last));
-                        let (at, size) = drawn.map_or((*first, None), |(at, size)| (at, Some(size)));
-                        cv.composer = Some(Composer { page, at, kind: ComposerKind::TextBox { size }, text: String::new(), focus: true });
-                    }
-                }
-            }
-            if resp.clicked()
-                && over_page
-                && let Some(p) = pointer
-            {
-                let kind = if tool == CommentTool::Note { ComposerKind::Note } else { ComposerKind::TextBox { size: None } };
-                cv.composer = Some(Composer { page: cx.page, at: cx.to_user(p), kind, text: String::new(), focus: true });
-                cv.selected = None;
-            }
-            true
-        }
+        QuickTool::Comment(tool) if tool.draws() => gestures.draw_shape(view, tool),
+        QuickTool::Comment(tool) if tool.clicks_points() => gestures.click_points(view, tool),
+        QuickTool::Comment(CommentTool::Callout) => gestures.callout(view),
+        QuickTool::Comment(CommentTool::Attach) => gestures.attach(view),
+        QuickTool::Comment(CommentTool::Caret) => gestures.caret(view, caret_text.as_deref()),
+        QuickTool::Comment(tool @ (CommentTool::Note | CommentTool::TextBox)) => gestures.note_or_box(view, tool),
         QuickTool::Select => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
         QuickTool::Fill(_) if fill_grab => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
         _ => false,
@@ -340,6 +109,46 @@ fn on_handle(cx: &PageCx<'_>, view: &DocView, p: Pos2, pick: impl Fn(&Annotation
     })
 }
 
+/// Whether `p` is on one of this page's links.
+fn on_link(cx: &PageCx<'_>, p: Pos2) -> bool {
+    cx.info.links.iter().any(|link| link.page == cx.page && cx.xf.user_rect(cx.info, cx.page, link.rect).contains(p))
+}
+
+/// The tip for the comment under the pointer, with any tool, beside that tool's own cursor: Acrobat
+/// shows a comment's tooltip whatever tool is active. Not with Fill & Sign, whose placement stays
+/// clear; not while drawing freehand, where it would cover the next stroke (#429); and not while a
+/// comment is moved, resized or drawn.
+pub(crate) fn describe(cx: &PageCx<'_>, view: &mut DocView) {
+    let freehand = matches!(cx.tool, QuickTool::Comment(CommentTool::Ink | CommentTool::Eraser));
+    if matches!(cx.tool, QuickTool::Fill(_)) || freehand || view.comments.gesture.is_some() {
+        return;
+    }
+    let Some(p) = cx.ptr.pos else { return };
+    // Inspection sorts comments by position, but the renderer paints them in `/Annots` order: the
+    // tip is that of the one drawn on top, among those with something to say (#3620).
+    let top = cx
+        .comments()
+        .filter(|a| cx.screen_rects(a).any(|r| r.contains(p)))
+        .filter_map(|a| hover_tip(a, cx.prefs).map(|text| (a.index, text)))
+        .max_by_key(|(index, _)| *index);
+    if let Some((_, text)) = top {
+        view.cursor.describe(Subject::Comment, text);
+    }
+}
+
+/// What hovering `a` says, as Acrobat's popups do. Replies and Fill & Sign's marks (typed text,
+/// checks, signatures) say nothing: they are page content being edited, not comments. Neither
+/// does a highlight with no text of its own, when the preferences say so.
+pub(super) fn hover_tip(a: &Annotation, prefs: &CommentPrefs) -> Option<String> {
+    let empty_highlight = a.subtype == "Highlight" && a.contents.as_deref().is_none_or(str::is_empty);
+    if a.is_reply() || a.fill_sign || prefs.hide_empty_highlight_hover && empty_highlight {
+        return None;
+    }
+    let who = a.author.clone().unwrap_or_else(|| a.subtype.clone());
+    let body = a.contents.clone().unwrap_or_default();
+    Some(if body.is_empty() { who } else { format!("{who}\n{body}") })
+}
+
 /// The Select tool: hover, select, move, resize, edit, delete.
 fn select_input(
     ui: &egui::Ui,
@@ -364,17 +173,26 @@ fn select_input(
     let mut consumed = false;
     if let Some(p) = pointer {
         if point_at(p).is_some() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            view.cursor.claim(Layer::Handle, egui::CursorIcon::Crosshair);
         } else if let Some(h) = handle_at(p) {
-            ui.ctx().set_cursor_icon(match h {
-                (0, _) => egui::CursorIcon::ResizeVertical,
-                (_, 0) => egui::CursorIcon::ResizeHorizontal,
-                (-1, -1) | (1, 1) => egui::CursorIcon::ResizeNwSe,
-                _ => egui::CursorIcon::ResizeNeSw,
-            });
-        } else if let Some(a) = cx.hit(p) {
+            view.cursor.claim(
+                Layer::Handle,
+                match h {
+                    (0, _) => egui::CursorIcon::ResizeVertical,
+                    (_, 0) => egui::CursorIcon::ResizeHorizontal,
+                    (-1, -1) | (1, 1) => egui::CursorIcon::ResizeNwSe,
+                    _ => egui::CursorIcon::ResizeNeSw,
+                },
+            );
+        } else if let Some(a) = cx.hit(p)
+            // A click on a highlight over a link follows the link, so the link's hand and tip
+            // show there.
+            && !(a.subtype == "Highlight" && on_link(cx, p))
+        {
             let movable = cx.allowed && !is_markup(&a.subtype);
-            ui.ctx().set_cursor_icon(if movable { egui::CursorIcon::Move } else { egui::CursorIcon::PointingHand });
+            let icon = if movable { egui::CursorIcon::Move } else { egui::CursorIcon::PointingHand };
+            // Signatures and Fill & Sign's marks are placed on the page rather than comments on it.
+            view.cursor.claim(if a.fill_sign { Layer::Placed } else { Layer::Comment }, icon);
         }
     }
     if resp.drag_started()
@@ -448,12 +266,8 @@ fn select_input(
     // (egui clears the press origin on release, so clicks are located by the pointer.)
     let on_page = pointer.is_some_and(|p| cx.xf.rect.contains(p));
     if resp.clicked() && on_page {
-        let follow_link = cx.tool == QuickTool::Select
-            && !consumed
-            && cv.gesture.is_none()
-            && !resp.double_clicked()
-            && pointer
-                .is_some_and(|p| cx.info.links.iter().any(|link| link.page == cx.page && cx.xf.user_rect(cx.info, cx.page, link.rect).contains(p)));
+        let follow_link =
+            cx.tool == QuickTool::Select && !consumed && cv.gesture.is_none() && !resp.double_clicked() && pointer.is_some_and(|p| on_link(cx, p));
         match pointer.and_then(|p| cx.hit(p)) {
             Some(a) if a.subtype == "Highlight" && follow_link => {
                 // A plain click follows the link beneath text highlighting. Keep other
@@ -509,6 +323,274 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
         view.clear_selection();
         view.pending_edit = Some(new_comment(cx, tool, Shape::TextMarkup { kind, quads }, String::new()));
         let _ = page;
+    }
+}
+
+/// What the pointer is doing on one page, for the comment tools that draw or place things.
+#[derive(Clone, Copy)]
+struct Gestures<'a> {
+    ui: &'a egui::Ui,
+    resp: &'a egui::Response,
+    cx: &'a PageCx<'a>,
+    pointer: Option<Pos2>,
+    origin: Option<Pos2>,
+    page_rect: Rect,
+    pressed_here: bool,
+    over_page: bool,
+}
+
+impl Gestures<'_> {
+    fn draw_shape(&self, view: &mut DocView, tool: CommentTool) -> bool {
+        let Self { ui, resp, cx, pointer, origin, page_rect, pressed_here, over_page } = *self;
+        let cv = &mut view.comments;
+        if !cx.allowed {
+            return false;
+        }
+        if over_page {
+            view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+        }
+        if resp.drag_started()
+            && pressed_here
+            && let Some(o) = origin
+        {
+            cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
+            cv.selected = None;
+        }
+        if let Some(Gesture::Draw { page, tool, points }) = cv.gesture.as_mut()
+            && *page == cx.page
+            && let Some(p) = pointer
+        {
+            let p = clamp_to(page_rect, p);
+            let u = cx.to_user(p);
+            if matches!(*tool, CommentTool::Ink | CommentTool::Eraser) {
+                let last = points.last().map(|l| cx.to_screen(*l)).unwrap_or(p);
+                if last.distance(p) >= 1.5 {
+                    points.push(u);
+                }
+            } else {
+                points.truncate(1);
+                points.push(u);
+            }
+        }
+        if resp.drag_stopped()
+            && let Some(Gesture::Draw { page, tool, points }) = cv.gesture.clone()
+            && page == cx.page
+        {
+            cv.gesture = None;
+            if tool == CommentTool::Eraser {
+                view.pending_edit = erase(cx, &points);
+            } else if let Some(shape) = drawn_shape(tool, &points) {
+                let now = ui.input(|i| i.time);
+                cv.settle(now, page, tool, &points);
+                view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
+            }
+        }
+        // A quick press/release does not start an egui drag, but Acrobat's Draw tool treats
+        // it as a one-point ink stroke (a dot). The appearance uses round line caps, so a
+        // single PDF point is visible and remains editable like any other drawing.
+        if tool == CommentTool::Ink
+            && resp.clicked()
+            && over_page
+            && let Some(p) = pointer
+            && let Some(shape) = drawn_shape(tool, &[cx.to_user(p)])
+        {
+            cv.selected = None;
+            let now = ui.input(|i| i.time);
+            cv.settle(now, cx.page, tool, &[cx.to_user(p)]);
+            view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
+        }
+        true
+    }
+
+    fn click_points(&self, view: &mut DocView, tool: CommentTool) -> bool {
+        let Self { ui, resp, cx, pointer, over_page, .. } = *self;
+        let cv = &mut view.comments;
+        if !cx.allowed {
+            return false;
+        }
+        if over_page {
+            view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+        }
+        let finish = resp.double_clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter));
+        // Backspace (or Delete) takes back the last point, e.g. after a wrong click; Undo does too.
+        // Only while a drawing is in progress: otherwise Delete belongs to the selected comment.
+        if matches!(cv.gesture, Some(Gesture::Draw { page, .. }) if page == cx.page)
+            && !ui.ctx().egui_wants_keyboard_input()
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace) || i.consume_key(egui::Modifiers::NONE, egui::Key::Delete))
+        {
+            cv.undo_point();
+            return true;
+        }
+        if resp.clicked()
+            && over_page
+            && let Some(p) = pointer
+        {
+            let u = cx.to_user(p);
+            match cv.gesture.as_mut() {
+                Some(Gesture::Draw { page, tool: t, points }) if *page == cx.page && *t == tool => {
+                    // Clicking the first point again closes a polygon.
+                    let closes = points.len() >= 3 && tool != CommentTool::PolyLine && cx.to_screen(points[0]).distance(p) <= 6.0;
+                    let repeat = points.last().is_some_and(|l| cx.to_screen(*l).distance(p) < 2.0);
+                    if closes {
+                        let pts = std::mem::take(points);
+                        cv.gesture = None;
+                        if let Some(shape) = drawn_shape(tool, &pts) {
+                            view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
+                        }
+                        return true;
+                    }
+                    if !repeat {
+                        points.push(u);
+                    }
+                }
+                _ => {
+                    cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![u] });
+                    cv.selected = None;
+                }
+            }
+        }
+        if finish
+            && let Some(Gesture::Draw { page, tool: t, points }) = cv.gesture.clone()
+            && page == cx.page
+            && t == tool
+        {
+            cv.gesture = None;
+            if let Some(shape) = drawn_shape(tool, &points) {
+                view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
+            }
+        }
+        true
+    }
+
+    fn callout(&self, view: &mut DocView) -> bool {
+        let Self { resp, cx, pointer, origin, page_rect, pressed_here, over_page, .. } = *self;
+        let cv = &mut view.comments;
+        // Drag from what the callout points at to where its text box goes.
+        if !cx.allowed {
+            return false;
+        }
+        if over_page {
+            view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+        }
+        if resp.drag_started()
+            && pressed_here
+            && let Some(o) = origin
+        {
+            cv.gesture = Some(Gesture::Draw { page: cx.page, tool: CommentTool::Callout, points: vec![cx.to_user(o)] });
+            cv.selected = None;
+        }
+        if let Some(Gesture::Draw { page, points, .. }) = cv.gesture.as_mut()
+            && *page == cx.page
+            && let Some(p) = pointer
+        {
+            points.truncate(1);
+            points.push(cx.to_user(clamp_to(page_rect, p)));
+        }
+        if resp.drag_stopped()
+            && let Some(Gesture::Draw { page, points, .. }) = cv.gesture.clone()
+            && page == cx.page
+        {
+            cv.gesture = None;
+            if let [point, at] = points[..]
+                && (point[0] - at[0]).hypot(point[1] - at[1]) >= 8.0
+            {
+                cv.composer = Some(Composer { page, at, kind: ComposerKind::Callout { point }, text: String::new(), focus: true });
+            }
+        }
+        true
+    }
+
+    fn attach(&self, view: &mut DocView) -> bool {
+        let Self { resp, cx, pointer, over_page, .. } = *self;
+        let cv = &mut view.comments;
+        if !cx.allowed {
+            return false;
+        }
+        if over_page {
+            view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+        }
+        if resp.clicked()
+            && over_page
+            && let Some(p) = pointer
+        {
+            cv.attach_at = Some((cx.page, cx.to_user(p)));
+            cv.selected = None;
+        }
+        true
+    }
+
+    fn caret(&self, view: &mut DocView, caret_text: Option<&pdfcraft_render::PageText>) -> bool {
+        let Self { resp, cx, pointer, over_page, .. } = *self;
+        let cv = &mut view.comments;
+        if !cx.allowed {
+            return false;
+        }
+        if over_page {
+            view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Text);
+        }
+        if resp.clicked()
+            && over_page
+            && let Some(p) = pointer
+        {
+            let (vx, vy) = cx.xf.screen_to_view(p);
+            let snapped = cx.info.pages.get(cx.page).zip(caret_text).and_then(|(page, t)| snapped_caret(page, t, vx, vy));
+            let (at, size) = snapped.unwrap_or_else(|| (cx.to_user(p), CARET_SIZE));
+            cv.composer = Some(Composer { page: cx.page, at, kind: ComposerKind::Caret { size }, text: String::new(), focus: true });
+            cv.selected = None;
+        }
+        true
+    }
+
+    fn note_or_box(&self, view: &mut DocView, tool: CommentTool) -> bool {
+        let Self { resp, cx, pointer, origin, page_rect, pressed_here, over_page, .. } = *self;
+        let cv = &mut view.comments;
+        if !cx.allowed {
+            return false;
+        }
+        if over_page {
+            view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+        }
+        // A text box also takes a drag, as in Acrobat: the box is drawn at that size and its
+        // text wraps inside it (#2669).
+        if tool == CommentTool::TextBox {
+            if resp.drag_started()
+                && pressed_here
+                && let Some(o) = origin
+            {
+                cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
+                cv.selected = None;
+            }
+            if let Some(Gesture::Draw { page, points, .. }) = cv.gesture.as_mut()
+                && *page == cx.page
+                && let Some(p) = pointer
+            {
+                points.truncate(1);
+                points.push(cx.to_user(clamp_to(page_rect, p)));
+            }
+            if resp.drag_stopped()
+                && let Some(Gesture::Draw { page, points, .. }) = cv.gesture.clone()
+                && page == cx.page
+            {
+                cv.gesture = None;
+                if let (Some(first), Some(last)) = (points.first(), points.last()) {
+                    let r = Rect::from_two_pos(cx.to_screen(*first), cx.to_screen(*last));
+                    // A drag of a few pixels is a click: the box fits its text.
+                    let drawn =
+                        (r.width() >= 6.0 && r.height() >= 6.0).then(|| cx.info.pages.get(page)).flatten().map(|p| drawn_box(p, *first, *last));
+                    let (at, size) = drawn.map_or((*first, None), |(at, size)| (at, Some(size)));
+                    cv.composer = Some(Composer { page, at, kind: ComposerKind::TextBox { size }, text: String::new(), focus: true });
+                }
+            }
+        }
+        if resp.clicked()
+            && over_page
+            && let Some(p) = pointer
+        {
+            let kind = if tool == CommentTool::Note { ComposerKind::Note } else { ComposerKind::TextBox { size: None } };
+            cv.composer = Some(Composer { page: cx.page, at: cx.to_user(p), kind, text: String::new(), focus: true });
+            cv.selected = None;
+        }
+        true
     }
 }
 

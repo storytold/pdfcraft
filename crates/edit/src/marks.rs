@@ -1,4 +1,4 @@
-use super::*;
+use super::{Document, EditError, Object, Rgb, added};
 
 /// The kinds of page marks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

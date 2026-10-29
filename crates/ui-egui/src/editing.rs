@@ -27,6 +27,79 @@ fn new_text_typed(v: &crate::DocView) -> bool {
     v.content.draft.as_ref().is_some_and(|d| d.index.is_none() && !d.text.trim().is_empty())
 }
 
+/// Keeps the pages (or comment) the user acted on selected, where they now are.
+fn select_after_edit(view: &mut crate::DocView, edit: Edit, info: &pdfcraft_render::DocInfo, quick_tool: crate::QuickTool) {
+    match edit {
+        Edit::MovePages { pages, to } => {
+            let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
+            let to = to.min(info.pages.len() - n);
+            view.select_pages(&(to..to + n).collect::<Vec<_>>());
+        }
+        Edit::DuplicatePages { pages, at: Some(at) } => {
+            let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
+            let at = at.min(info.pages.len().saturating_sub(n));
+            view.select_pages(&(at..at + n).collect::<Vec<_>>());
+        }
+        Edit::InsertBlankPage { at, .. } => view.select_pages(&[at.min(info.pages.len() - 1)]),
+        Edit::DeletePages { .. } => view.select_pages(&[]),
+        // A stroke drawn with the pen stays unselected, so the selection box and
+        // author popup don't sit over the next stroke (#429).
+        Edit::AddAnnotation(a)
+            if matches!(a.shape, pdfcraft_engine::Shape::Ink { .. })
+                && quick_tool == crate::QuickTool::Comment(crate::comments::CommentTool::Ink) =>
+        {
+            view.comments.selected = None;
+        }
+        Edit::AddAnnotation(a) => {
+            // Select the new comment (appended last among the page's comments).
+            let newest = info.annotations.iter().filter(|x| x.page == a.page && !x.is_reply()).map(|x| x.index).max();
+            view.comments.selected = newest.map(|n| (a.page, n));
+            view.comments.reveal = true;
+            // A new highlight opens its note for typing straight away, as in Acrobat,
+            // unless a note typed into another card is still unsaved.
+            if let (pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, .. }, Some(n)) = (&a.shape, newest)
+                && a.contents.is_empty()
+                && view.comments.editing.is_none()
+            {
+                view.comments.open_editor(a.page, n, String::new());
+            }
+        }
+        Edit::DeleteAnnotation { .. } => view.comments.selected = None,
+        _ => {}
+    }
+}
+
+/// The pages whose widgets differ between two form states, and the (field, page) pairs whose
+/// value changed and so must not be drawn from the baked page.
+fn form_edit_pages(
+    before: &[pdfcraft_engine::FormField],
+    after: &[pdfcraft_engine::FormField],
+) -> (std::collections::BTreeSet<usize>, Vec<(String, usize)>) {
+    let mut changed_pages = std::collections::BTreeSet::new();
+    let mut unbaked = Vec::new();
+    for f in after {
+        let pages = |field: &pdfcraft_engine::FormField| field.widgets.iter().filter_map(|w| w.page).collect::<Vec<_>>();
+        match before.iter().find(|old| old.name == f.name) {
+            Some(old) if old == f => {}
+            Some(old) => {
+                changed_pages.extend(pages(f));
+                changed_pages.extend(pages(old));
+                if old.value != f.value {
+                    unbaked.extend(pages(f).into_iter().map(|p| (f.name.clone(), p)));
+                }
+            }
+            None => {
+                changed_pages.extend(pages(f));
+                unbaked.extend(pages(f).into_iter().map(|p| (f.name.clone(), p)));
+            }
+        }
+    }
+    for old in before.iter().filter(|old| !after.iter().any(|f| f.name == old.name)) {
+        changed_pages.extend(old.widgets.iter().filter_map(|w| w.page));
+    }
+    (changed_pages, unbaked)
+}
+
 impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
@@ -68,49 +141,8 @@ impl PdfCraftApp {
                     && doc.xfa.is_none()
                     && is_form_edit(&edit)
                 {
-                    let mut changed_pages = std::collections::BTreeSet::new();
-                    for f in doc.form.iter() {
-                        match form_before.iter().find(|old| old.name == f.name) {
-                            Some(old) => {
-                                if old != f {
-                                    for w in &f.widgets {
-                                        if let Some(p) = w.page {
-                                            changed_pages.insert(p);
-                                        }
-                                    }
-                                    for w in &old.widgets {
-                                        if let Some(p) = w.page {
-                                            changed_pages.insert(p);
-                                        }
-                                    }
-                                    if old.value != f.value {
-                                        for w in &f.widgets {
-                                            if let Some(p) = w.page {
-                                                view.forms.unbaked.insert((f.name.clone(), p));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            None => {
-                                for w in &f.widgets {
-                                    if let Some(p) = w.page {
-                                        changed_pages.insert(p);
-                                        view.forms.unbaked.insert((f.name.clone(), p));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    for old in form_before.iter() {
-                        if !doc.form.iter().any(|f| f.name == old.name) {
-                            for w in &old.widgets {
-                                if let Some(p) = w.page {
-                                    changed_pages.insert(p);
-                                }
-                            }
-                        }
-                    }
+                    let (changed_pages, unbaked) = form_edit_pages(&form_before, &doc.form);
+                    view.forms.unbaked.extend(unbaked);
                     for page in changed_pages {
                         view.page_changed(page);
                     }
@@ -121,44 +153,7 @@ impl PdfCraftApp {
                     view.comments.comment_added();
                 }
                 // Keep the pages the user acted on selected, where they now are.
-                match edit {
-                    Edit::MovePages { pages, to } => {
-                        let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
-                        let to = to.min(info.pages.len() - n);
-                        view.select_pages(&(to..to + n).collect::<Vec<_>>());
-                    }
-                    Edit::DuplicatePages { pages, at: Some(at) } => {
-                        let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
-                        let at = at.min(info.pages.len().saturating_sub(n));
-                        view.select_pages(&(at..at + n).collect::<Vec<_>>());
-                    }
-                    Edit::InsertBlankPage { at, .. } => view.select_pages(&[at.min(info.pages.len() - 1)]),
-                    Edit::DeletePages { .. } => view.select_pages(&[]),
-                    // A stroke drawn with the pen stays unselected, so the selection box and
-                    // author popup don't sit over the next stroke (#429).
-                    Edit::AddAnnotation(a)
-                        if matches!(a.shape, pdfcraft_engine::Shape::Ink { .. })
-                            && self.quick_tool == crate::QuickTool::Comment(crate::comments::CommentTool::Ink) =>
-                    {
-                        view.comments.selected = None;
-                    }
-                    Edit::AddAnnotation(a) => {
-                        // Select the new comment (appended last among the page's comments).
-                        let newest = info.annotations.iter().filter(|x| x.page == a.page && !x.is_reply()).map(|x| x.index).max();
-                        view.comments.selected = newest.map(|n| (a.page, n));
-                        view.comments.reveal = true;
-                        // A new highlight opens its note for typing straight away, as in Acrobat,
-                        // unless a note typed into another card is still unsaved.
-                        if let (pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, .. }, Some(n)) = (&a.shape, newest)
-                            && a.contents.is_empty()
-                            && view.comments.editing.is_none()
-                        {
-                            view.comments.open_editor(a.page, n, String::new());
-                        }
-                    }
-                    Edit::DeleteAnnotation { .. } => view.comments.selected = None,
-                    _ => {}
-                }
+                select_after_edit(view, edit, info, self.quick_tool);
                 if std::mem::take(&mut view.comments.tool_done) && !self.comment_prefs.pinned {
                     self.quick_tool = crate::QuickTool::Select;
                 }
@@ -673,6 +668,7 @@ fn is_form_edit(edit: &Edit) -> bool {
             | Edit::ResetForm { .. }
             | Edit::AddField { .. }
             | Edit::DeleteField { .. }
+            | Edit::DeleteWidget { .. }
             | Edit::DuplicateField { .. }
             | Edit::SetFieldProps { .. }
             | Edit::SetFieldImage { .. }
@@ -734,6 +730,11 @@ impl PdfCraftApp {
             A::FromStructure => {
                 self.right = Some(crate::RightPanel::Bookmarks);
                 Edit::BookmarksFromStructure
+            }
+            // A dialog chooses the styles; it makes the edit.
+            A::FromTextStyles => {
+                self.open_text_style_bookmarks(id);
+                return;
             }
         };
         self.apply_edit(edit);
