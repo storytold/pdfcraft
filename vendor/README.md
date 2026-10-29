@@ -155,6 +155,23 @@ whose further face is hayro's own Symbol stand-in, and the craft-fonts renderer 
 `raster::tests` that PdfCraft's choice of faces (`pdfcraft_fonts::fallback`, through
 `raster/substitute.rs`) drives.
 
+## CJK fonts whose names hint at a standard family (#5329)
+
+`hayro-interpret` patch (72): `select_standard_font` matches name fragments, so a CID font of an
+Adobe CJK collection (Japan1, GB1, CNS1, Korea1, KR) named `MonotypeSung-Light` ("mono"),
+`…Serif…` or `…Sans…` was given Courier, Times or Helvetica without the font resolver being
+asked for anything else: its Latin letters were drawn in that face and its ideographs only reached
+a CJK face as further faces (patch 71). Such an inexact match is now a fallback query carrying
+the font as `FallbackFontQuery::standard_hint`, so a resolver with a face for the collection's
+script stands it in; `FallbackFontQuery::pick_standard_font` returns the hint, so a resolver
+without one (the default) draws exactly the font a standard query did. A name that names the
+family outright (literal standard names, Helvetica, Courier, Times, and Arial, Zapf or Dingbats,
+as `pdfcraft_fonts`' `Std14::recognise` reads them), and a font of no CJK collection, keep the
+standard query. PdfCraft's substitution chain defers the same name hints, so `doc_info` names the
+face drawn. Covered by `cid_fallback_query::{a_cjk_font_whose_name_hints_at_a_standard_family_asks_for_a_fallback,
+a_hinted_cjk_font_without_a_stand_in_keeps_the_hinted_font}` (`cargo test -p pdfcraft-render --test it`)
+and `raster::tests::a_cjk_font_hinting_at_a_standard_family_draws_with_its_stand_in` (craft-fonts).
+
 ## KenM76 integration patches
 
 | PR | Vendored change | Regression coverage |

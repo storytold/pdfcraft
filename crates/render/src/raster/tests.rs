@@ -8656,6 +8656,28 @@ fn non_embedded_chinese_cid_fonts_draw_with_a_craft_fonts_face() {
     }
 }
 
+/// A Chinese font whose name only hints at a standard family (`MonotypeSung-Light` holds "mono")
+/// was drawn in Courier, only its ideographs reaching the Chinese face as further faces, while the
+/// report named Courier too. With a Chinese face it is drawn with that face as the stand-in, as
+/// `STSong-Light` is, Latin letters included; without one it stays Courier.
+#[test]
+fn a_cjk_font_hinting_at_a_standard_family_draws_with_its_stand_in() {
+    let draw = |name: &str| {
+        let pdf = non_embedded_cid_pdf(name, "GBK-EUC-H", "CIDFontType0", "GB1", "", "41C6C2", None);
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(p.error.is_none(), "{name}: {:?}", p.error);
+        p.rgba
+    };
+    let hinted = draw("MonotypeSung-Light");
+    if pdfcraft_fonts::ui_chinese_fonts().is_empty() {
+        assert!(hinted == draw("Courier"), "without a Chinese face the hinted Courier stays");
+        eprintln!("built without craft-fonts (CRAFT_FONTS_DIR unset): no Chinese face to check");
+        return;
+    }
+    assert!(hinted == draw("STSong-Light"), "MonotypeSung-Light draws A坡 with the Chinese stand-in, as STSong-Light does");
+}
+
 /// #5329: Korean (Adobe-Korea1, `HYSMyeongJo-Medium`) and Traditional Chinese (Adobe-CNS1,
 /// `MSung-Light`) fonts that aren't embedded drew nothing either. Korean stands in with the
 /// Hangul face; Traditional Chinese, which the pinned craft-fonts has no face of its own for,
