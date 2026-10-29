@@ -8436,7 +8436,9 @@ fn named_layer_verdicts_are_reported_and_rendered_through_tools() {
 
 /// The PKCS #11 token path end to end, against the SoftHSM bench the `pdfcraft-sign` tests
 /// use: `PDFCRAFT_PKCS11_MODULE` names the module, whose token holds the "Test Signer RSA"
-/// identity (user PIN 1234). Skipped when the bench isn't configured (CI stays green).
+/// identity (user PIN 1234). Linux-only (the tools return an empty listing elsewhere);
+/// skipped when the bench isn't configured (CI stays green).
+#[cfg(target_os = "linux")]
 #[test]
 fn signing_with_a_pkcs11_token_through_tools() {
     if std::env::var("PDFCRAFT_PKCS11_MODULE").map(|v| v.is_empty()).unwrap_or(true) {
