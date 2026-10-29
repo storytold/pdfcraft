@@ -225,6 +225,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 
 - **2026-10-26 (M2, PR #4172):** Reconciled current main, preserving its Japanese serif/weight selection and both branches' progress records. Installed CJK viewer and preview fallback remains display-only; estimates unchanged.
+- **2026-10-29 (M3, #1399 review):** The comparison Hand-wheel test now verifies follower zoom and vertical alignment over either pane, using pages with a real scroll range. Estimates unchanged.
 
 - **2026-10-29 (M7, #2517):** Widening a paragraph rejoins a wrap with the number of spaces that wrap consumed, including a typed run and none for a Chinese or Japanese word split. The count survives an incremental save and a full rewrite, and a width-only `text_edit` uses it. Estimates unchanged.
 - **2026-10-28 (M3, #1399):** Preferences ▸ Make the Hand tool zoom with the mouse wheel, Acrobat's "Make Hand tool use mouse-wheel zooming": with the Hand tool over the pages, a plain wheel notch zooms as ⌘/Ctrl-wheel does. Off by default; trackpads and the wheel over panels keep scrolling. Estimates unchanged.
