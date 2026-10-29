@@ -5350,6 +5350,20 @@ fn unicode_ocr_layer_preserves_pixels_copy_save_and_undo() {
     assert_eq!(page_texts(&s, id), extracted, "invalid coordinates leave the document unchanged");
 }
 
+/// The edit runner must write OCR words through the Unicode layer. WinAnsi Helvetica cannot hold
+/// Romanian comma-below letters, so `Știința` would reopen as `?tiin?a`.
+#[test]
+fn romanian_ocr_restores_diacritics() {
+    let (mut s, id) = session_with(1);
+    let words = vec![ocr::PlacedWord { text: "Știința".into(), origin: [40.0, 100.0], across: [80.0, 0.0], up: [0.0, 12.0] }];
+    s.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = s.open("searchable.pdf", None, saved, None).unwrap();
+    let text = page_texts(&s, reopened);
+    assert!(text[0].contains("Știința"), "comma-below letters must survive save/reopen: {text:?}");
+    assert!(!text[0].contains('?'), "{text:?}");
+}
+
 /// #3029: the Unicode layer's invisible mode and font end with the layer. `3 Tr` is graphics
 /// state, and `ET` does not reset it, so a page with nothing to wrap would leave later text invisible.
 #[test]
