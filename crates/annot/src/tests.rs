@@ -2166,3 +2166,83 @@ fn degenerate_and_absurd_leader_and_caption_values_do_not_panic() {
     assert!(long.contains(&format!("({}) Tj", "w".repeat(256))), "cut to 256");
     assert!(!long.contains(&"w".repeat(257)));
 }
+
+/// Korean comment text (a text box, Fill & Sign text, a stamp's by-line, a measurement label) is
+/// drawn as outlines of the craft-fonts Korean face, so its appearance shows the words and no
+/// `?`, and the comment is not marked. Without the face it is kept and marked, as Chinese is.
+#[test]
+fn korean_comment_text_is_drawn_as_outlines() {
+    let mut doc = fixture();
+    let mark = |doc: &Document, i: usize| pdfcraft_fonts::undrawn_mark(&list(doc, 0)[i]);
+    let mut boxed = new(0, Shape::TextBox { rect: [100.0, 600.0, 300.0, 650.0], font_size: 12.0 });
+    boxed.contents = "검토 완료 — Ada\nOK".into();
+    let t = add_annotation(&mut doc, &boxed, &meta("t")).unwrap();
+    let typed = Shape::Typewriter { rect: [100.0, 700.0, 200.0, 716.0], font_size: 11.0 };
+    let f = add_annotation(
+        &mut doc,
+        &NewAnnotation { page: 0, style: Style::default_for(&typed), shape: typed, contents: "홍길동".into(), author: "Ada".into() },
+        &meta("x"),
+    )
+    .unwrap();
+    let stamp =
+        Shape::Stamp { rect: [100.0, 100.0, 260.0, 142.0], stamp: StampKind::DynApproved, by: Some("By 홍길동 at 2:14 pm, Oct 02, 2026".into()) };
+    let s = add_annotation(
+        &mut doc,
+        &NewAnnotation { page: 0, style: Style::default_for(&stamp), shape: stamp, contents: String::new(), author: "홍길동".into() },
+        &meta("s"),
+    )
+    .unwrap();
+    assert_eq!(text(&list(&doc, 0)[t], b"Contents"), "검토 완료 — Ada\nOK", "the words are kept as typed");
+    if pdfcraft_fonts::document_korean_fonts_for_style(false, false).is_empty() {
+        eprintln!("built without a craft-fonts Kore face: Korean comments are kept and marked");
+        assert_eq!((mark(&doc, t), mark(&doc, f), mark(&doc, s)), (Some('검'), Some('홍'), Some('홍')));
+        return;
+    }
+    for i in [t, f, s] {
+        assert_eq!(mark(&doc, i), None, "comment {i} is drawn completely");
+    }
+    let ap = ap_content(&doc, &list(&doc, 0)[t]);
+    // The Korean line is filled outlines; the Latin-only line stays text in Helvetica.
+    assert!(ap.contains("(OK) Tj") && !ap.contains('?'), "{ap}");
+    assert!(ap.contains(" m\n") && ap.contains("f\nq BT 3 Tr /PCKoText"), "{ap}");
+    // The invisible text layer holds the Korean line as UTF-16BE (검토 …).
+    assert!(ap.contains("Tm <AC80D1A0"), "{ap}");
+    let by = ap_content(&doc, &list(&doc, 0)[s]);
+    assert!(by.contains(" m\n") && !by.contains("(By"), "the by-line is outlines: {by}");
+    // A restyle redraws it the same way; Chinese the face lacks is still marked.
+    set_style(&mut doc, 0, t, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
+    assert_eq!(mark(&doc, t), None);
+    set_contents(&mut doc, 0, t, "한국어 欢", &meta("")).unwrap();
+    let expected = if pdfcraft_fonts::korean_has(false, false, '欢') { None } else { Some('欢') };
+    assert_eq!(mark(&doc, t), expected);
+    let doc = reopen(&doc);
+    assert_eq!(text(&list(&doc, 0)[f], b"Contents"), "홍길동");
+}
+
+/// A Korean Fill & Sign text sized by `appearance::text_width` fits on one line: the width is
+/// measured in the face the line is drawn with, not Helvetica, so nothing wraps into a second line
+/// below a one-line box. Each outlined line also carries its invisible text layer.
+#[test]
+fn korean_fill_and_sign_text_is_sized_to_its_outlines() {
+    let text = "한글 서명 확인 테스트";
+    let size = 16.0;
+    if pdfcraft_fonts::document_korean_fonts_for_style(false, false).is_empty() {
+        assert_eq!(appearance::text_width(text, size), pdfcraft_fonts::helvetica_width(text, size));
+        return;
+    }
+    let w = appearance::text_width(text, size);
+    assert!(w > pdfcraft_fonts::helvetica_width(text, size), "Hangul is wider than Helvetica's guess: {w}");
+    assert_eq!(appearance::wrap(text, size, w), [text]);
+    // As fill_sign_add sizes it: the text's width plus the box padding.
+    let mut doc = fixture();
+    let rect = [85.0, 405.0, 85.0 + w + 8.0, 405.0 + size * 1.2 + 6.0];
+    let shape = Shape::Typewriter { rect, font_size: size };
+    let i = add_annotation(
+        &mut doc,
+        &NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: text.into(), author: "a".into() },
+        &meta("t"),
+    )
+    .unwrap();
+    let ap = ap_content(&doc, &list(&doc, 0)[i]);
+    assert_eq!(ap.matches("f\nq BT 3 Tr /PCKoText").count(), 1, "one outlined line with its text layer: {ap}");
+}

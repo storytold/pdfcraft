@@ -1,7 +1,7 @@
 use super::draw::{draw, params};
 use super::layout::{first_undrawable, is_thai, nums, shaped_arabic, thai_error};
 use super::types::{Added, AddedImage, AddedText, Align, CHAR_SPACING_LIMIT, Family, MarkerScan, TAG};
-use super::{Content, Dict, Document, EditError, GlyphError, MarkKind, ObjRef, Object, Stream, check, contents, page_list, place_tagged};
+use super::{Content, Dict, Document, EditError, GlyphError, MarkKind, ObjRef, Object, Stream, check, contents, is_hangul, page_list, place_tagged};
 
 fn parse(doc: &Document, d: &Dict) -> Option<Content> {
     let r = nums(doc, d.get(b"Rect"));
@@ -137,6 +137,15 @@ fn validate(c: &Content) -> Result<(), EditError> {
             if t.text.chars().any(is_thai) && pdfcraft_fonts::document_thai_font().is_none() {
                 return Err(thai_error(GlyphError::NoFont, &t.text));
             }
+            // Without the Korean face, `draw` decides for the Hangul as it does for Arabic: a new
+            // item is refused with what's missing, one that already holds Korean stays movable.
+            let without_korean;
+            let t = if t.text.chars().any(is_hangul) && pdfcraft_fonts::document_korean_fonts_for_style(false, false).is_empty() {
+                without_korean = AddedText { text: t.text.chars().filter(|c| !is_hangul(*c)).collect(), ..t.clone() };
+                &without_korean
+            } else {
+                t
+            };
             // Without the Arabic face, `draw` decides for the Arabic letters themselves (#403): a new
             // item is refused with what's missing, and one that already holds Arabic stays movable.
             // Everything else in it is drawn in the standard font, so it still has to fit.

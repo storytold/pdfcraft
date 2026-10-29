@@ -86,7 +86,7 @@ impl RenderConfig {
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),
             hide_comments: self.hide_comments,
-            font_resolver: Arc::new(move |query| japanese_fallback(query).or_else(|| standard(query))),
+            font_resolver: Arc::new(move |query| japanese_fallback(query).or_else(|| korean_fallback(query)).or_else(|| standard(query))),
             ..InterpreterSettings::default()
         }
     }
@@ -117,6 +117,33 @@ fn japanese_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
         }
     }?;
     Some((Arc::new(face.bytes), 0))
+}
+
+/// A Korean face from craft-fonts (NanumMyeongjo, NanumGothic) for a CID font of the
+/// Adobe-Korea1 collection that the PDF doesn't embed (`HYSMyeongJo-Medium`, `HYGoThic-Medium`,
+/// Batang, Dotum, ...), which otherwise drew nothing. `None` for every other font, and when the
+/// build has no Korean face.
+fn korean_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
+    let FontQuery::Fallback(f) = query else { return None };
+    if f.character_collection.as_ref()?.family != CidFamily::AdobeKorea1 {
+        return None;
+    }
+    let serif = korean_serif(f.post_script_name.as_deref().unwrap_or_default(), f.is_serif);
+    let face = pdfcraft_fonts::document_korean_fonts_for_style(serif, f.is_bold || f.font_weight >= 600).into_iter().next()?;
+    Some((Arc::new(face.bytes), 0))
+}
+
+/// Whether a Korean font named `name` is a serif (Myeongjo): Myeongjo, Batang and Gungsuh names
+/// are; Gothic, Dotum, Gulim and Malgun names aren't; any other name by the descriptor's flag.
+fn korean_serif(name: &str, serif: bool) -> bool {
+    let name = name.to_ascii_lowercase();
+    if ["myeongjo", "myungjo", "batang", "gungsuh"].iter().any(|k| name.contains(k)) {
+        true
+    } else if ["goth", "dotum", "gulim", "malgun", "nanumgothic"].iter().any(|k| name.contains(k)) {
+        false
+    } else {
+        serif
+    }
 }
 
 #[derive(Debug, PartialEq)]

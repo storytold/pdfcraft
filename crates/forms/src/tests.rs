@@ -5356,3 +5356,86 @@ endstream".into(),
         assert!(f.value.iter().all(String::is_empty), "{kind:?}: reset leaves it off, not the parent's Yes: {:?}", f.value);
     }
 }
+
+/// A Korean value in a field whose form font is Helvetica (most forms): drawn as outlines of the
+/// craft-fonts Korean face, not `?`, and the widget is not marked. A form with a Korean CID font
+/// (`UniKS-UCS2-H`) keeps using it. Without the face the value is kept and marked, as before.
+#[test]
+fn korean_values_are_drawn_in_helvetica_forms() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [7 0 R 8 0 R 9 0 R] >>".into(),
+        "<< /Fields [7 0 R 8 0 R 9 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R /HYGoThic-Medium 6 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Font /Subtype /Type0 /BaseFont /HYGoThic-Medium /Encoding /UniKS-UCS2-H /DescendantFonts [<< /Type /Font /Subtype /CIDFontType0 /BaseFont /HYGoThic-Medium /CIDSystemInfo << /Registry (Adobe) /Ordering (Korea1) /Supplement 1 >> >>] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /DA (/Helv 10 Tf 0 0 1 rg) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (address) /Ff 4096 /DA (/Helv 10 Tf 0 g) /Rect [50 600 150 680] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (cid) /DA (/HYGoThic-Medium 10 Tf 0 g) /Rect [50 500 250 520] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    set_value(&mut doc, "name", &FieldValue::Text("홍길동 (Hong)".into())).unwrap();
+    set_value(&mut doc, "address", &FieldValue::Text("서울특별시 종로구 세종대로 209\nSeoul".into())).unwrap();
+    set_value(&mut doc, "cid", &FieldValue::Text("한국어".into())).unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    assert_eq!(field(&all, "name").value, ["홍길동 (Hong)"], "the value is stored as typed");
+    let appearance = |name: &str| {
+        let w = &field(&all, name).widgets[0];
+        let d = doc.get(w.obj).as_dict().unwrap().clone();
+        let n = d.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+        let Object::Stream(s) = &*doc.get(n) else { panic!() };
+        (String::from_utf8_lossy(&s.decoded().unwrap()).into_owned(), pdfcraft_fonts::undrawn_mark(&d))
+    };
+    // The CID font holds Korean itself: drawn in it, never as outlines.
+    let (cid, cid_mark) = appearance("cid");
+    assert!(cid.contains("/HYGoThic-Medium 10 Tf") && !cid.contains(" m\n"), "{cid}");
+    assert_eq!(cid_mark, None);
+    let (name, name_mark) = appearance("name");
+    let (address, address_mark) = appearance("address");
+    if pdfcraft_fonts::document_korean_fonts_for_style(false, false).is_empty() {
+        eprintln!("built without a craft-fonts Kore face: Korean in Helvetica forms is kept and marked");
+        assert_eq!((name_mark, address_mark), (Some('홍'), Some('서')));
+        return;
+    }
+    assert_eq!((name_mark, address_mark), (None, None), "drawn completely");
+    assert!(
+        name.contains("0 0 1 rg\n") && name.contains(" m\n") && name.contains("f\nq BT 3 Tr /PCKoText"),
+        "outlines filled in the field colour: {name}"
+    );
+    // Followed by the invisible text layer (the value's UTF-16BE), which keeps it searchable once
+    // flattened.
+    assert!(name.contains("<D64DAE38B3D9002000280048006F006E00670029> Tj"), "{name}");
+    assert!(!name.contains('?'), "{name}");
+    // The Korean lines are outlines; the Latin-only line stays text.
+    assert!(address.contains("(Seoul) Tj") && address.contains(" m\n"), "{address}");
+}
+
+/// A list box whose labels are Korean and whose export values are ASCII (and with no selection)
+/// draws its labels as outlines: the shown labels decide, not the export value.
+#[test]
+fn korean_list_box_labels_are_drawn_as_outlines() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (city) /DA (/Helv 10 Tf 0 g) /Opt [[(seoul) <FEFFC11CC6B8>] [(busan) <FEFFBD80C0B0>]] /Rect [50 600 200 680] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    set_value(&mut doc, "city", &FieldValue::Choice(vec!["busan".into()])).unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    let w = &field(&all, "city").widgets[0];
+    let d = doc.get(w.obj).as_dict().unwrap().clone();
+    let n = d.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+    let Object::Stream(s) = &*doc.get(n) else { panic!() };
+    let ap = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+    if pdfcraft_fonts::document_korean_fonts_for_style(false, false).is_empty() {
+        assert_eq!(pdfcraft_fonts::undrawn_mark(&d), Some('서'));
+        return;
+    }
+    assert_eq!(pdfcraft_fonts::undrawn_mark(&d), None, "{ap}");
+    assert!(ap.contains(" m\n") && ap.contains("<C11CC6B8>") && ap.contains("<BD80C0B0>") && !ap.contains('?'), "{ap}");
+}

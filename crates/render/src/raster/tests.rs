@@ -6521,6 +6521,77 @@ fn japanese_substitute_spaces_keep_pdf_widths_and_unicode() {
     }
 }
 
+/// A Korean CID font that isn't embedded (Adobe-Korea1, `HYSMyeongJo-Medium` with
+/// `UniKS-UCS2-H`, as Korean government forms use) drew nothing. With a craft-fonts Korean
+/// face it draws Hangul; without one, nothing changes.
+#[test]
+fn non_embedded_korean_cid_fonts_draw_with_a_craft_fonts_face() {
+    let pdf = |base_font: &str, flags: u32| {
+        // 한국 in UCS-2.
+        let content = "BT /F1 40 Tf 5 15 Td <D55CAD6D> Tj ET";
+        format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /{base_font} /Encoding /UniKS-UCS2-H /DescendantFonts [6 0 R] >> endobj
+6 0 obj << /Type /Font /Subtype /CIDFontType0 /BaseFont /{base_font} /CIDSystemInfo << /Registry (Adobe) /Ordering (Korea1) /Supplement 1 >>
+  /FontDescriptor 7 0 R /DW 1000 >> endobj
+7 0 obj << /Type /FontDescriptor /FontName /{base_font} /Flags {flags} /FontBBox [0 -141 1000 859] /ItalicAngle 0 /Ascent 859 /Descent -141 /CapHeight 700 /StemV 80 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len()
+        )
+    };
+    for (base_font, flags) in [("HYSMyeongJo-Medium", 6), ("HYGoThic-Medium", 4)] {
+        let mut r = PageRenderer::new(Arc::new(pdf(base_font, flags).into_bytes()), RenderConfig::default());
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(p.error.is_none(), "{base_font}: {:?}", p.error);
+        if pdfcraft_fonts::document_korean_fonts_for_style(false, false).is_empty() {
+            eprintln!("built without a craft-fonts Kore face: no Korean face to check");
+            continue;
+        }
+        let inked = p.rgba.as_chunks::<4>().0.iter().filter(|c| c[0] < 128).count();
+        // 한국 at 40 pt covers a few hundred dark pixels; a blank or missing-glyph run doesn't.
+        assert!(inked > 300, "{base_font}: 한국 is drawn ({inked} dark pixels)");
+    }
+}
+
+#[test]
+fn korean_font_names_pick_myeongjo_or_gothic() {
+    for (name, serif, expected) in [
+        ("HYSMyeongJo-Medium", false, true),
+        ("Batang", false, true),
+        ("GungsuhChe", false, true),
+        ("HYGoThic-Medium", true, false),
+        ("Dotum", true, false),
+        ("Gulim", true, false),
+        ("MalgunGothic-Bold", true, false),
+        ("Unnamed", true, true),
+        ("Unnamed", false, false),
+    ] {
+        assert_eq!(super::korean_serif(name, serif), expected, "{name}");
+    }
+    // Only Adobe-Korea1 fonts get a Korean substitute.
+    use hayro::hayro_interpret::font::FallbackFontQuery;
+    use hayro::hayro_interpret::hayro_cmap::CharacterCollection;
+    let query = |family| {
+        FontQuery::Fallback(FallbackFontQuery {
+            post_script_name: Some("Batang".into()),
+            character_collection: Some(CharacterCollection { family, supplement: 1 }),
+            ..FallbackFontQuery::default()
+        })
+    };
+    assert!(super::korean_fallback(&query(CidFamily::AdobeJapan1)).is_none());
+    assert_eq!(
+        super::korean_fallback(&query(CidFamily::AdobeKorea1)).is_some(),
+        !pdfcraft_fonts::document_korean_fonts_for_style(true, false).is_empty()
+    );
+}
+
 /// Half-width katakana are common in Japanese documents set in a non-embedded Mincho font
 /// such as HeiseiMin-W3. The Mincho substitute must have those glyphs: one that lacks them
 /// (Shippori Mincho) draws them as .notdef.

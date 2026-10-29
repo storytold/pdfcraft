@@ -1,4 +1,5 @@
-//! Arabic, Hebrew and Thai text shaping with the matching craft-fonts face and bounded glyph outlines.
+//! Arabic, Hebrew, Thai and Korean text shaping with the matching craft-fonts face and bounded
+//! glyph outlines.
 
 use std::sync::OnceLock;
 
@@ -28,6 +29,11 @@ pub enum ShapedScript {
     Arabic,
     Hebrew,
     Thai,
+    /// Hangul, in the Korean face of the text's style: Myeongjo for a serif, Gothic otherwise.
+    Korean {
+        serif: bool,
+        bold: bool,
+    },
 }
 
 impl ShapedScript {
@@ -36,18 +42,24 @@ impl ShapedScript {
             Self::Arabic => crate::document_arabic_font(),
             Self::Hebrew => crate::document_hebrew_font(false),
             Self::Thai => crate::document_thai_font(),
+            Self::Korean { serif, bold } => crate::document_korean_fonts_for_style(serif, bold).into_iter().next(),
         }
     }
 }
 
+type Face = OnceLock<Option<(FontRef<'static>, ShaperData)>>;
+
 fn face(script: ShapedScript) -> Option<&'static (FontRef<'static>, ShaperData)> {
-    static FACE: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
-    static HEBREW: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
-    static THAI: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static FACE: Face = OnceLock::new();
+    static HEBREW: Face = OnceLock::new();
+    static THAI: Face = OnceLock::new();
+    // One per style: (serif, bold) as an index.
+    static KOREAN: [Face; 4] = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
     let cache = match script {
         ShapedScript::Arabic => &FACE,
         ShapedScript::Hebrew => &HEBREW,
         ShapedScript::Thai => &THAI,
+        ShapedScript::Korean { serif, bold } => KOREAN.get(usize::from(serif) * 2 + usize::from(bold))?,
     };
     cache
         .get_or_init(|| {
@@ -91,6 +103,17 @@ pub fn shape_thai(text: &str) -> Result<Vec<ShapedCluster>, GlyphError> {
     shape_script(text, false, ShapedScript::Thai)
 }
 
+/// Whether the Korean document face of the style has a glyph for `c` (false without the face).
+pub fn korean_has(serif: bool, bold: bool, c: char) -> bool {
+    face(ShapedScript::Korean { serif, bold }).is_some_and(|(font, _)| font.charmap().map(c).is_some())
+}
+
+/// Shape Korean with the document face of the style. Grapheme clusters keep a syllable written
+/// as conjoining jamo one cluster, with its text exactly once.
+pub fn shape_korean(text: &str, serif: bool, bold: bool) -> Result<Vec<ShapedCluster>, GlyphError> {
+    shape_script(text, false, ShapedScript::Korean { serif, bold })
+}
+
 fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedCluster>, GlyphError> {
     let (font, data) = face(kind).ok_or(GlyphError::NoFont)?;
     let shaper = data.shaper(font).build();
@@ -102,11 +125,12 @@ fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedC
         ShapedScript::Arabic => script::ARABIC,
         ShapedScript::Hebrew => script::HEBREW,
         ShapedScript::Thai => script::THAI,
+        ShapedScript::Korean { .. } => script::HANGUL,
     });
     // Preserve the historical Arabic per-character mapping; Hebrew and Thai marks stay with their base.
     buffer.set_cluster_level(match kind {
         ShapedScript::Arabic => BufferClusterLevel::Characters,
-        ShapedScript::Hebrew | ShapedScript::Thai => BufferClusterLevel::MonotoneGraphemes,
+        ShapedScript::Hebrew | ShapedScript::Thai | ShapedScript::Korean { .. } => BufferClusterLevel::MonotoneGraphemes,
     });
     let shaped = shaper.shape(buffer, ShapeOptions::new());
     // Clusters are byte offsets into `text`; a cluster shows the characters up to the next one.
@@ -167,6 +191,30 @@ pub fn shaped_glyph(script: ShapedScript, id: u32) -> Result<GlyphOutline, Glyph
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn korean_is_shaped_with_the_korean_face() {
+        if crate::document_korean_fonts_for_style(false, false).is_empty() {
+            eprintln!("skipping the Korean shaping checks: built without a craft-fonts Kore face (set CRAFT_FONTS_DIR)");
+            assert_eq!(shape_korean("한", false, false), Err(GlyphError::NoFont));
+            assert!(!korean_has(false, false, '한'));
+            return;
+        }
+        let c = shape_korean("한글", false, false).unwrap();
+        assert_eq!(c.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(), ["한", "글"]);
+        assert!(c.iter().all(|c| c.advance > 0.5 && c.glyphs.len() == 1), "{c:?}");
+        // A syllable typed as conjoining jamo (U+1112 U+1161 U+11AB) is one cluster with all three.
+        let jamo = shape_korean("\u{1112}\u{1161}\u{11AB}", false, false).unwrap();
+        assert_eq!(jamo.len(), 1, "{jamo:?}");
+        assert_eq!(jamo[0].text, "\u{1112}\u{1161}\u{11AB}");
+        assert!(korean_has(true, true, '똠') && !korean_has(false, false, '\u{0627}'));
+        // The serif face draws other outlines than the sans.
+        let id = |serif| shape_korean("가", serif, false).unwrap()[0].glyphs[0].0;
+        let outline = |serif| shaped_glyph(ShapedScript::Korean { serif, bold: false }, id(serif)).unwrap().contours;
+        if crate::CRAFT_FONTS.iter().any(|f| f.family == "NanumMyeongjo") {
+            assert_ne!(outline(true), outline(false));
+        }
+    }
 
     fn face_or_skip() -> bool {
         if crate::document_arabic_font().is_none() {

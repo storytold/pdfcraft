@@ -199,6 +199,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+- **2026-10-29 (M7, Korean text in documents):** Korean in PDFs uses the craft-fonts Nanum faces (NanumGothic Regular is pinned; Bold and NanumMyeongjo in storytold/craft-fonts#30): Edit text replacements take a Korean Type 3 fallback matching the source's serif and weight; Add text shapes Korean and wraps between words; comments, Fill & Sign text, stamp by-lines, measurement labels and Helvetica form fields draw Korean as glyph outlines with an invisible text layer, so it stays searchable after flattening; KSC-EUC/UHC/UniKS predefined CMaps are decoded and re-encoded without ToUnicode; non-embedded Adobe-Korea1 fonts render. Without a Korean face, Korean edits are a clear error. Estimates unchanged.
 
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 - **2026-10-24 (M10, #4158 partial):** Word, HTML, RTF and PowerPoint export keep a block that continues another on its line (an italic case name, a link, a superscript) as a run in its own style inside that paragraph, with the source's word space, instead of a paragraph of its own. Style changes that wrap onto the next line still split paragraphs (the reading blocks keep style boundaries). Estimates unchanged.

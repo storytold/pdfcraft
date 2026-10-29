@@ -33,6 +33,19 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
   titles), in manifest order.
 - `ui_telugu_fonts`: the `Telu` faces for Telugu interface text (the Telugu catalog, file names,
   document titles), in manifest order.
+- `document_korean_fonts_for_style(serif, bold)` / `is_hangul`: every `Kore` face (NanumGothic,
+  NanumMyeongjo) best match first — Myeongjo for a serif source, Gothic otherwise, the asked
+  weight before Regular — for the Type 3 fallback of Korean text written by Edit text. Empty
+  without such a face; the editor then reports a clear error.
+- `korean_has` / `shape_korean`: Korean shaped with harfrust in the face of a style
+  (`ShapedScript::Korean`), grapheme clusters so conjoining jamo stay one syllable; Add text
+  draws the clusters through the shared Type 3 writer.
+- `needs_outlines` / `first_unoutlinable` / `outlined_width` / `outlined_path`: a line the
+  standard fonts can't draw, drawn as filled glyph outlines of the Korean Gothic face, for
+  appearances that can't hold a font (comments, Fill & Sign, form fields).
+- `outlined_text_layer` / `outline_text_font` / `hoist_font_descriptors`: the invisible
+  (`3 Tr`) UTF-16 text over each outlined line, so it stays searchable once flattened; its
+  descriptor is made indirect when the appearance is stored.
 - `ui_hebrew_fonts` / `document_hebrew_font(bold)`: the `Hebr` faces (Noto Sans Hebrew) for
   Hebrew interface text, and the face whose outlines become the Type 3 fallback for Hebrew text
   written by Edit text (Bold when asked for and present, else Regular). `None` without a
@@ -68,6 +81,12 @@ The descriptor does not change glyph programs or replace the Type 3 `FontBBox` m
 `Ascent`/`Descent` are omitted (PDF Reference 1.7, tables 5.9 and 5.19). The small web input has
 only Gothic Regular, so it cannot preserve bold. No new font assets or changes to that input are
 needed.
+
+`pdf::Metrics` interprets a Type0 font whose `/Encoding` names a predefined Korean CMap
+(`KSC-EUC-H`, `KSCpc-EUC-H`, `KSCms-UHC-H`, `KSCms-UHC-HW-H`, `UniKS-UCS2-H`, `UniKS-UTF16-H`):
+mixed one- and two-byte codes, code → Adobe-Korea1 CID for `/W` widths, text where `/ToUnicode`
+has none (ToUnicode always wins), and `encode` back into the document's own font. The tables are
+Adobe's BSD-3 CMap resources embedded in `hayro-cmap`, parsed once per process.
 
 wasm32 builds embed only BIZ UDPGothic Regular and any `Arab`, `Telu`, `Hebr` or `Thai` face, to keep the web build small: the web build
 currently has no Chinese face, so Chinese there still shows the replacement glyph.

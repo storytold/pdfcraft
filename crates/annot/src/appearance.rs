@@ -7,12 +7,29 @@
 //! endings, indirect geometry), so callers never replace an appearance with a worse one.
 //!
 //! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use the standard
-//! Helvetica font with WinAnsi encoding; line breaking uses [`text_width`], an approximation of
-//! Helvetica's proportions by character class (no font program or metrics file is bundled).
+//! Helvetica font with WinAnsi encoding, measured with its published metrics ([`text_width`]).
+//! A line Helvetica can't draw (Korean) is drawn as filled glyph outlines of the craft-fonts
+//! Korean face instead ([`pdfcraft_fonts::outlined_path`]): an appearance carries direct
+//! resources only, so it has nowhere to keep a font of its own.
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
 use pdfcraft_fonts::{first_undrawable, literal, win_ansi};
-pub use pdfcraft_fonts::{helvetica_width as text_width, wrap};
+
+/// The width of a line of appearance text at `size`: in the outline face when the line is drawn
+/// with it (Korean, see [`outlined_line`]), else in Helvetica. What callers size a text box by
+/// (Fill & Sign text), so its box fits what [`build`] draws.
+pub fn text_width(line: &str, size: f64) -> f64 {
+    if pdfcraft_fonts::needs_outlines(line) {
+        pdfcraft_fonts::outlined_width(line, size).unwrap_or_else(|| pdfcraft_fonts::helvetica_width(line, size))
+    } else {
+        pdfcraft_fonts::helvetica_width(line, size)
+    }
+}
+
+/// Greedy line breaking within `width` points, measured as [`build`] draws ([`text_width`]).
+pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
+    pdfcraft_fonts::wrap_with(text, size, width, text_width)
+}
 
 use crate::{NOTE_SIZE, Rgb, n};
 
@@ -305,23 +322,55 @@ fn text_turn(d: &Dict) -> i64 {
     d.get(b"PCTextRotate").and_then(Object::as_int).unwrap_or(0).rem_euclid(360) / 90 * 90
 }
 
-/// The first text [`build`] would draw in the standard fonts (Helvetica, WinAnsiEncoding) that
-/// they can't, which would come out as `?`: what it is (for the message) and the character. The
-/// text of a text box, callout or Fill & Sign text, a line's caption, a measurement's label, a
-/// dynamic stamp's "By …" line, and a redaction mark's overlay text (drawn when it is applied). `None` when all of
-/// it can be drawn.
+/// The first text [`build`] would draw that neither the standard fonts (Helvetica,
+/// WinAnsiEncoding) nor the outline face (Korean, [`pdfcraft_fonts::outlined_path`]) can, which
+/// would come out as `?`: what it is (for the message) and the character. The text of a text box,
+/// callout or Fill & Sign text, a measurement's label, a dynamic stamp's "By …" line, a line's
+/// caption and a redaction mark's overlay text (the last two are drawn in Helvetica only, so
+/// outlines don't count there). `None` when all of it can be drawn.
 pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
     let text = |key: &[u8]| d.get(key).and_then(Object::as_string).map(PdfString::to_text);
     let (what, text) = match d.name(b"Subtype")? {
         b"FreeText" => ("the comment's text", text(b"Contents")?),
-        b"Line" if !d.contains(b"PCMeasureValue") => ("the line's caption", line_caption(d)?),
+        // Drawn in Helvetica only: outlines don't count.
+        b"Line" if !d.contains(b"PCMeasureValue") => return Some(("the line's caption", first_undrawable(&line_caption(d)?)?)),
         b"Line" | b"PolyLine" | b"Polygon" => ("the measurement label", text(b"PCMeasureValue")?),
         b"Stamp" if matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) => ("the stamp's \"By\" line", text(b"PCByLine")?),
         // Drawn in Helvetica when the redaction is applied: refused when it is marked.
-        b"Redact" => ("the redaction's overlay text", text(b"OverlayText")?),
+        b"Redact" => return Some(("the redaction's overlay text", first_undrawable(&text(b"OverlayText")?)?)),
         _ => return None,
     };
-    Some((what, first_undrawable(&text)?))
+    Some((what, pdfcraft_fonts::first_unoutlinable(&text)?))
+}
+
+/// The drawing of a line the standard fonts can't draw, at baseline (`x`, `y`): its glyph outlines
+/// filled with `fill` (a colour operator), then its invisible text layer so search and copy find
+/// it, also once flattened. `None` to draw it in Helvetica (it needs no outlines, or the outline
+/// face can't draw it, in which case [`undrawable_text`] reports the character and Helvetica shows
+/// it as `?`). A stream that uses it needs [`with_outline_text_font`] in its resources.
+fn outlined_line(line: &str, size: f64, x: f64, y: f64, fill: &str) -> Option<String> {
+    if !pdfcraft_fonts::needs_outlines(line) || pdfcraft_fonts::first_unoutlinable(line).is_some() {
+        return None;
+    }
+    let path = pdfcraft_fonts::outlined_path(line, size, x, y).ok()?;
+    let layer = pdfcraft_fonts::outlined_text_layer(line, size, x, y, text_width(line, size));
+    Some(format!("{fill}{path}f\n{layer}"))
+}
+
+/// `fonts` with the invisible text layer's font ([`pdfcraft_fonts::outline_text_font`]) when `used`.
+fn with_outline_text_font(mut fonts: Dict, used: bool) -> Dict {
+    if used {
+        fonts.set(pdfcraft_fonts::OUTLINE_TEXT_FONT.as_bytes().to_vec(), Object::Dict(pdfcraft_fonts::outline_text_font()));
+    }
+    fonts
+}
+
+/// [`helvetica_resource`], with the outline text layer's font when `outlined` lines were drawn.
+fn helvetica_and_outline_resource(outlined: bool) -> Object {
+    match helvetica_resource() {
+        Object::Dict(fonts) => Object::Dict(with_outline_text_font(fonts, outlined)),
+        other => other,
+    }
 }
 
 /// `/Font` resources naming `/Helv`: standard Helvetica with WinAnsiEncoding.
@@ -470,11 +519,18 @@ fn finish_appearance(context: &AppearanceContext<'_>, mut drawing: AppearanceDra
             let x = (context.rect[0] + context.rect[2] - text_width(&value, size)) * 0.5;
             let y = context.rect[3] - 12.0;
             let col = context.stroke.unwrap_or([0.0, 0.47, 0.84]);
-            out.extend(format!("{}BT /Helv {} Tf {} {} Td ", rg(col), n(size), n(x), n(y)).bytes());
-            // WinAnsi bytes (e.g. 0xB2 for "²") go into the stream as-is, not through UTF-8.
-            out.extend(literal(&win_ansi(&value)));
-            out.extend_from_slice(b" Tj ET\n");
-            drawing.resources.set(b"Font".to_vec(), helvetica_resource());
+            let outlined = outlined_line(&value, size, x, y, &rg(col));
+            let has_outlines = outlined.is_some();
+            if let Some(outlined) = outlined {
+                // A label in Korean (a calibrated unit such as "미터"): glyph outlines.
+                out.extend(outlined.bytes());
+            } else {
+                out.extend(format!("{}BT /Helv {} Tf {} {} Td ", rg(col), n(size), n(x), n(y)).bytes());
+                // WinAnsi bytes (e.g. 0xB2 for "²") go into the stream as-is, not through UTF-8.
+                out.extend(literal(&win_ansi(&value)));
+                out.extend_from_slice(b" Tj ET\n");
+            }
+            drawing.resources.set(b"Font".to_vec(), helvetica_and_outline_resource(has_outlines));
         }
     }
     Some(form(context.rect, &out, drawing.resources))
@@ -975,6 +1031,9 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     ));
     let mut out = c.into_bytes();
     let mut y = rect[3] - pad - size * 0.9;
+    // Lines the standard fonts can't draw (Korean) are drawn as glyph outlines after the
+    // text object, in the same clip and colour.
+    let mut outlined = String::new();
     for line in wrap(&text, size, width) {
         if y < rect[1] - size {
             break;
@@ -985,13 +1044,19 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
             2 => rect[2] - pad - lw,
             _ => rect[0] + pad,
         };
-        out.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
-        out.extend(literal(&win_ansi(&line)));
-        out.extend_from_slice(b" Tj\n");
+        match outlined_line(&line, size, x, y, &rg(text_color)) {
+            Some(drawing) => outlined.push_str(&drawing),
+            None => {
+                out.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
+                out.extend(literal(&win_ansi(&line)));
+                out.extend_from_slice(b" Tj\n");
+            }
+        }
         y -= size * 1.2;
     }
     out.extend_from_slice(b"ET\n");
-    res.set(b"Font".to_vec(), helvetica_resource());
+    out.extend(outlined.bytes());
+    res.set(b"Font".to_vec(), helvetica_and_outline_resource(!outlined.is_empty()));
     let mut stream = form(full, &out, res);
     if let Some(m) = matrix {
         stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));

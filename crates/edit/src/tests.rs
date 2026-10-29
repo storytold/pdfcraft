@@ -7557,3 +7557,289 @@ fn q_inside_a_text_object_restores_the_text_matrices() {
         assert_eq!((lines[0].text.as_str(), lines[0].baseline()), ("Edited", baseline), "{content} after editing");
     }
 }
+
+/// The Korean fallback faces come from craft-fonts too (NanumGothic, NanumMyeongjo).
+fn without_korean_faces(test: &str) -> bool {
+    if !pdfcraft_fonts::document_korean_fonts_for_style(false, false).is_empty() {
+        return false;
+    }
+    eprintln!("skipping {test}: built without a craft-fonts Kore face (set CRAFT_FONTS_DIR to a checkout that has one)");
+    true
+}
+
+/// The glyph procedures of the generated font `name` on page 1.
+fn type3_paths(doc: &Document, name: &str) -> Vec<Vec<u8>> {
+    let p = pdfcraft_model::pages(doc).swap_remove(0);
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+    let font = doc.resolve(fonts.as_dict().unwrap().get(name.as_bytes()).unwrap());
+    let procs = doc.resolve(font.as_dict().unwrap().get(b"CharProcs").unwrap());
+    procs
+        .as_dict()
+        .unwrap()
+        .iter()
+        .map(|(_, object)| match &*doc.resolve(object) {
+            pdfcraft_cos::Object::Stream(s) => s.decoded().unwrap(),
+            other => panic!("expected a glyph stream, got {other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn korean_line_uses_the_korean_type3_fallback() {
+    if without_korean_faces("korean_line_uses_the_korean_type3_fallback") {
+        return;
+    }
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let replacement = "안녕하세요, 반갑습니다! 2026년 10월 15일 (Hello)";
+    let result = text::replace_line(&mut doc, 0, 0, replacement).unwrap();
+    // Whatever Korean face this build has: the sans regular one when there is one.
+    let face = pdfcraft_fonts::document_korean_fonts_for_style(false, false)[0];
+    assert_eq!(result.substituted.as_deref(), Some(format!("{} Type3", face.family).as_str()));
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("/PCKo") && !content.contains("/PCJp"), "{content}");
+    for d in [&doc, &reopen(&doc)] {
+        let lines = text::text_lines(d, 0).unwrap();
+        assert_eq!(lines[0].text, replacement);
+        assert_eq!(lines[0].base_font, format!("{}-{}", face.family, face.style).replace(' ', ""), "report the real fallback face");
+    }
+}
+
+#[test]
+fn korean_paragraph_uses_the_korean_type3_fallback_and_wraps_at_spaces() {
+    if without_korean_faces("korean_paragraph_uses_the_korean_type3_fallback_and_wraps_at_spaces") {
+        return;
+    }
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let replacement = "대한민국은 민주공화국이다. 대한민국의 주권은 국민에게 있고, 모든 권력은 국민으로부터 나온다.";
+    text::replace_block(&mut doc, 0, 0, replacement).unwrap();
+    let reopened = reopen(&doc);
+    assert_eq!(text::text_blocks(&reopened, 0).unwrap()[0].text, replacement);
+    // Every line break falls between words: Korean is written with spaces.
+    let words: Vec<&str> = replacement.split(' ').collect();
+    for line in text::text_lines(&reopened, 0).unwrap() {
+        assert!(line.text.split(' ').all(|w| words.contains(&w)), "{:?} splits a word", line.text);
+    }
+}
+
+#[test]
+fn korean_fallback_follows_the_source_style() {
+    if without_korean_faces("korean_fallback_follows_the_source_style") {
+        return;
+    }
+    let replacement = "견본 상회 귀중";
+    let mut sans = styled_text_page("Helvetica");
+    let mut serif = styled_text_page("Times-Roman");
+    let mut bold = styled_text_page("Helvetica-Bold");
+    for doc in [&mut sans, &mut serif, &mut bold] {
+        text::replace_line(doc, 0, 0, replacement).unwrap();
+    }
+    let has = |family: &str, style: &str| pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.family == family && f.style == style);
+    // Outlines differ only where both faces exist; a build with one Korean face uses it for all.
+    if has("NanumMyeongjo", "Regular") && has("NanumGothic", "Regular") {
+        assert_ne!(type3_paths(&sans, "PCKo"), type3_paths(&serif, "PCKo"), "a serif source takes Myeongjo outlines");
+        assert_eq!(text::text_lines(&serif, 0).unwrap()[0].base_font, "NanumMyeongjo-Regular");
+    }
+    if has("NanumGothic", "Bold") && has("NanumGothic", "Regular") {
+        assert_ne!(type3_paths(&sans, "PCKo"), type3_paths(&bold, "PCKo"), "bold changes the actual glyph paths");
+    }
+    for doc in [&sans, &serif, &bold] {
+        assert_eq!(text::text_lines(&reopen(doc), 0).unwrap()[0].text, replacement);
+    }
+}
+
+/// Korean with Japanese kana and a Hanja the Korean faces may lack: the Korean face draws what it
+/// has and each other character comes from the next face that has it, in one generated font.
+#[test]
+fn korean_mixed_with_japanese_takes_missing_glyphs_from_the_next_face() {
+    if without_korean_faces("korean_mixed_with_japanese_takes_missing_glyphs_from_the_next_face") || without_craft_fonts("korean mixed") {
+        return;
+    }
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let replacement = "한국어와 にほんご 漢字";
+    text::replace_line(&mut doc, 0, 0, replacement).unwrap();
+    assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap()[0].text, replacement);
+}
+
+/// Without a Korean face, editing in Korean is a clear error that leaves the page untouched,
+/// never Japanese outlines with holes; Latin edits work as before.
+#[test]
+fn korean_edit_without_a_korean_face_is_a_clear_error() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let before = page_content_bytes(&doc, 0);
+    let line = text::replace_line(&mut doc, 0, 0, "한국어 문장");
+    let block = text::replace_block(&mut doc, 0, 0, "한국어 문장");
+    if !pdfcraft_fonts::document_korean_fonts_for_style(false, false).is_empty() {
+        eprintln!("built with a Kore face: the Korean edits succeed (checked by the tests above)");
+        assert!(line.is_ok() && block.is_ok());
+        return;
+    }
+    for result in [line.map(|_| ()), block.map(|_| ())] {
+        let Err(EditError::Invalid(msg)) = result else { panic!("expected a clear error, got {result:?}") };
+        assert!(msg.contains("Korean fallback font") && msg.contains("CRAFT_FONTS_DIR"), "{msg}");
+    }
+    assert_eq!(page_content_bytes(&doc, 0), before);
+    let latin = text::replace_line(&mut doc, 0, 0, "Hello").unwrap();
+    assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap()[0].text, "Hello", "{latin:?}");
+}
+
+#[test]
+fn added_korean_text_is_shaped_wraps_at_words_and_survives_reopen() {
+    let mut doc = fixture();
+    let t = AddedText {
+        rect: [20.0, 100.0, 200.0, 300.0],
+        text: "한국어 문서에 글자를 추가합니다. PDF 2026년 漢字".into(),
+        size: 14.0,
+        ..AddedText::default()
+    };
+    if pdfcraft_fonts::document_korean_fonts_for_style(false, false).is_empty() {
+        assert_eq!(first_undrawable(&t), Some('한'));
+        let before = list_added(&doc);
+        // Without the face the Hanja can't be drawn either; leave them out to see the Korean error.
+        let t = AddedText { text: t.text.replace(" 漢字", ""), ..t };
+        let err = add_content(&mut doc, 0, &Content::Text(t)).unwrap_err().to_string();
+        assert!(err.contains("Korean") && err.contains("CRAFT_FONTS_DIR"), "{err}");
+        assert_eq!(list_added(&doc), before);
+        return;
+    }
+    // Hanja are drawn by the Korean face only when it has them; this check needs none.
+    let t = AddedText { text: t.text.replace(" 漢字", ""), ..t };
+    assert_eq!(first_undrawable(&t), None);
+    // Lines break between words, never inside one.
+    let words: Vec<&str> = t.text.split(' ').collect();
+    let lines = super::added::lines(&t);
+    assert!(lines.len() > 1, "{lines:?}");
+    for line in &lines {
+        assert!(line.split(' ').all(|w| words.contains(&w)), "{line:?} splits a word");
+    }
+    add_content(&mut doc, 0, &Content::Text(t.clone())).unwrap();
+    let reopened = reopen(&doc);
+    assert_eq!(list_added(&reopened)[0].content, Content::Text(AddedText { rect: super::added::text_rect(&t), ..t.clone() }));
+    // The Hangul comes from Type 3 fonts whose ToUnicode maps give each syllable back; Latin stays
+    // in the item's standard font.
+    let s = streams(&reopened, 0).join("");
+    assert!(s.contains("PDF") && s.contains("2026"), "Latin and digits stay in the standard font: {s}");
+    let p = &pdfcraft_model::pages(&reopened)[0];
+    let res = reopened.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = reopened.resolve(res.as_dict().unwrap().get(b"Font").unwrap()).as_dict().unwrap().clone();
+    let mut mapped = String::new();
+    for (_, f) in fonts.iter().filter(|(k, _)| k.starts_with(b"PCAr")) {
+        let f = reopened.resolve(f).as_dict().unwrap().clone();
+        assert_eq!(f.name(b"Subtype"), Some(&b"Type3"[..]));
+        mapped += &String::from_utf8_lossy(&stream_bytes(&reopened, f.get(b"ToUnicode").unwrap()).unwrap());
+    }
+    for syllable in ['한', '국', '어', '년'] {
+        assert!(mapped.contains(&format!("<{:04X}>", u32::from(syllable))), "{syllable} in {mapped}");
+    }
+    // Bold and serif items take other faces; updating and deleting keep the page clean.
+    update_content(&mut doc, 0, 0, &Content::Text(AddedText { text: "굵은 명조".into(), bold: true, family: Family::Times, ..t.clone() })).unwrap();
+    delete_content(&mut doc, 0, 0).unwrap();
+    assert!(list_added(&doc).is_empty());
+    assert!(arabic_font_names(&doc, 0).is_empty());
+}
+
+#[test]
+fn odd_korean_text_never_panics() {
+    for text in ["\u{1100}", "\u{11A8}", "가\u{11A8}\u{11A8}", "ㄱㄴㄷ", "\u{FFA0}", "한\n\n글", " 한 ", "한\u{200B}글", "똠뷁햏"] {
+        let mut doc = fixture();
+        let t = AddedText { rect: [20.0, 100.0, 60.0, 300.0], text: text.into(), size: 12.0, ..AddedText::default() };
+        let _ = first_undrawable(&t);
+        let _ = super::added::lines(&t);
+        let _ = add_content(&mut doc, 0, &Content::Text(t));
+    }
+}
+
+/// A Korean comment drawn as outlines stays searchable once flattened: the appearance carries an
+/// invisible text layer, so the page's text has the words after `/Contents` is gone, and the text
+/// layer's font descriptor is an indirect object. Without the Korean face the comment is marked,
+/// so flattening refuses rather than bake in `?`.
+#[test]
+fn flattened_korean_comments_keep_their_text() {
+    use pdfcraft_annot::{Meta, NewAnnotation, Shape, Style, add_annotation};
+    let mut doc = fixture();
+    let meta = Meta { date: None, id: "x".into() };
+    let shape = Shape::Typewriter { rect: [72.0, 600.0, 300.0, 620.0], font_size: 12.0 };
+    let style = Style::default_for(&shape);
+    add_annotation(&mut doc, &NewAnnotation { page: 0, shape, style, contents: "홍길동 서울".into(), author: "a".into() }, &meta).unwrap();
+    if pdfcraft_fonts::document_korean_fonts_for_style(false, false).is_empty() {
+        let err = flatten(&mut doc, &[0], true, false).unwrap_err().to_string();
+        assert!(err.contains("nothing was flattened"), "{err}");
+        return;
+    }
+    flatten(&mut doc, &[0], true, false).unwrap();
+    let doc = reopen(&doc);
+    assert!(!pdfcraft_model::pages(&doc)[0].dict.contains(b"Annots"), "the comment is flattened");
+    let text: String = text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>().join(" ");
+    assert!(text.contains("홍길동 서울"), "{text:?}");
+    // The text layer's font descriptor is an indirect object (ISO 32000-2 §9.8.1).
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let xo = doc.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+    let flat = doc.resolve(xo.as_dict().unwrap().get(b"PCFl0").unwrap());
+    let pdfcraft_cos::Object::Stream(flat) = &*flat else { panic!("the flattened appearance") };
+    let fonts = doc.resolve(doc.resolve(flat.dict.get(b"Resources").unwrap()).as_dict().unwrap().get(b"Font").unwrap());
+    let font = doc.resolve(fonts.as_dict().unwrap().get(pdfcraft_fonts::OUTLINE_TEXT_FONT.as_bytes()).unwrap());
+    let cid = doc.resolve(&doc.resolve(font.as_dict().unwrap().get(b"DescendantFonts").unwrap()).as_array().unwrap()[0]);
+    assert!(matches!(cid.as_dict().unwrap().get(b"FontDescriptor"), Some(pdfcraft_cos::Object::Ref(_))), "{cid:?}");
+}
+
+/// A line of only CJK punctuation in a Korean item (or Hanja, in a Korean face that has them)
+/// still takes the Korean face: the whole item decides, as the check before drawing does, so it
+/// is never written as `?` in the standard font.
+#[test]
+fn cjk_only_lines_in_a_korean_item_use_the_korean_face() {
+    if without_korean_faces("cjk_only_lines_in_a_korean_item_use_the_korean_face") {
+        return;
+    }
+    // 「※」: in the Korean face (KS X 1001), not in WinAnsi.
+    let cjk = "「※」";
+    assert!(cjk.chars().all(|c| pdfcraft_fonts::korean_has(false, false, c) && !pdfcraft_fonts::win_ansi_encodable(c)));
+    let mut doc = fixture();
+    let t = AddedText { rect: [20.0, 100.0, 300.0, 300.0], text: format!("한국\n{cjk}"), size: 14.0, ..AddedText::default() };
+    assert_eq!(first_undrawable(&t), None);
+    add_content(&mut doc, 0, &Content::Text(t)).unwrap();
+    let doc = reopen(&doc);
+    let s = streams(&doc, 0).join("");
+    assert!(!s.contains("(?"), "no character drawn as ? in the standard font: {s}");
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap()).as_dict().unwrap().clone();
+    let mut mapped = String::new();
+    for (_, f) in fonts.iter().filter(|(k, _)| k.starts_with(b"PCAr")) {
+        let f = doc.resolve(f).as_dict().unwrap().clone();
+        mapped += &String::from_utf8_lossy(&stream_bytes(&doc, f.get(b"ToUnicode").unwrap()).unwrap());
+    }
+    for u in ["300C", "203B", "300D"] {
+        assert!(mapped.contains(&format!("<{u}>")), "{u} is a Korean-face glyph: {mapped}");
+    }
+}
+
+/// Korean in a paragraph with formatted ranges goes through the styled writer, which groups
+/// fallback glyphs by face: the Korean face's glyphs go into Korean fonts (`PCKo`), not ones
+/// named for the Japanese faces, and the text reads back.
+#[test]
+fn korean_in_a_styled_paragraph_uses_korean_fallback_fonts() {
+    if without_korean_faces("korean_in_a_styled_paragraph_uses_korean_fallback_fonts") {
+        return;
+    }
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let replacement = "강조된 한국어 문장";
+    let style = text::BlockStyle {
+        ranges: vec![text::RangeStyle {
+            range: 0..replacement.find(' ').unwrap(),
+            family: None,
+            resource: None,
+            size: Some(16.0),
+            color: Some([1.0, 0.0, 0.0]),
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    text::rewrite_block(&mut doc, 0, 0, Some(replacement), &style).unwrap();
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("/PCKo") && !content.contains("/PCJp"), "{content}");
+    let reopened = reopen(&doc);
+    assert_eq!(text::text_blocks(&reopened, 0).unwrap()[0].text, replacement);
+}

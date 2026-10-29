@@ -1,9 +1,9 @@
 use super::grouping::{across, is_centred, row_rect};
 use super::{
     BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
-    RangeStyle, TextBlock, TextLine, Type3Glyph, coincident_ops, content_streams, fallback_face, japanese_glyph_from, needs_type3, no_fallback_font,
-    no_glyph_for, page_dict, reveal_ops, rewritten_contents, source_encodes, source_family, source_program, source_show, source_space, source_width,
-    splice, type3_faces, type3_glyph, write_type3_glyphs,
+    RangeStyle, TextBlock, TextLine, Type3Glyph, coincident_ops, content_streams, fallback_face, fallback_script_of, japanese_glyph_from,
+    needs_type3, no_fallback_font, no_glyph_for, page_dict, reveal_ops, rewritten_contents, source_encodes, source_family, source_program,
+    source_show, source_space, source_width, splice, type3_faces, type3_glyph, write_type3_glyphs,
 };
 
 // The draft is capped at 4 MiB; also bound the outline data prepared across all fallback faces.
@@ -157,7 +157,7 @@ impl CharacterPreparation<'_> {
         }
         drop(resolver);
         for group in fallback.groups {
-            let written = write_type3_glyphs(doc, fonts, group.face, false, group.glyphs, fallback.per_font);
+            let written = write_type3_glyphs(doc, fonts, group.face, fallback_script_of(group.face), group.glyphs, fallback.per_font);
             for name in &written.names {
                 let font = fonts
                     .get(name.as_bytes())

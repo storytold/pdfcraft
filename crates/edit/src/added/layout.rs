@@ -1,7 +1,7 @@
 use super::types::{AddedImage, AddedText};
 use super::{
-    Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedCluster, ShapedScript, shape_arabic, shape_hebrew,
-    shape_thai,
+    Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedCluster, ShapedScript, is_hangul, shape_arabic,
+    shape_hebrew, shape_korean, shape_thai,
 };
 
 pub(super) fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
@@ -35,6 +35,8 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
     #[cfg(test)]
     WRAP_CALLS.with(|c| c.set(c.get().saturating_add(1)));
     let width = (t.rect[2] - t.rect[0]).max(t.size);
+    // Whether the item has Hangul decides once for every line and word (see `shaped_layout`).
+    let korean = has_hangul(t);
     let mut out = Vec::new();
     for para in t.text.split('\n') {
         // Arabic or Hebrew: laid out with the bidirectional algorithm and shaped.
@@ -42,7 +44,7 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
         let thai = para.chars().any(is_thai);
         if thai
             && !rtl_script
-            && let Ok(lines) = thai_lines(t, para, width)
+            && let Ok(lines) = thai_lines(t, para, width, korean)
         {
             out.extend(lines.into_iter().map(|line| (line, false)));
             continue;
@@ -52,13 +54,15 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
         // sum of its words' and shaping stays linear in the paragraph's length. The space is the
         // paragraph's; a space between Latin words is drawn in the item's font, a few hundredths
         // of an em apart.
-        let measure = |s: &str| if rtl_script || thai { shaped_width(t, s, rtl) } else { latin_width(t, s) };
+        // Korean is shaped too, but breaks between words like Latin (word-by-word, as Korean is
+        // written with spaces).
+        let shaped = rtl_script || thai || korean;
+        let measure = |s: &str| if shaped { shaped_width(t, s, rtl, korean) } else { latin_width(t, s) };
         let space = measure(" ");
         let (mut line, mut line_w) = (String::new(), 0.0);
         for word in para.split(' ') {
             let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            let candidate_w =
-                if rtl_script || thai { if line.is_empty() { measure(word) } else { line_w + space + measure(word) } } else { measure(&candidate) };
+            let candidate_w = if shaped { if line.is_empty() { measure(word) } else { line_w + space + measure(word) } } else { measure(&candidate) };
             if !line.is_empty() && candidate_w > width {
                 out.push((std::mem::take(&mut line), rtl));
                 line = word.to_string();
@@ -75,8 +79,8 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
 
 /// Thai wrapping at shaped cluster boundaries never detaches a tone/vowel mark from its base.
 /// This is glyph-safe wrapping, not dictionary-based Thai word segmentation.
-fn thai_lines(t: &AddedText, para: &str, width: f64) -> Result<Vec<String>, EditError> {
-    let (pieces, _) = shaped_layout(t, para, false)?;
+fn thai_lines(t: &AddedText, para: &str, width: f64, korean: bool) -> Result<Vec<String>, EditError> {
+    let (pieces, _) = shaped_layout(t, para, false, korean)?;
     let mut atoms = Vec::new();
     for piece in pieces {
         match piece {
@@ -106,6 +110,23 @@ pub(super) fn is_thai(c: char) -> bool {
     matches!(u32::from(c), 0x0E00..=0x0E7F)
 }
 
+/// Whether the item has Hangul, so its Hangul (and what only the Korean face draws) takes that face.
+pub(super) fn has_hangul(t: &AddedText) -> bool {
+    t.text.chars().any(is_hangul)
+}
+
+/// The Korean face's style for an item: Myeongjo for Times, Gothic otherwise; bold as asked.
+fn korean_style(t: &AddedText) -> (bool, bool) {
+    (t.family == super::Family::Times, t.bold)
+}
+
+/// Whether `c` of an item with Hangul is drawn with the Korean face: Hangul, and what the
+/// standard fonts can't draw but the face can (Hanja, CJK punctuation). Latin keeps the item's font.
+fn korean_drawn(t: &AddedText, c: char) -> bool {
+    let (serif, bold) = korean_style(t);
+    is_hangul(c) || (!pdfcraft_fonts::win_ansi_encodable(c) && pdfcraft_fonts::korean_has(serif, bold, c))
+}
+
 /// Arabic letters, marks, digits and punctuation: an item with any of them is shaped with the
 /// craft-fonts Arabic face.
 pub(super) fn is_arabic(c: char) -> bool {
@@ -123,6 +144,15 @@ pub(super) fn is_hebrew(c: char) -> bool {
 /// draw (or that has no face to draw it). Page-content tools refuse such text; the Add-text editor
 /// keeps it open.
 pub fn first_undrawable(t: &AddedText) -> Option<char> {
+    let korean = has_hangul(t);
+    if korean {
+        let (serif, bold) = korean_style(t);
+        if let Some(c) = t.text.chars().find(|c| is_hangul(*c) && !pdfcraft_fonts::korean_has(serif, bold, *c)) {
+            return Some(c);
+        }
+        let rest = AddedText { text: t.text.chars().filter(|c| !korean_drawn(t, *c)).collect(), ..t.clone() };
+        return first_undrawable(&rest);
+    }
     if t.text.chars().any(is_thai) {
         if let Some(c) = t.text.chars().find(|c| is_thai(*c) && !pdfcraft_fonts::thai_has(*c)) {
             return Some(c);
@@ -143,7 +173,7 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
     }
     // What `shaped_layout` leaves to the standard font, exactly as `draw_shaped` splits it.
     wrapped(t).into_iter().find_map(|(line, rtl)| {
-        let (pieces, _) = shaped_layout(t, &line, rtl).ok()?;
+        let (pieces, _) = shaped_layout(t, &line, rtl, korean).ok()?;
         pieces.iter().find_map(|p| match p {
             Piece::Latin(s) => pdfcraft_fonts::first_non_win_ansi(s),
             Piece::Shaped(_) => None,
@@ -192,8 +222,9 @@ pub(super) enum Piece {
 }
 
 /// A line of a shaped-text item in drawing order (the Unicode bidirectional algorithm, UAX #9), and
-/// its width at the item's size. `rtl` is its paragraph's direction.
-pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec<Piece>, f64), EditError> {
+/// its width at the item's size. `rtl` is its paragraph's direction; `korean` is [`has_hangul`] of
+/// the whole item, which callers work out once rather than per line or word.
+pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool, korean: bool) -> Result<(Vec<Piece>, f64), EditError> {
     // unicode-bidi indexes the first level of a line, so an empty one would panic.
     if line.is_empty() {
         return Ok((Vec::new(), 0.0));
@@ -210,9 +241,14 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
         // (Hebrew's when they follow Hebrew), which the shaper then mirrors. Latin text (and what
         // the faces lack) keeps the item's font.
         let mut segments: Vec<(Option<ShapedScript>, String)> = Vec::new();
+        // The whole item decides, as `first_undrawable` does: a line of only Hanja or CJK
+        // punctuation in a Korean item still takes the Korean face.
+        let (serif, bold) = korean_style(t);
         for c in text.chars().filter(|c| !is_bidi_control(*c)) {
             let after_hebrew = segments.last().is_some_and(|(kind, _)| *kind == Some(ShapedScript::Hebrew));
-            let script = if is_thai(c) {
+            let script = if korean && korean_drawn(t, c) {
+                Some(ShapedScript::Korean { serif, bold })
+            } else if is_thai(c) {
                 Some(ShapedScript::Thai)
             } else if is_hebrew(c) || (run_rtl && after_hebrew && !c.is_alphanumeric() && pdfcraft_fonts::hebrew_has(c)) {
                 Some(ShapedScript::Hebrew)
@@ -235,6 +271,7 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
                     ShapedScript::Arabic => shape_arabic(&s, run_rtl).map_err(|e| arabic_error(e, &s))?,
                     ShapedScript::Hebrew => shape_hebrew(&s, run_rtl).map_err(|e| hebrew_error(e, &s))?,
                     ShapedScript::Thai => shape_thai(&s).map_err(|e| thai_error(e, &s))?,
+                    ShapedScript::Korean { serif, bold } => shape_korean(&s, serif, bold).map_err(|e| korean_error(e, &s))?,
                 };
                 Piece::Shaped(shaped)
             } else if run_rtl {
@@ -257,8 +294,8 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
 
 /// The width of `s` in a shaped-text item; the item's font's estimate if it can't be shaped (drawing
 /// then reports why).
-fn shaped_width(t: &AddedText, s: &str, rtl: bool) -> f64 {
-    shaped_layout(t, s, rtl).map(|(_, w)| w).unwrap_or_else(|_| latin_width(t, s))
+fn shaped_width(t: &AddedText, s: &str, rtl: bool, korean: bool) -> f64 {
+    shaped_layout(t, s, rtl, korean).map(|(_, w)| w).unwrap_or_else(|_| latin_width(t, s))
 }
 
 pub(super) fn arabic_error(e: GlyphError, text: &str) -> EditError {
@@ -278,6 +315,16 @@ pub(super) fn hebrew_error(e: GlyphError, text: &str) -> EditError {
             .into(),
         GlyphError::Missing => format!("the Hebrew font can't show \"{text}\""),
         GlyphError::TooComplex => format!("the Hebrew font's glyphs for \"{text}\" are too complex"),
+    })
+}
+
+pub(super) fn korean_error(e: GlyphError, text: &str) -> EditError {
+    EditError::Invalid(match e {
+        GlyphError::NoFont => "Korean text needs PdfCraft's Korean font (NanumGothic or NanumMyeongjo), which this build doesn't include \
+                               (to build it in, set CRAFT_FONTS_DIR to a craft-fonts checkout that has a Kore face)"
+            .into(),
+        GlyphError::Missing => format!("the Korean font can't show \"{text}\""),
+        GlyphError::TooComplex => format!("the Korean font's glyphs for \"{text}\" are too complex"),
     })
 }
 
@@ -355,5 +402,9 @@ fn copy_key(c: &Content) -> Content {
 
 /// The widest explicit line before wrapping, measured with the PDF writing fonts.
 pub fn text_width(t: &AddedText) -> f64 {
-    t.text.split('\n').map(|line| shaped_width(t, line, unicode_bidi::get_base_direction(line) == unicode_bidi::Direction::Rtl)).fold(0.0, f64::max)
+    let korean = has_hangul(t);
+    t.text
+        .split('\n')
+        .map(|line| shaped_width(t, line, unicode_bidi::get_base_direction(line) == unicode_bidi::Direction::Rtl, korean))
+        .fold(0.0, f64::max)
 }
