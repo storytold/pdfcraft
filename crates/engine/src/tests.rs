@@ -5778,6 +5778,14 @@ fn latin_ocr_keeps_czech_diacritics() {
     for ch in "áčéěíóřšúýž".chars() {
         assert!(text.contains(ch), "missing {ch} in {text:?}");
     }
+    // č ě ř š ž are outside WinAnsi. The recogniser result above can pass while the saved layer
+    // still stores them as `?` if AddOcrText stamps Helvetica instead of the Unicode layer.
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = s.open("result.pdf", None, saved, None).unwrap();
+    let extracted = page_texts(&s, reopened);
+    for ch in "áčéěíóřšúýž".chars() {
+        assert!(extracted[0].contains(ch), "the saved layer dropped {ch}: {extracted:?}");
+    }
 }
 
 /// The Polish pangram built to use every one of its nine special letters ("Zażółć gęślą jaźń":
@@ -5797,6 +5805,14 @@ fn latin_ocr_keeps_polish_diacritics() {
     let text = s.recognize_text(id, &[], ocr::OcrSettings { language: "pl".into(), ..Default::default() }).unwrap()[0].text();
     for ch in "ćęóś".chars() {
         assert!(text.contains(ch), "missing {ch} in {text:?}");
+    }
+    // ć ę ś are outside WinAnsi, so a Helvetica layer would save them as `?` even when recognition
+    // returned the letters.
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = s.open("result.pdf", None, saved, None).unwrap();
+    let extracted = page_texts(&s, reopened);
+    for ch in "ćęóś".chars() {
+        assert!(extracted[0].contains(ch), "the saved layer dropped {ch}: {extracted:?}");
     }
 }
 
