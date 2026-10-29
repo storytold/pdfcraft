@@ -2963,24 +2963,25 @@ fn stream_obj(dict: &str, body: &str) -> Vec<u8> {
 }
 
 /// One page with a form whose appearances and default resources are objects of their own:
-/// - text field "Name" (7): indirect `/AP` 8, appearance stream 9;
+/// - text field "Name" (7): indirect `/AP` 8, appearance stream 9, down appearance 26;
 /// - check box "Agree" (widget 13, field 14, `/FT` inherited): indirect states 15, streams 16 and 17;
-/// - `/AcroForm /DR` 10, its `/Font` 11, the font 12;
+///   check box "Also" (25) shares the off appearance 17;
+/// - `/AcroForm /DR` 10, its `/Font` 11, the font 12, and an XObject that is the down appearance 26;
 /// - text field "Shared" (19), whose appearances are also something else: 18 is a Form XObject the
 ///   page draws, 20 the appearance of the unsigned signature field "Approval" (6), 22 the
 ///   document's open action script, and 24 the appearance of a square comment (23).
 fn form_fixture() -> Vec<u8> {
     let objs: Vec<Vec<u8>> = vec![
-        b"<< /Type /Catalog /Pages 2 0 R /OpenAction 21 0 R /AcroForm << /Fields [6 0 R 7 0 R 14 0 R 19 0 R] /DR 10 0 R /DA (/Helv 0 Tf 0 g) >> >>".to_vec(),
+        b"<< /Type /Catalog /Pages 2 0 R /OpenAction 21 0 R /AcroForm << /Fields [6 0 R 7 0 R 14 0 R 19 0 R 25 0 R] /DR 10 0 R /DA (/Helv 0 Tf 0 g) >> >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Logo 18 0 R >> >> /Annots [6 0 R 7 0 R 13 0 R 19 0 R 23 0 R] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Logo 18 0 R >> >> /Annots [6 0 R 7 0 R 13 0 R 19 0 R 23 0 R 25 0 R] >>".to_vec(),
         stream_obj("", "BT /F1 14 Tf 20 250 Td (Contract text) Tj ET q /Logo Do Q"),
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
         b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /Rect [150 20 280 70] /P 3 0 R /F 4 /AP << /N 20 0 R >> >>".to_vec(),
         b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (Name) /V (Ann) /Rect [20 200 200 220] /P 3 0 R /F 4 /AP 8 0 R >>".to_vec(),
-        b"<< /N 9 0 R >>".to_vec(),
+        b"<< /N 9 0 R /D 26 0 R >>".to_vec(),
         stream_obj("/Type /XObject /Subtype /Form /BBox [0 0 180 20] /Resources << /Font << /Helv 12 0 R >> >>", "/Tx BMC BT /Helv 10 Tf 2 6 Td (Ann) Tj ET EMC"),
-        b"<< /Font 11 0 R >>".to_vec(),
+        b"<< /Font 11 0 R /XObject << /Shared 26 0 R >> >>".to_vec(),
         b"<< /Helv 12 0 R >>".to_vec(),
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
         b"<< /Type /Annot /Subtype /Widget /Parent 14 0 R /Rect [20 170 34 184] /P 3 0 R /F 4 /AS /Off /AP << /N 15 0 R >> >>".to_vec(),
@@ -2995,6 +2996,8 @@ fn form_fixture() -> Vec<u8> {
         stream_obj("", "app.alert('hello');"),
         b"<< /Type /Annot /Subtype /Square /Rect [220 220 280 280] /P 3 0 R /AP << /N 24 0 R >> >>".to_vec(),
         stream_obj("/Subtype /Form /BBox [0 0 60 60]", "0 0 60 60 re S"),
+        b"<< /Type /Annot /Subtype /Widget /FT /Btn /T (Also) /Rect [40 170 54 184] /P 3 0 R /F 4 /AS /Off /AP << /N << /Off 17 0 R >> >> >>".to_vec(),
+        stream_obj("/Type /XObject /Subtype /Form /BBox [0 0 180 20]", "0 0 180 20 re S"),
     ];
     write_pdf(&objs.iter().map(Vec::as_slice).collect::<Vec<_>>())
 }
@@ -3037,12 +3040,22 @@ fn a_form_fill_may_rewrite_existing_appearances_and_resources_in_place() {
         let rewrites: [(u32, Object); 3] = [
             (8, Object::Dict(dict_of(vec![("N", oref(9)), ("D", oref(9))]))),
             (15, Object::Dict(dict_of(vec![("Yes", oref(17)), ("Off", oref(16))]))),
-            (10, Object::Dict(dict_of(vec![("Font", oref(11)), ("ProcSet", Object::Array(vec![Object::name("PDF")]))]))),
+            (
+                10,
+                Object::Dict(dict_of(vec![
+                    ("Font", oref(11)),
+                    ("XObject", Object::Dict(dict_of(vec![("Shared", oref(26))]))),
+                    ("ProcSet", Object::Array(vec![Object::name("PDF")])),
+                ])),
+            ),
         ];
         for (num, now) in rewrites {
             let s = check(&edit_after(&signed, |doc| doc.set(obj(num), now)));
             assert_eq!((s.status, s.modification), (Status::Valid, Modification::Allowed(vec![kind::FORM_FILL])), "{certify:?}: {num}");
         }
+        // An off appearance two check boxes share is still only their appearance.
+        let s = check(&edit_after(&signed, rewrite_stream(17, b"0 0 14 14 re S")));
+        assert_eq!((s.status, s.modification), (Status::Valid, Modification::Allowed(vec![kind::FORM_FILL])), "{certify:?}: shared off appearance");
     }
     let locked = pdfcraft_sign::sign(&open(&form_fixture()), &id, &SignOptions { certify: Some(1), ..opts() }).unwrap();
     let s = check(&edit_after(&locked, fill_in_place));
@@ -3051,8 +3064,9 @@ fn a_form_fill_may_rewrite_existing_appearances_and_resources_in_place() {
 
 /// #3442: an object a field's appearance shares with something else keeps that other role: a
 /// Form XObject the page draws is page content, and the signature field's appearance, the
-/// document's script and a comment's appearance are no form fill. Nor is a default-resources
-/// entry changed rather than added, or an object a later revision makes a field's appearance.
+/// document's script, a comment's appearance and an XObject the default resources name are no
+/// form fill. Nor is a default-resources entry changed rather than added, or an object a later
+/// revision makes a field's appearance.
 #[test]
 fn an_appearance_shared_with_anything_else_is_not_a_form_fill() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
@@ -3068,7 +3082,9 @@ fn an_appearance_shared_with_anything_else_is_not_a_form_fill() {
         refused(&|doc| rewrite_stream(18, b"1 0 0 rg 0 0 50 50 re f")(doc), "page XObject"),
         Modification::Disallowed(vec![kind::PAGE_CONTENT])
     );
-    for (num, what) in [(20, "signature field appearance"), (22, "open action script"), (24, "comment appearance")] {
+    for (num, what) in
+        [(20, "signature field appearance"), (22, "open action script"), (24, "comment appearance"), (26, "XObject the default resources name")]
+    {
         assert_eq!(refused(&|doc| rewrite_stream(num, b"0 0 m 9 9 l S")(doc), what), Modification::Disallowed(vec![kind::OTHER]), "{what}");
     }
     let changed_font = |doc: &mut Document| doc.update_dict(obj(11), |d| d.set(b"Helv".to_vec(), oref(5))).unwrap();

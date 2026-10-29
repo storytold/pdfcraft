@@ -279,6 +279,20 @@ enum FormRole {
     Resources,
 }
 
+/// How the walk in [`form_fill_roles`] treats an object it comes to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Visit {
+    /// Marked reached, and everything it refers to walked.
+    Plain,
+    /// The AcroForm, written inline in the catalog.
+    InlineForm,
+    /// `/DR`: not marked reached, its categories walked as [`Visit::Category`], anything else in it
+    /// as [`Visit::Plain`].
+    Resources,
+    /// A category dictionary of `/DR`: not marked reached, what it names walked.
+    Category,
+}
+
 /// The objects of the signed revision that a form fill may rewrite in place (#3442), with their
 /// [`FormRole`]. A writer may redraw a filled field in its existing appearance stream, and add the
 /// font it drew with to an existing indirect `/DR`, rather than write new objects.
@@ -286,11 +300,15 @@ enum FormRole {
 /// The policy:
 /// - An object qualifies only through the role it held when signed, never through what a later
 ///   revision says it is.
-/// - It qualifies only when that role is all it held: nothing else in the signed file refers to
-///   it, directly or through other objects. The file is walked from the trailer, everything
-///   except the `/AP` of ordinary widgets and the AcroForm's `/DR`; whatever that walk reaches
-///   (a page's content or resources, another annotation's or a signature field's appearance, an
-///   action, the catalog's own entries) is left to the stricter judgement it had.
+/// - It qualifies only when that role is all it held: nothing in the signed file refers to it,
+///   directly or through other objects, except ordinary widgets' appearances and the form's
+///   default resources. The file is walked from the trailer, everything except the `/AP` of
+///   ordinary widgets, and `/DR` and its category dictionaries themselves (what they name is
+///   walked); whatever that walk reaches (a page's content or resources, another annotation's or
+///   a signature field's appearance, an action, the catalog's own entries, a font or XObject
+///   `/DR` names) is left to the stricter judgement it had.
+/// - Ordinary widgets may share an appearance: radio buttons often share their off appearance.
+///   Rewriting it changes only how those fields look, as filling them may.
 /// - An ordinary widget is one of a text, button or choice field (`/FT`, its own or inherited).
 ///   Signature fields, comments and widgets without a field type are not.
 /// - Each object must have the shape of its role: an appearance dictionary has only `/N`, `/R`
@@ -307,17 +325,19 @@ fn form_fill_roles(old: &Document) -> HashMap<ObjRef, FormRole> {
 
     let acroform_ref = old.root().and_then(|root| old.get(root).as_dict().and_then(|c| c.get(b"AcroForm").and_then(Object::as_ref)));
     let mut seen: HashSet<ObjRef> = HashSet::new();
+    // `/DR` and its category dictionaries: walked through without being marked reached.
+    let mut containers: HashSet<ObjRef> = HashSet::new();
     let (mut appearances, mut resources) = (Vec::new(), Vec::new());
-    // Each object to visit, and whether it is the AcroForm (written inline in the catalog).
-    let mut stack: Vec<(Object, bool)> = old.trailer().iter().map(|(_, v)| (v.clone(), false)).collect();
-    while let Some((o, inline_form)) = stack.pop() {
+    let mut stack: Vec<(Object, Visit)> = old.trailer().iter().map(|(_, v)| (v.clone(), Visit::Plain)).collect();
+    while let Some((o, visit)) = stack.pop() {
         let held;
         let (here, o) = match o {
             Object::Ref(r) => {
-                if !seen.insert(r) {
+                let first = if matches!(visit, Visit::Resources | Visit::Category) { containers.insert(r) } else { seen.insert(r) };
+                if !first {
                     continue;
                 }
-                if seen.len() > MAX_VISITED {
+                if seen.len().saturating_add(containers.len()) > MAX_VISITED {
                     return HashMap::new();
                 }
                 held = old.get(r);
@@ -325,22 +345,39 @@ fn form_fill_roles(old: &Document) -> HashMap<ObjRef, FormRole> {
             }
             ref other => (None, other),
         };
-        match o {
-            Object::Dict(d) => {
+        match (o, visit) {
+            // What the form's default resources name is reached like anything else: an appearance
+            // that `/DR` also names is not only an appearance.
+            (Object::Dict(d), Visit::Resources) => stack
+                .extend(d.iter().map(|(k, v)| (v.clone(), if RESOURCE_CATEGORIES.contains(&k.as_slice()) { Visit::Category } else { Visit::Plain }))),
+            (Object::Dict(d), Visit::Category) => stack.extend(d.iter().map(|(_, v)| (v.clone(), Visit::Plain))),
+            // A `/DR` or category that is no dictionary qualifies for nothing: walked as anything.
+            (_, Visit::Resources | Visit::Category) => {
+                if let Some(r) = here {
+                    containers.remove(&r);
+                    stack.push((Object::Ref(r), Visit::Plain));
+                } else {
+                    stack.push((o.clone(), Visit::Plain));
+                }
+            }
+            (Object::Dict(d), _) => {
                 let widget = d.name(b"Subtype") == Some(b"Widget") && is_ordinary_field(old, d);
-                let form = inline_form || (here.is_some() && here == acroform_ref);
+                let form = visit == Visit::InlineForm || (here.is_some() && here == acroform_ref);
                 let catalog = here.is_some() && here == old.root();
                 for (k, v) in d.iter() {
                     match k.as_slice() {
                         b"AP" if widget => appearances.push(v.clone()),
-                        b"DR" if form => resources.push(v.clone()),
-                        b"AcroForm" if catalog => stack.push((v.clone(), true)),
-                        _ => stack.push((v.clone(), false)),
+                        b"DR" if form => {
+                            resources.push(v.clone());
+                            stack.push((v.clone(), Visit::Resources));
+                        }
+                        b"AcroForm" if catalog => stack.push((v.clone(), Visit::InlineForm)),
+                        _ => stack.push((v.clone(), Visit::Plain)),
                     }
                 }
             }
-            Object::Stream(s) => stack.extend(s.dict.iter().map(|(_, v)| (v.clone(), false))),
-            Object::Array(a) => stack.extend(a.iter().map(|v| (v.clone(), false))),
+            (Object::Stream(s), _) => stack.extend(s.dict.iter().map(|(_, v)| (v.clone(), Visit::Plain))),
+            (Object::Array(a), _) => stack.extend(a.iter().map(|v| (v.clone(), Visit::Plain))),
             _ => {}
         }
     }
