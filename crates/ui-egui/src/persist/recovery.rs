@@ -154,6 +154,7 @@ impl RecoveryStore {
             Err(TryLockError::WouldBlock) => true,
             Ok(()) => {
                 let _ = file.unlock();
+                #[cfg(not(target_arch = "wasm32"))]
                 drop(file);
                 let _ = std::fs::remove_file(&path);
                 false

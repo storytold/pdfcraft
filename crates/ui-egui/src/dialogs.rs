@@ -280,7 +280,11 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             }
         }
         Dialog::OverwriteChanged => {
-            if !dialog_overwrite_changed(ui, app, req) {
+            #[cfg(not(target_arch = "wasm32"))]
+            let name = app.pending_overwrite.as_ref().and_then(|p| app.session.get(p.id)).map(|d| d.name.clone()).unwrap_or_default();
+            #[cfg(target_arch = "wasm32")]
+            let name = String::new();
+            if !dialog_overwrite_changed(ui, &name, req) {
                 return false;
             }
         }
@@ -1255,16 +1259,12 @@ fn dialog_revert(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) ->
 }
 
 /// `Dialog::OverwriteChanged` content. Returns `false` when it has its own buttons and no footer is wanted.
-fn dialog_overwrite_changed(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
-    #[cfg(not(target_arch = "wasm32"))]
-    let name = app.pending_overwrite.as_ref().and_then(|p| app.session.get(p.id)).map(|d| d.name.clone()).unwrap_or_default();
-    #[cfg(target_arch = "wasm32")]
-    let name = String::new();
+fn dialog_overwrite_changed(ui: &mut egui::Ui, name: &str, req: &mut Pending) -> bool {
     ui.label(egui::RichText::new(tl!("Save over the changed file?")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     ui.label(crate::i18n::fmt(
         tl!("“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one."),
-        &[("name", &name)],
+        &[("name", name)],
     ));
     ui.add_space(12.0);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1594,7 +1594,12 @@ fn dialog_footer(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: 
 
 /// Acts on what the dialog asked for, once the modal is drawn.
 fn finish_dialog(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: &mut Pending) {
-    finish_requests(app, dialog, modal_closed, req);
+    finish_requests(app, req);
+    // Cancelled or dismissed: the save is dropped.
+    #[cfg(not(target_arch = "wasm32"))]
+    if dialog == Dialog::OverwriteChanged && (modal_closed || req.close) {
+        app.pending_overwrite = None;
+    }
     finish_actions(app, req);
     finish_redactions_and_fields(app, req);
     finish_edits(app, dialog, req);
@@ -1602,7 +1607,7 @@ fn finish_dialog(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req:
 }
 
 /// Runs the one-shot requests the dialog made.
-fn finish_requests(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: &mut Pending) {
+fn finish_requests(app: &mut PdfCraftApp, req: &mut Pending) {
     if let Some(yes) = req.recover {
         let keys: Vec<String> = app.recoverable.iter().map(|m| m.key.clone()).collect();
         if yes {
@@ -1643,11 +1648,6 @@ fn finish_requests(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, re
     }
     #[cfg(target_arch = "wasm32")]
     let _ = (req.overwrite_now, req.overwrite_elsewhere);
-    // Cancelled or dismissed: the save is dropped.
-    #[cfg(not(target_arch = "wasm32"))]
-    if dialog == Dialog::OverwriteChanged && (modal_closed || req.close) {
-        app.pending_overwrite = None;
-    }
 }
 
 /// Runs the document actions the dialog asked for.

@@ -14,6 +14,7 @@ pub const RELEASES_PAGE: &str = "https://github.com/storytold/pdfcraft/releases"
 #[cfg(not(target_arch = "wasm32"))]
 pub type UpdateSource = CheckSource;
 
+#[cfg_attr(target_arch = "wasm32", derive(Default))]
 pub(crate) struct Updates {
     #[cfg(not(target_arch = "wasm32"))]
     updater: Updater,
@@ -26,15 +27,13 @@ pub(crate) struct Updates {
     check_requested: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Default for Updates {
     fn default() -> Self {
         Self {
-            #[cfg(not(target_arch = "wasm32"))]
             updater: Updater::new(&craft_update::suite::PDFCRAFT, env!("CARGO_PKG_VERSION")),
             open: false,
-            #[cfg(not(target_arch = "wasm32"))]
             startup_check: false,
-            #[cfg(not(target_arch = "wasm32"))]
             check_requested: false,
         }
     }

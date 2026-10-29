@@ -851,7 +851,7 @@ impl crate::PdfCraftApp {
             });
         }
         #[cfg(target_arch = "wasm32")]
-        self.notify_fmt("{name}: choosing images arrives on the web with file pickers for images", &[("name", &name)]);
+        self.notify_fmt("{name}: choosing images arrives on the web with file pickers for images", &[("name", name)]);
     }
 
     /// Edit image ▸ Replace: pick a file for the selected image.

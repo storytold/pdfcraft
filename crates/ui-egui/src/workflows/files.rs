@@ -926,6 +926,7 @@ impl PdfCraftApp {
         let Some(doc) = self.session.get(id) else { return };
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
         let ext = format.extension();
+        #[cfg(not(target_arch = "wasm32"))]
         let folder = doc.path.clone();
         let bytes = doc.export_office(format);
         #[cfg(not(target_arch = "wasm32"))]
