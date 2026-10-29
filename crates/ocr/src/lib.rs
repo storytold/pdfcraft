@@ -20,7 +20,8 @@
 //!
 //! When the layout model is installed too (PP-DocLayoutV3, Apache-2.0, fetched the same way),
 //! the recognised lines are read region by region in the order it gives, and each region is a
-//! paragraph.
+//! paragraph. With the table structure model as well (SLANet_plus, Apache-2.0, fetched the same
+//! way), a `table` region becomes a [`Table`] of rows and cells, its words put into the cells.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -31,6 +32,7 @@ mod ocrs;
 mod pitch;
 pub mod preprocess;
 mod regions;
+mod tables;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tesseract;
 mod tiles;
@@ -39,8 +41,9 @@ pub use confidence::{ConfidenceBand, band_for, is_suspect, low_confidence};
 pub use merge::{MergeStrategy, StrategyOutcome, mean_confidence, recognize_with_strategy, rover_merge};
 pub use ocrs::{
     ALPHABET, DETECTION_MODEL, DETECTION_MODEL_SHA256, LANGUAGES, LAYOUT_MODEL, Models, Ocr, OcrsRecognizer, RECOGNITION_MODEL,
-    RECOGNITION_MODEL_SHA256,
+    RECOGNITION_MODEL_SHA256, TABLE_MODEL,
 };
+pub use tables::{Cell, Table};
 
 pub use pdfcraft_fonts::TextPlan;
 pub use pdfcraft_fonts::helvetica_width;
@@ -187,10 +190,14 @@ pub struct Line {
     pub words: Vec<Word>,
 }
 
-/// Recognised lines read as one block of text: a paragraph, a heading, a caption.
+/// Recognised lines read as one block of text: a paragraph, a heading, a caption, or a table.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Paragraph {
+    /// The lines; in a table, one line a cell (in row order, left to right) holding the cell's
+    /// words, empty for an empty cell.
     pub lines: Vec<Line>,
+    /// The table's rows and cells, when the paragraph is a table.
+    pub table: Option<Table>,
 }
 
 impl Line {
@@ -229,9 +236,31 @@ pub trait Recognizer: Send + Sync {
     fn recognize(&self, image: &OcrImage, options: &RecognizeOptions) -> Result<Vec<Line>, OcrError>;
     /// Read `image` as paragraphs. The default is one paragraph: only an engine with a layout
     /// model splits a page into them, and its [`Self::recognize`] is those paragraphs' lines.
+    /// With the table structure model too, a table region is a paragraph carrying a [`Table`].
     fn paragraphs(&self, image: &OcrImage, options: &RecognizeOptions) -> Result<Vec<Paragraph>, OcrError> {
-        Ok(vec![Paragraph { lines: self.recognize(image, options)? }])
+        Ok(vec![Paragraph { lines: self.recognize(image, options)?, ..Default::default() }])
     }
+}
+
+/// `pixels` as a `width` × `height` picture of 1 or 3 bytes a pixel (RGBA loses its alpha), and
+/// how many bytes a pixel it has. An error when the size doesn't match the pixels.
+fn picture(pixels: &[u8], width: u32, height: u32) -> Result<(std::borrow::Cow<'_, [u8]>, usize), OcrError> {
+    if width == 0 || height == 0 || pixels.is_empty() {
+        return Err(OcrError::EmptyImage);
+    }
+    // In u64, so a huge size cannot wrap round to the buffer's length; ocrs multiplies the
+    // sides in u32 and slices the pixels by the product, so it gets only sizes that fit.
+    let area = u64::from(width) * u64::from(height);
+    let channels = [1, 3, 4].into_iter().find(|&c| area.checked_mul(c) == Some(pixels.len() as u64));
+    let Some(channels) = channels.filter(|_| area <= u64::from(u32::MAX)) else {
+        return Err(OcrError::Recognize(format!("{} bytes are not a {width} × {height} picture (1, 3 or 4 bytes a pixel)", pixels.len())));
+    };
+    // ocrs wants 1 or 3 channels.
+    Ok(if channels == 4 {
+        (pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into(), 3)
+    } else {
+        (pixels.into(), channels as usize)
+    })
 }
 
 /// A word placed on a page, in PDF user space: the bottom-left corner of its box, and the
@@ -1059,6 +1088,28 @@ mod tests {
                 .unwrap_or_else(|| panic!("{file} is not in ATTRIBUTION.toml"));
             assert!(entry.lines().any(|l| l == format!("sha256 = \"{sha256}\"")), "{file}: SHA-256 differs from ATTRIBUTION.toml");
         }
+    }
+
+    /// End to end, when every model is installed: the layout model finds a drawn table, the table
+    /// structure model reads its rows and cells, and each word lands in its cell, in row order.
+    #[test]
+    fn arranges_a_table_into_cells() {
+        let Ok(ocr) = Ocr::find() else {
+            eprintln!("skipped: OCR models not installed");
+            return;
+        };
+        if Models::find_layout().is_none() || Models::find_tables().is_none() {
+            eprintln!("skipped: layout or table structure model not installed");
+            return;
+        }
+        let (w, h, px, words) = tables::model_tests::drawn_table(4, 3);
+        let lines = words.chunks(3).map(|row| Line { words: row.to_vec() }).collect();
+        let paragraphs = ocr.arrange(lines, &px, w as u32, h as u32).unwrap();
+        let tables: Vec<&Paragraph> = paragraphs.iter().filter(|p| p.table.is_some()).collect();
+        assert_eq!(tables.len(), 1, "{paragraphs:?}");
+        let table = tables[0].table.as_ref().unwrap();
+        assert_eq!(table.rows.iter().map(Vec::len).collect::<Vec<_>>(), [3, 3, 3, 3]);
+        assert_eq!(tables[0].lines.iter().map(Line::text).collect::<Vec<_>>(), words.iter().map(|w| w.text.clone()).collect::<Vec<_>>());
     }
 
     mod test_image {

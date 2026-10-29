@@ -11045,6 +11045,7 @@ fn ocr_words_refresh_only_the_page_content_they_add() {
         s.apply_ocr(
             id,
             &[OcrPage {
+                tables: Vec::new(),
                 paragraph_lengths: Vec::new(),
                 line_lengths: Vec::new(),
                 page: 1,
