@@ -193,23 +193,63 @@ fn image_buffer(len: usize) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// PdfCraft patch: `mask` sampled onto the grid of a `width` × `height` image, each image sample
-/// taking the mask sample under its centre. `None` for an empty side or a buffer over the limits.
+/// PdfCraft patch: `mask` sampled onto the grid of a `width` × `height` image (no side smaller
+/// than the mask's). Each image sample takes the mask sample under its centre or, for a mask that
+/// asks for `/Interpolate`, the bilinear blend of the four around it, so the mask's edges stay as
+/// smooth as when it was enlarged on its own. `None` for an empty side, an image side smaller than
+/// the mask's, or a buffer over the limits.
 fn mask_on_image_grid(mask: &LumaData, width: u32, height: u32) -> Option<Vec<u8>> {
     if width == 0 || height == 0 || mask.width == 0 || mask.height == 0 {
         return None;
     }
     let mut out = image_buffer(source_byte_len(width, height, 1, MAX_IMAGE_PIXELS)?)?;
-    let mut columns = Vec::new();
-    columns.try_reserve_exact(width as usize).ok()?;
-    columns.extend((0..width).map(|x| nearest_source_index(mask.width, width, x)));
+    let columns = grid_axis(mask.width, width, mask.interpolate)?;
+    let rows = grid_axis(mask.height, height, mask.interpolate)?;
     let mask_width = mask.width as usize;
-    for y in 0..height {
-        let start = nearest_source_index(mask.height, height, y).checked_mul(mask_width)?;
-        let row = mask.data.get(start..start.checked_add(mask_width)?)?;
-        for &x in &columns {
-            out.push(*row.get(x)?);
+    let row = |y: usize| {
+        let start = y.checked_mul(mask_width)?;
+        mask.data.get(start..start.checked_add(mask_width)?)
+    };
+    let one = u64::from(GRID_ONE);
+    for &(y0, y1, fy) in &rows {
+        let (top, bottom, fy) = (row(y0)?, row(y1)?, u64::from(fy));
+        for &(x0, x1, fx) in &columns {
+            let fx = u64::from(fx);
+            let blend = |r: &[u8]| Some(u64::from(*r.get(x0)?) * (one - fx) + u64::from(*r.get(x1)?) * fx);
+            // At most 255 × GRID_ONE², so the sum fits in a u64 and the result in a u8.
+            let v = (blend(top)? * (one - fy) + blend(bottom)? * fy + one * one / 2) / (one * one);
+            out.push(v.min(255) as u8);
         }
+    }
+    Some(out)
+}
+
+/// PdfCraft patch: fixed-point unit of [`grid_axis`]'s blend weights.
+const GRID_ONE: u32 = 1 << 16;
+
+/// PdfCraft patch: for each of `dst` samples (`dst >= src`) taken from `src` along one axis, the
+/// two source samples it lies between and the weight of the second, in [`GRID_ONE`] units.
+/// Centres line up: target `t` lies at `(t + ½)·src/dst − ½` source samples, held to the ends.
+/// Without `smooth` both are the nearest sample, so the weight does not matter.
+fn grid_axis(src: u32, dst: u32, smooth: bool) -> Option<Vec<(usize, usize, u32)>> {
+    if src == 0 || dst < src {
+        return None;
+    }
+    let mut out = Vec::new();
+    out.try_reserve_exact(dst as usize).ok()?;
+    let last = u64::from(src - 1) << 16;
+    for t in 0..dst {
+        if !smooth {
+            let s = nearest_source_index(src, dst, t);
+            out.push((s, s, 0));
+            continue;
+        }
+        // In u128, as `(2t + 1)·src·2^16` can pass 2^64 for a long side; the quotient is at
+        // most `src·2^16`, so it fits back in a u64.
+        let centre = ((2 * u128::from(t) + 1) * u128::from(src) << 16) / (2 * u128::from(dst));
+        let at = u64::try_from(centre).ok()?.saturating_sub(u64::from(GRID_ONE / 2)).min(last);
+        let s = (at >> 16) as usize;
+        out.push((s, (s + 1).min(src as usize - 1), (at & 0xFFFF) as u32));
     }
     Some(out)
 }
@@ -2908,7 +2948,18 @@ mod area_shrink_tests {
         assert_eq!(mask_on_image_grid(&mask(&[10, 20], 2, 1), 4, 2), Some(vec![10, 10, 20, 20, 10, 10, 20, 20]));
         // Centres of 7 samples over 3: 0.5/7·3 = 0.21 → 0, 1.5/7·3 = 0.64 → 0, 2.5/7·3 = 1.07 → 1, …
         assert_eq!(mask_on_image_grid(&mask(&[1, 2, 3], 3, 1), 7, 1), Some(vec![1, 1, 2, 2, 2, 3, 3]));
-        assert_eq!(mask_on_image_grid(&mask(&[1, 2, 3, 4], 1, 4), 1, 2), Some(vec![2, 4]));
+    }
+
+    /// A mask that asks for `/Interpolate` is blended between the samples around each centre,
+    /// and held at its ends: the centres of 4 samples over 2 lie at -¼, ¼, ¾ and 1¼.
+    #[test]
+    fn an_interpolated_mask_is_blended_onto_the_image_grid() {
+        let smooth = |data: &[u8], width, height| LumaData { interpolate: true, ..mask(data, width, height) };
+        assert_eq!(mask_on_image_grid(&smooth(&[0, 255], 2, 1), 4, 2), Some(vec![0, 64, 191, 255, 0, 64, 191, 255]));
+        // Centres of 7 samples over 3 lie 3/7 apart, from -2/7 to 2 2/7: a ramp, flat at the ends.
+        assert_eq!(mask_on_image_grid(&smooth(&[0, 70, 140], 3, 1), 7, 1), Some(vec![0, 10, 40, 70, 100, 130, 140]));
+        assert_eq!(mask_on_image_grid(&smooth(&[0, 255], 1, 2), 1, 4), Some(vec![0, 64, 191, 255]));
+        assert_eq!(mask_on_image_grid(&smooth(&[7, 9], 2, 1), 2, 1), Some(vec![7, 9]), "same size is unchanged");
     }
 
     #[test]
@@ -2916,6 +2967,7 @@ mod area_shrink_tests {
         assert_eq!(mask_on_image_grid(&mask(&[], 0, 1), 4, 1), None, "an empty mask");
         assert_eq!(mask_on_image_grid(&mask(&[1, 2], 2, 1), 0, 1), None, "an empty image");
         assert_eq!(mask_on_image_grid(&mask(&[1], 2, 1), 4, 1), None, "mask data shorter than its size");
+        assert_eq!(mask_on_image_grid(&mask(&[1, 2, 3, 4], 1, 4), 1, 2), None, "a mask larger than the image");
     }
 
     /// Every target sample's weights add up to exactly one, and together the targets take every
