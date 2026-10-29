@@ -169,6 +169,7 @@ impl PdfCraftApp {
             sheet: 0,
             selected,
             which,
+            papers_read: false,
             ..keep
         };
         self.dialog = Some(crate::Dialog::Print);

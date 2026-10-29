@@ -239,6 +239,7 @@ impl PdfCraftApp {
             .and_then(|name| pdfcraft_engine::print::PAPERS.iter().position(|(canonical, _)| *canonical == name))
         {
             self.print_draft.paper = paper;
+            self.print_draft.paper_picked = true;
         }
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;

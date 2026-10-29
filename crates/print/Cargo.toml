@@ -17,3 +17,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 pdfcraft-render = { workspace = true }
+
+# Label printers on Windows are sent rendered sheets (src/label.rs).
+[target.'cfg(windows)'.dependencies]
+pdfcraft-render = { workspace = true }

@@ -4584,6 +4584,15 @@ fn printing_through_tools() {
     let none = ok(&mut a, "printer_options", json!({ "printer": "No_Such_Queue_PdfCraft" }));
     assert_eq!((none["count"].as_u64(), none["options"].as_array().map(Vec::len)), (Some(0), Some(0)));
     assert!(matches!(a.call("printer_options", &json!({})), Err(ToolError::InvalidArgs(_))));
+    // A queue without a PPD offers no paper sizes of its own; a paper that is neither standard
+    // nor one of those is refused, pointing at printer_papers.
+    let none = ok(&mut a, "printer_papers", json!({ "printer": "No_Such_Queue_PdfCraft" }));
+    assert_eq!((none["count"].as_u64(), none["papers"].as_array().map(Vec::len)), (Some(0), Some(0)));
+    assert!(matches!(a.call("printer_papers", &json!({})), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(
+        a.call("doc_print", &json!({ "doc": doc, "printer": "No_Such_Queue_PdfCraft", "paper": "w288h432" })),
+        Err(ToolError::InvalidArgs(m)) if m.contains("unknown paper") && m.contains("printer_papers")
+    ));
     assert!(matches!(
         a.call("doc_print", &json!({ "doc": doc, "printer": "default", "options": ["InputSlot"] })),
         Err(ToolError::InvalidArgs(m)) if m.contains("printer_options")

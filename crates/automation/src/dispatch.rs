@@ -663,6 +663,7 @@ impl Automation {
             "doc_hidden_info" => self.doc_hidden_info(&a)?,
             "printers" => self.printers()?,
             "printer_options" => self.printer_options(&a)?,
+            "printer_papers" => self.printer_papers(&a)?,
             "link_list" => self.link_list(&a)?,
             "link_open" => self.link_open(&a)?,
             "link_add" => self.link_add(&a)?,
