@@ -157,7 +157,7 @@ pub(crate) fn document_attachment_keys(doc: &Document) -> Vec<String> {
         .attachments
         .iter()
         .filter_map(|x| match &x.source {
-            pdfcraft_render::AttachmentSource::Document { key } => Some(key.clone()),
+            pdfcraft_render::AttachmentSource::Document { key, .. } => Some(key.clone()),
             pdfcraft_render::AttachmentSource::Annotation { .. } | pdfcraft_render::AttachmentSource::RichMedia { .. } => None,
         })
         .collect()

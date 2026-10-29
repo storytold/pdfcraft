@@ -513,8 +513,9 @@ pub struct Attachment {
 /// Where an attachment lives (so its bytes can be fetched on demand).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AttachmentSource {
-    /// Document-level: `/Names /EmbeddedFiles` entry with this key.
-    Document { key: String },
+    /// Document-level: decoded key for display/deletion, raw string key for exact extraction.
+    /// `None` retains the lenient lookup for malformed non-string name-tree keys.
+    Document { key: String, raw_key: Option<Vec<u8>> },
     /// A FileAttachment annotation: page index and position in the page's `/Annots`.
     Annotation { page: usize, index: usize },
     /// An asset in a RichMedia annotation’s /RichMediaContent /Assets name tree, identified by

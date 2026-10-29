@@ -238,10 +238,14 @@ pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -
         let doc = Document::load_mem_with_options(bytes, options).map_err(|e| e.to_string())?;
         let insp = Inspector::new(&doc);
         let spec: &Object = match &att.source {
-            AttachmentSource::Document { key } => {
+            AttachmentSource::Document { key, raw_key } => {
                 let names = doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| insp.dict(o)).ok_or("no /Names")?;
                 let ef = names.get(b"EmbeddedFiles").ok().and_then(|o| insp.dict(o)).ok_or("no /EmbeddedFiles")?;
-                insp.name_tree_find(ef, key, &mut NameTreeSeen::default(), 0).ok_or("attachment not found")?
+                match raw_key.as_deref() {
+                    Some(raw_key) => insp.name_tree_find_raw(ef, raw_key, &mut NameTreeSeen::default(), 0),
+                    None => insp.name_tree_find(ef, key, &mut NameTreeSeen::default(), 0),
+                }
+                .ok_or("attachment not found")?
             }
             AttachmentSource::Annotation { page, index } | AttachmentSource::RichMedia { page, index, .. } => {
                 let (&pid, _) = insp.page_index.iter().find(|(_, i)| **i == *page).ok_or("page not found")?;

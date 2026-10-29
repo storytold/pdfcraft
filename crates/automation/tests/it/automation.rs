@@ -10577,3 +10577,78 @@ fn mcp_attachment_save_reports_that_it_can_overwrite_files() {
     assert_eq!(tool["annotations"]["destructiveHint"], true);
     assert_eq!(tool["annotations"]["readOnlyHint"], false);
 }
+
+#[test]
+fn attachment_save_tracks_annotation_deletion_and_undo_redo() {
+    let bytes = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >>")
+        .obj("<< /Type /Annot /Subtype /Text /Rect [0 0 10 10] /NM (earlier) /Contents (delete me) >>")
+        .obj("<< /Type /Annot /Subtype /RichMedia /Rect [0 0 100 100] /RichMediaContent << /Configurations [<< /Subtype /Flash >>] /Assets << /Names [(diagram) 8 0 R] >> >> >>")
+        .obj("<< /Type /Annot /Subtype /RichMedia /Rect [0 0 100 100] /RichMediaContent << /Assets << /Names [(diagram) 10 0 R] >> >> >>")
+        .obj("<< /Type /Annot /Subtype /FileAttachment /Rect [0 0 10 10] /NM (file) /FS 12 0 R >>")
+        .obj("<< /Type /Filespec /F (first.swf) /EF << /F 9 0 R >> >>")
+        .stream("/Type /EmbeddedFile", b"first")
+        .obj("<< /Type /Filespec /F (second.bin) /EF << /F 11 0 R >> >>")
+        .stream("/Type /EmbeddedFile", b"second")
+        .obj("<< /Type /Filespec /F (note.bin) /EF << /F 13 0 R >> >>")
+        .stream("/Type /EmbeddedFile", b"file")
+        .build();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("attachments.pdf"), bytes).unwrap();
+    let mut a = auto(dir.path());
+    let doc = ok(&mut a, "doc_open", json!({"path":"attachments.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "comment_delete", json!({"doc":doc, "page":1, "index":1}));
+    for step in [None, Some("edit_undo"), Some("edit_redo")] {
+        if let Some(tool) = step {
+            ok(&mut a, tool, json!({"doc":doc}));
+        }
+        let info = ok(&mut a, "doc_info", json!({"doc":doc}));
+        assert_eq!(info["attachments"].as_array().unwrap().len(), 3);
+        for (index, expected) in [(1, b"first".as_slice()), (2, b"second".as_slice()), (3, b"file".as_slice())] {
+            ok(&mut a, "attachment_save", json!({"doc":doc, "index":index, "path":"selected.bin"}));
+            assert_eq!(std::fs::read(dir.path().join("selected.bin")).unwrap(), expected, "the listed attachment must stay correct after {step:?}");
+        }
+    }
+    // A FileAttachment itself disappears from the inventory, and undo restores it.
+    ok(&mut a, "comment_delete", json!({"doc":doc, "page":1, "index":3}));
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc":doc}))["attachments"].as_array().unwrap().len(), 2);
+    assert!(a.call("attachment_save", &json!({"doc":doc, "index":3, "path":"deleted.bin"})).is_err());
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    ok(&mut a, "attachment_save", json!({"doc":doc, "index":3, "path":"restored.bin"}));
+    assert_eq!(std::fs::read(dir.path().join("restored.bin")).unwrap(), b"file");
+}
+
+#[test]
+fn attachment_save_uses_raw_document_keys_after_budget_omissions() {
+    let uri = "u".repeat((16 << 20) - 2);
+    let bytes = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [<FEFF00FF> 5 0 R <FF> 7 0 R] >> >> >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R] >>")
+        .obj(format!("<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI ({uri}) >> >>"))
+        .obj("<< /Type /Filespec /F (first.bin) /EF << /F 6 0 R >> >>")
+        .stream("/Type /EmbeddedFile", b"first")
+        .obj("<< /Type /Filespec /F (second.bin) /EF << /F 8 0 R >> >>")
+        .stream("/Type /EmbeddedFile", b"second")
+        .build();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("aliases.pdf"), bytes).unwrap();
+    let mut a = auto(dir.path());
+    let doc = ok(&mut a, "doc_open", json!({"path":"aliases.pdf"}))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({"doc":doc}));
+    assert_eq!(info["attachments"].as_array().unwrap().len(), 1);
+    assert_eq!(info["attachments"][0]["size"], 6, "inventory kept the second raw key");
+    let document = a.session().get(pdfcraft_engine::DocId(doc)).unwrap();
+    assert!(
+        matches!(&document.info.attachments[0].source, pdfcraft_render::AttachmentSource::Document { key, .. } if key == "ÿ"),
+        "decoded key remains available to existing callers"
+    );
+    ok(&mut a, "attachment_save", json!({"doc":doc, "index":1, "path":"selected.bin"}));
+    assert_eq!(
+        std::fs::read(dir.path().join("selected.bin")).unwrap(),
+        b"second",
+        "save must use the listed raw key instead of the earlier decoded alias"
+    );
+}

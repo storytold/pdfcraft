@@ -34,7 +34,10 @@ embedded-file decoding has the existing 1 GiB limit. No content is opened or exe
 RichMedia inventory is bounded to 1,024 assets and 8,192 visited nodes, edges, configurations and
 entries per document, with a name-tree depth limit of 32 and the shared attachment-text budget.
 Extraction matches the listed asset’s raw name-tree key, so differently encoded keys with the
-same displayed text cannot select a different file after a budget omission.
+same displayed text cannot select a different file after a budget omission. Document-level
+attachments preserve raw key identity too. Duplicate display keys still contribute Flash
+indicators, while the listing retains the first matching asset. Deleting annotations refreshes
+attachment positions, including through undo and redo.
 When a work or asset limit is reached, `doc_info` warns that additional assets may be omitted.
 A malformed or cyclic asset tree cannot cause an unbounded walk. These limits concern inventory,
 not Flash playback: playback remains unsupported.

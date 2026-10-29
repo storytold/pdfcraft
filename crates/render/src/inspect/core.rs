@@ -256,7 +256,12 @@ impl<'a> Inspector<'a> {
                     let (name, spec) = (entry.key, entry.value);
                     // The key is kept a second time when it is also the name.
                     let fallback = |budget: &mut usize| spend(name.as_bytes(), budget, |_| name.clone());
-                    info.attachments.push(self.attachment(spec, AttachmentSource::Document { key: name.clone() }, &mut text_budget, fallback));
+                    info.attachments.push(self.attachment(
+                        spec,
+                        AttachmentSource::Document { key: name.clone(), raw_key: entry.raw_key.map(<[u8]>::to_vec) },
+                        &mut text_budget,
+                        fallback,
+                    ));
                 }
             }
             info.has_javascript |= names.get(b"JavaScript").is_ok();

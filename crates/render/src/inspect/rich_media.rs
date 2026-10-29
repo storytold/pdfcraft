@@ -62,10 +62,6 @@ impl<'a> Inspector<'a> {
             // exact raw key: an earlier decoded alias may have been omitted by the text budget.
             let Some(raw_key) = entry.raw_key else { continue };
             let (key, spec) = (entry.key, entry.value);
-            if !keys.insert(key.clone()) {
-                continue;
-            }
-            budget.assets = budget.assets.saturating_sub(1);
             let fallback = |left: &mut usize| spend(key.as_bytes(), left, |_| key.clone());
             let att = self.attachment(spec, AttachmentSource::RichMedia { page, index, raw_key: raw_key.to_vec() }, text_budget, fallback);
             let swf = |name: &str| name.rsplit_once('.').is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("swf"));
@@ -84,6 +80,11 @@ impl<'a> Inspector<'a> {
                 _ => false,
             });
             info.has_legacy_flash |= swf(&key) || swf(&att.name) || flash_type;
+            // A duplicate display key can still name Flash content; only the listing is deduplicated.
+            if !keys.insert(key.clone()) {
+                continue;
+            }
+            budget.assets = budget.assets.saturating_sub(1);
             info.attachments.push(att);
         }
     }
