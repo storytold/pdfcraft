@@ -67,7 +67,10 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             } else if e.path.starts_with("windows:") {
                 tl!("Windows store  ·  ").to_string()
             } else if e.path.starts_with("pkcs11:") {
-                tl!("PKCS #11 token  ·  ").to_string()
+                match &e.token {
+                    Some(token) => format!("{}«{token}»  ·  ", tl!("PKCS #11 token")),
+                    None => tl!("PKCS #11 token  ·  ").to_string(),
+                }
             } else {
                 String::new()
             };
@@ -91,6 +94,11 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 continue;
             }
             if resp.clicked() {
+                // A PIN typed for the previous selection must not reach another token: it
+                // could burn a failed-login attempt or lock it on the last one.
+                if d.selected != Some(i) {
+                    d.password.clear();
+                }
                 d.selected = Some(i);
                 d.confirm_remove = None;
             }
@@ -118,9 +126,7 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         ui.add_space(10.0);
     }
     let removable = d.selected.filter(|&i| {
-        ids.get(i).is_some_and(|e| {
-            !e.path.starts_with("keychain:") && !e.path.starts_with("windows:") && !e.path.starts_with("pkcs11:")
-        })
+        ids.get(i).is_some_and(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:") && !e.path.starts_with("pkcs11:"))
     });
     ui.horizontal(|ui| {
         if widgets::pill_button(ui, tl!("Configure New Digital ID"), false).clicked() {
@@ -461,11 +467,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 go = true;
             }
             ui.label("");
-            ui.label(
-                egui::RichText::new(tl!("The key is on a PKCS #11 token; the PIN unlocks it for this signing."))
-                    .small()
-                    .color(t.text_muted),
-            );
+            ui.label(egui::RichText::new(tl!("The key is on a PKCS #11 token; the PIN unlocks it for this signing.")).small().color(t.text_muted));
         } else if in_os_key_store {
             ui.label("");
             ui.label(
