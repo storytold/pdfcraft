@@ -1,7 +1,7 @@
 //! Multi-object editing through the real shell. Synthetic artwork and standard-font text only.
 use egui::{Key, Modifiers, Pos2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_engine::{AddedText, Edit, EditableObject};
 use pdfcraft_ui_egui::PdfCraftApp;
 
@@ -384,4 +384,244 @@ fn modifier_selection_picks_foreground_text_and_added_items_over_background_artw
         let shift = if stationary { [0.0, 0.0] } else { [25.0, -30.0] };
         assert!(new.rect.iter().enumerate().all(|(i, value)| (value - old.rect[i] - shift[i % 2]).abs() < 0.01), "{old:?} -> {new:?}");
     }
+}
+
+/// A page with one inline vector icon (two filled bars in their own `q … Q`) and a caption.
+fn graphics_fixture() -> Vec<u8> {
+    let stream = |body: &str, dict: &str| format!("<< {dict} /Length {} >>\nstream\n{body}\nendstream", body.len());
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 500] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_string(),
+        stream("q 1 0 0 1 40 340 cm .2 .2 .2 rg 0 0 20 20 re f 30 0 20 20 re f Q BT /F1 12 Tf 40 100 Td (Keep here) Tj ET", ""),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    out
+}
+
+fn graphics_harness() -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("graphics.pdf", None, graphics_fixture()).unwrap();
+        app.set_option("zoom", "100").unwrap();
+        assert!(app.execute("edit.edit_text"));
+        app
+    });
+    crate::support::settle(&mut h);
+    h
+}
+
+/// Where a user-space box is drawn on screen (the graphics fixture page is 400 points wide).
+fn graphic_on_screen(h: &Harness<'static, PdfCraftApp>, r: [f64; 4]) -> egui::Rect {
+    let s = h.state();
+    let page = s.views[0].page_screen_rect(0).expect("on screen");
+    let k = page.width() / 400.0;
+    let info = &s.session.get(s.views[0].id).unwrap().info;
+    let height = info.pages[0].height;
+    let p = |x: f64, y: f64| page.min + egui::vec2(x as f32 * k, (height - y as f32) * k);
+    egui::Rect::from_two_pos(p(r[0], r[1]), p(r[2], r[3]))
+}
+
+/// Accent-blue pixels in the ring just outside `r`: the faint outline that says the graphic can
+/// be selected.
+fn blue_ring(pixels: &image::RgbaImage, r: egui::Rect) -> usize {
+    let outer = r.expand(4.0);
+    let inner = r.shrink(2.0);
+    let (x0, y0, x1, y1) = (outer.left().max(0.0) as u32, outer.top().max(0.0) as u32, outer.right() as u32, outer.bottom() as u32);
+    (y0..y1.min(pixels.height()))
+        .flat_map(|y| (x0..x1.min(pixels.width())).map(move |x| (x, y)))
+        .filter(|(x, y)| !inner.contains(egui::pos2(*x as f32 + 0.5, *y as f32 + 0.5)))
+        .filter(|(x, y)| {
+            let [r, g, b, _] = pixels.get_pixel(*x, *y).0;
+            b as u16 > r as u16 + 30 && b > 200 && g < b
+        })
+        .count()
+}
+
+/// An inline vector icon has no single-object tool of its own: an ordinary click selects it and
+/// Delete removes only its paths, leaving the caption selectable and undoable. Before the click
+/// its faint blue box says it is there and selectable.
+#[test]
+fn clicking_an_inline_vector_icon_selects_and_deletes_only_it() {
+    use pdfcraft_engine::ObjectKind;
+    let _gpu = crate::gpu();
+    let mut h = graphics_harness();
+    let before = objects(&h);
+    let icon_object = before.iter().find(|o| o.target.kind == ObjectKind::Graphic).expect("the inline icon is listed");
+    let icon = icon_object.target;
+    let outlined = blue_ring(&h.render().unwrap(), graphic_on_screen(&h, icon_object.rect));
+    assert!(outlined > 40, "the icon is boxed before it is selected ({outlined} blue pixels)");
+    let p = at(&h, 60.0, 150.0);
+    click(&mut h, p, Modifiers::NONE);
+    h.get_by_label("1 object selected");
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    let after = objects(&h);
+    assert!(!after.iter().any(|o| o.target.kind == ObjectKind::Graphic), "{after:?}");
+    assert!(after.iter().any(|o| o.text.as_deref() == Some("Keep here")), "the caption stays");
+    let app = h.state();
+    assert_eq!(app.session.get(app.views[0].id).unwrap().can_undo(), Some("Delete graphic"));
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(4);
+    assert!(objects(&h).iter().any(|o| o.target == icon), "undo restores the icon");
+}
+
+/// Clicking a graphic selects it and the same press starts a move: dragging translates only its
+/// paths, the caption stays, and one undo puts it back.
+#[test]
+fn dragging_an_inline_vector_icon_moves_only_it() {
+    use pdfcraft_engine::ObjectKind;
+    let _gpu = crate::gpu();
+    let mut h = graphics_harness();
+    let before = objects(&h);
+    let icon = before.iter().find(|o| o.target.kind == ObjectKind::Graphic).expect("the inline icon is listed").clone();
+    let caption = before.iter().find(|o| o.text.as_deref() == Some("Keep here")).unwrap().clone();
+    let p = at(&h, 60.0, 150.0);
+    click(&mut h, p, Modifiers::NONE);
+    h.get_by_label("1 object selected");
+    let (a, b) = (at(&h, 60.0, 150.0), at(&h, 90.0, 130.0));
+    drag(&mut h, a, b);
+    let after = objects(&h);
+    let moved = after.iter().find(|o| o.target == icon.target).expect("the icon is still listed");
+    for i in 0..4 {
+        assert!((moved.rect[i] - icon.rect[i] - [30.0, 20.0][i % 2]).abs() < 0.01, "{icon:?} -> {moved:?}");
+    }
+    assert_eq!(after.iter().find(|o| o.target == caption.target).unwrap().rect, caption.rect, "the caption stays");
+    let app = h.state();
+    assert_eq!(app.session.get(app.views[0].id).unwrap().can_undo(), Some("Move object"));
+    h.get_by_label("1 object selected");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(4);
+    assert_eq!(objects(&h), before, "undo puts the icon back");
+}
+
+/// A single selected graphic shows the same corner handles as a picture: dragging one resizes
+/// the paths about the opposite corner, keeps its aspect ratio, and is one undo step.
+#[test]
+fn dragging_a_corner_handle_of_an_inline_vector_icon_resizes_it() {
+    use pdfcraft_engine::ObjectKind;
+    let _gpu = crate::gpu();
+    let mut h = graphics_harness();
+    let before = objects(&h);
+    let icon = before.iter().find(|o| o.target.kind == ObjectKind::Graphic).expect("the inline icon is listed").clone();
+    let caption = before.iter().find(|o| o.text.as_deref() == Some("Keep here")).unwrap().clone();
+    let p = at(&h, 60.0, 150.0);
+    click(&mut h, p, Modifiers::NONE);
+    h.get_by_label("1 object selected");
+    // The icon is [40, 340, 90, 360] in user space: its bottom-right handle is at view (90, 160).
+    let (grip, end) = (at(&h, 90.0, 160.0), at(&h, 100.0, 164.0));
+    drag(&mut h, grip, end);
+    let after = objects(&h);
+    let resized = after.iter().find(|o| o.target == icon.target).expect("the icon is still listed");
+    for (i, want) in [40.0, 336.0, 100.0, 360.0].into_iter().enumerate() {
+        assert!((resized.rect[i] - want).abs() < 0.1, "{}: {resized:?}", resized.rect[i] - want);
+    }
+    assert_eq!(after.iter().find(|o| o.target == caption.target).unwrap().rect, caption.rect, "the caption stays");
+    let app = h.state();
+    assert_eq!(app.session.get(app.views[0].id).unwrap().can_undo(), Some("Resize graphic"));
+    h.get_by_label("1 object selected");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(4);
+    assert_eq!(objects(&h), before, "undo restores the box");
+}
+
+/// The midpoints of the sides are extra handles: they stretch one dimension and leave the other
+/// alone (no aspect-ratio lock), unlike the corners.
+#[test]
+fn dragging_a_side_handle_of_an_inline_vector_icon_stretches_one_axis() {
+    use pdfcraft_engine::ObjectKind;
+    let _gpu = crate::gpu();
+    let mut h = graphics_harness();
+    let before = objects(&h);
+    let icon = before.iter().find(|o| o.target.kind == ObjectKind::Graphic).expect("the inline icon is listed").clone();
+    let caption = before.iter().find(|o| o.text.as_deref() == Some("Keep here")).unwrap().clone();
+    let p = at(&h, 60.0, 150.0);
+    click(&mut h, p, Modifiers::NONE);
+    h.get_by_label("1 object selected");
+    // The icon is [40, 340, 90, 360] in user space; its right side's midpoint is at view (90, 150).
+    let (grip, end) = (at(&h, 90.0, 150.0), at(&h, 110.0, 150.0));
+    drag(&mut h, grip, end);
+    let after = objects(&h);
+    let resized = after.iter().find(|o| o.target == icon.target).expect("the icon is still listed");
+    for (i, want) in [40.0, 340.0, 110.0, 360.0].into_iter().enumerate() {
+        assert!((resized.rect[i] - want).abs() < 0.1, "{}: {resized:?}", resized.rect[i] - want);
+    }
+    assert_eq!(after.iter().find(|o| o.target == caption.target).unwrap().rect, caption.rect, "the caption stays");
+    let app = h.state();
+    assert_eq!(app.session.get(app.views[0].id).unwrap().can_undo(), Some("Resize graphic"));
+    h.get_by_label("1 object selected");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(4);
+    assert_eq!(objects(&h), before, "undo restores the box");
+
+    // The top side's midpoint at view (65, 140) grows the icon upwards only. Undo cleared the
+    // selection, so select the icon again first.
+    let p = at(&h, 60.0, 150.0);
+    click(&mut h, p, Modifiers::NONE);
+    h.get_by_label("1 object selected");
+    let (grip, end) = (at(&h, 65.0, 140.0), at(&h, 65.0, 120.0));
+    drag(&mut h, grip, end);
+    let after = objects(&h);
+    let resized = after.iter().find(|o| o.target == icon.target).expect("the icon is still listed");
+    for (i, want) in [40.0, 340.0, 90.0, 380.0].into_iter().enumerate() {
+        assert!((resized.rect[i] - want).abs() < 0.1, "{}: {resized:?}", resized.rect[i] - want);
+    }
+}
+
+const LEVEL_BUTTONS: [&str; 4] = ["Bring to front", "Bring forward", "Send backward", "Send to back"];
+
+#[test]
+fn the_level_buttons_are_always_shown_and_follow_any_selection() {
+    let mut h = harness();
+    for label in LEVEL_BUTTONS {
+        assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label} is shown but disabled with nothing selected");
+    }
+    // A paragraph opened for editing is a selection too: the same four buttons become usable.
+    let p = at(&h, 55.0, 70.0);
+    click(&mut h, p, Modifiers::NONE);
+    assert!(h.state().views[0].line_editor.is_some());
+    for label in LEVEL_BUTTONS {
+        assert!(!h.get_by_label(label).accesskit_node().is_disabled(), "{label} is enabled for a text block");
+    }
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    for label in LEVEL_BUTTONS {
+        assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label} goes back to disabled");
+    }
+}
+
+#[test]
+fn pressing_a_level_button_keeps_the_selection_for_the_next_press() {
+    let mut h = harness();
+    let p = at(&h, 245.0, 410.0);
+    click(&mut h, p, Modifiers::NONE);
+    let before = h.state().views[0].line_editor.clone().expect("the paragraph is open");
+    assert_eq!(h.state().views[0].line_editor.as_ref().unwrap().block, before.block);
+    for _ in 0..2 {
+        h.get_by_label("Send backward").click();
+        h.run_steps(4);
+        let editor = h.state().views[0].line_editor.as_ref().expect("the paragraph stays selected");
+        assert_eq!(editor.text, before.text);
+        assert!(h.state().session.get(h.state().views[0].id).unwrap().can_undo() == Some("Send backward"));
+    }
+    // The group path keeps every selected object too.
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    marquee(&mut h);
+    h.get_by_label("Bring forward").click();
+    h.run_steps(4);
+    h.get_by_label("3 objects selected");
 }

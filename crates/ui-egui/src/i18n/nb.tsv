@@ -2733,3 +2733,9 @@ key	Space	Mellomrom
 	Rotate the selected pages clockwise	Roter de valgte sidene med klokken
 	Extract the selected pages…	Trekk ut de valgte sidene…
 	Delete the selected pages	Slett de valgte sidene
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Administrer nivåer
+	Bring to front	Helt fremst
+	Bring forward	Ett nivå frem
+	Send backward	Ett nivå tilbake
+	Send to back	Helt bakerst

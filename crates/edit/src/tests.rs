@@ -3050,6 +3050,48 @@ fn repeated_group_moves_of_a_cropped_image_change_one_clip_transform() {
 }
 
 #[test]
+fn a_group_move_of_an_unclipped_image_leaves_later_content_alone() {
+    // No `q … Q` of its own: the translation must be wrapped, or it would move the caption too.
+    let mut doc = image_page_with("200 0 0 100 100 100 cm /Im0 Do BT /F1 12 Tf 72 700 Td (Caption) Tj ET");
+    let caption =
+        |doc: &Document| crate::objects::editable_objects(doc, 0).unwrap().into_iter().find(|o| o.text.as_deref() == Some("Caption")).unwrap().rect;
+    let text = caption(&doc);
+    for _ in 0..3 {
+        images::translate_images(&mut doc, 0, &[0], [30.0, -20.0]).unwrap();
+    }
+    assert!(close(images::page_images(&doc, 0).unwrap()[0].rect, [190.0, 40.0, 390.0, 140.0]));
+    assert_eq!(caption(&doc), text, "the caption after the image does not move");
+    assert_eq!(q_depth(&doc), 1, "one wrapper, reused by later moves");
+}
+
+#[test]
+fn a_group_move_takes_the_path_clip_that_belongs_to_the_image() {
+    // A picture from a design export sits under nested section clips and a curved path clip of
+    // its own. Moving it without that clip used to erase it from the page.
+    let content = "q 20 20 380 260 re W n 30 30 m 340 30 l 340 260 l 30 260 l h W n \
+                   q 200 0 0 100 100 100 cm /Im0 Do Q Q BT /F1 12 Tf 72 700 Td (Caption) Tj ET";
+    let mut doc = image_page_with(content);
+    let before = images::page_images(&doc, 0).unwrap()[0].clone();
+    assert!(before.visible_rect.is_some());
+    let operators = |doc: &Document| pdfcraft_content::parse(&page_content_bytes(doc, 0)).ops.len();
+    let expected = [before.rect[0] + 60.0, before.rect[1] - 40.0, before.rect[2] + 60.0, before.rect[3] - 40.0];
+    images::translate_images(&mut doc, 0, &[0], [60.0, -40.0]).unwrap();
+    let first = operators(&doc);
+    let now = images::page_images(&doc, 0).unwrap()[0].clone();
+    assert!(close(now.rect, expected), "{:?}", now.rect);
+    assert!(close(now.visible_rect.unwrap_or_default(), expected), "the image's own clip moves with it: {:?}", now.visible_rect);
+    for _ in 0..5 {
+        images::translate_images(&mut doc, 0, &[0], [1.0, -2.0]).unwrap();
+        assert!(images::page_images(&doc, 0).unwrap()[0].visible_rect.is_some());
+    }
+    assert_eq!(operators(&doc), first, "repeated group moves add no more operators than one");
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap()[0].clone();
+    assert!(close(after.rect, [expected[0] + 5.0, expected[1] - 10.0, expected[2] + 5.0, expected[3] - 10.0]));
+    assert!(after.visible_rect.is_some(), "the moved clip survives saving");
+}
+
+#[test]
 fn page_images_move_turn_replace_and_delete() {
     let mut doc = image_page();
     let imgs = images::page_images(&doc, 0).unwrap();
@@ -4949,6 +4991,26 @@ fn disjoint_style_ranges_preserve_unselected_runs_and_validate_utf8_atomically()
     };
     assert!(text::rewrite_block(&mut doc, 0, 1, Some("é bad"), &invalid).is_err());
     assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
+}
+
+#[test]
+fn resizing_a_mixed_style_paragraph_reflows_its_text_without_hard_row_breaks() {
+    let mut doc = mixed_region_page();
+    let source = text::text_blocks(&doc, 0).unwrap()[1].clone();
+    assert_eq!(source.rows.len(), 3);
+    // The width handle passes the paragraph's own text (rows joined with spaces). A width-only
+    // rewrite must reflow it, not keep the old rows as hard breaks.
+    let style = BlockStyle { width: Some(600.0), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 1, Some(&source.text), &style).unwrap();
+    let reopened = reopen(&doc);
+    let after = text::text_blocks(&reopened, 0).unwrap()[1].clone();
+    assert_eq!(after.rows.len(), 1, "widening joins the old rows: {:?}", after.editor_text);
+    assert_eq!(after.text, source.text);
+    let lines = text::text_lines(&reopened, 0).unwrap();
+    let bold = lines.iter().find(|l| l.text == "bold").unwrap();
+    assert_eq!(bold.base_font, source.base_font, "the styled run keeps its face");
+    let italic = lines.iter().find(|l| l.text == "Italic footer").unwrap();
+    assert_eq!((italic.base_font.as_str(), italic.size), ("Courier-Oblique", 8.0));
 }
 
 #[test]
@@ -7556,4 +7618,432 @@ fn q_inside_a_text_object_restores_the_text_matrices() {
         let lines = text::text_lines(&doc, 0).unwrap();
         assert_eq!((lines[0].text.as_str(), lines[0].baseline()), ("Edited", baseline), "{content} after editing");
     }
+}
+/// The separate fill operators of one icon (Chrome prints each bar of a menu icon as its own
+/// path) group into one graphic when a pure-graphics `q … Q` holds them, and deleting it takes
+/// the whole scope with its saved state while the text and other artwork stay.
+#[test]
+fn vector_icons_group_into_one_graphic_and_delete_as_a_whole() {
+    let icon = "q 1 0 0 1 100 100 cm 0 0 10 20 re f 20 0 10 20 re f 40 0 10 20 re f Q";
+    let mut doc = text_page(&format!("BT /F1 12 Tf 50 600 Td (Keep) Tj ET {icon} q 300 300 20 20 re f Q"));
+    let objects = editable_objects(&doc, 0).unwrap();
+    let graphics: Vec<_> = objects.iter().filter(|o| o.target.kind == ObjectKind::Graphic).collect();
+    assert_eq!(graphics.len(), 2, "{objects:?}");
+    assert!(close(graphics[0].rect, [100.0, 100.0, 150.0, 120.0]), "{:?}", graphics[0].rect);
+    assert!(close(graphics[1].rect, [300.0, 300.0, 320.0, 320.0]), "{:?}", graphics[1].rect);
+    assert_eq!(objects.iter().filter(|o| o.target.kind == ObjectKind::Text).count(), 1);
+    delete_graphic(&mut doc, 0, 0).unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(!content.contains("0 0 10 20"), "{content}");
+    assert!(content.contains("(Keep)"), "{content}");
+    assert!(content.contains("300 300 20 20"), "{content}");
+    let after = editable_objects(&doc, 0).unwrap();
+    assert_eq!(after.iter().filter(|o| o.target.kind == ObjectKind::Graphic).count(), 1, "{after:?}");
+    assert_eq!(after.iter().filter(|o| o.target.kind == ObjectKind::Text).count(), 1);
+}
+
+/// Paths painted in a scope that also holds text (or an image) are one graphic each, and a
+/// clip-only run (`re W n`) is not selectable artwork at all.
+#[test]
+fn paths_in_a_shared_scope_are_one_graphic_each_and_clips_are_not() {
+    let doc = text_page("q 0 0 30 30 re f BT /F1 12 Tf 50 600 Td (A) Tj ET q 100 100 10 10 re f Q");
+    let objects = editable_objects(&doc, 0).unwrap();
+    let graphics: Vec<_> = objects.iter().filter(|o| o.target.kind == ObjectKind::Graphic).collect();
+    assert_eq!(graphics.len(), 2, "{objects:?}");
+    assert!(close(graphics[0].rect, [0.0, 0.0, 30.0, 30.0]), "{:?}", graphics[0].rect);
+    assert!(close(graphics[1].rect, [100.0, 100.0, 110.0, 110.0]), "{:?}", graphics[1].rect);
+    let doc = image_page_with("q 10 10 20 20 re W n Q q 100 100 200 100 cm /Im0 Do");
+    assert!(page_graphics(&doc, 0).unwrap().is_empty(), "{:?}", page_graphics(&doc, 0));
+    assert_eq!(images::page_images(&doc, 0).unwrap().len(), 1, "the image is still listed");
+}
+
+/// A path covering the page is background artwork, not an object to click; smaller paths
+/// printed inside the same content stay selectable.
+#[test]
+fn a_page_sized_background_path_is_not_selectable_but_smaller_ones_are() {
+    let doc = image_page_with("0 0 600 800 re f q 10 10 20 20 re f Q 100 100 200 100 cm /Im0 Do");
+    let graphics = page_graphics(&doc, 0).unwrap();
+    assert_eq!(graphics.len(), 1, "{graphics:?}");
+    assert!(close(graphics[0].rect, [10.0, 10.0, 30.0, 30.0]), "{:?}", graphics[0].rect);
+}
+
+/// Deleting a path painted in a shared scope removes only its path and paint operators: the
+/// colour set before it stays in effect for the content that follows.
+#[test]
+fn deleting_a_shared_path_keeps_the_state_around_it() {
+    let mut doc = text_page("1 0 0 rg 0 0 20 20 re f 0 1 0 rg 35 0 20 20 re f BT /F1 12 Tf 50 600 Td (T) Tj ET");
+    delete_graphic(&mut doc, 0, 0).unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("1 0 0 rg"), "{content}");
+    assert!(content.contains("0 1 0 rg 35 0 20 20"), "{content}");
+    assert!(!content.contains("0 0 20 20"), "{content}");
+    let graphics = page_graphics(&doc, 0).unwrap();
+    assert_eq!(graphics.len(), 1, "{graphics:?}");
+    assert!(close(graphics[0].rect, [35.0, 0.0, 55.0, 20.0]), "{:?}", graphics[0].rect);
+}
+
+/// Marked content (Chrome wraps each region in `/Div <</MCID n>> BDC … EMC`, often opening it
+/// outside the icon's own scope) stays balanced: deleting a graphic keeps its tags.
+#[test]
+fn deleting_a_graphic_keeps_marked_content_balanced() {
+    let content =
+        "q /Div <</MCID 0>> BDC 0 0 60 60 re f Q q 1 0 0 1 10 10 cm /P <</MCID 1>> BDC 0 0 20 20 re f EMC Q BT /F1 12 Tf 50 600 Td (T) Tj ET";
+    let mut doc = text_page(content);
+    let before = page_content_bytes(&doc, 0);
+    let tags = |bytes: &[u8]| String::from_utf8_lossy(bytes).split_whitespace().filter(|t| matches!(*t, "BDC" | "EMC")).count();
+    assert_eq!(tags(&before), 3, "{}", String::from_utf8_lossy(&before));
+    delete_graphic(&mut doc, 0, 1).unwrap();
+    let doc = reopen(&doc);
+    let after = page_content_bytes(&doc, 0);
+    assert_eq!(tags(&after), tags(&before), "marked content stays balanced: {}", String::from_utf8_lossy(&after));
+    let graphics = page_graphics(&doc, 0).unwrap();
+    assert_eq!(graphics.len(), 1, "{graphics:?}");
+    assert!(close(graphics[0].rect, [0.0, 0.0, 60.0, 60.0]), "{:?}", graphics[0].rect);
+}
+
+/// A graphic in the mixed inventory moves with the paragraphs beside it: text keeps its glyphs,
+/// the artwork keeps its own operators and gains one user-space translation.
+#[test]
+fn a_group_move_moves_a_graphic_with_the_text_beside_it() {
+    let mut doc = text_page("BT /F1 12 Tf 50 600 Td (T) Tj ET q 100 100 20 20 re f Q");
+    let objects = editable_objects(&doc, 0).unwrap();
+    let text = objects.iter().find(|o| o.target.kind == ObjectKind::Text).unwrap().clone();
+    let icon = objects.iter().find(|o| o.target.kind == ObjectKind::Graphic).unwrap().clone();
+    move_objects(&mut doc, 0, &[text.target, icon.target], [10.0, 5.0]).unwrap();
+    let doc = reopen(&doc);
+    let after = editable_objects(&doc, 0).unwrap();
+    let moved = after.iter().find(|o| o.target.kind == ObjectKind::Graphic).unwrap();
+    assert!(close(moved.rect, [110.0, 105.0, 130.0, 125.0]), "{:?}", moved.rect);
+    let moved_text = after.iter().find(|o| o.target.kind == ObjectKind::Text).unwrap();
+    assert!(close(moved_text.rect, [text.rect[0] + 10.0, text.rect[1] + 5.0, text.rect[2] + 10.0, text.rect[3] + 5.0]), "{:?}", moved_text.rect);
+    assert!(String::from_utf8_lossy(&page_content_bytes(&doc, 0)).contains("(T)"));
+}
+
+/// A whole `q … Q` graphic translates as a unit: its own saved state, nested paths and the
+/// artwork and caption after it keep their place.
+#[test]
+fn moving_a_whole_graphic_scope_leaves_the_neighbouring_artwork_in_place() {
+    let mut doc = text_page("q 1 0 0 1 100 100 cm 0 0 10 20 re f 20 0 10 20 re f Q q 300 300 20 20 re f Q BT /F1 12 Tf 50 600 Td (Keep) Tj ET");
+    let icon = editable_objects(&doc, 0).unwrap().into_iter().find(|o| o.target.kind == ObjectKind::Graphic).unwrap().target;
+    move_objects(&mut doc, 0, &[icon], [10.0, -5.0]).unwrap();
+    let doc = reopen(&doc);
+    let graphics = page_graphics(&doc, 0).unwrap();
+    assert_eq!(graphics.len(), 2, "{graphics:?}");
+    assert!(close(graphics[0].rect, [110.0, 95.0, 140.0, 115.0]), "{:?}", graphics[0].rect);
+    assert!(close(graphics[1].rect, [300.0, 300.0, 320.0, 320.0]), "{:?}", graphics[1].rect);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("(Keep)"), "{content}");
+}
+
+/// A path painted in a scope that also holds other content moves on its own: its translation is
+/// handed back after its paint, so the path and colour set after it stay where they were.
+#[test]
+fn moving_a_path_in_a_shared_scope_leaves_the_paths_around_it() {
+    let mut doc = text_page("1 0 0 rg 0 0 20 20 re f 0 1 0 rg 35 0 20 20 re f BT /F1 12 Tf 50 600 Td (T) Tj ET");
+    let objects = editable_objects(&doc, 0).unwrap();
+    let first = objects
+        .iter()
+        .find(|o| o.target.kind == ObjectKind::Graphic && close(o.rect, [0.0, 0.0, 20.0, 20.0]))
+        .expect("the first path is listed")
+        .target;
+    move_objects(&mut doc, 0, &[first], [10.0, 5.0]).unwrap();
+    let doc = reopen(&doc);
+    let after = editable_objects(&doc, 0).unwrap();
+    let moved = after.iter().find(|o| o.target == first).expect("the moved path is listed");
+    assert!(close(moved.rect, [10.0, 5.0, 30.0, 25.0]), "{:?}", moved.rect);
+    let other = after.iter().find(|o| o.target.kind == ObjectKind::Graphic && o.target != first).expect("the other path is listed");
+    assert!(close(other.rect, [35.0, 0.0, 55.0, 20.0]), "{:?}", other.rect);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("1 0 0 rg"), "the colour state stays: {content}");
+    assert!(content.contains("0 1 0 rg 35 0 20 20"), "the second path stays: {content}");
+}
+
+/// Resizing maps the old box onto the new one exactly, scales the drawn geometry about its
+/// top-left corner and leaves stroke widths and the caption untouched.
+#[test]
+fn resizing_a_graphic_maps_its_box_and_keeps_stroke_widths() {
+    let mut doc = text_page("q 0 0 1 RG 2 w 0 0 50 20 re f Q BT /F1 12 Tf 50 600 Td (Keep) Tj ET");
+    resize_graphic(&mut doc, 0, 0, [120.0, 150.0, 180.0, 190.0]).unwrap();
+    let doc = reopen(&doc);
+    let graphics = page_graphics(&doc, 0).unwrap();
+    assert_eq!(graphics.len(), 1, "{graphics:?}");
+    assert!(close(graphics[0].rect, [120.0, 150.0, 180.0, 190.0]), "{:?}", graphics[0].rect);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("2 w"), "stroke width does not scale: {content}");
+    assert!(content.contains("(Keep)"), "{content}");
+}
+
+/// Artwork pasted or exported inside its own clip box (`re W n q … Q`) moves with that box.
+/// Moving only the paths would leave the clip behind, so the object would be cut off — or,
+/// moved far enough, vanish completely.
+#[test]
+fn moving_a_clipped_graphic_takes_its_clip_box_along() {
+    let mut doc = text_page("q 50 50 40 40 re W n q 2 0 0 2 55 55 cm 0 0 10 10 re f Q Q BT /F1 12 Tf 50 600 Td (Keep) Tj ET");
+    let before = page_graphics(&doc, 0).unwrap();
+    assert_eq!(before.len(), 1, "{before:?}");
+    assert!(close(before[0].rect, [55.0, 55.0, 75.0, 75.0]), "{:?}", before[0].rect);
+    let icon = editable_objects(&doc, 0).unwrap().into_iter().find(|o| o.target.kind == ObjectKind::Graphic).unwrap().target;
+    move_objects(&mut doc, 0, &[icon], [60.0, 40.0]).unwrap();
+    let doc = reopen(&doc);
+    let after = page_graphics(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1, "the moved artwork is still listed: {after:?}");
+    assert!(close(after[0].rect, [115.0, 95.0, 135.0, 115.0]), "the clip moved too: {:?}", after[0].rect);
+    assert!(String::from_utf8_lossy(&page_content_bytes(&doc, 0)).contains("(Keep)"));
+}
+
+/// Resizing artwork inside its own clip box grows the box with it, so the enlarged object is not
+/// cut off at the old square.
+#[test]
+fn resizing_a_clipped_graphic_grows_past_its_old_clip_box() {
+    let mut doc = text_page("q 50 50 40 40 re W n q 2 0 0 2 55 55 cm 0 0 10 10 re f Q Q");
+    assert_eq!(page_graphics(&doc, 0).unwrap().len(), 1);
+    resize_graphic(&mut doc, 0, 0, [55.0, 55.0, 110.0, 120.0]).unwrap();
+    let doc = reopen(&doc);
+    let after = page_graphics(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1, "{after:?}");
+    assert!(close(after[0].rect, [55.0, 55.0, 110.0, 120.0]), "the whole enlarged box is listed: {:?}", after[0].rect);
+}
+
+/// Resizing one icon among several touches only its own box: the icon beside it keeps its place.
+#[test]
+fn resizing_one_of_two_whole_scope_icons_leaves_the_other() {
+    let mut doc = text_page("q 1 0 0 1 20 200 cm 0 0 0 rg 0 0 10 20 re f Q q 1 0 0 1 120 200 cm .5 .5 .5 rg 0 0 20 20 re f Q");
+    let before = page_graphics(&doc, 0).unwrap();
+    assert_eq!(before.len(), 2, "{before:?}");
+    resize_graphic(&mut doc, 0, 0, [40.0, 160.0, 100.0, 200.0]).unwrap();
+    let doc = reopen(&doc);
+    let after = page_graphics(&doc, 0).unwrap();
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert_eq!(after.len(), 2, "{after:?} in {content}");
+    assert!(close(after[0].rect, [40.0, 160.0, 100.0, 200.0]), "{:?} in {content}", after[0].rect);
+    assert!(close(after[1].rect, [120.0, 200.0, 140.0, 220.0]), "{:?} in {content}", after[1].rect);
+}
+
+/// A graphic drawn inside a scaled placement still moves and resizes in page points: the edit
+/// conjugates its user-space change through the placement, so a 10-point move moves it 10 points
+/// on the page rather than 10 points in the icon's own coordinates.
+#[test]
+fn moving_and_resizing_a_graphic_inside_a_scaled_placement_use_page_points() {
+    let mut doc = text_page("q 2 0 0 2 100 100 cm 0 0 10 20 re f Q");
+    let icon = editable_objects(&doc, 0).unwrap().into_iter().find(|o| o.target.kind == ObjectKind::Graphic).unwrap();
+    assert!(close(icon.rect, [100.0, 100.0, 120.0, 140.0]), "{:?}", icon.rect);
+    move_objects(&mut doc, 0, &[icon.target], [10.0, 5.0]).unwrap();
+    let mut doc = reopen(&doc);
+    let after_move = page_graphics(&doc, 0).unwrap();
+    assert!(close(after_move[0].rect, [110.0, 105.0, 130.0, 145.0]), "{:?}", after_move[0].rect);
+    resize_graphic(&mut doc, 0, 0, [120.0, 120.0, 160.0, 200.0]).unwrap();
+    let doc = reopen(&doc);
+    let after_resize = page_graphics(&doc, 0).unwrap();
+    assert!(close(after_resize[0].rect, [120.0, 120.0, 160.0, 200.0]), "{:?}", after_resize[0].rect);
+}
+
+/// A resize names a graphic in the current inventory, needs a finite, positive box and refuses
+/// a box the graphic already has; a refusal changes nothing.
+#[test]
+fn resizing_a_graphic_refuses_a_missing_index_a_degenerate_box_and_a_no_op() {
+    let mut doc = text_page("q 100 100 20 20 re f Q");
+    let original = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(resize_graphic(&mut doc, 0, 9, [0.0, 0.0, 10.0, 10.0]).unwrap_err().to_string().contains("has no graphic"));
+    assert!(resize_graphic(&mut doc, 0, 0, [0.0, 0.0, 0.0, 10.0]).is_err());
+    assert!(resize_graphic(&mut doc, 0, 0, [100.0, 100.0, 120.0, 120.0]).unwrap_err().to_string().contains("already"));
+    assert!(resize_graphic(&mut doc, 0, 0, [0.0, 0.0, 1e13, 1e13]).is_err(), "an out-of-range box is refused");
+    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), original);
+}
+
+/// A full-page background painted inside the same pure scope as an icon does not hide it: the
+/// background is left out, the icon is listed on its own, and deleting it keeps the background.
+#[test]
+fn an_icon_inside_a_full_page_background_scope_is_still_selectable_and_deletable() {
+    let mut doc = image_page_with("q 0 0 600 800 re f 1 0 0 rg 10 10 20 20 re f Q q 100 100 200 100 cm /Im0 Do");
+    let graphics = page_graphics(&doc, 0).unwrap();
+    assert_eq!(graphics.len(), 1, "{graphics:?}");
+    assert!(close(graphics[0].rect, [10.0, 10.0, 30.0, 30.0]), "{:?}", graphics[0].rect);
+    delete_graphic(&mut doc, 0, 0).unwrap();
+    let doc = reopen(&doc);
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("0 0 600 800 re f"), "the background stays: {content}");
+    assert!(!content.contains("10 10 20 20"), "only the icon goes: {content}");
+    assert_eq!(page_graphics(&doc, 0).unwrap(), Vec::new());
+    assert_eq!(images::page_images(&doc, 0).unwrap().len(), 1, "the picture is untouched");
+}
+
+/// The x positions of the square fills in a page's content, in painting order.
+fn squares(doc: &Document) -> Vec<f64> {
+    let content = String::from_utf8_lossy(&page_content_bytes(doc, 0)).into_owned();
+    content
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .windows(5)
+        .filter(|w| w[1] == "0" && w[2] == "10" && w[3] == "10" && w[4] == "re")
+        .filter_map(|w| w[0].parse().ok())
+        .collect()
+}
+
+fn three_squares() -> Document {
+    text_page("q 0 0 10 10 re f Q q 20 0 10 10 re f Q q 40 0 10 10 re f Q")
+}
+
+#[test]
+fn restacking_a_graphic_moves_only_it_between_levels() {
+    let graphic = |index| ObjectTarget { kind: ObjectKind::Graphic, index };
+
+    let mut doc = three_squares();
+    restack_object(&mut doc, 0, graphic(0), Restack::Forward).unwrap();
+    assert_eq!(squares(&doc), [20.0, 0.0, 40.0]);
+
+    let mut doc = three_squares();
+    restack_object(&mut doc, 0, graphic(2), Restack::Backward).unwrap();
+    assert_eq!(squares(&doc), [0.0, 40.0, 20.0]);
+
+    let mut doc = three_squares();
+    restack_object(&mut doc, 0, graphic(0), Restack::Front).unwrap();
+    assert_eq!(squares(&doc), [20.0, 40.0, 0.0]);
+
+    let mut doc = three_squares();
+    restack_object(&mut doc, 0, graphic(2), Restack::Back).unwrap();
+    assert_eq!(squares(&doc), [40.0, 0.0, 20.0]);
+
+    // Already at an end: nothing changes.
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    restack_object(&mut doc, 0, graphic(0), Restack::Back).unwrap();
+    restack_object(&mut doc, 0, graphic(2), Restack::Front).unwrap();
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
+
+    // The inventory still matches the page after saving and reopening.
+    let doc = reopen(&doc);
+    assert_eq!(squares(&doc), [40.0, 0.0, 20.0]);
+    assert_eq!(editable_objects(&doc, 0).unwrap().len(), 3);
+}
+
+#[test]
+fn restacking_a_paragraph_takes_its_colour_and_box_along() {
+    let mut doc = text_page(
+        "q 1 0 0 rg 0 0 30 30 re f Q \
+         q 0 0 50 50 re W n 0 0 1 rg BT /F1 12 Tf 50 600 Td (Low) Tj ET Q \
+         q 0 0 60 60 re W n BT /F1 12 Tf 150 600 Td (High) Tj ET Q",
+    );
+    assert_eq!(editable_objects(&doc, 0).unwrap().iter().filter(|o| o.target.kind == ObjectKind::Text).count(), 2);
+    restack_object(&mut doc, 0, ObjectTarget { kind: ObjectKind::Text, index: 0 }, Restack::Front).unwrap();
+    let doc = reopen(&doc);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["High", "Low"]);
+    // Both paragraphs keep their place and colour.
+    assert!(lines.iter().any(|l| l.text == "Low" && (l.rect[0] - 50.0).abs() < 0.01), "{lines:?}");
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("0 0 1 rg"), "{content}");
+    assert!(content.contains("50 50 re"), "{content}");
+}
+
+#[test]
+fn restacking_an_added_item_keeps_it_editable_and_in_place() {
+    let mut doc = text_page("BT /F1 12 Tf 40 400 Td (Native) Tj ET");
+    added::add_content(
+        &mut doc,
+        0,
+        &Content::Text(added::AddedText { text: "Added label".into(), rect: [50.0, 300.0, 200.0, 330.0], ..Default::default() }),
+    )
+    .unwrap();
+    let before: std::collections::BTreeMap<_, _> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| (l.text.clone(), l.rect)).collect();
+    let added_target = editable_objects(&doc, 0).unwrap().iter().find(|o| o.target.kind == ObjectKind::Added).unwrap().target;
+    restack_object(&mut doc, 0, added_target, Restack::Back).unwrap();
+    let after = text::text_lines(&doc, 0).unwrap();
+    for line in &after {
+        let old = before.get(&line.text).unwrap_or_else(|| panic!("{} vanished", line.text));
+        assert!(close(line.rect, *old), "{} moved: {:?} -> {:?}", line.text, old, line.rect);
+    }
+    assert_eq!(after.first().map(|l| l.text.as_str()), Some("Added label"), "it is the first content now");
+    assert_eq!(added::list_added(&doc).iter().filter(|a| a.page == 0).count(), 1);
+    // Still editable: moving it now shifts only its own text.
+    let target = editable_objects(&doc, 0).unwrap().iter().find(|o| o.target.kind == ObjectKind::Added).unwrap().target;
+    move_objects(&mut doc, 0, &[target], [10.0, 0.0]).unwrap();
+    let moved = text::text_lines(&doc, 0).unwrap();
+    assert!(moved.iter().any(|l| l.text == "Added label" && (l.rect[0] - 60.0).abs() < 0.01), "{moved:?}");
+}
+
+#[test]
+fn restacking_refuses_an_unknown_object_and_a_shared_text_object() {
+    let mut doc = text_page("BT /F1 12 Tf 50 600 Td (One) Tj 0 -200 Td (Two) Tj ET");
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(restack_object(&mut doc, 0, ObjectTarget { kind: ObjectKind::Text, index: 9 }, Restack::Front).is_err());
+    assert!(restack_object(&mut doc, 0, ObjectTarget { kind: ObjectKind::Text, index: 0 }, Restack::Front).is_err());
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
+}
+
+#[test]
+fn restacking_an_image_keeps_its_place_in_scoped_and_shared_content() {
+    let rects = |doc: &Document| images::page_images(doc, 0).unwrap().into_iter().map(|i| i.rect).collect::<Vec<_>>();
+    for content in
+        ["q 200 0 0 100 100 100 cm /Im0 Do Q q 200 0 0 100 300 100 cm /Im0 Do Q", "200 0 0 100 100 100 cm /Im0 Do 200 0 0 100 300 100 cm /Im0 Do"]
+    {
+        let mut doc = image_page_with(content);
+        let before = rects(&doc);
+        assert_eq!(before.len(), 2, "{content}");
+        restack_object(&mut doc, 0, ObjectTarget { kind: ObjectKind::Image, index: 0 }, Restack::Forward).unwrap();
+        let doc = reopen(&doc);
+        let after = rects(&doc);
+        let mut sorted_before = before.clone();
+        sorted_before.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        let mut sorted_after = after.clone();
+        sorted_after.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        assert_eq!(sorted_after, sorted_before, "{content}");
+        assert_eq!(after[0], before[1], "the second picture is drawn first now: {content}");
+    }
+}
+
+#[test]
+fn restacking_a_group_keeps_its_order_and_crosses_one_level() {
+    let graphic = |index| ObjectTarget { kind: ObjectKind::Graphic, index };
+    let four = || text_page("q 0 0 10 10 re f Q q 20 0 10 10 re f Q q 40 0 10 10 re f Q q 60 0 10 10 re f Q");
+
+    let mut doc = four();
+    restack_objects(&mut doc, 0, &[graphic(0), graphic(2)], Restack::Forward).unwrap();
+    assert_eq!(squares(&doc), [20.0, 60.0, 0.0, 40.0]);
+
+    let mut doc = four();
+    restack_objects(&mut doc, 0, &[graphic(2), graphic(3)], Restack::Backward).unwrap();
+    assert_eq!(squares(&doc), [0.0, 40.0, 60.0, 20.0]);
+
+    let mut doc = four();
+    restack_objects(&mut doc, 0, &[graphic(2), graphic(0)], Restack::Front).unwrap();
+    assert_eq!(squares(&doc), [20.0, 60.0, 0.0, 40.0]);
+
+    let mut doc = four();
+    restack_objects(&mut doc, 0, &[graphic(2), graphic(1)], Restack::Back).unwrap();
+    assert_eq!(squares(&doc), [20.0, 40.0, 0.0, 60.0]);
+
+    // Already there, one target unknown, or nothing selected: no change.
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    restack_objects(&mut doc, 0, &[graphic(0), graphic(1)], Restack::Back).unwrap();
+    restack_objects(&mut doc, 0, &[graphic(2), graphic(3)], Restack::Front).unwrap();
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
+    assert!(restack_objects(&mut doc, 0, &[graphic(1), graphic(9)], Restack::Front).is_err());
+    assert!(restack_objects(&mut doc, 0, &[], Restack::Front).is_err());
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
+}
+
+/// Moving a paragraph across another one drawn in the same content stream takes the whole
+/// `BT … ET` object along: it must not insert its operators inside the neighbour's text object,
+/// which would join both paragraphs on one row.
+#[test]
+fn restacking_a_paragraph_between_paragraphs_keeps_both_whole() {
+    let mut doc = text_page("BT /F1 18 Tf 40 430 Td (Group headline) Tj ET BT /F1 12 Tf 240 90 Td (Keep here) Tj ET");
+    let before: Vec<_> = editable_objects(&doc, 0).unwrap().into_iter().map(|o| (o.text, o.rect)).collect();
+    restack_object(&mut doc, 0, ObjectTarget { kind: ObjectKind::Text, index: 1 }, Restack::Backward).unwrap();
+    let after = editable_objects(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2, "both paragraphs stay separate: {after:?}");
+    for (text, rect) in &before {
+        let object = after.iter().find(|o| o.text == *text).unwrap_or_else(|| panic!("{text:?} vanished"));
+        assert!(close(object.rect, *rect), "{text:?} moved: {rect:?} -> {:?}", object.rect);
+    }
+    assert_eq!(after[0].text.as_deref(), Some("Keep here"), "it is painted first now");
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert_eq!(content.matches("(Keep here) Tj").count(), 1, "{content}");
+    assert_eq!(content.matches("(Group headline) Tj").count(), 1, "{content}");
+    // And forward again, from the first level.
+    restack_object(&mut doc, 0, ObjectTarget { kind: ObjectKind::Text, index: 0 }, Restack::Forward).unwrap();
+    let back = editable_objects(&doc, 0).unwrap();
+    assert_eq!(back.len(), 2);
+    assert_eq!(back[0].text.as_deref(), Some("Group headline"));
 }

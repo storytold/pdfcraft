@@ -2465,3 +2465,9 @@ animation effects	Off	ປິດ
 	Rotate the selected pages clockwise	ໝູນໜ້າທີ່ເລືອກຕາມເຂັມໂມງ
 	Extract the selected pages…	ແຍກໜ້າທີ່ເລືອກອອກ…
 	Delete the selected pages	ລຶບໜ້າທີ່ເລືອກ
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	ຈັດການຊັ້ນ
+	Bring to front	ໜ້າສຸດ
+	Bring forward	ຂຶ້ນໜຶ່ງຊັ້ນ
+	Send backward	ລົງໜຶ່ງຊັ້ນ
+	Send to back	ຫຼັງສຸດ

@@ -307,7 +307,8 @@ impl Automation {
                 Some("added") => ObjectKind::Added,
                 Some("text") => ObjectKind::Text,
                 Some("image") => ObjectKind::Image,
-                _ => return Err(bad("object kind must be added, text or image (see object_list)")),
+                Some("graphic") => ObjectKind::Graphic,
+                _ => return Err(bad("object kind must be added, text, image or graphic (see object_list)")),
             };
             let index = row
                 .get("index")
@@ -336,5 +337,125 @@ impl Automation {
         let mut result = self.apply(a, Edit::MoveObjects { page, objects: targets, offset })?;
         result["moved"] = json!(count);
         Ok(result)
+    }
+
+    /// Raise, lower, bring to front or send to back one object or a group (kind/index references
+    /// from `object_list`). Only their own drawing changes place in the page's paint order.
+    pub(crate) fn object_restack(&mut self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::{ObjectKind, ObjectTarget, Restack};
+        let page = self.page(a)?;
+        let parse = |row: &Value| -> Result<ObjectTarget> {
+            let row = row.as_object().ok_or_else(|| bad("each object must contain kind and index"))?;
+            let kind = match row.get("kind").and_then(Value::as_str) {
+                Some("added") => ObjectKind::Added,
+                Some("text") => ObjectKind::Text,
+                Some("image") => ObjectKind::Image,
+                Some("graphic") => ObjectKind::Graphic,
+                _ => return Err(bad("kind must be added, text, image or graphic (see object_list)")),
+            };
+            let index = row
+                .get("index")
+                .and_then(Value::as_u64)
+                .and_then(|i| i.checked_sub(1))
+                .and_then(|i| usize::try_from(i).ok())
+                .ok_or_else(|| bad("index must be a positive integer from object_list"))?;
+            Ok(ObjectTarget { kind, index })
+        };
+        let mut targets = match a.get("objects") {
+            Some(Value::Array(rows)) => {
+                if rows.is_empty() || rows.len() > 1_000 {
+                    return Err(bad("objects must contain 1–1000 references from object_list"));
+                }
+                rows.iter().map(parse).collect::<Result<Vec<_>>>()?
+            }
+            Some(_) => return Err(bad("objects must be an array of kind and index references")),
+            None => vec![parse(&json!({"kind": a.get("kind"), "index": a.get("index")}))?],
+        };
+        targets.dedup();
+        let (direction, name) = match a.get("direction").and_then(Value::as_str) {
+            Some("front") => (Restack::Front, "front"),
+            Some("forward") => (Restack::Forward, "forward"),
+            Some("backward") => (Restack::Backward, "backward"),
+            Some("back") => (Restack::Back, "back"),
+            _ => return Err(bad("direction must be front, forward, backward or back")),
+        };
+        let doc = self.doc(a)?;
+        if let Some(g) = a.get("generation") {
+            let g = g.as_u64().ok_or_else(|| bad("generation must be a non-negative integer from object_list"))?;
+            if g != doc.edit_generation() {
+                return Err(failed("the document changed; call object_list again before restacking"));
+            }
+        }
+        let edit = if targets.len() == 1 {
+            Edit::RestackObject { page, object: targets[0], direction }
+        } else {
+            Edit::RestackObjects { page, objects: targets, direction }
+        };
+        let mut result = self.apply(a, edit)?;
+        result["direction"] = json!(name);
+        Ok(result)
+    }
+
+    /// Delete one inline vector graphic (a kind "graphic" index from `object_list`). Only its
+    /// own paths go; text, pictures, Forms and the graphics state around it stay.
+    pub(crate) fn graphic_delete(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let index = a
+            .get("index")
+            .and_then(Value::as_u64)
+            .and_then(|i| i.checked_sub(1))
+            .and_then(|i| usize::try_from(i).ok())
+            .ok_or_else(|| bad("index must be a positive integer from object_list"))?;
+        let doc = self.doc(a)?;
+        if let Some(g) = a.get("generation") {
+            let Some(g) = g.as_u64() else {
+                return Err(bad("generation must be a non-negative integer from object_list"));
+            };
+            if g != doc.edit_generation() {
+                return Err(failed("the document changed; call object_list again before deleting"));
+            }
+        }
+        let graphics = doc.page_graphics(page);
+        let graphic = graphics.get(index).ok_or_else(|| bad(format!("page {} has no graphic {}; call object_list again", page + 1, index + 1)))?;
+        let info = doc.info.pages.get(page).ok_or_else(|| bad("the page no longer exists"))?;
+        let rect = crate::comments::rect_to_view(info, graphic.rect.map(|v| v as f32));
+        let mut out = self.apply(a, Edit::DeletePageGraphic { page, index })?;
+        out["index"] = json!(index + 1);
+        out["rect"] = json!(rect.map(|v| (f64::from(v) * 100.0).round() / 100.0));
+        Ok(out)
+    }
+
+    /// Resize one inline vector graphic (a kind "graphic" index from `object_list`) so its
+    /// displayed box becomes `rect` (points, top-left origin, as `object_list` reports it).
+    /// Its paths scale about the old box's top-left corner; stroke widths and colours keep
+    /// their size. One undo step.
+    pub(crate) fn graphic_resize(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let index = a
+            .get("index")
+            .and_then(Value::as_u64)
+            .and_then(|i| i.checked_sub(1))
+            .and_then(|i| usize::try_from(i).ok())
+            .ok_or_else(|| bad("index must be a positive integer from object_list"))?;
+        let rect = a.nums::<4>("rect")?.ok_or_else(|| bad("a graphic resize needs `rect`"))?;
+        if rect[2] <= rect[0] || rect[3] <= rect[1] {
+            return Err(bad("rect must be [left, top, right, bottom] with positive width and height"));
+        }
+        let doc = self.doc(a)?;
+        if let Some(g) = a.get("generation") {
+            let Some(g) = g.as_u64() else {
+                return Err(bad("generation must be a non-negative integer from object_list"));
+            };
+            if g != doc.edit_generation() {
+                return Err(failed("the document changed; call object_list again before resizing"));
+            }
+        }
+        let info = doc.info.pages.get(page).ok_or_else(|| bad("the page no longer exists"))?;
+        let user = crate::comments::rect_to_user(info, rect);
+        let view = crate::comments::rect_to_view(info, user.map(|v| v as f32));
+        let mut out = self.apply(a, Edit::ResizePageGraphic { page, index, rect: user })?;
+        out["index"] = json!(index + 1);
+        out["rect"] = json!(view.map(|v| (f64::from(v) * 100.0).round() / 100.0));
+        Ok(out)
     }
 }

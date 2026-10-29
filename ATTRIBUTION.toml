@@ -435,6 +435,17 @@ usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
 sha256 = "78635d0da597104f526ea01dede8ab4d04ccabc7a2229c4baf17f921b15985de"
 
 [[asset]]
+path = "assets/icons/arrow-down-from-line.svg"
+title = "Lucide icon \"arrow-down-from-line\""
+author = "Lucide Contributors (portions Cole Bemis, Feather)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/arrow-down-from-line.svg)"
+licence = "ISC"
+licence_file = "assets/icons/LICENSE-lucide.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+sha256 = "cdd709e2760d02a23bfdc3678933956c8fcc9069f670ab5ebafe68df3a89dc08"
+
+[[asset]]
 path = "assets/icons/arrow-left-right.svg"
 title = "Lucide icon \"arrow-left-right\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"
@@ -455,6 +466,17 @@ licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
 usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
 sha256 = "8380bdad937e85cc9c63701ce92ebe27c9e8ea2c710de28fac46f463c1a25f09"
+
+[[asset]]
+path = "assets/icons/arrow-up-from-line.svg"
+title = "Lucide icon \"arrow-up-from-line\""
+author = "Lucide Contributors (portions Cole Bemis, Feather)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/arrow-up-from-line.svg)"
+licence = "ISC"
+licence_file = "assets/icons/LICENSE-lucide.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+sha256 = "97b8a9e8960936ebff14e5adf44de024064bd4f333ef1d30e367302d1094b279"
 
 [[asset]]
 path = "assets/icons/arrow-up-right.svg"

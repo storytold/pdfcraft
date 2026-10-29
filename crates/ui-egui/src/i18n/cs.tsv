@@ -2864,3 +2864,9 @@ certificate	Version	Verze
 	Rotate the selected pages clockwise	Otočit vybrané stránky po směru hodinových ručiček
 	Extract the selected pages…	Extrahovat vybrané stránky…
 	Delete the selected pages	Odstranit vybrané stránky
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Správa vrstev
+	Bring to front	Do popředí
+	Bring forward	O úroveň dopředu
+	Send backward	O úroveň dozadu
+	Send to back	Do pozadí

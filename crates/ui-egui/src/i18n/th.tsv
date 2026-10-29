@@ -2720,3 +2720,9 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Rotate the selected pages clockwise	หมุนหน้าที่เลือกตามเข็มนาฬิกา
 	Extract the selected pages…	แยกหน้าที่เลือกออก…
 	Delete the selected pages	ลบหน้าที่เลือก
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	จัดการระดับ
+	Bring to front	ไปข้างหน้าสุด
+	Bring forward	ขึ้นหนึ่งระดับ
+	Send backward	ลงหนึ่งระดับ
+	Send to back	ไปข้างหลังสุด

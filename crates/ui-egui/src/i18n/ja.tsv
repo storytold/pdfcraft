@@ -2557,3 +2557,9 @@ animation effects	Off	オフ
 	Rotate the selected pages clockwise	選択したページを時計回りに回転
 	Extract the selected pages…	選択したページを抽出…
 	Delete the selected pages	選択したページを削除
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	レベルの管理
+	Bring to front	最前面へ移動
+	Bring forward	前面へ移動
+	Send backward	背面へ移動
+	Send to back	最背面へ移動

@@ -2544,3 +2544,9 @@ animation effects	Off	Joaktiv
 	Rotate the selected pages clockwise	Rrotullo faqet e përzgjedhura në drejtim të orës
 	Extract the selected pages…	Nxirr faqet e përzgjedhura…
 	Delete the selected pages	Fshi faqet e përzgjedhura
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Menaxho nivelet
+	Bring to front	Në plan të parë
+	Bring forward	Një nivel përpara
+	Send backward	Një nivel pas
+	Send to back	Në sfond

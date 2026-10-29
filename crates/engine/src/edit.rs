@@ -399,12 +399,38 @@ pub enum Edit {
         index: usize,
         change: ImageEdit,
     },
+    /// Delete one inline vector graphic on `page` (index from `Document::page_graphics`).
+    DeletePageGraphic {
+        page: usize,
+        index: usize,
+    },
+    /// Resize one inline vector graphic on `page` (index from `Document::page_graphics`) so its
+    /// box becomes `rect` (user space). Stroke widths and colours keep their size.
+    ResizePageGraphic {
+        page: usize,
+        index: usize,
+        rect: [f64; 4],
+    },
     /// Move mixed existing and added objects together. References resolve before any change;
     /// offset is a user-space vector. No retyping, reflow or font substitution is involved.
     MoveObjects {
         page: usize,
         objects: Vec<ObjectTarget>,
         offset: [f64; 2],
+    },
+    /// Raise, lower, front or back one object on `page` (a kind/index reference from
+    /// `Document::editable_objects`). Its own drawing moves; the rest of the content is copied.
+    RestackObject {
+        page: usize,
+        object: ObjectTarget,
+        direction: crate::Restack,
+    },
+    /// Restack several objects together: their paint order is kept, and the group moves one
+    /// level, to the front or to the back as a unit.
+    RestackObjects {
+        page: usize,
+        objects: Vec<ObjectTarget>,
+        direction: crate::Restack,
     },
     /// Edit text in a paragraph box: replace paragraph `block` (from `Document::text_blocks`),
     /// rewrapped to the box's width.

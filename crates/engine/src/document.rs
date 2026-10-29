@@ -161,6 +161,11 @@ impl Document {
         self.editor.as_ref().and_then(|e| pdfcraft_edit::page_images(&e.cos, page).ok()).unwrap_or_default()
     }
 
+    /// Edit a PDF: the vector graphics `page` draws directly (0-based), in drawing order.
+    pub fn page_graphics(&self, page: usize) -> Vec<pdfcraft_edit::PageGraphic> {
+        self.editor.as_ref().and_then(|e| pdfcraft_edit::page_graphics(&e.cos, page).ok()).unwrap_or_default()
+    }
+
     /// Mixed editable objects on one page. Source inventories are zero-based and added items
     /// appear once. Rectangles are user-space points, independent of the viewer's zoom.
     pub fn editable_objects(&self, page: usize) -> Result<Vec<EditableObject>, String> {

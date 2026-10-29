@@ -41,6 +41,11 @@ pub struct PageImage {
 }
 
 impl PageImage {
+    /// The `Do` operator that draws it, in the page's streams joined.
+    pub(crate) fn paint_op(&self) -> usize {
+        self.op
+    }
+
     /// Whether a user-space point belongs to the placed artwork and every active clip.
     pub fn contains(&self, point: [f64; 2]) -> bool {
         if !point.iter().all(|v| v.is_finite()) {
@@ -434,27 +439,6 @@ pub fn turn_by_degrees(rect: [f64; 4], degrees: f64) -> Option<[f64; 6]> {
     Some([a, b, cc, d, cx - a * cx - cc * cy, cy - b * cx - d * cy])
 }
 
-/// For a `Do` at `op` that sits alone in `q re W n cm Do Q`: the index of the `re` and the `cm` matrix.
-/// That clip belongs to this image only, so it may move with it. A `cm` this move put before the
-/// `re` earlier (`q cm re W n cm Do Q`) keeps the pattern, so the image can be moved again.
-fn exclusive_clip(ops: &[Op], op: usize) -> Option<(usize, Matrix)> {
-    let at = op.checked_sub(4)?;
-    let mut q = at.checked_sub(1)?;
-    while ops.get(q)?.is("cm") {
-        q = q.checked_sub(1)?;
-    }
-    let ok = ops.get(q)?.is("q")
-        && ops.get(at)?.is("re")
-        && (ops.get(at + 1)?.is("W") || ops.get(at + 1)?.is("W*"))
-        && ops.get(at + 2)?.is("n")
-        && ops.get(at + 3)?.is("cm")
-        && ops.get(op + 1)?.is("Q");
-    if !ok {
-        return None;
-    }
-    Some((at, Matrix(ops.get(at + 3)?.nums::<6>()?)))
-}
-
 /// The `q cm … Q` whose only content after its `cm` is `start..=end` (a `Do`, or a balanced
 /// `q … Q` scope), with the index and value of that `cm`. Another transform of the same
 /// placement is folded into it, so repeated moves and resizes don't nest one more `q` each.
@@ -466,13 +450,6 @@ fn enclosing_transform(ops: &[Op], start: usize, end: usize) -> Option<(usize, M
     }
     let m = Matrix(cm.nums::<6>()?);
     m.0.iter().all(|v| v.is_finite()).then_some((at, m))
-}
-
-/// The `cm` to put before the clip so that user-space transform `t` also moves the clip:
-/// the clip is drawn in the CTM before the image's own `cm` (`cm` · that = `draw`).
-fn clip_matrix(draw: Matrix, cm: Matrix, t: Matrix) -> Option<Matrix> {
-    let outer = cm.invert()?.then(&draw);
-    Some(outer.then(&t).then(&outer.invert()?))
 }
 
 /// Change image `index` (from [`page_images`]) on `page`.
@@ -566,7 +543,7 @@ fn image_transform_scope(ops: &[Op], target: usize) -> Result<Option<(usize, usi
         match op.op.as_slice() {
             b"q" => {
                 if stack.len() >= 256 {
-                    return Err(EditError::Invalid("the image graphics state is too deeply nested to transform".into()));
+                    return Err(EditError::Invalid("the image graphics state is nested too deeply to transform".into()));
                 }
                 stack.push(Scope { start: index, matrix, inherited_clip: clipped, inherited_path: path, selected: false, other_paint: false });
             }
@@ -642,7 +619,8 @@ fn transform_image(
     }
     // A private path crop moves with its image regardless of intervening state operators.
     // Shared crops retain the existing fixed-clip behavior, preserving neighbouring paint.
-    let (start, end, placement) = image_transform_scope(&ops, target)?.unwrap_or((target, target, Matrix(image.draw_matrix)));
+    let scope = image_transform_scope(&ops, target)?;
+    let (start, end, placement) = scope.unwrap_or((target, target, Matrix(image.draw_matrix)));
     let inverse = placement.invert().ok_or_else(|| EditError::Invalid("the image has no area".into()))?;
     let local = placement.then(&Matrix(transform)).then(&inverse);
     if !local.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
@@ -763,17 +741,10 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
     let images = page_images(doc, page)?;
     let p = page_of(doc, page)?;
     let all = content_streams(doc, &p.dict)?;
-    let mut plans = std::collections::BTreeMap::new();
+    let mut placements = std::collections::BTreeMap::new();
     for index in indexes {
         let image = images.get(*index).ok_or_else(|| EditError::Invalid("a selected image no longer exists".into()))?;
-        let placement = Matrix(image.draw_matrix);
-        let inverse = placement.invert().ok_or_else(|| EditError::Invalid("a selected image has no area".into()))?;
-        let [a, b, c, d, _, _] = inverse.0;
-        let movement = Matrix([1.0, 0.0, 0.0, 1.0, a * offset[0] + c * offset[1], b * offset[0] + d * offset[1]]);
-        if !movement.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
-            return Err(EditError::Invalid("the image move is too large".into()));
-        }
-        plans.insert(image.op, (movement, placement, offset));
+        placements.insert(image.op, Matrix(image.draw_matrix));
     }
     let pieces = joined(&all);
     let ops = pieces.parse().ops;
@@ -783,61 +754,71 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
             inside_text = true;
         } else if op.is("ET") {
             inside_text = false;
-        } else if inside_text && plans.contains_key(&index) {
+        } else if inside_text && placements.contains_key(&index) {
             return Err(EditError::Invalid("an image inside a text object cannot be moved in a group".into()));
         }
     }
-    // Images alone in their own `q re W n cm Do Q` take the clip with them.
-    let mut clips = std::collections::BTreeMap::new();
-    for index in 0..ops.len() {
-        let Some(&(_, placement, offset)) = plans.get(&index) else { continue };
-        let Some((at, cm)) = exclusive_clip(&ops, index) else { continue };
-        let translation = Matrix([1.0, 0.0, 0.0, 1.0, offset[0], offset[1]]);
-        let Some(c) = clip_matrix(placement, cm, translation).filter(|c| c.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12)) else {
-            return Err(EditError::Invalid("the image move is too large".into()));
-        };
-        plans.remove(&index);
-        // A `cm` an earlier move put before the clip takes this move too: `c · prev` is the
-        // same CTM as `prev` followed by another `cm c`, without one more operator per move.
-        let folded = at
-            .checked_sub(1)
-            .and_then(|i| Some((i, c.then(&Matrix(ops.get(i).filter(|op| op.is("cm"))?.nums::<6>()?)))))
-            .filter(|(_, m)| m.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12));
-        match folded {
-            Some((i, m)) => clips.insert(i, (m, false)),
-            None => clips.insert(at, (c, true)),
-        };
-    }
-    // An image already alone in `q cm Do Q` moves by changing that `cm`, not by nesting another.
-    let mut folds = std::collections::BTreeMap::new();
-    for index in 0..ops.len() {
-        let Some(&(movement, _, _)) = plans.get(&index) else { continue };
-        let Some((at, cm)) = enclosing_transform(&ops, index, index) else { continue };
-        let folded = movement.then(&cm);
-        if !folded.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
-            return Err(EditError::Invalid("the image move is too large".into()));
-        }
-        plans.remove(&index);
-        folds.insert(at, folded);
-    }
-    if plans.keys().any(|index| !ops.get(*index).is_some_and(|op| op.is("Do"))) {
+    if placements.keys().any(|index| !ops.get(*index).is_some_and(|op| op.is("Do"))) {
         return Err(EditError::Invalid("a selected image operation is missing".into()));
     }
-    let data = crate::text::splice(&pieces, &ops, |index| {
-        if let Some((c, keep)) = clips.remove(&index) {
-            return (vec![Op::new("cm", c.0.map(Object::Real).to_vec())], keep);
+    // Move each image together with the clip that belongs to it, by applying the user-space
+    // translation just inside its own graphics-state scope, exactly as a single-image move does.
+    // Folding into the `cm` an earlier move left there keeps repeated moves from adding an
+    // operator each time.
+    let translation = Matrix([1.0, 0.0, 0.0, 1.0, offset[0], offset[1]]);
+    let mut folds = std::collections::BTreeMap::new();
+    let mut inserts = std::collections::BTreeMap::new();
+    // An image with no `q … Q` of its own gets one, so the `cm` cannot outlive its `Do`.
+    let mut wrapped = std::collections::BTreeSet::new();
+    for (target, placement) in &placements {
+        let (start, end, scope) = image_transform_scope(&ops, *target)?.unwrap_or((*target, *target, *placement));
+        let inverse = scope.invert().ok_or_else(|| EditError::Invalid("a selected image has no area".into()))?;
+        let local = scope.then(&translation).then(&inverse);
+        if !local.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
+            return Err(EditError::Invalid("the image move is too large".into()));
         }
+        if let Some((at, cm)) = enclosing_transform(&ops, start, end) {
+            let folded = local.then(&cm);
+            if !folded.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
+                return Err(EditError::Invalid("the image move is too large".into()));
+            }
+            folds.insert(at, folded);
+            continue;
+        }
+        // Just inside the scope: before its clip, or before the `Do` when it has none.
+        let at = if start == end { start } else { start + 1 };
+        let existing = ops.get(at).filter(|op| op.is("cm")).and_then(|op| op.nums::<6>()).map(Matrix);
+        match existing {
+            Some(cm) => {
+                let folded = local.then(&cm);
+                if !folded.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
+                    return Err(EditError::Invalid("the image move is too large".into()));
+                }
+                folds.insert(at, folded);
+            }
+            None => {
+                if start == end {
+                    wrapped.insert(at);
+                }
+                // Two selected images cannot share a scope, but one translation would move both.
+                inserts.entry(at).or_insert(local);
+            }
+        }
+    }
+    let data = crate::text::splice(&pieces, &ops, |index| {
         if let Some(m) = folds.remove(&index) {
             return (vec![Op::new("cm", m.0.map(Object::Real).to_vec())], false);
         }
-        let Some((matrix, _, _)) = plans.remove(&index) else { return (Vec::new(), true) };
-        let original = ops.get(index).cloned().into_iter();
-        // Local translations can be tiny under a large CTM. Preserve their precision
-        // rather than rounding them to zero or amplifying an error on the page.
-        let mut out = vec![Op::new("q", vec![]), Op::new("cm", matrix.0.map(Object::Real).to_vec())];
-        out.extend(original);
-        out.push(Op::new("Q", vec![]));
-        (out, false)
+        if let Some(local) = inserts.remove(&index) {
+            if wrapped.remove(&index) {
+                let mut out = vec![Op::new("q", vec![]), Op::new("cm", local.0.map(Object::Real).to_vec())];
+                out.extend(ops.get(index).cloned());
+                out.push(Op::new("Q", vec![]));
+                return (out, false);
+            }
+            return (vec![Op::new("cm", local.0.map(Object::Real).to_vec())], true);
+        }
+        (Vec::new(), true)
     });
     let contents = crate::text::rewritten_contents(doc, &all, data);
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;

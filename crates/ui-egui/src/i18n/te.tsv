@@ -2466,3 +2466,9 @@ animation effects	Off	ఆఫ్
 	Rotate the selected pages clockwise	ఎంచుకున్న పేజీలను సవ్య దిశలో తిప్పు
 	Extract the selected pages…	ఎంచుకున్న పేజీలను సంగ్రహించు…
 	Delete the selected pages	ఎంచుకున్న పేజీలను తొలగించు
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	స్థాయిలను నిర్వహించండి
+	Bring to front	అన్నిటికంటే ముందుకు
+	Bring forward	ఒక స్థాయి ముందుకు
+	Send backward	ఒక స్థాయి వెనుకకు
+	Send to back	అన్నిటికంటే వెనుకకు

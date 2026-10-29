@@ -2562,3 +2562,9 @@ animation effects	Off	Izklopljeni
 	Rotate the selected pages clockwise	Zavrti izbrane strani v smeri urnega kazalca
 	Extract the selected pages…	Izvleci izbrane strani…
 	Delete the selected pages	Izbriši izbrane strani
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Upravljanje plasti
+	Bring to front	V ospredje
+	Bring forward	Eno raven naprej
+	Send backward	Eno raven nazaj
+	Send to back	V ozadje

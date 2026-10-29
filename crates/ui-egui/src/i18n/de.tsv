@@ -2558,3 +2558,9 @@ animation effects	Off	Aus
 	Rotate the selected pages clockwise	Ausgewählte Seiten im Uhrzeigersinn drehen
 	Extract the selected pages…	Ausgewählte Seiten extrahieren…
 	Delete the selected pages	Ausgewählte Seiten löschen
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Ebenen verwalten
+	Bring to front	In den Vordergrund
+	Bring forward	Eine Ebene nach vorne
+	Send backward	Eine Ebene nach hinten
+	Send to back	In den Hintergrund
