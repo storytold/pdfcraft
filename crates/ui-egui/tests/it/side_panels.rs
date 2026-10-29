@@ -79,18 +79,20 @@ fn read_mode_shows_the_side_panel_without_tools() {
     assert!(side(&h).right() < rail(&h).left());
 }
 
-/// Drag the side panel's resize edge `by` points to the left (wider).
-fn widen_side(h: &mut Harness<'static, PdfCraftApp>, by: f32) {
+/// The side panel's resize edge: the nearest one left of the panel's text, right of the page.
+fn side_edge(h: &Harness<'static, PdfCraftApp>) -> egui::Pos2 {
     let side_left = side(h).left();
-    // The side panel's resize edge: the one right of the page, left of the panel's text.
-    let edge = h
-        .get_all_by_label("Resize panels")
+    h.get_all_by_label("Resize panels")
         .map(|n| n.rect().left_center())
-        .filter(|c| c.x < side_left && c.x > WIDTH / 2.0)
+        .filter(|c| c.x < side_left)
         .min_by(|a, b| (side_left - a.x).total_cmp(&(side_left - b.x)))
         .expect("the side panel has a resize edge")
-        // 2 pt inside the panel: the edge lies right of the border, clear of the page's scrollbar.
-        + egui::vec2(2.0, 0.0);
+}
+
+/// Drag the side panel's resize edge `by` points to the left (wider).
+fn widen_side(h: &mut Harness<'static, PdfCraftApp>, by: f32) {
+    // 2 pt inside the panel: the edge lies right of the border, clear of the page's scrollbar.
+    let edge = side_edge(h) + egui::vec2(2.0, 0.0);
     h.hover_at(edge);
     h.run_steps(1);
     h.drag_at(edge);
@@ -126,7 +128,9 @@ fn the_side_panel_widens_up_to_most_of_the_window() {
     widen_side(&mut h, 400.0);
     let wide = h.state().side_panels.side_width;
     assert!((wide - (before + 400.0 - 2.0)).abs() <= 1.0, "{before} -> {wide}");
-    assert!(wide > 520.0 && (side(&h).width() - wide).abs() <= 2.0, "drawn as wide as set: {wide}, {:?}", side(&h));
+    // Drawn as wide as set: from its resize edge to the rail.
+    let drawn = rail(&h).left() - side_edge(&h).x;
+    assert!(wide > 520.0 && (drawn - wide).abs() <= 12.0, "{wide} set, {drawn} drawn");
     widen_side(&mut h, 600.0);
     let widest = h.state().side_panels.side_width;
     assert!(widest > wide && widest <= 0.7 * WIDTH + 1.0, "{wide} -> {widest}");
