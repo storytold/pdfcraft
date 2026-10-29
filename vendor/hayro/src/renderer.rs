@@ -1267,6 +1267,7 @@ impl Renderer {
             in_type3_glyph: false,
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
             preview: self.preview,
+            hairline_strokes: self.hairline_strokes,
             image_transparency_stack: Vec::new(),
             ink: InkState {
                 pass: Some(pass),
