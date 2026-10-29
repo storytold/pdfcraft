@@ -4,7 +4,7 @@ use super::geometry::{
 };
 use super::paint::{drawn_shape, edit_anchor, erase, new_comment};
 use super::state::{Composer, ComposerKind, Gesture, PageCx, nearest_corner};
-use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, SnapHit, vec2};
+use super::{Annotation, CommentPrefs, CommentTool, CommentView, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, SnapHit, vec2};
 use crate::page_cursor::{Layer, Subject};
 use crate::page_router::{CommentPart, Hit, Owner};
 
@@ -225,6 +225,49 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
     if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page) {
         consumed = true;
     }
+    let dragged = snap_select_gesture(ui, cx, cv, pointer);
+    if resp.drag_stopped()
+        && let Some(p) = pointer.map(|p| dragged.map_or(p, |(p, _)| p))
+    {
+        finish_select_gesture(ui, cx, view, p, dragged);
+    }
+    let cv = &mut view.comments;
+    // (egui clears the press origin on release, so clicks are located by the pointer.)
+    let on_page = pointer.is_some_and(|p| cx.xf.rect.contains(p));
+    if resp.clicked() && on_page {
+        // A click elsewhere (a link beneath text highlighting included: it follows the link)
+        // leaves comments unselected.
+        match owner {
+            Some((a, _)) => {
+                cv.selected = Some((cx.page, a.index));
+                cv.reveal = true;
+                consumed = true;
+            }
+            None => cv.selected = None,
+        }
+    }
+    if resp.double_clicked()
+        && on_page
+        && cx.allowed
+        && let Some((a, _)) = owner
+    {
+        cv.selected = Some((cx.page, a.index));
+        cv.composer = Some(Composer {
+            page: cx.page,
+            at: edit_anchor(cx.info, a),
+            kind: ComposerKind::Edit(a.index),
+            text: a.contents.clone().unwrap_or_default(),
+            focus: true,
+        });
+        consumed = true;
+    }
+    consumed
+}
+
+/// Snapping while the Select tool moves, resizes or reshapes a comment on this page: Tab's next
+/// anchor, the marker where it lands and the anchor's name. Returns the pointer as it snapped,
+/// and the target, for the gesture's end.
+fn snap_select_gesture(ui: &egui::Ui, cx: &PageCx<'_>, cv: &mut CommentView, pointer: Option<Pos2>) -> Option<(Pos2, Option<SnapHit>)> {
     // Tab while a comment is moved: its next anchor goes where this one is now (on its target,
     // when it has one), so the target stays and the comment turns about it.
     if cv.anchor_steps != 0
@@ -281,42 +324,7 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
     {
         cv.anchor_shown = Some((cx.page, cx.to_user(anchor.at + (moved - *from)), anchor.name));
     }
-    if resp.drag_stopped()
-        && let Some(p) = pointer.map(|p| dragged.map_or(p, |(p, _)| p))
-    {
-        finish_select_gesture(ui, cx, view, p, dragged);
-    }
-    let cv = &mut view.comments;
-    // (egui clears the press origin on release, so clicks are located by the pointer.)
-    let on_page = pointer.is_some_and(|p| cx.xf.rect.contains(p));
-    if resp.clicked() && on_page {
-        // A click elsewhere (a link beneath text highlighting included: it follows the link)
-        // leaves comments unselected.
-        match owner {
-            Some((a, _)) => {
-                cv.selected = Some((cx.page, a.index));
-                cv.reveal = true;
-                consumed = true;
-            }
-            None => cv.selected = None,
-        }
-    }
-    if resp.double_clicked()
-        && on_page
-        && cx.allowed
-        && let Some((a, _)) = owner
-    {
-        cv.selected = Some((cx.page, a.index));
-        cv.composer = Some(Composer {
-            page: cx.page,
-            at: edit_anchor(cx.info, a),
-            kind: ComposerKind::Edit(a.index),
-            text: a.contents.clone().unwrap_or_default(),
-            focus: true,
-        });
-        consumed = true;
-    }
-    consumed
+    dragged
 }
 
 /// The end of a gesture the Select tool began on this page (a move, a resize, a reshape, …): the
