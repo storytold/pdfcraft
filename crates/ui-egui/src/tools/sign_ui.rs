@@ -311,6 +311,7 @@ fn entry_unusable(u: &sign::windows::Unusable) -> DigitalIdEntry {
         issuer: String::new(),
         email: String::new(),
         expires: String::new(),
+        token: None,
         unusable: Some(u.reason.clone()),
     }
 }

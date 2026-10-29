@@ -466,6 +466,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 go = true;
             }
+            ui.end_row();
             ui.label("");
             ui.label(egui::RichText::new(tl!("The key is on a PKCS #11 token; the PIN unlocks it for this signing.")).small().color(t.text_muted));
         } else if in_os_key_store {
