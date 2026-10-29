@@ -32,7 +32,7 @@ use as_html::{allowed, base64};
 pub use as_rtf::rtf;
 pub use layout::{Block, Cell, Image, Page, Table};
 #[cfg(test)]
-use layout::{LOOKUP_STEPS, MAX_COLS, body_size};
+use layout::{LOOKUP_STEPS, MAX_COLS, body_size, directional_runs, is_rtl, paragraph_rtl};
 pub(crate) use layout::{Run, paragraphs, tables};
 
 #[cfg(test)]

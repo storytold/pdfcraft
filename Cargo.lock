@@ -4418,6 +4418,7 @@ name = "pdfcraft-export"
 version = "0.15.0"
 dependencies = [
  "flate2",
+ "unicode-bidi",
 ]
 
 [[package]]

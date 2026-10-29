@@ -769,3 +769,259 @@ fn a_paragraph_is_a_heading_only_when_its_text_is() {
     assert!(!xml.contains("Heading2"), "the lead-in made its paragraph a heading: {xml}");
     assert_eq!(word_paragraphs(&xml).len(), 2, "{xml}");
 }
+
+/// An Arabic body paragraph, an English one, a mixed one that starts in English, and an Arabic
+/// heading, as separate paragraphs of one page (body 11 pt).
+fn bidi_page() -> Page {
+    let b = |t: &str, y: f64, size: f64, bold: bool| Block {
+        text: t.into(),
+        rect: [72.0, y, 500.0, y + size],
+        size,
+        bold,
+        italic: false,
+        color: [0.0; 3],
+        rotation: 0.0,
+        space_around: [false; 2],
+    };
+    Page {
+        width: 612.0,
+        height: 792.0,
+        blocks: vec![
+            b(
+                "\u{0645}\u{0646}\u{0630} \u{0627}\u{0644}\u{0642}\u{0631}\u{0646} \u{0627}\u{0644}\u{062a}\u{0627}\u{0633}\u{0639} \u{0639}\u{0634}\u{0631} \u{0643}\u{0627}\u{0646} \u{0647}\u{0630}\u{0627} \u{0627}\u{0644}\u{0646}\u{0635} \u{0645}\u{0643}\u{062a}\u{0648}\u{0628}\u{0627}",
+                600.0,
+                11.0,
+                false,
+            ),
+            b("This paragraph is written in English and is long enough to be the body text size here.", 560.0, 11.0, false),
+            b(
+                "Chapter 2 \u{0627}\u{0644}\u{0641}\u{0635}\u{0644} \u{0627}\u{0644}\u{062b}\u{0627}\u{0646}\u{064a} is a mixed paragraph that begins in English and is long enough.",
+                520.0,
+                11.0,
+                false,
+            ),
+            b("\u{0627}\u{0644}\u{0639}\u{0646}\u{0648}\u{0627}\u{0646}", 700.0, 24.0, true),
+        ],
+        images: Vec::new(),
+        background: None,
+    }
+}
+
+/// #4653: which text reads right to left: the first strong character decides, as the HTML
+/// `dir="auto"` rule has it; digits, punctuation and spaces are not strong.
+#[test]
+fn text_reads_right_to_left_by_its_first_strong_character() {
+    for rtl in [
+        "\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}",
+        "\u{05e9}\u{05dc}\u{05d5}\u{05dd}",
+        "123 \u{0645}\u{0631}\u{062d}\u{0628}\u{0627}",
+        "(\u{05e9})",
+        "\u{200f}1",
+        "\u{0710}\u{0712}",
+        "\u{0780}\u{0781}",
+    ] {
+        assert!(is_rtl(rtl), "{rtl:?}");
+    }
+    for ltr in [
+        "",
+        "   ",
+        "123 456",
+        "Hello \u{0645}\u{0631}\u{062d}\u{0628}\u{0627}",
+        "\u{0661}\u{0662}\u{0663}",
+        "()",
+        "\u{0e01}\u{0e02}",
+        "\u{4e2d}\u{6587}",
+    ] {
+        assert!(!is_rtl(ltr), "{ltr:?}");
+    }
+}
+
+#[test]
+fn word_marks_right_to_left_paragraphs_and_runs() {
+    let xml = part(&docx(&[bidi_page()], "Arabic"), "word/document.xml");
+    let paragraphs: Vec<&str> = xml.split("<w:p>").skip(1).collect();
+    let find = |needle: &str| *paragraphs.iter().find(|p| p.contains(needle)).unwrap_or_else(|| panic!("no paragraph with {needle}"));
+    // The Arabic paragraph: right-to-left, its run a complex-script one.
+    let arabic = find("\u{0645}\u{0646}\u{0630}");
+    assert!(arabic.starts_with("<w:pPr><w:bidi/></w:pPr>"), "{arabic}");
+    assert!(arabic.contains("<w:szCs w:val=\"22\"/><w:rtl/>"), "{arabic}");
+    // English: neither.
+    let english = find("written in English");
+    assert!(!english.contains("<w:bidi/>") && !english.contains("<w:rtl/>"), "{english}");
+    // Mixed, starting in English: a left-to-right paragraph.
+    let mixed = find("mixed paragraph");
+    assert!(!mixed.contains("<w:bidi/>"), "{mixed}");
+    // A bold Arabic heading: the style first, then the direction (the order Word requires), and
+    // the bold is the complex-script bold too.
+    let heading = find("\u{0627}\u{0644}\u{0639}\u{0646}\u{0648}\u{0627}\u{0646}");
+    assert!(heading.starts_with("<w:pPr><w:pStyle w:val=\"Heading1\"/><w:bidi/></w:pPr>"), "{heading}");
+}
+
+#[test]
+fn html_and_rtf_mark_right_to_left_paragraphs() {
+    let html = html(&[bidi_page()], "Arabic");
+    assert!(html.contains("<p dir=\"rtl\">\u{0645}\u{0646}\u{0630}"), "{html}");
+    assert!(html.contains("<h1 dir=\"rtl\">\u{0627}\u{0644}\u{0639}"), "{html}");
+    assert!(html.contains("<p>This paragraph is written in English"), "no direction on the English one");
+    assert!(html.contains("<p>Chapter 2"), "nor on the mixed one that starts in English");
+    let rtf = rtf(&[bidi_page()]);
+    // RTF writes the Arabic as \u escapes: the right-to-left paragraph is the one with \rtlpar.
+    assert_eq!(rtf.matches("\\rtlpar").count(), 2, "the Arabic paragraph and the Arabic heading: {rtf}");
+    assert!(rtf.contains("{\\pard\\rtlpar\\fs22 \\u1605?"), "{rtf}");
+    assert!(!rtf.contains("\\rtlpar\\fs22 This"), "{rtf}");
+}
+
+/// #4653: table cells and positioned text boxes carry their direction too.
+#[test]
+fn right_to_left_table_cells_and_text_boxes_are_marked() {
+    let mut p = table_page();
+    for b in &mut p.blocks {
+        if b.text == "Unit" {
+            b.text = "\u{0627}\u{0644}\u{0648}\u{062d}\u{062f}\u{0629}".into();
+        }
+    }
+    let xml = part(&docx(&[p.clone()], "Table"), "word/document.xml");
+    assert_eq!(xml.matches("<w:p><w:pPr><w:bidi/></w:pPr>").count(), 1, "one Arabic cell: {xml}");
+    let html = html(&[p.clone()], "Table");
+    assert!(html.contains("<td dir=\"rtl\">\u{0627}\u{0644}\u{0648}"), "{html}");
+    assert_eq!(html.matches(" dir=\"rtl\"").count(), 1);
+    let rtf = rtf(&[p]);
+    assert_eq!(rtf.matches("\\rtlpar").count(), 1, "{rtf}");
+    // A page that stays in positioned text boxes (rotated text): the box's paragraph.
+    let mut q = bidi_page();
+    q.blocks[1].rotation = 30.0;
+    let xml = part(&docx(&[q], "Boxes"), "word/document.xml");
+    assert!(xml.contains("<w:txbxContent><w:p><w:pPr><w:bidi/><w:spacing"), "{xml}");
+    assert!(xml.contains("<w:txbxContent><w:p><w:pPr><w:spacing"), "the English box has no direction");
+}
+
+/// #4653: the direction is the first strong character's by its Unicode bidi class, not by its
+/// script: an explicit left-to-right mark before Arabic makes it left to right, and Hebrew
+/// punctuation that is not a letter is still strong right to left.
+#[test]
+fn direction_follows_the_unicode_bidi_class_of_the_first_strong_character() {
+    // LRM (strong L) before Arabic text: left to right.
+    assert!(!is_rtl("\u{200e}\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}"));
+    assert!(is_rtl("\u{200f}abc"), "RLM is strong R");
+    assert!(is_rtl("\u{061c}abc"), "ALM is strong AL");
+    // The maqaf is punctuation, and strong R: it starts a right-to-left text.
+    assert!(is_rtl("\u{05be}abc"));
+    assert!(is_rtl("123 (\u{05be}) abc"));
+    // Arabic-Indic digits are weak numbers: they decide nothing.
+    assert!(!is_rtl("\u{0661}\u{0662} abc"));
+    assert!(is_rtl("\u{0661}\u{0662} \u{0645}"));
+    // Across runs: the first strong character of the paragraph, wherever it is.
+    let runs = |texts: &[&str]| -> Vec<Run<'static>> {
+        let b: &'static Block = Box::leak(Box::new(block("x", 0.0, 0.0, 1.0, 1.0)));
+        texts.iter().map(|t| Run { block: b, text: (*t).into() }).collect()
+    };
+    assert!(!paragraph_rtl(&runs(&["\u{200e}", "\u{0645}\u{0631}"])), "LRM in the first run");
+    assert!(paragraph_rtl(&runs(&["12 ", ", ", "\u{05be}x"])), "weak runs, then the maqaf");
+    assert!(paragraph_rtl(&runs(&["", " ", "\u{0645}"])));
+    assert!(!paragraph_rtl(&runs(&["12", "\u{0661}"])));
+    assert!(!paragraph_rtl(&runs(&[])));
+    // The same through the exporters: an LRM-first Arabic paragraph is not marked.
+    let mut p = bidi_page();
+    p.blocks[0].text = format!("\u{200e}{}", p.blocks[0].text);
+    let xml = part(&docx(&[p.clone()], "LRM"), "word/document.xml");
+    assert!(!xml.contains("<w:p><w:pPr><w:bidi/></w:pPr><w:r><w:rPr><w:sz w:val=\"22\"/><w:szCs w:val=\"22\"/><w:rtl/>"), "{xml}");
+    assert!(!html(&[p.clone()], "LRM").contains("<p dir=\"rtl\">\u{200e}"));
+    assert!(!rtf(&[p]).contains("\\rtlpar\\fs22 \\u8206"));
+}
+
+/// #4653: a run that mixes Arabic and Latin is cut into runs, and only what is right to left for
+/// certain is marked `w:rtl`: the strong Arabic, its marks, and the spaces and punctuation between
+/// two Arabic characters. Numbers, Latin and the neutral characters at the edges are not, because
+/// Word treats every neutral and weak character in a `w:rtl` run as right to left, which reverses
+/// numbers and misplaces paired brackets.
+#[test]
+fn a_mixed_direction_run_is_split_so_only_the_arabic_is_marked_rtl() {
+    let arabic = "\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}";
+    let more = "\u{0628}\u{0643}";
+    let cases: [(String, Vec<(String, bool)>); 17] = [
+        // Arabic and then a number: the number is not in the right-to-left run.
+        (format!("{arabic} 123"), vec![(arabic.into(), true), (" 123".into(), false)]),
+        // A number before the Arabic.
+        (format!("123 {arabic}"), vec![("123 ".into(), false), (arabic.into(), true)]),
+        // Latin and brackets: both brackets are outside the right-to-left run.
+        (format!("abc ({arabic})"), vec![("abc (".into(), false), (arabic.into(), true), (")".into(), false)]),
+        // Spaces and punctuation between two Arabic words are inside it.
+        (format!("{arabic} {more}"), vec![(format!("{arabic} {more}"), true)]),
+        // The Arabic comma is a weak (separator) character, not a neutral one: it is not inside.
+        (format!("{arabic}\u{060c} {more}"), vec![(arabic.into(), true), ("\u{060c} ".into(), false), (more.into(), true)]),
+        // A number between two Arabic words splits it.
+        (format!("{arabic} 12 {more}"), vec![(arabic.into(), true), (" 12 ".into(), false), (more.into(), true)]),
+        // Marks and joiners stay with their letter; a mark after Latin stays with the Latin.
+        (
+            "\u{0645}\u{064e}\u{0631}\u{200c}\u{0628} x".to_string(),
+            vec![("\u{0645}\u{064e}\u{0631}\u{200c}\u{0628}".into(), true), (" x".into(), false)],
+        ),
+        ("e\u{0301} \u{0645}".into(), vec![("e\u{0301} ".into(), false), ("\u{0645}".into(), true)]),
+        // Leading and trailing spaces are outside; the first strong character decides nothing here.
+        (
+            format!("  {arabic} ABC 123 {arabic}  "),
+            vec![("  ".into(), false), (arabic.into(), true), (" ABC 123 ".into(), false), (arabic.into(), true), ("  ".into(), false)],
+        ),
+        // A mark or joiner after pending neutrals is no second strong character: they stay out.
+        ("abc \u{0645} \u{200c}x".into(), vec![("abc ".into(), false), ("\u{0645}".into(), true), (" \u{200c}x".into(), false)]),
+        ("abc \u{0645} (\u{0301}x".into(), vec![("abc ".into(), false), ("\u{0645}".into(), true), (" (\u{0301}x".into(), false)]),
+        ("\u{0645} \u{0301}".into(), vec![("\u{0645}".into(), true), (" \u{0301}".into(), false)]),
+        // A real strong character after them commits them, marks and joiners included.
+        ("\u{0645} \u{200c} \u{0628}".into(), vec![("\u{0645} \u{200c} \u{0628}".into(), true)]),
+        ("\u{0645} \u{0301}\u{0628}".into(), vec![("\u{0645} \u{0301}\u{0628}".into(), true)]),
+        // A mark attached to the committed stretch joins it.
+        ("\u{0645}\u{0301} x".into(), vec![("\u{0645}\u{0301}".into(), true), (" x".into(), false)]),
+        // No strong right-to-left character: one run, not marked.
+        ("12, 34 (x)".into(), vec![("12, 34 (x)".into(), false)]),
+        ("".into(), vec![("".into(), false)]),
+    ];
+    for (text, expected) in cases {
+        let got: Vec<(String, bool)> = directional_runs(&text).into_iter().map(|(t, d)| (t.to_string(), d)).collect();
+        assert_eq!(got, expected, "{text:?}");
+        assert_eq!(got.iter().map(|(t, _)| t.as_str()).collect::<String>(), text, "nothing is lost");
+        assert!(text.is_empty() || got.iter().all(|(t, _)| !t.is_empty()), "no empty run in {text:?}");
+    }
+    assert_eq!(directional_runs(arabic), [(arabic, true)]);
+
+    // In Word: one block, Arabic first, with Latin and a number in the middle.
+    let p = Page {
+        width: 612.0,
+        height: 792.0,
+        blocks: vec![block(&format!("{arabic} ABC 123 {arabic} and more text so that it is long enough to be the body"), 72.0, 600.0, 500.0, 612.0)],
+        images: Vec::new(),
+        background: None,
+    };
+    let xml = part(&docx(&[p], "Mixed"), "word/document.xml");
+    let runs: Vec<&str> = xml.split("<w:r>").skip(1).collect();
+    let with = |needle: &str| *runs.iter().find(|r| r.contains(needle)).unwrap_or_else(|| panic!("no run with {needle}: {xml}"));
+    assert!(with(arabic).contains("<w:rtl/>"));
+    let latin = with("ABC 123");
+    assert!(!latin.contains("<w:rtl/>"), "{latin}");
+    assert!(latin.contains("<w:szCs w:val=\"24\"/>"), "the complex-script size is on every run: {latin}");
+    assert!(xml.contains("<w:p><w:pPr><w:bidi/></w:pPr>"), "the paragraph is right to left: {xml}");
+    // A number after Arabic, and brackets around Arabic, are in runs without w:rtl.
+    for (text, plain) in [(format!("{arabic} 123"), " 123"), (format!("abc ({arabic})"), ")")] {
+        let q = Page { width: 612.0, height: 792.0, blocks: vec![block(&text, 72.0, 600.0, 500.0, 612.0)], images: Vec::new(), background: None };
+        let xml = part(&docx(&[q], "Edge"), "word/document.xml");
+        let run = xml.split("<w:r>").skip(1).find(|r| r.contains(&format!(">{plain}</w:t>"))).unwrap_or_else(|| panic!("no run {plain:?}: {xml}"));
+        assert!(!run.contains("<w:rtl/>"), "{plain:?} stays out of the right-to-left run: {run}");
+    }
+    // Bold Arabic keeps its complex-script bold on the right-to-left run, and none on the Latin.
+    let mut bold = block(&format!("{arabic} ABC"), 72.0, 600.0, 500.0, 612.0);
+    bold.bold = true;
+    let q = Page { width: 612.0, height: 792.0, blocks: vec![bold], images: Vec::new(), background: None };
+    let xml = part(&docx(&[q], "Bold"), "word/document.xml");
+    assert!(xml.contains("<w:b/><w:bCs/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/><w:rtl/>"), "{xml}");
+    assert!(xml.contains("<w:b/><w:bCs/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/></w:rPr><w:t xml:space=\"preserve\"> ABC</w:t>"), "{xml}");
+
+    // Styled Arabic with Arabic-Indic digits: the digits are not marked right to left, but they
+    // keep the block's complex-script bold and size like the letters, so they do not fall back to
+    // Word's default for complex script.
+    let mut styled = block(&format!("{arabic} \u{0661}\u{0662}"), 72.0, 600.0, 500.0, 612.0);
+    (styled.bold, styled.italic, styled.size) = (true, true, 24.0);
+    let q = Page { width: 612.0, height: 792.0, blocks: vec![styled], images: Vec::new(), background: None };
+    let xml = part(&docx(&[q], "Digits"), "word/document.xml");
+    let cs = "<w:b/><w:bCs/><w:i/><w:iCs/><w:sz w:val=\"48\"/><w:szCs w:val=\"48\"/>";
+    assert!(xml.contains(&format!("{cs}<w:rtl/></w:rPr><w:t xml:space=\"preserve\">{arabic}</w:t>")), "{xml}");
+    assert!(xml.contains(&format!("{cs}</w:rPr><w:t xml:space=\"preserve\"> \u{0661}\u{0662}</w:t>")), "{xml}");
+}

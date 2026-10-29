@@ -12,3 +12,4 @@ workspace = true
 
 [dependencies]
 flate2.workspace = true
+unicode-bidi = "0.3"

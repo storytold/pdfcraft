@@ -1,6 +1,6 @@
 use super::Zip;
 use super::as_html::esc;
-use super::layout::{Image, Item, Page, Table, body_size, items};
+use super::layout::{Image, Item, Page, Table, body_size, directional_runs, is_rtl, items, paragraph_rtl};
 
 /// A colour's 8-bit sRGB components (NaN and out-of-range values clamp; NaN reads as 0).
 pub(crate) fn rgb8(c: [f64; 3]) -> [u8; 3] {
@@ -14,20 +14,34 @@ pub(crate) fn hex(c: [f64; 3]) -> Option<String> {
     (r | g | b != 0).then(|| format!("{r:02X}{g:02X}{b:02X}"))
 }
 
-/// A formatted text run (shared by paragraphs and table cells).
+/// A formatted text run (shared by paragraphs and table cells), as one Word run per stretch of
+/// one direction: text in a right-to-left script is complex-script text to Word (its bold, italic
+/// and size are the `Cs` ones, and `w:rtl` says its direction), and only that text is marked, not
+/// the Latin letters that share its formatting (#4653).
 fn run_xml(text: &str, size: f64, bold: bool, italic: bool, color: [f64; 3]) -> String {
+    directional_runs(text).into_iter().map(|(part, rtl)| run_part(part, rtl, size, bold, italic, color)).collect()
+}
+
+fn run_part(text: &str, rtl: bool, size: f64, bold: bool, italic: bool, color: [f64; 3]) -> String {
+    // The complex-script counterparts (`bCs`, `iCs`, `szCs`) go on every run, whatever its
+    // direction: Word treats Arabic-script digits and punctuation as complex-script text even
+    // where they are not marked right to left, and Latin text ignores them. Only the direction,
+    // `w:rtl`, is limited to the text that is right to left for certain.
     let mut rpr = String::new();
     if bold {
-        rpr.push_str("<w:b/>");
+        rpr.push_str("<w:b/><w:bCs/>");
     }
     if italic {
-        rpr.push_str("<w:i/>");
+        rpr.push_str("<w:i/><w:iCs/>");
     }
     if let Some(h) = hex(color) {
         rpr.push_str(&format!("<w:color w:val=\"{h}\"/>"));
     }
     let half_points = if size.is_finite() { (size * 2.0).round().clamp(2.0, 3276.0) as i64 } else { 24 };
-    rpr.push_str(&format!("<w:sz w:val=\"{half_points}\"/>"));
+    rpr.push_str(&format!("<w:sz w:val=\"{half_points}\"/><w:szCs w:val=\"{half_points}\"/>"));
+    if rtl {
+        rpr.push_str("<w:rtl/>");
+    }
     format!("<w:r><w:rPr>{rpr}</w:rPr><w:t xml:space=\"preserve\">{}</w:t></w:r>", esc(text))
 }
 
@@ -53,7 +67,8 @@ pub(crate) fn docx_table(t: &Table) -> String {
             let span = if c.span > 1 { format!("<w:gridSpan w:val=\"{}\"/>", c.span) } else { String::new() };
             let w: i64 = widths.iter().skip(column).take(c.span).sum();
             s.push_str(&format!(
-                "<w:tc><w:tcPr><w:tcW w:w=\"{w}\" w:type=\"dxa\"/>{span}</w:tcPr><w:p>{}</w:p></w:tc>",
+                "<w:tc><w:tcPr><w:tcW w:w=\"{w}\" w:type=\"dxa\"/>{span}</w:tcPr><w:p>{}{}</w:p></w:tc>",
+                if is_rtl(&c.text) { "<w:pPr><w:bidi/></w:pPr>" } else { "" },
                 run_xml(&c.text, c.size, c.bold, c.italic, c.color)
             ));
             column = column.saturating_add(c.span);
@@ -170,8 +185,10 @@ fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, sha
             "position:absolute;margin-left:{x:.3}pt;margin-top:{y:.3}pt;width:{w:.3}pt;height:{h:.3}pt;rotation:{rotation:.3};z-index:{z};mso-position-horizontal-relative:page;mso-position-vertical-relative:page"
         );
         s.push_str(&format!(
-            "<w:r><w:pict><v:rect id=\"Text{}\" style=\"{style}\" filled=\"f\" stroked=\"f\"><v:textbox inset=\"0,0,0,0\" style=\"mso-fit-shape-to-text:t\"><w:txbxContent><w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"0\"/></w:pPr>{}</w:p></w:txbxContent></v:textbox><w10:wrap type=\"none\"/></v:rect></w:pict></w:r>",
-            shape_id, run_xml(&b.text, b.size, b.bold, b.italic, b.color)
+            "<w:r><w:pict><v:rect id=\"Text{}\" style=\"{style}\" filled=\"f\" stroked=\"f\"><v:textbox inset=\"0,0,0,0\" style=\"mso-fit-shape-to-text:t\"><w:txbxContent><w:p><w:pPr>{}<w:spacing w:before=\"0\" w:after=\"0\"/></w:pPr>{}</w:p></w:txbxContent></v:textbox><w10:wrap type=\"none\"/></v:rect></w:pict></w:r>",
+            shape_id,
+            if is_rtl(&b.text) { "<w:bidi/>" } else { "" },
+            run_xml(&b.text, b.size, b.bold, b.italic, b.color)
         ));
     }
     for im in &page.images {
@@ -247,12 +264,16 @@ pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
                 match &it {
                     Item::Para(runs, lvl) => {
                         let style = match lvl {
-                            1 => "<w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr>",
-                            2 => "<w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr>",
+                            1 => "<w:pStyle w:val=\"Heading1\"/>",
+                            2 => "<w:pStyle w:val=\"Heading2\"/>",
                             _ => "",
                         };
+                        // A paragraph that reads right to left says so: Word aligns and orders it so.
+                        let bidi = if paragraph_rtl(runs) { "<w:bidi/>" } else { "" };
                         body.push_str("<w:p>");
-                        body.push_str(style);
+                        if !style.is_empty() || !bidi.is_empty() {
+                            body.push_str(&format!("<w:pPr>{style}{bidi}</w:pPr>"));
+                        }
                         for r in runs {
                             body.push_str(&run_xml(&r.text, r.block.size, r.block.bold, r.block.italic, r.block.color));
                         }
