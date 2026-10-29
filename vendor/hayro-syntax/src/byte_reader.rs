@@ -81,7 +81,8 @@ impl<'a> Reader<'a> {
     /// close an array and each `>>` a dictionary, and strings and comments are stepped over so
     /// the delimiters in them don't count. Nothing in it is read, so nothing can be reached
     /// through it. Returns `None`, with the offset where it was, when no array or dictionary
-    /// starts here, a closing delimiter doesn't match its opener or the data ends before it
+    /// starts here, a closing delimiter doesn't match its opener, a hexadecimal string holds
+    /// something other than hexadecimal digits and whitespace, or the data ends before it
     /// closes.
     pub(crate) fn skip_unparsed_container(&mut self) -> Option<()> {
         let start = self.offset;
@@ -111,9 +112,18 @@ impl<'a> Reader<'a> {
                     open_level(&mut kinds, &mut depth, true)?;
                     continue;
                 }
-                // A hexadecimal string: whatever it holds, it ends at the first `>`.
+                // A hexadecimal string: it ends at the first `>` and holds only what
+                // `String::skip` accepts, hexadecimal digits and whitespace.
                 b'<' => {
-                    while self.read_byte()? != b'>' {}
+                    loop {
+                        let byte = self.read_byte()?;
+                        if byte == b'>' {
+                            break;
+                        }
+                        if !byte.is_ascii_hexdigit() && !crate::trivia::is_white_space_character(byte) {
+                            return None;
+                        }
+                    }
                     continue;
                 }
                 b']' => false,

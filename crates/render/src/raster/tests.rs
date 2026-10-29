@@ -4322,6 +4322,19 @@ fn a_value_nested_past_the_cap_leaves_its_dictionary_readable() {
     for mismatched in [format!("{} >> {}", "[".repeat(129), "]".repeat(128)), format!("{}<< {}", "[".repeat(128), "]".repeat(129))] {
         assert!(Dict::from_bytes(format!("<< /A 1 /Deep {mismatched} >>").as_bytes()).is_none(), "{mismatched}");
     }
+    // So does one holding a hexadecimal string that `String::skip` refuses, one with a byte
+    // other than a hexadecimal digit or whitespace in it, in an array or in a dictionary.
+    for bad in ["<g>", "<5D]>", "<5D/X>"] {
+        for deep in [format!("{}{bad}{}", "[".repeat(200), "]".repeat(200)), format!("{}{bad}{}", "<< /K ".repeat(200), " >>".repeat(200))] {
+            assert!(Dict::from_bytes(format!("<< /A 1 /Deep {deep} >>").as_bytes()).is_none(), "{bad}");
+        }
+    }
+    // A well-formed one, with whitespace in it, is still stepped over.
+    let hex = "<5D3e \t\r\n\x0c\x00 3E>";
+    let deep = format!("<< /A 1 /Deep {}{hex}{} /B 2 >>", "[".repeat(200), "]".repeat(200));
+    let dict = Dict::from_bytes(deep.as_bytes()).expect("the dictionary is read");
+    assert_eq!((dict.get::<i32>("A"), dict.get::<i32>("B")), (Some(1), Some(2)));
+    assert!(!dict.contains_key("Deep"));
 }
 
 /// A value nested past the cap inside a dictionary of the page, here its `/Resources`, leaves
