@@ -2405,6 +2405,113 @@ fn j_and_k_scroll_like_the_arrow_keys() {
     assert!((top(&h) - down).abs() < 0.5, "with Find closed, J scrolls again");
 }
 
+/// Send the native key and its text together, through eframe's raw-input path.
+fn jk_input(h: &mut Harness<'static, PdfCraftApp>, key: egui::Key, text: Option<&str>, modifiers: egui::Modifiers) {
+    h.input_mut().events.push(egui::Event::ModifiersChanged(modifiers));
+    h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+    if let Some(text) = text {
+        h.input_mut().events.push(egui::Event::Text(text.into()));
+    }
+    h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
+    h.input_mut().events.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+    h.run_steps(2);
+}
+
+#[test]
+fn j_and_k_belong_to_comment_text_field() {
+    jk_text_field(false);
+}
+
+#[test]
+fn j_and_k_belong_to_console_text_field() {
+    jk_text_field(true);
+}
+
+fn jk_text_field(console: bool) {
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(3);
+    // K must have room to scroll up, so a missing focus guard cannot pass at the top.
+    jk_input(&mut h, egui::Key::J, None, egui::Modifiers::NONE);
+    jk_input(&mut h, egui::Key::J, None, egui::Modifiers::NONE);
+    if console {
+        assert!(h.state_mut().execute("tools.js_console"));
+    } else {
+        h.state_mut().set_option("panel", "comments").unwrap();
+    }
+    h.run_steps(3);
+    let hint = if console { "JavaScript, e.g. getField(\"total\").value" } else { "Add a comment" };
+    h.query_all_by(|n| n.placeholder() == Some(hint)).next().expect("text input").click();
+    h.run_steps(3);
+    let top = h.state().views[0].page_screen_rect(0).unwrap().top();
+    for (key, text) in [(egui::Key::J, "j"), (egui::Key::K, "k")] {
+        jk_input(&mut h, key, Some(text), egui::Modifiers::NONE);
+        assert!((h.state().views[0].page_screen_rect(0).unwrap().top() - top).abs() < 0.5, "{hint}: {key:?} must not scroll");
+    }
+    let input = if console { &h.state().js_console.input } else { &h.state().views[0].comments.add_box };
+    assert_eq!(input, "jk", "both typed characters reach {hint}");
+}
+
+#[test]
+fn j_and_k_do_not_interrupt_ime_preedit() {
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(3);
+    jk_input(&mut h, egui::Key::J, None, egui::Modifiers::NONE);
+    jk_input(&mut h, egui::Key::J, None, egui::Modifiers::NONE);
+    h.state_mut().set_option("panel", "comments").unwrap();
+    h.run_steps(3);
+    h.query_all_by(|n| n.placeholder() == Some("Add a comment")).next().expect("comment text input").click();
+    h.run_steps(3);
+    let top = h.state().views[0].page_screen_rect(0).unwrap().top();
+    for (key, preedit) in [(egui::Key::J, "j"), (egui::Key::K, "jk")] {
+        h.input_mut().events.push(egui::Event::Ime(egui::ImeEvent::Preedit { text: preedit.into(), active_range_chars: None }));
+        jk_input(&mut h, key, None, egui::Modifiers::NONE);
+        assert_eq!(h.state().views[0].comments.add_box, preedit, "the editor received the actual preedit");
+        assert!((h.state().views[0].page_screen_rect(0).unwrap().top() - top).abs() < 0.5, "IME {key:?} must not scroll");
+    }
+    h.input_mut().events.push(egui::Event::Ime(egui::ImeEvent::Commit("字".into())));
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.add_box, "字", "commit replaces the preedit");
+    assert!((h.state().views[0].page_screen_rect(0).unwrap().top() - top).abs() < 0.5);
+}
+
+#[test]
+fn j_and_k_ignore_modified_k_even_when_modifiers_are_released_in_the_frame() {
+    for modifiers in [egui::Modifiers::SHIFT, egui::Modifiers::ALT, egui::Modifiers::COMMAND] {
+        let mut h = harness();
+        h.state_mut().active = Some(0);
+        h.run_steps(3);
+        let start = h.state().views[0].page_screen_rect(0).unwrap().top();
+        jk_input(&mut h, egui::Key::J, None, egui::Modifiers::NONE);
+        let down = h.state().views[0].page_screen_rect(0).unwrap().top();
+        assert!(down < start - 1.0);
+        // Real held modifiers, then a release in the same frame as the modified key.
+        h.key_press_modifiers(modifiers, egui::Key::K);
+        h.run_steps(3);
+        assert!((h.state().views[0].page_screen_rect(0).unwrap().top() - down).abs() < 0.5, "held {modifiers:?}+K");
+        if modifiers.command {
+            assert!(h.state().palette_open, "Command+K still opens the command palette");
+            jk_input(&mut h, egui::Key::Escape, None, egui::Modifiers::NONE);
+            assert!(!h.state().palette_open);
+        }
+        jk_input(&mut h, egui::Key::K, None, modifiers);
+        assert!((h.state().views[0].page_screen_rect(0).unwrap().top() - down).abs() < 0.5, "released {modifiers:?}+K");
+        if modifiers.command {
+            assert!(h.state().palette_open, "Command+K still opens the command palette");
+            jk_input(&mut h, egui::Key::Escape, None, egui::Modifiers::NONE);
+            assert!(!h.state().palette_open);
+        }
+        jk_input(&mut h, egui::Key::K, None, egui::Modifiers::NONE);
+        assert!((h.state().views[0].page_screen_rect(0).unwrap().top() - start).abs() < 0.5, "plain K still scrolls up");
+    }
+}
+
 /// #2665: next to a very wide page the normal pages sit far to its right, outside the window.
 /// Going to one changed the page counter but kept the horizontal scroll, so it stayed out of
 /// sight; as in Acrobat, it is brought into view.
