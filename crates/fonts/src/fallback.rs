@@ -18,7 +18,9 @@
 //!
 //! 1. The document embeds the program. Nothing is substituted.
 //! 2. `/BaseFont` names one of the standard 14 (or a well-known alias such as Arial). Exact
-//!    published metrics apply, so this is as close to right as a substitution gets.
+//!    published metrics apply, so this is as close to right as a substitution gets. A name that
+//!    only hints at a family ("Mono", "Serif", "Roman") gives way to step 4's stand-in for a CJK
+//!    font that has one.
 //! 3. craft-fonts holds that exact family. Never another family — see [`crate::embedding`].
 //! 4. The descendant font's `/CIDSystemInfo /Ordering` names a CJK collection (Japan1, GB1, CNS1,
 //!    Korea1, KR) and craft-fonts has a Han face: the best-ranked one stands in ([`cjk_stand_in`]),
@@ -170,19 +172,24 @@ pub fn substitute(req: &Request<'_>) -> Substitution {
     if req.embedded {
         return at(Face::Embedded, Why::Embedded);
     }
+    let scripts = req.ordering.map(collection_scripts).unwrap_or_default();
+    let cjk_face = if scripts.is_empty() { None } else { cjk_stand_in(req) };
     if let Some((f, how)) = Std14::recognise(req.base_font) {
-        return match how {
-            crate::std14::Match::Alias => at(Face::Standard14(f), Why::NamedStandard14),
-            crate::std14::Match::FamilyHint => at(Face::Standard14(f), Why::NameHintedStandard14),
-        };
+        match how {
+            crate::std14::Match::Alias => return at(Face::Standard14(f), Why::NamedStandard14),
+            // A CJK font whose name only hints at a family (`MonotypeSung-Light` holds "mono")
+            // takes its stand-in when there is one, as the renderer does (hayro-interpret patch
+            // 72); without one the hint stands.
+            crate::std14::Match::FamilyHint if cjk_face.is_none() => return at(Face::Standard14(f), Why::NameHintedStandard14),
+            crate::std14::Match::FamilyHint => {}
+        }
     }
     if let Some(f) = crate::embedding::matching_faces(req.base_font).first() {
         return at(Face::Craft(f), Why::ExactCraftFamily);
     }
-    let scripts = req.ordering.map(collection_scripts).unwrap_or_default();
     if !scripts.is_empty() {
         // A Han face stands in; without one there is no honest substitute to offer.
-        return match cjk_stand_in(req) {
+        return match cjk_face {
             Some(f) if scripts.iter().any(|s| f.covers(s)) => at(Face::Craft(f), Why::ScriptFace),
             Some(f) => at(Face::Craft(f), Why::NearestScriptFace),
             None => at(Face::None, Why::NoFaceForScript),
@@ -512,6 +519,31 @@ mod tests {
             assert_eq!(s.face_name(), None);
             assert!(s.why.note().contains("no licensed face"), "{ordering}");
         }
+    }
+
+    /// A CJK font whose name only hints at a standard family (`MonotypeSung-Light` holds "mono",
+    /// `MingSerif` "serif") is reported with its stand-in, the face the renderer draws with; a
+    /// name that names the family outright (Arial, Times) keeps it, and without a stand-in the
+    /// hint stands, as before.
+    #[test]
+    fn a_family_hint_gives_way_to_a_cjk_stand_in() {
+        for name in ["MonotypeSung-Light", "MingSerif-Regular", "SomeRoman-GB"] {
+            let r = req(name, false, 0b10, Some("GB1"));
+            let s = substitute(&r);
+            match cjk_stand_in(&r) {
+                Some(f) => assert_eq!((s.face, s.why), (Face::Craft(f), Why::ScriptFace), "{name}"),
+                None => assert_eq!(s.why, Why::NameHintedStandard14, "{name}"),
+            }
+        }
+        assert_eq!(
+            substitute(&req("MonotypeSung-Light", false, 0, Some("GB1"))).face == Face::Standard14(Std14::Courier),
+            cjk_stand_in(&req("x", false, 0, Some("GB1"))).is_none()
+        );
+        for name in ["ArialUnicodeMS", "Times-Roman"] {
+            assert_eq!(substitute(&req(name, false, 0, Some("GB1"))).why, Why::NamedStandard14, "{name}");
+        }
+        // Not a CJK font: the hint stands either way.
+        assert_eq!(substitute(&req("MonotypeSung-Light", false, 0, Some("Identity"))).why, Why::NameHintedStandard14);
     }
 
     /// #5329: the chain names the face the renderer draws with ([`cjk_stand_in`]), and says
