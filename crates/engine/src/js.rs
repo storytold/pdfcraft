@@ -33,15 +33,18 @@ impl JsOutput {
     }
 
     /// Adds what a field's own script produced: its alerts, console lines, errors and requests,
-    /// except a request to show a side panel or open Save As, which is noted on the console
-    /// and dropped.
+    /// except a request to print, show a side panel or open Save As, which is noted on the
+    /// console and dropped.
     fn absorb(&mut self, o: &Outcome) {
         self.alerts.extend(o.alerts.iter().cloned());
         self.console.extend(o.console.iter().cloned());
-        // A field's own scripts (keystroke, format, validate, calculate) run unasked: only a
-        // button's may show or hide a side panel, or open Save As.
+        // A field's own scripts (keystroke, format, validate, calculate) run unasked: only an
+        // explicit button or console script may print, show or hide a side panel, or open Save As.
         for r in &o.requests {
             match r {
+                Request::Print => self
+                    .console
+                    .push("Print requested by an automatic field script was ignored; use a button or the JavaScript console to print".into()),
                 Request::ShowPanel(_) => self.console.push("A field script asked to show a side panel; only a button may show a side panel".into()),
                 Request::SaveAs => {
                     self.console.push("A field script asked to save the document as a new file; only a button may open Save As".into())

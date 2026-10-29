@@ -2,6 +2,8 @@
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
+> **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M6, PR #4166/#4088: preserve automatic-field Print suppression, explicit script printing and document-error provenance on upstream 0.15; retain the integrated craft-libs revision; estimates unchanged)
+>
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M14 localization current state: Arabic logical catalog, explicit RTL label direction and mirrored stock chrome; native/browser RTL workflows unqualified. Native release Hans face via LXGW WenKai Lite; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M7, #2636 partial: pasting added text boxes and images in the engine and through `content_copy`; estimates unchanged)
@@ -200,6 +202,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-29 (M6, PR #4166/#4088 integration):** Retained automatic-field Print suppression, ShowPanel/SaveAs filtering, explicit button/console printing and document-error provenance while integrating upstream 0.15. All three engine regressions and the headless regression remain in their current test modules, with matching parity evidence. Dependency manifests retain main's integrated craft-libs revision, which includes #366. Estimates unchanged.
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 - **2026-10-24 (M10, #4158 partial):** Word, HTML, RTF and PowerPoint export keep a block that continues another on its line (an italic case name, a link, a superscript) as a run in its own style inside that paragraph, with the source's word space, instead of a paragraph of its own. Style changes that wrap onto the next line still split paragraphs (the reading blocks keep style boundaries). Estimates unchanged.
 - **2026-10-24 (M3, window move on Wayland, #3970 follow-up):** After a move or resize by PdfCraft's own title bar or edges, the button release given back to egui goes before the pointer leaving the window, so hover no longer sticks at the old place until the pointer moves. Found by CodeRabbit in review of #3970; a unit test covers it. Estimates unchanged.
@@ -220,6 +223,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
   The regression checks two distinct appearances, inherited resources, print/reopen pixels and unchanged source data.
   Estimates unchanged.
 - **2026-10-21 (M3, window resize and move on Wayland):** With PdfCraft's own title bar on GNOME/Wayland, a second resize by a window edge, or a second move by the empty tab strip, works straight after the first; it waited for a click inside the window, because the compositor keeps the button's release from egui. A unit test covers the release given back; checked by hand in a test build. Estimates unchanged.
+- **2026-10-22 (M6, #4088):** Automatic AcroForm Keystroke, Validate, Calculate and Format scripts cannot open the print dialog; ignored requests are reported in the JavaScript console. Explicit button and console printing remain available, including when they trigger automatic calculations. Engine and headless automation regressions cover the boundary. Estimates unchanged.
 - **2026-10-22 (M4, #3916 partial):** Document edits and Undo/Redo cancel an Organize page drag. Pointer-release regressions check exact page order and save/reopen.
 - **2026-10-22 (M10, #3752 paper):** CUPS jobs ask for the chosen paper in every size. The 13 sizes the Print dialog sent no paper for (A6, A0–A2, ARCH, ANSI C–E) use PWG 5101.1 names, checked against a synthetic PPD with `cupsfilter`, and `doc_print` to a printer sends the paper too. The macOS tray half (Auto Select instead of the PPD's default tray) is a craft-print change that needs a pin bump here. Estimates unchanged.
 - **2026-10-22 (M14, macOS association recovery candidate):** Successful desktop open/save/sign can queue recovery of an existing per-file binding to the running PDFCraft bundle through NSWorkspace. Metadata-only watcher changes retain undo and avoid false overwrite prompts; real same-length/same-mtime edits remain protected. Rebased on 0.12.0 and reuses #3042's shared atomic metadata preservation; the bounded recovery parser does not narrow save limits. Prior native Preview TEST-signature and Finder workflows passed on macOS 27.0.1; other versions remain unqualified. Estimates unchanged.
@@ -677,6 +681,8 @@ Newest first: the date, what moved, and the new overall estimate.
 - **2026-10-10 (UI docking):** Tools and Inspector can be regrouped, split beside the PDF, or floated inside the app window. Existing toggles reopen panels at their saved locations; UI commands arrange/reset panels, and preferences retain their layout. Read/full-screen modes preserve the focused document view. No milestone percentage change.
 
 ## Revision history
+
+**2026-10-29 · minor:** M6/PR #4166 refreshed against upstream 0.15. Automatic field scripts still suppress Print with a console diagnostic alongside ShowPanel/SaveAs filtering, and explicit button/console scripts retain their requests and document-error provenance. The three engine regressions, headless regression and parity evidence remain in the current modules. Dependency manifests retain main's integrated craft-libs revision, including #366. Estimates unchanged.
 
 **2026-10-25 · minor:** M14 localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build has no Hans face. Estimates unchanged.
 
