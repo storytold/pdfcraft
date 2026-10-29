@@ -695,18 +695,80 @@ fn new_id_bytes(opts: &SaveOptions, written: &[u8]) -> Vec<u8> {
     halves.iter().flat_map(|h| h.to_be_bytes()).collect()
 }
 
-/// The salt of an identifier. With caller entropy it is a fixed hash of that entropy. Without it, the
-/// standard library's random hash keys (seeded by the operating system on native targets) mixed with a
-/// process-wide counter make each call differ; on WebAssembly those keys are fixed, so there the
-/// counter and the written bytes are what differ.
+/// The salt of an identifier. With caller entropy it is a fixed hash of that entropy (deterministic,
+/// for tests and callers who pin output). Without it the salt is fresh: on WebAssembly from the
+/// browser ([`browser_salt`], so two fresh web apps that write the same bytes cannot share an
+/// identifier), and elsewhere from the standard library's random hash keys — seeded by the operating
+/// system, so separate processes differ — mixed with a process-wide counter, which separates
+/// successive calls in one process.
 fn id_salt(opts: &SaveOptions) -> u64 {
     use std::hash::BuildHasher;
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     match &opts.id_entropy {
         Some(entropy) => fnv1a(FNV_OFFSET, entropy),
-        None => std::collections::hash_map::RandomState::new().hash_one(COUNTER.fetch_add(1, Ordering::Relaxed)),
+        None => {
+            #[cfg(target_arch = "wasm32")]
+            if let Some(salt) = browser_salt() {
+                return salt;
+            }
+            std::collections::hash_map::RandomState::new().hash_one(COUNTER.fetch_add(1, Ordering::Relaxed))
+        }
     }
+}
+
+/// One byte from one `Math.random` draw: the draw (in [0, 1)) scaled to [0, 256), integer part
+/// taken. The quotient is in [0, 256), so a saturating cast never wraps; a NaN or infinite draw
+/// (which a conforming engine never returns) folds in as 0. No input can panic here.
+#[cfg(any(target_arch = "wasm32", test))]
+fn draw_byte(random: f64) -> u8 {
+    (random * 256.0).floor().rem_euclid(256.0) as u8
+}
+
+/// The `Math.random` fallback's mixing: one salt byte per draw (see [`draw_byte`]), folded through
+/// FNV-1a exactly like the Web Crypto bytes, so all sixteen bytes of the fold carry entropy from
+/// the draws. Pure and platform-independent, so the native test target can exercise it; on wasm
+/// each draw comes from `Math.random`.
+#[cfg(any(target_arch = "wasm32", test))]
+fn salt_from_draws(draws: &[f64; 16]) -> u64 {
+    let mut bytes = [0u8; 16];
+    for (byte, draw) in bytes.iter_mut().zip(draws) {
+        *byte = draw_byte(*draw);
+    }
+    fnv1a(FNV_OFFSET, &bytes)
+}
+
+/// Fresh salt entropy from the browser, on WebAssembly. `crypto.getRandomValues` (Web Crypto, the
+/// browser's secure generator, available in windows and workers alike) gives sixteen bytes, folded
+/// into one salt. When that API is missing or refuses the call, `Math.random` is mixed instead
+/// ([`salt_from_draws`]: sixteen draws, so the salt's full width carries entropy) — browsers seed
+/// it afresh for every document, so a fresh instance still cannot reproduce another's salt. Only
+/// where neither is reachable does the caller fall back to its `RandomState` salt, whose keys are
+/// fixed at compile time on `wasm32-unknown-unknown` — the state before browser entropy was wired
+/// in.
+#[cfg(target_arch = "wasm32")]
+fn browser_salt() -> Option<u64> {
+    use wasm_bindgen::JsCast;
+    let crypto = js_sys::Reflect::get(&js_sys::global(), &wasm_bindgen::JsValue::from_str("crypto"))
+        .ok()
+        .filter(|crypto| !crypto.is_undefined() && !crypto.is_null());
+    if let Some(crypto) = crypto {
+        let fill = js_sys::Reflect::get(&crypto, &wasm_bindgen::JsValue::from_str("getRandomValues"))
+            .ok()
+            .and_then(|fill| fill.dyn_into::<js_sys::Function>().ok());
+        if let Some(fill) = fill {
+            let bytes = js_sys::Uint8Array::new_with_length(16);
+            if fill.call1(&crypto, &bytes).is_ok() {
+                return Some(fnv1a(FNV_OFFSET, &bytes.to_vec()));
+            }
+        }
+    }
+    // Web Crypto is missing or refused the call: degrade to `Math.random` rather than giving up.
+    let mut draws = [0.0; 16];
+    for draw in &mut draws {
+        *draw = js_sys::Math::random();
+    }
+    Some(salt_from_draws(&draws))
 }
 
 /// A PDF date string for "now" given seconds since the Unix epoch (UTC).
@@ -748,6 +810,40 @@ mod tests {
         assert_eq!(super::fnv1a(super::FNV_OFFSET, b""), 0xcbf2_9ce4_8422_2325);
         assert_eq!(super::fnv1a(super::FNV_OFFSET, b"a"), 0xaf63_dc4c_8601_ec8c);
         assert_eq!(super::fnv1a(super::FNV_OFFSET, b"foobar"), 0x8594_4171_f739_67e8);
+    }
+
+    #[test]
+    fn math_random_draws_fill_the_whole_salt_width() {
+        // Draw i = (i + 1/2)/256 scales to the integer i, so the fold's byte i proves draw i landed
+        // there: all sixteen bytes carry their own draw's entropy (the fallback once shifted four
+        // draws into one word, leaving the other four bytes of the fold constant).
+        let draws: [f64; 16] = std::array::from_fn(|i| (i as f64 + 0.5) / 256.0);
+        let bytes: Vec<u8> = (0..16).collect();
+        assert_eq!(super::salt_from_draws(&draws), super::fnv1a(super::FNV_OFFSET, &bytes));
+    }
+
+    #[test]
+    fn every_math_random_draw_reaches_the_salt() {
+        let base = [0.5; 16];
+        let baseline = super::salt_from_draws(&base);
+        for i in 0..16 {
+            let mut draws = base;
+            draws[i] = 0.75;
+            assert_ne!(super::salt_from_draws(&draws), baseline, "draw {i} did not reach the salt");
+        }
+    }
+
+    #[test]
+    fn a_math_random_draw_outside_its_range_still_mixes_without_panicking() {
+        // A conforming `Math.random` stays in [0, 1), but the mixing must not panic outside it.
+        assert_eq!(super::draw_byte(0.0), 0);
+        assert_eq!(super::draw_byte(0.5), 128);
+        assert_eq!(super::draw_byte(255.5 / 256.0), 255);
+        assert_eq!(super::draw_byte(-0.5 / 256.0), 255);
+        assert_eq!(super::draw_byte(-1.0), 0);
+        assert_eq!(super::draw_byte(2.0), 0);
+        assert_eq!(super::draw_byte(f64::NAN), 0);
+        assert_eq!(super::draw_byte(f64::INFINITY), 0);
     }
 
     use super::*;

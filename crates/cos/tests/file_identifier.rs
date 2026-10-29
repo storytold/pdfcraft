@@ -236,3 +236,44 @@ fn the_identifier_depends_on_the_whole_rewritten_file() {
     assert!(first_difference > 64 * 1024, "the rewrites first differ at byte {first_difference}, inside the first 64 KiB");
     assert_ne!(id_strings(&reopen(a)), id_strings(&reopen(b)), "content past 64 KiB must change the identifier");
 }
+
+/// Where [`stand_in_for_a_fresh_process`] writes its rewrite.
+const ID_PROBE: &str = "PDFCRAFT_TEST_ID_PROBE";
+
+/// The child half of [`separate_fresh_processes_get_different_identifiers`]: it runs alone, in its
+/// own process, and writes a default-path rewrite of the standard fixture to the file the parent
+/// named. Without the variable it is a plain no-op.
+#[test]
+fn stand_in_for_a_fresh_process() {
+    let Some(path) = std::env::var_os(ID_PROBE) else { return };
+    let mut doc = reopen(source(true));
+    doc.require_full_save_with_new_id();
+    std::fs::write(path, write_full(&doc, &SaveOptions::default()).unwrap()).unwrap();
+}
+
+#[test]
+fn separate_fresh_processes_get_different_identifiers() {
+    // The default identifier is meant to differ between fresh instances of the whole save pipeline,
+    // not only between two calls in one process (which the counter already separates). On the native
+    // test target a fresh instance is a fresh process, whose hash keys the operating system seeds;
+    // the fix under test runs on WebAssembly, where no browser test harness exists — there the
+    // browser's `crypto.getRandomValues` stands in for this seeding, and this test cannot see it.
+    let exe = std::env::current_exe().unwrap();
+    let probe = |name: &str| {
+        let path = std::env::temp_dir().join(format!("pdfcraft-id-probe-{}-{name}.pdf", std::process::id()));
+        let out = std::process::Command::new(&exe)
+            .args(["--exact", "stand_in_for_a_fresh_process", "--nocapture", "--"])
+            .env(ID_PROBE, &path)
+            .output()
+            .expect("run this test's own binary as a child");
+        assert!(out.status.success(), "{name}: the child failed: {}", String::from_utf8_lossy(&out.stderr));
+        let saved = std::fs::read(&path).unwrap_or_else(|e| panic!("{name}: the child wrote its file: {e}"));
+        let ids = id_strings(&reopen(saved));
+        assert_eq!(ids.len(), 2, "{name}");
+        assert!(ids.iter().all(|s| s.len() == 16), "{name}: {ids:?}");
+        let _ = std::fs::remove_file(&path);
+        ids
+    };
+    let (first, second) = (probe("a"), probe("b"));
+    assert_ne!(first, second, "two fresh processes must not share an identifier");
+}
