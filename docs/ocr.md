@@ -61,7 +61,11 @@ This is an initial searchable-image workflow, not an editable-text reconstructio
 It targets horizontal printed text. Handwriting, vertical text, automatic deskew, reliable
 table reconstruction and rotated-line recognition remain unsupported. Reading order uses
 the existing detector's line analysis; complex layouts can need review. Chinese and Latin
-selection boxes cover a recognised line, with approximate character positions within it.
+selection boxes cover a recognised line, or each piece of a line wider than about forty times
+its height, with approximate character positions within a piece. A line that long used to be
+refused, and the whole page with it; it is now read in pieces split at the gaps between words.
+A single word that is still wider than the recogniser's input is squeezed into that input
+instead of being dropped.
 The Latin recogniser reads only the characters in its dictionary: accented letters outside
 it (e.g. some East European ones) are still dropped. A letter that is in the dictionary can
 still come back as another letter in it: on Árvíztűrő tükörfúrógép the model read ű as ü.

@@ -7251,6 +7251,91 @@ fn ocr_tools_make_a_scan_searchable() {
     }
 }
 
+/// A line wider than the PP-OCR recogniser's input used to fail the whole page
+/// ("text line exceeds the recogniser's maximum aspect ratio"). The tool reads both ends.
+#[test]
+fn ocr_recognize_reads_a_line_wider_than_the_recogniser() {
+    let dir = workdir("ocr-long-line");
+    let mut a = auto(&dir);
+    if !pdfcraft_engine::ocr::available_for("la") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    std::fs::write(dir.join("paper.png"), wide_line_png(&newspaper_line())).unwrap();
+    let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["paper.png"] }))["doc"].as_u64().unwrap();
+    let recognized = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "language": "la", "dpi": 600 }));
+    assert!(recognized["pages"][0]["skipped"].is_null(), "{recognized}");
+    let text = recognized["pages"][0]["text"].as_str().unwrap().to_lowercase();
+    assert!(text.contains("aaron"), "missing the start of the line in {recognized}");
+    assert!(text.contains("zurich"), "missing the end of the line in {recognized}");
+    assert!(recognized["pages"][0]["words"].as_u64().unwrap() >= 2, "a long line is more than one piece: {recognized}");
+    let found = ok(&mut a, "text_find", json!({ "doc": scan, "query": "Zurich" }));
+    assert!(found["count"].as_u64().unwrap() >= 1, "{found}");
+    ok(&mut a, "edit_undo", json!({ "doc": scan }));
+    let gone = ok(&mut a, "text_find", json!({ "doc": scan, "query": "Zurich" }));
+    assert_eq!(gone["count"].as_u64().unwrap(), 0, "{gone}");
+}
+
+fn newspaper_line() -> String {
+    let pool = ["north", "south", "east", "west", "river", "field", "stone", "cloud"];
+    let mut words = Vec::with_capacity(66);
+    words.push("Aaron");
+    for _ in 0..8 {
+        words.extend(pool);
+    }
+    words.push("Zurich");
+    words.join(" ")
+}
+
+/// One tight line, only a little taller than the glyphs, so a box around the whole image is past
+/// the recogniser's limit (4096 px at its 48 px input, about 85 heights).
+fn wide_line_png(text: &str) -> Vec<u8> {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+    let font = FontRef::try_from_slice(include_bytes!("../../../../assets/fonts/Inter-Regular.ttf")).unwrap();
+    let size = 36.0;
+    let scaled = font.as_scaled(PxScale::from(size));
+    let mut advance = 24.0_f32;
+    for ch in text.chars() {
+        let id = scaled.glyph_id(ch);
+        assert_ne!(id.0, 0, "fixture font must cover {ch}");
+        advance += scaled.h_advance(id);
+    }
+    advance += 24.0;
+    let width = advance.ceil() as u32;
+    let height = 52u32;
+    assert!(width as f32 / height as f32 > 100.0, "fixture {width}x{height} would not have been refused");
+    let mut rgba = vec![255u8; width as usize * height as usize * 4];
+    let mut x = 24.0_f32;
+    for ch in text.chars() {
+        let id = scaled.glyph_id(ch);
+        let glyph = id.with_scale_and_position(size, point(x, 40.0));
+        if let Some(outline) = font.outline_glyph(glyph) {
+            let bounds = outline.px_bounds();
+            outline.draw(|gx, gy, coverage| {
+                let px = bounds.min.x as i32 + gx as i32;
+                let py = bounds.min.y as i32 + gy as i32;
+                if px < 0 || py < 0 {
+                    return;
+                }
+                let (px, py) = (px as u32, py as u32);
+                if px >= width || py >= height {
+                    return;
+                }
+                let v = (255.0 * (1.0 - coverage)) as u8;
+                let i = (py as usize * width as usize + px as usize) * 4;
+                if let Some(pixel) = rgba.get_mut(i..i + 4) {
+                    pixel[0] = v;
+                    pixel[1] = v;
+                    pixel[2] = v;
+                    pixel[3] = 255;
+                }
+            });
+        }
+        x += scaled.h_advance(id);
+    }
+    pdfcraft_engine::export::encode_png(width, height, &rgba).unwrap()
+}
+
 /// #1028: `skip_text_pages: false` reads a picture on a page that has its own text, and the
 /// page's own words are left out (counted) instead of being added a second time.
 #[test]

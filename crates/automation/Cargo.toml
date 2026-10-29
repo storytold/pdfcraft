@@ -25,6 +25,7 @@ default = ["mcp"]
 mcp = ["dep:base64"]
 
 [dev-dependencies]
+ab_glyph = "0.2"
 pdfcraft-fonts = { workspace = true }
 png = "0.18"
 flate2.workspace = true

@@ -4293,6 +4293,7 @@ dependencies = [
 name = "pdfcraft-automation"
 version = "0.18.1"
 dependencies = [
+ "ab_glyph",
  "base64 0.23.1",
  "flate2",
  "image",
@@ -4683,6 +4684,7 @@ version = "0.18.1"
 name = "pdfcraft-ui-egui"
 version = "0.18.1"
 dependencies = [
+ "ab_glyph",
  "arboard",
  "base64 0.23.1",
  "block2 0.6.2",

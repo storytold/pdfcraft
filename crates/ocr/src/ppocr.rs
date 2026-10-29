@@ -72,11 +72,7 @@ impl PpOcr {
         if cw == 0 || ch == 0 {
             return Ok(Vec::new());
         }
-        let scaled = (cw as f64 * HEIGHT as f64 / ch as f64).ceil();
-        if scaled > MAX_WIDTH as f64 {
-            return Err(OcrError::Recognize("text line exceeds the recogniser's maximum aspect ratio".into()));
-        }
-        let resized = (scaled as usize).max(1);
+        let resized = input_width(cw, ch);
         let tensor_width = resized.max(320);
         let plane = HEIGHT * tensor_width;
         let mut data = vec![0.0; 3 * plane];
@@ -110,6 +106,15 @@ impl PpOcr {
         }
         Ok(output.iter().copied().collect())
     }
+}
+
+/// The width a `cw` x `ch` crop is scaled to at the recogniser's height: its own aspect ratio,
+/// squeezed to [`MAX_WIDTH`] when it is longer. Lines are split at word gaps before they get
+/// here; a single word that is still too long is read squeezed rather than refused, so one
+/// line cannot fail the page.
+fn input_width(cw: usize, ch: usize) -> usize {
+    let scaled = (cw as f64 * HEIGHT as f64 / ch.max(1) as f64).ceil();
+    if scaled.is_finite() { (scaled.min(MAX_WIDTH as f64) as usize).max(1) } else { MAX_WIDTH }
 }
 
 /// How close a preferred letter has to be, on the model's softmax probability, before it
@@ -167,6 +172,38 @@ fn preferred_near(row: &[f32], alphabet: &[char], preferred: &str, best: usize) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A crop longer than the recogniser takes is squeezed to its widest input, not refused.
+    #[test]
+    fn an_overlong_crop_is_squeezed_not_refused() {
+        assert_eq!(input_width(480, 48), 480);
+        assert_eq!(input_width(4096, 48), MAX_WIDTH);
+        assert_eq!(input_width(4097, 48), MAX_WIDTH);
+        assert_eq!(input_width(30_000, 30), MAX_WIDTH);
+        assert_eq!(input_width(10, 0), 480, "a crop without height counts as one pixel high");
+        assert_eq!(input_width(1, 1000), 1);
+        assert_eq!(input_width(usize::MAX, 1), MAX_WIDTH);
+        assert_eq!(input_width(0, 48), 1);
+    }
+
+    /// The model accepts a crop that used to be refused, including one exactly at the old limit.
+    /// Skipped when the Latin model has not been fetched.
+    #[test]
+    fn an_overlong_crop_is_read_instead_of_refused() {
+        let Some(models) = crate::Models::find_for("la") else {
+            eprintln!("skipped: Latin OCR models not installed");
+            return;
+        };
+        let ocr = PpOcr::load(&models.recognition, &models.recognition.with_file_name(crate::LATIN_DICTIONARY), 504).unwrap();
+        let (w, h) = (6000u32, 40u32);
+        let rgb = vec![255u8; (w * h * 3) as usize];
+        let wide = ocr.recognize(&rgb, w, h, [0.0, 0.0, w as f32, h as f32], "");
+        assert!(wide.is_ok(), "an over-wide crop must not fail the page: {wide:?}");
+        let at_limit = ocr.recognize(&rgb, w, h, [0.0, 0.0, 4096.0, 40.0], "");
+        assert!(at_limit.is_ok(), "{at_limit:?}");
+        let err = ocr.recognize(&rgb, w, h, [f32::NAN, 0.0, 10.0, 10.0], "");
+        assert!(err.as_ref().is_err_and(|e| e.to_string().contains("non-finite")), "{err:?}");
+    }
 
     #[test]
     fn ctc_keeps_chinese_and_repetitions_separated_by_blank() {
