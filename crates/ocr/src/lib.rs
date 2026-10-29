@@ -7,10 +7,24 @@
 //! searchable image (Acrobat's "Searchable Image (Exact)": the image is left untouched).
 //!
 //! The models read the Latin alphabet (English and other languages written without accents).
+//!
+//! For glyph work (the ClearScan pipeline), [`preprocess`] prepares a scan first — greyscale,
+//! Sauvola/Otsu binarization, deskew — and [`Ocr::recognize_annotated`] reads the same pages
+//! keeping per-character boxes and line metrics (baseline, x-height, cap height, descent).
+//! See the [`preprocess`] and [`annotations`] modules.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod annotations;
+pub mod binarize;
+pub mod deskew;
+pub mod grey;
+pub mod preprocess;
+
 use std::path::{Path, PathBuf};
+
+pub use annotations::{AnnotatedLine, AnnotatedWord, CharBox};
+pub use preprocess::{PreprocessedOptions, PreprocessedPage};
 
 pub use pdfcraft_fonts::helvetica_width;
 
@@ -28,7 +42,7 @@ pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
-    /// Shown to end users (release packages ship the models; a source build fetches them with
+    /// The text recognition models are not installed (release packages ship them; a source build fetches them with
     /// `cargo xtask models`). The UI catalogs key this exact text.
     #[error("the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)")]
     NoModels,
@@ -36,6 +50,8 @@ pub enum OcrError {
     Load(String, String),
     #[error("text recognition failed: {0}")]
     Recognize(String),
+    #[error("preprocessing the page: {0}")]
+    Preprocess(String),
     #[error("the image is empty")]
     EmptyImage,
 }
@@ -131,37 +147,24 @@ impl Ocr {
 
     /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels.
     pub fn recognize(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Line>, OcrError> {
-        if width == 0 || height == 0 || pixels.is_empty() {
-            return Err(OcrError::EmptyImage);
-        }
-        // ocrs wants 1 or 3 channels.
-        let rgb: std::borrow::Cow<[u8]> = if pixels.len() == (width * height * 4) as usize {
-            pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into()
-        } else {
-            pixels.into()
-        };
-        let err = |e: &dyn std::fmt::Display| OcrError::Recognize(e.to_string());
-        let source = ocrs::ImageSource::from_bytes(&rgb, (width, height)).map_err(|e| err(&e))?;
-        let input = self.engine.prepare_input(source).map_err(|e| err(&e))?;
-        let found = self.engine.detect_words(&input).map_err(|e| err(&e))?;
-        let lines = self.engine.find_text_lines(&input, &found);
-        let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
-        use ocrs::TextItem;
-        Ok(read
+        Ok(self
+            .recognize_annotated(pixels, width, height)?
             .into_iter()
-            .flatten()
-            .map(|line| Line {
-                words: line
-                    .words()
-                    .map(|w| {
-                        let r = w.bounding_rect();
-                        Word { text: w.to_string(), rect: [r.left() as f32, r.top() as f32, r.right() as f32, r.bottom() as f32] }
-                    })
-                    .filter(|w| !w.text.trim().is_empty())
-                    .collect(),
-            })
-            .filter(|l| !l.words.is_empty())
+            .map(|line| Line { words: line.words.into_iter().map(|w| Word { text: w.text, rect: w.rect }).collect() })
             .collect())
+    }
+
+    /// The same recognition, keeping what glyph work needs: per-character boxes grouped into
+    /// words, and each line's baseline, x-height, cap height and descent
+    /// ([`annotations::AnnotatedLine`]). Boxes are in the pixel space of the image read.
+    pub fn recognize_annotated(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<AnnotatedLine>, OcrError> {
+        annotations::recognize(&self.engine, pixels, width, height)
+    }
+
+    /// Recognize a preprocessed page's deskewed greyscale: the annotations come back in the
+    /// deskewed frame, and the page's `to_original` maps them onto the scan.
+    pub fn recognize_page(&self, page: &PreprocessedPage) -> Result<Vec<AnnotatedLine>, OcrError> {
+        annotations::recognize(&self.engine, page.grey.data(), page.grey.width(), page.grey.height())
     }
 }
 
@@ -441,6 +444,53 @@ mod tests {
         assert!(text.iter().any(|t| t.contains("HELL") && t.contains("WOR")), "{text:?}");
         let word = lines.iter().flat_map(|l| &l.words).find(|w| w.text.contains("HELL")).unwrap();
         assert!(word.rect[0] >= 10.0 && word.rect[0] < 60.0, "{word:?}");
+    }
+
+    /// End to end through the ClearScan preprocessing: the rendered text, degraded by a
+    /// lighting gradient and a tilt, is deskewed, binarized and read with characters and line
+    /// metrics, and its boxes map back onto the scan. Needs the models (`cargo xtask models`).
+    #[test]
+    fn reads_degraded_text_through_preprocessing() {
+        let Some(models) = Models::find() else {
+            eprintln!("skipped: OCR models not installed");
+            return;
+        };
+        let ocr = Ocr::load(&models).unwrap();
+        let (w, h, px) = test_image::hello();
+        let level = grey::to_grey(&px, w, h, 4).unwrap();
+        // Degrade: a gradient that darkens the left half's paper towards the ink, then a
+        // 2° tilt (rectifying by −2° turns the page by +2°: its text descends to the right).
+        let mut degraded = crate::grey::GreyImage::new(w, h, level.data().to_vec()).unwrap();
+        for (index, value) in degraded.data_mut().iter_mut().enumerate() {
+            let x = (index % w as usize) as f64;
+            let dim = (x / f64::from(w) * 70.0).round();
+            *value = value.saturating_sub(dim as u8);
+        }
+        let tilt = 2.0_f64.to_radians();
+        let tilted = deskew::rectify(&degraded, -tilt).unwrap();
+        let page = preprocess::preprocess(tilted.grey.data(), tilted.grey.width(), tilted.grey.height(), 1, &PreprocessedOptions::default()).unwrap();
+        assert!((page.angle_radians - tilt).abs() <= 0.3_f64.to_radians(), "tilt read as {}°", page.angle_radians.to_degrees());
+        assert!(page.binary.ink_count() > 0, "the text is ink");
+        let lines = ocr.recognize_page(&page).unwrap();
+        let text: Vec<String> = lines.iter().map(AnnotatedLine::text).collect();
+        assert!(text.iter().any(|t| t.contains("HELL") && t.contains("WOR")), "{text:?}");
+        for line in &lines {
+            assert!(line.baseline.is_finite() && line.x_height > 0.0 && line.cap_height >= line.x_height, "{line:?}");
+            for word in &line.words {
+                assert!(!word.chars.is_empty(), "every word keeps its characters: {word:?}");
+                // The word's box is the union of its characters' boxes.
+                for c in &word.chars {
+                    let inside = c.rect[0] >= word.rect[0] - 1.0
+                        && c.rect[1] >= word.rect[1] - 1.0
+                        && c.rect[2] <= word.rect[2] + 1.0
+                        && c.rect[3] <= word.rect[3] + 1.0;
+                    assert!(inside, "{c:?} outside its word {word:?}");
+                }
+                // Back on the scan, the word lands inside the original raster.
+                let (ox, oy) = page.to_original.apply(f64::from(word.rect[0]), f64::from(word.rect[3]));
+                assert!(ox >= 0.0 && oy >= 0.0 && ox <= f64::from(w) + 2.0 && oy <= f64::from(h) + 2.0, "({ox}, {oy})");
+            }
+        }
     }
 
     mod test_image {
