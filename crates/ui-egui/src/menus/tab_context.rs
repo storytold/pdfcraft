@@ -12,6 +12,7 @@ pub(crate) enum Action {
         tab: u64,
         down: bool,
     },
+    Detach(DocId),
 }
 
 impl crate::PdfCraftApp {
@@ -85,6 +86,9 @@ impl crate::PdfCraftApp {
                 }
                 #[cfg(target_arch = "wasm32")]
                 let _ = id;
+            }
+            Action::Detach(id) => {
+                self.detach_tab(id);
             }
         }
     }
