@@ -27,7 +27,9 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   or `/Mask` data, and images whose data decodes to more than three times their declared raster
   and a byte per row, plus 4 KiB (ASCIIHex text broken into lines under Flate is a little over
   twice; for a fax image's code, about a byte per pixel), are removed whole;
-  cleared copies drop `/Alternates` so alternate pixels cannot survive;
+  cleared copies drop `/Alternates` so alternate pixels cannot survive. An image is measured by
+  the part the clip in force shows: a cropped image (placed larger than its crop, as office
+  suites export them) is left alone when only its hidden part reaches an area;
 - **vectors**: covered paths are removed; partly covered paths and shadings are clipped so
   nothing paints inside the areas;
 - **form XObjects**: rewritten recursively into new objects (pages sharing the original keep it);
