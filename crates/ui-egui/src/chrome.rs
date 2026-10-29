@@ -152,8 +152,11 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     &mut close,
                                 );
                                 slots.push((i, response.rect));
-                                if response.dragged() || response.drag_stopped() {
-                                    dragged = Some((i, response.drag_stopped()));
+                                // egui also stops a drag on Escape; only a pointer release commits it.
+                                let released =
+                                    response.drag_stopped_by(egui::PointerButton::Primary) && !ui.input(|input| input.key_pressed(egui::Key::Escape));
+                                if response.dragged_by(egui::PointerButton::Primary) || released {
+                                    dragged = Some((i, released));
                                 }
                                 if changed && app.active == Some(i) && !app.combine_showing() {
                                     response.scroll_to_me(Some(Align::Center));
