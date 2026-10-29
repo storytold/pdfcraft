@@ -113,12 +113,30 @@ impl<'a> Inspector<'a> {
         depth: u32,
         text_budget: &mut usize,
     ) -> Vec<(String, &'a Object)> {
+        let mut visits = usize::MAX;
+        self.name_tree_limited(node, seen, depth, text_budget, &mut visits)
+    }
+
+    /// The same name-tree walk with a caller's total node/edge/entry work allowance.
+    pub(super) fn name_tree_limited(
+        &self,
+        node: &'a Dictionary,
+        seen: &mut HashSet<*const Dictionary>,
+        depth: u32,
+        text_budget: &mut usize,
+        visits: &mut usize,
+    ) -> Vec<(String, &'a Object)> {
         let mut out = Vec::new();
-        if depth > 32 || !seen.insert(node as *const _) {
+        if *visits == 0 || depth > 32 || !seen.insert(node as *const _) {
             return out;
         }
+        *visits = visits.saturating_sub(1);
         if let Ok(Object::Array(pairs)) = node.get(b"Names").map(|o| self.resolve(o)) {
             for pair in pairs.chunks(2) {
+                if *visits == 0 {
+                    break;
+                }
+                *visits = visits.saturating_sub(1);
                 if let [k, v] = pair {
                     let key = match self.resolve(k) {
                         Object::String(bytes, _) => match spend(bytes, text_budget, text_string) {
@@ -133,8 +151,12 @@ impl<'a> Inspector<'a> {
         }
         if let Ok(Object::Array(kids)) = node.get(b"Kids").map(|o| self.resolve(o)) {
             for k in kids {
+                if *visits == 0 {
+                    break;
+                }
+                *visits = visits.saturating_sub(1);
                 if let Some(d) = self.dict(k) {
-                    out.extend(self.name_tree(d, seen, depth + 1, text_budget));
+                    out.extend(self.name_tree_limited(d, seen, depth + 1, text_budget, visits));
                 }
             }
         }

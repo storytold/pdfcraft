@@ -26,6 +26,7 @@ default = ["mcp"]
 mcp = ["dep:base64"]
 
 [dev-dependencies]
+pdfcraft-testkit = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 png = "0.18"
 flate2.workspace = true

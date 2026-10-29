@@ -1870,3 +1870,60 @@ trailer << /Root 1 0 R >>
     assert!((p.width - 3874.96).abs() < 0.1, "width expected ~3874.96, got {}", p.width);
     assert!((p.height - 5493.54).abs() < 0.1, "height expected ~5493.54, got {}", p.height);
 }
+
+/// A RichMedia name tree, including malformed/cyclic cases, with two distinguishable files.
+fn rich_media_pdf(config: &str, names: &str, kids: &str, filename: &str, mime: &str, embedded: bool) -> Vec<u8> {
+    let ef = if embedded { "/EF << /F 7 0 R >>" } else { "" };
+    pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R] >>")
+        .obj(format!("<< /Subtype /RichMedia /Rect [0 0 200 200] /RichMediaContent << /Configurations [{config}] /Assets 5 0 R >> >>"))
+        .obj(format!("<< /Names [{names}] /Kids [{kids}] >>"))
+        .obj(format!("<< /Type /Filespec /UF ({filename}) {ef} >>"))
+        .stream(&format!("/Type /EmbeddedFile /Subtype /{mime}"), b"first")
+        .obj("<< /Type /Filespec /F (other.swf) /EF << /F 9 0 R >> >>")
+        .stream("/Type /EmbeddedFile", b"second")
+        .build()
+}
+
+#[test]
+fn rich_media_assets_are_detected_by_configuration_name_or_mime_and_never_follow_external_files() {
+    for (config, key, filename, mime, flash) in [
+        ("<< /Subtype /Flash >>", "opaque", "opaque", "application#2Foctet-stream", true),
+        ("", "diagram.SWF", "opaque", "application#2Foctet-stream", true),
+        ("", "opaque", "diagram.swf", "application#2Foctet-stream", true),
+        ("", "opaque", "opaque", "application#2Fx-shockwave-flash", true),
+        ("<< /Subtype /Video >>", "clip.mp4", "clip.mp4", "video#2Fmp4", false),
+    ] {
+        let bytes = rich_media_pdf(config, &format!("({key}) 6 0 R ({key}) 8 0 R"), "5 0 R", filename, mime, true);
+        let info = inspect(Arc::new(bytes.clone()), None).unwrap();
+        assert_eq!(info.attachments.len(), 1, "a duplicate key lists only its first file; a cycle terminates");
+        assert_eq!(info.has_legacy_flash, flash, "{config}, {key}, {filename}, {mime}");
+        assert_eq!(info.warnings.iter().filter(|w| w.contains("Flash/SWF")).count(), usize::from(flash));
+        assert_eq!(attachment_data(&bytes, None, &info.attachments[0]).unwrap(), b"first", "the file listed is the file extracted");
+    }
+    let bytes = rich_media_pdf("<< /Subtype /Flash >>", "(diagram.swf) 6 0 R", "", "../../external.swf", "", false);
+    let info = inspect(Arc::new(bytes.clone()), None).unwrap();
+    assert!(info.has_legacy_flash);
+    assert!(attachment_data(&bytes, None, &info.attachments[0]).unwrap_err().contains("external reference"));
+    let bytes = rich_media_pdf("<< /Subtype /Flash >>", "", "", "", "", false);
+    let info = inspect(Arc::new(bytes), None).unwrap();
+    assert!(info.has_legacy_flash, "an unsupported diagram is explained even with no extractable asset");
+    assert!(info.attachments.is_empty());
+}
+
+#[test]
+fn rich_media_inventory_caps_assets_and_work_and_reports_truncation() {
+    let names = (0..1100).map(|i| format!("(asset-{i}.swf) 6 0 R ")).collect::<String>();
+    let bytes = rich_media_pdf("", &names, "5 0 R", "diagram.swf", "", true);
+    let info = inspect(Arc::new(bytes), None).unwrap();
+    assert_eq!(info.attachments.len(), 1024);
+    assert!(info.warnings.iter().any(|w| w.contains("inventory limit")));
+    // Large malformed configuration arrays consume work without allocating an asset per entry.
+    let configs = "null ".repeat(9000);
+    let bytes = rich_media_pdf(&configs, "(diagram.swf) 6 0 R", "", "diagram.swf", "", true);
+    let info = inspect(Arc::new(bytes), None).unwrap();
+    assert!(info.attachments.is_empty());
+    assert!(info.warnings.iter().any(|w| w.contains("inventory limit")));
+}

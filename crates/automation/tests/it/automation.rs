@@ -10521,3 +10521,49 @@ fn mixed_script_tools_normalize_but_undo_restores_the_exact_mixture() {
         assert_eq!(page_text(&mut a, reopened)[0], plain);
     }
 }
+
+/// A synthetic blank page whose only diagram is an opaque embedded SWF asset. Nothing executes.
+fn legacy_flash_pdf() -> Vec<u8> {
+    pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R] >>")
+        .obj("<< /Type /Annot /Subtype /RichMedia /Rect [0 0 200 200] /RichMediaContent 5 0 R >>")
+        .obj("<< /Type /RichMediaContent /Assets 6 0 R /Configurations [<< /Subtype /Flash >>] >>")
+        .obj("<< /Kids [7 0 R] >>")
+        .obj("<< /Names [(diagram.swf) 8 0 R] >>")
+        .obj("<< /Type /Filespec /F (diagram.swf) /UF (diagram.swf) /EF << /F 9 0 R >> >>")
+        .stream("/Type /EmbeddedFile /Subtype /application#2Fx-shockwave-flash", b"FWS\x09\x10\0\0\0\x08\0\0\x0c\x01\0\0\0")
+        .build()
+}
+
+#[test]
+fn legacy_flash_is_explained_and_its_asset_can_be_saved_without_changing_the_pdf() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = legacy_flash_pdf();
+    std::fs::write(dir.path().join("manual.pdf"), &source).unwrap();
+    let mut a = auto(dir.path());
+    let doc = ok(&mut a, "doc_open", json!({"path":"manual.pdf"}))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({"doc":doc}));
+    assert!(info["warnings"].as_array().unwrap().iter().any(|w| w.as_str().is_some_and(|w| w.contains("Flash/SWF"))), "{info}");
+    assert_eq!(info["attachments"][0]["name"], "diagram.swf");
+    let saved = ok(&mut a, "attachment_save", json!({"doc":doc, "index":1, "path":"diagram.swf"}));
+    assert_eq!(saved["bytes"], 16);
+    let data = std::fs::read(dir.path().join("diagram.swf")).unwrap();
+    assert_eq!(data, b"FWS\x09\x10\0\0\0\x08\0\0\x0c\x01\0\0\0");
+    for index in [0, -1, 2, i64::MAX] {
+        assert!(a.call("attachment_save", &json!({"doc":doc, "index":index, "path":"bad.swf"})).is_err());
+    }
+    assert!(!dir.path().join("bad.swf").exists());
+    assert!(a.call("attachment_save", &json!({"doc":doc, "index":1, "path":"../escape.swf"})).is_err());
+    ok(&mut a, "doc_save", json!({"doc":doc, "path":"saved.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"saved.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "attachment_save", json!({"doc":reopened, "index":1, "path":"reopened.swf"}));
+    assert_eq!(std::fs::read(dir.path().join("reopened.swf")).unwrap(), data);
+    assert_eq!(std::fs::read(dir.path().join("manual.pdf")).unwrap(), source);
+    ok(&mut a, "doc_protect", json!({"doc":doc, "open_password":"open", "permissions_password":"owner"}));
+    ok(&mut a, "doc_save", json!({"doc":doc, "path":"encrypted.pdf"}));
+    let locked = ok(&mut a, "doc_open", json!({"path":"encrypted.pdf", "password":"open"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "attachment_save", json!({"doc":locked, "index":1, "path":"encrypted.swf"}));
+    assert_eq!(std::fs::read(dir.path().join("encrypted.swf")).unwrap(), data);
+}

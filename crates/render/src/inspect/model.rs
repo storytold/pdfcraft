@@ -517,6 +517,8 @@ pub enum AttachmentSource {
     Document { key: String },
     /// A FileAttachment annotation: page index and position in the page's `/Annots`.
     Annotation { page: usize, index: usize },
+    /// An asset in a RichMedia annotation’s /RichMediaContent /Assets name tree.
+    RichMedia { page: usize, index: usize, key: String },
 }
 
 /// A font used by the document (Document Properties ▸ Fonts).

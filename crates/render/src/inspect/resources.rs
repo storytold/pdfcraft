@@ -243,11 +243,18 @@ pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -
                 let ef = names.get(b"EmbeddedFiles").ok().and_then(|o| insp.dict(o)).ok_or("no /EmbeddedFiles")?;
                 insp.name_tree_find(ef, key, &mut NameTreeSeen::default(), 0).ok_or("attachment not found")?
             }
-            AttachmentSource::Annotation { page, index } => {
+            AttachmentSource::Annotation { page, index } | AttachmentSource::RichMedia { page, index, .. } => {
                 let (&pid, _) = insp.page_index.iter().find(|(_, i)| **i == *page).ok_or("page not found")?;
                 let annots = doc.get_dictionary(pid).map_err(|e| e.to_string())?.get(b"Annots").map_err(|e| e.to_string())?;
                 let a = insp.resolve(annots).as_array().map_err(|e| e.to_string())?.get(*index).ok_or("annotation not found")?;
-                insp.dict(a).and_then(|d| d.get(b"FS").ok()).ok_or("annotation has no file")?
+                let annot = insp.dict(a).ok_or("annotation is not a dictionary")?;
+                if let AttachmentSource::RichMedia { key, .. } = &att.source {
+                    let content = annot.get(b"RichMediaContent").ok().and_then(|v| insp.dict(v)).ok_or("no rich-media content")?;
+                    let assets = content.get(b"Assets").ok().and_then(|v| insp.dict(v)).ok_or("no rich-media assets")?;
+                    insp.name_tree_find(assets, key, &mut NameTreeSeen::default(), 0).ok_or("rich-media asset not found")?
+                } else {
+                    annot.get(b"FS").map_err(|_| "annotation has no file")?
+                }
             }
         };
         let fs = insp.dict(spec).ok_or("bad file specification")?;
@@ -256,6 +263,8 @@ pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -
         let stream = stream.as_stream().map_err(|e| e.to_string())?;
         if stream.dict.get(b"Filter").is_ok() {
             stream.decompressed_content_with_limit(1 << 30).map_err(|e| e.to_string())
+        } else if stream.content.len() > 1 << 30 {
+            Err("the embedded file exceeds the 1 GiB extraction limit".into())
         } else {
             Ok(stream.content.clone())
         }
