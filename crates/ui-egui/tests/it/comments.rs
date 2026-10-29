@@ -734,6 +734,58 @@ fn a_modified_e_or_b_leaves_the_draw_tool_and_the_eraser_alone() {
     }
 }
 
+/// Key events all in one frame, at `time`: kittest's own key calls give each event a frame.
+fn keys_in_one_frame(h: &mut Harness<'static, PdfCraftApp>, time: f64, keys: &[(egui::Key, bool)]) {
+    h.input_mut().time = Some(time);
+    for &(key, pressed) in keys {
+        h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE });
+    }
+    h.step();
+}
+
+/// #3900: a tap of E whose release comes in the same frame is a tap, however long it is until
+/// the next frame (egui draws again only when something happens).
+#[test]
+fn a_tap_of_e_within_one_frame_stays_on_the_eraser_after_a_pause() {
+    use eraser_key::*;
+    let mut h = eraser_harness();
+    keys_in_one_frame(&mut h, 100.0, &[(egui::Key::E, true), (egui::Key::E, false)]);
+    assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser));
+    h.input_mut().time = Some(105.0);
+    h.run_steps(3);
+    assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser), "the tap stays on the Eraser");
+}
+
+/// #3900: B and E in one frame are taken in the order they came: B goes back to Draw, then E
+/// goes to the Eraser.
+#[test]
+fn e_and_b_in_one_frame_are_taken_in_order() {
+    use eraser_key::*;
+    let mut h = eraser_harness();
+    h.key_press(egui::Key::E);
+    h.run_steps(4);
+    assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser));
+    let t = h.ctx.input(|i| i.time) + 1.0;
+    keys_in_one_frame(&mut h, t, &[(egui::Key::B, true), (egui::Key::E, true), (egui::Key::B, false), (egui::Key::E, false)]);
+    h.run_steps(3);
+    assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser), "B then E ends on the Eraser");
+}
+
+/// #3900: the Eraser chosen through the control channel while E is held is a choice, so letting
+/// E go after a hold does not take it back, as with the command.
+#[test]
+fn the_eraser_chosen_through_the_control_channel_outlasts_a_held_e() {
+    use eraser_key::*;
+    let mut h = eraser_harness();
+    h.key_down(egui::Key::E);
+    h.run_steps(8);
+    assert_eq!(h.state().quick_tool, ERASER, "held E is the Eraser");
+    h.state_mut().set_option("quick", "eraser").unwrap();
+    h.key_up(egui::Key::E);
+    h.run_steps(3);
+    assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser), "the control channel's choice stands");
+}
+
 /// #3900: E let go while a dialog is open is read when it comes up, not when the dialog closes: a
 /// tap stays on the Eraser however long the dialog stays, a hold gives Draw back under it.
 #[test]

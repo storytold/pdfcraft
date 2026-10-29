@@ -147,26 +147,34 @@ impl PdfCraftApp {
         // E and B swap the Draw tool and the Eraser (#3900): a tap of E switches to the Eraser and
         // stays, another tap of E or a tap of B goes back; holding E is the Eraser only while held.
         // Only from one of the two, so E means nothing to any other tool. The press itself must be
-        // plain too: a Shift+E let go within the frame leaves the frame's modifiers empty.
-        let first_press = |key: Key| {
-            ctx.input(|input| {
-                input.events.iter().any(
-                    |e| matches!(e, egui::Event::Key { key: k, pressed: true, repeat: false, modifiers, .. } if *k == key && modifiers.is_none()),
-                )
-            })
-        };
-        if first_press(Key::E) {
-            if self.quick_tool == ERASER {
-                self.set_drawing_tool(CommentTool::Ink);
-                self.eraser_key = None;
-            } else if self.quick_tool == DRAW {
-                self.set_drawing_tool(CommentTool::Eraser);
-                self.eraser_key = Some(ctx.input(|input| input.time));
+        // plain too: a Shift+E let go within the frame leaves the frame's modifiers empty. Presses
+        // are taken in the order they came, as a frame can hold more than one.
+        let presses: Vec<Key> = ctx.input(|input| {
+            input
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Key { key: key @ (Key::E | Key::B), pressed: true, repeat: false, modifiers, .. } if modifiers.is_none() => {
+                        Some(*key)
+                    }
+                    _ => None,
+                })
+                .collect()
+        });
+        for key in presses {
+            match (key, self.quick_tool) {
+                (Key::E, DRAW) => {
+                    self.set_drawing_tool(CommentTool::Eraser);
+                    // A hold is timed only while E is still down: a tap whose release came in the
+                    // same frame is over, and the next frame may come much later.
+                    self.eraser_key = ctx.input(|input| input.key_down(Key::E)).then(|| ctx.input(|input| input.time));
+                }
+                (Key::E | Key::B, ERASER) => {
+                    self.set_drawing_tool(CommentTool::Ink);
+                    self.eraser_key = None;
+                }
+                _ => {}
             }
-        }
-        if first_press(Key::B) && self.quick_tool == ERASER {
-            self.set_drawing_tool(CommentTool::Ink);
-            self.eraser_key = None;
         }
         if ctx.input(|input| input.key_pressed(Key::V)) {
             self.quick_tool = QuickTool::Select;
