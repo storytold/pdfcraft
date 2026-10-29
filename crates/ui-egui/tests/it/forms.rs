@@ -866,6 +866,41 @@ fn pressing_another_text_field_validates_the_refused_value_once() {
     assert_eq!((focus.name.as_str(), focus.text.as_str()), ("qty", "4500"));
 }
 
+/// #5041: a draft refused after its field was hidden while being typed in stays open for
+/// correcting: it is not committed (and refused, and alerted) again every frame, and a
+/// corrected value is taken.
+#[test]
+fn a_refused_draft_on_a_field_hidden_while_typed_in_can_be_corrected() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("order.pdf", None, validated_form()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(6);
+    click_field(&mut h, "qty", 0);
+    h.event(egui::Event::Text("500".into()));
+    h.run_steps(2);
+    let props = pdfcraft_engine::FieldProps { display: Some(pdfcraft_engine::FieldDisplay::HiddenPrintable), ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps { name: "qty".into(), props: Box::new(props) }));
+    h.run_steps(4);
+    assert!(h.state().toast.is_some(), "the hidden field's draft was committed and refused");
+    h.state_mut().toast = None;
+    h.run_steps(6);
+    assert_eq!(h.state().toast, None, "the refused draft is not committed again");
+    let focus = h.state().views[0].forms.focus.clone().expect("the refused draft stays open");
+    assert_eq!(focus.name, "qty");
+    assert!(focus.text.contains("500"), "{:?}", focus.text);
+    // Corrected and left, it is taken.
+    h.state_mut().views[0].forms.focus.as_mut().unwrap().text = "50".into();
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert_eq!(value(&h, "qty"), ["50"]);
+    assert!(h.state().views[0].forms.focus.is_none());
+}
+
 /// `validated_form` plus a plain text field, `note`, under `qty`.
 fn validated_form_with_note() -> Vec<u8> {
     pdf_from_objects(&[

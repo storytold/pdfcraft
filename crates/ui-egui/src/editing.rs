@@ -705,6 +705,7 @@ impl PdfCraftApp {
         }
         if let (Some(mut draft), Some(view)) = (committed, self.views.get_mut(i)) {
             draft.request_focus = true;
+            draft.refused = true;
             view.forms.focus = Some(draft);
         }
         false
@@ -1036,6 +1037,7 @@ mod revert_draft_tests {
             calendar_rect: None,
             calendar_text: None,
             had_focus: false,
+            refused: false,
         }
     }
 

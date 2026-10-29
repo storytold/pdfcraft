@@ -47,6 +47,9 @@ pub struct Focus {
     /// Whether the text box had the keyboard at the end of the editor's last frame
     /// ([`crate::edit_text_ui::lost_focus_once`]).
     pub(crate) had_focus: bool,
+    /// The field refused this draft and the editor reopened with it: it stays open for
+    /// correcting even on a widget hidden since, rather than being committed (and refused) again.
+    pub(crate) refused: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -126,6 +129,7 @@ fn open_focus(f: &FormField, widget: usize) -> Focus {
         calendar_rect: None,
         calendar_text: None,
         had_focus: false,
+        refused: false,
     }
 }
 
@@ -773,8 +777,9 @@ pub(crate) fn overlay(
     };
     let w = f.widgets.get(focus.widget)?;
     // A widget hidden since it took the keyboard (its display changed in Field Properties, or by
-    // a script) lets go of it, keeping what was typed as a click away does.
-    if w.hidden {
+    // a script) lets go of it, keeping what was typed as a click away does. A draft the field
+    // refused stays open instead, so it can be corrected; it is committed as usual when left.
+    if w.hidden && !focus.refused {
         commit(view, form);
         return None;
     }
