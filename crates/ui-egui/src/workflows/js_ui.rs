@@ -2,7 +2,7 @@
 //! the JavaScript console (⌘J), Document JavaScripts, and Preferences ▸ JavaScript.
 
 use egui::{Align, Layout};
-use pdfcraft_engine::js::{JsOutput, Message, MessageIcon, Panel, Request};
+use pdfcraft_engine::js::{JsOutput, Message, MessageIcon, Outcome, Panel, Request};
 use pdfcraft_engine::{DocId, Edit};
 
 use crate::theme::{self, Tokens};
@@ -41,6 +41,24 @@ pub(crate) fn message_icon(icon: MessageIcon) -> &'static str {
 /// on the notice bar for as long as the document is open.
 pub(crate) fn scripts_off_notice() -> String {
     tl!("This form's scripts are turned off because one ran too long. Reopen the document to run them again.").to_string()
+}
+
+/// Keep a button's effects and both error sources, retaining document-error provenance.
+fn button_output(o: Outcome) -> JsOutput {
+    JsOutput {
+        alerts: o.alerts,
+        console: o.console,
+        requests: o.requests,
+        errors: o.error.into_iter().chain(o.doc_errors.iter().cloned()).collect(),
+        doc_errors: o.doc_errors,
+    }
+}
+
+/// Keep console effects and document errors; return the command's error and completion value
+/// separately so the caller can display its error or successful result after those effects.
+fn console_output(o: Outcome) -> (JsOutput, Option<String>, Option<String>) {
+    let out = JsOutput { alerts: o.alerts, console: o.console, requests: o.requests, errors: o.doc_errors.clone(), doc_errors: o.doc_errors };
+    (out, o.error, o.result)
 }
 
 impl PdfCraftApp {
@@ -137,7 +155,8 @@ impl PdfCraftApp {
         true
     }
 
-    /// Run a push button's JavaScript (its Mouse Up action).
+    /// Run a push button's JavaScript (its Mouse Up action), reporting document initialization
+    /// errors alongside the button's own errors without discarding its effects.
     pub fn run_button_script(&mut self, id: DocId, field: &str, script: &str) {
         // A script reads the fields: include what's still being typed in one (#166).
         if !self.commit_form_typing() {
@@ -150,14 +169,7 @@ impl PdfCraftApp {
                 {
                     self.views[i].document_changed(&info);
                 }
-                let out = JsOutput {
-                    alerts: o.alerts,
-                    console: o.console,
-                    requests: o.requests,
-                    errors: o.error.into_iter().collect(),
-                    doc_errors: Vec::new(),
-                };
-                self.handle_js(id, out);
+                self.handle_js(id, button_output(o));
             }
             Err(e) => self.notify_fmt("{field}: {e}", &[("field", field), ("e", &e.to_string())]),
         }
@@ -182,7 +194,8 @@ impl PdfCraftApp {
         }
     }
 
-    /// The console's Run: evaluate the input in the active document.
+    /// The console's Run: evaluate the input in the active document. Document initialization
+    /// errors are shown without replacing the command's completion value or its own error.
     pub fn run_console(&mut self) {
         let Some((i, id)) = self.active_ids() else { return };
         let script = self.js_console.input.clone();
@@ -195,8 +208,7 @@ impl PdfCraftApp {
                 if let Some(info) = self.session.get(id).map(|d| d.info.clone()) {
                     self.views[i].document_changed(&info);
                 }
-                let (error, result) = (o.error.clone(), o.result.clone());
-                let out = JsOutput { alerts: o.alerts, console: o.console, requests: o.requests, errors: Vec::new(), doc_errors: Vec::new() };
+                let (out, error, result) = console_output(o);
                 self.handle_js(id, out);
                 match error {
                     Some(e) => self.js_console.log.push(format!("Error: {e}")),
@@ -728,6 +740,57 @@ fn reading_colours_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pdfcraft_engine::js::MessageButtons;
+
+    fn script_message() -> Message {
+        Message { text: "alert".into(), title: Some("Form".into()), icon: MessageIcon::Warning, buttons: MessageButtons::OkCancel }
+    }
+
+    /// An outcome whose invoked-script error may match a document diagnostic word for word.
+    fn outcome_with_document_errors(error: Option<&str>) -> Outcome {
+        Outcome {
+            alerts: vec![script_message()],
+            console: vec!["script ran".into()],
+            requests: vec![Request::GoToPage(2), Request::SaveAs, Request::ShowPanel(Panel::Bookmarks)],
+            error: error.map(str::to_string),
+            doc_errors: vec!["document failed".into(), "second document failed".into()],
+            result: error.is_none().then(|| "42".into()),
+            ..Outcome::default()
+        }
+    }
+
+    /// Button mapping preserves document provenance even when its own error has identical text.
+    #[test]
+    fn button_output_preserves_document_error_provenance() {
+        for error in [None, Some("document failed")] {
+            let out = button_output(outcome_with_document_errors(error));
+            let expected_errors = if error.is_some() {
+                vec!["document failed", "document failed", "second document failed"]
+            } else {
+                vec!["document failed", "second document failed"]
+            };
+            assert_eq!(out.errors, expected_errors);
+            assert_eq!(out.doc_errors, ["document failed", "second document failed"]);
+            assert_eq!(out.alerts, [script_message()]);
+            assert_eq!(out.console, ["script ran"]);
+            assert_eq!(out.requests, [Request::GoToPage(2), Request::SaveAs, Request::ShowPanel(Panel::Bookmarks)]);
+        }
+    }
+
+    /// Console mapping retains document provenance without absorbing the command's completion.
+    #[test]
+    fn console_output_preserves_document_error_provenance() {
+        for own_error in [None, Some("document failed")] {
+            let (out, error, result) = console_output(outcome_with_document_errors(own_error));
+            assert_eq!(out.errors, ["document failed", "second document failed"]);
+            assert_eq!(out.doc_errors, ["document failed", "second document failed"]);
+            assert_eq!(error.as_deref(), own_error);
+            assert_eq!(result.as_deref(), own_error.is_none().then_some("42"));
+            assert_eq!(out.alerts, [script_message()]);
+            assert_eq!(out.console, ["script ran"]);
+            assert_eq!(out.requests, [Request::GoToPage(2), Request::SaveAs, Request::ShowPanel(Panel::Bookmarks)]);
+        }
+    }
 
     #[test]
     fn date_language_names_fall_back_when_the_native_name_cannot_be_drawn() {

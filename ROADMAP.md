@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-10-29 · **Last updated:** 2026-10-29 · **Change:** patch (M6, PR #4850: refreshed against main 3109bb23; console/button document diagnostics retain message metadata and script requests; upstream craft-libs e11f9d9 includes #366; local UI tests and verification gates passed, console capture checked; estimates unchanged)
+
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
@@ -199,6 +201,12 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-10-29 · patch:** M6/PR #4850 refreshed against main `3109bb23` (0.15). Console/button adapters preserve document-error provenance alongside the invoked script's own result or error, structured alerts and panel/Save As requests. Upstream's message queue and regressions remain intact. Shared dependencies follow upstream `e11f9d9`, which includes craft-libs#366. Local Windows validation: 1,781 native UI tests passed, none failed, eight ignored (584 unit, 1,194 integration and three performance tests passed); format, strict UI all-target Clippy, layers, assets and parity checks passed. The wasm check passed with existing warnings. A separate console capture test passed and the inspected image shows the document-script error alongside "console ran" and result 42. Estimates unchanged.
+
+- **2026-10-27 · patch:** M6/PR #4850 refreshed against main `1dd2737b`, retaining its UI module boundaries and the console/button document-error adapters and regressions. Parity evidence points to the relocated `workflows/js_ui.rs`; the four shared frontend dependencies retain `acab34c0` (craft-libs#366). Estimates unchanged.
+
+- **2026-10-26 · patch:** M6/#3985 follow-up: console and button runs retain document-script errors alongside explicit-script errors, successful results and effects. UI integration and adapter-unit regressions cover visible diagnostics and document-error provenance. The four shared frontend dependencies use `acab34c0`, the previous pin plus the Cargo 1.95 menu manifest correction in craft-libs#366. Estimates unchanged.
 
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 - **2026-10-24 (M10, #4158 partial):** Word, HTML, RTF and PowerPoint export keep a block that continues another on its line (an italic case name, a link, a superscript) as a run in its own style inside that paragraph, with the source's word space, instead of a paragraph of its own. Style changes that wrap onto the next line still split paragraphs (the reading blocks keep style boundaries). Estimates unchanged.
@@ -677,6 +685,12 @@ Newest first: the date, what moved, and the new overall estimate.
 - **2026-10-10 (UI docking):** Tools and Inspector can be regrouped, split beside the PDF, or floated inside the app window. Existing toggles reopen panels at their saved locations; UI commands arrange/reset panels, and preferences retain their layout. Read/full-screen modes preserve the focused document view. No milestone percentage change.
 
 ## Revision history
+
+**2026-10-29 · patch:** M6/PR #4850 refreshed against main `3109bb23` (0.15). Document-error provenance and console completion handling remain separate; adapter regressions now exercise structured alert metadata and panel/Save As requests. Upstream's message queue, tests and `e11f9d9` craft-libs revision are retained. Local Windows validation: 1,781 native UI tests passed, none failed, eight ignored (584 unit, 1,194 integration and three performance tests passed); format, strict UI all-target Clippy, layers, assets and parity checks passed. The wasm check passed with existing warnings. A separate console capture test passed and the inspected image shows the document-script error alongside "console ran" and result 42. Estimates unchanged.
+
+**2026-10-27 · patch:** M6/PR #4850 refreshed against main `1dd2737b`. The UI module split retains console/button document-script diagnostics and provenance regressions; opening-view handling follows the new app module, and parity evidence follows the relocated JavaScript module. The shared menu dependencies remain pinned to the published craft-libs#366 correction. Estimates unchanged.
+
+**2026-10-26 · patch:** M6/#3985 follow-up: console and button runs retain document-script errors alongside explicit-script errors, successful results and effects. UI integration and adapter-unit regressions cover visible diagnostics and document-error provenance; the shared menu manifest supports Cargo 1.95 through craft-libs#366. Estimates unchanged.
 
 **2026-10-25 · minor:** M14 localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build has no Hans face. Estimates unchanged.
 

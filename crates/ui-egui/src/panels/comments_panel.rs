@@ -330,7 +330,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
             let head = ui.horizontal(|ui| {
                 above = avatar(ui, t, Some(subtype_icon(&a.subtype)), None, color);
                 // The catalogue and author names stay logical: egui lays out RTL text itself.
-                let author = a.author.as_deref().map_or_else(|| tl!("Unknown author"), |name| name);
+                let author = a.author.as_deref().unwrap_or_else(|| tl!("Unknown author"));
                 ui.label(egui::RichText::new(author).font(theme::semibold(12.5)).color(t.text));
                 if let Some(m) = &a.modified {
                     ui.add(egui::Label::new(egui::RichText::new(m).font(theme::regular(11.0)).color(t.text_faint)).truncate());
@@ -410,7 +410,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
                         ui.horizontal(|ui| {
-                            let author = r.author.as_deref().map_or_else(|| tl!("Reply"), |name| name);
+                            let author = r.author.as_deref().unwrap_or_else(|| tl!("Reply"));
                             ui.label(egui::RichText::new(author).font(theme::semibold(12.0)));
                             if let Some(m) = &r.modified {
                                 ui.add(egui::Label::new(egui::RichText::new(m).font(theme::regular(11.0)).color(t.text_faint)).truncate());
