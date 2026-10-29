@@ -185,6 +185,35 @@ fn solid_set_lines_keep_the_line_below_by_its_ink() {
     assert!(c.contains("(SECRET) Tj") && c.contains("(ABOVE123) Tj") && !c.contains("1234"), "{c}");
 }
 
+/// Stroked text paints past its outline: a mark over the strip between the digits' ink and the
+/// one-em box keeps filled digits but removes stroked ones (Tr 1, 2, 5, 6).
+#[test]
+fn stroked_text_is_measured_beyond_its_outline() {
+    let top = {
+        let doc = page_with_inter(b"");
+        let font = pdfcraft_model::pages(&doc)[0].dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap();
+        let font = font.get(b"Font").and_then(|f| doc.resolve(f).as_dict().cloned()).unwrap();
+        let font = doc.resolve(font.get(b"F1").unwrap()).as_dict().cloned().unwrap();
+        let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, &font);
+        let ink = pdfcraft_fonts::pdf::GlyphInk::from_dict(&doc, &font, &metrics, &mut pdfcraft_cos::DecodeBudget::page()).unwrap();
+        b"1234"
+            .iter()
+            .map(|&c| match ink.ink(&metrics, c.into()) {
+                pdfcraft_fonts::pdf::Ink::Box(b) => b[3],
+                other => panic!("{c} draws: {other:?}"),
+            })
+            .fold(0.0, f64::max)
+    };
+    assert!(top < 0.76, "the digits stay below the strip: {top}");
+    for (tr, removed) in [(0, 0), (1, 4), (2, 4), (5, 4), (6, 4)] {
+        let mut doc = page_with_inter(format!("BT /F1 40 Tf {tr} Tr 10 100 Td (1234) Tj ET").as_bytes());
+        // 40 pt: the strip from 0.76 em to just under the one-em box (0.8 em) is 1.5 pt tall.
+        mark(&mut doc, 0, &[[0.0, 100.0 + 0.76 * 40.0, 300.0, 131.9]], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!(r.glyphs, removed, "Tr {tr}: {r:?}");
+    }
+}
+
 /// #5255 at a small size: 9 pt lines set solid in a 1000 / −200 font (a 10.8 pt glyph box). The
 /// line below reached 1.8 pt into the selection's mark.
 #[test]

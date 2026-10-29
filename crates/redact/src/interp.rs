@@ -719,6 +719,12 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
                         }
                         None => match gs.ink.as_deref().map_or(Ink::Unknown, |ink| ink.ink(f, code)) {
                             // What the glyph draws is known: it goes when its ink is under a region.
+                            Ink::Box(ink) if matches!(gs.render_mode, 1 | 2 | 5 | 6) => {
+                                // Stroked text paints past its outline by the line width, which is
+                                // not tracked here: the one-em box counts too, as before outlines.
+                                let em = [0.0, descent, w0, ascent];
+                                scope.glyph_hit(trm.bbox([ink[0].min(em[0]), ink[1].min(em[1]), ink[2].max(em[2]), ink[3].max(em[3])]), origin)
+                            }
                             Ink::Box(ink) => scope.glyph_hit(trm.bbox(ink), origin),
                             // Nothing drawn: the one-em box decides, and nothing can stay behind.
                             Ink::Blank => scope.glyph_hit(trm.bbox([0.0, descent, w0, ascent]), origin),
