@@ -1927,3 +1927,22 @@ fn rich_media_inventory_caps_assets_and_work_and_reports_truncation() {
     assert!(info.attachments.is_empty());
     assert!(info.warnings.iter().any(|w| w.contains("inventory limit")));
 }
+
+#[test]
+fn rich_media_extraction_uses_the_listed_raw_key_when_a_decoded_alias_exceeds_the_budget() {
+    // UTF-16BE and PDFDocEncoding encode the same text with different raw lengths.
+    assert_eq!(super::navigation::text_string(&[0xfe, 0xff, 0, 0xff]), super::navigation::text_string(&[0xff]));
+    let bytes = rich_media_pdf("<< /Subtype /Flash >>", "<FEFF00FF> 6 0 R <FF> 8 0 R", "5 0 R", "first.swf", "", true);
+    let doc = Document::load_mem(&bytes).unwrap();
+    let inspector = Inspector::new(&doc);
+    let annot = doc.get_dictionary((4, 0)).unwrap();
+    for (mut text_budget, expected) in [(2, b"second".as_slice()), (128, b"first".as_slice())] {
+        let mut info = DocInfo::default();
+        inspector.rich_media(&mut info, 0, 0, annot, &mut text_budget, &mut super::rich_media::MediaBudget::default());
+        assert!(info.has_legacy_flash);
+        assert_eq!(info.attachments.len(), 1, "only the first listed decoded key is kept; cyclic Kids terminate");
+        let attachment = &info.attachments[0];
+        assert_eq!(attachment.size, Some(expected.len()), "inventory identifies the expected file");
+        assert_eq!(attachment_data(&bytes, None, attachment).unwrap(), expected, "extraction must return the listed file's bytes");
+    }
+}

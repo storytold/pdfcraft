@@ -54,17 +54,20 @@ impl<'a> Inspector<'a> {
         let Some(tree) = content.get(b"Assets").ok().and_then(|v| self.dict(v)) else { return };
         let mut seen = HashSet::new();
         let mut keys = HashSet::new();
-        for (key, spec) in self.name_tree_limited(tree, &mut seen, 0, text_budget, &mut budget.visits) {
+        for entry in self.name_tree_limited(tree, &mut seen, 0, text_budget, &mut budget.visits) {
             if budget.assets == 0 {
                 break;
             }
-            // Extraction finds the first matching key; listing uses the same rule.
+            // Name-tree keys must be strings. Keep display de-duplication, but extract by the
+            // exact raw key: an earlier decoded alias may have been omitted by the text budget.
+            let Some(raw_key) = entry.raw_key else { continue };
+            let (key, spec) = (entry.key, entry.value);
             if !keys.insert(key.clone()) {
                 continue;
             }
             budget.assets = budget.assets.saturating_sub(1);
             let fallback = |left: &mut usize| spend(key.as_bytes(), left, |_| key.clone());
-            let att = self.attachment(spec, AttachmentSource::RichMedia { page, index, key: key.clone() }, text_budget, fallback);
+            let att = self.attachment(spec, AttachmentSource::RichMedia { page, index, raw_key: raw_key.to_vec() }, text_budget, fallback);
             let swf = |name: &str| name.rsplit_once('.').is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("swf"));
             let embedded = self
                 .dict(spec)
