@@ -39,10 +39,15 @@ impl crate::Document {
 
     /// Every word of the document in reading order, with page and box.
     pub fn words(&self) -> Vec<pdfcraft_compare::Word> {
+        self.words_in(&(0..self.info.pages.len()).collect::<Vec<_>>())
+    }
+
+    /// `words` for the listed pages (0-based, ascending) only; the words keep their page numbers.
+    pub fn words_in(&self, pages: &[usize]) -> Vec<pdfcraft_compare::Word> {
         let config = pdfcraft_render::RenderConfig { password: self.password.as_deref().map(Arc::from), ..Default::default() };
         let mut r = pdfcraft_render::PageRenderer::new(self.bytes.clone(), config);
         let mut out = Vec::new();
-        for (page, info) in self.info.pages.iter().enumerate() {
+        for (page, info) in self.info.pages.iter().enumerate().filter(|(p, _)| pages.contains(p)) {
             let res = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
             if let Some(t) = res.text {
                 out.extend(crate::js::page_words(&t, info).into_iter().map(|(text, rect)| pdfcraft_compare::Word { text, page, rect }));
@@ -52,15 +57,35 @@ impl crate::Document {
     }
 }
 
+/// The pages a compare range selects, ascending and without repeats (a range is a set here).
+fn compare_pages_of(d: &crate::Document, range: Option<&str>) -> Result<Vec<usize>, EditError> {
+    // `None` is the only way to ask for every page: a blank range is a mistake, not "all".
+    if range.is_some_and(|r| r.trim().is_empty()) {
+        return Err(EditError::Print("compare page range: the range is empty".into()));
+    }
+    let mut pages = pdfcraft_print::select_pages(d.info.pages.len(), range, &[], pdfcraft_print::Subset::All, false)
+        .map_err(|e| EditError::Print(format!("compare page range: {e}")))?;
+    pages.sort_unstable();
+    pages.dedup();
+    Ok(pages)
+}
+
 impl Session {
     /// Compare files: the text differences from document `old` to document `new`. The result
     /// carries both documents' text, so both must allow copying it.
     pub fn compare(&self, old: DocId, new: DocId) -> Result<Comparison, EditError> {
+        self.compare_pages(old, new, None, None)
+    }
+
+    /// `compare` limited to a page range of each document (`"1-3, 6"`, `"5-"`; `None` is every
+    /// page). An invalid range (not a page, past the end, empty document) is an error.
+    pub fn compare_pages(&self, old: DocId, new: DocId, old_range: Option<&str>, new_range: Option<&str>) -> Result<Comparison, EditError> {
         let a = self.get(old).ok_or(EditError::NoDocument)?;
         let b = self.get(new).ok_or(EditError::NoDocument)?;
         a.check_copying()?;
         b.check_copying()?;
-        Ok(pdfcraft_compare::compare(&a.words(), &b.words()))
+        let (pa, pb) = (compare_pages_of(a, old_range)?, compare_pages_of(b, new_range)?);
+        Ok(pdfcraft_compare::compare(&a.words_in(&pa), &b.words_in(&pb)))
     }
 
     /// Visual compare: regions where page n of `new` looks different from page n of `old`

@@ -5394,6 +5394,27 @@ fn detecting_comb_boxes_adds_one_comb_field_per_row() {
 }
 
 #[test]
+fn comparing_a_page_range_of_each_document() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let v1 = s.create_from_text("t", "Alpha one.\u{c}Beta two.\u{c}Gamma three.").unwrap();
+    // The newer version drops the first page and edits the last.
+    let v2 = s.create_from_text("t", "Beta two.\u{c}Gamma four.").unwrap();
+    let old = s.open("v1.pdf", None, v1, None).unwrap();
+    let new = s.open("v2.pdf", None, v2, None).unwrap();
+    let got = |c: &compare::Comparison| c.changes.iter().map(|x| (x.kind, x.old.text.clone(), x.new.text.clone(), x.new.page)).collect::<Vec<_>>();
+    assert_eq!(got(&s.compare(old, new).unwrap()).len(), 2);
+    // Pages 2-3 of the old against all of the new: only the edit is left, on its real page.
+    let c = s.compare_pages(old, new, Some("2-"), None).unwrap();
+    assert_eq!(got(&c), [(compare::Kind::Replaced, "three.".into(), "four.".into(), 1)], "{:?}", got(&c));
+    // Page 2 against page 1 is identical.
+    assert!(s.compare_pages(old, new, Some("2"), Some("1")).unwrap().identical());
+    // Invalid ranges are errors, not an empty comparison.
+    for (o, n) in [(Some("4"), None), (None, Some("0")), (Some("x"), None), (None, Some("3-")), (Some(""), None), (None, Some("  "))] {
+        assert!(matches!(s.compare_pages(old, new, o, n), Err(EditError::Print(_))), "{o:?} {n:?}");
+    }
+}
+
+#[test]
 fn comparing_two_versions_of_a_document() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let v1 = s.create_from_text("t", "The contract starts on Monday.\n\nPayment is due within thirty days.\n\nSigned by both parties.").unwrap();

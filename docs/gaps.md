@@ -371,10 +371,12 @@ update the numbers.
 
 - **Done:** the synchronised side-by-side view; the Compare panel's Show: Text / Visual filter
   (Text hides the text changes from the list and the shading, Visual hides the visual differences
-  from the shading; they are counted, not listed).
+  from the shading; they are counted, not listed); the engine's `compare_pages` and the
+  `doc_compare` tool's `pages` / `other_pages` compare a page range of each document (an invalid
+  range is an error; the visual compare still pairs page n with page n and refuses a range).
 - **Missing:** telling images, annotations, formatting and background/header-footer changes apart
   (all of them are Visual today), scrolling the two halves by matching content rather than by
-  offset, page ranges, scanned documents.
+  offset, a page-range choice in the Compare panel, scanned documents.
 - **Estimate:** 8–16 h. **Doc:** [target-app-parity.md](target-app-parity.md).
 
 ### 22. PDF 2.0 extras, linearization, Arlington validation

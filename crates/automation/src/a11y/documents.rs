@@ -175,7 +175,11 @@ impl Automation {
     pub(crate) fn doc_compare(&self, a: &Args) -> Result<Value> {
         use pdfcraft_engine::compare::Kind;
         let (old, new) = self.compare_ids(a)?;
-        let c = self.session.compare(old, new).map_err(failed)?;
+        let (old_pages, new_pages) = (a.opt_str("other_pages")?, a.opt_str("pages")?);
+        if a.opt_bool("visual")?.unwrap_or(false) && (old_pages.is_some() || new_pages.is_some()) {
+            return Err(ToolError::InvalidArgs("visual compares page n with page n, so it cannot be combined with pages or other_pages".into()));
+        }
+        let c = self.session.compare_pages(old, new, old_pages, new_pages).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
         let limit = a.opt_int("limit")?.unwrap_or(500).max(1) as usize;
         let r2 = |r: &[f64; 4]| r.map(|v| (v * 100.0).round() / 100.0);
         let side =

@@ -6882,6 +6882,24 @@ fn comparing_documents_through_tools() {
 }
 
 #[test]
+fn comparing_page_ranges_through_tools() {
+    let dir = workdir("compare-pages");
+    let mut a = auto(&dir);
+    let make = |a: &mut Automation, text: &str| ok(a, "doc_create", json!({ "from": "text", "text": text }))["doc"].as_u64().unwrap();
+    let v1 = make(&mut a, "Alpha one.\u{c}Beta two.\u{c}Gamma three.");
+    let v2 = make(&mut a, "Beta two.\u{c}Gamma four.");
+    assert_eq!(ok(&mut a, "doc_compare", json!({ "doc": v2, "other": v1 }))["changes"].as_array().unwrap().len(), 2);
+    let r = ok(&mut a, "doc_compare", json!({ "doc": v2, "other": v1, "other_pages": "2-3", "pages": "1-2" }));
+    assert_eq!((r["replaced"].as_u64(), r["inserted"].as_u64(), r["deleted"].as_u64()), (Some(1), Some(0), Some(0)), "{r}");
+    assert_eq!(r["changes"][0]["new"]["page"], 2);
+    for bad in [json!({ "pages": "9" }), json!({ "other_pages": "abc" }), json!({ "pages": "1", "visual": true })] {
+        let mut args = json!({ "doc": v2, "other": v1 });
+        args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        assert!(a.call("doc_compare", &args).is_err(), "{args}");
+    }
+}
+
+#[test]
 fn actions_through_tools() {
     let dir = workdir("actions");
     let mut a = auto(&dir);
