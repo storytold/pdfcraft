@@ -1,3 +1,5 @@
+use std::cell::OnceCell;
+
 use super::types::{Modification, kind};
 use super::{Arc, Dict, Document, HashMap, HashSet, ObjRef, Object};
 
@@ -83,6 +85,7 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         signed_resources: &signed_resources,
         old_info,
         dss: &dss,
+        form_roles: OnceCell::new(),
     };
     for num in doc.object_numbers() {
         if same_place(num) {
@@ -150,6 +153,9 @@ struct ChangedObjectClassifier<'a> {
     signed_resources: &'a HashMap<ObjRef, bool>,
     old_info: Option<ObjRef>,
     dss: &'a HashSet<u32>,
+    /// [`form_fill_roles`] of the signed revision, worked out the first time a change would
+    /// otherwise be refused.
+    form_roles: OnceCell<HashMap<ObjRef, FormRole>>,
 }
 
 impl ChangedObjectClassifier<'_> {
@@ -160,12 +166,22 @@ impl ChangedObjectClassifier<'_> {
         if self.dss.contains(&r.num) {
             return Some(kind::SECURITY_STORE);
         }
-        match new {
+        let what = match new {
             Object::Array(now) if self.is_signed_annotation_array(r, before) => Some(self.annotation_array_change(now, before)),
             Object::Dict(dict) => Some(self.dictionary_change(r, dict, before)),
             Object::Stream(stream) => self.stream_change(r, stream, before),
             _ if before.is_none() => None,
             _ => Some(kind::OTHER),
+        };
+        if what != Some(kind::OTHER) {
+            return what;
+        }
+        // A field appearance or a form resource rewritten in place (#3442), judged by the role the
+        // object held when signed and held nowhere else.
+        match self.form_roles.get_or_init(|| form_fill_roles(self.old)).get(&r) {
+            Some(FormRole::Appearance) => Some(kind::FORM_FILL),
+            Some(FormRole::Resources) if before.is_some_and(|b| only_gained_entries(b, new, 0)) => Some(kind::FORM_FILL),
+            _ => what,
         }
     }
 
@@ -248,6 +264,183 @@ fn xfa_data_packets(doc: &Document) -> HashSet<ObjRef> {
         .filter(|[name, _]| doc.resolve(name).as_string().is_some_and(|s| matches!(s.to_text().as_str(), "datasets" | "form")))
         .filter_map(|[_, packet]| packet.as_ref())
         .collect()
+}
+
+/// What an object of the signed revision was to its interactive form, when that was all it was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FormRole {
+    /// An appearance of an ordinary field's widget: the widget's `/AP` dictionary, its `/N`, `/R`
+    /// or `/D` dictionary of states, or an appearance stream. Filling the field redraws it, so any
+    /// rewrite is a form fill.
+    Appearance,
+    /// The form's default resources (`/AcroForm /DR`) or one of its category dictionaries.
+    /// Filling a field may add the font it is drawn with, so a rewrite that only adds entries is a
+    /// form fill; one that changes or drops an entry is not.
+    Resources,
+}
+
+/// The objects of the signed revision that a form fill may rewrite in place (#3442), with their
+/// [`FormRole`]. A writer may redraw a filled field in its existing appearance stream, and add the
+/// font it drew with to an existing indirect `/DR`, rather than write new objects.
+///
+/// The policy:
+/// - An object qualifies only through the role it held when signed, never through what a later
+///   revision says it is.
+/// - It qualifies only when that role is all it held: nothing else in the signed file refers to
+///   it, directly or through other objects. The file is walked from the trailer, everything
+///   except the `/AP` of ordinary widgets and the AcroForm's `/DR`; whatever that walk reaches
+///   (a page's content or resources, another annotation's or a signature field's appearance, an
+///   action, the catalog's own entries) is left to the stricter judgement it had.
+/// - An ordinary widget is one of a text, button or choice field (`/FT`, its own or inherited).
+///   Signature fields, comments and widgets without a field type are not.
+/// - Each object must have the shape of its role: an appearance dictionary has only `/N`, `/R`
+///   and `/D`; a dictionary of states holds only references to streams; an appearance is a
+///   stream that is untyped or `/Type /XObject`; `/DR` has only resource categories.
+///
+/// Rewriting an ordinary field's appearance in place grants nothing a form fill can't already do:
+/// filling may give the widget a new appearance stream drawing anything. Past `MAX_VISITED`
+/// objects the walk gives up and nothing qualifies, so the changes are judged as before.
+fn form_fill_roles(old: &Document) -> HashMap<ObjRef, FormRole> {
+    const MAX_VISITED: usize = 500_000;
+    const STATES: [&[u8]; 3] = [b"N", b"R", b"D"];
+    const RESOURCE_CATEGORIES: [&[u8]; 8] = [b"Font", b"XObject", b"ExtGState", b"ColorSpace", b"Pattern", b"Shading", b"Properties", b"Encoding"];
+
+    let acroform_ref = old.root().and_then(|root| old.get(root).as_dict().and_then(|c| c.get(b"AcroForm").and_then(Object::as_ref)));
+    let mut seen: HashSet<ObjRef> = HashSet::new();
+    let (mut appearances, mut resources) = (Vec::new(), Vec::new());
+    // Each object to visit, and whether it is the AcroForm (written inline in the catalog).
+    let mut stack: Vec<(Object, bool)> = old.trailer().iter().map(|(_, v)| (v.clone(), false)).collect();
+    while let Some((o, inline_form)) = stack.pop() {
+        let held;
+        let (here, o) = match o {
+            Object::Ref(r) => {
+                if !seen.insert(r) {
+                    continue;
+                }
+                if seen.len() > MAX_VISITED {
+                    return HashMap::new();
+                }
+                held = old.get(r);
+                (Some(r), &*held)
+            }
+            ref other => (None, other),
+        };
+        match o {
+            Object::Dict(d) => {
+                let widget = d.name(b"Subtype") == Some(b"Widget") && is_ordinary_field(old, d);
+                let form = inline_form || (here.is_some() && here == acroform_ref);
+                let catalog = here.is_some() && here == old.root();
+                for (k, v) in d.iter() {
+                    match k.as_slice() {
+                        b"AP" if widget => appearances.push(v.clone()),
+                        b"DR" if form => resources.push(v.clone()),
+                        b"AcroForm" if catalog => stack.push((v.clone(), true)),
+                        _ => stack.push((v.clone(), false)),
+                    }
+                }
+            }
+            Object::Stream(s) => stack.extend(s.dict.iter().map(|(_, v)| (v.clone(), false))),
+            Object::Array(a) => stack.extend(a.iter().map(|v| (v.clone(), false))),
+            _ => {}
+        }
+    }
+
+    let mut roles = HashMap::new();
+    // Anything the walk reached has another role too; a conflict takes the stricter role.
+    let mut claim = |r: ObjRef, role: FormRole| {
+        if !seen.contains(&r) {
+            roles
+                .entry(r)
+                .and_modify(|held: &mut FormRole| {
+                    if *held != role {
+                        *held = FormRole::Resources;
+                    }
+                })
+                .or_insert(role);
+        }
+    };
+    let is_appearance = |o: &Object| matches!(&*old.resolve(o), Object::Stream(s) if matches!(s.dict.name(b"Type"), None | Some(b"XObject")));
+    for ap in appearances {
+        let ap = match ap {
+            Object::Ref(r) => match &*old.get(r) {
+                Object::Dict(d) if d.iter().all(|(k, _)| STATES.contains(&k.as_slice())) => {
+                    claim(r, FormRole::Appearance);
+                    d.clone()
+                }
+                _ => continue,
+            },
+            Object::Dict(d) => d,
+            _ => continue,
+        };
+        for v in STATES.iter().filter_map(|key| ap.get(key)) {
+            let (states, indirect) = match v {
+                Object::Ref(r) if is_appearance(v) => {
+                    claim(*r, FormRole::Appearance);
+                    continue;
+                }
+                Object::Ref(r) => (old.get(*r).as_dict().cloned(), Some(*r)),
+                Object::Dict(d) => (Some(d.clone()), None),
+                _ => continue,
+            };
+            let Some(states) = states.filter(|d| d.iter().all(|(_, s)| s.as_ref().is_some() && is_appearance(s))) else { continue };
+            if let Some(r) = indirect {
+                claim(r, FormRole::Appearance);
+            }
+            states.iter().filter_map(|(_, s)| s.as_ref()).for_each(|s| claim(s, FormRole::Appearance));
+        }
+    }
+    let is_resources = |d: &Dict| d.iter().all(|(k, _)| k.as_slice() == b"ProcSet" || RESOURCE_CATEGORIES.contains(&k.as_slice()));
+    for dr in resources {
+        let d = match dr {
+            Object::Ref(r) => match &*old.get(r) {
+                Object::Dict(d) if is_resources(d) => {
+                    claim(r, FormRole::Resources);
+                    d.clone()
+                }
+                _ => continue,
+            },
+            Object::Dict(d) if is_resources(&d) => d,
+            _ => continue,
+        };
+        for category in RESOURCE_CATEGORIES.iter().filter_map(|key| d.get(key)).filter_map(Object::as_ref) {
+            if old.get(category).as_dict().is_some() {
+                claim(category, FormRole::Resources);
+            }
+        }
+    }
+    roles
+}
+
+/// Whether the dictionary `now` keeps every entry of `before`: the same value, or an inline
+/// dictionary that itself only gained entries. A reference stays the same reference, so an entry
+/// pointed at another object, however alike, is a change.
+fn only_gained_entries(before: &Object, now: &Object, depth: u8) -> bool {
+    match (before, now) {
+        (Object::Dict(b), Object::Dict(n)) => {
+            b.iter().all(|(k, v)| n.get(k).is_some_and(|nv| nv == v || (depth < 4 && only_gained_entries(v, nv, depth + 1))))
+        }
+        _ => false,
+    }
+}
+
+/// Whether `widget`'s field (the widget itself, or the nearest ancestor with a `/FT`) is a text,
+/// button or choice field: one whose appearance a form fill redraws.
+fn is_ordinary_field(old: &Document, widget: &Dict) -> bool {
+    const MAX_ANCESTORS: usize = 64;
+    let mut ft = widget.name(b"FT").map(<[u8]>::to_vec);
+    let mut parent = widget.get(b"Parent").and_then(Object::as_ref);
+    let mut seen = HashSet::new();
+    while ft.is_none()
+        && let Some(p) = parent
+        && seen.insert(p)
+        && seen.len() <= MAX_ANCESTORS
+    {
+        let held = old.get(p);
+        let Some(d) = held.as_dict() else { break };
+        ft = d.name(b"FT").map(<[u8]>::to_vec);
+        parent = d.get(b"Parent").and_then(Object::as_ref);
+    }
+    matches!(ft.as_deref(), Some(b"Tx" | b"Btn" | b"Ch"))
 }
 
 /// Where an object sits in the Document Security Store (ISO 32000-2 §12.8.4.3).
