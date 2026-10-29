@@ -793,6 +793,102 @@ fn the_text_editor_aligns_a_narrow_box_to_its_own_edge() {
     );
 }
 
+/// #4789: a narrow reopened box keeps its fill inside the PDF rectangle, independently of
+/// the wider editor's alignment and whether the textless page background has arrived yet.
+#[test]
+fn a_narrow_text_editors_fill_stays_inside_its_pdf_rectangle() {
+    use egui::{Color32, Shape};
+    use pdfcraft_engine::TextAlign;
+    let fill = Color32::from_rgb(43, 99, 156);
+    for align in [TextAlign::Left, TextAlign::Center, TextAlign::Right, TextAlign::Justify] {
+        let mut h = harness();
+        // Prime the floating editor's geometry using a real empty draft. Reopening below can
+        // then paint immediately, before its textless page background is requested next frame.
+        assert!(h.state_mut().execute("edit.text"));
+        h.run_steps(3);
+        let empty = at(&h, 40.0, 300.0);
+        click(&mut h, empty);
+        assert!(h.state().views[0].content.draft.as_ref().is_some_and(|d| d.index.is_none()));
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.state().views[0].content.draft.is_none());
+        let rect = [100.0, 195.0, 120.0, 210.0];
+        let text = pdfcraft_engine::AddedText {
+            rect,
+            text: "Hi".into(),
+            align,
+            color: [1.0; 3],
+            background: Some([43.0 / 255.0, 99.0 / 255.0, 156.0 / 255.0]),
+            ..Default::default()
+        };
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+        let rect = added(&h)[0].content.rect();
+        assert!(h.state_mut().execute("edit.text"));
+        crate::support::settle(&mut h);
+        let r = item_on_screen(&h, rect);
+        assert!(r.width() < 60.0, "narrow-box precondition");
+        let point = r.center();
+        h.hover_at(point);
+        h.run_steps(1);
+        h.drag_at(point);
+        h.run_steps(1);
+        // One release frame only: drop_at also queues PointerGone, which would draw a
+        // second frame and allow the background worker to finish before this check.
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: point,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.step();
+        assert_eq!(h.state().views[0].content.draft.as_ref().and_then(|d| d.index), Some(0), "click reopens {align:?} text");
+        assert!(h.get_by_label("Added text").rect().width() >= 60.0, "the editor still has room to click and type");
+        let check = |h: &Harness<'static, PdfCraftApp>, background_ready: bool| {
+            let draft = h.state().views[0].content.draft.as_ref().unwrap();
+            assert_eq!(draft.rect, rect, "reopening preserves the PDF rectangle");
+            let r = item_on_screen(h, draft.rect);
+            let painted: Vec<_> = h
+                .output()
+                .shapes
+                .iter()
+                .enumerate()
+                .filter_map(|(i, shape)| match &shape.shape {
+                    Shape::Rect(box_) if box_.fill == fill && box_.rect.intersects(r) => Some((i, box_.rect)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(painted.len(), 1, "{align:?}, ready={background_ready}: one visible fill");
+            let (fill_index, actual) = painted[0];
+            assert!(
+                actual.min.distance(r.min) < 0.1 && actual.max.distance(r.max) < 0.1,
+                "{align:?}, ready={background_ready}: fill {actual:?} must match PDF rectangle {r:?}"
+            );
+            let fallback = h.output().shapes.iter().enumerate().find_map(|(i, shape)| match &shape.shape {
+                Shape::Rect(box_)
+                    if box_.fill == Color32::WHITE
+                        && box_.rect.min.distance(r.expand(1.0).min) < 0.1
+                        && box_.rect.max.distance(r.expand(1.0).max) < 0.1 =>
+                {
+                    Some(i)
+                }
+                _ => None,
+            });
+            assert_eq!(fallback.is_none(), background_ready, "{align:?}: exercise both page-background states");
+            if let Some(mask_index) = fallback {
+                assert!(mask_index < fill_index, "the temporary source mask must not cover the fill");
+            }
+        };
+        check(&h, false);
+        crate::support::settle(&mut h);
+        check(&h, true);
+        if let Ok(dir) = std::env::var("PDFCRAFT_NARROW_FILL_SHOTS") {
+            let _gpu = gpu();
+            std::fs::create_dir_all(&dir).unwrap();
+            h.render().unwrap().save(std::path::Path::new(&dir).join(format!("{align:?}.png"))).unwrap();
+        }
+    }
+}
+
 /// Added text takes character spacing from Format text (#4245), typed like a paragraph's; its
 /// line spacing and horizontal scale stay disabled until added text has them.
 #[test]

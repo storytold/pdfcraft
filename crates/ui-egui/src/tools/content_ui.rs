@@ -693,7 +693,12 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                 let [r, g, b] = c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
                 Color32::from_rgb(r, g, b)
             });
-            // The box is white in every theme (or the fill), so the caret must not follow the theme (pale in dark mode) (#655).
+            // Paint the PDF rectangle, independently of the wider editor's alignment. The
+            // temporary source mask above must stay behind it until the textless page is ready.
+            if let Some(fill) = fill {
+                ui.painter().rect_filled(r, CornerRadius::ZERO, fill);
+            }
+            // The caret contrasts with the text rectangle's fill, not the interface theme (#655).
             ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(fill.unwrap_or(Color32::WHITE));
             let [cr, cg, cb] = t.style.color.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
             let color = Color32::from_rgb(cr, cg, cb);
@@ -719,7 +724,7 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                     // Keep the page editor's original inset; the theme's larger button padding
                     // otherwise shifts narrow right-aligned boxes away from their text edge.
                     .margin(egui::Margin::symmetric(4, 2))
-                    .background_color(fill.unwrap_or(if background_ready { Color32::TRANSPARENT } else { Color32::WHITE }))
+                    .background_color(if fill.is_some() || background_ready { Color32::TRANSPARENT } else { Color32::WHITE })
                     .text_color(color)
                     .hint_text(tl!("Type text"))
                     .id(input)
