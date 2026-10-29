@@ -885,8 +885,8 @@ mod tests {
         }
         // Sizes over the crate's caps are refused before the pixels are looked at, so the sides
         // can never wrap round onto the buffer's length.
-        assert!(matches!(ocr.recognize(&vec![255; 3], u32::MAX, u32::MAX), Err(OcrError::ImageTooLarge)));
-        assert!(matches!(ocr.recognize(&vec![255; 3], MAX_SIDE + 1, 1), Err(OcrError::ImageTooLarge)));
+        assert!(matches!(ocr.recognize(&[255; 3], u32::MAX, u32::MAX), Err(OcrError::ImageTooLarge)));
+        assert!(matches!(ocr.recognize(&[255; 3], MAX_SIDE + 1, 1), Err(OcrError::ImageTooLarge)));
     }
 
     /// End to end on rendered text, when the models are installed (`cargo xtask models`).

@@ -120,11 +120,15 @@ impl Layout {
 /// rank (a missing one reads last).
 fn regions_from_rows(rows: impl Iterator<Item = [f32; 7]>, width: f32, height: f32) -> Vec<Region> {
     rows.filter_map(|[label, score, l, t, r, b, rank]| {
-        if score.is_nan() || score < MIN_SCORE || !label.is_finite() || label < 0.0 {
+        // A score must be a real probability and a label a whole class number: anything else is
+        // a malformed row, not a confident one (an infinite score is not "above the threshold",
+        // and 2.7 is no class).
+        if !score.is_finite() || score < MIN_SCORE || !label.is_finite() || label < 0.0 || label.fract() != 0.0 {
             return None;
         }
-        // Finite and not negative, so the cast saturates at worst; `get` rejects the rest.
-        let label = *LABELS.get(label.round() as usize)?;
+        // A finite whole number, not negative, so the cast is exact or saturates; `get` rejects
+        // the rest.
+        let label = *LABELS.get(label as usize)?;
         let rect = [l.clamp(0.0, width), t.clamp(0.0, height), r.clamp(0.0, width), b.clamp(0.0, height)];
         // `clamp` passes NaN through; `>` is false for it.
         if !(rect[2] > rect[0] && rect[3] > rect[1]) {
@@ -271,8 +275,9 @@ mod tests {
         }
     }
 
-    /// Rows the network is unsure of, with an unknown label, or with a box that is empty, inverted,
-    /// not a number or outside the picture are dropped; boxes reaching past the edge are clipped.
+    /// Rows the network is unsure of, with an unknown or fractional label, an infinite score, or
+    /// with a box that is empty, inverted, not a number or outside the picture are dropped; boxes
+    /// reaching past the edge are clipped.
     #[test]
     fn regions_keep_only_sensible_rows() {
         let rows = [
@@ -288,6 +293,8 @@ mod tests {
             [22.0, 0.9, f32::NAN, 20.0, 110.0, 60.0, 1.0],
             [22.0, 0.9, 900.0, 20.0, 1000.0, 60.0, 1.0],
             [22.0, 0.9, f32::NEG_INFINITY, 20.0, f32::INFINITY, 60.0, 1.0],
+            [22.0, f32::INFINITY, 10.0, 20.0, 110.0, 60.0, 1.0],
+            [21.6, 0.9, 10.0, 20.0, 110.0, 60.0, 1.0],
         ];
         let got = regions_from_rows(rows.into_iter(), 800.0, 600.0);
         assert_eq!(
