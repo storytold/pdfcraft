@@ -79,11 +79,9 @@ fn read_mode_shows_the_side_panel_without_tools() {
     assert!(side(&h).right() < rail(&h).left());
 }
 
-#[test]
-fn a_dragged_width_is_remembered_across_restarts() {
-    let mut h = harness(|app| app.set_option("panel", "bookmarks").unwrap());
-    let before = h.state().side_panels.side_width;
-    let side_left = side(&h).left();
+/// Drag the side panel's resize edge `by` points to the left (wider).
+fn widen_side(h: &mut Harness<'static, PdfCraftApp>, by: f32) {
+    let side_left = side(h).left();
     // The side panel's resize edge: the one right of the page, left of the panel's text.
     let edge = h
         .get_all_by_label("Resize panels")
@@ -98,11 +96,18 @@ fn a_dragged_width_is_remembered_across_restarts() {
     h.drag_at(edge);
     h.run_steps(1);
     for i in 1..=4 {
-        h.hover_at(edge - egui::vec2(10.0 * i as f32, 0.0));
+        h.hover_at(edge - egui::vec2(by * i as f32 / 4.0, 0.0));
         h.run_steps(1);
     }
-    h.drop_at(edge - egui::vec2(40.0, 0.0));
+    h.drop_at(edge - egui::vec2(by, 0.0));
     h.run_steps(3);
+}
+
+#[test]
+fn a_dragged_width_is_remembered_across_restarts() {
+    let mut h = harness(|app| app.set_option("panel", "bookmarks").unwrap());
+    let before = h.state().side_panels.side_width;
+    widen_side(&mut h, 40.0);
     let after = h.state().side_panels.side_width;
     // The pointer was pressed 2 pt inside the panel, and the edge follows the pointer.
     assert!((after - (before + 40.0 - 2.0)).abs() <= 1.0, "{before} -> {after}");
@@ -110,6 +115,21 @@ fn a_dragged_width_is_remembered_across_restarts() {
     let mut restored = PdfCraftApp::new();
     restored.restore(&saved);
     assert_eq!(restored.side_panels.side_width, after);
+}
+
+/// Long bookmark titles want room: the side panel widens well past the Tools pane's 520 pt, up to
+/// 70 % of the window, so the page stays in view.
+#[test]
+fn the_side_panel_widens_up_to_most_of_the_window() {
+    let mut h = harness(|app| app.set_option("panel", "bookmarks").unwrap());
+    let before = h.state().side_panels.side_width;
+    widen_side(&mut h, 400.0);
+    let wide = h.state().side_panels.side_width;
+    assert!((wide - (before + 400.0 - 2.0)).abs() <= 1.0, "{before} -> {wide}");
+    assert!(wide > 520.0 && (side(&h).width() - wide).abs() <= 2.0, "drawn as wide as set: {wide}, {:?}", side(&h));
+    widen_side(&mut h, 600.0);
+    let widest = h.state().side_panels.side_width;
+    assert!(widest > wide && widest <= 0.7 * WIDTH + 1.0, "{wide} -> {widest}");
 }
 
 #[test]

@@ -21,7 +21,11 @@ pub const SIDE_WIDTH: f32 = 330.0;
 const TOOLS_GUTTERS: f32 = 30.0;
 /// No narrower than Format text's widest row, so nothing in it is cut off.
 const TOOLS_RANGE: RangeInclusive<f32> = (crate::format_text_ui::MIN_ROW + TOOLS_GUTTERS)..=520.0;
-const SIDE_RANGE: RangeInclusive<f32> = 260.0..=520.0;
+/// The side panel can be dragged as wide as the window lets it ([`MAX_SHARE`]): the long
+/// bookmark titles of a set of plans, or a comment thread, then read on one line.
+const SIDE_RANGE: RangeInclusive<f32> = 260.0..=3840.0;
+/// The share of the window one pane may take, so the page keeps the rest in view.
+const MAX_SHARE: f32 = 0.7;
 /// Version of the saved `side_panels` value.
 const VERSION: u64 = 1;
 /// Deepest split tree the old layout migration walks; the old renderer allowed far fewer.
@@ -439,6 +443,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let host = egui::Id::unique("pdfcraft-side-panels");
     let output = PaneHost::new(host)
         .policy(SidePolicy::Columns)
+        .max_fraction(MAX_SHARE)
         .f6(false)
         .labels(labels)
         .frame(egui::Frame::NONE.fill(t.panel))
@@ -563,6 +568,11 @@ mod tests {
             restored.panels,
             SidePanels { tools_side: ToolsSide::Left, rail_side: ToolsSide::Right, tools_width: 520.0, side_width: SIDE_WIDTH }
         );
+        // The side panel keeps a width well past the Tools pane's limit.
+        let restored = restore(&json!({"side_panels": {"version": 1, "side_width": 1200.0}}));
+        assert_eq!(restored.panels.side_width, 1200.0);
+        let restored = restore(&json!({"side_panels": {"version": 1, "side_width": 9000.0}}));
+        assert_eq!(restored.panels.side_width, 3840.0);
         // Deep trees are cut off rather than walked.
         let mut deep = tabs(&["tools"]);
         for _ in 0..200 {
