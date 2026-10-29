@@ -657,8 +657,8 @@ fn a_field_can_be_visible_but_not_print() {
     let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
     // How many pixels of the printout are the red of "plain" and the blue of "submit" (the page is
     // scaled to the sheet, so the counts are what tells, not the places).
-    let printed = |a: &mut Automation, name: &str| -> (bool, bool) {
-        ok(a, "doc_print", json!({ "doc": doc, "path": name }));
+    let printed_as = |a: &mut Automation, name: &str, as_image: bool| -> (bool, bool) {
+        ok(a, "doc_print", json!({ "doc": doc, "path": name, "as_image": as_image, "dpi": 72 }));
         let out = ok(a, "doc_open", json!({ "path": name }))["doc"].as_u64().unwrap();
         let png = a.call("page_render", &json!({ "doc": out, "page": 1, "dpi": 72 })).unwrap();
         let Content::Png { data, width, .. } = &png[0] else { panic!("expected an image") };
@@ -669,6 +669,7 @@ fn a_field_can_be_visible_but_not_print() {
         let count = |colour: [u8; 3]| buf.chunks(channels).filter(|p| p.len() >= 3 && p[..3] == colour).count();
         (count([255, 0, 0]) > 2000, count([0, 0, 255]) > 2000)
     };
+    let printed = |a: &mut Automation, name: &str| printed_as(a, name, false);
     let display_of = |a: &mut Automation, field: &str| -> Option<String> {
         let list = ok(a, "form_fields", json!({ "doc": doc }));
         let f = list["fields"].as_array().unwrap().iter().find(|f| f["name"] == field).unwrap().clone();
@@ -700,6 +701,10 @@ fn a_field_can_be_visible_but_not_print() {
         assert!(matches!(r, Err(ToolError::InvalidArgs(_))), "{bad}: {r:?}");
     }
     assert_eq!(display_of(&mut a, "submit").as_deref(), Some("hidden_printable"));
+    // Hidden but printable prints, also as an image, where the renderer that draws each page
+    // would otherwise leave a NoView annotation off as it does on screen.
+    assert_eq!(printed_as(&mut a, "hidden-printable.pdf", false), (true, true), "printed");
+    assert_eq!(printed_as(&mut a, "hidden-printable-image.pdf", true), (true, true), "printed as an image");
 }
 
 #[test]

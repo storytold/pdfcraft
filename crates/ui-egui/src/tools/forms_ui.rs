@@ -772,6 +772,12 @@ pub(crate) fn overlay(
         return None;
     };
     let w = f.widgets.get(focus.widget)?;
+    // A widget hidden since it took the keyboard (its display changed in Field Properties, or by
+    // a script) lets go of it, keeping what was typed as a click away does.
+    if w.hidden {
+        commit(view, form);
+        return None;
+    }
     let page = w.page?;
     let Some(xf) = view.page_xform(page) else {
         // A check box or radio button scrolled out of view lets go (it has no draft to keep):

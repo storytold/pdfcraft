@@ -99,6 +99,22 @@ fn a_blank_tooltip_shows_nothing() {
     assert!(egui::Tooltip::seconds_since_last_tooltip(&h.ctx).is_infinite(), "no tooltip was shown");
 }
 
+/// #5041: a field hidden while it has the keyboard (Hidden but printable in Field Properties,
+/// which leaves its editor open when entered from Fill) lets go of it, and keeps what was typed.
+#[test]
+fn a_field_hidden_while_it_is_being_typed_in_lets_go_and_keeps_the_text() {
+    let mut h = harness();
+    click_field(&mut h, "city", 0);
+    h.event(egui::Event::Text("Oslo".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.text.as_str()), Some("Oslo"));
+    let props = pdfcraft_engine::FieldProps { display: Some(pdfcraft_engine::FieldDisplay::HiddenPrintable), ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps { name: "city".into(), props: Box::new(props) }));
+    h.run_steps(4);
+    assert!(h.state().views[0].forms.focus.is_none(), "the hidden field's editor closed");
+    assert_eq!(value(&h, "city"), ["Oslo"], "what was typed is kept");
+}
+
 /// A text field that doesn't scroll (`DoNotScroll`) takes no more than it shows, measured as its
 /// appearance draws it: a long paste keeps what fits, typing into a full field adds nothing, and
 /// a field without the flag takes it all.
