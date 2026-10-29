@@ -24,7 +24,7 @@ use pdfcraft_content::{Matrix, Op, Pieces, contains, num, overlaps, serialize_op
 use pdfcraft_cos::{CosError, DecodeBudget, Dict, Document, MAX_PAGE_FORMS, ObjRef, Object, Stream};
 
 use crate::{RedactError, Report, image, page_streams, tags};
-use pdfcraft_fonts::pdf::Metrics;
+use pdfcraft_fonts::pdf::{GlyphInk, Ink, Metrics};
 
 mod layers;
 mod prune;
@@ -57,6 +57,8 @@ pub(crate) enum Mode {
 struct Gs {
     ctm: Matrix,
     font: Rc<Metrics>,
+    /// What the current font's glyphs draw, when its embedded program can be read.
+    ink: Option<Rc<GlyphInk>>,
     /// The current font writes vertically (a Type0 font with an `-V` encoding or a CMap whose
     /// `/WMode` is 1). Glyph layout here is horizontal, so such text cannot be placed under a
     /// region; apply fails closed when it meets any (see `show`).
@@ -123,6 +125,8 @@ pub(crate) struct Scope<'a> {
     /// Content removed from hidden layers (blocks and XObjects).
     pub layer_blocks: usize,
     fonts: HashMap<Vec<u8>, Rc<Metrics>>,
+    /// The ink readers of the fonts in `fonts`, read only while marks are tested.
+    inks: HashMap<Vec<u8>, Option<Rc<GlyphInk>>>,
     used_names: Vec<Vec<u8>>,
     depth: usize,
     /// Form entries and decoded bytes left for this page, its content streams already charged:
@@ -147,6 +151,7 @@ impl<'a> Scope<'a> {
             xobject_oc_cache: HashMap::new(),
             layer_blocks: 0,
             fonts: HashMap::new(),
+            inks: HashMap::new(),
             used_names: Vec::new(),
             depth: 0,
             budget,
@@ -227,6 +232,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
     let gs = Gs {
         ctm,
         font: Rc::new(Metrics::fallback()),
+        ink: None,
         vertical: false,
         size: 0.0,
         char_spacing: 0.0,
@@ -455,6 +461,7 @@ impl Walk {
             _ => {
                 if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
                     (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
+                    self.gs.ink = None;
                 }
             }
         }
@@ -472,6 +479,16 @@ impl Walk {
                 scope.fonts.insert(name.to_vec(), m.clone());
                 m
             }
+        };
+        let font = self.gs.font.clone();
+        self.gs.ink = if scope.rects.is_empty() {
+            None
+        } else {
+            scope
+                .inks
+                .entry(name.to_vec())
+                .or_insert_with(|| font_dict.as_ref().and_then(|d| GlyphInk::from_dict(doc, d, &font)).map(Rc::new))
+                .clone()
         };
     }
 
@@ -642,8 +659,8 @@ fn clean_replacements(doc: &Document, resources: &Dict, original: &[Op], process
     }
 }
 
-/// The glyph box a mark is measured against, across the line: the font's descent to ascent,
-/// scaled down to one em when it is taller. A font's ascent and descent include the gap between
+/// The glyph box a mark is measured against, across the line, when the glyph's outline can't be
+/// read ([`Ink::Unknown`]): the font's descent to ascent, scaled down to one em when it is taller. A font's ascent and descent include the gap between
 /// lines, so with lines set solid (spacing = font size) each line's box would reach a few points
 /// into the marks on the next line and lose glyphs nobody marked. One em is also the box text
 /// selection uses, so a mark made from a selection covers its own line only.
@@ -693,13 +710,19 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
                             let degenerate = b[2] - b[0] < 0.01 && b[3] - b[1] < 0.01;
                             matches!(gs.render_mode, 3 | 7) || !(overlaps(page, b, 0.0) || degenerate)
                         }
-                        None => {
-                            let hit = scope.glyph_hit(trm.bbox([0.0, descent, w0, ascent]), origin);
-                            if !hit && scope.glyph_hit(b, origin) {
-                                beside += 1;
+                        None => match gs.ink.as_deref().map_or(Ink::Unknown, |ink| ink.ink(f, code)) {
+                            // What the glyph draws is known: it goes when its ink is under a region.
+                            Ink::Box(ink) => scope.glyph_hit(trm.bbox(ink), origin),
+                            // Nothing drawn: the one-em box decides, and nothing can stay behind.
+                            Ink::Blank => scope.glyph_hit(trm.bbox([0.0, descent, w0, ascent]), origin),
+                            Ink::Unknown => {
+                                let hit = scope.glyph_hit(trm.bbox([0.0, descent, w0, ascent]), origin);
+                                if !hit && scope.glyph_hit(b, origin) {
+                                    beside += 1;
+                                }
+                                hit
                             }
-                            hit
-                        }
+                        },
                     };
                     glyphs.push(Glyph { bytes: pos..pos + len, advance, hit });
                     *tm = Matrix::translate(advance * gs.scale, 0.0).then(tm);

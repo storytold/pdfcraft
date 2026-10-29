@@ -93,6 +93,54 @@ fn a_mark_on_one_line_leaves_the_line_below_when_lines_are_set_solid() {
     assert!(!content(&doc, 0).contains("SECRET"));
 }
 
+/// One page whose font /F1 is Inter, embedded as a TrueType program (every glyph 600 units wide).
+fn page_with_inter(content: &[u8]) -> Document {
+    let widths = format!("[{}]", vec!["600"; 224].join(" "));
+    pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        stream("", content),
+        format!("<< /Type /Font /Subtype /TrueType /BaseFont /Inter /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 255 /Widths {widths} /FontDescriptor 6 0 R >>").into_bytes(),
+        b"<< /Type /FontDescriptor /FontName /Inter /Flags 32 /Ascent 969 /Descent -242 /FontFile2 7 0 R >>".to_vec(),
+        stream("", pdfcraft_fonts::INTER_REGULAR),
+    ])
+}
+
+/// #5298: with the font's outline readable, a glyph goes when its ink is under a mark, even ink
+/// above its one-em box: a mark over only the accent of a 24 pt "É" removes it.
+#[test]
+fn a_mark_over_only_an_accent_removes_the_glyph_when_its_outline_is_known() {
+    let mut doc = page_with_inter(b"BT /F1 24 Tf 10 100 Td (\\311E) Tj ET");
+    // The accent's top, read from the program: the mark covers from 0.805 em up to it, above
+    // the one-em box (0.8 em) and above the capital E beside it.
+    let font = pdfcraft_model::pages(&doc)[0].dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap();
+    let font = font.get(b"Font").and_then(|f| doc.resolve(f).as_dict().cloned()).unwrap();
+    let font = doc.resolve(font.get(b"F1").unwrap()).as_dict().cloned().unwrap();
+    let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, &font);
+    let ink = pdfcraft_fonts::pdf::GlyphInk::from_dict(&doc, &font, &metrics).unwrap();
+    let pdfcraft_fonts::pdf::Ink::Box(accent) = ink.ink(&metrics, 0xC9) else { panic!("É draws") };
+    assert!(accent[3] > 0.85, "the accent rises above one em: {accent:?}");
+    mark(&mut doc, 0, &[[10.0, 100.0 + 0.805 * 24.0, 24.0, 100.0 + accent[3] * 24.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.glyphs_beside_marks), (1, 0), "{r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains("\\311") && c.contains("(E)"), "É removed, E kept: {c}");
+}
+
+/// #5255 with the outline known: Inter at 10 pt, lines set solid. The line below a mark keeps
+/// its glyphs because their ink stays below the mark, and nothing is left to count.
+#[test]
+fn solid_set_lines_keep_the_line_below_by_its_ink() {
+    let mut doc = page_with_inter(b"BT /F1 10 Tf 10 120 Td (ABOVE123) Tj 0 -10 Td (AB1234CD) Tj 0 -10 Td (SECRET) Tj ET");
+    // "1234" on the baseline at y 110 spans x 22–46; its em box is y 108–118.
+    mark(&mut doc, 0, &[[22.0, 108.0, 46.0, 118.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.glyphs_beside_marks), (4, 0), "{r:?}");
+    let c = content(&doc, 0);
+    assert!(c.contains("(SECRET) Tj") && c.contains("(ABOVE123) Tj") && !c.contains("1234"), "{c}");
+}
+
 /// #5255 at a small size: 9 pt lines set solid in a 1000 / −200 font (a 10.8 pt glyph box). The
 /// line below reached 1.8 pt into the selection's mark.
 #[test]
