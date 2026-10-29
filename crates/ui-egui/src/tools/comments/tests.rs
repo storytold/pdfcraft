@@ -194,6 +194,7 @@ fn annotation(subtype: &str, contents: Option<&str>, fill_sign: bool) -> Annotat
         fill_sign,
         no_rotate: false,
         points: Vec::new(),
+        turn: None,
     }
 }
 
