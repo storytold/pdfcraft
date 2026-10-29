@@ -22,7 +22,7 @@ win.
 5. **Make the change.** New behaviour needs a test at the right scale: property, unit, crate
    integration or end-to-end. A bug fix needs a regression test: revert the fix and watch the
    test fail before you trust it, because a test nobody has seen fail is not evidence.
-   Documentation-only changes need no test.
+   Documentation-only changes need no new test, but still pass the quality gates.
 6. **Run the quality gates**, scoped to the crates you touched. A full `--workspace` build can
    lock up a development machine; CI runs it on every PR. Set `CRATE` to the package name of
    each crate you changed (the `name` in its `Cargo.toml`):
@@ -39,8 +39,8 @@ win.
    Windows, `timeout` is a different command: leave the prefix off and watch the build yourself.
 7. **Open a PR into `main`** with `gh pr create`, fill in the template's checklists, and add
    `Fixes #123` if there is an issue. Merge only when CI is green.
-8. **Rebase on the same day that `main` moves.** `main` takes hundreds of commits a day, so a PR that
-   sits goes stale quickly.
+8. **Rebase on the same day that `main` moves.** `main` takes hundreds of commits a day, so a PR
+   that sits goes stale quickly.
 
 ## Hard rules
 
@@ -58,8 +58,8 @@ These are the reasons a PR gets rejected.
   - Every new asset has an entry in `ATTRIBUTION.toml`.
 - **Never crash.** Every PDF, script, MCP call, settings file and keystroke is untrusted input
   ([`AGENTS.md`](AGENTS.md) §4).
-  - No `unwrap`/`expect`/`panic!`/`unreachable!`/`todo!` outside tests unless provably
-    infallible, with a comment saying why.
+  - No `unwrap`/`expect`/`panic!`/`unreachable!`/`todo!`/`unimplemented!` outside tests
+    unless provably infallible, with a comment saying why.
   - No indexing or slicing with input-derived positions; use `get`, and slice strings only at
     char boundaries.
   - Checked or saturating arithmetic, capped allocations, bounded recursion.
