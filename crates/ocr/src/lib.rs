@@ -11,19 +11,26 @@
 //! For glyph work (the ClearScan pipeline), [`preprocess`] prepares a scan first — greyscale,
 //! Sauvola/Otsu binarization, deskew — and [`Ocr::recognize_annotated`] reads the same pages
 //! keeping per-character boxes and line metrics (baseline, x-height, cap height, descent).
-//! See the [`preprocess`] and [`annotations`] modules.
+//! [`components`] then labels the binarized page into blobs and separates text from rules,
+//! photos and speckles; [`align`] matches those glyphs to the OCR boxes and either keeps
+//! touching letters as one ligature or cuts them apart on the character boundaries.
+//! See the [`preprocess`], [`annotations`], [`components`] and [`align`] modules.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod align;
 pub mod annotations;
 pub mod binarize;
+pub mod components;
 pub mod deskew;
 pub mod grey;
 pub mod preprocess;
 
 use std::path::{Path, PathBuf};
 
+pub use align::{AlignParams, CharRef, MatchRole, PageAlignment, ResolvedGlyph, TouchingStrategy, align, iou};
 pub use annotations::{AnnotatedLine, AnnotatedWord, CharBox};
+pub use components::{AnalyzeOptions, Component, ComponentKind, ComponentSet, Connectivity, FilterParams, analyze, analyze_page};
 pub use preprocess::{PreprocessedOptions, PreprocessedPage};
 
 pub use pdfcraft_fonts::helvetica_width;
@@ -52,6 +59,8 @@ pub enum OcrError {
     Recognize(String),
     #[error("preprocessing the page: {0}")]
     Preprocess(String),
+    #[error("connected components: {0}")]
+    Components(String),
     #[error("the image is empty")]
     EmptyImage,
 }

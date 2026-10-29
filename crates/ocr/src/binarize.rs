@@ -20,7 +20,7 @@
 //! memory, integer-exact. Windows reach past the borders by repeating the edge rows and
 //! columns, so a border pixel's window is full and its statistics stay stable.
 
-use crate::grey::GreyImage;
+use crate::grey::{GreyImage, MAX_PIXELS};
 
 /// A binarized page: `width` × `height` flags, one per pixel, row-major, top-left origin.
 /// `1` is ink (the darker-than-threshold side), `0` is paper.
@@ -57,6 +57,20 @@ impl Bitmap {
     /// How many pixels are ink.
     pub fn ink_count(&self) -> u64 {
         self.ink.iter().map(|&f| u64::from(f)).sum()
+    }
+
+    /// A bitmap from ink flags. `ink.len()` must be `width` × `height`, and the canvas must
+    /// fit [`MAX_PIXELS`]. Any non-zero byte is ink. `None` when the buffer does not match
+    /// the canvas or the canvas is over the cap — callers keep the allocation they already made.
+    pub fn from_ink(width: u32, height: u32, mut ink: Vec<u8>) -> Option<Bitmap> {
+        let pixels = u64::from(width).checked_mul(u64::from(height))?;
+        if pixels != ink.len() as u64 || pixels > MAX_PIXELS {
+            return None;
+        }
+        for flag in &mut ink {
+            *flag = u8::from(*flag != 0);
+        }
+        Some(Bitmap { width, height, ink })
     }
 }
 
