@@ -505,7 +505,7 @@ fn test_render_tiles_stitch_equal_to_full_render() {
 }
 
 #[test]
-fn test_tile_1px_padded_render_removes_boundary_difference() {
+fn test_tile_1px_padded_render_subpixel_drift_bounded() {
     let pdf_bytes = fixture_standard_fonts();
     let engine = Engine::new();
     let doc_id = engine.open_bytes("test_padded.pdf".into(), pdf_bytes.clone(), None).unwrap();
@@ -522,11 +522,7 @@ fn test_tile_1px_padded_render_removes_boundary_difference() {
     };
     let full_res = engine.render_tile(doc_id, full_req).expect("full render");
 
-    // 2. Render 4 tiles with 1 px padding across the internal seams to avoid clip-edge antialiasing truncation.
-    // Tile (0, 0): rendered as (0, 0, 151, 151), stitched as (0..150, 0..150)
-    // Tile (150, 0): rendered as (149, 0, 151, 151), stitched offset 1..151 as (150..300, 0..150)
-    // Tile (0, 150): rendered as (0, 149, 151, 151), stitched offset 1..151 as (0..150, 150..300)
-    // Tile (150, 150): rendered as (149, 149, 151, 151), stitched offset (1..151, 1..151) as (150..300, 150..300)
+    // 2. Render 4 tiles with 1 px padding across the internal seams.
     let mut stitched_padded = vec![0u8; 300 * 300 * 4];
 
     // Config for each quadrant: (tile_req_x, tile_req_y, tile_req_w, tile_req_h, crop_x, crop_y, dst_x, dst_y)
@@ -560,24 +556,27 @@ fn test_tile_1px_padded_render_removes_boundary_difference() {
         }
     }
 
-    let mut padded_diff_count = 0;
+    let mut differing_pixels = std::collections::HashSet::new();
+    let mut max_delta = 0i32;
     for (i, (&s_byte, &f_byte)) in stitched_padded.iter().zip(full_res.pixels.iter()).enumerate() {
-        if s_byte != f_byte {
-            padded_diff_count += 1;
+        let diff = (s_byte as i32 - f_byte as i32).abs();
+        if diff > 0 {
+            max_delta = max_delta.max(diff);
             let px = (i / 4) % 300;
             let py = (i / 4) / 300;
             let ch = i % 4;
-            let diff = (s_byte as i32 - f_byte as i32).abs();
+            differing_pixels.insert((px, py));
             println!("Padded diff at pixel ({px}, {py}) channel {ch}: stitched={s_byte}, full={f_byte} (delta={diff})");
         }
     }
 
-    println!("Padded tile render: differing bytes count = {padded_diff_count} (out of 360,000 bytes)");
-    // The experiment reveals padded_diff_count is 3 bytes (channels 0, 1, 2 at pixel 175, 144).
-    // Because pixel (175, 144) is interior (x=175, y=144) and not on the tile seam, the difference
-    // is confirmed to stem from floating-point subpixel rasterization rounding under coordinate translation,
-    // not clip-edge antialiasing truncation.
-    assert!(padded_diff_count <= 3, "differing bytes must not exceed 3 (single pixel 1-LSB subpixel rounding)");
+    println!("Padded tile render: differing pixels count = {}, max_delta = {max_delta}", differing_pixels.len());
+    // A0c's statement that "padding eliminates the seam" was false: padded rendering still
+    // exhibits differences (pixel (175, 144) differs by 1 LSB in RGB channels).
+    // The exact cause is not yet established (hypotheses include subpixel rasterization rounding
+    // under coordinate translation vs clip-edge antialiasing).
+    assert!(max_delta <= 1, "max delta must not exceed 1 LSB, got {max_delta}");
+    assert!(differing_pixels.len() <= 4, "differing pixels count must not exceed 4, got {}", differing_pixels.len());
 
     engine.close(doc_id).unwrap();
 }

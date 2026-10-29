@@ -2494,6 +2494,7 @@ mod tests {
         const KEEP_AS_IS: &[&str] = &[
             "OK",
             "Digital ID",
+            "DN: ",
             "ZIP",
             "JavaScript",
             "Microsoft Word (.docx)",

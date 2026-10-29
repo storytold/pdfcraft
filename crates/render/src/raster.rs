@@ -65,6 +65,8 @@ pub struct RenderConfig {
     /// View ▸ Reading colours: solid text and line-art paints are remapped for readability and
     /// the page clears to the setting's background. Display only; the document never changes.
     pub reading_colors: ReadingColors,
+    /// Cap on tiling pattern cell width and height in device pixels. Defaults to hayro's default.
+    pub max_pattern_size: Option<u16>,
 }
 
 impl RenderConfig {
@@ -302,6 +304,7 @@ fn render_page<'a>(
     settings: &InterpreterSettings,
     reject_oversize: bool,
     reading: ReadingColors,
+    max_pattern_size: Option<u16>,
     req: RenderRequest,
 ) -> Result<Output, (String, bool)> {
     if req.kind == RequestKind::Text {
@@ -338,6 +341,7 @@ fn render_page<'a>(
                     y_offset: t.y as f32,
                     bg_color,
                     color_replacement,
+                    max_tiling_cell_size: max_pattern_size,
                 }
             }
             None => {
@@ -359,6 +363,7 @@ fn render_page<'a>(
                     height: Some(side(h)),
                     bg_color,
                     color_replacement,
+                    max_tiling_cell_size: max_pattern_size,
                     ..Default::default()
                 }
             }
@@ -463,7 +468,8 @@ impl PageRenderer {
         let cache = RenderCache::new();
         let warnings = Arc::new(Mutex::new(Vec::new()));
         let settings = warning_settings(&self.settings, warnings.clone());
-        let r = render_page(pdf, &cache, &settings, self.config.reject_oversize, request_reading(&self.config, &req), req);
+        let r =
+            render_page(pdf, &cache, &settings, self.config.reject_oversize, request_reading(&self.config, &req), self.config.max_pattern_size, req);
         let warnings = take_warnings(&warnings);
         if matches!(r, Err((_, true))) {
             self.pdf = parse(&self.bytes, self.config.password.as_deref());
@@ -1220,7 +1226,9 @@ fn worker(
                         panic!("injected page panic");
                     }
                     match pdf {
-                        Some(pdf) => render_page(pdf, cache, &settings, config.reject_oversize, request_reading(&config, &req), req),
+                        Some(pdf) => {
+                            render_page(pdf, cache, &settings, config.reject_oversize, request_reading(&config, &req), config.max_pattern_size, req)
+                        }
                         None => Err(("the document could not be parsed".into(), false)),
                     }
                 }))
@@ -3487,6 +3495,23 @@ trailer << /Root 1 0 R >>
         let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
         assert!(page.error.is_none(), "{:?}", page.error);
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn tiling_pattern_box_renders_bounded() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace crates")
+            .parent()
+            .expect("repo root")
+            .join("corpus/pdfjs/test/pdfs/tiling-pattern-box.pdf");
+        if !path.is_file() {
+            return;
+        }
+        let bytes = std::fs::read(&path).expect("corpus file readable");
+        let mut r = PageRenderer::new(Arc::new(bytes), RenderConfig { max_pattern_size: Some(256), ..Default::default() });
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
     }
 
     /// Contributor-original JPEG 2000: one unsigned 8-bit pixel per component, one tile,
@@ -5980,9 +6005,9 @@ endstream endobj
         let pdf = parse(&Arc::new(pdf), None).expect("parses");
         let cache = RenderCache::new();
         let settings = InterpreterSettings::default();
-        let preview = render_page(&pdf, &cache, &settings, false, ReadingColors::default(), req(true)).expect("preview renders");
-        let fin = render_page(&pdf, &cache, &settings, false, ReadingColors::default(), req(false)).expect("final renders");
-        let fresh = render_page(&pdf, &RenderCache::new(), &settings, false, ReadingColors::default(), req(false)).expect("final renders");
+        let preview = render_page(&pdf, &cache, &settings, false, ReadingColors::default(), None, req(true)).expect("preview renders");
+        let fin = render_page(&pdf, &cache, &settings, false, ReadingColors::default(), None, req(false)).expect("final renders");
+        let fresh = render_page(&pdf, &RenderCache::new(), &settings, false, ReadingColors::default(), None, req(false)).expect("final renders");
         assert_eq!(rgb_at(&preview.2, w, 35, 35), [0, 0, 255]);
         assert_eq!(&fin.2[..], &fresh.2[..], "a final render after a preview matches one with a fresh cache");
     }

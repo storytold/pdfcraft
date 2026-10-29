@@ -318,7 +318,9 @@ fn minimize(exe: &Path, work: &Path, data: Vec<u8>, outcome: Outcome, what: &str
                 break;
             }
             let (o, w) = run_one(exe, &probe, timeout);
-            if o == outcome && (outcome == Outcome::Hang || w == what) {
+            let same_cause =
+                outcome == Outcome::Hang || w == what || (what.starts_with("killed by RSS watchdog") && w.starts_with("killed by RSS watchdog"));
+            if o == outcome && same_cause {
                 best = cand;
                 progressed = true;
             } else {

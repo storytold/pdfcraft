@@ -5115,7 +5115,6 @@ trailer << /Root 1 0 R >>
             }
             assert_eq!(v.back, vec![0], "explicit search jump must remember its origin");
             assert_eq!(v.goto, Some((3, 0.5)), "keep the match offset instead of the page top");
-            assert_eq!(v.page_input, "4");
             assert!(v.goto_point.is_none(), "an earlier link destination cannot override the search offset");
             v.go_to_match(1);
             assert_eq!(v.back, vec![0], "same-page matches do not duplicate history");

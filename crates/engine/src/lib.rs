@@ -287,6 +287,49 @@ pub mod sign {
         }
     }
 
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct Appearance {
+        pub name: bool,
+        pub date: bool,
+        pub reason: bool,
+        pub location: bool,
+        pub distinguished_name: bool,
+        pub labels: bool,
+    }
+
+    impl Default for Appearance {
+        fn default() -> Self {
+            Self { name: true, date: true, reason: false, location: false, distinguished_name: false, labels: true }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct AppearanceLabels {
+        pub signed_by: String,
+        pub distinguished_name: String,
+        pub reason: String,
+        pub location: String,
+        pub date: String,
+    }
+
+    impl Default for AppearanceLabels {
+        fn default() -> Self {
+            Self {
+                signed_by: "Digitally signed by".into(),
+                distinguished_name: "DN: ".into(),
+                reason: "Reason: ".into(),
+                location: "Location: ".into(),
+                date: "Date: ".into(),
+            }
+        }
+    }
+
+    impl AppearanceLabels {
+        pub fn first_undrawable(&self) -> Option<(&'static str, char)> {
+            None
+        }
+    }
+
     #[derive(Clone, Debug, Default)]
     pub struct SignOptions {
         pub field: Option<String>,
@@ -300,6 +343,8 @@ pub mod sign {
         pub date: String,
         pub certify: Option<u8>,
         pub graphic: Option<Graphic>,
+        pub appearance: Appearance,
+        pub appearance_labels: AppearanceLabels,
     }
 
     #[derive(Clone, Debug, Default)]
@@ -434,6 +479,7 @@ pub mod sign {
     }
 
     pub mod pkcs12 {
+        pub const MIN_PASSWORD_CHARS: usize = 8;
         use super::{DigitalId, SignError};
         pub fn open(_bytes: &[u8], _password: &str) -> Result<DigitalId, SignError> {
             Err(SignError::Unsupported("Digital signatures feature not enabled".into()))
@@ -3017,9 +3063,11 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             // An XFA form's fields baked into the pages: the XFA goes too, or Adobe's viewers
             // would lay the form out again from its template over the baked pages. A dynamic
             // form that was never laid out keeps its XFA: without it only placeholders remain.
+            #[cfg(feature = "xfa")]
             let shape = (*fields).then(|| pdfcraft_xfa::xfa_shape(doc)).flatten();
             let n = pdfcraft_model::pages(doc).len();
             pdfcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), *comments, *fields)?;
+            #[cfg(feature = "xfa")]
             match shape {
                 Some(shape) if shape.strippable() => strip_xfa(doc, cx)?,
                 Some(_) => cx.xfa_removed.push("The XFA was kept: this dynamic form was not laid out, so its fields were not baked in".into()),
@@ -3027,13 +3075,18 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             }
         }
         Edit::XfaToStatic => {
-            let Some(shape) = pdfcraft_xfa::xfa_shape(doc) else {
-                return Err(EditError::Invalid("this document is not an XFA form".into()));
-            };
-            if !shape.strippable() {
-                return Err(EditError::Invalid("this dynamic XFA form was not laid out, so there is no static form to keep".into()));
+            #[cfg(feature = "xfa")]
+            {
+                let Some(shape) = pdfcraft_xfa::xfa_shape(doc) else {
+                    return Err(EditError::Invalid("this document is not an XFA form".into()));
+                };
+                if !shape.strippable() {
+                    return Err(EditError::Invalid("this dynamic XFA form was not laid out, so there is no static form to keep".into()));
+                }
+                strip_xfa(doc, cx)?;
             }
-            strip_xfa(doc, cx)?;
+            #[cfg(not(feature = "xfa"))]
+            return Err(EditError::Unsupported("XFA feature is not compiled into this build".into()));
         }
         Edit::FlattenFillSign => {
             let n = pdfcraft_model::pages(doc).len();
@@ -3491,7 +3544,6 @@ fn sync_xfa_state(doc: &mut Document) {
 #[cfg(not(feature = "xfa"))]
 fn sync_xfa_state(_doc: &mut Document) {}
 
-#[cfg(feature = "xfa")]
 /// How the warnings of a strip start, so they can be told from the XFA's own.
 const XFA_REMOVED_PREFIX: &str = "XFA removed: ";
 
@@ -3879,7 +3931,10 @@ impl Session {
         let (bytes, info, cos) = match cos {
             Ok(Ok(cos)) if !info.pages.is_empty() && pdfcraft_organize::page_count(&cos).unwrap_or(0) == 0 => {
                 let mut work = cos.clone();
+                #[cfg(feature = "sign")]
                 let signed = || pdfcraft_sign::pdf::list(&cos, &bytes, &context.trust).iter().any(|s| s.signed);
+                #[cfg(not(feature = "sign"))]
+                let signed = || false;
                 let rebuilt = match pdfcraft_organize::recover_page_tree(&mut work) {
                     Ok(n) if n > 0 && !signed() => rebase(&work).ok().filter(|(_, i, _)| same_pages(&i.pages, &info.pages)),
                     _ => None,

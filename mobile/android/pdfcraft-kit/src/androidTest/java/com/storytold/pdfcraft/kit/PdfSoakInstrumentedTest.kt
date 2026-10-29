@@ -25,7 +25,8 @@ class PdfSoakInstrumentedTest {
             "transparency_group.pdf"
         )
 
-        val durationMs = 900_000L // 15 minutes (900 seconds)
+        val args = InstrumentationRegistry.getArguments()
+        val durationMs = args.getString("soakDurationMs")?.toLongOrNull() ?: 900_000L // 15 minutes default (900 seconds)
         val startTime = System.currentTimeMillis()
         var cycles = 0
         var totalTilesRendered = 0

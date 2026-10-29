@@ -27,6 +27,112 @@ const CASES: &[TestCase] = &[
     TestCase { category: "Document outlines / forms", filename: "corpus/pdfjs/test/pdfs/nested_outline.pdf", password: None },
 ];
 
+struct SsimThreshold {
+    filename: &'static str,
+    scale: f32,
+    min_ssim: f64,
+    _note: &'static str,
+}
+
+const THRESHOLDS: &[SsimThreshold] = &[
+    SsimThreshold { filename: "issue14847.pdf", scale: 1.0, min_ssim: 0.9900, _note: "TrueType subset" },
+    SsimThreshold { filename: "issue14847.pdf", scale: 3.0, min_ssim: 0.9950, _note: "TrueType subset" },
+    SsimThreshold { filename: "issue7492.pdf", scale: 1.0, min_ssim: 0.9850, _note: "CFF / Type 1C" },
+    SsimThreshold {
+        filename: "issue7492.pdf",
+        scale: 3.0,
+        min_ssim: 0.9600,
+        _note: "CFF / Type 1C: subpixel antialiasing differences (Poppler-vs-MuPDF is 0.9538)",
+    },
+    SsimThreshold { filename: "cmykjpeg.pdf", scale: 1.0, min_ssim: 0.9850, _note: "CMYK JPEG" },
+    SsimThreshold { filename: "cmykjpeg.pdf", scale: 3.0, min_ssim: 0.9900, _note: "CMYK JPEG" },
+    SsimThreshold {
+        filename: "ccitt_EndOfBlock_false.pdf",
+        scale: 1.0,
+        min_ssim: 0.9300,
+        _note: "CCITT bilevel fractional pixel scaling (Poppler-vs-MuPDF is 0.9615)",
+    },
+    SsimThreshold {
+        filename: "ccitt_EndOfBlock_false.pdf",
+        scale: 3.0,
+        min_ssim: 0.9750,
+        _note: "CCITT bilevel fractional pixel scaling (Poppler-vs-MuPDF is 0.9791)",
+    },
+    SsimThreshold {
+        filename: "jbig2_file_header.pdf",
+        scale: 1.0,
+        min_ssim: 0.9900,
+        _note: "JBIG2 stream: Poppler errors with Unknown segment and outputs blank",
+    },
+    SsimThreshold {
+        filename: "jbig2_file_header.pdf",
+        scale: 3.0,
+        min_ssim: 0.9900,
+        _note: "JBIG2 stream: Poppler errors with Unknown segment and outputs blank",
+    },
+    SsimThreshold {
+        filename: "issue19971.pdf",
+        scale: 1.0,
+        min_ssim: 0.9450,
+        _note: "CJK multi-font embedded: Type 3 emoji and MS-PGothic fallback differences",
+    },
+    SsimThreshold {
+        filename: "issue19971.pdf",
+        scale: 3.0,
+        min_ssim: 0.9650,
+        _note: "CJK multi-font embedded: Type 3 emoji and MS-PGothic fallback differences",
+    },
+    SsimThreshold {
+        filename: "issue8372.pdf",
+        scale: 1.0,
+        min_ssim: 0.8850,
+        _note: "CJK non-embedded AdobeHeitiStd: fontconfig system font vs stand-in font",
+    },
+    SsimThreshold {
+        filename: "issue8372.pdf",
+        scale: 3.0,
+        min_ssim: 0.9350,
+        _note: "CJK non-embedded AdobeHeitiStd: fontconfig system font vs stand-in font",
+    },
+    SsimThreshold {
+        filename: "transparency_group.pdf",
+        scale: 1.0,
+        min_ssim: 0.9300,
+        _note: "Transparency group: vello_cpu backdrop blending vs poppler",
+    },
+    SsimThreshold {
+        filename: "transparency_group.pdf",
+        scale: 3.0,
+        min_ssim: 0.9600,
+        _note: "Transparency group: vello_cpu backdrop blending vs poppler",
+    },
+    SsimThreshold {
+        filename: "issue15893_reduced.pdf",
+        scale: 1.0,
+        min_ssim: 0.9800,
+        _note: "Encrypted Standard-14 Times: fontconfig system font vs std14_metrics",
+    },
+    SsimThreshold {
+        filename: "issue15893_reduced.pdf",
+        scale: 3.0,
+        min_ssim: 0.9650,
+        _note: "Encrypted Standard-14 Times: fontconfig system font vs std14_metrics",
+    },
+    SsimThreshold { filename: "colors.pdf", scale: 1.0, min_ssim: 0.9850, _note: "Complex vector graphics" },
+    SsimThreshold { filename: "colors.pdf", scale: 3.0, min_ssim: 0.9950, _note: "Complex vector graphics" },
+    SsimThreshold { filename: "nested_outline.pdf", scale: 1.0, min_ssim: 0.9900, _note: "Document outlines / forms" },
+    SsimThreshold { filename: "nested_outline.pdf", scale: 3.0, min_ssim: 0.9950, _note: "Document outlines / forms" },
+];
+
+fn min_ssim_for(filename: &str, scale: f32) -> f64 {
+    for t in THRESHOLDS {
+        if t.filename == filename && (t.scale - scale).abs() < 0.01 {
+            return t.min_ssim;
+        }
+    }
+    0.9800
+}
+
 fn find_pdftoppm() -> Option<PathBuf> {
     for p in &["/opt/homebrew/bin/pdftoppm", "/usr/local/bin/pdftoppm", "/usr/bin/pdftoppm"] {
         let path = PathBuf::from(p);
@@ -289,13 +395,28 @@ fn test_real_document_oracle_correctness_suite() {
 
             let (ssim, diff_pct) = compute_metrics(w, h, &ffi_rgb, &oracle_rgb);
 
-            let label = format!("{} ({:.0}x)", Path::new(case.filename).file_name().unwrap().to_str().unwrap(), scale);
-            let passed = ssim >= 0.98;
-            let status_str = if passed { "PASS" } else { "BELOW" };
+            let ffi_nw = ffi_rgb.as_chunks::<3>().0.iter().filter(|c| c[0] < 250 || c[1] < 250 || c[2] < 250).count();
+            let oracle_nw = oracle_rgb.as_chunks::<3>().0.iter().filter(|c| c[0] < 250 || c[1] < 250 || c[2] < 250).count();
+            let total_px = (w * h) as usize;
 
-            println!("{:<28} | {:<12} | {:<9.4} | {:<8.2}% | {:<8}", label, format!("{scale:.1}x ({w}x{h})"), ssim, diff_pct, status_str);
+            let fname = Path::new(case.filename).file_name().unwrap().to_str().unwrap();
+            let label = format!("{fname} ({:.0}x)", scale);
+            let min_ssim = min_ssim_for(fname, scale);
+            let _passed = ssim >= min_ssim;
+            let status_str = if ssim >= 0.98 { "PASS (>=0.98)" } else { "KNOWN GAP" };
 
-            if !passed {
+            println!(
+                "{:<28} | {:<12} | {:<9.4} | {:<8.2}% | {:<8} (min: {:.4})",
+                label,
+                format!("{scale:.1}x ({w}x{h})"),
+                ssim,
+                diff_pct,
+                status_str,
+                min_ssim
+            );
+            println!("  -> Non-white pixels: FFI={ffi_nw}, Oracle={oracle_nw} / {total_px}");
+
+            if ssim < 0.98 {
                 // Save 128x128 crop around the maximum difference region
                 let crop_w = w.min(128);
                 let crop_h = h.min(128);
@@ -305,6 +426,8 @@ fn test_real_document_oracle_correctness_suite() {
                 let _ = write_ppm_crop(&crop_oracle, w, h, &oracle_rgb, 0, 0, crop_w, crop_h);
                 println!("  -> Crop saved: {}", crop_ffi.display());
             }
+
+            assert!(ssim >= min_ssim, "SSIM regression on {fname} ({scale:.0}x): got {ssim:.4}, floor is {min_ssim:.4}");
         }
 
         engine.close(doc_id).expect("close doc");

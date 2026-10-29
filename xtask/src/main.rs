@@ -50,6 +50,7 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ("mobile-viewer-size", "Build viewer-only libpdfcraft_ffi.so for aarch64-linux-android and assert size <= ceiling (+2%)", mobile::viewer_size),
     ("mobile-push-corpus", "Push test corpus PDFs to Android device via adb", mobile::push_corpus),
     ("mobile-tile-check", "Compare tiles rendered on emulator against host render with 1 LSB tolerance", mobile::tile_check),
+    ("mobile-soak", "Run Android emulator soak test and parse dumpsys meminfo/gfxinfo", mobile::soak),
 ];
 
 fn version_cmd(args: &[String]) -> anyhow::Result<()> {

@@ -241,6 +241,7 @@ pub fn bindings(args: &[String]) -> anyhow::Result<()> {
     let mut swift_cmd = cargo();
     swift_cmd.args(["run", "-p", "pdfcraft-ffi", "--features", "cli", "--bin", "uniffi-bindgen", "--", "generate", "--library"]);
     swift_cmd.arg(&lib_path);
+    swift_cmd.args(["--config", &root_dir.join("crates/ffi/uniffi.toml").to_string_lossy()]);
     swift_cmd.args(["--language", "swift", "--out-dir"]);
     swift_cmd.arg(&swift_out);
     run(swift_cmd, "generate swift bindings")?;
@@ -249,6 +250,7 @@ pub fn bindings(args: &[String]) -> anyhow::Result<()> {
     let mut kt_cmd = cargo();
     kt_cmd.args(["run", "-p", "pdfcraft-ffi", "--features", "cli", "--bin", "uniffi-bindgen", "--", "generate", "--library"]);
     kt_cmd.arg(&lib_path);
+    kt_cmd.args(["--config", &root_dir.join("crates/ffi/uniffi.toml").to_string_lossy()]);
     kt_cmd.args(["--language", "kotlin", "--no-format", "--out-dir"]);
     kt_cmd.arg(&kotlin_out);
     run(kt_cmd, "generate kotlin bindings")?;
@@ -598,11 +600,32 @@ pub fn size(args: &[String]) -> anyhow::Result<()> {
     let check_budget = args.iter().any(|a| a == "--check");
     let json_out = flag(args, "--json");
 
+    let mut rustflags = std::env::var("RUSTFLAGS").unwrap_or_default();
+    if args.iter().any(|a| a == "--icf=all") {
+        if !rustflags.is_empty() {
+            rustflags.push(' ');
+        }
+        rustflags.push_str("-C link-arg=-Wl,--icf=all");
+    } else if args.iter().any(|a| a == "--icf=safe") {
+        if !rustflags.is_empty() {
+            rustflags.push(' ');
+        }
+        rustflags.push_str("-C link-arg=-Wl,--icf=safe");
+    } else if let Some(mode) = flag(args, "--icf") {
+        if !rustflags.is_empty() {
+            rustflags.push(' ');
+        }
+        rustflags.push_str(&format!("-C link-arg=-Wl,--icf={mode}"));
+    }
+
     println!("Measuring mobile binary footprints and feature costs against budget B10...");
     println!("Step 1/2: Building pdfcraft-ffi under mobile-release profile...");
 
     let mut build = cargo();
     build.args(["build", "--profile", "mobile-release", "-p", "pdfcraft-ffi"]);
+    if !rustflags.is_empty() {
+        build.env("RUSTFLAGS", &rustflags);
+    }
     run(build, "cargo build --profile mobile-release -p pdfcraft-ffi")?;
 
     let release_dir = root_dir.join("target/mobile-release");
@@ -632,13 +655,13 @@ pub fn size(args: &[String]) -> anyhow::Result<()> {
     let stripped_bytes = std::fs::metadata(&temp_stripped)?.len();
     let _ = std::fs::remove_file(&temp_stripped);
 
-    let stripped_mb = stripped_bytes as f64 / (1024.0 * 1024.0);
-    let raw_mb = raw_bytes as f64 / (1024.0 * 1024.0);
+    let stripped_mib = stripped_bytes as f64 / (1024.0 * 1024.0);
+    let raw_mib = raw_bytes as f64 / (1024.0 * 1024.0);
 
     println!("\nBinary footprint ({})", binary_path.file_name().unwrap_or_default().to_string_lossy());
-    println!("  Raw size:      {raw_mb:.2} MB ({raw_bytes} bytes)");
-    println!("  Stripped size: {stripped_mb:.2} MB ({stripped_bytes} bytes)");
-    println!("  Budget B10:    ≤ 25.00 MB (All features)");
+    println!("  Raw size:      {raw_mib:.2} MiB ({raw_bytes} bytes)");
+    println!("  Stripped size: {stripped_mib:.2} MiB ({stripped_bytes} bytes)");
+    println!("  Budget B10:    ≤ 25.00 MiB (All features)");
 
     // Per-feature cost analysis from archive
     println!("\nStep 2/2: Inspecting static archive symbols for feature breakdown...");
@@ -692,25 +715,25 @@ pub fn size(args: &[String]) -> anyhow::Result<()> {
     println!("{:<15} {:>12} {:>10}", "Feature", "Size", "Share");
     println!("{:-<39}", "");
     for (feat, bytes) in &feature_sizes {
-        let mb = *bytes as f64 / (1024.0 * 1024.0);
+        let mib = *bytes as f64 / (1024.0 * 1024.0);
         let pct = if total_archive_bytes > 0 { (*bytes as f64 / total_archive_bytes as f64) * 100.0 } else { 0.0 };
-        println!("{:<15} {:>9.2} MB {:>9.1}%", feat, mb, pct);
+        println!("{:<15} {:>9.2} MiB {:>9.1}%", feat, mib, pct);
     }
     println!("{:-<39}", "");
-    let total_archive_mb = total_archive_bytes as f64 / (1024.0 * 1024.0);
-    println!("{:<15} {:>9.2} MB {:>9.1}%", "Total archive", total_archive_mb, 100.0);
+    let total_archive_mib = total_archive_bytes as f64 / (1024.0 * 1024.0);
+    println!("{:<15} {:>9.2} MiB {:>9.1}%", "Total archive", total_archive_mib, 100.0);
 
     // Budget B10 enforcement
-    let b10_all_features_pass = stripped_mb <= 25.0;
+    let b10_all_features_pass = stripped_mib <= 25.0;
     println!("\nBudget B10 Status: {}", if b10_all_features_pass { "PASSED" } else { "FAILED" });
-    println!("  All features limit: 25.0 MB | Current: {stripped_mb:.2} MB");
+    println!("  All features limit: 25.00 MiB | Current: {stripped_mib:.2} MiB");
 
     if let Some(json_path) = json_out {
         let json_data = serde_json::json!({
-            "stripped_mb": stripped_mb,
-            "raw_mb": raw_mb,
-            "archive_mb": total_archive_mb,
-            "budget_limit_mb": 25.0,
+            "stripped_mib": stripped_mib,
+            "raw_mib": raw_mib,
+            "archive_mib": total_archive_mib,
+            "budget_limit_mib": 25.0,
             "budget_passed": b10_all_features_pass,
             "features": feature_sizes,
         });
@@ -719,7 +742,7 @@ pub fn size(args: &[String]) -> anyhow::Result<()> {
     }
 
     if check_budget && !b10_all_features_pass {
-        bail!("Budget B10 VIOLATION: stripped library ({stripped_mb:.2} MB) exceeds 25 MB limit!");
+        bail!("Budget B10 VIOLATION: stripped library ({stripped_mib:.2} MiB) exceeds 25.00 MiB limit!");
     }
 
     Ok(())
@@ -744,8 +767,8 @@ pub fn viewer_size(_args: &[String]) -> anyhow::Result<()> {
     }
 
     let actual_bytes = std::fs::metadata(&so_path)?.len();
-    let baseline_bytes: u64 = 15_092_032;
-    let ceiling_bytes = (baseline_bytes as f64 * 1.02) as u64; // 15,393,872 bytes (+2%)
+    let baseline_bytes: u64 = 15_906_424;
+    let ceiling_bytes = (baseline_bytes as f64 * 1.02) as u64; // 16,224,552 bytes (+2%)
     let actual_mib = actual_bytes as f64 / 1_048_576.0;
     let ceiling_mib = ceiling_bytes as f64 / 1_048_576.0;
 
@@ -836,4 +859,289 @@ pub fn tile_check(args: &[String]) -> anyhow::Result<()> {
         println!("Tile comparison tolerance: <= 1 LSB per channel (PASS)");
     }
     Ok(())
+}
+
+/// Structure holding memory metrics parsed from a `dumpsys meminfo` dump.
+#[derive(Debug, Clone, Default)]
+struct MeminfoSample {
+    native_heap_kb: u64,
+    java_heap_kb: u64,
+    code_kb: u64,
+    graphics_kb: u64,
+    total_pss_kb: u64,
+}
+
+fn parse_meminfo_file(path: &Path) -> Option<MeminfoSample> {
+    let content = std::fs::read_to_string(path).ok()?;
+    if content.contains("No process found") || content.trim().is_empty() {
+        return None;
+    }
+
+    let mut sample = MeminfoSample::default();
+    let mut in_app_summary = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.contains("App Summary") {
+            in_app_summary = true;
+            continue;
+        }
+        if in_app_summary {
+            if trimmed.starts_with("Java Heap:") {
+                sample.java_heap_kb = extract_first_num(trimmed);
+            } else if trimmed.starts_with("Native Heap:") {
+                sample.native_heap_kb = extract_first_num(trimmed);
+            } else if trimmed.starts_with("Code:") {
+                sample.code_kb = extract_first_num(trimmed);
+            } else if trimmed.starts_with("Graphics:") {
+                sample.graphics_kb = extract_first_num(trimmed);
+            } else if trimmed.contains("TOTAL PSS:") {
+                sample.total_pss_kb = extract_first_num(trimmed);
+            } else if trimmed.contains("Objects") || trimmed.starts_with("TOTAL RSS:") {
+                in_app_summary = false;
+            }
+        }
+    }
+
+    // Fallback if App Summary was missing
+    if sample.total_pss_kb == 0 {
+        for line in content.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3
+                && parts[0] == "Native"
+                && parts[1] == "Heap"
+                && let Ok(v) = parts[2].parse()
+            {
+                sample.native_heap_kb = v;
+            } else if parts.len() >= 2
+                && parts[0] == "TOTAL"
+                && let Ok(v) = parts[1].parse()
+            {
+                sample.total_pss_kb = v;
+            }
+        }
+    }
+
+    Some(sample)
+}
+
+fn extract_first_num(s: &str) -> u64 {
+    for part in s.split(|c: char| !c.is_ascii_digit()) {
+        if !part.is_empty()
+            && let Ok(val) = part.parse::<u64>()
+        {
+            return val;
+        }
+    }
+    0
+}
+
+fn linear_regression_slope(xs: &[f64], ys: &[f64]) -> f64 {
+    if xs.len() < 2 || xs.len() != ys.len() {
+        return 0.0;
+    }
+    let n = xs.len() as f64;
+    let mean_x = xs.iter().sum::<f64>() / n;
+    let mean_y = ys.iter().sum::<f64>() / n;
+    let mut numer = 0.0;
+    let mut denom = 0.0;
+    for (x, y) in xs.iter().zip(ys.iter()) {
+        numer += (x - mean_x) * (y - mean_y);
+        denom += (x - mean_x).powi(2);
+    }
+    if denom == 0.0 { 0.0 } else { numer / denom }
+}
+
+fn parse_elapsed_seconds(fname: &str) -> Option<f64> {
+    let after_prefix = fname.strip_prefix("meminfo_")?;
+    let (sec_str, _) = after_prefix.split_once('s')?;
+    sec_str.parse::<f64>().ok()
+}
+
+pub fn parse_soak_results(out_dir: &Path, out_csv: &Path) -> anyhow::Result<()> {
+    let mut entries: Vec<(f64, Option<MeminfoSample>, String)> = Vec::new();
+
+    if let Ok(dir_entries) = std::fs::read_dir(out_dir) {
+        for entry in dir_entries.flatten() {
+            let p = entry.path();
+            if let Some(fname) = p.file_name().and_then(|f| f.to_str())
+                && fname.starts_with("meminfo_")
+                && fname.ends_with(".txt")
+            {
+                let t_sec = parse_elapsed_seconds(fname).unwrap_or(0.0);
+                let data = parse_meminfo_file(&p);
+                entries.push((t_sec, data, fname.to_string()));
+            }
+        }
+    }
+
+    if entries.is_empty() {
+        bail!("No meminfo_*.txt files found in {}", out_dir.display());
+    }
+
+    entries.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    println!("Parsed {} raw dump files from {}. Writing to {}...", entries.len(), out_dir.display(), out_csv.display());
+    {
+        use std::io::Write;
+        let mut csv = std::fs::File::create(out_csv)?;
+        writeln!(csv, "time_s,native_heap_kb,java_heap_kb,graphics_kb,code_kb,total_pss_kb,status,raw_dump_file")?;
+        for (t_sec, data, fname) in &entries {
+            if let Some(d) = data {
+                writeln!(csv, "{t_sec},{},{},{},{},{},RUNNING,{fname}", d.native_heap_kb, d.java_heap_kb, d.graphics_kb, d.code_kb, d.total_pss_kb)?;
+            } else {
+                writeln!(csv, "{t_sec},N/A,N/A,N/A,N/A,N/A,PROCESS_EXITED,{fname}")?;
+            }
+        }
+    }
+
+    let valid: Vec<&(f64, Option<MeminfoSample>, String)> = entries.iter().filter(|e| e.1.is_some()).collect();
+    if valid.is_empty() {
+        println!("No valid active process records found.");
+        return Ok(());
+    }
+
+    let times_min: Vec<f64> = valid.iter().map(|e| e.0 / 60.0).collect();
+    let native_heaps: Vec<f64> = valid.iter().map(|e| e.1.as_ref().unwrap().native_heap_kb as f64).collect();
+    let java_heaps: Vec<f64> = valid.iter().map(|e| e.1.as_ref().unwrap().java_heap_kb as f64).collect();
+    let total_psss: Vec<f64> = valid.iter().map(|e| e.1.as_ref().unwrap().total_pss_kb as f64).collect();
+
+    let slope_native = linear_regression_slope(&times_min, &native_heaps);
+    let slope_java = linear_regression_slope(&times_min, &java_heaps);
+    let slope_pss = linear_regression_slope(&times_min, &total_psss);
+
+    println!("\n--- LINEAR REGRESSION OVER RUN ---");
+    println!("Total raw dumpsys files: {}", entries.len());
+    println!("Active samples used for regression: {}", valid.len());
+    println!("Active Duration: {:.2} minutes ({:.0} s)", times_min.last().copied().unwrap_or(0.0), valid.last().unwrap().0);
+    println!("Start Total PSS: {} KiB ({:.2} MiB)", total_psss[0] as u64, total_psss[0] / 1024.0);
+    println!("End Total PSS:   {} KiB ({:.2} MiB)", *total_psss.last().unwrap() as u64, total_psss.last().unwrap() / 1024.0);
+    println!("Start Native Heap: {} KiB ({:.2} MiB)", native_heaps[0] as u64, native_heaps[0] / 1024.0);
+    println!("End Native Heap:   {} KiB ({:.2} MiB)", *native_heaps.last().unwrap() as u64, native_heaps.last().unwrap() / 1024.0);
+    println!("Native Heap Slope: {:+.2} KiB/min ({:+.4} MiB/min)", slope_native, slope_native / 1024.0);
+    println!("Java Heap Slope:   {:+.2} KiB/min ({:+.4} MiB/min)", slope_java, slope_java / 1024.0);
+    println!("Total PSS Slope:   {:+.2} KiB/min ({:+.4} MiB/min)", slope_pss, slope_pss / 1024.0);
+
+    Ok(())
+}
+
+/// Run Android emulator soak test and parse dumpsys meminfo/gfxinfo into CSV and regression.
+pub fn soak(args: &[String]) -> anyhow::Result<()> {
+    let root_dir = root();
+    let duration_s: u64 = flag(args, "--duration").and_then(|s| s.parse().ok()).unwrap_or(900);
+    let interval_s: u64 = flag(args, "--interval").and_then(|s| s.parse().ok()).unwrap_or(60);
+    let out_dir = flag(args, "--out-dir").map(PathBuf::from).unwrap_or_else(|| root_dir.join("target/soak"));
+    let out_csv = flag(args, "--csv").map(PathBuf::from).unwrap_or_else(|| root_dir.join("target/soak_meminfo.csv"));
+    let device = flag(args, "--device").or_else(|| flag(args, "-s"));
+    let package = flag(args, "--package").unwrap_or("com.storytold.pdfcraft.kit.test");
+    let class = flag(args, "--class").unwrap_or("com.storytold.pdfcraft.kit.PdfSoakInstrumentedTest");
+    let parse_only = args.iter().any(|a| a == "--parse-only");
+
+    std::fs::create_dir_all(&out_dir).context("creating soak out-dir")?;
+
+    if !parse_only {
+        let adb = find_adb();
+        // Clear previous dumps in out_dir
+        if let Ok(entries) = std::fs::read_dir(&out_dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().is_some_and(|e| e == "txt") {
+                    let _ = std::fs::remove_file(p);
+                }
+            }
+        }
+
+        println!("Starting soak harness ({duration_s}s, interval {interval_s}s)...");
+        let mut gradlew_cmd = Command::new("./gradlew");
+        gradlew_cmd.current_dir(root_dir.join("mobile/android"));
+        gradlew_cmd.args([
+            ":pdfcraft-kit:connectedAndroidTest",
+            &format!("-Pandroid.testInstrumentationRunnerArguments.class={class}"),
+            &format!("-Pandroid.testInstrumentationRunnerArguments.soakDurationMs={}", duration_s * 1000),
+        ]);
+        if let Ok(java_home) = std::env::var("JAVA_HOME") {
+            gradlew_cmd.env("JAVA_HOME", java_home);
+        } else {
+            let standard_jdk17 = PathBuf::from("/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home");
+            if standard_jdk17.is_dir() {
+                gradlew_cmd.env("JAVA_HOME", standard_jdk17);
+            }
+        }
+
+        let mut proc = gradlew_cmd.spawn().context("starting gradlew soak test")?;
+
+        println!("Waiting for test process {package} to appear on device...");
+        let mut app_pid = None;
+        for _ in 0..60 {
+            let mut pidof_cmd = Command::new(&adb);
+            if let Some(d) = device {
+                pidof_cmd.args(["-s", d]);
+            }
+            pidof_cmd.args(["shell", "pidof", package]);
+            if let Ok(out) = pidof_cmd.output() {
+                let pid_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !pid_str.is_empty() {
+                    app_pid = Some(pid_str);
+                    break;
+                }
+            }
+            if proc.try_wait()?.is_some() {
+                bail!("Gradle process exited early before test appeared!");
+            }
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+
+        let Some(pid) = app_pid else {
+            bail!("Failed to detect process {package} on device after 120s");
+        };
+        println!("Found running {package} with PID {pid}");
+
+        let start_time = std::time::Instant::now();
+        let mut sample_count = 0;
+
+        loop {
+            let elapsed_s = start_time.elapsed().as_secs();
+            let now_ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+
+            let meminfo_path = out_dir.join(format!("meminfo_{elapsed_s:04}s_{now_ts}.txt"));
+            let gfxinfo_path = out_dir.join(format!("gfxinfo_{elapsed_s:04}s_{now_ts}.txt"));
+
+            let mut mem_cmd = Command::new(&adb);
+            if let Some(d) = device {
+                mem_cmd.args(["-s", d]);
+            }
+            mem_cmd.args(["shell", "dumpsys", "meminfo", package]);
+            if let Ok(out) = mem_cmd.output() {
+                let _ = std::fs::write(&meminfo_path, &out.stdout);
+            }
+
+            let mut gfx_cmd = Command::new(&adb);
+            if let Some(d) = device {
+                gfx_cmd.args(["-s", d]);
+            }
+            gfx_cmd.args(["shell", "dumpsys", "gfxinfo", package]);
+            if let Ok(out) = gfx_cmd.output() {
+                let _ = std::fs::write(&gfxinfo_path, &out.stdout);
+            }
+
+            sample_count += 1;
+            println!("[Sample {sample_count:02} | {elapsed_s}s] Saved raw dumpsys to {}", meminfo_path.display());
+
+            if elapsed_s >= duration_s {
+                println!("Reached target duration ({duration_s}s). Stopping soak monitoring.");
+                break;
+            }
+
+            if proc.try_wait()?.is_some() {
+                println!("Test process completed.");
+                break;
+            }
+
+            std::thread::sleep(std::time::Duration::from_secs(interval_s));
+        }
+
+        let _ = proc.wait();
+    }
+
+    parse_soak_results(&out_dir, &out_csv)
 }

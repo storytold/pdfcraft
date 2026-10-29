@@ -787,7 +787,6 @@
 	Redaction code:	遮蔽代碼：
 	Font:	字型：
 	Font size:	字型大小：
-	Font size:	字號：
 	Font size	字號
 	Auto-size text to fit redaction region	自動調整文字大小以適應遮蔽內容區域
 	Font colour:	字型顏色：
@@ -1322,7 +1321,6 @@
 	Sort comments by:	註解排序依據：
 	Create PDF Comment Summary	建立 PDF 註解摘要
 	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	還原到「{name}」的上次儲存版本？此後的更改將無法復原。
-	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	還原到“{name}”的上次儲存版本？此後的更改將無法復原。
 	Save over the changed file?	覆寫已變更的檔案？
 	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	「{name}」在開啟或上次儲存後已在磁碟上變更。現在儲存會以此版本取代那個較新的版本。
 	Save anyway	仍要儲存

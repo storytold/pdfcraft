@@ -200,6 +200,12 @@ theme	Appearance	Giao diện
 	 · password-protected	 · được bảo vệ bằng mật khẩu
 	(none)	(không có)
 	, Expires: 	, Hết hạn: 
+	Digitally signed by	Được ký điện tử bởi
+	DN: 	DN: 
+	Reason: 	Lý do: 
+	Location: 	Địa điểm: 
+	Date: 	Ngày: 
+	The labels are in English: the signature's font can't draw them in this language.	Các nhãn hiển thị bằng tiếng Anh: phông chữ của chữ ký không thể vẽ các nhãn bằng ngôn ngữ này.
 	1 difference found	Tìm thấy 1 điểm khác biệt
 	1 file	1 tệp
 	1 file done	1 tệp đã xong
@@ -723,7 +729,7 @@ theme	Appearance	Giao diện
 	More options	Thêm tùy chọn
 	More options:	Thêm tùy chọn:
 	More ways to add files	Thêm cách để thêm tệp
-	Mouse wheel scroll speed	Tốc độ cuộn bánh xe chuột
+	Scroll speed (mouse wheel and arrow keys)	Tốc độ cuộn (bánh xe chuột và phím mũi tên)
 	Move down	Chuyển xuống
 	Move earlier	Chuyển lên trước
 	Move later	Chuyển ra sau
@@ -1176,7 +1182,7 @@ theme	Appearance	Giao diện
 	This document isn't password-protected	Tài liệu này không được bảo vệ bằng mật khẩu
 	This drawing exceeds the snapping limit; only the first paths are used.	Bản vẽ này vượt quá giới hạn bắt dính; chỉ các đường đầu tiên được sử dụng.
 	This field is locked. Unlock it to change its properties.	Trường này đã bị khóa. Hãy mở khóa để thay đổi thuộc tính của nó.
-	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Tệp này đã thay đổi trên đĩa. Hãy tải lại để xem phiên bản mới; các thay đổi chưa lưu của bạn sẽ bị mất.
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Tệp này đã thay đổi trên đĩa. Tải lại hiển thị phiên bản mới và hủy các thay đổi chưa lưu; Lưu thay thế nó bằng phiên bản này.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Tệp này bị hỏng và đã được sửa chữa. Việc lưu sẽ giữ phiên bản đã sửa.
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Thư mục này hiện không khả dụng. Nó có thể đã bị di chuyển, hoặc ổ đĩa hay đồng bộ đám mây của nó đang ngoại tuyến.
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Các script của biểu mẫu này đã bị tắt vì một script chạy quá lâu. Hãy mở lại tài liệu để chạy chúng lại.
@@ -1702,7 +1708,7 @@ theme	Appearance	Giao diện
 	The font {} isn't embedded	Phông chữ {} chưa được nhúng
 	The metadata doesn't identify the file as {}	Siêu dữ liệu không xác định tệp là {}
 	The password is incorrect.	Mật khẩu không đúng.
-	The password must have at least 6 characters.	Mật khẩu phải có ít nhất 6 ký tự.
+	The password must have at least 8 characters.	Mật khẩu phải có ít nhất 8 ký tự.
 	The passwords do not match.	Các mật khẩu không khớp.
 	The security settings don't allow screen readers to read the text	Cài đặt bảo mật không cho phép trình đọc màn hình đọc văn bản
 	The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.	Thuật toán chữ ký và thuật toán băm của SignerInfo chỉ định các hàm băm khác nhau; chữ ký được tạo bằng hàm băm của SignerInfo.
@@ -2615,3 +2621,57 @@ key	Space	Space
 	Redact Image	Xóa nội dung nhạy cảm của hình ảnh
 	Create Link…	Tạo liên kết…
 	Recognize Text…	Nhận dạng văn bản…
+	Next tab	Tab tiếp theo
+	Previous tab	Tab trước
+	Word count…	Đếm từ…
+@id	file.word_count	Đếm từ…
+	Characters	Ký tự
+	Characters without spaces	Ký tự không tính khoảng trắng
+	Counting words… {n} pages read	Đang đếm từ… đã đọc {n} trang
+	Crop Image	Cắt hình ảnh
+	Remove Crop	Xóa cắt
+	Trim the picture with its handles; Enter or Done applies	Cắt xén hình ảnh bằng các tay cầm; Enter hoặc Xong để áp dụng
+	Current page only	Chỉ trang hiện tại
+	Exclude image/OCR text	Loại trừ văn bản hình ảnh/OCR
+	Exclude tagged code blocks	Loại trừ các khối mã được gắn thẻ
+	Exclude tagged tables	Loại trừ các bảng được gắn thẻ
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Các trường hợp loại trừ sử dụng thẻ PDF. Các bảng và mã chưa được gắn thẻ vẫn được bao gồm. Loại trừ hình ảnh cũng loại bỏ văn bản vô hình.
+	Fill colour:	Màu tô:
+	Outline colour:	Màu đường viền:
+	Opacity:	Độ mờ:
+	Font size	Cỡ chữ
+	Full Screen	Toàn màn hình
+	Open in Full Screen mode?	Mở ở chế độ Toàn màn hình?
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Tài liệu này yêu cầu mở ở chế độ Toàn màn hình: trang sẽ lấp đầy màn hình và không hiển thị gì khác. Nhấn Esc bất kỳ lúc nào để thoát.
+	Make properties default	Đặt thuộc tính làm mặc định
+	Mark as artifact	Đánh dấu là cấu phần
+	Mark content as artifact	Đánh dấu nội dung là cấu phần
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Xóa thẻ lá này khỏi thứ tự đọc và đánh dấu nội dung trực tiếp của nó là cấu phần
+	Merge image fragments	Hợp nhất các đoạn hình ảnh
+	Optimizing… merging image fragments	Đang tối ưu hóa… đang hợp nhất các đoạn hình ảnh
+	Standard	Tiêu chuẩn
+	Mobile	Di động
+	New file only	Chỉ tệp mới
+	New file: {name}	Tệp mới: {name}
+	Old file: {name}	Tệp cũ: {name}
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Không tìm thấy máy in nào. Kiểm tra máy in đã được cài đặt và dịch vụ in đang chạy, sau đó mở lại In.
+	Not now	Không phải bây giờ
+	Page properties	Thuộc tính trang
+	Pages counted	Số trang đã đếm
+	Pages selected	Số trang đã chọn
+	Print as image	In dưới dạng hình ảnh
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Sử dụng khi máy in bỏ qua văn bản, đổ bóng hoặc độ trong suốt. Bản in không còn là văn bản có thể tìm kiếm; với In thang xám, hình ảnh sẽ có màu xám.
+	Redaction mark appearance	Diện mạo dấu che
+	Resolution:	Độ phân giải:
+	Save anyway	Vẫn lưu
+	Save over the changed file?	Lưu đè lên tệp đã thay đổi?
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	“{name}” đã thay đổi trên đĩa sau khi mở hoặc lưu lần cuối. Lưu bây giờ sẽ thay thế phiên bản mới hơn đó bằng phiên bản này.
+	Set page transitions	Đặt hiệu ứng chuyển trang
+	Shown while the pointer is over a mark.	Hiển thị khi con trỏ ở trên một dấu.
+	Side by side	Cạnh nhau
+	Some content could not be classified safely and was kept in the count.	Một số nội dung không thể phân loại an toàn và được giữ lại trong số lượng đếm.
+	Some pages contain no countable text. Scanned images need OCR first.	Một số trang không chứa văn bản có thể đếm. Hình ảnh quét cần OCR trước.
+	What takes up the space in this file, by kind of content.	Nội dung chiếm dung lượng trong tệp này, theo loại nội dung.
+	Word count	Đếm từ
+	Word counting stopped unexpectedly.	Đếm từ dừng lại bất ngờ.
+	Words	Từ

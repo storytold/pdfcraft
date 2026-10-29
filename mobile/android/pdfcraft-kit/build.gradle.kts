@@ -33,12 +33,6 @@ android {
         }
     }
 
-    lint {
-        // UniFFI generated bindings (pdfcraft_ffi.kt) use runtime reflection:
-        // java.lang.Class.forName("java.lang.ref.Cleaner") with fallback to UniffiJnaCleaner().
-        // Android Lint cannot detect reflection-based API guards on minSdk 26, reporting NewApi error.
-        disable.add("NewApi")
-    }
 }
 
 dependencies {
