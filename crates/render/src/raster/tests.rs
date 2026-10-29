@@ -8879,21 +8879,25 @@ trailer << /Root 1 0 R >>
 /// ISO 32000-2 §11.6.4.4: the fill and stroke opacity (`ca`, `CA`) in effect when a tiling
 /// pattern paints apply to the whole pattern, as to a solid colour or a shading pattern. A
 /// coloured pattern drew opaque whatever the opacity, and an uncoloured one took the fill
-/// opacity current at `scn`, so a `gs` after it had no effect. MuPDF, Poppler and PDFium draw
-/// every band below at 25 %.
+/// opacity current at `scn`, so a `gs` after it had no effect. MuPDF and Ghostscript draw every
+/// band below at 25 %, except the uncoloured stroke, which takes its own 75 % stroke opacity
+/// under a 25 % fill opacity (so a stroke that took `ca` would show). Poppler and PDFium don't
+/// follow the stroke opacity for a pattern: the coloured stroke comes out opaque and the
+/// uncoloured one at `ca`.
 #[test]
 fn tiling_pattern_uses_the_alpha_current_at_paint_time() {
     let content = "q /F1 gs /Pattern cs /P0 scn 0 80 100 15 re f Q \
                    q /Pattern cs /P0 scn /F1 gs 0 55 100 15 re f Q \
                    q /CS0 cs 1 0 0 /P1 scn /F1 gs 0 30 100 15 re f Q \
                    q /Pattern CS /P0 SCN /S1 gs 10 w 0 12 m 100 12 l S Q \
+                   q /F1 gs /CS0 CS 1 0 0 /P1 SCN /S2 gs 6 w 0 23 m 100 23 l S Q \
                    q /Pattern cs /P0 scn 0 0 10 5 re f Q";
     let pdf = format!(
         "%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R
-  /Resources << /ExtGState << /S1 << /CA 0.25 >> /F1 << /ca 0.25 >> >> /ColorSpace << /CS0 [/Pattern /DeviceRGB] >>
+  /Resources << /ExtGState << /S1 << /CA 0.25 >> /S2 << /CA 0.75 >> /F1 << /ca 0.25 >> >> /ColorSpace << /CS0 [/Pattern /DeviceRGB] >>
   /Pattern << /P0 5 0 R /P1 6 0 R >> >> >> endobj
 4 0 obj << /Length {} >> stream
 {content}
@@ -8922,6 +8926,9 @@ trailer << /Root 1 0 R >>
         let c = px(50, y);
         assert!(c[0] >= 250 && (185..=197).contains(&c[1]) && (185..=197).contains(&c[2]), "{what}: {c:?}");
     }
+    // Red at 75% over white is about (255, 64, 64): the stroke opacity, not the fill's 25%.
+    let c = px(50, 77);
+    assert!(c[0] >= 250 && (55..=73).contains(&c[1]) && (55..=73).contains(&c[2]), "uncoloured stroke, /CA set after SCN: {c:?}");
     // Without an opacity in force the pattern stays opaque.
     assert_eq!(px(5, 97), vec![255, 0, 0, 255], "no opacity");
 }
