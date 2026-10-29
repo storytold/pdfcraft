@@ -285,13 +285,17 @@ impl PrintDraft {
     }
 
     /// The paper to choose once the printer's sizes are read, `size` being the one chosen so
-    /// far: that size when it was chosen (`paper_picked`) and the printer lists it (or lists no
+    /// far and `key` the printer's keyword for it when it was one of the printer's own: that
+    /// entry when it was chosen (`paper_picked`) and the printer still lists it under that
+    /// keyword and size (so a chosen `Letter.Fullbleed` stays itself rather than becoming the
+    /// standard Letter), else that size when it was chosen and the printer lists it (or lists no
     /// sizes at all), else the printer's default size when its driver reports one (the stock a
     /// label printer is set up for, an office printer's tray paper), else that size when it is
     /// a standard size or one of the printer's, else the first standard size.
-    pub fn paper_after_read(&self, size: (f64, f64)) -> usize {
-        let kept = self.paper_index(size);
+    pub fn paper_after_read(&self, size: (f64, f64), key: Option<&str>) -> usize {
         let own = self.own_papers();
+        let same_entry = key.and_then(|k| own.iter().position(|p| p.key == k && spool::paper_of_size(std::slice::from_ref(p), size).is_some()));
+        let kept = same_entry.map(|i| PAPERS.len() + i).or_else(|| self.paper_index(size));
         let listed = own.is_empty() || spool::paper_of_size(own, size).is_some();
         kept.filter(|_| self.paper_picked && listed).or_else(|| self.default_paper()).or(kept).unwrap_or(0)
     }

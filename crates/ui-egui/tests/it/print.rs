@@ -353,30 +353,38 @@ fn the_printers_default_size_is_chosen_when_its_sizes_are_read() {
     let mut d = PrintDraft { printer: Some("Label_Queue".into()), units: pdfcraft_ui_egui::units::Unit::Inches, ..Default::default() };
     d.printer_papers = Some(("Label_Queue".into(), vec![paper("Letter", (612.0, 792.0), false), paper("User defined", (162.0, 90.0), true)]));
     assert_eq!(d.default_own_paper(), Some(PAPERS.len() + 1));
-    assert_eq!(d.paper_after_read((612.0, 792.0)), PAPERS.len() + 1, "the printer's default over the size chosen so far");
+    assert_eq!(d.paper_after_read((612.0, 792.0), None), PAPERS.len() + 1, "the printer's default over the size chosen so far");
     // A paper the user chose (in the dialog, or remembered from the last session, #2156) stays
     // chosen when the printer has it; the printer's default is taken only when it hasn't.
     d.paper_picked = true;
-    assert_eq!(d.paper_after_read((612.0, 792.0)), 0, "a chosen US Letter the printer has");
-    assert_eq!(d.paper_after_read((595.28, 841.89)), PAPERS.len() + 1, "a chosen A4 the printer lacks gives way to its default");
+    assert_eq!(d.paper_after_read((612.0, 792.0), None), 0, "a chosen US Letter the printer has");
+    assert_eq!(d.paper_after_read((595.28, 841.89), None), PAPERS.len() + 1, "a chosen A4 the printer lacks gives way to its default");
     d.paper_picked = false;
-    d.paper = d.paper_after_read((0.0, 0.0));
+    d.paper = d.paper_after_read((0.0, 0.0), None);
     assert_eq!((d.paper_name().as_str(), d.media().map(|(_, m)| m).as_deref()), ("User defined (2.25 × 1.25 in)", Some("User defined")));
     // A default that is a standard size as the driver feeds it starts on the standard entry, under
     // its own name, and the job still names the printer's keyword.
     d.printer_papers = Some(("Label_Queue".into(), vec![paper("Letter", (612.0, 792.0), true), paper("User defined", (162.0, 90.0), false)]));
-    d.paper = d.paper_after_read((0.0, 0.0));
+    d.paper = d.paper_after_read((0.0, 0.0), None);
     assert_eq!((d.paper, d.paper_name().as_str(), d.media().map(|(_, m)| m).as_deref()), (0, "US Letter", Some("Letter")));
     // A driver offering that size under two keywords: the job names its default one.
     d.printer_papers = Some(("Label_Queue".into(), vec![paper("Letter", (612.0, 792.0), false), paper("Letter.Fullbleed", (612.0, 792.0), true)]));
-    d.paper = d.paper_after_read((0.0, 0.0));
+    d.paper = d.paper_after_read((0.0, 0.0), None);
     assert_eq!((d.paper, d.media().map(|(_, m)| m).as_deref()), (0, Some("Letter.Fullbleed")));
+    // One of the printer's own entries the user chose stays chosen under its keyword when the
+    // sizes are read again, though it is a standard size and another keyword is the default.
+    d.printer_papers = Some(("Label_Queue".into(), vec![paper("Letter", (612.0, 792.0), true), paper("Letter.Fullbleed", (612.0, 792.0), false)]));
+    d.paper_picked = true;
+    d.paper = d.paper_after_read((612.0, 792.0), Some("Letter.Fullbleed"));
+    assert_eq!((d.paper, d.media().map(|(_, m)| m).as_deref()), (PAPERS.len() + 1, Some("Letter.Fullbleed")));
+    assert_eq!(d.paper_after_read((612.0, 792.0), Some("Gone")), 0, "a keyword the printer no longer has falls back to the size");
+    d.paper_picked = false;
     d.printer_papers = Some(("Label_Queue".into(), vec![paper("Letter", (612.0, 792.0), false), paper("User defined", (162.0, 90.0), true)]));
     assert_eq!(d.own_papers_listed().len(), 2, "the printer's sizes are all listed, a standard one too");
     d.printer_papers = Some(("Label_Queue".into(), vec![paper("Letter", (612.0, 792.0), false), paper("w162h288", (162.0, 288.0), false)]));
     assert_eq!(d.default_own_paper(), None);
-    assert_eq!(d.paper_after_read((288.0, 162.0)), PAPERS.len() + 1, "else the size chosen so far, when the printer has it");
-    assert_eq!(d.paper_after_read((100.0, 100.0)), 0, "else the first standard size");
+    assert_eq!(d.paper_after_read((288.0, 162.0), None), PAPERS.len() + 1, "else the size chosen so far, when the printer has it");
+    assert_eq!(d.paper_after_read((100.0, 100.0), None), 0, "else the first standard size");
 }
 
 /// Opening the dialog again reads the printer's sizes again, even for the same printer: a label

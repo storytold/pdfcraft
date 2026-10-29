@@ -210,17 +210,17 @@ pub(crate) fn body(
                 // so far when this printer has it, else the first standard size.
                 let wanted = d.printer.clone().filter(|_| !browser);
                 if !d.papers_read || d.printer_papers.as_ref().map(|(read_for, _)| read_for) != wanted.as_ref() {
-                    // The size chosen so far: on the last printer's list when it was one of its own.
-                    let size = match (d.paper.checked_sub(PAPERS.len()), &d.printer_papers) {
-                        (Some(i), Some((_, last))) => last.get(i).map_or(PAPERS[0].1, |p| p.size),
-                        _ => d.paper_size(),
+                    // The size chosen so far, and its keyword when it was one of the last printer's own.
+                    let (size, key) = match (d.paper.checked_sub(PAPERS.len()), &d.printer_papers) {
+                        (Some(i), Some((_, last))) => last.get(i).map_or((PAPERS[0].1, None), |p| (p.size, Some(p.key.clone()))),
+                        _ => (d.paper_size(), None),
                     };
                     d.printer_papers = wanted.map(|p| {
                         let papers = spool::printer_papers(&p);
                         (p, papers)
                     });
                     d.papers_read = true;
-                    d.paper = d.paper_after_read(size);
+                    d.paper = d.paper_after_read(size, key.as_deref());
                 }
                 let before = d.paper;
                 let own = d.own_papers_listed();
