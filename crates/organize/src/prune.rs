@@ -15,7 +15,7 @@ use crate::OrganizeError;
 /// Form XObjects nested deeper than this are a broken file, not a reason to hang.
 const MAX_FORM_DEPTH: u8 = 8;
 /// Count every resource object and direct child; a graph beyond this is left unpruned.
-const MAX_GLYPH_RESOURCE_WORK: usize = 10_000;
+const MAX_PAINT_RESOURCE_WORK: usize = 10_000;
 
 /// The dictionary a set of drawn names belongs to.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -24,8 +24,8 @@ enum XKey {
     XObject(ObjRef),
     /// An inline `/XObject` dictionary inside an indirect resources object.
     Resources(ObjRef),
-    /// Everything inline on the page itself.
-    Page(ObjRef),
+    /// An inline XObject map inside a page or Form's direct Resources dictionary.
+    Container(ObjRef),
 }
 
 /// Who owns the resources currently being walked, for the key drawn names are recorded under.
@@ -33,8 +33,8 @@ enum XKey {
 enum Owner {
     /// An indirect resources object (a page's, or a form XObject's own).
     Resources(ObjRef),
-    /// Resources inline on the page.
-    Page(ObjRef),
+    /// Direct Resources owned by a page or Form object.
+    Container(ObjRef),
 }
 
 struct Pruner<'a> {
@@ -44,123 +44,201 @@ struct Pruner<'a> {
     /// past the depth limit, Type 3 glyphs drawing through them). They are left untouched:
     /// pruning must never drop an XObject something still draws.
     unsure: HashSet<XKey>,
-    /// An overlarge glyph-resource graph is not safe to prune at all.
-    glyph_budget_exhausted: bool,
-    glyph_work_left: usize,
-    glyph_seen: HashSet<ObjRef>,
-    /// An indirect font's explicit resources have one owner regardless of which page uses it.
-    glyph_fonts: HashSet<ObjRef>,
+    /// An incomplete unparsed-paint resource graph is not safe to prune at all.
+    paint_budget_exhausted: bool,
+    paint_work_left: usize,
+    /// A resource-less paint can inherit from each caller. Its appearance role also matters:
+    /// an AP stream may omit Subtype, unlike opaque font/profile data reached through resources.
+    paint_seen: HashSet<(ObjRef, Owner, bool)>,
+    /// An owner's resource catalog is immutable during collection. Shared catalogs and the
+    /// content/error paths must not repeatedly consume the protection budget for the same owner.
+    resources_seen: HashSet<Owner>,
+    /// Nested resource-less paint in a font can still depend on each caller's resources.
+    glyph_fonts: HashSet<(ObjRef, Owner)>,
     /// Forms already analysed, with the owner of the resources they drew against: drawing one
     /// again records nothing new, and re-reading it on every `Do` is exponential in the nesting.
     forms_seen: HashSet<(ObjRef, Owner)>,
 }
 
 impl Pruner<'_> {
+    /// Inspect direct containers in place; resolving a direct dictionary would clone it before
+    /// the protection work budget has charged its children.
+    fn usable_resources(&self, object: &Object) -> bool {
+        match object.as_ref() {
+            Some(reference) => self.doc.get(reference).as_dict().is_some(),
+            None => object.as_dict().is_some(),
+        }
+    }
+
     /// Mark the `/XObject` dictionary of `resources` as one not to prune.
     fn distrust(&mut self, resources: &Dict, owner: Owner) {
-        if let Some((_, key)) = self.xobjects(resources, owner) {
+        if let Some(xobjects) = resources.get(b"XObject") {
+            let key = match (xobjects.as_ref(), owner) {
+                (Some(reference), _) => XKey::XObject(reference),
+                (None, Owner::Resources(reference)) => XKey::Resources(reference),
+                (None, Owner::Container(reference)) => XKey::Container(reference),
+            };
             self.unsure.insert(key);
         }
     }
 
-    fn glyph_work(&mut self, count: usize) -> bool {
-        if !self.glyph_budget_exhausted
-            && let Some(left) = self.glyph_work_left.checked_sub(count)
+    fn paint_work(&mut self, count: usize) -> bool {
+        if !self.paint_budget_exhausted
+            && let Some(left) = self.paint_work_left.checked_sub(count)
         {
-            self.glyph_work_left = left;
+            self.paint_work_left = left;
             return true;
         }
-        self.glyph_budget_exhausted = true;
+        self.paint_budget_exhausted = true;
         false
     }
 
     /// Walk one object's direct children without cloning them or recursing. Referenced objects
     /// go on a separate work list, so their borrowed dictionaries stay alive during this pass.
-    fn protect_glyph_tree(&mut self, object: &Object, referenced: &mut Vec<ObjRef>) {
-        if !self.glyph_work(1) {
-            return;
+    fn protect_paint_tree(&mut self, object: &Object, owner: Owner, appearance: bool, referenced: &mut Vec<(ObjRef, bool)>) -> bool {
+        if !self.paint_work(1) {
+            return false;
         }
-        let mut pending = vec![object];
-        while let Some(object) = pending.pop() {
+        let mut inherits = false;
+        let mut pending = vec![(object, appearance)];
+        while let Some((object, appearance)) = pending.pop() {
+            if let Some(dict) = object.as_dict() {
+                let paint_stream = matches!(object, Object::Stream(_))
+                    && (appearance || dict.name(b"Subtype") == Some(b"Form") || dict.int(b"PatternType") == Some(1));
+                if (paint_stream || dict.name(b"Subtype") == Some(b"Type3"))
+                    && !dict.get(b"Resources").is_some_and(|resources| self.usable_resources(resources))
+                {
+                    inherits = true;
+                }
+            }
             match object {
                 Object::Ref(r) => {
-                    // A glyph's forms, patterns and soft masks can share either the XObject
-                    // dictionary itself or a resource owner with content we do interpret.
+                    // Unparsed paint can share either the XObject dictionary itself or a
+                    // resource owner with page/Form content we do interpret.
                     self.unsure.insert(XKey::XObject(*r));
                     self.unsure.insert(XKey::Resources(*r));
-                    self.unsure.insert(XKey::Page(*r));
-                    if self.glyph_seen.insert(*r) {
-                        referenced.push(*r);
+                    self.unsure.insert(XKey::Container(*r));
+                    if self.paint_seen.insert((*r, owner, appearance)) {
+                        referenced.push((*r, appearance));
                     }
                 }
                 Object::Array(array) => {
-                    if !self.glyph_work(array.len()) {
-                        return;
+                    if !self.paint_work(array.len()) {
+                        return inherits;
                     }
-                    pending.extend(array);
+                    pending.extend(array.iter().map(|value| (value, appearance)));
                 }
                 Object::Dict(_) | Object::Stream(_) => {
                     if let Some(dict) = object.as_dict() {
-                        if !self.glyph_work(dict.len()) {
-                            return;
+                        if !self.paint_work(dict.len()) {
+                            return inherits;
                         }
-                        pending.extend(dict.iter().map(|(_, value)| value));
+                        // Appearance dictionaries contain N/R/D and named states. Once a
+                        // stream is reached, its dictionary holds ordinary resource/data graphs.
+                        let child_appearance = appearance && !matches!(object, Object::Stream(_));
+                        let soft_mask = matches!(dict.name(b"S"), Some(b"Luminosity" | b"Alpha"));
+                        pending.extend(dict.iter().map(|(key, value)| (value, child_appearance || (soft_mask && key.as_slice() == b"G"))));
                     }
                 }
                 _ => {}
             }
         }
+        inherits
     }
 
-    /// Glyph programs are not interpreted here. Keep every resource owner reachable from their
-    /// resource graph, including nested forms, patterns and soft masks. Data bytes are never
-    /// decoded; references are visited once and all direct children count against the budget.
-    fn protect_glyph_object(&mut self, object: &Object) {
+    /// Keep every owner reachable from unparsed paint, without decoding any stream bytes.
+    /// Returns whether a paint program may also use its caller's resources.
+    fn protect_paint_object(&mut self, object: &Object, owner: Owner, appearance: bool) -> bool {
         let mut referenced = Vec::new();
-        self.protect_glyph_tree(object, &mut referenced);
-        while !self.glyph_budget_exhausted {
-            let Some(r) = referenced.pop() else { break };
+        let mut inherits = self.protect_paint_tree(object, owner, appearance, &mut referenced);
+        while !self.paint_budget_exhausted {
+            let Some((r, appearance)) = referenced.pop() else { break };
             let object = self.doc.get(r);
-            self.protect_glyph_tree(&object, &mut referenced);
+            inherits |= self.protect_paint_tree(&object, owner, appearance, &mut referenced);
+        }
+        inherits
+    }
+
+    fn protect_caller(&mut self, resources: &Dict, owner: Owner) {
+        self.distrust(resources, owner);
+        for (_, value) in resources.iter() {
+            self.protect_paint_object(value, owner, false);
+            if self.paint_budget_exhausted {
+                break;
+            }
+        }
+    }
+
+    /// Patterns and graphics states can paint through soft masks or select Type 3 fonts.
+    /// Their content is not interpreted by this pruner, so protect any aliased resource owners.
+    fn protect_resources(&mut self, resources: &Dict, owner: Owner) {
+        if self.paint_budget_exhausted || !self.resources_seen.insert(owner) {
+            return;
+        }
+        self.protect_type3_resources(resources, owner);
+        for key in [b"Pattern".as_slice(), b"ExtGState"] {
+            if let Some(root) = resources.get(key)
+                && self.protect_paint_object(root, owner, false)
+            {
+                self.protect_caller(resources, owner);
+            }
+        }
+    }
+
+    fn protect_appearances(&mut self, page: ObjRef, dict: &Dict, caller: Option<&(Dict, Owner)>) {
+        let Some(annotations) = dict.get(b"Annots") else { return };
+        let resolved = annotations.as_ref().map(|reference| self.doc.get(reference));
+        let Some(annotations) = resolved.as_deref().unwrap_or(annotations).as_array() else { return };
+        if !self.paint_work(annotations.len()) {
+            return;
+        }
+        let owner = caller.map_or(Owner::Container(page), |(_, owner)| *owner);
+        for annotation in annotations {
+            let resolved = annotation.as_ref().map(|reference| self.doc.get(reference));
+            let annotation = resolved.as_deref().unwrap_or(annotation);
+            if let Some(appearance) = annotation.as_dict().and_then(|dict| dict.get(b"AP"))
+                && self.protect_paint_object(appearance, owner, true)
+                && let Some((resources, owner)) = caller
+            {
+                self.protect_caller(resources, *owner);
+            }
+            if self.paint_budget_exhausted {
+                break;
+            }
         }
     }
 
     fn protect_type3_resources(&mut self, resources: &Dict, owner: Owner) {
-        if self.glyph_budget_exhausted {
+        if self.paint_budget_exhausted {
             return;
         }
-        let Some(fonts) = resources.get(b"Font").map(|f| self.doc.resolve(f)) else { return };
-        let Some(fonts) = fonts.as_dict() else { return };
+        let Some(fonts) = resources.get(b"Font") else { return };
+        let resolved = fonts.as_ref().map(|reference| self.doc.get(reference));
+        let Some(fonts) = resolved.as_deref().unwrap_or(fonts).as_dict() else { return };
         // Bound discovery too, but don't spend the glyph-graph budget repeatedly examining an
         // ordinary shared font catalog on every page of a large document.
-        if fonts.len() > MAX_GLYPH_RESOURCE_WORK {
-            self.glyph_budget_exhausted = true;
+        if fonts.len() > MAX_PAINT_RESOURCE_WORK {
+            self.paint_budget_exhausted = true;
             return;
         }
         for (_, font) in fonts.iter() {
-            if self.glyph_budget_exhausted {
+            if self.paint_budget_exhausted {
                 return;
             }
             let font_ref = font.as_ref();
-            let resolved = self.doc.resolve(font);
-            let Some(font) = resolved.as_dict().filter(|f| f.name(b"Subtype") == Some(b"Type3")) else { continue };
-            if let Some(glyph_resources) = font.get(b"Resources") {
+            let resolved = font_ref.map(|reference| self.doc.get(reference));
+            let Some(font) = resolved.as_deref().unwrap_or(font).as_dict().filter(|f| f.name(b"Subtype") == Some(b"Type3")) else { continue };
+            if let Some(glyph_resources) = font.get(b"Resources").filter(|resources| self.usable_resources(resources)) {
                 if let Some(r) = font_ref
-                    && !self.glyph_fonts.insert(r)
+                    && !self.glyph_fonts.insert((r, owner))
                 {
                     continue;
                 }
-                self.protect_glyph_object(glyph_resources);
-            } else {
-                self.distrust(resources, owner);
-                // This root dictionary is already owned by the content caller. Only its
-                // referenced descendants can share additional owners elsewhere in the file.
-                for (_, value) in resources.iter() {
-                    self.protect_glyph_object(value);
-                    if self.glyph_budget_exhausted {
-                        return;
-                    }
+                if self.protect_paint_object(glyph_resources, owner, false) {
+                    self.protect_caller(resources, owner);
                 }
+            } else {
+                self.protect_caller(resources, owner);
             }
         }
     }
@@ -173,14 +251,14 @@ impl Pruner<'_> {
         }
         let key = match owner {
             Owner::Resources(r) => XKey::Resources(r),
-            Owner::Page(p) => XKey::Page(p),
+            Owner::Container(p) => XKey::Container(p),
         };
         Some((self.doc.resolve(x).as_dict()?.clone(), key))
     }
 
     /// Record every XObject name `data` draws with `Do`, descending into form XObjects.
     fn content(&mut self, data: &[u8], resources: &Dict, owner: Owner, depth: u8) {
-        self.protect_type3_resources(resources, owner);
+        self.protect_resources(resources, owner);
         let Some((xobjects, key)) = self.xobjects(resources, owner) else {
             return;
         };
@@ -206,8 +284,8 @@ impl Pruner<'_> {
                         None => continue,
                     },
                     None => match self.doc.resolve(res).as_dict().cloned() {
-                        // The form carries its resources inline: filter them on the form itself.
-                        Some(d) => (d, Owner::Resources(r)),
+                        // The form carries its resources inline: filter inside its Resources entry.
+                        Some(d) => (d, Owner::Container(r)),
                         None => continue,
                     },
                 },
@@ -223,7 +301,7 @@ impl Pruner<'_> {
                 Ok(data) => self.content(&data, &inner, inner_owner, depth + 1),
                 // What the form draws is unknown: keep everything it could reach.
                 Err(_) => {
-                    self.protect_type3_resources(&inner, inner_owner);
+                    self.protect_resources(&inner, inner_owner);
                     self.distrust(&inner, inner_owner);
                 }
             }
@@ -247,7 +325,7 @@ pub(crate) fn content_bytes(doc: &Document, contents: &Object) -> Result<Vec<u8>
 fn resolve_resources(doc: &Document, resources: &Object, page: ObjRef) -> Option<(Dict, Owner)> {
     match resources {
         Object::Ref(r) => doc.get(*r).as_dict().cloned().map(|d| (d, Owner::Resources(*r))),
-        Object::Dict(d) => Some((d.clone(), Owner::Page(page))),
+        Object::Dict(d) => Some((d.clone(), Owner::Container(page))),
         _ => None,
     }
 }
@@ -282,9 +360,9 @@ fn filter_at(doc: &mut Document, key: XKey, names: &HashSet<Vec<u8>>) -> Result<
             }
             Ok(removed)
         }
-        XKey::Page(p) => {
-            let Some(pd) = doc.get(p).as_dict().cloned() else { return Ok(0) };
-            let Some(res) = pd.get(b"Resources") else { return Ok(0) };
+        XKey::Container(container) => {
+            let Some(object) = doc.get(container).as_dict().cloned() else { return Ok(0) };
+            let Some(res) = object.get(b"Resources") else { return Ok(0) };
             if res.as_ref().is_some() {
                 return Ok(0); // recorded as Resources(r) instead
             }
@@ -297,7 +375,7 @@ fn filter_at(doc: &mut Document, key: XKey, names: &HashSet<Vec<u8>>) -> Result<
             let removed = drop_unused(&mut xd, names);
             if removed > 0 {
                 rd.set(b"XObject".to_vec(), Object::Dict(xd));
-                doc.update_dict(p, |d| d.set(b"Resources".to_vec(), Object::Dict(rd.clone())))?;
+                doc.update_dict(container, |d| d.set(b"Resources".to_vec(), Object::Dict(rd.clone())))?;
             }
             Ok(removed)
         }
@@ -311,28 +389,37 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
         doc,
         used: HashMap::new(),
         unsure: HashSet::new(),
-        glyph_budget_exhausted: false,
-        glyph_work_left: MAX_GLYPH_RESOURCE_WORK,
-        glyph_seen: HashSet::new(),
+        paint_budget_exhausted: false,
+        paint_work_left: MAX_PAINT_RESOURCE_WORK,
+        paint_seen: HashSet::new(),
+        resources_seen: HashSet::new(),
         glyph_fonts: HashSet::new(),
         forms_seen: HashSet::new(),
     };
     for (page, attrs) in &pages {
-        let Some(res) = attrs.get(b"Resources") else { continue };
-        let Some((res_dict, owner)) = resolve_resources(pruner.doc, res, *page) else { continue };
-        let Some(pd) = pruner.doc.get(*page).as_dict().cloned() else { continue };
-        let Some(contents) = pd.get(b"Contents").cloned() else { continue };
-        match content_bytes(pruner.doc, &contents) {
+        let pd = pruner.doc.get(*page);
+        let Some(pd) = pd.as_dict() else { continue };
+        let caller = attrs.get(b"Resources").and_then(|res| resolve_resources(pruner.doc, res, *page));
+        pruner.protect_appearances(*page, pd, caller.as_ref());
+        if pruner.paint_budget_exhausted {
+            return Ok(0);
+        }
+        let Some((res_dict, owner)) = caller else { continue };
+        pruner.protect_resources(&res_dict, owner);
+        if pruner.paint_budget_exhausted {
+            return Ok(0);
+        }
+        let Some(contents) = pd.get(b"Contents") else { continue };
+        match content_bytes(pruner.doc, contents) {
             Ok(data) if data.is_empty() => {}
             Ok(data) => pruner.content(&data, &res_dict, owner, 0),
             Err(_) => {
-                pruner.protect_type3_resources(&res_dict, owner);
                 pruner.distrust(&res_dict, owner);
             }
         }
     }
-    let Pruner { used, unsure, glyph_budget_exhausted, .. } = pruner;
-    if glyph_budget_exhausted {
+    let Pruner { used, unsure, paint_budget_exhausted, .. } = pruner;
+    if paint_budget_exhausted {
         return Ok(0);
     }
     let mut removed = 0;
