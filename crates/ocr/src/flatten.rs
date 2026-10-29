@@ -15,7 +15,8 @@
 //! The resampling follows the model's own: the map is stretched bilinearly with aligned corners,
 //! and the photo is read bilinearly with aligned corners. Where the map points outside the photo,
 //! the result is white (the model's own padding is black), as in Enhance camera image's
-//! four-corner warp.
+//! four-corner warp. A map with a coordinate that is not a finite number is an error, not white:
+//! the model failed, and a white or partly white page would hide that.
 //!
 //! Cost on a 32-thread Zen 5 CPU: about 0.1 s for the network whatever the photo's size, then
 //! about 30 ms a megapixel for the resampling (0.4 s at 12 megapixels, 1.1 s at 38), with no
@@ -213,12 +214,16 @@ pub fn network_input(rgb: &[u8], width: u32, height: u32) -> Result<Vec<f32>, Oc
 }
 
 /// Resample an RGB8 photo through a backward map: the flat page, RGB8 at the photo's size. Map
-/// points outside the photo, or not numbers, come out white.
+/// points outside the photo come out white. A map with any coordinate that is not a finite number
+/// (NaN or infinite) is an error, checked before anything is resampled.
 pub fn unwarp(rgb: &[u8], width: u32, height: u32, grid: &Grid) -> Result<Vec<u8>, OcrError> {
     let (w, h) = checked_len(rgb, width, height)?;
     let (gw, gh) = (grid.width, grid.height);
     if gw < 2 || gh < 2 || gw.checked_mul(gh) != Some(grid.xy.len()) {
         return Err(OcrError::Flatten("the flattening map is malformed".into()));
+    }
+    if !grid.xy.iter().flatten().all(|v| v.is_finite()) {
+        return Err(OcrError::Flatten("the flattening model returned a map with coordinates that are not numbers".into()));
     }
     // Where each output column and row falls in the coarse map (corners aligned).
     let place = |i: usize, n: usize, g: usize| -> (usize, f32) {
@@ -249,7 +254,8 @@ pub fn unwarp(rgb: &[u8], width: u32, height: u32, grid: &Grid) -> Result<Vec<u8
             let [u, v] = lerp(top, bottom, ty);
             // Grid-sample coordinates to pixels, corners aligned.
             let (sx, sy) = ((u + 1.0) * 0.5 * xmax, (v + 1.0) * 0.5 * ymax);
-            // Far outside (or not a number): white. The bound also keeps the casts below exact.
+            // Far outside: white. The bound also keeps the casts below exact (and would catch a
+            // non-number, which the check above already rejects).
             if !(sx > -2.0 && sy > -2.0 && sx < xmax + 2.0 && sy < ymax + 2.0) {
                 out.extend_from_slice(&[255; 3]);
                 continue;
@@ -307,10 +313,21 @@ mod tests {
     #[test]
     fn hostile_maps_and_pictures_are_errors_or_white_not_panics() {
         let src = gradient(4, 4);
-        // Not numbers, infinities and huge values: white.
-        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1e30, -1e30] {
+        // Huge but finite values point far outside the photo: white.
+        for far in [1e30, -1e30, f32::MAX, f32::MIN] {
+            let g = Grid { width: 2, height: 2, xy: vec![[far, far]; 4] };
+            assert!(unwarp(&src, 4, 4, &g).unwrap().iter().all(|&v| v == 255), "{far}");
+        }
+        // Not numbers and infinities are a failed model: an error, not a white page, even when
+        // only one coordinate of an otherwise good map is bad.
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             let g = Grid { width: 2, height: 2, xy: vec![[bad, bad]; 4] };
-            assert!(unwarp(&src, 4, 4, &g).unwrap().iter().all(|&v| v == 255), "{bad}");
+            assert!(matches!(unwarp(&src, 4, 4, &g), Err(OcrError::Flatten(_))), "{bad}");
+            for at in 0..8 {
+                let mut g = identity(2, 2);
+                g.xy[at / 2][at % 2] = bad;
+                assert!(matches!(unwarp(&src, 4, 4, &g), Err(OcrError::Flatten(_))), "{bad} at {at}");
+            }
         }
         // Malformed maps.
         assert!(unwarp(&src, 4, 4, &Grid { width: 2, height: 2, xy: vec![[0.0; 2]; 3] }).is_err());

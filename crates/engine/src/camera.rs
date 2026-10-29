@@ -113,6 +113,10 @@ pub fn flattener() -> Result<Arc<pdfcraft_ocr::flatten::Flattener>, String> {
     Ok(f)
 }
 
+/// Where Enhance camera image gets a photo's flattening map from: the model
+/// ([`pdfcraft_ocr::flatten::Flattener::grid`]), given the RGB8 photo and its size.
+pub(crate) type GridSource<'a> = dyn Fn(&[u8], u32, u32) -> Result<pdfcraft_ocr::flatten::Grid, pdfcraft_ocr::OcrError> + 'a;
+
 /// Whether the flattening model is installed ([`Straighten::Flatten`] needs it).
 pub fn flatten_available() -> bool {
     pdfcraft_ocr::flatten::available()
@@ -191,6 +195,23 @@ impl Session {
             Straighten::Flatten(_) => Some(flattener().map_err(EditError::Invalid)?),
             Straighten::Corners(_) => None,
         };
+        let grid = flat.as_ref().map(|f| move |rgb: &[u8], w: u32, h: u32| f.grid(rgb, w, h));
+        self.enhance_camera_page_through(id, page, how, look, level, grid.as_ref().map(|g| g as &GridSource<'_>))
+    }
+
+    /// [`Session::enhance_camera_page_with`], with the flattening map coming from `grid` (the
+    /// model, or a stand-in in tests). Nothing in the document changes until the new page is
+    /// ready, so every error — a map the model got wrong included — leaves the document's bytes
+    /// and its undo history as they were.
+    pub(crate) fn enhance_camera_page_through(
+        &mut self,
+        id: DocId,
+        page: usize,
+        how: Straighten,
+        look: crate::camera_clean::Look,
+        level: u8,
+        grid: Option<&GridSource<'_>>,
+    ) -> Result<(), EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         if let Some(why) = &doc.read_only_reason {
             return Err(EditError::ReadOnly(why.clone()));
@@ -229,8 +250,11 @@ impl Session {
             Straighten::Flatten(None) => over_white(&shot.rgba, shot.width, shot.height),
         }
         .map_err(EditError::Invalid)?;
-        if let Some(flat) = flat {
-            out.rgb = flat.flatten(&out.rgb, out.width, out.height).map_err(|e| EditError::Invalid(e.to_string()))?;
+        if let Straighten::Flatten(_) = how {
+            let grid = grid.ok_or_else(|| EditError::Invalid(pdfcraft_ocr::OcrError::NoFlattenModel.to_string()))?;
+            let failed = |e: pdfcraft_ocr::OcrError| EditError::Invalid(format!("the page could not be flattened: {e}"));
+            let map = grid(&out.rgb, out.width, out.height).map_err(failed)?;
+            out.rgb = pdfcraft_ocr::flatten::unwarp(&out.rgb, out.width, out.height, &map).map_err(failed)?;
         }
         let pixels = crate::camera_clean::apply(&out.rgb, out.width, out.height, look, level)
             .ok_or_else(|| EditError::Invalid("the straightened page could not be cleaned up".into()))?;

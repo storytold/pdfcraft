@@ -10585,6 +10585,42 @@ fn flattening_without_the_model_says_so_and_changes_nothing() {
     assert_eq!(s.get(id).unwrap().can_undo(), None);
 }
 
+/// A flattening model that returns a map with a coordinate that is not a number must not turn the
+/// page white: the edit fails, and the document's bytes and undo history are as they were. The
+/// map is injected, so this runs without the model; an identity map through the same path does
+/// change the page, so the error really comes from the map.
+#[test]
+fn a_non_finite_flattening_map_leaves_the_document_untouched() {
+    use pdfcraft_ocr::flatten::Grid;
+    let identity = |gw: usize, gh: usize| Grid {
+        width: gw,
+        height: gh,
+        xy: (0..gh).flat_map(|y| (0..gw).map(move |x| [x as f32 / (gw - 1) as f32 * 2.0 - 1.0, y as f32 / (gh - 1) as f32 * 2.0 - 1.0])).collect(),
+    };
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = curled_photo_doc(&mut s, 120, 160);
+    let before = s.get(id).unwrap().bytes.clone();
+    let whole = Some([[0.0, 0.0], [120.0, 0.0], [120.0, 160.0], [0.0, 160.0]]);
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let map = |_: &[u8], _: u32, _: u32| {
+            let mut g = identity(31, 45);
+            g.xy[700][1] = bad;
+            Ok::<_, pdfcraft_ocr::OcrError>(g)
+        };
+        for how in [camera::Straighten::Flatten(None), camera::Straighten::Flatten(whole)] {
+            let e = s.enhance_camera_page_through(id, 0, how, camera_clean::Look::Colour, 0, Some(&map)).unwrap_err().to_string();
+            assert!(e.contains("could not be flattened") && e.contains("not numbers"), "{bad}: {e}");
+            assert_eq!(s.get(id).unwrap().bytes, before, "{bad}: the document changed");
+            assert_eq!(s.get(id).unwrap().can_undo(), None, "{bad}: an undo step was recorded");
+        }
+    }
+    // The same path with a good map does replace the page, in one undoable step.
+    let good = |_: &[u8], _: u32, _: u32| Ok::<_, pdfcraft_ocr::OcrError>(identity(31, 45));
+    s.enhance_camera_page_through(id, 0, camera::Straighten::Flatten(None), camera_clean::Look::Colour, 0, Some(&good)).unwrap();
+    assert_ne!(s.get(id).unwrap().bytes, before);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Enhance camera image"));
+}
+
 /// End to end, when the model is installed (`cargo xtask models`): flattening a photographed,
 /// curled page leaves its lines of text level and straight, in one undoable step; the four-corner
 /// warp alone (the same page, corners on its edges) does not.
