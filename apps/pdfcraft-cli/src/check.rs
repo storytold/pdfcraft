@@ -88,6 +88,7 @@ fn edit_round_trip(bytes: &[u8]) {
     if let Some(root) = doc.root() {
         let _ = doc.update_dict(root, |d| d.set(b"PdfCraftFuzz".to_vec(), Object::Bool(true)));
     }
+    object_layer_round_trip(&mut doc);
     let classic = SaveOptions { object_streams: false, ..SaveOptions::default() };
     for out in [write_incremental(&doc, &SaveOptions::default()), write_full(&doc, &SaveOptions::default()), write_full(&doc, &classic)]
         .into_iter()
@@ -95,6 +96,31 @@ fn edit_round_trip(bytes: &[u8]) {
     {
         if let Ok(again) = Document::open(Arc::new(out)) {
             let _ = again.root().map(|r| again.get(r));
+        }
+    }
+}
+
+/// The object layer's own readers and writers on the same hostile bytes: the graphic scanner,
+/// the mixed-object inventory, a restack of what it finds, a graphic resize and a delete. Every
+/// call may fail; only a panic, hang or abort is a bug. The edits stay in `doc`, so the save that
+/// follows writes the rewritten content and the reopen reads it back.
+fn object_layer_round_trip(doc: &mut pdfcraft_cos::Document) {
+    use pdfcraft_edit::{EditError, Restack, delete_graphic, editable_objects, page_graphics, resize_graphic, restack_objects};
+    for page in 0..64 {
+        let graphics = match page_graphics(doc, page) {
+            Ok(graphics) => graphics,
+            Err(EditError::NoSuchPage(_)) => break,
+            Err(_) => continue,
+        };
+        if let Ok(objects) = editable_objects(doc, page) {
+            let targets: Vec<_> = objects.iter().map(|o| o.target).take(4).collect();
+            let _ = restack_objects(doc, page, &targets, Restack::Front);
+            let _ = restack_objects(doc, page, &targets, Restack::Back);
+        }
+        for index in 0..graphics.len().min(4) {
+            let [x0, y0, x1, y1] = graphics[index].rect;
+            let _ = resize_graphic(doc, page, index, [x0, y0, x0 + (x1 - x0) * 0.5, y0 + (y1 - y0) * 0.5]);
+            let _ = delete_graphic(doc, page, index);
         }
     }
 }
