@@ -63,7 +63,7 @@ mod ui;
 
 use check::{audit, check, check_one};
 use commands::{combine, edit, extract, info, render, split, text};
-use options::{OptionSpec, flag, validate_options};
+use options::{OptionSpec, flag, positional, validate_options};
 #[cfg(feature = "mcp")]
 use run::mcp;
 use run::{automation, print_output, run, tools};

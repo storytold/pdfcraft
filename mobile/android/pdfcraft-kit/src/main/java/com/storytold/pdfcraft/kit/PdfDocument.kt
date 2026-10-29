@@ -15,10 +15,14 @@ class PdfDocument(
     val engine: Engine = Engine(),
     val name: String,
     val docId: ULong,
-    val pageCount: Int
+    initialPageCount: Int
 ) : Closeable {
     private val isClosed = AtomicBoolean(false)
     private val geometryCache = ConcurrentHashMap<UInt, FfiPageGeometry>()
+
+    @Volatile
+    var pageCount: Int = initialPageCount
+        private set
 
     companion object {
         /**
@@ -39,6 +43,41 @@ class PdfDocument(
             val fileName = File(path).name
             return PdfDocument(engine, fileName, id, count)
         }
+
+        fun createSelfSignedDigitalId(
+            engine: Engine = Engine(),
+            name: String,
+            password: String,
+            keyType: String = "rsa2048",
+            organization: String? = null,
+            unit: String? = null,
+            email: String? = null,
+            country: String? = null,
+            validityYears: UInt = 5u
+        ): ByteArray {
+            return engine.createSelfSignedDigitalId(
+                name = name,
+                password = password,
+                keyType = keyType,
+                organization = organization,
+                unit = unit,
+                email = email,
+                country = country,
+                validityYears = validityYears
+            )
+        }
+
+        fun inspectDigitalId(
+            engine: Engine = Engine(),
+            p12Bytes: ByteArray,
+            password: String? = null
+        ): FfiDigitalIdInfo {
+            return engine.inspectDigitalId(p12Bytes, password)
+        }
+
+        fun ocrStatus(engine: Engine = Engine()): FfiOcrStatus = engine.ocrStatus()
+
+        fun setOcrModelsDir(engine: Engine = Engine(), dir: String) = engine.setOcrModelsDir(dir)
     }
 
     override fun close() {
@@ -647,6 +686,128 @@ class PdfDocument(
      * Invokes an automation tool directly on this document with JSON arguments.
      */
     fun invokeTool(name: String, argsJson: String): FfiToolResult {
-        return engine.invokeTool(name, argsJson)
+        val res = engine.invokeTool(name, argsJson)
+        if (res.success) {
+            geometryCache.clear()
+        }
+        return res
+    }
+
+    // MARK: - Page Operations (Phase 5)
+
+    /**
+     * Rotates specified page by degrees clockwise (90, 180, 270).
+     */
+    fun rotatePage(page: Int, degrees: Int = 90) {
+        val p = page + 1
+        invokeTool("page_rotate", """{"doc": $docId, "pages": [$p], "degrees": $degrees}""")
+        geometryCache.clear()
+        pageCount = engine.pageCount(docId).toInt()
+    }
+
+    /**
+     * Deletes specified zero-based page.
+     */
+    fun deletePage(page: Int) {
+        val p = page + 1
+        invokeTool("page_delete", """{"doc": $docId, "pages": [$p]}""")
+        geometryCache.clear()
+        pageCount = engine.pageCount(docId).toInt()
+    }
+
+    /**
+     * Inserts a blank page after the specified page index (or at beginning if afterPage is -1).
+     */
+    fun insertBlankPage(afterPage: Int = -1) {
+        val at = if (afterPage >= 0) afterPage + 2 else 1
+        invokeTool("page_insert_blank", """{"doc": $docId, "at": $at}""")
+        geometryCache.clear()
+        pageCount = engine.pageCount(docId).toInt()
+    }
+
+    // MARK: - Redaction & Security Audit (Phase 6 / MOB-6.2)
+
+    fun markRedaction(page: Int, rect: FfiRect, overlayText: String? = null) {
+        engine.markRedactionRect(docId, page.toUInt(), rect, overlayText)
+    }
+
+    fun markRedactionText(text: String, overlayText: String? = null): UInt {
+        return engine.markRedactionText(docId, text, overlayText)
+    }
+
+    fun clearRedactions() {
+        engine.clearRedactions(docId)
+    }
+
+    fun auditRedactions(): List<uniffi.pdfcraft_ffi.FfiRedactionFinding> {
+        return engine.auditRedactions(docId)
+    }
+
+    fun applyRedactions(): uniffi.pdfcraft_ffi.FfiRedactionApplyResult {
+        val res = engine.applyRedactions(docId)
+        geometryCache.clear()
+        return res
+    }
+
+    // MARK: - Digital Signatures & PKCS#12 (Phase 6 / MOB-6.3)
+
+    fun listDigitalSignatures(): List<uniffi.pdfcraft_ffi.FfiDigitalSignature> {
+        return engine.listDigitalSignatures(docId)
+    }
+
+    fun sign(p12Bytes: ByteArray, password: String? = null, options: uniffi.pdfcraft_ffi.FfiSignOptions): uniffi.pdfcraft_ffi.FfiSignResult {
+        val res = engine.signDocumentP12(docId, p12Bytes, password, options)
+        geometryCache.clear()
+        return res
+    }
+
+    // MARK: - Scan & OCR (Phase 6 / MOB-6.4)
+
+    fun recognizeText(page: Int, dpi: Float? = null, skipTextPages: Boolean = true): uniffi.pdfcraft_ffi.FfiOcrPageResult {
+        return engine.recognizePageText(docId, page.toUInt(), dpi, skipTextPages)
+    }
+
+    fun applyOcrTextLayer(page: Int, words: List<uniffi.pdfcraft_ffi.FfiOcrWord>): UInt {
+        return engine.applyOcrTextLayer(docId, page.toUInt(), words)
+    }
+
+    // MARK: - Advanced Capabilities (Phase 6 / MOB-6.5)
+
+    fun isFormJavascriptEnabled(): Boolean = engine.isFormJavascriptEnabled()
+
+    fun setFormJavascriptEnabled(enabled: Boolean) {
+        engine.setFormJavascriptEnabled(enabled)
+    }
+
+    fun runJavascript(script: String, target: String? = null): uniffi.pdfcraft_ffi.FfiJsResult {
+        return engine.runFormJavascript(docId, script, target)
+    }
+
+    fun declaredStandards(): uniffi.pdfcraft_ffi.FfiPreflightDeclared {
+        return engine.declaredStandards(docId)
+    }
+
+    fun verifyPdfA(level: String = "pdfa2b"): List<uniffi.pdfcraft_ffi.FfiPreflightIssue> {
+        return engine.verifyPdfa(docId, level)
+    }
+
+    fun convertToPdfA(level: String = "pdfa2b"): UInt {
+        val res = engine.convertToPdfa(docId, level)
+        geometryCache.clear()
+        return res
+    }
+
+    fun checkAccessibility(): uniffi.pdfcraft_ffi.FfiA11yReport {
+        return engine.checkAccessibility(docId)
+    }
+
+    val cjkFontStatus: uniffi.pdfcraft_ffi.FfiCjkFontStatus
+        get() = engine.getCjkFontStatus()
+
+    val xfaStatus: uniffi.pdfcraft_ffi.FfiXfaStatus
+        get() = engine.getXfaStatus(docId)
+
+    fun compare(other: PdfDocument): List<uniffi.pdfcraft_ffi.FfiDocumentChange> {
+        return engine.compareDocuments(docId, other.docId)
     }
 }

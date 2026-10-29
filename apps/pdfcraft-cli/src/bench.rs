@@ -102,7 +102,7 @@ pub fn bench(args: &[String]) -> Result<(), CliError> {
     let tile_sizes: Vec<u32> = flag(args, "--tile-sizes").unwrap_or("256,512,1024").split(',').filter_map(|s| s.trim().parse::<u32>().ok()).collect();
     let scale: f32 = flag(args, "--scale").unwrap_or("2.0").parse().map_err(|_| "invalid --scale")?;
 
-    let positional_files = positional(args);
+    let positional_files = positional(args, BENCH_OPTIONS);
     let mut documents_to_bench: Vec<(String, String, Vec<u8>)> = Vec::new();
 
     if positional_files.is_empty() || args.iter().any(|a| a == "--synthetic") {

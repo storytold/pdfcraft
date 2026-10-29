@@ -25,9 +25,9 @@ preflight = ["pdfcraft-engine/preflight", "pdfcraft-automation/preflight"]
 cli = ["uniffi/cli"]
 
 [dependencies]
-pdfcraft-engine = { workspace = true, default-features = false }
+pdfcraft-engine = { workspace = true }
 pdfcraft-render = { workspace = true }
-pdfcraft-automation = { workspace = true, default-features = false }
+pdfcraft-automation = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-cos = { workspace = true }
 pdfcraft-geom = { workspace = true }

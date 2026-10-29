@@ -1988,7 +1988,8 @@ impl Engine {
                 return Err(FfiError::Unsupported { reason: "OCR models are not installed (set PDFCRAFT_MODELS or call set_ocr_models_dir)".into() });
             }
 
-            let settings = pdfcraft_engine::ocr::OcrSettings { dpi: dpi.unwrap_or(300.0), language: "en".into(), skip_text_pages, native_text_only: false };
+            let settings =
+                pdfcraft_engine::ocr::OcrSettings { dpi: dpi.unwrap_or(300.0), language: "en".into(), skip_text_pages, native_text_only: false };
 
             let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
             let page_idx = page as usize;
