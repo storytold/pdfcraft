@@ -2408,6 +2408,22 @@ struct ScrollGeometry<'a> {
     hand: bool,
 }
 
+/// Size two-page scrolling to the actual spread edges, without scrollable side gutters.
+/// Paged mode passes only the current spread; continuous mode passes every laid-out page.
+fn size_two_page_canvas(rects: &mut [Rect], pages: &[usize], content_h: f32, avail: &mut Rect, bar: f32) -> f32 {
+    let Some(bounds) = pages.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union) else { return avail.width() };
+    let horizontal_bar = if bounds.width() > avail.width() { bar } else { 0.0 };
+    if content_h > avail.height() - horizontal_bar {
+        avail.max.x = (avail.max.x - bar).max(avail.min.x);
+    }
+    let content_w = bounds.width().max(avail.width());
+    let shift = vec2((content_w - bounds.width()) / 2.0 - bounds.left(), 0.0);
+    for rect in rects {
+        *rect = rect.translate(shift);
+    }
+    content_w
+}
+
 /// The page view's scroll area, with the offset this frame's jumps, drags and zoom anchor ask for.
 fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry<'_>) -> egui::ScrollArea {
     let ScrollGeometry { rects, y_shift, content_w, content_h, avail, middle_gesture, hand } = *geometry;
@@ -2878,8 +2894,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.viewport_screen = avail;
     let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, unobstructed);
 
-    let content_w = view.content_width(info, avail.width());
-    let rects = view.layout(info, content_w, ui.ctx().pixels_per_point());
+    let mut content_w = view.content_width(info, avail.width());
+    let mut rects = view.layout(info, content_w, ui.ctx().pixels_per_point());
     // When not scrolling continuously, only one row is shown at a time: the current page, or the
     // current two-page spread (with the cover rule). These indices drive paging, which pages are
     // drawn, and the content height (#752). Empty for a document with no pages.
@@ -2916,10 +2932,22 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         }
     };
 
+    let mut scroll_avail = avail;
+    if view.layout == PageLayout::TwoUp {
+        content_w = size_two_page_canvas(&mut rects, &visible_pages, content_h, &mut scroll_avail, ui.spacing().scroll.allocated_width());
+    }
     let mut scroll = page_scroll_area(
         ui,
         view,
-        &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand: app.quick_tool == QuickTool::Hand },
+        &ScrollGeometry {
+            rects: &rects,
+            y_shift,
+            content_w,
+            content_h,
+            avail: scroll_avail,
+            middle_gesture,
+            hand: app.quick_tool == QuickTool::Hand,
+        },
     );
     let ppp = ui.ctx().pixels_per_point();
     let scale = view.render_scale(ppp);
@@ -2976,7 +3004,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     view.move_background.prepare(ui.ctx(), doc, &view.content, scale);
 
-    scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
+    scroll =
+        refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail: scroll_avail, middle_gesture, hand });
+    if view.layout == PageLayout::TwoUp && content_w <= scroll_avail.width() {
+        scroll = scroll.hscroll(false).horizontal_scroll_offset(0.0);
+    }
     let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
     let env = PageEnv {
         added: &added,

@@ -311,6 +311,82 @@ fn two_up_layout_places_pages_side_by_side() {
     assert!(c.min.y > a.max.y);
 }
 
+/// A deliberate sideways touchpad swipe, including attempts beyond both page edges.
+fn swipe_sideways(h: &mut Harness<'static, PdfCraftApp>, dx: f32) {
+    h.hover_at(h.state().views[0].viewport_rect().center());
+    h.event(egui::Event::MouseWheel {
+        unit: MouseWheelUnit::Point,
+        delta: egui::vec2(dx, 0.0),
+        phase: TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(4);
+}
+
+#[test]
+fn two_page_horizontal_pan_keeps_fitting_spreads_centered() {
+    for layout in ["two-page", "two-up"] {
+        for floating in [true, false] {
+            let mut h = harness(&[("layout", "two-page"), ("zoom", "100")]);
+            h.state_mut().set_option("layout", layout).unwrap();
+            h.ctx.global_style_mut(|s| s.spacing.scroll.floating = floating);
+            h.run_steps(8);
+            // Fit the pages themselves with only 20 points to spare: the old side gutters
+            // created scrollable overflow even though both pages were completely visible.
+            let viewport = h.state().views[0].viewport_rect();
+            let gap = rect(&h, 1).unwrap().left() - rect(&h, 0).unwrap().right();
+            let zoom = (viewport.width() - gap - 20.0) / 8.0;
+            h.state_mut().set_option("zoom", &zoom.to_string()).unwrap();
+            h.run_steps(8);
+            for dx in [-10000.0, 10000.0] {
+                swipe_sideways(&mut h, dx);
+                let spread = rect(&h, 0).unwrap().union(rect(&h, 1).unwrap());
+                let viewport = h.state().views[0].viewport_rect();
+                assert!(spread.width() < viewport.width());
+                assert!((spread.center().x - viewport.center().x).abs() < 1.0, "{layout}, floating={floating}, dx={dx}: {spread:?} in {viewport:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn two_page_horizontal_pan_stops_at_both_page_edges() {
+    for layout in ["two-page", "two-up"] {
+        for floating in [true, false] {
+            let mut h = harness(&[("layout", "two-page"), ("zoom", "250")]);
+            h.state_mut().set_option("layout", layout).unwrap();
+            h.ctx.global_style_mut(|s| s.spacing.scroll.floating = floating);
+            h.run_steps(8);
+            for dx in [-10000.0, 10000.0] {
+                swipe_sideways(&mut h, dx);
+                let spread = rect(&h, 0).unwrap().union(rect(&h, 1).unwrap());
+                let viewport = h.state().views[0].viewport_rect();
+                assert!(spread.width() > viewport.width());
+                let error = if dx < 0.0 { spread.right() - viewport.right() } else { spread.left() - viewport.left() };
+                assert!(error.abs() < 1.0, "{layout}, floating={floating}, dx={dx}: {spread:?} in {viewport:?}");
+            }
+            // Zooming back out must discard the previous horizontal offset.
+            h.state_mut().set_option("zoom", "100").unwrap();
+            h.run_steps(8);
+            let spread = rect(&h, 0).unwrap().union(rect(&h, 1).unwrap());
+            assert!((spread.center().x - h.state().views[0].viewport_rect().center().x).abs() < 1.0);
+        }
+    }
+}
+
+#[test]
+fn two_page_horizontal_pan_uses_actual_unequal_page_widths() {
+    let mut h = mixed_harness(&[("layout", "two-page"), ("zoom", "100")]);
+    for dx in [-10000.0, 10000.0] {
+        swipe_sideways(&mut h, dx);
+        let spread = rect(&h, 0).unwrap().union(rect(&h, 1).unwrap());
+        let viewport = h.state().views[0].viewport_rect();
+        assert!(spread.width() < viewport.width());
+        assert!((spread.center().x - viewport.center().x).abs() < 1.0, "{spread:?} in {viewport:?}");
+    }
+}
+
 #[test]
 fn two_page_view_shows_one_spread_at_a_time_until_continuous() {
     use pdfcraft_ui_egui::canvas::PageLayout;

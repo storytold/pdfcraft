@@ -890,8 +890,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.layout.two_up"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/view.rs::two_up_layout_places_pages_side_by_side", "crates/ui-egui/tests/it/viewer.rs::two_page_view_steps_a_spread_at_a_time"]
-notes = "next/previous page step a spread at a time"
+evidence = ["crates/ui-egui/tests/it/view.rs::two_up_layout_places_pages_side_by_side", "crates/ui-egui/tests/it/viewer.rs::two_page_view_steps_a_spread_at_a_time", "crates/ui-egui/tests/it/view.rs::two_page_horizontal_pan_keeps_fitting_spreads_centered", "crates/ui-egui/tests/it/view.rs::two_page_horizontal_pan_stops_at_both_page_edges", "crates/ui-egui/tests/it/view.rs::two_page_horizontal_pan_uses_actual_unequal_page_widths"]
+notes = "next/previous page step a spread at a time; fitting spreads stay horizontally centered, wider spreads pan only to their outer page edges; continuous view uses the bounds of all laid-out spreads. Exact Acrobat gesture thresholds remain unverified"
 
 [[feature]]
 id = "view.layout-two-up-scrolling"
@@ -902,8 +902,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/viewer.rs::layouts_fit_height_labels_and_system_theme"]
-notes = "the two-page view scrolls continuously"
+evidence = ["crates/ui-egui/tests/it/viewer.rs::layouts_fit_height_labels_and_system_theme", "crates/ui-egui/tests/it/view.rs::two_page_horizontal_pan_keeps_fitting_spreads_centered", "crates/ui-egui/tests/it/view.rs::two_page_horizontal_pan_stops_at_both_page_edges", "crates/ui-egui/tests/it/view.rs::two_page_horizontal_pan_uses_actual_unequal_page_widths"]
+notes = "the two-page view scrolls continuously; fitting spreads stay horizontally centered, wider spreads pan only to their outer page edges; continuous view uses the bounds of all laid-out spreads. Exact Acrobat gesture thresholds remain unverified"
 
 [[feature]]
 id = "view.cover-page"
