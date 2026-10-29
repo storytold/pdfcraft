@@ -183,3 +183,7 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.BrockDawg]
+display_name = "BrockDawg"
+sync_github_name = false
