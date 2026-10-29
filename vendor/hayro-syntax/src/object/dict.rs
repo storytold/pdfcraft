@@ -199,11 +199,9 @@ impl Skippable for Dict<'_> {
 
                 r.skip_white_spaces_and_comments();
 
-                if is_content_stream {
-                    r.skip::<Object<'_>>(is_content_stream)?;
-                } else {
-                    r.skip::<MaybeRef<Object<'_>>>(is_content_stream)?;
-                }
+                // PdfCraft patch (29): a value nested past the cap is stepped over here too, so
+                // the dictionary holding it (a page's `/Resources`) keeps its other entries.
+                skip_value(r, is_content_stream)?;
             }
         })();
         r.leave_container();
@@ -446,27 +444,47 @@ where
             // dictionary 10,000 arrays deep. The value is stepped over unparsed, and its key is
             // left out, so it reads as absent and nothing deeper than the cap is ever parsed.
             // Any other value that can't be read still fails the dictionary, as before.
-            let refused_earlier = r.take_depth_refused();
-            let skipped = if ctx.in_content_stream() {
-                r.skip::<Object<'_>>(ctx.in_content_stream())
-            } else {
-                r.skip::<MaybeRef<Object<'_>>>(ctx.in_content_stream())
-            };
-            let refused = r.take_depth_refused();
-            r.set_depth_refused(refused_earlier);
-            match skipped {
-                Some(_) => on_entry(name, offset, r)?,
-                None if refused => {
-                    if r.skip_unparsed_container().is_none() {
-                        // Leave the refusal for a dictionary further out.
-                        r.set_depth_refused(true);
-                        return None;
-                    }
-                    repaired = true;
-                }
-                None => return None,
+            match skip_value(r, ctx.in_content_stream())? {
+                Skipped::Read => on_entry(name, offset, r)?,
+                Skipped::SteppedOver => repaired = true,
             }
         }
+    }
+}
+
+/// PdfCraft patch (29): how [`skip_value`] got past a dictionary value.
+enum Skipped {
+    /// It was read (skipped as an object), within the nesting cap.
+    Read,
+    /// It nested past the cap and was stepped over unparsed.
+    SteppedOver,
+}
+
+/// PdfCraft patch (29): skips the dictionary value at the reader's offset. A value nested past
+/// the cap (`Reader::enter_container` refused a level in it) is stepped over unparsed with
+/// `Reader::skip_unparsed_container`, so the dictionary nearest to it keeps its other entries,
+/// and the refusal is not seen further out. `None` when the value can't be read for another
+/// reason, or doesn't close (the refusal is then left for a dictionary further out, which
+/// can't step over it either).
+fn skip_value(r: &mut Reader<'_>, is_content_stream: bool) -> Option<Skipped> {
+    let refused_earlier = r.take_depth_refused();
+    let skipped = if is_content_stream {
+        r.skip::<Object<'_>>(is_content_stream)
+    } else {
+        r.skip::<MaybeRef<Object<'_>>>(is_content_stream)
+    };
+    let refused = r.take_depth_refused();
+    r.set_depth_refused(refused_earlier);
+    match skipped {
+        Some(_) => Some(Skipped::Read),
+        None if refused => {
+            if r.skip_unparsed_container().is_none() {
+                r.set_depth_refused(true);
+                return None;
+            }
+            Some(Skipped::SteppedOver)
+        }
+        None => None,
     }
 }
 

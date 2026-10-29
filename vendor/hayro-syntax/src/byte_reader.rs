@@ -1,5 +1,6 @@
 //! A byte reader.
 
+use alloc::vec::Vec;
 use core::cell::Cell;
 use core::ops::Range;
 
@@ -76,11 +77,12 @@ impl<'a> Reader<'a> {
     }
 
     /// PdfCraft patch (29): steps over the direct array or dictionary at the offset without
-    /// parsing it, in one pass and without recursion, however deeply it nests: brackets and
-    /// `<<` `>>` are counted, and strings and comments are stepped over so the delimiters in
-    /// them don't count. Nothing in it is read, so nothing can be reached through it. Returns
-    /// `None`, with the offset where it was, when no array or dictionary starts here or the
-    /// data ends before it closes.
+    /// parsing it, in one pass and without recursion, however deeply it nests: each `]` must
+    /// close an array and each `>>` a dictionary, and strings and comments are stepped over so
+    /// the delimiters in them don't count. Nothing in it is read, so nothing can be reached
+    /// through it. Returns `None`, with the offset where it was, when no array or dictionary
+    /// starts here, a closing delimiter doesn't match its opener or the data ends before it
+    /// closes.
     pub(crate) fn skip_unparsed_container(&mut self) -> Option<()> {
         let start = self.offset;
         let skipped = self.skip_unparsed_container_inner();
@@ -94,20 +96,30 @@ impl<'a> Reader<'a> {
         if self.peek_tag(b"<<").is_none() && self.peek_tag(b"[").is_none() {
             return None;
         }
+        // What each open level is, one bit per level (set for a dictionary): at most one word
+        // for every 64 bytes of the data, since every level takes at least one byte.
+        let mut kinds: Vec<u64> = Vec::new();
         let mut depth = 0usize;
         loop {
-            match self.read_byte()? {
-                b'[' => depth = depth.checked_add(1)?,
+            let closes_dict = match self.read_byte()? {
+                b'[' => {
+                    open_level(&mut kinds, &mut depth, false)?;
+                    continue;
+                }
                 b'<' if self.peek_byte() == Some(b'<') => {
                     self.forward();
-                    depth = depth.checked_add(1)?;
+                    open_level(&mut kinds, &mut depth, true)?;
+                    continue;
                 }
                 // A hexadecimal string: whatever it holds, it ends at the first `>`.
-                b'<' => while self.read_byte()? != b'>' {},
-                b']' => depth = depth.checked_sub(1)?,
+                b'<' => {
+                    while self.read_byte()? != b'>' {}
+                    continue;
+                }
+                b']' => false,
                 b'>' if self.peek_byte() == Some(b'>') => {
                     self.forward();
-                    depth = depth.checked_sub(1)?;
+                    true
                 }
                 // A literal string, with its balanced parentheses and escapes.
                 b'(' => {
@@ -122,10 +134,19 @@ impl<'a> Reader<'a> {
                             _ => {}
                         }
                     }
+                    continue;
                 }
                 // A comment runs to the end of its line.
-                b'%' => while !matches!(self.read_byte()?, b'\n' | b'\r') {},
-                _ => {}
+                b'%' => {
+                    while !matches!(self.read_byte()?, b'\n' | b'\r') {}
+                    continue;
+                }
+                _ => continue,
+            };
+            depth = depth.checked_sub(1)?;
+            let is_dict = kinds.get(depth / 64).is_some_and(|w| (w >> (depth % 64)) & 1 == 1);
+            if is_dict != closes_dict {
+                return None;
             }
             if depth == 0 {
                 return Some(());
@@ -345,6 +366,24 @@ impl<'a> Reader<'a> {
             bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
         ]))
     }
+}
+
+/// PdfCraft patch (29): opens one more level in `Reader::skip_unparsed_container`, a dictionary
+/// when `dict`, recording its kind in `kinds` (one bit per level).
+fn open_level(kinds: &mut Vec<u64>, depth: &mut usize, dict: bool) -> Option<()> {
+    let word = *depth / 64;
+    if word == kinds.len() {
+        kinds.push(0);
+    }
+    let bits = kinds.get_mut(word)?;
+    let bit = 1u64 << (*depth % 64);
+    if dict {
+        *bits |= bit;
+    } else {
+        *bits &= !bit;
+    }
+    *depth = depth.checked_add(1)?;
+    Some(())
 }
 
 #[cfg(test)]
