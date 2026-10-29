@@ -394,15 +394,27 @@ pub fn tool_for(a: &Annotation) -> Option<CommentTool> {
     })
 }
 
+/// Whether Delete all comments counts `a`: a comment of its own (replies, statuses and checkmarks
+/// go with it), but not a redaction mark or a Fill & Sign item, which their own tools apply, clear
+/// and sign. Only unlocked ones go. Keep in step with `pdfcraft_annot::delete_all_annotations`.
+fn in_bulk_delete(a: &Annotation) -> bool {
+    a.is_comment() && a.subtype != "Redact" && !a.fill_sign
+}
+
+/// How many comments Delete all comments counts on `page` (every page when `None`), and how many
+/// of them are unlocked and would go.
+pub(crate) fn bulk_delete_counts(annotations: &[Annotation], page: Option<usize>) -> (usize, usize) {
+    annotations
+        .iter()
+        .filter(|a| page.is_none_or(|p| a.page == p) && in_bulk_delete(a))
+        .fold((0, 0), |(total, unlocked), a| (total + 1, unlocked + usize::from(!a.locked)))
+}
+
 impl PdfCraftApp {
     /// Delete all unlocked comments in the active document.
     pub fn delete_all_comments(&mut self) {
         let Some((i, id)) = self.active_ids() else { return };
-        let (total, unlocked) = self.session.get(id).map_or((0, 0), |d| {
-            let total = d.info.annotations.iter().filter(|a| a.is_comment()).count();
-            let unlocked = d.info.annotations.iter().filter(|a| a.is_comment() && !a.locked).count();
-            (total, unlocked)
-        });
+        let (total, unlocked) = self.session.get(id).map_or((0, 0), |d| bulk_delete_counts(&d.info.annotations, None));
         if total == 0 {
             self.notify_tr("No comments to remove");
             return;
@@ -425,11 +437,7 @@ impl PdfCraftApp {
     pub fn delete_page_comments(&mut self) {
         let Some((i, id)) = self.active_ids() else { return };
         let page = self.views[i].current;
-        let (total, unlocked) = self.session.get(id).map_or((0, 0), |d| {
-            let total = d.info.annotations.iter().filter(|a| a.page == page && a.is_comment()).count();
-            let unlocked = d.info.annotations.iter().filter(|a| a.page == page && a.is_comment() && !a.locked).count();
-            (total, unlocked)
-        });
+        let (total, unlocked) = self.session.get(id).map_or((0, 0), |d| bulk_delete_counts(&d.info.annotations, Some(page)));
         if total == 0 {
             self.notify_tr("No comments on this page");
             return;

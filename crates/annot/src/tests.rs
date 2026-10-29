@@ -356,6 +356,114 @@ fn delete_all_annotations_removes_comments_and_preserves_widgets_and_locked_thre
     assert_eq!(delete_all_annotations(&mut doc, None).unwrap(), 0);
 }
 
+/// Two pages whose `/Annots` are `page0` and `page1`, with `objects` numbered from 5 on.
+fn two_pages(page0: &str, page1: &str, objects: &[String]) -> Document {
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] >>".to_string(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots {page0} >>"),
+        format!("<< /Type /Page /Parent 2 0 R /Annots {page1} >>"),
+    ];
+    objs.extend_from_slice(objects);
+    doc_of(&objs)
+}
+
+/// An annotation named `nm` (`/NM`), with `extra` entries.
+fn named(subtype: &str, nm: &str, extra: &str) -> String {
+    format!("<< /Type /Annot /Subtype /{subtype} /Rect [0 0 10 10] /NM ({nm}) {extra} >>")
+}
+
+fn names_on(doc: &Document, page: usize) -> Vec<String> {
+    list(doc, page).iter().map(|d| text(d, b"NM")).collect()
+}
+
+#[test]
+fn delete_all_keeps_redaction_marks_and_fill_and_sign_items() {
+    let mut doc = two_pages(
+        "[5 0 R 6 0 R 7 0 R 8 0 R]",
+        "[]",
+        &[
+            named("Text", "note", ""),
+            named("Redact", "mark", ""),
+            named("Stamp", "check", "/Name /PCCheck"),
+            named("FreeText", "typed", "/PCFillSign true"),
+        ],
+    );
+    assert_eq!(delete_all_annotations(&mut doc, None).unwrap(), 1);
+    let mut doc = reopen(&doc);
+    assert_eq!(names_on(&doc, 0), ["mark", "check", "typed"], "the Redact and Fill & Sign tools own these");
+    assert_eq!(delete_all_annotations(&mut doc, Some(&[0])).unwrap(), 0);
+}
+
+#[test]
+fn delete_all_takes_replies_and_popups_on_other_pages() {
+    let objects = [
+        named("Text", "root", "/Popup 6 0 R"),
+        named("Popup", "root popup", "/Parent 5 0 R"),
+        named("Text", "reply", "/IRT 5 0 R /Popup 8 0 R"),
+        named("Popup", "reply popup", "/Parent 7 0 R"),
+        named("Square", "other", ""),
+    ];
+    // Clearing page 1 takes the whole thread of its comment; clearing the document counts the
+    // reply on page 2 as part of that thread, not as a comment of its own.
+    for (pages, removed, left) in [(Some(&[0][..]), 1, vec!["other"]), (None, 2, vec![])] {
+        let mut doc = two_pages("[5 0 R]", "[6 0 R 7 0 R 8 0 R 9 0 R]", &objects);
+        assert_eq!(delete_all_annotations(&mut doc, pages).unwrap(), removed, "{pages:?}");
+        let doc = reopen(&doc);
+        assert!(names_on(&doc, 0).is_empty());
+        assert_eq!(names_on(&doc, 1), left, "{pages:?}");
+    }
+}
+
+#[test]
+fn delete_all_keeps_an_unlocked_reply_to_a_locked_comment_on_another_page() {
+    for pages in [None, Some(&[1][..])] {
+        let mut doc = two_pages("[5 0 R]", "[6 0 R]", &[named("Text", "locked", "/F 128"), named("Text", "reply", "/IRT 5 0 R")]);
+        assert_eq!(delete_all_annotations(&mut doc, pages).unwrap(), 0, "{pages:?}");
+        assert_eq!((names_on(&doc, 0), names_on(&doc, 1)), (vec!["locked".to_string()], vec!["reply".to_string()]));
+    }
+}
+
+/// `/IRT` loops, an `/IRT` to itself and one to an object that isn't there leave comments of their
+/// own, as the comment list shows them; a locked one in a loop stays.
+#[test]
+fn delete_all_ends_on_reply_loops_and_treats_their_comments_as_their_own() {
+    let mut doc = two_pages(
+        "[5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R]",
+        "[]",
+        &[
+            named("Text", "a", "/IRT 6 0 R"),
+            named("Text", "b", "/IRT 5 0 R"),
+            named("Text", "self", "/IRT 7 0 R"),
+            named("Text", "locked", "/F 128 /IRT 9 0 R"),
+            named("Text", "c", "/IRT 8 0 R"),
+            named("Text", "dangling", "/IRT 99 0 R"),
+        ],
+    );
+    assert_eq!(delete_all_annotations(&mut doc, None).unwrap(), 5);
+    assert_eq!(names_on(&reopen(&doc), 0), ["locked"]);
+}
+
+/// An annotation listed on two pages, or an `/Annots` array two pages share, belongs to the first
+/// page (as the comment list has it), and every listing of a deleted annotation goes.
+#[test]
+fn delete_all_counts_a_comment_listed_twice_on_its_first_page() {
+    let objects = [named("Text", "twice", ""), named("Square", "other", "")];
+    let mut doc = two_pages("[5 0 R]", "[5 0 R 6 0 R]", &objects);
+    assert_eq!(delete_all_annotations(&mut doc, None).unwrap(), 2);
+    assert!(names_on(&doc, 0).is_empty() && names_on(&doc, 1).is_empty());
+    let mut doc = two_pages("[5 0 R]", "[5 0 R 6 0 R]", &objects);
+    assert_eq!(delete_all_annotations(&mut doc, Some(&[1])).unwrap(), 1);
+    assert_eq!((names_on(&doc, 0), names_on(&doc, 1)), (vec!["twice".to_string()], vec!["twice".to_string()]));
+
+    let shared = [named("Text", "shared", ""), "[5 0 R]".to_string()];
+    let mut doc = two_pages("6 0 R", "6 0 R", &shared);
+    assert_eq!(delete_all_annotations(&mut doc, Some(&[1])).unwrap(), 0, "the array's comments are on page 1");
+    assert_eq!(delete_all_annotations(&mut doc, None).unwrap(), 1);
+    let doc = reopen(&doc);
+    assert!(names_on(&doc, 0).is_empty() && names_on(&doc, 1).is_empty());
+}
+
 #[test]
 fn move_shifts_all_geometry_and_the_popup() {
     let mut doc = fixture();

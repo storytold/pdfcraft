@@ -3154,3 +3154,109 @@ fn delete_page_and_all_comments_commands_preserve_locked_and_undo_restores() {
     h.run_steps(2);
     assert_eq!(h.state().session.get(doc_id).unwrap().info.annotations.len(), 3);
 }
+
+/// [`TEXT_FIXTURE`] with `/Annots` `page1` and `page2` on its pages and `objects` numbered from 8 on.
+fn text_fixture_with_annots(page1: &str, page2: &str, objects: &[&str]) -> Vec<u8> {
+    let mut out = String::new();
+    for line in String::from_utf8_lossy(TEXT_FIXTURE).lines() {
+        if line.starts_with("trailer") {
+            for (i, o) in objects.iter().enumerate() {
+                out += &format!("{} 0 obj {o} endobj\n", i + 8);
+            }
+        }
+        let annots = [("3 0 obj", page1), ("4 0 obj", page2)].into_iter().find(|(obj, _)| line.starts_with(obj));
+        match annots {
+            Some((_, a)) => out += &line.replace(">> >> >> endobj", &format!(">> >> /Annots {a} >> endobj")),
+            None => out += line,
+        }
+        out.push('\n');
+    }
+    out.into_bytes()
+}
+
+/// Whether the Comments panel's "…" menu offers the two delete commands enabled (this page, all).
+fn panel_delete_enabled(h: &mut Harness<'static, PdfCraftApp>) -> (bool, bool) {
+    use egui_kittest::kittest::NodeT;
+    h.get_by_label("More options").click();
+    h.run_steps(2);
+    let enabled = |label: &str| !h.get_by_label(label).accesskit_node().is_disabled();
+    let both = (enabled("Delete comments on this page"), enabled("Delete all comments"));
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    both
+}
+
+/// Redaction marks and Fill & Sign items belong to their own tools: the delete commands neither
+/// count, offer nor remove them.
+#[test]
+fn deleting_comments_leaves_redaction_marks_and_fill_and_sign_items() {
+    let bytes = text_fixture_with_annots(
+        "[8 0 R 9 0 R]",
+        "[10 0 R]",
+        &[
+            "<< /Type /Annot /Subtype /Redact /Rect [20 20 80 60] >>",
+            "<< /Type /Annot /Subtype /Stamp /Name /PCCheck /Rect [100 20 120 40] >>",
+            "<< /Type /Annot /Subtype /Square /Rect [20 20 80 60] /Contents (Page 2 note) >>",
+        ],
+    );
+    let mut h = harness_with_bytes(bytes, |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.set_option("quick", "select").unwrap();
+    });
+    crate::support::settle(&mut h);
+    let doc_id = h.state().views[0].id;
+    assert_eq!(comments(&h).len(), 3);
+    assert_eq!(panel_delete_enabled(&mut h), (false, true), "page 1 has only a redaction mark and a Fill & Sign check");
+
+    // The page's right-click menu doesn't offer it on page 1 either.
+    let p = at(&h, 200.0, 150.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    h.get_by_label("Flatten comments");
+    assert!(h.query_by_label("Delete comments on this page").is_none());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+
+    assert!(h.state_mut().execute("comment.delete_page"));
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("No comments on this page"));
+    assert!(h.state().session.get(doc_id).unwrap().can_undo().is_none());
+    assert!(h.state_mut().execute("comment.delete_all"));
+    h.run_steps(2);
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("Removed 1 comment"));
+    assert_eq!(comments(&h).iter().map(|a| a.subtype.as_str()).collect::<Vec<_>>(), ["Redact", "Stamp"]);
+}
+
+/// A reply on page 2 to a locked comment on page 1 is in that comment's thread, not a comment of
+/// its own: with everything locked, the commands, the panel and the edit all leave it.
+#[test]
+fn a_reply_on_another_page_to_a_locked_comment_is_not_deleted() {
+    let bytes = text_fixture_with_annots(
+        "[8 0 R]",
+        "[9 0 R]",
+        &[
+            "<< /Type /Annot /Subtype /Text /Rect [20 150 40 170] /F 128 /Contents (Locked note) >>",
+            "<< /Type /Annot /Subtype /Text /Rect [20 150 40 170] /IRT 8 0 R /Contents (Reply on page 2) >>",
+        ],
+    );
+    let mut h = harness_with_bytes(bytes, |app| app.set_option("panel", "comments").unwrap());
+    crate::support::settle(&mut h);
+    let doc_id = h.state().views[0].id;
+    assert_eq!(comments(&h).iter().filter(|a| a.is_reply()).count(), 1);
+    assert_eq!(panel_delete_enabled(&mut h), (false, false));
+
+    assert!(h.state_mut().execute("comment.delete_all"));
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("All comments are locked"));
+    h.state_mut().views[0].current = 1;
+    assert!(h.state_mut().execute("comment.delete_page"));
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("No comments on this page"));
+
+    // The engine counts as the interface does: there is nothing it may delete.
+    use pdfcraft_engine::Edit;
+    assert!(!h.state_mut().apply_edit(Edit::DeleteAnnotations { pages: None }));
+    assert!(!h.state_mut().apply_edit(Edit::DeleteAnnotations { pages: Some(vec![1]) }));
+    assert_eq!(comments(&h).len(), 2);
+    assert!(h.state().session.get(doc_id).unwrap().can_undo().is_none());
+}
