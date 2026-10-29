@@ -101,9 +101,9 @@ needs a prompt to open is listed and asks at signing (issue #179).
   button or choice) field's existing appearance (its `/AP` dictionary, a dictionary of states, an
   appearance stream) and add entries to the AcroForm's existing indirect `/DR` or its category
   dictionaries; both are form fill. Each object is judged by the role it held when signed, and
-  only when nothing else in the signed file refers to it: an appearance that is also a Form XObject
-  a page draws stays page content, and one shared with a signature field, a comment or a script is
-  not form fill. Changing or dropping a `/DR` entry is not form fill either.
+  only when nothing but other fields' appearances refers to it: an appearance that is also a Form
+  XObject a page draws stays page content, and one shared with a signature field, a comment, a
+  script or a `/DR` entry is not form fill. Changing or dropping a `/DR` entry is not form fill either.
 - **Strict in what it checks, tolerant where signers differ.** RSA PKCS #1 signatures are checked
   against the one encoding the digest should have, built here and compared byte for byte; the
   `DigestInfo` may omit its NULL parameter, as older signers write it (RFC 8017 App. B.1), but a
