@@ -9608,10 +9608,9 @@ fn spaces_after_a_rows_last_word_do_not_move_its_alignment() {
     }
 }
 
-/// A justified row ends at the margin. Word spacing reaches only the spaces between its words:
-/// the spaces before its first word and after its last are left out of a stretched row (as
-/// before #4199), so the reopened rows stay inside the paragraph and can be edited again in
-/// place. The ones before its first word still indent it: the row starts their width in (#4487).
+/// A justified row retains its leading spaces at their natural width and ends at the margin.
+/// Word spacing stretches only the gaps between words; trailing spaces are omitted. The
+/// reopened text keeps its indent and remains one editable paragraph (#4487).
 #[test]
 fn a_justified_row_keeps_its_indent_and_ends_at_the_margin() {
     let style = text::BlockStyle {
