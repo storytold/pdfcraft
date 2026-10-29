@@ -144,7 +144,7 @@ Right-click a PDF tab to close it, reopen the last closed file-backed tab, or re
 
 Bookmarks, page thumbnails and the document's own page labels (i, ii, 1, 2…) keep you oriented in long documents. Search bookmark titles in the Bookmarks panel to find nested entries even when their parents are collapsed. Matches keep their ancestors for context; Clear restores the unfiltered tree without changing its expansion state.
 
-In **Inspector > Pages**, use **Thumbnail size** and the smaller/larger buttons to show more pages or inspect larger previews (50–150%). This changes only the thumbnails, keeping multi-page selection and the current page in view. The size belongs to the open document view and survives reloading its file; it is not remembered after restarting. Agents can set it with `ui.set {"key":"thumbnail-zoom","value":"75"}` and read `active.thumbnail_zoom` from `ui.state`.
+In **Inspector > Pages**, use **Thumbnail size** and the smaller/larger buttons to show more pages or inspect larger previews (50–150%). The size controls hide when the panel is narrow and return when widened, keeping the chosen size. This changes only the thumbnails, keeping multi-page selection and the current page in view. The size belongs to the open document view and survives reloading its file; it is not remembered after restarting. Agents can set it with `ui.set {"key":"thumbnail-zoom","value":"75"}` and read `active.thumbnail_zoom` from `ui.state`.
 
 <table>
 <tr>
@@ -334,7 +334,7 @@ pdfcraft-cli ui --control ~/.pdfcraft-control.json quit
 
 `ui.panel` opens, closes or sizes a side panel: `{"panel":"tools"|"side","open":true|false,"width":320}`.
 `tools` is the Tools panel and `side` the panel the rail opens (reopening it shows the one open last).
-`width` is clamped to the panel's limits (Tools 240–520, side panel 260–520 points). `ui.dock.reset`
+`width` is clamped to the panel's limits (Tools 240–520, side panel 220–520 points). `ui.dock.reset`
 resets the side panels: Tools open on the left, default widths. The control channel accepts these
 methods directly; `ui.command` also accepts `{"id":"ui.panel","params":{...}}`. Saved preferences keep
 the Tools side, the open panels and their widths. Invalid requests return an error without changing

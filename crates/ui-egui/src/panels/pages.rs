@@ -34,6 +34,10 @@ pub(super) fn page_tools(ui: &mut egui::Ui, enabled: bool) -> Option<&'static st
 
 /// Size controls stay above the scroll area, so they remain reachable on long documents.
 pub(super) fn thumbnail_size(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, enabled: bool) {
+    // Keep narrow panels compact without changing the chosen thumbnail size.
+    if ui.available_width() < 280.0 {
+        return;
+    }
     let before = view.thumbnail_zoom();
     let mut zoom = before;
     let label = ui

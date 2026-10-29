@@ -18,7 +18,7 @@ pub const TOOLS_WIDTH: f32 = 272.0;
 /// Default width of the side panel.
 pub const SIDE_WIDTH: f32 = 330.0;
 const TOOLS_RANGE: RangeInclusive<f32> = 240.0..=520.0;
-const SIDE_RANGE: RangeInclusive<f32> = 260.0..=520.0;
+const SIDE_RANGE: RangeInclusive<f32> = 220.0..=520.0;
 /// Version of the saved `side_panels` value.
 const VERSION: u64 = 1;
 /// Deepest split tree the old layout migration walks; the old renderer allowed far fewer.
