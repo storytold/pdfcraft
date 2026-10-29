@@ -303,6 +303,23 @@ fn a_cropped_image_is_kept_when_only_its_hidden_part_reaches_a_mark() {
     assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
 }
 
+/// The clip's box is the whole path the renderer clips with: one carried across an operator
+/// inside the path (`w`), and points read from an operator's last operands, as the renderer does.
+#[test]
+fn a_clip_is_measured_by_the_path_the_renderer_builds() {
+    let jpeg =
+        stream("/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode", b"not decoded");
+    // Both clips show the image at the mark (10–40); read from the front, `100 0 0 m` would
+    // start the triangle at x 100 and leave it no width.
+    for clip in [&b"0 0 100 100 re 1 w 200 0 100 100 re W n"[..], b"100 0 0 m 100 0 l 100 100 l h W n"] {
+        let src = [b"q ", clip, b" q 300 0 0 100 0 0 cm /Im1 Do Q Q"].concat();
+        let mut doc = one_page(&src, "/XObject << /Im1 7 0 R >>", vec![jpeg.clone()]);
+        mark(&mut doc, 0, &[[10.0, 10.0, 40.0, 40.0]], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!(r.images_removed, 1, "{}: {r:?}", String::from_utf8_lossy(clip));
+    }
+}
+
 /// Inline images are measured by what the clip shows too.
 #[test]
 fn a_cropped_inline_image_is_kept_when_only_its_hidden_part_reaches_a_mark() {

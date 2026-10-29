@@ -385,10 +385,9 @@ impl Walk {
             return;
         }
         if !self.path.is_empty() {
-            // A path not ended by a painting operator: pass it through.
+            // An operator inside a path: pass the path so far through. The renderer keeps
+            // building the same path, so its box and clip carry on to the painting operator.
             piece.ops.append(&mut self.path);
-            self.path_box = None;
-            self.clip = false;
         }
         let kept = match o {
             b"q" | b"Q" | b"cm" | b"Tf" | b"gs" => {
@@ -414,7 +413,16 @@ impl Walk {
         let pts: Vec<(f64, f64)> = match o {
             b"re" => op.nums::<4>().map(|[x, y, w, h]| vec![(x, y), (x + w, y), (x, y + h), (x + w, y + h)]).unwrap_or_default(),
             b"h" | b"W" | b"W*" => Vec::new(),
-            _ => op.operands.iter().filter_map(Object::as_f64).collect::<Vec<_>>().as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect(),
+            _ => {
+                // The renderer reads the last operands an operator takes, as `nums` does for `re`.
+                let n = match o {
+                    b"c" => 6,
+                    b"v" | b"y" => 4,
+                    _ => 2,
+                };
+                let all: Vec<f64> = op.operands.iter().filter_map(Object::as_f64).collect();
+                all[all.len().saturating_sub(n)..].as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect()
+            }
         };
         for (x, y) in pts {
             let (u, v) = self.gs.ctm.apply(x, y);
