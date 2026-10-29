@@ -1,4 +1,5 @@
 use super::{Dict, Object, PdfString, Rgb, Stream, color, ext_gstate, form, literal, n, nums, rg, rg_stroke, text_width, win_ansi};
+use pdfcraft_fonts::first_undrawable;
 
 /// The label and colour of a standard rubber stamp name (ISO 32000-2 Table 184), for a stamp
 /// another program wrote without an appearance. Names are matched byte for byte, as PDF names

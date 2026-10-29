@@ -761,7 +761,7 @@ fn stamps_outside_the_standard_fonts_are_drawn_as_outlines() {
     assert_eq!(d.name(b"PCLang"), Some(&b"ru"[..]));
     assert!(appearance::undrawable_text(d).is_none());
     assert!(appearance::build(d).is_some(), "it can be restyled");
-    set_style(&mut doc, 0, i, Some([0.1, 0.2, 0.9]), None, None, None, &meta("")).unwrap();
+    set_style(&mut doc, 0, i, StyleChange::new(Some([0.1, 0.2, 0.9]), None, None, None), &meta("")).unwrap();
     assert!(ap_content(&doc, &list(&doc, 0)[i]).contains("/ActualText <FEFF041E"), "restyled in Russian");
     // An English stamp keeps its Helvetica label; a Cyrillic name on it becomes outlines.
     let j = add_stamp(&mut doc, StampKind::DynReviewed, StampLang::En, Some("By Иван at 2:14 pm, Oct 02, 2026"));

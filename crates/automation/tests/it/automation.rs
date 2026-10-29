@@ -5682,6 +5682,12 @@ fn stamps_in_other_scripts_through_tools() {
             assert!(matches!(a.call("comment_add", &call), Err(ToolError::InvalidArgs(m)) if m.contains("craft-fonts")), "{}", lang.code());
         }
     }
+    // The code is matched case-insensitively, and one the list lacks is refused rather than placed in English.
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "stamp", "stamp": "draft", "lang": " RU ", "at": [150, 300] }));
+    let unknown = json!({ "doc": doc, "page": 1, "type": "stamp", "stamp": "draft", "lang": "xx", "at": [150, 300] });
+    assert!(matches!(a.call("comment_add", &unknown), Err(ToolError::InvalidArgs(m)) if m.contains("unknown stamp language")));
+    let schema = &comment_add.input_schema["properties"]["lang"]["enum"];
+    assert_eq!(schema.as_array().map(Vec::len), Some(StampLang::ALL.len()), "{schema}");
 }
 
 /// #4077: a PDF page placed at a given width (a text column, 483 pt) through `rect`, fitted
