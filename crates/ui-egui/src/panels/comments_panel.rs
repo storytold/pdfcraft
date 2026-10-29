@@ -762,6 +762,15 @@ pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocV
             command = Some("comment.flatten");
             ui.close();
         }
+        ui.separator();
+        if ui.button(tl!("Delete comments on this page")).clicked() {
+            command = Some("comment.delete_page");
+            ui.close();
+        }
+        if ui.button(tl!("Delete all comments")).clicked() {
+            command = Some("comment.delete_all");
+            ui.close();
+        }
     });
     let filter = icons::button(ui, "filter", 26.0, active, tl!("Filter comments"));
     egui::Popup::menu(&filter).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {

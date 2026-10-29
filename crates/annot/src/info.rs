@@ -60,7 +60,7 @@ pub fn is_comment_subtype(subtype: &str) -> bool {
 
 /// Where a reference to a reference (`5 0 obj 6 0 R endobj`) ends, as `pdfcraft_render::inspect`
 /// follows it, within a few steps (a cycle stops there).
-fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
+pub(super) fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
     for _ in 0..8 {
         match &*doc.get(r) {
             Object::Ref(next) => r = *next,
