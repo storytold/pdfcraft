@@ -95,11 +95,11 @@ impl PdfCraftApp {
 }
 
 impl PdfCraftApp {
-    /// Whether this frame's wheel zooms rather than scrolls ([`scroll_speed::wheel_zooms`]): the
-    /// preference is on, the Hand tool is held, no dialog is open, and the pointer is over the
-    /// pages of a document shown (not replaced by the expanded All tools view) (either of a side-by-side comparison's, not a page grid), with
-    /// nothing drawn over them there: a menu or popup above the pages keeps the wheel. Both as
-    /// the last frame drew them.
+    /// Whether this frame's wheel zooms rather than scrolls ([`scroll_speed::wheel_zooms`]):
+    /// the preference is on, the Hand tool is held, no dialog is open, and the pointer is over
+    /// the document view (its pages and the space around them), including either comparison
+    /// half. A page grid or expanded All tools view does not qualify. A menu or popup over
+    /// the document view keeps the wheel. Viewports and covering layers are from the last frame.
     fn hand_wheel_zooms(&self, ctx: &egui::Context, raw: &egui::RawInput) -> bool {
         if !self.hand_wheel_zoom || self.quick_tool != QuickTool::Hand || self.modal_open() {
             return false;
@@ -110,7 +110,7 @@ impl PdfCraftApp {
         }
         let moved = raw.events.iter().rev().find_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None });
         let Some(pointer) = moved.or_else(|| ctx.input(|i| i.pointer.latest_pos())) else { return false };
-        // The pages are drawn in the window's background layer; menus and popups above it.
+        // The document view is drawn in the window's background layer; menus and popups above it.
         if ctx.layer_id_at(pointer).is_some_and(|layer| layer.order != egui::Order::Background) {
             return false;
         }

@@ -2278,8 +2278,8 @@ fn the_hand_tool_zooms_with_the_wheel_when_the_preference_says_so() {
     }
 }
 
-/// #1399: off the pages (a panel, the tab strip) the wheel keeps scrolling whatever is under it:
-/// only a notch over the pages is turned into ⌘/Ctrl-wheel.
+/// #1399: outside the document view (a panel, the tab strip) the wheel keeps scrolling.
+/// The document view is its viewport, including pages, gaps and surrounding space.
 #[test]
 fn the_hand_tool_wheel_zooms_only_over_the_pages() {
     let mut h = harness();
@@ -2304,9 +2304,9 @@ fn the_hand_tool_wheel_zooms_only_over_the_pages() {
         h.state_mut().prepare_raw_input(&ctx, &mut raw);
         raw.events.iter().find_map(|e| if let egui::Event::MouseWheel { modifiers, .. } = e { Some(*modifiers) } else { None }).unwrap()
     };
-    assert_eq!(notch(&mut h, pages.center()), egui::Modifiers::COMMAND, "over the pages it zooms");
-    assert_eq!(notch(&mut h, egui::pos2(pages.center().x, pages.top() - 20.0)), egui::Modifiers::NONE, "above them it scrolls");
-    assert_eq!(notch(&mut h, egui::pos2(pages.right() + 5.0, pages.center().y)), egui::Modifiers::NONE, "beside them it scrolls");
+    assert_eq!(notch(&mut h, pages.center()), egui::Modifiers::COMMAND, "over the document view it zooms");
+    assert_eq!(notch(&mut h, egui::pos2(pages.center().x, pages.top() - 20.0)), egui::Modifiers::NONE, "above the document view it scrolls");
+    assert_eq!(notch(&mut h, egui::pos2(pages.right() + 5.0, pages.center().y)), egui::Modifiers::NONE, "outside the document view it scrolls");
     // Over a menu open above the pages, the menu has the wheel.
     crate::support::open_menu(&mut h, "View");
     let row = crate::support::menu_row(&h, "Page display").rect().center();
