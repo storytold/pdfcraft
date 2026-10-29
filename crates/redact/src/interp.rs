@@ -845,7 +845,10 @@ impl Walk {
         {
             self.out.vertical = true;
         }
-        let (new_items, removed) = show(scope, &self.gs, &mut self.tm, &items);
+        let (new_items, removed, beside) = show(scope, &self.gs, &mut self.tm, &items);
+        if scope.mode == Mode::Apply {
+            scope.report.glyphs_beside_marks += beside;
+        }
         if removed == 0 {
             return Some(op);
         }
@@ -977,9 +980,9 @@ fn em_box(descent: f64, ascent: f64) -> (f64, f64) {
 }
 
 /// Lay out a shown string (or `TJ` array) glyph by glyph, advancing `tm`. Returns the `TJ`
-/// items with the glyphs under a region replaced by displacements, and how many were removed.
-/// In apply mode the runs removed under each region are also handed to `scope.removed`.
-fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<Object>, usize) {
+/// items with the glyphs under a region replaced by displacements, how many were removed, and
+/// how many were kept although their full font box reaches a region (see [`em_box`]).
+fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<Object>, usize, usize) {
     let f = &gs.font;
     let size = gs.size;
     let (descent, ascent) = em_box(f.descent, f.ascent);
@@ -987,6 +990,7 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
     let mut removed = 0;
     scope.shown += 1;
     let op = scope.shown;
+    let mut beside = 0;
     let push_num = |out: &mut Vec<Object>, v: f64| {
         if v == 0.0 {
             return;
@@ -1021,6 +1025,9 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
                         }
                         None => {
                             rects = scope.glyph_rects(trm.bbox([0.0, descent, w0, ascent]), origin);
+                            if rects.is_empty() && !scope.glyph_rects(b, origin).is_empty() {
+                                beside += 1;
+                            }
                             !rects.is_empty()
                         }
                     };
@@ -1103,7 +1110,7 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
             }
         }
     }
-    (out, removed)
+    (out, removed, beside)
 }
 
 /// `Do`: `None` = leave the operator alone; `Some(None)` = drop it; `Some(Some(op))` = replace it.

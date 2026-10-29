@@ -146,6 +146,7 @@ fn a_mark_on_one_line_leaves_the_line_below_when_lines_are_set_solid() {
     mark(&mut doc, 0, &[[20.0, 108.0, 40.0, 118.0]], "");
     let r = apply(&mut doc, None).unwrap();
     assert_eq!(r.glyphs, 4, "{r:?}");
+    assert_eq!(r.glyphs_beside_marks, 4, "CRET below reaches the mark only with its font box: kept and counted");
     let c = content(&doc, 0);
     assert!(!c.contains("1234"), "{c}");
     assert!(c.contains("(SECRET) Tj") && c.contains("(ABOVE123) Tj"), "the lines above and below are whole: {c}");
@@ -163,7 +164,7 @@ fn small_text_set_solid_keeps_the_line_below() {
     // "1234" on the baseline at y 111 spans x 19–37; its em box is y 109.2–118.2.
     mark(&mut doc, 0, &[[19.0, 109.2, 37.0, 118.2]], "");
     let r = apply(&mut doc, None).unwrap();
-    assert_eq!(r.glyphs, 4, "{r:?}");
+    assert_eq!((r.glyphs, r.glyphs_beside_marks), (4, 4), "{r:?}");
     let c = content(&doc, 0);
     assert!(c.contains("(SECRET) Tj") && c.contains("(ABOVE123) Tj"), "{c}");
 }
@@ -176,7 +177,7 @@ fn a_mark_over_part_of_large_text_still_removes_it() {
     // Glyph boxes span y 95.2–119.2; S and E span x 10–34.
     mark(&mut doc, 0, &[[10.0, 90.0, 34.0, 99.0]], "");
     let r = apply(&mut doc, None).unwrap();
-    assert_eq!(r.glyphs, 2, "{r:?}");
+    assert_eq!((r.glyphs, r.glyphs_beside_marks), (2, 0), "{r:?}");
     assert!(!content(&doc, 0).contains("SECRET"));
 }
 
