@@ -915,7 +915,13 @@ impl crate::PdfCraftApp {
             }
             #[cfg(target_arch = "wasm32")]
             if self.system_clipboard {
-                return Err("the web version can't put images on the clipboard yet; use Save Image As".to_string());
+                // Browsers only let a secure (https or localhost) page write to the clipboard; elsewhere
+                // eframe would log the refusal and the picture would seem copied when it is not.
+                if !web_sys::window().is_some_and(|w| w.is_secure_context()) {
+                    return Err("the browser only allows copying on a secure (https) page; use Save Image As".to_string());
+                }
+                let ctx = self.ctx.as_ref().ok_or("the window isn't ready yet; try again")?;
+                copy_image_through_egui(ctx, w, h, &rgba)?;
             }
             self.last_copied_image = Some((w, h, rgba));
             Ok((w, h))
@@ -1135,6 +1141,19 @@ fn spaced_job(text: &str, font: &egui::FontId, color: Color32, letter_spacing: f
     job
 }
 
+/// Queues the picture (`w` × `h`, unpremultiplied RGBA) for egui to put on the clipboard. On the
+/// web, eframe writes it as a PNG through the asynchronous Clipboard API at the end of the frame.
+#[cfg(any(target_arch = "wasm32", test))]
+fn copy_image_through_egui(ctx: &egui::Context, w: u32, h: u32, rgba: &[u8]) -> Result<(), String> {
+    let (width, height) = (usize::try_from(w).unwrap_or(usize::MAX), usize::try_from(h).unwrap_or(usize::MAX));
+    // `from_rgba_unmultiplied` asserts this, so a short buffer is an error here, not a panic.
+    if width.checked_mul(height).and_then(|n| n.checked_mul(4)) != Some(rgba.len()) {
+        return Err(format!("its pixels don't match its size ({w} × {h})"));
+    }
+    ctx.copy_image(egui::ColorImage::from_rgba_unmultiplied([width, height], rgba));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use egui_kittest::kittest::Queryable;
@@ -1251,5 +1270,34 @@ mod tests {
         // Page width = width + 10 (spacing after the last character) > width + 5: the page wraps.
         assert_eq!(rows(width + 5.0), 2, "the saved text wraps here, so the editor must too");
         assert_eq!(rows(width + 10.0), 1, "and keeps the line when the spacing fits");
+    }
+
+    /// The web build's Copy Image hands egui the picture's own pixels (eframe puts them on the
+    /// browser clipboard), and a pixel buffer that doesn't match the size is refused, not a panic.
+    #[test]
+    fn copy_image_through_egui_queues_the_pixels_and_refuses_a_short_buffer() {
+        let ctx = egui::Context::default();
+        let rgba = [255, 0, 0, 255, 0, 0, 255, 128];
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            assert_eq!(copy_image_through_egui(ui.ctx(), 2, 1, &rgba), Ok(()));
+        });
+        out.textures_delta.clear();
+        let images: Vec<_> = out
+            .platform_output
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                egui::OutputCommand::CopyImage(i) => Some(i.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(images, vec![egui::ColorImage::from_rgba_unmultiplied([2, 1], &rgba)]);
+
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            assert!(copy_image_through_egui(ui.ctx(), 2, 2, &rgba).is_err(), "8 bytes are not 2 × 2 pixels");
+            assert!(copy_image_through_egui(ui.ctx(), u32::MAX, u32::MAX, &rgba).is_err(), "no overflow");
+        });
+        out.textures_delta.clear();
+        assert!(!out.platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyImage(_))));
     }
 }
