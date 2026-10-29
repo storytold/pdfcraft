@@ -37,6 +37,9 @@ pub const RECOGNITION_MODEL: &str = "text-recognition.onnx";
 /// The layout model (optional: without it, a page's lines are ordered by their position alone and
 /// make one paragraph).
 pub const LAYOUT_MODEL: &str = "doclayout.onnx";
+/// The table structure model (optional, and used only with the layout model: without it, a table
+/// region is a paragraph like any other).
+pub const TABLE_MODEL: &str = "slanet-plus.onnx";
 /// Their SHA-256s, as in ATTRIBUTION.toml. [`Ocr::from_bytes`] loads nothing else: rten's ONNX
 /// parser can spin forever on bytes that aren't a model (64 × 0xff does).
 pub const DETECTION_MODEL_SHA256: &str = "a917b23dbd9524b465df7e922641b3ff2981623df4ded5a0234004ef2fee7cfe";
@@ -72,14 +75,24 @@ impl Models {
 
     /// Look for the models: `$PDFCRAFT_MODELS`, then `models/` beside the executable (and
     /// `Resources/models` in a macOS bundle), then the source tree's `assets/models/`.
+    pub fn find() -> Option<Models> {
+        Self::search_dirs().iter().find_map(|d| Self::in_dir(d))
+    }
+
     /// Where the layout model ([`LAYOUT_MODEL`]) is: the first of [`Models::search_dirs`] that
     /// has it.
     pub fn find_layout() -> Option<PathBuf> {
-        Self::search_dirs().into_iter().map(|d| d.join(LAYOUT_MODEL)).find(|p| p.is_file())
+        Self::find_file(LAYOUT_MODEL)
     }
 
-    pub fn find() -> Option<Models> {
-        Self::search_dirs().iter().find_map(|d| Self::in_dir(d))
+    /// Where the table structure model ([`TABLE_MODEL`]) is: the first of
+    /// [`Models::search_dirs`] that has it.
+    pub fn find_tables() -> Option<PathBuf> {
+        Self::find_file(TABLE_MODEL)
+    }
+
+    fn find_file(name: &str) -> Option<PathBuf> {
+        Self::search_dirs().into_iter().map(|d| d.join(name)).find(|p| p.is_file())
     }
 
     /// The directories [`Models::find`] looks in, in order.
@@ -144,6 +157,7 @@ pub struct Ocr {
     /// page much larger than that is detected in tiles.
     pub(crate) detector_input: Option<(u32, u32)>,
     layout: Option<crate::regions::Layout>,
+    tables: Option<crate::tables::TableModel>,
 }
 
 impl Ocr {
@@ -173,17 +187,21 @@ impl Ocr {
             ..Default::default()
         };
         let engine = ocrs::OcrEngine::new(params).map_err(|e| OcrError::Load("ocr engine".into(), e.to_string()))?;
-        Ok(Ocr { engine, detector_input, layout: None })
+        Ok(Ocr { engine, detector_input, layout: None, tables: None })
     }
 
-    /// Load the models found by [`Models::find`], and the layout model ([`LAYOUT_MODEL`]) from
-    /// the first search directory that has it, if any does.
+    /// Load the models found by [`Models::find`], and the layout model ([`LAYOUT_MODEL`]) and the
+    /// table structure model ([`TABLE_MODEL`]) from the first search directory that has each, if
+    /// any does.
     pub fn find() -> Result<Ocr, OcrError> {
-        let ocr = Self::load(&Models::find().ok_or(OcrError::NoModels)?)?;
-        match Models::find_layout() {
-            Some(path) => ocr.with_layout(&path),
-            None => Ok(ocr),
+        let mut ocr = Self::load(&Models::find().ok_or(OcrError::NoModels)?)?;
+        if let Some(path) = Models::find_layout() {
+            ocr = ocr.with_layout(&path)?;
         }
+        if let Some(path) = Models::find_tables() {
+            ocr = ocr.with_tables(&path)?;
+        }
+        Ok(ocr)
     }
 
     /// This recogniser with the layout model at `path`. An installed model that does not load
@@ -192,10 +210,17 @@ impl Ocr {
         Ok(Ocr { layout: Some(crate::regions::Layout::load(path)?), ..self })
     }
 
+    /// This recogniser with the table structure model at `path` (an installed model that does not
+    /// load is an error, as for the layout model).
+    fn with_tables(self, path: &Path) -> Result<Ocr, OcrError> {
+        Ok(Ocr { tables: Some(crate::tables::TableModel::load(path)?), ..self })
+    }
+
     /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels.
     /// The lines come in reading order: split at column gutters, each column top to bottom.
-    /// With the layout model they are then read region by region, each region a paragraph;
-    /// without it the page is one paragraph.
+    /// With the layout model they are then read region by region, each region a paragraph, and
+    /// with the table structure model too, a table region is a table of cells; without the layout
+    /// model the page is one paragraph.
     pub fn recognize(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Paragraph>, OcrError> {
         if pixels.is_empty() {
             return Err(OcrError::EmptyImage);
@@ -223,30 +248,61 @@ impl Ocr {
         let before: Vec<Option<RectF>> = lines.iter_mut().map(|l| pad_line(l)).collect();
         let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
         use ocrs::TextItem;
-        let lines = crate::layout::reading_order(
-            read.into_iter()
-                .zip(before)
-                .filter_map(|(line, before)| line.map(|l| (l, before)))
-                .map(|(line, before)| Line {
-                    words: line
-                        .words()
-                        .map(|w| {
-                            let r = w.bounding_rect();
-                            Word::new(w.to_string(), clip([r.left() as f32, r.top() as f32, r.right() as f32, r.bottom() as f32], before), "ocrs")
-                        })
-                        .filter(|w| !w.text.trim().is_empty())
-                        .collect(),
-                })
-                .filter(|l| !l.words.is_empty())
-                .collect(),
-        );
+        let lines = read
+            .into_iter()
+            .zip(before)
+            .filter_map(|(line, before)| line.map(|l| (l, before)))
+            .map(|(line, before)| Line {
+                words: line
+                    .words()
+                    .map(|w| {
+                        let r = w.bounding_rect();
+                        Word::new(w.to_string(), clip([r.left() as f32, r.top() as f32, r.right() as f32, r.bottom() as f32], before), "ocrs")
+                    })
+                    .filter(|w| !w.text.trim().is_empty())
+                    .collect(),
+            })
+            .filter(|l| !l.words.is_empty())
+            .collect();
+        Ok(self.layout_page(lines, &rgb, channels, width as usize, height as usize))
+    }
+
+    /// What [`Ocr::recognize`] does with the lines it read, for lines read some other way: `lines`
+    /// (words in pixels of the picture) put in reading order and, with the layout model, read
+    /// region by region, tables cell by cell. `pixels` is the page picture the lines are on, as
+    /// for [`Ocr::recognize`].
+    pub fn arrange(&self, lines: Vec<Line>, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Paragraph>, OcrError> {
+        let (rgb, channels) = crate::picture(pixels, width, height)?;
+        Ok(self.layout_page(lines, &rgb, channels, width as usize, height as usize))
+    }
+
+    /// `lines` in reading order, then by region and table cell (see [`Ocr::recognize`]); `rgb` is
+    /// the page picture, `channels` (1 or 3) bytes a pixel.
+    fn layout_page(&self, lines: Vec<Line>, rgb: &[u8], channels: usize, width: usize, height: usize) -> Vec<Paragraph> {
+        let lines = crate::layout::reading_order(lines);
         let regions = match &self.layout {
             // The layout only orders what was read: if it fails, the page keeps the geometric
             // order rather than losing its text.
-            Some(model) => model.regions(&rgb, channels, width as usize, height as usize).unwrap_or_default(),
+            Some(model) => model.regions(rgb, channels, width, height).unwrap_or_default(),
             None => Vec::new(),
         };
-        Ok(crate::layout::paragraphs(lines, &regions).into_iter().map(|lines| Paragraph { lines }).collect())
+        let paragraphs = crate::layout::paragraphs(lines, &regions);
+        let read_as_table = crate::tables::to_read(paragraphs.iter().map(|(region, _)| region.and_then(|i| regions.get(i)).map(|r| r.label)));
+        paragraphs
+            .into_iter()
+            .zip(read_as_table)
+            .map(|((region, lines), as_table)| {
+                let table = region.and_then(|i| regions.get(i)).filter(|_| as_table);
+                // A table the model cannot read stays a paragraph: its text is not lost.
+                let read =
+                    table.zip(self.tables.as_ref()).and_then(|(region, model)| model.read(rgb, channels, width, height, region.rect).ok().flatten());
+                let Some(found) = read else { return Paragraph { lines, table: None } };
+                match crate::tables::fill(&found.rects, lines) {
+                    Ok(cells) => Paragraph { lines: cells, table: Some(found.table) },
+                    Err(lines) => Paragraph { lines, table: None },
+                }
+            })
+            .collect()
     }
 
     /// The words in a page, `rgb` (1 or 3 bytes per pixel) prepared as `page`. A page at least

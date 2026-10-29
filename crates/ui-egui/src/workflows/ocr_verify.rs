@@ -817,6 +817,7 @@ impl OcrVerify {
         self.pages
             .iter()
             .map(|p| OcrPage {
+                tables: Vec::new(),
                 paragraph_lengths: Vec::new(),
                 line_lengths: Vec::new(),
                 already_on_page: 0,
@@ -2310,6 +2311,7 @@ mod tests {
         let id = session.open("t.pdf", None, text, None).expect("fixture");
         let job = session.ocr_job(id, &[0], OcrSettings::default()).expect("fixture");
         let page = OcrPage {
+            tables: Vec::new(),
             paragraph_lengths: Vec::new(),
             line_lengths: Vec::new(),
             already_on_page: 0,
@@ -2330,6 +2332,7 @@ mod tests {
         let mut v = OcrVerify::default();
         v.finished(
             vec![OcrPage {
+                tables: Vec::new(),
                 paragraph_lengths: Vec::new(),
                 line_lengths: Vec::new(),
                 already_on_page: 0,
@@ -2344,6 +2347,7 @@ mod tests {
         assert_eq!(v.message, "OCR complete — no text recognized on this page.");
         v.finished(
             vec![OcrPage {
+                tables: Vec::new(),
                 paragraph_lengths: Vec::new(),
                 line_lengths: Vec::new(),
                 already_on_page: 0,
@@ -2454,6 +2458,7 @@ mod tests {
             id,
             job.guard.clone(),
             vec![OcrPage {
+                tables: Vec::new(),
                 paragraph_lengths: Vec::new(),
                 line_lengths: Vec::new(),
                 already_on_page: 0,
@@ -2489,6 +2494,7 @@ mod tests {
         let mut s = Session::new();
         let (_, mut v) = loaded(&mut s, &[Some(95.0), Some(95.0)]);
         v.pages = vec![OcrPage {
+            tables: Vec::new(),
             paragraph_lengths: Vec::new(),
             line_lengths: Vec::new(),
             already_on_page: 0,
@@ -2528,6 +2534,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(page, words)| OcrPage {
+                tables: Vec::new(),
                 paragraph_lengths: Vec::new(),
                 line_lengths: Vec::new(),
                 already_on_page: 0,
@@ -2640,6 +2647,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(page, words)| OcrPage {
+                tables: Vec::new(),
                 paragraph_lengths: Vec::new(),
                 line_lengths: Vec::new(),
                 already_on_page: 0,
@@ -2875,6 +2883,7 @@ mod tests {
             id,
             job.guard.clone(),
             vec![OcrPage {
+                tables: Vec::new(),
                 paragraph_lengths: Vec::new(),
                 line_lengths: Vec::new(),
                 already_on_page: 0,
@@ -3169,6 +3178,7 @@ mod tests {
         // A review with a correction in it, put away by another mode, comes back as it was.
         let job = h.state_mut().session.ocr_job(id, &[0], OcrSettings::default()).expect("fixture");
         let page = OcrPage {
+            tables: Vec::new(),
             paragraph_lengths: Vec::new(),
             line_lengths: Vec::new(),
             already_on_page: 0,
@@ -3196,6 +3206,7 @@ mod tests {
     #[test]
     fn a_finished_run_shows_a_read_page_over_a_skipped_one() {
         let skipped = |page| OcrPage {
+            tables: Vec::new(),
             paragraph_lengths: Vec::new(),
             line_lengths: Vec::new(),
             already_on_page: 0,
@@ -3205,6 +3216,7 @@ mod tests {
             notes: Vec::new(),
         };
         let read = |page| OcrPage {
+            tables: Vec::new(),
             paragraph_lengths: Vec::new(),
             line_lengths: Vec::new(),
             already_on_page: 0,
@@ -3244,6 +3256,7 @@ mod tests {
         assert_eq!(v.page_indicator(Some(5)), "—", "no reading yet");
         v.finished(
             vec![OcrPage {
+                tables: Vec::new(),
                 paragraph_lengths: Vec::new(),
                 line_lengths: Vec::new(),
                 already_on_page: 0,
@@ -3290,6 +3303,7 @@ mod tests {
         let a = app.views.first().expect("a is open").id;
         let job = app.session.ocr_job(a, &[0], OcrSettings::default()).expect("fixture");
         let page = OcrPage {
+            tables: Vec::new(),
             paragraph_lengths: Vec::new(),
             line_lengths: Vec::new(),
             already_on_page: 0,
@@ -3330,6 +3344,7 @@ mod tests {
         let a = app.views.first().expect("a is open").id;
         let job = app.session.ocr_job(a, &[0], OcrSettings::default()).expect("fixture");
         let page = OcrPage {
+            tables: Vec::new(),
             paragraph_lengths: Vec::new(),
             line_lengths: Vec::new(),
             already_on_page: 0,
@@ -3401,6 +3416,7 @@ mod tests {
     fn a_finished_run_shows_a_page_it_read() {
         let mut v = OcrVerify { current: 0, ..Default::default() };
         let page = OcrPage {
+            tables: Vec::new(),
             paragraph_lengths: Vec::new(),
             line_lengths: Vec::new(),
             already_on_page: 0,
@@ -3436,6 +3452,7 @@ mod tests {
         // A review on the screen: a run that cannot start leaves it as it was.
         let job = app.session.ocr_job(a, &[0], OcrSettings::default()).expect("fixture");
         let page = OcrPage {
+            tables: Vec::new(),
             paragraph_lengths: Vec::new(),
             line_lengths: Vec::new(),
             already_on_page: 0,
@@ -3491,6 +3508,7 @@ mod tests {
         assert!(!app.unsaved_flag.load(Ordering::Relaxed), "nothing to lose yet");
         let job = app.session.ocr_job(a, &[0], OcrSettings::default()).expect("fixture");
         let page = OcrPage {
+            tables: Vec::new(),
             paragraph_lengths: Vec::new(),
             line_lengths: Vec::new(),
             already_on_page: 0,
@@ -3521,6 +3539,7 @@ mod tests {
         let a = app.views[0].id;
         let job = app.session.ocr_job(a, &[0], OcrSettings::default()).expect("fixture");
         let page = OcrPage {
+            tables: Vec::new(),
             paragraph_lengths: Vec::new(),
             line_lengths: Vec::new(),
             already_on_page: 0,

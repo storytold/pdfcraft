@@ -1,6 +1,6 @@
 [package]
 name = "pdfcraft-ocr"
-description = "Scan & OCR: recognise text in page images (ocrs), order it by the page layout (PP-DocLayoutV3) and write it as an invisible, searchable text layer"
+description = "Scan & OCR: recognise text in page images (ocrs), order it by the page layout (PP-DocLayoutV3), read tables as rows and cells (SLANet_plus) and write it as an invisible, searchable text layer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

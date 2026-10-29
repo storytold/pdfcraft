@@ -203,7 +203,7 @@ fn network_input(pixels: &[u8], channels: usize, width: usize, height: usize) ->
 /// For each of `dst` output samples along one axis of `src` input samples: the input samples it
 /// reads and their weights (summing to 1). Shrinking averages the input samples each output one
 /// covers; enlarging interpolates linearly between the two nearest, sample centres aligned.
-fn axis_weights(src: usize, dst: usize) -> Vec<Vec<(usize, f32)>> {
+pub(crate) fn axis_weights(src: usize, dst: usize) -> Vec<Vec<(usize, f32)>> {
     let last = src.saturating_sub(1);
     let k = src as f64 / dst.max(1) as f64;
     (0..dst)

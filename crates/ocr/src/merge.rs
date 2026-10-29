@@ -5,7 +5,7 @@
 //! surviving word is named `"ROVER"`; secondary words nothing claimed are appended, keeping
 //! their own engine's name.
 
-use crate::{Line, OcrError, OcrImage, RecognizeOptions, Recognizer, Word};
+use crate::{Line, OcrError, OcrImage, RecognizeOptions, Recognizer, Table, Word};
 
 /// How the chosen engines combine. The default is [`MergeStrategy::PrimaryOnly`] with the
 /// default engine (ocrs), which is today's behavior.
@@ -170,6 +170,10 @@ pub struct StrategyOutcome {
     /// the primary engine groups lines into paragraphs, and a merge reorders them, so a reading
     /// that went through one has none.
     pub paragraph_lengths: Vec<usize>,
+    /// The paragraphs that are tables, each with its index in [`StrategyOutcome::paragraph_lengths`]
+    /// (see [`crate::Paragraph::table`]). The primary engine's order is what both the paragraph
+    /// breaks and the tables refer to, so a reading that went through a merge has none.
+    pub tables: Vec<(usize, Table)>,
     /// Whether the secondary engine's reading is part of `lines`: true only when the merge
     /// actually happened. A secondary that failed, or whose reading was discarded over the
     /// comparison cap, is `false`, with a note in [`StrategyOutcome::notes`] saying why.
@@ -207,35 +211,42 @@ pub fn recognize_with_strategy(
     // stands, which is every branch below except a merge that actually ran.
     let paragraphs = primary.paragraphs(image, options)?;
     let paragraph_lengths: Vec<usize> = paragraphs.iter().map(|p| p.lines.len()).collect();
+    let tables: Vec<(usize, Table)> = paragraphs.iter().enumerate().filter_map(|(i, p)| p.table.clone().map(|t| (i, t))).collect();
     let p: Vec<Line> = paragraphs.into_iter().flat_map(|pa| pa.lines).collect();
     // The shared shape of the ensemble strategies: the primary has read, the secondary joins
     // or fails (a failure degrades to the primary, with a note).
-    let join = |p: Vec<Line>, paragraph_lengths: Vec<usize>, sec: &dyn Recognizer| match sec.recognize(image, options) {
+    let join = |p: Vec<Line>, paragraph_lengths: Vec<usize>, tables: Vec<(usize, Table)>, sec: &dyn Recognizer| match sec.recognize(image, options) {
         // Over the comparison cap the merge is skipped: the secondary's reading was read but
         // is not part of the result, so the outcome says so — primary only, honestly not
         // merged, with the skip named.
         Ok(s) if over_cap(&p, &s) => {
             let (primary_words, secondary_words) = (p.iter().map(|l| l.words.len()).sum::<usize>(), s.iter().map(|l| l.words.len()).sum::<usize>());
-            StrategyOutcome { lines: p, paragraph_lengths, secondary_ran: false, notes: vec![cap_note(sec.id(), primary_words, secondary_words)] }
+            StrategyOutcome {
+                lines: p,
+                paragraph_lengths,
+                tables,
+                secondary_ran: false,
+                notes: vec![cap_note(sec.id(), primary_words, secondary_words)],
+            }
         }
         Ok(s) => StrategyOutcome { lines: rover_merge(p, s, sec.id()), secondary_ran: true, notes: Vec::new(), ..Default::default() },
-        Err(e) => StrategyOutcome { lines: p, paragraph_lengths, secondary_ran: false, notes: vec![degraded_note(sec.id(), &e)] },
+        Err(e) => StrategyOutcome { lines: p, paragraph_lengths, tables, secondary_ran: false, notes: vec![degraded_note(sec.id(), &e)] },
     };
     match strategy {
-        MergeStrategy::PrimaryOnly => Ok(StrategyOutcome { lines: p, paragraph_lengths, secondary_ran: false, notes: Vec::new() }),
+        MergeStrategy::PrimaryOnly => Ok(StrategyOutcome { lines: p, paragraph_lengths, tables, secondary_ran: false, notes: Vec::new() }),
         MergeStrategy::RoverVote => match secondary {
-            None => Ok(StrategyOutcome { lines: p, paragraph_lengths, secondary_ran: false, notes: Vec::new() }),
-            Some(sec) => Ok(join(p, paragraph_lengths, sec)),
+            None => Ok(StrategyOutcome { lines: p, paragraph_lengths, tables, secondary_ran: false, notes: Vec::new() }),
+            Some(sec) => Ok(join(p, paragraph_lengths, tables, sec)),
         },
         MergeStrategy::ConfidenceWeighted => match mean_confidence(&p) {
             // Confident enough — or an empty reading: the primary stands alone.
             Some(mean) if mean >= UNKNOWN_CONFIDENCE_BAR => {
-                Ok(StrategyOutcome { lines: p, paragraph_lengths, secondary_ran: false, notes: Vec::new() })
+                Ok(StrategyOutcome { lines: p, paragraph_lengths, tables, secondary_ran: false, notes: Vec::new() })
             }
             // A weak mean, or an unknown confidence (words, none reported): the secondary runs.
             _ => match secondary {
-                None => Ok(StrategyOutcome { lines: p, paragraph_lengths, secondary_ran: false, notes: Vec::new() }),
-                Some(sec) => Ok(join(p, paragraph_lengths, sec)),
+                None => Ok(StrategyOutcome { lines: p, paragraph_lengths, tables, secondary_ran: false, notes: Vec::new() }),
+                Some(sec) => Ok(join(p, paragraph_lengths, tables, sec)),
             },
         },
     }
@@ -603,7 +614,7 @@ mod tests {
             self.0.recognize(image, options)
         }
         fn paragraphs(&self, image: &OcrImage, options: &RecognizeOptions) -> Result<Vec<Paragraph>, OcrError> {
-            Ok(self.recognize(image, options)?.into_iter().map(|line| Paragraph { lines: vec![line] }).collect())
+            Ok(self.recognize(image, options)?.into_iter().map(|line| Paragraph { lines: vec![line], ..Default::default() }).collect())
         }
     }
 
@@ -644,5 +655,53 @@ mod tests {
         let outcome = recognize_with_strategy(&primary, Some(&secondary), MergeStrategy::RoverVote, &image(), &options).unwrap();
         assert!(outcome.secondary_ran);
         assert!(outcome.paragraph_lengths.is_empty());
+    }
+
+    /// Like [`EachLineAParagraph`], with the first paragraph a table.
+    struct FirstParagraphATable(EachLineAParagraph);
+
+    impl Recognizer for FirstParagraphATable {
+        fn id(&self) -> &'static str {
+            self.0.id()
+        }
+        fn available(&self) -> bool {
+            self.0.available()
+        }
+        fn languages(&self) -> Vec<(String, String)> {
+            self.0.languages()
+        }
+        fn recognize(&self, image: &OcrImage, options: &RecognizeOptions) -> Result<Vec<Line>, OcrError> {
+            self.0.recognize(image, options)
+        }
+        fn paragraphs(&self, image: &OcrImage, options: &RecognizeOptions) -> Result<Vec<Paragraph>, OcrError> {
+            let mut paragraphs = self.0.paragraphs(image, options)?;
+            if let Some(first) = paragraphs.first_mut() {
+                first.table = Some(Table::default());
+            }
+            Ok(paragraphs)
+        }
+    }
+
+    /// A table stays a table wherever the primary's line order stands: a partner that fails or
+    /// is over the comparison cap leaves the page as the primary read it, tables included.
+    #[test]
+    fn the_primary_keeps_its_tables_when_the_merge_does_not_run() {
+        let options = RecognizeOptions::default();
+        let primary = FirstParagraphATable(EachLineAParagraph(two_line_reading("ocrs", 3)));
+        let mut failing = Fake::empty("tesseract");
+        failing.fail = true;
+        let outcome = recognize_with_strategy(&primary, Some(&failing), MergeStrategy::RoverVote, &image(), &options).unwrap();
+        assert!(!outcome.secondary_ran);
+        assert_eq!(outcome.tables.iter().map(|(i, _)| *i).collect::<Vec<_>>(), vec![0], "the partner failed");
+        let primary = FirstParagraphATable(EachLineAParagraph(two_line_reading("ocrs", 5_500)));
+        let secondary = two_line_reading("tesseract", 5_500);
+        let outcome = recognize_with_strategy(&primary, Some(&secondary), MergeStrategy::RoverVote, &image(), &options).unwrap();
+        assert!(!outcome.secondary_ran);
+        assert_eq!(outcome.tables.iter().map(|(i, _)| *i).collect::<Vec<_>>(), vec![0], "the readings were too large to merge");
+        // A merge that ran reorders the lines, so the table's place is gone.
+        let primary = FirstParagraphATable(EachLineAParagraph(two_line_reading("ocrs", 3)));
+        let secondary = two_line_reading("tesseract", 3);
+        let outcome = recognize_with_strategy(&primary, Some(&secondary), MergeStrategy::RoverVote, &image(), &options).unwrap();
+        assert!(outcome.secondary_ran && outcome.tables.is_empty());
     }
 }

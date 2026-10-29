@@ -1202,6 +1202,7 @@ mod tests {
                 words: vec![word()],
                 line_lengths: vec![1],
                 paragraph_lengths: vec![1],
+                tables: Vec::new(),
                 already_on_page: 0,
                 skipped: None,
                 notes: Vec::new(),
@@ -1251,6 +1252,7 @@ mod tests {
             page: 0,
             line_lengths: vec![1],
             paragraph_lengths: vec![1],
+            tables: Vec::new(),
             words: vec![pdfcraft_engine::ocr::PlacedWord {
                 text: "scanned".into(),
                 origin: [72.0, 700.0],
@@ -1511,6 +1513,7 @@ mod tests {
             source: "fake".into(),
         };
         let page = OcrPage {
+            tables: Vec::new(),
             paragraph_lengths: Vec::new(),
             line_lengths: Vec::new(),
             page: 0,
@@ -1548,6 +1551,7 @@ mod tests {
             source: "ocrs".into(),
         };
         let page = pdfcraft_engine::ocr::OcrPage {
+            tables: Vec::new(),
             paragraph_lengths: Vec::new(),
             line_lengths: Vec::new(),
             page: 0,
@@ -1582,6 +1586,7 @@ mod tests {
             source: "ocrs".into(),
         };
         let page = OcrPage {
+            tables: Vec::new(),
             paragraph_lengths: Vec::new(),
             line_lengths: Vec::new(),
             page: 0,

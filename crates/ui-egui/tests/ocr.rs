@@ -106,6 +106,7 @@ fn ocr_verify_screen_controls_keyboard_and_accept() {
         let id = app.active_ids().unwrap().1;
         let job = app.session.ocr_job(id, &[0], OcrSettings::default()).unwrap();
         let page = OcrPage {
+            tables: Vec::new(),
             paragraph_lengths: Vec::new(),
             line_lengths: Vec::new(),
             already_on_page: 0,
@@ -164,6 +165,7 @@ fn ocr_verify_screen_focus_ring_and_empty_walk() {
         let id = app.active_ids().unwrap().1;
         let job = app.session.ocr_job(id, &[0], OcrSettings::default()).unwrap();
         let page = OcrPage {
+            tables: Vec::new(),
             paragraph_lengths: Vec::new(),
             line_lengths: Vec::new(),
             already_on_page: 0,
