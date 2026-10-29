@@ -1090,11 +1090,33 @@ mod tests {
         }
     }
 
+    /// [`Ocr::find`] for an end-to-end test: `None` (skip) only when the models are not
+    /// installed. An installed model that does not load, such as a damaged `doclayout.onnx` or
+    /// `slanet-plus.onnx`, fails the test instead of skipping it.
+    fn installed(found: Result<Ocr, OcrError>) -> Option<Ocr> {
+        match found {
+            Ok(ocr) => Some(ocr),
+            Err(OcrError::NoModels) => None,
+            Err(e) => panic!("an installed OCR model does not load: {e}"),
+        }
+    }
+
+    #[test]
+    fn an_end_to_end_test_skips_only_without_the_models() {
+        assert!(installed(Err(OcrError::NoModels)).is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "an installed OCR model does not load: loading slanet-plus.onnx: damaged")]
+    fn an_installed_model_that_does_not_load_fails_an_end_to_end_test() {
+        let _ = installed(Err(OcrError::Load("slanet-plus.onnx".into(), "damaged".into())));
+    }
+
     /// End to end, when every model is installed: the layout model finds a drawn table, the table
     /// structure model reads its rows and cells, and each word lands in its cell, in row order.
     #[test]
     fn arranges_a_table_into_cells() {
-        let Ok(ocr) = Ocr::find() else {
+        let Some(ocr) = installed(Ocr::find()) else {
             eprintln!("skipped: OCR models not installed");
             return;
         };
