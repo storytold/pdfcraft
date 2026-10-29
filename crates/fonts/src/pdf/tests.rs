@@ -907,3 +907,17 @@ fn hostile_bytes_in_predefined_fonts_never_panic() {
     assert_eq!(other.codes(&[0x41, 0xB0, 0xA1]), [(0x41B0, 2), (0xA1, 1)]);
     assert_eq!(other.decode(&[0xB0, 0xA1]), "");
 }
+
+#[test]
+fn kscpc_euc_one_byte_codes_stay_one_byte() {
+    // KSCpc-EUC-H (Mac) has codes of their own at 0x81–0x83, 0xFE and 0xFF; its two-byte codes lead with 0xA1–0xFD.
+    let m = korean("KSCpc-EUC-H", "Batang", &[], None);
+    for b in [0x81u8, 0x83, 0xFE] {
+        let bytes = [b, 0x41];
+        assert_eq!(m.codes(&bytes).into_iter().map(|(_, len)| len).collect::<Vec<_>>(), [1, 1], "{b:02X}");
+        let text = m.decode(&bytes);
+        assert!(text.ends_with('A') && text.chars().count() == 2, "{b:02X}: {text:?}");
+        assert_eq!(m.encode(&text).as_deref(), Some(&bytes[..]), "{b:02X}");
+    }
+    assert_eq!(m.decode(&[0xB0, 0xA1, 0xFD, 0xFE]).chars().next(), Some('가'));
+}

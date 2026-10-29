@@ -36,7 +36,8 @@ const PREDEFINED: [(&[u8], LeadBytes); 6] = [
     (b"KSC-EUC-H", Some((0x81, 0xFE))),
     (b"KSCms-UHC-H", Some((0x81, 0xFE))),
     (b"KSCms-UHC-HW-H", Some((0x81, 0xFE))),
-    (b"KSCpc-EUC-H", Some((0x81, 0xFE))),
+    // The Mac variant: 0x81–0x83, 0xFE and 0xFF are codes of their own.
+    (b"KSCpc-EUC-H", Some((0xA1, 0xFD))),
     (b"UniKS-UCS2-H", None),
     (b"UniKS-UTF16-H", None),
 ];

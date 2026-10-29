@@ -585,13 +585,18 @@ pub fn date_language(code: &str) -> Option<&'static DateLanguage> {
 /// The characters of `text` that Fill & Sign can't write into a PDF yet, each once. Its text is
 /// drawn in Helvetica with WinAnsi encoding (Western European letters), and Korean as outlines of
 /// the craft-fonts Korean face when the build has one, so anything else (`ř`, Japanese, Chinese)
-/// would become `?` in the file.
+/// would become `?` in the file. A paragraph with Korean is drawn wholly in that face, so it is
+/// checked as a whole: a Western European letter the face lacks can't be written in it either.
 pub fn unwritable(text: &str) -> String {
     let mut out = String::new();
-    for c in text.chars() {
-        let mut buf = [0u8; 4];
-        if c != '?' && pdfcraft_fonts::first_unoutlinable(c.encode_utf8(&mut buf)).is_some() && !out.contains(c) {
-            out.push(c);
+    for para in text.split(['\n', '\r']) {
+        // Each pass drops the character found, so this ends within the paragraph's distinct characters.
+        let mut rest = para.to_string();
+        while let Some(c) = pdfcraft_fonts::first_unoutlinable(&rest) {
+            if c != '?' && !out.contains(c) {
+                out.push(c);
+            }
+            rest.retain(|x| x != c);
         }
     }
     out
@@ -1029,5 +1034,27 @@ mod tests {
             assert_eq!(korean.as_deref(), Ok("2023년 11월 14일"));
             assert_eq!(unwritable("2026년 10월 8일 목요일"), "");
         }
+    }
+
+    /// A paragraph with Korean is drawn wholly in the Korean face, so a Western European character
+    /// that face lacks can't be written in it, though it can in a paragraph of its own.
+    #[test]
+    fn korean_paragraphs_are_checked_against_the_korean_face() {
+        if pdfcraft_fonts::document_korean_fonts_for_style(false, false).is_empty() {
+            eprintln!("built without a craft-fonts Kore face: no Korean face to check");
+            return;
+        }
+        let Some(c) = ['ƒ', '‰', '†', '‡', 'Œ', 'Ÿ', '˜'].into_iter().find(|c| !pdfcraft_fonts::korean_has(false, false, *c)) else {
+            eprintln!("the Korean face has every candidate character: nothing to check");
+            return;
+        };
+        let mixed = format!("2026년 {c}");
+        assert_eq!(pdfcraft_fonts::first_unoutlinable(&mixed), Some(c));
+        assert_eq!(unwritable(&mixed), c.to_string(), "{mixed}");
+        assert_eq!(unwritable(&format!("2026년\n{c}")), "", "a paragraph without Korean stays in Helvetica");
+        assert_eq!(
+            unwritable(&format!("2026년 {c}{c} 欢\n{c}")),
+            if pdfcraft_fonts::korean_has(false, false, '欢') { format!("{c}") } else { format!("欢{c}") }
+        );
     }
 }
