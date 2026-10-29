@@ -72,6 +72,16 @@ fn select_after_edit(
             }
         }
         Edit::DeleteAnnotation { page, index } => view.comments.annotation_deleted(annots_before, &info.annotations, (*page, *index)),
+        Edit::DeleteAnnotations { pages } => {
+            view.comments.selected = None;
+            let on_deleted_page = |p: usize| pages.as_ref().is_none_or(|ps| ps.contains(&p));
+            if view.comments.editing.as_ref().is_some_and(|(p, _, _)| on_deleted_page(*p)) {
+                view.comments.editing = None;
+            }
+            if view.comments.composer.as_ref().is_some_and(|c| matches!(c.kind, crate::comments::ComposerKind::Edit(_)) && on_deleted_page(c.page)) {
+                view.comments.composer = None;
+            }
+        }
         _ => {}
     }
 }
@@ -889,9 +899,11 @@ fn content_page(edit: &Edit) -> Option<usize> {
     }
 }
 
+/// The single page whose raster a comment edit invalidates, or `None` when more than one page may change.
 fn comment_page(edit: &Edit) -> Option<usize> {
     match edit {
         Edit::AddAnnotation(a) => Some(a.page),
+        Edit::DeleteAnnotations { pages: Some(pages) } if pages.len() == 1 => pages.first().copied(),
         Edit::DeleteAnnotation { page, .. }
         | Edit::SetAnnotationContents { page, .. }
         | Edit::ReplyToAnnotation { page, .. }

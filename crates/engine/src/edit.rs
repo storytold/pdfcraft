@@ -162,6 +162,10 @@ pub enum Edit {
         page: usize,
         index: usize,
     },
+    /// Delete comments on the named pages, or all pages when `None`, with their pop-ups and replies.
+    DeleteAnnotations {
+        pages: Option<Vec<usize>>,
+    },
     SetAnnotationContents {
         page: usize,
         index: usize,

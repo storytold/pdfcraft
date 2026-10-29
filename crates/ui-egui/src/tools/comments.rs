@@ -19,7 +19,7 @@ use pdfcraft_render::{Annotation, DocInfo, PageInfo, PageText};
 use crate::canvas::{DocView, PageXform};
 use crate::page_pointer::PagePointer;
 use crate::theme::{self, Tokens};
-use crate::{QuickTool, icons};
+use crate::{PdfCraftApp, QuickTool, icons};
 
 mod composer;
 mod geometry;
@@ -392,6 +392,61 @@ pub fn tool_for(a: &Annotation) -> Option<CommentTool> {
         ("FileAttachment", _) => CommentTool::Attach,
         _ => return None,
     })
+}
+
+impl PdfCraftApp {
+    /// Delete all unlocked comments in the active document.
+    pub fn delete_all_comments(&mut self) {
+        let Some((i, id)) = self.active_ids() else { return };
+        let (total, unlocked) = self.session.get(id).map_or((0, 0), |d| {
+            let total = d.info.annotations.iter().filter(|a| a.is_comment()).count();
+            let unlocked = d.info.annotations.iter().filter(|a| a.is_comment() && !a.locked).count();
+            (total, unlocked)
+        });
+        if total == 0 {
+            self.notify_tr("No comments to remove");
+            return;
+        }
+        if unlocked == 0 {
+            self.notify_tr("All comments are locked");
+            return;
+        }
+        self.views[i].comments.selected = None;
+        if self.apply_edit(Edit::DeleteAnnotations { pages: None }) {
+            if unlocked == 1 {
+                self.notify_tr("Removed 1 comment");
+            } else {
+                self.notify_fmt("Removed {n} comments", &[("n", &unlocked.to_string())]);
+            }
+        }
+    }
+
+    /// Delete all unlocked comments on the current page of the active document.
+    pub fn delete_page_comments(&mut self) {
+        let Some((i, id)) = self.active_ids() else { return };
+        let page = self.views[i].current;
+        let (total, unlocked) = self.session.get(id).map_or((0, 0), |d| {
+            let total = d.info.annotations.iter().filter(|a| a.page == page && a.is_comment()).count();
+            let unlocked = d.info.annotations.iter().filter(|a| a.page == page && a.is_comment() && !a.locked).count();
+            (total, unlocked)
+        });
+        if total == 0 {
+            self.notify_tr("No comments on this page");
+            return;
+        }
+        if unlocked == 0 {
+            self.notify_tr("All comments on this page are locked");
+            return;
+        }
+        self.views[i].comments.selected = None;
+        if self.apply_edit(Edit::DeleteAnnotations { pages: Some(vec![page]) }) {
+            if unlocked == 1 {
+                self.notify_tr("Removed 1 comment");
+            } else {
+                self.notify_fmt("Removed {n} comments", &[("n", &unlocked.to_string())]);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

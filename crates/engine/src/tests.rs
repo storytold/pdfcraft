@@ -2177,6 +2177,49 @@ fn comments_are_added_drawn_threaded_and_undone() {
 }
 
 #[test]
+fn delete_annotations_removes_all_comments_and_undo_restores_them() {
+    let (mut s, id) = session_with(2);
+    let rect = Shape::Rectangle { rect: [100.0, 100.0, 200.0, 200.0] };
+    let style = Style::default_for(&rect);
+    s.apply(
+        id,
+        Edit::AddAnnotation(NewAnnotation {
+            page: 0,
+            shape: rect.clone(),
+            style: style.clone(),
+            contents: "Page 0 note".into(),
+            author: "Marc".into(),
+        }),
+    )
+    .unwrap();
+    s.apply(id, Edit::AddAnnotation(NewAnnotation { page: 1, shape: rect, style, contents: "Page 1 note".into(), author: "Marc".into() })).unwrap();
+    assert_eq!(s.get(id).unwrap().info.annotations.len(), 2);
+
+    // Delete comments on page 1 only
+    s.apply(id, Edit::DeleteAnnotations { pages: Some(vec![1]) }).unwrap();
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Delete page comments"));
+    assert_eq!(s.get(id).unwrap().info.annotations.len(), 1);
+    assert_eq!(s.get(id).unwrap().info.annotations[0].page, 0);
+
+    // Deleting again on empty page 1 is refused rather than pushing a no-op undo step
+    assert!(s.apply(id, Edit::DeleteAnnotations { pages: Some(vec![1]) }).is_err());
+
+    // Delete all remaining comments
+    s.apply(id, Edit::DeleteAnnotations { pages: None }).unwrap();
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Delete all comments"));
+    assert!(s.get(id).unwrap().info.annotations.is_empty());
+
+    // Undo restores page 0 comment
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().info.annotations.len(), 1);
+    assert_eq!(s.get(id).unwrap().info.annotations[0].page, 0);
+
+    // Undo restores page 1 comment
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().info.annotations.len(), 2);
+}
+
+#[test]
 fn highlight_multiplies_over_text() {
     let (mut s, id) = session_with(1);
     // "Page 1" is drawn at 20,150 in 24 pt Helvetica.

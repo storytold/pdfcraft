@@ -124,6 +124,17 @@ pub(crate) fn context_menu(
     // or reviewed pages whose comments should no longer move.
     if !info.annotations.is_empty() {
         ui.separator();
+        let target_page = selected.map(|a| a.page).or_else(|| view.comments.context_at.map(|(page, _)| page));
+        if let Some(page) = target_page
+            && info.annotations.iter().any(|a| a.page == page && a.is_comment())
+        {
+            let has_unlocked = info.annotations.iter().any(|a| a.page == page && a.is_comment() && !a.locked);
+            if ui.add_enabled(allowed && has_unlocked, egui::Button::new(tl!("Delete comments on this page"))).clicked() {
+                view.comments.selected = None;
+                action = Some(CanvasAction::Edit(Box::new(Edit::DeleteAnnotations { pages: Some(vec![page]) })));
+                ui.close();
+            }
+        }
         if ui.add_enabled(can_modify, egui::Button::new(tl!("Flatten comments"))).clicked() {
             view.comments.selected = None;
             action = Some(CanvasAction::Edit(Box::new(Edit::Flatten { comments: true, fields: false })));

@@ -2,8 +2,8 @@ use super::create::{
     add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, normalize, num_array, rect_for, rgb,
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
-use super::info::{line_endings_of, text_value};
-use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, page_ref, set_annots};
+use super::info::{final_ref, is_comment_subtype, line_endings_of, text_value};
+use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, page_ref, page_refs, set_annots};
 use super::types::{
     FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb, Shape, Style,
     StyleChange, TextReplacement,
@@ -115,6 +115,90 @@ pub fn lift_annotation(doc: &mut Document, page: usize, index: usize) -> Result<
 /// comment (which has none to collect) the pop-up it names, which still goes.
 fn seed(target: &Object) -> Option<ObjRef> {
     target.as_ref().or_else(|| target.as_dict().and_then(|d| d.reference(b"Popup")))
+}
+
+/// Whether `entry` (resolved to `d`) is an unlocked root comment rather than a reply, state
+/// bookkeeping annotation, pop-up, or non-comment annotation.
+fn is_deletable_root_comment(doc: &Document, entry: &Object, d: &Dict, page_refs_set: &HashSet<ObjRef>) -> bool {
+    let is_comment = d.name(b"Subtype").is_some_and(|st| is_comment_subtype(&String::from_utf8_lossy(st)));
+    if !is_comment || d.contains(b"State") {
+        return false;
+    }
+    if d.get(b"IRT").and_then(Object::as_ref).is_some_and(|r| page_refs_set.contains(&final_ref(doc, r))) {
+        return false;
+    }
+    let locked = entry.as_ref().is_some_and(|r| flags(doc, final_ref(doc, r)) & FLAG_LOCKED != 0) || (annotation_flags(doc, d) & FLAG_LOCKED != 0);
+    !locked
+}
+
+/// Whether `/Annots` entry `entry` at `index` stays on the page after removing `doomed_indices`
+/// and their reply/pop-up chains in `doomed`.
+fn keep_after_bulk_delete(doc: &Document, index: usize, entry: &Object, doomed_indices: &HashSet<usize>, doomed: &HashSet<ObjRef>) -> bool {
+    if doomed_indices.contains(&index) {
+        return false;
+    }
+    if !goes_with(entry, doomed) {
+        return true;
+    }
+    let obj = entry.as_ref().map_or_else(|| doc.resolve(entry), |r| doc.get(final_ref(doc, r)));
+    let Some(d) = obj.as_dict() else { return false };
+    let is_comment_or_popup = d.name(b"Subtype").is_some_and(|st| {
+        let s = String::from_utf8_lossy(st);
+        s == "Popup" || is_comment_subtype(&s)
+    });
+    !is_comment_or_popup
+}
+
+/// Delete all unlocked comments on the specified pages (or all pages when `None`), as Acrobat does.
+///
+/// Only comment annotations (see [`is_comment_subtype`]) are removed; non-comment annotations
+/// such as `/Link`, `/Widget` (form fields), `/Screen`, and `/PrinterMark` are preserved.
+/// Locked comments (properties with the Locked flag) are preserved along with their pop-ups,
+/// replies, checkmarks, and review statuses. Associated pop-ups and replies of deleted comments
+/// are cleaned up automatically.
+///
+/// Returns the number of root comments removed.
+pub fn delete_all_annotations(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize, AnnotError> {
+    let refs = page_refs(doc)?;
+    let mut total_removed = 0;
+    for (pi, p) in refs.iter().enumerate() {
+        if pages.is_some_and(|ps| !ps.contains(&pi)) {
+            continue;
+        }
+        let list = annots(doc, *p);
+        if list.is_empty() {
+            continue;
+        }
+
+        let page_refs_set: HashSet<ObjRef> = list.iter().filter_map(|e| e.as_ref().map(|r| final_ref(doc, r))).collect();
+        let mut doomed_indices = HashSet::new();
+        let mut doomed_seeds = Vec::new();
+        for (idx, e) in list.iter().enumerate() {
+            let obj = e.as_ref().map_or_else(|| doc.resolve(e), |r| doc.get(final_ref(doc, r)));
+            let Some(d) = obj.as_dict() else { continue };
+            if !is_deletable_root_comment(doc, e, d, &page_refs_set) {
+                continue;
+            }
+            doomed_indices.insert(idx);
+            if let Some(r) = e.as_ref() {
+                doomed_seeds.push(final_ref(doc, r));
+            } else if let Some(popup) = d.reference(b"Popup") {
+                doomed_seeds.push(popup);
+            }
+        }
+
+        if doomed_indices.is_empty() {
+            continue;
+        }
+
+        let doomed = with_replies_and_popups(doc, &list, doomed_seeds);
+        let kept: Vec<Object> =
+            list.into_iter().enumerate().filter(|(i, e)| keep_after_bulk_delete(doc, *i, e, &doomed_indices, &doomed)).map(|(_, e)| e).collect();
+
+        total_removed += doomed_indices.len();
+        set_annots(doc, *p, kept)?;
+    }
+    Ok(total_removed)
 }
 
 /// Whether the `/Annots` entry `entry` goes with `going` (from [`with_replies_and_popups`]): it is

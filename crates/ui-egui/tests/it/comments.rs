@@ -3092,3 +3092,65 @@ fn a_card_with_an_editor_open_out_of_view_is_drawn_at_its_size() {
     let after = h.get_by_label("Card 61").rect().top();
     assert!(after > before + 20.0, "the cards below make room for card 1's editor: {before} → {after}");
 }
+
+#[test]
+fn delete_page_and_all_comments_commands_preserve_locked_and_undo_restores() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = harness(|_| {});
+    let shape = Shape::Rectangle { rect: [40.0, 40.0, 140.0, 80.0] };
+    let style = Style::default_for(&shape);
+    let doc_id = h.state().views[0].id;
+
+    // Empty state reports cleanly without adding an undo entry.
+    assert!(h.state_mut().execute("comment.delete_all"));
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("No comments to remove"));
+    assert!(h.state().session.get(doc_id).unwrap().can_undo().is_none());
+
+    // Add one unlocked and one locked comment on page 0, and one unlocked comment on page 1.
+    h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        shape: shape.clone(),
+        style: style.clone(),
+        contents: "Unlocked p0".into(),
+        author: "Marc".into(),
+    }));
+    h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        shape: Shape::Rectangle { rect: [40.0, 100.0, 140.0, 140.0] },
+        style: style.clone(),
+        contents: "Locked p0".into(),
+        author: "Marc".into(),
+    }));
+    let locked_index =
+        h.state().session.get(doc_id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("Locked p0")).unwrap().index;
+    h.state_mut().apply_edit(Edit::LockAnnotation { page: 0, index: locked_index, locked: true });
+    h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation { page: 1, shape, style, contents: "Unlocked p1".into(), author: "Marc".into() }));
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(doc_id).unwrap().info.annotations.len(), 3);
+
+    // Delete comments on page 0: removes only the unlocked comment; locked stays.
+    assert!(h.state_mut().execute("comment.delete_page"));
+    h.run_steps(2);
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("Removed 1 comment"));
+    assert_eq!(h.state().session.get(doc_id).unwrap().info.annotations.len(), 2);
+
+    // Repeating on page 0 when only the locked comment remains notifies without pushing undo.
+    assert!(h.state_mut().execute("comment.delete_page"));
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("All comments on this page are locked"));
+    assert_eq!(h.state().session.get(doc_id).unwrap().can_undo(), Some("Delete page comments"));
+
+    // Delete all comments across the document: removes page 1's comment; locked p0 stays.
+    assert!(h.state_mut().execute("comment.delete_all"));
+    h.run_steps(2);
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("Removed 1 comment"));
+    assert_eq!(h.state().session.get(doc_id).unwrap().info.annotations.len(), 1);
+    assert_eq!(h.state().session.get(doc_id).unwrap().info.annotations[0].contents.as_deref(), Some("Locked p0"));
+
+    // Undo restores page 1's comment, then page 0's unlocked comment.
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(doc_id).unwrap().info.annotations.len(), 2);
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(doc_id).unwrap().info.annotations.len(), 3);
+}

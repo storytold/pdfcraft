@@ -307,6 +307,56 @@ fn deleting_the_last_comment_removes_annots() {
 }
 
 #[test]
+fn delete_all_annotations_removes_comments_and_preserves_widgets_and_locked_threads() {
+    let mut doc = fixture();
+    // Add an unlocked note with a reply on page 0, plus a widget and a locked note with its own reply and checkmark.
+    let unlocked_idx = add_annotation(&mut doc, &new(0, Shape::Note { at: [80.0, 80.0], icon: NoteIcon::Comment }), &meta("u")).unwrap();
+    add_reply(&mut doc, 0, unlocked_idx, "reply to unlocked", "Bob", &meta("ur")).unwrap();
+
+    let locked_idx = add_annotation(&mut doc, &new(0, Shape::Note { at: [120.0, 120.0], icon: NoteIcon::Comment }), &meta("l")).unwrap();
+    add_reply(&mut doc, 0, locked_idx, "reply to locked", "Bob", &meta("lr")).unwrap();
+    set_marked(&mut doc, 0, locked_idx, true, "Bob", &meta("lm")).unwrap();
+    set_locked(&mut doc, 0, locked_idx, true).unwrap();
+
+    let widget_ref = {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Widget"));
+        d.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(100), Object::Int(30)]));
+        d.set(b"T".to_vec(), PdfString::text("Field1"));
+        doc.add(Object::Dict(d))
+    };
+    let p0 = page_refs(&doc).unwrap()[0];
+    let mut annots_p0 = annots(&doc, p0);
+    annots_p0.push(Object::Ref(widget_ref));
+    set_annots(&mut doc, p0, annots_p0).unwrap();
+
+    // 1. Delete comments on page 1 only (the Stamp).
+    let removed_p1 = delete_all_annotations(&mut doc, Some(&[1])).unwrap();
+    assert_eq!(removed_p1, 1);
+    let doc = reopen(&doc);
+    assert!(list(&doc, 1).is_empty());
+
+    // 2. Delete all comments document-wide:
+    // On page 0, both the inline Square and the unlocked Note (+ its pop-up and reply) go;
+    // the Widget and the locked Note (+ its pop-up, reply, and checkmark) all stay.
+    let mut doc = doc;
+    let removed_all = delete_all_annotations(&mut doc, None).unwrap();
+    assert_eq!(removed_all, 2);
+    let doc = reopen(&doc);
+    let p0_left = list(&doc, 0);
+    let left_subtypes: Vec<String> = p0_left.iter().map(|d| String::from_utf8_lossy(d.name(b"Subtype").unwrap()).to_string()).collect();
+    assert_eq!(left_subtypes, vec!["Text", "Popup", "Text", "Text", "Widget"]);
+    let kept_summaries = summaries(&doc);
+    assert_eq!(kept_summaries.len(), 3, "locked note + its reply + its checkmark survive");
+    assert!(kept_summaries.iter().any(|s| s.contents.as_deref() == Some("reply to locked")));
+
+    // 3. Running again when only locked comments and widgets remain removes 0.
+    let mut doc = doc;
+    assert_eq!(delete_all_annotations(&mut doc, None).unwrap(), 0);
+}
+
+#[test]
 fn move_shifts_all_geometry_and_the_popup() {
     let mut doc = fixture();
     let q = [72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0];
