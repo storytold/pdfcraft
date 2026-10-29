@@ -215,11 +215,9 @@ impl<'a> Scope<'a> {
         self.rects.iter().any(|r| contains(*r, b, 0.01))
     }
 
-    /// Which regions a glyph box counts as under? Any real overlap does (more than a fifth of
-    /// the glyph or a point, whichever is less, in both directions), so neighbours that only
-    /// touch an edge survive while partly covered glyphs go. Degenerate boxes (zero-size text)
-    /// count when their origin is inside. Empty = under no region (a glyph kept). A glyph may
-    /// lie under several regions at once (overlapping marks); each is reported.
+    /// Which regions a glyph box counts as under. A tall glyph needs a fifth of its height
+    /// overlapped, so solid leading does not redact the line below. Short glyphs keep the
+    /// one-point tolerance. A glyph may lie under several regions at once.
     fn glyph_rects(&self, b: [f64; 4], origin: (f64, f64)) -> Vec<usize> {
         let (gw, gh) = (b[2] - b[0], b[3] - b[1]);
         if gw < 0.01 || gh < 0.01 {
@@ -231,7 +229,8 @@ impl<'a> Scope<'a> {
                 .map(|(i, _)| i)
                 .collect();
         }
-        let (mx, my) = ((gw * 0.2).min(1.0), (gh * 0.2).min(1.0));
+        let mx = (gw * 0.2).min(1.0);
+        let my = if gh > 12.0 { gh * 0.2 } else { (gh * 0.2).min(1.0) };
         self.rects
             .iter()
             .enumerate()
@@ -1146,4 +1145,21 @@ fn extgstate_type3_inherits(doc: &Document, ext_gstates: &Dict, name: &[u8]) -> 
 /// `/Resources`, or `/Resources null`, which is the same thing.
 fn type3_without_resources(doc: &Document, font: &Dict) -> bool {
     font.name(b"Subtype") == Some(b"Type3") && font.get(b"Resources").is_none_or(|r| matches!(&*doc.resolve(r), Object::Null))
+}
+
+#[cfg(test)]
+mod glyph_hit_tests {
+    use super::*;
+
+    #[test]
+    fn solid_leading_does_not_redact_the_line_below() {
+        let marked = [10.0, 100.0, 20.0, 115.0];
+        let mut report = Report::default();
+        let rects = [marked];
+        let mut images = ImageBudget::with_work(u64::MAX);
+        let scope = Scope::new(&rects, Mode::Verify, &mut report, DecodeBudget::page(), &mut images);
+
+        assert!(!scope.glyph_rects([10.0, 102.0, 20.0, 114.0], (10.0, 102.0)).is_empty());
+        assert!(scope.glyph_rects([10.0, 88.0, 20.0, 103.0], (10.0, 88.0)).is_empty());
+    }
 }
