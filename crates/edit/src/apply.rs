@@ -6,9 +6,9 @@ use super::marks::{
 };
 use super::place::{
     END, Isolation, add_page_resources, add_resources, begin, check, check_on_top, contents, free_font_name, isolation, page_fonts, page_list, place,
-    place_inside_wrapper, stream_tag, undrawable, wrapper_role,
+    place_inside_wrapper, stream_tag, wrapper_role,
 };
-use super::{Document, EditError, Object, added, backdrop, helvetica_width};
+use super::{Document, EditError, Object, added, backdrop, helvetica_width, mark_font};
 
 /// Commit one complete mark operation only after every selected page succeeds. The snapshot
 /// shares original bytes, cross-references, caches and unchanged objects; only the overlay table
@@ -38,7 +38,7 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
         return Err(EditError::Invalid(why));
     }
     if let Some(c) = hf.first_undrawable() {
-        return Err(undrawable(c));
+        return Err(mark_font::undrawable(c));
     }
     if !(hf.font_size.is_finite() && hf.font_size > 0.0 && hf.font_size <= 200.0 && hf.margins.iter().all(|m| m.is_finite() && *m >= 0.0)) {
         return Err(EditError::Invalid("invalid font size or margins".into()));
@@ -74,6 +74,10 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
     for &i in pages {
         check_on_top(doc, &all[i])?;
     }
+    // Lines the standard faces can't draw are drawn in the bundled face (#2013): one copy for
+    // the whole run, the one the first page already has when it is updated.
+    let first = pages.first().and_then(|&i| all.get(i));
+    let bundled = mark_font::MarkFont::for_lines(doc, first, hf.text.iter().filter(|t| !t.trim().is_empty()).flat_map(|t| t.lines()))?;
     if replace {
         remove_marks(doc, pages, MarkKind::HeaderFooter)?;
     }
@@ -107,6 +111,7 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
         };
         let base = hf.font.base_font(false, false);
         let resource = free_font_name(doc, &page_fonts(doc, page), preferred, base);
+        let bundled_name = bundled.as_ref().map(|b| b.name_in(&page_fonts(doc, page)));
         let mut body: Vec<u8> = format!("BT\n/{resource} {} Tf\n{}\n", n(size), rgb(hf.color)).into_bytes();
         let mut current = None;
         let mut underlines = String::new();
@@ -118,9 +123,17 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
             let header = slot < 3;
             let line_h = size * 1.2;
             for (li, line) in lines.iter().enumerate() {
-                // Centred and right-aligned text is placed by its width in the chosen face.
+                // A line the chosen face can't draw, and has no Thai, is drawn in the bundled one.
+                let in_bundled = match (&bundled, &bundled_name) {
+                    (Some(b), Some((name, _))) if mark_font::wanted(line) => Some((b.encode(line)?, name)),
+                    _ => None,
+                };
+                // Centred and right-aligned text is placed by its width in the face it is drawn in.
                 let face = |s: &str, size: f64| hf.font.width(s, size, false, false);
-                let tw = thai_width(line, size, face);
+                let tw = match &in_bundled {
+                    Some(((_, advance), _)) => advance * size,
+                    None => thai_width(line, size, face),
+                };
                 let x = match slot % 3 {
                     0 => left,
                     1 => (w - tw) / 2.0,
@@ -128,7 +141,14 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
                 };
                 // Headers hang below the top margin; footers sit on the bottom margin.
                 let y = if header { h - top - size * 0.8 - li as f64 * line_h } else { bottom + (lines.len() - 1 - li) as f64 * line_h };
-                thai.show(&mut body, line, x, y, size, &resource, |s| face(s, size), &mut current);
+                match &in_bundled {
+                    Some(((bytes, _), name)) => {
+                        body.extend(mark_font::show(name, &resource, size, x, y, bytes));
+                        // `show` selects the chosen face again.
+                        current = None;
+                    }
+                    None => thai.show(&mut body, line, x, y, size, &resource, |s| face(s, size), &mut current),
+                }
                 if hf.underline {
                     underlines.push_str(&format!("{} {} {} {} re f\n", n(x), n(y - size * 0.15), n(tw), n((size * 0.06).max(0.4))));
                 }
@@ -146,6 +166,10 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
             add_page_resources(doc, page, None, &[(resource.into_bytes(), base)])?;
         }
         thai.add_to(doc, &page_list(doc)[i])?;
+        if let (Some(b), Some((name, true))) = (&bundled, &bundled_name) {
+            let page = page_list(doc).get(i).cloned().ok_or(EditError::NoSuchPage(i))?;
+            b.add_to_page(doc, &page, name)?;
+        }
         let page = &page_list(doc)[i];
         place(doc, page, MarkKind::HeaderFooter, content, false)?;
         if let Some(Some(m)) = shrinks.get(k) {
@@ -174,7 +198,7 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
         return Err(EditError::Invalid(why));
     }
     if let Some(c) = wm.first_undrawable() {
-        return Err(undrawable(c));
+        return Err(mark_font::undrawable(c));
     }
     if !(wm.opacity.is_finite()
         && wm.rotation.is_finite()
@@ -189,11 +213,26 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
             check_on_top(doc, &all[i])?;
         }
     }
+    let lines: Vec<&str> = text.lines().collect();
+    // Lines Helvetica can't draw are drawn in the bundled face (#2013): one copy for the whole
+    // run, the one the first page already has when it is updated.
+    let bundled = match wm.source {
+        Some(_) => None,
+        None => mark_font::MarkFont::for_lines(doc, pages.first().and_then(|&i| all.get(i)), lines.iter().copied())?,
+    };
+    // Each line, with its codes in the bundled face and its advance per point of size when it is
+    // drawn in that face.
+    let drawn = lines
+        .iter()
+        .map(|&line| match &bundled {
+            Some(b) if mark_font::wanted(line) => b.encode(line).map(|e| (line, Some(e))),
+            _ => Ok((line, None)),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     if replace {
         remove_marks(doc, pages, MarkKind::Watermark)?;
     }
     let opacity = wm.opacity.clamp(0.0, 1.0);
-    let lines: Vec<&str> = text.lines().collect();
     let thai = if wm.source.is_none() { MarkText::new(doc, &page_list(doc), pages, lines.iter().copied())? } else { MarkText::default() };
     for &i in pages {
         let page = page_list(doc)[i].clone();
@@ -209,7 +248,11 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
             place(doc, page, MarkKind::Watermark, content.into_bytes(), wm.behind)?;
             continue;
         }
-        let widest = lines.iter().map(|l| thai_width(l, 1.0, helvetica_width)).fold(0.0, f64::max).max(0.01);
+        let widest = drawn
+            .iter()
+            .map(|(l, e)| e.as_ref().map_or_else(|| thai_width(l, 1.0, helvetica_width), |(_, advance)| *advance))
+            .fold(0.0, f64::max)
+            .max(0.01);
         let size = if wm.font_size > 0.0 { wm.font_size } else { ((w * w + h * h).sqrt() * 0.5 / widest).clamp(6.0, 300.0) };
         let (s, c) = wm.rotation.to_radians().sin_cos();
         let (cx, cy) = (w / 2.0 + wm.offset[0], h / 2.0 + wm.offset[1]);
@@ -231,24 +274,28 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
         );
         let line_h = size * 1.15;
         let total = line_h * (lines.len() as f64 - 1.0);
+        let bundled_name = bundled.as_ref().map(|b| b.name_in(&page_fonts(doc, &page)));
         let mut current = None;
-        for (li, line) in lines.iter().enumerate() {
-            let tw = thai_width(line, size, helvetica_width);
-            thai.show(
-                &mut content,
-                line,
-                -tw / 2.0,
-                total / 2.0 - li as f64 * line_h - size * 0.35,
-                size,
-                "PCHelv",
-                |s| helvetica_width(s, size),
-                &mut current,
-            );
+        for (li, (line, encoded)) in drawn.iter().enumerate() {
+            let tw = encoded.as_ref().map_or_else(|| thai_width(line, size, helvetica_width), |(_, advance)| advance * size);
+            let (x, y) = (-tw / 2.0, total / 2.0 - li as f64 * line_h - size * 0.35);
+            match (encoded, &bundled_name) {
+                (Some((bytes, _)), Some((name, _))) => {
+                    content.extend(mark_font::show(name, "PCHelv", size, x, y, bytes));
+                    // `show` selects Helvetica again.
+                    current = None;
+                }
+                _ => thai.show(&mut content, line, x, y, size, "PCHelv", |s| helvetica_width(s, size), &mut current),
+            }
         }
         content.extend_from_slice(b"ET\n");
         content.extend_from_slice(END.as_bytes());
         add_resources(doc, &page, Some(opacity), None)?;
         thai.add_to(doc, &page_list(doc)[i])?;
+        if let (Some(b), Some((name, true))) = (&bundled, &bundled_name) {
+            let page = page_list(doc).get(i).cloned().ok_or(EditError::NoSuchPage(i))?;
+            b.add_to_page(doc, &page, name)?;
+        }
         let page = &page_list(doc)[i];
         place(doc, page, MarkKind::Watermark, content, wm.behind)?;
     }
