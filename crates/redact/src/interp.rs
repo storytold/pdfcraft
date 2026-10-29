@@ -576,11 +576,10 @@ impl Walk {
             return;
         }
         if !self.path.is_empty() {
-            // A path not ended by a painting operator: pass it through.
+            // An operator inside a path: pass the path so far through. The renderer keeps
+            // building the same path, so its box and clip carry on to the painting operator.
             piece.ops.append(&mut self.path);
             piece.ops.append(&mut self.pending);
-            self.path_box = None;
-            self.clip = false;
         }
         let kept = match o {
             b"q" | b"Q" | b"cm" | b"Tf" | b"gs" | b"w" | b"M" | b"j" | b"J" => {
