@@ -6526,15 +6526,15 @@ fn japanese_substitute_spaces_keep_pdf_widths_and_unicode() {
 /// (Shippori Mincho) draws them as .notdef.
 #[test]
 fn mincho_substitute_covers_half_width_katakana() {
-    use hayro::hayro_interpret::font::FallbackFontQuery;
-    use hayro::hayro_interpret::hayro_cmap::CharacterCollection;
+    use hayro::hayro_interpret::font::{FallbackFontQuery, FontQuery};
+    use hayro::hayro_interpret::hayro_cmap::{CharacterCollection, CidFamily};
     use skrifa::MetadataProvider;
     let query = FontQuery::Fallback(FallbackFontQuery {
         post_script_name: Some("HeiseiMin-W3".into()),
         character_collection: Some(CharacterCollection { family: CidFamily::AdobeJapan1, supplement: 2 }),
         ..FallbackFontQuery::default()
     });
-    let Some((data, index)) = super::japanese_fallback(&query) else {
+    let Some((data, index)) = super::substitute::resolve(&query) else {
         eprintln!("built without craft-fonts (CRAFT_FONTS_DIR unset): no Japanese face to check");
         return;
     };
@@ -6544,10 +6544,17 @@ fn mincho_substitute_covers_half_width_katakana() {
     assert!(missing.is_empty(), "the Mincho substitute lacks {missing:?}");
 }
 
-/// 𠮷 (U+20BB7, Adobe-Japan1 CID 13706) in a non-embedded Japanese font: neither craft-fonts
-/// substitute has it, and hayro drew the substitute's glyph 13706 instead, which is
-/// unrelated (in BIZ UDPGothic, "Ｑ"). It draws the substitute's .notdef now, while 吉, which
-/// the substitutes have, still draws.
+/// 𠮷 (U+20BB7, Adobe-Japan1 CID 13706) in a non-embedded Japanese font: neither BIZ UD stand-in
+/// has it, and hayro drew the stand-in's glyph 13706 instead, which is unrelated (in BIZ
+/// UDPGothic, "Ｑ"). It drew the stand-in's .notdef after that, and since #5329 it draws the 𠮷 of
+/// the further face that has one (Shippori Mincho), or .notdef when none has. 吉, which the
+/// stand-ins have, still draws.
+/// Whether a craft-fonts face has a glyph for `c`.
+fn some_face_has(c: char) -> bool {
+    use skrifa::MetadataProvider;
+    pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| skrifa::FontRef::new(f.bytes).is_ok_and(|font| font.charmap().map(c).is_some()))
+}
+
 #[test]
 fn cids_a_substitute_lacks_are_not_drawn_as_other_glyphs() {
     if pdfcraft_fonts::document_japanese_font().is_none() {
@@ -6582,30 +6589,176 @@ trailer << /Root 1 0 R >>
         let notdef = render(base_font, "Identity-H", "0000");
         let missing = render(base_font, "UniJIS-UTF16-H", "D842DFB7");
         let covered = render(base_font, "UniJIS-UTF16-H", "5409");
-        assert!(missing == notdef, "{base_font}: 𠮷 draws .notdef ({} dark pixels, .notdef {})", inked(&missing), inked(&notdef));
+        let unrelated = render(base_font, "UniJIS-UTF16-H", "FF31");
+        assert!(missing != unrelated, "{base_font}: 𠮷 is not the stand-in's glyph 13706 (Ｑ)");
+        if some_face_has('\u{20BB7}') {
+            assert!(inked(&missing) > 100 && missing != notdef, "{base_font}: 𠮷 draws in a further face ({} dark pixels)", inked(&missing));
+        } else {
+            assert!(missing == notdef, "{base_font}: 𠮷 draws .notdef ({} dark pixels, .notdef {})", inked(&missing), inked(&notdef));
+        }
         assert!(inked(&covered) > 300 && covered != notdef, "{base_font}: 吉 is drawn ({} dark pixels)", inked(&covered));
     }
 }
 
+/// #5329: a page drawing the codes `codes` (hex) at 40 pt in a Type 0 font that isn't embedded,
+/// named `base_font`, with the encoding `encoding` and a `subtype` descendant of the Adobe
+/// collection `ordering` whose `/W` is `widths`. `to_unicode`, when given, is the font's
+/// `/ToUnicode` CMap's `bfchar` lines. Vertical text (a `-V` encoding) runs down from the top.
+fn non_embedded_cid_pdf(
+    base_font: &str,
+    encoding: &str,
+    subtype: &str,
+    ordering: &str,
+    widths: &str,
+    codes: &str,
+    to_unicode: Option<&str>,
+) -> Vec<u8> {
+    let at = if encoding.ends_with("-V") { "60 110" } else { "5 15" };
+    let content = format!("BT /F1 40 Tf {at} Td <{codes}> Tj ET");
+    let (to_unicode_entry, to_unicode_object) = match to_unicode {
+        Some(lines) => {
+            let cmap = format!(
+                "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Test def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange {} beginbfchar {lines} endbfchar endcmap CMapName currentdict /CMap defineresource pop end end",
+                lines.split('>').filter(|s| s.contains('<')).count() / 2
+            );
+            ("/ToUnicode 8 0 R", format!("8 0 obj << /Length {} >> stream\n{cmap}\nendstream endobj\n", cmap.len()))
+        }
+        None => ("", String::new()),
+    };
+    format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 120 120] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /{base_font} /Encoding /{encoding} /DescendantFonts [6 0 R] {to_unicode_entry} >> endobj
+6 0 obj << /Type /Font /Subtype /{subtype} /BaseFont /{base_font} /CIDSystemInfo << /Registry (Adobe) /Ordering ({ordering}) /Supplement 2 >>
+  /FontDescriptor 7 0 R /DW 1000 /W [{widths}] >> endobj
+7 0 obj << /Type /FontDescriptor /FontName /{base_font} /Flags 6 /FontBBox [-25 -254 1000 880] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 880 /StemV 93 >> endobj
+{to_unicode_object}trailer << /Root 1 0 R >>
+%%EOF",
+        content.len()
+    )
+    .into_bytes()
+}
+
+/// The dark pixels of the first page of `pdf`, and the text its text layer reads.
+fn ink_and_text(pdf: Vec<u8>) -> (usize, String) {
+    let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+    assert!(p.error.is_none(), "{:?}", p.error);
+    let inked = p.rgba.as_chunks::<4>().0.iter().filter(|c| c[0] < 128).count();
+    let text = r.render(RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() });
+    assert!(text.error.is_none(), "{:?}", text.error);
+    (inked, text.text.map(|t| t.glyphs.iter().map(|g| g.text.as_str()).collect()).unwrap_or_default())
+}
+
+/// Whether some craft-fonts face is for a Han script, so CJK text has a face to draw in.
+fn has_han_face() -> bool {
+    pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| ["Hans", "Hant", "Jpan", "Kore"].iter().any(|s| f.covers(s)))
+}
+
+/// #5329: Simplified Chinese in a CID font of the Adobe-GB1 collection that isn't embedded
+/// (`STSong-Light` with `GBK-EUC-H`, as CAJ2PDF writes academic papers) drew nothing: the only
+/// CJK stand-in was Japanese, for Adobe-Japan1, and hayro's own substitute is Times. With
+/// craft-fonts it draws in the Simplified Chinese face; the text layer reads 坡走 either way.
 #[test]
-fn japanese_font_names_pick_mincho_or_gothic() {
-    use super::JapaneseFace::{Gothic, Mincho};
-    for (name, serif, bold, face) in [
-        ("HeiseiMin-W3", false, false, Mincho),
-        ("KozMinPro-Regular", false, false, Mincho),
-        ("Ryumin-Light", false, false, Mincho),
-        ("MS-PMincho", false, false, Mincho),
-        ("HiraMinProN-W3", false, false, Mincho),
-        ("HeiseiKakuGo-W5", true, false, Gothic { bold: false }),
-        ("KozGoPro-Bold", true, true, Gothic { bold: true }),
-        ("GothicBBB-Medium", true, false, Gothic { bold: false }),
-        ("MS-Gothic", false, false, Gothic { bold: false }),
-        ("HiraKakuProN-W6", false, true, Gothic { bold: true }),
-        ("Unknown-Japanese", true, false, Mincho),
-        ("Unknown-Japanese", false, false, Gothic { bold: false }),
-    ] {
-        assert_eq!(super::japanese_face(name, serif, bold), face, "{name}");
+fn non_embedded_chinese_cid_fonts_draw_with_a_craft_fonts_face() {
+    for base_font in ["STSong-Light", "STSong-Light,Bold", "STSong-Light,Italic", "STHeiti-Regular"] {
+        for (subtype, encoding) in [("CIDFontType2", "GBK-EUC-H"), ("CIDFontType0", "GBK-EUC-H"), ("CIDFontType2", "GBK-EUC-V")] {
+            let (inked, text) = ink_and_text(non_embedded_cid_pdf(base_font, encoding, subtype, "GB1", "", "C6C2D7DF", None));
+            assert_eq!(text, "坡走", "{base_font} {subtype} {encoding}: the text layer");
+            if pdfcraft_fonts::ui_chinese_fonts().is_empty() {
+                eprintln!("built without craft-fonts (CRAFT_FONTS_DIR unset): no Chinese face to check");
+                continue;
+            }
+            // 坡走 at 40 pt covers several hundred dark pixels; a blank run covers none.
+            assert!(inked > 300, "{base_font} {subtype} {encoding}: 坡走 is drawn ({inked} dark pixels)");
+        }
     }
+}
+
+/// A Chinese font whose name only hints at a standard family (`MonotypeSung-Light` holds "mono")
+/// was drawn in Courier, only its ideographs reaching the Chinese face as further faces, while the
+/// report named Courier too. With a Chinese face it is drawn with that face as the stand-in, as
+/// `STSong-Light` is, Latin letters included; without one it stays Courier.
+#[test]
+fn a_cjk_font_hinting_at_a_standard_family_draws_with_its_stand_in() {
+    let draw = |name: &str| {
+        let pdf = non_embedded_cid_pdf(name, "GBK-EUC-H", "CIDFontType0", "GB1", "", "41C6C2", None);
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(p.error.is_none(), "{name}: {:?}", p.error);
+        p.rgba
+    };
+    let hinted = draw("MonotypeSung-Light");
+    if pdfcraft_fonts::ui_chinese_fonts().is_empty() {
+        assert!(hinted == draw("Courier"), "without a Chinese face the hinted Courier stays");
+        eprintln!("built without craft-fonts (CRAFT_FONTS_DIR unset): no Chinese face to check");
+        return;
+    }
+    assert!(hinted == draw("STSong-Light"), "MonotypeSung-Light draws A坡 with the Chinese stand-in, as STSong-Light does");
+}
+
+/// #5329: Korean (Adobe-Korea1, `HYSMyeongJo-Medium`) and Traditional Chinese (Adobe-CNS1,
+/// `MSung-Light`) fonts that aren't embedded drew nothing either. Korean stands in with the
+/// Hangul face; Traditional Chinese, which the pinned craft-fonts has no face of its own for,
+/// with the nearest Han face (Japanese kanji keep the traditional forms).
+#[test]
+fn non_embedded_korean_and_traditional_chinese_cid_fonts_draw() {
+    let cases =
+        [("HYSMyeongJo-Medium", "KSCms-UHC-H", "Korea1", "B0A1", "가", "Kore"), ("MSung-Light", "ETen-B5-H", "CNS1", "A4A4B0EA", "中國", "Hant")];
+    for (base_font, encoding, ordering, codes, expected, script) in cases {
+        let (inked, text) = ink_and_text(non_embedded_cid_pdf(base_font, encoding, "CIDFontType0", ordering, "", codes, None));
+        assert_eq!(text, expected, "{base_font}: the text layer");
+        let has_face = if script == "Kore" { pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.covers("Kore")) } else { has_han_face() };
+        if !has_face {
+            eprintln!("built without craft-fonts (CRAFT_FONTS_DIR unset): no {script} face to check");
+            continue;
+        }
+        assert!(inked > 150, "{base_font}: {expected} is drawn ({inked} dark pixels)");
+    }
+}
+
+/// #5329: a character the standard substitute lacks, in a Type 0 font that isn't embedded and
+/// says no CJK collection (Identity-H with a `/ToUnicode`), drew the substitute's glyph at the
+/// CID's index: an unrelated glyph. It draws in a further face now: Cyrillic in the bundled Inter
+/// (every build), Hebrew in craft-fonts' Hebrew face.
+#[test]
+fn non_embedded_identity_fonts_draw_characters_their_substitute_lacks() {
+    let page = |codes: &str| {
+        non_embedded_cid_pdf("CraftUnicode-Regular", "Identity-H", "CIDFontType2", "Identity", "", codes, Some("<0001> <0416> <0002> <05E9>"))
+    };
+    let notdef =
+        ink_and_text(non_embedded_cid_pdf("CraftUnicode-Regular", "Identity-H", "CIDFontType2", "Identity", "", "0001", Some("<0001> <E000>")));
+    let (inked, text) = ink_and_text(page("0001"));
+    assert_eq!(text, "Ж");
+    assert!(inked > 150 && inked != notdef.0, "Ж is drawn by Inter ({inked} dark pixels; a private-use character {})", notdef.0);
+    let (inked, text) = ink_and_text(page("0002"));
+    assert_eq!(text, "ש");
+    if pdfcraft_fonts::ui_hebrew_fonts().is_empty() {
+        eprintln!("built without craft-fonts (CRAFT_FONTS_DIR unset): no Hebrew face to check");
+        return;
+    }
+    assert!(inked > 100, "ש is drawn by the Hebrew face ({inked} dark pixels)");
+}
+
+/// #5329: a further face's glyph is fitted to the advance `/W` gives, like the stand-in's: Ж at
+/// 300 units is drawn narrower than at 1500.
+#[test]
+fn a_further_faces_glyph_keeps_the_pdfs_advance() {
+    let extent = |widths: &str| {
+        let pdf = non_embedded_cid_pdf("CraftUnicode-Regular", "Identity-H", "CIDFontType2", "Identity", widths, "0001", Some("<0001> <0416>"));
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        let width = p.width as usize;
+        let columns: Vec<usize> = p.rgba.as_chunks::<4>().0.iter().enumerate().filter(|(_, c)| c[0] < 128).map(|(i, _)| i % width).collect();
+        columns.iter().max().zip(columns.iter().min()).map_or(0, |(max, min)| max - min)
+    };
+    let (narrow, wide) = (extent("1 [300]"), extent("1 [1500]"));
+    assert!(narrow > 0 && narrow * 2 < wide, "Ж spans {narrow} px at 300 units and {wide} px at 1500");
 }
 
 /// Adobe-Japan1 maps the JIS X 0208 forms of the kanji that JIS X 0213:2004 redrew (噂, 逢,

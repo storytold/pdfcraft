@@ -73,6 +73,85 @@ fn a_cid_font_without_a_descriptor_asks_for_the_default_style() {
     assert_eq!(query.font_weight, 400);
 }
 
+/// A page showing `A` (GBK-EUC-H code 0x41, Adobe-GB1 CID 34) at 40 pt in a non-embedded Type 0
+/// font named `name` of the collection `ordering`, without a font descriptor. The Identity ordering
+/// takes the Identity-H encoding, since a predefined CMap's own collection wins over
+/// `/CIDSystemInfo`.
+fn named(name: &str, ordering: &str) -> Vec<u8> {
+    let encoding = if ordering == "Identity" { "Identity-H" } else { "GBK-EUC-H" };
+    pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 80 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        stream("", "BT /F1 40 Tf 10 15 Td (A) Tj ET"),
+        format!("<< /Type /Font /Subtype /Type0 /BaseFont /{name} /Encoding /{encoding} /DescendantFonts [6 0 R] >>"),
+        format!(
+            "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /{name} /CIDSystemInfo << /Registry (Adobe) /Ordering ({ordering}) /Supplement 2 >> >>"
+        ),
+    ])
+}
+
+/// Every query the resolver received while drawing the page: `Some` for a fallback, `None` for a
+/// standard-font query.
+fn queries(bytes: Vec<u8>) -> Vec<Option<FallbackFontQuery>> {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = seen.clone();
+    let standard = InterpreterSettings::default().font_resolver;
+    let settings = InterpreterSettings {
+        font_resolver: Arc::new(move |query| {
+            sink.lock().unwrap().push(match query {
+                FontQuery::Fallback(f) => Some(f.clone()),
+                FontQuery::Standard(_) => None,
+            });
+            standard(query)
+        }),
+        ..InterpreterSettings::default()
+    };
+    let pdf = Pdf::new(bytes).unwrap();
+    let pages = pdf.pages();
+    let cache = RenderCache::new();
+    render(pages.first().unwrap(), &cache, &settings, &RenderSettings::default());
+    seen.lock().unwrap().clone()
+}
+
+/// hayro-interpret patch 72: a CJK font whose name only hints at a standard family
+/// (`MonotypeSung-Light` holds "mono") is asked for as a fallback carrying the hint, so a
+/// resolver with a face for its script stands it in. Before, hayro chose Courier itself and the
+/// resolver was asked only for Courier. A name that names the family outright (Arial, Times,
+/// Courier), or a font of no CJK collection, still asks for the standard font.
+#[test]
+fn a_cjk_font_whose_name_hints_at_a_standard_family_asks_for_a_fallback() {
+    let hint = |q: &[Option<FallbackFontQuery>]| match q.first() {
+        Some(Some(f)) => Some(f.standard_hint.map(|s| format!("{s:?}"))),
+        Some(None) => None,
+        None => panic!("the resolver is asked"),
+    };
+    let asked = queries(named("MonotypeSung-Light", "GB1"));
+    assert_eq!(hint(&asked), Some(Some("Courier".to_owned())), "a fallback hinted at Courier: {asked:?}");
+    assert!(asked.first().and_then(Option::as_ref).and_then(|q| q.character_collection.as_ref()).is_some_and(|c| c.family == CidFamily::AdobeGB1));
+    for (name, ordering) in [("MingSerif-Regular", "Korea1"), ("SomeSans-Medium", "CNS1"), ("MonoHei", "KR")] {
+        assert!(matches!(hint(&queries(named(name, ordering))), Some(Some(_))), "{name} ({ordering})");
+    }
+    for (name, ordering) in [("ArialUnicodeMS", "GB1"), ("Times-Roman", "GB1"), ("CourierCJK", "Japan1"), ("MonotypeSung-Light", "Identity")] {
+        assert_eq!(hint(&queries(named(name, ordering))), None, "{name} ({ordering}): a standard query");
+    }
+}
+
+/// Without a face for the script, the hint stands: the default resolver draws the same Courier
+/// a standard query for it would.
+#[test]
+fn a_hinted_cjk_font_without_a_stand_in_keeps_the_hinted_font() {
+    let draw = |bytes: Vec<u8>| {
+        let pdf = Pdf::new(bytes).unwrap();
+        let pages = pdf.pages();
+        let cache = RenderCache::new();
+        render(pages.first().unwrap(), &cache, &InterpreterSettings::default(), &RenderSettings::default()).data_as_u8_slice().to_vec()
+    };
+    let hinted = draw(named("MonotypeSung-Light", "GB1"));
+    assert!(hinted.as_chunks::<4>().0.iter().any(|p| p[3] >= 128), "A is drawn");
+    assert!(hinted == draw(named("Courier", "GB1")), "the hinted Courier, as before");
+}
+
 fn pdf(objects: &[String]) -> Vec<u8> {
     let mut bytes = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();

@@ -165,13 +165,13 @@ impl<'a> Inspector<'a> {
                 let desc = descriptor_of(f).or_else(|| descendant.and_then(descriptor_of));
                 let embedded =
                     kind == "Type3" || desc.is_some_and(|d| d.get(b"FontFile").is_ok() || d.get(b"FontFile2").is_ok() || d.get(b"FontFile3").is_ok());
-                // What the substitution chain needs beyond the name: the descriptor flags, and for
-                // a composite font the script its descendant declares (ISO 32000-2 9.7.3).
-                let flags = desc
-                    .and_then(|d| d.get(b"Flags").ok())
-                    .and_then(|o| self.resolve(o).as_i64().ok())
-                    .and_then(|n| u32::try_from(n).ok())
-                    .unwrap_or(0);
+                // What the substitution chain needs beyond the name: the descriptor flags and
+                // weight, and for a composite font the script its descendant declares (ISO 32000-2
+                // 9.7.3). The renderer asks the chain with the same, so this names the face drawn.
+                let number = |key: &[u8]| {
+                    desc.and_then(|d| d.get(key).ok()).and_then(|o| self.resolve(o).as_i64().ok()).and_then(|n| u32::try_from(n).ok()).unwrap_or(0)
+                };
+                let (flags, weight) = (number(b"Flags"), number(b"FontWeight"));
                 let ordering =
                     descendant.and_then(|d| d.get(b"CIDSystemInfo").ok()).and_then(|o| self.dict(o)).and_then(|c| self.text(c, b"Ordering"));
                 let subset = base.len() > 7 && base.as_bytes()[6] == b'+' && base[..6].bytes().all(|b| b.is_ascii_uppercase());
@@ -181,6 +181,7 @@ impl<'a> Inspector<'a> {
                     embedded,
                     flags,
                     ordering: ordering.as_deref(),
+                    weight,
                 });
                 let info = FontInfo {
                     name,
@@ -406,13 +407,23 @@ trailer << /Size 13 /Root 1 0 R >>
     fn doc_info_says_which_face_stands_in_and_why() {
         let info = inspect(Arc::new(NOT_EMBEDDED.to_vec()), None).expect("opens");
 
-        // The one that matters most to a user: a Chinese PDF that draws nothing. Before this,
-        // doc_info said only `embedded: false` and left them to guess.
+        // The one that matters most to a user: a Chinese PDF. Before this, doc_info said only
+        // `embedded: false` and left them to guess. With craft-fonts its Simplified Chinese face
+        // stands in, the face the renderer draws with (#5329); without, nothing is drawn, and
+        // the report says why.
         let cjk = font(&info.fonts, "STSong-Light");
         assert!(!cjk.embedded);
-        assert_eq!(cjk.substitute, None, "no licensed Chinese face, so nothing stands in");
         let why = cjk.substitution.as_deref().unwrap_or_default();
-        assert!(why.contains("no licensed face") && why.contains("rather than the wrong glyphs"), "{why}");
+        match pdfcraft_fonts::ui_chinese_fonts().first() {
+            Some(face) => {
+                assert_eq!(cjk.substitute, Some(face.name()), "the Simplified Chinese face stands in");
+                assert!(why.contains("the script the font declares"), "{why}");
+            }
+            None => {
+                assert_eq!(cjk.substitute, None, "no licensed Chinese face, so nothing stands in");
+                assert!(why.contains("no licensed face") && why.contains("rather than the wrong glyphs"), "{why}");
+            }
+        }
 
         // An aliased standard-14 name resolves to the real face, whose metrics are exact.
         let arial = font(&info.fonts, "ArialMT");

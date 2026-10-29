@@ -3,7 +3,7 @@ use crate::color::{ColorSpace, DefaultColorSpaces, DeviceFamily};
 use crate::context::Context;
 use crate::convert::{convert_line_cap, convert_line_join};
 use crate::device::Device;
-use crate::font::{Font, FontData, FontQuery, StandardFont};
+use crate::font::{FallbackFontQuery, Font, FontData, FontQuery, StandardFont};
 use crate::interpret::path::{
     apply_pending_clip, close_path, fill_path, fill_path_impl, fill_stroke_path, stroke_path,
 };
@@ -39,6 +39,12 @@ pub use state::ActiveTransferFunction;
 /// The first argument is the raw data, the second argument is the index in case the font
 /// is a TTC, otherwise it should be 0.
 pub type FontResolverFn = Arc<dyn Fn(&FontQuery) -> Option<(FontData, u32)> + Send + Sync>;
+/// PdfCraft patch (71): a callback returning the further faces for a font the document doesn't
+/// embed, in the order they are tried (see [`InterpreterSettings::further_faces`]). Each entry
+/// is the raw data of a TrueType/OpenType font or CFF font program and its index in a
+/// collection (0 otherwise).
+pub type FurtherFacesFn =
+    Arc<dyn Fn(&FallbackFontQuery) -> Vec<(FontData, u32)> + Send + Sync>;
 /// A callback function for resolving cmap names to their files.
 pub type CMapResolverFn =
     Arc<dyn Fn(hayro_cmap::CMapName<'_>) -> Option<&'static [u8]> + Send + Sync>;
@@ -84,6 +90,13 @@ pub struct InterpreterSettings {
     /// If you don't want having to deal with this, you can just enable the `embed-fonts` feature
     /// and use the default implementation of the callback.
     pub font_resolver: FontResolverFn,
+    /// PdfCraft patch (71): the faces that draw the characters a Type 0 font's substitute has no
+    /// glyph for, tried in order. Called once per Type 0 font the document doesn't embed, with
+    /// the same query the substitute was chosen for; the faces are only parsed when a
+    /// character needs one. A face whose data is the substitute's own (the same bytes and
+    /// index) is skipped, so a callback can rank every face it has without knowing which one
+    /// the font resolver returned. The default has none, so such characters draw `.notdef`.
+    pub further_faces: FurtherFacesFn,
     /// A callback for resolving cmaps that aren't embedded.
     ///
     /// When the PDF requires using a cmap that is not directly embedded in the PDF,
@@ -132,6 +145,7 @@ impl Default for InterpreterSettings {
                 FontQuery::Standard(s) => Some(s.get_font_data()),
                 FontQuery::Fallback(f) => Some(f.pick_standard_font().get_font_data()),
             }),
+            further_faces: Arc::new(|_| Vec::new()),
             #[cfg(feature = "embed-cmaps")]
             cmap_resolver: Arc::new(hayro_cmap::load_embedded),
             #[cfg(not(feature = "embed-cmaps"))]

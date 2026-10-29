@@ -1,5 +1,7 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-10-29 · **Last updated:** 2026-10-29 · **Change:** minor (gap 2, #5329: non-embedded CID fonts of every Adobe CJK collection draw with a craft-fonts stand-in, and characters a substitute lacks draw in the next face that has them; estimates unchanged)
+
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-19 · **Change:** minor (gap 2: composite fonts with `/ToUnicode /Identity-H` read as Unicode, hayro-interpret patch 44; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -72,6 +74,14 @@ update the numbers.
   from Acrobat ([#739](https://github.com/storytold/pdfcraft/issues/739)). An outside author
   proposes his MIT/Apache renderer as the bridge
   ([#841](https://github.com/storytold/pdfcraft/issues/841)).
+- **Fix (2026-10-29, #5329):** a CID font of the Adobe-GB1, CNS1 or Korea1 collection that isn't
+  embedded (`STSong-Light`, common in CNKI papers) drew nothing; only Adobe-Japan1 had a stand-in.
+  The substitution chain (`pdfcraft_fonts::fallback`) now ranks the craft-fonts faces for every
+  CJK collection, the renderer draws with its stand-in and `doc_info` names the same face, and
+  characters a substitute lacks draw in the next ranked face (hayro-interpret patch 71), Cyrillic
+  in the bundled Inter in every build. Still missing: a Song/Ming face (GB1 draws in a Kai face),
+  a Traditional Chinese face, synthetic bold/italic, CJK faces on the web, and the same fallback
+  for simple fonts (`view.render-cid-fonts`).
 - **Impact:** every page a user sees. Wrong glyphs, shadings or blend modes erode trust faster than
   any missing feature.
 - **Fix:** first a fidelity harness (gap 12), then the renderer: own devices (150–250 h in the old
@@ -403,6 +413,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | Gap 2, #5329: non-embedded Adobe-GB1, CNS1 and Korea1 CID fonts draw with a craft-fonts stand-in ranked by the substitution chain, which `doc_info` reports; characters a Type 0 substitute lacks draw in the next ranked face (hayro-interpret patch 71). Song/Ming and Traditional Chinese faces, web CJK faces and simple-font fallback remain. Estimates unchanged. |
 | 2026-10-25 | minor | Gaps 5 and 14 current state: native release builds embed LXGW WenKai Lite for Simplified Chinese, while the web build has no Hans face; Arabic catalogs stay logical with explicit RTL label direction and mirrored stock chrome, while native/browser RTL input, IME and complex workflows remain unqualified. Estimates unchanged. |
 | 2026-10-19 | minor | Gap 2: a Type 0 font whose `/ToUnicode` is the name `/Identity-H` or `/Identity-V` (WSCAD) reads its codes as Unicode, so such pages have text to select, find and edit (hayro-interpret patch 44, `view.render-cid-fonts`). Estimates unchanged. |
 | 2026-10-15 | minor | Gap 21: the side-by-side view had already shipped; the Compare panel filters text changes and visual differences. Estimate 10–20 h → 8–16 h |

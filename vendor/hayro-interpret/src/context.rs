@@ -520,6 +520,7 @@ impl<'a> Context<'a> {
                     Font::new(
                         font_dict,
                         &self.settings.font_resolver,
+                        &self.settings.further_faces,
                         &self.settings.cmap_resolver,
                     )
                 })
