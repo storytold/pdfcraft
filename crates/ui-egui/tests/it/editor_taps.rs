@@ -271,6 +271,29 @@ fn touch_tap_on_a_focused_check_box_keeps_its_focus() {
     assert!(value(&h, "agree").is_empty(), "and clears it");
 }
 
+/// #3247: J and K scroll like ↓ and ↑, but not while a form field has the keyboard, a focused
+/// check box included (↓ still scrolls there, as before).
+#[test]
+fn j_does_not_scroll_while_a_check_box_has_the_keyboard() {
+    let mut h = open(toggles_pdf());
+    let p = field(&h, "agree").center();
+    mouse_click(&mut h, p);
+    assert_eq!(focus(&h).as_deref(), Some("agree"), "a click focuses the box");
+    // Zoomed in so far that the page scrolls.
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::None;
+    h.state_mut().views[0].zoom = 6.0;
+    h.run_steps(4);
+    let top = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).map(|r| r.top());
+    let before = top(&h);
+    h.key_press(egui::Key::J);
+    h.run_steps(3);
+    assert_eq!(top(&h), before, "J doesn't scroll while the check box has the keyboard");
+    assert_eq!(focus(&h).as_deref(), Some("agree"), "the box keeps the keyboard");
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(3);
+    assert_ne!(top(&h), before, "↓ scrolls from a focused check box, so the page could have moved");
+}
+
 #[test]
 fn mouse_click_on_a_radio_button_keeps_the_group_focused() {
     // Control for the tap below.

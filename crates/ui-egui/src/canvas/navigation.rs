@@ -422,9 +422,20 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
         let line = KEY_SCROLL_LINE * speed.factor();
         let screen = (view.viewport_h - KEY_SCROLL_LINE).max(KEY_SCROLL_LINE);
         let steps = [(Key::ArrowDown, line), (Key::ArrowUp, -line), (Key::PageDown, screen), (Key::PageUp, -screen)];
+        // J / K are ↓ / ↑ as in vim (#3247): plain letters only, judged on the key's own event
+        // (a modifier let go in the same frame doesn't make Shift+J plain), and not while a form
+        // field has the keyboard, a check box included. H stays the Hand tool, so there is no
+        // H / L.
+        let vim = |k| {
+            form_box.is_none()
+                && ctx.input(|i| {
+                    i.events.iter().any(|e| matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. } if *key == k && modifiers.is_none()))
+                })
+        };
         for (k, by) in steps {
             let arrow = matches!(k, Key::ArrowDown | Key::ArrowUp);
-            if !key(k) || !(scrolls || arrow) {
+            let hit = key(k) || (k == Key::ArrowDown && vim(Key::J)) || (k == Key::ArrowUp && vim(Key::K));
+            if !hit || !(scrolls || arrow) {
                 continue;
             }
             let forward = k == Key::ArrowDown;

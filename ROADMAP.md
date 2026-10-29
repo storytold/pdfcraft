@@ -2,6 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
+> **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M3, #3247: focused J/K controls cover comment and console typing, actual IME composition, modified K, and arrow-equivalent navigation from both comparison panes; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M14 localization current state: Arabic logical catalog, explicit RTL label direction and mirrored stock chrome; native/browser RTL workflows unqualified. Native release Hans face via LXGW WenKai Lite; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M7, #2636 partial: pasting added text boxes and images in the engine and through `content_copy`; estimates unchanged)
@@ -199,6 +200,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-10-29 (M3, #3247 review controls):** J/K tests cover comment/console typed characters, real IME preedit and commit, held/released Shift/Alt/Command+K, and arrow-equivalent navigation from either comparison pane. Production behavior and estimates unchanged.
 
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 - **2026-10-24 (M10, #4158 partial):** Word, HTML, RTF and PowerPoint export keep a block that continues another on its line (an italic case name, a link, a superscript) as a run in its own style inside that paragraph, with the source's word space, instead of a paragraph of its own. Style changes that wrap onto the next line still split paragraphs (the reading blocks keep style boundaries). Estimates unchanged.
@@ -449,6 +452,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 Newest first: the date, what moved, and the new overall estimate.
 
+- **2026-10-28 (M3, #3247 partial):** J and K scroll the page like ↓ and ↑, as in vim, as plain letters only and not while a text field has the keyboard. H and L are not bound: H is the Hand tool, and sideways key scrolling would need a decision. Estimates unchanged.
 - **2026-10-12 (M3, GNOME title bar, #553):** On GNOME's Wayland session, whose compositor draws no window frames (it offers no `zxdg_decoration_manager_v1`), PdfCraft no longer shows winit's fallback title bar: it turns the frame off and the tab strip becomes the header bar, as in GNOME's own apps. Minimize, maximize/restore and close are drawn in Adwaita's style, in the order and on the side GNOME's `button-layout` names (Fedora's default shows only close); the window's edges and corners resize it, and a hairline outlines it while it isn't maximized. Preferences ▸ Use system title bar (shown only there) gives the window back winit's frame at once, without a restart (part of #1001), and `PDFCRAFT_TITLEBAR=app|system` overrides the choice. KDE, Sway, Hyprland, COSMIC and X11 keep the frame their desktop draws. Not done: right-clicking the header bar doesn't open GNOME's window menu (egui can't ask for it), the window has no shadow or rounded corners, the resize edges lie just inside the window rather than outside it, and Windows still uses its system frame (the rest of #1001). Estimates unchanged.
 - **2026-10-12 (M0, build label):** A local or patched build can carry a label, set at compile time with `PDFCRAFT_BUILD_LABEL`: `pdfcraft --version`, `pdfcraft-cli --version`, About and the log show `0.7.1 (titlebar)`, and `packaging/linux/package.sh` names the files `pdfcraft-0.7.1-titlebar-…` and makes the .rpm/.deb release `1.titlebar`, which upgrades over the release of the same version (and the next release over it). The version itself is unchanged, so the update check still compares it with published releases. Unlabelled builds are as before. Estimates unchanged.
 - **2026-10-11 (M6, #1208):** Dropdown and list-box Field Properties expose the existing Left/Center/Right alignment picker. Existing alignment stays intact until changed; cancel, undo/redo and save/reopen are covered through the real UI without changing options, values or flags. Estimates unchanged.

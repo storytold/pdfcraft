@@ -279,3 +279,45 @@ fn export_to_word_html_and_rtf() {
     }
     assert!(std::fs::read_to_string(dir.join("e.html")).unwrap().contains("Exported words"));
 }
+
+/// #3247: J/K use precisely the same navigation target as the arrows in either half.
+#[test]
+fn j_and_k_match_arrow_navigation_in_either_comparison_half() {
+    fn trace(pane: usize, keys: [egui::Key; 2]) -> [[f32; 2]; 3] {
+        let mut h = side_by_side();
+        for view in &mut h.state_mut().views {
+            view.zoom = 1.5;
+            view.fit = pdfcraft_ui_egui::canvas::Fit::None;
+        }
+        h.run_steps(4);
+        let active = h.state().active;
+        let viewport = h.state().views[pane].viewport_rect();
+        let point = viewport.center();
+        h.event(egui::Event::PointerMoved(point));
+        h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(3);
+        assert_eq!(h.state().compare.as_ref().unwrap().leader, pane);
+        let tops = |h: &Harness<'static, PdfCraftApp>| {
+            [0, 1].map(|i| h.state().views[i].page_screen_rect(0).unwrap().top() - h.state().views[i].viewport_rect().top())
+        };
+        let mut trace = [tops(&h); 3];
+        assert!(h.state().views[pane].page_screen_rect(0).unwrap().height() > viewport.height() + 100.0, "room to scroll");
+        for (step, key) in keys.into_iter().enumerate() {
+            h.key_press(key);
+            h.run_steps(4);
+            trace[step + 1] = tops(&h);
+            assert_eq!(h.state().active, active, "comparison tab stays active");
+        }
+        assert!(trace[1][1] < trace[0][1] - 1.0, "down moves the active document: {trace:?}");
+        assert!((trace[2][1] - trace[0][1]).abs() < 0.5, "up returns to the original position: {trace:?}");
+        trace
+    }
+    for pane in [0, 1] {
+        let arrows = trace(pane, [egui::Key::ArrowDown, egui::Key::ArrowUp]);
+        let aliases = trace(pane, [egui::Key::J, egui::Key::K]);
+        for (arrow, alias) in arrows.into_iter().flatten().zip(aliases.into_iter().flatten()) {
+            assert!((arrow - alias).abs() < 0.5, "pane {pane}: J/K {aliases:?} match arrows {arrows:?}");
+        }
+    }
+}
