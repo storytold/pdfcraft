@@ -1542,7 +1542,7 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     let painter = ui.painter();
     view.text_background.paint(painter, &xf, i, view.line_editor.as_ref(), view.content.draft.as_ref());
     if editing_content {
-        view.move_background.paint(painter, &xf, i, info, &view.content, pointer);
+        view.move_background.paint(painter, &xf, i, info, &view.content, view.content.drag_pointer(pointer));
     }
     if view.show_page_gaps {
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
@@ -1561,20 +1561,28 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
         ) => Some(*page),
         _ => None,
     };
-    let here = pointer.is_some_and(|p| r.contains(p)) || gesture_page == Some(i);
+    // Text added in Edit text & images, and a picture, snap by their corners while they are
+    // moved; a picture not to itself where it was.
+    let moving_text = editing_content && view.content.moving().is_some_and(|(page, _)| page == i);
+    let moving_picture = view.image_selection.as_ref().and_then(crate::edit_text_ui::ImageSelection::moving).filter(|(page, _)| *page == i);
+    let moving = moving_text || moving_picture.is_some();
+    let here = pointer.is_some_and(|p| r.contains(p)) || gesture_page == Some(i) || moving;
     // The Select tool too: a comment moved or resized snaps by its corners; only while that runs
-    // on this page, as hovering over a page with Select shows no snap and shouldn't stall for its
-    // paths.
+    // on this page (or an item is moved there), as hovering over a page with Select shows no snap
+    // and shouldn't stall for its paths.
     let snaps = match tool {
         QuickTool::Comment(t) => t.snaps(),
         QuickTool::Fill(t) => t.snaps(),
-        QuickTool::Select => gesture_page == Some(i),
-        _ => false,
+        QuickTool::Select => gesture_page == Some(i) || moving,
+        _ => moving,
     };
     let snapping = prefs.snap && snaps && here;
     frame.snap = if snapping {
         let mut notice = None;
-        let geometry = view.comments.snap_cache.geometry(doc, i, &mut notice);
+        let geometry = match moving_picture {
+            Some((page, index)) => view.comments.snap_cache.geometry_without_image(doc, page, index, &mut notice),
+            None => view.comments.snap_cache.geometry(doc, i, &mut notice),
+        };
         if notice.is_some() {
             view.comments.notice = notice;
         }

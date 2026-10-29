@@ -618,18 +618,7 @@ impl PageCx<'_> {
             anchors.push(anchor(r.center(), "Middle", false));
             return (anchors, None);
         }
-        let anchors = vec![
-            anchor(r.left_bottom(), "Bottom left", true),
-            anchor(r.left_center(), "Left", false),
-            anchor(r.left_top(), "Top left", true),
-            anchor(r.center_top(), "Top", false),
-            anchor(r.right_top(), "Top right", true),
-            anchor(r.right_center(), "Right", false),
-            anchor(r.right_bottom(), "Bottom right", true),
-            anchor(r.center_bottom(), "Bottom", false),
-            anchor(r.center(), "Middle", false),
-        ];
-        (anchors, None)
+        (box_anchors(r), None)
     }
 
     /// The pointer `p` of a move of comment `a` by a drag from `from`, moved so one of its
@@ -638,6 +627,18 @@ impl PageCx<'_> {
     /// anchor that is put on it (`choice`, else the corner that snapped).
     pub(crate) fn snap_move(&self, a: &Annotation, from: Pos2, p: Pos2, choice: Option<usize>) -> (Pos2, Option<SnapHit>, Option<usize>) {
         let (anchors, mark) = self.move_anchors(a);
+        self.snap_anchors(&anchors, mark, from, p, choice)
+    }
+
+    /// [`Self::snap_move`] for a thing with these `anchors`.
+    fn snap_anchors(
+        &self,
+        anchors: &[Anchor],
+        mark: Option<f64>,
+        from: Pos2,
+        p: Pos2,
+        choice: Option<usize>,
+    ) -> (Pos2, Option<SnapHit>, Option<usize>) {
         let choice = choice.filter(|i| *i < anchors.len());
         let candidates: Vec<usize> = match choice {
             Some(i) => vec![i],
@@ -647,6 +648,59 @@ impl PageCx<'_> {
         let (p, hit) = self.snap_drag_by(&at, mark, from, p);
         (p, hit.map(|(hit, _)| hit), hit.and_then(|(_, k)| candidates.get(k).copied()).or(choice))
     }
+
+    /// A box `r` on screen (a picture or text added in Edit text & images) moved by a drag from
+    /// `from` to `p`, as a comment's box is (see [`Self::snap_move`]): one of its corners, the
+    /// middles of its sides or its centre lands on a snap target in reach, `choice` (Tab's) only
+    /// when there is one. Tab's `steps` move on from the anchor in use to the next, put where it
+    /// is now. The markers in `cv` show the target and the anchor on it. Returns the pointer
+    /// the box is moved by, and the drag's start and the anchor after Tab.
+    pub(crate) fn snap_box_move(
+        &self,
+        cv: &mut CommentView,
+        r: Rect,
+        (from, p): (Pos2, Pos2),
+        choice: Option<usize>,
+        steps: isize,
+    ) -> (Pos2, Pos2, Option<usize>) {
+        let anchors = box_anchors(r);
+        let (mut from, mut choice) = (from, choice);
+        if steps != 0 && self.snapping() {
+            let (moved, _, used) = self.snap_anchors(&anchors, None, from, p, choice);
+            let i = used.unwrap_or_else(|| nearest_corner(&anchors, from));
+            if let Some(now) = anchors.get(i) {
+                let spot = now.at + (moved - from);
+                let j = usize::try_from((i as isize).saturating_add(steps).rem_euclid(anchors.len() as isize)).unwrap_or(0);
+                from = anchors[j].at + (p - spot);
+                choice = Some(j);
+            }
+        }
+        let (moved, hit, used) = self.snap_anchors(&anchors, None, from, p, choice);
+        cv.snap_hover = hit.map(|(at, kind)| (self.page, at, kind));
+        cv.anchor_shown = used
+            .filter(|_| self.snapping())
+            .and_then(|i| anchors.get(i))
+            .map(|anchor| (self.page, self.to_user(anchor.at + (moved - from)), anchor.name));
+        (moved, from, choice)
+    }
+}
+
+/// The points of a box on screen that go onto a snap target while it is moved, in the order Tab
+/// steps through them: its corners and the middles of its sides, clockwise from the bottom
+/// left, then its centre.
+fn box_anchors(r: Rect) -> Vec<Anchor> {
+    let anchor = |at: Pos2, name: &'static str, corner: bool| Anchor { at, name, corner };
+    vec![
+        anchor(r.left_bottom(), "Bottom left", true),
+        anchor(r.left_center(), "Left", false),
+        anchor(r.left_top(), "Top left", true),
+        anchor(r.center_top(), "Top", false),
+        anchor(r.right_top(), "Top right", true),
+        anchor(r.right_center(), "Right", false),
+        anchor(r.right_bottom(), "Bottom right", true),
+        anchor(r.center_bottom(), "Bottom", false),
+        anchor(r.center(), "Middle", false),
+    ]
 }
 
 /// The corner among `anchors` nearest `p` (the first anchor when there is none).

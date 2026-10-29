@@ -334,6 +334,97 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     assert_eq!(images(&h), 2, "Prepare Form pastes fields");
 }
 
+/// A page 300 × 200 with one line across, from (20, 50) to (280, 50).
+const LINE_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R >> endobj
+4 0 obj << /Length 18 >> stream
+20 50 m 280 50 l S
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// With Snap to drawing on (F3), a pasted picture moved over the page snaps as a comment does:
+/// the corner that comes near a target lands on it, Tab picks the next point of its box instead
+/// (the middle of its left side), and the markers say where. It doesn't snap to where it was
+/// itself, and with F3 off it goes where it is dragged.
+#[test]
+fn a_pasted_picture_snaps_by_its_corners_while_it_is_moved() {
+    let mut h = harness_bytes(LINE_FIXTURE.to_vec());
+    h.state_mut().set_option("zoom", "100").unwrap();
+    h.run_steps(2);
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 30, 20);
+        enc.set_color(png::ColorType::Rgb);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&[90u8; 1800]).unwrap();
+    }
+    h.state_mut().add_image("Pasted image.png".into(), png);
+    h.run_steps(3);
+    crate::support::settle(&mut h);
+    let rect = |h: &Harness<'static, PdfCraftApp>| added(h)[0].content.rect();
+    assert_eq!(rect(&h), [135.0, 90.0, 165.0, 110.0]);
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    assert!(h.state().comment_prefs.snap);
+    // A point in user space on screen (the page is upright, 300 wide).
+    let pt = |h: &Harness<'static, PdfCraftApp>, x: f32, y: f32| {
+        let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+        let k = r.width() / 300.0;
+        r.min + egui::vec2(x * k, (200.0 - y) * k)
+    };
+    let grab = |h: &mut Harness<'static, PdfCraftApp>, from: (f32, f32), to: (f32, f32)| {
+        let (a, b) = (pt(h, from.0, from.1), pt(h, to.0, to.1));
+        h.hover_at(a);
+        h.run_steps(1);
+        h.drag_at(a);
+        h.run_steps(1);
+        for k in 1..=4 {
+            h.hover_at(a + (b - a) * (k as f32 / 4.0));
+            h.run_steps(1);
+        }
+        b
+    };
+    let drop = |h: &mut Harness<'static, PdfCraftApp>, b: Pos2| {
+        h.drop_at(b);
+        h.run_steps(3);
+        crate::support::settle(h);
+    };
+    let near = |r: [f64; 4], want: [f64; 4]| r.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.05);
+    // A little to the right: its corners stay off where they were.
+    let b = grab(&mut h, (150.0, 100.0), (152.5, 100.0));
+    assert_eq!(h.state().views[0].comments.snap_hover, None, "nothing to snap to but itself");
+    drop(&mut h, b);
+    assert!(near(rect(&h), [137.5, 90.0, 167.5, 110.0]), "moved as dragged: {:?}", rect(&h));
+    // Its bottom-left corner brought near the line's left end goes onto it.
+    let b = grab(&mut h, (152.5, 100.0), (36.5, 61.0));
+    let v = &h.state().views[0];
+    assert!(
+        matches!(v.comments.snap_hover, Some((0, p, pdfcraft_engine::measure::snap::SnapKind::Endpoint)) if (p[0] - 20.0).abs() < 0.01 && (p[1] - 50.0).abs() < 0.01),
+        "{:?}",
+        v.comments.snap_hover
+    );
+    assert!(matches!(v.comments.anchor_shown, Some((0, _, "Bottom left"))), "{:?}", v.comments.anchor_shown);
+    // Tab: the middle of its left side goes there instead.
+    h.state_mut().views[0].content.anchor_steps = 1;
+    h.run_steps(2);
+    let shown = h.state().views[0].comments.anchor_shown;
+    assert!(matches!(shown, Some((0, p, "Left")) if (p[0] - 20.0).abs() < 0.01 && (p[1] - 50.0).abs() < 0.01), "{shown:?}");
+    drop(&mut h, b);
+    assert!(near(rect(&h), [20.0, 40.0, 50.0, 60.0]), "its left side's middle on the end: {:?}", rect(&h));
+    let v = &h.state().views[0];
+    assert_eq!((v.comments.snap_hover, v.comments.anchor_shown), (None, None), "no markers once it is dropped");
+    // F3 off: where it is dragged.
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    assert!(!h.state().comment_prefs.snap);
+    let b = grab(&mut h, (35.0, 50.0), (37.0, 51.0));
+    drop(&mut h, b);
+    assert!(near(rect(&h), [22.0, 41.0, 52.0, 61.0]), "unsnapped: {:?}", rect(&h));
+}
+
 /// #125: text the standard fonts can't draw stays in the editor with a warning instead of being
 /// written to the page as `?` (or lost).
 #[test]

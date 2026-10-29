@@ -186,6 +186,26 @@ fn images_snap_by_their_corners_sides_and_centre() {
     assert_eq!(at([301.0, 409.0]), Some((snap::SnapKind::Endpoint, [300.0, 410.0])), "an inline image's top-left corner");
 }
 
+/// A picture left out by its placement (one being moved) gives nothing to snap to; the same
+/// image drawn elsewhere, and the page's paths, still do. A form XObject is left out by its own
+/// coordinates to user space (its /Matrix, then the CTM).
+#[test]
+fn a_picture_left_out_by_its_placement_does_not_snap() {
+    let image = "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\nA\nendstream";
+    let d = fixture("0 0 m 100 0 l S q 50 0 0 50 200 200 cm /Nested Do Q q 20 0 0 20 400 400 cm /Nested Do Q", "", &[image]);
+    assert_eq!(snap::geometry(&d, 0).unwrap().segments.len(), 9, "the line and two frames");
+    let without = snap::geometry_skipping(&d, 0, snap::Limits::default(), &[[50.0, 0.0, 0.0, 50.0, 200.0, 200.0]]).unwrap();
+    assert_eq!(without.segments.len(), 5, "the line and the other frame");
+    assert!(without.segments.iter().all(|[a, b]| a[0] < 200.0 || a[0] >= 400.0 && b[0] >= 400.0), "{:?}", without.segments);
+    let body = "0 0 m 10 0 l S";
+    let form =
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Matrix [2 0 0 2 0 0] /Length {} >>\nstream\n{body}\nendstream", body.len());
+    let d = fixture("q 1 0 0 1 30 40 cm /Nested Do Q", "", &[&form]);
+    assert_eq!(snap::geometry(&d, 0).unwrap().segments, vec![[[30.0, 40.0], [50.0, 40.0]]]);
+    let without = snap::geometry_skipping(&d, 0, snap::Limits::default(), &[[2.0, 0.0, 0.0, 2.0, 30.0, 40.0]]).unwrap();
+    assert!(without.segments.is_empty(), "{:?}", without.segments);
+}
+
 #[test]
 fn nested_forms_transforms_curves_and_cycles_are_bounded() {
     let body = "0 0 m 10 0 l S 0 0 m 0 10 10 10 10 0 c S /Nested Do";

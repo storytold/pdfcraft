@@ -358,6 +358,9 @@ pub struct SnapCache {
     warned: Vec<(usize, u64)>,
     /// The comments drawn on a page, by generation and the `/Annots` places left out.
     comments: Vec<CommentPaths>,
+    /// A page's paths without the picture on it that is being moved (Edit text & images):
+    /// page, generation, the picture's index among the page's images and its paths.
+    moving: Option<(usize, u64, usize, Option<std::sync::Arc<measure::snap::Geometry>>)>,
 }
 
 /// A page, generation, the `/Annots` places left out, and the comments' snap geometry.
@@ -375,12 +378,43 @@ impl SnapCache {
         let generation = doc.edit_generation();
         // An edit starts the document over.
         self.paths.retain(|(_, g, _)| *g == generation);
-        self.warned.retain(|(_, g)| *g == generation);
         if let Some((_, _, cached)) = self.paths.iter().find(|(p, _, _)| *p == page) {
             return cached.clone();
         }
         let geometry = doc.measurement_paths(page).ok().map(std::sync::Arc::new);
-        if let Some(g) = &geometry
+        self.warn(geometry.as_deref(), page, generation, notice);
+        if self.paths.len() >= SNAP_CACHE_PAGES {
+            self.paths.remove(0);
+        }
+        self.paths.push((page, generation, geometry.clone()));
+        geometry
+    }
+
+    /// The paths of `page` without the picture at `index` among its images, which is being
+    /// moved: it doesn't snap to where it was.
+    pub fn geometry_without_image(
+        &mut self,
+        doc: &Document,
+        page: usize,
+        index: usize,
+        notice: &mut Option<&'static str>,
+    ) -> Option<std::sync::Arc<measure::snap::Geometry>> {
+        let generation = doc.edit_generation();
+        if let Some((p, g, i, cached)) = &self.moving
+            && (*p, *g, *i) == (page, generation, index)
+        {
+            return cached.clone();
+        }
+        let geometry = doc.measurement_paths_without_image(page, index).ok().map(std::sync::Arc::new);
+        self.warn(geometry.as_deref(), page, generation, notice);
+        self.moving = Some((page, generation, index, geometry.clone()));
+        geometry
+    }
+
+    /// Says once per page and generation, through `notice`, that extraction hit a limit.
+    fn warn(&mut self, geometry: Option<&measure::snap::Geometry>, page: usize, generation: u64, notice: &mut Option<&'static str>) {
+        self.warned.retain(|(_, g)| *g == generation);
+        if let Some(g) = geometry
             && (g.truncated || g.unreadable > 0)
             && !self.warned.contains(&(page, generation))
         {
@@ -391,11 +425,6 @@ impl SnapCache {
             });
             self.warned.push((page, generation));
         }
-        if self.paths.len() >= SNAP_CACHE_PAGES {
-            self.paths.remove(0);
-        }
-        self.paths.push((page, generation, geometry.clone()));
-        geometry
     }
 
     /// The comments drawn with lines on `page`, as the document is now, but those at the

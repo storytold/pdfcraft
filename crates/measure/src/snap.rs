@@ -642,6 +642,9 @@ struct Walker<'a> {
     bytes: usize,
     streams: usize,
     limits: Limits,
+    /// Pictures left out (one being moved), by their placement: an image's unit square, or a
+    /// form XObject's coordinates, to user space.
+    skip: &'a [[f64; 6]],
 }
 impl Walker<'_> {
     fn walk(&mut self, object: &Object, resources: &Dict, initial: Matrix, depth: usize) -> Result<()> {
@@ -749,6 +752,9 @@ impl Walker<'_> {
     /// rectangle's does, so its corners, the middles of its sides and its centre snap (a pasted
     /// screenshot, a photo or a scanned detail on a plan).
     fn image(&mut self, matrix: Matrix) {
+        if self.skips(&matrix) {
+            return;
+        }
         if self.geometry.segments.len().saturating_add(4) > self.geometry.cap {
             self.geometry.truncated = true;
             return;
@@ -772,6 +778,11 @@ impl Walker<'_> {
             self.geometry.truncated = true;
         }
     }
+    /// Whether a picture placed by `m` is one left out (see [`geometry_skipping`]); placements
+    /// computed apart may differ in the last bits.
+    fn skips(&self, m: &Matrix) -> bool {
+        self.skip.iter().any(|s| s.iter().zip(m.0).all(|(a, b)| (a - b).abs() <= 1e-6 * a.abs().max(b.abs()).max(1.0)))
+    }
     /// A form XObject `o` drawn by `Do` under `matrix`, with its own resources or else
     /// `resources`; one already being walked (a form drawing itself) is skipped.
     fn form(&mut self, o: &Object, resources: &Dict, matrix: Matrix, depth: usize) -> Result<()> {
@@ -790,6 +801,9 @@ impl Walker<'_> {
                 .and_then(|o| o.as_array().and_then(|a| Matrix::from_operands(a)))
                 .unwrap_or_default()
                 .then(&matrix);
+            if self.skips(&m) {
+                return Ok(());
+            }
             let own = s.dict.get(b"Resources").map(|o| self.doc.resolve(o));
             let res = own.as_ref().and_then(|o| o.as_dict()).unwrap_or(resources);
             if let Some(r) = r {
@@ -1141,11 +1155,17 @@ pub fn geometry(doc: &Document, page_index: usize) -> Result<Geometry> {
 }
 /// [`geometry`] within the given limits.
 pub fn geometry_within(doc: &Document, page_index: usize, limits: Limits) -> Result<Geometry> {
+    geometry_skipping(doc, page_index, limits, &[])
+}
+/// [`geometry_within`] without the pictures placed by the matrices in `skip` (an image's unit
+/// square, or a form XObject's coordinates, to user space): a picture being moved mustn't snap to
+/// where it was.
+pub fn geometry_skipping(doc: &Document, page_index: usize, limits: Limits, skip: &[[f64; 6]]) -> Result<Geometry> {
     let p = crate::page(doc, page_index)?;
     let resources = p.dict.get(b"Resources").map(|o| doc.resolve(o));
     let empty = Dict::new();
     let resources = resources.as_ref().and_then(|o| o.as_dict()).unwrap_or(&empty);
-    let mut walker = Walker { doc, geometry: Geometry::with_limits(limits), seen: HashSet::new(), bytes: 0, streams: 0, limits };
+    let mut walker = Walker { doc, geometry: Geometry::with_limits(limits), seen: HashSet::new(), bytes: 0, streams: 0, limits, skip };
     // Extraction is lenient: limits and unreadable streams are reported in the geometry.
     if let Some(contents) = p.dict.get(b"Contents") {
         walker.walk(contents, resources, Matrix::IDENTITY, 0)?;

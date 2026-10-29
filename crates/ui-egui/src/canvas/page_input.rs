@@ -167,6 +167,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         source_blocked
             || crate::content_ui::page_input(
                 cx,
+                &pcx,
                 added,
                 tool == QuickTool::AddText && !over_source,
                 matches!(tool, QuickTool::AddText | QuickTool::EditText),
@@ -193,6 +194,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
             page: i,
             info,
             allow_interaction: !others_own_pointer && (matches!(view.router.owner(i), Some(crate::page_router::Owner::Picture { .. })) || !text_used),
+            snap: &pcx,
         };
         let image_used = crate::edit_text_ui::image_input(&image_cx, &images, view);
         !others_own_pointer && (text_used || image_used)
@@ -781,7 +783,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     }
     comments::paint_page(ui, painter, &pcx, view, input.hover.as_ref());
     if editing_content {
-        crate::content_ui::paint_page(painter, &xf, i, info, added, view, pointer);
+        crate::content_ui::paint_page(painter, &xf, i, info, added, view, view.content.drag_pointer(pointer));
     }
     if tool == QuickTool::EditText {
         crate::object_ui::paint(painter, &xf, i, info, &view.objects);

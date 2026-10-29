@@ -27,22 +27,26 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     };
     let caret_text = if cx.tool == QuickTool::Comment(CommentTool::Caret) { view.page_text(cx.page) } else { None };
     let cv = &mut view.comments;
-    // (The Fill & Sign tools set their own, before this runs.)
-    if !matches!(cx.tool, QuickTool::Fill(_)) && cv.snap_hover.is_some_and(|(page, _, _)| page == cx.page) {
-        cv.snap_hover = None;
-    }
-    // The nearest target under the pointer, which Tab cycles from.
-    match pointer.filter(|_| over_page && cx.snapping()) {
-        Some(p) => {
-            let first = cx.snap_candidates(cx.to_user(p)).first().map(|s| (cx.page, s.point));
-            // Tab's place is among one page's candidates: on another page it starts over.
-            if first.map(|(page, _)| page) != cv.snap_first.map(|(page, _)| page) {
-                cv.snap_cycle = None;
-            }
-            cv.snap_first = first;
+    // The snap marker and the target Tab cycles from are the commenting tools' own; when another
+    // tool took this frame (added text or a picture being moved, which snap and set the marker
+    // themselves), they are left to it. (The Fill & Sign tools set theirs before this runs.)
+    if !taken {
+        if !matches!(cx.tool, QuickTool::Fill(_)) && cv.snap_hover.is_some_and(|(page, _, _)| page == cx.page) {
+            cv.snap_hover = None;
         }
-        None if cv.snap_first.is_some_and(|(page, _)| page == cx.page) => cv.snap_first = None,
-        None => {}
+        // The nearest target under the pointer, which Tab cycles from.
+        match pointer.filter(|_| over_page && cx.snapping()) {
+            Some(p) => {
+                let first = cx.snap_candidates(cx.to_user(p)).first().map(|s| (cx.page, s.point));
+                // Tab's place is among one page's candidates: on another page it starts over.
+                if first.map(|(page, _)| page) != cv.snap_first.map(|(page, _)| page) {
+                    cv.snap_cycle = None;
+                }
+                cv.snap_first = first;
+            }
+            None if cv.snap_first.is_some_and(|(page, _)| page == cx.page) => cv.snap_first = None,
+            None => {}
+        }
     }
     if cv.gesture.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         cv.gesture = None;

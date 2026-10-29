@@ -108,6 +108,13 @@ pub struct ContentView {
     /// Select the item an add creates (the page's item count before it).
     pub select_added: Option<(usize, usize)>,
     grab: Option<(usize, Grab, Pos2)>,
+    /// While an item is moved with snapping on (F3): the point of its box Tab chose to go onto a
+    /// target (see [`crate::comments::PageCx::snap_box_move`]), `None` for whichever corner comes
+    /// near one; Tab presses not applied yet; and where the pointer counts as being while the
+    /// item snaps.
+    anchor: Option<usize>,
+    pub anchor_steps: isize,
+    snapped: Option<Pos2>,
     undrawable: UndrawableMemo,
     layout: Option<(AddedText, f32, f64, [f64; 4])>,
 }
@@ -116,6 +123,36 @@ impl ContentView {
     /// Forget an in-progress pointer grab for content editing.
     pub(crate) fn cancel_pointer_gesture(&mut self) {
         self.grab = None;
+        self.end_snap();
+    }
+
+    /// The item being moved (not resized): its page and index among the page's items.
+    pub(crate) fn moving(&self) -> Option<(usize, usize)> {
+        match (self.grab, self.selected) {
+            (Some((gp, Grab::Move, _)), Some((sp, si))) if gp == sp => Some((sp, si)),
+            _ => None,
+        }
+    }
+
+    /// The pointer as the moved item follows it: moved onto a snap target while it snaps.
+    pub(crate) fn drag_pointer(&self, pointer: Option<Pos2>) -> Option<Pos2> {
+        self.snapped.or(pointer)
+    }
+
+    /// The end of a move that snapped (an added text's, or a picture's): Tab's choice goes.
+    pub(crate) fn end_snap(&mut self) {
+        (self.anchor, self.anchor_steps, self.snapped) = (None, 0, None);
+    }
+
+    /// For a picture moved in the image controller, which keeps its own drag: the point of its
+    /// box Tab chose, and the Tab presses not applied yet (taken).
+    pub(crate) fn box_anchor(&mut self) -> (Option<usize>, isize) {
+        (self.anchor, std::mem::take(&mut self.anchor_steps))
+    }
+
+    /// Keep the point Tab chose for the picture being moved.
+    pub(crate) fn keep_box_anchor(&mut self, anchor: Option<usize>) {
+        self.anchor = anchor;
     }
 
     pub(crate) fn finish_draft(&mut self, added: &[Added]) -> Option<Edit> {
@@ -376,6 +413,7 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, added: &[Added], 
 /// used the input.
 pub(crate) fn page_input(
     cx: PageToolContext<'_>,
+    snap: &crate::comments::PageCx<'_>,
     added: &[Added],
     adding_text: bool,
     edit_on_click: bool,
@@ -385,14 +423,23 @@ pub(crate) fn page_input(
     let PageToolContext { resp, xf, ptr, page, info, .. } = cx;
     let mut consumed = false;
     let pointer = ptr.pos;
+    snap_move(snap, added, view);
     let cv = &mut view.content;
     if let Some((gp, grab, start)) = cv.grab
         && gp == page
     {
         consumed = true;
         if resp.drag_stopped() || !ptr.primary_down {
+            let end = cv.drag_pointer(pointer).unwrap_or(start);
             cv.grab = None;
-            let end = pointer.unwrap_or(start);
+            cv.end_snap();
+            if view.comments.snap_hover.is_some_and(|(p, ..)| p == page) {
+                view.comments.snap_hover = None;
+            }
+            if view.comments.anchor_shown.is_some_and(|(p, ..)| p == page) {
+                view.comments.anchor_shown = None;
+            }
+            let cv = &mut view.content;
             if let Some((sp, si)) = cv.selected
                 && sp == page
                 && let Some((_, a)) = on_page(added, page).into_iter().find(|(i, a)| *i == si && matches!(a.content, AddedContent::Text(_)))
@@ -504,6 +551,22 @@ pub(crate) fn page_input(
         }
     }
     consumed || hit.is_some() && resp.is_pointer_button_down_on()
+}
+
+/// Snapping while an added item is moved on this page with F3 on: one of its corners, the
+/// middles of its sides or its centre lands on the drawing (or a comment) in reach, Tab picks
+/// which, and the markers show where.
+fn snap_move(cx: &crate::comments::PageCx<'_>, added: &[Added], view: &mut DocView) {
+    let cv = &mut view.content;
+    let Some((page, index)) = cv.moving().filter(|(page, _)| *page == cx.page) else { return };
+    let (Some((_, grab, start)), Some(p), Some((_, a))) = (cv.grab, cx.ptr.pos, on_page(added, page).into_iter().find(|(i, _)| *i == index)) else {
+        return;
+    };
+    let r = screen_rect(cx.xf, cx.info, page, a.content.rect());
+    let (moved, from, anchor) = cx.snap_box_move(&mut view.comments, r, (start, p), cv.anchor, cv.anchor_steps);
+    cv.grab = Some((page, grab, from));
+    (cv.anchor, cv.anchor_steps) = (anchor, 0);
+    cv.snapped = (moved != p).then_some(moved);
 }
 
 /// Outlines of added items (hover and selection with handles) and the box being dragged, the

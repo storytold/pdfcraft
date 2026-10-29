@@ -14,6 +14,8 @@ pub(crate) struct ImageCx<'a> {
     pub page: usize,
     pub info: &'a DocInfo,
     pub allow_interaction: bool,
+    /// Snap to drawing (F3) for a picture being moved.
+    pub snap: &'a crate::comments::PageCx<'a>,
 }
 
 /// The 8 resize handles on an image (4 corners + 4 edge centers).
@@ -101,6 +103,12 @@ impl ImageSelection {
         {
             crop.keep = before;
         }
+    }
+
+    /// The picture being moved (not resized or turned): its page and index among the page's
+    /// images.
+    pub(crate) fn moving(&self) -> Option<(usize, usize)> {
+        self.drag.filter(|d| d.target == DragTarget::Move && !self.turning).map(|_| (self.page, self.index))
     }
 
     pub(crate) fn dragging(&self) -> bool {
@@ -273,7 +281,7 @@ pub(crate) fn crop_controls_contain(
 /// (the pointer and keys are the crop's while it lasts).
 #[allow(clippy::cognitive_complexity)]
 fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_engine::PageImage) -> bool {
-    let ImageCx { ui, resp, xf, ptr, page, info, allow_interaction } = *cx;
+    let ImageCx { ui, resp, xf, ptr, page, info, allow_interaction, .. } = *cx;
     let painter = ui.painter();
     let Some(mode) = view.image_selection.as_mut().and_then(|s| s.crop.as_mut()) else { return false };
     let hover_pos = ptr.pos;
@@ -588,6 +596,32 @@ pub enum ImageAction {
 
 /// Where the rotate knob sits, and the edge point its stem starts from: above the middle of the
 /// top edge, or below the bottom edge when the area on screen (`view`) has no room above.
+/// A picture moved with Snap to drawing on (F3) snaps as a comment's box does
+/// ([`crate::comments::PageCx::snap_box_move`]): the corner that comes near a target lands on it,
+/// Tab picks another point of its box (the middles of its sides, its centre), and the markers say
+/// where. Returns the pointer the picture follows, and the drag with its start moved by Tab.
+fn snap_move(snap: &crate::comments::PageCx<'_>, view: &mut DocView, drag: ImageDrag, p: Pos2) -> (Pos2, ImageDrag) {
+    let (anchor, steps) = view.content.box_anchor();
+    let (moved, from, anchor) = snap.snap_box_move(&mut view.comments, drag.initial_rect, (drag.start, p), anchor, steps);
+    view.content.keep_box_anchor(anchor);
+    let drag = ImageDrag { start: from, ..drag };
+    if let Some(s) = view.image_selection.as_mut() {
+        s.drag = Some(drag);
+    }
+    (moved, drag)
+}
+
+/// The move is over: Tab's choice goes, and the markers on `page` with it.
+fn end_snap(view: &mut DocView, page: usize) {
+    view.content.end_snap();
+    if view.comments.snap_hover.is_some_and(|(p, ..)| p == page) {
+        view.comments.snap_hover = None;
+    }
+    if view.comments.anchor_shown.is_some_and(|(p, ..)| p == page) {
+        view.comments.anchor_shown = None;
+    }
+}
+
 pub(super) fn rotate_knob(b: Rect, view: Rect) -> (Pos2, Pos2) {
     let above = b.center_top() - egui::vec2(0.0, 22.0);
     if above.y - 6.0 >= view.top() { (above, b.center_top()) } else { (b.center_bottom() + egui::vec2(0.0, 22.0), b.center_bottom()) }
@@ -628,7 +662,7 @@ pub fn image_menu_id() -> egui::Id {
 /// Images on a page: select, move, resize, right-click. Returns `true` when the pointer was used.
 #[allow(clippy::cognitive_complexity)]
 pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage], view: &mut DocView) -> bool {
-    let ImageCx { ui, resp, xf, ptr, page, info, allow_interaction } = *cx;
+    let ImageCx { ui, resp, xf, ptr, page, info, allow_interaction, .. } = *cx;
     let boxes: Vec<Rect> = images.iter().map(|im| crate::canvas::image_screen_rect(im, xf, info, page)).collect();
     let painter = ui.painter();
     let hover_pos = ptr.pos;
@@ -825,6 +859,7 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
             && let Some(p) = hover_pos
         {
             if !obb.is_rotated && !matches!(drag.target, DragTarget::Rotate) {
+                let (p, drag) = if drag.target == DragTarget::Move { snap_move(cx.snap, view, drag, p) } else { (p, drag) };
                 let preview = match drag.target {
                     DragTarget::Handle(handle) => {
                         let delta = p - drag.start;
@@ -874,6 +909,7 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
                 }
 
                 if resp.drag_stopped() || !ptr.primary_down {
+                    end_snap(view, page);
                     if let Some(s) = view.image_selection.as_mut() {
                         s.drag = None;
                         let norm = |r: Rect| {

@@ -90,12 +90,17 @@ impl PdfCraftApp {
         let view = self.active.and_then(|i| self.views.get(i));
         let marker = view.is_some_and(|v| v.comments.snap_first.is_some());
         let moving = self.comment_prefs.snap && view.is_some_and(|v| matches!(v.comments.gesture, Some(comments::Gesture::Move { .. })));
-        if (marker || moving) && !ctx.memory(|m| m.focused().is_some()) {
+        // Text added in Edit text & images, or a picture, moved with snapping on, likewise.
+        let moving_content = self.comment_prefs.snap
+            && view.is_some_and(|v| v.content.moving().is_some() || v.image_selection.as_ref().is_some_and(|s| s.moving().is_some()));
+        if (marker || moving || moving_content) && !ctx.memory(|m| m.focused().is_some()) {
             let step = comments::take_snap_tabs(&mut raw.events);
             if step != 0
                 && let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
             {
-                if moving {
+                if moving_content {
+                    view.content.anchor_steps = view.content.anchor_steps.saturating_add(step);
+                } else if moving {
                     view.comments.anchor_steps = view.comments.anchor_steps.saturating_add(step);
                 } else {
                     view.comments.cycle_snap(step);
