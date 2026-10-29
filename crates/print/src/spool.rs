@@ -6,6 +6,9 @@ pub use craft_print::{
     parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers, printers_parsed,
 };
 
+#[cfg(any(windows, test))]
+mod windows_duplex;
+
 /// The driver's job options for a printer (CUPS: its PPD, with the queue's current defaults);
 /// empty when it has none or on other platforms. Reads files and runs `lpoptions`, so call it
 /// when the user asks, not every frame.
@@ -143,13 +146,34 @@ pub(crate) fn printer_options_via_within(
     options
 }
 
+/// Submit a print-ready PDF to the selected system printer and return the spooler's response.
+/// On Windows, an unspecified duplex setting is resolved from the selected printer's current
+/// settings before submission; explicit duplex choices are kept. A driver without a duplex
+/// field leaves it unspecified. Failed default lookups are logged and leave duplex unspecified.
+/// Other platforms delegate the job to their spooler unchanged.
+///
+/// # Errors
+///
+/// Returns a spool error if the underlying spooler cannot submit the job.
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, crate::PrintError> {
+    #[cfg(windows)]
+    let resolved = windows_duplex::job(job);
+    #[cfg(windows)]
+    let job = resolved.as_ref();
     craft_print::submit(pdf, job).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
 /// [`submit`], told `(sent, sheets)` as each sheet reaches the spooler (Windows; CUPS takes the
 /// whole PDF at once and reports nothing).
+///
+/// # Errors
+///
+/// Returns the same submission errors as [`submit`].
 pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, crate::PrintError> {
+    #[cfg(windows)]
+    let resolved = windows_duplex::job(job);
+    #[cfg(windows)]
+    let job = resolved.as_ref();
     craft_print::submit_with_progress(pdf, job, progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 

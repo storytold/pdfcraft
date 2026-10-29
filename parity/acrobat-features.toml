@@ -8108,8 +8108,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::spooler_arguments_and_printer_list", "crates/ui-egui/src/workflows/print_ui.rs::two_sided_follows_the_printer_until_chosen", "crates/automation/src/printing.rs::duplex_printer_leaves_two_sided_to_the_printer"]
-notes = "long/short edge via the spooler: lp -o sides=…, and the Windows driver's Duplex setting. Two-sided starts at Printer default, as in Acrobat: nothing is sent, so the printer's own default (its Properties) applies until Off or an edge is chosen (doc_print: duplex \"printer\"). Missing: the document's /ViewerPreferences /Duplex preset isn't read yet"
+evidence = ["crates/print/src/tests.rs::spooler_arguments_and_printer_list", "crates/ui-egui/src/workflows/print_ui.rs::two_sided_follows_the_printer_until_chosen", "crates/automation/src/printing.rs::duplex_printer_leaves_two_sided_to_the_printer", "crates/print/src/spool/windows_duplex.rs::printer_default_reaches_the_windows_job_for_each_binding", "crates/print/src/spool/windows_duplex.rs::failed_or_invalid_settings_fall_back_and_keep_the_resolved_queue"]
+notes = "long/short edge via the spooler: lp -o sides=…, and the Windows driver's Duplex setting. Two-sided starts at Printer default: Windows reads the driver's current DEVMODE duplex and sends it explicitly (#5130), logging lookup failures and leaving duplex unspecified as a fallback; CUPS leaves duplex unspecified so the queue default applies (doc_print: duplex \"printer\"). Off or an edge overrides either. Physical output still needs hardware validation. Missing: the document's /ViewerPreferences /Duplex preset isn't read yet"
 
 [[feature]]
 id = "print.n-up"

@@ -1,5 +1,9 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** patch (M10, #5130 review: log failed Windows default lookups and defer to the driver; estimates unchanged)
+
+> **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** patch (M10, #5130: Windows resolves Printer default from native duplex settings before submission; estimates unchanged)
+
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
@@ -200,6 +204,9 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-29 (M10, #5130 review):** Failed Windows duplex-default lookups now log a fallback and allow submission with duplex unspecified; successful queue resolution is retained. Automation and parity wording aligned. Hardware duplex qualification remains open. Estimates unchanged.
+
+- **2026-10-28 (M10, #5130):** Windows Printer default carries the current native driver duplex setting explicitly into both submission paths; explicit binding choices are retained. Synthetic regressions and a read-only installed-driver check cover resolution; physical output remains unverified. Estimates unchanged.
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 - **2026-10-24 (M10, #4158 partial):** Word, HTML, RTF and PowerPoint export keep a block that continues another on its line (an italic case name, a link, a superscript) as a run in its own style inside that paragraph, with the source's word space, instead of a paragraph of its own. Style changes that wrap onto the next line still split paragraphs (the reading blocks keep style boundaries). Estimates unchanged.
 - **2026-10-24 (M3, window move on Wayland, #3970 follow-up):** After a move or resize by PdfCraft's own title bar or edges, the button release given back to egui goes before the pointer leaving the window, so hover no longer sticks at the old place until the pointer moves. Found by CodeRabbit in review of #3970; a unit test covers it. Estimates unchanged.
@@ -684,6 +691,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | patch | M10, #5130: resolve Windows Printer default from the driver's current duplex settings for UI and automation submissions; synthetic and read-only native checks, no physical-output qualification. Estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
 | 2026-10-23 | minor | M8, #3205 follow-up: phone-pattern redaction includes the +39 country code on labelled Italian geographic numbers with a slash; dates, protocol identifiers and whole-run guards remain. Estimates unchanged. |
 | 2026-10-23 | minor | M11: image downsampling measures physical resolution after page-local UserUnit scaling, including shared nested forms; synthetic measurement and optimization regressions. Estimates unchanged. |

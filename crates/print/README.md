@@ -52,6 +52,18 @@ orientation, zero added margins and hardware-edge clipping. Long-edge and short-
 use the corresponding Windows binding edges. Random, exclusively created Windows job files
 are removed on success and failure. Other targets offer the print-ready PDF instead.
 
+On Windows, **Printer default** reads the selected driver's current `DEVMODEW` duplex
+setting immediately before submission and carries that binding explicitly into the job
+(#5130). This also applies to `doc_print` with `duplex: "printer"`; its omitted-argument
+default remains `off`. Explicit Off/Long Edge/Short Edge choices, booklet binding and
+single-sided cut-and-stack bypass this lookup. Drivers without `DM_DUPLEX` retain the
+unspecified setting. A failed lookup, settings read or invalid declared duplex value is
+logged and falls back to leaving duplex unspecified, so the driver can still choose its default.
+If the queue was resolved before the settings failure, the job remains pinned to that queue. CUPS still leaves the choice to the queue. The Windows backend
+selects `JobDuplexAllDocumentsContiguously`, falling back to `DocumentDuplex` when
+the driver exposes only document-level duplex, and validates the retained binding before submission
+([craft-libs #411](https://github.com/storytold/craft-libs/pull/411)).
+
 The shared dependency requires Rust 1.95. Transport and native Windows regression tests
 live in craft-libs; local tests retain composition, facade, engine, automation and UI coverage.
 The desktop UI discovers printers and submits jobs on workers, so neither operation blocks

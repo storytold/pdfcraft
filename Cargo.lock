@@ -1234,7 +1234,7 @@ dependencies = [
 [[package]]
 name = "craft-print"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545#e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545"
+source = "git+https://github.com/storytold/craft-libs?rev=a040a0a71181969c76ed6c1d40cde513991311d2#a040a0a71181969c76ed6c1d40cde513991311d2"
 dependencies = [
  "craft-winprint-gdi",
  "miniz_oxide 0.9.1",
@@ -4552,6 +4552,7 @@ name = "pdfcraft-print"
 version = "0.15.0"
 dependencies = [
  "craft-print",
+ "log",
  "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-model",
