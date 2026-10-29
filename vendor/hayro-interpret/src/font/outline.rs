@@ -108,6 +108,11 @@ impl OutlineFont {
         }
     }
 
+    /// PdfCraft patch: whether `glyph` is drawn by a further face of a Type 0 font's substitute.
+    pub(crate) fn is_further_glyph(&self, glyph: GlyphId) -> bool {
+        matches!(self, Self::Type0(t) if t.is_further_glyph(glyph))
+    }
+
     /// Get the advance width for a glyph by character code.
     pub(crate) fn glyph_advance_width(&self, char_code: u32) -> Option<f32> {
         match self {

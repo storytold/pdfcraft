@@ -114,8 +114,9 @@ and ActualText filtered extraction), and
 `text::tests::clipping_mode_text_is_extracted_and_searchable_like_other_rendering_modes`
 (extraction, search, glyph geometry, clip-through pixels and no-paint pixels).
 
-Missing spacing glyphs (#3601): in `hayro-interpret` `Type0Font::map_via_unicode`,
-an OpenType substitute uses its ordinary-space glyph only when its own charmap
+Missing spacing glyphs (#3601): in `hayro-interpret` `cid::open_type_glyph` (the lookup a
+Type 0 font's substitute and its further faces share), an OpenType substitute uses its
+ordinary-space glyph only when its own charmap
 lacks a spacing character (including Adobe-Japan1 U+2002). Native glyphs and
 variation forms retain priority; embedded fonts, PDF advances and Unicode decoding
 are unchanged. Renderer regressions `japanese_substitute_missing_spaces_draw_no_ink`
@@ -131,6 +132,28 @@ ones, as ISO 32000-2 §9.6.5.4 prescribes for symbolic fonts; the
 order the font lists them, platform ID first, so a wrong (1, 0) table (SAS 9.4's AMT fonts)
 drew "8" as "p" and "+" as "V". Covered by `raster::tests::symbolic_truetype_cmap`, whose font
 is built in memory.
+
+## Further faces for Type 0 substitutes (#5329)
+
+`hayro-interpret` patch (71): `InterpreterSettings::further_faces` gives, for a Type 0 font the
+document doesn't embed, the faces that draw the characters its substitute has no glyph for
+(OpenType fonts or CFF programs, tried in order; the default has none). `Type0Font` asks once
+per font, with the query the substitute was chosen for (also when the name matched a standard
+font), skips a face whose data is the substitute's own, and parses a face only when a character
+needs it, so a page whose substitute covers everything never parses one. A character is looked up by Unicode (`/ToUnicode` or the
+collection's UCS2 CMap) in the substitute first, then in each further face; a further face's
+glyph id carries the face's position above its 16-bit id (`FACE_SHIFT`), so glyph caches keyed
+by font and glyph id keep the faces apart, and its outline is fitted to the PDF's `/W` advance
+like the substitute's. `OutlineGlyph::font_data` is `None` for such a glyph, because its id
+indexes another face than those bytes. Before, such a character drew `.notdef` (an Adobe
+character collection) or the substitute's glyph at the CID's index, an unrelated glyph (any
+other collection). Embedded fonts are unchanged. Covered by `further_faces::{a_character_the_substitute_lacks_draws_in_a_further_face,
+a_character_the_substitute_has_keeps_the_substitutes_glyph, further_face_glyphs_stay_apart_from_the_substitutes,
+further_faces_are_asked_for_once_per_substituted_font, the_substitute_itself_is_no_further_face}`
+(`cargo test -p pdfcraft-render --test it`),
+whose further face is hayro's own Symbol stand-in, and the craft-fonts renderer tests in
+`raster::tests` that PdfCraft's choice of faces (`pdfcraft_fonts::fallback`, through
+`raster/substitute.rs`) drives.
 
 ## KenM76 integration patches
 

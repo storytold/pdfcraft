@@ -11,7 +11,7 @@ use crate::font::true_type::TrueTypeFont;
 use crate::font::type1::Type1Font;
 use crate::font::type3::Type3;
 use crate::interpret::state::State;
-use crate::{CMapResolverFn, CacheKey, FontResolverFn, InterpreterSettings, Paint};
+use crate::{CMapResolverFn, CacheKey, FontResolverFn, FurtherFacesFn, InterpreterSettings, Paint};
 use bitflags::bitflags;
 use hayro_syntax::object::Name;
 use hayro_syntax::object::dict::keys::SUBTYPE;
@@ -155,8 +155,13 @@ impl OutlineGlyph {
 
     /// Get raw font bytes and metadata for downstream use.
     ///
-    /// Returns `None` for Type1 fonts.
+    /// Returns `None` for Type1 fonts. PdfCraft patch: also `None` for a glyph a further face
+    /// of a substitute draws (`InterpreterSettings::further_faces`): its id indexes that face,
+    /// not the font these bytes are.
     pub fn font_data(&self) -> Option<OutlineFontData> {
+        if self.font.is_further_glyph(self.id) {
+            return None;
+        }
         self.font.font_data()
     }
 
@@ -242,6 +247,7 @@ impl<'a> Font<'a> {
     pub(crate) fn new(
         dict: &Dict<'a>,
         font_resolver: &FontResolverFn,
+        further_faces: &FurtherFacesFn,
         cmap_resolver: &CMapResolverFn,
     ) -> Option<Self> {
         let f_type = match dict.get::<Name<'_>>(SUBTYPE)?.deref() {
@@ -254,7 +260,12 @@ impl<'a> Font<'a> {
                 font_resolver,
                 cmap_resolver,
             )?)),
-            TYPE0 => FontType::Type0(Rc::new(Type0Font::new(dict, font_resolver, cmap_resolver)?)),
+            TYPE0 => FontType::Type0(Rc::new(Type0Font::new(
+                dict,
+                font_resolver,
+                further_faces,
+                cmap_resolver,
+            )?)),
             TYPE3 => FontType::Type3(Rc::new(Type3::new(dict, cmap_resolver)?)),
             f => {
                 warn!(
