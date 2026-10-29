@@ -121,6 +121,32 @@ fn strings_and_streams_round_trip_and_are_scrambled() {
     }
 }
 
+thread_local! {
+    /// Crypt filter names compared or looked up, on this thread.
+    pub(crate) static FILTER_COMPARES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[test]
+fn crypt_filters_are_looked_up_once_per_handler() {
+    let plain = new(Algorithm::Aes128, "", "o", -1);
+    let mut d = plain.dict().clone();
+    let n = 5_000;
+    let mut filters: Vec<_> = (0..n).map(|i| (format!("F{i}").into_bytes(), Method::Identity)).collect();
+    filters.append(&mut d.crypt_filters);
+    d.crypt_filters = filters;
+    FILTER_COMPARES.with(|c| c.set(0));
+    let h = SecurityHandler::open(d, ID, None).unwrap();
+    let strings = 1_000;
+    let enc = plain.encrypt_string(7, 0, b"secret");
+    for _ in 0..strings {
+        assert_eq!(h.decrypt_string(7, 0, &enc), b"secret");
+        assert_eq!(h.decrypt_stream(7, 0, &plain.encrypt_stream(7, 0, b"s", StreamKind::Normal), StreamKind::Normal), b"s");
+    }
+    assert_eq!(h.decrypt_stream(7, 0, b"x", StreamKind::Named(b"F3")), b"x");
+    let compares = FILTER_COMPARES.with(|c| c.get());
+    assert!(compares <= 2 * n + 3 * strings, "{compares} filter name comparisons");
+}
+
 #[test]
 fn identity_crypt_filters_leave_data_alone() {
     let mut d = new(Algorithm::Aes256, "", "o", -1).dict().clone();
@@ -210,6 +236,28 @@ fn permission_bits_follow_table_22() {
     assert!(p.print() && p.modify() && p.copy() && p.annotate() && p.assemble() && p.fill_forms());
     let p = Permissions { bits: 0, owner: true };
     assert!(p.modify(), "owners ignore /P");
+}
+
+#[test]
+fn perms_limits_what_an_edited_p_grants() {
+    let made = new(Algorithm::Aes256, "user pw", "owner pw", 0b0100); // print only
+    let open = |d: &EncryptDict, pw| SecurityHandler::open(d.clone(), ID, Some(pw)).unwrap().permissions();
+    let mut d = made.dict().clone();
+    assert_eq!(open(&d, "user pw").bits, d.p, "/P and /Perms agree");
+    d.p = -4; // /P edited to allow everything, /Perms as written
+    let p = open(&d, "user pw");
+    assert!(p.print() && !p.modify() && !p.copy() && !p.annotate() && !p.fill_forms() && !p.assemble());
+    assert!(open(&d, "owner pw").modify(), "owners ignore /P");
+    d.p = -3904; // a stricter /P still applies
+    assert!(!open(&d, "user pw").print());
+    // No /Perms, or one that does not decrypt to an `adb` block: /P as before.
+    for perms in [Vec::new(), vec![0; 16], made.dict().perms[..15].to_vec()] {
+        let d = EncryptDict { p: -4, perms, ..made.dict().clone() };
+        assert!(open(&d, "user pw").modify());
+    }
+    // R2 to R4 have no /Perms: /P is part of their file key, so an edited /P does not open.
+    let d = EncryptDict { p: -4, ..new(Algorithm::Aes128, "user pw", "owner pw", 0b0100).dict().clone() };
+    assert_eq!(SecurityHandler::open(d, ID, Some("user pw")).unwrap_err(), CryptError::WrongPassword);
 }
 
 proptest::proptest! {

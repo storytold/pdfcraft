@@ -1,0 +1,2796 @@
+# Hindi (hi) interface catalog. Columns, separated by a TAB:
+#   context <TAB> English source <TAB> translation
+#   Clean-room translation written from the English source's meaning.
+#   License: MIT OR Apache-2.0.
+	Menu	मेनू
+	File	फ़ाइल
+	Edit	संपादित करें
+	Pages	पृष्ठ
+	View	दृश्य
+	Help	सहायता
+	Preferences	प्राथमिकताएँ
+	Preferences…	प्राथमिकताएँ…
+	Interface language	इंटरफ़ेस भाषा
+	Interface size	इंटरफ़ेस का आकार
+	Auto ({percent}%)	स्वतः ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	स्वतः मोड सिस्टम की टेक्स्ट आकार सेटिंग का पालन करता है। पृष्ठ हमेशा डिस्प्ले की पूर्ण रिज़ॉल्यूशन पर रेंडर होते हैं।
+	Identity	पहचान
+	Name on new comments	नई टिप्पणियों में नाम
+	Open…	खोलें…
+	Open Recent	हाल ही में खोले गए
+	Pin folder to Home…	होम पर फ़ोल्डर पिन करें…
+	Folders	फ़ोल्डर
+	Pin a folder…	फ़ोल्डर पिन करें…
+	Pin a folder to Home	होम पर फ़ोल्डर पिन करें
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	किसी फ़ोल्डर को पिन करें ताकि उसके नवीनतम पीडीएफ़ यहाँ सूची में दिखें, जैसे वह जगह जहाँ आपका स्कैनर या सिंक किया गया क्लाउड ड्राइव उन्हें सहेजता है।
+	Unpin	अनपिन करें
+	Unpin {folder}	{folder} अनपिन करें
+	Looking for PDFs…	पीडीएफ़ खोजे जा रहे हैं…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	यह फ़ोल्डर इस समय उपलब्ध नहीं है। हो सकता है कि इसे स्थानांतरित कर दिया गया हो, या इसका ड्राइव या क्लाउड सिंक ऑफ़लाइन हो।
+	No PDFs in this folder yet	इस फ़ोल्डर में अभी तक कोई पीडीएफ़ नहीं है
+	Show less	कम दिखाएँ
+	Show {n} more	{n} और दिखाएँ
+	The newest {n} of {total} PDFs	{total} पीडीएफ़ में से नवीनतम {n}
+	Pinned folders need the desktop app	पिन किए गए फ़ोल्डरों के लिए डेस्कटॉप ऐप आवश्यक है
+	Choose a folder on this computer to pin	पिन करने के लिए इस कंप्यूटर का कोई फ़ोल्डर चुनें
+	{folder} is already pinned to Home	{folder} पहले से ही होम पर पिन है
+	You can pin up to {n} folders. Unpin one first.	आप अधिकतम {n} फ़ोल्डर पिन कर सकते हैं। पहले किसी एक को अनपिन करें।
+	Pinned {folder} to Home	{folder} को होम पर पिन किया गया
+	No recent files	कोई हाल की फ़ाइल नहीं
+	New blank PDF	नया खाली पीडीएफ़
+	Create PDF from file…	फ़ाइल से पीडीएफ़ बनाएँ…
+	Create PDF from images…	छवियों से पीडीएफ़ बनाएँ…
+	Create PDF from clipboard	क्लिपबोर्ड से पीडीएफ़ बनाएँ
+	Combine files…	फ़ाइलें संयोजित करें…
+	Save	सहेजें
+	Save as…	इस रूप में सहेजें…
+	Close file	फ़ाइल बंद करें
+	Close all	सभी बंद करें
+	Revert	सहेजे गए संस्करण पर लौटें
+	Print…	प्रिंट करें…
+	Document properties…	दस्तावेज़ गुण…
+	Undo	पूर्ववत करें
+	Redo	पुनः करें
+	Find…	खोजें…
+	Advanced search…	उन्नत खोज…
+	Copy pages	पृष्ठ कॉपी करें
+	Cut pages	पृष्ठ काटें
+	Paste pages	पृष्ठ पेस्ट करें
+	Fit visible	दृश्य भाग पर फ़िट करें
+	Marquee zoom	चयनित क्षेत्र पर ज़ूम करें
+	Take a snapshot	स्नैपशॉट लें
+	Column select	कॉलम चयन
+	Full screen mode	पूर्ण स्क्रीन मोड
+	Read mode	पढ़ने का मोड
+	Switch light / dark theme	हल्की / गहरी थीम पर स्विच करें
+	Comments panel	टिप्पणी पैनल
+	Form fields panel	फ़ॉर्म फ़ील्ड पैनल
+	Clear form	फ़ॉर्म साफ़ करें
+	Find tools and commands…	टूल और कमांड खोजें…
+	Zoom	ज़ूम
+	Actual size	वास्तविक आकार
+	Zoom to page level	पृष्ठ स्तर पर ज़ूम करें
+	Fit to width	चौड़ाई के अनुसार फ़िट करें
+	Display theme	प्रदर्शन थीम
+	Side panels	साइड पैनल
+	Enable Acrobat JavaScript	Acrobat JavaScript सक्षम करें
+	OK	ठीक है
+	Join our Discord	हमारे Discord से जुड़ें
+	Close	बंद करें
+	Next / previous match	अगला / पिछला मिलान
+	Copy selected text	चयनित टेक्स्ट कॉपी करें
+	Double-click	डबल-क्लिक
+	Select a word	शब्द चुनें
+	Clear selection / close find	चयन हटाएँ / खोज बंद करें
+	Zoom in / out (also pinch or {key}-scroll)	ज़ूम इन / आउट करें (पिंच या {key}-स्क्रॉल से भी)
+	Rotate view	दृश्य घुमाएँ
+	First / last page	पहला / अंतिम पृष्ठ
+	Previous / next page	पिछला / अगला पृष्ठ
+	Delete selected pages (Organize)	चयनित पृष्ठ हटाएँ (व्यवस्था)
+	Select all pages (Organize)	सभी पृष्ठ चुनें (व्यवस्था)
+	Home	होम
+	Open	खोलें
+	Open a PDF ({key})	पीडीएफ़ खोलें ({key})
+	Dark gray theme	गहरी धूसर थीम
+	Light theme	हल्की थीम
+	Appearance mode	दिखावट मोड
+	Light	हल्का
+	Dark	गहरा
+	Active	सक्रिय
+	Dark theme	गहरी थीम
+	Appearance settings…	दिखावट सेटिंग्स…
+	All tools	सभी टूल
+	Read	पढ़ें
+	Convert	रूपांतरित करें
+	E-Sign	ई-साइन
+	Print ({key})	प्रिंट करें ({key})
+	Save ({key})	सहेजें ({key})
+	Document properties ({key})	दस्तावेज़ गुण ({key})
+	Find tools and commands	टूल और कमांड खोजें
+	Fit to height	ऊँचाई के अनुसार फ़िट करें
+	Zoom in	ज़ूम इन करें
+	Zoom out	ज़ूम आउट करें
+	Rotate view clockwise	दृश्य दक्षिणावर्त घुमाएँ
+	Rotate view counterclockwise	दृश्य वामावर्त घुमाएँ
+	Page navigation	पृष्ठ नेविगेशन
+	Previous view	पिछला दृश्य
+	Next view	अगला दृश्य
+	Page display	पृष्ठ प्रदर्शन
+	Continuous scrolling	लगातार स्क्रॉलिंग
+	Show gaps between pages	पृष्ठों के बीच अंतराल दिखाएँ
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	पृष्ठों के किनारे जोड़ने के लिए अंतराल छिपाएँ। PDF के भीतर के हाशिये नहीं बदलते।
+	Two-page view	दो-पृष्ठ दृश्य
+	Single page	एकल पृष्ठ
+	Show cover page in two-page view	दो-पृष्ठ दृश्य में कवर पृष्ठ दिखाएँ
+	Use system setting	सिस्टम सेटिंग का उपयोग करें
+	Light gray	हल्का धूसर
+	Dark gray	गहरा धूसर
+	Comments	टिप्पणियाँ
+	Bookmarks	बुकमार्क
+	Fields	फ़ील्ड
+	Layers	परतें
+	Attachments	अनुलग्नक
+	Signatures	हस्ताक्षर
+	Accessibility Checker	ऐक्सेसिबिलिटी जाँचकर्ता
+	Search	खोज
+	Compare	तुलना करें
+	Page thumbnails	पृष्ठ थंबनेल
+	Form fields	फ़ॉर्म फ़ील्ड
+	Zoom out ({key})	ज़ूम आउट ({key})
+	Zoom in ({key})	ज़ूम इन ({key})
+	Rotate view clockwise ({key})	दृश्य दक्षिणावर्त घुमाएँ ({key})
+	Toggle fit page / fit width	पृष्ठ फ़िट / चौड़ाई फ़िट टॉगल करें
+	Next page	अगला पृष्ठ
+	Previous page	पिछला पृष्ठ
+	Current page — type a page number or label (such as iv) and press Enter	वर्तमान पृष्ठ — पृष्ठ संख्या या लेबल (जैसे iv) टाइप करें और Enter दबाएँ
+	Welcome to PdfCraft	PdfCraft में आपका स्वागत है
+	An open-source PDF workbench — local, private, and scriptable.	एक ओपन-सोर्स पीडीएफ़ वर्कबेंच — स्थानीय, निजी और स्क्रिप्टेबल।
+	Join the ArtCraft community	ArtCraft समुदाय से जुड़ें
+	Get help, share feedback and follow development on Discord.	Discord पर सहायता प्राप्त करें, प्रतिक्रिया साझा करें और विकास पर नज़र रखें।
+	Recommended tools	अनुशंसित टूल
+	Use now	अभी उपयोग करें
+	Open file	फ़ाइल खोलें
+	Recent	हाल की फ़ाइलें
+	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	आप PdfCraft में जो फ़ाइलें खोलते हैं वे यहाँ दिखाई देती हैं। खोलने के लिए पीडीएफ़ कहीं भी छोड़ दें।
+	Privacy	गोपनीयता
+	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft ऑफ़लाइन काम करता है। जब तक आप कोई प्रोवाइडर न जोड़ें, न टेलीमेट्री है, न खाता और न ही क्लाउड प्रोसेसिंग।
+	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	स्क्रिप्ट ऐसे सैंडबॉक्स में चलती हैं जिसमें फ़ाइल या नेटवर्क एक्सेस नहीं होता। JavaScript बंद होने पर भी Acrobat के मानक format, validate और calculate फ़ंक्शन काम करते हैं।
+	Back to all tools	सभी टूल पर वापस जाएँ
+	Close panel	पैनल बंद करें
+	View less	कम देखें
+	View more	अधिक देखें
+	Available	उपलब्ध
+	Ready	तैयार
+	Search tools and commands…	टूल और कमांड खोजें…
+
+# Accessible names for inputs that have no visible label.
+	Added text	जोड़ा गया टेक्स्ट
+	Link URL	लिंक का URL
+	Search tools and commands	टूल और कमांड खोजें
+	Text editing line	टेक्स्ट संपादन पंक्ति
+	Text to place	रखने के लिए टेक्स्ट
+	Tooltip	टूलटिप
+	Words or phrases to redact	रेडैक्ट करने के लिए शब्द या वाक्यांश
+	No matching tools	कोई मेल खाता टूल नहीं
+	Tool	टूल
+	Command	कमांड
+	Add a sticky note	स्टिकी नोट जोड़ें
+	Add a text box	टेक्स्ट बॉक्स जोड़ें
+	Highlight text	टेक्स्ट हाइलाइट करें
+	Underline text	टेक्स्ट को रेखांकित करें
+	Strikethrough text	टेक्स्ट स्ट्राइकथ्रू करें
+	Squiggly underline text	टेक्स्ट को लहरदार रेखा से रेखांकित करें
+	Draw freehand	फ्रीहैंड ड्रॉ करें
+	Draw a line	एक रेखा खींचें
+	Draw an arrow	एक तीर खींचें
+	Draw a rectangle	एक आयत खींचें
+	Draw an oval	एक अंडाकार खींचें
+	Draw a polygon	एक बहुभुज खींचें
+	Draw connected lines	जुड़ी हुई रेखाएँ खींचें
+	Draw a cloud	एक बादल खींचें
+	Add a callout	कॉलआउट जोड़ें
+	Insert text	टेक्स्ट प्रविष्ट करें
+	Replace text	टेक्स्ट बदलें
+	Attach a file	फ़ाइल संलग्न करें
+	Erase drawings	ड्रॉइंग मिटाएँ
+	Flatten comments	टिप्पणियाँ फ़्लैट करें
+	Import comments…	टिप्पणियाँ आयात करें…
+	Add a stamp	स्टाम्प जोड़ें
+	Export all comments to data file…	सभी टिप्पणियाँ डेटा फ़ाइल में निर्यात करें…
+	Hide all comments	सभी टिप्पणियाँ छिपाएँ
+	Summarize comments	टिप्पणियों का सारांश बनाएँ
+	Import form data…	फ़ॉर्म डेटा आयात करें…
+	Export form data…	फ़ॉर्म डेटा निर्यात करें…
+	PDF/A…	PDF/A…
+	Action Wizard…	एक्शन विज़ार्ड…
+	Prepare for distribution…	वितरण के लिए तैयार करें…
+	Optimize scanned documents…	स्कैन किए गए दस्तावेज़ अनुकूलित करें…
+	Compare files…	फ़ाइलों की तुलना करें…
+	Detect form fields	फ़ॉर्म फ़ील्ड का पता लगाएँ
+	Merge data files into spreadsheet…	डेटा फ़ाइलों को स्प्रेडशीट में मर्ज करें…
+	Flatten form fields	फ़ॉर्म फ़ील्ड फ़्लैट करें
+	Prepare a form	फ़ॉर्म तैयार करें
+	Tab order: by rows	टैब क्रम: पंक्तियों के अनुसार
+	Tab order: by columns	टैब क्रम: कॉलम के अनुसार
+	Tab order: by document structure	टैब क्रम: दस्तावेज़ संरचना के अनुसार
+	Add text	टेक्स्ट जोड़ें
+	Edit text & images	टेक्स्ट और छवियाँ संपादित करें
+	Add or edit links	लिंक जोड़ें या संपादित करें
+	Create links from URLs	URL से लिंक बनाएँ
+	Remove all links	सभी लिंक हटाएँ
+	No links to remove	हटाने के लिए कोई लिंक नहीं
+	Removed 1 link	1 लिंक हटाया गया
+	Removed {n} links	{n} लिंक हटाए गए
+	Add Bates numbering…	बेट्स नंबरिंग जोड़ें…
+	Add image…	छवि जोड़ें…
+	Redact text and images	टेक्स्ट और छवियाँ रेडैक्ट करें
+	Redact pages…	पृष्ठ रेडैक्ट करें…
+	Find text and redact…	टेक्स्ट खोजें और रेडैक्ट करें…
+	Redaction properties…	रेडैक्शन गुण…
+	Apply redactions…	रेडैक्शन लागू करें…
+	Clear redaction marks	रेडैक्शन चिह्न साफ़ करें
+	Remove hidden information…	छिपी हुई जानकारी हटाएँ…
+	Sanitize document…	दस्तावेज़ सैनिटाइज़ करें…
+	Field properties…	फ़ील्ड गुण…
+	Add a text field	टेक्स्ट फ़ील्ड जोड़ें
+	Add a checkbox	चेकबॉक्स जोड़ें
+	Add a radio button	रेडियो बटन जोड़ें
+	Add a drop-down list	ड्रॉप-डाउन सूची जोड़ें
+	Add a list box	सूची बॉक्स जोड़ें
+	Add a button	बटन जोड़ें
+	Add an image field	छवि फ़ील्ड जोड़ें
+	Add a date field	दिनांक फ़ील्ड जोड़ें
+	Add a digital signature field	डिजिटल हस्ताक्षर फ़ील्ड जोड़ें
+	Digitally sign	डिजिटल रूप से हस्ताक्षर करें
+	Certify (visible signature)	प्रमाणित करें (दृश्यमान हस्ताक्षर)
+	Certify (invisible signature)	प्रमाणित करें (अदृश्य हस्ताक्षर)
+	Validate all signatures	सभी हस्ताक्षर सत्यापित करें
+	Signatures panel	हस्ताक्षर पैनल
+	Fill & Sign: add text	भरें व हस्ताक्षर करें: टेक्स्ट जोड़ें
+	Fill & Sign: checkmark	भरें व हस्ताक्षर करें: चेकमार्क
+	Fill & Sign: cross	भरें व हस्ताक्षर करें: क्रॉस
+	Fill & Sign: dot	भरें व हस्ताक्षर करें: बिंदु
+	Fill & Sign: line	भरें व हस्ताक्षर करें: रेखा
+	Fill & Sign: date	भरें व हस्ताक्षर करें: दिनांक
+	Fill & Sign: sign	भरें व हस्ताक्षर करें: हस्ताक्षर
+	Fill & Sign: initials	भरें व हस्ताक्षर करें: आद्याक्षर
+	Export to image…	छवि में निर्यात करें…
+	Reduce file size…	फ़ाइल का आकार घटाएँ…
+	Optimize PDF…	पीडीएफ़ अनुकूलित करें…
+	Export to text…	टेक्स्ट में निर्यात करें…
+	Export to Word…	Word में निर्यात करें…
+	Export to PowerPoint…	PowerPoint में निर्यात करें…
+	Export to HTML…	HTML में निर्यात करें…
+	Export to RTF…	RTF में निर्यात करें…
+	JavaScript console…	JavaScript कंसोल…
+	Document JavaScripts…	दस्तावेज़ JavaScript…
+	Recognize text…	टेक्स्ट पहचानें…
+	Recognize text in multiple files…	कई फ़ाइलों में टेक्स्ट पहचानें…
+	Check for accessibility…	ऐक्सेसिबिलिटी की जाँच करें…
+	Open accessibility report	ऐक्सेसिबिलिटी रिपोर्ट खोलें
+	Change reading options…	पढ़ने के विकल्प बदलें…
+	Add alternate text…	वैकल्पिक टेक्स्ट जोड़ें…
+	Export all images…	सभी छवियाँ निर्यात करें…
+	Add header & footer…	शीर्षलेख और पादलेख जोड़ें…
+	Update header & footer…	शीर्षलेख और पादलेख अद्यतन करें…
+	Remove header & footer	शीर्षलेख और पादलेख हटाएँ
+	Add watermark…	वॉटरमार्क जोड़ें…
+	Update watermark…	वॉटरमार्क अद्यतन करें…
+	Remove watermark	वॉटरमार्क हटाएँ
+	Add background…	पृष्ठभूमि जोड़ें…
+	Update background…	पृष्ठभूमि अद्यतन करें…
+	Remove background	पृष्ठभूमि हटाएँ
+	Protect using password…	पासवर्ड से सुरक्षित करें…
+	Remove security	सुरक्षा हटाएँ
+	Security properties…	सुरक्षा गुण…
+	Organize pages	पृष्ठ व्यवस्थित करें
+	New bookmark	नया बुकमार्क
+	New bookmarks from structure	संरचना से नए बुकमार्क
+	Rotate pages clockwise	पृष्ठ दक्षिणावर्त घुमाएँ
+	Rotate pages counterclockwise	पृष्ठ वामावर्त घुमाएँ
+	Delete pages	पृष्ठ हटाएँ
+	Insert blank page	खाली पृष्ठ प्रविष्ट करें
+	Rotate pages…	पृष्ठ घुमाएँ…
+	Duplicate pages	पृष्ठ डुप्लिकेट करें
+	Crop pages	पृष्ठ क्रॉप करें
+	Set page boxes…	पृष्ठ बॉक्स सेट करें…
+	Insert pages from file…	फ़ाइल से पृष्ठ प्रविष्ट करें…
+	Replace pages…	पृष्ठ बदलें…
+	Extract pages…	पृष्ठ निकालें…
+	Split document…	दस्तावेज़ विभाजित करें…
+	Number pages…	पृष्ठों पर नंबर लगाएँ…
+	Keyboard shortcuts	कीबोर्ड शॉर्टकट
+	Join the ArtCraft Discord	ArtCraft Discord से जुड़ें
+	PdfCraft web page	PdfCraft वेबपेज
+	PdfCraft on GitHub	GitHub पर PdfCraft
+	ArtCraft website	ArtCraft वेबसाइट
+	Check for updates…	अपडेट की जाँच करें…
+	About PdfCraft	PdfCraft के बारे में
+	Export a PDF	पीडीएफ़ निर्यात करें
+	Export to	इसमें निर्यात करें
+	Microsoft Word (.docx)	Microsoft Word (.docx)
+	Spreadsheet (.xlsx)	स्प्रेडशीट (.xlsx)
+	Presentation (.pptx)	प्रेज़ेंटेशन (.pptx)
+	Image (PNG)	छवि (PNG)
+	Export all images	सभी छवियाँ निर्यात करें
+	HTML web page	HTML वेबपेज
+	Rich Text Format (.rtf)	रिच टेक्स्ट फ़ॉर्मैट (.rtf)
+	Text (plain)	टेक्स्ट (सादा)
+	PostScript / EPS	PostScript / EPS
+	Fill & Sign	भरें व हस्ताक्षर करें
+	Fill	भरें
+	Checkmark	चेकमार्क
+	Cross	क्रॉस
+	Dot	बिंदु
+	Line	रेखा
+	Date	दिनांक
+	Signature	हस्ताक्षर
+	Initials	आद्याक्षर
+	Edit a PDF	पीडीएफ़ संपादित करें
+	Modify page	पृष्ठ संशोधित करें
+	Rotate pages	पृष्ठ घुमाएँ
+	Insert pages	पृष्ठ प्रविष्ट करें
+	Extract pages	पृष्ठ निकालें
+	Add content	सामग्री जोड़ें
+	Text	टेक्स्ट
+	Image	छवि
+	Header and footer	शीर्षलेख और पादलेख
+	Watermark	वॉटरमार्क
+	Link	लिंक
+	Bates numbering	बेट्स नंबरिंग
+	Background	पृष्ठभूमि
+	Attach file	फ़ाइल संलग्न करें
+	Create a PDF	पीडीएफ़ बनाएँ
+	Create from	इससे बनाएँ
+	Single file	एक फ़ाइल
+	Multiple files	कई फ़ाइलें
+	Separate PDFs	अलग-अलग पीडीएफ़
+	Images	छवियाँ
+	Clipboard	क्लिपबोर्ड
+	Blank page	खाली पृष्ठ
+	Combine files	फ़ाइलें संयोजित करें
+	Combine	संयोजित करें
+	Add files to combine	संयोजित करने के लिए फ़ाइलें जोड़ें
+	Page options	पृष्ठ विकल्प
+	Page grid	पृष्ठ ग्रिड
+	Rotate	घुमाएँ
+	Delete	हटाएँ
+	Extract	निकालें
+	Insert	प्रविष्ट करें
+	Replace	बदलें
+	Split	विभाजित करें
+	More	अधिक
+	Set page boxes	पृष्ठ बॉक्स सेट करें
+	Page labels	पृष्ठ लेबल
+	Page transitions	पृष्ठ संक्रमण
+	Add comments	टिप्पणियाँ जोड़ें
+	Markup	मार्कअप
+	Sticky note	स्टिकी नोट
+	Underline	अधोरेखन
+	Strikethrough	स्ट्राइकथ्रू
+	Squiggly underline	लहरदार अधोरेखन
+	Text box	टेक्स्ट बॉक्स
+	Drawing	ड्रॉइंग
+	Rectangle	आयत
+	Oval	अंडाकार
+	Arrow	तीर
+	Cloud	बादल
+	Stamp	स्टाम्प
+	Review	समीक्षा
+	Comment list	टिप्पणी सूची
+	Scan & OCR	स्कैन और OCR
+	Recognize text	टेक्स्ट पहचानें
+	In this file	इस फ़ाइल में
+	In multiple files	कई फ़ाइलों में
+	Enhance scanned file	स्कैन की गई फ़ाइल सुधारें
+	Correct recognized text	पहचाने गए टेक्स्ट को ठीक करें
+	Protect a PDF	पीडीएफ़ सुरक्षित करें
+	Protect	सुरक्षित करें
+	Protect with password	पासवर्ड से सुरक्षित करें
+	Remove hidden information	छिपी हुई जानकारी हटाएँ
+	Advanced options	उन्नत विकल्प
+	Encrypt with certificate	प्रमाणपत्र से एन्क्रिप्ट करें
+	Security properties	सुरक्षा गुण
+	Redact a PDF	पीडीएफ़ रेडैक्ट करें
+	Redact	रेडैक्ट करें
+	Redact pages	पृष्ठ रेडैक्ट करें
+	Find text and redact	टेक्स्ट खोजें और रेडैक्ट करें
+	Set properties	गुण सेट करें
+	Sanitize document	दस्तावेज़ सैनिटाइज़ करें
+	Compress a PDF	पीडीएफ़ संपीड़ित करें
+	Optimize	अनुकूलित करें
+	Reduce file size	फ़ाइल का आकार घटाएँ
+	Advanced optimization	उन्नत अनुकूलन
+	Audit space usage	स्थान उपयोग का ऑडिट करें
+	Field list	फ़ील्ड सूची
+	Field properties	फ़ील्ड गुण
+	Tab order by rows	पंक्तियों के अनुसार टैब क्रम
+	Tab order by columns	कॉलम के अनुसार टैब क्रम
+	Import data	डेटा आयात करें
+	Export data	डेटा निर्यात करें
+	Add form components	फ़ॉर्म घटक जोड़ें
+	Text field	टेक्स्ट फ़ील्ड
+	Checkbox	चेकबॉक्स
+	Radio button	रेडियो बटन
+	Drop-down list	ड्रॉप-डाउन सूची
+	List box	सूची बॉक्स
+	Button	बटन
+	Image field	छवि फ़ील्ड
+	Date field	दिनांक फ़ील्ड
+	Digital signature	डिजिटल हस्ताक्षर
+	Stamps	स्टाम्प
+	Stamp palette	स्टाम्प पैलेट
+	Use a certificate	प्रमाणपत्र का उपयोग करें
+	Certificates	प्रमाणपत्र
+	Timestamp	टाइमस्टैम्प
+	Use print production	प्रिंट प्रोडक्शन का उपयोग करें
+	Print production	प्रिंट प्रोडक्शन
+	Output preview	आउटपुट प्रीव्यू
+	Preflight	प्रीफ़्लाइट
+	Convert colors	रंग रूपांतरित करें
+	Add printer marks	प्रिंटर मार्क जोड़ें
+	Fix hairlines	हेयरलाइन ठीक करें
+	Measure objects	ऑब्जेक्ट मापें
+	Measure	मापें
+	Measuring tool	मापन टूल
+	Geospatial location	भौगोलिक स्थान
+	Compare files	फ़ाइलों की तुलना करें
+	Select files to compare	तुलना के लिए फ़ाइलें चुनें
+	Use guided actions	गाइडेड एक्शन का उपयोग करें
+	Actions list	एक्शन सूची
+	Action Wizard	एक्शन विज़ार्ड
+	Make accessible	ऐक्सेसिबल बनाएँ
+	Prepare for distribution	वितरण के लिए तैयार करें
+	Optimize scanned documents	स्कैन किए गए दस्तावेज़ अनुकूलित करें
+	Archive documents	दस्तावेज़ संग्रहित करें
+	Prepare for accessibility	ऐक्सेसिबिलिटी के लिए तैयार करें
+	Accessibility	ऐक्सेसिबिलिटी
+	Automatically tag PDF	पीडीएफ़ को स्वतः टैग करें
+	Change reading options	पढ़ने के विकल्प बदलें
+	Check for accessibility	ऐक्सेसिबिलिटी की जाँच करें
+	Add alternate text	वैकल्पिक टेक्स्ट जोड़ें
+	Fix reading order	पढ़ने का क्रम ठीक करें
+	Apply PDF standards	पीडीएफ़ मानक लागू करें
+	Standards	मानक
+	Save as PDF/A	PDF/A के रूप में सहेजें
+	Save as PDF/X	PDF/X के रूप में सहेजें
+	Save as PDF/UA	PDF/UA के रूप में सहेजें
+	Add search index	खोज इंडेक्स जोड़ें
+	Index	इंडेक्स
+	Manage embedded index	एम्बेडेड इंडेक्स प्रबंधित करें
+	Use JavaScript	JavaScript का उपयोग करें
+	JavaScript	JavaScript
+	Console	कंसोल
+	Document JavaScripts	दस्तावेज़ JavaScript
+	Document actions	दस्तावेज़ एक्शन
+	AI assistant	AI सहायक
+	Bring your own model (off by default)	अपना स्वयं का मॉडल लाएँ (डिफ़ॉल्ट रूप से बंद)
+	Summarize	सारांश बनाएँ
+	Ask about this document	इस दस्तावेज़ के बारे में पूछें
+	Translate	अनुवाद करें
+	pages	पृष्ठ
+	Planned	योजित
+	Planned for milestone	माइलस्टोन के लिए योजित
+	open to see what it will include	खोलकर देखें कि इसमें क्या शामिल होगा
+	Optional: needs an AI provider you configure	वैकल्पिक: आपके द्वारा कॉन्फ़िगर किए गए AI प्रोवाइडर की आवश्यकता है
+	Coming in milestone	माइलस्टोन में आ रहा है
+	Items marked Ready work today.	जिन आइटम पर “तैयार” चिह्न है वे आज ही काम करते हैं।
+	Preview	प्रीव्यू
+	Edit fields	फ़ील्ड संपादित करें
+	Try the form as people filling it in will see it	फ़ॉर्म को उस रूप में आज़माएँ जिस रूप में उसे भरने वाले लोग देखेंगे
+	Redact all	सभी रेडैक्ट करें
+	Clear all	सभी साफ़ करें
+	Rotate page	पृष्ठ घुमाएँ
+	Delete page	पृष्ठ हटाएँ
+	Move page	पृष्ठ ले जाएँ
+	Move pages	पृष्ठों को ले जाएँ
+	Duplicate page	पृष्ठ डुप्लिकेट करें
+	Replace page	पृष्ठ बदलें
+	Replace pages	पृष्ठ बदलें
+	Crop page	पृष्ठ क्रॉप करें
+	Cancel	रद्द करें
+	Don't save	सहेजें नहीं
+	Apply	लागू करें
+	Run	चलाएँ
+	Clear	साफ़ करें
+	Sanitize	सैनिटाइज़ करें
+	Mark all	सभी चिह्नित करें
+	Save changes to “{name}” before closing?	क्या आप “{name}” में किए गए बदलाव बंद करने से पहले सहेजना चाहते हैं?
+	Your changes will be lost if you don't save them.	यदि आप बदलाव सहेजते नहीं, तो वे खो जाएँगे।
+	Password required	पासवर्ड आवश्यक
+	“{name}” is protected. Enter a password to open it.	“{name}” सुरक्षित है। इसे खोलने के लिए पासवर्ड दर्ज करें।
+	Password	पासवर्ड
+	Incorrect password. Try again.	गलत पासवर्ड। पुनः प्रयास करें।
+	Recognize Text	टेक्स्ट पहचानें
+	Password protection will be applied when you save	सहेजने पर पासवर्ड सुरक्षा लागू की जाएगी
+	Saved the print-ready PDF to {path}	प्रिंट के लिए तैयार पीडीएफ़ {path} पर सहेजा गया
+	Could not save: {e}	सहेजा नहीं जा सका: {e}
+	Earlier in tab order	टैब क्रम में पहले
+	Later in tab order	टैब क्रम में बाद में
+	From:	से:
+	To:	तक:
+	High Resolution	उच्च रिज़ॉल्यूशन
+	Print	प्रिंट करें
+	Verify to see what the document needs.	सत्यापित करें और देखें कि दस्तावेज़ को क्या चाहिए।
+	Set Page Boxes	पृष्ठ बॉक्स सेट करें
+	Signature panel	हस्ताक्षर पैनल
+	{month} {day}, {y}	{day} {month} {y}
+	The document's security settings don't allow filling in form fields	दस्तावेज़ की सुरक्षा सेटिंग्स फ़ॉर्म फ़ील्ड भरने की अनुमति नहीं देतीं
+	{name} is read-only	{name} केवल पढ़ने के लिए है
+	{name} has no action	{name} में कोई एक्शन नहीं है
+	Previous month	पिछला महीना
+	Next month	अगला महीना
+	January	जनवरी
+	February	फ़रवरी
+	March	मार्च
+	April	अप्रैल
+	May	मई
+	June	जून
+	July	जुलाई
+	August	अगस्त
+	September	सितंबर
+	October	अक्तूबर
+	November	नवंबर
+	December	दिसंबर
+	Done	पूर्ण
+	This certificate is in your list of trusted certificates.	यह प्रमाणपत्र आपकी विश्वसनीय प्रमाणपत्र सूची में मौजूद है।
+	This certificate is trusted through a certificate above it in the chain.	यह प्रमाणपत्र श्रृंखला में अपने ऊपर मौजूद प्रमाणपत्र के ज़रिए विश्वसनीय है।
+	This certificate is not trusted. Signatures made with it show an unknown identity.	यह प्रमाणपत्र विश्वसनीय नहीं है। इससे किए गए हस्ताक्षर अज्ञात पहचान दिखाते हैं।
+	Add to Trusted Certificates	विश्वसनीय प्रमाणपत्रों में जोड़ें
+	Export…	निर्यात करें…
+	PDF Optimizer	पीडीएफ़ ऑप्टिमाइज़र
+	Discard Objects	ऑब्जेक्ट हटाएँ
+	Discard User Data	उपयोगकर्ता डेटा हटाएँ
+	Clean Up	सफ़ाई
+	Color Images	रंगीन छवियाँ
+	Grayscale Images	ग्रेस्केल छवियाँ
+	Bicubic downsampling to	बाइक्यूबिक डाउनसैंपलिंग तक
+	for images above	इससे बड़ी छवियों के लिए
+	Compression	संपीड़न
+	ZIP	ZIP
+	Retain existing	मौजूदा बनाए रखें
+	Minimum	न्यूनतम
+	Low	कम
+	High	उच्च
+	Maximum	अधिकतम
+	Each image is measured where pages draw it; an image is replaced only if the result is smaller.	हर छवि को वहीं मापा जाता है जहाँ पृष्ठ उसे बनाते हैं; छवि तभी बदली जाती है जब परिणाम छोटा हो।
+	Discard all links, actions and JavaScript	सभी लिंक, एक्शन और JavaScript हटाएँ
+	Discard alternate images	वैकल्पिक छवियाँ हटाएँ
+	Discard embedded page thumbnails	एम्बेडेड पृष्ठ थंबनेल हटाएँ
+	Discard document tags	दस्तावेज़ टैग हटाएँ
+	Discard embedded print settings	एम्बेडेड प्रिंट सेटिंग्स हटाएँ
+	Discard bookmarks	बुकमार्क हटाएँ
+	Discard hidden layer content	छिपी हुई परतों की सामग्री हटाएँ
+	Discard all comments, forms and multimedia	सभी टिप्पणियाँ, फ़ॉर्म और मल्टीमीडिया हटाएँ
+	Discard document information and metadata	दस्तावेज़ जानकारी और मेटाडेटा हटाएँ
+	Discard all object data (file attachments)	सभी ऑब्जेक्ट डेटा (फ़ाइल अनुलग्नक) हटाएँ
+	Discard private data of other applications	अन्य ऐप्लिकेशन का निजी डेटा हटाएँ
+	Discard hidden text	छिपा हुआ टेक्स्ट हटाएँ
+	Use Flate to encode streams that are not encoded	जो स्ट्रीम एन्कोडेड नहीं हैं उन्हें Flate से एन्कोड करें
+	In streams that use LZW encoding, use Flate instead	LZW एन्कोडिंग वाली स्ट्रीम में इसके बजाय Flate का उपयोग करें
+	Remove invalid links and bookmarks	अमान्य लिंक और बुकमार्क हटाएँ
+	Remove unreferenced named destinations	बिना संदर्भ वाले नामित गंतव्य हटाएँ
+	Compress document structure (object streams)	दस्तावेज़ संरचना संपीड़ित करें (ऑब्जेक्ट स्ट्रीम)
+	Remove unused objects and merge identical ones	अप्रयुक्त ऑब्जेक्ट हटाएँ और समान ऑब्जेक्ट मर्ज करें
+	Audit space usage…	स्थान उपयोग का ऑडिट करें…
+	Space Audit	स्थान ऑडिट
+	Bytes	बाइट
+	Content Streams	कंटेंट स्ट्रीम
+	X Object Forms	X ऑब्जेक्ट फ़ॉर्म
+	Structure Info	संरचना जानकारी
+	Thumbnails	थंबनेल
+	Named Destinations	नामित गंतव्य
+	Color Spaces	रंग स्पेस
+	Shadings	शेडिंग
+	Patterns (graphics objects)	पैटर्न (ग्राफ़िक्स ऑब्जेक्ट)
+	Extended Graphics States	विस्तारित ग्राफ़िक्स स्थितियाँ
+	Embedded Files	एम्बेडेड फ़ाइलें
+	Document Overhead	दस्तावेज़ ओवरहेड
+	Total	कुल
+	Text Field Properties	टेक्स्ट फ़ील्ड गुण
+	Check Box Properties	चेकबॉक्स गुण
+	Radio Button Properties	रेडियो बटन गुण
+	Dropdown Properties	ड्रॉप-डाउन गुण
+	List Box Properties	सूची बॉक्स गुण
+	Button Properties	बटन गुण
+	Digital Signature Properties	डिजिटल हस्ताक्षर गुण
+	Position	स्थिति
+	Options	विकल्प
+	Validate	सत्यापित करें
+	Calculate	गणना करें
+	Actions	क्रियाएँ
+	This field is locked. Unlock it to change its properties.	यह फ़ील्ड लॉक है। इसके गुण बदलने के लिए इसे अनलॉक करें।
+	Tooltip:	टूलटिप:
+	Common Properties	सामान्य गुण
+	Read Only	केवल पढ़ने के लिए
+	Required	आवश्यक
+	Font Size:	फ़ॉन्ट आकार:
+	Auto	स्वतः
+	Text Color:	पाठ का रंग:
+	Borders and Colors	बॉर्डर और रंग
+	Border Color:	बॉर्डर का रंग:
+	Fill Color:	भरण का रंग:
+	No color	कोई रंग नहीं
+	Beveled	बेवेल्ड
+	Left:	बाएँ:
+	Bottom:	नीचे:
+	Width:	चौड़ाई:
+	Height:	ऊँचाई:
+	Points from the page's bottom-left corner.	पृष्ठ के निचले-बाएँ कोने से बिंदुओं में।
+	Alignment:	संरेखण:
+	Default Value:	डिफ़ॉल्ट मान:
+	Multi-line	बहु-पंक्ति
+	Scroll long text	लंबा पाठ स्क्रॉल करें
+	Allow Rich Text Formatting	रिच टेक्स्ट फ़ॉर्मैटिंग की अनुमति दें
+	Limit of	अधिकतम
+	characters	वर्ण
+	Field is used for file selection	फ़ील्ड का उपयोग फ़ाइल चयन के लिए किया जाता है
+	Check spelling	वर्तनी की जाँच करें
+	Comb of	कॉम्ब में
+	Export Value: {on}	निर्यात मान: {on}
+	Check box is checked by default	चेक बॉक्स डिफ़ॉल्ट रूप से चुना हुआ है
+	Button is checked by default	बटन डिफ़ॉल्ट रूप से चुना हुआ है
+	Buttons with the same name and value are selected in unison	एक ही नाम और मान वाले बटन एक साथ चुने जाते हैं
+	Item:	मद:
+	Item List	मद सूची
+	Up	ऊपर
+	Delete {o}	{o} हटाएँ
+	Add the choices people pick from.	वे विकल्प जोड़ें जिनमें से लोग चुन सकें।
+	Default:	डिफ़ॉल्ट:
+	(none)	(कोई नहीं)
+	Sort items	मदों को क्रमबद्ध करें
+	Allow user to enter custom text	उपयोगकर्ता को कस्टम पाठ दर्ज करने की अनुमति दें
+	Multiple selection	एकाधिक चयन
+	Commit selected value immediately	चयनित मान तुरंत लागू करें
+	Number	संख्या
+	Percentage	प्रतिशत
+	Time	समय
+	Special	विशेष
+	Select format category:	प्रारूप श्रेणी चुनें:
+	The value is shown as typed.	मान वैसा ही दिखता है जैसा दर्ज किया गया हो।
+	Decimal places:	दशमलव स्थान:
+	Separator style:	विभाजक शैली:
+	Currency symbol:	मुद्रा प्रतीक:
+	Before the number	संख्या से पहले
+	Negative number style:	ऋणात्मक संख्या शैली:
+	Format:	प्रारूप:
+	Custom:	कस्टम:
+	Zip Code	ज़िप कोड
+	Zip Code + 4	ज़िप कोड + 4
+	Phone Number	फ़ोन नंबर
+	Social Security Number	सामाजिक सुरक्षा संख्या
+	Arbitrary Mask	मनमाना मास्क
+	Mask:	मास्क:
+	9 digit, A letter, O letter or digit, X any character	9 अंक, A अक्षर, O अक्षर या अंक, X कोई भी वर्ण
+	Example: {sample}	उदाहरण: {sample}
+	Field value is not validated	फ़ील्ड मान सत्यापित नहीं होता
+	Field value is in range:	फ़ील्ड मान श्रेणी में है:
+	Add an Action	क्रिया जोड़ें
+	Select Trigger:	ट्रिगर चुनें:
+	Mouse Up	माउस अप
+	Mouse Down	माउस डाउन
+	Mouse Enter	माउस एंटर
+	Mouse Exit	माउस एक्ज़िट
+	On Focus	ऑन फ़ोकस
+	On Blur	ऑन ब्लर
+	Select Action:	क्रिया चुनें:
+	Open a web link	वेब लिंक खोलें
+	Reset a form	फ़ॉर्म रीसेट करें
+	Execute a menu item	मेनू मद चलाएँ
+	Show a field	फ़ील्ड दिखाएँ
+	Hide a field	फ़ील्ड छिपाएँ
+	Submit a form	फ़ॉर्म सबमिट करें
+	Fields to reset (comma-separated; empty: all)	रीसेट करने के लिए फ़ील्ड (कॉमा से अलग; खाली: सभी)
+	Print, NextPage, PrevPage, FirstPage or LastPage	Print, NextPage, PrevPage, FirstPage या LastPage
+	Field names (comma-separated)	फ़ील्ड नाम (कॉमा से अलग)
+	URL to submit to	सबमिट करने का URL
+	Script:	स्क्रिप्ट:
+	Value:	मान:
+	No actions	कोई क्रिया नहीं
+	Value is not calculated	मान की गणना नहीं होती
+	Value is the	मान निम्नलिखित फ़ील्डों का
+	sum (+)	योग (+)
+	product (x)	गुणनफल (x)
+	average	औसत
+	minimum	न्यूनतम
+	maximum	अधिकतम
+	of the following fields:	है:
+	Simplified field notation:	सरलीकृत फ़ील्ड संकेतन:
+	Field names with + - * / and parentheses; put \\ before spaces in names.	+ - * / और कोष्ठकों के साथ फ़ील्ड नाम; नामों में रिक्त स्थान से पहले \\ लगाएँ।
+	Finding document fonts…	दस्तावेज़ के फ़ॉन्ट खोजे जा रहे हैं…
+	Installed fonts…	इंस्टॉल किए गए फ़ॉन्ट…
+	Keep source fonts	स्रोत फ़ॉन्ट रखें
+	Load font…	फ़ॉन्ट लोड करें…
+	No openly licensed document fonts found. Load a font file.	कोई खुले लाइसेंस वाला दस्तावेज़ फ़ॉन्ट नहीं मिला। कोई फ़ॉन्ट फ़ाइल लोड करें।
+	Format text	पाठ स्वरूपित करें
+	Bold	बोल्ड
+	Italic	इटैलिक
+	Align left	बाएँ संरेखित करें
+	Centre	मध्य
+	Align right	दाएँ संरेखित करें
+	Justify	जस्टिफ़ाई
+	Thai and Arabic use regular fallback fonts when available.	थाई और अरबी उपलब्ध होने पर सामान्य फ़ॉलबैक फ़ॉन्ट का उपयोग करते हैं।
+	Edit image	छवि संपादित करें
+	Rotate counterclockwise	वामावर्त घुमाएँ
+	Rotate clockwise	दक्षिणावर्त घुमाएँ
+	Flip horizontal	क्षैतिज पलटें
+	Flip vertical	लंबवत पलटें
+	Replace image	छवि बदलें
+	Crop (% trimmed from each side)	क्रॉप (हर ओर से % कटा हुआ)
+	Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it.	पाठ जोड़ने के लिए पृष्ठ पर क्लिक करें; हर क्लिक एक नया बॉक्स शुरू करता है और ✓ उसे पूरा करता है। आइटम खिसकाने के लिए उन्हें खींचें, आकार बदलने के लिए कोना खींचें, पाठ संपादित करने के लिए उस पर डबल-क्लिक करें।
+	Choose an image	कोई छवि चुनें
+	Export to Image	छवि में निर्यात करें
+	Export to Text	पाठ में निर्यात करें
+	Export All Images	सभी छवियाँ निर्यात करें
+	Resolution	रेज़ोल्यूशन
+	Format	प्रारूप
+	Quality	गुणवत्ता
+	One {f} file per page, named after the document.	हर पृष्ठ के लिए एक {f} फ़ाइल, दस्तावेज़ के नाम पर।
+	Exclude images smaller than	इससे छोटी छवियाँ बाहर रखें
+	No limit	कोई सीमा नहीं
+	Each image once, named after the document and page. JPEG images are saved unchanged; others as PNG.	हर छवि एक बार, दस्तावेज़ और पृष्ठ के नाम पर। JPEG छवियाँ बिना बदलाव के सहेजी जाती हैं; बाकी PNG के रूप में।
+	Plain text in reading order; pages are separated by form feeds.	पढ़ने के क्रम में सादा पाठ; पृष्ठ फ़ॉर्म फ़ीड से विभाजित होते हैं।
+	Create {what}	{what} बनाएँ
+	initials	प्रथमाक्षर
+	signature	हस्ताक्षर
+	Create Custom Stamp	कस्टम स्टाम्प बनाएँ
+	From {file}	{file} से
+	Category:	श्रेणी:
+	e.g. My stamps	जैसे मेरे स्टाम्प
+	Name:	नाम:
+	Custom	कस्टम
+	Delete stamp	स्टाम्प हटाएँ
+	Create custom stamp…	कस्टम स्टाम्प बनाएँ…
+	From a PDF page or an image	पीडीएफ़ पृष्ठ या छवि से
+	Line spacing	पंक्ति अंतराल
+	Character spacing	वर्ण अंतराल
+	Horizontal scale	क्षैतिज स्केल
+	Rotate Clockwise	दक्षिणावर्त घुमाएँ
+	Rotate Counterclockwise	वामावर्त घुमाएँ
+	Flip Horizontal	क्षैतिज पलटें
+	Flip Vertical	लंबवत पलटें
+	Replace Image…	छवि बदलें…
+	Save Image As…	छवि इस रूप में सहेजें…
+	Copy Image	छवि कॉपी करें
+	The image has been copied ({w} × {h} pixels)	छवि कॉपी हो गई है ({w} × {h} पिक्सेल)
+	Couldn't copy the image: {e}	छवि कॉपी नहीं हो सकी: {e}
+	Copy Image in Original Format	छवि मूल प्रारूप में कॉपी करें
+	The image has been copied as a {ext} file	छवि {ext} फ़ाइल के रूप में कॉपी हो गई है
+	The page has changed; select the image again	पृष्ठ बदल गया है; छवि फिर से चुनें
+	Check for updates	अपडेट के लिए जाँचें
+	No check has run yet.	अभी तक कोई जाँच नहीं चली है।
+	Checking for a newer version…	नए संस्करण की जाँच हो रही है…
+	PdfCraft {v} is available.	PdfCraft {v} उपलब्ध है।
+	You have version {c}. Download the new version from its release page.	आपके पास संस्करण {c} है। नया संस्करण इसके रिलीज़ पृष्ठ से डाउनलोड करें।
+	PdfCraft {c} is up to date.	PdfCraft {c} अद्यतन है।
+	Couldn't check for updates: {e}	अपडेट की जाँच नहीं हो सकी: {e}
+	You have version {c}. All releases are listed at {page}.	आपके पास संस्करण {c} है। सभी रिलीज़ {page} पर सूचीबद्ध हैं।
+	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	GitHub से नवीनतम रिलीज़ की क्वेरी करता है। कुछ भी स्वतः डाउनलोड या इंस्टॉल नहीं होता।
+	Download	डाउनलोड
+	Later	बाद में
+	none	कोई नहीं
+	Declared conformance: {shown}	घोषित अनुरूपता: {shown}
+	Output intent: {list}	आउटपुट इंटेंट: {list}
+	Conformance level:	अनुरूपता स्तर:
+	No problems found: the document conforms to {level}.	कोई समस्या नहीं मिली: दस्तावेज़ {level} के अनुरूप है।
+	 (page {p})	 (पृष्ठ {p})
+	  · not fixable here	  · यहाँ ठीक नहीं किया जा सकता
+	Verify	सत्यापित करें
+	Box	बॉक्स
+	Units	इकाइयाँ
+	Set to zero	शून्य पर सेट करें
+	Current page ({n})	मौजूदा पृष्ठ ({n})
+	Subset	उपसमुच्चय
+	Update	अपडेट करें
+	Add	जोड़ें
+	{verb} Header and Footer	{verb} हेडर और फ़ुटर
+	{verb} Watermark	{verb} वॉटरमार्क
+	{verb} Background	{verb} पृष्ठभूमि
+	Margins (in)	हाशिये (इंच)
+	Left Header Text	बायाँ हेडर पाठ
+	Center Header Text	मध्य हेडर पाठ
+	Right Header Text	दायाँ हेडर पाठ
+	Left Footer Text	बायाँ फ़ुटर पाठ
+	Center Footer Text	मध्य फ़ुटर पाठ
+	Right Footer Text	दायाँ फ़ुटर पाठ
+	Insert Page Number	पृष्ठ संख्या जोड़ें
+	Insert Date	दिनांक जोड़ें
+	Start page number	प्रारंभिक पृष्ठ संख्या
+	Source	स्रोत
+	Fit to page	पृष्ठ के अनुसार फ़िट करें
+	Rotation	घुमाव
+	Appear behind page	पृष्ठ के पीछे दिखें
+	Appear on top of page	पृष्ठ के ऊपर दिखें
+	Offset from centre	केंद्र से ऑफ़सेट
+	From colour	रंग से
+	Page Range Options	पृष्ठ श्रेणी विकल्प
+	Preview: page {p} of {n}	पूर्वावलोकन: पृष्ठ {p} / {n}
+	Applies to 1 page	1 पृष्ठ पर लागू
+	Applies to {n} pages	{n} पृष्ठों पर लागू
+	Replaces the existing one on those pages.	उन पृष्ठों पर मौजूदा वाले को बदल देता है।
+	PDF or image	पीडीएफ़ या छवि
+	No file chosen	कोई फ़ाइल नहीं चुनी गई
+	Page number	पृष्ठ संख्या
+	Scale relative to target page	लक्ष्य पृष्ठ के सापेक्ष स्केल
+	Link Properties	लिंक गुण
+	Create Link	लिंक बनाएँ
+	Link Appearance	लिंक स्वरूप
+	Link Type:	लिंक प्रकार:
+	Visible Rectangle	दृश्यमान आयत
+	Invisible Rectangle	अदृश्य आयत
+	Highlight Style:	हाइलाइट शैली:
+	Invert	उलटा
+	Outline	रूपरेखा
+	Inset	इनसेट
+	Line Thickness:	रेखा की मोटाई:
+	Thin	पतली
+	Thick	मोटी
+	Line Style:	रेखा शैली:
+	Solid	सॉलिड
+	Dashed	डैश्ड
+	Color:	रंग:
+	Link Action	लिंक क्रिया
+	Open a web page	वेब पृष्ठ खोलें
+	Go to a page view	पृष्ठ दृश्य पर जाएँ
+	Type the web address.	वेब पता टाइप करें।
+	This document has no signatures.	इस दस्तावेज़ में कोई हस्ताक्षर नहीं है।
+	The Keychain's digital IDs couldn't be listed: {e}	Keychain की डिजिटल आईडी सूचीबद्ध नहीं की जा सकीं: {e}
+	Signed and saved to {path}	हस्ताक्षरित कर {path} पर सहेजा गया
+	Couldn't open revision {n}: {e}	संशोधन {n} नहीं खोला जा सका: {e}
+	Couldn't open the signed version: {e}	हस्ताक्षरित संस्करण नहीं खोला जा सका: {e}
+	Sign with a Digital ID	डिजिटल आईडी से हस्ताक्षर करें
+	Choose the digital ID that you want to use for signing:	हस्ताक्षर के लिए जिस डिजिटल आईडी का उपयोग आप करना चाहते हैं उसे चुनें:
+	Keychain  ·  	Keychain  ·  
+	Windows store  ·  	Windows स्टोर  ·  
+	Issued by: 	जारीकर्ता: 
+	, Expires: 	, समाप्ति: 
+	No digital IDs yet.	अभी तक कोई डिजिटल आईडी नहीं हैं।
+	Configure New Digital ID	नई डिजिटल आईडी कॉन्फ़िगर करें
+	Continue	जारी रखें
+	Configure a Digital ID for Signing	हस्ताक्षर के लिए डिजिटल आईडी कॉन्फ़िगर करें
+	Use a Digital ID from a file	फ़ाइल से डिजिटल आईडी उपयोग करें
+	Create a new Digital ID (self-signed, saved to a password-protected file)	नई डिजिटल आईडी बनाएँ (स्व-हस्ताक्षरित, पासवर्ड-सुरक्षित फ़ाइल में सहेजी गई)
+	Name	नाम
+	Organizational Unit	संगठनात्मक इकाई
+	Organization Name	संगठन का नाम
+	Email Address	ईमेल पता
+	Country/Region	देश/क्षेत्र
+	Key Algorithm	कुंजी एल्गोरिद्म
+	Confirm Password	पासवर्ड की पुष्टि करें
+	Valid for 5 years, for digital signatures. Self-signed IDs are usually not trusted by others.	5 वर्षों तक वैध, डिजिटल हस्ताक्षरों के लिए। स्व-हस्ताक्षरित आईडी पर आम तौर पर दूसरों का भरोसा नहीं होता।
+	File (.p12, .pfx)	फ़ाइल (.p12, .pfx)
+	Digital ID	डिजिटल आईडी
+	Browse…	ब्राउज़ करें…
+	{verb} as "{name}"	{verb} “{name}” के रूप में
+	Certify	प्रमाणित करें
+	The signature will be invisible.	हस्ताक्षर अदृश्य होगा।
+	The existing action will be preserved.	मौजूदा क्रिया सुरक्षित रहेगी।
+	Distinguished name	विशिष्ट नाम
+	Labels	लेबल
+	Graphic	ग्राफ़िक
+	Signer's name	हस्ताक्षरकर्ता का नाम
+	Fill & Sign signature	Fill & Sign हस्ताक्षर
+	Choose image…	छवि चुनें…
+	Permitted actions after certifying	प्रमाणित करने के बाद अनुमत क्रियाएँ
+	No changes allowed	कोई बदलाव की अनुमति नहीं
+	Annotations, form fill-in, and digital signatures	एनोटेशन, फ़ॉर्म भरना और डिजिटल हस्ताक्षर
+	Form fill-in and digital signatures	फ़ॉर्म भरना और डिजिटल हस्ताक्षर
+	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	कुंजी macOS Keychain में है, जो PdfCraft को उसका उपयोग करने की अनुमति माँग सकती है।
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	कुंजी Windows प्रमाणपत्र स्टोर में है, जो PdfCraft को उसका उपयोग करने की अनुमति माँग सकता है।
+	Digital ID password	डिजिटल आईडी पासवर्ड
+	Back	पीछे
+	Validate all	सभी सत्यापित करें
+	Sign this field…	इस फ़ील्ड पर हस्ताक्षर करें…
+	Signature is valid:	हस्ताक्षर वैध है:
+	Signature validity is UNKNOWN:	हस्ताक्षर की वैधता अज्ञात है:
+	Signature is INVALID:	हस्ताक्षर अमान्य है:
+	Signature Details	हस्ताक्षर विवरण
+	Reason	कारण
+	Signing time	हस्ताक्षर करने का समय
+	Algorithm	एल्गोरिद्म
+	Signer	हस्ताक्षरकर्ता
+	Issued by	जारीकर्ता
+	Valid	वैध
+	Field	फ़ील्ड
+	Field: {field} on page {p}	फ़ील्ड: {field}, पृष्ठ {p} पर
+	Add to trusted certificates	भरोसेमंद प्रमाणपत्रों में जोड़ें
+	View signed version	हस्ताक्षरित संस्करण देखें
+	Show certificate…	प्रमाणपत्र दिखाएँ…
+	Export certificate…	प्रमाणपत्र निर्यात करें…
+	Certificate Viewer	प्रमाणपत्र व्यूअर
+	This dialog shows the details of a certificate and its chain.	यह संवाद प्रमाणपत्र और उसकी श्रृंखला का विवरण दिखाता है।
+	Trust	भरोसा
+	Issued to	जारी हुआ
+	Valid from	इससे वैध
+	Valid to	इस तक वैध
+	Intended usage	अभीष्ट उपयोग
+	Any	कोई भी
+	Version	संस्करण
+	Serial number	क्रमांक
+	Issuer	जारीकर्ता
+	Validity starts	वैधता प्रारंभ
+	Validity ends	वैधता समाप्ति
+	Public key	सार्वजनिक कुंजी
+	Key usage	कुंजी उपयोग
+	Not present	मौजूद नहीं
+	Self-signed	स्व-हस्ताक्षरित
+	Edit Action	क्रिया संपादित करें
+	New Action	नई क्रिया
+	Action name:	क्रिया का नाम:
+	Description:	विवरण:
+	Steps	चरण
+	Add the steps this action runs, in order.	वे चरण जोड़ें जो यह क्रिया क्रम से चलाती है।
+	Add Step	चरण जोड़ें
+	An action with this name already exists.	इस नाम की क्रिया पहले से मौजूद है।
+	New Action…	नई क्रिया…
+	Edit…	संपादित करें…
+	Add watermark	वॉटरमार्क जोड़ें
+	Add header	हेडर जोड़ें
+	Add footer	फ़ुटर जोड़ें
+	Set document title	दस्तावेज़ शीर्षक सेट करें
+	Run a JavaScript	JavaScript चलाएँ
+	Prepare for Distribution	वितरण के लिए तैयार करें
+	Remove hidden information and flatten comments and form fields, so recipients see only the pages.	छिपी जानकारी हटाएँ और टिप्पणियाँ व फ़ॉर्म फ़ील्ड फ़्लैट करें, ताकि प्राप्तकर्ता केवल पृष्ठ देखें।
+	Optimize Scanned Documents	स्कैन किए गए दस्तावेज़ अनुकूलित करें
+	Make scans searchable, then make them smaller.	स्कैन को खोजने योग्य बनाएँ, फिर उन्हें छोटा करें।
+	Add Page Numbers	पृष्ठ संख्याएँ जोड़ें
+	Number every page in the footer.	फ़ुटर में हर पृष्ठ को क्रमांकित करें।
+	Mark as Confidential	गोपनीय के रूप में चिह्नित करें
+	A diagonal CONFIDENTIAL watermark on every page.	हर पृष्ठ पर तिर्यक CONFIDENTIAL वॉटरमार्क।
+	Sanitize Documents	दस्तावेज़ सैनिटाइज़ करें
+	Remove hidden information, metadata, scripts and embedded content, and rewrite the files.	छिपी जानकारी, मेटाडेटा, स्क्रिप्ट और एम्बेडेड सामग्री हटाएँ और फ़ाइलें फिर से लिखें।
+	Type text	पाठ टाइप करें
+	Text to insert	जोड़ने के लिए पाठ
+	Replacement text	बदलने का पाठ
+	Edit text…	पाठ संपादित करें…
+	Add a sticky note here	यहाँ एक स्टिकी नोट जोड़ें
+	{kind} Properties	{kind} गुण
+	Appearance	स्वरूप
+	General	सामान्य
+	Review History	समीक्षा इतिहास
+	This comment's appearance can't be changed yet.	इस टिप्पणी का स्वरूप अभी नहीं बदला जा सकता।
+	Icon	आइकन
+	Thickness	मोटाई
+	Modified	संशोधित
+	No status has been set.	कोई स्थिति निर्धारित नहीं की गई है।
+	Compare Files	फ़ाइलों की तुलना करें
+	Old file:	पुरानी फ़ाइल:
+	Open the older version first	पहले पुराना संस्करण खोलें
+	New file:	नई फ़ाइल:
+	Text is compared word by word; the differences are shown on the new file.	पाठ शब्द दर शब्द तुलना किया जाता है; अंतर नई फ़ाइल पर दिखाए जाते हैं।
+	Compare this file with an older version: Compare files… in All tools.	इस फ़ाइल की तुलना पुराने संस्करण से करें: “सभी टूल” में “फ़ाइलों की तुलना करें…”।
+	No differences in the text.	पाठ में कोई अंतर नहीं है।
+	{n} {kind}	{n} {kind}
+	Inserted	जोड़ा गया
+	Deleted	हटाया गया
+	Replaced	बदला गया
+	Visual	विज़ुअल
+	Mark as comments	टिप्पणियों के रूप में चिह्नित करें
+	Report…	रिपोर्ट…
+	{kind} · page {p}	{kind} · पृष्ठ {p}
+	Set Alternate Text	वैकल्पिक पाठ सेट करें
+	This document has no tagged figures.	इस दस्तावेज़ में कोई टैग की गई आकृतियाँ नहीं हैं।
+	 on page {p}	 पृष्ठ {p} पर
+	Figure {i} of {n}{page}	आकृति {i} / {n}{page}
+	No preview	कोई पूर्वावलोकन नहीं
+	Alternate text	वैकल्पिक पाठ
+	Describe the figure	आकृति का वर्णन करें
+	Decorative figure	सजावटी आकृति
+	Previous figure	पिछली आकृति
+	Next figure	अगली आकृति
+	Save & Close	सहेजें और बंद करें
+	Accessibility Checker Options	एक्सेसिबिलिटी चेकर विकल्प
+	Report Options	रिपोर्ट विकल्प
+	Create accessibility report	एक्सेसिबिलिटी रिपोर्ट बनाएँ
+	Page Range	पृष्ठ श्रेणी
+	All pages in document	दस्तावेज़ के सभी पृष्ठ
+	Checking Options ({on} of 32 in all categories)	जाँच विकल्प (सभी श्रेणियों के 32 में से {on})
+	Show this dialog when the Checker starts	चेकर शुरू होने पर यह संवाद दिखाएँ
+	Select All	सभी चुनें
+	Clear All	सभी साफ़ करें
+	Start Checking	जाँच शुरू करें
+	This document hasn't been checked yet.	इस दस्तावेज़ की अभी तक जाँच नहीं हुई है।
+	No issues found	कोई समस्या नहीं मिली
+	1 issue	1 समस्या
+	{n} issues	{n} समस्याएँ
+	{label} (1 issue)	{label} (1 समस्या)
+	{label} ({n} issues)	{label} ({n} समस्याएँ)
+	Check again	फिर से जाँचें
+	Report	रिपोर्ट
+	Show the accessibility report	एक्सेसिबिलिटी रिपोर्ट दिखाएँ
+	Collapse	समेटें
+	Expand	विस्तृत करें
+	{rule} - {status}	{rule} - {status}
+	Passed	उत्तीर्ण
+	Failed	अनुत्तीर्ण
+	Needs manual check	मैन्युअल जाँच आवश्यक
+	Skipped	छोड़ा गया
+	Fix	ठीक करें
+	Skip Rule	नियम छोड़ें
+	Explain	स्पष्ट करें
+	Check Again	फिर से जाँचें
+	Show Report	रिपोर्ट दिखाएँ
+	Options…	विकल्प…
+	Go to the page	पृष्ठ पर जाएँ
+	Page Content	पृष्ठ सामग्री
+	Forms	फ़ॉर्म
+	Alternate Text	वैकल्पिक पाठ
+	Tables	तालिकाएँ
+	Lists	सूचियाँ
+	Headings	शीर्षक
+	Accessibility permission flag	एक्सेसिबिलिटी अनुमति फ़्लैग
+	Accessibility permission flag is set	एक्सेसिबिलिटी अनुमति फ़्लैग सेट है
+	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	सुरक्षा सेटिंग सहायक तकनीक को सामग्री पढ़ने की अनुमति देनी चाहिए (“स्क्रीन रीडर उपकरणों के लिए पाठ पहुँच सक्षम करें”)। इसकी अनुमति देने के लिए दस्तावेज़ की सुरक्षा बदलें।
+	Image-only PDF	केवल-छवि पीडीएफ़
+	Document is not image-only PDF	दस्तावेज़ केवल-छवि पीडीएफ़ नहीं है
+	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	जो पृष्ठ केवल पाठ की तस्वीरें हैं उन्हें पढ़ा या खोजा नहीं जा सकता। पाठ परत जोड़ने के लिए पाठ पहचानें (OCR)।
+	Document is tagged PDF	दस्तावेज़ टैगयुक्त पीडीएफ़ है
+	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	टैग दस्तावेज़ को तार्किक संरचना देते हैं जिसका पालन सहायक तकनीक करती है। दस्तावेज़ को टैग करें (पीडीएफ़ स्वतः टैग करें)।
+	Logical Reading Order	तार्किक पढ़ने का क्रम
+	Document structure provides a logical reading order	दस्तावेज़ की संरचना तार्किक पढ़ने का क्रम देती है
+	Check that the tags read in the order a sighted reader would. Use the Reading Order tool or the Tags panel to correct it.	जाँचें कि टैग उसी क्रम में पढ़े जाते हैं जिस क्रम में कोई देखने वाला पाठक पढ़ता। इसे ठीक करने के लिए पढ़ने के क्रम का टूल या टैग पैनल उपयोग करें।
+	Primary language	मुख्य भाषा
+	Text language is specified	पाठ की भाषा निर्दिष्ट है
+	Screen readers choose their voice from the document's language. Set it in Document Properties > Advanced > Language.	स्क्रीन रीडर दस्तावेज़ की भाषा से अपनी आवाज़ चुनते हैं। इसे “दस्तावेज़ गुण > उन्नत > भाषा” में सेट करें।
+	Document title is showing in title bar	दस्तावेज़ शीर्षक शीर्षक पट्टी में दिख रहा है
+	The window should show a meaningful title rather than the file name. Set a title and Initial View > Show: Document Title.	विंडो को फ़ाइल नाम के बजाय सार्थक शीर्षक दिखाना चाहिए। शीर्षक सेट करें और “प्रारंभिक दृश्य > दिखाएँ: दस्तावेज़ शीर्षक”।
+	Bookmarks are present in large documents	बड़े दस्तावेज़ों में बुकमार्क मौजूद हैं
+	Documents of more than 20 pages need bookmarks for navigation. Add bookmarks for the main sections.	20 से अधिक पृष्ठों वाले दस्तावेज़ों को नेविगेशन के लिए बुकमार्क चाहिए। मुख्य अनुभागों के लिए बुकमार्क जोड़ें।
+	Color contrast	रंग कंट्रास्ट
+	Document has appropriate color contrast	दस्तावेज़ में उचित रंग कंट्रास्ट है
+	Text must contrast enough with its background for people with low vision. Check the colours by eye or with a contrast tool.	कम दृष्टि वाले लोगों के लिए पाठ का पृष्ठभूमि से पर्याप्त कंट्रास्ट होना चाहिए। रंग आँख से या कंट्रास्ट टूल से जाँचें।
+	Tagged content	टैग की गई सामग्री
+	All page content is tagged	पृष्ठ की सभी सामग्री टैग की गई है
+	Everything on a page must be tagged or marked as an artifact (decoration, headers, footers). Tag the untagged content.	पृष्ठ पर सब कुछ टैग किया जाना चाहिए या आर्टिफ़ैक्ट (सजावट, हेडर, फ़ुटर) के रूप में चिह्नित। बिना टैग वाली सामग्री को टैग करें।
+	Tagged annotations	टैग किए गए एनोटेशन
+	All annotations are tagged	सभी एनोटेशन टैग किए गए हैं
+	Comments, links and fields must be in the tag tree to be announced. Tag the annotations.	टिप्पणियों, लिंक और फ़ील्ड का ऐलान होने के लिए उन्हें टैग ट्री में होना चाहिए। एनोटेशन को टैग करें।
+	Tab order	टैब क्रम
+	Tab order is consistent with structure order	टैब क्रम संरचना क्रम के अनुरूप है
+	Pages with links, comments or fields should tab in structure order. The fix sets each page's tab order to Use Document Structure.	लिंक, टिप्पणियों या फ़ील्ड वाले पृष्ठों में टैब संरचना क्रम में चलना चाहिए। यह ठीक करने पर हर पृष्ठ का टैब क्रम “दस्तावेज़ संरचना उपयोग करें” पर सेट हो जाता है।
+	Character encoding	वर्ण एन्कोडिंग
+	Reliable character encoding is provided	विश्वसनीय वर्ण एन्कोडिंग दी गई है
+	Fonts must map their characters to Unicode so text can be read and copied. Fix the fonts or recreate the PDF.	फ़ॉन्ट को अपने वर्ण यूनिकोड से मैप करने चाहिए ताकि पाठ पढ़ा और कॉपी किया जा सके। फ़ॉन्ट ठीक करें या पीडीएफ़ फिर से बनाएँ।
+	Tagged multimedia	टैग किया गया मल्टीमीडिया
+	All multimedia objects are tagged	सभी मल्टीमीडिया वस्तुएँ टैग की गई हैं
+	Video, sound and rich media must be tagged to be announced. Tag the multimedia annotations.	वीडियो, ध्वनि और रिच मीडिया का ऐलान होने के लिए उन्हें टैग किया जाना चाहिए। मल्टीमीडिया एनोटेशन को टैग करें।
+	Screen flicker	स्क्रीन टिमटिमाहट
+	Page will not cause screen flicker	पृष्ठ से स्क्रीन टिमटिमाहट नहीं होगी
+	Animation that flashes can cause seizures. Check scripts and media for flicker.	चमकता एनिमेशन दौरे पैदा कर सकता है। स्क्रिप्ट और मीडिया में टिमटिमाहट जाँचें।
+	Scripts	स्क्रिप्ट
+	No inaccessible scripts	कोई असुगम स्क्रिप्ट नहीं
+	Timed responses	समय-सीमित उत्तर
+	Page does not require timed responses	पृष्ठ को समय-सीमित उत्तर की आवश्यकता नहीं है
+	People may need more time to respond. Check that nothing has a time limit.	जवाब देने में लोगों को अधिक समय चाहिए हो सकता है। जाँचें कि किसी चीज़ की समय सीमा न हो।
+	Navigation links	नेविगेशन लिंक
+	Navigation links are not repetitive	नेविगेशन लिंक दोहरावपूर्ण नहीं हैं
+	Repeated navigation links should be skippable. Check links that appear on every page.	बार-बार आने वाले नेविगेशन लिंक को छोड़ा जा सकना चाहिए। हर पृष्ठ पर आने वाले लिंक जाँचें।
+	Tagged form fields	टैग किए गए फ़ॉर्म फ़ील्ड
+	All form fields are tagged	सभी फ़ॉर्म फ़ील्ड टैग किए गए हैं
+	Form fields must be in the tag tree (Form tags) to be announced. Tag the form fields.	फ़ॉर्म फ़ील्ड का ऐलान होने के लिए उन्हें टैग ट्री (फ़ॉर्म टैग) में होना चाहिए। फ़ॉर्म फ़ील्ड को टैग करें।
+	Field descriptions	फ़ील्ड विवरण
+	All form fields have description	सभी फ़ॉर्म फ़ील्ड का विवरण है
+	Each field needs a tooltip that says what to enter. Add one in Field Properties > General > Tooltip.	हर फ़ील्ड को एक टूलटिप चाहिए जो बताए कि क्या दर्ज करना है। इसे “फ़ील्ड गुण > सामान्य > टूलटिप” में जोड़ें।
+	Figures alternate text	आकृतियों का वैकल्पिक पाठ
+	Figures require alternate text	आकृतियों को वैकल्पिक पाठ चाहिए
+	Pictures need alternate text that describes them, or must be marked decorative. Add alternate text to each figure.	तस्वीरों को उनका वर्णन करने वाला वैकल्पिक पाठ चाहिए या उन्हें सजावटी चिह्नित करना चाहिए। हर आकृति में वैकल्पिक पाठ जोड़ें।
+	Nested alternate text	नेस्टेड वैकल्पिक पाठ
+	Alternate text that will never be read	वैकल्पिक पाठ जो कभी नहीं पढ़ा जाएगा
+	Alternate text inside an element that already has alternate text is never read. Remove the inner alternate text.	जिस तत्व में पहले से वैकल्पिक पाठ है, उसके भीतर का वैकल्पिक पाठ कभी नहीं पढ़ा जाता। भीतरी वैकल्पिक पाठ हटाएँ।
+	Associated with content	सामग्री से संबद्ध
+	Alternate text must be associated with some content	वैकल्पिक पाठ किसी सामग्री से संबद्ध होना चाहिए
+	Alternate text on an element without page content is never reached. Remove it or attach the element to content.	बिना पृष्ठ सामग्री वाले तत्व का वैकल्पिक पाठ तक कभी नहीं पहुँचा जाता। उसे हटाएँ या तत्व को सामग्री से जोड़ें।
+	Hides annotation	एनोटेशन छिपाता है
+	Alternate text should not hide annotation	वैकल्पिक पाठ को एनोटेशन नहीं छिपाना चाहिए
+	Alternate text on an element that contains a link or field hides that annotation from assistive technology. Move the alternate text.	लिंक या फ़ील्ड वाले तत्व का वैकल्पिक पाठ उस एनोटेशन को सहायक तकनीक से छिपा देता है। वैकल्पिक पाठ को हटाकर दूसरी जगह रखें।
+	Other elements alternate text	अन्य तत्वों का वैकल्पिक पाठ
+	Other elements that require alternate text	अन्य तत्व जिन्हें वैकल्पिक पाठ चाहिए
+	Formulas and similar non-text elements need alternate text. Add alternate text to them.	सूत्रों और इसी तरह के गैर-पाठ तत्वों को वैकल्पिक पाठ चाहिए। उनमें वैकल्पिक पाठ जोड़ें।
+	Rows	पंक्तियाँ
+	TR must be a child of Table, THead, TBody, or TFoot	TR को Table, THead, TBody या TFoot की संतान होना चाहिए
+	Table cells belong in a row. Fix the table's tags.	तालिका कोशिकाएँ पंक्ति में होनी चाहिए। तालिका के टैग ठीक करें।
+	Headers	शीर्षक
+	Tables should have headers	तालिकाओं में शीर्षक होने चाहिए
+	Header cells (TH) tell listeners what each column or row holds. Mark the header cells.	शीर्षक कोशिकाएँ (TH) सुनने वालों को बताती हैं कि हर कॉलम या पंक्ति में क्या है। शीर्षक कोशिकाओं को चिह्नित करें।
+	Regularity	नियमितता
+	Tables must contain the same number of columns in each row and rows in each column	तालिकाओं की हर पंक्ति में कॉलमों की संख्या और हर कॉलम में पंक्तियों की संख्या समान होनी चाहिए
+	Irregular tables confuse cell navigation. Give every row the same number of cells (counting spans).	अनियमित तालिकाएँ कोशिका नेविगेशन में भ्रम पैदा करती हैं। हर पंक्ति को समान संख्या में कोशिकाएँ दें (स्पैन गिनते हुए)।
+	Summary	सारांश
+	Tables must have a summary	तालिकाओं में सारांश होना चाहिए
+	A summary describes the table's purpose and layout. Add a Summary attribute to each table.	सारांश तालिका के उद्देश्य और लेआउट का वर्णन करता है। हर तालिका में Summary विशेषता जोड़ें।
+	List items	सूची मदें
+	LI must be a child of L	LI को L की संतान होना चाहिए
+	List items belong in a list. Fix the list's tags.	सूची मदें सूची में होनी चाहिए। सूची के टैग ठीक करें।
+	Lbl and LBody	Lbl और LBody
+	Lbl and LBody must be children of LI	Lbl और LBody को LI की संतानाएँ होना चाहिए
+	List labels and bodies belong in a list item. Fix the list's tags.	सूची लेबल और बॉडी सूची मद में होनी चाहिए। सूची के टैग ठीक करें।
+	Appropriate nesting	उचित नेस्टिंग
+	Heading levels shouldn't skip (an H1 followed by an H3). Retag the headings.	शीर्षक स्तर छूटने नहीं चाहिए (H1 के बाद H3)। शीर्षकों के टैग फिर से लगाएँ।
+	TH and TD	TH और TD
+	TH and TD must be children of TR	TH और TD को TR की संतानाएँ होना चाहिए
+	Mark Page Range	पृष्ठ श्रेणी चिह्नित करें
+	Pages from	पृष्ठ
+	Single word or phrase	एक शब्द या वाक्यांश
+	Text to find	खोजने के लिए पाठ
+	Patterns	पैटर्न
+	Phone Numbers	फ़ोन नंबर
+	Email Addresses	ईमेल पते
+	Credit Cards	क्रेडिट कार्ड
+	Social Security Numbers	सामाजिक सुरक्षा संख्याएँ
+	Dates	तिथियाँ
+	Text in images isn't found; recognise text (OCR) first.	छवियों में पाठ नहीं मिलता; पहले पाठ पहचानें (OCR)।
+	No matches.	कोई मिलान नहीं।
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	कुछ बुकमार्क यहाँ नहीं दिखाए गए हैं: पैनल सीमित संख्या में बुकमार्क, सीमित गहराई तक दिखाता है।
+	{n} match(es) marked for redaction.	रिडैक्शन के लिए चिह्नित मिलान: {n}।
+	Multiple words or phrases	एकाधिक शब्द या वाक्यांश
+	One word or phrase per line	प्रति पंक्ति एक शब्द या वाक्यांश
+	Import list…	सूची आयात करें…
+	{n} word(s) or phrase(s)	शब्द या वाक्यांश: {n}
+	{name} is too large for a word list (at most 1 MB).	{name} शब्द सूची के लिए बहुत बड़ा है (अधिकतम 1 MB)।
+	Redaction Tool Properties	रिडैक्शन टूल गुण
+	Redacted area fill colour:	रिडैक्टेड क्षेत्र का भरण रंग:
+	Use overlay text	ओवरले पाठ का उपयोग करें
+	Custom text:	कस्टम पाठ:
+	Redaction code:	रिडैक्शन कोड:
+	Font:	फ़ॉन्ट:
+	Font size:	फ़ॉन्ट आकार:
+	Auto-size text to fit redaction region	पाठ का आकार रिडैक्शन क्षेत्र के अनुसार स्वतः रखें
+	Font colour:	फ़ॉन्ट रंग:
+	Repeat overlay text	ओवरले पाठ दोहराएँ
+	Text alignment:	पाठ संरेखण:
+	Center	मध्य
+	Apply redactions	रिडैक्शन लागू करें
+	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	आप 1 रिडैक्शन चिह्न लागू करने जा रहे हैं। चिह्नों के नीचे का पाठ, छवियाँ और चित्र, तथा उन्हें ढकने वाली टिप्पणियाँ और फ़ॉर्म फ़ील्ड स्थायी रूप से हटा दिए जाते हैं।
+	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	आप {n} रिडैक्शन चिह्न लागू करने जा रहे हैं। चिह्नों के नीचे का पाठ, छवियाँ और चित्र, तथा उन्हें ढकने वाली टिप्पणियाँ और फ़ॉर्म फ़ील्ड स्थायी रूप से हटा दिए जाते हैं।
+	Save the document afterwards: saving rewrites the whole file so no trace of the removed content stays in it.	इसके बाद दस्तावेज़ सहेजें: सहेजने पर पूरी फ़ाइल फिर से लिखी जाती है, ताकि हटाई गई सामग्री का कोई निशान न रहे।
+	Select the items to remove from this document.	इस दस्तावेज़ से हटाने के लिए मदें चुनें।
+	Metadata	मेटाडेटा
+	File attachments	फ़ाइल अनुलग्नक
+	Comments and markups	टिप्पणियाँ और मार्कअप
+	Hidden text	छिपा हुआ पाठ
+	Hidden layers	छिपी हुई परतें
+	Links, actions and JavaScripts	लिंक, क्रियाएँ और JavaScript
+	Private data of other applications	अन्य ऐप्लिकेशन का निजी डेटा
+	None found	कुछ नहीं मिला
+	Form fields are flattened: their values stay visible. Saving rewrites the whole file.	फ़ॉर्म फ़ील्ड फ़्लैट हो जाते हैं: उनके मान दिखते रहते हैं। सहेजने पर पूरी फ़ाइल फिर से लिखी जाती है।
+	Remove	हटाएँ
+	Sanitizing removes hidden information from the document: metadata, file attachments, comments, form fields (flattened), hidden text and layers, bookmarks, links, actions and scripts, and private application data.	सैनिटाइज़ करने से दस्तावेज़ से छिपी जानकारी हटती है: मेटाडेटा, फ़ाइल अनुलग्नक, टिप्पणियाँ, फ़ॉर्म फ़ील्ड (फ़्लैट किए गए), छिपा पाठ और परतें, बुकमार्क, लिंक, क्रियाएँ और स्क्रिप्ट, तथा ऐप्लिकेशन का निजी डेटा।
+	Save the document afterwards; saving rewrites the whole file so nothing removed stays in it.	इसके बाद दस्तावेज़ सहेजें; सहेजने पर पूरी फ़ाइल फिर से लिखी जाती है, ताकि हटाई गई कोई चीज़ उसमें न रह जाए।
+	Printer:	प्रिंटर:
+	Save as PDF	पीडीएफ़ के रूप में सहेजें
+	{name} (default)	{name} (डिफ़ॉल्ट)
+	Copies:	प्रतियाँ:
+	Collate	कॉलेट करें
+	Print in grayscale	ग्रेस्केल में प्रिंट करें
+	Two-sided:	दो तरफ़ा:
+	Off	बंद
+	Flip on long edge	लंबे किनारे पर पलटें
+	Flip on short edge	छोटे किनारे पर पलटें
+	Paper:	कागज़:
+	Pages to Print	प्रिंट करने के लिए पृष्ठ
+	More options:	अधिक विकल्प:
+	All pages in range	श्रेणी के सभी पृष्ठ
+	Odd pages only	केवल विषम पृष्ठ
+	Even pages only	केवल सम पृष्ठ
+	Reverse pages	पृष्ठ उल्टे क्रम में
+	Page Sizing & Handling	पृष्ठ आकार और प्रबंधन
+	Size	आकार
+	Poster	पोस्टर
+	Multiple	एकाधिक
+	Booklet	बुकलेट
+	Fit	फ़िट
+	Shrink oversized pages	अत्यधिक बड़े पृष्ठ सिकोड़ें
+	Custom scale:	कस्टम पैमाना:
+	Tile scale:	टाइल पैमाना:
+	Overlap:	ओवरलैप:
+	Cut marks	कट मार्क्स
+	Pages per sheet:	प्रति शीट पृष्ठ:
+	Page order:	पृष्ठ क्रम:
+	Horizontal	क्षैतिज
+	Horizontal reversed	क्षैतिज, उल्टे क्रम में
+	Vertical	ऊर्ध्वाधर
+	Vertical reversed	ऊर्ध्वाधर, उल्टे क्रम में
+	Print page border	पृष्ठ बॉर्डर प्रिंट करें
+	Auto-rotate pages	पृष्ठ स्वतः घुमाएँ
+	Booklet subset:	बुकलेट भाग:
+	Both sides	दोनों ओर
+	Front side only	केवल सामने का भाग
+	Back side only	केवल पीछे का भाग
+	Binding:	बंधन:
+	Left	बाएँ
+	Right	दाएँ
+	Orientation:	अभिविन्यास:
+	Auto portrait/landscape	स्वतः पोर्ट्रेट/लैंडस्केप
+	Portrait	पोर्ट्रेट
+	Landscape	लैंडस्केप
+	Comments & Forms	टिप्पणियाँ और फ़ॉर्म
+	Document	दस्तावेज़
+	Document and markups	दस्तावेज़ और मार्कअप
+	Document and stamps	दस्तावेज़ और स्टाम्प
+	Form fields only	केवल फ़ॉर्म फ़ील्ड
+	Previous sheet	पिछली शीट
+	Next sheet	अगली शीट
+	No sheets	कोई शीट नहीं
+	Sheet {s} of {n}	कुल {n} में से शीट {s}
+	Removed 1 hidden item. Save to remove them from the file.	1 छिपी हुई वस्तु हटाई गई। इसे फ़ाइल से हटाने के लिए सहेजें।
+	Removed {n} hidden items. Save to remove them from the file.	{n} छिपी हुई वस्तुएँ हटाई गईं। इन्हें फ़ाइल से हटाने के लिए सहेजें।
+	Document sanitized. Save to finish: saving rewrites the whole file.	दस्तावेज़ साफ़ कर दिया गया। पूरा करने के लिए सहेजें: सहेजने पर पूरी फ़ाइल फिर से लिखी जाती है।
+	Applied 1 redaction mark. Save to remove the content from the file.	1 रेडैक्शन चिह्न लागू किया गया। सामग्री फ़ाइल से हटाने के लिए सहेजें।
+	Applied {n} redaction marks. Save to remove the content from the file.	{n} रेडैक्शन चिह्न लागू किए गए। सामग्री फ़ाइल से हटाने के लिए सहेजें।
+	JavaScript Console	JavaScript कंसोल
+	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript बंद है (प्राथमिकताएँ ▸ JavaScript)।
+	Output appears here.	आउटपुट यहाँ दिखता है।
+	Script Name:	स्क्रिप्ट का नाम:
+	This document has no document-level scripts.	इस दस्तावेज़ में दस्तावेज़-स्तर की कोई स्क्रिप्ट नहीं है।
+	No form fields were detected	कोई फ़ॉर्म फ़ील्ड नहीं मिला
+	Detected 1 form field	1 फ़ॉर्म फ़ील्ड मिला
+	Detected {n} form fields	{n} फ़ॉर्म फ़ील्ड मिले
+	{field}: {e}	{field}: {e}
+	Current page	वर्तमान पृष्ठ
+	Selected pages	चयनित पृष्ठ
+	Document language	दस्तावेज़ की भाषा
+	Output	आउटपुट
+	Searchable Image (Exact)	सर्च योग्य छवि (सटीक)
+	Adds invisible text over each word; the page image is not changed	हर शब्द के ऊपर अदृश्य टेक्स्ट जोड़ता है; पृष्ठ की छवि नहीं बदलती
+	Downsample to	इस तक डाउनसैंपल करें
+	Also recognize pages that already have text	उन पृष्ठों को भी पहचानें जिन पर पहले से टेक्स्ट है
+	Pictures on those pages are recognized too; words already in the page's text are not added again	उन पृष्ठों की तस्वीरें भी पहचानी जाती हैं; पृष्ठ के टेक्स्ट में पहले से मौजूद शब्द दोबारा नहीं जोड़े जाते
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	टेक्स्ट पहचान इंस्टॉल नहीं है: इसकी मॉडल फ़ाइलें मौजूद नहीं हैं। PdfCraft दोबारा इंस्टॉल करें, या PDFCRAFT_MODELS को उस फ़ोल्डर पर सेट करें जिसमें वे रखी हैं।
+	Settings	सेटिंग्स
+	Optional	वैकल्पिक
+	Planned · {m}	नियोजित · {m}
+	Planned for milestone {m} — open to see what it will include	माइलस्टोन {m} के लिए नियोजित — खोलने पर दिखेगा कि इसमें क्या-क्या शामिल होगा
+	Coming in milestone {m}. Items marked Ready work today.	माइलस्टोन {m} में आ रहा है। “तैयार” चिह्नित चीज़ें आज ही काम करती हैं।
+	1 mark	1 चिह्न
+	{n} marks	{n} चिह्न
+	Dynamic	डायनामिक
+	Sign Here	यहाँ हस्ताक्षर करें
+	Standard Business	स्टैंडर्ड बिज़नेस
+	Choose a stamp, then click on the page to place it.	एक स्टाम्प चुनें, फिर उसे लगाने के लिए पृष्ठ पर क्लिक करें।
+	Note	नोट
+	Polyline	पॉलीलाइन
+	Attachment	अनुलग्नक
+	Callout	कॉलआउट
+	Typewriter	टाइपराइटर
+	Checked	चेक किया हुआ
+	Unchecked	अनचेक
+	Marked	चिह्नित
+	Locked	लॉक किया गया
+	Search comments	टिप्पणियाँ खोजें
+	Add a comment	टिप्पणी जोड़ें
+	No comments yet.	अभी कोई टिप्पणी नहीं है।
+	Pick a tool in the quick bar, or type above.	क्विक बार में से कोई टूल चुनें, या ऊपर टाइप करें।
+	No comments match.	कोई टिप्पणी मेल नहीं खाती।
+	Unknown author	अज्ञात लेखक
+	No colour	कोई रंग नहीं
+	Remove checkmark	चेकमार्क हटाएँ
+	Mark with checkmark	चेकमार्क लगाएँ
+	Reply	जवाब दें
+	Add a reply	जवाब जोड़ें
+	Post	पोस्ट करें
+	Page {label}	पृष्ठ {label}
+	{kind} — click to show it on the page	{kind} — पृष्ठ पर दिखाने के लिए क्लिक करें
+	Set status	स्थिति सेट करें
+	Copy text	टेक्स्ट कॉपी करें
+	Properties…	प्रॉपर्टीज़…
+	Make Current Properties Default	वर्तमान प्रॉपर्टीज़ डिफ़ॉल्ट बनाएँ
+	More options	और विकल्प
+	Sort by	इसके अनुसार क्रमबद्ध करें
+	Author	लेखक
+	Type	टाइप करें
+	Colour	रंग
+	Show all comments	सभी टिप्पणियाँ दिखाएँ
+	Create PDF comment summary…	पीडीएफ़ टिप्पणी सारांश बनाएँ…
+	Export all to data file…	सब कुछ डेटा फ़ाइल में निर्यात करें…
+	Filter comments	टिप्पणियाँ फ़िल्टर करें
+	Status	स्थिति
+	Accepted	स्वीकृत
+	Rejected	अस्वीकृत
+	Cancelled	रद्द किया गया
+	Completed	पूर्ण
+	Show all	सब दिखाएँ
+	Yellow	पीला
+	Orange	नारंगी
+	Red	लाल
+	Pink	गुलाबी
+	Purple	बैंगनी
+	Blue	नीला
+	Light blue	हल्का नीला
+	Green	हरा
+	Gray	स्लेटी
+	Black	काला
+	Bookmark options	बुकमार्क विकल्प
+	Expand all bookmarks	सभी बुकमार्क विस्तृत करें
+	Expand top-level bookmarks	शीर्ष-स्तर के बुकमार्क विस्तृत करें
+	Collapse all bookmarks	सभी बुकमार्क सिकोड़ें
+	New bookmark ({key})	नया बुकमार्क ({key})
+	This document has no bookmarks.	इस दस्तावेज़ में कोई बुकमार्क नहीं है।
+	This document has no layers.	इस दस्तावेज़ में कोई परत नहीं है।
+	This document has no attachments.	इस दस्तावेज़ में कोई अनुलग्नक नहीं है।
+	Hide layer	परत छिपाएँ
+	Show layer	परत दिखाएँ
+	Set layer visibility	परत की दृश्यता सेट करें
+	on page {label}	पृष्ठ {label} पर
+	Save attachment…	अनुलग्नक सहेजें…
+	Open in a new tab	नए टैब में खोलें
+	This document has no pages.	इस दस्तावेज़ में कोई पृष्ठ नहीं है।
+	Find text	टेक्स्ट खोजें
+	No matches	कोई मेल नहीं
+	Searching… {s}/{p}	खोजा जा रहा है… {s}/{p}
+	{c} of {n}{more}	{n} में से {c}{more}
+	Previous ({key})	पिछला ({key})
+	Next ({key})	अगला ({key})
+	Find options	खोज विकल्प
+	Whole words only	केवल पूरे शब्द
+	Case-sensitive	केस-संवेदी
+	Close (Esc)	बंद करें (Esc)
+	Align	संरेखित करें
+	Top	ऊपर
+	Bottom	नीचे
+	Center horizontally	क्षैतिज रूप से मध्य
+	Center vertically	ऊर्ध्वाधर रूप से मध्य
+	Distribute	वितरित करें
+	Horizontally	क्षैतिज रूप से
+	Vertically	ऊर्ध्वाधर रूप से
+	Set Fields to Same Size	फ़ील्ड का आकार समान सेट करें
+	Height	ऊँचाई
+	Width	चौड़ाई
+	Both	दोनों
+	Duplicate…	डुप्लिकेट करें…
+	All pages	सभी पृष्ठ
+	Odd pages	विषम पृष्ठ
+	Even pages	सम पृष्ठ
+	Landscape pages	लैंडस्केप पृष्ठ
+	Portrait pages	पोर्ट्रेट पृष्ठ
+	Move earlier	पहले खिसकाएँ
+	Move later	बाद में खिसकाएँ
+	Back to the document	दस्तावेज़ पर वापस जाएँ
+	Protect Using Password	पासवर्ड से सुरक्षित करें
+	Requires user to enter a password for:	इनके लिए उपयोगकर्ता को पासवर्ड दर्ज करना होगा:
+	Viewing	देखने के लिए
+	Editing	संपादन के लिए
+	Type Password	पासवर्ड दर्ज करें
+	Re-type Password	पासवर्ड दोबारा दर्ज करें
+	Strength: {s}	मज़बूती: {s}
+	Strong	मज़बूत
+	Medium	मध्यम
+	Weak	कमज़ोर
+	Advanced Options {chevron}	उन्नत विकल्प {chevron}
+	Compatibility	संगतता
+	Acrobat X and later (256-bit AES)	Acrobat X और इसके बाद (256-बिट AES)
+	Acrobat 7.0 and later (128-bit AES)	Acrobat 7.0 और इसके बाद (128-बिट AES)
+	Acrobat 5.0 and later (128-bit RC4)	Acrobat 5.0 और इसके बाद (128-बिट RC4)
+	Acrobat 3.0 and later (40-bit RC4)	Acrobat 3.0 और इसके बाद (40-बिट RC4)
+	Encrypt	एन्क्रिप्ट करें
+	All document contents	दस्तावेज़ की पूरी सामग्री
+	All document contents except metadata	दस्तावेज़ की पूरी सामग्री, मेटाडेटा को छोड़कर
+	Printing allowed	प्रिंटिंग की अनुमति है
+	Low Resolution (150 dpi)	कम रेज़ोल्यूशन (150 dpi)
+	Changes allowed	बदलावों की अनुमति है
+	Inserting, deleting, and rotating pages	पृष्ठ जोड़ना, हटाना और घुमाना
+	Filling in form fields and signing existing signature fields	फ़ॉर्म फ़ील्ड भरना और मौजूदा हस्ताक्षर फ़ील्ड पर हस्ताक्षर करना
+	Commenting, filling in form fields, and signing existing signature fields	टिप्पणी करना, फ़ॉर्म फ़ील्ड भरना और मौजूदा हस्ताक्षर फ़ील्ड पर हस्ताक्षर करना
+	Any except extracting pages	पृष्ठ निकालने के अलावा कोई भी
+	Enable copying of text, images, and other content	टेक्स्ट, तस्वीरों और अन्य सामग्री की कॉपी करने की अनुमति दें
+	Enable text access for screen reader devices for the visually impaired	दृष्टिबाधितों के लिए स्क्रीन रीडर डिवाइसों को टेक्स्ट एक्सेस की अनुमति दें
+	Type a password.	पासवर्ड दर्ज करें।
+	The passwords don't match.	पासवर्ड मेल नहीं खाते।
+	This compatibility level supports only plain ASCII passwords.	यह संगतता स्तर केवल सादे ASCII पासवर्ड का समर्थन करता है।
+	Anyone opening the document will need this password. It's applied when you save.	दस्तावेज़ खोलने वाले हर व्यक्ति को यह पासवर्ड चाहिए। यह सहेजने पर लागू होता है।
+	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	दस्तावेज़ बिना पासवर्ड खुलता है; पाबंदियाँ बदलने के लिए यह पासवर्ड चाहिए। यह सहेजने पर लागू होता है।
+	Recover unsaved documents?	असहेजे दस्तावेज़ पुनर्प्राप्त करें?
+	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft सही ढंग से बंद नहीं हुआ। इन दस्तावेज़ों के बदलाव स्वतः सहेजे गए थे:
+	just now	अभी-अभी
+	{n} min ago	{n} मिनट पहले
+	{n} h ago	{n} घंटे पहले
+	 · password-protected	 · पासवर्ड-सुरक्षित
+	Recover	पुनर्प्राप्त करें
+	Discard	छोड़ दें
+	Version {v}	संस्करण {v}
+	A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0.	Rust में लिखा गया एक क्लीन-रूम, ओपन-सोर्स पीडीएफ़ ऐप्लिकेशन। MIT OR Apache-2.0।
+	Part of	इसका हिस्सा
+	Summarize Options	सारांश विकल्प
+	Choose a layout:	एक लेआउट चुनें:
+	Comments only	केवल टिप्पणियाँ
+	Sort comments by:	टिप्पणियाँ इसके अनुसार क्रमबद्ध करें:
+	Create PDF Comment Summary	पीडीएफ़ टिप्पणी सारांश बनाएँ
+	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	“{name}” के पहले सहेजे गए संस्करण पर लौटें? उसके बाद से किए गए बदलाव आगे वापस नहीं लिए जा सकेंगे।
+	Number pages	पृष्ठ क्रमांकित करें
+	Style	शैली
+	None (prefix only)	कोई नहीं (केवल प्रीफ़िक्स)
+	Prefix	प्रीफ़िक्स
+	Start	प्रारंभ करें
+	Labels: {preview}. Later pages keep their labels.	लेबल: {preview}। बाद के पृष्ठ अपने-अपने लेबल रखते हैं।
+	Even and Odd Pages	सम और विषम पृष्ठ
+	Even Pages Only	केवल सम पृष्ठ
+	Odd Pages Only	केवल विषम पृष्ठ
+	Landscape and Portrait Pages	लैंडस्केप और पोर्ट्रेट पृष्ठ
+	Landscape Pages	लैंडस्केप पृष्ठ
+	Portrait Pages	पोर्ट्रेट पृष्ठ
+	Duplicate Field	फ़ील्ड डुप्लिकेट करें
+	Duplicate "{name}" onto:	“{name}” को इन पर डुप्लिकेट करें:
+	1 page selected.	1 पृष्ठ चयनित।
+	{n} pages selected.	{n} पृष्ठ चयनित।
+	Delete pages after extracting	निकालने के बाद पृष्ठ हटाएँ
+	Extract pages as separate files	पृष्ठ अलग-अलग फ़ाइलों में निकालें
+	Rotate Pages	पृष्ठ घुमाएँ
+	Direction:	दिशा:
+	Clockwise 90 degrees	घड़ी की दिशा में 90 डिग्री
+	Counterclockwise 90 degrees	घड़ी की उल्टी दिशा में 90 डिग्री
+	180 degrees	180 डिग्री
+	Pages:	पृष्ठ:
+	All	सभी
+	Selection	चयन
+	From	से
+	Rotate:	घुमाएँ:
+	Repairs	मरम्मत
+	Repair log	मरम्मत लॉग
+	Split document	दस्तावेज़ विभाजित करें
+	Number of pages	पृष्ठों की संख्या
+	Pages per file	प्रति फ़ाइल पृष्ठ
+	File size	फ़ाइल का आकार
+	At most	अधिकतम
+	Top-level bookmarks ({n})	शीर्ष-स्तर के बुकमार्क ({n})
+	Before each selected page (select pages in Organize)	प्रत्येक चयनित पृष्ठ से पहले (पृष्ठ ऑर्गनाइज़ में चुनें)
+	Creates 1 file from {n} pages.	{n} पृष्ठों से 1 फ़ाइल बनाता है।
+	Creates {f} files from {n} pages.	{n} पृष्ठों से {f} फ़ाइलें बनाता है।
+	Each file holds as many of the {n} pages as fit.	हर फ़ाइल में {n} पृष्ठों में से जितने समा जाते हैं, उतने होते हैं।
+	Replace Pages	पृष्ठ बदलें
+	Original: replace pages	मूल: पृष्ठ बदलें
+	to	से
+	to {n}	से {n} तक
+	Replacement: pages of {name}	बदली: {name} के पृष्ठ
+	of {name}	{name} में से
+	Only the page content changes: links, comments, form fields and bookmarks on the original pages stay.	केवल पृष्ठ की सामग्री बदलती है: मूल पृष्ठों पर मौजूद लिंक, टिप्पणियाँ, फ़ॉर्म फ़ील्ड और बुकमार्क बने रहते हैं।
+	The replacement file doesn't have that many pages.	बदलने वाली फ़ाइल में उतने पृष्ठ नहीं हैं।
+	Tagged PDF	टैग किया गया पीडीएफ़
+	Document Properties	दस्तावेज़ प्रॉपर्टीज़
+	Description	विवरण
+	Initial View	प्रारंभिक दृश्य
+	Security	सुरक्षा
+	Fonts	फ़ॉन्ट
+	Advanced	उन्नत
+	Title	शीर्षक
+	Subject	विषय
+	Keywords	कीवर्ड
+	Application	ऐप्लिकेशन
+	PDF producer	पीडीएफ़ निर्माता
+	Layout and Magnification	लेआउट और आवर्धन
+	Navigation tab	नेविगेशन टैब
+	Page Only	केवल पृष्ठ
+	Bookmarks Panel and Page	बुकमार्क पैनल और पृष्ठ
+	Pages Panel and Page	पृष्ठ पैनल और पृष्ठ
+	Attachments Panel and Page	अनुलग्नक पैनल और पृष्ठ
+	Layers Panel and Page	परत पैनल और पृष्ठ
+	Page layout	पृष्ठ लेआउट
+	Default	डिफ़ॉल्ट
+	Single Page	एक पृष्ठ
+	Single Page Continuous	एक पृष्ठ, लगातार
+	Two-Up (Facing)	दो-एक-साथ (आमने-सामने)
+	Two-Up Continuous (Facing)	दो-एक-साथ, लगातार (आमने-सामने)
+	Two-Up (Cover Page)	दो-एक-साथ (कवर पृष्ठ)
+	Two-Up Continuous (Cover Page)	दो-एक-साथ, लगातार (कवर पृष्ठ)
+	Magnification	आवर्धन
+	Actual Size	वास्तविक आकार
+	Fit Page	पृष्ठ फ़िट करें
+	Fit Width	चौड़ाई फ़िट करें
+	Fit Height	ऊँचाई फ़िट करें
+	Fit Visible	विज़िबल फ़िट करें
+	Open to page	इस पृष्ठ पर खोलें
+	of {pages}	{pages} में से
+	Window Options	विंडो विकल्प
+	Resize window to initial page	विंडो का आकार प्रारंभिक पृष्ठ के अनुसार बदलें
+	Center window on screen	विंडो को स्क्रीन पर मध्य में रखें
+	Open in Full Screen mode	फ़ुल स्क्रीन मोड में खोलें
+	Show:	दिखाएँ:
+	File Name	फ़ाइल का नाम
+	Document Title	दस्तावेज़ का शीर्षक
+	User Interface Options	यूज़र इंटरफ़ेस विकल्प
+	Hide menu bar	मेन्यू बार छिपाएँ
+	Hide toolbars	टूलबार छिपाएँ
+	Hide window controls	विंडो नियंत्रण छिपाएँ
+	Security method	सुरक्षा विधि
+	No security	कोई सुरक्षा नहीं
+	Restrictions	पाबंदियाँ
+	None — everything is allowed	कोई नहीं — सब कुछ की अनुमति है
+	Password security	पासवर्ड सुरक्षा
+	Encryption	एन्क्रिप्शन
+	Opened with	इससे खोला गया
+	— (protection is applied when you save)	— (सुरक्षा सहेजने पर लागू होती है)
+	Owner password (no restrictions apply)	स्वामी पासवर्ड (कोई पाबंदी लागू नहीं होती)
+	User password	उपयोगकर्ता पासवर्ड
+	Change settings…	सेटिंग्स बदलें…
+	Printing	प्रिंटिंग
+	Not allowed	अनुमति नहीं
+	Allowed	अनुमति है
+	High resolution	उच्च रेज़ोल्यूशन
+	Low resolution	कम रेज़ोल्यूशन
+	Changing the document	दस्तावेज़ बदलना
+	Document assembly	दस्तावेज़ संयोजन
+	Content copying	सामग्री कॉपी करना
+	Content copying for accessibility	पहुँच के लिए सामग्री कॉपी करना
+	Commenting	टिप्पणी करना
+	Filling of form fields	फ़ॉर्म फ़ील्ड भरना
+	No fonts are referenced by the pages.	पृष्ठों द्वारा कोई फ़ॉन्ट संदर्भित नहीं है।
+	PDF version	पीडीएफ़ संस्करण
+	Location	स्थान
+	Page size	पृष्ठ आकार
+	Yes	हाँ
+	No	नहीं
+	Revisions	संशोधन
+	View revision {n}	संशोधन {n} देखें
+	Open the file as it was saved then	फ़ाइल को तब सहेजे गए रूप में खोलें
+	Binding	बंधन
+	Left Edge	बायाँ किनारा
+	Right Edge	दायाँ किनारा
+	Language	भाषा
+	Saved {place}: {before} → {after} ({pct}% smaller){detail}	सहेजा गया {place}: {before} → {after} ({pct}% छोटा){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	यह फ़ाइल पहले से ही जितनी छोटी बन सकती थी, उतनी छोटी है ({size})। कोई प्रति सहेजी नहीं गई।
+	Saved {place}: {before} → {after} (not smaller){detail}	सहेजा गया {place}: {before} → {after} (छोटा नहीं){detail}
+	Couldn't save the image: {e}	छवि सहेजी नहीं जा सकी: {e}
+	Adding images arrives on the web with file pickers for images	तस्वीरें जोड़ना वेब पर तस्वीरों के फ़ाइल पिकर के साथ आएगा
+	Replacing images on page {p} arrives on the web with image pickers ({i})	पृष्ठ {p} की तस्वीरें बदलना वेब पर इमेज पिकर के साथ आएगा ({i})
+	{name}: choosing images arrives on the web with file pickers for images	{name}: तस्वीरें चुनना वेब पर तस्वीरों के फ़ाइल पिकर के साथ आएगा
+	Replacing images arrives on the web with image file pickers	तस्वीरें बदलना वेब पर इमेज फ़ाइल पिकर के साथ आएगा
+	Couldn't create a PDF: {e}	पीडीएफ़ नहीं बनाया जा सका: {e}
+	The clipboard has no image or text	क्लिपबोर्ड में कोई तस्वीर या टेक्स्ट नहीं है
+	On the web, open or drop an image to convert it	वेब पर, इसे बदलने के लिए कोई तस्वीर खोलें या छोड़ें
+	Couldn't optimize the file: {e}	फ़ाइल ऑप्टिमाइज़ नहीं की जा सकी: {e}
+	Couldn't write {path}: {e}	{path} नहीं लिखा जा सका: {e}
+	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	फ़ॉर्म {u} पर जमा होने का अनुरोध करता है; PdfCraft फ़ॉर्म डेटा नहीं भेजता। अपनी भरी हुई जानकारी बनाए रखने के लिए दस्तावेज़ सहेजें।
+	This PDF uses the unsupported {s} action.	यह पीडीएफ़ असमर्थित {s} क्रिया उपयोग करता है।
+	{name}: the {other} action isn't supported yet	{name}: {other} क्रिया अभी समर्थित नहीं है
+	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} फ़ॉर्म {url} पर भेजता है; PdfCraft फ़ॉर्म डेटा नहीं भेजता। अपनी भरी हुई जानकारी बनाए रखने के लिए दस्तावेज़ सहेजें।
+	Export stopped: {e}	निर्यात रुक गया: {e}
+	Exported 1 image	1 तस्वीर निर्यात की गई
+	Exported {n} images	{n} तस्वीरें निर्यात की गईं
+	 ({s} not exported: {first})	 ({s} निर्यात नहीं हुईं: {first})
+	Exported the text of 1 page	1 पृष्ठ का टेक्स्ट निर्यात किया गया
+	Exported the text of {n} pages	{n} पृष्ठों का टेक्स्ट निर्यात किया गया
+	{msg} to {dir}	{msg} — {dir} में
+	Exporting… {d} of {t}	निर्यात हो रहा है… {t} में से {d}
+	Choose a folder for the exported files	निर्यात की गई फ़ाइलों के लिए एक फ़ोल्डर चुनें
+	New {tool} comments will look like this one	टूल {tool} की नई टिप्पणियाँ इस जैसी दिखेंगी
+	This document can't be checked: it couldn't be read for editing	इस दस्तावेज़ की जाँच नहीं हो सकती: इसे संपादन के लिए पढ़ा नहीं जा सका
+	The checker found no problems in this document.	जाँच ने इस दस्तावेज़ में कोई समस्या नहीं पाई।
+	The checker found 1 problem which may prevent the document from being fully accessible.	जाँच ने 1 समस्या पाई जो दस्तावेज़ को पूरी तरह सुलभ होने से रोक सकती है।
+	The checker found {n} problems which may prevent the document from being fully accessible.	जाँच ने {n} समस्याएँ पाईं जो दस्तावेज़ को पूरी तरह सुलभ होने से रोक सकती हैं।
+	The text is the same	टेक्स्ट एक जैसा है
+	1 difference found	1 अंतर मिला
+	{n} differences found	{n} अंतर मिले
+	Added 1 comment	1 टिप्पणी जोड़ी गई
+	Added {n} comments	{n} टिप्पणियाँ जोड़ी गईं
+	Choose a folder for the results	परिणामों के लिए एक फ़ोल्डर चुनें
+	Files for {name}	{name} के लिए फ़ाइलें
+	An action is already running	एक क्रिया पहले से चल रही है
+	Running action… file {d} of {t}	क्रिया चल रही है… फ़ाइल {t} में से {d}
+	No unlinked web addresses were found in the text	टेक्स्ट में कोई बिना लिंक वाला वेब पता नहीं मिला
+	Created 1 link	1 लिंक बनाया गया
+	Created {n} links	{n} लिंक बनाए गए
+	Text recognition is already running	टेक्स्ट पहचान पहले से चल रही है
+	Recognizing text… file {d} of {t}	टेक्स्ट पहचाना जा रहा है… फ़ाइल {t} में से {d}
+	Recognizing text… page {d} of {t}	टेक्स्ट पहचाना जा रहा है… पृष्ठ {t} में से {d}
+	Recognized 1 word	1 शब्द पहचाना गया
+	Recognized {n} words	{n} शब्द पहचाने गए
+	{words} on {pages}	{pages} पर {words}
+	; 1 page already had text	; 1 पृष्ठ में पहले से टेक्स्ट था
+	; {n} pages already had text	; {n} पृष्ठों में पहले से टेक्स्ट था
+	Recognized {w} words in 1 file	1 फ़ाइल में {w} शब्द पहचाने गए
+	Recognized {w} words in {n} files	{n} फ़ाइलों में {w} शब्द पहचाने गए
+	; failed: {list}	; विफल: {list}
+	1 file done	1 फ़ाइल पूरी हुई
+	{n} files done	{n} फ़ाइलें पूरी हुईं
+	The selected area has been copied ({w} × {h} pixels)	चयनित क्षेत्र कॉपी हो गया ({w} × {h} पिक्सेल)
+	Couldn't take the snapshot: {e}	स्नैपशॉट नहीं लिया जा सका: {e}
+	Couldn't recover {name}: {e}	{name} पुनर्प्राप्त नहीं किया जा सका: {e}
+	The document now conforms to {level}; save it to keep the changes	दस्तावेज़ अब {level} के अनुरूप है; बदलाव बनाए रखने के लिए इसे सहेजें
+	Fixed what could be fixed; 1 problem remains	जो ठीक हो सकता था, ठीक कर दिया गया; 1 समस्या बची है
+	Fixed what could be fixed; {n} problems remain	जो ठीक हो सकता था, ठीक कर दिया गया; {n} समस्याएँ बची हैं
+	Custom stamps arrive on the web with file pickers for images	कस्टम स्टाम्प वेब पर तस्वीरों के फ़ाइल पिकर के साथ आएँगे
+	{file} is too large for a stamp (at most {n} MB)	{file} स्टाम्प के लिए बहुत बड़ी है (अधिकतम {n} MB)
+	Sent to {printer}	{printer} को भेजा गया
+	Sent to {printer}: {msg}	{printer} को भेजा गया: {msg}
+	Looking for printers…	प्रिंटर खोजे जा रहे हैं…
+	Sending to {printer}…	{printer} को भेजा जा रहा है…
+	Choose a folder for the searchable files	सर्च योग्य फ़ाइलों के लिए एक फ़ोल्डर चुनें
+	Files are combined from top to bottom. Leave Pages empty to take every page.	फ़ाइलें ऊपर से नीचे संयोजित होती हैं। सभी पृष्ठ लेने के लिए पृष्ठ खाली छोड़ दें।
+	Unlock…	अनलॉक करें…
+	Select a password-protected file first	पहले पासवर्ड-सुरक्षित फ़ाइल चुनें
+	Enter the permissions password to allow combining	संयोजन की अनुमति देने के लिए अनुमति पासवर्ड दर्ज करें
+	Enter the password that opens it	वह पासवर्ड दर्ज करें जो इसे खोलता है
+	Unlock {name}	{name} अनलॉक करें
+	Unlock {n} files	{n} फ़ाइलें अनलॉक करें
+	The same password is tried on each file.	हर फ़ाइल पर वही पासवर्ड आज़माया जाता है।
+	Hide password	पासवर्ड छिपाएँ
+	Show password	पासवर्ड दिखाएँ
+	Wrong password	ग़लत पासवर्ड
+	The password is only used to read the file; it isn't saved.	पासवर्ड केवल फ़ाइल पढ़ने के लिए उपयोग होता है; यह सहेजा नहीं जाता।
+	Unlock	अनलॉक करें
+	Opened, but its security settings don't allow combining. Enter the permissions password.	खुल गया, लेकिन इसकी सुरक्षा सेटिंग्स संयोजन की अनुमति नहीं देतीं। अनुमति पासवर्ड दर्ज करें।
+	Unlocked: the combined file won't be password-protected	अनलॉक हो गया: संयोजित फ़ाइल पासवर्ड-सुरक्षित नहीं होगी
+	Unlocked {n} of {m} files	{m} फ़ाइलों में से {n} अनलॉक हुईं
+	Drop PDFs, images, text files or folders here, or choose them.	पीडीएफ़, तस्वीरें, टेक्स्ट फ़ाइलें या फ़ोल्डर यहाँ छोड़ें, या उन्हें चुनें।
+	Add folder…	फ़ोल्डर जोड़ें…
+	Add folder and subfolders…	फ़ोल्डर और सबफ़ोल्डर जोड़ें…
+	More ways to add files	फ़ाइलें जोड़ने के और तरीक़े
+	Every PDF, image and text file in the folder	फ़ोल्डर की हर पीडीएफ़, तस्वीर और टेक्स्ट फ़ाइल
+	Every PDF, image and text file in the folder and the folders inside it	फ़ोल्डर और उसके अंदर के फ़ोल्डरों की हर पीडीएफ़, तस्वीर और टेक्स्ट फ़ाइल
+	Add folder	फ़ोल्डर जोड़ें
+	Add folder and subfolders	फ़ोल्डर और सबफ़ोल्डर जोड़ें
+	No PDFs, images or text files found in {folder}	{folder} में कोई पीडीएफ़, तस्वीर या टेक्स्ट फ़ाइल नहीं मिली
+	Added the first {n} files in {folder}	{folder} में से पहली {n} फ़ाइलें जोड़ दी गईं
+	Click to sort, drag to move the column. Drag its edge to resize it.	क्रमबद्ध करने के लिए क्लिक करें, कॉलम खिसकाने के लिए ड्रैग करें। आकार बदलने के लिए उसका किनारा खींचें।
+	Reset columns	कॉलम रीसेट करें
+	Remove {n} files	{n} फ़ाइलें हटाएँ
+	{n} selected	{n} चयनित
+	sorted ascending	आरोही क्रम में
+	sorted descending	अवरोही क्रम में
+	Protected: the combined file won't keep its security settings	सुरक्षित: संयोजित फ़ाइल अपनी सुरक्षा सेटिंग्स नहीं रखेगी
+	Add open documents	खुले दस्तावेज़ जोड़ें
+	All open documents	सभी खुले दस्तावेज़
+	No documents are open	कोई दस्तावेज़ खुला नहीं है
+	Select a file first	पहले एक फ़ाइल चुनें
+	1 file	1 फ़ाइल
+	{n} files	{n} फ़ाइलें
+	1 file needs attention	1 फ़ाइल को ध्यान चाहिए
+	{n} files need attention	{n} फ़ाइलों को ध्यान चाहिए
+	{name} can't be combined: {why}	{name} को संयोजित नहीं किया जा सकता: {why}
+	Check the pages of {name}: {why}	{name} के पृष्ठ जाँचें: {why}
+	Add the files to combine	संयोजित करने के लिए फ़ाइलें जोड़ें
+	File name	फ़ाइल का नाम
+	Warnings	चेतावनियाँ
+	Drag to reorder	क्रम बदलने के लिए ड्रैग करें
+	{k} of {n}	{n} में से {k}
+	? of {n}	{n} में से ?
+	Added more than once	एक से ज़्यादा बार जोड़ा गया
+	yesterday	बीता कल
+	{n} days ago	{n} दिन पहले
+	No pages selected	कोई पृष्ठ चयनित नहीं
+	Password-protected	पासवर्ड-सुरक्षित
+	Its security settings don't allow copying pages	इसकी सुरक्षा सेटिंग्स पृष्ठ कॉपी करने की अनुमति नहीं देतीं
+	Can't be read: {e}	पढ़ा नहीं जा सकता: {e}
+	Leave out files that can't be read?	जो फ़ाइलें पढ़ी नहीं जा सकतीं, उन्हें छोड़ दें?
+	These files can't be read, so they won't be in the combined PDF:	ये फ़ाइलें पढ़ी नहीं जा सकतीं, इसलिए वे संयोजित पीडीएफ़ में नहीं होंगी:
+	Combine the rest	बाक़ी को संयोजित करें
+	and {n} more	और {n} और
+	Includes unsaved changes	असहेजे बदलाव शामिल हैं
+	Pages of {name} to combine, e.g. 1-3, 6	{name} से संयोजित करने के लिए पृष्ठ, जैसे 1-3, 6
+	Remove {name}	{name} हटाएँ
+	Add files…	फ़ाइलें जोड़ें…
+	Add at least two files	कम से कम दो फ़ाइलें जोड़ें
+	Couldn't add {name}: {e}	{name} जोड़ा नहीं जा सका: {e}
+	Couldn't combine files: {e}	फ़ाइलें संयोजित नहीं की जा सकीं: {e}
+	Export comments	टिप्पणियाँ निर्यात करें
+	Export form data	फ़ॉर्म डेटा निर्यात करें
+	Comment and form data	टिप्पणी और फ़ॉर्म डेटा
+	Export	निर्यात करें
+	Select data files to merge	मर्ज करने के लिए डेटा फ़ाइलें चुनें
+	Form data and PDF forms	फ़ॉर्म डेटा और पीडीएफ़ फ़ॉर्म
+	Save the spreadsheet	स्प्रेडशीट सहेजें
+	Save the accessibility report	पहुँच रिपोर्ट सहेजें
+	Save image	तस्वीर सहेजें
+	Export certificate	प्रमाणपत्र निर्यात करें
+	Choose a folder for the extracted pages	निकाले गए पृष्ठों के लिए एक फ़ोल्डर चुनें
+	Choose a folder for the split files	विभाजित फ़ाइलों के लिए एक फ़ोल्डर चुनें
+	Couldn't use {name}: {e}	{name} उपयोग नहीं किया जा सका: {e}
+	Couldn't extract pages: {e}	पृष्ठ नहीं निकाले जा सके: {e}
+	Couldn't write {name}: {e}	{name} नहीं लिखी जा सकी: {e}
+	Wrote 1 file to {dir}	1 फ़ाइल {dir} में लिखी गई
+	Wrote {n} files to {dir}	{n} फ़ाइलें {dir} में लिखी गईं
+	No pages match those choices	इन विकल्पों से कोई पृष्ठ मेल नहीं खाता
+	Couldn't split: {e}	विभाजित नहीं किया जा सका: {e}
+	Couldn't summarize comments: {e}	टिप्पणियों का सारांश नहीं बनाया जा सका: {e}
+	Couldn't open the result: {e}	परिणाम खोला नहीं जा सका: {e}
+	Importing data arrives on the web with file pickers for data files	डेटा आयात वेब पर डेटा फ़ाइलों के फ़ाइल पिकर के साथ आएगा
+	Exported to {path}	{path} पर निर्यात किया गया
+	Merging data files needs the desktop app	डेटा फ़ाइलें मर्ज करने के लिए डेस्कटॉप ऐप चाहिए
+	Merged 1 file into {path}	1 फ़ाइल {path} में मर्ज की गई
+	Merged {n} files into {path}	{n} फ़ाइलें {path} में मर्ज की गईं
+	Combined {n} files	{n} फ़ाइलें संयोजित की गईं
+	Extracted 1 page	1 पृष्ठ निकाला गया
+	Extracted {n} pages	{n} पृष्ठ निकाले गए
+	Created a comment summary	टिप्पणियों का सारांश बनाया गया
+	Couldn't open {name}: {e}	{name} खोला नहीं जा सका: {e}
+	Couldn't read {name}: {e}	{name} पढ़ी नहीं जा सकी: {e}
+	Couldn't save: {e}	सहेजा नहीं जा सका: {e}
+	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	वेब पर अनुलग्नक डाउनलोड M3.10 के साथ आएगा ({n} बाइट तैयार)
+	`{command}` {when}	`{command}` {when}
+	ships in milestone {m}	माइलस्टोन {m} में आता है
+	needs an AI provider (off by default)	AI प्रदाता चाहिए (डिफ़ॉल्ट रूप से बंद)
+	is available	उपलब्ध है
+	is not available yet	अभी उपलब्ध नहीं है
+	{label} failed: {e}	{label} विफल रहा: {e}
+	Undid {label}	{label} पूर्ववत किया गया
+	Redid {label}	{label} फिर किया गया
+	A document needs at least one page: copy instead	दस्तावेज़ को कम से कम एक पृष्ठ चाहिए: इसके बजाय कॉपी करें
+	Cut {what}	काटा गया: {what}
+	Copied {what}	कॉपी किया गया: {what}
+	1 page	1 पृष्ठ
+	{n} pages	{n} पृष्ठ
+	Copy or cut pages first	पहले पृष्ठ कॉपी करें या काटें
+	Couldn't save {name}: {e}	{name} सहेजा नहीं जा सका: {e}
+	Saved {name}	{name} सहेजा गया
+	Saved, but reopening failed: {e}	सहेजा गया, लेकिन दोबारा खोलना विफल रहा: {e}
+	Downloaded {name}	{name} डाउनलोड हुआ
+	Couldn't download {name}: {e}	{name} डाउनलोड नहीं हो सका: {e}
+	Reverted to the last saved version	अंतिम सहेजे गए संस्करण पर लौटा लिया गया
+	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	वह काम नहीं कर पाया: एक आंतरिक त्रुटि ने उसे रोक दिया ({m})। आपके दस्तावेज़ नहीं बदले।
+	Nothing to undo	पूर्ववत करने के लिए कुछ नहीं
+	Nothing to redo	फिर करने के लिए कुछ नहीं
+	This document has no form fields you can fill in	इस दस्तावेज़ में भरने योग्य कोई फ़ॉर्म फ़ील्ड नहीं है
+	This document has no comments to flatten	इस दस्तावेज़ में फ़्लैट करने के लिए कोई टिप्पणी नहीं है
+	This document has no form fields to flatten	इस दस्तावेज़ में फ़्लैट करने के लिए कोई फ़ॉर्म फ़ील्ड नहीं है
+	There are no redaction marks (mark text, areas or pages first)	कोई रेडैक्शन चिह्न नहीं हैं (पहले टेक्स्ट, क्षेत्र या पृष्ठ चिह्नित करें)
+	This document has no {kind} to change	इस दस्तावेज़ में बदलने के लिए कोई {kind} नहीं है
+	header or footer	हेडर या फ़ुटर
+	watermark	वॉटरमार्क
+	background	पृष्ठभूमि
+	This document isn't password-protected	यह दस्तावेज़ पासवर्ड-सुरक्षित नहीं है
+	Enter permissions password…	अनुमति पासवर्ड दर्ज करें…
+	Permissions password	अनुमति पासवर्ड
+	“{name}” has security restrictions. Enter its permissions password to lift them.	“{name}” पर सुरक्षा पाबंदियाँ हैं। उन्हें हटाने के लिए इसका अनुमति पासवर्ड दर्ज करें।
+	Restrictions lifted	पाबंदियाँ हटा दी गईं
+	Couldn't unlock {name}: {e}	{name} अनलॉक नहीं किया जा सका: {e}
+	This document has no restrictions to lift	इस दस्तावेज़ पर हटाने लायक़ कोई पाबंदी नहीं है
+	The document's security settings don't allow this change	दस्तावेज़ की सुरक्षा सेटिंग्स यह बदलाव नहीं करने देतीं
+	The document's security settings don't allow copying text and images	दस्तावेज़ की सुरक्षा सेटिंग्स टेक्स्ट और तस्वीरें कॉपी नहीं करने देतीं
+	Open a document first	पहले एक दस्तावेज़ खोलें
+	Security will be removed when you save	सहेजने पर सुरक्षा हटा दी जाएगी
+	Click text or an image to edit it	संपादित करने के लिए टेक्स्ट या तस्वीर पर क्लिक करें
+	Drag a rectangle to create a link; double-click a link to edit it	लिंक बनाने के लिए एक आयत खींचें; लिंक संपादित करने के लिए उस पर डबल-क्लिक करें
+	There are no redaction marks to apply	लागू करने के लिए कोई रेडैक्शन चिह्न नहीं है
+	Drag to draw the area where the signature should appear.	हस्ताक्षर जहाँ दिखाई देना चाहिए, वह क्षेत्र बनाने के लिए ड्रैग करें।
+	Couldn't fit the visible content: {e}	दिख रही सामग्री फ़िट नहीं की जा सकी: {e}
+	Drag a rectangle around the area to copy	कॉपी करने के क्षेत्र के चारों ओर एक आयत खींचें
+	Click on the page to add a {tool}, or drag to set its size	{tool} जोड़ने के लिए पृष्ठ पर क्लिक करें, या आकार सेट करने के लिए ड्रैग करें
+	Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes	पृष्ठ काटने (क्रॉप करने) के लिए उस पर एक आयत खींचें; पृष्ठ की सीमाएँ सेट करने के लिए पृष्ठ पर डबल-क्लिक करें
+	Keep tool selected: on	टूल चयनित रखें: चालू
+	Keep tool selected	टूल चयनित रखें
+	Opacity	अपारदर्शिता
+	Line thickness	लाइन की मोटाई
+	What word or phrase would you like to search for?	आप कौन-सा शब्द या वाक्यांश खोजना चाहेंगे?
+	Searching… {s} of {p} pages	खोजा जा रहा है… {p} पृष्ठों में से {s}
+	 (searching… {s} of {p} pages)	 (खोजा जा रहा है… {p} पृष्ठों में से {s})
+	1 instance	1 मिलान
+	{n} instances	{n} मिलान
+	Go to this result	इस परिणाम पर जाएँ
+	Highlight	हाइलाइट
+	Draw	ड्रॉ
+	Polygon	बहुभुज
+	Connected lines	जुड़ी रेखाएँ
+	Eraser	इरेज़र
+	Sign	हस्ताक्षर करें
+	Certified by {by}	{by} द्वारा प्रमाणित
+	At least one signature is invalid.	कम से कम एक हस्ताक्षर अमान्य है।
+	Signed and all signatures are valid.	हस्ताक्षरित, और सभी हस्ताक्षर मान्य हैं।
+	At least one signature has problems.	कम से कम एक हस्ताक्षर में समस्याएँ हैं।
+	This document is secured. Some changes are restricted by its security settings.	यह दस्तावेज़ सुरक्षित है। इसकी सुरक्षा सेटिंग्स कुछ बदलाव प्रतिबंधित करती हैं।
+	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	यह एक डायनामिक XFA फ़ॉर्म है, जिसे PdfCraft अभी दिखा नहीं सकता। आप जो देख रहे हैं वह फ़ाइल का प्लेसहोल्डर पृष्ठ है।
+	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	इस फ़ॉर्म में XFA डेटा भी है, जिसे PdfCraft अभी नहीं पढ़ता। आप इसके फ़ील्ड भर सकते हैं, लेकिन Acrobat इसके बजाय XFA मान दिखा सकता है।
+	This document contains {n} interactive form fields.	इस दस्तावेज़ में {n} इंटरैक्टिव फ़ॉर्म फ़ील्ड हैं।
+	This file was damaged and has been repaired. Saving keeps the repaired version.	यह फ़ाइल क्षतिग्रस्त थी और उसे मरम्मत कर दिया गया है। सहेजने पर मरम्मत किया हुआ संस्करण ही रहेगा।
+	Dismiss	छिपाएँ
+	Hide field highlights	फ़ील्ड हाइलाइट छिपाएँ
+	Highlight fields	फ़ील्ड हाइलाइट करें
+	Security settings	सुरक्षा सेटिंग्स
+	Details	विवरण
+	Select (V)	चयन करें (V)
+	Hand (H)	हैंड (H)
+	Delete pages (Delete)	पृष्ठ हटाएँ (Delete)
+	Insert a blank page after the selection	चयन के बाद एक रिक्त पृष्ठ जोड़ें
+	Insert pages from a file…	फ़ाइल से पृष्ठ जोड़ें…
+	Extract pages to a new document	पृष्ठों को नए दस्तावेज़ में निकालें
+	Split into files…	फ़ाइलों में विभाजित करें…
+	Select pages	पृष्ठ चुनें
+	Cut	काटें
+	Copy	कॉपी करें
+	Paste after	बाद में पेस्ट करें
+	Rename	नाम बदलें
+	Set to current page ({n})	वर्तमान पृष्ठ पर सेट करें ({n})
+	Move up	ऊपर ले जाएँ
+	Move down	नीचे ले जाएँ
+	Indent	इंडेंट बढ़ाएँ
+	Outdent	इंडेंट घटाएँ
+	This document has no form fields.	इस दस्तावेज़ में कोई फ़ॉर्म फ़ील्ड नहीं हैं।
+	Tab order: move a field with its arrows.	टैब क्रम: फ़ील्ड को उसके तीरों से खिसकाएँ।
+	Unplaced	रखा नहीं गया
+	Has JavaScript actions (run in M6)	JavaScript क्रियाएँ हैं (M6 में चलती हैं)
+	Page	पृष्ठ
+	None	कोई नहीं
+	Delete selected fields	चयनित फ़ील्ड हटाएँ
+	Diagnostic details	डायग्नोस्टिक विवरण
+	The operation failed.	ऑपरेशन विफल हो गया।
+	no such document	ऐसा कोई दस्तावेज़ नहीं है
+	nothing to undo	पूर्ववत करने के लिए कुछ नहीं है
+	nothing to redo	दोहराने के लिए कुछ नहीं है
+	this document is signed: rewriting it would invalidate its signatures (save it incrementally instead)	यह दस्तावेज़ हस्ताक्षरित है: इसे फिर से लिखने पर इसके हस्ताक्षर अमान्य हो जाएँगे (इसके बजाय इसे क्रमिक रूप से सहेजें)
+	the document is protected by a password	दस्तावेज़ पासवर्ड से सुरक्षित है
+	the password is incorrect	पासवर्ड ग़लत है
+	the document has no page tree	दस्तावेज़ में पृष्ठ ट्री नहीं है
+	a document must keep at least one page	एक दस्तावेज़ में कम से कम एक पृष्ठ बना रहना चाहिए
+	a bookmark cannot be moved inside itself	बुकमार्क अपने अंदर नहीं खिसकाया जा सकता
+	the title must not be empty	शीर्षक ख़ाली नहीं होना चाहिए
+	the document has no form fields	दस्तावेज़ में कोई फ़ॉर्म फ़ील्ड नहीं हैं
+	there are no redaction marks to apply	लागू करने के लिए कोई रीडैक्शन चिह्न नहीं हैं
+	there are no pages to print	छपाई के लिए कोई पृष्ठ नहीं हैं
+	the document has no tags	दस्तावेज़ में कोई टैग नहीं हैं
+	{0}: {1}	{0}: {1}
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	टेक्स्ट पहचान मॉडल इंस्टॉल नहीं हैं (PdfCraft दोबारा इंस्टॉल करें, या PDFCRAFT_MODELS को उस फ़ोल्डर पर सेट करें जिसमें वे मौजूद हैं)
+	the image is empty	छवि ख़ाली है
+	this file isn't XFDF, FDF, XML or text form data	यह फ़ाइल XFDF, FDF, XML या टेक्स्ट फ़ॉर्म डेटा नहीं है
+	nothing in the file matches this document	फ़ाइल में कुछ भी इस दस्तावेज़ से मेल नहीं खाता
+	This page couldn't be displayed.\n{e}	यह पृष्ठ नहीं दिखाया जा सका।\n{e}
+	Go to page {p}	पृष्ठ {p} पर जाएँ
+	{s} action	{s} क्रिया
+	Page {p} of {n}	पृष्ठ {p} / {n}
+	1 page selected	1 पृष्ठ चयनित
+	{n} pages selected	{n} पृष्ठ चयनित
+	{name} — unsaved changes	{name} — असहेजे बदलाव
+	{kind} field	{kind} फ़ील्ड
+	Select a file for the stamp	स्टाम्प के लिए फ़ाइल चुनें
+	JavaScript, e.g. getField("total").value	JavaScript, जैसे getField("total").value
+	Font: Helvetica	फ़ॉन्ट: Helvetica
+	e.g. en-US	जैसे en-US
+	Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)	रेंडरिंग: hayro (बूटस्ट्रैप) · UI: egui · आइकन: Lucide (ISC) · फ़ॉन्ट: Inter, JetBrains Mono, Dancing Script (OFL)
+	CheckBox	चेकबॉक्स
+	Radio	रेडियो
+	PushButton	पुश बटन
+	Combo	कॉम्बो
+	List	सूची
+	Unknown	अज्ञात
+	The document has no XMP metadata	दस्तावेज़ में कोई XMP मेटाडेटा नहीं है
+	The title in the metadata and the document information differ	मेटाडेटा और दस्तावेज़ जानकारी में शीर्षक अलग-अलग हैं
+	The document is encrypted	दस्तावेज़ एन्क्रिप्टेड है
+	Device colour is used, but there is no PDF/A output intent	डिवाइस रंग का उपयोग हुआ है, लेकिन कोई PDF/A आउटपुट इंटेंट नहीं है
+	DeviceCMYK is used: it needs a CMYK output intent (not added automatically)	DeviceCMYK का उपयोग हुआ है: इसे CMYK आउटपुट इंटेंट चाहिए (अपने आप नहीं जुड़ता)
+	The document has additional actions (/AA)	दस्तावेज़ में अतिरिक्त क्रियाएँ (/AA) हैं
+	The document has document-level JavaScript	दस्तावेज़ में दस्तावेज़-स्तरीय JavaScript है
+	The form asks viewers to make appearances (NeedAppearances)	फ़ॉर्म व्यूअर से अपीयरेंस बनाने को कहता है (NeedAppearances)
+	A form field has additional actions	एक फ़ॉर्म फ़ील्ड में अतिरिक्त क्रियाएँ हैं
+	A stream uses LZW compression	एक स्ट्रीम LZW संपीड़न का उपयोग करती है
+	A stream refers to an external file	एक स्ट्रीम बाहरी फ़ाइल की ओर इशारा करती है
+	An image asks to be interpolated	एक छवि इंटरपोलेशन माँगती है
+	An image has alternates or OPI information	एक छवि के वैकल्पिक रूप या OPI जानकारी मौजूद हैं
+	PostScript XObjects aren't allowed	PostScript XObject की अनुमति नहीं है
+	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	एम्बेडेड फ़ाइलें स्वयं PDF/A फ़ाइलें होनी चाहिए (अन्य के लिए PDF/A-3 उपयोग करें)
+	An embedded file has no AFRelationship	एक एम्बेडेड फ़ाइल में AFRelationship नहीं है
+	Select Icon	आइकन चुनें
+	Choose images	छवियाँ चुनें
+	{dpi} pixels/inch	{dpi} पिक्सेल/इंच
+	Type your {what}.	अपना {what} टाइप करें।
+	Draw your {what} below.	अपना {what} नीचे बनाएँ।
+	Your name	आपका नाम
+	Images and text (converted to PDF)	छवियाँ और टेक्स्ट (पीडीएफ़ में बदले गए)
+	Images and text	छवियाँ और टेक्स्ट
+	Check Box Style:	चेक बॉक्स शैली:
+	Button Style:	बटन शैली:
+	Check	चेक
+	Circle	वृत्त
+	Diamond	डायमंड
+	Square	वर्ग
+	Star	तारा
+	{month} {y}	{month} {y}
+	Change {key}	{key} बदलें
+	Insert pages from {name}	{name} से पृष्ठ जोड़ें
+	Insert pages from {name} — 1 field renamed	{name} से पृष्ठ जोड़ें — 1 फ़ील्ड का नाम बदला गया
+	Insert pages from {name} — fields renamed	{name} से पृष्ठ जोड़ें — फ़ील्ड के नाम बदले गए
+	Fill in {name}	{name} भरें
+	Set the image of {name}	{name} की छवि सेट करें
+	Edit script of {name}	{name} की स्क्रिप्ट संपादित करें
+	Import {name}	{name} आयात करें
+	Add bookmark	बुकमार्क जोड़ें
+	Rename bookmark	बुकमार्क का नाम बदलें
+	Delete bookmark	बुकमार्क हटाएँ
+	Move bookmark	बुकमार्क खिसकाएँ
+	Set bookmark destination	बुकमार्क गंतव्य सेट करें
+	Add stamp	स्टाम्प जोड़ें
+	Delete comment	टिप्पणी हटाएँ
+	Edit comment	टिप्पणी संपादित करें
+	Erase	मिटाएँ
+	Lock comment	टिप्पणी लॉक करें
+	Unlock comment	टिप्पणी अनलॉक करें
+	Move comment	टिप्पणी खिसकाएँ
+	Resize comment	टिप्पणी का आकार बदलें
+	Change comment properties	टिप्पणी गुण बदलें
+	Add field	फ़ील्ड जोड़ें
+	Change field properties	फ़ील्ड गुण बदलें
+	Delete field	फ़ील्ड हटाएँ
+	Duplicate field	फ़ील्ड डुप्लिकेट करें
+	Set tab order	टैब क्रम सेट करें
+	Change initial view	प्रारंभिक दृश्य बदलें
+	Set alternate text	वैकल्पिक टेक्स्ट सेट करें
+	Mark figure as decorative	आकृति को सजावटी के रूप में चिह्नित करें
+	Run JavaScript	JavaScript चलाएँ
+	Delete document JavaScript	दस्तावेज़ JavaScript हटाएँ
+	Edit document JavaScript	दस्तावेज़ JavaScript संपादित करें
+	Edit text	टेक्स्ट संपादित करें
+	Load document font	दस्तावेज़ फ़ॉन्ट लोड करें
+	Move image	छवि खिसकाएँ
+	Rotate image	छवि घुमाएँ
+	Flip image	छवि पलटें
+	Delete image	छवि हटाएँ
+	Add header & footer	हेडर और फ़ुटर जोड़ें
+	Update header & footer	हेडर और फ़ुटर अपडेट करें
+	Update watermark	वॉटरमार्क अपडेट करें
+	Add background	पृष्ठभूमि जोड़ें
+	Update background	पृष्ठभूमि अपडेट करें
+	Add image	छवि जोड़ें
+	Edit content	सामग्री संपादित करें
+	Delete content	सामग्री हटाएँ
+	Remove redaction marks	रीडैक्शन चिह्न हटाएँ
+	Add link	लिंक जोड़ें
+	Change link properties	लिंक गुण बदलें
+	Delete link	लिंक हटाएँ
+	Create link	लिंक बनाएँ
+	Flatten	फ़्लैटन करें
+	Add sticky note	स्टिकी नोट जोड़ें
+	Add highlight	हाइलाइट जोड़ें
+	Add underline	रेखांकन जोड़ें
+	Add strikethrough	स्ट्राइकथ्रू जोड़ें
+	Add squiggly underline	लहरदार रेखांकन जोड़ें
+	Add rectangle	आयत जोड़ें
+	Add oval	अंडाकार जोड़ें
+	Add arrow	तीर जोड़ें
+	Add line	रेखा जोड़ें
+	Add drawing	रेखाचित्र जोड़ें
+	Add text box	टेक्स्ट बॉक्स जोड़ें
+	Add checkmark	चेक मार्क जोड़ें
+	Add cross	क्रॉस जोड़ें
+	Add dot	बिंदु जोड़ें
+	Add signature	हस्ताक्षर जोड़ें
+	Add redaction mark	रीडैक्शन चिह्न जोड़ें
+	Add cloud	बादल जोड़ें
+	Add polygon	बहुभुज जोड़ें
+	Add connected lines	जुड़ी रेखाएँ जोड़ें
+	Add callout	कॉलआउट जोड़ें
+	Add inserted text	सम्मिलित टेक्स्ट जोड़ें
+	Add file attachment	फ़ाइल अटैचमेंट जोड़ें
+	Set status Accepted	स्थिति सेट करें: स्वीकृत
+	Set status Rejected	स्थिति सेट करें: अस्वीकृत
+	Set status Cancelled	स्थिति सेट करें: रद्द किया गया
+	Set status Completed	स्थिति सेट करें: पूर्ण
+	Set status None	स्थिति सेट करें: कोई नहीं
+	Set status Unmarked	स्थिति सेट करें: अचिह्नित
+	Save as PDF/A-1b	PDF/A-1b के रूप में सहेजें
+	Save as PDF/A-2b	PDF/A-2b के रूप में सहेजें
+	Save as PDF/A-3b	PDF/A-3b के रूप में सहेजें
+	Fill & Sign: change signature	फ़िल और साइन: हस्ताक्षर बदलें
+	Fill & Sign: change initials	फ़िल और साइन: आद्याक्षर बदलें
+	Fill & Sign: remove saved signature	फ़िल और साइन: सहेजा गया हस्ताक्षर हटाएँ
+	Fill & Sign: remove saved initials	फ़िल और साइन: सहेजे गए आद्याक्षर हटाएँ
+	Change signature	हस्ताक्षर बदलें
+	Change initials	आद्याक्षर बदलें
+	Measure distance	दूरी मापें
+	Measure perimeter	परिमाप मापें
+	Measure area	क्षेत्रफल मापें
+	Set measurement scale	मापन पैमाना सेट करें
+	Measurement information	मापन जानकारी
+	Measurement snapping	मापन स्नैपिंग
+	Export measurements as CSV	मापन CSV के रूप में निर्यात करें
+	Distance	दूरी
+	Perimeter	परिमाप
+	Area	क्षेत्रफल
+	Drawing scale	रेखाचित्र पैमाना
+	Scale	पैमाना
+	Common scales	सामान्य पैमाने
+	Enter a scale such as 1:50.	1:50 जैसा पैमाना दर्ज करें।
+	Applying a scale switches units to m / mm.	पैमाना लागू करने पर इकाइयाँ m / mm में बदल जाती हैं।
+	Snapping	स्नैपिंग
+	Export measurements	मापन निर्यात करें
+	Open a PDF to measure it.	मापने के लिए एक पीडीएफ़ खोलें।
+	Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area.	शीर्षों पर क्लिक करें। Enter या डबल-क्लिक परिमाप या क्षेत्रफल पूरा कर देता है। क्षेत्रफल बंद करने के लिए पहले बिंदु पर क्लिक करें।
+	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shift कोण को 45 डिग्री तक सीमित रखता है। Backspace एक शीर्ष हटा देता है। Escape रद्द करता है।
+	Angle	कोण
+	Click the first point to begin.	शुरू करने के लिए पहले बिंदु पर क्लिक करें।
+	Snap to drawing	रेखाचित्र से स्नैप करें
+	Endpoints	अंत बिंदु
+	Midpoints	मध्य बिंदु
+	Intersections	प्रतिच्छेदन
+	Paths	पथ
+	Sensitivity	संवेदनशीलता
+	Unit	इकाई
+	Decimals	दशमलव स्थान
+	Calibrate from two points	दो बिंदुओं से कैलिब्रेट करें
+	Entire page	पूरा पृष्ठ
+	Viewport rectangle in page points (x, y, width, height)	पृष्ठ बिंदुओं में व्यूपोर्ट आयत (x, y, चौड़ाई, ऊँचाई)
+	Viewport	व्यूपोर्ट
+	Apply scale	पैमाना लागू करें
+	Saved measurements	सहेजे गए मापन
+	Saved measurements.	मापन सहेजे गए।
+	Endpoint	अंत बिंदु
+	Midpoint	मध्य बिंदु
+	Intersection	प्रतिच्छेदन
+	Path	पथ
+	This drawing exceeds the snapping limit; only the first paths are used.	यह रेखाचित्र स्नैपिंग सीमा से बड़ा है; केवल पहले पथ ही उपयोग में आते हैं।
+	Some page content couldn't be read; snapping uses the rest.	पृष्ठ की कुछ सामग्री नहीं पढ़ी जा सकी; स्नैपिंग बाक़ी सामग्री का उपयोग करती है।
+	Unsupported measurements	असमर्थित मापन
+	Label	लेबल
+	{n} measurements use an unsupported format and are left out.	{n} मापन असमर्थित प्रारूप का उपयोग करते हैं, इसलिए छोड़ दिए गए हैं।
+	This area has too many overlapping paths; intersection snapping is limited.	इस क्षेत्र में एक-दूसरे पर चढ़े बहुत सारे पथ हैं; प्रतिच्छेदन स्नैपिंग सीमित है।
+	This measurement needs at least {n} points.	इस मापन को कम से कम {n} बिंदु चाहिए।
+	Change {what}	{what} बदलें
+	Cut and stack	काटें और ढेर लगाएँ
+	Default workspace mode	डिफ़ॉल्ट वर्कस्पेस मोड
+	Documents and view	दस्तावेज़ और दृश्य
+	Open email app	ईमेल ऐप खोलें
+	Open link	लिंक खोलें
+	Open this web page?	यह वेब पृष्ठ खोलें?
+	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	स्क्रिप्ट ऐसे सैंडबॉक्स में चलती हैं जिसमें फ़ाइल या नेटवर्क की पहुँच नहीं होती। वेब पृष्ठ खोलने को कहने वाली स्क्रिप्ट को पहले आपकी अनुमति चाहिए। JavaScript बंद होने पर भी Acrobat के मानक फ़ॉर्मेट, सत्यापन और गणना फ़ंक्शन काम करते रहते हैं।
+	Sign yourself	स्वयं हस्ताक्षर करें
+	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	पीडीएफ़ खोलते समय उपयोग होता है। सत्र के लिए स्पष्ट रूप से दिया गया लॉन्च या नियंत्रण मोड प्राथमिकता लेता है।
+	Write this email?	यह ईमेल लिखें?
+	{who} in this document wants to open this address in your browser:	इस दस्तावेज़ में {who} आपके ब्राउज़र में यह पता खोलना चाहता है:
+	{who} in this document wants to open your email app with this address:	इस दस्तावेज़ में {who} आपके ईमेल ऐप में यह पता लेकर आना चाहता है:
+	This web address mixes letters from different alphabets, a common way to imitate another site's name.	यह वेब पता अलग-अलग वर्णमालाओं के अक्षर मिलाकर बना है — किसी दूसरी साइट का नाम नक़ली बनाने का आम तरीक़ा।
+	This web address uses letters from another alphabet, which can look like familiar ones.	यह वेब पता किसी दूसरी वर्णमाला के अक्षरों का उपयोग करता है, जो जाने-पहचाने अक्षरों जैसे दिख सकते हैं।
+	Create PDF from images	छवियों से पीडीएफ़ बनाएँ
+	Selected image files: {count}	चयनित छवि फ़ाइलें: {count}
+	Use image resolution	छवि का रेज़ोल्यूशन उपयोग करें
+	Use each image's embedded DPI; use 72 DPI when it is absent.	हर छवि का एम्बेडेड DPI उपयोग करें; न होने पर 72 DPI उपयोग करें।
+	Use 72 DPI (one point per pixel)	72 DPI उपयोग करें (प्रति पिक्सेल एक पॉइंट)
+	Use custom DPI	कस्टम DPI उपयोग करें
+	DPI sets the printed page size without resampling the image.	DPI छवि को रीसैंपल किए बिना छपे पृष्ठ का आकार तय करता है।
+	Create	बनाएँ
+	Dynamic XFA form laid out from its template: {pages}, {fields}.	टेम्पलेट से लेआउट किया गया डायनामिक XFA फ़ॉर्म: {pages}, {fields}।
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	इस फ़ॉर्म की स्क्रिप्ट बंद कर दी गई हैं, क्योंकि एक स्क्रिप्ट बहुत लंबे समय तक चली। उन्हें फिर से चलाने के लिए दस्तावेज़ दोबारा खोलें।
+	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA फ़ॉर्म: इसके फ़ील्ड और इसका XFA डेटा साथ-साथ चलते रहते हैं, इसलिए दूसरे व्यूअर आपने जो भरा है वही दिखाते हैं।
+	Switch to two-page view first to show the cover page	कवर पृष्ठ दिखाने के लिए पहले दो-पृष्ठ दृश्य पर जाएँ
+	Page display: {layout}	पृष्ठ प्रदर्शन: {layout}
+	Fit to width scrolling	चौड़ाई के अनुसार स्क्रॉलिंग
+	Fit one full page	एक पूरा पृष्ठ फ़िट करें
+	Default page display	डिफ़ॉल्ट पृष्ठ प्रदर्शन
+	Default zoom	डिफ़ॉल्ट ज़ूम
+	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	जब पीडीएफ़ लेआउट या ज़ूम न माँगता हो तब उपयोग होता है। लगातार स्क्रॉलिंग में पृष्ठों के बीच कभी स्नैप नहीं होता।
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	PNG या JPEG छवि चुनें (4 MiB तक)। पारदर्शिता बनी रहती है।
+	Couldn't import the signature image: {e}	हस्ताक्षर की छवि आयात नहीं हो सकी: {e}
+@plural	{n} page|{n} pages	{n} पृष्ठ
+@plural	{n} field|{n} fields	{n} फ़ील्ड
+@plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} फ़ील्ड नाम पहले की फ़ाइलों से टकराता है और उसका नाम बदल दिया जाएगा: {list}
+	Create PDF from multiple files…	कई फ़ाइलों से पीडीएफ़ बनाएँ…
+	Create separate PDFs…	अलग-अलग पीडीएफ़ बनाएँ…
+	Optimizing… removing user data	ऑप्टिमाइज़ हो रहा है… उपयोगकर्ता डेटा हटाया जा रहा है
+	Optimizing… image {d} of {t}	ऑप्टिमाइज़ हो रहा है… छवि {d} / {t}
+	Optimizing… cleaning up	ऑप्टिमाइज़ हो रहा है… सफ़ाई हो रही है
+	Optimizing… merging identical objects	ऑप्टिमाइज़ हो रहा है… समान ऑब्जेक्ट मिलाए जा रहे हैं
+	Optimizing… writing the copy	ऑप्टिमाइज़ हो रहा है… कॉपी लिखी जा रही है
+	Cancelling…	रद्द हो रहा है…
+	Created a PDF from {n} files	{n} फ़ाइलों से पीडीएफ़ बनाया गया
+	PDF, images and text	पीडीएफ़, छवियाँ और टेक्स्ट
+	Insert a file before page {label}	पृष्ठ {label} से पहले फ़ाइल जोड़ें
+	Insert a file at the end	अंत में फ़ाइल जोड़ें
+	Save pages	पृष्ठ सहेजें
+	Save these pages as one PDF	इन पृष्ठों को एक पीडीएफ़ के रूप में सहेजें
+	No changes to save	सहेजने के लिए कोई बदलाव नहीं
+	Created a PDF from {n} files; left out: {names}	{n} फ़ाइलों से पीडीएफ़ बनाया गया; छोड़े गए: {names}
+	Created a PDF from the first {n} files	पहली {n} फ़ाइलों से पीडीएफ़ बनाया गया
+	Go to page…	पृष्ठ पर जाएँ…
+	Optimization is already running	ऑप्टिमाइज़ेशन पहले से चल रहा है
+	Optimization cancelled	ऑप्टिमाइज़ेशन रद्द किया गया
+	Couldn't optimize the file	फ़ाइल ऑप्टिमाइज़ नहीं हो सकी
+	Files are combined in this order. Leave Pages empty to take every page.	फ़ाइलें इसी क्रम में जुड़ती हैं। सभी पृष्ठ लेने के लिए “पृष्ठ” ख़ाली छोड़ दें।
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	पोर्टेबल मोड बंद है: {folder} में लिखा नहीं जा सकता ({error})। सेटिंग्स इसके बजाय आपके यूज़र फ़ोल्डर में रखी जाती हैं।
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft बिना ग्राफ़िक्स प्रोसेसर के चित्र बना रहा है, इसलिए धीमा चल सकता है। ग्राफ़िक्स ड्राइवर अपडेट करने से मदद मिल सकती है।
+	Show	दिखाएँ
+	Sort	क्रमबद्ध करें
+	Reverse the order	क्रम उल्टा करें
+	Grab bag	विविध
+	Table	तालिका
+	Username	उपयोगकर्ता नाम
+	Display name	प्रदर्शित नाम
+	Real name	असली नाम
+	Name (A–Z)	नाम (A–Z)
+	Merged PRs	मर्ज किए गए PR
+	PRs	PR
+	Commits	कमिट
+	Lines added	जोड़ी गई पंक्तियाँ
+	+LOC	+LOC
+	Lines deleted	हटाई गई पंक्तियाँ
+	−LOC	−LOC
+	Line delta	पंक्ति अंतर
+	ΔLOC	ΔLOC
+	Binary assets added	जोड़े गए बाइनरी एसेट
+	+Bin	+Bin
+	Binary assets removed	हटाए गए बाइनरी एसेट
+	−Bin	−Bin
+	First commit	पहला कमिट
+	First	पहला
+	Last commit	आख़िरी कमिट
+	Last	आख़िरी
+	No contributor data was built into this copy.	इस प्रति में योगदानकर्ताओं का डेटा शामिल नहीं किया गया है।
+	No model credits were built into this copy.	इस प्रति में मॉडल क्रेडिट शामिल नहीं किए गए हैं।
+	{n} contributors · {c} commits	{n} योगदानकर्ता · {c} कमिट
+	Company	कंपनी
+	Model	मॉडल
+	% of all commits	कुल कमिट का %
+	Lines +/−	पंक्तियाँ +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} कमिट, +{added} / −{deleted} पंक्तियाँ (Δ {delta}), +{bin_added} / −{bin_deleted} बाइनरी एसेट, {first} – {last}
+	None of those files can be made into a PDF; use PDFs, images or .txt files	इनमें से कोई भी फ़ाइल पीडीएफ़ नहीं बन सकती; पीडीएफ़, छवियाँ या .txt फ़ाइलें उपयोग करें
+	About	के बारे में
+	Contributors	योगदानकर्ता
+	Models	मॉडल
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	केवल तब आगे बढ़ें जब आप इस दस्तावेज़ पर भरोसा करते हों। पता दस्तावेज़ की जानकारी साथ ले जा सकता है, जैसे आपने इसके फ़ॉर्म में जो टाइप किया।
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	एक तरफ़ छापें। शीट क्रम में रखें, चिह्नों पर काटें, फिर ढेरों को बाएँ से दाएँ और ऊपर से नीचे जमाएँ।
+comment menu	Edit	संपादित करें
+	Undo {action}	{action} पूर्ववत करें
+	Redo {action}	{action} दोहराएँ
+signature pad	Type	टाइप करें
+action wizard	Start	प्रारंभ करें
+calendar date	January	जनवरी
+calendar date	February	फ़रवरी
+calendar date	March	मार्च
+calendar date	April	अप्रैल
+calendar date	May	मई
+calendar date	June	जून
+calendar date	July	जुलाई
+calendar date	August	अगस्त
+calendar date	September	सितंबर
+calendar date	October	अक्तूबर
+calendar date	November	नवंबर
+calendar date	December	दिसंबर
+	Reopen the files that were open when PdfCraft last closed	PdfCraft के बंद होने के समय जो फ़ाइलें खुली थीं, उन्हें दोबारा खोलें
+	Clear Recent Files	हाल की फ़ाइलें साफ़ करें
+	Remove from Recent	हाल की फ़ाइलों से हटाएँ
+	Remove {name} from Recent	{name} को हाल की फ़ाइलों से हटाएँ
+	Inserted text	सम्मिलित टेक्स्ट
+	Add {what}	{what} जोड़ें
+	Use {what}	{what} उपयोग करें
+	Place saved {what}	सहेजा हुआ {what} रखें
+	Remove saved {what}	सहेजा हुआ {what} हटाएँ
+	A link	एक लिंक
+	A button	एक बटन
+	A script	एक स्क्रिप्ट
+	{who} in this document tried to open an address PdfCraft won't open: {e}.	इस दस्तावेज़ में {who} ने एक ऐसा पता खोलने की कोशिश की जो PdfCraft नहीं खोलता: {e}।
+	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	इस दस्तावेज़ में {who} ने एक ऐसा पता खोलने की कोशिश की जो PdfCraft नहीं खोलता: {e}। दस्तावेज़ों से केवल वेब (http, https) और ईमेल (mailto) लिंक खुलते हैं।
+	Another file dialog is still open. Finish with it first.	एक और फ़ाइल संवाद अभी खुला है। पहले उससे काम पूरा करें।
+	Couldn't show the file picker. Please try again.	फ़ाइल चुनने वाला संवाद नहीं दिखाया जा सका। कृपया दोबारा कोशिश करें।
+	The document changed while you were choosing a file, so nothing was changed.	आप फ़ाइल चुन रहे थे, तभी दस्तावेज़ बदल गया, इसलिए कुछ नहीं बदला गया।
+	The document was closed before it could be saved.	दस्तावेज़ सहेजे जाने से पहले ही बंद हो गया।
+	The pages were extracted but not deleted, because the document changed while you were choosing a folder.	पृष्ठ निकाले गए, पर हटाए नहीं गए, क्योंकि आप फ़ोल्डर चुन रहे थे तभी दस्तावेज़ बदल गया।
+	That didn't work: an internal error stopped it ({m}).	वह काम नहीं हो सका: एक आंतरिक त्रुटि ने उसे रोक दिया ({m})।
+	The Windows store's digital IDs couldn't be listed: {e}	Windows स्टोर के डिजिटल ID की सूची नहीं बनाई जा सकी: {e}
+	Align fields	फ़ील्ड संरेखित करें
+	Distribute fields	फ़ील्ड वितरित करें
+	Match field sizes	फ़ील्ड के आकार मिलाएँ
+	Mark for redaction	रीडैक्शन के लिए चिह्नित करें
+	Mark pages for redaction	रीडैक्शन के लिए पृष्ठ चिह्नित करें
+	Change document properties	दस्तावेज़ गुण बदलें
+	Mark differences	अंतर चिह्नित करें
+	Run form script	फ़ॉर्म स्क्रिप्ट चलाएँ
+	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	स्क्रिप्ट वाली सामग्री कीबोर्ड और सहायक तकनीक से उपयोग करने योग्य होनी चाहिए। दस्तावेज़ की स्क्रिप्ट जाँचें।
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	तालिका की पंक्तियाँ सीधे तालिका या उसके शीर्ष, मुख्य भाग या पाद में होनी चाहिए। तालिका के टैग ठीक करें।
+	Basic constraints	मूल प्रतिबंध
+	Certificate authority	प्रमाणपत्र प्राधिकरण
+	End entity	अंतिम इकाई
+	SHA-1 digest	SHA-1 डाइजेस्ट
+	SHA-256 digest	SHA-256 डाइजेस्ट
+	Squiggly	लहरदार
+	Home / End	Home / End
+	H / Space (hold)	H / Space (दबाए रखें)
+	Rotation:	घुमाव:
+	Line ending	रेखा का अंत
+	Open arrow	खुला तीर
+	Closed arrow	बंद तीर
+	Butt	बट
+	Reverse open arrow	उल्टा खुला तीर
+	Reverse closed arrow	उल्टा बंद तीर
+	Slash	स्लैश
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	पीडीएफ़ टेक्स्ट फ़ॉन्ट “{c}” ({code}) नहीं बना सकते। समर्थित टेक्स्ट चुनें।
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	मानक फ़ॉन्ट “{c}” ({code}) नहीं बना सकते। फ़िलहाल टेक्स्ट के रूप में केवल पश्चिमी यूरोपीय अक्षर ही जोड़े जा सकते हैं।
+	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	इस फ़ील्ड का फ़ॉन्ट “{c}” ({code}) नहीं बना सकता, इसलिए PdfCraft उसकी जगह ? दिखाता है। मान सहेजा गया है, और दूसरे पीडीएफ़ व्यूअर उसी से फ़ील्ड दोबारा बनाते हैं।
+	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	जिन फ़ॉन्ट से PdfCraft लिखता है, वे “{c}” ({code}) नहीं बना सकते, इसलिए हर पीडीएफ़ व्यूअर में वह ? की तरह दिखता है। टेक्स्ट सहेजा गया है।
+	Larger pages	बड़े पृष्ठ
+	Smaller pages	छोटे पृष्ठ
+	Reset page size	पृष्ठ आकार रीसेट करें
+	Flatten Fill & Sign when saving	सहेजते समय फ़िल और साइन फ़्लैटन करें
+	Text, marks and signatures become part of the page. Other comments stay editable.	टेक्स्ट, चिह्न और हस्ताक्षर पृष्ठ का हिस्सा बन जाते हैं। बाक़ी टिप्पणियाँ संपादन योग्य रहती हैं।
+	Date format	तिथि प्रारूप
+	Fill & Sign dates	फ़िल और साइन की तिथियाँ
+	Pattern	पैटर्न
+	Today: {date}	आज: {date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy या yy वर्ष · m या mm महीना · mmm या mmmm महीने का नाम · d या dd दिन · ddd या dddd सप्ताह का दिन। H, h, M, s और t समय के अक्षर हैं और अकेले उपयोग नहीं किए जा सकते: किसी अक्षर को वैसा ही दिखाने के लिए उसके पहले {escape} लगाएँ।
+	Same as interface ({language})	इंटरफ़ेस के समान ({language})
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} को अभी पीडीएफ़ में नहीं लिखा जा सकता: फ़िल और साइन का टेक्स्ट केवल पश्चिमी यूरोपीय अक्षरों तक सीमित है। dd.mm.yyyy जैसा कोई संख्यात्मक प्रारूप चुनें।
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	प्रिंटर ड्राइवर की प्राथमिकताएँ खोलता है। वे इस कंप्यूटर से की जाने वाली हर छपाई के लिए सहेजी जाती हैं; यहाँ चुनी गई प्रतियाँ, दोतरफ़ा छपाई, ग्रेस्केल और काग़ज़ फिर भी लागू रहते हैं।
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	इस छपाई के लिए प्रिंटर ड्राइवर की अपनी सेटिंग्स: काग़ज़ ट्रे, काग़ज़ का प्रकार, फ़िनिशिंग आदि।
+	Couldn't open the printer's preferences: {e}	प्रिंटर की प्राथमिकताएँ नहीं खोली जा सकीं: {e}
+	Printer properties	प्रिंटर गुण
+	Reset to printer defaults	प्रिंटर डिफ़ॉल्ट पर रीसेट करें
+	This printer offers no settings of its own.	इस प्रिंटर की कोई अपनी सेटिंग्स नहीं हैं।
+	Margins	हाशिये
+	For page sizes and margins.	पृष्ठ आकारों और हाशियों के लिए।
+certificate	Subject	विषय
+	Scroll tabs left	टैब बाएँ स्क्रॉल करें
+	Scroll tabs right	टैब दाएँ स्क्रॉल करें
+	Shared Field Properties	साझा फ़ील्ड गुण
+	{n} fields selected	{n} फ़ील्ड चयनित
+	Mixed	मिश्रित
+	Custom font	कस्टम फ़ॉन्ट
+	Only checked properties will change. Mixed means the selected fields have different values.	केवल चुने गए गुण बदलेंगे। “मिश्रित” का मतलब है कि चयनित फ़ील्ड के मान अलग-अलग हैं।
+	Shift- or Ctrl/Command-click to select several fields.	कई फ़ील्ड चुनने के लिए Shift या Ctrl/Command के साथ क्लिक करें।
+	Font size 0 uses automatic sizing.	फ़ॉन्ट आकार 0 पर स्वचालित आकार निर्धारण लागू होता है।
+	Character limit:	अक्षर सीमा:
+	Character limit 0 means no limit. A comb of characters needs a limit.	अक्षर सीमा 0 का मतलब है कोई सीमा नहीं। अक्षर कॉम्ब को एक सीमा चाहिए।
+	To change locked fields, also set Locked to No.	लॉक किए गए फ़ील्ड बदलने के लिए, “लॉक” को भी “नहीं” पर सेट करें।
+	Comb of characters	अक्षर कॉम्ब
+	The document changed while you were editing field properties.	आप फ़ील्ड गुण संपादित कर रहे थे, तभी दस्तावेज़ बदल गया।
+	The document is no longer open.	दस्तावेज़ अब खुला नहीं है।
+	The field properties dialog is no longer open.	फ़ील्ड गुण संवाद अब खुला नहीं है।
+	The field properties could not be changed.	फ़ील्ड गुण नहीं बदले जा सके।
+	The selected fields could not be found. Select them again.	चयनित फ़ील्ड नहीं मिले। उन्हें दोबारा चुनें।
+	The field {name} no longer exists.	फ़ील्ड {name} अब मौजूद नहीं है।
+	A selected field has no widget on any page, so the fields can't be edited together.	एक चयनित फ़ील्ड का किसी भी पृष्ठ पर विजेट नहीं है, इसलिए फ़ील्ड एक साथ संपादित नहीं किए जा सकते।
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n}, {dpi} dpi पर — जितने बड़े आकार में उन्हें बनाया जा सकता है)
+@plural	{n} object selected|{n} objects selected	{n} ऑब्जेक्ट चयनित
+	Drag the selection to move it. Esc clears the selection.	चयन को खिसकाने के लिए उसे खींचें। Esc चयन साफ़ कर देता है।
+	Shift-click to select several objects. Drag empty space to select an area.	कई ऑब्जेक्ट चुनने के लिए Shift के साथ क्लिक करें। कोई क्षेत्र चुनने के लिए ख़ाली जगह पर खींचें।
+	Select at most 1000 objects at a time.	एक बार में अधिकतम 1000 ऑब्जेक्ट चुनें।
+	Finish or discard the text being edited before selecting several objects.	कई ऑब्जेक्ट चुनने से पहले संपादित किया जा रहा टेक्स्ट पूरा करें या छोड़ दें।
+	Move object	ऑब्जेक्ट खिसकाएँ
+	Move objects	ऑब्जेक्ट खिसकाएँ
+	Vertical text cannot be moved with this selection.	लंबवत टेक्स्ट इस चयन के साथ खिसकाया नहीं जा सकता।
+	Text used as a clipping path cannot be moved with this selection.	क्लिपिंग पथ के रूप में उपयोग होता टेक्स्ट इस चयन के साथ खिसकाया नहीं जा सकता।
+	These objects could not be moved. Select them again and try a smaller move.	इन ऑब्जेक्ट को खिसकाया नहीं जा सका। उन्हें दोबारा चुनें और कम खिसकाव आज़माएँ।
+	This page contains objects that cannot be selected together.	इस पृष्ठ पर कुछ ऐसे ऑब्जेक्ट हैं जिन्हें एक साथ नहीं चुना जा सकता।
+	Fill colour	फ़िल रंग
+	No fill	कोई फ़िल नहीं
+	Fill colour: none	फ़िल रंग: कोई नहीं
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	Space
+	Grid view	ग्रिड दृश्य
+	List view	सूची दृश्य
+	Files are combined in the order shown. Drag them to change it.	फ़ाइलें दिखाए गए क्रम में जुड़ती हैं। क्रम बदलने के लिए उन्हें खींचें।
+	Preview unavailable: {e}	पूर्वावलोकन उपलब्ध नहीं: {e}
+	Pages: {k} of {n}	पृष्ठ: {k} / {n}
+	Check the pages	पृष्ठ जाँचें
+	Switch to List view to change the pages it takes.	कौन से पृष्ठ लिए जाएँ, यह बदलने के लिए सूची दृश्य पर जाएँ।
+	Expand all	सभी विस्तृत करें
+	Collapse all	सभी संकुचित करें
+	Remove page	पृष्ठ हटाएँ
+	Remove {n} pages	{n} पृष्ठ हटाएँ
+	Reset panel layout	पैनल लेआउट रीसेट करें
+	Float panel	पैनल फ़्लोट करें
+	Move to group	समूह में ले जाएँ
+	Panels	पैनल
+	Resize panels	पैनल का आकार बदलें
+	Resize panel window	पैनल विंडो का आकार बदलें
+	PDF page: {size}	पीडीएफ़ पृष्ठ: {size}
+	Match page at 100%	पृष्ठ को 100% पर मिलाएँ
+	PDF scale: {scale}%	पीडीएफ़ पैमाना: {scale}%
+	Printer paper and scaling may differ. Check driver settings.	प्रिंटर का काग़ज़ और स्केलिंग अलग हो सकते हैं। ड्राइवर सेटिंग्स जाँचें।
+	Drawing scale changes. Use Actual size for full-scale plans.	रेखाचित्र पैमाना बदल जाता है। पूर्ण-पैमाने योजनाओं के लिए “वास्तविक आकार” चुनें।
+	Reload documents when their files change on disk	जब उनकी फ़ाइलें डिस्क पर बदलें तो दस्तावेज़ दोबारा लोड करें
+	Don't show again	फिर से न दिखाएँ
+	Show a notice when a document is secured	दस्तावेज़ सुरक्षित होने पर सूचना दिखाएँ
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	यह फ़ाइल डिस्क पर बदल गई है। नया संस्करण देखने के लिए उसे दोबारा लोड करें; आपके असहेजे बदलाव खो जाएँगे।
+	Reload	दोबारा लोड करें
+	Couldn't reload {name}: {e}	{name} दोबारा लोड नहीं हो सका: {e}
+	Select page {label}	पृष्ठ {label} चुनें
+	Rotate page {label} counterclockwise	पृष्ठ {label} वामावर्त घुमाएँ
+	Rotate page {label} clockwise	पृष्ठ {label} दक्षिणावर्त घुमाएँ
+	Delete page {label}	पृष्ठ {label} हटाएँ
+	Mouse wheel scroll speed	माउस व्हील स्क्रॉल गति
+scroll speed	Slow	धीमी
+scroll speed	Normal	सामान्य
+scroll speed	Fast	तेज़
+	Animation effects	एनिमेशन प्रभाव
+animation effects	On	चालू
+animation effects	Off	बंद
+	Enhance camera image	कैमरे की छवि सुधारें
+	Drag the corners onto the document's edges, then choose Enhance page.	कोनों को दस्तावेज़ के किनारों तक खींचें, फिर “पृष्ठ सुधारें” चुनें।
+	Enhance page	पृष्ठ सुधारें
+	Done adding text	टेक्स्ट जोड़ना पूरा हुआ
+	Discard this text (Esc)	यह टेक्स्ट छोड़ दें (Esc)
+	Clean-up	सफ़ाई
+	Original	मूल
+	Greyscale	ग्रेस्केल
+	Black and white	काला-सफ़ेद
+	Reading colours	पढ़ने के रंग
+	Replace document colours	दस्तावेज़ के रंग बदलें
+	Black on white	सफ़ेद पर काला
+	White on black	काले पर सफ़ेद
+	Yellow on black	काले पर पीला
+	Green on black	काले पर हरा
+	Page background	पृष्ठ पृष्ठभूमि
+	Only change the colour of black text or line art	केवल काले टेक्स्ट या रेखा-चित्र का रंग बदलें
+	Change the colour of line art as well as text	टेक्स्ट के साथ-साथ रेखा-चित्र का रंग भी बदलें
+	Colours are remapped while rendering; the document itself never changes.	रेंडर करते समय रंग फिर से मैप किए जाते हैं; दस्तावेज़ अपने आप कभी नहीं बदलता।
+	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	इस प्रिंटर का ड्राइवर दूसरे प्रोग्रामों से दोतरफ़ा सेटिंग नहीं लेता, इसलिए उसकी अपनी सेटिंग लागू रहती है। इसे “गुण…” में बदलें।…
+	Browser's print dialog	ब्राउज़र का प्रिंट संवाद
+	Copies, two-sided printing and colour are chosen in the browser's print dialog.	प्रतियाँ, दोतरफ़ा छपाई और रंग ब्राउज़र के प्रिंट संवाद में चुने जाते हैं।
+	Preparing {n} sheets for printing…	छपाई के लिए {n} शीट तैयार हो रही हैं…
+	Preparing sheet {done} of {total} for printing…	छपाई के लिए शीट {done} / {total} तैयार हो रही है…
+	Opening the browser's print dialog…	ब्राउज़र का प्रिंट संवाद खुल रहा है…
+	Couldn't print from the browser ({e}); downloaded {name} to print instead	ब्राउज़र से छपाई नहीं हो सकी ({e}); इसके बजाय छपाई के लिए {name} डाउनलोड कर लिया गया
+	Tools panel side	टूल पैनल की दिशा
+	Add comment	टिप्पणी जोड़ें
+	Change tag properties	टैग गुण बदलें
+	Tags panel	टैग पैनल
+	Tags	टैग
+	Tag type	टैग प्रकार
+	Actual text	वास्तविक टेक्स्ट
+	Find a tag	टैग खोजें
+	Collapse tag	टैग संकुचित करें
+	Expand tag	टैग विस्तृत करें
+	Revert changes	बदलाव पूर्ववत करें
+	Save tag properties	टैग गुण सहेजें
+	This document has no editable structure tags.	इस दस्तावेज़ में संपादन योग्य संरचना टैग नहीं हैं।
+	{n} tags	{n} टैग
+	Save or revert changes before selecting another tag.	कोई दूसरा टैग चुनने से पहले बदलाव सहेजें या पूर्ववत करें।
+	Left out: {names}	छोड़े गए: {names}
+	already a PDF	पहले से पीडीएफ़ है
+	no unused output name	कोई अप्रयुक्त आउटपुट नाम नहीं
+	no output folder was chosen	आउटपुट फ़ोल्डर नहीं चुना गया
+@plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} पीडीएफ़ डाउनलोड हुए
+	Scan	स्कैन करें
+	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	सफ़ेद काग़ज़ के एक टुकड़े पर हस्ताक्षर करें और तेज़, एकसार रोशनी में उसकी फ़ोटो लें (फ़्लैश लगाएँ)। फ़ोटो चुनें या यहाँ छोड़ दें: PdfCraft हस्ताक्षर ढूँढ लेगा और काग़ज़ हटा देगा।
+	Choose photo…	फ़ोटो चुनें…
+	No photo chosen	कोई फ़ोटो नहीं चुना गया
+	Photo	फ़ोटो
+	Ink sensitivity	स्याही संवेदनशीलता
+	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	फ़्रेम में कोई हस्ताक्षर नहीं मिला। फ़्रेम को हस्ताक्षर पर ले जाएँ या स्याही संवेदनशीलता बढ़ाएँ।
+	Couldn't use the photo: {e}	फ़ोटो उपयोग नहीं किया जा सका: {e}
+	Close Tab	टैब बंद करें
+	Reopen Closed Tab	बंद टैब दोबारा खोलें
+	Reveal in Finder	Finder में दिखाएँ
+	Reveal in File Explorer	File Explorer में दिखाएँ
+	Other colour…	दूसरा रंग…
+	Recent colours	हाल के रंग
+	Couldn't follow linked PDF: {reason}	लिंक किए गए पीडीएफ़ को खोला नहीं जा सका: {reason}
+	The linked PDF opened, but its named destination was not applied.	लिंक किया गया पीडीएफ़ खुल गया, पर उसका नामित गंतव्य लागू नहीं हुआ।
+	The linked PDF opened, but its page destination was out of range.	लिंक किया गया पीडीएफ़ खुल गया, पर उसका पृष्ठ गंतव्य सीमा से बाहर था।
+	Local cross-PDF links require the desktop app	पीडीएफ़ के बीच स्थानीय लिंक के लिए डेस्कटॉप ऐप ज़रूरी है
+	Paste	चिपकाएँ
+	Select all	सभी चुनें
+	Next	अगला
+	Previous	पिछला
+	Choose…	चुनें…
+	Refresh	ताज़ा करें
+	Loading…	लोड हो रहा है…
+	Save changes?	बदलाव सहेजें?
+	Page {n}	पृष्ठ {n}
+	of	/
+	Comment	टिप्पणी
+	Font	फ़ॉन्ट
+	Color	रंग
+	Theme	थीम
+	System	सिस्टम
+	Save file	फ़ाइल सहेजें
+	Import	आयात करें
+	Help…	सहायता…
+	Automatically	स्वचालित
+	Never	कभी नहीं
+	Always	हमेशा
+	On	चालू
+	Enabled	सक्षम
+	Disabled	अक्षम
+	Error	त्रुटि
+	Warning	चेतावनी
+	Information	जानकारी
+	Success	सफल
+	Folder	फ़ोल्डर
+	Choose a file…	फ़ाइल चुनें…
+	Choose a folder…	फ़ोल्डर चुनें…
+	Open folder	फ़ोल्डर खोलें
+	Create folder	फ़ोल्डर बनाएँ
+	Duplicate	प्रतिलिपि बनाएँ
+	Move	स्थानांतरित करें
+	Copy to clipboard	क्लिपबोर्ड पर कॉपी करें
+	Copied to clipboard	क्लिपबोर्ड पर कॉपी किया गया
+	Organize	व्यवस्थित करें
+	Comment and review	टिप्पणी और समीक्षा
+	Search results	खोज परिणाम
+	No results	कोई परिणाम नहीं
+	Page {n} of {total}	पृष्ठ {n} / {total}
+	Tools	उपकरण
+	Inspector	निरीक्षक
+	 on page {label}	 पृष्ठ {label} पर
+	A font isn't embedded	एक फ़ॉन्ट एम्बेड नहीं किया गया है
+	A {} action isn't allowed	{} क्रिया की अनुमति नहीं है
+	A {} annotation has additional actions	{} एनोटेशन में अतिरिक्त क्रियाएँ हैं
+	A {} annotation has no appearance stream	{} एनोटेशन में कोई अपीयरेंस स्ट्रीम नहीं है
+	A {} annotation isn't set to print, or is hidden	{} एनोटेशन प्रिंट के लिए सेट नहीं है, या छिपा हुआ है
+	Accessibility Report	सुलभता रिपोर्ट
+	Add the PDFs to combine	संयोजित करने के लिए पीडीएफ़ जोड़ें
+	Added the first {n} PDFs in {folder}	{folder} में पहली {n} पीडीएफ़ जोड़ी गईं
+	CRL Signing	सीआरएल हस्ताक्षर
+	Certificate Signing	प्रमाणपत्र हस्ताक्षर
+	Change Author	लेखक बदलें
+	Change Keywords	कीवर्ड बदलें
+	Change Subject	विषय बदलें
+	Change Title	शीर्षक बदलें
+	Choose a digital ID.	कोई डिजिटल आईडी चुनें।
+	Create links	लिंक बनाएँ
+	Creator	निर्माता
+	Cut and stack needs Two-sided: Off. Print single-sided sheets.	काटें और जमाएँ के लिए दो-तरफ़ा: बंद होना चाहिए। एक-तरफ़ा शीट प्रिंट करें।
+	Data Encipherment	डेटा एन्सिफ़रमेंट
+	Decipher Only	केवल डिसिफ़र
+	Detailed Report	विस्तृत रिपोर्ट
+	DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile	DeviceCMYK का उपयोग हुआ है, लेकिन पीडीएफ़/ए आउटपुट इंटेंट CMYK प्रोफ़ाइल नहीं है
+	DeviceRGB is used, but the PDF/A output intent isn't an RGB profile	DeviceRGB का उपयोग हुआ है, लेकिन पीडीएफ़/ए आउटपुट इंटेंट RGB प्रोफ़ाइल नहीं है
+	Digital Signature	डिजिटल हस्ताक्षर
+	Document properties (⌘D)	दस्तावेज़ गुण (⌘D)
+	Drop PDFs or folders here, or choose them.	पीडीएफ़ या फ़ोल्डर यहाँ छोड़ें, या उन्हें चुनें।
+	Encipher Only	केवल एन्सिफ़र
+	English	अंग्रेज़ी
+	Enter a URL	यूआरएल दर्ज करें
+	Enter a name.	नाम दर्ज करें।
+	Enter a page number	पृष्ठ संख्या दर्ज करें
+	Enter the field names	फ़ील्ड के नाम दर्ज करें
+	Every PDF in the folder	फ़ोल्डर की हर पीडीएफ़
+	Every PDF in the folder and the folders inside it	फ़ोल्डर और उसके भीतर के फ़ोल्डरों की हर पीडीएफ़
+	Field "{}" on page {p} has no description (tooltip)	पृष्ठ {p} पर फ़ील्ड "{}" का कोई विवरण (टूलटिप) नहीं है
+	Filename	फ़ाइल नाम
+	Flatten Fill & Sign	भरें और हस्ताक्षर करें को समतल करें
+	Font (unnamed) on page {p} doesn't map its characters to Unicode	पृष्ठ {p} पर फ़ॉन्ट (बिना नाम) अपने वर्णों को यूनिकोड से नहीं जोड़ता
+	Font {} on page {p} doesn't map its characters to Unicode	पृष्ठ {p} पर फ़ॉन्ट {} अपने वर्णों को यूनिकोड से नहीं जोड़ता
+	Form field on page {p} isn't tagged	पृष्ठ {p} पर फ़ॉर्म फ़ील्ड टैग नहीं किया गया है
+	H{n} follows an H{d}; headings should not skip levels	H{n}, H{d} के बाद आया है; शीर्षकों में स्तर नहीं छूटने चाहिए
+	Key Agreement	की एग्रीमेंट
+	Key Encipherment	की एन्सिफ़रमेंट
+	New bookmark (⌘B)	नया बुकमार्क (⌘B)
+	Next (⌘G)	अगला (⌘G)
+	No PDFs found in {folder}	{folder} में कोई पीडीएफ़ नहीं मिली
+	No document language is set	दस्तावेज़ की कोई भाषा सेट नहीं है
+	No page has text: the document appears to be images of pages	किसी पृष्ठ में पाठ नहीं है: दस्तावेज़ पृष्ठों की छवियों जैसा लगता है
+	Non-Repudiation	अस्वीकार-निषेध
+	Only the document's owner can change its security (open it with the permissions password)	केवल दस्तावेज़ का स्वामी उसकी सुरक्षा बदल सकता है (उसे अनुमति पासवर्ड से खोलें)
+	Open a PDF (⌘O)	पीडीएफ़ खोलें (⌘O)
+	Page {p} doesn't tab in structure order	पृष्ठ {p} संरचना के क्रम में टैब नहीं होता
+	Page {p}: {n} untagged content item	पृष्ठ {p}: {n} बिना टैग वाला सामग्री आइटम
+	Page {p}: {n} untagged content items	पृष्ठ {p}: {n} बिना टैग वाले सामग्री आइटम
+	Page {} has additional actions	पृष्ठ {} में अतिरिक्त क्रियाएँ हैं
+	Panel layout could not be restored: {error}	पैनल लेआउट पुनर्स्थापित नहीं किया जा सका: {error}
+	Panel move was not applied: {error}	पैनल का स्थानांतरण लागू नहीं हुआ: {error}
+	PdfCraft can't check this signature yet: {}.	PdfCraft अभी इस हस्ताक्षर की जाँच नहीं कर सकता: {}।
+	Previous (⇧⌘G)	पिछला (⇧⌘G)
+	Print (⌘P)	प्रिंट करें (⌘P)
+	Producer	प्रोड्यूसर
+	Rendering…	रेंडर हो रहा है…
+	Report created	रिपोर्ट बन गई
+	Rev. {rev}: Certified by an unknown signer	संशोधन {rev}: अज्ञात हस्ताक्षरकर्ता द्वारा प्रमाणित
+	Rev. {rev}: Certified by {name}	संशोधन {rev}: {name} द्वारा प्रमाणित
+	Rev. {rev}: Signed by an unknown signer	संशोधन {rev}: अज्ञात हस्ताक्षरकर्ता द्वारा हस्ताक्षरित
+	Rev. {rev}: Signed by {name}	संशोधन {rev}: {name} द्वारा हस्ताक्षरित
+	Rotate view clockwise (⇧⌘+)	दृश्य को दक्षिणावर्त घुमाएँ (⇧⌘+)
+	Rule Name	नियम का नाम
+	Save (M4)	सहेजें (M4)
+	Save as {level}	{level} के रूप में सहेजें
+	Signature is invalid	हस्ताक्षर अमान्य है
+	Signature is valid	हस्ताक्षर मान्य है
+	Signature validity is unknown	हस्ताक्षर की वैधता अज्ञात है
+	Signing time is from the clock on the signer's computer.	हस्ताक्षर का समय हस्ताक्षरकर्ता के कंप्यूटर की घड़ी से लिया गया है।
+	Still rendering — this page is unusually complex…	अभी भी रेंडर हो रहा है — यह पृष्ठ असामान्य रूप से जटिल है…
+	The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.	ECDSA हस्ताक्षर कैनोनिकल DER में नहीं है (अतिरिक्त बाइट, पैडिंग या साइन बाइट की कमी); फिर भी इसे पढ़ लिया गया।
+	The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.	ECDSA हस्ताक्षर DER अनुक्रम के बजाय कच्चे r और s मान हैं; फिर भी इसे पढ़ लिया गया।
+	The RSA signature value does not have the length of the key's modulus (leading zero bytes dropped or added); it was read anyway.	RSA हस्ताक्षर मान की लंबाई कुंजी के मॉड्यूलस के बराबर नहीं है (आगे के शून्य बाइट हटे या जुड़े हैं); फिर भी इसे पढ़ लिया गया।
+	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	RSA हस्ताक्षर के DigestInfo में NULL पैरामीटर नहीं है (पुराने हस्ताक्षरकर्ता इसे ऐसे ही लिखते हैं); फिर भी इसे पढ़ लिया गया।
+	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	{} का प्रमाणपत्र अपने नीचे इतने सीए प्रमाणपत्रों (पाथ लंबाई) की अनुमति नहीं देता, इसलिए उसका उपयोग {} की पुष्टि के लिए नहीं किया जाता।
+	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	{} का प्रमाणपत्र प्रमाणपत्र जारी कर सकने वाला सीए प्रमाणपत्र नहीं है, इसलिए उसका उपयोग {} की पुष्टि के लिए नहीं किया जाता।
+	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	{} का प्रमाणपत्र हस्ताक्षर के समय मान्य नहीं था, इसलिए उसका उपयोग {} की पुष्टि के लिए नहीं किया जाता।
+	The checker found problems which may prevent the document from being fully accessible.	जाँचकर्ता को ऐसी समस्याएँ मिलीं जो दस्तावेज़ को पूरी तरह सुलभ होने से रोक सकती हैं।
+	The document has been altered or corrupted since the signature was applied.	हस्ताक्षर लगाए जाने के बाद दस्तावेज़ में बदलाव हुआ है या वह दूषित हो गया है।
+	The document has been altered or corrupted since the timestamp was applied.	टाइमस्टैम्प लगाए जाने के बाद दस्तावेज़ में बदलाव हुआ है या वह दूषित हो गया है।
+	The document has been altered since this signature was applied in ways it does not permit ({}).	इस हस्ताक्षर के लगाए जाने के बाद दस्तावेज़ में ऐसे बदलाव हुए हैं जिनकी अनुमति नहीं है ({})।
+	The document has been altered since this timestamp was applied in ways it does not permit ({}).	इस टाइमस्टैम्प के लगाए जाने के बाद दस्तावेज़ में ऐसे बदलाव हुए हैं जिनकी अनुमति नहीं है ({})।
+	The document has been modified since this signature was applied, but the changes are permitted ({}).	इस हस्ताक्षर के लगाए जाने के बाद दस्तावेज़ में बदलाव हुए हैं, लेकिन वे अनुमत हैं ({})।
+	The document has been modified since this timestamp was applied, but the changes are permitted ({}).	इस टाइमस्टैम्प के लगाए जाने के बाद दस्तावेज़ में बदलाव हुए हैं, लेकिन वे अनुमत हैं ({})।
+	The document has no tags (structure tree)	दस्तावेज़ में कोई टैग (संरचना वृक्ष) नहीं है
+	The document has no title	दस्तावेज़ का कोई शीर्षक नहीं है
+	The document isn't marked as tagged (MarkInfo Marked)	दस्तावेज़ को टैग किया हुआ चिह्नित नहीं किया गया है (MarkInfo Marked)
+	The document isn't tagged, so none of its content is	दस्तावेज़ टैग नहीं किया गया है, इसलिए उसकी कोई सामग्री भी टैग नहीं है
+	The document's embedded revocation information shows that the signer's certificate has not been revoked.	दस्तावेज़ में एम्बेड की गई निरस्तीकरण जानकारी दिखाती है कि हस्ताक्षरकर्ता का प्रमाणपत्र निरस्त नहीं किया गया है।
+	The embedded timestamp token is valid and its authority is trusted; trusted time is {}.	एम्बेड किया गया टाइमस्टैम्प टोकन मान्य है और उसका प्राधिकारी विश्वसनीय है; विश्वसनीय समय {} है।
+	The font {} isn't embedded	फ़ॉन्ट {} एम्बेड नहीं किया गया है
+	The metadata doesn't identify the file as {}	मेटाडेटा फ़ाइल को {} के रूप में नहीं पहचानता
+	The password is incorrect.	पासवर्ड गलत है।
+	The password must have at least 6 characters.	पासवर्ड में कम से कम 6 वर्ण होने चाहिए।
+	The passwords do not match.	पासवर्ड मेल नहीं खाते।
+	The security settings don't allow screen readers to read the text	सुरक्षा सेटिंग स्क्रीन रीडर को पाठ पढ़ने की अनुमति नहीं देतीं
+	The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.	हस्ताक्षर एल्गोरिदम और SignerInfo के डाइजेस्ट एल्गोरिदम अलग-अलग हैश बताते हैं; हस्ताक्षर SignerInfo वाले हैश से बनाया गया था।
+	The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.	हस्ताक्षर के साथ एक असत्यापित टाइमस्टैम्प है ({}): टाइमस्टैम्प प्राधिकारी आपकी विश्वसनीय प्रमाणपत्रों की सूची में नहीं है, इसलिए हस्ताक्षरकर्ता द्वारा बताया गया हस्ताक्षर-समय उपयोग किया गया है।
+	The signature contents are not hexadecimal.	हस्ताक्षर की सामग्री हेक्साडेसिमल नहीं है।
+	The signature could not be checked ({}).	हस्ताक्षर की जाँच नहीं की जा सकी ({})।
+	The signature could not be read ({}).	हस्ताक्षर पढ़ा नहीं जा सका ({})।
+	The signature could not be verified ({}).	हस्ताक्षर सत्यापित नहीं किया जा सका ({})।
+	The signature has no valid byte range.	हस्ताक्षर की कोई मान्य बाइट रेंज नहीं है।
+	The signature includes an embedded timestamp.	हस्ताक्षर में एम्बेड किया गया टाइमस्टैम्प शामिल है।
+	The signature is BER-encoded (indefinite lengths) rather than DER; it was read leniently.	हस्ताक्षर DER के बजाय BER-एन्कोडेड (अनिश्चित लंबाई) है; इसे उदारता से पढ़ा गया।
+	The signature uses the legacy adbe.x509.rsa_sha1 format.	हस्ताक्षर पुराने adbe.x509.rsa_sha1 प्रारूप का उपयोग करता है।
+	The signature value does not match the signer's certificate: the signature is corrupt.	हस्ताक्षर मान हस्ताक्षरकर्ता के प्रमाणपत्र से मेल नहीं खाता: हस्ताक्षर दूषित है।
+	The signature's byte range does not exclude exactly its contents.	हस्ताक्षर की बाइट रेंज ठीक उसकी सामग्री को बाहर नहीं रखती।
+	The signature's byte range does not match the file.	हस्ताक्षर की बाइट रेंज फ़ाइल से मेल नहीं खाती।
+	The signature's timestamp token could not be verified ({}).	हस्ताक्षर के टाइमस्टैम्प टोकन को सत्यापित नहीं किया जा सका ({})।
+	The signature's timestamp token does not cover the signature value.	हस्ताक्षर का टाइमस्टैम्प टोकन हस्ताक्षर मान को कवर नहीं करता।
+	The signed content is a constructed (segmented) OCTET STRING, as BER allows; it was read anyway.	हस्ताक्षरित सामग्री एक निर्मित (खंडित) OCTET STRING है, जैसा BER में अनुमत है; फिर भी इसे पढ़ लिया गया।
+	The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation).	हस्ताक्षरकर्ता का प्रमाणपत्र डिजिटल हस्ताक्षर की अनुमति नहीं देता (उसके की-यूसेज में न डिजिटल हस्ताक्षर है, न अस्वीकार-निषेध)।
+	The signer's certificate has been revoked ({}).	हस्ताक्षरकर्ता का प्रमाणपत्र निरस्त कर दिया गया है ({})।
+	The signer's certificate has critical extensions PdfCraft does not recognize ({}).	हस्ताक्षरकर्ता के प्रमाणपत्र में क्रिटिकल एक्सटेंशन हैं जिन्हें PdfCraft नहीं पहचानता ({})।
+	The signer's certificate is not in the signature.	हस्ताक्षरकर्ता का प्रमाणपत्र हस्ताक्षर में मौजूद नहीं है।
+	The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).	हस्ताक्षरकर्ता का प्रमाणपत्र दस्तावेज़ों पर हस्ताक्षर के लिए जारी नहीं किया गया है (उसके एक्सटेंडेड की-यूसेज में दस्तावेज़-हस्ताक्षर का उद्देश्य नहीं है)।
+	The signer's certificate was not valid at the time of signing.	हस्ताक्षरकर्ता का प्रमाणपत्र हस्ताक्षर के समय मान्य नहीं था।
+	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	हस्ताक्षरकर्ता की पहचान अज्ञात है, क्योंकि वह आपकी विश्वसनीय प्रमाणपत्रों की सूची में शामिल नहीं है और उसके कोई भी मूल प्रमाणपत्र विश्वसनीय प्रमाणपत्र नहीं हैं।
+	The signer's identity is valid.	हस्ताक्षरकर्ता की पहचान मान्य है।
+	The timestamp authority's certificate was not valid at the time of timestamping.	टाइमस्टैम्प प्राधिकारी का प्रमाणपत्र टाइमस्टैम्प लगाते समय मान्य नहीं था।
+	The timestamp contents are not hexadecimal.	टाइमस्टैम्प की सामग्री हेक्साडेसिमल नहीं है।
+	The timestamp has no valid byte range.	टाइमस्टैम्प की कोई मान्य बाइट रेंज नहीं है।
+	The timestamp token could not be read ({}).	टाइमस्टैम्प टोकन पढ़ा नहीं जा सका ({})।
+	The timestamp token is valid and its authority is trusted.	टाइमस्टैम्प टोकन मान्य है और उसका प्राधिकारी विश्वसनीय है।
+	The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.	टाइमस्टैम्प टोकन मान्य है, लेकिन टाइमस्टैम्प प्राधिकारी आपकी विश्वसनीय प्रमाणपत्रों की सूची में नहीं है।
+	The timestamp's byte range does not exclude exactly its contents.	टाइमस्टैम्प की बाइट रेंज ठीक उसकी सामग्री को बाहर नहीं रखती।
+	The timestamp's byte range does not match the file.	टाइमस्टैम्प की बाइट रेंज फ़ाइल से मेल नहीं खाती।
+	The window shows the file name, not the title (Initial View > Show)	विंडो में शीर्षक नहीं, फ़ाइल का नाम दिखता है (प्रारंभिक दृश्य > दिखाएँ)
+	There is no folder to save the digital ID in.	डिजिटल आईडी सहेजने के लिए कोई फ़ोल्डर नहीं है।
+	This document has not been modified since this signature was applied.	इस हस्ताक्षर के लगाए जाने के बाद यह दस्तावेज़ बदला नहीं गया है।
+	This document has not been modified since this timestamp was applied.	इस टाइमस्टैम्प के लगाए जाने के बाद यह दस्तावेज़ बदला नहीं गया है।
+	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	यह हस्ताक्षर RIPEMD-160 का उपयोग करता है, जो एक पुराना 160-बिट हैश एल्गोरिदम है और हस्ताक्षरों के लिए अब अनुशंसित नहीं है। यह अब भी सत्यापित होता है, पर इस पर भरोसा नहीं करना चाहिए।
+	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	यह हस्ताक्षर SHA-1 का उपयोग करता है, जो एक कमज़ोर हैश एल्गोरिदम है: इसमें टकराव प्रदर्शित किए जा चुके हैं। यह अब भी सत्यापित होता है, क्योंकि कई वर्षों पहले हस्ताक्षरित दस्तावेज़ इसका उपयोग करते हैं, पर इस पर भरोसा नहीं करना चाहिए।
+	Unsigned signature field	बिना हस्ताक्षर वाला हस्ताक्षर फ़ील्ड
+	Unsigned signature field: {name}	बिना हस्ताक्षर वाला हस्ताक्षर फ़ील्ड: {name}
+	Zoom in (⌘+)	ज़ूम इन (⌘+)
+	Zoom in / out (also pinch or ⌘-scroll)	ज़ूम इन / आउट (पिंच या ⌘-स्क्रॉल से भी)
+	Zoom out (⌘−)	ज़ूम आउट (⌘−)
+	alternate text hides an annotation inside it	वैकल्पिक पाठ के भीतर एक एनोटेशन छिपा है
+	alternate text on an element with no page content	ऐसे तत्व पर वैकल्पिक पाठ जिसमें कोई पृष्ठ सामग्री नहीं है
+	comments	टिप्पणियाँ
+	document security store	दस्तावेज़ सुरक्षा स्टोर
+	document structure	दस्तावेज़ संरचना
+	form fill	फ़ॉर्म भरना
+	its alternate text is inside another element's and will never be read	उसका वैकल्पिक पाठ किसी अन्य तत्व के वैकल्पिक पाठ के भीतर है और कभी पढ़ा नहीं जाएगा
+	links	लिंक
+	metadata	मेटाडेटा
+	no alternate text	कोई वैकल्पिक पाठ नहीं
+	no header cells (TH)	कोई हेडर सेल (TH) नहीं
+	no summary	कोई सारांश नहीं
+	not in a TR	TR में नहीं है
+	not in a Table, THead, TBody or TFoot	Table, THead, TBody या TFoot में नहीं है
+	not in an L (list)	L (सूची) में नहीं है
+	not in an LI (list item)	LI (सूची आइटम) में नहीं है
+	other changes	अन्य बदलाव
+	page content	पृष्ठ सामग्री
+	page {n} is out of range (1–{count})	पृष्ठ {n} सीमा से बाहर है (1–{count})
+	pages added or removed	जोड़े या हटाए गए पृष्ठ
+	rows have between {min} and {max} columns	पंक्तियों में {min} से {max} स्तंभ हैं
+	the first heading is an H{n}; headings should not skip levels	पहला शीर्षक H{n} है; शीर्षकों में स्तर नहीं छूटने चाहिए
+	the signed version could not be read	हस्ताक्षरित संस्करण पढ़ा नहीं जा सका
+	{n} pages and no bookmarks	{n} पृष्ठ और कोई बुकमार्क नहीं
+	{page} is not a page number or label	{page} कोई पृष्ठ संख्या या लेबल नहीं है
+	{ty} element on page {p}: {what}	पृष्ठ {p} पर {ty} तत्व: {what}
+	{ty} element: {what}	{ty} तत्व: {what}
+	{who}, certificate issued by an unknown issuer.	{who}, प्रमाणपत्र अज्ञात जारीकर्ता द्वारा जारी किया गया।
+	{who}, certificate issued by {issuer}.	{who}, प्रमाणपत्र {issuer} द्वारा जारी किया गया।
+	{} annotation on page {p} isn't tagged	पृष्ठ {p} पर {} एनोटेशन टैग नहीं किया गया है
+	{} annotations aren't allowed	{} एनोटेशन की अनुमति नहीं है
+	… and {n} more	… और {n} अन्य
+@plural	Delete {n} field|Delete {n} fields	{n} फ़ील्ड हटाएँ
+@plural	{n} byte|{n} bytes	{n} बाइट
+@plural	{n} image optimized|{n} images optimized	{n} छवि अनुकूलित की गई
+@plural	{n} item discarded|{n} items discarded	{n} आइटम छोड़ा गया
+@plural	{n} pixel|{n} pixels	{n} पिक्सेल
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	टेक्स्ट पहचान स्थापित नहीं है: इसके मॉडल गायब हैं (`cargo xtask models` चलाएँ, या PDFCRAFT_MODELS सेट करें)।
+calendar weekday	Su	रवि
+calendar weekday	Mo	सोम
+calendar weekday	Tu	मंगल
+calendar weekday	We	बुध
+calendar weekday	Th	गुरु
+calendar weekday	Fr	शुक्र
+	Next tab	अगली टैब
+	Previous tab	पिछली टैब
+calendar weekday	Sa	शनि
+certificate	Issued to	जिसे जारी किया गया
+certificate	Issued by	जिसने जारी किया
+certificate	Valid from	मान्य होने की शुरुआत
+certificate	Valid to	मान्य होने की समाप्ति
+certificate	Intended usage	अभिप्रेत उपयोग
+certificate	Version	संस्करण
+certificate	Serial number	क्रमांक
+certificate	Issuer	जारीकर्ता
+certificate	Validity starts	वैधता शुरू
+certificate	Validity ends	वैधता समाप्त
+certificate	Public key	सार्वजनिक कुंजी
+certificate	Basic constraints	मूल बाधाएँ
+certificate	Key usage	कुंजी उपयोग
+certificate	Self-signed	स्व-हस्ताक्षरित
+certificate	SHA-1 digest	SHA-1 डाइजेस्ट
+certificate	SHA-256 digest	SHA-256 डाइजेस्ट
+	the name is not a plain file name	नाम एक सामान्य फ़ाइल नाम नहीं है
+@plural	{n} file|{n} files	{n} फ़ाइल
+@plural	{n} comment|{n} comments	{n} टिप्पणी
+@plural	{n} result|{n} results	{n} परिणाम
+	Allow	अनुमति दें
+	Maximize	अधिकतम करें
+	Minimize	न्यूनतम करें
+	Move tag earlier	टैग पहले ले जाएँ
+	Move tag later	टैग बाद में ले जाएँ
+	Only allow this if you trust the source document.	इसे केवल तभी अनुमति दें जब आप स्रोत दस्तावेज़ पर भरोसा करें।
+	Open this local PDF?	यह स्थानीय पीडीएफ़ खोलें?
+	Remove "{name}" from this list? The file itself is not deleted.	"{name}" को इस सूची से हटाएँ? फ़ाइल स्वयं नहीं मिटती।
+	Restore	पुनर्स्थापित करें
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	विंडो बटनों के लिए एक साधारण शीर्षक पट्टी दिखाएँ, टैब स्ट्रिप के बजाय। GNOME ऐप्स के लिए शीर्षक पट्टी नहीं बनाता, इसलिए यह उसकी थीम का पालन नहीं करता।
+	This document is trying to open a local file:	यह दस्तावेज़ एक स्थानीय फ़ाइल खोलने का प्रयास कर रहा है:
+	Use system title bar	सिस्टम शीर्षक पट्टी का उपयोग करें
+	Hide hover previews for highlights without comment text	बिना टिप्पणी टेक्स्ट वाली हाइलाइट का होवर पूर्वावलोकन छिपाएँ
+	Set page transitions	पृष्ठ संक्रमण सेट करें
+	What takes up the space in this file, by kind of content.	इस फ़ाइल में स्थान किस प्रकार की सामग्री ने घेरा है, यह दिखाता है।
+	Digitally signed by	द्वारा डिजिटल हस्ताक्षरित
+	DN: 	DN: 
+	Reason: 	कारण: 
+	Location: 	स्थान: 
+	Date: 	दिनांक: 
+	The labels are in English: the signature's font can't draw them in this language.	लेबल अंग्रेज़ी में हैं: हस्ताक्षर का फ़ॉन्ट इन्हें इस भाषा में नहीं बना सकता।
+	Font size	फ़ॉन्ट आकार
+	Make Properties Default	गुण डिफ़ॉल्ट बनाएँ
+	Save over the changed file?	बदली हुई फ़ाइल के ऊपर सहेजें?
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	“{name}” खोले जाने या अंतिम बार सहेजे जाने के बाद डिस्क पर बदल गई है। अभी सहेजने पर वह नया संस्करण इस संस्करण से बदल जाएगा।
+	Save anyway	फिर भी सहेजें
+	Sending sheet {s} of {n} to {printer}…	शीट {n} में से {s} को {printer} पर भेजा जा रहा है…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	कोई प्रिंटर नहीं मिला। जाँच लें कि प्रिंटर इंस्टॉल है और प्रिंट स्पूलर चल रहा है, फिर से प्रिंट खोलें।
+	Collapse all pages	सभी पृष्ठ समेटें
+	Expand all pages	सभी पृष्ठ विस्तृत करें
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	यह फ़ाइल डिस्क पर बदल गई है। पुनः लोड करने पर नया संस्करण दिखेगा और आपके सहेजे न गए बदलाव हट जाएँगे; सहेजने पर डिस्क का संस्करण इस संस्करण से बदल जाएगा।
+	Scroll speed (mouse wheel and arrow keys)	स्क्रॉल गति (माउस व्हील और तीर कुंजियाँ)
+	Cut Image	छवि काटें
+	Redact Image	छवि रिडैक्ट करें
+	Create Link…	लिंक बनाएँ…
+	Recognize Text…	टेक्स्ट पहचानें…
+	Open in Full Screen mode?	फ़ुल स्क्रीन मोड में खोलें?
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	यह दस्तावेज़ फ़ुल स्क्रीन मोड में खुलने का अनुरोध करता है: पृष्ठ पूरी स्क्रीन भर देता है और बाकी कुछ नहीं दिखता। बाहर निकलने के लिए कभी भी Esc दबाएँ।
+	Full Screen	फ़ुल स्क्रीन
+	Not now	अभी नहीं
+	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	आप “{from}” का हस्ताक्षरित संस्करण (संशोधन {rev}) देख रहे हैं। यह एक स्नैपशॉट है: यहाँ किए गए बदलाव मूल फ़ाइल को प्रभावित नहीं करेंगे।
+	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	आप “{from}” का संशोधन {rev} देख रहे हैं। यह एक स्नैपशॉट है: यहाँ किए गए बदलाव मूल फ़ाइल को प्रभावित नहीं करेंगे।
+	Turn upside down (180°)	उल्टा घुमाएँ (180°)
+	4 x 6 in label (101.6 x 152.4 mm)	4 x 6 इंच लेबल (101.6 x 152.4 mm)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	प्रत्येक पृष्ठ को उसके मुद्रित क्षेत्र तक काटता है, उसे सीधा करता है और बिना खिंचाव के शीट पर फ़िट करता है। प्रति शीट एक लेबल।
+	Find untagged content	बिना टैग वाली सामग्री खोजें
+	No untagged content was found.	कोई बिना टैग वाली सामग्री नहीं मिली।
+	Found {n} untagged content problems.	{n} बिना टैग वाली सामग्री की समस्याएँ मिलीं।
+	Tag form fields	फ़ॉर्म फ़ील्ड टैग करें
+	Mark as artifact	आर्टिफ़ैक्ट के रूप में चिह्नित करें
+	Remove this leaf tag from reading order and mark its direct content as an artifact	इस लीफ़ टैग को पढ़ने के क्रम से हटाएँ और इसके अंतर्गत सीधे आने वाली सामग्री को आर्टिफ़ैक्ट के रूप में चिह्नित करें
+	Mark content as artifact	सामग्री को आर्टिफ़ैक्ट के रूप में चिह्नित करें
+	Word count	शब्द गणना
+	Current page only	केवल वर्तमान पृष्ठ
+	Exclude tagged tables	टैग की गई तालिकाएँ बाहर रखें
+	Exclude tagged code blocks	टैग किए गए कोड ब्लॉक बाहर रखें
+	Exclude image/OCR text	छवि/OCR टेक्स्ट बाहर रखें
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	बाहर रखने के नियम PDF टैग पर आधारित हैं। बिना टैग वाली तालिकाएँ और कोड शामिल रहते हैं। छवि बाहर रखने से अदृश्य टेक्स्ट भी हट जाता है।
+	Words	शब्द
+	Characters	वर्ण
+	Characters without spaces	रिक्त स्थान के बिना वर्ण
+	Pages counted	गिने गए पृष्ठ
+	Some pages contain no countable text. Scanned images need OCR first.	कुछ पृष्ठों में गिनने योग्य टेक्स्ट नहीं है। स्कैन की गई छवियों को पहले OCR करना होगा।
+	Some content could not be classified safely and was kept in the count.	कुछ सामग्री को सुरक्षित रूप से वर्गीकृत नहीं किया जा सका, इसलिए उसे गिनती में रखा गया।
+	Counting words… {n} pages read	शब्द गिने जा रहे हैं… {n} पृष्ठ पढ़े गए
+	Word counting stopped unexpectedly.	शब्द गणना अप्रत्याशित रूप से रुक गई।
+	Word count…	शब्द गणना…
+@id	file.word_count	शब्द गणना…
+	Standard	मानक
+	Mobile	मोबाइल
+	Merge image fragments	छवि खंड मर्ज करें
+	Optimizing… merging image fragments	ऑप्टिमाइज़ किया जा रहा है… छवि खंड मर्ज किए जा रहे हैं
+	Side by side	एक के बगल में एक
+	New file only	केवल नई फ़ाइल
+	Old file: {name}	पुरानी फ़ाइल: {name}
+	New file: {name}	नई फ़ाइल: {name}
+	Print as image	छवि के रूप में प्रिंट करें
+	Resolution:	रेज़ोल्यूशन:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	जब प्रिंटर टेक्स्ट, छायांकन या पारदर्शिता छोड़ दे, तब इसका उपयोग करें। प्रिंट अब खोजने योग्य टेक्स्ट नहीं रहता; ग्रेस्केल में प्रिंट करने पर चित्र सलेटे होते हैं।
+	Crop Image	छवि क्रॉप करें
+	Remove Crop	क्रॉप हटाएँ
+	Trim the picture with its handles; Enter or Done applies	हैंडल से चित्र को ट्रिम करें; Enter या Done दबाने पर लागू होता है
+	Redaction mark appearance	रिडैक्शन चिह्न का स्वरूप
+	Outline colour:	रूपरेखा रंग:
+	Fill colour:	भरण रंग:
+	Shown while the pointer is over a mark.	जब पॉइंटर किसी चिह्न के ऊपर होता है, तब यह दिखता है।
+	Opacity:	अपारदर्शिता:
+	Make properties default	गुण डिफ़ॉल्ट बनाएँ
+	Pages selected	चयनित पृष्ठ
+	Page properties	पृष्ठ गुण
+	Create & Edit	बनाएँ और संपादित करें
+	Review & Compare	समीक्षा और तुलना करें
+	Forms & Signatures	फ़ॉर्म और हस्ताक्षर
+	Protect & Standardize	सुरक्षित और मानकीकृत करें
+	Customize & Automate	अनुकूलित और स्वचालित करें
+	No tools match your search.	आपकी खोज से कोई टूल मेल नहीं खाता।
+	Expand all tools	सभी टूल विस्तृत करें
+	Collapse all tools	सभी टूल समेटें
+	The password must have at least 8 characters.	पासवर्ड में कम से कम 8 वर्ण होने चाहिए।
+theme	Appearance	स्वरूप
+	Zoom — type a percentage and press Enter	ज़ूम — प्रतिशत टाइप करें और Enter दबाएँ
+# Untranslated: English text until a translator fills these in.
+	Calculation order	Calculation order
+	Alignment	Alignment
+	Always use my default zoom and page layout	Always use my default zoom and page layout
+	Back to Prepare a form	Back to Prepare a form
+	Bulleted list	Bulleted list
+	Drag a field to move it, or select it and press {up} or {down}.	Drag a field to move it, or select it and press {up} or {down}.
+	Earlier in calculation order	Earlier in calculation order
+	Edit {field}'s formula	Edit {field}'s formula
+	Every field calculates after the fields it reads.	Every field calculates after the fields it reads.
+	Every field outside a loop calculates after the fields it reads.	Every field outside a loop calculates after the fields it reads.
+	Fix order	Fix order
+	Larger thumbnails	Larger thumbnails
+	Later in calculation order	Later in calculation order
+	Layer options	Layer options
+	Less	Less
+	Links on page	Links on page
+	Loop	Loop
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.
+	Move only what must move, so every field calculates after the fields it reads.	Move only what must move, so every field calculates after the fields it reads.
+	Moves only what must move	Moves only what must move
+	No field reads it	No field reads it
+	No order can fix a loop. Change one of the formulas.	No order can fix a loop. Change one of the formulas.
+	Not in order	Not in order
+	Numbered list	Numbered list
+	Order · top calculates first	Order · top calculates first
+	Other options	Other options
+	Paragraph spacing	Paragraph spacing
+	Printer default	Printer default
+	Reading the printer's settings…	Reading the printer's settings…
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.
+	Reads {name}, which calculates later, so it shows an old value.	Reads {name}, which calculates later, so it shows an old value.
+	Reset to Initial Visibility	Reset to Initial Visibility
+	Script	Script
+	Show on the page which fields each field reads	Show on the page which fields each field reads
+	Shrink the page content to make room for the header and footer	Shrink the page content to make room for the header and footer
+	Smaller thumbnails	Smaller thumbnails
+	Subscript	Subscript
+	Superscript	Superscript
+	The document's security settings don't allow printing	The document's security settings don't allow printing
+	The order saved in the PDF needs tidying	The order saved in the PDF needs tidying
+	Thumbnail size	Thumbnail size
+	Too early	Too early
+	{fields} read each other	{fields} read each other
+	{field} reads its own value	{field} reads its own value
+	{field} reads no other field	{field} reads no other field
+	{field} reads {fields}	{field} reads {fields}
+	{names} and {last}	{names} and {last}
+
+# Prepare a form ▸ Text field table (AI-assisted, not separately native-reviewed)
+	Add text field table	टेक्स्ट फ़ील्ड तालिका जोड़ें
+	Text field table	टेक्स्ट फ़ील्ड तालिका
+	Text Field Table	टेक्स्ट फ़ील्ड तालिका
+	Columns	कॉलम
+	Row spacing	पंक्तियों के बीच की दूरी
+	Column spacing	कॉलमों के बीच की दूरी
+	First row number	पहली पंक्ति की संख्या
+	Column widths	कॉलमों की चौड़ाई
+	Distribute evenly	बराबर बाँटें
+	Field names	फ़ील्ड के नाम
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N या {row} पंक्ति संख्या है, {col} कॉलम संख्या, {seq} सेल संख्या। इनमें से कोई न हो, तो पंक्ति संख्या अंत में लगती है।
+	Column {n}	कॉलम {n}
+	Add fields	फ़ील्ड जोड़ें
+	a table has 1 to {max} rows	तालिका में 1 से {max} पंक्तियाँ होती हैं
+	a table has 1 to {max} columns	तालिका में 1 से {max} कॉलम होते हैं
+	the first row number can be at most {max}	पहली पंक्ति की संख्या अधिकतम {max} हो सकती है
+	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	क्षेत्र, दूरी और कॉलमों की चौड़ाई संख्याएँ होनी चाहिए; दूरी 0 या अधिक और हर चौड़ाई 0 से अधिक
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	पंक्तियाँ बहुत छोटी हैं: क्षेत्र को ऊँचा करें, या कम पंक्तियाँ या पंक्तियों के बीच कम दूरी रखें
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	एक कॉलम बहुत संकरा है: क्षेत्र को चौड़ा करें, कॉलम को उसका बड़ा हिस्सा दें, या कम कॉलम या कॉलमों के बीच कम दूरी रखें
+	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
+	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
+	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	आज
+
+# AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
+	Restore the last view (page, zoom and page display) when a document is opened again	दस्तावेज़ फिर से खोलने पर पिछला दृश्य (पृष्ठ, ज़ूम और पृष्ठ प्रदर्शन) पुनर्स्थापित करें
+	Attach a file…	फ़ाइल संलग्न करें…
+	Attach {name}	{name} संलग्न करें
+	Attaching files is not available on the web yet	वेब पर अभी फ़ाइलें संलग्न करना उपलब्ध नहीं है
+	Delete attachment	अनुलग्नक हटाएँ
+	Delete attachment {key}	अनुलग्नक {key} हटाएँ
+@plural	{n} reply|{n} replies	{n} जवाब
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	पृष्ठ उपकरण
+	Insert pages from a file after the selection…	चयन के बाद किसी फ़ाइल से पृष्ठ डालें…
+	Rotate the selected pages counterclockwise	चयनित पृष्ठों को वामावर्त घुमाएँ
+	Rotate the selected pages clockwise	चयनित पृष्ठों को दक्षिणावर्त घुमाएँ
+	Extract the selected pages…	चयनित पृष्ठ निकालें…
+	Delete the selected pages	चयनित पृष्ठ हटाएँ

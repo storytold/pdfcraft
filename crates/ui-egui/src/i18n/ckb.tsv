@@ -1,0 +1,2751 @@
+# Central Kurdish (ckb) catalog. Columns, separated by a TAB:  context <TAB> source <TAB> translation
+#
+#   context  empty                a plain UI string; `source` is the English text in the code
+#            @id                  a command id (e.g. file.saveAs): wins over the English text for
+#                                 that menu item, so one id can read differently from its twin
+#            @plural              `source` is "one|other" (English forms); the translation lists the
+#                                 language's forms separated by "|" (see `plural` in i18n/mod.rs):
+#                                 Kurdish (ckb) has two forms: one, other
+#            anything else        a disambiguating context passed to `tr_ctx`
+#   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
+#   lines starting with # and blank lines are ignored.
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Central Kurdish (Sorani) computing vocabulary. No proprietary localisation resource, string table
+# or product UI (Acrobat's included) was consulted or copied; add entries the same way.
+# Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
+# the trailing "…" of dialog commands is kept. Digits are Western (0-9).
+#
+# Write every entry in logical (typing) order. Catalogs stay logical: epaint shapes and
+# reorders each line with UAX #9, so preordering here would reverse right-to-left text twice.
+# Spaces and a colon at either end of an entry stay at that end, next to what the code appends.
+
+	Menu	پێڕست
+	File	فایل
+	Edit	دەستکاریکردن
+	Pages	پەڕەکان
+	View	بینین
+	Help	یارمەتی
+	Preferences	هەڵبژاردەکان
+	Preferences…	هەڵبژاردەکان…
+	Interface language	زمانی ڕووکار
+	Interface size	قەبارەی ڕووکار
+	Auto ({percent}%)	خۆکار ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	دۆخی خۆکار بەدوای قەبارەی دەقی سیستەم دەکەوێت. پەڕەکان هەمیشە بە ڕوونیی تەواوی شاشەکە پیشان دەدرێن.
+	Identity	ناسنامە
+	Name on new comments	ناو لەسەر لێدوانە نوێیەکان
+	Hide hover previews for highlights without comment text	شاردنەوەی پێشبینینەکانی هۆڤەر بۆ ئەو هایلایتانەی دەقی لێدوانیان نییە
+	Open…	کردنەوە…
+	Open Recent	کردنەوەی دواییەکان
+	Pin folder to Home…	جێگیرکردنی فۆڵدەر لە لاپەڕەی سەرەکی…
+	Folders	فۆڵدەرەکان
+	Pin a folder…	جێگیرکردنی فۆڵدەرێک…
+	Pin a folder to Home	جێگیرکردنی فۆڵدەرێک لە لاپەڕەی سەرەکی
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	فۆڵدەرێک جێگیر بکە بۆ ئەوەی نوێترین PDFەکانی لێرە پیشان بدات، وەک ئەو شوێنەی کە سکانەرەکەت یان درایڤێکی هەوری هاوکاتکراو فایلەکانی تێدا پاشەکەوت دەکات.
+	Unpin	لابردنی جێگیرکردن
+	Unpin {folder}	لابردنی جێگیرکردنی {folder}
+	Looking for PDFs…	بەدوای PDFەکاندا دەگەڕێین…
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	ئەم فۆڵدەرە ئێستا بەردەست نییە. لەوانەیە گوێزرابێتەوە، یان درایڤەکەی یان هاوکاتکردنی هەورەکەی دابڕابێت.
+	No PDFs in this folder yet	هێشتا هیچ PDFێک لەم فۆڵدەرەدا نییە
+	Show less	کەمتر پیشان بدە
+	Show {n} more	{n}ی تر پیشان بدە
+	The newest {n} of {total} PDFs	نوێترین {n} لە {total} PDF
+	Pinned folders need the desktop app	فۆڵدەرە جێگیرکراوەکان پێویستیان بە ئەپی سەر مێز هەیە
+	Choose a folder on this computer to pin	فۆڵدەرێک لەسەر ئەم کۆمپیوتەرە هەڵبژێرە بۆ جێگیرکردن
+	{folder} is already pinned to Home	{folder} پێشتر لە لاپەڕەی سەرەکی جێگیرکراوە
+	You can pin up to {n} folders. Unpin one first.	دەتوانیت تا {n} فۆڵدەر جێگیر بکەیت. سەرەتا یەکێکیان لابە.
+	Pinned {folder} to Home	{folder} لە لاپەڕەی سەرەکی جێگیرکرا
+	No recent files	هیچ فایلێکی دوایی نییە
+	New blank PDF	PDFی بەتاڵی نوێ
+	Create PDF from file…	دروستکردنی PDF لە فایل…
+	Create PDF from images…	دروستکردنی PDF لە وێنەکان…
+	Create PDF from clipboard	دروستکردنی PDF لە کلیپبۆرد
+	Combine files…	تێکەڵکردنی فایلەکان…
+	Save	پاشەکەوتکردن
+	Save as…	پاشەکەوتکردن وەک…
+	Close file	داخستنی فایل
+	Close all	داخستنی هەموو
+	Revert	گەڕاندنەوە
+	Print…	چاپکردن…
+	Document properties…	تایبەتمەندییەکانی بەڵگەنامە…
+	Undo	پاشگەزبوونەوە
+	Redo	دووبارەکردنەوە
+	Find…	دۆزینەوە…
+	Advanced search…	گەڕانی پێشکەوتوو…
+	Copy pages	کۆپیکردنی پەڕەکان
+	Cut pages	بڕینی پەڕەکان
+	Paste pages	لکاندنی پەڕەکان
+	Fit visible	گونجاندنی ناوەڕۆکی دیار
+	Marquee zoom	گەورەکردنەوە بە هەڵبژاردن
+	Take a snapshot	گرتنی وێنەی چەقاو
+	Column select	هەڵبژاردنی ستوونی
+	Full screen mode	دۆخی شاشەی پڕ
+	Read mode	دۆخی خوێندنەوە
+	Next tab	بازدەری داهاتوو
+	Previous tab	بازدەری پێشوو
+	Switch light / dark theme	گۆڕینی تیمی ڕووناک / تاریک
+	Comments panel	پانێڵی لێدوانەکان
+	Form fields panel	پانێڵی خانەکانی فۆڕم
+	Clear form	پاککردنەوەی فۆڕم
+	Find tools and commands…	گەڕان بۆ ئامرازەکان و فەرمانەکان…
+	Zoom	زووم
+	Actual size	قەبارەی ڕاستەقینە
+	Zoom to page level	زووم بۆ ئاستی پەڕە
+	Fit to width	گونجاندن بە پانی
+	Display theme	تیمی پیشاندان
+	Side panels	پانێڵە لاوەکییەکان
+	Enable Acrobat JavaScript	چالاککردنی Acrobat JavaScript
+	OK	باشە
+	Join our Discord	بەشداریکردن لە Discordی ئێمە
+	Close	داخستن
+	Next / previous match	گونجاوی داهاتوو / پێشوو
+	Copy selected text	کۆپیکردنی دەقی هەڵبژێردراو
+	Double-click	دوو کرتە
+	Select a word	هەڵبژاردنی وشەیەک
+	Clear selection / close find	پاککردنەوەی هەڵبژاردن / داخستنی دۆزینەوە
+	Zoom in / out (also pinch or {key}-scroll)	گەورەکردنەوە / بچووککردنەوە (هەروەها بە پینچ یان سکرۆڵکردن بە {key})
+	Rotate view	سووڕاندنەوەی بینین
+	First / last page	یەکەم / کۆتا پەڕە
+	Previous / next page	پەڕەی پێشوو / داهاتوو
+	Delete selected pages (Organize)	سڕینەوەی پەڕە هەڵبژێردراوەکان (ڕێکخستن)
+	Select all pages (Organize)	هەڵبژاردنی هەموو پەڕەکان (ڕێکخستن)
+	Home	لاپەڕەی سەرەکی
+	Open	کردنەوە
+	Open a PDF ({key})	کردنەوەی PDF ({key})
+	Dark gray theme	تیمی خۆڵەمێشیی تاریک
+	Light theme	تیمی ڕووناک
+	Appearance mode	دۆخی دیمەن
+	Light	ڕووناک
+	Dark	تاریک
+	Active	چالاک
+	Dark theme	تیمی تاریک
+	Appearance settings…	ڕێکخستنەکانی دیمەن…
+	All tools	هەموو ئامرازەکان
+	Read	خوێندنەوە
+	Convert	گۆڕین
+	E-Sign	واژووی ئەلیکترۆنی
+	Print ({key})	چاپکردن ({key})
+	Save ({key})	پاشەکەوتکردن ({key})
+	Document properties ({key})	تایبەتمەندییەکانی بەڵگەنامە ({key})
+	Find tools and commands	گەڕان بۆ ئامرازەکان و فەرمانەکان
+	Fit to height	گونجاندن بە بەرزی
+	Zoom in	گەورەکردنەوە
+	Zoom out	بچووککردنەوە
+	Rotate view clockwise	سووڕاندنەوەی بینین بە ئاراستەی کاتژمێر
+	Rotate view counterclockwise	سووڕاندنەوەی بینین بە پێچەوانەی ئاراستەی کاتژمێر
+	Page navigation	گەشتکردن لە پەڕەکاندا
+	Previous view	بینینی پێشوو
+	Next view	بینینی داهاتوو
+	Page display	پیشاندانی پەڕە
+	Continuous scrolling	سکرۆڵی بەردەوام
+	Show gaps between pages	پیشاندانی بۆشایی نێوان پەڕەکان
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	شاردنەوەی بۆشاییەکان بۆ لکاندنی لێواری پەڕەکان. پەراوێزەکانی ناو PDF وەک خۆیان دەمێننەوە.
+	Two-page view	بینینی دوو پەڕە
+	Single page	تاکە پەڕە
+	Show cover page in two-page view	پیشاندانی پەڕەی بەرگ لە بینینی دوو پەڕەدا
+	Use system setting	بەکارهێنانی ڕێکخستنی سیستەم
+	Light gray	خۆڵەمێشیی ڕووناک
+	Dark gray	خۆڵەمێشیی تاریک
+	Comments	لێدوانەکان
+	Bookmarks	دڵخوازەکان
+	Fields	خانەکان
+	Layers	چینەکان
+	Attachments	پێوەکراوەکان
+	Signatures	واژووەکان
+	Accessibility Checker	پشکنەری دەستڕاگەیشتن
+	Search	گەڕان
+	Compare	بەراوردکردن
+	Page thumbnails	وێنۆچکەکانی پەڕە
+	Form fields	خانەکانی فۆڕم
+	Zoom out ({key})	بچووککردنەوە ({key})
+	Zoom in ({key})	گەورەکردنەوە ({key})
+	Rotate view clockwise ({key})	سووڕاندنەوەی بینین بە ئاراستەی کاتژمێر ({key})
+	Toggle fit page / fit width	گۆڕینی نێوان گونجاندنی پەڕە / گونجاندنی پانی
+	Next page	پەڕەی داهاتوو
+	Previous page	پەڕەی پێشوو
+	Current page — type a page number or label (such as iv) and press Enter	پەڕەی ئێستا — ژمارەی پەڕەیەک یان نیشانەکەی بنووسە (وەک iv) و Enter دابگرە
+	Zoom — type a percentage and press Enter	زووم — ڕێژەیەکی سەدی بنووسە و Enter دابگرە
+	Welcome to PdfCraft	بەخێربێیت بۆ PdfCraft
+	An open-source PDF workbench — local, private, and scriptable.	مێزێکی کاری سەرچاوەکراوە بۆ PDF — ناوخۆیی، تایبەت و بەرنامەڕێژکراو.
+	Join the ArtCraft community	بەشداریکردن لە کۆمەڵگەی ArtCraft
+	Get help, share feedback and follow development on Discord.	یارمەتی وەربگرە، بۆچوونەکانت بڵاو بکەرەوە و بەدوای پەرەپێداندا بکەوە لە Discord.
+	Recommended tools	ئامرازی پێشنیارکراو
+	Use now	ئێستا بەکاری بهێنە
+	Open file	کردنەوەی فایل
+	Recent	دواییەکان
+	Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.	ئەو فایلانەی لە PdfCraft دەیانکەیتەوە لێرە دەردەکەون. PDFێک لە هەرکوێ دابنێ بۆ کردنەوەی.
+	Privacy	تایبەتێتی
+	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft بەبێ ئینتەرنێت کار دەکات. نە پێوانەی دوورەوە، نە هەژمار و نە پێواژۆی هەور هەیە مەگەر دابینکەرێک زیاد بکەیت.
+	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	سکریپتەکان لە ژینگەیەکی جیاکراوەدا جێبەجێ دەبن بەبێ دەستگەیشتن بە فایل یان تۆڕ. کاتێک JavaScript دابخرێت، فەرمانە ستانداردەکانی Acrobat بۆ فۆرمات، پشتڕاستکردنەوە و ژمێرکاریکردن هێشتا کار دەکەن.
+	Back to all tools	گەڕانەوە بۆ هەموو ئامرازەکان
+	Close panel	داخستنی پانێڵ
+	View less	کەمتر پیشان بدە
+	View more	زیاتر پیشان بدە
+	Available	بەردەست
+	Ready	ئامادە
+	Search tools and commands…	گەڕان لە ئامرازەکان و فەرمانەکان…
+
+# Accessible names for inputs that have no visible label.
+	Added text	دەقی زیادکراو
+	Link URL	ناونیشانی URLی بەستەر
+	Search tools and commands	گەڕان لە ئامرازەکان و فەرمانەکان
+	Text editing line	هێڵی دەستکاریکردنی دەق
+	Text to place	دەقی دانان
+	Tooltip	ڕێنمایی
+	Words or phrases to redact	وشە یان دەستەواژەکان بۆ شاردنەوە
+	No matching tools	هیچ ئامرازێکی گونجاو نییە
+	Tool	ئامراز
+	Command	فەرمان
+	Add a sticky note	زیادکردنی تێبینییەکی لکاو
+	Add a text box	زیادکردنی سندووقی دەقێک
+	Highlight text	هایلایتکردنی دەق
+	Underline text	ژێرهێڵکردنی دەق
+	Strikethrough text	هێڵخستنەسەری دەق
+	Squiggly underline text	ژێرهێڵی شەپۆلی بۆ دەق
+	Draw freehand	وێنەکێشانی دەستی
+	Draw a line	کێشانی هێڵێک
+	Draw an arrow	کێشانی تیرێک
+	Draw a rectangle	کێشانی لاکێشەیەک
+	Draw an oval	کێشانی هێلکەیییەک
+	Draw a polygon	کێشانی فرەگۆشەیەک
+	Draw connected lines	کێشانی هێڵە بەیەکەوەگرێدراوەکان
+	Draw a cloud	کێشانی هەورێک
+	Add a callout	زیادکردنی بالۆنێک
+	Insert text	خستنەناوی دەق
+	Replace text	جێگرتنەوەی دەق
+	Attach a file	پێوەکردنی فایلێک
+	Erase drawings	سڕینەوەی وێنەکێشراوەکان
+	Flatten comments	تەختکردنی لێدوانەکان
+	Import comments…	هاوردەکردنی لێدوانەکان…
+	Add a stamp	زیادکردنی مۆرێک
+	Export all comments to data file…	هەناردەکردنی هەموو لێدوانەکان بۆ فایلی داتا…
+	Hide all comments	شارینەوەی هەموو لێدوانەکان
+	Summarize comments	کورتکردنەوەی لێدوانەکان
+	Import form data…	هاوردەکردنی داتای فۆڕم…
+	Export form data…	هەناردەکردنی داتای فۆڕم…
+	PDF/A…	PDF/A…
+	Action Wizard…	ڕێبەری کردارەکان…
+	Prepare for distribution…	ئامادەکردن بۆ بڵاوکردنەوە…
+	Optimize scanned documents…	باشترکردنی بەڵگەنامە سکانکراوەکان…
+	Compare files…	بەراوردکردنی فایلەکان…
+	Detect form fields	دۆزینەوەی خانەکانی فۆڕم
+	Merge data files into spreadsheet…	یەکخستنی فایلەکانی داتا لە خشتەی داتا…
+	Flatten form fields	تەختکردنی خانەکانی فۆڕم
+	Prepare a form	ئامادەکردنی فۆڕمێک
+	Tab order: by rows	ڕیزبەندی بازدەر: بەپێی ڕیزەکان
+	Tab order: by columns	ڕیزبەندی بازدەر: بەپێی ستوونەکان
+	Tab order: by document structure	ڕیزبەندی بازدەر: بەپێی پێکهاتەی بەڵگەنامە
+	Add text	زیادکردنی دەق
+	Edit text & images	دەستکاریکردنی دەق و وێنەکان
+	Add or edit links	زیادکردن یان دەستکاریکردنی بەستەرەکان
+	Create links from URLs	دروستکردنی بەستەر لە URLەکانەوە
+	Remove all links	لابردنی هەموو بەستەرەکان
+	No links to remove	هیچ بەستەرێک نییە بۆ لابردن
+	Removed 1 link	1 بەستەر لابرا
+	Removed {n} links	{n} بەستەر لابرا
+	Add Bates numbering…	زیادکردنی ژمارەدانی Bates…
+	Add image…	زیادکردنی وێنە…
+	Redact text and images	شاردنەوەی دەق و وێنەکان
+	Redact pages…	شاردنەوەی پەڕەکان…
+	Find text and redact…	دۆزینەوەی دەق و شاردنەوە…
+	Redaction properties…	تایبەتمەندییەکانی شاردنەوە…
+	Apply redactions…	جێبەجێکردنی شاردنەوەکان…
+	Clear redaction marks	پاککردنەوەی نیشانەکانی شاردنەوە
+	Remove hidden information…	لابردنی زانیارییە شاردراوەکان…
+	Sanitize document…	پاکژکردنی بەڵگەنامە…
+	Field properties…	تایبەتمەندییەکانی خانە…
+	Add a text field	زیادکردنی خانەیەکی دەق
+	Add a checkbox	زیادکردنی خانەیەکی هەڵبژاردن
+	Add a radio button	زیادکردنی دوگمەیەکی هەڵبژاردن
+	Add a drop-down list	زیادکردنی پێڕستێکی بەرەوخوار
+	Add a list box	زیادکردنی سندووقێکی پێڕست
+	Add a button	زیادکردنی دوگمەیەک
+	Add an image field	زیادکردنی خانەیەکی وێنە
+	Add a date field	زیادکردنی خانەیەکی بەروار
+	Add a digital signature field	زیادکردنی خانەیەکی واژووی دیجیتاڵی
+	Digitally sign	واژووکردنی دیجیتاڵی
+	Certify (visible signature)	بڕوانامەدان (واژووی بینراو)
+	Certify (invisible signature)	بڕوانامەدان (واژووی نەبینراو)
+	Validate all signatures	پشتڕاستکردنەوەی هەموو واژووەکان
+	Signatures panel	پانێڵی واژووەکان
+	Fill & Sign: add text	پڕکردنەوە و واژووکردن: زیادکردنی دەق
+	Fill & Sign: checkmark	پڕکردنەوە و واژووکردن: نیشانەی ڕاست
+	Fill & Sign: cross	پڕکردنەوە و واژووکردن: نیشانەی هەڵە
+	Fill & Sign: dot	پڕکردنەوە و واژووکردن: خاڵ
+	Fill & Sign: line	پڕکردنەوە و واژووکردن: هێڵ
+	Fill & Sign: date	پڕکردنەوە و واژووکردن: بەروار
+	Fill & Sign: sign	پڕکردنەوە و واژووکردن: واژوو
+	Fill & Sign: initials	پڕکردنەوە و واژووکردن: سەرەتاییەکانی ناو
+	Export to image…	هەناردەکردن بۆ وێنە…
+	Reduce file size…	کەمکردنەوەی قەبارەی فایل…
+	Optimize PDF…	باشترکردنی PDF…
+	Export to text…	هەناردەکردن بۆ دەق…
+	Export to Word…	هەناردەکردن بۆ Word…
+	Export to PowerPoint…	هەناردەکردن بۆ PowerPoint…
+	Export to HTML…	هەناردەکردن بۆ HTML…
+	Export to RTF…	هەناردەکردن بۆ RTF…
+	JavaScript console…	کۆنسۆڵی JavaScript…
+	Document JavaScripts…	JavaScriptەکانی بەڵگەنامە…
+	Recognize text…	ناسینەوەی دەق…
+	Recognize text in multiple files…	ناسینەوەی دەق لە چەند فایلێکدا…
+	Check for accessibility…	پشکنین بۆ دەستڕاگەیشتن…
+	Open accessibility report	کردنەوەی ڕاپۆرتی دەستڕاگەیشتن
+	Change reading options…	گۆڕینی هەڵبژاردەکانی خوێندنەوە…
+	Add alternate text…	زیادکردنی دەقی جێگرەوە…
+	Export all images…	هەناردەکردنی هەموو وێنەکان…
+	Add header & footer…	زیادکردنی سەرەوە و خوارەوەی پەڕە…
+	Update header & footer…	نوێکردنەوەی سەرەوە و خوارەوەی پەڕە…
+	Remove header & footer	لابردنی سەرەوە و خوارەوەی پەڕە
+	Add watermark…	زیادکردنی نیشانەی ئاوی…
+	Update watermark…	نوێکردنەوەی نیشانەی ئاوی…
+	Remove watermark	لابردنی نیشانەی ئاوی
+	Add background…	زیادکردنی پاشبنەما…
+	Update background…	نوێکردنەوەی پاشبنەما…
+	Remove background	لابردنی پاشبنەما
+	Protect using password…	پاراستن بە وشەی نهێنی…
+	Remove security	لابردنی ئاسایش
+	Security properties…	تایبەتمەندییەکانی ئاسایش…
+	Organize pages	ڕێکخستنی پەڕەکان
+	New bookmark	دڵخوازی نوێ
+	New bookmarks from structure	دڵخوازی نوێ لە پێکهاتەوە
+	Rotate pages clockwise	سووڕاندنەوەی پەڕەکان بە ئاراستەی کاتژمێر
+	Rotate pages counterclockwise	سووڕاندنەوەی پەڕەکان بە پێچەوانەی ئاراستەی کاتژمێر
+	Delete pages	سڕینەوەی پەڕەکان
+	Insert blank page	خستنەناوی پەڕەیەکی بەتاڵ
+	Rotate pages…	سووڕاندنەوەی پەڕەکان…
+	Duplicate pages	دووبارەکردنەوەی پەڕەکان
+	Crop pages	بڕینەوەی پەڕەکان
+	Set page boxes…	دانانی سندووقەکانی پەڕە…
+	Insert pages from file…	خستنەناوی پەڕە لە فایل…
+	Replace pages…	جێگرتنەوەی پەڕەکان…
+	Extract pages…	دەرهێنانی پەڕەکان…
+	Split document…	دابەشکردنی بەڵگەنامە…
+	Number pages…	ژمارەدان بە پەڕەکان…
+	Keyboard shortcuts	کورتەڕێگاکانی تەختەکلیل
+	Join the ArtCraft Discord	بەشداریکردن لە Discordی ArtCraft
+	PdfCraft web page	لاپەڕەی وێبی PdfCraft
+	PdfCraft on GitHub	PdfCraft لە GitHub
+	ArtCraft website	ماڵپەڕی ArtCraft
+	Check for updates…	پشکنین بۆ نوێکردنەوەکان…
+	About PdfCraft	دەربارەی PdfCraft
+	Export a PDF	هەناردەکردنی PDFێک
+	Export to	هەناردەکردن بۆ
+	Microsoft Word (.docx)	Microsoft Word (.docx)
+	Spreadsheet (.xlsx)	خشتەی داتا (.xlsx)
+	Presentation (.pptx)	پێشکەشکردن (.pptx)
+	Image (PNG)	وێنە (PNG)
+	Export all images	هەناردەکردنی هەموو وێنەکان
+	HTML web page	لاپەڕەی وێبی HTML
+	Rich Text Format (.rtf)	فۆرماتی دەقی دەوڵەمەند (.rtf)
+	Text (plain)	دەق (سادە)
+	PostScript / EPS	PostScript / EPS
+	Fill & Sign	پڕکردنەوە و واژووکردن
+	Fill	پڕکردنەوە
+	Checkmark	نیشانەی ڕاست
+	Cross	نیشانەی هەڵە
+	Dot	خاڵ
+	Line	هێڵ
+	Date	بەروار
+	Signature	واژوو
+	Initials	سەرەتاییەکانی ناو
+	Edit a PDF	دەستکاریکردنی PDFێک
+	Modify page	دەستکاریکردنی پەڕە
+	Rotate pages	سووڕاندنەوەی پەڕەکان
+	Insert pages	خستنەناوی پەڕەکان
+	Extract pages	دەرهێنانی پەڕەکان
+	Add content	زیادکردنی ناوەڕۆک
+	Text	دەق
+	Image	وێنە
+	Header and footer	سەرەوە و خوارەوەی پەڕە
+	Watermark	نیشانەی ئاوی
+	Link	بەستەر
+	Bates numbering	ژمارەدانی Bates
+	Background	پاشبنەما
+	Attach file	پێوەکردنی فایل
+	Create a PDF	دروستکردنی PDFێک
+	Create from	دروستکردن لە
+	Single file	یەک فایل
+	Multiple files	چەند فایل
+	Separate PDFs	PDFی جیاجیا
+	Images	وێنەکان
+	Clipboard	کلیپبۆرد
+	Blank page	پەڕەی بەتاڵ
+	Combine files	تێکەڵکردنی فایلەکان
+	Combine	تێکەڵکردن
+	Add files to combine	زیادکردنی فایل بۆ تێکەڵکردن
+	Page options	هەڵبژاردەکانی پەڕە
+	Page grid	تۆڕی پەڕەکان
+	Rotate	سووڕاندنەوە
+	Delete	سڕینەوە
+	Extract	دەرهێنان
+	Insert	خستنەناو
+	Replace	جێگرتنەوە
+	Split	دابەشکردن
+	More	زیاتر
+	Set page boxes	دانانی سندووقەکانی پەڕە
+	Set page transitions	دانانی گواستنەوەکانی پەڕە
+	Page labels	نیشانەکانی پەڕە
+	Page transitions	گواستنەوەکانی پەڕە
+	Add comments	زیادکردنی لێدوان
+	Markup	نیشانەکردن
+	Sticky note	تێبینی لکاو
+	Underline	ژێرهێڵ
+	Strikethrough	هێڵخستنەسەر
+	Squiggly underline	ژێرهێڵی شەپۆلی
+	Text box	سندووقی دەق
+	Drawing	وێنەکێشان
+	Rectangle	لاکێشە
+	Oval	هێلکەیی
+	Arrow	تیر
+	Cloud	هەور
+	Stamp	مۆر
+	Review	پێداچوونەوە
+	Comment list	پێڕستی لێدوانەکان
+	Scan & OCR	سکانکردن و OCR
+	Recognize text	ناسینەوەی دەق
+	In this file	لەم فایلەدا
+	In multiple files	لە چەند فایلێکدا
+	Enhance scanned file	باشترکردنی فایلی سکانکراو
+	Correct recognized text	ڕاستکردنەوەی دەقی ناسراو
+	Protect a PDF	پاراستنی PDFێک
+	Protect	پاراستن
+	Protect with password	پاراستن بە وشەی نهێنی
+	Remove hidden information	لابردنی زانیارییە شاردراوەکان
+	Advanced options	هەڵبژاردە پێشکەوتووەکان
+	Encrypt with certificate	کۆدکردن بە بڕوانامە
+	Security properties	تایبەتمەندییەکانی ئاسایش
+	Redact a PDF	شاردنەوەی PDFێک
+	Redact	شاردنەوە
+	Redact pages	شاردنەوەی پەڕەکان
+	Find text and redact	دۆزینەوەی دەق و شاردنەوە
+	Set properties	دانانی تایبەتمەندییەکان
+	Sanitize document	پاکژکردنی بەڵگەنامە
+	Compress a PDF	پەستاندنی PDFێک
+	Optimize	باشترکردن
+	Reduce file size	کەمکردنەوەی قەبارەی فایل
+	Advanced optimization	باشترکردنی پێشکەوتوو
+	Audit space usage	وردبینیکردنی بەکارهێنانی بۆشایی
+	Field list	پێڕستی خانەکان
+	Field properties	تایبەتمەندییەکانی خانە
+	Tab order by rows	ڕیزبەندی بازدەر بەپێی ڕیزەکان
+	Tab order by columns	ڕیزبەندی بازدەر بەپێی ستوونەکان
+	Import data	هاوردەکردنی داتا
+	Export data	هەناردەکردنی داتا
+	Add form components	زیادکردنی پێکهاتەکانی فۆڕم
+	Text field	خانەی دەق
+	Checkbox	خانەی هەڵبژاردن
+	Radio button	دوگمەی هەڵبژاردن
+	Drop-down list	پێڕستی بەرەوخوار
+	List box	سندووقی پێڕست
+	Button	دوگمە
+	Image field	خانەی وێنە
+	Date field	خانەی بەروار
+	Digital signature	واژووی دیجیتاڵی
+	Stamps	مۆرەکان
+	Stamp palette	پالێتی مۆرەکان
+	Use a certificate	بەکارهێنانی بڕوانامەیەک
+	Certificates	بڕوانامەکان
+	Timestamp	مۆری کات
+	Use print production	بەکارهێنانی بەرهەمهێنانی چاپ
+	Print production	بەرهەمهێنانی چاپ
+	Output preview	پێشبینینی دەرهاویشتە
+	Preflight	پشکنینی پێش چاپ
+	Convert colors	گۆڕینی ڕەنگەکان
+	Add printer marks	زیادکردنی نیشانەکانی چاپکەر
+	Fix hairlines	چاککردنی هێڵە باریکەکان
+	Measure objects	پێوانەکردنی تەنەکان
+	Measure	پێوانەکردن
+	Measuring tool	ئامرازی پێوانەکردن
+	Geospatial location	شوێنی جوگرافیایی
+	Compare files	بەراوردکردنی فایلەکان
+	Select files to compare	هەڵبژاردنی فایلەکان بۆ بەراوردکردن
+	Use guided actions	بەکارهێنانی کردارە ڕێنیشاندراوەکان
+	Actions list	پێڕستی کردارەکان
+	Action Wizard	ڕێبەری کردارەکان
+	Make accessible	دەستڕاگەیشتنپێدان
+	Prepare for distribution	ئامادەکردن بۆ بڵاوکردنەوە
+	Optimize scanned documents	باشترکردنی بەڵگەنامە سکانکراوەکان
+	Archive documents	ئەرشیڤکردنی بەڵگەنامەکان
+	Prepare for accessibility	ئامادەکردن بۆ دەستڕاگەیشتن
+	Accessibility	دەستڕاگەیشتن
+	Automatically tag PDF	تاگکردنی خۆکاری PDF
+	Change reading options	گۆڕینی هەڵبژاردەکانی خوێندنەوە
+	Check for accessibility	پشکنینی دەستڕاگەیشتن
+	Add alternate text	زیادکردنی دەقی جێگرەوە
+	Fix reading order	چاککردنی ڕیزبەندی خوێندنەوە
+	Apply PDF standards	جێبەجێکردنی ستانداردەکانی PDF
+	Standards	ستانداردەکان
+	Save as PDF/A	پاشەکەوتکردن وەک PDF/A
+	Save as PDF/X	پاشەکەوتکردن وەک PDF/X
+	Save as PDF/UA	پاشەکەوتکردن وەک PDF/UA
+	Add search index	زیادکردنی پێڕستی گەڕان
+	Index	پێڕست
+	Manage embedded index	بەڕێوەبردنی پێڕستی تێخستراو
+	Use JavaScript	بەکارهێنانی JavaScript
+	JavaScript	JavaScript
+	Console	کۆنسۆڵ
+	Document JavaScripts	JavaScriptەکانی بەڵگەنامە
+	Document actions	کردارەکانی بەڵگەنامە
+	AI assistant	یاریدەدەری AI
+	Bring your own model (off by default)	مۆدێلی خۆت بهێنە (بە بنەڕەت کوژاوەتەوە)
+	Summarize	کورتکردنەوە
+	Ask about this document	پرسیار لەبارەی ئەم بەڵگەنامەیە
+	Translate	وەرگێڕان
+	pages	پەڕەکان
+	Planned	پلانگیراو
+	Planned for milestone	پلانگیراوە بۆ قۆناغ
+	open to see what it will include	بیکەرەوە بۆ بینینی ئەوەی لەخۆی دەگرێت
+	Optional: needs an AI provider you configure	بەدڵی خۆت: پێویستی بە دابینکەرێکی AI هەیە کە خۆت ڕێکی دەخەیت
+	Coming in milestone	لە قۆناغێکی داهاتوودا دێت
+	Items marked Ready work today.	بابەتە نیشانەکراوەکانی «ئامادە» ئەمڕۆ کاردەکەن
+	Preview	پێشبینین
+	Edit fields	دەستکاریکردنی خانەکان
+	Try the form as people filling it in will see it	فۆڕمەکە تاقی بکەرەوە وەک ئەوەی پڕکەرەوەکانی دەیبینن
+	Redact all	شاردنەوەی هەموو
+	Clear all	پاککردنەوەی هەموو
+	Rotate page	سووڕاندنەوەی پەڕە
+	Delete page	سڕینەوەی پەڕە
+	Move page	گواستنەوەی پەڕە
+	Move pages	گواستنەوەی پەڕەکان
+	Duplicate page	دووبارەکردنەوەی پەڕە
+	Replace page	جێگرتنەوەی پەڕە
+	Replace pages	جێگرتنەوەی پەڕەکان
+	Crop page	بڕینەوەی پەڕە
+	Cancel	هەڵوەشاندنەوە
+	Don't save	پاشەکەوت مەکە
+	Apply	جێبەجێکردن
+	Run	بەڕێکردن
+	Clear	پاککردنەوە
+	Sanitize	پاکژکردن
+	Mark all	نیشانەکردنی هەموو
+	Save changes to “{name}” before closing?	گۆڕانکارییەکان لە «{name}» پاشەکەوت بکرێن پێش داخستن؟
+	Your changes will be lost if you don't save them.	گۆڕانکارییەکانت لەدەست دەچن ئەگەر پاشەکەوتیان نەکەیت.
+	Password required	پێویستی بە وشەی نهێنی هەیە
+	“{name}” is protected. Enter a password to open it.	«{name}» پارێزراوە. وشەی نهێنی بنووسە بۆ کردنەوەی.
+	Password	وشەی نهێنی
+	Incorrect password. Try again.	وشەی نهێنی هەڵەیە. دووبارە هەوڵ بدەرەوە.
+	Recognize Text	ناسینەوەی دەق
+	Password protection will be applied when you save	پاراستنی وشەی نهێنی کاتێک پاشەکەوتی دەکەیت جێبەجێ دەکرێت
+	Saved the print-ready PDF to {path}	PDFی ئامادەی چاپ پاشەکەوتکرا لە {path}
+	Could not save: {e}	پاشەکەوتکردن نەکرا: {e}
+	Earlier in tab order	پێشتر لە ڕیزبەندی بازدەردا
+	Later in tab order	دواتر لە ڕیزبەندی بازدەردا
+	From:	لە:
+	To:	بۆ:
+	High Resolution	ڕوونی بەرز
+	Print	چاپکردن
+	Verify to see what the document needs.	پشتڕاستی بکەرەوە بۆ بینینی ئەوەی بەڵگەنامەکە پێویستی پێیەتی.
+	Set Page Boxes	ڕێکخستنی سندووقەکانی پەڕە
+	Signature panel	پانێڵی واژووەکان
+	{month} {day}, {y}	{day} {month} {y}
+	The document's security settings don't allow filling in form fields	ڕێکخستنەکانی ئاسایشی بەڵگەنامەکە ڕێگە نادەن خانەکانی فۆڕم پڕ بکرێنەوە
+	{name} is read-only	{name} تەنها بۆ خوێندنەوەیە
+	{name} has no action	{name} هیچ کردارێکی نییە
+	Previous month	مانگی پێشوو
+	Next month	مانگی داهاتوو
+	January	کانوونی دووەم
+	February	شوبات
+	March	ئازار
+	April	نیسان
+	May	ئایار
+	June	حوزەیران
+	July	تەممووز
+	August	ئاب
+	September	ئەیلوول
+	October	تشرینی یەکەم
+	November	تشرینی دووەم
+	December	کانوونی یەکەم
+	Done	تەواو
+	This certificate is in your list of trusted certificates.	ئەم بڕوانامەیە لە پێڕستی بڕوانامە متمانەپێکراوەکانتدایە.
+	This certificate is trusted through a certificate above it in the chain.	ئەم بڕوانامەیە لە ڕێگەی بڕوانامەیەکی سەروویەوە لە زنجیرەکەدا متمانەپێکراوە.
+	This certificate is not trusted. Signatures made with it show an unknown identity.	ئەم بڕوانامەیە متمانەپێکراو نییە. واژووەکانی دروستکراو پێی ناسنامەیەکی نەناسراو پیشان دەدەن.
+	Add to Trusted Certificates	زیادکردن بۆ بڕوانامە متمانەپێکراوەکان
+	Export…	هەناردەکردن…
+	PDF Optimizer	باشترکەری PDF
+	Discard Objects	فڕێدانی تەنەکان
+	Discard User Data	فڕێدانی داتاکانی بەکارهێنەر
+	Clean Up	پاککردنەوە
+	Color Images	وێنە ڕەنگاوڕەنگەکان
+	Grayscale Images	وێنە خۆڵەمێشییەکان
+	Bicubic downsampling to	کەمکردنەوەی نموونە بە شێوازی Bicubic بۆ
+	for images above	بۆ ئەو وێنانەی سەرووی
+	Compression	پەستاندن
+	ZIP	ZIP
+	Retain existing	هێشتنەوەی ئێستاکە
+	Minimum	کەمترین
+	Low	نزم
+	High	بەرز
+	Maximum	زۆرترین
+	Each image is measured where pages draw it; an image is replaced only if the result is smaller.	هەر وێنەیەک لەو شوێنە پێوانە دەکرێت کە پەڕەکان ڕایدەکێشن؛ وێنەیەک تەنها ئەگەر ئەنجامەکە بچووکتر بێت دەگۆڕدرێت.
+	Discard all links, actions and JavaScript	فڕێدانی هەموو بەستەرەکان و کردارەکان و JavaScript
+	Discard alternate images	فڕێدانی وێنە جێگرەوەکان
+	Discard embedded page thumbnails	فڕێدانی وێنۆچکە تێخستراوەکانی پەڕە
+	Discard document tags	فڕێدانی تاگەکانی بەڵگەنامە
+	Discard embedded print settings	فڕێدانی ڕێکخستنە تێخستراوەکانی چاپ
+	Discard bookmarks	فڕێدانی دڵخوازەکان
+	Discard hidden layer content	فڕێدانی ناوەڕۆکی چینە شاراوەکان
+	Discard all comments, forms and multimedia	فڕێدانی هەموو لێدوانەکان و فۆڕمەکان و فرەمیدیاکان
+	Discard document information and metadata	فڕێدانی زانیاری و میتاداتاکانی بەڵگەنامە
+	Discard all object data (file attachments)	فڕێدانی هەموو داتاکانی تەنەکان (پێوەکراوەکانی فایل)
+	Discard private data of other applications	فڕێدانی داتا تایبەتەکانی بەرنامەکانی تر
+	Discard hidden text	فڕێدانی دەقی شاراوە
+	Use Flate to encode streams that are not encoded	بەکارهێنانی Flate بۆ کۆدکردنی ئەو لێشاوانەی کۆد نەکراون
+	In streams that use LZW encoding, use Flate instead	بەکارهێنانی Flate لە جیاتی LZW بۆ ئەو لێشاوانەی بە LZW کۆد کراون
+	Remove invalid links and bookmarks	لابردنی بەستەر و دڵخوازە نادروستەکان
+	Remove unreferenced named destinations	لابردنی مەبەستە ناونراوەکانی ئاماژەپێنەکراو
+	Compress document structure (object streams)	پەستاندنی پێکهاتەی بەڵگەنامە (لێشاوەکانی تەن)
+	Remove unused objects and merge identical ones	لابردنی تەنە بەکارنەهێنراوەکان و یەکخستنی هاوشێوەکان
+	Audit space usage…	پشکنینی بەکارهێنانی بۆشایی…
+	Space Audit	پشکنینی بۆشایی
+	What takes up the space in this file, by kind of content.	چی بۆشایی ئەم فایلە داگیر دەکات، بەپێی جۆری ناوەڕۆک.
+	Bytes	بایت
+	Content Streams	لێشاوەکانی ناوەڕۆک
+	X Object Forms	فۆڕمەکانی X Object
+	Structure Info	زانیاری پێکهاتە
+	Thumbnails	وێنۆچکەکان
+	Named Destinations	مەبەستە ناونراوەکان
+	Color Spaces	بۆشایی ڕەنگەکان
+	Shadings	سێبەرەکان
+	Patterns (graphics objects)	شێوەکان (تەنە گرافیکییەکان)
+	Extended Graphics States	دۆخە گرافیکییە درێژکراوەکان
+	Embedded Files	فایلە تێخستراوەکان
+	Document Overhead	باری زیادەی بەڵگەنامە
+	Total	کۆی گشتی
+	Text Field Properties	تایبەتمەندییەکانی خانەی دەق
+	Check Box Properties	تایبەتمەندییەکانی خانەی هەڵبژاردن
+	Radio Button Properties	تایبەتمەندییەکانی دوگمەی هەڵبژاردن
+	Dropdown Properties	تایبەتمەندییەکانی پێڕستی بەرەوخوار
+	List Box Properties	تایبەتمەندییەکانی سندووقی پێڕست
+	Button Properties	تایبەتمەندییەکانی دوگمە
+	Digital Signature Properties	تایبەتمەندییەکانی واژووی دیجیتاڵی
+	Position	شوێن
+	Options	هەڵبژاردەکان
+	Validate	پشتڕاستکردنەوە
+	Calculate	ژمێرکاریکردن
+	Actions	کردارەکان
+	This field is locked. Unlock it to change its properties.	ئەم خانەیە قفڵ کراوە. بیکەرەوە بۆ گۆڕینی تایبەتمەندییەکانی.
+	Tooltip:	ڕێنمایی:
+	Common Properties	تایبەتمەندییە هاوبەشەکان
+	Read Only	تەنها خوێندنەوە
+	Required	پێویستە
+	Font Size:	قەبارەی فۆنت:
+	Auto	خۆکار
+	Text Color:	ڕەنگی دەق:
+	Borders and Colors	سنوورەکان و ڕەنگەکان
+	Border Color:	ڕەنگی سنوور:
+	Fill Color:	ڕەنگی پڕکردنەوە:
+	No color	بێ ڕەنگ
+	Beveled	لێواربڕاو
+	Left:	چەپ:
+	Bottom:	خوارەوە:
+	Width:	پانی:
+	Height:	بەرزی:
+	Points from the page's bottom-left corner.	خاڵ لە گۆشەی خوارەوە-چەپی پەڕەکەوە.
+	Alignment:	هاوتەریبکردن:
+	Default Value:	بەهای بنەڕەتی:
+	Multi-line	فرەدێڕ
+	Scroll long text	سکرۆڵکردنی دەقی درێژ
+	Allow Rich Text Formatting	ڕێگەدان بە فۆرماتکردنی دەقی دەوڵەمەند
+	Limit of	سنووری
+	characters	پیت
+	Field is used for file selection	خانەکە بۆ هەڵبژاردنی فایل بەکاردێت
+	Check spelling	پشکنینی ڕێنووس
+	Comb of	خانە بە ژمارەی
+	Export Value: {on}	بەهای هەناردەکردن: {on}
+	Check box is checked by default	خانەی هەڵبژاردن بە بنەڕەت هەڵبژێردراوە
+	Button is checked by default	دوگمەکە بە بنەڕەت هەڵبژێردراوە
+	Buttons with the same name and value are selected in unison	ئەو دوگمانەی هەمان ناو و بەهایان هەیە پێکەوە هەڵدەبژێردرێن
+	Item:	بابەت:
+	Item List	پێڕستی بابەتەکان
+	Up	بۆ سەرەوە
+	Delete {o}	سڕینەوەی {o}
+	Add the choices people pick from.	ئەو هەڵبژاردانە زیاد بکە کە خەڵک لێیان هەڵدەبژێرێت.
+	Default:	بنەڕەتی:
+	(none)	(هیچ)
+	Sort items	ڕیزکردنی بابەتەکان
+	Allow user to enter custom text	ڕێگەدان بە بەکارهێنەر بۆ نووسینی دەقی تایبەت
+	Multiple selection	هەڵبژاردنی فرە
+	Commit selected value immediately	جێبەجێکردنی دەستبەجێی بەهای هەڵبژێردراو
+	Number	ژمارە
+	Percentage	ڕێژەی سەدی
+	Time	کات
+	Special	تایبەت
+	Select format category:	هەڵبژاردنی پۆلی فۆرمات:
+	The value is shown as typed.	بەهاکە وەک ئەوەی نووسراوە پیشان دەدرێت.
+	Decimal places:	شوێنە دەیییەکان:
+	Separator style:	شێوازی جیاکەرەوە:
+	Currency symbol:	هێمای دراو:
+	Before the number	پێش ژمارەکە
+	Negative number style:	شێوازی ژمارە نەرێنییەکان:
+	Format:	فۆرمات:
+	Custom:	تایبەت:
+	Zip Code	کۆدی پۆستە
+	Zip Code + 4	کۆدی پۆستە + 4
+	Phone Number	ژمارەی تەلەفۆن
+	Social Security Number	ژمارەی دڵنیایی کۆمەڵایەتی
+	Arbitrary Mask	ماسکی ئازاد
+	Mask:	ماسک:
+	9 digit, A letter, O letter or digit, X any character	9 ژمارە، A پیت، O پیت یان ژمارە، X هەر پیتێک
+	Example: {sample}	نموونە: {sample}
+	Field value is not validated	بەهای خانەکە پشتڕاست نەکراوەتەوە
+	Field value is in range:	بەهای خانەکە لەناو مەودادایە:
+	Add an Action	زیادکردنی کردارێک
+	Select Trigger:	هەڵبژاردنی پاڵنەر:
+	Mouse Up	بەرزکردنەوەی دوگمەی مشک
+	Mouse Down	پەستانی دوگمەی مشک
+	Mouse Enter	چوونە ژوورەوەی مشک
+	Mouse Exit	چوونە دەرەوەی مشک
+	On Focus	لە کاتی فۆکەسدا
+	On Blur	لە کاتی لەدەستدانی فۆکەسدا
+	Select Action:	هەڵبژاردنی کردار:
+	Open a web link	کردنەوەی بەستەری وێب
+	Reset a form	ڕێکخستنەوەی فۆڕم
+	Execute a menu item	جێبەجێکردنی بابەتێکی پێڕست
+	Show a field	پیشاندانی خانە
+	Hide a field	شاردنەوەی خانە
+	Submit a form	ناردنی فۆڕم
+	Fields to reset (comma-separated; empty: all)	ئەو خانانەی ڕێکدەخرێنەوە (بە کۆمادا جیاکراونەتەوە؛ بەتاڵ: هەموو)
+	Print, NextPage, PrevPage, FirstPage or LastPage	Print یان NextPage یان PrevPage یان FirstPage یان LastPage
+	Field names (comma-separated)	ناوەکانی خانەکان (بە کۆمادا جیاکراونەتەوە)
+	URL to submit to	ئەو URLـەی بۆی دەنێردرێت
+	Script:	سکریپت:
+	Value:	بەها:
+	No actions	هیچ کردارێک نییە
+	Value is not calculated	بەهاکە ژمێرکاری نەکراوە
+	Value is the	بەهاکە بریتییە لە
+	sum (+)	کۆ (+)
+	product (x)	ئەنجامی لێکدان (x)
+	average	تێکڕا
+	minimum	کەمترین
+	maximum	زۆرترین
+	of the following fields:	ئەم خانانەی خوارەوە:
+	Simplified field notation:	نیشانەکردنی سادەکراوی خانەکان:
+	Field names with + - * / and parentheses; put \\ before spaces in names.	ناوی خانەکان لەگەڵ + - * / و کەوانەکان؛ \\ لەپێش بۆشایییەکان لە ناوەکاندا دابنێ.
+
+# Document font selection
+	Finding document fonts…	گەڕان بەدوای فۆنتەکانی بەڵگەنامەدا…
+	Installed fonts…	فۆنتە دامەزراوەکان…
+	Keep source fonts	هێشتنەوەی فۆنتەکانی سەرچاوە
+	Load font…	بارکردنی فۆنت…
+	No openly licensed document fonts found. Load a font file.	هیچ فۆنتێکی بەڵگەنامە بە مۆڵەتی کراوە نەدۆزرایەوە. فایلێکی فۆنت بار بکە.
+
+	Format text	فۆرماتکردنی دەق
+	Bold	ئەستوور
+	Italic	لار
+	Align left	هاوتەریبکردن بە چەپ
+	Centre	ناوەڕاست
+	Align right	هاوتەریبکردن بە ڕاست
+	Justify	هاوتەریبکردنی دوولایەن
+	Thai and Arabic use regular fallback fonts when available.	تایلەندی و عەرەبی کاتێک بەردەست بن فۆنتی جێگرەوەی ئاسایی بەکاردەهێنن.
+	Edit image	دەستکاریکردنی وێنە
+	Rotate counterclockwise	سووڕاندنەوە بە پێچەوانەی ئاراستەی کاتژمێر
+	Rotate clockwise	سووڕاندنەوە بە ئاراستەی کاتژمێر
+	Flip horizontal	هەڵگەڕانەوەی ئاسۆیی
+	Flip vertical	هەڵگەڕانەوەی ستوونی
+	Replace image	جێگرتنەوەی وێنە
+	Crop (% trimmed from each side)	بڕینەوە (% لە هەر لایەکەوە دەبڕدرێت)
+	Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it.	کرتە لە پەڕەکە بکە بۆ زیادکردنی دەق؛ هەر کرتەیەک سندووقێکی نوێ دەست پێدەکات، و ✓ کۆتایی دێنێت. بابەتەکان ڕابکێشە بۆ گواستنەوەیان، گۆشەیەک ڕابکێشە بۆ گۆڕینی قەبارە، دوو کرتە لە دەقەکە بکە بۆ دەستکاریکردنی.
+	Choose an image	هەڵبژاردنی وێنەیەک
+	Export to Image	هەناردەکردن بۆ وێنە
+	Export to Text	هەناردەکردن بۆ دەق
+	Export All Images	هەناردەکردنی هەموو وێنەکان
+	Resolution	ڕوونی
+	Format	فۆرمات
+	Quality	کوالیتی
+	One {f} file per page, named after the document.	یەک فایلی {f} بۆ هەر پەڕەیەک، بە ناوی بەڵگەنامەکەوە ناونراوە.
+	Exclude images smaller than	دەرهێنانی ئەو وێنانەی بچووکترن لە
+	No limit	بێ سنوور
+	Each image once, named after the document and page. JPEG images are saved unchanged; others as PNG.	هەر وێنەیەک جارێک، بە ناوی بەڵگەنامە و پەڕەکەوە ناونراوە. وێنەکانی JPEG بێ گۆڕان پاشەکەوت دەکرێن؛ ئەوانی تر وەک PNG.
+	Plain text in reading order; pages are separated by form feeds.	دەقی سادە بە ڕیزبەندی خوێندنەوە؛ پەڕەکان بە هێمای گۆڕینی پەڕە جیا دەکرێنەوە.
+	Create {what}	دروستکردنی {what}
+	initials	پیتە سەرەتاییەکان
+	signature	واژوو
+	Create Custom Stamp	دروستکردنی مۆری تایبەت
+	From {file}	لە {file}
+	Category:	پۆل:
+	e.g. My stamps	بۆ نموونە: مۆرەکانم
+	Name:	ناو:
+	Custom	تایبەت
+	Delete stamp	سڕینەوەی مۆر
+	Create custom stamp…	دروستکردنی مۆری تایبەت…
+	From a PDF page or an image	لە پەڕەیەکی PDF یان وێنەیەکەوە
+	Line spacing	بۆشایی نێوان دێڕەکان
+	Character spacing	بۆشایی نێوان پیتەکان
+	Horizontal scale	پێوەری ئاسۆیی
+	Rotate Clockwise	سووڕاندنەوە بە ئاراستەی کاتژمێر
+	Rotate Counterclockwise	سووڕاندنەوە بە پێچەوانەی ئاراستەی کاتژمێر
+	Flip Horizontal	هەڵگەڕانەوەی ئاسۆیی
+	Flip Vertical	هەڵگەڕانەوەی ستوونی
+	Replace Image…	جێگرتنەوەی وێنە…
+	Save Image As…	پاشەکەوتکردنی وێنە وەک…
+	Copy Image	کۆپیکردنی وێنە
+	The image has been copied ({w} × {h} pixels)	وێنەکە کۆپی کرا ({w} × {h} پیکسڵ)
+	Couldn't copy the image: {e}	کۆپیکردنی وێنەکە نەکرا: {e}
+	Copy Image in Original Format	کۆپیکردنی وێنە بە فۆرماتی ڕەسەن
+	The image has been copied as a {ext} file	وێنەکە وەک فایلی {ext} کۆپی کرا
+	The page has changed; select the image again	پەڕەکە گۆڕاوە؛ دووبارە وێنەکە هەڵبژێرە
+	Check for updates	پشکنین بۆ نوێکردنەوەکان
+	No check has run yet.	هێشتا هیچ پشکنینێک نەکراوە.
+	Checking for a newer version…	پشکنین بۆ وەشانێکی نوێتر…
+	PdfCraft {v} is available.	PdfCraft {v} بەردەستە.
+	You have version {c}. Download the new version from its release page.	وەشانی {c} هەیە. وەشانە نوێیەکە لە پەڕەی وەشانەکەیەوە دابگرە.
+	PdfCraft {c} is up to date.	PdfCraft {c} نوێکراوەتەوە.
+	Couldn't check for updates: {e}	پشکنین بۆ نوێکردنەوە نەکرا: {e}
+	You have version {c}. All releases are listed at {page}.	وەشانی {c} هەیە. هەموو وەشانەکان لە {page} پێڕست کراون.
+	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	لە GitHub دەپرسێت بۆ نوێترین وەشان. هیچ شتێک بە شێوەی خۆکار داگیر ناکرێت یان دادەمەزرێنرێت.
+	Download	داگرتن
+	Later	دواتر
+	none	هیچ
+	Declared conformance: {shown}	گونجانی ڕاگەیەندراو: {shown}
+	Output intent: {list}	مەبەستی دەرهاویشتە: {list}
+	Conformance level:	ئاستی گونجان:
+	No problems found: the document conforms to {level}.	هیچ کێشەیەک نەدۆزرایەوە: بەڵگەنامەکە لەگەڵ {level} دەگونجێت.
+	 (page {p})	 (پەڕەی {p})
+	  · not fixable here	  · لێرە چاک ناکرێت
+	Verify	سەلماندن
+	Box	سندووق
+	Units	یەکەکان
+	Set to zero	دانان بە سفر
+	Current page ({n})	پەڕەی ئێستا ({n})
+	Subset	ژێرکۆمەڵە
+	Update	نوێکردنەوە
+	Add	زیادکردن
+	{verb} Header and Footer	{verb} سەرەوە و خوارەوەی پەڕە
+	{verb} Watermark	{verb} نیشانەی ئاوی
+	{verb} Background	{verb} پاشبنەما
+	Margins (in)	پەراوێزەکان (ئینچ)
+	Left Header Text	دەقی سەرەوەی چەپ
+	Center Header Text	دەقی سەرەوەی ناوەڕاست
+	Right Header Text	دەقی سەرەوەی ڕاست
+	Left Footer Text	دەقی خوارەوەی چەپ
+	Center Footer Text	دەقی خوارەوەی ناوەڕاست
+	Right Footer Text	دەقی خوارەوەی ڕاست
+	Insert Page Number	خستنەناوی ژمارەی پەڕە
+	Insert Date	خستنەناوی بەروار
+	Start page number	ژمارەی پەڕەی دەستپێک
+	Source	سەرچاوە
+	Fit to page	گونجاندن بە پەڕە
+	Rotation	سووڕاندنەوە
+	Appear behind page	دەردەکەوێت لە پشت پەڕەکە
+	Appear on top of page	دەردەکەوێت لە سەرەوەی پەڕەکە
+	Offset from centre	لادان لە ناوەڕاستەوە
+	From colour	لە ڕەنگەوە
+	Page Range Options	هەڵبژاردەکانی مەودای پەڕەکان
+	Preview: page {p} of {n}	پێشبینین: پەڕەی {p} لە {n}
+	Applies to 1 page	بۆ 1 پەڕە جێبەجێ دەکرێت
+	Applies to {n} pages	بۆ {n} پەڕە جێبەجێ دەکرێت
+	Replaces the existing one on those pages.	ئەوەی ئێستا هەیە لەسەر ئەو پەڕانە دەگۆڕێت.
+	PDF or image	PDF یان وێنە
+	No file chosen	هیچ فایلێک هەڵنەبژێردراوە
+	Page number	ژمارەی پەڕە
+	Scale relative to target page	پێوەر بە بەراورد لەگەڵ پەڕەی ئامانج
+	Link Properties	تایبەتمەندییەکانی بەستەر
+	Create Link	دروستکردنی بەستەر
+	Link Appearance	دیمەنی بەستەر
+	Link Type:	جۆری بەستەر:
+	Visible Rectangle	لاکێشەی دیار
+	Invisible Rectangle	لاکێشەی نادیار
+	Highlight Style:	شێوازی هایلایت:
+	Invert	پێچەوانەکردنەوە
+	Outline	چوارچێوە
+	Inset	ناوەوەچوو
+	Line Thickness:	ئەستووریی هێڵ:
+	Thin	تەنک
+	Thick	ئەستوور
+	Line Style:	شێوازی هێڵ:
+	Solid	پتەو
+	Dashed	خاڵخاڵی
+	Color:	ڕەنگ:
+	Link Action	کرداری بەستەر
+	Open a web page	کردنەوەی لاپەڕەی وێب
+	Go to a page view	چوون بۆ بینینی پەڕەیەک
+	Type the web address.	ناونیشانی وێبەکە بنووسە.
+	This document has no signatures.	ئەم بەڵگەنامەیە هیچ واژوویەکی نییە.
+	The Keychain's digital IDs couldn't be listed: {e}	ناسنامە دیجیتاڵییەکانی Keychain نەتوانرا پێڕست بکرێن: {e}
+	Signed and saved to {path}	واژوو کرا و پاشەکەوتکرا لە {path}
+	Couldn't open revision {n}: {e}	کردنەوەی پێداچوونەوەی {n} نەکرا: {e}
+	Couldn't open the signed version: {e}	کردنەوەی وەشانی واژووکراو نەکرا: {e}
+	Sign with a Digital ID	واژووکردن بە ناسنامەی دیجیتاڵی
+	Choose the digital ID that you want to use for signing:	ئەو ناسنامە دیجیتاڵییە هەڵبژێرە کە دەتەوێت بۆ واژووکردن بەکاری بهێنیت:
+	Keychain  ·  	Keychain  ·  
+	Windows store  ·  	کۆگای Windows  ·  
+	Issued by: 	دەرکراوە لەلایەن: 
+	, Expires: 	، بەسەردەچوون: 
+	Digitally signed by	بە شێوەی دیجیتاڵی واژووکراوە لەلایەن
+	DN: 	DN: 
+	Reason: 	هۆکار: 
+	Location: 	شوێن: 
+	Date: 	بەروار: 
+	The labels are in English: the signature's font can't draw them in this language.	نیشانەکان بە ئینگلیزین: فۆنتی واژووەکە ناتوانێت بەم زمانە بیانکێشێت.
+	No digital IDs yet.	هێشتا هیچ ناسنامەیەکی دیجیتاڵی نییە.
+	Configure New Digital ID	ڕێکخستنی ناسنامەی دیجیتاڵی نوێ
+	Remove "{name}" from this list? The file itself is not deleted.	"{name}" لەم پێڕستە لاببرێت؟ خودی فایلەکە ناسڕدرێتەوە.
+	Continue	بەردەوامبوون
+	Configure a Digital ID for Signing	ڕێکخستنی ناسنامەی دیجیتاڵی بۆ واژووکردن
+	Use a Digital ID from a file	بەکارهێنانی ناسنامەی دیجیتاڵی لە فایلێکەوە
+	Create a new Digital ID (self-signed, saved to a password-protected file)	دروستکردنی ناسنامەی دیجیتاڵی نوێ (خۆواژووکراو، لە فایلێکی پارێزراو بە وشەی نهێنی پاشەکەوت دەکرێت)
+	Name	ناو
+	Organizational Unit	یەکەی ڕێکخراوەیی
+	Organization Name	ناوی ڕێکخراو
+	Email Address	ناونیشانی ئیمەیڵ
+	Country/Region	وڵات/ناوچە
+	Key Algorithm	ئەلگۆریتمی کلیل
+	Confirm Password	پشتڕاستکردنەوەی وشەی نهێنی
+	Valid for 5 years, for digital signatures. Self-signed IDs are usually not trusted by others.	بۆ ماوەی 5 ساڵ کارایە، بۆ واژووە دیجیتاڵییەکان. ناسنامە خۆواژووکراوەکان زۆربەی کات لەلایەن ئەوانی ترەوە متمانەیان پێ ناکرێت.
+	File (.p12, .pfx)	فایل (.p12, .pfx)
+	Digital ID	ناسنامەی دیجیتاڵی
+	Browse…	گەڕان…
+	{verb} as "{name}"	{verb} وەک "{name}"
+	Certify	بڕوانامەدان
+	The signature will be invisible.	واژووەکە نادیار دەبێت.
+	The existing action will be preserved.	کردارە هەبووەکە دەپارێزرێت.
+	Distinguished name	ناوی جیاکراوە
+	Labels	نیشانەکان
+	Graphic	گرافیک
+	Signer's name	ناوی واژووکەر
+	Fill & Sign signature	واژووی «پڕکردنەوە و واژووکردن»
+	Choose image…	هەڵبژاردنی وێنە…
+	Permitted actions after certifying	کردارە ڕێگەپێدراوەکان دوای بڕوانامەدان
+	No changes allowed	هیچ گۆڕانکارییەک ڕێگەپێدراو نییە
+	Annotations, form fill-in, and digital signatures	تێبینییەکان، پڕکردنەوەی فۆڕم و واژووە دیجیتاڵییەکان
+	Form fill-in and digital signatures	پڕکردنەوەی فۆڕم و واژووە دیجیتاڵییەکان
+	The key is in the macOS Keychain, which may ask to allow PdfCraft to use it.	کلیلەکە لە Keychain ی macOS ـدایە، کە ڕەنگە داوای ڕێگەدان بکات بۆ ئەوەی PdfCraft بەکاری بهێنێت.
+	The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.	کلیلەکە لە کۆگای بڕوانامەکانی Windows ـدایە، کە ڕەنگە داوای ڕێگەدان بکات بۆ ئەوەی PdfCraft بەکاری بهێنێت.
+	Digital ID password	وشەی نهێنیی ناسنامەی دیجیتاڵی
+	Back	گەڕانەوە
+	Validate all	پشتڕاستکردنەوەی هەموو
+	Sign this field…	واژووکردنی ئەم خانەیە…
+	Signature is valid:	واژووەکە دروستە:
+	Signature validity is UNKNOWN:	دروستیی واژووەکە نەناسراوە:
+	Signature is INVALID:	واژووەکە نادروستە:
+	Signature Details	وردەکارییەکانی واژوو
+	Reason	هۆکار
+	Signing time	کاتی واژووکردن
+	Algorithm	ئەلگۆریتم
+	Signer	واژووکەر
+	Issued by	دەرکراوە لەلایەن
+	Valid	دروست
+	Field	خانە
+	Field: {field} on page {p}	خانە: {field} لە پەڕەی {p}
+	Add to trusted certificates	زیادکردن بۆ بڕوانامە متمانەپێکراوەکان
+	View signed version	بینینی وەشانی واژووکراو
+	Show certificate…	پیشاندانی بڕوانامە…
+	Export certificate…	هەناردەکردنی بڕوانامە…
+	Certificate Viewer	بینەری بڕوانامە
+	This dialog shows the details of a certificate and its chain.	ئەم دیالۆگە وردەکارییەکانی بڕوانامە و زنجیرەکەی پیشان دەدات.
+	Trust	متمانە
+	Issued to	دراوە بۆ
+	Valid from	دروستە لە
+	Valid to	دروستە تا
+	Intended usage	بەکارهێنانی مەبەستدار
+	Any	هەر
+	Version	وەشان
+	Serial number	ژمارەی زنجیرەیی
+	Issuer	دەرکەر
+	Validity starts	دەستپێکی دروستی
+	Validity ends	کۆتایی دروستی
+	Public key	کلیلی گشتی
+	Key usage	بەکارهێنانی کلیل
+	Not present	بوونی نییە
+	Self-signed	واژووکراو بە خۆی
+	Edit Action	دەستکاریکردنی کردار
+	New Action	کرداری نوێ
+	Action name:	ناوی کردار:
+	Description:	وەسف:
+	Steps	هەنگاوەکان
+	Add the steps this action runs, in order.	ئەو هەنگاوانە زیاد بکە کە ئەم کردارە جێبەجێیان دەکات، بە ڕیزبەندی.
+	Add Step	زیادکردنی هەنگاو
+	An action with this name already exists.	کردارێک بەم ناوە پێشتر هەیە.
+	New Action…	کرداری نوێ…
+	Edit…	دەستکاریکردن…
+	Add watermark	زیادکردنی نیشانەی ئاوی
+	Add header	زیادکردنی سەرەوەی پەڕە
+	Add footer	زیادکردنی خوارەوەی پەڕە
+	Set document title	دانانی ناونیشانی بەڵگەنامە
+	Run a JavaScript	جێبەجێکردنی JavaScript
+	Prepare for Distribution	ئامادەکردن بۆ دابەشکردن
+	Remove hidden information and flatten comments and form fields, so recipients see only the pages.	لابردنی زانیارییە شاراوەکان و تەختکردنی لێدوانەکان و خانەکانی فۆڕم، تا وەرگرەکان تەنیا پەڕەکان ببینن.
+	Optimize Scanned Documents	باشترکردنی بەڵگەنامە سکانکراوەکان
+	Make scans searchable, then make them smaller.	سکانەکان بکە بە گەڕانپێکراو، پاشان قەبارەیان بچووک بکەرەوە.
+	Add Page Numbers	زیادکردنی ژمارەی پەڕەکان
+	Number every page in the footer.	هەموو پەڕەیەک لە خوارەوەی پەڕەدا ژمارە بکە.
+	Mark as Confidential	نیشانکردن وەک نهێنی
+	A diagonal CONFIDENTIAL watermark on every page.	نیشانەی ئاوی CONFIDENTIAL لار لەسەر هەموو پەڕەیەک.
+	Sanitize Documents	پاکژکردنی بەڵگەنامەکان
+	Remove hidden information, metadata, scripts and embedded content, and rewrite the files.	لابردنی زانیاریی شاراوە، میتاداتا، سکریپتەکان و ناوەڕۆکی تێخراو، و دووبارە نووسینەوەی فایلەکان.
+	Type text	تایپکردنی دەق
+	Text to insert	ئەو دەقەی دەخرێتە ناو
+	Replacement text	دەقی جێگرتنەوە
+	Edit text…	دەستکاریکردنی دەق…
+	Add a sticky note here	لێرە تێبینییەکی لکاو زیاد بکە
+	{kind} Properties	تایبەتمەندییەکانی {kind}
+	Appearance	دیمەن
+	General	گشتی
+	Review History	مێژووی پێداچوونەوە
+	This comment's appearance can't be changed yet.	هێشتا دیمەنی ئەم لێدوانە ناگۆڕدرێت.
+	Icon	ئایکۆن
+	Thickness	ئەستووری
+	Modified	دەستکاریکراو
+	No status has been set.	هیچ دۆخێک دانەنراوە.
+	Compare Files	بەراوردکردنی فایلەکان
+	Old file:	فایلی کۆن:
+	Open the older version first	یەکەم جار وەشانە کۆنەکە بیکەرەوە
+	New file:	فایلی نوێ:
+	Text is compared word by word; the differences are shown on the new file.	دەقەکە وشە بە وشە بەراورد دەکرێت؛ جیاوازییەکان لەسەر فایلە نوێیەکە پیشان دەدرێن.
+	Compare this file with an older version: Compare files… in All tools.	ئەم فایلە لەگەڵ وەشانێکی کۆنتر بەراورد بکە: «بەراوردکردنی فایلەکان…» لە هەموو ئامرازەکاندا.
+	No differences in the text.	هیچ جیاوازییەک لە دەقەکەدا نییە.
+	{n} {kind}	{n} {kind}
+	Inserted	خراوەتە ناو
+	Deleted	سڕاوەتەوە
+	Replaced	گۆڕدراوە
+	Visual	بینراو
+	Mark as comments	نیشانکردن وەک لێدوان
+	Report…	ڕاپۆرت…
+	{kind} · page {p}	{kind} · پەڕەی {p}
+	Set Alternate Text	دانانی دەقی جێگرەوە
+	This document has no tagged figures.	ئەم بەڵگەنامەیە هیچ شێوەیەکی تاگکراوی تێدا نییە.
+	 on page {p}	 لە پەڕەی {p}
+	Figure {i} of {n}{page}	شێوەی {i} لە {n}{page}
+	No preview	هیچ پێشبینینێک نییە
+	Alternate text	دەقی جێگرەوە
+	Describe the figure	شێوەکە وەسف بکە
+	Decorative figure	شێوەی ڕازاندنەوە
+	Previous figure	شێوەی پێشوو
+	Next figure	شێوەی داهاتوو
+	Save & Close	پاشەکەوتکردن و داخستن
+	Accessibility Checker Options	هەڵبژاردەکانی پشکنەری دەستڕاگەیشتن
+	Report Options	هەڵبژاردەکانی ڕاپۆرت
+	Create accessibility report	دروستکردنی ڕاپۆرتی دەستڕاگەیشتن
+	Page Range	مەودای پەڕەکان
+	All pages in document	هەموو پەڕەکانی بەڵگەنامەکە
+	Checking Options ({on} of 32 in all categories)	هەڵبژاردەکانی پشکنین ({on} لە 32 لە هەموو پۆلەکاندا)
+	Show this dialog when the Checker starts	ئەم دیالۆگە پیشان بدە کاتێک پشکنەرەکە دەست پێدەکات
+	Select All	هەڵبژاردنی هەموو
+	Clear All	پاککردنەوەی هەموو
+	Start Checking	دەستپێکردنی پشکنین
+	This document hasn't been checked yet.	ئەم بەڵگەنامەیە هێشتا پشکنینی بۆ نەکراوە.
+	No issues found	هیچ کێشەیەک نەدۆزرایەوە
+	1 issue	1 کێشە
+	{n} issues	{n} کێشە
+	{label} (1 issue)	{label} (1 کێشە)
+	{label} ({n} issues)	{label} ({n} کێشە)
+	Check again	دووبارە پشکنینەوە
+	Report	ڕاپۆرت
+	Show the accessibility report	پیشاندانی ڕاپۆرتی دەستڕاگەیشتن
+	Collapse	کۆکردنەوە
+	Expand	فراوانکردن
+	{rule} - {status}	{rule} - {status}
+	Passed	سەرکەوتوو
+	Failed	شکستخواردوو
+	Needs manual check	پێویستی بە پشکنینی دەستی هەیە
+	Skipped	تێپەڕێنراو
+	Fix	چاککردنەوە
+	Skip Rule	تێپەڕاندنی ڕێسا
+	Explain	ڕوونکردنەوە
+	Check Again	دووبارە پشکنینەوە
+	Show Report	پیشاندانی ڕاپۆرت
+	Options…	هەڵبژاردەکان…
+	Go to the page	چوون بۆ پەڕەکە
+	Page Content	ناوەڕۆکی پەڕە
+	Forms	فۆڕمەکان
+	Alternate Text	دەقی جێگرەوە
+	Tables	خشتەکان
+	Lists	پێڕستەکان
+	Headings	سەردێڕەکان
+	Accessibility permission flag	ئاڵای مۆڵەتی دەستڕاگەیشتن
+	Accessibility permission flag is set	ئاڵای مۆڵەتی دەستڕاگەیشتن دانراوە
+	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	ڕێکخستنەکانی ئاسایش دەبێت ڕێگە بە تەکنەلۆژیای یاریدەدەر بدەن ناوەڕۆکەکە بخوێننەوە ("Enable text access for screen reader devices"). ئاسایشی بەڵگەنامەکە بگۆڕە بۆ ئەوەی ڕێگەی پێبدات.
+	Image-only PDF	PDFی تەنیا وێنە
+	Document is not image-only PDF	بەڵگەنامەکە PDFی تەنیا وێنە نییە
+	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	ئەو پەڕانەی تەنیا وێنەی دەقن ناخوێنرێنەوە بە دەنگ و ناگەڕێن تێیاندا. دەق بناسەوە (OCR) بۆ زیادکردنی چینێکی دەق.
+	Document is tagged PDF	بەڵگەنامەکە PDFی تاگکراوە
+	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	تاگەکان پێکهاتەیەکی لۆژیکی بە بەڵگەنامەکە دەدەن کە تەکنەلۆژیای یاریدەدەر پەیڕەوی دەکات. بەڵگەنامەکە تاگ بکە (تاگکردنی PDF بە شێوەی ئۆتۆماتیکی).
+	Logical Reading Order	ڕیزبەندی لۆژیکیی خوێندنەوە
+	Document structure provides a logical reading order	پێکهاتەی بەڵگەنامەکە ڕیزبەندییەکی لۆژیکیی خوێندنەوە دابین دەکات
+	Check that the tags read in the order a sighted reader would. Use the Reading Order tool or the Tags panel to correct it.	دڵنیابە تاگەکان بەو ڕیزبەندییە دەخوێنرێنەوە کە خوێنەرێکی بینەر دەیخوێنێتەوە. ئامرازی ڕیزبەندی خوێندنەوە یان پانێڵی تاگەکان بەکاربهێنە بۆ ڕاستکردنەوەی.
+	Primary language	زمانی سەرەکی
+	Text language is specified	زمانی دەقەکە دیاریکراوە
+	Screen readers choose their voice from the document's language. Set it in Document Properties > Advanced > Language.	خوێنەرەوەکانی شاشە دەنگەکەیان لە زمانی بەڵگەنامەکە هەڵدەبژێرن. لە تایبەتمەندییەکانی بەڵگەنامە > پێشکەوتوو > زمان دایبنێ.
+	Document title is showing in title bar	ناونیشانی بەڵگەنامەکە لە شریتی ناونیشاندا پیشان دەدرێت
+	The window should show a meaningful title rather than the file name. Set a title and Initial View > Show: Document Title.	پەنجەرەکە دەبێت ناونیشانێکی بەمانا پیشان بدات لە جیاتی ناوی فایلەکە. ناونیشانێک دابنێ و لە بینینی سەرەتایی > پیشاندان: ناونیشانی بەڵگەنامە.
+	Bookmarks are present in large documents	دڵخوازەکان لە بەڵگەنامە گەورەکاندا هەن
+	Documents of more than 20 pages need bookmarks for navigation. Add bookmarks for the main sections.	ئەو بەڵگەنامانەی زیاتر لە 20 پەڕەیان هەیە پێویستیان بە دڵخوازە بۆ ڕێنیشاندان. بۆ بەشە سەرەکییەکان دڵخواز زیاد بکە.
+	Color contrast	جیاوازیی ڕەنگ
+	Document has appropriate color contrast	بەڵگەنامەکە جیاوازیی ڕەنگی گونجاوی هەیە
+	Text must contrast enough with its background for people with low vision. Check the colours by eye or with a contrast tool.	دەق دەبێت بە پێی پێویست لەگەڵ پاشبنەماکەی جیاوازیی ڕەنگی هەبێت بۆ ئەوانەی بیناییان لاوازە. ڕەنگەکان بە چاو یان بە ئامرازی جیاوازیی ڕەنگ بپشکنە.
+	Tagged content	ناوەڕۆکی تاگکراو
+	All page content is tagged	هەموو ناوەڕۆکی پەڕەکە تاگکراوە
+	Everything on a page must be tagged or marked as an artifact (decoration, headers, footers). Tag the untagged content.	هەموو شتێک لەسەر پەڕەیەک دەبێت تاگکراو بێت یان وەک توخمی ڕازاندنەوە نیشانکرابێت (ڕازاندنەوە، سەرەوەی پەڕەکان، خوارەوەی پەڕەکان). ئەو ناوەڕۆکەی تاگ نەکراوە تاگی بکە.
+	Tagged annotations	تێبینییە تاگکراوەکان
+	All annotations are tagged	هەموو تێبینییەکان تاگکراون
+	Comments, links and fields must be in the tag tree to be announced. Tag the annotations.	لێدوانەکان، بەستەرەکان و خانەکان دەبێت لە درەختی تاگەکاندا بن تا ڕابگەیەنرێن. تێبینییەکان تاگ بکە.
+	Tab order	ڕیزبەندی بازدەر
+	Tab order is consistent with structure order	ڕیزبەندی بازدەر لەگەڵ ڕیزبەندی پێکهاتەدا یەکدەگرێتەوە
+	Pages with links, comments or fields should tab in structure order. The fix sets each page's tab order to Use Document Structure.	ئەو پەڕانەی بەستەر، لێدوان یان خانیان تێدایە دەبێت بە ڕیزبەندی پێکهاتە بڕۆن. چاککردنەوەکە ڕیزبەندی بازدەری هەر پەڕەیەک دادەنێت بە «بەکارهێنانی پێکهاتەی بەڵگەنامە».
+	Character encoding	کۆدکردنی پیتەکان
+	Reliable character encoding is provided	کۆدکردنی پیتی جێی متمانە دابین کراوە
+	Fonts must map their characters to Unicode so text can be read and copied. Fix the fonts or recreate the PDF.	فۆنتەکان دەبێت پیتەکانیان بە Unicode ببەستنەوە تا دەق بخوێنرێتەوە و کۆپی بکرێت. فۆنتەکان چاک بکەرەوە یان PDFەکە دووبارە دروست بکەرەوە.
+	Tagged multimedia	مولتیمیدیای تاگکراو
+	All multimedia objects are tagged	هەموو تەنەکانی مولتیمیدیا تاگکراون
+	Video, sound and rich media must be tagged to be announced. Tag the multimedia annotations.	ڤیدیۆ، دەنگ و میدیای دەوڵەمەند دەبێت تاگ بکرێن تا ڕابگەیەنرێن. تێبینییەکانی مولتیمیدیا تاگ بکە.
+	Screen flicker	بلیسکەی شاشە
+	Page will not cause screen flicker	پەڕەکە بلیسکەی شاشە دروست ناکات
+	Animation that flashes can cause seizures. Check scripts and media for flicker.	جوڵەی بلیسکەدەر دەتوانێت ببێتە هۆی نۆرە. سکریپتەکان و میدیاکان بۆ بلیسکە بپشکنە.
+	Scripts	سکریپتەکان
+	No inaccessible scripts	هیچ سکریپتێکی دەستپێنەگەیشتوو نییە
+	Timed responses	وەڵامە کاتدارەکان
+	Page does not require timed responses	پەڕەکە پێویستی بە وەڵامی کاتدار نییە
+	People may need more time to respond. Check that nothing has a time limit.	لەوانەیە خەڵک پێویستیان بە کاتی زیاتر بێت بۆ وەڵامدانەوە. دڵنیابە هیچ شتێک سنووری کاتی نییە.
+	Navigation links	بەستەرەکانی ڕێنیشاندان
+	Navigation links are not repetitive	بەستەرەکانی ڕێنیشاندان دووبارە نین
+	Repeated navigation links should be skippable. Check links that appear on every page.	دەبێت بتوانرێت بەستەرە دووبارەبووەکانی ڕێنیشاندان تێپەڕێنرێن. ئەو بەستانە بپشکنە کە لە هەموو پەڕەیەکدا دەردەکەون.
+	Tagged form fields	خانە تاگکراوەکانی فۆڕم
+	All form fields are tagged	هەموو خانەکانی فۆڕم تاگکراون
+	Form fields must be in the tag tree (Form tags) to be announced. Tag the form fields.	خانەکانی فۆڕم دەبێت لە درەختی تاگەکاندا بن (تاگەکانی Form) تا ڕابگەیەنرێن. خانەکانی فۆڕم تاگ بکە.
+	Field descriptions	وەسفەکانی خانە
+	All form fields have description	هەموو خانەکانی فۆڕم وەسفیان هەیە
+	Each field needs a tooltip that says what to enter. Add one in Field Properties > General > Tooltip.	هەر خانەیەک پێویستی بە ڕێنمایییەک هەیە کە بڵێت چی بنووسرێت. یەکێک زیاد بکە لە تایبەتمەندییەکانی خانە > گشتی > ڕێنمایی.
+	Figures alternate text	دەقی جێگرەوەی شێوەکان
+	Figures require alternate text	شێوەکان پێویستیان بە دەقی جێگرەوە هەیە
+	Pictures need alternate text that describes them, or must be marked decorative. Add alternate text to each figure.	وێنەکان پێویستیان بە دەقی جێگرەوەیە کە وەسفیان بکات، یان دەبێت وەک ڕازاندنەوە نیشان بکرێن. بۆ هەر شێوەیەک دەقی جێگرەوە زیاد بکە.
+	Nested alternate text	دەقی جێگرەوەی نێوخراو
+	Alternate text that will never be read	دەقی جێگرەوە کە هەرگیز ناخوێنرێتەوە
+	Alternate text inside an element that already has alternate text is never read. Remove the inner alternate text.	دەقی جێگرەوە لەناو توخمێکدا کە خۆی دەقی جێگرەوەی هەیە هەرگیز ناخوێنرێتەوە. دەقە جێگرەوە ناوخۆییەکە لاببە.
+	Associated with content	بەستراوە بە ناوەڕۆکەوە
+	Alternate text must be associated with some content	دەقی جێگرەوە دەبێت بە ناوەڕۆکێکەوە ببەسترێت
+	Alternate text on an element without page content is never reached. Remove it or attach the element to content.	دەقی جێگرەوە لەسەر توخمێک بەبێ ناوەڕۆکی پەڕە هەرگیز پێی ناگەن. لایببە یان توخمەکە بە ناوەڕۆکەوە بلکێنە.
+	Hides annotation	تێبینییەک دەشارێتەوە
+	Alternate text should not hide annotation	دەقی جێگرەوە نابێت تێبینییەک بشارێتەوە
+	Alternate text on an element that contains a link or field hides that annotation from assistive technology. Move the alternate text.	دەقی جێگرەوە لەسەر توخمێک کە بەستەر یان خانەیەکی تێدایە ئەو تێبینییە لە تەکنەلۆژیای یاریدەدەر دەشارێتەوە. دەقە جێگرەوەکە بگوازەوە.
+	Other elements alternate text	دەقی جێگرەوەی توخمەکانی تر
+	Other elements that require alternate text	توخمەکانی تر کە پێویستیان بە دەقی جێگرەوە هەیە
+	Formulas and similar non-text elements need alternate text. Add alternate text to them.	فۆرمولەکان و توخمە نادەقییە هاوشێوەکان پێویستیان بە دەقی جێگرەوە هەیە. دەقی جێگرەوەیان بۆ زیاد بکە.
+	Rows	ڕیزەکان
+	TR must be a child of Table, THead, TBody, or TFoot	TR دەبێت منداڵی Table یان THead یان TBody یان TFoot بێت
+	Table cells belong in a row. Fix the table's tags.	خانەکانی خشتە شوێنیان لەناو ڕیزێکدایە. تاگەکانی خشتەکە چاک بکەرەوە.
+	Headers	سەردێڕەکان
+	Tables should have headers	خشتەکان دەبێت سەردێڕیان هەبێت
+	Header cells (TH) tell listeners what each column or row holds. Mark the header cells.	خانە سەردێڕەکان (TH) بە گوێگرەکان دەڵێن هەر ستوون یان ڕیزێک چی لەخۆ دەگرێت. خانە سەردێڕەکان نیشان بکە.
+	Regularity	ڕێکی
+	Tables must contain the same number of columns in each row and rows in each column	خشتەکان دەبێت لە هەر ڕیزێکدا هەمان ژمارەی ستوون و لە هەر ستوونێکدا هەمان ژمارەی ڕیزیان تێدا بێت
+	Irregular tables confuse cell navigation. Give every row the same number of cells (counting spans).	خشتە ناڕێکەکان ڕێنیشاندانی خانەکان شێواو دەکەن. بە هەر ڕیزێک هەمان ژمارەی خانە بدە (بە ژماردنی درێژبوونەوەکان).
+	Summary	کورتە
+	Tables must have a summary	خشتەکان دەبێت کورتەیەکیان هەبێت
+	A summary describes the table's purpose and layout. Add a Summary attribute to each table.	کورتەکە ئامانج و شێوازی خشتەکە وەسف دەکات. بۆ هەر خشتەیەک تایبەتمەندییەکی Summary زیاد بکە.
+	List items	توخمەکانی پێڕست
+	LI must be a child of L	LI دەبێت منداڵی L بێت
+	List items belong in a list. Fix the list's tags.	توخمەکانی پێڕست شوێنیان لەناو پێڕستێکدایە. تاگەکانی پێڕستەکە چاک بکەرەوە.
+	Lbl and LBody	Lbl و LBody
+	Lbl and LBody must be children of LI	Lbl و LBody دەبێت منداڵی LI بن
+	List labels and bodies belong in a list item. Fix the list's tags.	نیشانەکان و دەقەکانی پێڕست شوێنیان لەناو توخمێکی پێڕستدایە. تاگەکانی پێڕستەکە چاک بکەرەوە.
+	Appropriate nesting	نێوخستنی گونجاو
+	Heading levels shouldn't skip (an H1 followed by an H3). Retag the headings.	ئاستەکانی سەردێڕ نابێت ئاستێک تێپەڕێنن (H1 و پاشان H3). سەردێڕەکان دووبارە تاگ بکەرەوە.
+	TH and TD	TH و TD
+	TH and TD must be children of TR	TH و TD دەبێت منداڵی TR بن
+	Mark Page Range	نیشانکردنی مەودای پەڕەکان
+	Pages from	پەڕەکان لە
+	Single word or phrase	یەک وشە یان دەستەواژە
+	Text to find	ئەو دەقەی بۆی دەگەڕێیت
+	Patterns	شێوازەکان
+	Phone Numbers	ژمارەکانی تەلەفۆن
+	Email Addresses	ناونیشانەکانی ئیمەیڵ
+	Credit Cards	کارتەکانی بانک
+	Social Security Numbers	ژمارەکانی دڵنیایی کۆمەڵایەتی
+	Dates	بەروارەکان
+	Text in images isn't found; recognise text (OCR) first.	دەقی ناو وێنەکان نادۆزرێتەوە؛ یەکەم جار دەق بناسەوە (OCR).
+	No matches.	هیچ گونجانێک نییە.
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	هەندێک لە دڵخوازەکان لێرە پیشان نادرێن: پانێڵەکە ژمارەیەکی سنووردار پێڕست دەکات، بە قووڵییەکی سنوورداری نێوخستن.
+	{n} match(es) marked for redaction.	{n} گونجان بۆ شاردنەوە نیشانکراوە.
+	Multiple words or phrases	چەندین وشە یان دەستەواژە
+	One word or phrase per line	یەک وشە یان دەستەواژە لە هەر دێڕێکدا
+	Import list…	هاوردەکردنی پێڕست…
+	{n} word(s) or phrase(s)	{n} وشە یان دەستەواژە
+	{name} is too large for a word list (at most 1 MB).	{name} زۆر گەورەیە بۆ پێڕستی وشەکان (زۆرترین 1 MB).
+	Redaction Tool Properties	تایبەتمەندییەکانی ئامرازی شاردنەوە
+	Redacted area fill colour:	ڕەنگی پڕکردنەوەی ناوچە شاردراوەکە:
+	Use overlay text	بەکارهێنانی دەقی سەرپۆش
+	Custom text:	دەقی تایبەت:
+	Redaction code:	کۆدی شاردنەوە:
+	Font:	فۆنت:
+	Font size:	قەبارەی فۆنت:
+	Font size	قەبارەی فۆنت
+	Auto-size text to fit redaction region	قەبارەدانی ئۆتۆماتیکی دەق بۆ گونجاندن لەگەڵ ناوچەی شاردنەوە
+	Font colour:	ڕەنگی فۆنت:
+	Repeat overlay text	دووبارەکردنەوەی دەقی سەرپۆش
+	Text alignment:	هاوتەریبکردنی دەق:
+	Center	ناوەڕاست
+	Apply redactions	جێبەجێکردنی شاردنەوەکان
+	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	خەریکە 1 نیشانەی شاردنەوە جێبەجێ دەکەیت. دەق، وێنە و وێنەکێشانەکانی ژێر نیشانەکان، و لێدوانەکان و خانەکانی فۆڕم کە لەگەڵیاندا تێکەڵ دەبن، بۆ هەمیشە لادەبرێن.
+	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	خەریکە {n} نیشانەی شاردنەوە جێبەجێ دەکەیت. دەق، وێنە و وێنەکێشانەکانی ژێر نیشانەکان، و لێدوانەکان و خانەکانی فۆڕم کە لەگەڵیاندا تێکەڵ دەبن، بۆ هەمیشە لادەبرێن.
+	Save the document afterwards: saving rewrites the whole file so no trace of the removed content stays in it.	پاشان بەڵگەنامەکە پاشەکەوت بکە: پاشەکەوتکردن هەموو فایلەکە دووبارە دەنووسێتەوە تا هیچ شوێنەواری ناوەڕۆکە لابراوەکە تێیدا نەمێنێت.
+	Select the items to remove from this document.	ئەو توخمانە هەڵبژێرە کە لەم بەڵگەنامەیە لادەبرێن.
+	Metadata	میتاداتا
+	File attachments	پێوەکراوەکانی فایل
+	Comments and markups	لێدوانەکان و نیشانکردنەکان
+	Hidden text	دەقی شاراوە
+	Hidden layers	چینە شاراوەکان
+	Links, actions and JavaScripts	بەستەرەکان، کردارەکان و سکریپتەکانی JavaScript
+	Private data of other applications	داتای تایبەتی بەرنامەکانی تر
+	None found	هیچ نەدۆزرایەوە
+	Form fields are flattened: their values stay visible. Saving rewrites the whole file.	خانەکانی فۆڕم تەخت دەکرێن: بەهاکانیان بەردەوام دەردەکەون. پاشەکەوتکردن هەموو فایلەکە دووبارە دەنووسێتەوە.
+	Remove	لابردن
+	Sanitizing removes hidden information from the document: metadata, file attachments, comments, form fields (flattened), hidden text and layers, bookmarks, links, actions and scripts, and private application data.	پاکژکردن زانیاریی شاراوە لە بەڵگەنامەکە لادەبات: میتاداتا، پێوەکراوەکانی فایل، لێدوانەکان، خانەکانی فۆڕم (تەختکراو)، دەقی شاراوە و چینەکان، دڵخوازەکان، بەستەرەکان، کردارەکان و سکریپتەکان، و داتای تایبەتی بەرنامەکان.
+	Save the document afterwards; saving rewrites the whole file so nothing removed stays in it.	پاشان بەڵگەنامەکە پاشەکەوت بکە؛ پاشەکەوتکردن هەموو فایلەکە دووبارە دەنووسێتەوە تا هیچ شتێکی لابراو تێیدا نەمێنێت.
+	Printer:	چاپکەر:
+	Save as PDF	پاشەکەوتکردن وەک PDF
+	{name} (default)	{name} (بنەڕەتی)
+	Copies:	کۆپییەکان:
+	Collate	ڕیزکردنی کۆپییەکان
+	Print in grayscale	چاپکردن بە خۆڵەمێشی
+	Two-sided:	دوولایە:
+	Off	کوژاوە
+	Flip on long edge	هەڵگێڕانەوە لەسەر لێواری درێژ
+	Flip on short edge	هەڵگێڕانەوە لەسەر لێواری کورت
+	Paper:	کاغەز:
+	Pages to Print	ئەو پەڕانەی چاپ دەکرێن
+	More options:	هەڵبژاردەی زیاتر:
+	All pages in range	هەموو پەڕەکانی ناو مەوداکە
+	Odd pages only	تەنیا پەڕە تاکەکان
+	Even pages only	تەنیا پەڕە جووتەکان
+	Reverse pages	پێچەوانەکردنەوەی ڕیزبەندی پەڕەکان
+	Page Sizing & Handling	قەبارەدان و مامەڵەکردن لەگەڵ پەڕەکان
+	Size	قەبارە
+	Poster	پۆستەر
+	Multiple	فرە
+	Booklet	کتێبچە
+	Fit	گونجاندن
+	Shrink oversized pages	بچووککردنەوەی پەڕە زۆر گەورەکان
+	Custom scale:	پێوەری تایبەت:
+	Tile scale:	پێوەری کاشی:
+	Overlap:	تێکەڵبوون:
+	Cut marks	نیشانەکانی بڕین
+	Pages per sheet:	پەڕە بۆ هەر کاغەزێک:
+	Page order:	ڕیزبەندی پەڕەکان:
+	Horizontal	ئاسۆیی
+	Horizontal reversed	ئاسۆیی پێچەوانە
+	Vertical	ستوونی
+	Vertical reversed	ستوونی پێچەوانە
+	Print page border	چاپکردنی سنووری پەڕە
+	Auto-rotate pages	سووڕاندنەوەی ئۆتۆماتیکی پەڕەکان
+	Booklet subset:	بەشی کتێبچە:
+	Both sides	هەردوو لا
+	Front side only	تەنیا لای پێشەوە
+	Back side only	تەنیا لای دواوە
+	Binding:	بەستنەوە:
+	Left	چەپ
+	Right	ڕاست
+	Orientation:	ئاراستە:
+	Auto portrait/landscape	ستوونی/ئاسۆیی بە شێوەی ئۆتۆماتیکی
+	Portrait	ستوونی
+	Landscape	ئاسۆیی
+	Comments & Forms	لێدوانەکان و فۆڕمەکان
+	Document	بەڵگەنامە
+	Document and markups	بەڵگەنامە و نیشانکردنەکان
+	Document and stamps	بەڵگەنامە و مۆرەکان
+	Form fields only	تەنیا خانەکانی فۆڕم
+	Previous sheet	کاغەزی پێشوو
+	Next sheet	کاغەزی داهاتوو
+	No sheets	هیچ کاغەزێک نییە
+	Sheet {s} of {n}	کاغەزی {s} لە {n}
+	Removed 1 hidden item. Save to remove them from the file.	1 توخمی شاراوە لابرا. بۆ لابردنی لە فایلەکە پاشەکەوتی بکە.
+	Removed {n} hidden items. Save to remove them from the file.	{n} توخمی شاراوە لابرا. بۆ لابردنیان لە فایلەکە پاشەکەوتی بکە.
+	Document sanitized. Save to finish: saving rewrites the whole file.	بەڵگەنامەکە پاکژکرا. بۆ تەواوکردن پاشەکەوتی بکە: پاشەکەوتکردن هەموو فایلەکە دووبارە دەنووسێتەوە.
+	Applied 1 redaction mark. Save to remove the content from the file.	1 نیشانەی شاردنەوە جێبەجێکرا. بۆ لابردنی ناوەڕۆکەکە لە فایلەکە پاشەکەوتی بکە.
+	Applied {n} redaction marks. Save to remove the content from the file.	{n} نیشانەی شاردنەوە جێبەجێکرا. بۆ لابردنی ناوەڕۆکەکە لە فایلەکە پاشەکەوتی بکە.
+	JavaScript Console	کۆنسۆڵی JavaScript
+	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript کوژاوەتەوە (هەڵبژاردەکان ▸ JavaScript).
+	Output appears here.	دەرهاویشتەکە لێرە دەردەکەوێت.
+	Script Name:	ناوی سکریپت:
+	This document has no document-level scripts.	ئەم بەڵگەنامەیە هیچ سکریپتێکی لە ئاستی بەڵگەنامەدا نییە.
+	No form fields were detected	هیچ خانەیەکی فۆڕم نەدۆزرایەوە
+	Detected 1 form field	1 خانەی فۆڕم دۆزرایەوە
+	Detected {n} form fields	{n} خانەی فۆڕم دۆزرایەوە
+	{field}: {e}	{field}: {e}
+	Current page	پەڕەی ئێستا
+	Selected pages	پەڕە هەڵبژێردراوەکان
+	Document language	زمانی بەڵگەنامە
+	Output	دەرهاویشتە
+	Searchable Image (Exact)	وێنەی گەڕانپێکراو (ورد)
+	Adds invisible text over each word; the page image is not changed	دەقی نادیار بەسەر هەر وشەیەکدا زیاد دەکات؛ وێنەی پەڕەکە ناگۆڕێت
+	Downsample to	کەمکردنەوەی ڕوونی بۆ
+	Also recognize pages that already have text	هەروەها ئەو پەڕانە بناسەوە کە خۆیان دەقیان هەیە
+	Pictures on those pages are recognized too; words already in the page's text are not added again	وێنەکانی ئەو پەڕانەش دەناسرێنەوە؛ ئەو وشانەی پێشتر لە دەقی پەڕەکەدان دووبارە زیاد ناکرێن
+	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	ناسینەوەی دەق دانەمەزراوە: فایلەکانی مۆدێلەکەی نین. PdfCraft دووبارە دامەزرێنە، یان PDFCRAFT_MODELS بکە بە ئەو فۆڵدەرەی کە لەخۆی دەگرێت.
+	Settings	ڕێکخستنەکان
+	Optional	بەدڵی خۆت
+	Planned · {m}	پلانگیراو · {m}
+	Planned for milestone {m} — open to see what it will include	پلانگیراو بۆ قۆناغی {m} — بیکەرەوە بۆ ئەوەی ببینیت چی لەخۆ دەگرێت
+	Coming in milestone {m}. Items marked Ready work today.	لە قۆناغی {m}دا دێت. ئەو توخمانەی بە «ئامادە» نیشانکراون ئەمڕۆ کار دەکەن.
+	1 mark	1 نیشانە
+	{n} marks	{n} نیشانە
+	Dynamic	داینامیکی
+	Sign Here	لێرە واژوو بکە
+	Standard Business	بازرگانیی ستاندارد
+	Choose a stamp, then click on the page to place it.	مۆرێک هەڵبژێرە، پاشان کرتە لەسەر پەڕەکە بکە بۆ دانانی.
+	Note	تێبینی
+	Polyline	فرەهێڵ
+	Attachment	پێوەکراو
+	Callout	بالۆن
+	Typewriter	ئامێری نووسین
+	Checked	هەڵبژێردراو
+	Unchecked	هەڵنەبژێردراو
+	Marked	نیشانکراو
+	Locked	قفڵکراو
+	Search comments	گەڕان لە لێدوانەکاندا
+	Add a comment	زیادکردنی لێدوان
+	No comments yet.	هێشتا هیچ لێدوانێک نییە.
+	Pick a tool in the quick bar, or type above.	ئامرازێک لە شریتە خێراکە هەڵبژێرە، یان لە سەرەوە بنووسە.
+	No comments match.	هیچ لێدوانێک ناگونجێت.
+	Unknown author	نووسەری نەناسراو
+	No colour	بێ ڕەنگ
+	Remove checkmark	لابردنی نیشانەی پشکنین
+	Mark with checkmark	نیشانکردن بە نیشانەی پشکنین
+	Reply	وەڵامدانەوە
+	Add a reply	زیادکردنی وەڵام
+	Post	بڵاوکردنەوە
+	Page {label}	پەڕەی {label}
+	{kind} — click to show it on the page	{kind} — کرتە بکە بۆ پیشاندانی لەسەر پەڕەکە
+	Set status	دانانی دۆخ
+	Copy text	کۆپیکردنی دەق
+	Properties…	تایبەتمەندییەکان…
+	Make Current Properties Default	کردنی تایبەتمەندییەکانی ئێستا بە بنەڕەتی
+	Make Properties Default	کردنی تایبەتمەندییەکان بە بنەڕەتی
+	More options	هەڵبژاردەی زیاتر
+	Sort by	ڕیزکردن بەپێی
+	Author	نووسەر
+	Type	جۆر
+	Colour	ڕەنگ
+	Show all comments	پیشاندانی هەموو لێدوانەکان
+	Create PDF comment summary…	دروستکردنی کورتەی لێدوانەکانی PDF…
+	Export all to data file…	هەناردەکردنی هەموو بۆ فایلی داتا…
+	Filter comments	پاڵاوتنی لێدوانەکان
+	Status	دۆخ
+	Accepted	پەسندکراو
+	Rejected	ڕەتکراوە
+	Cancelled	هەڵوەشاوە
+	Completed	تەواوبوو
+	Show all	پیشاندانی هەموو
+	Yellow	زەرد
+	Orange	پرتەقاڵی
+	Red	سوور
+	Pink	پەمەیی
+	Purple	مۆر
+	Blue	شین
+	Light blue	شینی کاڵ
+	Green	سەوز
+	Gray	خۆڵەمێشی
+	Black	ڕەش
+	Bookmark options	هەڵبژاردەکانی دڵخواز
+	Expand all bookmarks	فراوانکردنی هەموو دڵخوازەکان
+	Expand top-level bookmarks	فراوانکردنی دڵخوازەکانی ئاستی سەرەوە
+	Collapse all bookmarks	کۆکردنەوەی هەموو دڵخوازەکان
+	New bookmark ({key})	دڵخوازی نوێ ({key})
+	This document has no bookmarks.	ئەم بەڵگەنامەیە هیچ دڵخوازێکی نییە.
+	This document has no layers.	ئەم بەڵگەنامەیە هیچ چینێکی نییە.
+	This document has no attachments.	ئەم بەڵگەنامەیە هیچ پێوەکراوێکی نییە.
+	Hide layer	شاردنەوەی چین
+	Show layer	پیشاندانی چین
+	Set layer visibility	دانانی دەرکەوتنی چین
+	on page {label}	لە پەڕەی {label}
+	Save attachment…	پاشەکەوتکردنی پێوەکراو…
+	Open in a new tab	کردنەوە لە بازدەرێکی نوێدا
+	This document has no pages.	ئەم بەڵگەنامەیە هیچ پەڕەیەکی نییە.
+	Find text	دۆزینەوەی دەق
+	No matches	هیچ گونجانێک نییە
+	Searching… {s}/{p}	لە گەڕاندایە… {s}/{p}
+	{c} of {n}{more}	{c} لە {n}{more}
+	Previous ({key})	پێشوو ({key})
+	Next ({key})	داهاتوو ({key})
+	Find options	هەڵبژاردەکانی دۆزینەوە
+	Whole words only	تەنیا وشە تەواوەکان
+	Case-sensitive	هەستیار بە گەورە و بچووکی پیت
+	Close (Esc)	داخستن (Esc)
+	Align	هاوتەریبکردن
+	Top	سەرەوە
+	Bottom	خوارەوە
+	Center horizontally	ناوەڕاستکردن بە ئاسۆیی
+	Center vertically	ناوەڕاستکردن بە ستوونی
+	Distribute	دابەشکردن
+	Horizontally	بە ئاسۆیی
+	Vertically	بە ستوونی
+	Set Fields to Same Size	کردنی خانەکان بە هەمان قەبارە
+	Height	بەرزی
+	Width	پانی
+	Both	هەردووکیان
+	Duplicate…	دووبارەکردنەوە…
+	All pages	هەموو پەڕەکان
+	Odd pages	پەڕە تاکەکان
+	Even pages	پەڕە جووتەکان
+	Landscape pages	پەڕە ئاسۆیییەکان
+	Portrait pages	پەڕە ستوونییەکان
+	Move earlier	گواستنەوە بۆ پێشتر
+	Move later	گواستنەوە بۆ دواتر
+	Back to the document	گەڕانەوە بۆ بەڵگەنامەکە
+	Protect Using Password	پاراستن بە وشەی نهێنی
+	Requires user to enter a password for:	پێویستی بەوەیە بەکارهێنەر وشەی نهێنی بنووسێت بۆ:
+	Viewing	بینین
+	Editing	دەستکاریکردن
+	Type Password	نووسینی وشەی نهێنی
+	Re-type Password	دووبارە نووسینەوەی وشەی نهێنی
+	Strength: {s}	هێز: {s}
+	Strong	بەهێز
+	Medium	مامناوەند
+	Weak	لاواز
+	Advanced Options {chevron}	هەڵبژاردە پێشکەوتووەکان {chevron}
+	Compatibility	گونجانی
+	Acrobat X and later (256-bit AES)	Acrobat X و دواتر (AES ی 256-بیت)
+	Acrobat 7.0 and later (128-bit AES)	Acrobat 7.0 و دواتر (AES ی 128-بیت)
+	Acrobat 5.0 and later (128-bit RC4)	Acrobat 5.0 و دواتر (RC4 ی 128-بیت)
+	Acrobat 3.0 and later (40-bit RC4)	Acrobat 3.0 و دواتر (RC4 ی 40-بیت)
+	Encrypt	کۆدکردن
+	All document contents	هەموو ناوەڕۆکەکانی بەڵگەنامەکە
+	All document contents except metadata	هەموو ناوەڕۆکەکانی بەڵگەنامەکە جگە لە میتاداتا
+	Printing allowed	چاپی ڕێگەپێدراو
+	Low Resolution (150 dpi)	ڕوونیی نزم (150 dpi)
+	Changes allowed	گۆڕانکارییە ڕێگەپێدراوەکان
+	Inserting, deleting, and rotating pages	خستنەناو، سڕینەوە و سووڕاندنەوەی پەڕەکان
+	Filling in form fields and signing existing signature fields	پڕکردنەوەی خانەکانی فۆڕم و واژووکردنی خانەکانی واژووی هەبوو
+	Commenting, filling in form fields, and signing existing signature fields	لێدوان، پڕکردنەوەی خانەکانی فۆڕم و واژووکردنی خانەکانی واژووی هەبوو
+	Any except extracting pages	هەموو شتێک جگە لە دەرهێنانی پەڕەکان
+	Enable copying of text, images, and other content	چالاککردنی کۆپیکردنی دەق، وێنە و ناوەڕۆکی تر
+	Enable text access for screen reader devices for the visually impaired	چالاککردنی دەستڕاگەیشتن بە دەق بۆ ئامێرەکانی خوێنەرەوەی شاشە بۆ کەمبینایان
+	Type a password.	وشەی نهێنی بنووسە.
+	The passwords don't match.	وشە نهێنییەکان یەک ناگرنەوە.
+	This compatibility level supports only plain ASCII passwords.	ئەم ئاستەی گونجانی تەنیا پشتیوانی وشە نهێنییە سادەکانی ASCII دەکات.
+	Anyone opening the document will need this password. It's applied when you save.	هەر کەسێک بەڵگەنامەکە بکاتەوە پێویستی بەم وشە نهێنییە دەبێت. لە کاتی پاشەکەوتکردن جێبەجێ دەکرێت.
+	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	بەڵگەنامەکە بەبێ وشەی نهێنی دەکرێتەوە؛ ئەم وشە نهێنییە بۆ گۆڕینی سنووردارکردنەکان پێویستە. لە کاتی پاشەکەوتکردن جێبەجێ دەکرێت.
+	Recover unsaved documents?	گەڕاندنەوەی بەڵگەنامە پاشەکەوتنەکراوەکان؟
+	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft بە شێوەی ئاسایی دانەخرا. ئەم بەڵگەنامانە گۆڕانکارییان هەبوو کە بە شێوەی خۆکار پاشەکەوت کرابوون:
+	just now	ئێستا
+	{n} min ago	{n} خولەک لەمەوبەر
+	{n} h ago	{n} کاتژمێر لەمەوبەر
+	 · password-protected	 · بە وشەی نهێنی پارێزراو
+	Recover	گەڕاندنەوە
+	Discard	فڕێدان
+	Version {v}	وەشان {v}
+	A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0.	بەرنامەیەکی PDF ی سەرچاوە-کراوە کە بە Rust نووسراوە و بە شێوازی ژووری پاک دروستکراوە. MIT OR Apache-2.0.
+	Part of	بەشێک لە
+	Summarize Options	هەڵبژاردەکانی کورتکردنەوە
+	Choose a layout:	شێوازێک هەڵبژێرە:
+	Comments only	تەنیا لێدوانەکان
+	Sort comments by:	ڕیزکردنی لێدوانەکان بەپێی:
+	Create PDF Comment Summary	دروستکردنی کورتەی لێدوانەکانی PDF
+	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	گەڕانەوە بۆ وەشانی پێشووی پاشەکەوتکراوی “{name}”؟ گۆڕانکارییەکانی دوای ئەو کاتە ناتوانرێت پاشگەز بکرێنەوە.
+	Save over the changed file?	پاشەکەوتکردن بەسەر فایلە گۆڕاوەکەدا؟
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	“{name}” لەسەر دیسک گۆڕا دوای ئەوەی کرایەوە یان دوایین جار پاشەکەوت کرا. پاشەکەوتکردن ئێستا ئەو وەشانە نوێیە بەم دانەیە دەگۆڕێتەوە.
+	Save anyway	هەر پاشەکەوتی بکە
+	Number pages	ژمارەدان بە پەڕەکان
+	Style	شێواز
+	None (prefix only)	هیچ (تەنیا پێشگر)
+	Prefix	پێشگر
+	Start	دەستپێک
+	Labels: {preview}. Later pages keep their labels.	نیشانەکان: {preview}. پەڕە دواترەکان نیشانەکانی خۆیان دەپارێزن.
+	Even and Odd Pages	پەڕە جووت و تاکەکان
+	Even Pages Only	تەنیا پەڕە جووتەکان
+	Odd Pages Only	تەنیا پەڕە تاکەکان
+	Landscape and Portrait Pages	پەڕە ئاسۆیی و ستوونییەکان
+	Landscape Pages	پەڕە ئاسۆییەکان
+	Portrait Pages	پەڕە ستوونییەکان
+	Duplicate Field	دووبارەکردنەوەی خانە
+	Duplicate "{name}" onto:	دووبارەکردنەوەی "{name}" بۆ:
+	1 page selected.	1 پەڕە هەڵبژێردرا.
+	{n} pages selected.	{n} پەڕە هەڵبژێردرا.
+	Delete pages after extracting	سڕینەوەی پەڕەکان دوای دەرهێنان
+	Extract pages as separate files	دەرهێنانی پەڕەکان وەک فایلی جیا
+	Rotate Pages	سووڕاندنەوەی پەڕەکان
+	Direction:	ئاراستە:
+	Clockwise 90 degrees	90 پلە بە ئاراستەی کاتژمێر
+	Counterclockwise 90 degrees	90 پلە بە پێچەوانەی کاتژمێر
+	180 degrees	180 پلە
+	Pages:	پەڕەکان:
+	All	هەموو
+	Selection	هەڵبژاردن
+	From	لە
+	Rotate:	سووڕاندنەوە:
+	Repairs	چاکسازییەکان
+	Repair log	تۆماری چاکسازی
+	Split document	دابەشکردنی بەڵگەنامە
+	Number of pages	ژمارەی پەڕەکان
+	Pages per file	پەڕە بۆ هەر فایلێک
+	File size	قەبارەی فایل
+	At most	بە زۆرترین
+	Top-level bookmarks ({n})	دڵخوازەکانی ئاستی سەرەوە ({n})
+	Before each selected page (select pages in Organize)	پێش هەر پەڕەیەکی هەڵبژێردراو (لە «ڕێکخستن» پەڕەکان هەڵبژێرە)
+	Creates 1 file from {n} pages.	1 فایل لە {n} پەڕە دروست دەکات.
+	Creates {f} files from {n} pages.	{f} فایل لە {n} پەڕە دروست دەکات.
+	Each file holds as many of the {n} pages as fit.	هەر فایلێک ئەوەندە لەو {n} پەڕەیە هەڵدەگرێت کە جێی دەبێتەوە.
+	Replace Pages	جێگرتنەوەی پەڕەکان
+	Original: replace pages	ئەسڵ: جێگرتنەوەی پەڕەکان
+	to	بۆ
+	to {n}	بۆ {n}
+	Replacement: pages of {name}	جێگرەوە: پەڕەکانی {name}
+	of {name}	ی {name}
+	Only the page content changes: links, comments, form fields and bookmarks on the original pages stay.	تەنیا ناوەڕۆکی پەڕەکە دەگۆڕێت: بەستەرەکان، لێدوانەکان، خانەکانی فۆڕم و دڵخوازەکانی سەر پەڕە ئەسڵییەکان دەمێننەوە.
+	The replacement file doesn't have that many pages.	فایلە جێگرەوەکە ئەو هەموو پەڕەی نییە.
+	Tagged PDF	PDF ی تاگدار
+	Document Properties	تایبەتمەندییەکانی بەڵگەنامە
+	Description	وەسف
+	Initial View	بینینی سەرەتایی
+	Security	ئاسایش
+	Fonts	فۆنتەکان
+	Advanced	پێشکەوتوو
+	Title	ناونیشان
+	Subject	بابەت
+	Keywords	وشە سەرەکییەکان
+	Application	بەرنامە
+	PDF producer	بەرهەمهێنەری PDF
+	Layout and Magnification	شێواز و گەورەکردنەوە
+	Navigation tab	بازدەری گەشتکردن
+	Page Only	تەنیا پەڕە
+	Bookmarks Panel and Page	پانێڵی دڵخوازەکان و پەڕە
+	Pages Panel and Page	پانێڵی پەڕەکان و پەڕە
+	Attachments Panel and Page	پانێڵی پێوەکراوەکان و پەڕە
+	Layers Panel and Page	پانێڵی چینەکان و پەڕە
+	Page layout	شێوازی پەڕە
+	Default	بنەڕەتی
+	Single Page	تاکە پەڕە
+	Single Page Continuous	تاکە پەڕەی بەردەوام
+	Two-Up (Facing)	دوو-بەر (بەرامبەر)
+	Two-Up Continuous (Facing)	دوو-بەری بەردەوام (بەرامبەر)
+	Two-Up (Cover Page)	دوو-بەر (پەڕەی بەرگ)
+	Two-Up Continuous (Cover Page)	دوو-بەری بەردەوام (پەڕەی بەرگ)
+	Magnification	گەورەکردنەوە
+	Actual Size	قەبارەی ڕاستەقینە
+	Fit Page	گونجاندنی پەڕە
+	Fit Width	گونجاندنی پانی
+	Fit Height	گونجاندنی بەرزی
+	Fit Visible	گونجاندنی دیار
+	Open to page	کردنەوە لە پەڕەی
+	of {pages}	لە {pages}
+	Window Options	هەڵبژاردەکانی پەنجەرە
+	Resize window to initial page	گۆڕینی قەبارەی پەنجەرە بۆ پەڕەی سەرەتایی
+	Center window on screen	ناوەڕاستکردنی پەنجەرە لەسەر شاشە
+	Open in Full Screen mode	کردنەوە بە دۆخی شاشەی پڕ
+	Show:	پیشاندان:
+	File Name	ناوی فایل
+	Document Title	ناونیشانی بەڵگەنامە
+	User Interface Options	هەڵبژاردەکانی ڕووکاری بەکارهێنەر
+	Hide menu bar	شاردنەوەی شریتی پێڕست
+	Hide toolbars	شاردنەوەی شریتەکانی ئامراز
+	Hide window controls	شاردنەوەی کۆنترۆڵەکانی پەنجەرە
+	Security method	شێوازی ئاسایش
+	No security	بێ ئاسایش
+	Restrictions	سنووردارکردنەکان
+	None — everything is allowed	هیچ — هەموو شتێک ڕێگەپێدراوە
+	Password security	ئاسایشی وشەی نهێنی
+	Encryption	کۆدکردن
+	Opened with	کرایەوە بە
+	— (protection is applied when you save)	— (پاراستن لە کاتی پاشەکەوتکردن جێبەجێ دەکرێت)
+	Owner password (no restrictions apply)	وشەی نهێنیی خاوەن (هیچ سنووردارکردنێک جێبەجێ نابێت)
+	User password	وشەی نهێنیی بەکارهێنەر
+	Change settings…	گۆڕینی ڕێکخستنەکان…
+	Printing	چاپ
+	Not allowed	ڕێگەپێنەدراو
+	Allowed	ڕێگەپێدراو
+	High resolution	ڕوونیی بەرز
+	Low resolution	ڕوونیی نزم
+	Changing the document	گۆڕینی بەڵگەنامە
+	Document assembly	کۆکردنەوەی بەڵگەنامە
+	Content copying	کۆپیکردنی ناوەڕۆک
+	Content copying for accessibility	کۆپیکردنی ناوەڕۆک بۆ دەستڕاگەیشتن
+	Commenting	لێدوان
+	Filling of form fields	پڕکردنەوەی خانەکانی فۆڕم
+	No fonts are referenced by the pages.	هیچ فۆنتێک لەلایەن پەڕەکانەوە ئاماژەی پێ نەدراوە.
+	PDF version	وەشانی PDF
+	Location	شوێن
+	Page size	قەبارەی پەڕە
+	Yes	بەڵێ
+	No	نەخێر
+	Revisions	پێداچوونەوەکان
+	View revision {n}	بینینی پێداچوونەوەی {n}
+	Open the file as it was saved then	فایلەکە بکەرەوە وەک ئەوەی ئەو کاتە پاشەکەوت کرابوو
+	Binding	بەستنەوە
+	Left Edge	لێواری چەپ
+	Right Edge	لێواری ڕاست
+	Language	زمان
+	Saved {place}: {before} → {after} ({pct}% smaller){detail}	پاشەکەوتکرا {place}: {before} → {after} ({pct}% بچووکترە){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	ئەم فایلە پێشتر هێندەی پێویست بچووکە ({size}). هیچ کۆپییەک پاشەکەوت نەکرا.
+	Saved {place}: {before} → {after} (not smaller){detail}	پاشەکەوتکرا {place}: {before} → {after} (بچووکتر نییە){detail}
+	Couldn't save the image: {e}	نەتوانرا وێنەکە پاشەکەوت بکرێت: {e}
+	Adding images arrives on the web with file pickers for images	زیادکردنی وێنە لە وێبدا بە هەڵبژێرەری فایلی وێنەوە بەردەست دەبێت
+	Replacing images on page {p} arrives on the web with image pickers ({i})	جێگرتنەوەی وێنەکان لە پەڕەی {p} لە وێبدا بە هەڵبژێرەری وێنەوە بەردەست دەبێت ({i})
+	{name}: choosing images arrives on the web with file pickers for images	{name}: هەڵبژاردنی وێنە لە وێبدا بە هەڵبژێرەری فایلی وێنەوە بەردەست دەبێت
+	Replacing images arrives on the web with image file pickers	جێگرتنەوەی وێنەکان لە وێبدا بە هەڵبژێرەری فایلی وێنەوە بەردەست دەبێت
+	Couldn't create a PDF: {e}	نەتوانرا PDF دروست بکرێت: {e}
+	The clipboard has no image or text	کلیپبۆرد هیچ وێنە یان دەقێکی تێدا نییە
+	On the web, open or drop an image to convert it	لە وێبدا، وێنەیەک بکەرەوە یان فڕێی بدە بۆ گۆڕینی
+	Couldn't optimize the file: {e}	نەتوانرا فایلەکە باشتر بکرێت: {e}
+	Couldn't write {path}: {e}	نەتوانرا لە {path} بنووسرێت: {e}
+	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	فۆڕمەکە داوای ناردن دەکات بۆ {u}؛ PdfCraft داتای فۆڕم نانێرێت. بەڵگەنامەکە پاشەکەوت بکە بۆ پاراستنی تۆمارەکانت.
+	This PDF uses the unsupported {s} action.	ئەم PDFە کرداری {s}ی پشتگیرینەکراو بەکار دەهێنێت.
+	{name}: the {other} action isn't supported yet	{name}: کرداری {other} هێشتا پشتگیری نەکراوە
+	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} فۆڕمەکە دەنێرێت بۆ {url}؛ PdfCraft داتای فۆڕم نانێرێت. بەڵگەنامەکە پاشەکەوت بکە بۆ پاراستنی تۆمارەکانت.
+	Export stopped: {e}	هەناردەکردن وەستا: {e}
+	Exported 1 image	1 وێنە هەناردەکرا
+	Exported {n} images	{n} وێنە هەناردەکرا
+	 ({s} not exported: {first})	 ({s} هەناردە نەکرا: {first})
+	Exported the text of 1 page	دەقی 1 پەڕە هەناردەکرا
+	Exported the text of {n} pages	دەقی {n} پەڕە هەناردەکرا
+	{msg} to {dir}	{msg} بۆ {dir}
+	Exporting… {d} of {t}	لە هەناردەکردندایە… {d} لە {t}
+	Choose a folder for the exported files	فۆڵدەرێک هەڵبژێرە بۆ فایلە هەناردەکراوەکان
+	New {tool} comments will look like this one	لێدوانە نوێیەکانی {tool} وەک ئەمە دەردەکەون
+	This document can't be checked: it couldn't be read for editing	ناتوانرێت ئەم بەڵگەنامەیە بپشکنرێت: نەتوانرا بۆ دەستکاریکردن بخوێنرێتەوە
+	The checker found no problems in this document.	پشکنەرەکە هیچ کێشەیەکی لەم بەڵگەنامەیەدا نەدۆزییەوە.
+	The checker found 1 problem which may prevent the document from being fully accessible.	پشکنەرەکە 1 کێشەی دۆزییەوە کە ڕەنگە ڕێگری بکات لەوەی بەڵگەنامەکە بە تەواوی دەستڕاگەیشتن بێت.
+	The checker found {n} problems which may prevent the document from being fully accessible.	پشکنەرەکە {n} کێشەی دۆزییەوە کە ڕەنگە ڕێگری بکات لەوەی بەڵگەنامەکە بە تەواوی دەستڕاگەیشتن بێت.
+	The text is the same	دەقەکە هەمانە
+	1 difference found	1 جیاوازی دۆزرایەوە
+	{n} differences found	{n} جیاوازی دۆزرایەوە
+	Added 1 comment	1 لێدوان زیادکرا
+	Added {n} comments	{n} لێدوان زیادکرا
+	Choose a folder for the results	فۆڵدەرێک هەڵبژێرە بۆ ئەنجامەکان
+	Files for {name}	فایلەکانی {name}
+	An action is already running	کردارێک پێشتر لە جێبەجێکردندایە
+	Running action… file {d} of {t}	لە جێبەجێکردنی کرداردایە… فایلی {d} لە {t}
+	No unlinked web addresses were found in the text	هیچ ناونیشانی وێبی بەستەرنەکراو لە دەقەکەدا نەدۆزرایەوە
+	Created 1 link	1 بەستەر دروستکرا
+	Created {n} links	{n} بەستەر دروستکرا
+	Text recognition is already running	ناسینەوەی دەق پێشتر لە جێبەجێکردندایە
+	Recognizing text… file {d} of {t}	لە ناسینەوەی دەقدایە… فایلی {d} لە {t}
+	Recognizing text… page {d} of {t}	لە ناسینەوەی دەقدایە… پەڕەی {d} لە {t}
+	Recognized 1 word	1 وشە ناسرایەوە
+	Recognized {n} words	{n} وشە ناسرایەوە
+	{words} on {pages}	{words} لە {pages}
+	; 1 page already had text	؛ 1 پەڕە پێشتر دەقی هەبوو
+	; {n} pages already had text	؛ {n} پەڕە پێشتر دەقی هەبوو
+	Recognized {w} words in 1 file	{w} وشە لە 1 فایل ناسرایەوە
+	Recognized {w} words in {n} files	{w} وشە لە {n} فایل ناسرایەوە
+	; failed: {list}	؛ شکستی هێنا: {list}
+	1 file done	1 فایل تەواو بوو
+	{n} files done	{n} فایل تەواو بوون
+	The selected area has been copied ({w} × {h} pixels)	ناوچە هەڵبژێردراوەکە کۆپیکرا ({w} × {h} پیکسڵ)
+	Couldn't take the snapshot: {e}	نەتوانرا وێنەی دەستبەجێ بگیرێت: {e}
+	Couldn't recover {name}: {e}	نەتوانرا {name} بگەڕێندرێتەوە: {e}
+	The document now conforms to {level}; save it to keep the changes	بەڵگەنامەکە ئێستا لەگەڵ {level} دەگونجێت؛ پاشەکەوتی بکە بۆ پاراستنی گۆڕانکارییەکان
+	Fixed what could be fixed; 1 problem remains	ئەوەی دەکرا چاک بکرێت چاککرا؛ 1 کێشە ماوە
+	Fixed what could be fixed; {n} problems remain	ئەوەی دەکرا چاک بکرێت چاککرا؛ {n} کێشە ماوە
+	Custom stamps arrive on the web with file pickers for images	مۆری تایبەت لە وێبدا بە هەڵبژێرەری فایلی وێنەوە بەردەست دەبێت
+	{file} is too large for a stamp (at most {n} MB)	{file} زۆر گەورەیە بۆ مۆر (بە زۆرترین {n} MB)
+	Sent to {printer}	نێردرا بۆ {printer}
+	Sent to {printer}: {msg}	نێردرا بۆ {printer}: {msg}
+	Looking for printers…	بەدوای چاپکەردا دەگەڕێین…
+	Sending sheet {s} of {n} to {printer}…	لە ناردنی پەڕەی {s} لە {n} بۆ {printer}دایە…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	هیچ چاپکەرێک نەدۆزرایەوە. دڵنیابە لەوەی چاپکەرەکە دامەزراوە و خزمەتگوزاری چاپکردن لە کاردایە، ئینجا دووبارە «Print» بکەرەوە.
+	Sending to {printer}…	لە ناردن بۆ {printer}دایە…
+	Choose a folder for the searchable files	فۆڵدەرێک هەڵبژێرە بۆ فایلە گەڕانلێکراوەکان
+	Files are combined from top to bottom. Leave Pages empty to take every page.	فایلەکان لە سەرەوە بۆ خوارەوە تێکەڵ دەکرێن. «پەڕەکان» بە بەتاڵی بەجێبهێڵە بۆ وەرگرتنی هەموو پەڕەیەک.
+	Unlock…	کردنەوەی قفڵ…
+	Select a password-protected file first	سەرەتا فایلێکی بە وشەی نهێنی پارێزراو هەڵبژێرە
+	Enter the permissions password to allow combining	وشەی نهێنیی مۆڵەتەکان بنووسە بۆ ڕێگەدان بە تێکەڵکردن
+	Enter the password that opens it	ئەو وشە نهێنییە بنووسە کە دەیکاتەوە
+	Unlock {name}	کردنەوەی قفڵی {name}
+	Unlock {n} files	کردنەوەی قفڵی {n} فایل
+	The same password is tried on each file.	هەمان وشەی نهێنی لەسەر هەر فایلێک تاقی دەکرێتەوە.
+	Hide password	شاردنەوەی وشەی نهێنی
+	Show password	پیشاندانی وشەی نهێنی
+	Wrong password	وشەی نهێنیی هەڵە
+	The password is only used to read the file; it isn't saved.	وشە نهێنییەکە تەنیا بۆ خوێندنەوەی فایلەکە بەکار دەهێنرێت؛ پاشەکەوت ناکرێت.
+	Unlock	کردنەوەی قفڵ
+	Opened, but its security settings don't allow combining. Enter the permissions password.	کرایەوە، بەڵام ڕێکخستنەکانی ئاسایشەکەی ڕێگە بە تێکەڵکردن نادەن. وشەی نهێنیی مۆڵەتەکان بنووسە.
+	Unlocked: the combined file won't be password-protected	قفڵ کرایەوە: فایلە تێکەڵکراوەکە بە وشەی نهێنی پارێزراو نابێت
+	Unlocked {n} of {m} files	قفڵی {n} لە {m} فایل کرایەوە
+	Drop PDFs, images, text files or folders here, or choose them.	PDF، وێنە، فایلی دەق یان فۆڵدەر لێرە فڕێ بدە، یان هەڵیانبژێرە.
+	Add folder…	زیادکردنی فۆڵدەر…
+	Add folder and subfolders…	زیادکردنی فۆڵدەر و ژێرفۆڵدەرەکان…
+	More ways to add files	ڕێگای زیاتر بۆ زیادکردنی فایل
+	Every PDF, image and text file in the folder	هەموو فایلی PDF، وێنە و دەق لە فۆڵدەرەکەدا
+	Every PDF, image and text file in the folder and the folders inside it	هەموو فایلی PDF، وێنە و دەق لە فۆڵدەرەکە و ئەو فۆڵدەرانەدا کە لە ناویدان
+	Add folder	زیادکردنی فۆڵدەر
+	Add folder and subfolders	زیادکردنی فۆڵدەر و ژێرفۆڵدەرەکان
+	No PDFs, images or text files found in {folder}	هیچ PDF، وێنە یان فایلی دەقێک لە {folder} نەدۆزرایەوە
+	Added the first {n} files in {folder}	یەکەم {n} فایل لە {folder} زیادکرا
+	Click to sort, drag to move the column. Drag its edge to resize it.	بۆ ڕیزکردن کرتە بکە، بۆ گواستنەوەی ستوونەکە ڕایبکێشە. بۆ گۆڕینی قەبارەکەی لێوارەکەی ڕابکێشە.
+	Reset columns	ڕێکخستنەوەی ستوونەکان
+	Remove {n} files	لابردنی {n} فایل
+	{n} selected	{n} هەڵبژێردرا
+	sorted ascending	ڕیزکراوە بەرەو سەرەوە
+	sorted descending	ڕیزکراوە بەرەو خوارەوە
+	Protected: the combined file won't keep its security settings	پارێزراو: فایلە تێکەڵکراوەکە ڕێکخستنەکانی ئاسایشەکەی ناپارێزێت
+	Add open documents	زیادکردنی بەڵگەنامە کراوەکان
+	All open documents	هەموو بەڵگەنامە کراوەکان
+	No documents are open	هیچ بەڵگەنامەیەک کراوە نییە
+	Select a file first	سەرەتا فایلێک هەڵبژێرە
+	1 file	1 فایل
+	{n} files	{n} فایل
+	1 file needs attention	1 فایل پێویستی بە سەرنج هەیە
+	{n} files need attention	{n} فایل پێویستیان بە سەرنج هەیە
+	{name} can't be combined: {why}	ناتوانرێت {name} تێکەڵ بکرێت: {why}
+	Check the pages of {name}: {why}	پەڕەکانی {name} بپشکنە: {why}
+	Add the files to combine	ئەو فایلانە زیاد بکە کە دەبێت تێکەڵ بکرێن
+	File name	ناوی فایل
+	Warnings	ئاگادارکردنەوەکان
+	Drag to reorder	بۆ ڕیزکردنەوە ڕایبکێشە
+	{k} of {n}	{k} لە {n}
+	? of {n}	? لە {n}
+	Added more than once	زیاتر لە جارێک زیادکراوە
+	yesterday	دوێنێ
+	{n} days ago	{n} ڕۆژ لەمەوبەر
+	No pages selected	هیچ پەڕەیەک هەڵبژێردراو نییە
+	Password-protected	بە وشەی نهێنی پارێزراو
+	Its security settings don't allow copying pages	ڕێکخستنەکانی ئاسایشەکەی ڕێگە بە کۆپیکردنی پەڕەکان نادەن
+	Can't be read: {e}	ناخوێنرێتەوە: {e}
+	Leave out files that can't be read?	ئەو فایلانەی ناخوێنرێنەوە بەجێبهێڵرێن؟
+	These files can't be read, so they won't be in the combined PDF:	ئەم فایلانە ناخوێنرێنەوە، بۆیە لە PDFە تێکەڵکراوەکەدا نابن:
+	Combine the rest	تێکەڵکردنی ئەوانی تر
+	and {n} more	و {n}ی تر
+	Includes unsaved changes	گۆڕانکاریی پاشەکەوتنەکراوی تێدایە
+	Pages of {name} to combine, e.g. 1-3, 6	پەڕەکانی {name} بۆ تێکەڵکردن، بۆ نموونە 1-3, 6
+	Remove {name}	لابردنی {name}
+	Add files…	زیادکردنی فایلەکان…
+	Add at least two files	لانیکەم دوو فایل زیاد بکە
+	Couldn't add {name}: {e}	نەتوانرا {name} زیاد بکرێت: {e}
+	Couldn't combine files: {e}	نەتوانرا فایلەکان تێکەڵ بکرێن: {e}
+	Export comments	هەناردەکردنی لێدوانەکان
+	Export form data	هەناردەکردنی داتای فۆڕم
+	Comment and form data	داتای لێدوان و فۆڕم
+	Export	هەناردەکردن
+	Select data files to merge	فایلی داتا هەڵبژێرە بۆ یەکخستن
+	Form data and PDF forms	داتای فۆڕم و فۆڕمەکانی PDF
+	Save the spreadsheet	پاشەکەوتکردنی خشتەکە
+	Save the accessibility report	پاشەکەوتکردنی ڕاپۆرتی دەستڕاگەیشتن
+	Save image	پاشەکەوتکردنی وێنە
+	Export certificate	هەناردەکردنی بڕوانامە
+	Choose a folder for the extracted pages	فۆڵدەرێک هەڵبژێرە بۆ پەڕە دەرهێنراوەکان
+	Choose a folder for the split files	فۆڵدەرێک هەڵبژێرە بۆ فایلە دابەشکراوەکان
+	Couldn't use {name}: {e}	نەتوانرا {name} بەکار بهێنرێت: {e}
+	Couldn't extract pages: {e}	نەتوانرا پەڕەکان دەربهێنرێن: {e}
+	Couldn't write {name}: {e}	نەتوانرا {name} بنووسرێت: {e}
+	the name is not a plain file name	ناوەکە ناوی فایلی ئاسایی نییە
+	Wrote 1 file to {dir}	1 فایل نووسرا لە {dir}
+	Wrote {n} files to {dir}	{n} فایل نووسرا لە {dir}
+	No pages match those choices	هیچ پەڕەیەک لەگەڵ ئەو هەڵبژاردانە ناگونجێت
+	Couldn't split: {e}	نەتوانرا دابەش بکرێت: {e}
+	Couldn't summarize comments: {e}	نەتوانرا لێدوانەکان کورت بکرێنەوە: {e}
+	Couldn't open the result: {e}	نەتوانرا ئەنجامەکە بکرێتەوە: {e}
+	Importing data arrives on the web with file pickers for data files	هاوردەکردنی داتا لە وێبدا بە هەڵبژێرەری فایلی داتاوە بەردەست دەبێت
+	Exported to {path}	هەناردەکرا بۆ {path}
+	Merging data files needs the desktop app	یەکخستنی فایلی داتا پێویستی بە بەرنامەی سەر مێز هەیە
+	Merged 1 file into {path}	1 فایل یەکخرا لە {path}
+	Merged {n} files into {path}	{n} فایل یەکخرا لە {path}
+	Combined {n} files	{n} فایل تێکەڵکرا
+	Extracted 1 page	1 پەڕە دەرهێنرا
+	Extracted {n} pages	{n} پەڕە دەرهێنرا
+	Created a comment summary	کورتەی لێدوانەکان دروستکرا
+	Couldn't open {name}: {e}	نەتوانرا {name} بکرێتەوە: {e}
+	Couldn't read {name}: {e}	نەتوانرا {name} بخوێنرێتەوە: {e}
+	Couldn't save: {e}	نەتوانرا پاشەکەوت بکرێت: {e}
+	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	داگرتنی پێوەکراوەکان لە وێبدا لەگەڵ M3.10 بەردەست دەبێت ({n} بایت ئامادەیە)
+	`{command}` {when}	`{command}` {when}
+	ships in milestone {m}	لە قۆناغی {m} دەردەچێت
+	needs an AI provider (off by default)	پێویستی بە دابینکەری AI هەیە (بە بنەڕەتی کوژاوەتەوە)
+	is available	بەردەستە
+	is not available yet	هێشتا بەردەست نییە
+	{label} failed: {e}	{label} شکستی هێنا: {e}
+	Undid {label}	{label} پاشگەزکرایەوە
+	Redid {label}	{label} دووبارەکرایەوە
+	A document needs at least one page: copy instead	بەڵگەنامە لانیکەم پێویستی بە یەک پەڕەیە: لە جیاتی ئەوە کۆپی بکە
+	Cut {what}	{what} بڕدرا
+	Copied {what}	{what} کۆپیکرا
+	1 page	1 پەڕە
+	{n} pages	{n} پەڕە
+	Copy or cut pages first	سەرەتا پەڕەکان کۆپی یان ببڕە
+	Couldn't save {name}: {e}	نەتوانرا {name} پاشەکەوت بکرێت: {e}
+	Saved {name}	{name} پاشەکەوتکرا
+	Saved, but reopening failed: {e}	پاشەکەوتکرا، بەڵام کردنەوەوە شکستی هێنا: {e}
+	Downloaded {name}	{name} داگیرا
+	Couldn't download {name}: {e}	نەتوانرا {name} دابگیرێت: {e}
+	Reverted to the last saved version	گەڕایەوە بۆ دوایین وەشانی پاشەکەوتکراو
+	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	ئەوە سەرینەگرت: هەڵەیەکی ناوخۆیی وەستاندی ({m}). بەڵگەنامەکانت نەگۆڕان.
+	Nothing to undo	هیچ شتێک نییە پاشگەزی بکرێتەوە
+	Nothing to redo	هیچ شتێک نییە دووبارە بکرێتەوە
+	This document has no form fields you can fill in	ئەم بەڵگەنامەیە هیچ خانەیەکی فۆڕمی نییە کە بتوانیت پڕی بکەیتەوە
+	This document has no comments to flatten	ئەم بەڵگەنامەیە هیچ لێدوانێکی نییە بۆ تەختکردن
+	This document has no form fields to flatten	ئەم بەڵگەنامەیە هیچ خانەیەکی فۆڕمی نییە بۆ تەختکردن
+	There are no redaction marks (mark text, areas or pages first)	هیچ نیشانەی شاردنەوە نییە (سەرەتا دەق، ناوچە یان پەڕە نیشان بکە)
+	This document has no {kind} to change	ئەم بەڵگەنامەیە هیچ {kind}ی نییە بۆ گۆڕین
+	header or footer	سەرەوەی پەڕە یان خوارەوەی پەڕە
+	watermark	نیشانەی ئاوی
+	background	پاشبنەما
+	This document isn't password-protected	ئەم بەڵگەنامەیە بە وشەی نهێنی پارێزراو نییە
+	Enter permissions password…	وشەی نهێنیی مۆڵەتەکان بنووسە…
+	Permissions password	وشەی نهێنیی مۆڵەتەکان
+	“{name}” has security restrictions. Enter its permissions password to lift them.	“{name}” سنووردارکردنی ئاسایشی هەیە. بۆ لابردنیان وشەی نهێنیی مۆڵەتەکانی بنووسە.
+	Restrictions lifted	سنووردارکردنەکان لابران
+	Couldn't unlock {name}: {e}	نەتوانرا قفڵی {name} بکرێتەوە: {e}
+	This document has no restrictions to lift	ئەم بەڵگەنامەیە هیچ سنووردارکردنێکی نییە بلابرێت
+	The document's security settings don't allow this change	ڕێکخستنەکانی ئاسایشی بەڵگەنامەکە ڕێگە بەم گۆڕانکارییە نادەن
+	The document's security settings don't allow copying text and images	ڕێکخستنەکانی ئاسایشی بەڵگەنامەکە ڕێگە بە کۆپیکردنی دەق و وێنە نادەن
+	Open a document first	سەرەتا بەڵگەنامەیەک بکەرەوە
+	Security will be removed when you save	ئاسایش لە کاتی پاشەکەوتکردن لادەبرێت
+	Click text or an image to edit it	کرتە لەسەر دەق یان وێنەیەک بکە بۆ دەستکاریکردنی
+	Drag a rectangle to create a link; double-click a link to edit it	لاکێشەیەک ڕابکێشە بۆ دروستکردنی بەستەر؛ دوو کرتە لەسەر بەستەرێک بکە بۆ دەستکاریکردنی
+	There are no redaction marks to apply	هیچ نیشانەی شاردنەوە نییە بۆ جێبەجێکردن
+	Drag to draw the area where the signature should appear.	ڕابکێشە بۆ وێنەکێشانی ئەو ناوچەیەی کە واژووەکە تێیدا دەردەکەوێت.
+	Couldn't fit the visible content: {e}	نەتوانرا ناوەڕۆکی دیار بگونجێنرێت: {e}
+	Drag a rectangle around the area to copy	لاکێشەیەک بە دەوری ئەو ناوچەیە ڕابکێشە کە دەبێت کۆپی بکرێت
+	Click on the page to add a {tool}, or drag to set its size	کرتە لەسەر پەڕەکە بکە بۆ زیادکردنی {tool}، یان ڕابکێشە بۆ دیاریکردنی قەبارەکەی
+	Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes	لاکێشەیەک لەسەر پەڕەیەک ڕابکێشە بۆ بڕینەوەی؛ دوو کرتە لەسەر پەڕەیەک بکە بۆ «دانانی سندووقەکانی پەڕە»
+	Keep tool selected: on	هێشتنەوەی ئامرازەکە بە هەڵبژێردراوی: چالاک
+	Keep tool selected	هێشتنەوەی ئامرازەکە بە هەڵبژێردراوی
+	Opacity	ناڕوونی
+	Line thickness	ئەستووریی هێڵ
+	What word or phrase would you like to search for?	دەتەوێت بەدوای چ وشە یان دەستەواژەیەکدا بگەڕێیت؟
+	Searching… {s} of {p} pages	لە گەڕاندایە… {s} لە {p} پەڕە
+	 (searching… {s} of {p} pages)	 (لە گەڕاندایە… {s} لە {p} پەڕە)
+	1 instance	1 شوێن
+	{n} instances	{n} شوێن
+	Go to this result	چوون بۆ ئەم ئەنجامە
+	Highlight	هایلایت
+	Draw	وێنەکێشان
+	Polygon	فرەگۆشە
+	Connected lines	هێڵی بەیەکەوەبەستراو
+	Eraser	سڕەرەوە
+	Sign	واژووکردن
+	Certified by {by}	پشتڕاستکراوە لەلایەن {by}
+	At least one signature is invalid.	لانیکەم واژوویەک نادروستە.
+	Signed and all signatures are valid.	واژوو کراوە و هەموو واژووەکان دروستن.
+	At least one signature has problems.	لانیکەم واژوویەک کێشەی هەیە.
+	This document is secured. Some changes are restricted by its security settings.	ئەم بەڵگەنامەیە پارێزراوە. هەندێک گۆڕانکاری بە ڕێکخستنەکانی ئاسایشەکەی سنووردار کراوە.
+	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	ئەمە فۆڕمی داینامیکی XFA یە، کە PdfCraft هێشتا ناتوانێت پیشانی بدات. ئەوەی دەیبینیت پەڕەی جێگرەوەی فایلەکەیە.
+	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	ئەم فۆڕمە هەروەها داتای XFA ی تێدایە، کە PdfCraft هێشتا نایخوێنێتەوە. دەتوانیت خانەکانی پڕ بکەیتەوە، بەڵام Acrobat ڕەنگە بەهاکانی XFA پیشان بدات لە جیاتیان.
+	This document contains {n} interactive form fields.	ئەم بەڵگەنامەیە {n} خانەی فۆڕمی کارلێکی تێدایە.
+	This file was damaged and has been repaired. Saving keeps the repaired version.	ئەم فایلە تێکچووبوو و چاککرایەوە. پاشەکەوتکردن وەشانە چاککراوەکە دەپارێزێت.
+	Dismiss	پشتگوێخستن
+	Hide field highlights	شاردنەوەی هایلایتی خانەکان
+	Highlight fields	هایلایتکردنی خانەکان
+	Security settings	ڕێکخستنەکانی ئاسایش
+	Details	وردەکارییەکان
+	Select (V)	هەڵبژاردن (V)
+	Hand (H)	دەست (H)
+	Delete pages (Delete)	سڕینەوەی پەڕەکان (Delete)
+	Insert a blank page after the selection	خستنەناوی پەڕەیەکی بەتاڵ دوای هەڵبژاردنەکە
+	Insert pages from a file…	خستنەناوی پەڕە لە فایلێکەوە…
+	Extract pages to a new document	دەرهێنانی پەڕەکان بۆ بەڵگەنامەیەکی نوێ
+	Split into files…	دابەشکردن بۆ فایلەکان…
+	Select pages	هەڵبژاردنی پەڕەکان
+	Cut	بڕین
+	Copy	کۆپیکردن
+	Paste after	لکاندن دوای
+	Rename	ناونانەوە
+	Set to current page ({n})	دانان بە پەڕەی ئێستا ({n})
+	Move up	گواستنەوە بۆ سەرەوە
+	Move down	گواستنەوە بۆ خوارەوە
+	Indent	چوونە ژوورەوە
+	Outdent	هاتنە دەرەوە
+	This document has no form fields.	ئەم بەڵگەنامەیە هیچ خانەیەکی فۆڕمی نییە.
+	Tab order: move a field with its arrows.	ڕیزبەندی بازدەر: خانەیەک بە تیرەکانی بجوڵێنە.
+	Unplaced	دانەنراو
+	Has JavaScript actions (run in M6)	کرداری JavaScript ی هەیە (لە M6 جێبەجێ دەکرێت)
+	Page	پەڕە
+	None	هیچ
+	Delete selected fields	سڕینەوەی خانە هەڵبژێردراوەکان
+	Diagnostic details	وردەکارییەکانی دەستنیشانکردن
+	The operation failed.	کردارەکە شکستی هێنا.
+	no such document	هیچ بەڵگەنامەیەکی لەو جۆرە نییە
+	nothing to undo	هیچ شتێک نییە پاشگەزی بکرێتەوە
+	nothing to redo	هیچ شتێک نییە دووبارە بکرێتەوە
+	this document is signed: rewriting it would invalidate its signatures (save it incrementally instead)	ئەم بەڵگەنامەیە واژوو کراوە: نووسینەوەی دووبارە واژووەکانی بێبایەخ دەکات (لە جیاتی ئەوە بە شێوەی زیادکردن پاشەکەوتی بکە)
+	the document is protected by a password	بەڵگەنامەکە بە وشەی نهێنی پارێزراوە
+	the password is incorrect	وشە نهێنییەکە هەڵەیە
+	the document has no page tree	بەڵگەنامەکە درەختی پەڕەی نییە
+	a document must keep at least one page	بەڵگەنامە دەبێت لانیکەم یەک پەڕەی هەبێت
+	a bookmark cannot be moved inside itself	ناکرێت دڵخوازێک بگوازرێتەوە بۆ ناو خۆی
+	the title must not be empty	ناونیشانەکە نابێت بەتاڵ بێت
+	the document has no form fields	بەڵگەنامەکە هیچ خانەیەکی فۆڕمی نییە
+	there are no redaction marks to apply	هیچ نیشانەیەکی شاردنەوە نییە بۆ جێبەجێکردن
+	there are no pages to print	هیچ پەڕەیەک نییە بۆ چاپکردن
+	the document has no tags	بەڵگەنامەکە هیچ تاگێکی نییە
+	{0}: {1}	{0}: {1}
+	the text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)	مۆدێلەکانی ناسینەوەی دەق دانەمەزراون (PdfCraft دابمەزرێنەرەوە، یان PDFCRAFT_MODELS بکە بە فۆڵدەرەکەی کە لەخۆی دەگرێت)
+	the image is empty	وێنەکە بەتاڵە
+	this file isn't XFDF, FDF, XML or text form data	ئەم فایلە داتای فۆڕمی XFDF یان FDF یان XML یان دەق نییە
+	nothing in the file matches this document	هیچ شتێک لە فایلەکەدا لەگەڵ ئەم بەڵگەنامەیە ناگونجێت
+	This page couldn't be displayed.\n{e}	نەتوانرا ئەم پەڕەیە پیشان بدرێت.\n{e}
+	Go to page {p}	بڕۆ بۆ پەڕەی {p}
+	{s} action	کرداری {s}
+	Page {p} of {n}	پەڕەی {p} لە {n}
+	1 page selected	1 پەڕە هەڵبژێردرا
+	{n} pages selected	{n} پەڕە هەڵبژێردرا
+	{name} — unsaved changes	{name} — گۆڕانکارییە پاشەکەوتنەکراوەکان
+	{kind} field	خانەی {kind}
+	Select a file for the stamp	فایلێک هەڵبژێرە بۆ مۆرەکە
+	JavaScript, e.g. getField("total").value	JavaScript، بۆ نموونە getField("total").value
+	Font: Helvetica	فۆنت: Helvetica
+	e.g. en-US	بۆ نموونە en-US
+	Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)	وێناکردن: hayro (bootstrap) · ڕووکار: egui · ئایکۆنەکان: Lucide (ISC) · فۆنتەکان: Inter, JetBrains Mono, Dancing Script (OFL)
+	CheckBox	خانەی هەڵبژاردن
+	Radio	دوگمەی هەڵبژاردن
+	PushButton	دوگمەی پاڵنان
+	Combo	پێڕستی بەرەوخوار
+	List	پێڕست
+	Unknown	نەناسراو
+	The document has no XMP metadata	بەڵگەنامەکە هیچ میتاداتای XMPی نییە
+	The title in the metadata and the document information differ	ناونیشانی میتاداتاکە و زانیارییەکانی بەڵگەنامەکە جیاوازن
+	The document is encrypted	بەڵگەنامەکە کۆدکراوە
+	Device colour is used, but there is no PDF/A output intent	ڕەنگی ئامێر بەکاردەهێنرێت، بەڵام هیچ مەبەستی دەرهاویشتەی PDF/A نییە
+	DeviceCMYK is used: it needs a CMYK output intent (not added automatically)	DeviceCMYK بەکاردەهێنرێت: پێویستی بە مەبەستی دەرهاویشتەی CMYK هەیە (بە شێوەی خۆکار زیاد ناکرێت)
+	The document has additional actions (/AA)	بەڵگەنامەکە کرداری زیادەی هەیە (/AA)
+	The document has document-level JavaScript	بەڵگەنامەکە JavaScriptی ئاستی بەڵگەنامەی هەیە
+	The form asks viewers to make appearances (NeedAppearances)	فۆڕمەکە داوای دروستکردنی ڕووخسار لە بینەران دەکات (NeedAppearances)
+	A form field has additional actions	خانەیەکی فۆڕم کرداری زیادەی هەیە
+	A stream uses LZW compression	لێشاوێک پەستاندنی LZW بەکاردەهێنێت
+	A stream refers to an external file	لێشاوێک ئاماژە بە فایلێکی دەرەکی دەکات
+	An image asks to be interpolated	وێنەیەک داوای نێوانپڕکردن دەکات
+	An image has alternates or OPI information	وێنەیەک بدیل یان زانیاری OPI هەیە
+	PostScript XObjects aren't allowed	PostScript XObjects ڕێپێنەدراون
+	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	فایلە تێخراوەکان خۆیان دەبێت فایلی PDF/A بن (بۆ ئەوانی تر PDF/A-3 بەکاربهێنە)
+	An embedded file has no AFRelationship	فایلێکی تێخراو هیچ AFRelationshipی نییە
+	Select Icon	هەڵبژاردنی ئایکۆن
+	Choose images	وێنەکان هەڵبژێرە
+	{dpi} pixels/inch	{dpi} پیکسڵ/ئینج
+	Type your {what}.	{what}ەکەت بنووسە.
+	Draw your {what} below.	{what}ەکەت لە خوارەوە بکێشە.
+	Your name	ناوت
+	Images and text (converted to PDF)	وێنە و دەق (دەگۆڕدرێن بۆ PDF)
+	Images and text	وێنە و دەق
+	Check Box Style:	شێوازی خانەی هەڵبژاردن:
+	Button Style:	شێوازی دوگمە:
+	Check	چێک
+	Circle	بازنە
+	Diamond	ئەڵماس
+	Square	چوارگۆشە
+	Star	ئەستێرە
+	{month} {y}	{month} {y}
+	Change {key}	گۆڕینی {key}
+	Insert pages from {name}	خستنەناوی پەڕەکان لە {name}
+	Insert pages from {name} — 1 field renamed	خستنەناوی پەڕەکان لە {name} — 1 خانە ناونرایەوە
+	Insert pages from {name} — fields renamed	خستنەناوی پەڕەکان لە {name} — خانەکان ناونرانەوە
+	Fill in {name}	پڕکردنەوەی {name}
+	Set the image of {name}	دانانی وێنەی {name}
+	Edit script of {name}	دەستکاریکردنی سکریپتی {name}
+	Import {name}	هاوردەکردنی {name}
+	Add bookmark	زیادکردنی دڵخواز
+	Rename bookmark	ناونانەوەی دڵخوازەکە
+	Delete bookmark	سڕینەوەی دڵخوازەکە
+	Move bookmark	گواستنەوەی دڵخوازەکە
+	Set bookmark destination	دانانی مەبەستی دڵخوازەکە
+	Add stamp	زیادکردنی مۆر
+	Delete comment	سڕینەوەی لێدوان
+	Edit comment	دەستکاریکردنی لێدوان
+	Erase	سڕینەوە
+	Lock comment	قفڵکردنی لێدوان
+	Unlock comment	کردنەوەی قفڵی لێدوان
+	Move comment	گواستنەوەی لێدوان
+	Resize comment	گۆڕینی قەبارەی لێدوان
+	Change comment properties	گۆڕینی تایبەتمەندییەکانی لێدوان
+	Add field	زیادکردنی خانە
+	Change field properties	گۆڕینی تایبەتمەندییەکانی خانە
+	Delete field	سڕینەوەی خانە
+	Duplicate field	دووبارەکردنەوەی خانە
+	Set tab order	دانانی ڕیزبەندی بازدەر
+	Change initial view	گۆڕینی بینینی سەرەتایی
+	Set alternate text	دانانی دەقی جێگرەوە
+	Mark figure as decorative	نیشانەکردنی شێوەکە وەک ڕازاندنەوە
+	Run JavaScript	جێبەجێکردنی JavaScript
+	Delete document JavaScript	سڕینەوەی JavaScriptی بەڵگەنامە
+	Edit document JavaScript	دەستکاریکردنی JavaScriptی بەڵگەنامە
+	Edit text	دەستکاریکردنی دەق
+	Load document font	بارکردنی فۆنتی بەڵگەنامە
+	Move image	گواستنەوەی وێنە
+	Rotate image	سووڕاندنەوەی وێنە
+	Flip image	هەڵگەڕاندنەوەی وێنە
+	Delete image	سڕینەوەی وێنە
+	Add header & footer	زیادکردنی سەرەوەی پەڕە و خوارەوەی پەڕە
+	Update header & footer	نوێکردنەوەی سەرەوەی پەڕە و خوارەوەی پەڕە
+	Update watermark	نوێکردنەوەی نیشانەی ئاوی
+	Add background	زیادکردنی پاشبنەما
+	Update background	نوێکردنەوەی پاشبنەما
+	Add image	زیادکردنی وێنە
+	Edit content	دەستکاریکردنی ناوەڕۆک
+	Delete content	سڕینەوەی ناوەڕۆک
+	Remove redaction marks	لابردنی نیشانەکانی شاردنەوە
+	Add link	زیادکردنی بەستەر
+	Change link properties	گۆڕینی تایبەتمەندییەکانی بەستەر
+	Delete link	سڕینەوەی بەستەر
+	Create link	دروستکردنی بەستەر
+	Flatten	تەختکردن
+	Add sticky note	زیادکردنی تێبینی لکاو
+	Add highlight	زیادکردنی هایلایت
+	Add underline	زیادکردنی ژێرهێڵ
+	Add strikethrough	زیادکردنی هێڵخستنەسەر
+	Add squiggly underline	زیادکردنی ژێرهێڵی شەپۆلی
+	Add rectangle	زیادکردنی لاکێشە
+	Add oval	زیادکردنی هێلکەیی
+	Add arrow	زیادکردنی تیر
+	Add line	زیادکردنی هێڵ
+	Add drawing	زیادکردنی وێنەکێشان
+	Add text box	زیادکردنی سندووقی دەق
+	Add checkmark	زیادکردنی نیشانەی چێک
+	Add cross	زیادکردنی نیشانەی خاچ
+	Add dot	زیادکردنی خاڵ
+	Add signature	زیادکردنی واژوو
+	Add redaction mark	زیادکردنی نیشانەی شاردنەوە
+	Add cloud	زیادکردنی هەور
+	Add polygon	زیادکردنی فرەگۆشە
+	Add connected lines	زیادکردنی هێڵی بەستراو
+	Add callout	زیادکردنی بالۆن
+	Add inserted text	زیادکردنی دەقی خستراوەناو
+	Add file attachment	زیادکردنی پێوەکراوی فایل
+	Set status Accepted	دانانی دۆخ: قبووڵکراو
+	Set status Rejected	دانانی دۆخ: ڕەتکراوە
+	Set status Cancelled	دانانی دۆخ: هەڵوەشێنراوە
+	Set status Completed	دانانی دۆخ: تەواوکراو
+	Set status None	دانانی دۆخ: هیچ
+	Set status Unmarked	دانانی دۆخ: بێ نیشانە
+	Save as PDF/A-1b	پاشەکەوتکردن وەک PDF/A-1b
+	Save as PDF/A-2b	پاشەکەوتکردن وەک PDF/A-2b
+	Save as PDF/A-3b	پاشەکەوتکردن وەک PDF/A-3b
+	Fill & Sign: change signature	پڕکردنەوە و واژووکردن: گۆڕینی واژوو
+	Fill & Sign: change initials	پڕکردنەوە و واژووکردن: گۆڕینی پیتە سەرەتاییەکان
+	Fill & Sign: remove saved signature	پڕکردنەوە و واژووکردن: لابردنی واژووی پاشەکەوتکراو
+	Fill & Sign: remove saved initials	پڕکردنەوە و واژووکردن: لابردنی پیتە سەرەتاییە پاشەکەوتکراوەکان
+	Change signature	گۆڕینی واژوو
+	Change initials	گۆڕینی پیتە سەرەتاییەکان
+	Measure distance	پێوانەکردنی دووری
+	Measure perimeter	پێوانەکردنی چێوە
+	Measure area	پێوانەکردنی ڕووبەر
+	Set measurement scale	دانانی پێوەری پێوانە
+	Measurement information	زانیاریی پێوانە
+	Measurement snapping	لکاندنی پێوانە
+	Export measurements as CSV	هەناردەکردنی پێوانەکان وەک CSV
+	Distance	دووری
+	Perimeter	چێوە
+	Area	ڕووبەر
+	Drawing scale	پێوەری وێنەکێشان
+	Scale	پێوەر
+	Common scales	پێوەرە باوەکان
+	Enter a scale such as 1:50.	پێوەرێک بنووسە وەک 1:50.
+	Applying a scale switches units to m / mm.	جێبەجێکردنی پێوەر یەکەکان دەگۆڕێت بۆ م / ملم.
+	Snapping	لکاندن
+	Export measurements	هەناردەکردنی پێوانەکان
+	Open a PDF to measure it.	PDFێک بکەرەوە بۆ پێوانەکردنی.
+	Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area.	کرتە لە لووتکەکان بکە. Enter یان دوو کرتە چێوە یان ڕووبەرێک تەواو دەکات. کرتە لە خاڵی یەکەم بکە بۆ داخستنی ڕووبەرێک.
+	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shift بە 45 پلە سنووردار دەکات. Backspace لووتکەیەک لادەبات. Escape هەڵدەوەشێنێتەوە.
+	Angle	گۆشە
+	Click the first point to begin.	کرتە لە خاڵی یەکەم بکە بۆ دەستپێکردن.
+	Snap to drawing	لکاندن بە وێنەکێشانەوە
+	Endpoints	خاڵەکانی کۆتایی
+	Midpoints	خاڵەکانی ناوەڕاست
+	Intersections	یەکتربڕەکان
+	Paths	ڕێڕەوەکان
+	Sensitivity	هەستیاری
+	Unit	یەکە
+	Decimals	شوێنە دەیییەکان
+	Calibrate from two points	کالیبرەکردن لە دوو خاڵەوە
+	Entire page	هەموو پەڕەکە
+	Viewport rectangle in page points (x, y, width, height)	لاکێشەی ناوچەی بینین بە خاڵەکانی پەڕە (x, y, پانی, بەرزی)
+	Viewport	ناوچەی بینین
+	Apply scale	جێبەجێکردنی پێوەر
+	Saved measurements	پێوانە پاشەکەوتکراوەکان
+	Saved measurements.	پێوانەکان پاشەکەوتکران.
+	Endpoint	خاڵی کۆتایی
+	Midpoint	خاڵی ناوەڕاست
+	Intersection	یەکتربڕ
+	Path	ڕێڕەو
+	This drawing exceeds the snapping limit; only the first paths are used.	ئەم وێنەکێشانە لە سنووری لکاندن تێدەپەڕێت؛ تەنها ڕێڕەوە سەرەتاییەکان بەکاردەهێنرێن.
+	Some page content couldn't be read; snapping uses the rest.	بەشێک لە ناوەڕۆکی پەڕەکە نەخوێنرایەوە؛ لکاندن پاشماوەکە بەکاردەهێنێت.
+	Unsupported measurements	پێوانە پشتگیرینەکراوەکان
+	Label	نیشانە
+	{n} measurements use an unsupported format and are left out.	{n} پێوانە فۆرماتێکی پشتگیرینەکراو بەکاردەهێنن و چوونەتە دەرەوە.
+	This area has too many overlapping paths; intersection snapping is limited.	ئەم ناوچەیە ڕێڕەوی یەکتربڕی زۆری هەیە؛ لکاندنی یەکتربڕەکان سنووردارە.
+	This measurement needs at least {n} points.	ئەم پێوانەیە پێویستی بە لانیکەم {n} خاڵ هەیە.
+	Change {what}	گۆڕینی {what}
+	Cut and stack	بڕین و کەڵەکەکردن
+	Default workspace mode	دۆخی بنەڕەتی شوێنی کار
+	Documents and view	بەڵگەنامەکان و بینین
+	Open email app	کردنەوەی ئەپی ئیمەیڵ
+	Open link	کردنەوەی بەستەر
+	Open this web page?	ئەم لاپەڕەی وێبە بکرێتەوە؟
+	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	سکریپتەکان لە ژینگەیەکی جیاکراودا کاردەکەن بەبێ دەستڕاگەیشتن بە فایل یان تۆڕ. سکریپتێک کە داوای کردنەوەی لاپەڕەی وێب بکات سەرەتا پێویستی بە مۆڵەتی تۆ هەیە. کاتێک JavaScript کوژاوەتەوە، فەرمانە ستانداردەکانی Acrobat بۆ فۆرمات و پشتڕاستکردنەوە و ژمێرکاریکردن هێشتا کاردەکەن.
+	Sign yourself	خۆت واژوو بکە
+	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	کاتی کردنەوەی PDFەکان بەکاردێت. دۆخی ڕوونی خستنەکار یان کۆنترۆڵ بۆ دانیشتنەکە پێشینەی هەیە.
+	Write this email?	ئەم ئیمەیڵە بنووسرێت؟
+	{who} in this document wants to open this address in your browser:	{who} لەم بەڵگەنامەیەدا دەیەوێت ئەم ناونیشانە لە وێبگەڕەکەتدا بکاتەوە:
+	{who} in this document wants to open your email app with this address:	{who} لەم بەڵگەنامەیەدا دەیەوێت ئەپی ئیمەیڵەکەت بەم ناونیشانە بکاتەوە:
+	This web address mixes letters from different alphabets, a common way to imitate another site's name.	ئەم ناونیشانە وێبییە پیت لە ئەلفوبێی جیاواز تێکەڵ دەکات، کە ڕێگایەکی باوە بۆ لاساییکردنەوەی ناوی ماڵپەڕێکی تر.
+	This web address uses letters from another alphabet, which can look like familiar ones.	ئەم ناونیشانە وێبییە پیت لە ئەلفوبێیەکی ترەوە بەکاردەهێنێت، کە لەوانەیە لە پیتە ناسراوەکان بچن.
+	Create PDF from images	دروستکردنی PDF لە وێنەکان
+	Selected image files: {count}	فایلە وێنە هەڵبژێردراوەکان: {count}
+	Use image resolution	بەکارهێنانی ڕوونیی وێنە
+	Use each image's embedded DPI; use 72 DPI when it is absent.	DPIی تێخراوی هەر وێنەیەک بەکاربهێنە؛ کاتێک نییە 72 DPI بەکاربهێنە.
+	Use 72 DPI (one point per pixel)	بەکارهێنانی 72 DPI (یەک خاڵ بۆ هەر پیکسڵێک)
+	Use custom DPI	بەکارهێنانی DPIی تایبەت
+	DPI sets the printed page size without resampling the image.	DPI قەبارەی پەڕەی چاپکراو دیاری دەکات بەبێ دووبارە نموونەگرتنەوەی وێنەکە.
+	Create	دروستکردن
+	Dynamic XFA form laid out from its template: {pages}, {fields}.	فۆڕمی XFAی داینامیکی کە لە قاڵبەکەیەوە ڕێکخراوە: {pages}، {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	سکریپتەکانی ئەم فۆڕمە کوژاونەتەوە چونکە یەکێکیان زۆری پێچوو. بەڵگەنامەکە دووبارە بکەرەوە بۆ ئەوەی دووبارە جێبەجێ بکرێن.
+	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	فۆڕمی XFA: خانەکانی و داتای XFAی هاوتەریب دەهێڵدرێنەوە، بۆیە بینەرەکانی تر ئەوە پیشان دەدەن کە تۆ پڕت کردووەتەوە.
+	Switch to two-page view first to show the cover page	سەرەتا بگۆڕە بۆ بینینی دوو پەڕە بۆ پیشاندانی پەڕەی بەرگ
+	Page display: {layout}	پیشاندانی پەڕە: {layout}
+	Fit to width scrolling	سکرۆڵی گونجاندن بە پانی
+	Fit one full page	گونجاندنی یەک پەڕەی تەواو
+	Default page display	پیشاندانی بنەڕەتی پەڕە
+	Default zoom	زوومی بنەڕەتی
+	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	کاتێک بەکاردێت کە PDFێک داوای چیدان یان زووم ناکات. سکرۆڵی بەردەوام هەرگیز لە نێوان پەڕەکاندا نالکێت.
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	وێنەیەکی PNG یان JPEG هەڵبژێرە (تا 4 MiB). ڕوونییەکە پارێزراو دەمێنێت.
+	Couldn't import the signature image: {e}	نەتوانرا وێنەی واژووەکە هاوردە بکرێت: {e}
+@plural	{n} page|{n} pages	{n} پەڕە|{n} پەڕە
+@plural	{n} field|{n} fields	{n} خانە|{n} خانە
+@plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} ناوی خانە پێکدادەچێت لەگەڵ فایلە پێشووەکاندا و ناودەنرێتەوە: {list}|{n} ناوی خانە پێکدادەچێت لەگەڵ فایلە پێشووەکاندا و ناودەنرێتەوە: {list}
+	Create PDF from multiple files…	دروستکردنی PDF لە چەند فایلێک…
+	Create separate PDFs…	دروستکردنی PDFی جیاجیا…
+	Optimizing… removing user data	باشترکردن… لابردنی داتای بەکارهێنەر
+	Optimizing… image {d} of {t}	باشترکردن… وێنەی {d} لە {t}
+	Optimizing… cleaning up	باشترکردن… پاککردنەوە
+	Optimizing… merging identical objects	باشترکردن… یەکخستنی تەنە هاوشێوەکان
+	Optimizing… writing the copy	باشترکردن… نووسینی کۆپییەکە
+	Cancelling…	هەڵوەشاندنەوە…
+	Created a PDF from {n} files	PDFێک لە {n} فایل دروستکرا
+	PDF, images and text	PDF و وێنە و دەق
+	Insert a file before page {label}	خستنەناوی فایلێک پێش پەڕەی {label}
+	Insert a file at the end	خستنەناوی فایلێک لە کۆتاییدا
+	Save pages	پاشەکەوتکردنی پەڕەکان
+	Save these pages as one PDF	ئەم پەڕانە وەک یەک PDF پاشەکەوت بکە
+	No changes to save	هیچ گۆڕانکارییەک نییە بۆ پاشەکەوتکردن
+	Created a PDF from {n} files; left out: {names}	PDFێک لە {n} فایل دروستکرا؛ چوونەتە دەرەوە: {names}
+	Created a PDF from the first {n} files	PDFێک لە یەکەم {n} فایل دروستکرا
+	Go to page…	بڕۆ بۆ پەڕە…
+	Optimization is already running	باشترکردن ئێستا لە کاردایە
+	Optimization cancelled	باشترکردن هەڵوەشێنرایەوە
+	Couldn't optimize the file	نەتوانرا فایلەکە باشتر بکرێت
+	Files are combined in this order. Leave Pages empty to take every page.	فایلەکان بەم ڕیزبەندییە تێکەڵ دەکرێن. پەڕەکان بەتاڵ بهێڵەوە بۆ وەرگرتنی هەموو پەڕەیەک.
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	دۆخی گەڕۆک کوژاوەتەوە: ناتوانرێت لە {folder} بنووسرێت ({error}). لە جیاتی ئەوە ڕێکخستنەکان لە فۆڵدەری بەکارهێنەرەکەتدا دەهێڵدرێنەوە.
+	PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	PdfCraft بەبێ پڕۆسێسەری گرافیک وێنە دەکێشێت، بۆیە لەوانەیە هێواش بێت. نوێکردنەوەی درایڤەری گرافیک لەوانەیە یارمەتیدەر بێت.
+	Show	پیشاندان
+	Sort	ڕیزکردن
+	Reverse the order	پێچەوانەکردنەوەی ڕیزبەندەکە
+	Grab bag	جۆراوجۆر
+	Table	خشتە
+	Username	ناوی بەکارهێنەر
+	Display name	ناوی پیشاندراو
+	Real name	ناوی ڕاستەقینە
+	Name (A–Z)	ناو (A–Z)
+	Merged PRs	داواکاری کێشانەوە یەکخراوەکان
+	PRs	داواکاری کێشانەوەکان
+	Commits	کۆمیتەکان
+	Lines added	هێڵە زیادکراوەکان
+	+LOC	+LOC
+	Lines deleted	هێڵە سڕدراوەکان
+	−LOC	−LOC
+	Line delta	جیاوازی هێڵەکان
+	ΔLOC	ΔLOC
+	Binary assets added	ئاسێتە دووانییە زیادکراوەکان
+	+Bin	+Bin
+	Binary assets removed	ئاسێتە دووانییە لابراوەکان
+	−Bin	−Bin
+	First commit	یەکەم کۆمیت
+	First	یەکەم
+	Last commit	کۆتا کۆمیت
+	Last	کۆتایی
+	No contributor data was built into this copy.	هیچ داتای بەشداربوو لەم کۆپییەدا تێنەخراوە.
+	No model credits were built into this copy.	هیچ ناساندنی مۆدێل لەم کۆپییەدا تێنەخراوە.
+	{n} contributors · {c} commits	{n} بەشداربوو · {c} کۆمیت
+	Company	کۆمپانیا
+	Model	مۆدێل
+	% of all commits	% لە هەموو کۆمیتەکان
+	Lines +/−	هێڵەکان +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: {prs} داواکاری کێشانەوە، {commits} کۆمیت، +{added} / −{deleted} هێڵ (Δ {delta})، +{bin_added} / −{bin_deleted} ئاسێتی دووانی، {first} – {last}
+	None of those files can be made into a PDF; use PDFs, images or .txt files	هیچ کام لەو فایلانە ناکرێت بکرێتە PDF؛ فایلی PDF یان وێنە یان فایلی .txt بەکاربهێنە
+	About	دەربارە
+	Contributors	بەشداربووان
+	Models	مۆدێلەکان
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	تەنها ئەگەر متمانەت بەم بەڵگەنامەیە هەیە بەردەوام بە. ناونیشانێک دەتوانێت زانیاری لە بەڵگەنامەکەوە هەڵبگرێت، وەک ئەوەی لە فۆڕمەکەیدا نوسیوتە.
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	بە شێوەی یەکلایە چاپ بکە. پەڕەکان بە ڕیزبەندی بهێڵەوە، لە نیشانەکانەوە ببڕە، پاشان کۆمەڵەکان لە چەپەوە بۆ ڕاست و لە سەرەوە بۆ خوارەوە کەڵەکە بکە.
+comment menu	Edit	دەستکاریکردن
+	Undo {action}	پاشگەزبوونەوەی {action}
+	Redo {action}	دووبارەکردنەوەی {action}
+signature pad	Type	تایپکردن
+action wizard	Start	دەستپێکردن
+calendar date	January	کانوونی دووەم
+calendar date	February	شوبات
+calendar date	March	ئازار
+calendar date	April	نیسان
+calendar date	May	ئایار
+calendar date	June	حوزەیران
+calendar date	July	تەممووز
+calendar date	August	ئاب
+calendar date	September	ئەیلوول
+calendar date	October	تشرینی یەکەم
+calendar date	November	تشرینی دووەم
+calendar date	December	کانوونی یەکەم
+	Reopen the files that were open when PdfCraft last closed	دووبارە کردنەوەی ئەو فایلانەی کاتی کۆتا داخستنی PdfCraft کراوە بوون
+	Clear Recent Files	پاککردنەوەی فایلە نوێیەکان
+	Remove from Recent	لابردن لە نوێیەکان
+	Remove {name} from Recent	لابردنی {name} لە نوێیەکان
+	Inserted text	دەقی خستراوەناو
+	Add {what}	زیادکردنی {what}
+	Use {what}	بەکارهێنانی {what}
+	Place saved {what}	دانانی {what}ی پاشەکەوتکراو
+	Remove saved {what}	لابردنی {what}ی پاشەکەوتکراو
+	A link	بەستەر
+	A button	دوگمە
+	A script	سکریپت
+	{who} in this document tried to open an address PdfCraft won't open: {e}.	{who} لەم بەڵگەنامەیەدا هەوڵیدا ناونیشانێک بکاتەوە کە PdfCraft نایکاتەوە: {e}.
+	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} لەم بەڵگەنامەیەدا هەوڵیدا ناونیشانێک بکاتەوە کە PdfCraft نایکاتەوە: {e}. تەنها بەستەری وێب (http, https) و ئیمەیڵ (mailto) لە بەڵگەنامەکانەوە دەکرێنەوە.
+	Another file dialog is still open. Finish with it first.	دیالۆگێکی تری فایل هێشتا کراوەیە. سەرەتا کارەکەی تەواو بکە.
+	Couldn't show the file picker. Please try again.	نەتوانرا هەڵبژێرەری فایل پیشان بدرێت. تکایە دووبارە هەوڵ بدەرەوە.
+	The document changed while you were choosing a file, so nothing was changed.	بەڵگەنامەکە گۆڕا لە کاتێکدا تۆ فایلێکت هەڵدەبژارد، بۆیە هیچ شتێک نەگۆڕدرا.
+	The document was closed before it could be saved.	بەڵگەنامەکە داخرا پێش ئەوەی بتوانرێت پاشەکەوت بکرێت.
+	The pages were extracted but not deleted, because the document changed while you were choosing a folder.	پەڕەکان دەرهێنران بەڵام نەسڕدرانەوە، چونکە بەڵگەنامەکە گۆڕا لە کاتێکدا تۆ فۆڵدەرێکت هەڵدەبژارد.
+	That didn't work: an internal error stopped it ({m}).	ئەوە سەرنەکەوت: هەڵەیەکی ناوخۆیی ڕایگرت ({m}).
+	The Windows store's digital IDs couldn't be listed: {e}	ناسنامە دیجیتاڵییەکانی کۆگای Windows نەتوانران ڕیز بکرێن: {e}
+	Align fields	هاوتەریبکردنی خانەکان
+	Distribute fields	دابەشکردنی خانەکان
+	Match field sizes	گونجاندنی قەبارەی خانەکان
+	Mark for redaction	نیشانەکردن بۆ شاردنەوە
+	Mark pages for redaction	نیشانەکردنی پەڕەکان بۆ شاردنەوە
+	Change document properties	گۆڕینی تایبەتمەندییەکانی بەڵگەنامە
+	Mark differences	نیشانەکردنی جیاوازییەکان
+	Run form script	جێبەجێکردنی سکریپتی فۆڕم
+	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	ناوەڕۆکی سکریپتکراو دەبێت بە تەختەکلیل و تەکنەلۆژیای یاریدەدەر بەکاربهێنرێت. سکریپتەکانی بەڵگەنامەکە بپشکنە.
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	ڕیزەکانی خشتە دەبێت ڕاستەوخۆ لە خشتەیەکدا یان سەرەوە یان لاشە یان خوارەوەکەیدا بن. تاگەکانی خشتەکە چاک بکەرەوە.
+	Basic constraints	سنوورە بنەڕەتییەکان
+	Certificate authority	دەسەڵاتی بڕوانامە
+	End entity	قیتەعی کۆتایی
+	SHA-1 digest	هاشی SHA-1
+	SHA-256 digest	هاشی SHA-256
+	Squiggly	شەپۆلی
+	Home / End	Home / End
+	H / Space (hold)	H / بۆشایی (بە گرتنی)
+	Rotation:	سووڕاندنەوە:
+	Line ending	کۆتایی هێڵ
+	Open arrow	تیری کراوە
+	Closed arrow	تیری داخراو
+	Butt	تەخت
+	Reverse open arrow	تیری کراوەی پێچەوانە
+	Reverse closed arrow	تیری داخراوی پێچەوانە
+	Slash	خەتی لار
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	فۆنتەکانی دەقی PDF ناتوانن «{c}» بکێشن ({code}). دەقی پشتگیریکراو هەڵبژێرە.
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	فۆنتە ستانداردەکان ناتوانن «{c}» بکێشن ({code}). بۆ ئێستا تەنها پیتی ئەوروپای ڕۆژئاوا دەتوانرێت وەک دەق زیاد بکرێت.
+	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	فۆنتی ئەم خانەیە ناتوانێت «{c}» بکێشێت ({code})، بۆیە PdfCraft لە جێگاکەیدا ? پیشان دەدات. بەهاکە پاشەکەوتکراوە، و بینەرەکانی تری PDF خانەکە لەسەر ئەو دووبارە دەکێشنەوە.
+	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	ئەو فۆنتانەی PdfCraft پێیان دەنووسێت ناتوانن «{c}» بکێشن ({code})، بۆیە لە هەموو بینەرێکی PDFدا وەک ? دەردەکەوێت. دەقەکە پاشەکەوتکراوە.
+	Larger pages	پەڕە گەورەترەکان
+	Smaller pages	پەڕە بچووکترەکان
+	Reset page size	ڕێکخستنەوەی قەبارەی پەڕە
+	Flatten Fill & Sign when saving	تەختکردنی پڕکردنەوە و واژووکردن لە کاتی پاشەکەوتکردندا
+	Text, marks and signatures become part of the page. Other comments stay editable.	دەق و نیشانەکان و واژووەکان دەبنە بەشێک لە پەڕەکە. لێدوانەکانی تر دەستکاریکراو دەمێننەوە.
+	Date format	فۆرماتی بەروار
+	Fill & Sign dates	بەروارەکانی پڕکردنەوە و واژووکردن
+	Pattern	شێواز
+	Today: {date}	ئەمڕۆ: {date}
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy یان yy ساڵ · m یان mm مانگ · mmm یان mmmm ناوی مانگ · d یان dd ڕۆژ · ddd یان dddd ڕۆژی هەفتە. H و h و M و s و t پیتی کاتن و ناکرێت بە تەنها بەکاربهێنرێن: {escape} لە پێش پیتێک دابنێ بۆ ئەوەی وەک خۆی پیشان بدرێت.
+	Same as interface ({language})	وەک ڕووکارەکە ({language})
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	{chars} هێشتا ناکرێت لە PDFەکەدا بنووسرێت: دەقی پڕکردنەوە و واژووکردن تەنها ئەوروپای ڕۆژئاواییە. فۆرماتێکی ژمارەیی وەک dd.mm.yyyy هەڵبژێرە.
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	هەڵبژاردەکانی درایڤەری چاپکەر دەکاتەوە. بۆ هەموو چاپێک لەم کۆمپیوتەرەوە پاشەکەوت دەکرێن؛ ژمارەی کۆپی و دوولایە و خۆڵەمێشی و کاغەزی لێرە هەڵبژێردراو هێشتا جێبەجێ دەبن.
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	ڕێکخستنە تایبەتەکانی درایڤەری چاپکەر بۆ ئەم چاپە: سینی کاغەز و جۆری کاغەز و تەواوکردن و زیاتر.
+	Couldn't open the printer's preferences: {e}	نەتوانرا هەڵبژاردەکانی چاپکەر بکرێنەوە: {e}
+	Printer properties	تایبەتمەندییەکانی چاپکەر
+	Reset to printer defaults	ڕێکخستنەوە بۆ بنەڕەتییەکانی چاپکەر
+	This printer offers no settings of its own.	ئەم چاپکەرە هیچ ڕێکخستنێکی تایبەتی خۆی نییە.
+certificate	Subject	بابەت
+	Scroll tabs left	سکرۆڵی بازدەرەکان بۆ چەپ
+	Scroll tabs right	سکرۆڵی بازدەرەکان بۆ ڕاست
+	Shared Field Properties	تایبەتمەندییە هاوبەشەکانی خانە
+	{n} fields selected	{n} خانە هەڵبژێردرا
+	Mixed	تێکەڵاو
+	Custom font	فۆنتی تایبەت
+	Only checked properties will change. Mixed means the selected fields have different values.	تەنها ئەو تایبەتمەندییانەی نیشانەکراون دەگۆڕدرێن. «تێکەڵاو» واتە خانە هەڵبژێردراوەکان بەهای جیاوازیان هەیە.
+	Shift- or Ctrl/Command-click to select several fields.	بۆ هەڵبژاردنی چەند خانەیەک کرتە بە Shift یان Ctrl/Command بکە.
+	Font size 0 uses automatic sizing.	قەبارەی فۆنتی 0 قەبارەدانی خۆکاری بەکاردەهێنێت.
+	Character limit:	سنووری پیت:
+	Character limit 0 means no limit. A comb of characters needs a limit.	سنووری پیتی 0 واتە بێ سنوور. شانەی پیتەکان پێویستی بە سنوور هەیە.
+	To change locked fields, also set Locked to No.	بۆ گۆڕینی خانە قفڵکراوەکان، «قفڵکراو»یش بکە بە «نەخێر».
+	Comb of characters	شانەی پیتەکان
+	The document changed while you were editing field properties.	بەڵگەنامەکە گۆڕا لە کاتێکدا تۆ تایبەتمەندییەکانی خانەت دەستکاری دەکرد.
+	The document is no longer open.	بەڵگەنامەکە چیتر کراوە نییە.
+	The field properties dialog is no longer open.	دیالۆگی تایبەتمەندییەکانی خانە چیتر کراوە نییە.
+	The field properties could not be changed.	نەتوانرا تایبەتمەندییەکانی خانە بگۆڕدرێن.
+	The selected fields could not be found. Select them again.	خانە هەڵبژێردراوەکان نەدۆزرانەوە. دووبارە هەڵیانبژێرە.
+	The field {name} no longer exists.	خانەی {name} چیتر بوونی نییە.
+	A selected field has no widget on any page, so the fields can't be edited together.	یەکێک لە خانە هەڵبژێردراوەکان لە هیچ پەڕەیەکدا ویجێتی نییە، بۆیە ناکرێت خانەکان پێکەوە دەستکاری بکرێن.
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	ناسینەوەی دەق دانەمەزراوە: مۆدێلەکانی ونن (`cargo xtask models` جێبەجێ بکە، یان PDFCRAFT_MODELS دابنێ).
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} بە {dpi} dpi، گەورەترین قەبارەی کە دەتوانرێت پێی بکێشرێن)
+	Margins	پەراوێزەکان
+	For page sizes and margins.	بۆ قەبارەکانی پەڕە و پەراوێزەکان.
+
+# Multi-object selection and movement (#844)
+@plural	{n} object selected|{n} objects selected	{n} تەن هەڵبژێردرا|{n} تەن هەڵبژێردرا
+	Drag the selection to move it. Esc clears the selection.	هەڵبژاردنەکە ڕابکێشە بۆ گواستنەوەی. Esc هەڵبژاردنەکە پاک دەکاتەوە.
+	Shift-click to select several objects. Drag empty space to select an area.	کرتە بە Shift بکە بۆ هەڵبژاردنی چەند تەنێک. لە بۆشاییەکی بەتاڵدا ڕابکێشە بۆ هەڵبژاردنی ناوچەیەک.
+	Select at most 1000 objects at a time.	لە هەر جارێکدا لە زۆرترین 1000 تەن هەڵبژێرە.
+	Finish or discard the text being edited before selecting several objects.	پێش هەڵبژاردنی چەند تەنێک، دەستکاریکردنی دەقەکە تەواو بکە یان فڕێی بدە.
+	Move object	گواستنەوەی تەن
+	Move objects	گواستنەوەی تەنەکان
+	Vertical text cannot be moved with this selection.	دەقی ستوونی ناکرێت بەم هەڵبژاردنەوە بگوازرێتەوە.
+	Text used as a clipping path cannot be moved with this selection.	ئەو دەقەی وەک ڕێڕەوی بڕین بەکاردێت ناکرێت بەم هەڵبژاردنەوە بگوازرێتەوە.
+	These objects could not be moved. Select them again and try a smaller move.	نەتوانرا ئەم تەنانە بگوازرێنەوە. دووبارە هەڵیانبژێرە و بە گواستنەوەیەکی بچووکتر هەوڵ بدەرەوە.
+	This page contains objects that cannot be selected together.	ئەم پەڕەیە تەنی تێدایە کە ناکرێت پێکەوە هەڵبژێردرێن.
+	Fill colour	ڕەنگی پڕکردنەوە
+	No fill	بێ پڕکردنەوە
+	Fill colour: none	ڕەنگی پڕکردنەوە: هیچ
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	بۆشایی
+	Grid view	بینینی تۆڕ
+	List view	بینینی پێڕست
+	Files are combined in the order shown. Drag them to change it.	فایلەکان بەو ڕیزبەندییەی پیشان دراوە تێکەڵ دەکرێن. ڕایانبکێشە بۆ گۆڕینی.
+	Preview unavailable: {e}	پێشبینین بەردەست نییە: {e}
+	Pages: {k} of {n}	پەڕەکان: {k} لە {n}
+	Check the pages	پەڕەکان بپشکنە
+	Switch to List view to change the pages it takes.	بگۆڕە بۆ بینینی پێڕست بۆ گۆڕینی ئەو پەڕانەی وەریاندەگرێت.
+	Expand all	فراوانکردنی هەموو
+	Collapse all	کۆکردنەوەی هەموو
+	Collapse all pages	کۆکردنەوەی هەموو پەڕەکان
+	Expand all pages	فراوانکردنی هەموو پەڕەکان
+	Remove page	لابردنی پەڕە
+	Remove {n} pages	لابردنی {n} پەڕە
+
+# Shared panel docking
+	Reset panel layout	ڕێکخستنەوەی چیدانی پانێڵەکان
+	Float panel	سەربەخۆکردنی پانێڵ
+	Move to group	گواستنەوە بۆ گرووپ
+	Panels	پانێڵەکان
+	Resize panels	گۆڕینی قەبارەی پانێڵەکان
+	Resize panel window	گۆڕینی قەبارەی پەنجەرەی پانێڵ
+
+# Architectural print controls (follow-up to #599).
+	PDF page: {size}	پەڕەی PDF: {size}
+	Match page at 100%	گونجاندنی پەڕە بە 100%
+	PDF scale: {scale}%	پێوەری PDF: {scale}%
+	Printer paper and scaling may differ. Check driver settings.	ڕەنگە کاغەز و پێوەری چاپکەر جیاواز بن. ڕێکخستنەکانی درایڤەر بپشکنە.
+	Drawing scale changes. Use Actual size for full-scale plans.	پێوەری وێنەکێشان دەگۆڕێت. «قەبارەی ڕاستەقینە» بەکاربهێنە بۆ پلانەکان بە پێوەری تەواو.
+	Reload documents when their files change on disk	دووبارە بارکردنی بەڵگەنامەکان کاتێک فایلەکانیان لەسەر دیسک دەگۆڕێن
+	Don't show again	جارێکی تر پیشان مەدە
+	Show a notice when a document is secured	پیشاندانی ئاگادارکردنەوە کاتێک بەڵگەنامەیەک پارێزراوە
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	ئەم فایلە لەسەر دیسک گۆڕاوە. «دووبارە بارکردن» وەشانی نوێ پیشان دەدات و گۆڕانکارییە پاشەکەوتنەکراوەکانت فڕێدەدات؛ «پاشەکەوتکردن» بەم وەشانە جێگەی دەگرێتەوە.
+	Reload	دووبارە بارکردن
+	Couldn't reload {name}: {e}	دووبارە بارکردنی {name} نەکرا: {e}
+	Select page {label}	هەڵبژاردنی پەڕەی {label}
+	Rotate page {label} counterclockwise	سووڕاندنەوەی پەڕەی {label} بە پێچەوانەی ئاراستەی کاتژمێر
+	Rotate page {label} clockwise	سووڕاندنەوەی پەڕەی {label} بە ئاراستەی کاتژمێر
+	Delete page {label}	سڕینەوەی پەڕەی {label}
+	Scroll speed (mouse wheel and arrow keys)	خێرایی سکرۆڵ (ترۆپکی مشک و دوگمەکانی تیر)
+scroll speed	Slow	هێواش
+scroll speed	Normal	ئاسایی
+scroll speed	Fast	خێرا
+	Animation effects	کاریگەرییەکانی جووڵە
+animation effects	On	چالاک
+animation effects	Off	ناچالاک
+	Enhance camera image	باشترکردنی وێنەی کامێرا
+	Drag the corners onto the document's edges, then choose Enhance page.	گۆشەکان ڕابکێشە بۆ لێوارەکانی بەڵگەنامەکە، پاشان «باشترکردنی پەڕە» هەڵبژێرە.
+	Enhance page	باشترکردنی پەڕە
+	Done adding text	تەواوبوونی زیادکردنی دەق
+	Discard this text (Esc)	فڕێدانی ئەم دەقە (Esc)
+	Clean-up	پاککردنەوە
+	Original	ڕەسەن
+	Greyscale	خۆڵەمێشی
+	Black and white	ڕەش و سپی
+	Reading colours	ڕەنگەکانی خوێندنەوە
+	Replace document colours	جێگرتنەوەی ڕەنگەکانی بەڵگەنامە
+	Black on white	ڕەش لەسەر سپی
+	White on black	سپی لەسەر ڕەش
+	Yellow on black	زەرد لەسەر ڕەش
+	Green on black	سەوز لەسەر ڕەش
+	Page background	پاشبنەمای پەڕە
+	Only change the colour of black text or line art	تەنها ڕەنگی دەقی ڕەش یان هێڵەکان بگۆڕە
+	Change the colour of line art as well as text	ڕەنگی هێڵەکانیش بگۆڕە، نەک تەنها دەق
+	Colours are remapped while rendering; the document itself never changes.	ڕەنگەکان لە کاتی وێنەکێشاندا دووبارە دەنەخشێنرێن؛ خودی بەڵگەنامەکە هەرگیز ناگۆڕێت.
+	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	درایڤەری ئەم چاپکەرە ڕێکخستنە دوولایەکان لە بەرنامەکانی ترەوە وەرناگرێت، بۆیە ڕێکخستنی خۆی جێبەجێ دەکرێت. لە «تایبەتمەندییەکان» بیگۆڕە…
+	Browser's print dialog	دیالۆگی چاپکردنی وێبگەڕ
+	Copies, two-sided printing and colour are chosen in the browser's print dialog.	ژمارەی کۆپی، چاپی دوولایە و ڕەنگ لە دیالۆگی چاپکردنی وێبگەڕدا هەڵدەبژێردرێن.
+	Preparing {n} sheets for printing…	ئامادەکردنی {n} کاغەز بۆ چاپ…
+	Preparing sheet {done} of {total} for printing…	ئامادەکردنی کاغەزی {done} لە {total} بۆ چاپ…
+	Opening the browser's print dialog…	کردنەوەی دیالۆگی چاپکردنی وێبگەڕ…
+	Couldn't print from the browser ({e}); downloaded {name} to print instead	چاپکردن لە وێبگەڕەوە نەکرا ({e})؛ {name} دابەزێنرا بۆ ئەوەی لە جیاتیدا چاپ بکرێت
+	Tools panel side	لای پانێڵی ئامرازەکان
+	Add comment	زیادکردنی لێدوان
+	Change tag properties	گۆڕینی تایبەتمەندییەکانی تاگ
+# Accessibility structure tags.
+	Tags panel	پانێڵی تاگەکان
+	Tags	تاگەکان
+	Tag type	جۆری تاگ
+	Actual text	دەقی ڕاستەقینە
+	Find a tag	دۆزینەوەی تاگێک
+	Collapse tag	کۆکردنەوەی تاگ
+	Expand tag	فراوانکردنی تاگ
+	Revert changes	گەڕاندنەوەی گۆڕانکارییەکان
+	Save tag properties	پاشەکەوتکردنی تایبەتمەندییەکانی تاگ
+	This document has no editable structure tags.	ئەم بەڵگەنامەیە تاگی پێکهاتەی دەستکاریکراوەی نییە.
+	{n} tags	{n} تاگ
+	Save or revert changes before selecting another tag.	پێش هەڵبژاردنی تاگێکی تر، گۆڕانکارییەکان پاشەکەوت بکە یان بیانگەڕێنەوە.
+	Left out: {names}	دەرکرا: {names}
+	already a PDF	خۆی PDF ـە
+	no unused output name	هیچ ناوی دەرهاویشتەی بەکارنەهاتوو نییە
+	no output folder was chosen	هیچ فۆڵدەرێک بۆ دەرهاویشتە هەڵنەبژێردرا
+@plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} PDF دابەزێنرا|{n} PDF دابەزێنرا
+	Scan	سکانکردن
+	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	لەسەر کاغەزێکی سپی واژوو بکە و لە ڕووناکییەکی بەهێز و یەکساندا وێنەی بگرە (فلاش بەکاربهێنە). وێنەکە هەڵبژێرە یان لێرە دایبنێ: PdfCraft واژووەکە دەدۆزێتەوە و کاغەزەکە لادەبات.
+	Choose photo…	هەڵبژاردنی وێنە…
+	No photo chosen	هیچ وێنەیەک هەڵنەبژێردرا
+	Photo	وێنە
+	Ink sensitivity	هەستیاریی مەرەکەب
+	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	هیچ واژوویەک لە چوارچێوەکەدا نەدۆزرایەوە. چوارچێوەکە بگوازەوە بۆ سەر واژووەکە یان هەستیاریی مەرەکەب زیاد بکە.
+	Couldn't use the photo: {e}	بەکارهێنانی وێنەکە نەکرا: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	داخستنی بازدەر
+	Reopen Closed Tab	کردنەوەی ئەو بازدەرەی داخرا
+	Reveal in Finder	نیشاندان لە Finder
+	Reveal in File Explorer	نیشاندان لە File Explorer
+	Other colour…	ڕەنگێکی تر…
+	Recent colours	ڕەنگە دواییەکان
+	Couldn't follow linked PDF: {reason}	کردنەوەی PDF ـی بەستەردراو نەکرا: {reason}
+	The linked PDF opened, but its named destination was not applied.	PDF ـی بەستەردراو کرایەوە، بەڵام مەبەستی ناونراوەکەی جێبەجێ نەکرا.
+	The linked PDF opened, but its page destination was out of range.	PDF ـی بەستەردراو کرایەوە، بەڵام مەبەستی پەڕەکەی لە دەرەوەی سنوور بوو.
+	Local cross-PDF links require the desktop app	بەستەرە نێوان-PDF ـە ناوخۆییەکان پێویستیان بە ئەپی سەر مێزە
+	Cut Image	بڕینی وێنە
+	Redact Image	شاردنەوەی وێنە
+	Create Link…	دروستکردنی بەستەر…
+	Recognize Text…	ناسینەوەی دەق…
+	Minimize	بچووککردنەوە
+	Maximize	گەورەکردنەوە
+	Restore	گەڕاندنەوە
+	Use system title bar	بەکارهێنانی شریتی ناونیشانی سیستەم
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	شریتێکی ناونیشانی سادە بۆ دوگمەکانی پەنجەرە پیشان بدە لە جیاتی شریتی بازدەرەکان. GNOME شریتی ناونیشان بۆ ئەپەکان ناکێشێت، بۆیە ئەمە شوێنی تیمی خۆی ناکەوێت.
+
+# Absolute local GoToR confirmation (#1364).
+	Allow	ڕێگەدان
+	Only allow this if you trust the source document.	تەنها ئەگەر متمانەت بە بەڵگەنامە سەرچاوەییەکە هەیە ڕێگەی پێ بدە.
+	Open in Full Screen mode?	کردنەوە لە دۆخی شاشەی پڕدا؟
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	ئەم بەڵگەنامەیە داوای کردنەوە دەکات لە دۆخی شاشەی پڕدا: پەڕەکە هەموو شاشەکە پڕ دەکات و هیچی تر پیشان نادرێت. لە هەر کاتێکدا Esc دابگرە بۆ چوونە دەرەوە.
+	Full Screen	شاشەی پڕ
+	Not now	ئێستا نا
+	Open this local PDF?	کردنەوەی ئەم PDF ـە ناوخۆییە؟
+	This document is trying to open a local file:	ئەم بەڵگەنامەیە هەوڵی کردنەوەی فایلێکی ناوخۆیی دەدات:
+	Move tag earlier	گواستنەوەی تاگ بۆ پێشتر
+	Move tag later	گواستنەوەی تاگ بۆ دواتر
+
+# Historical snapshot notice bar (View signed version / View revision).
+	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	تۆ وەشانی واژووکراوی “{from}” دەبینیت (پێداچوونەوەی {rev}). ئەمە وێنەیەکی چەسپاوە: گۆڕانکارییەکانی لێرە کار لە ڕەسەنەکە ناکەن.
+	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	تۆ پێداچوونەوەی {rev} ی “{from}” دەبینیت. ئەمە وێنەیەکی چەسپاوە: گۆڕانکارییەکانی لێرە کار لە ڕەسەنەکە ناکەن.
+# Completion: the rows the newer catalogs (lt, cs, es …) grew — certificates,
+# digital-signature verification detail, accessibility checks, calendar weekdays
+# and the newer plural counts — same clean-room Kurdish as the rest of the file.
+	 on page {label}	 لە پەڕەی {label}
+	A font isn't embedded	فۆنتێک تێکەڵ نەکراوە
+	A {} action isn't allowed	کرداری {} ڕێگەپێنەدراوە
+	A {} annotation has additional actions	تێبینیی {} کرداری زیاتری هەیە
+	A {} annotation has no appearance stream	تێبینیی {} لێشاوی دەرکەوتنی نییە
+	A {} annotation isn't set to print, or is hidden	تێبینیی {} بۆ چاپ دانەنراوە، یان شاراوەیە
+	Accessibility Report	ڕاپۆرتی دەستڕاگەیشتن
+	Add the PDFs to combine	PDF ـەکان زیاد بکە بۆ تێکەڵکردن
+	Added the first {n} PDFs in {folder}	یەکەم {n} PDF لە {folder} زیادکرا
+	Always	هەمیشە
+	Automatically	بە شێوەی خۆکار
+	CRL Signing	واژووکردنی CRL
+	Certificate Signing	واژووکردنی بڕوانامە
+	Change Author	گۆڕینی نووسەر
+	Change Keywords	گۆڕینی وشە سەرەکییەکان
+	Change Subject	گۆڕینی بابەت
+	Change Title	گۆڕینی ناونیشان
+	Choose a digital ID.	ناسنامەیەکی دیجیتاڵی هەڵبژێرە.
+	Choose a file…	هەڵبژاردنی فایلێک…
+	Choose a folder…	هەڵبژاردنی فۆڵدەرێک…
+	Choose…	هەڵبژاردن…
+	Color	ڕەنگ
+	Comment	لێدوان
+	Comment and review	لێدوان و پێداچوونەوە
+	Copied to clipboard	کۆپیکرا بۆ کلیپبۆرد
+	Copy to clipboard	کۆپیکردن بۆ کلیپبۆرد
+	Create folder	دروستکردنی فۆڵدەر
+	Create links	دروستکردنی بەستەرەکان
+	Creator	دروستکەر
+	Cut and stack needs Two-sided: Off. Print single-sided sheets.	بڕین و کەڵەکەکردن پێویستی بە «دوولایە: ناچالاک» هەیە. کاغەزی یەکلایە چاپ بکە.
+	Data Encipherment	کۆدکردنی داتا
+	Decipher Only	تەنها شیفربوونەوە
+	Detailed Report	ڕاپۆرتی ورد
+	DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile	DeviceCMYK بەکاردێت، بەڵام مەبەستی دەرهاویشتەی PDF/A پڕۆفایلی CMYK نییە
+	DeviceRGB is used, but the PDF/A output intent isn't an RGB profile	DeviceRGB بەکاردێت، بەڵام مەبەستی دەرهاویشتەی PDF/A پڕۆفایلی RGB نییە
+	Digital Signature	واژووی دیجیتاڵی
+	Disabled	ناچالاککراو
+	Document properties (⌘D)	تایبەتمەندییەکانی بەڵگەنامە (⌘D)
+	Drop PDFs or folders here, or choose them.	PDF ـەکان یان فۆڵدەرەکان لێرە دابنێ، یان هەڵیانبژێرە.
+	Duplicate	دووبارەکردنەوە
+	Enabled	چالاککراو
+	Encipher Only	تەنها کۆدکردن
+	English	ئینگلیزی
+	Enter a URL	URL ـێک بنووسە
+	Enter a name.	ناوێک بنووسە.
+	Enter a page number	ژمارەی پەڕەیەک بنووسە
+	Enter the field names	ناوەکانی خانەکان بنووسە
+	Error	هەڵە
+	Every PDF in the folder	هەموو PDF ـێک لە فۆڵدەرەکەدا
+	Every PDF in the folder and the folders inside it	هەموو PDF ـێک لە فۆڵدەرەکە و فۆڵدەرەکانی ناویدا
+	Field "{}" on page {p} has no description (tooltip)	خانەی «{}» لە پەڕەی {p} وەسفی نییە (ڕێنمایی)
+	Filename	ناوی فایل
+	Flatten Fill & Sign	تەختکردنی پڕکردنەوە و واژووکردن
+	Folder	فۆڵدەر
+	Font	فۆنت
+	Font (unnamed) on page {p} doesn't map its characters to Unicode	فۆنتی (بێناو) لە پەڕەی {p} پیتەکانی بۆ Unicode نەخشە ناکات
+	Font {} on page {p} doesn't map its characters to Unicode	فۆنتی {} لە پەڕەی {p} پیتەکانی بۆ Unicode نەخشە ناکات
+	Form field on page {p} isn't tagged	خانەی فۆڕم لە پەڕەی {p} تاگ نەکراوە
+	Help…	یارمەتی…
+	H{n} follows an H{d}; headings should not skip levels	H{n} دوای H{d} دێت؛ سەردێڕەکان نابێت ئاستەکان ببەزنەوە
+	Import	هاوردەکردن
+	Information	زانیاری
+	Inspector	پشکنەر
+	Key Agreement	ڕێککەوتنی کلیل
+	Key Encipherment	کۆدکردنی کلیل
+	Loading…	بارکردن…
+	Move	گواستنەوە
+	Never	هەرگیز
+	New bookmark (⌘B)	دڵخوازی نوێ (⌘B)
+	Next	داهاتوو
+	Next (⌘G)	داهاتوو (⌘G)
+	No PDFs found in {folder}	هیچ PDF ـێک لە {folder} نەدۆزرایەوە
+	No document language is set	هیچ زمانێک بۆ بەڵگەنامە دیاری نەکراوە
+	No page has text: the document appears to be images of pages	هیچ پەڕەیەک دەقی نییە: پێدەچێت بەڵگەنامەکە وێنەی پەڕەکان بێت
+	No results	هیچ ئەنجامێک نییە
+	Non-Repudiation	ڕەتنەکردنەوە
+	On	چالاک
+	Only the document's owner can change its security (open it with the permissions password)	تەنها خاوەنی بەڵگەنامەکە دەتوانێت ئاسایشەکەی بگۆڕێت (بە وشەی نهێنیی مۆڵەتەکان بیکەرەوە)
+	Open a PDF (⌘O)	کردنەوەی PDF (⌘O)
+	Open folder	کردنەوەی فۆڵدەر
+	Organize	ڕێکخستن
+	Page {n}	پەڕەی {n}
+	Page {n} of {total}	پەڕەی {n} لە {total}
+	Page {p} doesn't tab in structure order	پەڕەی {p} بەپێی ڕیزبەندی پێکهاتە ڕیز ناکرێت
+	Page {p}: {n} untagged content item	پەڕەی {p}: {n} توخمی ناوەڕۆکی بێ تاگ
+	Page {p}: {n} untagged content items	پەڕەی {p}: {n} توخمی ناوەڕۆکی بێ تاگ
+	Page {} has additional actions	پەڕەی {} کرداری زیاتری هەیە
+	Panel layout could not be restored: {error}	شێوازی پانێڵەکان نەگەڕێنرایەوە: {error}
+	Panel move was not applied: {error}	گواستنەوەی پانێڵ جێبەجێ نەکرا: {error}
+	Paste	لکاندن
+	PdfCraft can't check this signature yet: {}.	PdfCraft هێشتا ناتوانێت ئەم واژووە پشکنی بکات: {}.
+	Previous	پێشوو
+	Previous (⇧⌘G)	پێشوو (⇧⌘G)
+	Print (⌘P)	چاپکردن (⌘P)
+	Producer	بەرهەمهێنەر
+	Refresh	نوێکردنەوە
+	Rendering…	وێنەکێشان…
+	Report created	ڕاپۆرت دروستکرا
+	Rev. {rev}: Certified by an unknown signer	پێداچوونەوە {rev}: پشتڕاستکراوە لەلایەن واژووکەرێکی نەناسراوەوە
+	Rev. {rev}: Certified by {name}	پێداچوونەوە {rev}: پشتڕاستکراوە لەلایەن {name} ـەوە
+	Rev. {rev}: Signed by an unknown signer	پێداچوونەوە {rev}: واژووکراوە لەلایەن واژووکەرێکی نەناسراوەوە
+	Rev. {rev}: Signed by {name}	پێداچوونەوە {rev}: واژووکراوە لەلایەن {name} ـەوە
+	Rotate view clockwise (⇧⌘+)	سووڕاندنەوەی بینین بە ئاراستەی کاتژمێر (⇧⌘+)
+	Rule Name	ناوی یاسا
+	Save (M4)	پاشەکەوتکردن (M4)
+	Save as {level}	پاشەکەوتکردن وەک {level}
+	Save changes?	گۆڕانکارییەکان پاشەکەوت بکرێن؟
+	Save file	پاشەکەوتکردنی فایل
+	Search results	ئەنجامەکانی گەڕان
+	Select all	هەڵبژاردنی هەموو
+	Signature is invalid	واژووەکە نادروستە
+	Signature is valid	واژووەکە دروستە
+	Signature validity is unknown	دروستیی واژووەکە نەناسراوە
+	Signing time is from the clock on the signer's computer.	کاتی واژووکردن لە کاتژمێری کۆمپیوتەری واژووکەرەوەیە.
+	Still rendering — this page is unusually complex…	هێشتا لە وێنەکێشاندایە — ئەم پەڕەیە بە شێوەیەکی نائاسایی ئاڵۆزە…
+	Success	سەرکەوتن
+	System	سیستەم
+	The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.	واژووی ECDSA بە شێوەی DER ـی ستاندارد نییە (بایتی زیادە، پڕکردنەوە یان بایتی نیشانەی ونبوو)؛ بە هەر حاڵ خوێندرایەوە.
+	The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.	واژووی ECDSA بەها خاوەکانی r و s ـە لە جیاتی زنجیرەی DER؛ بە هەر حاڵ خوێندرایەوە.
+	The RSA signature value does not have the length of the key's modulus (leading zero bytes dropped or added); it was read anyway.	بەهای واژووی RSA درێژی مۆدیۆلی کلیلەکەی نییە (بایتە سفری سەرەتاییەکان لابراون یان زیادکراون)؛ بە هەر حاڵ خوێندرایەوە.
+	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	DigestInfo ـی واژووی RSA پارامێتەری NULL ـی نییە (واژووکەرە کۆنەکان بەم شێوەیە دەینووسن)؛ بە هەر حاڵ خوێندرایەوە.
+	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	بڕوانامەی {} ڕێگە بەم ژمارەیە بڕوانامەی CA ـی لەژێر خۆیدا نادات (درێژی ڕێڕەو)، بۆیە بۆ پشتڕاستکردنەوەی {} بەکارناهێنرێت.
+	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	بڕوانامەی {} بڕوانامەی CA نییە کە بتوانێت بڕوانامە دەربکات، بۆیە بۆ پشتڕاستکردنەوەی {} بەکارناهێنرێت.
+	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	بڕوانامەی {} لە کاتی واژووکردندا دروست نەبوو، بۆیە بۆ پشتڕاستکردنەوەی {} بەکارناهێنرێت.
+	The checker found problems which may prevent the document from being fully accessible.	پشکنەرەکە کێشەی دۆزییەوە کە ڕەنگە ڕێگری لە دەستڕاگەیشتنی تەواو بە بەڵگەنامەکە بکات.
+	The document has been altered or corrupted since the signature was applied.	بەڵگەنامەکە لە دوای جێبەجێکردنی واژووەکەوە گۆڕاوە یان تێکچووە.
+	The document has been altered or corrupted since the timestamp was applied.	بەڵگەنامەکە لە دوای جێبەجێکردنی مۆری کاتەوە گۆڕاوە یان تێکچووە.
+	The document has been altered since this signature was applied in ways it does not permit ({}).	بەڵگەنامەکە لە دوای جێبەجێکردنی ئەم واژووەوە بە شێوازێک گۆڕاوە کە ڕێگەی پێنادات ({}).
+	The document has been altered since this timestamp was applied in ways it does not permit ({}).	بەڵگەنامەکە لە دوای جێبەجێکردنی ئەم مۆرە کاتییەوە بە شێوازێک گۆڕاوە کە ڕێگەی پێنادات ({}).
+	The document has been modified since this signature was applied, but the changes are permitted ({}).	بەڵگەنامەکە لە دوای جێبەجێکردنی ئەم واژووەوە گۆڕاوە، بەڵام گۆڕانکارییەکان ڕێگەپێدراون ({}).
+	The document has been modified since this timestamp was applied, but the changes are permitted ({}).	بەڵگەنامەکە لە دوای جێبەجێکردنی ئەم مۆرە کاتییەوە گۆڕاوە، بەڵام گۆڕانکارییەکان ڕێگەپێدراون ({}).
+	The document has no tags (structure tree)	بەڵگەنامەکە تاگی نییە (داری پێکهاتە)
+	The document has no title	بەڵگەنامەکە ناونیشانی نییە
+	The document isn't marked as tagged (MarkInfo Marked)	بەڵگەنامەکە وەک تاگکراو نیشانە نەکراوە (MarkInfo Marked)
+	The document isn't tagged, so none of its content is	بەڵگەنامەکە تاگ نەکراوە، بۆیە هیچ بەشێک لە ناوەڕۆکەکەشی تاگ نەکراوە
+	The document's embedded revocation information shows that the signer's certificate has not been revoked.	زانیارییە هەڵوەشاندنەوە تێکەڵکراوەکانی بەڵگەنامەکە نیشانی دەدەن کە بڕوانامەی واژووکەرەکە هەڵنەوەشاوەتەوە.
+	The embedded timestamp token is valid and its authority is trusted; trusted time is {}.	نیشانەی مۆری کاتی تێکەڵکراو دروستە و دەسەڵاتەکەی متمانەپێکراوە؛ کاتی متمانەپێکراو {} ـە.
+	The font {} isn't embedded	فۆنتی {} تێکەڵ نەکراوە
+	The metadata doesn't identify the file as {}	میتاداتا فایلەکە وەک {} ناناسێنێت
+	The password is incorrect.	وشەی نهێنییەکە هەڵەیە.
+	The password must have at least 6 characters.	وشەی نهێنی دەبێت لانیکەم 6 پیتی هەبێت.
+	The passwords do not match.	وشە نهێنییەکان یەک ناگرنەوە.
+	The security settings don't allow screen readers to read the text	ڕێکخستنەکانی ئاسایش ڕێگە بە خوێنەرەوەی شاشە نادەن دەقەکە بخوێننەوە
+	The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.	ئەلگۆریتمی واژوو و ئەلگۆریتمی هاشی SignerInfo دوو هاشی جیاواز ناودەبەن؛ واژووەکە بە ئەلگۆریتمی SignerInfo دروستکراوە.
+	The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.	واژووەکە مۆری کاتێکی پشتڕاستنەکراوەی هەڵگرتووە ({}): دەسەڵاتی مۆری کات لە پێڕستی بڕوانامە متمانەپێکراوەکانتدا نییە، بۆیە لە جیاتیدا ئەو کاتی واژووکردنە بەکاردێت کە واژووکەرەکە باسی کردووە.
+	The signature contents are not hexadecimal.	ناوەڕۆکی واژووەکە شازدەیی نییە.
+	The signature could not be checked ({}).	پشکنینی واژووەکە نەکرا ({}).
+	The signature could not be read ({}).	خوێندنەوەی واژووەکە نەکرا ({}).
+	The signature could not be verified ({}).	سەلماندنی واژووەکە نەکرا ({}).
+	The signature has no valid byte range.	واژووەکە مەودای بایتی دروستی نییە.
+	The signature includes an embedded timestamp.	واژووەکە مۆری کاتێکی تێکەڵکراوی تێدایە.
+	The signature is BER-encoded (indefinite lengths) rather than DER; it was read leniently.	واژووەکە بە BER کۆدکراوە (درێژییە نادیارەکان) نەک DER؛ بە چاوپۆشییەوە خوێندرایەوە.
+	The signature uses the legacy adbe.x509.rsa_sha1 format.	واژووەکە فۆرماتی کۆنی adbe.x509.rsa_sha1 بەکاردەهێنێت.
+	The signature value does not match the signer's certificate: the signature is corrupt.	بەهای واژووەکە لەگەڵ بڕوانامەی واژووکەرەکە ناگونجێت: واژووەکە تێکچووە.
+	The signature's byte range does not exclude exactly its contents.	مەودای بایتی واژووەکە بە تەواوی ناوەڕۆکەکەی دەرناکات.
+	The signature's byte range does not match the file.	مەودای بایتی واژووەکە لەگەڵ فایلەکە ناگونجێت.
+	The signature's timestamp token could not be verified ({}).	سەلماندنی نیشانەی مۆری کاتی واژووەکە نەکرا ({}).
+	The signature's timestamp token does not cover the signature value.	نیشانەی مۆری کاتی واژووەکە بەهای واژووەکە ناگرێتەوە.
+	The signed content is a constructed (segmented) OCTET STRING, as BER allows; it was read anyway.	ناوەڕۆکی واژووکراو OCTET STRING ـێکی پێکهاتووە (پارچە پارچە)، وەک BER ڕێگەی پێدەدات؛ بە هەر حاڵ خوێندرایەوە.
+	The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation).	بڕوانامەی واژووکەرەکە ڕێگە بە واژووی دیجیتاڵی نادات (بەکارهێنانی کلیلەکەی نە واژووی دیجیتاڵی و نە ڕەتنەکردنەوەی تێدایە).
+	The signer's certificate has been revoked ({}).	بڕوانامەی واژووکەرەکە هەڵوەشێنراوەتەوە ({}).
+	The signer's certificate has critical extensions PdfCraft does not recognize ({}).	بڕوانامەی واژووکەرەکە درێژکراوەی گرنگی هەیە کە PdfCraft نایانناسێتەوە ({}).
+	The signer's certificate is not in the signature.	بڕوانامەی واژووکەرەکە لە واژووەکەدا نییە.
+	The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).	بڕوانامەی واژووکەرەکە بۆ واژووکردنی بەڵگەنامە دەرنەکراوە (بەکارهێنانە درێژکراوەکەی کلیلەکە مەبەستی واژووکردنی بەڵگەنامەی تێدا نییە).
+	The signer's certificate was not valid at the time of signing.	بڕوانامەی واژووکەرەکە لە کاتی واژووکردندا دروست نەبوو.
+	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	ناسنامەی واژووکەرەکە نەناسراوە چونکە لە پێڕستی بڕوانامە متمانەپێکراوەکانتدا نییە و هیچ کام لە بڕوانامە باوانەکانی متمانەپێکراو نین.
+	The signer's identity is valid.	ناسنامەی واژووکەرەکە دروستە.
+	The timestamp authority's certificate was not valid at the time of timestamping.	بڕوانامەی دەسەڵاتی مۆری کات لە کاتی مۆرکردنی کاتدا دروست نەبوو.
+	The timestamp contents are not hexadecimal.	ناوەڕۆکی مۆری کات شازدەیی نییە.
+	The timestamp has no valid byte range.	مۆری کات مەودای بایتی دروستی نییە.
+	The timestamp token could not be read ({}).	خوێندنەوەی نیشانەی مۆری کات نەکرا ({}).
+	The timestamp token is valid and its authority is trusted.	نیشانەی مۆری کات دروستە و دەسەڵاتەکەی متمانەپێکراوە.
+	The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.	نیشانەی مۆری کات دروستە، بەڵام دەسەڵاتی مۆری کات لە پێڕستی بڕوانامە متمانەپێکراوەکانتدا نییە.
+	The timestamp's byte range does not exclude exactly its contents.	مەودای بایتی مۆری کات بە تەواوی ناوەڕۆکەکەی دەرناکات.
+	The timestamp's byte range does not match the file.	مەودای بایتی مۆری کات لەگەڵ فایلەکە ناگونجێت.
+	The window shows the file name, not the title (Initial View > Show)	پەنجەرەکە ناوی فایل پیشان دەدات، نەک ناونیشانەکە (بینینی سەرەتایی > پیشاندان)
+	Theme	تیم
+	There is no folder to save the digital ID in.	هیچ فۆڵدەرێک نییە بۆ پاشەکەوتکردنی ناسنامەی دیجیتاڵی تێیدا.
+	This document has not been modified since this signature was applied.	ئەم بەڵگەنامەیە لە دوای جێبەجێکردنی ئەم واژووەوە نەگۆڕاوە.
+	This document has not been modified since this timestamp was applied.	ئەم بەڵگەنامەیە لە دوای جێبەجێکردنی ئەم مۆرە کاتییەوە نەگۆڕاوە.
+	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	ئەم واژووە RIPEMD-160 بەکاردەهێنێت، ئەلگۆریتمێکی هاشی کۆنی 160-بیتی کە چیتر بۆ واژووەکان پێشنیار ناکرێت. هێشتا پشتڕاست دەکرێتەوە، بەڵام نابێت پشتی پێ ببەستریت.
+	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	ئەم واژووە SHA-1 بەکاردەهێنێت، ئەلگۆریتمێکی هاشی لاواز: بەریەککەوتن تێیدا سەلمێنراوە. هێشتا پشتڕاست دەکرێتەوە چونکە بەڵگەنامەی زۆر کە ساڵانێک پێش ئێستا واژوو کراون بەکاری دەهێنن، بەڵام نابێت پشتی پێ ببەستریت.
+	Tools	ئامرازەکان
+	Unsigned signature field	خانەی واژووی بێ واژوو
+	Unsigned signature field: {name}	خانەی واژووی بێ واژوو: {name}
+	Warning	ئاگادارکردنەوە
+	Zoom in (⌘+)	گەورەکردنەوە (⌘+)
+	Zoom in / out (also pinch or ⌘-scroll)	گەورەکردنەوە / بچووککردنەوە (هەروەها قرتاندن یان ⌘-سکرۆڵ)
+	Zoom out (⌘−)	بچووککردنەوە (⌘−)
+	alternate text hides an annotation inside it	دەقی جێگرەوە تێبینییەکی لەناویدا دەشارێتەوە
+	alternate text on an element with no page content	دەقی جێگرەوە لەسەر توخمێک بەبێ ناوەڕۆکی پەڕە
+	comments	لێدوانەکان
+	document security store	کۆگای ئاسایشی بەڵگەنامە
+	document structure	پێکهاتەی بەڵگەنامە
+	form fill	پڕکردنەوەی فۆڕم
+	its alternate text is inside another element's and will never be read	دەقی جێگرەوەکەی لەناو دەقی توخمێکی ترە و هەرگیز ناخوێنرێتەوە
+	links	بەستەرەکان
+	metadata	میتاداتا
+	no alternate text	بێ دەقی جێگرەوە
+	no header cells (TH)	بێ خانەی سەردێڕ (TH)
+	no summary	بێ کورتە
+	not in a TR	لە TR دا نییە
+	not in a Table, THead, TBody or TFoot	لە Table یان THead یان TBody یان TFoot دا نییە
+	not in an L (list)	لە L (پێڕست) دا نییە
+	not in an LI (list item)	لە LI (توخمی پێڕست) دا نییە
+	of	لە
+	other changes	گۆڕانکارییەکانی تر
+	page content	ناوەڕۆکی پەڕە
+	page {n} is out of range (1–{count})	پەڕەی {n} لە دەرەوەی سنوورە (1–{count})
+	pages added or removed	پەڕە زیادکراون یان لابراون
+	rows have between {min} and {max} columns	ڕیزەکان لە نێوان {min} و {max} ستوونیان هەیە
+	the first heading is an H{n}; headings should not skip levels	یەکەم سەردێڕ H{n} ـە؛ سەردێڕەکان نابێت ئاستەکان ببەزنەوە
+	the signed version could not be read	وەشانی واژووکراو نەخوێنرایەوە
+	{n} pages and no bookmarks	{n} پەڕە و بێ دڵخواز
+	{page} is not a page number or label	{page} ژمارەی پەڕە یان نیشانە نییە
+	{ty} element on page {p}: {what}	توخمی {ty} لە پەڕەی {p}: {what}
+	{ty} element: {what}	توخمی {ty}: {what}
+	{who}, certificate issued by an unknown issuer.	{who}، بڕوانامەیەک لەلایەن دەرکەرێکی نەناسراوەوە دەرکراوە.
+	{who}, certificate issued by {issuer}.	{who}، بڕوانامەیەک لەلایەن {issuer} ـەوە دەرکراوە.
+	{} annotation on page {p} isn't tagged	تێبینیی {} لە پەڕەی {p} تاگ نەکراوە
+	{} annotations aren't allowed	تێبینییەکانی {} ڕێگەپێنەدراون
+	… and {n} more	… و {n} ی تر
+@plural	Delete {n} field|Delete {n} fields	سڕینەوەی {n} خانە|سڕینەوەی {n} خانە
+@plural	{n} byte|{n} bytes	{n} بایت|{n} بایت
+@plural	{n} comment|{n} comments	{n} لێدوان|{n} لێدوان
+@plural	{n} file|{n} files	{n} فایل|{n} فایل
+@plural	{n} image optimized|{n} images optimized	{n} وێنە باشترکرا|{n} وێنە باشترکرا
+@plural	{n} item discarded|{n} items discarded	{n} توخم فڕێدرا|{n} توخم فڕێدرا
+@plural	{n} pixel|{n} pixels	{n} پیکسڵ|{n} پیکسڵ
+@plural	{n} result|{n} results	{n} ئەنجام|{n} ئەنجام
+calendar weekday	Fr	هەینی
+calendar weekday	Mo	دووشەممە
+calendar weekday	Sa	شەممە
+calendar weekday	Su	یەکشەممە
+calendar weekday	Th	پێنجشەممە
+calendar weekday	Tu	سێشەممە
+calendar weekday	We	چوارشەممە
+certificate	Basic constraints	سنووردارکردنە بنەڕەتییەکان
+certificate	Intended usage	بەکارهێنانی مەبەستدار
+certificate	Issued by	دەرکراوە لەلایەن
+certificate	Issued to	دەرکراوە بۆ
+certificate	Issuer	دەرکەر
+certificate	Key usage	بەکارهێنانی کلیل
+certificate	Public key	کلیلی گشتی
+certificate	SHA-1 digest	هاشی SHA-1
+certificate	SHA-256 digest	هاشی SHA-256
+certificate	Self-signed	خۆواژووکراو
+certificate	Serial number	ژمارەی زنجیرەیی
+certificate	Valid from	دروستە لە
+certificate	Valid to	دروستە تا
+certificate	Validity ends	کۆتایی دروستی
+certificate	Validity starts	دەستپێکی دروستی
+certificate	Version	وەشان
+	Turn upside down (180°)	هەڵگەڕاندنەوە بۆ سەروخوار (180°)
+	4 x 6 in label (101.6 x 152.4 mm)	نیشانەی 4 x 6 ئینج (101.6 x 152.4 ملم)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	هەر پەڕەیەک دەبڕێتەوە بۆ ناوچە چاپکراوەکەی، ڕاست دەکرێتەوە و بەبێ کێشانەوە بۆ کاغەزەکە دەگونجێنرێت. یەک نیشانە بۆ هەر کاغەزێک.
+	Find untagged content	دۆزینەوەی ناوەڕۆکی بێ تاگ
+	No untagged content was found.	هیچ ناوەڕۆکێکی بێ تاگ نەدۆزرایەوە.
+	Found {n} untagged content problems.	{n} کێشەی ناوەڕۆکی بێ تاگ دۆزرایەوە.
+	Tag form fields	تاگکردنی خانەکانی فۆڕم
+	Mark as artifact	نیشانەکردن وەک توخمی ڕازاندنەوە
+	Remove this leaf tag from reading order and mark its direct content as an artifact	ئەم تاگە گەڵاییە لە ڕیزبەندی خوێندنەوە لابە و ناوەڕۆکە ڕاستەوخۆکەی وەک توخمی ڕازاندنەوە نیشانە بکە
+	Mark content as artifact	نیشانەکردنی ناوەڕۆک وەک توخمی ڕازاندنەوە
+	Word count	ژمارەی وشەکان
+	Current page only	تەنها پەڕەی ئێستا
+	Exclude tagged tables	دەرکردنی خشتە تاگکراوەکان
+	Exclude tagged code blocks	دەرکردنی بلۆکە کۆدە تاگکراوەکان
+	Exclude image/OCR text	دەرکردنی دەقی وێنە/OCR
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	دەرکردنەکان تاگەکانی PDF بەکاردەهێنن. خشتە و کۆدە بێ تاگەکان بە شمێندراوی دەمێننەوە. دەرکردنی وێنە دەقی نادیاریش لادەبات.
+	Words	وشەکان
+	Characters	پیتەکان
+	Characters without spaces	پیتەکان بەبێ بۆشایی
+	Pages counted	پەڕە ژمێردراوەکان
+	Some pages contain no countable text. Scanned images need OCR first.	هەندێک پەڕە دەقی ژمێردراویان تێدا نییە. وێنە سکانکراوەکان سەرەتا پێویستیان بە OCR هەیە.
+	Some content could not be classified safely and was kept in the count.	هەندێک ناوەڕۆک بە شێوەیەکی سەلامەت پۆلێن نەکرا و لە ژماردنەکەدا هێڵرایەوە.
+	Counting words… {n} pages read	ژماردنی وشەکان… {n} پەڕە خوێندرایەوە
+	Word counting stopped unexpectedly.	ژماردنی وشەکان بە شێوەیەکی چاوەڕواننەکراو وەستا.
+	Word count…	ژمارەی وشەکان…
+@id	file.word_count	ژمارەی وشەکان…
+	Standard	ستاندارد
+	Mobile	مۆبایل
+	Merge image fragments	یەکخستنی پارچەکانی وێنە
+	Optimizing… merging image fragments	باشترکردن… یەکخستنی پارچەکانی وێنە
+	Side by side	تەنیشت یەکتر
+	New file only	تەنها فایلی نوێ
+	Old file: {name}	فایلی کۆن: {name}
+	New file: {name}	فایلی نوێ: {name}
+	Print as image	چاپکردن وەک وێنە
+	Resolution:	ڕوونی:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	کاتێک چاپکەرێک دەق، سێبەر یان ڕوونییەتی فڕێدەدات بەکاری بهێنە. چاپەکە چیتر دەقی گەڕانکراو نییە؛ بە چاپکردن بە خۆڵەمێشی، وێنەکان خۆڵەمێشی دەبن.
+	Crop Image	بڕینەوەی وێنە
+	Remove Crop	لابردنی بڕینەوە
+	Trim the picture with its handles; Enter or Done applies	وێنەکە بە دەسکەکانی ببڕەوە؛ Enter یان تەواو جێبەجێی دەکات
+	Redaction mark appearance	دیمەنی نیشانەی شاردنەوە
+	Outline colour:	ڕەنگی سنوور:
+	Fill colour:	ڕەنگی پڕکردنەوە:
+	Shown while the pointer is over a mark.	لە کاتی بوونی نیشاندەر لەسەر نیشانەیەکدا پیشان دەدرێت.
+	Opacity:	ناڕوونی:
+	Make properties default	کردنی تایبەتمەندییەکان بە بنەڕەتی
+	Pages selected	پەڕە هەڵبژێردراوەکان
+	Page properties	تایبەتمەندییەکانی پەڕە
+	Create & Edit	دروستکردن و دەستکاریکردن
+	Review & Compare	پێداچوونەوە و بەراوردکردن
+	Forms & Signatures	فۆڕمەکان و واژووەکان
+	Protect & Standardize	پاراستن و ستانداردکردن
+	Customize & Automate	تایبەتکردن و خۆکارکردن
+	No tools match your search.	هیچ ئامرازێک لەگەڵ گەڕانەکەت ناگونجێت.
+	Expand all tools	فراوانکردنی هەموو ئامرازەکان
+	Collapse all tools	کۆکردنەوەی هەموو ئامرازەکان
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	ئەمڕۆ
+@plural	{n} reply|{n} replies	{n} وەڵام|{n} وەڵام
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	ئامرازەکانی پەڕە
+	Insert pages from a file after the selection…	پەڕەکان لە فایلێکەوە لە دوای هەڵبژاردەکە دابنێ…
+	Rotate the selected pages counterclockwise	پەڕە هەڵبژێردراوەکان پێچەوانەی میلی کاتژمێر بسوڕێنە
+	Rotate the selected pages clockwise	پەڕە هەڵبژێردراوەکان بە ئاڕاستەی میلی کاتژمێر بسوڕێنە
+	Extract the selected pages…	پەڕە هەڵبژێردراوەکان دەربهێنە…
+	Delete the selected pages	پەڕە هەڵبژێردراوەکان بسڕەوە

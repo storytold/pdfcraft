@@ -78,20 +78,32 @@ pub fn wasm(_: &[String]) -> anyhow::Result<()> {
         .filter(|c| matches!(layers::classify(&c.name), Some(layers::Class::Layer(_) | layers::Class::Standalone(_))))
         .map(|c| c.name)
         .collect();
-    let mut failed = Vec::new();
+    // One call over every crate: they share one dependency build, and `--keep-going` reports
+    // each failing crate instead of stopping at the first.
+    let mut c = cargo();
+    c.args(["check", "--target", "wasm32-unknown-unknown", "--keep-going"]);
     for pkg in &set {
-        let mut c = cargo();
-        c.args(["check", "--target", "wasm32-unknown-unknown", "-p", pkg]);
-        if run(c, &format!("cargo check --target wasm32-unknown-unknown -p {pkg}")).is_err() {
-            failed.push(pkg.clone());
-        }
+        c.args(["-p", pkg]);
     }
-    if failed.is_empty() {
-        println!("wasm32: {} crates ok", set.len());
-        Ok(())
+    run(c, &format!("cargo check --target wasm32-unknown-unknown --keep-going ({} crates)", set.len()))?;
+    println!("wasm32: {} crates ok", set.len());
+    Ok(())
+}
+
+/// The workspace tests. Unit and integration tests run under cargo-nextest when it is installed
+/// (one process per test, so the run is not held up by its slowest binary), else under
+/// `cargo test`; doctests run separately because nextest does not run them. Examples are left
+/// out of the test build: clippy `--all-targets` already checks that they compile.
+pub fn test(_: &[String]) -> anyhow::Result<()> {
+    let targets = ["--workspace", "--lib", "--bins", "--tests"];
+    let nextest = cargo().args(["nextest", "--version"]).output().is_ok_and(|o| o.status.success());
+    if nextest {
+        run_args(&[&["nextest", "run", "--no-fail-fast"][..], &targets].concat())?;
     } else {
-        bail!("wasm32 check failed for: {}", failed.join(", "))
+        eprintln!("test: cargo-nextest is not installed, using cargo test (cargo install cargo-nextest --locked)");
+        run_args(&[&["test", "--no-fail-fast"][..], &targets].concat())?;
     }
+    run_args(&["test", "--workspace", "--doc"])
 }
 
 pub fn ci(_: &[String]) -> anyhow::Result<()> {
@@ -99,7 +111,9 @@ pub fn ci(_: &[String]) -> anyhow::Result<()> {
     let steps: Vec<Step> = vec![
         ("fmt", Box::new(|| run_args(&["fmt", "--all", "--", "--check"]))),
         ("clippy", Box::new(|| run_args(&["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]))),
-        ("test", Box::new(|| run_args(&["test", "--workspace"]))),
+        ("cli-no-default-features", Box::new(|| run_args(&["check", "-p", "pdfcraft-cli", "--no-default-features"]))),
+        ("test", Box::new(|| test(&[]))),
+        ("i18n-report", Box::new(|| i18n_report(&["--workspace".to_string()]))),
         ("layers", Box::new(|| layers(&[]))),
         ("wasm", Box::new(|| wasm(&[]))),
         ("assets", Box::new(|| crate::assets::run(&[]))),
@@ -114,6 +128,36 @@ pub fn ci(_: &[String]) -> anyhow::Result<()> {
         }
     }
     println!("\nCI: all {} steps passed", steps.len());
+    Ok(())
+}
+
+/// `cargo xtask i18n-report`: the strings each interface language has no translation for, as
+/// counts and the first few keys, from the UI crate's `translation_gaps_report` test. It always
+/// passes: a missing string shows in English. `--workspace` runs the test from the workspace
+/// test build, which `xtask ci` has just made; without it only the UI crate is built.
+pub fn i18n_report(args: &[String]) -> anyhow::Result<()> {
+    const TEST: &str = "i18n::tests::translation_gaps_report";
+    const START: &str = "=== translation gaps ===";
+    const END: &str = "=== end of translation gaps ===";
+    let scope: &[&str] = if args.iter().any(|a| a == "--workspace") { &["--workspace"] } else { &["-p", "pdfcraft-ui-egui"] };
+    let mut c = cargo();
+    c.arg("test").args(scope).args(["--lib", "--quiet", "--", TEST, "--exact", "--nocapture"]).stderr(std::process::Stdio::inherit());
+    eprintln!("$ cargo test {} --lib --quiet -- {TEST} --exact --nocapture", scope.join(" "));
+    let out = match c.output() {
+        Ok(out) => out,
+        Err(e) => {
+            println!("i18n-report: no report, cargo test did not start: {e}");
+            return Ok(());
+        }
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let report: Vec<&str> = stdout.lines().skip_while(|l| *l != START).skip(1).take_while(|l| *l != END).collect();
+    if report.is_empty() {
+        println!("i18n-report: no report (cargo test exited with {})", out.status);
+    }
+    for line in report {
+        println!("{line}");
+    }
     Ok(())
 }
 
@@ -196,8 +240,13 @@ pub fn check(args: &[String]) -> anyhow::Result<()> {
 }
 
 /// `cargo xtask text-oracle [--limit N]`: compare `pdfcraft-cli text` with poppler's `pdftotext`
-/// (external oracle process, never linked) over the corpus. Reports word-level F1 per file and the
-/// median. Plan target (M2): median ≥ 0.97.
+/// (external oracle process, never linked) over the corpus.
+///
+/// Two scores per file, because one hides the other. **Word F1** ([`f1`]) is a bag of words: it
+/// catches a character read wrong, a glyph not read at all, a font we cannot map, and is blind to
+/// order. **Reading order** ([`order_score`]) catches what F1 cannot see — a column read into the
+/// middle of its neighbour, a figure's labels threaded through a paragraph. Reports both; gates
+/// neither. Plan target (M2): median F1 ≥ 0.97.
 pub fn text_oracle(args: &[String]) -> anyhow::Result<()> {
     let limit: usize = args.iter().position(|a| a == "--limit").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(usize::MAX);
     let pdftotext = match pdfcraft_oracle::pdftotext() {
@@ -211,8 +260,11 @@ pub fn text_oracle(args: &[String]) -> anyhow::Result<()> {
     files.sort();
     let cli = release_cli();
     let mut scores = Vec::new();
+    let mut orders = Vec::new();
     let mut worst: Vec<(f64, String)> = Vec::new();
+    let mut worst_order: Vec<(f64, String)> = Vec::new();
     let mut not_permitted = 0usize;
+    let mut truncated = 0usize;
     for f in files.iter().take(limit) {
         // A document may forbid copying its text, and we honour that: `pdfcraft-cli text` refuses
         // and says how to override it with the owner password. pdftotext ignores the flag and
@@ -225,27 +277,47 @@ pub fn text_oracle(args: &[String]) -> anyhow::Result<()> {
         let ours = run_capture(Command::new(&cli).arg("text").arg(f), 20);
         let theirs = run_capture(pdftotext.command().arg("-q").arg(f).arg("-"), 20);
         let (Some(ours), Some(theirs)) = (ours, theirs) else { continue };
-        let (a, b) = (words(&ours), words(&theirs));
+        let (sa, sb) = (word_sequence(&ours), word_sequence(&theirs));
+        let (a, b) = (words(&sa), words(&sb));
         if b.len() < 20 {
             continue; // image-only or near-empty per the oracle
         }
         let score = f1(&a, &b);
+        let (order, cut) = order_score(&sa, &sb);
+        truncated = truncated.saturating_add(usize::from(cut));
+        let name = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         scores.push(score);
-        worst.push((score, f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
+        orders.push(order);
+        worst.push((score, name.clone()));
+        worst_order.push((order, name));
     }
     if scores.is_empty() {
         bail!("no comparable files");
     }
-    scores.sort_by(f64::total_cmp);
+    let summary = |v: &mut Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        let mean = v.iter().sum::<f64>() / v.len() as f64;
+        (v[v.len() / 2], mean, v[v.len() / 10])
+    };
+    let compared = scores.len();
+    let (median, mean, p10) = summary(&mut scores);
+    let (omedian, omean, op10) = summary(&mut orders);
     worst.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let median = scores[scores.len() / 2];
-    let mean = scores.iter().sum::<f64>() / scores.len() as f64;
-    println!("text oracle: {} files with text; median F1 {:.3}, mean {:.3}, p10 {:.3}", scores.len(), median, mean, scores[scores.len() / 10]);
+    worst_order.sort_by(|a, b| a.0.total_cmp(&b.0));
+    println!("text oracle: {compared} files with text; median F1 {median:.3}, mean {mean:.3}, p10 {p10:.3}");
+    println!(
+        "  reading order: median {omedian:.3}, mean {omean:.3}, p10 {op10:.3}{}",
+        if truncated > 0 { format!(" ({truncated} cut to {MAX_ORDER_WORDS} words)") } else { String::new() }
+    );
     if not_permitted > 0 {
         println!("  {not_permitted} skipped: the document forbids copying its text, which we honour and pdftotext does not");
     }
-    println!("lowest:");
+    println!("lowest F1:");
     for (s, n) in worst.iter().take(12) {
+        println!("  {s:.3}  {n}");
+    }
+    println!("lowest reading order:");
+    for (s, n) in worst_order.iter().take(12) {
         println!("  {s:.3}  {n}");
     }
     Ok(())
@@ -416,12 +488,55 @@ fn run_capture_bytes(cmd: &mut Command, timeout_s: u64) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn words(s: &str) -> BTreeMap<String, usize> {
+/// The words of `s`, in the order they were extracted.
+fn word_sequence(s: &str) -> Vec<String> {
+    s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).collect()
+}
+
+fn words(seq: &[String]) -> BTreeMap<String, usize> {
     let mut m = BTreeMap::new();
-    for w in s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
-        *m.entry(w.to_lowercase()).or_insert(0) += 1;
+    for w in seq {
+        *m.entry(w.clone()).or_insert(0) += 1;
     }
     m
+}
+
+/// Both word sequences are cut to this length before [`order_score`] compares them: the
+/// comparison is quadratic, and three pages of prose is plenty of signal about reading order.
+const MAX_ORDER_WORDS: usize = 3000;
+
+/// How much of the longer word sequence reads in the same order in both, and whether either side
+/// was cut to [`MAX_ORDER_WORDS`] first.
+///
+/// [`f1`] is a bag of words and cannot see order at all: a page emitted back to front scores a
+/// perfect 1.000 against the page read properly. Reading order is most of what extraction has
+/// left to get
+/// wrong — a column read into the middle of its neighbour, a figure's labels threaded through a
+/// paragraph, a form's value parted from its label — so it needs a number of its own. Reviewing
+/// #2431, a change that moves text and alters nothing else, F1 called 26 of the 29 files whose
+/// output changed identical, while this separated 18 improvements from 6 regressions.
+///
+/// The score is the length of the longest common subsequence over the longer side. Like every
+/// other oracle number here it is a *disagreement* with Poppler, not a verdict: the same split
+/// scores as a win on one file and a loss on another purely because `pdftotext` happens to make
+/// it in one place and not the other.
+fn order_score(a: &[String], b: &[String]) -> (f64, bool) {
+    let cut = a.len() > MAX_ORDER_WORDS || b.len() > MAX_ORDER_WORDS;
+    let a = a.get(..a.len().min(MAX_ORDER_WORDS)).unwrap_or(a);
+    let b = b.get(..b.len().min(MAX_ORDER_WORDS)).unwrap_or(b);
+    let (n, m) = (a.len(), b.len());
+    if n == 0 || m == 0 {
+        return (0.0, cut);
+    }
+    // Two rows of the usual table: after row `i`, `prev[j]` answers `a[..i]` against `b[..j]`.
+    let (mut prev, mut cur) = (vec![0u32; m + 1], vec![0u32; m + 1]);
+    for x in a {
+        for (j, y) in b.iter().enumerate() {
+            cur[j + 1] = if x == y { prev[j].saturating_add(1) } else { cur[j].max(prev[j + 1]) };
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    (f64::from(prev[m]) / n.max(m) as f64, cut)
 }
 
 fn f1(a: &BTreeMap<String, usize>, b: &BTreeMap<String, usize>) -> f64 {
@@ -436,7 +551,42 @@ fn f1(a: &BTreeMap<String, usize>, b: &BTreeMap<String, usize>) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::root;
+    use super::{f1, order_score, root, word_sequence, words};
+
+    /// The two scores answer different questions, and the point of adding the second one is the
+    /// first row: F1 cannot tell a page from the same page read backwards.
+    #[test]
+    fn reading_order_sees_what_word_f1_cannot() {
+        let score = |ours: &str, theirs: &str| {
+            let (a, b) = (word_sequence(ours), word_sequence(theirs));
+            (f1(&words(&a), &words(&b)), order_score(&a, &b).0)
+        };
+
+        // Two columns, read as columns and read interleaved: every word is there either way.
+        let columns = "left one left two left three right one right two right three";
+        let woven = "left one right one left two right two left three right three";
+        let (same_words, out_of_order) = score(woven, columns);
+        assert_eq!(same_words, 1.0, "F1 is a bag of words and cannot see the difference");
+        assert!(out_of_order < 0.7, "reading order can: {out_of_order}");
+
+        // It is not blind to the thing F1 measures, either: a missing word costs both.
+        let (f, o) = score("left one left two left", columns);
+        assert!(f < 0.9 && o < 0.9, "{f} {o}");
+
+        // Identical text, and the degenerate inputs.
+        assert_eq!(score(columns, columns), (1.0, 1.0));
+        assert_eq!(score("", columns).1, 0.0);
+        assert_eq!(score(columns, "").1, 0.0);
+        assert_eq!(order_score(&[], &[]), (0.0, false));
+
+        // Case and punctuation are not order: both sides are folded the same way.
+        assert_eq!(score("Left, one. LEFT two!", "left one left two"), (1.0, 1.0));
+
+        // Over the cap, the comparison still answers, and says that it was cut.
+        let long: Vec<String> = (0..super::MAX_ORDER_WORDS + 10).map(|i| i.to_string()).collect();
+        let (s, cut) = order_score(&long, &long);
+        assert!((s - 1.0).abs() < 1e-9 && cut, "{s} {cut}");
+    }
 
     // Issue #211: Finder lists the app under Open With > Recommended only when the
     // bundle claims PDFs by UTI (#176).

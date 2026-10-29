@@ -153,7 +153,7 @@ pub fn claim(files: &[String], may_hand_off: bool) -> Claim {
 /// `%LOCALAPPDATA%` is unset.
 #[cfg(windows)]
 fn socket_path() -> Option<std::path::PathBuf> {
-    let name = socket_name(std::env::var("SESSIONNAME").ok().as_deref());
+    let name = socket_name(session_id(), std::env::var("SESSIONNAME").ok().as_deref());
     // %LOCALAPPDATA% is private to the user's sign-in, so other accounts can't receive this
     // user's file paths or send it files to open. A portable copy uses it too (#889), under its
     // own name so it never hands files to an installed copy (which keeps its settings elsewhere).
@@ -184,13 +184,31 @@ fn display_socket_name(display: Option<&str>) -> String {
     if display.is_empty() { "instance.sock".to_string() } else { format!("instance-{display}.sock") }
 }
 
-/// The socket's file name for a Windows session (`SESSIONNAME`: `Console`, `RDP-Tcp#3`…). The
-/// same user signed in twice (at the console and over Remote Desktop) gets one socket per session,
-/// so a file never opens in a window on the other screen. Only letters, digits and `-` are kept.
+/// The Windows session this process runs in, from its access token: the console, each Remote
+/// Desktop sign-in and session 0 (services) each have their own. `None` if Windows won't say.
+#[cfg(windows)]
+fn session_id() -> Option<u32> {
+    use winsafe::{HACCESSTOKEN, TokenInfo, co::TOKEN_INFORMATION_CLASS};
+    match HACCESSTOKEN::GetCurrentProcessToken().GetTokenInformation(TOKEN_INFORMATION_CLASS::SessionId) {
+        Ok(TokenInfo::SessionId(id)) => Some(*id),
+        _ => None,
+    }
+}
+
+/// The socket's file name for a Windows session. The same user signed in twice (at the console
+/// and over Remote Desktop) gets one socket per session, so a file never opens in a window on the
+/// other screen. The session is the token's session id (`session`): a launch from Task Scheduler,
+/// a service or a remote shell has no `SESSIONNAME` but still runs in a session, so it finds the
+/// window of the session it runs in (#3338), and never one in another session (review on #3340).
+/// Only if the id can't be read does `SESSIONNAME` (`Console`, `RDP-Tcp#3`…) name it, letters,
+/// digits and `-` kept.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn socket_name(session: Option<&str>) -> String {
-    let session: String = session.unwrap_or_default().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(32).collect();
-    if session.is_empty() { "instance.sock".to_string() } else { format!("instance-{session}.sock") }
+fn socket_name(session: Option<u32>, session_name: Option<&str>) -> String {
+    if let Some(id) = session {
+        return format!("instance-s{id}.sock");
+    }
+    let name: String = session_name.unwrap_or_default().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(32).collect();
+    if name.is_empty() { "instance.sock".to_string() } else { format!("instance-{name}.sock") }
 }
 
 /// Held while a launch finds out whether it is the first, so launches that start together (several
@@ -359,12 +377,20 @@ mod tests {
 
     #[test]
     fn each_windows_session_gets_its_own_socket_name() {
-        assert_eq!(socket_name(Some("Console")), "instance-Console.sock");
-        assert_eq!(socket_name(Some("RDP-Tcp#3")), "instance-RDP-Tcp3.sock");
-        assert_ne!(socket_name(Some("RDP-Tcp#3")), socket_name(Some("RDP-Tcp#4")));
-        assert_eq!(socket_name(Some(r"..\x/y:z")), "instance-xyz.sock", "never a path");
-        assert_eq!(socket_name(None), "instance.sock");
-        assert_eq!(socket_name(Some("")), "instance.sock");
+        // The session id decides: #3338, a launch from Task Scheduler (no SESSIONNAME) in the
+        // console's session finds the window opened from Explorer there...
+        assert_eq!(socket_name(Some(1), None), socket_name(Some(1), Some("Console")));
+        // ...and (review on #3340) one in a Remote Desktop session never reaches the console's.
+        assert_ne!(socket_name(Some(2), None), socket_name(Some(1), Some("Console")));
+        assert_ne!(socket_name(Some(2), Some("RDP-Tcp#3")), socket_name(Some(3), Some("RDP-Tcp#3")));
+        assert_eq!(socket_name(Some(4_000_000_000), None), "instance-s4000000000.sock");
+        // Only without an id does SESSIONNAME name it.
+        assert_eq!(socket_name(None, Some("Console")), "instance-Console.sock");
+        assert_eq!(socket_name(None, Some("RDP-Tcp#3")), "instance-RDP-Tcp3.sock");
+        assert_ne!(socket_name(None, Some("RDP-Tcp#3")), socket_name(None, Some("RDP-Tcp#4")));
+        assert_eq!(socket_name(None, Some(r"..\x/y:z")), "instance-xyz.sock", "never a path");
+        assert_eq!(socket_name(None, None), "instance.sock");
+        assert_eq!(socket_name(None, Some("")), "instance.sock");
     }
 
     #[test]
@@ -394,11 +420,21 @@ mod tests {
         assert_eq!(display_socket_name(Some("")), "instance.sock");
     }
 
+    /// The socket is named by the session the process runs in, which Windows always gives.
+    #[cfg(windows)]
+    #[test]
+    fn this_process_has_a_session_id() {
+        let id = super::session_id();
+        assert!(id.is_some(), "the access token names the session");
+        let name = socket_name(id, None);
+        assert!(socket_path().is_none_or(|p| p.file_name().is_some_and(|f| f.to_string_lossy().ends_with(&name))), "{name}");
+    }
+
     #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
     fn socket(test: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("pdfcraft-instance-{}-{test}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        dir.join(socket_name(None))
+        dir.join(socket_name(None, None))
     }
 
     #[cfg(any(windows, all(unix, not(target_os = "macos"))))]

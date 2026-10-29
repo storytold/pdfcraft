@@ -1988,7 +1988,7 @@ impl Engine {
                 return Err(FfiError::Unsupported { reason: "OCR models are not installed (set PDFCRAFT_MODELS or call set_ocr_models_dir)".into() });
             }
 
-            let settings = pdfcraft_engine::ocr::OcrSettings { dpi: dpi.unwrap_or(300.0), language: "en".into(), skip_text_pages };
+            let settings = pdfcraft_engine::ocr::OcrSettings { dpi: dpi.unwrap_or(300.0), language: "en".into(), skip_text_pages, native_text_only: false };
 
             let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
             let page_idx = page as usize;
@@ -2110,10 +2110,7 @@ impl Engine {
         #[cfg(feature = "js")]
         {
             let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
-            let outcome = inner.session.run_javascript(pdfcraft_engine::DocId(doc_id), &script, target.as_deref()).map_err(|e| match e {
-                pdfcraft_engine::EditError::Unsupported(reason) => FfiError::Unsupported { reason: reason.to_string() },
-                _ => FfiError::EditFailed { reason: e.to_string() },
-            })?;
+            let outcome = inner.session.run_javascript(pdfcraft_engine::DocId(doc_id), &script, target.as_deref()).map_err(FfiError::from)?;
 
             if let Some(bytes) = inner.session.get(pdfcraft_engine::DocId(doc_id)).map(|d| d.bytes.clone()) {
                 inner.doc_bytes.insert(doc_id, bytes);
@@ -2138,7 +2135,7 @@ impl Engine {
         {
             let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
             let out = inner.session.take_js_output(pdfcraft_engine::DocId(doc_id));
-            Ok(crate::advanced::FfiJsOutput { alerts: out.alerts, console: out.console, errors: out.errors })
+            Ok(crate::advanced::FfiJsOutput { alerts: out.alerts.into_iter().map(|m| m.text).collect(), console: out.console, errors: out.errors })
         }
     }
 
@@ -2178,10 +2175,7 @@ impl Engine {
         {
             let inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
             let xml_bytes =
-                inner.session.export_data(pdfcraft_engine::DocId(doc_id), pdfcraft_engine::DataFormat::Xml, false, true).map_err(|e| match e {
-                    pdfcraft_engine::EditError::Unsupported(reason) => FfiError::Unsupported { reason: reason.to_string() },
-                    _ => FfiError::EditFailed { reason: e.to_string() },
-                })?;
+                inner.session.export_data(pdfcraft_engine::DocId(doc_id), pdfcraft_engine::DataFormat::Xml, false, true).map_err(FfiError::from)?;
             String::from_utf8(xml_bytes).map_err(|e| FfiError::Internal { reason: format!("invalid UTF-8 in XFA datasets: {e}") })
         }
     }

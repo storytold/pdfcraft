@@ -31,9 +31,10 @@ finish-args:
   # passed by path (the command line, Open Recent, "Save" next to the original) work there.
   - --filesystem=xdg-documents
   - --filesystem=xdg-download
-  # Deliberately not granted: network (Flatpak installs update through flatpak, so Help ▸ Check
-  # for updates reports that GitHub is unreachable; the optional --control channel listens on
-  # 127.0.0.1 inside the sandbox) and home/host filesystem access. No CUPS socket either: printing
+  # Network: Help ▸ Check for updates reaches GitHub. The optional --control channel still listens
+  # on 127.0.0.1 inside the sandbox.
+  - --share=network
+  # Deliberately not granted: home/host filesystem access. No CUPS socket either: printing
   # runs the `lp` command (crates/print), which the freedesktop runtime doesn't ship, so Print
   # reports that the spooler is unavailable until it goes through the print portal.
 build-options:
@@ -48,6 +49,7 @@ modules:
     build-commands:
       - cargo --offline build --release --locked -p pdfcraft
       - install -Dm755 target/release/pdfcraft /app/bin/pdfcraft
+      - install -Dm644 NOTICE /app/share/doc/pdfcraft/NOTICE
       - install -Dm644 packaging/linux/ai.storyteller.pdfcraft.desktop /app/share/applications/ai.storyteller.pdfcraft.desktop
       - install -Dm644 packaging/linux/ai.storyteller.pdfcraft.mime.xml /app/share/mime/packages/ai.storyteller.pdfcraft.xml
       - mkdir -p /app/share/icons && cp -R assets/app-icon/hicolor /app/share/icons/

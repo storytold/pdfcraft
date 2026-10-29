@@ -98,6 +98,11 @@ pub struct OcrSettings {
     /// text" and skips them). When `false`, such pages are read too (a picture on a page that
     /// also has text, #1028) and only the words that aren't already there are added.
     pub skip_text_pages: bool,
+    /// What counts as the page's text when `skip_text_pages` is on: only its own (page content
+    /// and form fields). Comments and text boxes are left out, and are not drawn into the picture
+    /// that is read, so a scan with a few comments on it is still a scan. `false`: everything
+    /// the page shows.
+    pub native_text_only: bool,
 }
 
 /// A recognised word whose box is at least this much covered by the page's own text is that
@@ -127,7 +132,7 @@ fn covered(word: [f32; 4], text: &[[f32; 4]]) -> f32 {
 
 impl Default for OcrSettings {
     fn default() -> Self {
-        OcrSettings { dpi: 300.0, language: "en".into(), skip_text_pages: true }
+        OcrSettings { dpi: 300.0, language: "en".into(), skip_text_pages: true, native_text_only: false }
     }
 }
 
@@ -152,7 +157,7 @@ impl OcrPage {
 #[cfg(feature = "ocr")]
 pub fn engine() -> Result<Arc<Ocr>, String> {
     static OCR: Mutex<Option<Arc<Ocr>>> = Mutex::new(None);
-    let mut slot = OCR.lock().unwrap_or_else(|e| e.into_inner());
+    let mut slot = OCR.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(o) = slot.as_ref() {
         return Ok(o.clone());
     }
@@ -185,7 +190,8 @@ impl OcrJob {
     /// stops (the pages read so far are returned).
     #[cfg(feature = "ocr")]
     pub fn run(self, ocr: &Ocr, mut progress: impl FnMut(usize, usize) -> bool) -> Vec<OcrPage> {
-        let config = RenderConfig { password: self.password.as_deref().map(Arc::from), ..Default::default() };
+        let config =
+            RenderConfig { password: self.password.as_deref().map(Arc::from), hide_comments: self.settings.native_text_only, ..Default::default() };
         let mut r = PageRenderer::new(self.bytes.clone(), config);
         let mut out = Vec::new();
         let total = self.pages.len();

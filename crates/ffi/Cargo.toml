@@ -25,13 +25,13 @@ preflight = ["pdfcraft-engine/preflight", "pdfcraft-automation/preflight"]
 cli = ["uniffi/cli"]
 
 [dependencies]
-pdfcraft-engine = { path = "../engine", version = "0.8.0", default-features = false }
-pdfcraft-render = { path = "../render", version = "0.8.0" }
-pdfcraft-automation = { path = "../automation", version = "0.8.0", default-features = false }
-pdfcraft-model = { path = "../model", version = "0.8.0" }
-pdfcraft-cos = { path = "../cos", version = "0.8.0" }
-pdfcraft-geom = { path = "../geom", version = "0.8.0" }
-pdfcraft-fonts = { path = "../fonts", version = "0.8.0" }
+pdfcraft-engine = { workspace = true, default-features = false }
+pdfcraft-render = { workspace = true }
+pdfcraft-automation = { workspace = true, default-features = false }
+pdfcraft-model = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-geom = { workspace = true }
+pdfcraft-fonts = { workspace = true }
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true

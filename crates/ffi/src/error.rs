@@ -76,7 +76,6 @@ impl From<pdfcraft_engine::EditError> for FfiError {
             pdfcraft_engine::EditError::ReadOnly(reason) => FfiError::ReadOnly { reason },
             pdfcraft_engine::EditError::NotPermitted(op) => FfiError::NotPermitted { operation: op.to_string() },
             pdfcraft_engine::EditError::WrongPassword => FfiError::WrongPassword,
-            pdfcraft_engine::EditError::Unsupported(reason) => FfiError::Unsupported { reason: reason.to_string() },
             other => FfiError::EditFailed { reason: other.to_string() },
         }
     }

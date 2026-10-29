@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 pub use pdfcraft_fonts::helvetica_width;
 
 /// The model files, as named in ATTRIBUTION.toml.
-pub const DETECTION_MODEL: &str = "text-detection.rten";
-pub const RECOGNITION_MODEL: &str = "text-recognition.rten";
+pub const DETECTION_MODEL: &str = "text-detection.onnx";
+pub const RECOGNITION_MODEL: &str = "text-recognition.onnx";
 
 /// The recognition model's alphabet, as it was trained (ocrs-models' `DEFAULT_ALPHABET`): its
 /// output classes follow this order. The ocrs crate's own copy has an `E` where the training had
@@ -57,10 +57,13 @@ pub fn set_models_dir(dir: impl Into<PathBuf>) {
 }
 
 impl Models {
-    /// The models in `dir`, if both files are there.
+    /// A complete model pair in `dir`, preferring current ONNX files over legacy RTEN files.
+    /// An incomplete update never mixes formats or hides an intact legacy pair.
     pub fn in_dir(dir: &Path) -> Option<Models> {
-        let m = Models { detection: dir.join(DETECTION_MODEL), recognition: dir.join(RECOGNITION_MODEL) };
-        (m.detection.is_file() && m.recognition.is_file()).then_some(m)
+        [(DETECTION_MODEL, RECOGNITION_MODEL), ("text-detection.rten", "text-recognition.rten")].into_iter().find_map(|(detection, recognition)| {
+            let m = Models { detection: dir.join(detection), recognition: dir.join(recognition) };
+            (m.detection.is_file() && m.recognition.is_file()).then_some(m)
+        })
     }
 
     /// Look for the models: custom dir, then `$PDFCRAFT_MODELS`, then where the release packages install them
@@ -229,7 +232,10 @@ fn num(v: f64) -> String {
 /// WinAnsiEncoding), each word stretched to its box so selection and search highlight the
 /// right place. Marked content `/OCR` so it can be told apart from the page's own text.
 pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
-    let mut out = b"/OCR BMC\nBT\n3 Tr\n/PCHelv 1 Tf\n".to_vec();
+    // `3 Tr` and the font are graphics state, which `ET` doesn't reset: without `q … Q` they
+    // would stay set for every later content stream on the page, so text added after OCR (a
+    // header or footer) drew invisibly (#3029).
+    let mut out = b"/OCR BMC\nq\nBT\n3 Tr\n/PCHelv 1 Tf\n".to_vec();
     for w in words {
         let width = helvetica_width(&w.text, 1.0);
         let height = w.up[0].hypot(w.up[1]);
@@ -249,7 +255,7 @@ pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
         out.extend(pdfcraft_fonts::literal(&pdfcraft_fonts::win_ansi(&w.text)));
         out.extend_from_slice(b" Tj\n");
     }
-    out.extend_from_slice(b"ET\nEMC\n");
+    out.extend_from_slice(b"ET\nQ\nEMC\n");
     out
 }
 
@@ -286,6 +292,26 @@ mod tests {
         assert!(s.starts_with("/OCR BMC") && s.ends_with("EMC\n"));
     }
 
+    /// #3029: the layer's invisible rendering mode and font end with the layer. Every operator
+    /// that sets them sits inside a `q … Q` pair that the layer closes itself, so content drawn
+    /// after it on the page starts from the graphics state it had before.
+    #[test]
+    fn the_layer_restores_the_graphics_state_it_changes() {
+        let w = PlacedWord { text: "Hi".into(), origin: [10.0, 20.0], across: [30.0, 0.0], up: [0.0, 9.3] };
+        let s = String::from_utf8(text_layer(&[w])).unwrap();
+        let mut depth = 0_i32;
+        for token in s.split_ascii_whitespace() {
+            match token {
+                "q" => depth += 1,
+                "Q" => depth -= 1,
+                "Tr" | "Tf" | "Tm" => assert!(depth > 0, "`{token}` outside q … Q in {s:?}"),
+                _ => {}
+            }
+            assert!(depth >= 0, "unbalanced Q in {s:?}");
+        }
+        assert_eq!(depth, 0, "the layer leaves a q open: {s:?}");
+    }
+
     /// A word box is tight around the ink, so the text's size and baseline come from the letters:
     /// capitals, lowercase without ascenders, descenders.
     #[test]
@@ -310,6 +336,63 @@ mod tests {
         let w = PlacedWord::place(&Word { text: "Up".into(), rect: [0.0, 0.0, 50.0, 10.0] }, to_user);
         assert_eq!(w.across, [0.0, 50.0]);
         assert_eq!(w.up, [-10.0, 0.0]);
+    }
+
+    /// The current ONNX pair wins when an installation also retains both legacy models.
+    #[test]
+    fn model_discovery_prefers_the_complete_onnx_pair() {
+        let dir = tempfile::tempdir().unwrap();
+        for file in ["text-detection.onnx", "text-recognition.onnx"] {
+            std::fs::write(dir.path().join(file), b"model").unwrap();
+        }
+        let expected = Some(Models { detection: dir.path().join("text-detection.onnx"), recognition: dir.path().join("text-recognition.onnx") });
+        assert_eq!(Models::in_dir(dir.path()), expected, "a complete ONNX pair is sufficient");
+        for file in ["text-detection.rten", "text-recognition.rten"] {
+            std::fs::write(dir.path().join(file), b"model").unwrap();
+        }
+        assert_eq!(Models::in_dir(dir.path()), expected, "the complete ONNX pair takes precedence over legacy models");
+    }
+
+    /// An interrupted ONNX update still permits an intact legacy pair in the same directory.
+    #[test]
+    fn model_discovery_falls_back_to_legacy_when_the_onnx_pair_is_incomplete() {
+        for current in ["text-detection.onnx", "text-recognition.onnx"] {
+            let dir = tempfile::tempdir().unwrap();
+            for file in [current, "text-detection.rten", "text-recognition.rten"] {
+                std::fs::write(dir.path().join(file), b"model").unwrap();
+            }
+            assert_eq!(
+                Models::in_dir(dir.path()),
+                Some(Models { detection: dir.path().join("text-detection.rten"), recognition: dir.path().join("text-recognition.rten") }),
+                "{current} alone must not hide a complete legacy pair"
+            );
+        }
+    }
+
+    /// Detection and recognition must come from one complete format pair, never a mixed update.
+    #[test]
+    fn model_discovery_refuses_mixed_format_pairs() {
+        for pair in [["text-detection.onnx", "text-recognition.rten"], ["text-detection.rten", "text-recognition.onnx"]] {
+            let dir = tempfile::tempdir().unwrap();
+            for file in pair {
+                std::fs::write(dir.path().join(file), b"model").unwrap();
+            }
+            assert_eq!(Models::in_dir(dir.path()), None, "{pair:?} is not a complete model pair");
+        }
+    }
+
+    /// Existing source builds and PDFCRAFT_MODELS overrides retain their complete RTEN pair.
+    #[test]
+    fn model_discovery_keeps_legacy_only_installations() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(Models::in_dir(dir.path()), None);
+        std::fs::write(dir.path().join("text-detection.rten"), b"model").unwrap();
+        assert_eq!(Models::in_dir(dir.path()), None, "one legacy model is incomplete");
+        std::fs::write(dir.path().join("text-recognition.rten"), b"model").unwrap();
+        assert_eq!(
+            Models::in_dir(dir.path()),
+            Some(Models { detection: dir.path().join("text-detection.rten"), recognition: dir.path().join("text-recognition.rten") })
+        );
     }
 
     /// #103: every release package's layout puts the models where the installed app looks.

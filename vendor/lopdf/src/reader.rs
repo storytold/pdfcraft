@@ -1627,8 +1627,38 @@ impl Reader<'_> {
         Some((number, generation))
     }
 
-    /// Newest backwards-scanned `trailer` whose `/Root` references a scanned object.
+    /// Newest backwards-scanned `trailer` whose `/Root` references a scanned object, one whose
+    /// `/Root` is the catalog first.
     fn find_latest_trailer(&self, xref: &Xref) -> Option<(usize, Dictionary)> {
+        // PdfCraft patch: (#2365) an in-file /Root must also match its generation, as
+        // `get_offset` requires when the root is loaded.
+        let usable = |dict: &Dictionary| {
+            dict.get(b"Root")
+                .and_then(Object::as_reference)
+                .is_ok_and(|root| match xref.entries.get(&root.0) {
+                    Some(XrefEntry::Normal { generation, .. }) => *generation == root.1,
+                    entry => entry.is_some(),
+                })
+        };
+        // PdfCraft patch: (#2365) a candidate whose /Root is the catalog (`/Type /Catalog` or
+        // `/Pages`) beats one whose /Root is another dictionary, such as /Info, wherever it is;
+        // the other kind is still taken when nothing better is there (an FDF's /Root).
+        let is_catalog = |dict: &Dictionary| {
+            let Ok(root) = dict.get(b"Root").and_then(Object::as_reference) else {
+                return false;
+            };
+            let Some(XrefEntry::Normal { offset, generation }) = xref.entries.get(&root.0) else {
+                return false;
+            };
+            if *generation != root.1 {
+                return false;
+            }
+            parser::indirect_object(self.buffer, *offset as usize, None, self, &mut HashSet::new(), None)
+                .ok()
+                .and_then(|(_, object)| object.as_dict().map(|d| d.has_type(b"Catalog") || d.has(b"Pages")).ok())
+                .unwrap_or(false)
+        };
+        let mut latest: Option<(bool, usize, Dictionary)> = None;
         let mut bound = self.buffer.len();
         for _ in 0..MAX_TRAILER_CANDIDATES {
             let Some(pos) = Reader::search_substring(&self.buffer[..bound], b"trailer", 0) else {
@@ -1643,15 +1673,54 @@ impl Reader<'_> {
             let Ok((_, dict)) = parser::dictionary(&after_keyword[dict_start..]) else {
                 continue;
             };
-            if dict
-                .get(b"Root")
-                .and_then(Object::as_reference)
-                .is_ok_and(|root| xref.entries.contains_key(&root.0))
-            {
-                return Some((pos, dict));
+            if usable(&dict) {
+                let catalog = is_catalog(&dict);
+                if latest.is_none() || catalog {
+                    latest = Some((catalog, pos, dict));
+                }
+                if catalog {
+                    break;
+                }
             }
         }
-        None
+        // PdfCraft patch: (#2365) a file whose only trailer is a cross-reference stream has
+        // no `trailer` keyword, so the scan above found nothing and the rebuild failed; its
+        // /Info and /ID were then lost. Such a stream's dictionary is the trailer, and the
+        // latest one in the file wins, as a later `trailer` keyword would.
+        const HEADER_WINDOW: usize = 32;
+        const DICT_WINDOW: usize = 4096;
+        for entry in xref.entries.values() {
+            let XrefEntry::Normal { offset, .. } = entry else {
+                continue;
+            };
+            let offset = *offset as usize;
+            if latest.as_ref().is_some_and(|(catalog, pos, _)| *catalog && *pos >= offset) {
+                continue;
+            }
+            let Some(head) = self.buffer.get(offset..) else {
+                continue;
+            };
+            let Some(dict_start) = head[..cmp::min(head.len(), HEADER_WINDOW)]
+                .windows(2)
+                .position(|window| window == b"<<")
+            else {
+                continue;
+            };
+            let dict_bytes = &head[dict_start..cmp::min(head.len(), dict_start + DICT_WINDOW)];
+            if !dict_bytes.windows(5).any(|window| window == b"/XRef") {
+                continue;
+            }
+            let Ok((_, dict)) = parser::dictionary(&head[dict_start..]) else {
+                continue;
+            };
+            if dict.has_type(b"XRef") && usable(&dict) {
+                let rank = (is_catalog(&dict), offset);
+                if latest.as_ref().is_none_or(|(catalog, pos, _)| rank > (*catalog, *pos)) {
+                    latest = Some((rank.0, offset, dict));
+                }
+            }
+        }
+        latest.map(|(_, pos, dict)| (pos, dict))
     }
 
     /// Some generators write `startxref` (or trailer `Prev`) values that are
