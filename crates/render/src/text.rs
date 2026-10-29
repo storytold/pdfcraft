@@ -95,11 +95,11 @@ fn is_accent_mark(c: char) -> bool {
     ('\u{300}'..='\u{36F}').contains(&c)
 }
 
-/// `s` with the accents taken off Latin letters, so `café` and `cafe`, `Đặng` and `Dang`'s
-/// accented letters, `ș` and `s` read the same: a precomposed letter whose canonical
-/// decomposition is an ASCII letter plus combining diacritical marks becomes that letter, and such
-/// marks written on their own after a Latin letter are dropped. Nothing else changes. Letters that
-/// have no decomposition (`ł`, `ø`, `đ`) are letters of their own and stay; so do the kana
+/// `s` with the accents taken off Latin letters, so `café` and `cafe`, `ặ` and `a`, `ș` and `s`
+/// read the same: a precomposed letter whose canonical decomposition is an ASCII letter plus
+/// combining diacritical marks becomes that letter, and such marks written on their own after a
+/// Latin letter are dropped. Nothing else changes. Letters that have no decomposition (`ł`, `ø`,
+/// `đ`, so `Đặng` reads as `Đang`) are letters of their own and stay; so do the kana
 /// (`が` is not `か`), Cyrillic (`й` is not `и`) and Greek.
 ///
 /// A mark's length varies, so the result can be shorter than `s`; callers that map matches back
