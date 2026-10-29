@@ -1,7 +1,7 @@
 # OCR benchmark
 
-> **Last updated:** 2026-10-28 · **Change:** patch (scans at the documented 11 pt, floors and
-> numbers re-measured; empty predictions for failed MDPBench pages; how to leave CDM out)
+> **Last updated:** 2026-10-29 · **Change:** patch (the accented floors of 0 guard nothing yet,
+> and when they get real values)
 
 How well Scan & OCR ▸ Recognize text reads, measured two ways: synthetic scans of committed
 ground-truth texts (reproducible to the pixel, guarded by a test), and real pages from MDPBench
@@ -63,7 +63,9 @@ points). Each fixture is read with the recogniser of its own language when PdfCr
 only `en` exists, so every floor is an `en` floor, and the accented floors are 0: ocrs's alphabet
 has no accented letters. When a recogniser for another language lands (#1012, #2520),
 `every_fixture_has_a_floor_and_inter_draws_it` fails until that language's fixtures have
-measured floors for it.
+measured floors for it. So on `main` the accented floors do not guard accent recognition at all;
+they get real, non-zero values, measured for that recogniser, when a Latin recogniser that knows
+accented letters lands (#2520, #1012).
 
 The test catches regressions in rendering, recognition or the text layer: a model alphabet
 shifted by one letter dropped every fixture below its floor (for example `nl-wikipedia.tsv` from
@@ -194,5 +196,6 @@ Read the comparison with care:
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | patch | Says that the accented floors of 0 cannot guard accent recognition with `en`, and that they get non-zero values when a Latin recogniser with accented letters lands (#2520, #1012). |
 | 2026-10-28 | patch | The scans set their text at 11 pt as documented (they were 4/3 larger, about 14.7 pt); the `en` floors and the synthetic numbers are re-measured. A failed MDPBench page gets an empty prediction, a prediction that cannot be written stops the run, and annotated image names with a directory part are skipped. The official-evaluation steps say how to leave CDM out. |
 | 2026-10-28 | new | Ground-truth fixtures, floors for the `en` recogniser, MDPBench with its official evaluation; numbers for `main`. |
