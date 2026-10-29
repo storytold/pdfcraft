@@ -734,8 +734,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = ["page_render"]
-evidence = ["crates/render/src/raster/tests.rs::renders_a_blue_rectangle", "crates/automation/tests/it/automation.rs::open_inspect_render_and_find", "crates/render/src/raster/tests.rs::user_unit_scales_the_page_and_everything_on_it"]
-notes = "hayro bootstrap renderer; own DisplayList devices in M2.6. Pages with /UserUnit are shown at their size in points, as Acrobat reads the value"
+evidence = ["crates/render/src/raster/tests.rs::renders_a_blue_rectangle", "crates/automation/tests/it/automation.rs::open_inspect_render_and_find", "crates/render/src/raster/tests.rs::user_unit_scales_the_page_and_everything_on_it", "crates/render/src/raster/tests.rs::non_interpolated_minification_keeps_thin_strokes", "crates/render/src/raster/tests.rs::minified_image_edges_snap_to_whole_pixels", "crates/render/src/raster/tests.rs::large_non_interpolated_images_are_smoothed_when_enlarged", "crates/render/src/raster/tests.rs::small_non_interpolated_images_keep_hard_pixels_when_enlarged"]
+notes = "hayro bootstrap renderer; own DisplayList devices in M2.6. Pages with /UserUnit are shown at their size in points, as Acrobat reads the value. An image drawn below its resolution is shrunk once to whole device pixels: by area averaging unless it asks for /Interpolate (then Catmull-Rom), so the text of a 300 dpi scan at 100% keeps its strokes (it was nearest-neighbour, which dropped them). Enlarged, an image of page-scan size (512 samples or more on its shorter side) is smoothed bilinearly whatever its /Interpolate, so a zoomed scan has no staircases; smaller images keep their hard pixels. Not measured against Acrobat"
 
 [[feature]]
 id = "view.render-shadings-patterns"
