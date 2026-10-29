@@ -4109,6 +4109,48 @@ fn saving_with_flatten_fill_sign_bakes_marks_and_leaves_other_comments() {
     assert_eq!(fields.len(), 1, "the form field stays");
 }
 
+/// Arabic and Hebrew typed with Fill & Sign, in a text box or in a callout stay copyable in their
+/// logical order once the marks are baked into the page, by a flattening save or by flattening.
+#[test]
+fn flattened_arabic_and_hebrew_fill_sign_text_and_comments_extract_in_logical_order() {
+    if pdfcraft_fonts::document_arabic_font().is_none() || pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        eprintln!("set CRAFT_FONTS_DIR to exercise Arabic and Hebrew marks");
+        return;
+    }
+    let dir = workdir("rtl-fill-sign-flatten");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({"from":"blank","width":600,"height":800}))["doc"].as_u64().unwrap();
+    let arabic = "سَلَام 123 (PDF) توقيع";
+    let hebrew = "שָׁלוֹם 123 (PDF) חתימה";
+    ok(&mut a, "fill_sign_add", json!({"doc":doc,"page":1,"type":"text","at":[60.0,100.0],"text":arabic}));
+    ok(&mut a, "fill_sign_add", json!({"doc":doc,"page":1,"type":"text","at":[60.0,300.0],"text":hebrew}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"rtl-flat.pdf","flatten_fill_sign":true}));
+    let flat = ok(&mut a, "doc_open", json!({"path":"rtl-flat.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "comment_list", json!({"doc":flat}))["count"], 0, "both marks were baked in");
+    let text = page_text(&mut a, flat).concat();
+    assert!(text.contains(arabic) && text.contains(hebrew), "{text}");
+    assert!(!text.contains('?'), "{text}");
+
+    let box_text = "טקסט עברי בתיבה 456";
+    let callout_text = "הערה עם חץ 789";
+    let added = ok(&mut a, "comment_add", json!({"doc":flat,"page":1,"type":"textbox","rect":[50,500,540,560],"contents":box_text,"font_size":16}));
+    assert!(added.get("warnings").is_none(), "supported Hebrew must be drawn: {added}");
+    let added = ok(
+        &mut a,
+        "comment_add",
+        json!({"doc":flat,"page":1,"type":"callout","rect":[200,600,540,660],"knee":[150,630],"to":[80,620],"contents":callout_text,"font_size":16}),
+    );
+    assert!(added.get("warnings").is_none(), "supported Hebrew must be drawn: {added}");
+    ok(&mut a, "doc_flatten", json!({"doc":flat}));
+    ok(&mut a, "doc_save", json!({"doc":flat,"path":"rtl-comments-flat.pdf"}));
+    let re = ok(&mut a, "doc_open", json!({"path":"rtl-comments-flat.pdf"}))["doc"].as_u64().unwrap();
+    let text = page_text(&mut a, re).concat();
+    for logical in [arabic, hebrew, box_text, callout_text] {
+        assert!(text.contains(logical), "{logical} missing from {text}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn flattening_through_tools() {
     let dir = workdir("flatten");

@@ -1534,6 +1534,46 @@ fn arabic_text_boxes_callouts_and_typewriter_embed_searchable_appearances_after_
     }
 }
 
+/// Hebrew takes the same shaped path as Arabic in text boxes, typewriter (Fill & Sign) text and
+/// callouts: points stay on their letters, digits and Latin keep their place, the appearance
+/// carries the typed text for copy and search, and it survives a restyle, a reopen and a retype.
+#[test]
+fn hebrew_text_boxes_callouts_and_typewriter_embed_searchable_appearances_after_reopen() {
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let rect = [100.0, 500.0, 400.0, 650.0];
+    let shapes = [
+        Shape::TextBox { rect, font_size: 14.0 },
+        Shape::Typewriter { rect, font_size: 14.0 },
+        Shape::Callout { rect, knee: [80.0, 560.0], point: [50.0, 540.0], font_size: 14.0, ending: LineEnding::OpenArrow },
+    ];
+    let logical = "שָׁלוֹם 123 (PDF) עברית";
+    for (i, shape) in shapes.into_iter().enumerate() {
+        let mut annotation = new(0, shape);
+        annotation.contents = logical.into();
+        let index = add_annotation(&mut doc, &annotation, &meta(&format!("hebrew-{i}"))).unwrap();
+        assert_eq!(pdfcraft_fonts::undrawn_mark(&list(&doc, 0)[index]), None, "every Hebrew letter and point is drawn");
+        set_style(&mut doc, 0, index, StyleChange::new(Some([0.1, 0.2, 0.3]), Some(0.8), None, None), &meta("")).unwrap();
+        set_rect(&mut doc, 0, index, [110.0, 490.0, 410.0, 640.0], &meta("")).unwrap();
+        let annotation = list(&doc, 0)[index].clone();
+        assert!(text(&annotation, b"RC").contains("dir=\"rtl\""));
+        let content = ap_content(&doc, &annotation);
+        let hex: String = logical.encode_utf16().map(|u| format!("{u:04X}")).collect();
+        assert!(content.contains(&format!("/ActualText <FEFF{hex}>")), "{content}");
+        assert!(!content.contains("(?) Tj"), "{content}");
+        assert_eq!(text(&annotation, b"Contents"), logical);
+        doc = reopen(&doc);
+        let annotation = list(&doc, 0)[index].clone();
+        assert_eq!(ap_content(&doc, &annotation), content);
+        set_contents(&mut doc, 0, index, "טקסט עברי חדש 456", &meta("")).unwrap();
+        doc = reopen(&doc);
+        assert_eq!(text(&list(&doc, 0)[index], b"Contents"), "טקסט עברי חדש 456");
+        assert_eq!(pdfcraft_fonts::undrawn_mark(&list(&doc, 0)[index]), None);
+    }
+}
+
 #[test]
 fn cached_arabic_appearance_templates_allocate_valid_fonts_in_each_display_copy() {
     if pdfcraft_fonts::document_arabic_font().is_none() {
