@@ -19,21 +19,27 @@ win.
 3. **Fork** if you do not have write access: `gh repo fork --remote`.
 4. **Branch** from an up-to-date `main` as `<type>/<slug>` (`feat/`, `fix/`, `docs/`, `chore/`,
    `refactor/`), for example `fix/radio-delete`. `main` is never pushed to directly.
-5. **Make the change and add a test** at the right scale: property, unit, crate integration or
-   end-to-end. For a bug fix, revert the fix and watch the test fail before you trust it. A test
-   nobody has seen fail is not evidence.
+5. **Make the change.** New behaviour needs a test at the right scale: property, unit, crate
+   integration or end-to-end. A bug fix needs a regression test: revert the fix and watch the
+   test fail before you trust it, because a test nobody has seen fail is not evidence.
+   Documentation-only changes need no test.
 6. **Run the quality gates**, scoped to the crates you touched. A full `--workspace` build can
-   lock up a development machine; CI runs it on every PR.
+   lock up a development machine; CI runs it on every PR. Set `CRATE` to the package name of
+   each crate you changed (the `name` in its `Cargo.toml`):
    ```sh
+   CRATE=pdfcraft-sign
    cargo fmt --check
-   timeout 1800 cargo clippy -p <crate> -j 2 --all-targets -- -D warnings
-   timeout 1800 cargo test -p <crate> -j 2
+   timeout 1800 cargo clippy -p "$CRATE" -j 2 --all-targets -- -D warnings
+   timeout 1800 cargo test -p "$CRATE" -j 2
    cargo xtask layers
    cargo xtask assets
    ```
+   `timeout` stops a build that hangs. Linux has it. On macOS, `brew install coreutils` provides
+   it as `gtimeout` (and as `timeout` when Homebrew's `gnubin` directory is on your `PATH`). On
+   Windows, `timeout` is a different command: leave the prefix off and watch the build yourself.
 7. **Open a PR into `main`** with `gh pr create`, fill in the template's checklists, and add
    `Fixes #123` if there is an issue. Merge only when CI is green.
-8. **Rebase the same day `main` moves.** `main` takes hundreds of commits a day, so a PR that
+8. **Rebase on the same day that `main` moves.** `main` takes hundreds of commits a day, so a PR that
    sits goes stale quickly.
 
 ## Hard rules
@@ -42,8 +48,9 @@ These are the reasons a PR gets rejected.
 
 - **Provenance.** Read [`AGENTS.md`](AGENTS.md) §1 before adding any asset.
   - No assets from Adobe products, and no Adobe icon recreated, traced or imitated.
-  - No font files in this repository; fonts live in
-    [storytold/craft-fonts](https://github.com/storytold/craft-fonts).
+  - Do not add font files here; new fonts go to
+    [storytold/craft-fonts](https://github.com/storytold/craft-fonts). The Latin UI fonts already
+    in `assets/fonts/` (Inter, JetBrains Mono, Dancing Script) stay.
   - No copied GPL/AGPL code. MuPDF, Ghostscript, Poppler, veraPDF and DSS run only as external
     oracle processes.
   - Behaviour comes from the specification (ISO 32000-2, the Arlington model) or black-box
