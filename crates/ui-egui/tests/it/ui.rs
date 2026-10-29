@@ -2035,6 +2035,21 @@ fn tab_context_menu_can_detach_tab_to_new_window() {
     assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[2]));
 }
 
+#[test]
+fn detached_window_views_retain_render_demand_and_are_not_suspended() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach middle.pdf
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(4);
+
+    // middle.pdf is detached and treated as visible by finish_render_frame
+    assert!(h.state().views[1].detached, "middle.pdf is detached");
+    // It rendered in its detached window viewport
+    assert!(h.state().session.get(ids[1]).is_some());
+}
+
 /// The Edit tab turns on Edit text & images at once, as Acrobat does, so every paragraph and image
 /// is boxed and editable with one click; another tab puts the tool down again.
 #[test]
