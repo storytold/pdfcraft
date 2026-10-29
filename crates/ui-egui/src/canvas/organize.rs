@@ -354,9 +354,12 @@ pub(super) fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, 
     let ppp = ui.ctx().pixels_per_point();
     // The page image scales with the zoom; the padding and the page number don't.
     let cell = vec2(146.0 * view.grid_zoom + 44.0, 194.0 * view.grid_zoom + 88.0);
-    let anchor = view.grid_anchor.take();
     let reveal = view.grid_reveal.take();
     let follow = view.grid_follow.take();
+    // A page to reveal or follow wins over the zoom anchor: both set egui's one scroll target,
+    // and the anchor's, set later, would leave that page off screen (#4993 review).
+    let pages = info.pages.len();
+    let anchor = view.grid_anchor.take().filter(|_| !reveal.or(follow).is_some_and(|p| p < pages));
     let mut open_page = None;
     organize_toolbar(view, info, editable, dirty, unobstructed, ui, t);
     let viewport = ui.available_rect_before_wrap();
@@ -619,7 +622,12 @@ pub(super) fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, 
     if let Some(zoom) = view.grid_zoom_request.take() {
         let before = view.grid_zoom;
         view.set_grid_zoom(zoom);
-        if view.grid_zoom != before {
+        if let Some(page) = follow.filter(|p| *p < pages).filter(|_| view.grid_zoom != before) {
+            // An arrow moved to `page` this frame: bring it into view again at the new size
+            // instead of anchoring another page (#4993 review).
+            view.grid_follow = Some(page);
+            ui.ctx().request_repaint();
+        } else if view.grid_zoom != before {
             // Keep the page under the pointer (or else the first one in view) where it is.
             let under = pointer.and_then(|p| cells.iter().find(|(_, r)| r.contains(p)));
             let anchor = under.or_else(|| cells.iter().find(|(_, r)| r.bottom() > viewport.top()));

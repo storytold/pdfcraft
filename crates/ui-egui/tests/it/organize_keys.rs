@@ -10,7 +10,11 @@ use pdfcraft_ui_egui::PdfCraftApp;
 const PAGES: usize = 20;
 
 fn organize() -> Harness<'static, PdfCraftApp> {
-    let bytes = Session::new().create_blank(200.0, 300.0, PAGES).unwrap();
+    organize_pages(PAGES)
+}
+
+fn organize_pages(pages: usize) -> Harness<'static, PdfCraftApp> {
+    let bytes = Session::new().create_blank(200.0, 300.0, pages).unwrap();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
@@ -109,4 +113,30 @@ fn each_arrow_press_uses_the_shift_it_was_pressed_with() {
     h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
     h.run_steps(1);
     assert_eq!(state(&h), (1, vec![]), "a plain press with Shift held later in the frame selects only its page");
+}
+
+/// An arrow press still brings its page into view when the grid zooms in the same frame or the
+/// one before: the zoom keeps a page in view where it was, and that must not replace the
+/// arrow's target (#4993 review). A guard only: the harness runs a second pass that settles the
+/// zoom anchor before the arrow is read, so this passes without the fix as well.
+#[test]
+fn an_arrow_press_next_to_a_zoom_still_shows_its_page() {
+    const MANY: usize = 60;
+    let label = format!("Page {MANY}");
+    for same_frame in [true, false] {
+        let mut h = organize_pages(MANY);
+        assert!(h.query_by_label(&label).is_none(), "the last page starts out of view");
+        h.state_mut().views[0].current = MANY - 2;
+        let z0 = h.state().views[0].grid_zoom();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Minus);
+        if !same_frame {
+            h.run_steps(1);
+        }
+        h.key_press(Key::ArrowRight);
+        h.run_steps(4);
+        assert_eq!(state(&h).0, MANY - 1);
+        eprintln!("DBG same={same_frame} zoom {z0} -> {} page1 {:?}", h.state().views[0].grid_zoom(), h.query_by_label("Page 1").map(|n| n.rect()));
+        let page = h.query_by_label(&label).map(|n| n.rect());
+        assert!(page.is_some_and(|r| r.top() >= 0.0 && r.bottom() <= 900.0), "same frame {same_frame}: the last page is in view: {page:?}");
+    }
 }
