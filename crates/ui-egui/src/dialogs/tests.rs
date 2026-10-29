@@ -4,6 +4,8 @@ use std::rc::Rc;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 
+use super::{Dialog, PdfCraftApp, Pending, finish_close};
+
 #[test]
 fn preferences_scroll_preserves_disabled_animation() {
     for animated in [false, true] {
@@ -32,4 +34,17 @@ fn preferences_scroll_preserves_disabled_animation() {
         assert!((before - settled).abs() > 50.0, "the target must scroll: {before} -> {settled}");
         assert_eq!((early - settled).abs() > 1.0, animated, "animated: {animated}, early: {early}, settled: {settled}");
     }
+}
+
+/// Closing Import certificates any way at all (here the modal's own close: Escape or a
+/// click outside) drops what was read for it; staying open keeps it.
+#[test]
+fn closing_the_certificate_import_drops_what_it_read() {
+    let mut app = PdfCraftApp::new();
+    app.cert_import = Some(crate::sign_ui::CertImport::new("bundle.p7b"));
+    app.dialog = Some(Dialog::ImportCertificates);
+    finish_close(&mut app, Dialog::ImportCertificates, false, &mut Pending::default());
+    assert!(app.cert_import.is_some() && app.dialog == Some(Dialog::ImportCertificates));
+    finish_close(&mut app, Dialog::ImportCertificates, true, &mut Pending::default());
+    assert!(app.cert_import.is_none() && app.dialog.is_none());
 }

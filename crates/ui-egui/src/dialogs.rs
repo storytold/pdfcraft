@@ -2020,6 +2020,10 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     } else if dialog == Dialog::CreateImages && app.dialog != Some(Dialog::CreateImages) {
         app.image_import = None;
     }
+    // Escape, a click outside or another dialog drops the certificates read for import too.
+    if dialog == Dialog::ImportCertificates && app.dialog != Some(Dialog::ImportCertificates) {
+        app.cert_import = None;
+    }
     if req.ocr_now {
         app.start_ocr();
     }
