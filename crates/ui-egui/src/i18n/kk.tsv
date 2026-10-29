@@ -2577,3 +2577,10 @@ animation effects	Off	Өшірулі
 	Options for this reply	Осы жауаптың параметрлері
 	Export value	Экспорт мәні
 	Show Page Edge Shadows	Бет жиектерінің көлеңкелерін көрсету
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Деңгейлерді басқару
+	Bring to front	Ең алдыға
+	Bring forward	Бір деңгей алға
+	Send backward	Бір деңгей артқа
+	Send to back	Ең артқа

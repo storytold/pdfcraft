@@ -2543,3 +2543,10 @@ animation effects	Off	关
 	Options for this reply	此回复的选项
 	Export value	导出值
 	Show Page Edge Shadows	显示页面边缘阴影
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	管理层级
+	Bring to front	置于顶层
+	Bring forward	上移一层
+	Send backward	下移一层
+	Send to back	置于底层

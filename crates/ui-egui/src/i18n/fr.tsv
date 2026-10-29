@@ -2845,3 +2845,10 @@ certificate	Version	Version
 	Options for this reply	Options de cette réponse
 	Export value	Valeur d’exportation
 	Show Page Edge Shadows	Afficher les ombres des bords des pages
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Gérer les niveaux
+	Bring to front	Mettre au premier plan
+	Bring forward	Avancer d’un plan
+	Send backward	Reculer d’un plan
+	Send to back	Mettre à l’arrière-plan

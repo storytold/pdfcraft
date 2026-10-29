@@ -2838,3 +2838,10 @@ theme	Appearance	Aspect
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opțiuni pentru acest răspuns
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Gestionare niveluri
+	Bring to front	În prim-plan
+	Bring forward	Un nivel în față
+	Send backward	Un nivel în spate
+	Send to back	În plan secund

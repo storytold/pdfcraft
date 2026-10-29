@@ -2584,3 +2584,10 @@ animation effects	Off	Izklopljeni
 	Options for this reply	Možnosti tega odgovora
 	Export value	Izvozna vrednost
 	Show Page Edge Shadows	Prikaži sence robov strani
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Upravljanje plasti
+	Bring to front	V ospredje
+	Bring forward	Eno raven naprej
+	Send backward	Eno raven nazaj
+	Send to back	V ozadje

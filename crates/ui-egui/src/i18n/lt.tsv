@@ -2840,3 +2840,10 @@ theme	Appearance	Išvaizda
 	Options for this reply	Šio atsakymo parinktys
 	Export value	Eksporto reikšmė
 	Show Page Edge Shadows	Rodyti puslapių kraštų šešėlius
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Tvarkyti sluoksnius
+	Bring to front	Į viršų
+	Bring forward	Vienu sluoksniu aukščiau
+	Send backward	Vienu sluoksniu žemiau
+	Send to back	Į apačią

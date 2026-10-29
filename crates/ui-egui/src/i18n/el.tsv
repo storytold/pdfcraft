@@ -2585,3 +2585,10 @@ animation effects	Off	Ανενεργά
 	Options for this reply	Επιλογές για αυτήν την απάντηση
 	Export value	Τιμή εξαγωγής
 	Show Page Edge Shadows	Εμφάνιση σκιών στα άκρα των σελίδων
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Διαχείριση επιπέδων
+	Bring to front	Στο προσκήνιο
+	Bring forward	Ένα επίπεδο μπροστά
+	Send backward	Ένα επίπεδο πίσω
+	Send to back	Στο παρασκήνιο

@@ -2736,3 +2736,10 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Unchecked reads	Unchecked reads
 	{field} reads fields named as it runs	{field} reads fields named as it runs
 	Some names are built as it runs	Some names are built as it runs
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	จัดการระดับ
+	Bring to front	ไปข้างหน้าสุด
+	Bring forward	ขึ้นหนึ่งระดับ
+	Send backward	ลงหนึ่งระดับ
+	Send to back	ไปข้างหลังสุด

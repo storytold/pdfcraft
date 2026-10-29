@@ -2488,3 +2488,10 @@ animation effects	Off	ఆఫ్
 	Options for this reply	ఈ ప్రత్యుత్తరం ఎంపికలు
 	Export value	ఎగుమతి విలువ
 	Show Page Edge Shadows	పేజీ అంచుల నీడలను చూపించు
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	స్థాయిలను నిర్వహించండి
+	Bring to front	అన్నిటికంటే ముందుకు
+	Bring forward	ఒక స్థాయి ముందుకు
+	Send backward	ఒక స్థాయి వెనుకకు
+	Send to back	అన్నిటికంటే వెనుకకు

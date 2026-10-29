@@ -2846,3 +2846,10 @@ key	Space	Space
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất
 	Show Page Edge Shadows	Hiển thị bóng viền trang
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Quản lý lớp
+	Bring to front	Lên trên cùng
+	Bring forward	Tiến một lớp
+	Send backward	Lùi một lớp
+	Send to back	Xuống dưới cùng

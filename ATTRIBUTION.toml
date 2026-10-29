@@ -299,7 +299,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "14a8513e41d0b1fea22a24a48ef5658ae8bead15f376bf60f9db7d516d09c1db"
 
 [[asset]]
@@ -310,7 +310,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "30d5abcbed2176ee33b2844c8cdde6fc379c3e9ec28a6a22a1fa916a356c1dcb"
 
 [[asset]]
@@ -321,7 +321,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "bc70fba645343be0760d1a87f9e0975a10ead2b8d95883314f4cea007376e79f"
 
 [[asset]]
@@ -332,7 +332,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "023f88e71f9e3efad5904bf35d59657aece6b7e48bf77051e04dd8a3192b8278"
 
 [[asset]]
@@ -343,7 +343,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "a52ebec6ffe56b062b3a7bc11a844be424555694736da11a4654481fb5668493"
 
 [[asset]]
@@ -354,7 +354,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "147afd6de42696232301090fcf32a506689e3b7f2b9e9ae588ed3c37f63d7e3a"
 
 [[asset]]
@@ -365,7 +365,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "df46328a73b53ae85f6837d170411b2616204c6cedc59bd8603112b5b38b3b3e"
 
 [[asset]]
@@ -376,7 +376,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "70ef15bcaa5721820aef032ad1e65370fb2667fd2e2d63eb24fbf3c2f57346cc"
 
 [[asset]]
@@ -387,7 +387,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "54f7a2f2c3ffe9c0f13189e85571192651aaafe1eea0726de97701f67921aafb"
 
 [[asset]]
@@ -398,7 +398,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "401a4ceb06a88210638e3264e05f2a5281acad42df5c96363160db75f7fd105a"
 
 [[asset]]
@@ -409,7 +409,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "b50af0f3281f7d639a2958c12f0336e41ba889a6f4ff277de16d5c3324c43778"
 
 [[asset]]
@@ -420,7 +420,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "1372eabd5f05d58ec554a6f67da83337367f8c818b2ada7d1591c0ba227ca0a6"
 
 [[asset]]
@@ -431,8 +431,19 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "78635d0da597104f526ea01dede8ab4d04ccabc7a2229c4baf17f921b15985de"
+
+[[asset]]
+path = "assets/icons/arrow-down-from-line.svg"
+title = "Lucide icon \"arrow-down-from-line\""
+author = "Lucide Contributors (portions Cole Bemis, Feather)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/arrow-down-from-line.svg)"
+licence = "ISC AND MIT"
+licence_file = "assets/icons/LICENSE-lucide.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
+sha256 = "cdd709e2760d02a23bfdc3678933956c8fcc9069f670ab5ebafe68df3a89dc08"
 
 [[asset]]
 path = "assets/icons/arrow-left-right.svg"
@@ -442,7 +453,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "2d64da427cbb3f14e522658459903829575b09ec15162c1a69ea6ad341a4359a"
 
 [[asset]]
@@ -453,8 +464,19 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "8380bdad937e85cc9c63701ce92ebe27c9e8ea2c710de28fac46f463c1a25f09"
+
+[[asset]]
+path = "assets/icons/arrow-up-from-line.svg"
+title = "Lucide icon \"arrow-up-from-line\""
+author = "Lucide Contributors (portions Cole Bemis, Feather)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/arrow-up-from-line.svg)"
+licence = "ISC AND MIT"
+licence_file = "assets/icons/LICENSE-lucide.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
+sha256 = "97b8a9e8960936ebff14e5adf44de024064bd4f333ef1d30e367302d1094b279"
 
 [[asset]]
 path = "assets/icons/arrow-up-right.svg"
@@ -464,7 +486,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "59fb769ed094d290ac57d4154e5e86c27e33b4c250a59fd04d2f9b0ea842bf65"
 
 [[asset]]
@@ -475,7 +497,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "bf9f82b0ecadeaef6b366e3178402a602b4a470451a13a3bd4c98fdc278161c7"
 
 [[asset]]
@@ -486,7 +508,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "a0e56764e3701ea180950c79975ac3aa14d90924c9fc9b427f7c476ec01eb609"
 
 [[asset]]
@@ -497,7 +519,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "5227140d3559a4794233779b5008c75e2475db4f761aaa4fdbec14c914721f8a"
 
 [[asset]]
@@ -508,7 +530,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "cff13925b80ff33a4f9c58114105c7077e2a24bbf1c5b9eb361d7bc706f92240"
 
 [[asset]]
@@ -519,7 +541,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "373485597d54503eb5da76a7aabbce2231509b89dea9f144361d9ede1aacf934"
 
 [[asset]]
@@ -530,7 +552,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "2ec21196b84989fe072c282b94060cf244eaba4cf21f63c08aa587ee326fec71"
 
 [[asset]]
@@ -541,7 +563,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "864613d93fddfb9b22368882c00b7895fa2681ceb3ed45c85a1cf2c3d01a3aad"
 
 [[asset]]
@@ -552,7 +574,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "e111411ef061a708e351caefefa68bd1f8c82533f08f9e20dc6bbc0815d7fc1f"
 
 [[asset]]
@@ -563,7 +585,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "c793670f91c7aab05bc58779e5956935a5307c12c62ec91364439d063d4d74c6"
 
 [[asset]]
@@ -574,7 +596,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "16501b23a40f7d446d4047deaaa92b99236ae4caebe5b2e9eb47169a12a6a4a1"
 
 [[asset]]
@@ -585,7 +607,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "70a2174ebd2601367ba0e8ce6ddb3d6a844d5d17e24235197f04481a1bed27e9"
 
 [[asset]]
@@ -596,7 +618,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "5702e28d75e57ec05aa0ec98ae74e928c3604f5ea4634c4584e33363fd886c3a"
 
 [[asset]]
@@ -607,7 +629,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "765ebd1031367e2fd2a940b62f4402fac8976dea0210b0e3b1e59a2c75897928"
 
 [[asset]]
@@ -618,7 +640,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "7f33acc9a77a61659531044525fc008edebe215bf4dcf1c789c8674ad3277db0"
 
 [[asset]]
@@ -629,7 +651,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "66ea878e72ed3488bb3b464c39dfdccee8d1f78e560dccea40e5e12da0e87e87"
 
 [[asset]]
@@ -640,7 +662,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "9d4c68b2301b07a424056d43a7cda715678be2b10d5344183261a3b48a752d36"
 
 [[asset]]
@@ -651,7 +673,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "2758143d7b2434e4aa7307dfd34405c87909ff4052f21b5f3f40d45224b4f19b"
 
 [[asset]]
@@ -662,7 +684,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "e7c0f5229a9b40bfc598f38e4c76099780bdd0747927c98322e816772d929b63"
 
 [[asset]]
@@ -673,7 +695,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "ec966bce841337a305fc7fbc0dab04c650dc9fb7f313d78645ea33378bef06e7"
 
 [[asset]]
@@ -684,7 +706,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "3491f9fe180bf75a058d480f32a0d26ff6a97c6c9a70315c77df7c6b75329d91"
 
 [[asset]]
@@ -695,7 +717,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "201e790f3a05c65b2c4b0f952c9b9e1f35cd1c5b21698b3f4be131883fe90bc8"
 
 [[asset]]
@@ -706,7 +728,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "9b964be491a821be8ffd714baf3b94ca2d70af789bddcfc1bda6bde250d89187"
 
 [[asset]]
@@ -717,7 +739,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "c263f6a08a089c06ad40f408ad5da9100359ab52d379e6c571cd7c5bd74eaa87"
 
 [[asset]]
@@ -728,7 +750,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "4c98aa38a1b10d938d6a51b89f29f484277662df09c816ccfabbcbf5c28c3de4"
 
 [[asset]]
@@ -739,7 +761,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "40e0367d4353eb24f6faa37332cbe9a7b2a0548ab7eed1f2c589e546c58656a5"
 
 [[asset]]
@@ -750,7 +772,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "e3f6615d593ff5a5d6409efe8db462a4af71e22379ea1d8d8323241e06b3da57"
 
 [[asset]]
@@ -761,7 +783,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "e9d3e3acf4d1c280fcf8092293439dc0a4756a908ceb859de144b12451cd1cb9"
 
 [[asset]]
@@ -772,7 +794,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "e45a217268e550c3f9e08a4cbd4b30c24e3994f6f58b481930a3ec43b52f8ef3"
 
 [[asset]]
@@ -783,7 +805,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "8f19866847075907fdc862e13354d5c81da2f7ba23c9df354514789f6db4c855"
 
 [[asset]]
@@ -794,7 +816,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "9f3b21989a68d727da9a152e08483fa55f9048d476d3a4c94e94b8b88d25c2a8"
 
 [[asset]]
@@ -805,7 +827,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "6198d8a47ed17aeff727ba07da1ec0ae35fc33d4509a7b2b486e4934f2ba8e56"
 
 [[asset]]
@@ -816,7 +838,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "c5a4d147bf48424f48b514712dd61c1b07cb689612a7baef87c88870092c1659"
 
 [[asset]]
@@ -827,7 +849,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "a9f1a6166c479cd3e546625b09686a7e97322c850a9b146f270f912e886c395c"
 
 [[asset]]
@@ -838,7 +860,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "37142d5673196e4e32fbf3e17e5010fa6cd39d225b084215d58e8601129d2458"
 
 [[asset]]
@@ -849,7 +871,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "ea80e566c7a12628a447cb53179b19aea4f60b9143e2becd0d0f20bf260e5718"
 
 [[asset]]
@@ -860,7 +882,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "9229f7832445ee0caa15eecd6323397a3ebb5c9a124f923212605ad3529d64b8"
 
 [[asset]]
@@ -871,7 +893,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "abca4df60f91c605d945c6fe5ee0e6c919b53116d81e268f4581f8841bf24751"
 
 [[asset]]
@@ -882,7 +904,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "e2f2969f90b09eba9196fdcb46c7b5c6a37da2852c8dd7dbfa320a2fffac0e96"
 
 [[asset]]
@@ -893,7 +915,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "4f495cc72013ffdfec677f03b33a150f7b4dd741979283fd6853a09024bca112"
 
 [[asset]]
@@ -904,7 +926,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "838d4355dd49340523c38a22a2d23f1aca72ef42f8eba79f6a0c84bf6e27b929"
 
 [[asset]]
@@ -915,7 +937,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "65f9dfdd9cbaf6209ce987a2b55f53752fd3ff9dacb821b7b39077f9c4dda211"
 
 [[asset]]
@@ -926,7 +948,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "774bcd975c5de781a4ee778c76e5591bcdeb409955f7054847e7e6003da0a520"
 
 [[asset]]
@@ -937,7 +959,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "5bf90197dd7629cad64a2e48d1186a71559deb6121207d10e3dc5b19ebaffdcf"
 
 [[asset]]
@@ -948,7 +970,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "b49990be253930f060a292e317fb3d179c02b890fbdcf3425d383936cd58c7eb"
 
 [[asset]]
@@ -959,7 +981,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "d82f725376e5e79100a90a7bb51e22c744e80b93dccd890f5fbdb846435d697b"
 
 [[asset]]
@@ -970,7 +992,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "2a47f8ccd404b40e4be1192ef9d64f52da351843806af233e803c67e5957078e"
 
 [[asset]]
@@ -981,7 +1003,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "d375ea90750602c62651ca8a83f969b2fd892bab62c35204202cbdb8b69867f9"
 
 [[asset]]
@@ -992,7 +1014,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "a732f26975a788eb729ed5b0dbc229e73cd628020265feb44d733ef56c14c23d"
 
 [[asset]]
@@ -1003,7 +1025,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "f17e82a531938fe09b82c7a8ea712c71f756a07f0274dd95fa51ca50167dfc3c"
 
 [[asset]]
@@ -1014,7 +1036,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "a9d6d27a64ab0cd8fab8e618ab2da8b0037ded02290f4dd67675567353af8d2f"
 
 [[asset]]
@@ -1025,7 +1047,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "08538fb09dbf314c36941949b4c3c41d250a127283d487d8557115768a996ee1"
 
 [[asset]]
@@ -1036,7 +1058,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "bbcf862a2a4425baa8a5bda39c7f16ec1d283816a3db77baf84f2e8766dd223e"
 
 [[asset]]
@@ -1047,7 +1069,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "af56d89c39dce00d85d90ac67b85a42818b445e63a9b467edeaa6998e529d216"
 
 [[asset]]
@@ -1058,7 +1080,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "4be1b0d68f4a40236ad69dc724e7f18715c63347ed183688c546efa5fc46ef77"
 
 [[asset]]
@@ -1069,7 +1091,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "cc3831d50f9c3a526f8e15f0d9ead60cf00d3dd15d157c0f2920fea713404c60"
 
 [[asset]]
@@ -1080,7 +1102,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "56582e205bca1dc510113d529ea45e5ff83fc19761cafd23b94f72f3b3b83844"
 
 [[asset]]
@@ -1091,7 +1113,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "be612116328caa8b47a4013d8de36a59082ef75c687504e9489b0afca0e3736b"
 
 [[asset]]
@@ -1102,7 +1124,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "8d8fa5955c5e9c86a1104936b1288958f77c6c9b68288d4404299e7817e47b66"
 
 [[asset]]
@@ -1113,7 +1135,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "3271f1e5b684d2d60f0370f074fb87d611a138162d27959cb3ec5260eb912771"
 
 [[asset]]
@@ -1124,7 +1146,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "694054f56e5476f88eb262258f6a865558f1c89c9106d29b5c08f1ce865c2190"
 
 [[asset]]
@@ -1135,7 +1157,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "ee57452b40e71df310214091dd9da1941a397c83197b8ff8d7ae66dd4242578b"
 
 [[asset]]
@@ -1146,7 +1168,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "76d62eb7796ce6c7e303c437464923de2d1ae19a5c8d010f8b36dfc1d6180890"
 
 [[asset]]
@@ -1157,7 +1179,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "f0d92b94b797a8ab7d4c4ae33c3236c47f64068351b4e14bdb5014ee42898a39"
 
 [[asset]]
@@ -1168,7 +1190,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "d7710543a5085c5a61d0bbac1da8b89ef28e541b38ed739357991dff33d475b5"
 
 [[asset]]
@@ -1179,7 +1201,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "2cafe78609903c93e1d7c3f9ebfcbcf855b86e9c8b223ef15b4d56d8b52c3809"
 
 [[asset]]
@@ -1190,7 +1212,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "af069c0f6a5d3f9c9eb2ce61d2601ab02976400d85f9d941e8c6c08d8b2ec910"
 
 [[asset]]
@@ -1201,7 +1223,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "6c24155397cf0e751c05931bae68e67e4fe0fd58baeb7b29e9f80c90ed1d5194"
 
 [[asset]]
@@ -1212,7 +1234,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "fe3771fa2f0a9a3c7736164c9a855beefacc02548084ac1d6fc8da8a8a9180b0"
 
 [[asset]]
@@ -1223,7 +1245,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "077da53f7eca1e2b218fb01cd64355ab152451178017b810371cd4237e147b89"
 
 [[asset]]
@@ -1234,7 +1256,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "cba292c255357a7fc4bfcff46789f00fb70a934b9d524cee22b434ff61ff7b37"
 
 [[asset]]
@@ -1245,7 +1267,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "c7468ec5c64330662b57e71c10a4c8538a501038f4c44ed0469dfb1e04ed7d3a"
 
 [[asset]]
@@ -1256,7 +1278,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "12247b4183e3041c0925003d6dc42c838a2190276f0ece72b2b393212530a64d"
 
 [[asset]]
@@ -1267,7 +1289,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "ed4944f92b6f84af9e32acabe238a659330847fcd75ad81b20865ac27e108732"
 
 [[asset]]
@@ -1278,7 +1300,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "619c9db58c879dce6250376ba67d9c9102ca6dbb3b1efb9294c9f180e22273a5"
 
 [[asset]]
@@ -1289,7 +1311,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "bc977a64eb96f3e9c1041ffd09a3fceb70e3e65c02b571f76064062ed31f3cb9"
 
 [[asset]]
@@ -1300,7 +1322,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "189b65467080a06a6cd99b431be3c54752915eb2efaa2dda9a6dc4b0b037ff43"
 
 [[asset]]
@@ -1311,7 +1333,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "7e86095a7a5937a8388c9a8a8753399062c9f59fe5ddea162d7a6fbdc2e4ddfa"
 
 [[asset]]
@@ -1322,7 +1344,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "6b063dbff366eb4768c9d5cbdf4f03f218b9a807c5c730e87c004690696952fa"
 
 [[asset]]
@@ -1333,7 +1355,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "ce16d0a955e3581cda17f6b2fd5c5bc2034b405f9cecc31c8ebb8495b4afc1bb"
 
 [[asset]]
@@ -1344,7 +1366,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "c4dee78bfdc06e9abf18e7655f75489c891aa028188b6260116f491558e187ea"
 
 [[asset]]
@@ -1355,7 +1377,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "4361be66d28b313a2856a520677dc754eb8195094b8c6be9759e021850a28313"
 
 [[asset]]
@@ -1366,7 +1388,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "4f3237183dcaabfac92f4e94c776a9a9e45c3c5e77a921061a6b34b61eb5413f"
 
 [[asset]]
@@ -1377,7 +1399,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "4a1cf4c9c25b4c80462573775fd58a62f8db71d917c1d3288c56089ab0005191"
 
 [[asset]]
@@ -1388,7 +1410,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "179b2d82ab358e7785eee08e1e60c84b7fa70530904838a3106e8255dc0b015b"
 
 [[asset]]
@@ -1399,7 +1421,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "4866bb4c3a207f3f924f0034de0bb4f57774e059d53b2cb90488128b334f5e90"
 
 [[asset]]
@@ -1410,7 +1432,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "f167153e8fec4008d6946f28035607636ed0b04dcfecdf58d7204db0b3d030f2"
 
 [[asset]]
@@ -1421,7 +1443,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "d2cfe60cac8deaef36442b5c8218c1e61abe18222784b2a370ea090d13fca840"
 
 [[asset]]
@@ -1432,7 +1454,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "9b8413ad44a3d4f5a80049713743daddcdc3c5465a71c218cac156a99f582b5b"
 
 [[asset]]
@@ -1443,7 +1465,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "f55ca094be0970b29367eb285ec640360402ae73a19894f0d59ebd4873df75e4"
 
 [[asset]]
@@ -1454,7 +1476,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "9c073ecf0d27857130a28c7526658156e7ef5b7b2ead46d9738556d68074d14b"
 
 [[asset]]
@@ -1465,7 +1487,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "7df41ce0c2b74654d44eee6a639433af6172c9ea82d8ade3eb68f636ec2a9933"
 
 [[asset]]
@@ -1476,7 +1498,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "5812a3be783fdcd73efd2b6026e03131e4b8c6649e7d52aa2dc7bf2e2023a59d"
 
 [[asset]]
@@ -1487,7 +1509,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "eaad0af0779c6ef7816f2468017b3a1aa58338486dc85aa1ba6b276a6b1454b0"
 
 [[asset]]
@@ -1498,7 +1520,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "b1be29238f563ba7e3623ad8e0e0bc51285f17c8bd5d4c37aa5c6b6263e2dbf8"
 
 [[asset]]
@@ -1509,7 +1531,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "fe917d6144a9aed9a5297cb28addb9e582ac591a8f1c498a55aecea9b5c1783e"
 
 [[asset]]
@@ -1520,7 +1542,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "1150437d5a870321c59b7ebca2e1bc3f6227f0fa03dd10484ab384dfe5110739"
 
 [[asset]]
@@ -1531,7 +1553,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "a0c743ab6dbf545d8a6e19ef3874f48ede686ce68d25e231bd81f540d97b1f19"
 
 [[asset]]
@@ -1542,7 +1564,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "205b959e940d5841f0ce1d09c933153da9d9c94130a54d5cc0c68c2af1d403da"
 
 [[asset]]
@@ -1553,7 +1575,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "a87128b1d33024c22ab598d1ce313081ce8942efd1a70274215bcc53421b7c7e"
 
 [[asset]]
@@ -1564,7 +1586,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "915074a1292f72d59165339b8b93f8d440c8d55b7116b52fca240b9ded5af74d"
 
 [[asset]]
@@ -1575,7 +1597,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "3c1adf655f06c733013ddf00848c3efe905ed70d7b3eba7a6be5e60e65880503"
 
 [[asset]]
@@ -1586,7 +1608,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "456e35597fb306f3e0e97d6e1b091df371cfe546854f2444da8063c89cca7a9c"
 
 [[asset]]
@@ -1597,7 +1619,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "8e7d3fde990cffd10469ba351f27c50202b057a9bb9af5626322e53fd3abc78c"
 
 [[asset]]
@@ -1608,7 +1630,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "bafd841b89deadd12a571ba9e7d15473751dc51f46e857f7c2ab09a32bd01a79"
 
 [[asset]]
@@ -1619,7 +1641,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "327d197328f9feb1f88c36c9db04e9b00fe717d877459f92fcd892f5e4c349fa"
 
 [[asset]]
@@ -1630,7 +1652,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "321a2a5500f2b814a2e62eb73c4b01dc65c7334fe2e6f7d77517239383e26bb1"
 
 [[asset]]
@@ -1641,7 +1663,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "d1ee1380a653f5a560b9be83efde570fc6fddd0a13437cc17cbab675fe070782"
 
 [[asset]]
@@ -1652,7 +1674,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "195939cbf88689334dc3a9d64bd0b3f459ce1de7d71e53620f6b0448b958f9c8"
 
 [[asset]]
@@ -1663,7 +1685,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "a31b434a7b7e379bd37b05fe7ae4b632c0cf38baf7463a726961ce65dd0cb089"
 
 [[asset]]
@@ -1674,7 +1696,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "a73f639dbe723e9aea20a08ecd48b0e1aa50d7a176c71ac615bdfa720c3b6e86"
 
 [[asset]]
@@ -1685,7 +1707,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "dad18ee11312000529dbfaa6c60fa8da00773eebe91e23633d8f4baca8421cdc"
 
 [[asset]]
@@ -1696,7 +1718,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "7f6af73bf1ff6c4bca3f18351c8d1bdec6749c0c2530c4de5da85d520c21df17"
 
 [[asset]]
@@ -1707,7 +1729,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "0a97d7e69391dd12bfa33e9295bcb891085c045a1bd8dcef84461b3eab784729"
 
 [[asset]]
@@ -1718,7 +1740,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "f8f15151f722f614d5e1e4b7b6af7f3ce87e63a637f6a8291bb4fb9b8f5dfd61"
 
 [[asset]]
@@ -1729,7 +1751,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "7c76ec54521e399c3216ff0864e30e35b457205b110ee153e787316eb550be59"
 
 [[asset]]
@@ -1740,7 +1762,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "4cbd2cdebc70b6b7979c681ed3f313d9cbb102465dcf7d0d2d6a72c937b344bc"
 
 [[asset]]
@@ -1751,7 +1773,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "1ab8cdcc42f7e5e20d4fe19988a78790146edfb749cb6e9269cfda58aeb1dddb"
 
 [[asset]]
@@ -1762,7 +1784,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "02f2a0344ebca39676cc64a9b78472744cc18904123affb99e05aae5c06e34b6"
 
 [[asset]]
@@ -1773,7 +1795,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "cdb42aaf99e23b9775d6b8df4dd75338220e64f48d581ca7f40356940d40bd0e"
 
 [[asset]]
@@ -1784,7 +1806,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "40a639ed7d0f80527f7482639e9c6f3970497a43680c9cd406eb5165d7b9ab4d"
 
 [[asset]]
@@ -1795,7 +1817,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "ec6b42742c642d7f140c9a59fc45ce6b0e3a9ae8632911415dec9126d7557bcc"
 
 [[asset]]
@@ -1806,7 +1828,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "6a995962733ed8b126c606221692a2a88f5f7c105f5202f03cc804958534a457"
 
 [[asset]]
@@ -1817,7 +1839,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "c77f0e634b2451a14a262a59b61d75bbcea3994b16eeba1f5753e86b33282a4d"
 
 [[asset]]
@@ -1828,7 +1850,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "4c831fc2c903825f68565c28ffab945c34b2c60b6c564e2ae54250e1099fa550"
 
 [[asset]]
@@ -1839,7 +1861,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "283d371c2e433817bb9c0c8310caa6c77fa4177c0f4f1168d9c83b97af7389dc"
 
 [[asset]]
@@ -1850,7 +1872,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "058ad0cd31ab7c30e6c306236f2528b4f556dc80b7199399a9a800aeff77f4db"
 
 [[asset]]
@@ -1861,7 +1883,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "0deae2e31f13e1550b39dedd1fa8e3e6b7dd68fdd8f5680c06c761416eb46196"
 
 [[asset]]
@@ -1872,7 +1894,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "0ae27fd0f81999229e3127ac96c5b32edfea448e291d509e76212b917551d66b"
 
 [[asset]]
@@ -1883,7 +1905,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "dafcc50305ff3f26016016d6ba8eedae5ae2861c03e4f534423a8220a5eb4056"
 
 [[asset]]
@@ -1894,7 +1916,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "1b98a38ef1bf5fe95d0ec8795d83fde64a211759fabf3a00eb0a1d26f147843a"
 
 [[asset]]
@@ -1905,7 +1927,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "6a3827f903c29f75eb010aa18d4c46e84541e04e5ab7d6041ec95b3a0b0fdb27"
 
 [[asset]]
@@ -1916,7 +1938,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "e43a00e5eb684e6cbb61083bed2528d7a3fa5f265693eb2b5f314cd432aa65f4"
 
 [[asset]]
@@ -1927,7 +1949,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "f5499f33f09d7158151e9bd2ec0faf79ff8fb57292f84fdd7286d96d0f0424d8"
 
 [[asset]]
@@ -1938,7 +1960,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "12ab21825926c786bda749f3faa1fb905cfeec0fa1d4848525033f72199ad529"
 
 [[asset]]
@@ -1949,7 +1971,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "01f48e7e8757bdcc015741a543530bf97a7815647c5dc20450a2d26501bb94ff"
 
 [[asset]]
@@ -1960,7 +1982,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "bb7958e30d2658e90c3eaaa01d4808fa7a7427bc1ae1744a0fe016ddda258b2a"
 
 [[asset]]
@@ -1971,7 +1993,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "bd979354f0ab184b95cecf03eedefe40c2dc65830ac6d7e60017b2b25a354acb"
 
 [[asset]]
@@ -1982,7 +2004,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "662139de4397f334617c9fbfbd733e3f0581d4eb375b02ec496de3d45b1e95d8"
 
 [[asset]]
@@ -1993,7 +2015,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "35a73f33fb942f17fa36669fda5a60b9dad59dacfa1d9207ffbc003f1bf4ba33"
 
 [[asset]]
@@ -2004,7 +2026,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "6456b4232f3b690c4ac9d3b9a158986fb33880be6b9f966e891b2ff5c474c9ff"
 
 [[asset]]
@@ -2015,7 +2037,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "3ed53dd62051499d8429d3d003a6107c6412090f4a3bec1cba63fa6e12990840"
 
 [[asset]]
@@ -2026,7 +2048,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "32828fca3c3dd010931fa903268ca108dc84d6d8343eb41eeea27fd6f18a4261"
 
 [[asset]]
@@ -2037,7 +2059,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "a3955c8b0425fcc5c9ba12d2bdd77fe53b2cd5dd05e7742a56f342e996fb2ef8"
 
 [[asset]]
@@ -2048,7 +2070,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "08e8ae6cead6b01282961d90a891a1d4332495b8fe8df616a17b2b2e249d37cc"
 
 [[asset]]
@@ -2059,7 +2081,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "d90bf7dbca84f33b4256d7da9365998719d4734ca7e2b36d1ffef1b62ebd9259"
 
 [[asset]]
@@ -2070,7 +2092,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "40c83d2e570512e61ea71547a0176a50d20691296dc1e07b59570838d898e6aa"
 
 [[asset]]
@@ -2081,7 +2103,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "185cee1a1c40a816ff26844bf248311a4e84676b346d0094d4d546db6db943a8"
 
 [[asset]]
@@ -2092,7 +2114,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "6758190a97e7cd6b857e0cf244130726265643a5adfffe3df1ace2792e1ecd16"
 
 [[asset]]
@@ -2103,7 +2125,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "27299f69ad7c6272be64b1b8e2d48cbd6dcf0ef0d4f92827a1affa945c91700e"
 
 [[asset]]
@@ -2114,7 +2136,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "55aa37e0b73e7f8cd906952dbdeb96283c6595ca64aba240a17f3455cb989114"
 
 [[asset]]
@@ -2125,7 +2147,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "82c514732330f9c36c0f1f7fd1034634fa6ad21ba2016ffa76cf5d9608c3d6b1"
 
 [[asset]]
@@ -2136,7 +2158,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "ed6037142dbf22b4d4f30d7ac57441898df91d4cba3e1fb685deb82cb227f86c"
 
 [[asset]]
@@ -2147,7 +2169,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "efad2edbbd2be6038cc23fd64df2d012fad5cc6460dfbf227cfa3d990e9e897f"
 
 [[asset]]
@@ -2158,7 +2180,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "15811db4bba24c2f413a252a78e5ba885e8fe9234ca0f182d0b6039685dee6b0"
 
 [[asset]]
@@ -2169,7 +2191,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "d73067ff2463118d4f11f9c532e7162be45f96835b966b4fc89977ca47a7317d"
 
 [[asset]]
@@ -2180,7 +2202,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "5566c462ba64bc343dd7dd0ba3a45c6b916fdd6f20ff8ffc2099551a3443dd21"
 
 [[asset]]
@@ -2191,7 +2213,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "4a9cdab38fbb96162e7dace28e33f4ca0e49d8963a6162abc3d4691b7d675117"
 
 [[asset]]
@@ -2202,7 +2224,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "91206ae20013e2c84f2f5d09db5a7200f11698a84fc4e857b06fab2ce7c933f1"
 
 [[asset]]
@@ -2213,7 +2235,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "486119c5803718fce74a1e2fe9b93bca4864fd9178139ca355339011e989bcb8"
 
 [[asset]]
@@ -3197,7 +3219,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "d28d42dd90e0ed601fb7120b6e0b98218289da8fc7bf41fac5ca83aeffd0ae32"
 
 [[asset]]
@@ -3208,7 +3230,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "d4586a7c7aea911762604211e3624b3436b998d1343b0b29162b3eddf9e6ab81"
 
 [[asset]]
@@ -3219,7 +3241,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "f6161386877fb29e058c85ac76f1793fb43f6fcf5144b21ef3f36a367cb41e94"
 
 [[asset]]
@@ -3230,7 +3252,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "e30b1dc9b4f1d56fa935ee55a4a2c9dad0eaeaffa6603085a1d3f8d5c22f60a3"
 
 [[asset]]
@@ -3241,7 +3263,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "283a01b7798806a6b9ffd19f4c449e72a08ef860281fa0d33b584b52590e7240"
 
 [[asset]]
@@ -3252,7 +3274,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "5e9d80429d9b219c98402a0d4f3194d2a0cbfe0c41dd42f46771a4d7e1c563e8"
 
 [[asset]]
@@ -3263,7 +3285,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "ef1fec17d88794ba6c34c5cf63bdadbd234b3d4dffbcc3d55468b47e3f398472"
 
 [[asset]]
@@ -3285,7 +3307,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "55a9c2b2531928957c23e7695ccd39b096a3b3f2a5ef3e66b3ad970742e20f26"
 
 [[asset]]
@@ -3296,7 +3318,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "69a76b4cd352dbdea61c63ed1e8d1e02083ee1773b3ced2a1c8cdf8c90fb2055"
 
 [[asset]]
@@ -3318,7 +3340,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "631d24bde604be36b2dcf3b6f86ddf6026879cdcd272c0dfe37ab0cc6b341fda"
 
 [[asset]]
@@ -3411,7 +3433,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "d1a443233345724859de8e4fb48968ba91e885e12ddbd710701548bd91b39428"
 
 [[asset]]
@@ -3464,7 +3486,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "34af289365aaa19295f874e4fda3b56196e203785d6fe1d9c3c929ae290518a0"
 
 [[asset]]
@@ -3475,7 +3497,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "06462f57e87a14e6496da9216eee9906b83ded0ff99b70498efa37ae88a5cba4"
 
 [[asset]]
@@ -3486,7 +3508,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "d344d9f9222f6c1b698c0c82a753a2212d9bd7785f06c00cd6e4910fe2fee8f8"
 
 [[asset]]
@@ -3497,7 +3519,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "864ab2f19254e6ac7240bc6a98323197332e8f714d4d3f94831f41309e5ef2f7"
 
 [[asset]]

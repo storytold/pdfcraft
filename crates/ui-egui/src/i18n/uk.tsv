@@ -2601,3 +2601,10 @@ animation effects	Off	Вимкнено
 	Options for this reply	Параметри цієї відповіді
 	Export value	Значення експорту
 	Show Page Edge Shadows	Показувати тіні на краях сторінок
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Керування рівнями
+	Bring to front	На передній план
+	Bring forward	На рівень уперед
+	Send backward	На рівень назад
+	Send to back	На задній план

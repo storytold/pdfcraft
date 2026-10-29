@@ -2481,3 +2481,10 @@ animation effects	Off	ປິດ
 	Unchecked reads	Unchecked reads
 	{field} reads fields named as it runs	{field} reads fields named as it runs
 	Some names are built as it runs	Some names are built as it runs
+
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	ຈັດການຊັ້ນ
+	Bring to front	ໜ້າສຸດ
+	Bring forward	ຂຶ້ນໜຶ່ງຊັ້ນ
+	Send backward	ລົງໜຶ່ງຊັ້ນ
+	Send to back	ຫຼັງສຸດ
