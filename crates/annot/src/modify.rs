@@ -3,7 +3,7 @@ use super::create::{
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
 use super::info::{final_ref, is_comment_subtype, line_endings_of, text_value};
-use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, page_ref, page_refs, set_annots};
+use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, is_fill_sign, page_ref, page_refs, set_annots};
 use super::types::{
     FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb, Shape, Style,
     StyleChange, TextReplacement,
@@ -117,88 +117,153 @@ fn seed(target: &Object) -> Option<ObjRef> {
     target.as_ref().or_else(|| target.as_dict().and_then(|d| d.reference(b"Popup")))
 }
 
-/// Whether `entry` (resolved to `d`) is an unlocked root comment rather than a reply, state
-/// bookkeeping annotation, pop-up, or non-comment annotation.
-fn is_deletable_root_comment(doc: &Document, entry: &Object, d: &Dict, page_refs_set: &HashSet<ObjRef>) -> bool {
-    let is_comment = d.name(b"Subtype").is_some_and(|st| is_comment_subtype(&String::from_utf8_lossy(st)));
-    if !is_comment || d.contains(b"State") {
-        return false;
-    }
-    if d.get(b"IRT").and_then(Object::as_ref).is_some_and(|r| page_refs_set.contains(&final_ref(doc, r))) {
-        return false;
-    }
-    let locked = entry.as_ref().is_some_and(|r| flags(doc, final_ref(doc, r)) & FLAG_LOCKED != 0) || (annotation_flags(doc, d) & FLAG_LOCKED != 0);
-    !locked
+/// One `/Annots` entry as [`delete_all_annotations`] reads it, once, for every page at a time.
+struct Listed {
+    /// Position in the document's pages.
+    page: usize,
+    /// The annotation object the entry resolves to; `None` for one written inline.
+    key: Option<ObjRef>,
+    /// In the comment list (`pdfcraft_render::inspect`): a comment subtype, listed here first.
+    comment: bool,
+    /// Bulk deletion may remove it as the comment its thread starts at ([`bulk_removable`]).
+    removable: bool,
+    popup_subtype: bool,
+    /// `/IRT`, `/Parent` and `/Popup`, resolved as the comment list resolves them.
+    irt: Option<ObjRef>,
+    parent: Option<ObjRef>,
+    popup: Option<ObjRef>,
 }
 
-/// Whether `/Annots` entry `entry` at `index` stays on the page after removing `doomed_indices`
-/// and their reply/pop-up chains in `doomed`.
-fn keep_after_bulk_delete(doc: &Document, index: usize, entry: &Object, doomed_indices: &HashSet<usize>, doomed: &HashSet<ObjRef>) -> bool {
-    if doomed_indices.contains(&index) {
-        return false;
+impl Listed {
+    fn read(doc: &Document, page: usize, entry: &Object, key: Option<ObjRef>, first_listing: bool) -> Self {
+        let obj = key.map_or_else(|| doc.resolve(entry), |r| doc.get(r));
+        let d = obj.as_dict();
+        let subtype = d.and_then(|d| d.name(b"Subtype"));
+        let to = |k: &[u8]| d.and_then(|d| d.reference(k)).map(|r| final_ref(doc, r));
+        Listed {
+            page,
+            key,
+            comment: first_listing && subtype.is_some_and(|s| is_comment_subtype(&String::from_utf8_lossy(s))),
+            removable: d.zip(subtype).is_some_and(|(d, s)| bulk_removable(doc, d, s)),
+            popup_subtype: matches!(subtype, Some(b"Popup")),
+            irt: to(b"IRT"),
+            parent: to(b"Parent"),
+            popup: to(b"Popup"),
+        }
     }
-    if !goes_with(entry, doomed) {
-        return true;
-    }
-    let obj = entry.as_ref().map_or_else(|| doc.resolve(entry), |r| doc.get(final_ref(doc, r)));
-    let Some(d) = obj.as_dict() else { return false };
-    let is_comment_or_popup = d.name(b"Subtype").is_some_and(|st| {
-        let s = String::from_utf8_lossy(st);
-        s == "Popup" || is_comment_subtype(&s)
-    });
-    !is_comment_or_popup
 }
 
-/// Delete all unlocked comments on the specified pages (or all pages when `None`), as Acrobat does.
+/// Whether bulk deletion removes the comment `d` (of `subtype`) when its thread starts at it: not
+/// a status or checkmark, not locked, and not a redaction mark or a Fill & Sign item, which their
+/// own tools apply, clear and sign. The interface counts by the same rule
+/// (`in_bulk_delete` in `pdfcraft_ui_egui`).
+fn bulk_removable(doc: &Document, d: &Dict, subtype: &[u8]) -> bool {
+    text_value(doc, d, b"State").is_none() && annotation_flags(doc, d) & FLAG_LOCKED == 0 && subtype != b"Redact" && !is_fill_sign(doc, d)
+}
+
+/// The comment the thread of entry `i` starts at, following `link` (each comment's `/IRT` to
+/// another listed comment) as `pdfcraft_render::link_replies` settles it: a chain that ends within
+/// 64 steps files under its end, and anything else (a loop, a longer chain) is a comment of its own.
+fn thread_root(i: usize, link: impl Fn(usize) -> Option<usize>) -> usize {
+    let mut at = i;
+    for _ in 0..=64 {
+        match link(at) {
+            Some(up) => at = up,
+            None => return at,
+        }
+    }
+    i
+}
+
+/// Delete every unlocked comment on `pages` (all pages when `None`) with its pop-up and its
+/// thread, as Acrobat's "Delete all" does, and return how many comments (threads) went.
 ///
-/// Only comment annotations (see [`is_comment_subtype`]) are removed; non-comment annotations
-/// such as `/Link`, `/Widget` (form fields), `/Screen`, and `/PrinterMark` are preserved.
-/// Locked comments (properties with the Locked flag) are preserved along with their pop-ups,
-/// replies, checkmarks, and review statuses. Associated pop-ups and replies of deleted comments
-/// are cleaned up automatically.
+/// What is a comment, and whose thread a reply is in, follows the comment list
+/// (`pdfcraft_render::inspect`), so the count matches what the Comments panel shows:
+/// - Only comment subtypes ([`is_comment_subtype`]) go: links, form widgets and the other
+///   non-markup annotations stay, and so do redaction marks and Fill & Sign items.
+/// - A comment starts a thread unless its `/IRT` chain reaches another listed comment within 64
+///   steps. An `/IRT` to an object that isn't listed, to itself or round a loop leaves it a
+///   comment of its own. Replies, statuses and checkmarks go with their thread, wherever it
+///   starts, and never on their own: a reply on a page being cleared stays when its thread starts
+///   at a locked comment or on another page.
+/// - A deleted comment's replies and pop-ups go from every page, as deleting one comment takes its
+///   whole thread.
+/// - An annotation listed on several pages, or an `/Annots` array several pages share, is on the
+///   first of them, and every listing of a deleted annotation goes.
 ///
-/// Returns the number of root comments removed.
+/// Only pages whose `/Annots` change are written.
 pub fn delete_all_annotations(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize, AnnotError> {
     let refs = page_refs(doc)?;
-    let mut total_removed = 0;
-    for (pi, p) in refs.iter().enumerate() {
-        if pages.is_some_and(|ps| !ps.contains(&pi)) {
+    let mut seen_arrays = HashSet::new();
+    let mut entries: Vec<(usize, Object)> = Vec::new();
+    for (pi, &p) in refs.iter().enumerate() {
+        if let Some(r) = doc.get(p).as_dict().and_then(|d| d.reference(b"Annots"))
+            && !seen_arrays.insert(final_ref(doc, r))
+        {
             continue;
         }
-        let list = annots(doc, *p);
-        if list.is_empty() {
-            continue;
-        }
-
-        let page_refs_set: HashSet<ObjRef> = list.iter().filter_map(|e| e.as_ref().map(|r| final_ref(doc, r))).collect();
-        let mut doomed_indices = HashSet::new();
-        let mut doomed_seeds = Vec::new();
-        for (idx, e) in list.iter().enumerate() {
-            let obj = e.as_ref().map_or_else(|| doc.resolve(e), |r| doc.get(final_ref(doc, r)));
-            let Some(d) = obj.as_dict() else { continue };
-            if !is_deletable_root_comment(doc, e, d, &page_refs_set) {
-                continue;
-            }
-            doomed_indices.insert(idx);
-            if let Some(r) = e.as_ref() {
-                doomed_seeds.push(final_ref(doc, r));
-            } else if let Some(popup) = d.reference(b"Popup") {
-                doomed_seeds.push(popup);
-            }
-        }
-
-        if doomed_indices.is_empty() {
-            continue;
-        }
-
-        let doomed = with_replies_and_popups(doc, &list, doomed_seeds);
-        let kept: Vec<Object> =
-            list.into_iter().enumerate().filter(|(i, e)| keep_after_bulk_delete(doc, *i, e, &doomed_indices, &doomed)).map(|(_, e)| e).collect();
-
-        total_removed += doomed_indices.len();
-        set_annots(doc, *p, kept)?;
+        entries.extend(annots(doc, p).into_iter().map(|e| (pi, e)));
     }
-    Ok(total_removed)
+    let keys: Vec<Option<ObjRef>> = entries.iter().map(|(_, e)| e.as_ref().map(|r| final_ref(doc, r))).collect();
+    let mut first: HashMap<ObjRef, usize> = HashMap::new();
+    for (i, key) in keys.iter().enumerate() {
+        if let Some(k) = key {
+            first.entry(*k).or_insert(i);
+        }
+    }
+    let listed: Vec<Listed> = entries
+        .iter()
+        .zip(&keys)
+        .enumerate()
+        .map(|(i, ((page, e), &key))| Listed::read(doc, *page, e, key, key.is_none_or(|k| first.get(&k) == Some(&i))))
+        .collect();
+    let link = |i: usize| {
+        let l = listed.get(i).filter(|l| l.comment)?;
+        first.get(&l.irt?).copied().filter(|&j| j != i && listed.get(j).is_some_and(|p| p.comment))
+    };
+    let roots: HashSet<usize> = listed
+        .iter()
+        .enumerate()
+        .filter(|(i, l)| l.comment && l.removable && pages.is_none_or(|ps| ps.contains(&l.page)) && thread_root(*i, link) == *i)
+        .map(|(i, _)| i)
+        .collect();
+    if roots.is_empty() {
+        return Ok(0);
+    }
+    let in_thread: Vec<bool> = listed.iter().enumerate().map(|(i, l)| l.comment && roots.contains(&thread_root(i, link))).collect();
+    let thread = || listed.iter().zip(&in_thread).filter(|(_, t)| **t).map(|(l, _)| l);
+    let going: HashSet<ObjRef> = thread().filter_map(|l| l.key).collect();
+    let going_popups: HashSet<ObjRef> = thread().filter_map(|l| l.popup).collect();
+    let gone: Vec<bool> = listed
+        .iter()
+        .zip(&in_thread)
+        .map(|(l, &t)| {
+            t || l.key.is_some_and(|k| going.contains(&k))
+                || (l.popup_subtype && (l.key.is_some_and(|k| going_popups.contains(&k)) || l.parent.is_some_and(|p| going.contains(&p))))
+        })
+        .collect();
+
+    // Each page's entries are together and in order: what is left of each, and whether it changed.
+    let mut left: Vec<(usize, Vec<Object>, bool)> = Vec::new();
+    for ((page, e), gone) in entries.into_iter().zip(gone) {
+        if left.last().is_none_or(|(p, ..)| *p != page) {
+            left.push((page, Vec::new(), false));
+        }
+        if let Some((_, kept, changed)) = left.last_mut() {
+            if gone {
+                *changed = true;
+            } else {
+                kept.push(e);
+            }
+        }
+    }
+    for (page, kept, changed) in left {
+        if changed && let Some(&p) = refs.get(page) {
+            set_annots(doc, p, kept)?;
+        }
+    }
+    Ok(roots.len())
 }
 
 /// Whether the `/Annots` entry `entry` goes with `going` (from [`with_replies_and_popups`]): it is
