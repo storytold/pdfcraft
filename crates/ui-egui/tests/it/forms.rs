@@ -800,8 +800,49 @@ fn exporting_form_data_while_typing_includes_the_text() {
     h.event(egui::Event::Text("Exported value".into()));
     h.run_steps(2);
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
-    h.state_mut().export_data_dialog(false, true);
+    h.state_mut().export_data_dialog(pdfcraft_ui_egui::DataKind::FormData);
+    h.run_steps(2);
+    h.get_by_label("Export").click();
+    h.run_steps(2);
     assert!(std::fs::read_to_string(&out).unwrap().contains("Exported value"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #5215: Export form data asks for the format in PdfCraft (the macOS save panel shows no list of
+/// file types) and writes the format chosen there. The file has no extension, so only the
+/// dialog's choice can make it CSV.
+#[test]
+fn export_form_data_asks_for_the_format_and_writes_that_format() {
+    let dir = scratch("export-format");
+    let out = dir.join("data");
+    let mut h = harness();
+    assert!(h.state_mut().execute("form.export_data"));
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::ExportData(pdfcraft_ui_egui::DataKind::FormData)));
+    let format = |h: &Harness<'static, PdfCraftApp>, value: &str| {
+        h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| n.value().as_deref() == Some(value))
+    };
+    assert!(format(&h, "XFDF (.xfdf)"), "XFDF is the default for an AcroForm");
+    h.get_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.value().is_some_and(|v| v == "XFDF (.xfdf)")).click();
+    h.run_steps(2);
+    for offered in ["FDF (.fdf)", "XML (.xml)", "Text (.txt)"] {
+        h.get_by_label(offered);
+    }
+    h.get_by_label("CSV (.csv)").click();
+    h.run_steps(2);
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.get_by_label("Export").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None, "the dialog closes once the file is chosen");
+    let written = std::fs::read_to_string(&out).unwrap();
+    assert!(!written.trim_start().starts_with('<') && written.lines().next().is_some_and(|l| l.contains(',')), "CSV, not XML: {written:?}");
+    // The choice is remembered for the next export.
+    assert!(h.state_mut().execute("form.export_data"));
+    h.run_steps(2);
+    assert!(format(&h, "CSV (.csv)"), "the last format chosen is offered first");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -1014,25 +1014,41 @@ impl PdfCraftApp {
         let _ = crate::editing::download("report.csv", csv.as_bytes());
     }
 
-    pub fn export_data_dialog(&mut self, comments: bool, fields: bool) {
+    /// Export form data or Export comments: choose the format first (#5215).
+    pub fn export_data_dialog(&mut self, kind: crate::data_export_ui::DataKind) {
         // What's typed in a form field is part of the document (#166).
+        if !self.commit_form_typing() {
+            return;
+        }
+        if self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some() {
+            self.dialog = Some(crate::Dialog::ExportData(kind));
+        }
+    }
+
+    /// Write `kind` as `format`: through the save panel, named and filtered for that format, or to
+    /// the save override. A name the user changes to another offered format's extension is
+    /// written in that format.
+    pub fn export_data_as(&mut self, kind: crate::data_export_ui::DataKind, format: pdfcraft_engine::DataFormat) {
+        use crate::data_export_ui::{DataKind, extension};
         if !self.commit_form_typing() {
             return;
         }
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
+        let (comments, fields) = (kind == DataKind::Comments, kind == DataKind::FormData);
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
+        let file_name = format!("{stem}.{}", extension(format));
         #[cfg(not(target_arch = "wasm32"))]
         {
             let folder = doc.path.clone();
-            let xfa = doc.info.xfa.is_some();
+            let offered = crate::data_export_ui::formats(kind, doc.info.xfa.is_some());
             let write = move |app: &mut Self, path: std::path::PathBuf| {
                 // Include what was typed while the save panel was open (#166).
                 if !app.commit_typing_in(id) {
                     return;
                 }
                 let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
-                let format = pdfcraft_engine::DataFormat::from_extension(&ext).unwrap_or(pdfcraft_engine::DataFormat::Xfdf);
+                let format = pdfcraft_engine::DataFormat::from_extension(&ext).filter(|f| offered.contains(f)).unwrap_or(format);
                 match app.session.export_data(id, format, comments, fields) {
                     Ok(bytes) => match crate::editing::write_atomically(&path.to_string_lossy(), &bytes) {
                         Ok(()) => app.notify_fmt("Exported to {path}", &[("path", &path.display().to_string())]),
@@ -1045,34 +1061,19 @@ impl PdfCraftApp {
                 Some(p) => write(self, p.into()),
                 None => {
                     let title = if comments { tl!("Export comments") } else { tl!("Export form data") };
-                    let d = rfd::AsyncFileDialog::new().set_title(title).set_file_name(format!("{stem}.xfdf"));
-                    let d = if comments {
-                        d.add_filter("XFDF", &["xfdf"]).add_filter("FDF", &["fdf"])
-                    } else if xfa {
-                        // An XFA form's data, as Acrobat exports it, first.
-                        d.set_file_name(format!("{stem}.xml"))
-                            .add_filter("XML", &["xml"])
-                            .add_filter("XDP", &["xdp"])
-                            .add_filter("XFDF", &["xfdf"])
-                            .add_filter("FDF", &["fdf"])
-                            .add_filter("CSV", &["csv"])
-                            .add_filter(tl!("Text").to_string(), &["txt"])
-                    } else {
-                        d.add_filter("XFDF", &["xfdf"])
-                            .add_filter("FDF", &["fdf"])
-                            .add_filter("XML", &["xml"])
-                            .add_filter("CSV", &["csv"])
-                            .add_filter(tl!("Text").to_string(), &["txt"])
-                    };
+                    let d = rfd::AsyncFileDialog::new()
+                        .set_title(title)
+                        .set_file_name(file_name)
+                        .add_filter(crate::data_export_ui::name(format), &[extension(format)]);
                     let d = crate::editing::in_document_folder(d, folder.as_deref());
                     self.ask_one(crate::pickers::Ask::Save(d), None, write);
                 }
             }
         }
         #[cfg(target_arch = "wasm32")]
-        match self.session.export_data(id, pdfcraft_engine::DataFormat::Xfdf, comments, fields) {
+        match self.session.export_data(id, format, comments, fields) {
             Ok(bytes) => {
-                let _ = crate::editing::download(&format!("{stem}.xfdf"), &bytes);
+                let _ = crate::editing::download(&file_name, &bytes);
             }
             Err(e) => self.notify_error(e),
         }
