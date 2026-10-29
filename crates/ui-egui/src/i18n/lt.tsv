@@ -2764,6 +2764,54 @@ key	Space	Tarpas
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	Tinklo spausdintuvas (WS-Print)
+	Printer address:	Spausdintuvo adresas:
+	Query printer	Užklausti spausdintuvo
+	Asking the printer…	Klausiama spausdintuvo…
+	Printer status: {state}	Spausdintuvo būsena: {state}
+	Reasons: {reasons}	Priežastys: {reasons}
+	Quality:	Kokybė:
+	Draft	Juodraštis
+	Normal	Įprasta
+	Printer orientation:	Spausdintuvo orientacija:
+	Reverse portrait	Stačias, apverstas
+	Reverse landscape	Gulsčias, apverstas
+	I confirm sending this document to this printer	Patvirtinu, kad šis dokumentas siunčiamas į šį spausdintuvą
+	Query the printer first to see what it supports.	Pirmiausia užklauskite spausdintuvo, kad pamatytumėte, ką jis palaiko.
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Priimami tik šio tinklo IP adresai (privatūs, link-local ar loopback), o ne pagrindinių kompiuterių vardai.
+	Canceling…	Atšaukiama…
+	The job was canceled	Užduotis atšaukta
+	Printed with warnings	Atspausdinta su įspėjimais
+	Printed with errors	Atspausdinta su klaidomis
+	The printer stopped the job	Spausdintuvas sustabdė užduotį
+	The printer no longer lists the job; it most likely finished	Spausdintuvas užduoties nebeišvardija; greičiausiai ji baigta
+	Still printing; the job continues on the printer	Dar spausdinama; užduotis tęsiama spausdintuve
+	The printer address was refused	Spausdintuvo adresas atmestas
+	Couldn't reach the printer	Nepavyko pasiekti spausdintuvo
+	The printer's reply couldn't be understood	Spausdintuvo atsakymo nepavyko suprasti
+	The printer refused the request	Spausdintuvas atmetė užklausą
+	The printer accepts none of the formats this document can be sent in	Spausdintuvas nepriima nė vieno formato, kuriuo galima siųsti šį dokumentą
+	The printer doesn't support this setting	Spausdintuvas nepalaiko šio nustatymo
+	The document couldn't be prepared	Nepavyko paruošti dokumento
+	A setting isn't valid	Nustatymas netinkamas
+	The print job stopped unexpectedly	Spausdinimo užduotis netikėtai sustojo
+	Sheets printed: {n}	Atspausdinta lapų: {n}
+	Accepted by {printer}	Priėmė {printer}
+	Waiting in the printer's queue	Laukia spausdintuvo eilėje
+	Held by the printer	Spausdintuvo sulaikyta
+	The printer is printing it	Spausdintuvas ją spausdina
+	The printer paused the job; it needs attention	Spausdintuvas pristabdė užduotį; reikia dėmesio
+	Sheets printed: {done} of {total}	Atspausdinta lapų: {done} iš {total}
+	Sent. The printer can't say whether it printed.	Išsiųsta. Spausdintuvas negali pasakyti, ar atspausdinta.
+	The printer may have received the document. Check the printer before sending again.	Spausdintuvas galėjo gauti dokumentą. Prieš siųsdami iš naujo, patikrinkite spausdintuvą.
+	This printer does not take a copies setting.	Šis spausdintuvas nepalaiko kopijų skaičiaus nustatymo.
+	This printer only prints one-sided.	Šis spausdintuvas spausdina tik vienoje pusėje.
+	This printer does not take an orientation setting.	Šis spausdintuvas nepalaiko orientacijos nustatymo.
+	This printer does not take a quality setting.	Šis spausdintuvas nepalaiko kokybės nustatymo.
+	This printer only prints in black and white.	Šis spausdintuvas spausdina tik nespalvotai.
+	This printer does not take a resolution setting.	Šis spausdintuvas nepalaiko raiškos nustatymo.
+	Not confirmed by the printer	Spausdintuvas nepatvirtino
 	Attach a file…	Pridėti failą…
 	Delete attachment	Ištrinti priedą
 	Attaching files is not available on the web yet	Failų pridėjimas žiniatinklyje dar negalimas

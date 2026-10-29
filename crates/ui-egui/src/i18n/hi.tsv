@@ -2774,6 +2774,54 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	नेटवर्क प्रिंटर (WS-Print)
+	Printer address:	प्रिंटर का पता:
+	Query printer	प्रिंटर से पूछें
+	Asking the printer…	प्रिंटर से पूछा जा रहा है…
+	Printer status: {state}	प्रिंटर की स्थिति: {state}
+	Reasons: {reasons}	कारण: {reasons}
+	Quality:	गुणवत्ता:
+	Draft	ड्राफ़्ट
+	Normal	सामान्य
+	Printer orientation:	प्रिंटर का ओरिएंटेशन:
+	Reverse portrait	उलटा पोर्ट्रेट
+	Reverse landscape	उलटा लैंडस्केप
+	I confirm sending this document to this printer	इस दस्तावेज़ को इस प्रिंटर पर भेजने की पुष्टि है
+	Query the printer first to see what it supports.	पहले प्रिंटर से पूछें कि वह क्या सपोर्ट करता है।
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	केवल इस नेटवर्क के IP पते स्वीकार किए जाते हैं (निजी, लिंक-लोकल या लूपबैक), होस्ट नाम नहीं।
+	Canceling…	रद्द किया जा रहा है…
+	The job was canceled	जॉब रद्द कर दिया गया
+	Printed with warnings	चेतावनियों के साथ प्रिंट हुआ
+	Printed with errors	त्रुटियों के साथ प्रिंट हुआ
+	The printer stopped the job	प्रिंटर ने जॉब रोक दिया
+	The printer no longer lists the job; it most likely finished	प्रिंटर अब जॉब को सूचीबद्ध नहीं करता; संभवतः वह पूरा हो चुका है
+	Still printing; the job continues on the printer	अभी प्रिंट हो रहा है; जॉब प्रिंटर पर जारी है
+	The printer address was refused	प्रिंटर का पता अस्वीकार कर दिया गया
+	Couldn't reach the printer	प्रिंटर तक नहीं पहुँचा जा सका
+	The printer's reply couldn't be understood	प्रिंटर का उत्तर समझा नहीं जा सका
+	The printer refused the request	प्रिंटर ने अनुरोध अस्वीकार कर दिया
+	The printer accepts none of the formats this document can be sent in	प्रिंटर उन किसी भी फ़ॉर्मैट को स्वीकार नहीं करता जिनमें यह दस्तावेज़ भेजा जा सकता है
+	The printer doesn't support this setting	प्रिंटर इस सेटिंग को सपोर्ट नहीं करता
+	The document couldn't be prepared	दस्तावेज़ तैयार नहीं किया जा सका
+	A setting isn't valid	कोई सेटिंग मान्य नहीं है
+	The print job stopped unexpectedly	प्रिंट जॉब अप्रत्याशित रूप से रुक गया
+	Sheets printed: {n}	प्रिंट हुई शीट: {n}
+	Accepted by {printer}	{printer} ने स्वीकार किया
+	Waiting in the printer's queue	प्रिंटर की कतार में प्रतीक्षा में
+	Held by the printer	प्रिंटर ने रोक रखा है
+	The printer is printing it	प्रिंटर इसे प्रिंट कर रहा है
+	The printer paused the job; it needs attention	प्रिंटर ने जॉब रोका है; उस पर ध्यान देने की ज़रूरत है
+	Sheets printed: {done} of {total}	प्रिंट हुई शीट: {total} में से {done}
+	Sent. The printer can't say whether it printed.	भेज दिया गया। प्रिंटर नहीं बता सकता कि प्रिंट हुआ या नहीं।
+	The printer may have received the document. Check the printer before sending again.	हो सकता है प्रिंटर को दस्तावेज़ मिल गया हो। दोबारा भेजने से पहले प्रिंटर जाँच लें।
+	This printer does not take a copies setting.	यह प्रिंटर प्रतियों की सेटिंग नहीं लेता।
+	This printer only prints one-sided.	यह प्रिंटर केवल एक तरफ़ प्रिंट करता है।
+	This printer does not take an orientation setting.	यह प्रिंटर ओरिएंटेशन की सेटिंग नहीं लेता।
+	This printer does not take a quality setting.	यह प्रिंटर गुणवत्ता की सेटिंग नहीं लेता।
+	This printer only prints in black and white.	यह प्रिंटर केवल श्वेत-श्याम में प्रिंट करता है।
+	This printer does not take a resolution setting.	यह प्रिंटर रिज़ॉल्यूशन की सेटिंग नहीं लेता।
+	Not confirmed by the printer	प्रिंटर ने पुष्टि नहीं की
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज

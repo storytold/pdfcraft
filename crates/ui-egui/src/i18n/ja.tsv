@@ -2498,6 +2498,54 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	ネットワークプリンター (WS-Print)
+	Printer address:	プリンターのアドレス:
+	Query printer	プリンターに問い合わせ
+	Asking the printer…	プリンターに問い合わせています…
+	Printer status: {state}	プリンターの状態: {state}
+	Reasons: {reasons}	理由: {reasons}
+	Quality:	品質:
+	Draft	下書き
+	Normal	標準
+	Printer orientation:	プリンター側の向き:
+	Reverse portrait	縦 (反転)
+	Reverse landscape	横 (反転)
+	I confirm sending this document to this printer	この文書をこのプリンターに送信することを確認します
+	Query the printer first to see what it supports.	まずプリンターに問い合わせて、対応している内容を確認してください。
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	このネットワーク内の IP アドレス (プライベート、リンクローカル、ループバック) のみ使えます。ホスト名は使えません。
+	Canceling…	キャンセルしています…
+	The job was canceled	ジョブをキャンセルしました
+	Printed with warnings	警告付きで印刷しました
+	Printed with errors	エラー付きで印刷しました
+	The printer stopped the job	プリンターがジョブを停止しました
+	The printer no longer lists the job; it most likely finished	プリンターのジョブ一覧にありません。おそらく完了しています
+	Still printing; the job continues on the printer	印刷中です。ジョブはプリンターで続行されます
+	The printer address was refused	プリンターのアドレスが拒否されました
+	Couldn't reach the printer	プリンターに接続できませんでした
+	The printer's reply couldn't be understood	プリンターの応答を解釈できませんでした
+	The printer refused the request	プリンターが要求を拒否しました
+	The printer accepts none of the formats this document can be sent in	プリンターは、この文書を送信できる形式のどれにも対応していません
+	The printer doesn't support this setting	プリンターはこの設定に対応していません
+	The document couldn't be prepared	文書を準備できませんでした
+	A setting isn't valid	無効な設定があります
+	The print job stopped unexpectedly	印刷ジョブが予期せず停止しました
+	Sheets printed: {n}	印刷した枚数: {n}
+	Accepted by {printer}	{printer} が受け付けました
+	Waiting in the printer's queue	プリンターのキューで待機中
+	Held by the printer	プリンターが保留しています
+	The printer is printing it	プリンターが印刷中です
+	The printer paused the job; it needs attention	プリンターがジョブを一時停止しました。確認が必要です
+	Sheets printed: {done} of {total}	印刷した枚数: {done} / {total}
+	Sent. The printer can't say whether it printed.	送信しました。プリンターは印刷されたかどうかを答えられません。
+	The printer may have received the document. Check the printer before sending again.	プリンターが文書を受信している可能性があります。再送信する前にプリンターを確認してください。
+	This printer does not take a copies setting.	このプリンターは部数の設定に対応していません。
+	This printer only prints one-sided.	このプリンターは片面印刷のみ対応しています。
+	This printer does not take an orientation setting.	このプリンターは向きの設定に対応していません。
+	This printer does not take a quality setting.	このプリンターは品質の設定に対応していません。
+	This printer only prints in black and white.	このプリンターは白黒印刷のみ対応しています。
+	This printer does not take a resolution setting.	このプリンターは解像度の設定に対応していません。
+	Not confirmed by the printer	プリンターからは確認されていません
 	Create & Edit	作成と編集
 	Review & Compare	レビューと比較
 	Forms & Signatures	フォームと署名

@@ -583,6 +583,41 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .with(schema(json!({ "printer": { "type": "string" } }), &["printer"])),
         t(
+            "wsd_printer_info",
+            "Ask a network printer what it is (WS-Print)",
+            "Contact a WSD network printer (WS-Print) and report its name, colour support, status and what it accepts: document formats, compression, paper sizes, duplex, orientation, quality, copies and resolutions. Sends only read requests, no job. printer_url must be http:// plus a numeric loopback, link-local or private IP address (no host names, no public addresses), e.g. http://192.168.1.50:5357/service. Builds without the network-print feature refuse.",
+        )
+        .ro()
+        .with(schema(json!({ "printer_url": { "type": "string", "description": "http://<IPv4 or [IPv6]>[:port]/path of the printer's print service. Numeric local addresses only." } }), &["printer_url"])),
+        t(
+            "print_wsd",
+            "Print to a network printer (WS-Print)",
+            "Send a document straight to a WSD network printer (WS-Print): the printer accepts it, then the job is followed until it ends or wait_secs runs out. Needs user_confirmed: true, which must be set only after the person has agreed to this print; without it nothing is sent. printer_url must be http:// plus a numeric loopback, link-local or private IP address. Give exactly one of doc (an open document: sent as a print-ready PDF when the printer lists application/pdf, else rendered to PWG raster, at the resolution the printer lists nearest 300 dpi, when it lists image/pwg-raster) or path (a file sent as it is; its format comes from its content or extension, or from format, and the printer must list it: PDF, PWG raster, PostScript, JPEG, PNG, TIFF, plain text, XPS and Open XPS can be sent). Options: copies, duplex off/long-edge/short-edge, orientation, paper (a MediaSizeName such as iso_a4_210x297mm or na_letter_8.5x11in), quality draft/normal/high/photo, dpi (the raster resolution when a document is rendered), color auto/color/mono (applied when a document is rendered), job_name, strict (refuse settings the printer does not list, and ask the printer to insist on each), transfer mtom/inline, wait_secs (default 120; the job keeps going on the printer if it runs out). The result has accepted (the printer has the document), outcome (completed, completed_with_warnings, completed_with_errors, canceled, aborted, forgotten, still_running, accepted_unknown, failed), the job id, state reasons and warnings about settings that were left out. A document is never sent twice: if sending failed with a note that the request may have reached the printer, check the printer before trying again. Builds without the network-print feature refuse.",
+        )
+        .with(schema(
+            json!({
+                "printer_url": { "type": "string", "description": "http://<IPv4 or [IPv6]>[:port]/path of the printer's print service. Numeric local addresses only." },
+                "user_confirmed": { "type": "boolean", "description": "Must be true: the person has agreed to print this to this printer." },
+                "doc": doc(),
+                "path": path_arg(),
+                "format": { "type": "string", "description": "With path: the MIME type of the file when its extension does not say, e.g. application/pdf, image/jpeg, image/pwg-raster." },
+                "copies": { "type": "integer", "minimum": 1, "maximum": 9999 },
+                "duplex": { "type": "string", "enum": ["off", "long-edge", "short-edge"] },
+                "orientation": { "type": "string", "enum": ["portrait", "landscape", "reverse-portrait", "reverse-landscape"] },
+                "paper": { "type": "string", "description": "A MediaSizeName from wsd_printer_info, e.g. iso_a4_210x297mm." },
+                "quality": { "type": "string", "enum": ["draft", "normal", "high", "photo"] },
+                "dpi": { "type": "integer", "minimum": 50, "maximum": 2400 },
+                "color": { "type": "string", "enum": ["auto", "color", "mono"] },
+                "job_name": { "type": "string", "maxLength": 255 },
+                "strict": { "type": "boolean" },
+                "ticket": { "type": "string", "enum": ["full", "description", "job_name", "empty"], "description": "How much of the print ticket to send. Default full. A quirk for printers whose firmware stalls on JobProcessing/DocumentProcessing: description sends only the job name and user name (the smallest schema-valid ticket; recommended), job_name only the job name and empty sends no settings at all. Options that need the omitted elements are refused unless drop_ticket_settings is true." },
+                "drop_ticket_settings": { "type": "boolean", "description": "With a reduced ticket, drop copies/duplex/orientation/quality/paper/dpi (with a warning each) instead of refusing the print." },
+                "transfer": { "type": "string", "enum": ["mtom", "inline"] },
+                "wait_secs": { "type": "integer", "minimum": 0, "maximum": 3600 },
+            }),
+            &["printer_url"],
+        )),
+        t(
             "doc_print",
             "Print",
             "Print with Acrobat's Print dialog options, or save the print-ready PDF. pages: a range such as \"1-3, 6, 9-\" (page labels allowed; default all); subset odd/even (by page number, as Acrobat counts them: pages 2, 7-10 with even prints 2, 8 and 10, not every second page of the range); reverse. layout: fit (default), actual, shrink, custom (scale %), multiple (per_sheet 2/4/6/9/16, order, border, auto_rotate; cut-stack order arranges single-sided sheets for cutting into piles and stacking left to right, top to bottom, keeping sheet order within each pile; duplex must be off), booklet (booklet_subset both/front/back, binding left/right; a booklet sets two-sided itself, as Acrobat does: both flips on the short edge, front or back prints one-sided), poster (scale %, overlap pt, cut_marks). orientation auto/portrait/landscape; comments_forms document / document-and-markups (default) / document-and-stamps / form-fields-only; paper Letter/Legal/Tabloid, ARCH A/B/C/D/E1/E, ANSI C/D/E, A0/A1/A2/A3/A4/A5/A6, or US #10 Envelope (short names or full preset labels); use layout actual for 100% in the print-ready PDF; printer drivers may still substitute paper or scale. Then path (save) or printer (a name or \"default\") with copies, collate, duplex off/long-edge/short-edge, grayscale, and options (driver options from printer_options, CUPS).",

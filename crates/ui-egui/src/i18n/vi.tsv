@@ -2772,6 +2772,55 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	Máy in mạng (WS-Print)
+	Printer address:	Địa chỉ máy in:
+	Query printer	Truy vấn máy in
+	Query the printer first to see what it supports.	Hãy truy vấn máy in trước để xem máy in hỗ trợ những gì.
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Chỉ chấp nhận địa chỉ IP trong mạng này (riêng, liên kết cục bộ hoặc loopback), không chấp nhận tên máy chủ.
+	I confirm sending this document to this printer	Tôi xác nhận gửi tài liệu này đến máy in này
+	Asking the printer…	Đang hỏi máy in…
+	Not confirmed by the printer	Máy in chưa xác nhận
+	Printer orientation:	Hướng của máy in:
+	Reverse landscape	Ngang đảo ngược
+	Reverse portrait	Dọc đảo ngược
+	Quality:	Chất lượng:
+	Draft	Nháp
+	Normal	Bình thường
+	This printer does not take a copies setting.	Máy in này không nhận thiết lập số bản sao.
+	This printer does not take a quality setting.	Máy in này không nhận thiết lập chất lượng.
+	This printer does not take a resolution setting.	Máy in này không nhận thiết lập độ phân giải.
+	This printer does not take an orientation setting.	Máy in này không nhận thiết lập hướng giấy.
+	This printer only prints in black and white.	Máy in này chỉ in đen trắng.
+	This printer only prints one-sided.	Máy in này chỉ in một mặt.
+	Accepted by {printer}	Đã được {printer} chấp nhận
+	Canceling…	Đang hủy…
+	Waiting in the printer's queue	Đang chờ trong hàng đợi của máy in
+	Held by the printer	Máy in đang giữ lệnh in
+	The printer is printing it	Máy in đang in
+	Printer status: {state}	Trạng thái máy in: {state}
+	Reasons: {reasons}	Lý do: {reasons}
+	Sheets printed: {done} of {total}	Số tờ đã in: {done} / {total}
+	Sheets printed: {n}	Số tờ đã in: {n}
+	Printed with errors	Đã in nhưng có lỗi
+	Printed with warnings	Đã in nhưng có cảnh báo
+	Sent. The printer can't say whether it printed.	Đã gửi. Máy in không thể cho biết đã in hay chưa.
+	Still printing; the job continues on the printer	Vẫn đang in; lệnh in tiếp tục trên máy in
+	The job was canceled	Lệnh in đã bị hủy
+	The print job stopped unexpectedly	Lệnh in dừng bất ngờ
+	The printer paused the job; it needs attention	Máy in đã tạm dừng lệnh in; cần được xử lý
+	The printer stopped the job	Máy in đã dừng lệnh in
+	The printer no longer lists the job; it most likely finished	Máy in không còn liệt kê lệnh in; nhiều khả năng lệnh in đã hoàn tất
+	Couldn't reach the printer	Không thể kết nối tới máy in
+	The printer address was refused	Địa chỉ máy in bị từ chối
+	The printer refused the request	Máy in đã từ chối yêu cầu
+	The printer doesn't support this setting	Máy in không hỗ trợ thiết lập này
+	A setting isn't valid	Một thiết lập không hợp lệ
+	The printer accepts none of the formats this document can be sent in	Máy in không nhận định dạng nào mà tài liệu này có thể được gửi
+	The document couldn't be prepared	Không thể chuẩn bị tài liệu
+	The printer's reply couldn't be understood	Không thể hiểu phản hồi của máy in
+	The printer may have received the document. Check the printer before sending again.	Máy in có thể đã nhận tài liệu. Hãy kiểm tra máy in trước khi gửi lại.
 	Attach a file…	Đính kèm tệp…
 	Delete attachment	Xóa tệp đính kèm
 	Attaching files is not available on the web yet	Chưa thể đính kèm tệp trên web

@@ -2710,6 +2710,54 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	Stampante di rete (WS-Print)
+	Printer address:	Indirizzo della stampante:
+	Query printer	Interroga stampante
+	Asking the printer…	Interrogazione della stampante…
+	Printer status: {state}	Stato della stampante: {state}
+	Reasons: {reasons}	Motivi: {reasons}
+	Quality:	Qualità:
+	Draft	Bozza
+	Normal	Normale
+	Printer orientation:	Orientamento della stampante:
+	Reverse portrait	Verticale invertito
+	Reverse landscape	Orizzontale invertito
+	I confirm sending this document to this printer	Confermo l'invio di questo documento a questa stampante
+	Query the printer first to see what it supports.	Interroga prima la stampante per vedere cosa supporta.
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Sono accettati solo indirizzi IP di questa rete (privati, link-local o loopback), non nomi host.
+	Canceling…	Annullamento…
+	The job was canceled	Il lavoro è stato annullato
+	Printed with warnings	Stampato con avvisi
+	Printed with errors	Stampato con errori
+	The printer stopped the job	La stampante ha interrotto il lavoro
+	The printer no longer lists the job; it most likely finished	La stampante non elenca più il lavoro; molto probabilmente è terminato
+	Still printing; the job continues on the printer	Stampa ancora in corso; il lavoro continua sulla stampante
+	The printer address was refused	L'indirizzo della stampante è stato rifiutato
+	Couldn't reach the printer	Impossibile raggiungere la stampante
+	The printer's reply couldn't be understood	La risposta della stampante non è stata compresa
+	The printer refused the request	La stampante ha rifiutato la richiesta
+	The printer accepts none of the formats this document can be sent in	La stampante non accetta nessuno dei formati in cui si può inviare questo documento
+	The printer doesn't support this setting	La stampante non supporta questa impostazione
+	The document couldn't be prepared	Non è stato possibile preparare il documento
+	A setting isn't valid	Un'impostazione non è valida
+	The print job stopped unexpectedly	Il lavoro di stampa si è interrotto in modo imprevisto
+	Sheets printed: {n}	Fogli stampati: {n}
+	Accepted by {printer}	Accettato da {printer}
+	Waiting in the printer's queue	In attesa nella coda della stampante
+	Held by the printer	Trattenuto dalla stampante
+	The printer is printing it	La stampante lo sta stampando
+	The printer paused the job; it needs attention	La stampante ha messo in pausa il lavoro; richiede attenzione
+	Sheets printed: {done} of {total}	Fogli stampati: {done} di {total}
+	Sent. The printer can't say whether it printed.	Inviato. La stampante non può dire se è stato stampato.
+	The printer may have received the document. Check the printer before sending again.	La stampante potrebbe aver ricevuto il documento. Controlla la stampante prima di inviarlo di nuovo.
+	This printer does not take a copies setting.	Questa stampante non supporta l'impostazione del numero di copie.
+	This printer only prints one-sided.	Questa stampante stampa solo su un lato.
+	This printer does not take an orientation setting.	Questa stampante non supporta l'impostazione dell'orientamento.
+	This printer does not take a quality setting.	Questa stampante non supporta l'impostazione della qualità.
+	This printer only prints in black and white.	Questa stampante stampa solo in bianco e nero.
+	This printer does not take a resolution setting.	Questa stampante non supporta l'impostazione della risoluzione.
+	Not confirmed by the printer	Non confermato dalla stampante
 	Create & Edit	Crea e modifica
 	Review & Compare	Revisione e confronto
 	Forms & Signatures	Moduli e firme

@@ -2496,6 +2496,54 @@ animation effects	Off	Өшірулі
 	Make properties default	Қасиеттерді әдепкі ету
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	Желілік принтер (WS-Print)
+	Printer address:	Принтер мекенжайы:
+	Query printer	Принтерден сұрау
+	Asking the printer…	Принтерден сұралуда…
+	Printer status: {state}	Принтер күйі: {state}
+	Reasons: {reasons}	Себептері: {reasons}
+	Quality:	Сапасы:
+	Draft	Нобай
+	Normal	Қалыпты
+	Printer orientation:	Принтер бағыты:
+	Reverse portrait	Тік, төңкерілген
+	Reverse landscape	Жатық, төңкерілген
+	I confirm sending this document to this printer	Осы құжатты осы принтерге жіберетінімді растаймын
+	Query the printer first to see what it supports.	Алдымен принтердің нені қолдайтынын көру үшін одан сұраңыз.
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Тек осы желінің IP мекенжайлары қабылданады (жеке, link-local немесе loopback), хост атаулары емес.
+	Canceling…	Бас тартылуда…
+	The job was canceled	Тапсырмадан бас тартылды
+	Printed with warnings	Ескертулермен басылды
+	Printed with errors	Қателермен басылды
+	The printer stopped the job	Принтер тапсырманы тоқтатты
+	The printer no longer lists the job; it most likely finished	Принтер тапсырманы енді көрсетпейді; ол көбіне аяқталған
+	Still printing; the job continues on the printer	Басып шығару жалғасуда; тапсырма принтерде орындалуда
+	The printer address was refused	Принтер мекенжайы қабылданбады
+	Couldn't reach the printer	Принтерге қол жеткізу мүмкін болмады
+	The printer's reply couldn't be understood	Принтер жауабы түсініксіз болды
+	The printer refused the request	Принтер сұрауды қабылдамады
+	The printer accepts none of the formats this document can be sent in	Принтер осы құжатты жіберуге болатын форматтардың ешқайсысын қабылдамайды
+	The printer doesn't support this setting	Принтер бұл параметрді қолдамайды
+	The document couldn't be prepared	Құжатты дайындау мүмкін болмады
+	A setting isn't valid	Параметр жарамсыз
+	The print job stopped unexpectedly	Басып шығару тапсырмасы күтпеген жерден тоқтады
+	Sheets printed: {n}	Басылған парақтар: {n}
+	Accepted by {printer}	{printer} қабылдады
+	Waiting in the printer's queue	Принтер кезегінде күтуде
+	Held by the printer	Принтер ұстап тұр
+	The printer is printing it	Принтер оны басып шығаруда
+	The printer paused the job; it needs attention	Принтер тапсырманы кідіртті; назар аударуды қажет етеді
+	Sheets printed: {done} of {total}	Басылған парақтар: {done} / {total}
+	Sent. The printer can't say whether it printed.	Жіберілді. Принтер басылған-басылмағанын айта алмайды.
+	The printer may have received the document. Check the printer before sending again.	Принтер құжатты алған болуы мүмкін. Қайта жіберместен бұрын принтерді тексеріңіз.
+	This printer does not take a copies setting.	Бұл принтер көшірме санын баптауды қолдамайды.
+	This printer only prints one-sided.	Бұл принтер тек бір жағына басады.
+	This printer does not take an orientation setting.	Бұл принтер бағдарды баптауды қолдамайды.
+	This printer does not take a quality setting.	Бұл принтер сапаны баптауды қолдамайды.
+	This printer only prints in black and white.	Бұл принтер тек ақ-қара басады.
+	This printer does not take a resolution setting.	Бұл принтер ажыратымдылықты баптауды қолдамайды.
+	Not confirmed by the printer	Принтер растамаған
 	Create & Edit	Жасау және өңдеу
 	Review & Compare	Шолу және салыстыру
 	Forms & Signatures	Пішіндер және қолтаңбалар

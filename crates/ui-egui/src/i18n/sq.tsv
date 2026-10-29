@@ -2524,6 +2524,54 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	Printer rrjeti (WS-Print)
+	Printer address:	Adresa e printerit:
+	Query printer	Pyet printerin
+	Asking the printer…	Po pyetet printeri…
+	Printer status: {state}	Gjendja e printerit: {state}
+	Reasons: {reasons}	Arsyet: {reasons}
+	Quality:	Cilësia:
+	Draft	Skicë
+	Normal	Normale
+	Printer orientation:	Orientimi i printerit:
+	Reverse portrait	Portret i kthyer
+	Reverse landscape	Peizazh i kthyer
+	I confirm sending this document to this printer	Konfirmoj dërgimin e këtij dokumenti te ky printer
+	Query the printer first to see what it supports.	Pyet fillimisht printerin për të parë çfarë mbështet.
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Pranohen vetëm adresa IP të këtij rrjeti (private, lidhje-lokale ose loopback), jo emra hosti.
+	Canceling…	Po anulohet…
+	The job was canceled	Puna u anulua
+	Printed with warnings	Printuar me paralajmërime
+	Printed with errors	Printuar me gabime
+	The printer stopped the job	Printeri e ndali punën
+	The printer no longer lists the job; it most likely finished	Printeri nuk e liston më punën; ka shumë gjasa që ka mbaruar
+	Still printing; the job continues on the printer	Ende po printohet; puna vazhdon në printer
+	The printer address was refused	Adresa e printerit u refuzua
+	Couldn't reach the printer	Printeri nuk u arrit
+	The printer's reply couldn't be understood	Përgjigja e printerit nuk u kuptua
+	The printer refused the request	Printeri e refuzoi kërkesën
+	The printer accepts none of the formats this document can be sent in	Printeri nuk pranon asnjë nga formatet në të cilat mund të dërgohet ky dokument
+	The printer doesn't support this setting	Printeri nuk e mbështet këtë cilësim
+	The document couldn't be prepared	Dokumenti nuk u përgatit dot
+	A setting isn't valid	Një cilësim nuk është i vlefshëm
+	The print job stopped unexpectedly	Puna e printimit u ndal papritur
+	Sheets printed: {n}	Fletë të printuara: {n}
+	Accepted by {printer}	Pranuar nga {printer}
+	Waiting in the printer's queue	Në pritje në radhën e printerit
+	Held by the printer	Mbajtur nga printeri
+	The printer is printing it	Printeri po e printon
+	The printer paused the job; it needs attention	Printeri e ndali përkohësisht punën; ka nevojë për vëmendje
+	Sheets printed: {done} of {total}	Fletë të printuara: {done} nga {total}
+	Sent. The printer can't say whether it printed.	U dërgua. Printeri nuk mund të thotë nëse printoi.
+	The printer may have received the document. Check the printer before sending again.	Printeri mund ta ketë marrë dokumentin. Kontrollo printerin para se ta dërgosh sërish.
+	This printer does not take a copies setting.	Ky printer nuk e mbështet cilësimin e kopjeve.
+	This printer only prints one-sided.	Ky printer printon vetëm njëanshëm.
+	This printer does not take an orientation setting.	Ky printer nuk e mbështet cilësimin e orientimit.
+	This printer does not take a quality setting.	Ky printer nuk e mbështet cilësimin e cilësisë.
+	This printer only prints in black and white.	Ky printer printon vetëm bardhezi.
+	This printer does not take a resolution setting.	Ky printer nuk e mbështet cilësimin e rezolucionit.
+	Not confirmed by the printer	Nuk u konfirmua nga printeri
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Sot

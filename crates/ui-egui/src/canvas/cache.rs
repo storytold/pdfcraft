@@ -232,7 +232,15 @@ impl DocView {
     /// The print preview's picture of `page`: the sheet raster when it has arrived, otherwise the
     /// thumbnail.
     pub(crate) fn page_preview(&self, page: usize) -> Option<egui::TextureId> {
-        self.print_pages.get(&page).map(|(_, tex)| tex.id()).or_else(|| self.thumb_id(page))
+        // A print raster of the other colour mode (stale after a toggle, or arriving late from
+        // before it) is never shown, and neither is the colour thumbnail while gray is wanted:
+        // the page is a neutral placeholder until the right raster arrives.
+        match self.print_pages.get(&page) {
+            Some((tag, tex)) if (tag & GRAYSCALE_TAG != 0) == self.grayscale => Some(tex.id()),
+            Some(_) => None,
+            None if self.grayscale => None,
+            None => self.thumb_id(page),
+        }
     }
 
     pub(crate) fn page_text(&self, page: usize) -> Option<Arc<PageText>> {

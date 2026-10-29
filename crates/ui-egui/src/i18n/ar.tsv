@@ -2775,6 +2775,54 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	طابعة شبكية (WS-Print)
+	Printer address:	عنوان الطابعة:
+	Query printer	استعلام عن الطابعة
+	Asking the printer…	جارٍ الاستعلام عن الطابعة…
+	Printer status: {state}	حالة الطابعة: {state}
+	Reasons: {reasons}	الأسباب: {reasons}
+	Quality:	الجودة:
+	Draft	مسودة
+	Normal	عادية
+	Printer orientation:	اتجاه الطابعة:
+	Reverse portrait	عمودي معكوس
+	Reverse landscape	أفقي معكوس
+	I confirm sending this document to this printer	أؤكد إرسال هذا المستند إلى هذه الطابعة
+	Query the printer first to see what it supports.	استعلم عن الطابعة أولًا لمعرفة ما تدعمه.
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	تُقبل عناوين IP الخاصة بهذه الشبكة فقط (خاصة أو محلية الارتباط أو الحلقة الراجعة)، وليس أسماء المضيفين.
+	Canceling…	جارٍ الإلغاء…
+	The job was canceled	تم إلغاء المهمة
+	Printed with warnings	تمت الطباعة مع تحذيرات
+	Printed with errors	تمت الطباعة مع أخطاء
+	The printer stopped the job	أوقفت الطابعة المهمة
+	The printer no longer lists the job; it most likely finished	لم تعد الطابعة تعرض المهمة؛ والأرجح أنها انتهت
+	Still printing; the job continues on the printer	ما زالت الطباعة جارية؛ تتابع المهمة عملها على الطابعة
+	The printer address was refused	تم رفض عنوان الطابعة
+	Couldn't reach the printer	تعذر الوصول إلى الطابعة
+	The printer's reply couldn't be understood	تعذر فهم رد الطابعة
+	The printer refused the request	رفضت الطابعة الطلب
+	The printer accepts none of the formats this document can be sent in	لا تقبل الطابعة أيًا من التنسيقات التي يمكن إرسال هذا المستند بها
+	The printer doesn't support this setting	لا تدعم الطابعة هذا الإعداد
+	The document couldn't be prepared	تعذر تجهيز المستند
+	A setting isn't valid	أحد الإعدادات غير صالح
+	The print job stopped unexpectedly	توقفت مهمة الطباعة بشكل غير متوقع
+	Sheets printed: {n}	الأوراق المطبوعة: {n}
+	Accepted by {printer}	قبلته {printer}
+	Waiting in the printer's queue	في انتظار دوره في قائمة انتظار الطابعة
+	Held by the printer	محتجزة لدى الطابعة
+	The printer is printing it	الطابعة تطبعه الآن
+	The printer paused the job; it needs attention	أوقفت الطابعة المهمة مؤقتًا؛ تحتاج إلى انتباه
+	Sheets printed: {done} of {total}	الأوراق المطبوعة: {done} من {total}
+	Sent. The printer can't say whether it printed.	تم الإرسال. لا تستطيع الطابعة أن تقول ما إذا كانت قد طبعت.
+	The printer may have received the document. Check the printer before sending again.	ربما تلقّت الطابعة المستند. تحقق من الطابعة قبل الإرسال مرة أخرى.
+	This printer does not take a copies setting.	هذه الطابعة لا تدعم إعداد عدد النسخ.
+	This printer only prints one-sided.	هذه الطابعة تطبع على وجه واحد فقط.
+	This printer does not take an orientation setting.	هذه الطابعة لا تدعم إعداد الاتجاه.
+	This printer does not take a quality setting.	هذه الطابعة لا تدعم إعداد الجودة.
+	This printer only prints in black and white.	هذه الطابعة تطبع بالأبيض والأسود فقط.
+	This printer does not take a resolution setting.	هذه الطابعة لا تدعم إعداد الدقة.
+	Not confirmed by the printer	لم تؤكده الطابعة
 	Create & Edit	الإنشاء والتحرير
 	Review & Compare	المراجعة والمقارنة
 	Forms & Signatures	النماذج والتوقيعات

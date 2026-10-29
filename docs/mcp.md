@@ -1,8 +1,14 @@
 # MCP conventions
 
-Start explicitly with `pdfcraft-cli mcp [--root DIR] [--compact] [--automation-read-root DIR] [--automation-write-root DIR]`. The server uses JSON lines on
+Start explicitly with `pdfcraft-cli mcp [--root DIR] [--compact] [--allow-network-print] [--automation-read-root DIR] [--automation-write-root DIR]`. The server uses JSON lines on
 stdin/stdout, opens no port, and stops on EOF. `--root` confines all reads and writes, including
 commands invoked through the common tools. Logs stay on stderr.
+
+Printing to a network printer is off in the server unless you start it with
+`--allow-network-print`: without it `wsd_printer_info` and `print_wsd` are neither listed nor
+run. It is a setting of the server's command line, in your MCP client's configuration, which no
+tool call can change. A job still needs `user_confirmed: true`; for an agent that is a statement
+it makes itself, so the flag is what records that you allow it.
 
 Supply `--root` at most once, followed by a nonempty directory path. Missing operands,
 repeated roots and another long option in place of the directory are refused before any

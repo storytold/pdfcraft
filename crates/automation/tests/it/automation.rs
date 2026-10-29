@@ -1596,7 +1596,7 @@ fn mcp_session_over_stdio() {
 
     assert_eq!(replies[0]["result"]["protocolVersion"], "2025-03-26");
     assert_eq!(replies[0]["result"]["serverInfo"]["name"], "pdfcraft");
-    assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), tools().len());
+    assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), tools().len() - NETWORK_TOOLS);
     assert_eq!(replies[2]["result"]["structuredContent"]["pages"], 3);
     assert_eq!(replies[2]["result"]["isError"], false);
     let img = &replies[3]["result"]["content"][0];
@@ -1665,12 +1665,51 @@ fn tool_names(reply: &Value) -> Vec<String> {
     reply["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect()
 }
 
+/// The tools an MCP server leaves out until it is started with `--allow-network-print`.
+#[cfg(feature = "mcp")]
+const NETWORK_TOOLS: usize = 2;
+
+/// Network printing is the user's opt-in at the server, not something a tool call can grant: off, the
+/// tools are not listed (nor found by `tool_search`) and a call by name is refused, even with `user_confirmed`.
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_network_printing_needs_the_servers_opt_in() {
+    let listed = |s: &mut McpServer| tool_names(&rpc(s, 1, "tools/list", json!({})));
+    let call = |s: &mut McpServer, tool: &str, args: Value| rpc(s, 2, "tools/call", json!({ "name": tool, "arguments": args }));
+    let print = json!({ "printer_url": "http://127.0.0.1:1/", "user_confirmed": true, "path": "a.pdf" });
+
+    let mut off = McpServer::new(Automation::new());
+    for tool in ["wsd_printer_info", "print_wsd"] {
+        assert!(!listed(&mut off).iter().any(|n| n == tool), "{tool} listed while off");
+    }
+    let refused = call(&mut off, "print_wsd", print.clone());
+    assert_eq!(refused["result"]["isError"], true);
+    assert!(refused.to_string().contains("--allow-network-print"), "{refused}");
+    let info = call(&mut off, "wsd_printer_info", json!({ "printer_url": "http://127.0.0.1:1/" }));
+    assert_eq!(info["result"]["isError"], true);
+    assert!(info.to_string().contains("--allow-network-print"), "{info}");
+
+    let mut compact = McpServer::new(Automation::new()).with_compact(true);
+    let found = rpc(&mut compact, 3, "tools/call", json!({ "name": "tool_search", "arguments": { "query": "wsd" } }));
+    assert_eq!(found["result"]["structuredContent"]["count"], 0, "{found}");
+    let via_meta = rpc(&mut compact, 4, "tools/call", json!({ "name": "tool_call", "arguments": { "name": "print_wsd", "arguments": print } }));
+    assert!(via_meta.to_string().contains("--allow-network-print"), "{via_meta}");
+
+    let mut on = McpServer::new(Automation::new()).with_network_print(true);
+    let names = listed(&mut on);
+    assert!(names.iter().any(|n| n == "print_wsd") && names.iter().any(|n| n == "wsd_printer_info"));
+    assert_eq!(names.len(), tools().len());
+    // Past the opt-in the tool's own checks run: no confirmation, no job.
+    let unconfirmed = call(&mut on, "print_wsd", json!({ "printer_url": "http://127.0.0.1:1/", "path": "a.pdf" }));
+    assert!(!unconfirmed.to_string().contains("--allow-network-print"), "{unconfirmed}");
+}
+
 #[cfg(feature = "mcp")]
 #[test]
 fn mcp_default_lists_every_tool_and_has_no_meta_tools() {
     let mut s = McpServer::new(Automation::new());
     let names = tool_names(&rpc(&mut s, 1, "tools/list", json!({})));
-    assert_eq!(names.len(), tools().len());
+    assert_eq!(names.len(), tools().len() - NETWORK_TOOLS);
     assert!(!names.iter().any(|n| n == "tool_search" || n == "tool_call"));
     assert!(!rpc(&mut s, 2, "initialize", json!({}))["result"]["instructions"].as_str().unwrap().contains("tool_search"));
     // Without --compact the meta tools do not exist.
@@ -1709,7 +1748,7 @@ fn mcp_compact_tool_search_filters_by_query_and_category() {
 
     let everything = search(json!({}));
     assert_eq!(everything["result"]["isError"], false);
-    assert_eq!(everything["result"]["structuredContent"]["count"], tools().len());
+    assert_eq!(everything["result"]["structuredContent"]["count"], tools().len() - NETWORK_TOOLS);
     let first = &everything["result"]["structuredContent"]["tools"][0];
     assert!(first["name"].is_string() && first["description"].is_string() && first["read_only"].is_boolean(), "{first}");
 

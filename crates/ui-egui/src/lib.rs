@@ -46,6 +46,12 @@ pub use edit_text_ui::CropMode;
 mod editing;
 mod home;
 mod panels;
+// Print ▸ Network printer: craft-ui's `printing::network` model and widgets, with craft-print's WS-Print
+// backend behind them. Needs the `network-print` feature on a target with sockets.
+#[cfg(network_print)]
+mod network_glue;
+#[cfg(network_print)]
+pub use network_glue::Transport as WsdTransport;
 pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;

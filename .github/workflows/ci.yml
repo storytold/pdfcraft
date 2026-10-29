@@ -90,3 +90,28 @@ jobs:
       windows-command: |
         cargo clippy --workspace --all-targets --locked -- -D warnings
         cargo test --workspace --locked
+
+  # Network printing is a default feature; this job builds, lints and tests it switched off. The
+  # shared gate builds the default features only.
+  network-print-off:
+    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
+    name: Network printing left out still builds, lints and refuses
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev             libgl1-mesa-dev libgtk-3-dev
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Network printing left out
+        run: |
+          cargo clippy -p pdfcraft-print -p pdfcraft-automation -p pdfcraft-cli --no-default-features --all-targets -- -D warnings
+          cargo test -p pdfcraft-automation --no-default-features --test wsd_print_off
+          cargo test -p pdfcraft-cli --no-default-features --test it print_off

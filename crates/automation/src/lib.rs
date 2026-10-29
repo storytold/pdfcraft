@@ -32,6 +32,7 @@ mod redact;
 mod signing;
 mod text_cache;
 mod tools;
+mod wsdprint;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -78,10 +79,16 @@ pub struct Automation {
     root: Option<PathBuf>,
     /// The read and write folders of `--automation-read-root` / `--automation-write-root`.
     roots: Option<Arc<file_access::AutomationRoots>>,
+    /// Whether the network printing tools may run. On for direct use; an [`mcp::McpServer`] turns it
+    /// off until whoever starts the server opts in, since a model can set `user_confirmed` itself.
+    network_print: bool,
     /// Synchronous renderers, rebuilt when a document's working bytes change.
     renderers: HashMap<DocId, (Arc<Vec<u8>>, PageRenderer)>,
     /// Extracted page text, under one memory budget across all open documents.
     texts: TextCache,
+    /// The WS-Print transport (None: the built-in HTTP one, in builds that have it).
+    #[cfg(all(feature = "network-print", not(target_arch = "wasm32")))]
+    wsd: Option<wsdprint::WsdTransport>,
     /// The paragraphs of the last `text_paragraphs` listing of each page, so a paragraph number
     /// keeps naming that paragraph after edits regroup the page (#2516).
     listed: HashMap<(DocId, usize), Vec<BlockKey>>,
@@ -98,12 +105,18 @@ impl Default for Automation {
 
 impl Automation {
     pub fn new() -> Self {
+        // Network printing converts a PDF to PWG raster with this build's renderer (registered once).
+        #[cfg(all(feature = "network-print", not(target_arch = "wasm32")))]
+        pdfcraft_print::network::register_pdf_converter();
         Self {
             session: Session::new(),
             root: None,
             roots: None,
+            network_print: true,
             renderers: HashMap::new(),
             texts: TextCache::default(),
+            #[cfg(all(feature = "network-print", not(target_arch = "wasm32")))]
+            wsd: None,
             listed: HashMap::new(),
             evicted: HashSet::new(),
         }
@@ -131,6 +144,18 @@ impl Automation {
     pub fn with_clock(mut self, clock: fn() -> i64) -> Self {
         self.session = std::mem::take(&mut self.session).with_clock(clock);
         self
+    }
+
+    /// Allow or refuse the network printing tools (`wsd_printer_info`, `print_wsd`). On by default;
+    /// the MCP server starts with them off.
+    pub fn with_network_print(mut self, allowed: bool) -> Self {
+        self.network_print = allowed;
+        self
+    }
+
+    #[cfg(any(feature = "mcp", all(feature = "network-print", not(target_arch = "wasm32"))))]
+    pub(crate) fn network_print_allowed(&self) -> bool {
+        self.network_print
     }
 
     /// Multiply the time XFA form scripts may take (tests). See [`Session::with_xfa_time_scale`].

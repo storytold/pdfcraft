@@ -2512,6 +2512,54 @@ animation effects	Off	Desativados
 	Make properties default	Tornar propriedades padrão
 	Pages selected	Páginas selecionadas
 	Page properties	Propriedades da página
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	Impressora de rede (WS-Print)
+	Printer address:	Endereço da impressora:
+	Query printer	Consultar impressora
+	Asking the printer…	Consultando a impressora…
+	Printer status: {state}	Status da impressora: {state}
+	Reasons: {reasons}	Motivos: {reasons}
+	Quality:	Qualidade:
+	Draft	Rascunho
+	Normal	Padrão
+	Printer orientation:	Orientação da impressora:
+	Reverse portrait	Retrato invertido
+	Reverse landscape	Paisagem invertida
+	I confirm sending this document to this printer	Confirmo o envio deste documento para esta impressora
+	Query the printer first to see what it supports.	Consulte primeiro a impressora para ver o que ela aceita.
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Somente endereços IP desta rede são aceitos (privados, link-local ou loopback), não nomes de host.
+	Canceling…	Cancelando…
+	The job was canceled	O trabalho foi cancelado
+	Printed with warnings	Impresso com avisos
+	Printed with errors	Impresso com erros
+	The printer stopped the job	A impressora interrompeu o trabalho
+	The printer no longer lists the job; it most likely finished	A impressora não lista mais o trabalho; provavelmente ele terminou
+	Still printing; the job continues on the printer	Ainda imprimindo; o trabalho continua na impressora
+	The printer address was refused	O endereço da impressora foi recusado
+	Couldn't reach the printer	Não foi possível alcançar a impressora
+	The printer's reply couldn't be understood	A resposta da impressora não pôde ser entendida
+	The printer refused the request	A impressora recusou a solicitação
+	The printer accepts none of the formats this document can be sent in	A impressora não aceita nenhum dos formatos em que este documento pode ser enviado
+	The printer doesn't support this setting	A impressora não oferece suporte a esta configuração
+	The document couldn't be prepared	Não foi possível preparar o documento
+	A setting isn't valid	Uma configuração não é válida
+	The print job stopped unexpectedly	O trabalho de impressão parou inesperadamente
+	Sheets printed: {n}	Folhas impressas: {n}
+	Accepted by {printer}	Aceito por {printer}
+	Waiting in the printer's queue	Aguardando na fila da impressora
+	Held by the printer	Retido pela impressora
+	The printer is printing it	A impressora está imprimindo
+	The printer paused the job; it needs attention	A impressora pausou o trabalho; ele precisa de atenção
+	Sheets printed: {done} of {total}	Folhas impressas: {done} de {total}
+	Sent. The printer can't say whether it printed.	Enviado. A impressora não consegue dizer se imprimiu.
+	The printer may have received the document. Check the printer before sending again.	A impressora pode ter recebido o documento. Verifique a impressora antes de enviar novamente.
+	This printer does not take a copies setting.	Esta impressora não aceita a configuração de número de cópias.
+	This printer only prints one-sided.	Esta impressora imprime apenas em um lado.
+	This printer does not take an orientation setting.	Esta impressora não aceita a configuração de orientação.
+	This printer does not take a quality setting.	Esta impressora não aceita a configuração de qualidade.
+	This printer only prints in black and white.	Esta impressora imprime apenas em preto e branco.
+	This printer does not take a resolution setting.	Esta impressora não aceita a configuração de resolução.
+	Not confirmed by the printer	Não confirmado pela impressora
 	Create & Edit	Criar e editar
 	Review & Compare	Revisar e comparar
 	Forms & Signatures	Formulários e assinaturas

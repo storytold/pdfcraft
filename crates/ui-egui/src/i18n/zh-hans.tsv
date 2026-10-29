@@ -2462,6 +2462,54 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	网络打印机 (WS-Print)
+	Printer address:	打印机地址：
+	Query printer	查询打印机
+	Asking the printer…	正在查询打印机…
+	Printer status: {state}	打印机状态：{state}
+	Reasons: {reasons}	原因：{reasons}
+	Quality:	质量：
+	Draft	草稿
+	Normal	正常
+	Printer orientation:	打印机方向：
+	Reverse portrait	纵向（反向）
+	Reverse landscape	横向（反向）
+	I confirm sending this document to this printer	我确认将此文档发送到这台打印机
+	Query the printer first to see what it supports.	请先查询打印机，了解它支持哪些功能。
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	只接受本网络内的 IP 地址（专用、链路本地或环回地址），不接受主机名。
+	Canceling…	正在取消…
+	The job was canceled	作业已取消
+	Printed with warnings	已打印，有警告
+	Printed with errors	已打印，有错误
+	The printer stopped the job	打印机已停止作业
+	The printer no longer lists the job; it most likely finished	打印机不再列出该作业；很可能已完成
+	Still printing; the job continues on the printer	仍在打印；作业将在打印机上继续
+	The printer address was refused	打印机地址被拒绝
+	Couldn't reach the printer	无法连接到打印机
+	The printer's reply couldn't be understood	无法理解打印机的回复
+	The printer refused the request	打印机拒绝了请求
+	The printer accepts none of the formats this document can be sent in	打印机不接受此文档可发送的任何格式
+	The printer doesn't support this setting	打印机不支持此设置
+	The document couldn't be prepared	无法准备文档
+	A setting isn't valid	某项设置无效
+	The print job stopped unexpectedly	打印作业意外停止
+	Sheets printed: {n}	已打印页数：{n}
+	Accepted by {printer}	已被 {printer} 接受
+	Waiting in the printer's queue	正在打印机队列中等待
+	Held by the printer	已被打印机保留
+	The printer is printing it	打印机正在打印
+	The printer paused the job; it needs attention	打印机已暂停作业；需要处理
+	Sheets printed: {done} of {total}	已打印页数：{done}/{total}
+	Sent. The printer can't say whether it printed.	已发送。打印机无法说明是否已打印。
+	The printer may have received the document. Check the printer before sending again.	打印机可能已收到文档。再次发送之前，请先检查打印机。
+	This printer does not take a copies setting.	此打印机不支持份数设置。
+	This printer only prints one-sided.	此打印机仅支持单面打印。
+	This printer does not take an orientation setting.	此打印机不支持方向设置。
+	This printer does not take a quality setting.	此打印机不支持质量设置。
+	This printer only prints in black and white.	此打印机仅支持黑白打印。
+	This printer does not take a resolution setting.	此打印机不支持分辨率设置。
+	Not confirmed by the printer	打印机未确认
 	Create & Edit	创建和编辑
 	Review & Compare	审阅和比较
 	Forms & Signatures	表单和签名

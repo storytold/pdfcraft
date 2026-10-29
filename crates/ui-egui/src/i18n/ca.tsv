@@ -2798,6 +2798,54 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	Impressora de xarxa (WS-Print)
+	Printer address:	Adreça de la impressora:
+	Query printer	Consulta la impressora
+	Asking the printer…	Consultant la impressora…
+	Printer status: {state}	Estat de la impressora: {state}
+	Reasons: {reasons}	Motius: {reasons}
+	Quality:	Qualitat:
+	Draft	Esborrany
+	Normal	Normal
+	Printer orientation:	Orientació de la impressora:
+	Reverse portrait	Vertical invertit
+	Reverse landscape	Horitzontal invertit
+	I confirm sending this document to this printer	Confirmo l'enviament d'aquest document a aquesta impressora
+	Query the printer first to see what it supports.	Consulta primer la impressora per veure què admet.
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Només s'accepten adreces IP d'aquesta xarxa (privades, d'enllaç local o de bucle local), no noms d'amfitrió.
+	Canceling…	Cancel·lant…
+	The job was canceled	S'ha cancel·lat la feina
+	Printed with warnings	Impresa amb advertiments
+	Printed with errors	Impresa amb errors
+	The printer stopped the job	La impressora ha aturat la feina
+	The printer no longer lists the job; it most likely finished	La impressora ja no mostra la feina; probablement ha acabat
+	Still printing; the job continues on the printer	Encara s'imprimeix; la feina continua a la impressora
+	The printer address was refused	S'ha rebutjat l'adreça de la impressora
+	Couldn't reach the printer	No s'ha pogut contactar amb la impressora
+	The printer's reply couldn't be understood	No s'ha entès la resposta de la impressora
+	The printer refused the request	La impressora ha rebutjat la sol·licitud
+	The printer accepts none of the formats this document can be sent in	La impressora no accepta cap dels formats en què es pot enviar aquest document
+	The printer doesn't support this setting	La impressora no admet aquesta opció
+	The document couldn't be prepared	No s'ha pogut preparar el document
+	A setting isn't valid	Una opció no és vàlida
+	The print job stopped unexpectedly	La feina d'impressió s'ha aturat de manera inesperada
+	Sheets printed: {n}	Fulls impresos: {n}
+	Accepted by {printer}	Acceptada per {printer}
+	Waiting in the printer's queue	Esperant a la cua de la impressora
+	Held by the printer	Retinguda per la impressora
+	The printer is printing it	La impressora l'està imprimint
+	The printer paused the job; it needs attention	La impressora ha posat la feina en pausa; necessita atenció
+	Sheets printed: {done} of {total}	Fulls impresos: {done} de {total}
+	Sent. The printer can't say whether it printed.	Enviat. La impressora no pot dir si ha imprès.
+	The printer may have received the document. Check the printer before sending again.	És possible que la impressora hagi rebut el document. Comprova la impressora abans de tornar a enviar.
+	This printer does not take a copies setting.	Aquesta impressora no admet l'opció de còpies.
+	This printer only prints one-sided.	Aquesta impressora només imprimeix a una cara.
+	This printer does not take an orientation setting.	Aquesta impressora no admet l'opció d'orientació.
+	This printer does not take a quality setting.	Aquesta impressora no admet l'opció de qualitat.
+	This printer only prints in black and white.	Aquesta impressora només imprimeix en blanc i negre.
+	This printer does not take a resolution setting.	Aquesta impressora no admet l'opció de resolució.
+	Not confirmed by the printer	La impressora no ho ha confirmat
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui

@@ -2807,6 +2807,54 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	Verkkotulostin (WS-Print)
+	Printer address:	Tulostimen osoite:
+	Query printer	Kysy tulostimelta
+	Asking the printer…	Kysytään tulostimelta…
+	Printer status: {state}	Tulostimen tila: {state}
+	Reasons: {reasons}	Syyt: {reasons}
+	Quality:	Laatu:
+	Draft	Luonnos
+	Normal	Normaali
+	Printer orientation:	Tulostimen suunta:
+	Reverse portrait	Käänteinen pysty
+	Reverse landscape	Käänteinen vaaka
+	I confirm sending this document to this printer	Vahvistan tämän asiakirjan lähettämisen tälle tulostimelle
+	Query the printer first to see what it supports.	Kysy ensin tulostimelta, mitä se tukee.
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Vain tämän verkon IP-osoitteet hyväksytään (yksityiset, linkkipaikalliset tai loopback), ei isäntänimiä.
+	Canceling…	Perutaan…
+	The job was canceled	Työ peruttiin
+	Printed with warnings	Tulostettu varoituksin
+	Printed with errors	Tulostettu virheillä
+	The printer stopped the job	Tulostin keskeytti työn
+	The printer no longer lists the job; it most likely finished	Tulostin ei enää listaa työtä; se on todennäköisesti valmis
+	Still printing; the job continues on the printer	Tulostus on yhä kesken; työ jatkuu tulostimessa
+	The printer address was refused	Tulostimen osoite hylättiin
+	Couldn't reach the printer	Tulostimeen ei saatu yhteyttä
+	The printer's reply couldn't be understood	Tulostimen vastausta ei ymmärretty
+	The printer refused the request	Tulostin hylkäsi pyynnön
+	The printer accepts none of the formats this document can be sent in	Tulostin ei hyväksy yhtään muotoa, jossa tämä asiakirja voidaan lähettää
+	The printer doesn't support this setting	Tulostin ei tue tätä asetusta
+	The document couldn't be prepared	Asiakirjaa ei voitu valmistella
+	A setting isn't valid	Asetus ei kelpaa
+	The print job stopped unexpectedly	Tulostustyö pysähtyi odottamatta
+	Sheets printed: {n}	Tulostetut arkit: {n}
+	Accepted by {printer}	{printer} hyväksyi työn
+	Waiting in the printer's queue	Odottaa tulostimen jonossa
+	Held by the printer	Tulostin pitää työtä pidossa
+	The printer is printing it	Tulostin tulostaa sitä
+	The printer paused the job; it needs attention	Tulostin keskeytti työn; se tarvitsee huomiota
+	Sheets printed: {done} of {total}	Tulostetut arkit: {done} / {total}
+	Sent. The printer can't say whether it printed.	Lähetetty. Tulostin ei voi kertoa, tulostuiko se.
+	The printer may have received the document. Check the printer before sending again.	Tulostin on saattanut vastaanottaa asiakirjan. Tarkista tulostin, ennen kuin lähetät uudelleen.
+	This printer does not take a copies setting.	Tämä tulostin ei tue kopiomäärän asetusta.
+	This printer only prints one-sided.	Tämä tulostin tulostaa vain yksipuolisesti.
+	This printer does not take an orientation setting.	Tämä tulostin ei tue suunta-asetusta.
+	This printer does not take a quality setting.	Tämä tulostin ei tue laatuasetusta.
+	This printer only prints in black and white.	Tämä tulostin tulostaa vain mustavalkoisena.
+	This printer does not take a resolution setting.	Tämä tulostin ei tue tarkkuusasetusta.
+	Not confirmed by the printer	Tulostin ei vahvistanut
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään

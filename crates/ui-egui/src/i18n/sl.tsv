@@ -2503,6 +2503,54 @@ animation effects	Off	Izklopljeni
 	Make properties default	Nastavi lastnosti kot privzete
 	Pages selected	Izbrane strani
 	Page properties	Lastnosti strani
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	Omrežni tiskalnik (WS-Print)
+	Printer address:	Naslov tiskalnika:
+	Query printer	Povprašaj tiskalnik
+	Asking the printer…	Povpraševanje tiskalnika…
+	Printer status: {state}	Stanje tiskalnika: {state}
+	Reasons: {reasons}	Razlogi: {reasons}
+	Quality:	Kakovost:
+	Draft	Osnutek
+	Normal	Običajna
+	Printer orientation:	Usmerjenost tiskalnika:
+	Reverse portrait	Pokončno, obrnjeno
+	Reverse landscape	Ležeče, obrnjeno
+	I confirm sending this document to this printer	Potrjujem pošiljanje tega dokumenta v ta tiskalnik
+	Query the printer first to see what it supports.	Najprej povprašajte tiskalnik, da vidite, kaj podpira.
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Sprejeti so le naslovi IP tega omrežja (zasebni, link-local ali povratna zanka), ne imena gostiteljev.
+	Canceling…	Preklic…
+	The job was canceled	Opravilo je preklicano
+	Printed with warnings	Natisnjeno z opozorili
+	Printed with errors	Natisnjeno z napakami
+	The printer stopped the job	Tiskalnik je ustavil opravilo
+	The printer no longer lists the job; it most likely finished	Tiskalnik opravila ne navaja več; verjetno je končano
+	Still printing; the job continues on the printer	Tiskanje še poteka; opravilo se nadaljuje v tiskalniku
+	The printer address was refused	Naslov tiskalnika je bil zavrnjen
+	Couldn't reach the printer	Tiskalnika ni bilo mogoče doseči
+	The printer's reply couldn't be understood	Odgovora tiskalnika ni bilo mogoče razumeti
+	The printer refused the request	Tiskalnik je zavrnil zahtevo
+	The printer accepts none of the formats this document can be sent in	Tiskalnik ne sprejme nobene od oblik, v katerih je mogoče poslati ta dokument
+	The printer doesn't support this setting	Tiskalnik te nastavitve ne podpira
+	The document couldn't be prepared	Dokumenta ni bilo mogoče pripraviti
+	A setting isn't valid	Nastavitev ni veljavna
+	The print job stopped unexpectedly	Tiskarsko opravilo se je nepričakovano ustavilo
+	Sheets printed: {n}	Natisnjeni listi: {n}
+	Accepted by {printer}	Sprejel tiskalnik {printer}
+	Waiting in the printer's queue	Čaka v vrsti tiskalnika
+	Held by the printer	Tiskalnik ga zadržuje
+	The printer is printing it	Tiskalnik ga tiska
+	The printer paused the job; it needs attention	Tiskalnik je opravilo začasno ustavil; potrebuje pozornost
+	Sheets printed: {done} of {total}	Natisnjeni listi: {done} od {total}
+	Sent. The printer can't say whether it printed.	Poslano. Tiskalnik ne more povedati, ali je natisnil.
+	The printer may have received the document. Check the printer before sending again.	Tiskalnik je dokument morda prejel. Preden ga pošljete znova, preverite tiskalnik.
+	This printer does not take a copies setting.	Ta tiskalnik ne podpira nastavitve števila kopij.
+	This printer only prints one-sided.	Ta tiskalnik tiska samo enostransko.
+	This printer does not take an orientation setting.	Ta tiskalnik ne podpira nastavitve usmerjenosti.
+	This printer does not take a quality setting.	Ta tiskalnik ne podpira nastavitve kakovosti.
+	This printer only prints in black and white.	Ta tiskalnik tiska samo črno-belo.
+	This printer does not take a resolution setting.	Ta tiskalnik ne podpira nastavitve ločljivosti.
+	Not confirmed by the printer	Tiskalnik tega ni potrdil
 	Create & Edit	Ustvarjanje in urejanje
 	Review & Compare	Pregled in primerjava
 	Forms & Signatures	Obrazci in podpisi

@@ -2494,6 +2494,54 @@ animation effects	Off	Kapalı
 	Make properties default	Özellikleri varsayılan yap
 	Pages selected	Seçilen sayfalar
 	Page properties	Sayfa özellikleri
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	Ağ yazıcısı (WS-Print)
+	Printer address:	Yazıcı adresi:
+	Query printer	Yazıcıyı sorgula
+	Asking the printer…	Yazıcıya soruluyor…
+	Printer status: {state}	Yazıcı durumu: {state}
+	Reasons: {reasons}	Nedenler: {reasons}
+	Quality:	Kalite:
+	Draft	Taslak
+	Normal	Standart
+	Printer orientation:	Yazıcı yönü:
+	Reverse portrait	Dikey, ters
+	Reverse landscape	Yatay, ters
+	I confirm sending this document to this printer	Bu belgenin bu yazıcıya gönderilmesini onaylıyorum
+	Query the printer first to see what it supports.	Neleri desteklediğini görmek için önce yazıcıyı sorgulayın.
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Yalnızca bu ağdaki IP adresleri kabul edilir (özel, bağlantı yerel veya geri döngü); ana bilgisayar adları kabul edilmez.
+	Canceling…	İptal ediliyor…
+	The job was canceled	İş iptal edildi
+	Printed with warnings	Uyarılarla yazdırıldı
+	Printed with errors	Hatalarla yazdırıldı
+	The printer stopped the job	Yazıcı işi durdurdu
+	The printer no longer lists the job; it most likely finished	Yazıcı işi artık listelemiyor; büyük olasılıkla tamamlandı
+	Still printing; the job continues on the printer	Yazdırma sürüyor; iş yazıcıda devam ediyor
+	The printer address was refused	Yazıcı adresi reddedildi
+	Couldn't reach the printer	Yazıcıya ulaşılamadı
+	The printer's reply couldn't be understood	Yazıcının yanıtı anlaşılamadı
+	The printer refused the request	Yazıcı isteği reddetti
+	The printer accepts none of the formats this document can be sent in	Yazıcı, bu belgenin gönderilebileceği biçimlerin hiçbirini kabul etmiyor
+	The printer doesn't support this setting	Yazıcı bu ayarı desteklemiyor
+	The document couldn't be prepared	Belge hazırlanamadı
+	A setting isn't valid	Bir ayar geçerli değil
+	The print job stopped unexpectedly	Yazdırma işi beklenmedik şekilde durdu
+	Sheets printed: {n}	Yazdırılan sayfalar: {n}
+	Accepted by {printer}	{printer} kabul etti
+	Waiting in the printer's queue	Yazıcının sırasında bekliyor
+	Held by the printer	Yazıcı tarafından bekletiliyor
+	The printer is printing it	Yazıcı bunu yazdırıyor
+	The printer paused the job; it needs attention	Yazıcı işi duraklattı; ilgi gerekiyor
+	Sheets printed: {done} of {total}	Yazdırılan sayfalar: {done} / {total}
+	Sent. The printer can't say whether it printed.	Gönderildi. Yazıcı yazdırıp yazdırmadığını söyleyemiyor.
+	The printer may have received the document. Check the printer before sending again.	Yazıcı belgeyi almış olabilir. Yeniden göndermeden önce yazıcıyı kontrol edin.
+	This printer does not take a copies setting.	Bu yazıcı kopya sayısı ayarını desteklemiyor.
+	This printer only prints one-sided.	Bu yazıcı yalnızca tek yüze yazdırır.
+	This printer does not take an orientation setting.	Bu yazıcı yön ayarını desteklemiyor.
+	This printer does not take a quality setting.	Bu yazıcı kalite ayarını desteklemiyor.
+	This printer only prints in black and white.	Bu yazıcı yalnızca siyah beyaz yazdırır.
+	This printer does not take a resolution setting.	Bu yazıcı çözünürlük ayarını desteklemiyor.
+	Not confirmed by the printer	Yazıcı tarafından doğrulanmadı
 	Create & Edit	Oluştur ve Düzenle
 	Review & Compare	İncele ve Karşılaştır
 	Forms & Signatures	Formlar ve İmzalar

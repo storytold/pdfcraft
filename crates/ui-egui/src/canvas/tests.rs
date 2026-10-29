@@ -1472,6 +1472,46 @@ fn suspended_signature_preview_releases_layers_and_rebuilds_without_editing() {
 }
 
 #[test]
+fn print_preview_colour_mode_follows_the_grayscale_flag() {
+    let ctx = egui::Context::default();
+    let mut view = view(1, PageLayout::Single, true);
+    let texture = |name| ctx.load_texture(name, egui::ColorImage::filled([1, 1], Color32::WHITE), TextureOptions::LINEAR);
+    let tags = |v: &mut DocView| {
+        let q = std::mem::take(&mut v.frame_queue);
+        q.iter().map(|r| r.tag).collect::<Vec<_>>()
+    };
+    // Colour: the request must not carry the gray bit (it once collided with PRINT_TAG).
+    view.set_print_grayscale(false);
+    view.queue_print_previews(&[(0, 1.0)]);
+    let t = tags(&mut view);
+    assert_eq!(t.len(), 1);
+    assert_eq!(t[0] & GRAYSCALE_TAG, 0, "colour preview requested as gray");
+    let colour_tag = t[0];
+    view.print_pages.insert(0, (colour_tag, texture("colour")));
+    let colour_id = view.page_preview(0);
+    assert!(colour_id.is_some());
+    view.queue_print_previews(&[(0, 1.0)]);
+    assert!(tags(&mut view).is_empty(), "a fresh colour raster is not re-requested");
+    // Toggle to gray: nothing colour is shown, a gray request is queued.
+    view.set_print_grayscale(true);
+    assert!(view.page_preview(0).is_none(), "colour must not show while gray is wanted");
+    view.queue_print_previews(&[(0, 1.0)]);
+    let t = tags(&mut view);
+    assert_eq!(t.len(), 1);
+    assert_ne!(t[0] & GRAYSCALE_TAG, 0);
+    // A late colour result is ignored for display; the gray one is shown.
+    view.print_pages.insert(0, (colour_tag, texture("late-colour")));
+    assert!(view.page_preview(0).is_none());
+    view.print_pages.insert(0, (t[0], texture("gray")));
+    assert!(view.page_preview(0).is_some());
+    // And back to colour.
+    view.set_print_grayscale(false);
+    assert!(view.page_preview(0).is_none() || view.thumb_id(0).is_some());
+    view.queue_print_previews(&[(0, 1.0)]);
+    assert_eq!(tags(&mut view)[0] & GRAYSCALE_TAG, 0);
+}
+
+#[test]
 fn suspending_a_view_releases_owned_raster_textures_and_queue_state() {
     let ctx = egui::Context::default();
     let mut view = view(2, PageLayout::Single, true);

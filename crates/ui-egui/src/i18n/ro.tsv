@@ -2798,6 +2798,54 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	Imprimantă de rețea (WS-Print)
+	Printer address:	Adresa imprimantei:
+	Query printer	Interoghează imprimanta
+	Asking the printer…	Se interoghează imprimanta…
+	Printer status: {state}	Starea imprimantei: {state}
+	Reasons: {reasons}	Motive: {reasons}
+	Quality:	Calitate:
+	Draft	Ciornă
+	Normal	Normală
+	Printer orientation:	Orientarea imprimantei:
+	Reverse portrait	Portret inversat
+	Reverse landscape	Peisaj inversat
+	I confirm sending this document to this printer	Confirm trimiterea acestui document la această imprimantă
+	Query the printer first to see what it supports.	Interoghează mai întâi imprimanta pentru a vedea ce acceptă.
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Sunt acceptate doar adrese IP din această rețea (private, link-local sau loopback), nu nume de gazdă.
+	Canceling…	Se anulează…
+	The job was canceled	Lucrarea a fost anulată
+	Printed with warnings	Tipărit cu avertismente
+	Printed with errors	Tipărit cu erori
+	The printer stopped the job	Imprimanta a oprit lucrarea
+	The printer no longer lists the job; it most likely finished	Imprimanta nu mai listează lucrarea; cel mai probabil s-a terminat
+	Still printing; the job continues on the printer	Încă se tipărește; lucrarea continuă pe imprimantă
+	The printer address was refused	Adresa imprimantei a fost refuzată
+	Couldn't reach the printer	Imprimanta nu a putut fi contactată
+	The printer's reply couldn't be understood	Răspunsul imprimantei nu a putut fi înțeles
+	The printer refused the request	Imprimanta a refuzat cererea
+	The printer accepts none of the formats this document can be sent in	Imprimanta nu acceptă niciunul dintre formatele în care poate fi trimis acest document
+	The printer doesn't support this setting	Imprimanta nu acceptă această setare
+	The document couldn't be prepared	Documentul nu a putut fi pregătit
+	A setting isn't valid	O setare nu este validă
+	The print job stopped unexpectedly	Lucrarea de tipărire s-a oprit neașteptat
+	Sheets printed: {n}	Coli tipărite: {n}
+	Accepted by {printer}	Acceptată de {printer}
+	Waiting in the printer's queue	În așteptare în coada imprimantei
+	Held by the printer	Reținută de imprimantă
+	The printer is printing it	Imprimanta o tipărește
+	The printer paused the job; it needs attention	Imprimanta a pus lucrarea în pauză; are nevoie de atenție
+	Sheets printed: {done} of {total}	Coli tipărite: {done} din {total}
+	Sent. The printer can't say whether it printed.	Trimis. Imprimanta nu poate spune dacă a tipărit.
+	The printer may have received the document. Check the printer before sending again.	Este posibil ca imprimanta să fi primit documentul. Verifică imprimanta înainte de a trimite din nou.
+	This printer does not take a copies setting.	Această imprimantă nu acceptă setarea numărului de copii.
+	This printer only prints one-sided.	Această imprimantă tipărește doar pe o singură față.
+	This printer does not take an orientation setting.	Această imprimantă nu acceptă setarea orientării.
+	This printer does not take a quality setting.	Această imprimantă nu acceptă setarea calității.
+	This printer only prints in black and white.	Această imprimantă tipărește doar alb-negru.
+	This printer does not take a resolution setting.	Această imprimantă nu acceptă setarea rezoluției.
+	Not confirmed by the printer	Neconfirmat de imprimantă
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi

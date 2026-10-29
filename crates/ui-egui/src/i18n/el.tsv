@@ -2504,6 +2504,54 @@ animation effects	Off	Ανενεργά
 	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
 	Pages selected	Επιλεγμένες σελίδες
 	Page properties	Ιδιότητες σελίδας
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	Δικτυακός εκτυπωτής (WS-Print)
+	Printer address:	Διεύθυνση εκτυπωτή:
+	Query printer	Ερώτημα στον εκτυπωτή
+	Asking the printer…	Ερώτημα στον εκτυπωτή…
+	Printer status: {state}	Κατάσταση εκτυπωτή: {state}
+	Reasons: {reasons}	Λόγοι: {reasons}
+	Quality:	Ποιότητα:
+	Draft	Πρόχειρο
+	Normal	Κανονική
+	Printer orientation:	Προσανατολισμός εκτυπωτή:
+	Reverse portrait	Κατακόρυφος, ανεστραμμένος
+	Reverse landscape	Οριζόντιος, ανεστραμμένος
+	I confirm sending this document to this printer	Επιβεβαιώνω την αποστολή αυτού του εγγράφου σε αυτόν τον εκτυπωτή
+	Query the printer first to see what it supports.	Ρωτήστε πρώτα τον εκτυπωτή για να δείτε τι υποστηρίζει.
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Γίνονται δεκτές μόνο διευθύνσεις IP αυτού του δικτύου (ιδιωτικές, τοπικής σύνδεσης ή loopback), όχι ονόματα υπολογιστών.
+	Canceling…	Ακύρωση…
+	The job was canceled	Η εργασία ακυρώθηκε
+	Printed with warnings	Εκτυπώθηκε με προειδοποιήσεις
+	Printed with errors	Εκτυπώθηκε με σφάλματα
+	The printer stopped the job	Ο εκτυπωτής σταμάτησε την εργασία
+	The printer no longer lists the job; it most likely finished	Ο εκτυπωτής δεν εμφανίζει πια την εργασία· πιθανότατα ολοκληρώθηκε
+	Still printing; the job continues on the printer	Η εκτύπωση συνεχίζεται· η εργασία συνεχίζεται στον εκτυπωτή
+	The printer address was refused	Η διεύθυνση του εκτυπωτή απορρίφθηκε
+	Couldn't reach the printer	Δεν ήταν δυνατή η επικοινωνία με τον εκτυπωτή
+	The printer's reply couldn't be understood	Η απάντηση του εκτυπωτή δεν έγινε κατανοητή
+	The printer refused the request	Ο εκτυπωτής απέρριψε το αίτημα
+	The printer accepts none of the formats this document can be sent in	Ο εκτυπωτής δεν δέχεται κανέναν από τους τύπους με τους οποίους μπορεί να σταλεί αυτό το έγγραφο
+	The printer doesn't support this setting	Ο εκτυπωτής δεν υποστηρίζει αυτή τη ρύθμιση
+	The document couldn't be prepared	Δεν ήταν δυνατή η προετοιμασία του εγγράφου
+	A setting isn't valid	Μια ρύθμιση δεν είναι έγκυρη
+	The print job stopped unexpectedly	Η εργασία εκτύπωσης σταμάτησε απροσδόκητα
+	Sheets printed: {n}	Φύλλα που εκτυπώθηκαν: {n}
+	Accepted by {printer}	Έγινε αποδεκτό από τον εκτυπωτή {printer}
+	Waiting in the printer's queue	Αναμονή στην ουρά του εκτυπωτή
+	Held by the printer	Σε αναμονή από τον εκτυπωτή
+	The printer is printing it	Ο εκτυπωτής την εκτυπώνει
+	The printer paused the job; it needs attention	Ο εκτυπωτής διέκοψε προσωρινά την εργασία· χρειάζεται προσοχή
+	Sheets printed: {done} of {total}	Φύλλα που εκτυπώθηκαν: {done} από {total}
+	Sent. The printer can't say whether it printed.	Εστάλη. Ο εκτυπωτής δεν μπορεί να πει αν εκτυπώθηκε.
+	The printer may have received the document. Check the printer before sending again.	Ο εκτυπωτής μπορεί να έλαβε το έγγραφο. Ελέγξτε τον εκτυπωτή πριν το στείλετε ξανά.
+	This printer does not take a copies setting.	Αυτός ο εκτυπωτής δεν υποστηρίζει ρύθμιση αριθμού αντιγράφων.
+	This printer only prints one-sided.	Αυτός ο εκτυπωτής εκτυπώνει μόνο στη μία όψη.
+	This printer does not take an orientation setting.	Αυτός ο εκτυπωτής δεν υποστηρίζει ρύθμιση προσανατολισμού.
+	This printer does not take a quality setting.	Αυτός ο εκτυπωτής δεν υποστηρίζει ρύθμιση ποιότητας.
+	This printer only prints in black and white.	Αυτός ο εκτυπωτής εκτυπώνει μόνο σε ασπρόμαυρο.
+	This printer does not take a resolution setting.	Αυτός ο εκτυπωτής δεν υποστηρίζει ρύθμιση ανάλυσης.
+	Not confirmed by the printer	Δεν επιβεβαιώνεται από τον εκτυπωτή
 	Create & Edit	Δημιουργία και επεξεργασία
 	Review & Compare	Αναθεώρηση και σύγκριση
 	Forms & Signatures	Φόρμες και υπογραφές

@@ -13,14 +13,19 @@ repository = "https://github.com/storytold/pdfcraft"
 
 [workspace.dependencies]
 # Shared frontend components; engines remain independent of egui.
-craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545", features = ["serde"] }
+# The pin follows craft-libs#112 (the shared capability widget, `printing::network` for the
+# network-printer destination, and the `scanning` component) until it merges; then pin an immutable revision.
+craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "refs/pull/112/head", features = ["serde"] }
 # Quit the macOS way (#1136): ⌘Q asks about unsaved changes, and closing quits through `terminate:`.
 craft-quit = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545" }
 # One menu definition for the native macOS menu bar and the in-window bar elsewhere.
 craft-menu = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545" }
 craft-keymap = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545", default-features = false }
-# Shared system spooler; document composition remains in pdfcraft-print.
-craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545" }
+# Shared print backends and registry; document composition remains in pdfcraft-print. The pin follows
+# craft-libs#116 (the print backend and registry, WS-Print, tracked jobs, IPP; it carries the craft-wsd core
+# of #113 and craft-job of #120) until those merge; then pin an immutable revision. The `wsd` feature is
+# chosen by pdfcraft-print's `network-print` feature, so a build without it has the spooler only.
+craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "refs/pull/116/head", default-features = false }
 # Whether a path stored in a document may be opened (GoToR link targets).
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545" }
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545", features = ["egui"] }

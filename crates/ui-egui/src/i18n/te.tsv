@@ -2407,6 +2407,54 @@ animation effects	Off	ఆఫ్
 	Make properties default	లక్షణాలను డిఫాల్ట్‌గా చేయి
 	Pages selected	ఎంచుకున్న పేజీలు
 	Page properties	పేజీ లక్షణాలు
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	నెట్‌వర్క్ ప్రింటర్ (WS-Print)
+	Printer address:	ప్రింటర్ చిరునామా:
+	Query printer	ప్రింటర్‌ను అడగండి
+	Asking the printer…	ప్రింటర్‌ను అడుగుతోంది…
+	Printer status: {state}	ప్రింటర్ స్థితి: {state}
+	Reasons: {reasons}	కారణాలు: {reasons}
+	Quality:	నాణ్యత:
+	Draft	డ్రాఫ్ట్
+	Normal	సాధారణం
+	Printer orientation:	ప్రింటర్ దిశ:
+	Reverse portrait	పోర్ట్రెయిట్, తిరగబడినది
+	Reverse landscape	ల్యాండ్‌స్కేప్, తిరగబడినది
+	I confirm sending this document to this printer	ఈ పత్రాన్ని ఈ ప్రింటర్‌కు పంపడాన్ని నేను నిర్ధారిస్తున్నాను
+	Query the printer first to see what it supports.	అది ఏమి మద్దతిస్తుందో చూడటానికి ముందుగా ప్రింటర్‌ను అడగండి.
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	ఈ నెట్‌వర్క్‌లోని IP చిరునామాలు మాత్రమే (ప్రైవేట్, లింక్-లోకల్ లేదా లూప్‌బ్యాక్) అంగీకరించబడతాయి, హోస్ట్ పేర్లు కాదు.
+	Canceling…	రద్దు చేస్తోంది…
+	The job was canceled	జాబ్ రద్దు చేయబడింది
+	Printed with warnings	హెచ్చరికలతో ముద్రించబడింది
+	Printed with errors	లోపాలతో ముద్రించబడింది
+	The printer stopped the job	ప్రింటర్ జాబ్‌ను ఆపివేసింది
+	The printer no longer lists the job; it most likely finished	ప్రింటర్ ఇకపై జాబ్‌ను చూపడం లేదు; అది బహుశా పూర్తయి ఉండవచ్చు
+	Still printing; the job continues on the printer	ఇంకా ముద్రణ జరుగుతోంది; జాబ్ ప్రింటర్‌లో కొనసాగుతోంది
+	The printer address was refused	ప్రింటర్ చిరునామా తిరస్కరించబడింది
+	Couldn't reach the printer	ప్రింటర్‌ను చేరుకోలేకపోయింది
+	The printer's reply couldn't be understood	ప్రింటర్ ప్రత్యుత్తరం అర్థం కాలేదు
+	The printer refused the request	ప్రింటర్ అభ్యర్థనను తిరస్కరించింది
+	The printer accepts none of the formats this document can be sent in	ఈ పత్రాన్ని పంపగల ఫార్మాట్‌లలో ఏదీ ప్రింటర్ అంగీకరించదు
+	The printer doesn't support this setting	ప్రింటర్ ఈ సెట్టింగ్‌కు మద్దతివ్వదు
+	The document couldn't be prepared	పత్రాన్ని సిద్ధం చేయలేకపోయింది
+	A setting isn't valid	ఒక సెట్టింగ్ చెల్లదు
+	The print job stopped unexpectedly	ప్రింట్ జాబ్ అనుకోకుండా ఆగిపోయింది
+	Sheets printed: {n}	ముద్రించిన షీట్‌లు: {n}
+	Accepted by {printer}	{printer} అంగీకరించింది
+	Waiting in the printer's queue	ప్రింటర్ క్యూలో వేచి ఉంది
+	Held by the printer	ప్రింటర్ నిలిపి ఉంచింది
+	The printer is printing it	ప్రింటర్ దీన్ని ముద్రిస్తోంది
+	The printer paused the job; it needs attention	ప్రింటర్ జాబ్‌ను తాత్కాలికంగా ఆపింది; దీనికి శ్రద్ధ అవసరం
+	Sheets printed: {done} of {total}	ముద్రించిన షీట్‌లు: {done}/{total}
+	Sent. The printer can't say whether it printed.	పంపబడింది. ముద్రించిందో లేదో ప్రింటర్ చెప్పలేదు.
+	The printer may have received the document. Check the printer before sending again.	ప్రింటర్ పత్రాన్ని అందుకుని ఉండవచ్చు. మళ్లీ పంపే ముందు ప్రింటర్‌ను తనిఖీ చేయండి.
+	This printer does not take a copies setting.	ఈ ప్రింటర్ కాపీల సంఖ్య సెట్టింగ్‌ను అంగీకరించదు.
+	This printer only prints one-sided.	ఈ ప్రింటర్ ఒకవైపు మాత్రమే ప్రింట్ చేస్తుంది.
+	This printer does not take an orientation setting.	ఈ ప్రింటర్ ఓరియంటేషన్ సెట్టింగ్‌ను అంగీకరించదు.
+	This printer does not take a quality setting.	ఈ ప్రింటర్ నాణ్యత సెట్టింగ్‌ను అంగీకరించదు.
+	This printer only prints in black and white.	ఈ ప్రింటర్ నలుపు-తెలుపులో మాత్రమే ప్రింట్ చేస్తుంది.
+	This printer does not take a resolution setting.	ఈ ప్రింటర్ రిజల్యూషన్ సెట్టింగ్‌ను అంగీకరించదు.
+	Not confirmed by the printer	ప్రింటర్ నిర్ధారించలేదు
 	Create & Edit	సృష్టించు & సవరించు
 	Review & Compare	సమీక్షించు & పోల్చు
 	Forms & Signatures	ఫారమ్‌లు & సంతకాలు

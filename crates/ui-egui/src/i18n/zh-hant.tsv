@@ -2448,6 +2448,54 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	網路印表機 (WS-Print)
+	Printer address:	印表機位址：
+	Query printer	查詢印表機
+	Asking the printer…	正在查詢印表機…
+	Printer status: {state}	印表機狀態：{state}
+	Reasons: {reasons}	原因：{reasons}
+	Quality:	品質：
+	Draft	草稿
+	Normal	標準
+	Printer orientation:	印表機方向：
+	Reverse portrait	縱向（反向）
+	Reverse landscape	橫向（反向）
+	I confirm sending this document to this printer	我確認將此文件傳送到這台印表機
+	Query the printer first to see what it supports.	請先查詢印表機，了解它支援哪些功能。
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	只接受本網路內的 IP 位址（私人、連結本機或回送位址），不接受主機名稱。
+	Canceling…	正在取消…
+	The job was canceled	工作已取消
+	Printed with warnings	已列印，有警告
+	Printed with errors	已列印，有錯誤
+	The printer stopped the job	印表機已停止工作
+	The printer no longer lists the job; it most likely finished	印表機不再列出該工作；很可能已完成
+	Still printing; the job continues on the printer	仍在列印；工作會在印表機上繼續
+	The printer address was refused	印表機位址遭拒絕
+	Couldn't reach the printer	無法連線到印表機
+	The printer's reply couldn't be understood	無法理解印表機的回覆
+	The printer refused the request	印表機拒絕了要求
+	The printer accepts none of the formats this document can be sent in	印表機不接受此文件可傳送的任何格式
+	The printer doesn't support this setting	印表機不支援此設定
+	The document couldn't be prepared	無法準備文件
+	A setting isn't valid	某項設定無效
+	The print job stopped unexpectedly	列印工作意外停止
+	Sheets printed: {n}	已列印張數：{n}
+	Accepted by {printer}	已被 {printer} 接受
+	Waiting in the printer's queue	正在印表機佇列中等候
+	Held by the printer	已被印表機保留
+	The printer is printing it	印表機正在列印
+	The printer paused the job; it needs attention	印表機已暫停工作；需要處理
+	Sheets printed: {done} of {total}	已列印張數：{done}/{total}
+	Sent. The printer can't say whether it printed.	已傳送。印表機無法說明是否已列印。
+	The printer may have received the document. Check the printer before sending again.	印表機可能已收到文件。再次傳送之前，請先檢查印表機。
+	This printer does not take a copies setting.	此印表機不支援份數設定。
+	This printer only prints one-sided.	此印表機僅支援單面列印。
+	This printer does not take an orientation setting.	此印表機不支援方向設定。
+	This printer does not take a quality setting.	此印表機不支援品質設定。
+	This printer only prints in black and white.	此印表機僅支援黑白列印。
+	This printer does not take a resolution setting.	此印表機不支援解析度設定。
+	Not confirmed by the printer	印表機未確認
 	Create & Edit	建立與編輯
 	Review & Compare	審閱與比較
 	Forms & Signatures	表單與簽名

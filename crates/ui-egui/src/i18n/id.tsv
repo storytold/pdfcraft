@@ -2775,6 +2775,54 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+# Network printer destination in Print (WS-Print). MACHINE-DRAFTED rows: need review by a native speaker.
+	Network printer (WS-Print)	Printer jaringan (WS-Print)
+	Printer address:	Alamat printer:
+	Query printer	Tanya printer
+	Asking the printer…	Menanyai printer…
+	Printer status: {state}	Status printer: {state}
+	Reasons: {reasons}	Alasan: {reasons}
+	Quality:	Kualitas:
+	Draft	Draf
+	Normal	Normal
+	Printer orientation:	Orientasi printer:
+	Reverse portrait	Potret terbalik
+	Reverse landscape	Lanskap terbalik
+	I confirm sending this document to this printer	Saya mengonfirmasi pengiriman dokumen ini ke printer ini
+	Query the printer first to see what it supports.	Tanyai printer terlebih dahulu untuk melihat apa yang didukungnya.
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Hanya alamat IP di jaringan ini yang diterima (privat, link-local, atau loopback), bukan nama host.
+	Canceling…	Membatalkan…
+	The job was canceled	Pekerjaan dibatalkan
+	Printed with warnings	Dicetak dengan peringatan
+	Printed with errors	Dicetak dengan kesalahan
+	The printer stopped the job	Printer menghentikan pekerjaan
+	The printer no longer lists the job; it most likely finished	Printer tidak lagi mencantumkan pekerjaan ini; kemungkinan besar sudah selesai
+	Still printing; the job continues on the printer	Masih mencetak; pekerjaan berlanjut di printer
+	The printer address was refused	Alamat printer ditolak
+	Couldn't reach the printer	Tidak dapat menjangkau printer
+	The printer's reply couldn't be understood	Balasan printer tidak dapat dipahami
+	The printer refused the request	Printer menolak permintaan
+	The printer accepts none of the formats this document can be sent in	Printer tidak menerima satu pun format yang dapat digunakan untuk mengirim dokumen ini
+	The printer doesn't support this setting	Printer tidak mendukung pengaturan ini
+	The document couldn't be prepared	Dokumen tidak dapat disiapkan
+	A setting isn't valid	Ada pengaturan yang tidak valid
+	The print job stopped unexpectedly	Pekerjaan cetak berhenti secara tak terduga
+	Sheets printed: {n}	Lembar tercetak: {n}
+	Accepted by {printer}	Diterima oleh {printer}
+	Waiting in the printer's queue	Menunggu dalam antrean printer
+	Held by the printer	Ditahan oleh printer
+	The printer is printing it	Printer sedang mencetaknya
+	The printer paused the job; it needs attention	Printer menjeda pekerjaan; perlu perhatian
+	Sheets printed: {done} of {total}	Lembar tercetak: {done} dari {total}
+	Sent. The printer can't say whether it printed.	Terkirim. Printer tidak dapat memastikan apakah sudah tercetak.
+	The printer may have received the document. Check the printer before sending again.	Printer mungkin sudah menerima dokumen. Periksa printer sebelum mengirim ulang.
+	This printer does not take a copies setting.	Printer ini tidak memiliki pengaturan jumlah salinan.
+	This printer only prints one-sided.	Printer ini hanya mencetak satu sisi.
+	This printer does not take an orientation setting.	Printer ini tidak memiliki pengaturan orientasi.
+	This printer does not take a quality setting.	Printer ini tidak memiliki pengaturan kualitas.
+	This printer only prints in black and white.	Printer ini hanya mencetak hitam-putih.
+	This printer does not take a resolution setting.	Printer ini tidak memiliki pengaturan resolusi.
+	Not confirmed by the printer	Tidak dikonfirmasi oleh printer
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini

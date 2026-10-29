@@ -44,6 +44,8 @@ pub fn system_printers() -> PrinterSource {
 pub(crate) struct PrintTasks {
     #[cfg(not(target_arch = "wasm32"))]
     printers: Option<std::sync::mpsc::Receiver<Vec<spool::Printer>>>,
+    #[cfg(network_print)]
+    pub(crate) net: crate::network_glue::NetTasks,
     #[cfg(not(target_arch = "wasm32"))]
     jobs: Vec<PrintJob>,
     /// The progress card is showing a print job (it is shared with other long jobs).
@@ -171,6 +173,8 @@ impl PdfCraftApp {
             which,
             ..keep
         };
+        #[cfg(network_print)]
+        self.print_tasks.net.state.dialog_opened();
         self.dialog = Some(crate::Dialog::Print);
     }
 
@@ -339,6 +343,8 @@ impl PdfCraftApp {
             for (printer, result) in finished {
                 self.report_print_job(&printer, result);
             }
+            #[cfg(network_print)]
+            self.poll_network();
         }
     }
 
@@ -403,6 +409,8 @@ impl PdfCraftApp {
             }
         };
         let name = doc.name.clone();
+        #[cfg(network_print)]
+        let page_sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
         let bytes = match self.session.print_pdf(id, &settings) {
             Ok(b) => b,
             Err(e) => {
@@ -410,6 +418,19 @@ impl PdfCraftApp {
                 return false;
             }
         };
+        // A network printer: the job runs in the background and the dialog stays open to show it,
+        // so this answers `false` (the dialog is not closed) whether or not it started.
+        #[cfg(network_print)]
+        if self.print_draft.network_dest {
+            let paper = PAPERS[self.print_draft.paper.min(PAPERS.len() - 1)].0;
+            match print::layout(&page_sizes, &settings) {
+                Ok(sheets) => {
+                    self.network_send(&name, bytes, sheets.iter().map(|s| s.size).collect(), paper);
+                }
+                Err(e) => self.notify_error(e),
+            }
+            return false;
+        }
         match self.print_draft.printer.clone() {
             #[cfg(target_arch = "wasm32")]
             Some(printer) if printer == crate::web_print::BROWSER_PRINTER => {
