@@ -2842,3 +2842,4 @@ theme	Appearance	Aparência
 	Rotate the selected pages clockwise	Girar as páginas selecionadas no sentido horário
 	Extract the selected pages…	Extrair as páginas selecionadas…
 	Delete the selected pages	Excluir as páginas selecionadas
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	A fonte da assinatura não pode exibir “{c}” ({code}). Digite com letras latinas, cirílicas ou gregas, ou use “Desenhar” ou “Imagem”.

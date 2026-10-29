@@ -2521,3 +2521,4 @@ animation effects	Off	关
 	Rotate the selected pages clockwise	顺时针旋转所选页面
 	Extract the selected pages…	提取所选页面…
 	Delete the selected pages	删除所选页面
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	签名字体无法显示“{c}”（{code}）。请使用拉丁、西里尔或希腊字母输入，或改用“绘制”或“图像”。

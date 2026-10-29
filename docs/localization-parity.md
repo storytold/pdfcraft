@@ -80,15 +80,17 @@ help/docs polish (catalog and script work are already done), not missing UI stri
 | Romanian | `ro` | 2,798 entries (every current key) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
 | Norwegian Bokmål | `nb` | 2,707 entries | partial; native-speaker terminology review by the contributor ([#1836](https://github.com/storytold/pdfcraft/pull/1836)), not yet line by line | yes |
 | Persian | `fa` | 2,785 entries (all but 13 keys of the current 2,798-key union) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
+| Hebrew | `he` | 474 entries (menus, every command, All tools, Preferences, Fill & Sign) | partial; native speaker (contributor) | yes (Middle East edition) |
 
-**20 other languages** ship (34 catalogs plus English = **35** interface languages in Preferences).
+**21 other languages** ship (35 catalogs plus English = **36** interface languages in Preferences).
 The entry counts without percentages are as of 2026-10-25; they are not percentages of the older 2,143-key snapshot above. Their presence does not imply a detailed linguistic or runtime review.
-Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is shipped here but not by Acrobat.
+Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish. Vietnamese is shipped here but not by Acrobat.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | Hebrew (`he`) catalog: 474 entries (menus, every command, All tools, Preferences, Fill & Sign); right to left through epaint like Arabic; three CLDR plural forms |
 | 2026-10-25 | minor | Arabic current state corrected: catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build still has no Hans face and the release-pinned craft-fonts still has no Telugu face. Scores and estimates unchanged |
 | 2026-10-25 | minor | Added Persian (`fa`, 2,785 entries, all but 13 of the current 2,798-key union); right-to-left like Arabic and Kurdish, with logical entries reordered by egui 0.37's epaint; AI-assisted, not yet native-reviewed |
 | 2026-10-21 | minor | Brazilian Portuguese (`pt-br`) now covers all 2,674 distinct keys in the current catalog union; no help or engine/OS error-detail localization; twelve-language mean still rounds to ≈ 68% |

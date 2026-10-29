@@ -2749,3 +2749,4 @@ certificate	Version	وەشان
 	Rotate the selected pages clockwise	پەڕە هەڵبژێردراوەکان بە ئاڕاستەی میلی کاتژمێر بسوڕێنە
 	Extract the selected pages…	پەڕە هەڵبژێردراوەکان دەربهێنە…
 	Delete the selected pages	پەڕە هەڵبژێردراوەکان بسڕەوە
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	فۆنتی واژۆ ناتوانێت «{c}» ({code}) بکێشێت. بە پیتی لاتینی، سیریلی یان یۆنانی بینووسە، یان «وێنەکێشان» یان «وێنە» بەکاربهێنە.

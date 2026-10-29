@@ -2804,3 +2804,4 @@ theme	Appearance	ظاهر
 	two cells would both be named {name}	دو خانه هر دو با نام {name} نام‌گذاری می‌شوند
 	a field named {name} already exists	فیلدی با نام {name} از قبل وجود دارد
 	Today	امروز
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	قلم امضا نمی‌تواند «{c}» ({code}) را رسم کند. آن را با حروف لاتین، سیریلیک یا یونانی بنویسید، یا از «رسم» یا «تصویر» استفاده کنید.

@@ -2733,3 +2733,4 @@ key	Space	Mellomrom
 	Rotate the selected pages clockwise	Roter de valgte sidene med klokken
 	Extract the selected pages…	Trekk ut de valgte sidene…
 	Delete the selected pages	Slett de valgte sidene
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Signaturskriften kan ikke tegne «{c}» ({code}). Skriv med latinske, kyrilliske eller greske bokstaver, eller bruk Tegn eller Bilde.

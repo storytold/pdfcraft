@@ -2794,3 +2794,4 @@ theme	Appearance	모양
 	Rotate the selected pages clockwise	선택한 페이지를 시계 방향으로 회전
 	Extract the selected pages…	선택한 페이지 추출…
 	Delete the selected pages	선택한 페이지 삭제
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	서명 글꼴은 “{c}”({code})를 그릴 수 없습니다. 라틴, 키릴 또는 그리스 문자로 입력하거나 “그리기” 또는 “이미지”를 사용하세요.

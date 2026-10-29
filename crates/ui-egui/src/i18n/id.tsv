@@ -2795,3 +2795,4 @@ theme	Appearance	Tampilan
 	Rotate the selected pages clockwise	Putar halaman yang dipilih searah jarum jam
 	Extract the selected pages…	Ekstrak halaman yang dipilih…
 	Delete the selected pages	Hapus halaman yang dipilih
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Font tanda tangan tidak dapat menggambar “{c}” ({code}). Ketik dengan huruf Latin, Sirilik, atau Yunani, atau gambar tanda tangan Anda, atau gunakan gambar.

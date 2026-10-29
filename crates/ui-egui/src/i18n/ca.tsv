@@ -2818,3 +2818,4 @@ theme	Appearance	Aspecte
 	Rotate the selected pages clockwise	Gira les pàgines seleccionades en sentit horari
 	Extract the selected pages…	Extreu les pàgines seleccionades…
 	Delete the selected pages	Suprimeix les pàgines seleccionades
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	El tipus de lletra de la signatura no pot dibuixar “{c}” ({code}). Escriviu-lo amb lletres llatines, ciríl·liques o gregues, o feu servir Dibuixa o Imatge.

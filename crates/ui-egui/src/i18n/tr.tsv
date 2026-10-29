@@ -2553,3 +2553,4 @@ animation effects	Off	Kapalı
 	Rotate the selected pages clockwise	Seçili sayfaları saat yönünde döndür
 	Extract the selected pages…	Seçili sayfaları ayıkla…
 	Delete the selected pages	Seçili sayfaları sil
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	İmza yazı tipi “{c}” ({code}) karakterini çizemez. Latin, Kiril veya Yunan harfleriyle yazın ya da “Çiz” veya “Resim” seçeneğini kullanın.

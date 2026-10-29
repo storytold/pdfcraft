@@ -2557,3 +2557,4 @@ animation effects	Off	オフ
 	Rotate the selected pages clockwise	選択したページを時計回りに回転
 	Extract the selected pages…	選択したページを抽出…
 	Delete the selected pages	選択したページを削除
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	署名用フォントでは「{c}」（{code}）を表示できません。ラテン文字、キリル文字、ギリシャ文字で入力するか、「描画」または「画像」を使用してください。

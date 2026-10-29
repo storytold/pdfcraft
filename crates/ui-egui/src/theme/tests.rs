@@ -298,3 +298,36 @@ fn text_is_readable_on_every_surface() {
         }
     }
 }
+
+/// `draws` asks the faces of the proportional family, so an installed Hebrew face counts once it is
+/// in the family, and the embedded faces alone draw Hebrew only with a craft-fonts `Hebr` face.
+#[test]
+fn draws_counts_every_face_of_the_family() {
+    let embedded = font_definitions();
+    assert!(draws(&embedded, "Save as… Ωμέγα Журнал"));
+    assert!(!draws(&embedded, "\u{0378}"), "nothing draws an unassigned code point");
+    assert!(draws(&embedded, " \n"), "white space needs no glyph");
+    assert_eq!(draws(&embedded, "קובץ"), !pdfcraft_fonts::ui_hebrew_fonts().is_empty());
+    let installed = [
+        "/System/Library/Fonts/SFHebrew.ttf",
+        "/System/Library/Fonts/ArialHB.ttc",
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ];
+    let face = installed.iter().filter_map(|path| std::fs::read(path).ok()).find_map(|bytes| {
+        use skrifa::MetadataProvider as _;
+        let index = (0..4).find(|&i| skrifa::FontRef::from_index(&bytes, i).is_ok_and(|f| f.charmap().map('א').is_some()))?;
+        let mut data = egui::FontData::from_owned(bytes);
+        data.index = index;
+        Some(data)
+    });
+    let Some(face) = face else {
+        eprintln!("skipping the installed-face case: no known Hebrew face is installed");
+        return;
+    };
+    let mut with_hebrew = embedded;
+    with_hebrew.font_data.insert("installed-hebrew".to_owned(), std::sync::Arc::new(face));
+    with_hebrew.families.entry(egui::FontFamily::Proportional).or_default().push("installed-hebrew".to_owned());
+    assert!(draws(&with_hebrew, "אבגדהוזחטיךכלםמןנסעףפץצקרשת"));
+}

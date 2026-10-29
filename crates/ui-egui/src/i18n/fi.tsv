@@ -2827,3 +2827,4 @@ theme	Appearance	Teema
 	Rotate the selected pages clockwise	Kierrä valittuja sivuja myötäpäivään
 	Extract the selected pages…	Pura valitut sivut…
 	Delete the selected pages	Poista valitut sivut
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Allekirjoitusfontti ei pysty piirtämään merkkiä ”{c}” ({code}). Kirjoita se latinalaisin, kyrillisin tai kreikkalaisin kirjaimin tai käytä vaihtoehtoa Piirrä tai Kuva.

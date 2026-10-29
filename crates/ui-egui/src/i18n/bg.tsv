@@ -2520,3 +2520,4 @@ animation effects	Off	Изключени
 	Rotate the selected pages clockwise	Завъртане на избраните страници по часовниковата стрелка
 	Extract the selected pages…	Извличане на избраните страници…
 	Delete the selected pages	Изтриване на избраните страници
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Шрифтът на подписа не може да изобрази „{c}“ ({code}). Напишете го с латински, кирилски или гръцки букви или използвайте „Рисуване“ или „Изображение“.

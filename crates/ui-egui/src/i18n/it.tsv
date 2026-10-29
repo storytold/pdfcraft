@@ -2789,3 +2789,4 @@ certificate	SHA-256 digest	Impronta SHA-256
 	Rotate the selected pages clockwise	Ruota le pagine selezionate in senso orario
 	Extract the selected pages…	Estrai le pagine selezionate…
 	Delete the selected pages	Elimina le pagine selezionate
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Il carattere della firma non può visualizzare «{c}» ({code}). Scriverlo in lettere latine, cirilliche o greche, oppure usare «Disegna» o «Immagine».

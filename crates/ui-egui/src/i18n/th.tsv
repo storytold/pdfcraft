@@ -2720,3 +2720,4 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Rotate the selected pages clockwise	หมุนหน้าที่เลือกตามเข็มนาฬิกา
 	Extract the selected pages…	แยกหน้าที่เลือกออก…
 	Delete the selected pages	ลบหน้าที่เลือก
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	แบบอักษรลายเซ็นวาด “{c}” ({code}) ไม่ได้ พิมพ์ด้วยตัวอักษรละติน ซีริลลิก หรือกรีก หรือใช้ “วาด” หรือ “รูปภาพ”

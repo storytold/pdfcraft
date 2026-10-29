@@ -2864,3 +2864,4 @@ certificate	Version	Verze
 	Rotate the selected pages clockwise	Otočit vybrané stránky po směru hodinových ručiček
 	Extract the selected pages…	Extrahovat vybrané stránky…
 	Delete the selected pages	Odstranit vybrané stránky
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Písmo podpisu neumí vykreslit „{c}“ ({code}). Napište jej latinkou, cyrilicí nebo řeckým písmem, nebo použijte „Kreslení“ či „Obrázek“.

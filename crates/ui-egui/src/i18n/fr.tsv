@@ -2823,3 +2823,4 @@ certificate	Version	Version
 	Rotate the selected pages clockwise	Faire pivoter les pages sélectionnées dans le sens horaire
 	Extract the selected pages…	Extraire les pages sélectionnées…
 	Delete the selected pages	Supprimer les pages sélectionnées
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	La police de signature ne peut pas afficher « {c} » ({code}). Saisissez-le en lettres latines, cyrilliques ou grecques, ou utilisez « Dessiner » ou « Image ».

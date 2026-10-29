@@ -2794,3 +2794,4 @@ theme	Appearance	स्वरूप
 	Rotate the selected pages clockwise	चयनित पृष्ठों को दक्षिणावर्त घुमाएँ
 	Extract the selected pages…	चयनित पृष्ठ निकालें…
 	Delete the selected pages	चयनित पृष्ठ हटाएँ
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	हस्ताक्षर फ़ॉन्ट “{c}” ({code}) नहीं बना सकता। इसे लैटिन, सिरिलिक या ग्रीक अक्षरों में टाइप करें, या “ड्रॉ” या “छवि” का उपयोग करें।

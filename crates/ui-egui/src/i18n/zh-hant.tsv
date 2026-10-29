@@ -2507,3 +2507,4 @@ animation effects	Off	關
 	Rotate the selected pages clockwise	順時針旋轉所選頁面
 	Extract the selected pages…	擷取所選頁面…
 	Delete the selected pages	刪除所選頁面
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	簽名字型無法顯示「{c}」（{code}）。請以拉丁、西里爾或希臘字母輸入，或改用「繪製」或「圖片」。

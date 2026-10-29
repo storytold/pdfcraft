@@ -2824,3 +2824,4 @@ key	Space	Space
 	Rotate the selected pages clockwise	Xoay các trang đã chọn theo chiều kim đồng hồ
 	Extract the selected pages…	Trích xuất các trang đã chọn…
 	Delete the selected pages	Xóa các trang đã chọn
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Phông chữ chữ ký không thể vẽ “{c}” ({code}). Hãy nhập bằng chữ Latinh, Kirin hoặc Hy Lạp, hoặc dùng “Vẽ” hoặc “Hình ảnh”.

@@ -2653,3 +2653,4 @@ animation effects	Off	Wyłączone
 	Rotate the selected pages clockwise	Obróć zaznaczone strony w prawo
 	Extract the selected pages…	Wyodrębnij zaznaczone strony…
 	Delete the selected pages	Usuń zaznaczone strony
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Czcionka podpisu nie obsługuje znaku „{c}” ({code}). Wpisz go literami łacińskimi, cyrylicą lub greckimi albo użyj opcji „Rysuj” lub „Obraz”.

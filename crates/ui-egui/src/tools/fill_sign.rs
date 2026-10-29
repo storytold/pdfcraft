@@ -134,8 +134,11 @@ impl SigDraft {
         } else if self.drawing {
             self.strokes.iter().any(|s| s.len() > 1)
         } else {
+            // A name the script font and its fallback can't draw (Hebrew, Arabic, Japanese …) would
+            // be saved and then placed with letters missing; it is drawn or added as an image instead.
             !self.text.trim().is_empty()
                 && self.text.chars().take(pdfcraft_engine::MAX_SIGNATURE_CHARS + 1).count() <= pdfcraft_engine::MAX_SIGNATURE_CHARS
+                && pdfcraft_engine::script_missing(&self.text).is_none()
         }
     }
 
@@ -290,6 +293,15 @@ pub fn place(page: usize, info: &PageInfo, at: [f64; 2], sig: &SavedSig, initial
             typed_signature_at(page, at, text, height, rotation, author)
         }
     }
+}
+
+/// Why a typed signature with `c` in it can't be applied, and what to do instead: the words the
+/// `signature` automation tool uses for the same check.
+fn script_missing_message(c: char) -> String {
+    crate::i18n::fmt(
+        tl!("The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image."),
+        &[("c", &c.to_string()), ("code", &format!("U+{:04X}", u32::from(c)))],
+    )
 }
 
 /// The text in the script font as a picture (`w`×`h` px, black on transparent), for previews.
@@ -643,8 +655,13 @@ pub(crate) fn signature_pad(
             let img = script_preview(&d.text, 920, 300);
             *preview = Some((key, ui.ctx().load_texture("typed-signature", img, egui::TextureOptions::LINEAR)));
         }
-        if let Some((_, tex)) = preview {
+        // A partial preview would hide that letters are missing; Apply stays off too (`SigDraft::ready`).
+        let missing = pdfcraft_engine::script_missing(&d.text);
+        if let Some((_, tex)) = preview.as_ref().filter(|_| missing.is_none()) {
             painter.image(tex.id(), rect.shrink(4.0), egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+        if let Some(c) = missing {
+            ui.label(egui::RichText::new(script_missing_message(c)).small().color(crate::tools::content_ui::UNDRAWABLE));
         }
         let (apply, cancel) = pad_buttons(ui, d);
         return (apply, cancel, false);
@@ -909,6 +926,20 @@ mod tests {
         assert!(d.undo_stroke());
         assert!(d.strokes.is_empty());
         assert!(!d.undo_stroke());
+    }
+
+    /// A typed name in a script the signature font can't draw is not saved with letters missing.
+    #[test]
+    fn typed_names_the_script_font_lacks_are_not_ready() {
+        let typed = |text: &str| super::SigDraft { text: text.to_owned(), ..Default::default() };
+        assert!(typed("Ada Lovelace").ready());
+        assert!(typed("Анна Каренина").ready(), "Cyrillic is drawn from the Inter fallback");
+        for name in ["נטלי זכריה", "Natalie זכריה", "سارة", "山田"] {
+            assert!(!typed(name).ready(), "{name}");
+        }
+        // The pad says which letter, blames the signature font and points to Draw or Image.
+        let message = super::script_missing_message('נ');
+        assert!(message.contains("“נ” (U+05E0)") && message.contains("signature font") && message.contains("Draw or Image"), "{message}");
     }
 
     #[test]

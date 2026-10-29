@@ -2818,3 +2818,4 @@ theme	Appearance	Aspect
 	Rotate the selected pages clockwise	Rotește paginile selectate în sens orar
 	Extract the selected pages…	Extrage paginile selectate…
 	Delete the selected pages	Șterge paginile selectate
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Fontul semnăturii nu poate desena „{c}” ({code}). Scrieți cu litere latine, chirilice sau grecești ori folosiți Desenare sau Imagine.

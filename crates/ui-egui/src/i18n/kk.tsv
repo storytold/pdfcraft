@@ -2555,3 +2555,4 @@ animation effects	Off	Өшірулі
 	Rotate the selected pages clockwise	Таңдалған беттерді сағат тілімен бұру
 	Extract the selected pages…	Таңдалған беттерді шығарып алу…
 	Delete the selected pages	Таңдалған беттерді жою
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Қолтаңба қарпі «{c}» таңбасын ({code}) сала алмайды. Оны латын, кирилл немесе грек әріптерімен жазыңыз немесе «Салу» не «Кескін» қойындысын пайдаланыңыз.

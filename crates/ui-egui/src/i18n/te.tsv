@@ -2466,3 +2466,4 @@ animation effects	Off	ఆఫ్
 	Rotate the selected pages clockwise	ఎంచుకున్న పేజీలను సవ్య దిశలో తిప్పు
 	Extract the selected pages…	ఎంచుకున్న పేజీలను సంగ్రహించు…
 	Delete the selected pages	ఎంచుకున్న పేజీలను తొలగించు
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	సంతకం ఫాంట్ “{c}” ({code})ని చూపలేదు. దాన్ని లాటిన్, సిరిలిక్ లేదా గ్రీకు అక్షరాలలో టైప్ చేయండి, లేదా “గీయి” లేదా “చిత్రం” ఉపయోగించండి.

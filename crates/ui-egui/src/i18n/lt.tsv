@@ -2818,3 +2818,4 @@ theme	Appearance	Išvaizda
 	Rotate the selected pages clockwise	Pasukti pasirinktus puslapius pagal laikrodžio rodyklę
 	Extract the selected pages…	Išskleisti pasirinktus puslapius…
 	Delete the selected pages	Ištrinti pasirinktus puslapius
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Parašo šriftas negali atvaizduoti simbolio „{c}“ ({code}). Įveskite jį lotyniškomis, kirilicos ar graikiškomis raidėmis arba naudokite „Brėžti“ ar „Paveikslėlis“.

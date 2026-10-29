@@ -2558,3 +2558,4 @@ animation effects	Off	Aus
 	Rotate the selected pages clockwise	Ausgewählte Seiten im Uhrzeigersinn drehen
 	Extract the selected pages…	Ausgewählte Seiten extrahieren…
 	Delete the selected pages	Ausgewählte Seiten löschen
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Die Unterschriftsschrift kann „{c}“ ({code}) nicht darstellen. Schreiben Sie in lateinischen, kyrillischen oder griechischen Buchstaben oder verwenden Sie „Zeichnen“ oder „Bild“.

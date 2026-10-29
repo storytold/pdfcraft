@@ -2563,3 +2563,4 @@ animation effects	Off	Ανενεργά
 	Rotate the selected pages clockwise	Περιστροφή των επιλεγμένων σελίδων δεξιόστροφα
 	Extract the selected pages…	Εξαγωγή των επιλεγμένων σελίδων…
 	Delete the selected pages	Διαγραφή των επιλεγμένων σελίδων
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	Η γραμματοσειρά της υπογραφής δεν μπορεί να εμφανίσει τον χαρακτήρα «{c}» ({code}). Πληκτρολογήστε τον με λατινικά, κυριλλικά ή ελληνικά γράμματα ή χρησιμοποιήστε «Σχεδίαση» ή «Εικόνα».
