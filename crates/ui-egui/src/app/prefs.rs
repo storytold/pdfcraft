@@ -194,6 +194,7 @@ impl PdfCraftApp {
             self.restore_last_view = on;
         }
         self.restore_last_views(&v["last_views"]);
+        self.load_reading_progress();
         self.last_session = last_session::LastSession::from_json(&v["last_session"]);
         if let Some(on) = v["system_title_bar"].as_bool() {
             self.system_title_bar = on;

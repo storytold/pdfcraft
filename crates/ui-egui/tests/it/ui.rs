@@ -1865,3 +1865,173 @@ fn full_screen_neither_is_remembered_nor_hides_the_last_view() {
     view.leave_presentation();
     assert_eq!((view.fit, view.zoom, view.layout, view.continuous), (Fit::None, 0.5, PageLayout::TwoUp, false), "the remembered view");
 }
+
+struct TempReadingStore {
+    path: std::path::PathBuf,
+}
+
+impl TempReadingStore {
+    fn new(tag: &str) -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "pdfcraft-test-rp-{tag}-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos())
+        ));
+        let _ = std::fs::remove_file(&path);
+        Self { path }
+    }
+
+    fn path(&self) -> std::path::PathBuf {
+        self.path.clone()
+    }
+}
+
+impl Drop for TempReadingStore {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Auto-persistence of reading progress: moving across pages while reading updates
+/// remembered views without requiring closing the tab or manual saving.
+#[test]
+fn reading_progress_updates_while_reading_and_restores() {
+    let store = TempReadingStore::new("updates");
+    let store_path = store.path();
+    let path = std::env::temp_dir().join(format!("pdfcraft-reading-progress-{}.pdf", std::process::id())).to_string_lossy().into_owned();
+    let (p, sp) = (path.clone(), store_path.clone());
+    let mut h = harness(move |app| {
+        app.set_reading_progress_path(Some(sp));
+        app.open_bytes("doc.pdf", Some(p), pages_fixture(5)).expect("opens");
+    });
+    h.run_steps(2);
+    {
+        let app = h.state_mut();
+        app.views[0].go_to_page(3);
+    }
+    h.run_steps(3);
+    assert!(!h.state().last_views.is_empty(), "reading progress was recorded");
+    assert_eq!(h.state().last_views[0].page, 3);
+    h.state_mut().save_reading_progress();
+    assert!(store_path.exists(), "reading progress was saved to disk store");
+
+    let saved = h.state().persist();
+    let (p, sp) = (path.clone(), store_path.clone());
+    let h = harness(move |app| {
+        app.set_reading_progress_path(Some(sp));
+        app.restore(&saved);
+        app.open_bytes("doc.pdf", Some(p), pages_fixture(5)).expect("opens");
+    });
+    let v = &h.state().views[0];
+    assert_eq!(v.current, 3, "restored to the last read page");
+}
+
+/// Multiple documents maintain independent reading progress.
+#[test]
+fn independent_reading_progress_for_multiple_documents() {
+    let store = TempReadingStore::new("multi");
+    let store_path = store.path();
+    let path_a = std::env::temp_dir().join(format!("pdfcraft-reading-multi-a-{}.pdf", std::process::id())).to_string_lossy().into_owned();
+    let path_b = std::env::temp_dir().join(format!("pdfcraft-reading-multi-b-{}.pdf", std::process::id())).to_string_lossy().into_owned();
+    let (pa, pb, sp) = (path_a.clone(), path_b.clone(), store_path.clone());
+    let mut h = harness(move |app| {
+        app.set_reading_progress_path(Some(sp));
+        app.open_bytes("a.pdf", Some(pa), pages_fixture(5)).expect("opens a");
+        app.open_bytes("b.pdf", Some(pb), pages_fixture(10)).expect("opens b");
+    });
+    h.run_steps(2);
+    {
+        let app = h.state_mut();
+        app.active = Some(0);
+        app.views[0].go_to_page(2);
+    }
+    h.run_steps(3);
+    {
+        let app = h.state_mut();
+        app.active = Some(1);
+        app.views[1].go_to_page(7);
+    }
+    h.run_steps(3);
+    h.state_mut().save_reading_progress();
+    assert!(store_path.exists(), "reading progress was saved to disk store");
+
+    let saved = h.state().persist();
+    let (pa, sp) = (path_a.clone(), store_path.clone());
+    let h_a = harness(move |app| {
+        app.set_reading_progress_path(Some(sp));
+        app.restore(&saved);
+        app.open_bytes("a.pdf", Some(pa), pages_fixture(5)).expect("opens a");
+    });
+    assert_eq!(h_a.state().views[0].current, 2);
+
+    let (pb, sp) = (path_b.clone(), store_path.clone());
+    let h_b = harness(move |app| {
+        app.set_reading_progress_path(Some(sp));
+        app.restore(&saved);
+        app.open_bytes("b.pdf", Some(pb), pages_fixture(10)).expect("opens b");
+    });
+    assert_eq!(h_b.state().views[0].current, 7);
+}
+
+/// Graceful handling if page in last view exceeds the document's actual page count.
+#[test]
+fn reading_progress_clamps_to_valid_page_when_document_shortened() {
+    let path = std::env::temp_dir().join(format!("pdfcraft-reading-shortened-{}.pdf", std::process::id())).to_string_lossy().into_owned();
+    let last = vec![pdfcraft_ui_egui::last_view::LastView {
+        path: path.clone(),
+        page: 9,
+        zoom: "fit-width".to_string(),
+        display: "continuous".to_string(),
+        cover: false,
+    }];
+    let json = serde_json::json!({
+        "restore_last_view": true,
+        "last_views": last,
+    }).to_string();
+    let p = path.clone();
+    let h = harness(move |app| {
+        app.restore(&json);
+        app.open_bytes("short.pdf", Some(p), pages_fixture(3)).expect("opens");
+    });
+    let v = &h.state().views[0];
+    assert_eq!(v.current, 2, "clamped to last valid page (index 2 for 3-page document)");
+}
+
+/// Reading progress on disk takes precedence over older settings on restore.
+#[test]
+fn disk_reading_progress_takes_precedence_over_older_settings() {
+    let store = TempReadingStore::new("precedence");
+    let store_path = store.path();
+    let path = std::env::temp_dir().join(format!("pdfcraft-reading-prec-{}.pdf", std::process::id())).to_string_lossy().into_owned();
+
+    let settings_view = vec![pdfcraft_ui_egui::last_view::LastView {
+        path: path.clone(),
+        page: 1,
+        zoom: "fit-width".to_string(),
+        display: "continuous".to_string(),
+        cover: false,
+    }];
+    let saved = serde_json::json!({
+        "restore_last_view": true,
+        "last_views": settings_view,
+    })
+    .to_string();
+
+    let disk_views = vec![pdfcraft_ui_egui::last_view::LastView {
+        path: path.clone(),
+        page: 4,
+        zoom: "fit-width".to_string(),
+        display: "continuous".to_string(),
+        cover: false,
+    }];
+    std::fs::write(&store_path, serde_json::to_string(&disk_views).unwrap()).unwrap();
+
+    let (p, sp) = (path.clone(), store_path.clone());
+    let h = harness(move |app| {
+        app.set_reading_progress_path(Some(sp));
+        app.restore(&saved);
+        app.open_bytes("doc.pdf", Some(p), pages_fixture(6)).expect("opens");
+    });
+    let v = &h.state().views[0];
+    assert_eq!(v.current, 4, "disk entry takes precedence over settings");
+}
