@@ -13,6 +13,7 @@ pub(crate) enum Action {
         tab: u64,
         down: bool,
     },
+    Detach(DocId),
 }
 
 impl crate::PdfCraftApp {
@@ -88,6 +89,9 @@ impl crate::PdfCraftApp {
                 let _ = id;
             }
             Action::Rename(id) => self.start_rename(id),
+            Action::Detach(id) => {
+                self.detach_tab(id);
+            }
         }
     }
 }
