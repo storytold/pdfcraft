@@ -2,7 +2,8 @@ use super::draw::draw_appearance;
 use super::lookup::{annot_dict, annot_ref, annots, fill_sign_shape, page_ref, set_annots};
 use super::modify::{free_text_da, n, refuse_undrawable_thai, rich_text, set_part_keys, shape_text_box};
 use super::types::{
-    FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup, Style,
+    FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup, StampLang,
+    Style,
 };
 use super::{AnnotError, Dict, Document, ObjRef, Object, PdfString, appearance};
 

@@ -338,7 +338,12 @@ impl Automation {
                         .into_iter()
                         .find(|k| k.label().to_ascii_lowercase().replace(' ', "") == want && ((k.group() == StampGroup::Dynamic) == dynamic))
                         .ok_or_else(|| ToolError::InvalidArgs(format!("unknown stamp {want:?} (see the tool description)")))?;
-                    let lang = StampLang::from_code(a.opt_str("lang")?.unwrap_or("en"));
+                    // A code the list doesn't have is an error, not English: a typo would place the wrong stamp silently.
+                    let code = a.opt_str("lang")?.unwrap_or("en").trim().to_ascii_lowercase();
+                    let lang = StampLang::ALL
+                        .into_iter()
+                        .find(|l| l.code() == code)
+                        .ok_or_else(|| ToolError::InvalidArgs(format!("unknown stamp language {code:?} (see the tool description)")))?;
                     if !lang.drawable() {
                         return Err(ToolError::InvalidArgs(format!(
                             "stamps in {} need craft-fonts faces for its script, which this build doesn't have (built without CRAFT_FONTS_DIR)",

@@ -898,7 +898,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "all": { "type": "boolean", "description": "Mark every match of `find` on the page, not just the first." },
                 "quads": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 8, "maxItems": 8 } },
                 "stamp": { "type": "string" },
-                "lang": { "type": "string" },
+                "lang": { "type": "string", "enum": pdfcraft_engine::StampLang::ALL.iter().map(|l| l.code()).collect::<Vec<_>>(), "description": "stamp: the language it is written in (default en)." },
                 "dynamic": { "type": "boolean" },
                 "strokes": { "type": "array", "items": { "type": "array", "items": point() } },
                 "icon": { "type": "string", "description": "note: Comment, Note, Help, Insert, Key, NewParagraph, Paragraph (the standard names), Check, Circle, Cross, CrossHairs, Star, RightArrow, UpArrow; attachment: PushPin, Paperclip, Graph, Tag." },
