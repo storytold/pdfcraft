@@ -203,7 +203,9 @@ pub(crate) struct Scope<'a> {
     /// How many text operators have been shown, for [`Removed::op`].
     shown: usize,
     fonts: HashMap<Vec<u8>, Rc<Metrics>>,
-    /// The ink readers of the fonts in `fonts`, read only while marks are tested.
+    /// The ink readers of the fonts in `fonts`, under the same keys, read only while marks are
+    /// tested. Like `fonts`, they belong to one resource dictionary: a form's `/F1` can be
+    /// another font than the page's.
     inks: HashMap<Vec<u8>, Option<Rc<GlyphInk>>>,
     used_names: Vec<Vec<u8>>,
     depth: usize,
@@ -214,6 +216,21 @@ pub(crate) struct Scope<'a> {
 }
 
 impl<'a> Scope<'a> {
+    /// The ink reader for the font cached under `key` (its resource name, or the ExtGState key),
+    /// read from `font` the first time; `None` when no marks are tested or it has no readable
+    /// program. Its decodes are charged to the page's budget.
+    fn glyph_ink(&mut self, doc: &Document, key: &[u8], font: Option<&Dict>, metrics: &Metrics) -> Option<Rc<GlyphInk>> {
+        if self.rects.is_empty() {
+            return None;
+        }
+        if let Some(ink) = self.inks.get(key) {
+            return ink.clone();
+        }
+        let ink = font.and_then(|d| GlyphInk::from_dict(doc, d, metrics, &mut self.budget)).map(Rc::new);
+        self.inks.insert(key.to_vec(), ink.clone());
+        ink
+    }
+
     /// A scope whose form walk spends `budget`, what is left of the page's allowance after its
     /// content streams were decoded.
     pub fn new(rects: &'a [[f64; 4]], mode: Mode, report: &'a mut Report, budget: DecodeBudget, images: &'a mut ImageBudget) -> Self {
@@ -736,11 +753,12 @@ impl Walk {
             b"j" => self.gs.line_join = last.map_or(self.gs.line_join, |j| j as i64),
             b"J" => self.gs.line_cap = last.map_or(self.gs.line_cap, |j| j as i64),
             _ => {
-                if let Some((font, vertical, size)) = op.last_name().and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
-                    (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
+                if let Some((font, ink, vertical, size)) =
+                    op.last_name().and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback))
+                {
+                    (self.gs.font, self.gs.ink, self.gs.vertical, self.gs.size) = (font, ink, vertical, size);
                     // As for `Tf`: a Type 3 font without /Resources paints through this scope's.
                     self.gs.type3_inherits = op.last_name().is_some_and(|n| extgstate_type3_inherits(doc, &self.ext_gstates, n));
-                    self.gs.ink = None;
                 }
                 if let Some(state) = op.name(0).and_then(|n| self.ext_gstates.get(n)).and_then(|s| doc.resolve(s).as_dict().cloned()) {
                     let num = |key: &[u8]| state.get(key).and_then(|v| doc.resolve(v).as_f64());
@@ -769,16 +787,7 @@ impl Walk {
                 m
             }
         };
-        let font = self.gs.font.clone();
-        self.gs.ink = if scope.rects.is_empty() {
-            None
-        } else {
-            scope
-                .inks
-                .entry(name.to_vec())
-                .or_insert_with(|| font_dict.as_ref().and_then(|d| GlyphInk::from_dict(doc, d, &font)).map(Rc::new))
-                .clone()
-        };
+        self.gs.ink = scope.glyph_ink(doc, name, font_dict.as_ref(), &self.gs.font);
     }
 
     /// Text state and text-positioning operators.
@@ -1294,10 +1303,12 @@ fn xobject(
             let own = s.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned());
             let res = own.clone().unwrap_or_else(|| resources.clone());
             let saved_fonts = std::mem::take(&mut scope.fonts);
+            let saved_inks = std::mem::take(&mut scope.inks);
             scope.depth += 1;
             let inner = process_from(doc, scope, std::slice::from_ref(&data), &res, Gs { ctm: fctm, ..gs.clone() });
             scope.depth -= 1;
             scope.fonts = saved_fonts;
+            scope.inks = saved_inks;
             out.residue += inner.residue;
             out.vertical |= inner.vertical;
             out.ambiguous |= inner.ambiguous;
