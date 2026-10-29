@@ -1,4 +1,4 @@
-use super::{Args, Automation, Result, ToolError, Value, child, failed, json, write_atomic};
+use super::{Args, Automation, Result, ToolError, Value, child, failed, json};
 
 impl Automation {
     /// Recognition settings from the arguments: `dpi` (clamped to 72–600), `language` (refused
