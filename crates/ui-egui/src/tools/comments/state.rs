@@ -1,5 +1,5 @@
 use super::geometry::{corner_ratio, is_markup, resized};
-use super::*;
+use super::{Annotation, CommentPrefs, CommentTool, DocInfo, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect};
 
 /// The user's login name, which Acrobat uses as the default comment author.
 pub(super) fn login_name() -> String {

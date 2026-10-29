@@ -105,6 +105,10 @@ impl PdfCraftApp {
             open_prepare_gate: None,
             pinned: Default::default(),
             toast: None,
+            toast_script: None,
+            script_messages: std::collections::VecDeque::new(),
+            script_messages_dropped: 0,
+            toast_dropped: 0,
             integrated_titlebar: false,
             window_controls: None,
             system_title_bar: false,
@@ -190,6 +194,7 @@ impl PdfCraftApp {
             v_pressed: false,
             attach_override: None,
             duplicate_draft: None,
+            page_props_draft: None,
             field_table_draft: None,
             form_preview: false,
             window_title: String::new(),
@@ -217,8 +222,10 @@ impl PdfCraftApp {
             pending_full_screen: None,
             pending_remote_link: None,
             protect_draft: Default::default(),
+            text_style_draft: Default::default(),
             boxes_draft: Default::default(),
             marks_draft: Default::default(),
+            unmarked_page: Default::default(),
             export_draft: Default::default(),
             export_status: None,
             signature: None,
@@ -284,8 +291,13 @@ impl PdfCraftApp {
             || self.updates.open
     }
 
+    /// Show `msg` in the toast now, in place of whatever it showed. Script messages still waiting
+    /// show after it.
     pub fn notify(&mut self, msg: impl Into<String>) {
+        // A left-out count it replaces is said again once the toast is free.
+        self.script_messages_dropped = self.script_messages_dropped.saturating_add(std::mem::take(&mut self.toast_dropped));
         self.toast = Some((msg.into(), 0.0));
+        self.toast_script = None;
     }
 
     /// Notify with a static message in the UI language.

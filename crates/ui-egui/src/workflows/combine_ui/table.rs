@@ -1,6 +1,9 @@
 use super::files::{Columns, Lock, RowAction, SortKey};
 use super::parts::{ago, utc_stamp};
-use super::*;
+use super::{
+    Align, Color32, Column, CornerRadius, ERROR, Layout, Modifiers, PdfCraftApp, Rect, Sense, Stroke, TableBuilder, Tokens, WARNING, icons, theme,
+    vec2,
+};
 
 /// A column heading being dragged to a new place.
 #[derive(Clone, Copy)]
@@ -48,9 +51,9 @@ pub(super) fn table(
     let rows = Rows { checks, selected, twice, conflicts, dragging, sort: app.combine_tab.sort };
     let mut heading_event = None;
     let mut shown = None;
-    egui::ScrollArea::horizontal()
-        .id_salt("combine-files-h")
-        .show(ui, |ui| table_body(app, ui, t, &rows, widths, &mut events, &mut heading_event, &mut shown));
+    egui::ScrollArea::horizontal().id_salt("combine-files-h").show(ui, |ui| {
+        table_body(ui, TableBody { app, theme: t, rows: &rows, widths, events: &mut events, heading_event: &mut heading_event, shown: &mut shown })
+    });
     // A column resized by hand keeps its width from now on.
     if let Some(shown) = shown
         && shown.iter().zip(&widths).any(|(a, b)| (a - b).abs() > 0.5)
@@ -151,17 +154,18 @@ fn heading(ui: &mut egui::Ui, t: &Tokens, key: SortKey, sort: Option<(SortKey, b
 
 /// Draw the Combine files table body: reorder handles, editable page ranges with validation, file metadata
 /// and per-row warnings.
-#[allow(clippy::too_many_arguments)]
-fn table_body(
-    app: &mut PdfCraftApp,
-    ui: &mut egui::Ui,
-    t: &Tokens,
-    rows: &Rows,
+struct TableBody<'a> {
+    app: &'a mut PdfCraftApp,
+    theme: &'a Tokens,
+    rows: &'a Rows<'a>,
     widths: [f32; 5],
-    events: &mut TableEvents,
-    heading_event: &mut Option<HeadingEvent>,
-    shown: &mut Option<[f32; 5]>,
-) {
+    events: &'a mut TableEvents,
+    heading_event: &'a mut Option<HeadingEvent>,
+    shown: &'a mut Option<[f32; 5]>,
+}
+
+fn table_body(ui: &mut egui::Ui, context: TableBody<'_>) {
+    let TableBody { app, theme: t, rows, widths, events, heading_event, shown } = context;
     let n = app.combine_draft.len();
     let order = app.combine_columns.order;
     // The heading being dragged follows the pointer.

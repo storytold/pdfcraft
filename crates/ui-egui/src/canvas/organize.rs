@@ -1,6 +1,9 @@
 use super::cache::{GRID_TAG, thumbnail_density, thumbnail_rows, thumbnail_scale};
 use super::zoom::{GRID_ZOOM_RANGE, GRID_ZOOM_STEP};
-use super::*;
+use super::{
+    Align2, Color32, CornerRadius, DocInfo, DocView, Edit, Pos2, Rect, RenderRequest, RequestKind, Sense, Stroke, Tokens, Vec2, ViewAction,
+    device_pixels, icons, pos2, theme, vec2, widgets,
+};
 
 /// How far a sharp grid render may be from the size drawn before it is redone: a pinch changes
 /// the size on every frame, and a slightly soft or slightly large image is fine meanwhile.
@@ -210,6 +213,60 @@ fn gap_button(ui: &mut egui::Ui, gap: usize, at: Pos2, height: f32, label: Strin
     resp.on_hover_text(label).clicked()
 }
 
+/// Middle-button auto-scroll: its delta scrolls the grid, and the page controls under it are
+/// disabled (but not dimmed) while the gesture lasts.
+fn apply_auto_scroll(ui: &mut egui::Ui, middle_gesture: bool, auto_delta: Vec2) {
+    if middle_gesture {
+        let opacity = ui.opacity();
+        ui.disable();
+        ui.set_opacity(opacity);
+    }
+    if auto_delta != Vec2::ZERO {
+        ui.scroll_with_delta_animation(auto_delta, egui::style::ScrollAnimation::none());
+    }
+}
+
+/// Drag pages to move them (the selection, or the page grabbed); `drop` is set when the drag ends.
+fn drag_pages(view: &mut DocView, resp: &egui::Response, page: usize, drop: &mut bool) {
+    if resp.drag_started() {
+        if !view.selected.contains(&page) {
+            view.selected = [page].into();
+            view.select_anchor = Some(page);
+        }
+        let mut pages: Vec<usize> = view.selected.iter().copied().collect();
+        pages.sort_unstable();
+        view.org_drag = Some(pages);
+    }
+    if resp.drag_stopped() {
+        *drop = true;
+    }
+}
+
+/// A page drawn larger than its thumbnail gets a render at the size drawn, while it is in view;
+/// until that arrives the thumbnail stands in.
+fn request_sharper(
+    view: &DocView,
+    page: usize,
+    want: f32,
+    page_width: f32,
+    drawn_width: Option<u32>,
+    in_view: &mut Vec<(usize, f32)>,
+    sharper: &mut Vec<RenderRequest>,
+) {
+    in_view.push((page, want));
+    if !drawn_width.is_some_and(|w| sharp_enough(w, want)) && !view.errors.contains_key(&page) {
+        sharper.push(RenderRequest {
+            page,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: want / page_width.max(1.0),
+            tag: GRID_TAG,
+            // Grid cells are previews: tiny images are skipped for them.
+            preview: true,
+        });
+    }
+}
+
 pub(super) fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool, unobstructed: bool, ui: &mut egui::Ui, t: &Tokens) {
     let ppp = ui.ctx().pixels_per_point();
     // The page image scales with the zoom; the padding and the page number don't.
@@ -234,14 +291,7 @@ pub(super) fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, 
     // The source cell can scroll out of the virtualized rows during a drag.
     let mut drop = view.org_drag.is_some() && ui.input(|i| i.pointer.primary_released());
     egui::ScrollArea::vertical().auto_shrink([false, false]).show_viewport(ui, |ui, clip| {
-        if middle_gesture {
-            let opacity = ui.opacity();
-            ui.disable();
-            ui.set_opacity(opacity);
-        }
-        if auto_delta != Vec2::ZERO {
-            ui.scroll_with_delta_animation(auto_delta, egui::style::ScrollAnimation::none());
-        }
+        apply_auto_scroll(ui, middle_gesture, auto_delta);
         ui.add_space(20.0);
         let cols = ((ui.available_width() - 40.0) / cell.x).floor().max(1.0) as usize;
         let rows = info.pages.len().div_ceil(cols);
@@ -267,19 +317,7 @@ pub(super) fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, 
                 if let Some((_, above)) = anchor.filter(|(page, _)| *page == i) {
                     ui.scroll_to_rect_animation(c.translate(vec2(0.0, -above)), Some(egui::Align::Min), egui::style::ScrollAnimation::none());
                 }
-                // Drag pages to move them (the selection, or the page grabbed).
-                if resp.drag_started() {
-                    if !view.selected.contains(&i) {
-                        view.selected = [i].into();
-                        view.select_anchor = Some(i);
-                    }
-                    let mut pages: Vec<usize> = view.selected.iter().copied().collect();
-                    pages.sort_unstable();
-                    view.org_drag = Some(pages);
-                }
-                if resp.drag_stopped() {
-                    drop = true;
-                }
+                drag_pages(view, &resp, i, &mut drop);
                 let page_label = crate::i18n::fmt(tl!("Page {label}"), &[("label", &p.label)]);
                 resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, view.selected.contains(&i), page_label.clone()));
                 let pr = grid_page_rect(c, vec2(p.width, p.height));
@@ -300,18 +338,7 @@ pub(super) fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, 
                 let thumb_ok = thumb.is_some_and(|t| t.size()[0] as f32 >= want * GRID_SHARP.start());
                 let sharp = view.grid_pages.get(&i).filter(|_| !thumb_ok);
                 if !thumb_ok && ui.is_rect_visible(c) {
-                    in_view.push((i, want));
-                    if !sharp.is_some_and(|(w, _)| sharp_enough(*w, want)) && !view.errors.contains_key(&i) {
-                        sharper.push(RenderRequest {
-                            page: i,
-                            kind: RequestKind::Pixels,
-                            tile: None,
-                            scale: want / p.width.max(1.0),
-                            tag: GRID_TAG,
-                            // Grid cells are previews: tiny images are skipped for them.
-                            preview: true,
-                        });
-                    }
+                    request_sharper(view, i, want, p.width, sharp.map(|(w, _)| *w), &mut in_view, &mut sharper);
                 }
                 if let Some(tex) = sharp.map(|(_, t)| t).or(thumb) {
                     ui.painter().image(tex.id(), pr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);

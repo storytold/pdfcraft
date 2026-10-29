@@ -1,7 +1,7 @@
 use super::interp::{Carry, interpret};
 use super::lines::{content_streams, page_dict, reading_lines, rewritten_contents, splice, text_lines};
 use super::rewrite::{LineEdit, coincident_ops, rewrite_block};
-use super::*;
+use super::{Document, EditError, HashMap, Object, Op, Pieces, TextLine, group_blocks, regions};
 
 /// An editable text region: adjacent runs on visual rows, followed by aligned rows.
 /// A region may contain several source fonts, sizes, colours and weights.

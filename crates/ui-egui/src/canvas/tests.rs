@@ -57,36 +57,6 @@ fn grid_pages_are_centred_and_as_large_as_the_cell_allows() {
     }
 }
 
-fn annotation(fill_sign: bool) -> pdfcraft_render::Annotation {
-    pdfcraft_render::Annotation {
-        page: 0,
-        subtype: "FreeText".into(),
-        author: None,
-        contents: Some("Hello".into()),
-        modified: None,
-        name: None,
-        in_reply_to: None,
-        parent: None,
-        grouped: false,
-        rect: [0.0; 4],
-        color: None,
-        index: 0,
-        state: None,
-        quads: Vec::new(),
-        locked: false,
-        intent: None,
-        fill_sign,
-        no_rotate: false,
-        points: Vec::new(),
-    }
-}
-
-#[test]
-fn hover_popup_skips_fill_and_sign_marks() {
-    assert_eq!(annotation_hover_text(&annotation(false)).as_deref(), Some("FreeText\nHello"));
-    assert_eq!(annotation_hover_text(&annotation(true)), None);
-}
-
 fn signature(signed: bool, visible: bool, page: Option<usize>, rect: Option<[f64; 4]>) -> pdfcraft_engine::SignatureInfo {
     pdfcraft_engine::SignatureInfo {
         field: "Signature1".into(),

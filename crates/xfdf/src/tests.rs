@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use pdfcraft_annot::{Markup, Meta, NewAnnotation, Shape, Style, add_annotation, add_reply, add_text_replacement, summaries};
+use pdfcraft_annot::{Markup, Meta, NewAnnotation, Shape, Style, TextReplacement, add_annotation, add_reply, add_text_replacement, summaries};
 use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
 use pdfcraft_forms::{NewField, add_field, fields, set_value};
 
@@ -151,7 +151,20 @@ fn a_replace_text_pair_survives_an_xfdf_round_trip() {
     let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
     let style = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
     let meta = |id: &str| Meta { date: Some("D:20261001120000Z".into()), id: id.into() };
-    add_text_replacement(&mut src, 0, &quads, "new words", "Ada", &style, &style, &meta("strike"), &meta("caret")).unwrap();
+    add_text_replacement(
+        &mut src,
+        TextReplacement {
+            page: 0,
+            quads: &quads,
+            replacement: "new words",
+            author: "Ada",
+            strike: &style,
+            caret: &style,
+            strike_meta: &meta("strike"),
+            caret_meta: &meta("caret"),
+        },
+    )
+    .unwrap();
     assert_eq!(summaries(&src).len(), 2, "a strikeout and a caret");
 
     let xfdf = export_xfdf(&src, true, false, "a.pdf");
@@ -607,6 +620,45 @@ fn csv_exports_preserve_carriage_returns_in_names_and_values() {
         let reopened = Document::open(Arc::new(write_full(&dst, &SaveOptions::default()).unwrap())).unwrap();
         assert_eq!(values(&reopened), [(name.to_string(), vec![value.to_string()])]);
         assert_eq!(csv, expected, "CSV must quote CR as well as LF, commas and quotes");
+    }
+}
+
+/// Export Data as CSV writes a name or value that a spreadsheet would run as a formula with a
+/// leading `'`, by the same rule as Merge Data Files, and Import Data gives it back unchanged.
+#[test]
+fn exported_csv_cells_never_start_a_formula_and_import_back_unchanged() {
+    for (name, value, expected) in [
+        ("Name", "=1+1", "Name\n'=1+1\n"),
+        ("Name", "@SUM(A1:A2)", "Name\n'@SUM(A1:A2)\n"),
+        ("Name", "+1 555 0100", "Name\n'+1 555 0100\n"),
+        ("Name", "-A1", "Name\n'-A1\n"),
+        ("Name", " =1+1", "Name\n' =1+1\n"),
+        ("Name", "\t=1+1", "Name\n\"'\t=1+1\"\n"),
+        ("Name", "\r=1+1", "Name\n\"'\r=1+1\"\n"),
+        ("Name", "=1,2", "Name\n\"'=1,2\"\n"),
+        ("Name", "'=1+1", "Name\n''=1+1\n"),
+        ("Name", "-12.5", "Name\n-12.5\n"),
+        ("Name", "+1", "Name\n+1\n"),
+        ("Name", "'-5", "Name\n'-5\n"),
+        ("Name", "'plain", "Name\n'plain\n"),
+        ("Name", "a=b", "Name\na=b\n"),
+        ("=Name", "Ada", "'=Name\nAda\n"),
+    ] {
+        let mut src = one_field();
+        let field = fields(&src)[0].obj;
+        src.update_dict(field, |d| d.set(b"T".to_vec(), PdfString::text(name))).unwrap();
+        set_value(&mut src, name, &FieldValue::Text(value.into())).unwrap();
+        let source = Arc::new(write_full(&src, &SaveOptions::default()).unwrap());
+        let src = Document::open(source.clone()).unwrap();
+        let csv = export_data(&src, Format::Csv);
+        assert_eq!(csv, expected, "{value:?}");
+
+        let mut dst = Document::open(source).unwrap();
+        set_value(&mut dst, name, &FieldValue::Text("replaced".into())).unwrap();
+        let report = import(&mut dst, csv.as_bytes()).unwrap();
+        assert_eq!(report.fields, 1, "{value:?}");
+        assert!(report.rejected.is_empty(), "{report:?}");
+        assert_eq!(values(&dst), [(name.to_string(), vec![value.to_string()])]);
     }
 }
 

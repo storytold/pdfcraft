@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, EditError, Hidden, SignatureInfo, TrustStore, optimize};
 
 /// A change to an existing page image.
 #[derive(Clone, Debug, PartialEq)]

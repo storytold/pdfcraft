@@ -2,7 +2,10 @@ use super::globals::{recalculate, relayout};
 use super::host::{HNode, XHost, host};
 use super::instances::{instance_manager, list_object};
 use super::model::{MAX_DEPTH, XfaEffect};
-use super::*;
+use super::{
+    Attribute, Context, JsObject, JsProxy, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, arg, as_number, error, function,
+    js_string, s, text,
+};
 
 // ── node objects ────────────────────────────────────────────────────────────────────────────
 

@@ -295,6 +295,168 @@ fn the_preview_steps_through_the_pages_and_starts_at_the_current_one() {
     h.get_by_label("Preview: page 2 of 3");
 }
 
+/// Keeps every texture the app uploads, so a test can read what a picture it paints shows.
+#[derive(Clone, Default)]
+struct Uploads(std::sync::Arc<std::sync::Mutex<std::collections::HashMap<egui::TextureId, std::sync::Arc<egui::ColorImage>>>>);
+
+impl egui_kittest::TestRenderer for Uploads {
+    fn handle_delta(&mut self, delta: &mut egui::TexturesDelta) {
+        let mut seen = self.0.lock().unwrap();
+        for (id, images) in delta.set.drain() {
+            for d in images.into_iter().filter(|d| d.pos.is_none()) {
+                let egui::ImageData::Color(image) = d.image;
+                seen.insert(id, image);
+            }
+        }
+        // Freed textures stay readable: ids are never reused.
+        delta.free.clear();
+    }
+
+    fn render(&mut self, _: &egui::Context, _: &egui::FullOutput) -> Result<image::RgbaImage, String> {
+        Err("this renderer only keeps the uploads".into())
+    }
+}
+
+/// The page picture the dialog's preview painted last frame, left of its "Preview: page …" label,
+/// once its texture is in: its tint and its image.
+fn preview_picture(h: &Harness<'static, PdfCraftApp>, uploads: &Uploads) -> Option<(egui::Color32, std::sync::Arc<egui::ColorImage>)> {
+    let label = h.query_by_label_contains("Preview: page")?.rect();
+    h.output().shapes.iter().find_map(|s| {
+        let egui::Shape::Mesh(m) = &s.shape else { return None };
+        let r = m.calc_bounds();
+        // The size of the 210-point box left of the label (which is centred down its side), and
+        // not the stepper's arrow beside the label. A landscape page is shorter than the box, so
+        // it can sit below the label: within half the box of it.
+        let beside = r.width() > 50.0
+            && r.height() <= 215.0
+            && r.right() <= label.left()
+            && label.left() - r.right() < 260.0
+            && (r.center().y - label.center().y).abs() <= 105.0;
+        if !beside {
+            return None;
+        }
+        let image = uploads.0.lock().unwrap().get(&m.texture_id).cloned()?;
+        Some((m.vertices.first()?.color, image))
+    })
+}
+
+/// [`preview_picture`], waiting until `ready` accepts it (the page renders off the UI thread).
+fn wait_for_preview(
+    h: &mut Harness<'static, PdfCraftApp>,
+    uploads: &Uploads,
+    what: &str,
+    ready: impl Fn(&egui::ColorImage) -> bool,
+) -> (egui::Color32, std::sync::Arc<egui::ColorImage>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        h.step();
+        let shown = preview_picture(h, uploads);
+        if let Some((tint, image)) = shown.clone().filter(|(_, image)| ready(image)) {
+            return (tint, image);
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the preview never showed {what}; last (tint, size, middle of the lower half): {:?}",
+            shown.map(|(tint, i)| (tint, i.size, at(&i, 0.5, 0.75)))
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// The pixel of `image` at (u, v), from 0 to 1 across and down.
+fn at(image: &egui::ColorImage, u: f32, v: f32) -> egui::Color32 {
+    let [w, h] = image.size;
+    let (x, y) = (((u * w as f32) as usize).min(w - 1), ((v * h as f32) as usize).min(h - 1));
+    image.pixels[y * w + x]
+}
+
+fn count(image: &egui::ColorImage, f: impl Fn(egui::Color32) -> bool) -> usize {
+    image.pixels.iter().filter(|&&c| f(c)).count()
+}
+
+/// Update draws its preview on the page without the marks it replaces, which the page's thumbnail
+/// still has: a pale yellow background updated to light blue previews light blue, not blue
+/// multiplied onto the yellow, and a new watermark or header isn't drawn over the old one. The
+/// page's content and its other kinds of mark stay.
+#[test]
+fn update_previews_the_page_without_the_marks_it_replaces() {
+    let uploads = Uploads::default();
+    let pdf = content_fixture();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).renderer(uploads.clone()).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("doc.pdf", None, pdf.clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    let yellow = egui::Color32::from_rgb(255, 255, 153);
+    let red = |c: egui::Color32| c.r() > 200 && c.g() < 80 && c.b() < 80;
+    let blue = |c: egui::Color32| c.b() > 150 && c.r() < 100 && c.g() < 100;
+    let dark = |c: egui::Color32| c.r() < 60 && c.g() < 60 && c.b() < 60;
+    let apply = |h: &mut Harness<'static, PdfCraftApp>, command: &str, draft: &dyn Fn(&mut pdfcraft_ui_egui::marks::MarksDraft)| {
+        assert!(h.state_mut().execute(command));
+        h.run_steps(2);
+        draft(&mut h.state_mut().marks_draft);
+        h.run_steps(2);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+    };
+    // A pale yellow background, a red watermark and a blue header.
+    apply(&mut h, "edit.background", &|d| d.bg.color = [1.0, 1.0, 0.6]);
+    apply(&mut h, "edit.watermark", &|d| {
+        d.wm.text = "OLD".into();
+        d.wm.color = [1.0, 0.0, 0.0];
+        d.wm.opacity = 1.0;
+        d.wm.rotation = 0.0;
+    });
+    apply(&mut h, "edit.header_footer", &|d| {
+        d.hf.text[1] = "OLD".into();
+        d.hf.color = [0.0, 0.0, 1.0];
+        d.hf.font_size = 40.0;
+    });
+    // Add keeps the marks there, and previews on the thumbnail, which has all three.
+    assert!(h.state_mut().execute("edit.watermark"));
+    h.run_steps(2);
+    let all = |i: &egui::ColorImage| at(i, 0.5, 0.75) == yellow && count(i, red) > 200 && count(i, blue) > 40;
+    wait_for_preview(&mut h, &uploads, "the page with its marks", all);
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+
+    assert!(h.state_mut().execute("edit.background.update"));
+    h.run_steps(2);
+    h.state_mut().marks_draft.bg.color = [0.6, 0.8, 1.0];
+    h.step();
+    // Update shows the page without the marks from the frame it opens: neither a blank sheet nor
+    // the old marks while it renders.
+    let shown = |h: &Harness<'static, PdfCraftApp>| preview_picture(h, &uploads).expect("a page is previewed");
+    let (tint, page) = shown(&h);
+    assert_eq!(tint, egui::Color32::from_rgb(153, 204, 255), "the new colour tints the page");
+    assert_eq!(at(&page, 0.5, 0.75), egui::Color32::WHITE, "the page is previewed without the yellow background");
+    assert!(count(&page, red) > 200 && count(&page, blue) > 40 && count(&page, dark) > 1000, "the watermark, header and page content stay");
+    // So does a step to page 2: the pages are prepared once, and each is drawn as it is shown.
+    h.state_mut().marks_draft.preview = Some(1);
+    h.step();
+    assert_eq!(at(&shown(&h).1, 0.5, 0.75), egui::Color32::WHITE, "page 2 is previewed without its background at once");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+
+    assert!(h.state_mut().execute("edit.watermark.update"));
+    h.run_steps(2);
+    h.state_mut().marks_draft.wm.text = "NEW".into();
+    h.step();
+    let (_, page) = shown(&h);
+    assert_eq!(count(&page, red), 0, "the new watermark isn't previewed over the old one");
+    assert!(at(&page, 0.5, 0.75) == yellow && count(&page, blue) > 40, "the background and header stay");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+
+    assert!(h.state_mut().execute("edit.header_footer.update"));
+    h.run_steps(2);
+    let (_, page) = shown(&h);
+    assert_eq!(count(&page, blue), 0, "the new header isn't previewed over the old one");
+    assert!(at(&page, 0.5, 0.75) == yellow && count(&page, red) > 200, "the background and watermark stay");
+}
+
 /// Pages from 1 to 1 stays one page: the dialog used to turn "to" back into the last page on
 /// every frame while both were 1, so only page 1 could not be chosen alone. The field starts on
 /// the last page.

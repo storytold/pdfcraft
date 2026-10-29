@@ -7,7 +7,8 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
 use pdfcraft_engine::{Added, AddedContent, AddedText, Edit};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{DocView, PageXform};
+use crate::canvas::{DocView, PageToolContext, PageXform};
+use crate::page_cursor::Layer;
 use crate::page_pointer::PagePointer;
 use crate::theme::Tokens;
 use crate::widgets;
@@ -345,20 +346,15 @@ pub(crate) fn select_grabs(xf: &PageXform, ptr: &PagePointer, page: usize, info:
 
 /// Pointer input on one page in Edit mode (`adding_text` with the Text tool). `true` when it
 /// used the input.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn page_input(
-    ui: &egui::Ui,
-    resp: &egui::Response,
-    xf: &PageXform,
-    ptr: &PagePointer,
-    page: usize,
-    info: &DocInfo,
+    cx: PageToolContext<'_>,
     added: &[Added],
     adding_text: bool,
     edit_on_click: bool,
     style: &AddedText,
     view: &mut DocView,
 ) -> bool {
+    let PageToolContext { resp, xf, ptr, page, info, .. } = cx;
     let mut consumed = false;
     let pointer = ptr.pos;
     let cv = &mut view.content;
@@ -398,13 +394,8 @@ pub(crate) fn page_input(
         .and_then(|(_, si)| items.iter().find(|(i, _)| *i == si))
         .map(|(_, a)| screen_rect(xf, info, page, a.content.rect()));
     let corner = selected_rect.and_then(|r| handles(r).into_iter().find(|(c, ..)| c.distance(p) <= 6.0));
-    // Cursors only where the page shows: the mode bar and side panels over a page scrolled under
-    // them keep their own (#2755).
-    let shows = resp.contains_pointer();
     if adding_text && hit.is_none() {
-        if shows {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
-        }
+        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Text);
         if resp.clicked() {
             // Text that can't be drawn stays where it is being typed (#125).
             if cv.hold_blocked() {
@@ -429,10 +420,10 @@ pub(crate) fn page_input(
         }
         return consumed;
     }
-    if let Some((_, left, top)) = corner.filter(|_| shows) {
-        ui.ctx().set_cursor_icon(if left == top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
-    } else if hit.is_some() && shows {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
+    if let Some((_, left, top)) = corner {
+        view.cursor.claim(Layer::Handle, if left == top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
+    } else if hit.is_some() {
+        view.cursor.claim(Layer::Placed, egui::CursorIcon::Move);
     }
     if resp.drag_started() {
         let origin = ptr.origin.unwrap_or(p);

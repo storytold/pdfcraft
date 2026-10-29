@@ -1,4 +1,6 @@
-use super::*;
+use super::{GridDrop, GridFile, PdfCraftApp};
+#[cfg(not(target_arch = "wasm32"))]
+use super::{OpenRequest, open_worker};
 
 /// Read a file dropped on a page grid (see [`GridFile`]).
 fn read_grid_file((name, source): GridFile) -> Result<(String, Vec<u8>), (String, String)> {

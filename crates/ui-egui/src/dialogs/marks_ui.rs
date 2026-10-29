@@ -3,6 +3,8 @@
 //! page the range selects, with the marks laid out on it. "Update" opens the same dialog in
 //! replace mode.
 
+use std::collections::{HashMap, HashSet};
+
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
 use pdfcraft_engine::{Background, Edit, FontFamily, HeaderFooter, MarkKind, Watermark};
 
@@ -11,6 +13,9 @@ use crate::{PdfCraftApp, icons, widgets};
 
 /// How far a watermark may be moved from the page centre, in points.
 const MAX_OFFSET: f64 = 20_000.0;
+
+/// The preview page's longer side, in points.
+const PREVIEW_SIDE: f32 = 190.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Subset {
@@ -63,7 +68,7 @@ impl PageRange {
                 Subset::Even => tl!("Even pages only"),
                 Subset::Odd => tl!("Odd pages only"),
             };
-            egui::ComboBox::from_id_salt("mark-subset").selected_text(label).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("mark-subset").selected_text(label).show_ui(ui, |ui| {
                 ui.selectable_value(&mut self.subset, Subset::All, tl!("All pages in range"));
                 ui.selectable_value(&mut self.subset, Subset::Even, tl!("Even pages only"));
                 ui.selectable_value(&mut self.subset, Subset::Odd, tl!("Odd pages only"));
@@ -152,7 +157,7 @@ fn preview(
     draw: impl FnOnce(&egui::Painter, Rect, f32),
 ) {
     let (w, h) = (size.0.max(1.0), size.1.max(1.0));
-    let s = (190.0 / w.max(h)) as f32;
+    let s = (f64::from(PREVIEW_SIDE) / w.max(h)) as f32;
     let (r, _) = ui.allocate_exact_size(vec2(210.0, 210.0), egui::Sense::hover());
     let page = Rect::from_center_size(r.center(), vec2(w as f32 * s, h as f32 * s));
     let painter = ui.painter_at(r);
@@ -178,6 +183,119 @@ fn rgb32(c: [f64; 3]) -> Color32 {
 fn behind(color: [f64; 3], opacity: f64) -> Color32 {
     let a = if opacity.is_finite() { opacity.clamp(0.0, 1.0) } else { 1.0 };
     rgb32(color.map(|c| 1.0 - a * (1.0 - c)))
+}
+
+/// In Update, the pages previewed without the marks the dialog replaces. Their thumbnails still
+/// have them, so the new marks would be drawn over the old ones, and a new background colour
+/// would tint the old one. The document without them is made once per dialog (it costs about a
+/// save). The page shown is drawn from it straight away, at the preview's small size, so neither
+/// a blank sheet nor the old marks show while it renders; the pages a step goes to next render
+/// ahead, off the UI thread (not on the web, where the pool renders on it), so stepping rarely
+/// waits.
+#[derive(Default)]
+pub(crate) struct UnmarkedPage {
+    /// The document, its edit generation and the kind of mark taken away.
+    key: Option<(pdfcraft_engine::DocId, u64, MarkKind)>,
+    pages: Option<pdfcraft_engine::UnmarkedPages>,
+    /// Renders the pages next to the one shown, ahead. None on the web, where the pool renders on
+    /// the UI thread inside `try_recv`: it would draw them in the same frame too.
+    renderer: Option<pdfcraft_render::RenderPool>,
+    /// The pages rendered, with the scale (×1000) they were rendered at: the page shown and the
+    /// pages next to it.
+    textures: HashMap<usize, (u64, egui::TextureHandle)>,
+    /// Pages that failed to render when shown, so they aren't tried every frame: their
+    /// thumbnails show instead, the other pages still don't.
+    failed: HashSet<usize>,
+    /// The pages asked of the renderer ahead, and not back yet. Nothing waits for them: a step
+    /// is a frame, which takes what has come back first and draws the rest itself.
+    ahead: Vec<(usize, u64)>,
+    /// Pages (at a scale) that came back from rendering ahead with an error, not asked ahead
+    /// again: the error needn't be the page's, so drawing it when shown still decides.
+    not_ahead: HashSet<(usize, u64)>,
+}
+
+impl UnmarkedPage {
+    /// The picture to preview `page` on in place of its thumbnail, or `None` for the thumbnail:
+    /// not Update, no marks of `kind` in the document, the pages can't be prepared, or `page`
+    /// fails to render and was never drawn (a picture of it at another scale is shown rather than
+    /// the old marks). `near` are the pages a step goes to from it, rendered ahead.
+    fn picture(
+        &mut self,
+        ctx: &egui::Context,
+        (doc, id): (&pdfcraft_engine::Document, pdfcraft_engine::DocId),
+        page: usize,
+        near: &[usize],
+        kind: MarkKind,
+        replace: bool,
+    ) -> Option<egui::TextureId> {
+        let key = replace.then(|| (id, doc.edit_generation(), kind));
+        if self.key != key {
+            *self = Self { key, ..Default::default() };
+            if replace {
+                self.pages = doc.without_marks(kind).ok().flatten();
+                self.renderer = self.pages.as_ref().filter(|_| !cfg!(target_arch = "wasm32")).map(|p| p.renderer());
+            }
+        }
+        self.pages.as_ref()?;
+        let near = if self.renderer.is_some() { near } else { &[][..] };
+        // At the preview's size in pixels.
+        let scale = |page: usize| {
+            let p = doc.info.pages.get(page)?;
+            let s = PREVIEW_SIDE * ctx.pixels_per_point() / p.width.max(p.height).max(1.0);
+            Some((s, (s * 1000.0) as u64))
+        };
+        let load = |ctx: &egui::Context, out: pdfcraft_render::RenderedPage| {
+            let image = crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba);
+            ctx.load_texture("marks-preview-unmarked", image, egui::TextureOptions::LINEAR)
+        };
+        while let Some(out) = self.renderer.as_ref().and_then(|r| r.try_recv()) {
+            let at = (out.request.page, out.request.tag);
+            self.ahead.retain(|a| *a != at);
+            // An error rendering ahead needn't be the page's (the pool retires its parser, a
+            // request is cancelled): the page is drawn here when it is shown, and that decides.
+            // It isn't asked ahead again, so a page that always fails isn't rendered every frame.
+            if out.error.is_none() {
+                self.textures.insert(at.0, (at.1, load(ctx, out)));
+            } else {
+                self.not_ahead.insert(at);
+            }
+        }
+        let (s, tag) = scale(page)?;
+        if !self.failed.contains(&page)
+            && self.textures.get(&page).is_none_or(|(t, _)| *t != tag)
+            && let Some(pages) = self.pages.as_mut()
+        {
+            match pages.render_page(page, s) {
+                Ok(out) => {
+                    self.textures.insert(page, (tag, load(ctx, out)));
+                }
+                Err(_) => {
+                    self.failed.insert(page);
+                }
+            }
+        }
+        // Ahead: the pages a step goes to, not rendered yet at their scale.
+        let wanted: Vec<(usize, u64)> = near
+            .iter()
+            .filter(|p| !self.failed.contains(p))
+            .filter_map(|&p| scale(p).map(|(_, t)| (p, t)))
+            .filter(|at| !self.not_ahead.contains(at))
+            .filter(|(p, t)| self.textures.get(p).is_none_or(|(have, _)| have != t))
+            .collect();
+        if let Some(renderer) = self.renderer.as_ref()
+            && !wanted.is_empty()
+            && wanted != self.ahead
+        {
+            let requests = wanted
+                .iter()
+                .filter_map(|&(p, _)| scale(p).map(|(s, tag)| pdfcraft_render::RenderRequest { page: p, scale: s, tag, ..Default::default() }));
+            renderer.set_queue(requests.collect());
+            self.ahead = wanted;
+        }
+        self.textures.retain(|p, _| *p == page || near.contains(p));
+        // A picture rendered at another scale beats the thumbnail with the old marks.
+        self.textures.get(&page).map(|(_, t)| t.id())
+    }
 }
 
 /// The page (0-based) the preview shows: the current one when the range selects it, otherwise the
@@ -227,7 +345,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
             ui.horizontal(|ui| {
                 // The standard faces a header can be drawn in (#3754).
                 ui.label(tl!("Font:"));
-                egui::ComboBox::from_id_salt("hf-font").selected_text(d.hf.font.label()).width(100.0).show_ui(ui, |ui| {
+                craft_ui::ComboBox::from_id_salt("hf-font").selected_text(d.hf.font.label()).width(100.0).show_ui(ui, |ui| {
                     for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
                         ui.selectable_value(&mut d.hf.font, f, f.label());
                     }
@@ -267,7 +385,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 }
             });
             ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("hf-page-format").selected_text(PAGE_FORMATS[d.page_format].trim_matches(['<', '>'])).show_ui(
+                craft_ui::ComboBox::from_id_salt("hf-page-format").selected_text(PAGE_FORMATS[d.page_format].trim_matches(['<', '>'])).show_ui(
                     ui,
                     |ui| {
                         for (k, f) in PAGE_FORMATS.iter().enumerate() {
@@ -279,7 +397,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     d.hf.text[d.focused_box].push_str(PAGE_FORMATS[d.page_format]);
                 }
                 ui.add_space(12.0);
-                egui::ComboBox::from_id_salt("hf-date-format").selected_text(DATE_FORMATS[d.date_format].trim_matches(['<', '>'])).show_ui(
+                craft_ui::ComboBox::from_id_salt("hf-date-format").selected_text(DATE_FORMATS[d.date_format].trim_matches(['<', '>'])).show_ui(
                     ui,
                     |ui| {
                         for (k, f) in DATE_FORMATS.iter().enumerate() {
@@ -378,12 +496,16 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     ui.add_space(8.0);
     // The preview: the current page (or the page stepped to), or the first one the range selects
     // if it leaves that out, drawn from its thumbnail at its displayed size (after /Rotate), the
-    // frame the engine lays the marks out in.
+    // frame the engine lays the marks out in. Update draws it without the marks it replaces.
     let target = shown_preview(&d.range, &mut d.preview, current, count);
     let page = doc.info.pages.get(target).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));
-    let picture = app.views.get_mut(i).and_then(|view| {
-        view.need_thumbnail(target, true);
-        view.thumb_id(target)
+    let near: Vec<usize> = [false, true].into_iter().filter_map(|forward| step_preview(&d.range, target, count, forward)).collect();
+    let unmarked = app.unmarked_page.picture(ui.ctx(), (doc, id), target, &near, kind, d.replace);
+    let picture = unmarked.or_else(|| {
+        app.views.get_mut(i).and_then(|view| {
+            view.need_thumbnail(target, true);
+            view.thumb_id(target)
+        })
     });
     let tint = if kind == MarkKind::Background && !d.use_file { behind(d.bg.color, d.bg.opacity) } else { Color32::WHITE };
     let hf = d.hf.clone();

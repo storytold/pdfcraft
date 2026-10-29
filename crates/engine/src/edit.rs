@@ -122,6 +122,11 @@ pub enum Edit {
     /// Bookmarks for the tagged headings (H, H1–H6), nested by level under a new first
     /// "Untitled" bookmark (New Bookmarks from Structure).
     BookmarksFromStructure,
+    /// Bookmarks for the lines set in `levels`' styles (the first is level 1, the next nests
+    /// under it, …), under a new first "Untitled" bookmark (#1693; see [`crate::text_style_bookmarks`]).
+    BookmarksFromTextStyles {
+        levels: Vec<crate::text_style_bookmarks::TextStyle>,
+    },
     /// Label pages `from..=to` (0-based) as Acrobat's "Number pages" does; later pages keep their labels.
     NumberPages {
         from: usize,
@@ -286,6 +291,12 @@ pub enum Edit {
     },
     DeleteField {
         name: String,
+    },
+    /// Delete one widget of a field (`widget`, 0-based in the field's widgets): one radio button
+    /// of a group, or one copy of a duplicated field. The last widget takes the field with it.
+    DeleteWidget {
+        name: String,
+        widget: usize,
     },
     /// Page properties ▸ Tab order, for pages (0-based).
     SetTabOrder {
@@ -517,7 +528,8 @@ pub enum Edit {
         links: Vec<(usize, Vec<[f64; 4]>, String)>,
         style: LinkStyle,
     },
-    /// Import comments and/or form data (XFDF, FDF, XML, CSV, tab-delimited text).
+    /// Import comments and/or form data (XFDF, FDF, XML, CSV, tab-delimited text), or the
+    /// comments of another PDF onto the pages with the same numbers.
     ImportData {
         name: String,
         bytes: Arc<Vec<u8>>,

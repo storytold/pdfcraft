@@ -7,8 +7,8 @@ use egui::{Color32, Pos2, Rect, Stroke};
 use pdfcraft_engine::{Document, Edit, EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{DocView, PageXform};
-use crate::page_pointer::PagePointer;
+use crate::canvas::{DocView, PageToolContext, PageXform};
+use crate::page_cursor::Layer;
 
 const BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
@@ -163,15 +163,8 @@ fn leave_single(view: &mut DocView) {
 
 /// Returns true while group selection owns the interaction. Ordinary clicks still reach the
 /// single-object text/resize tools. A text draft is finished or discarded through its editor.
-pub(crate) fn page_input(
-    ui: &egui::Ui,
-    resp: &egui::Response,
-    xf: &PageXform,
-    ptr: &PagePointer,
-    page: usize,
-    doc: &Document,
-    view: &mut DocView,
-) -> bool {
+pub(crate) fn page_input(cx: PageToolContext<'_>, view: &mut DocView) -> bool {
+    let PageToolContext { ui, xf, ptr, page, .. } = cx;
     if view.objects.input_blocked {
         return true;
     }
@@ -189,22 +182,13 @@ pub(crate) fn page_input(
         return false;
     }
     let mut selection = std::mem::take(&mut view.objects);
-    let result = input(&mut selection, ui, resp, xf, ptr, page, doc, view);
+    let result = input(&mut selection, cx, view);
     view.objects = selection;
     result
 }
 
-#[allow(clippy::too_many_arguments)]
-fn input(
-    s: &mut ObjectSelection,
-    ui: &egui::Ui,
-    resp: &egui::Response,
-    xf: &PageXform,
-    ptr: &PagePointer,
-    page: usize,
-    doc: &Document,
-    view: &mut DocView,
-) -> bool {
+fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -> bool {
+    let PageToolContext { ui, resp, xf, ptr, page, doc, .. } = cx;
     let pointer = ptr.pos;
     let (pressed, down) = (ptr.pressed().is_some(), ptr.primary_down);
     let info = &doc.info;
@@ -255,7 +239,7 @@ fn input(
         } else {
             s.gesture = Some(gesture);
         }
-        ui.ctx().set_cursor_icon(if gesture.marquee { egui::CursorIcon::Crosshair } else { egui::CursorIcon::Move });
+        view.cursor.claim(Layer::Drag, if gesture.marquee { egui::CursorIcon::Crosshair } else { egui::CursorIcon::Move });
         return true;
     }
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p) && ui.clip_rect().contains(*p) && resp.rect.contains(*p)) else {
@@ -265,7 +249,7 @@ fn input(
         if s.page == Some(page) && !s.selected.is_empty() {
             let union = s.selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o)));
             if union.contains(p) {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
+                view.cursor.claim(Layer::Placed, egui::CursorIcon::Move);
             }
             return true;
         }

@@ -237,6 +237,16 @@ impl Document {
         self.generation
     }
 
+    /// The styles the document's text is set in, the largest first, for bookmarks from text
+    /// styles (#1693).
+    /// Empty when the document doesn't allow copying: the samples are its text.
+    pub fn text_styles(&self) -> Vec<crate::text_style_bookmarks::TextStyleUse> {
+        if !self.allows_copying() {
+            return Vec::new();
+        }
+        self.editor.as_ref().map(|e| crate::text_style_bookmarks::styles(&e.cos)).unwrap_or_default()
+    }
+
     /// Edit a PDF ▸ Edit text: the lines of existing text on `page` (0-based).
     pub fn text_lines(&self, page: usize) -> Vec<pdfcraft_edit::TextLine> {
         self.editor.as_ref().and_then(|e| pdfcraft_edit::text_lines(&e.cos, page).ok()).unwrap_or_default()
@@ -246,6 +256,11 @@ impl Document {
     /// formula reads, what is wrong with the order, and the order Fix order writes.
     pub fn calculation_order(&self) -> CalculationOrder {
         self.editor.as_ref().map(|e| pdfcraft_forms::calculation_order(&e.cos, &self.form)).unwrap_or_default()
+    }
+
+    /// Page properties ▸ Tab order: each page's tab order, in page order.
+    pub fn tab_orders(&self) -> Vec<TabOrder> {
+        self.editor.as_ref().map(|e| pdfcraft_forms::tab_orders(&e.cos)).unwrap_or_default()
     }
 
     /// Add alternate text: the figures, in document order.

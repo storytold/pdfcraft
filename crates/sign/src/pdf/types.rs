@@ -1,4 +1,4 @@
-use super::*;
+use super::Certificate;
 
 /// Certificates trusted for signing (Acrobat: Trusted Certificates). Only `certs`, the user's own
 /// list, is trusted by default; a trust list has to be loaded.
