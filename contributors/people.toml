@@ -194,3 +194,7 @@ sync_github_name = false
 
 [people.enriquemelzer-bit]
 sync_github_name = true
+
+[people.huppiflupp]
+display_name = "huppiflupp"
+
