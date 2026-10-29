@@ -3381,6 +3381,32 @@ kind = "model"
 usage = "Scan & OCR: reads the words it finds (cargo xtask models)"
 sha256 = "86c145c2edb96c8caed5b1ebb8f44d706408922211451c309c625157dd6061c5"
 
+[[fetched]]
+file = "doclayout.onnx"
+url = "https://huggingface.co/PaddlePaddle/PP-DocLayoutV3_onnx/resolve/46bbdf188bb0a772c08aed74882ce7e51a8f1ea6/inference.onnx"
+title = "PP-DocLayoutV3 document layout model (ONNX export)"
+author = "PaddlePaddle Authors (PaddleOCR; layout module of PaddleOCR-VL-1.5)"
+source = "https://huggingface.co/PaddlePaddle/PP-DocLayoutV3_onnx/tree/46bbdf188bb0a772c08aed74882ce7e51a8f1ea6 (inference.onnx, saved here as doclayout.onnx; model card: license apache-2.0)"
+licence = "Apache-2.0"
+licence_url = "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v3.0.0/LICENSE"
+licence_sha256 = "3840c5c0c61c294264d2dd77b8777be6ddd90121ef4e0e64abcd22edea581d6e"
+kind = "model"
+usage = "Scan & OCR ▸ Recognize text: finds a page's regions (paragraphs, headings, captions, tables, figures) and their reading order, so recognised lines are read region by region and broken into paragraphs (optional; cargo xtask models)"
+sha256 = "45bf71750b00739a41fc209f132eb104a4d6b5bb29483c9078164d8b87cf28ba"
+
+[[fetched]]
+file = "slanet-plus.onnx"
+url = "https://huggingface.co/PaddlePaddle/SLANet_plus_onnx/resolve/7dbe640e127602bf506815e822c09758de73c482/inference.onnx"
+title = "SLANet_plus table structure recognition model (ONNX export)"
+author = "PaddlePaddle Authors (PaddleOCR; table structure module)"
+source = "https://huggingface.co/PaddlePaddle/SLANet_plus_onnx/tree/7dbe640e127602bf506815e822c09758de73c482 (inference.onnx, saved here as slanet-plus.onnx; model card: license apache-2.0)"
+licence = "Apache-2.0"
+licence_url = "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v3.0.0/LICENSE"
+licence_sha256 = "3840c5c0c61c294264d2dd77b8777be6ddd90121ef4e0e64abcd22edea581d6e"
+kind = "model"
+usage = "Scan & OCR ▸ Recognize text: reads the rows, cells and spans of the table regions the layout model finds, so a recognised table comes out as a table with its words in their cells (optional; cargo xtask models)"
+sha256 = "7790c0c13ce064782c9d22ebeb16b4da8216f83d3ba576da962c106ef58386da"
+
 [[build_input]]
 name = "craft-fonts"
 option = "CRAFT_FONTS_DIR"

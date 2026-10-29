@@ -79,20 +79,25 @@ impl Automation {
             .iter()
             .map(|p| match &p.skipped {
                 Some(why) => json!({ "page": p.page + 1, "skipped": why }),
-                None if copy => json!({ "page": p.page + 1, "words": p.words.len(), "already_on_page": p.already_on_page, "text": p.text() }),
-                None => json!({ "page": p.page + 1, "words": p.words.len(), "already_on_page": p.already_on_page }),
+                None if copy => {
+                    json!({ "page": p.page + 1, "words": p.words.len(), "tables": p.tables.len(), "already_on_page": p.already_on_page, "text": p.text() })
+                }
+                None => json!({ "page": p.page + 1, "words": p.words.len(), "tables": p.tables.len(), "already_on_page": p.already_on_page }),
             })
             .collect();
         Ok(json!({ "words": found.iter().map(|p| p.words.len()).sum::<usize>(), "pages": list }))
     }
 
-    /// Whether text recognition's models are installed, the directories searched for them (in
-    /// order), and the languages it reads, each as a code and a name.
+    /// Whether text recognition's models are installed, whether the layout and table structure
+    /// models are too, the directories searched for them (in order), and the languages it reads,
+    /// each as a code and a name.
     pub(crate) fn ocr_status(&self) -> Result<Value> {
         use pdfcraft_engine::ocr;
         let dirs: Vec<String> = ocr::Models::search_dirs().iter().map(|d| d.to_string_lossy().into_owned()).collect();
         let langs: Vec<Value> = ocr::LANGUAGES.iter().map(|(c, n)| json!({ "code": c, "name": n })).collect();
-        Ok(json!({ "available": ocr::available(), "search_dirs": dirs, "languages": langs }))
+        Ok(
+            json!({ "available": ocr::available(), "layout": ocr::layout_available(), "tables": ocr::tables_available(), "search_dirs": dirs, "languages": langs }),
+        )
     }
 }
 

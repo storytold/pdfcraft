@@ -6517,6 +6517,7 @@ fn ocr_tools_make_a_scan_searchable() {
     let mut a = auto(&dir);
     let status = ok(&mut a, "ocr_status", json!({}));
     assert_eq!(status["languages"][0]["code"], "en");
+    assert!(status["layout"].is_boolean() && status["tables"].is_boolean(), "{status}");
     if status["available"] != true {
         eprintln!("skipped: OCR models not installed");
         return;
@@ -6528,6 +6529,7 @@ fn ocr_tools_make_a_scan_searchable() {
     let r = ok(&mut a, "ocr_recognize", json!({ "doc": scan }));
     assert!(r["pages"][0]["text"].as_str().unwrap().to_lowercase().contains("searchable"), "{r}");
     assert!(r["words"].as_u64().unwrap() >= 4);
+    assert_eq!(r["pages"][0]["tables"], 0, "{r}");
     let again = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "pages": [1] }));
     assert!(again["pages"][0]["skipped"].is_string(), "{again}");
     assert!(matches!(a.call("ocr_recognize", &json!({ "doc": scan, "language": "xx" })), Err(ToolError::InvalidArgs(_))));

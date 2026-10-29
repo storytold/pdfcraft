@@ -7,16 +7,33 @@
 //! searchable image (Acrobat's "Searchable Image (Exact)": the image is left untouched).
 //!
 //! The models read the Latin alphabet (English and other languages written without accents).
+//!
+//! When the layout model is installed too (PP-DocLayoutV3, Apache-2.0, fetched the same way),
+//! the recognised lines are read region by region in the order it gives, and each region is a
+//! paragraph. With the table structure model as well (SLANet_plus, Apache-2.0, fetched the same
+//! way), a `table` region becomes a [`Table`] of rows and cells, its words put into the cells.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::path::{Path, PathBuf};
+
+mod layout;
+mod regions;
+mod tables;
+
+pub use tables::{Cell, Table};
 
 pub use pdfcraft_fonts::helvetica_width;
 
 /// The model files, as named in ATTRIBUTION.toml.
 pub const DETECTION_MODEL: &str = "text-detection.onnx";
 pub const RECOGNITION_MODEL: &str = "text-recognition.onnx";
+/// The layout model (optional: without it, a page's lines are ordered by their position alone and
+/// make one paragraph).
+pub const LAYOUT_MODEL: &str = "doclayout.onnx";
+/// The table structure model (optional, and used only with the layout model: without it, a table
+/// region is a paragraph like any other).
+pub const TABLE_MODEL: &str = "slanet-plus.onnx";
 
 /// The recognition model's alphabet, as it was trained (ocrs-models' `DEFAULT_ALPHABET`): its
 /// output classes follow this order. The ocrs crate's own copy has an `E` where the training had
@@ -85,6 +102,22 @@ impl Models {
     pub fn dirs_beside_exe(exe_dir: &Path) -> Vec<PathBuf> {
         vec![exe_dir.join("models"), exe_dir.join("../Resources/models"), exe_dir.join("../share/pdfcraft/models")]
     }
+
+    /// Where the layout model ([`LAYOUT_MODEL`]) is: the first of [`Models::search_dirs`] that
+    /// has it.
+    pub fn find_layout() -> Option<PathBuf> {
+        Self::find_file(LAYOUT_MODEL)
+    }
+
+    /// Where the table structure model ([`TABLE_MODEL`]) is: the first of
+    /// [`Models::search_dirs`] that has it.
+    pub fn find_tables() -> Option<PathBuf> {
+        Self::find_file(TABLE_MODEL)
+    }
+
+    fn find_file(name: &str) -> Option<PathBuf> {
+        Self::search_dirs().into_iter().map(|d| d.join(name)).find(|p| p.is_file())
+    }
 }
 
 /// A recognised word: its text and its box in image pixels `[left, top, right, bottom]`.
@@ -106,9 +139,21 @@ impl Line {
     }
 }
 
+/// Recognised lines read as one block of text: a paragraph, a heading, a caption, or a table.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Paragraph {
+    /// The lines; in a table, one line a cell (in row order, left to right) holding the cell's
+    /// words, empty for an empty cell.
+    pub lines: Vec<Line>,
+    /// The table's rows and cells, when the paragraph is a table.
+    pub table: Option<Table>,
+}
+
 /// A loaded recogniser. Loading takes a moment; keep one and reuse it.
 pub struct Ocr {
     engine: ocrs::OcrEngine,
+    layout: Option<regions::Layout>,
+    tables: Option<tables::TableModel>,
 }
 
 impl Ocr {
@@ -121,25 +166,42 @@ impl Ocr {
             ..Default::default()
         };
         let engine = ocrs::OcrEngine::new(params).map_err(|e| OcrError::Load("ocr engine".into(), e.to_string()))?;
-        Ok(Ocr { engine })
+        Ok(Ocr { engine, layout: None, tables: None })
     }
 
-    /// Load the models found by [`Models::find`].
+    /// Load the models found by [`Models::find`], and the layout model ([`LAYOUT_MODEL`]) and the
+    /// table structure model ([`TABLE_MODEL`]) from the first search directory that has each, if
+    /// any does.
     pub fn find() -> Result<Ocr, OcrError> {
-        Self::load(&Models::find().ok_or(OcrError::NoModels)?)
+        let mut ocr = Self::load(&Models::find().ok_or(OcrError::NoModels)?)?;
+        if let Some(path) = Models::find_layout() {
+            ocr = ocr.with_layout(&path)?;
+        }
+        if let Some(path) = Models::find_tables() {
+            ocr = ocr.with_tables(&path)?;
+        }
+        Ok(ocr)
+    }
+
+    /// This recogniser with the layout model at `path`. An installed model that does not load
+    /// is an error, as for the other two: a damaged installation is reported, not worked round.
+    fn with_layout(self, path: &Path) -> Result<Ocr, OcrError> {
+        Ok(Ocr { layout: Some(regions::Layout::load(path)?), ..self })
+    }
+
+    /// This recogniser with the table structure model at `path` (an installed model that does not
+    /// load is an error, as for the layout model).
+    fn with_tables(self, path: &Path) -> Result<Ocr, OcrError> {
+        Ok(Ocr { tables: Some(tables::TableModel::load(path)?), ..self })
     }
 
     /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels.
-    pub fn recognize(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Line>, OcrError> {
-        if width == 0 || height == 0 || pixels.is_empty() {
-            return Err(OcrError::EmptyImage);
-        }
-        // ocrs wants 1 or 3 channels.
-        let rgb: std::borrow::Cow<[u8]> = if pixels.len() == (width * height * 4) as usize {
-            pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into()
-        } else {
-            pixels.into()
-        };
+    /// The lines come in reading order: split at column gutters, each column top to bottom.
+    /// With the layout model they are then read region by region, each region a paragraph, and
+    /// with the table structure model too, a table region is a table of cells; without the layout
+    /// model the page is one paragraph.
+    pub fn recognize(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Paragraph>, OcrError> {
+        let (rgb, channels) = picture(pixels, width, height)?;
         let err = |e: &dyn std::fmt::Display| OcrError::Recognize(e.to_string());
         let source = ocrs::ImageSource::from_bytes(&rgb, (width, height)).map_err(|e| err(&e))?;
         let input = self.engine.prepare_input(source).map_err(|e| err(&e))?;
@@ -147,7 +209,7 @@ impl Ocr {
         let lines = self.engine.find_text_lines(&input, &found);
         let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
         use ocrs::TextItem;
-        Ok(read
+        let lines = read
             .into_iter()
             .flatten()
             .map(|line| Line {
@@ -161,8 +223,68 @@ impl Ocr {
                     .collect(),
             })
             .filter(|l| !l.words.is_empty())
-            .collect())
+            .collect();
+        Ok(self.layout_page(lines, &rgb, channels, width as usize, height as usize))
     }
+
+    /// What [`Ocr::recognize`] does with the lines it read, for lines read some other way: `lines`
+    /// (words in pixels of the picture) put in reading order and, with the layout model, read
+    /// region by region, tables cell by cell. `pixels` is the page picture the lines are on, as
+    /// for [`Ocr::recognize`].
+    pub fn arrange(&self, lines: Vec<Line>, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Paragraph>, OcrError> {
+        let (rgb, channels) = picture(pixels, width, height)?;
+        Ok(self.layout_page(lines, &rgb, channels, width as usize, height as usize))
+    }
+
+    /// `lines` in reading order, then by region and table cell (see [`Ocr::recognize`]); `rgb` is
+    /// the page picture, `channels` (1 or 3) bytes a pixel.
+    fn layout_page(&self, lines: Vec<Line>, rgb: &[u8], channels: usize, width: usize, height: usize) -> Vec<Paragraph> {
+        let lines = layout::reading_order(lines);
+        let regions = match &self.layout {
+            // The layout only orders what was read: if it fails, the page keeps the geometric
+            // order rather than losing its text.
+            Some(model) => model.regions(rgb, channels, width, height).unwrap_or_default(),
+            None => Vec::new(),
+        };
+        let paragraphs = layout::paragraphs(lines, &regions);
+        let read_as_table = tables::to_read(paragraphs.iter().map(|(region, _)| region.and_then(|i| regions.get(i)).map(|r| r.label)));
+        paragraphs
+            .into_iter()
+            .zip(read_as_table)
+            .map(|((region, lines), as_table)| {
+                let table = region.and_then(|i| regions.get(i)).filter(|_| as_table);
+                // A table the model cannot read stays a paragraph: its text is not lost.
+                let read =
+                    table.zip(self.tables.as_ref()).and_then(|(region, model)| model.read(rgb, channels, width, height, region.rect).ok().flatten());
+                let Some(found) = read else { return Paragraph { lines, table: None } };
+                match tables::fill(&found.rects, lines) {
+                    Ok(cells) => Paragraph { lines: cells, table: Some(found.table) },
+                    Err(lines) => Paragraph { lines, table: None },
+                }
+            })
+            .collect()
+    }
+}
+
+/// `pixels` as a `width` × `height` picture of 1 or 3 bytes a pixel (RGBA loses its alpha), and
+/// how many bytes a pixel it has. An error when the size doesn't match the pixels.
+fn picture(pixels: &[u8], width: u32, height: u32) -> Result<(std::borrow::Cow<'_, [u8]>, usize), OcrError> {
+    if width == 0 || height == 0 || pixels.is_empty() {
+        return Err(OcrError::EmptyImage);
+    }
+    // In u64, so a huge size cannot wrap round to the buffer's length; ocrs multiplies the
+    // sides in u32 and slices the pixels by the product, so it gets only sizes that fit.
+    let area = u64::from(width) * u64::from(height);
+    let channels = [1, 3, 4].into_iter().find(|&c| area.checked_mul(c) == Some(pixels.len() as u64));
+    let Some(channels) = channels.filter(|_| area <= u64::from(u32::MAX)) else {
+        return Err(OcrError::Recognize(format!("{} bytes are not a {width} × {height} picture (1, 3 or 4 bytes a pixel)", pixels.len())));
+    };
+    // ocrs wants 1 or 3 channels.
+    Ok(if channels == 4 {
+        (pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into(), 3)
+    } else {
+        (pixels.into(), channels as usize)
+    })
 }
 
 /// A word placed on a page, in PDF user space: the bottom-left corner of its box, and the
@@ -427,6 +549,22 @@ mod tests {
         assert!(!message.contains("cargo") && message.contains("PDFCRAFT_MODELS"), "{message}");
     }
 
+    /// A size whose pixel count overflows 32 bits, or doesn't match the pixels, is an error: it
+    /// used to overflow in the RGBA check (a panic in debug builds) and in ocrs, which then sliced
+    /// the pixels by the wrapped size (a panic in every build).
+    #[test]
+    fn a_size_that_does_not_match_the_pixels_is_an_error() {
+        let Some(models) = Models::find() else {
+            eprintln!("skipped: OCR models not installed");
+            return;
+        };
+        let ocr = Ocr::load(&models).unwrap();
+        // 65537² wraps round to 131073 in u32.
+        for (len, w, h) in [(131_073 * 3, 65_537, 65_537), (12, 65_536, 65_536), (5, 2, 2), (13, 2, 2)] {
+            assert!(matches!(ocr.recognize(&vec![255; len], w, h), Err(OcrError::Recognize(_))), "{len} bytes, {w} × {h}");
+        }
+    }
+
     /// End to end on rendered text, when the models are installed (`cargo xtask models`).
     #[test]
     fn reads_rendered_text() {
@@ -436,11 +574,55 @@ mod tests {
         };
         let ocr = Ocr::load(&models).unwrap();
         let (w, h, px) = test_image::hello();
-        let lines = ocr.recognize(&px, w, h).unwrap();
+        let lines: Vec<Line> = ocr.recognize(&px, w, h).unwrap().into_iter().flat_map(|p| p.lines).collect();
         let text: Vec<String> = lines.iter().map(Line::text).collect();
         assert!(text.iter().any(|t| t.contains("HELL") && t.contains("WOR")), "{text:?}");
         let word = lines.iter().flat_map(|l| &l.words).find(|w| w.text.contains("HELL")).unwrap();
         assert!(word.rect[0] >= 10.0 && word.rect[0] < 60.0, "{word:?}");
+    }
+
+    /// [`Ocr::find`] for an end-to-end test: `None` (skip) only when the models are not
+    /// installed. An installed model that does not load, such as a damaged `doclayout.onnx` or
+    /// `slanet-plus.onnx`, fails the test instead of skipping it.
+    fn installed(found: Result<Ocr, OcrError>) -> Option<Ocr> {
+        match found {
+            Ok(ocr) => Some(ocr),
+            Err(OcrError::NoModels) => None,
+            Err(e) => panic!("an installed OCR model does not load: {e}"),
+        }
+    }
+
+    #[test]
+    fn an_end_to_end_test_skips_only_without_the_models() {
+        assert!(installed(Err(OcrError::NoModels)).is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "an installed OCR model does not load: loading slanet-plus.onnx: damaged")]
+    fn an_installed_model_that_does_not_load_fails_an_end_to_end_test() {
+        let _ = installed(Err(OcrError::Load("slanet-plus.onnx".into(), "damaged".into())));
+    }
+
+    /// End to end, when every model is installed: the layout model finds a drawn table, the table
+    /// structure model reads its rows and cells, and each word lands in its cell, in row order.
+    #[test]
+    fn arranges_a_table_into_cells() {
+        let Some(ocr) = installed(Ocr::find()) else {
+            eprintln!("skipped: OCR models not installed");
+            return;
+        };
+        if ocr.layout.is_none() || ocr.tables.is_none() {
+            eprintln!("skipped: layout or table structure model not installed");
+            return;
+        }
+        let (w, h, px, words) = tables::model_tests::drawn_table(4, 3);
+        let lines = words.chunks(3).map(|row| Line { words: row.to_vec() }).collect();
+        let paragraphs = ocr.arrange(lines, &px, w as u32, h as u32).unwrap();
+        let tables: Vec<&Paragraph> = paragraphs.iter().filter(|p| p.table.is_some()).collect();
+        assert_eq!(tables.len(), 1, "{paragraphs:?}");
+        let table = tables[0].table.as_ref().unwrap();
+        assert_eq!(table.rows.iter().map(Vec::len).collect::<Vec<_>>(), [3, 3, 3, 3]);
+        assert_eq!(tables[0].lines.iter().map(Line::text).collect::<Vec<_>>(), words.iter().map(|w| w.text.clone()).collect::<Vec<_>>());
     }
 
     mod test_image {
