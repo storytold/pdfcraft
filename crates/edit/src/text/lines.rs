@@ -32,13 +32,13 @@ impl TextLine {
     }
 
     pub(crate) fn rotation(&self) -> f64 {
-        let m = Matrix(self.origin.tm).then(&Matrix(self.origin.ctm)).0;
-        m[1].atan2(m[0]).to_degrees()
+        let (x, y) = self.direction();
+        y.atan2(x).to_degrees()
     }
 
     /// The unit direction its baseline runs in, in user space.
     pub(super) fn direction(&self) -> (f64, f64) {
-        direction(&Matrix(self.origin.tm).then(&Matrix(self.origin.ctm)))
+        self.horizontal_frame.map_or_else(|| direction(&Matrix(self.origin.tm).then(&Matrix(self.origin.ctm))), |f| f.direction)
     }
 
     /// Whether it reads left to right along the page's x axis (most text; a page drawn
@@ -274,6 +274,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 face: s.face.clone(),
                 stream: si,
                 scope: s.scope,
+                horizontal_frame: s.horizontal_frame,
                 paint: s.paint.clone(),
                 logical_order: s.logical_order,
                 actual_text: s.actual_text,
@@ -388,6 +389,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             face: s.face.clone(),
             stream,
             scope: s.scope,
+            horizontal_frame: s.horizontal_frame,
             paint: s.paint.clone(),
             logical_order: s.logical_order,
             actual_text: s.actual_text,
@@ -544,7 +546,14 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
         let Some(form) = form_call(w.doc, resources, name, ts.ctm, &w.path, &mut w.budget) else { return Ok(()) };
         let ops = parse(&form.data).ops;
         // The form starts with the graphics state at its `Do`, its own matrix applied.
-        let mut carry = Carry { ts: Ts { ctm: form.ctm, ..ts }, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: *text_left };
+        let mut carry = Carry {
+            ts: Ts { ctm: form.ctm, ..ts },
+            stack: Vec::new(),
+            marked: Vec::new(),
+            frames: Vec::new(),
+            layers: Vec::new(),
+            text_left: *text_left,
+        };
         let stream = w.next_stream;
         w.next_stream = w.next_stream.saturating_add(1);
         if let Some(r) = form.obj {

@@ -1299,7 +1299,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         };
         // Editable text takes precedence over background/overlapping artwork. Both
         // inventories are painted every frame, even when text owns the pointer.
-        let text_used = crate::edit_text_ui::page_input(cx, &lines, view, !others_own_pointer && !image_owns_pointer);
+        let text_used = crate::edit_text_ui::page_input(cx, &lines, view, &images, !others_own_pointer && !image_owns_pointer);
         let image_cx = crate::edit_text_ui::ImageCx {
             ui,
             resp,

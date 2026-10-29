@@ -3213,6 +3213,32 @@ fn a_one_row_title_keeps_its_centre_when_it_grows_and_when_it_wraps() {
 }
 
 #[test]
+fn height_only_preserves_inferred_title_alignment_after_reopen_and_typing() {
+    for title in ["(Centered title) Tj", "(Centered ) Tj /F1 12 Tf (title) Tj"] {
+        let src = format!(
+            "BT /F1 18 Tf 1 0 0 1 252.477 700 Tm {title} ET\n\
+             BT /F1 12 Tf 1 0 0 1 72 640 Tm (Body text below the heading starts here and runs) Tj ET\n\
+             BT /F1 12 Tf 1 0 0 1 72 625.6 Tm (on for a second row of ordinary words.) Tj ET"
+        );
+        let mut doc = text_page(&src);
+        let before = text::text_blocks(&doc, 0).unwrap()[0].clone();
+        let centre = (before.rect[0] + before.rect[2]) / 2.0;
+        text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { vertical_frame: Some([680.0, 730.0]), ..Default::default() }).unwrap();
+        let mut doc = reopen(&doc);
+        assert!(close(text::text_blocks(&doc, 0).unwrap()[0].rect, before.rect), "height alone leaves the title ink in place");
+        text::replace_block(&mut doc, 0, 0, "Centered title with many more words added so that the single row has to become much longer").unwrap();
+        let doc = reopen(&doc);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert!(blocks[0].rows.len() > 1, "the title wraps within its original width");
+        for row in &blocks[0].rows {
+            let rect = row.iter().map(|i| lines[*i].rect).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]).unwrap();
+            assert!(((rect[0] + rect[2]) / 2.0 - centre).abs() < 2.0, "{title}: row {rect:?} must stay centred on {centre}");
+        }
+    }
+}
+
+#[test]
 fn a_new_paragraph_colour_does_not_spill_into_the_text_after_it() {
     let mut doc = text_page("BT /F1 10 Tf 72 700 Td (First paragraph) Tj 0 -40 Td (Second paragraph) Tj ET");
     let style = text::BlockStyle { color: Some([1.0, 0.0, 0.0]), ..Default::default() };
@@ -3450,6 +3476,271 @@ fn editing_text_keeps_an_overlapping_watermark_and_covered_paragraphs() {
     let mut ocr = text_page("BT /F1 12 Tf 0 Tr 1 0 0 1 72 700 Tm (Hello world) Tj ET BT /F1 12 Tf 3 Tr 1 0 0 1 72 700 Tm (Rello world) Tj ET");
     text::replace_line(&mut ocr, 0, 0, "Goodbye world").unwrap();
     assert_eq!(listed(&reopen(&ocr)), ["Goodbye world"]);
+}
+
+#[test]
+fn a_resized_paragraph_keeps_its_width_when_edited_after_reopening() {
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hi) Tj ET");
+    let before = text::text_lines(&doc, 0).unwrap();
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(90.0), ..Default::default() }).unwrap();
+    let mut doc = reopen(&doc);
+    let after = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(after[0].text, before[0].text);
+    assert!(close(after[0].rect, before[0].rect), "resizing must not stretch the glyphs");
+    let frame = text::text_blocks(&doc, 0).unwrap()[0].editing_rect();
+    assert!((frame[2] - frame[0] - 90.0).abs() < 0.01, "{frame:?}");
+    text::replace_block(&mut doc, 0, 0, "One two three four five six seven").unwrap();
+    let blocks = text::text_blocks(&reopen(&doc), 0).unwrap();
+    assert!(blocks[0].rows.len() > 1, "the chosen width must survive reopening and subsequent editing: {:?}", blocks[0]);
+    assert!(blocks[0].rect[2] <= 72.0 + 90.5, "{:?}", blocks[0]);
+}
+
+#[test]
+fn resized_frames_follow_moves_and_repeated_resizes_without_merging_neighbours() {
+    let mut doc = text_page("q 0.5 0 0 0.5 0 0 cm BT /F1 24 Tf 144 1400 Td (Hi) Tj ET Q BT /F1 12 Tf 180 700 Td (Neighbour) Tj ET");
+    let neighbour = text::text_blocks(&doc, 0).unwrap()[1].clone();
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(160.0), ..Default::default() }).unwrap();
+    for width in 100..120 {
+        text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(f64::from(width)), ..Default::default() }).unwrap();
+    }
+    let before = text::text_blocks(&doc, 0).unwrap()[0].editing_rect();
+    objects::move_objects(&mut doc, 0, &[objects::ObjectTarget { kind: objects::ObjectKind::Text, index: 0 }], [-20.0, -25.0]).unwrap();
+    let blocks = text::text_blocks(&reopen(&doc), 0).unwrap();
+    assert_eq!(blocks.len(), 2);
+    assert!(close(blocks[0].editing_rect(), [before[0] - 20.0, before[1] - 25.0, before[2] - 20.0, before[3] - 25.0]));
+    assert_eq!(blocks[1].text, neighbour.text);
+    assert!(close(blocks[1].rect, neighbour.rect));
+    let data = streams(&doc, 0).join("\n");
+    assert_eq!(data.matches("/PCTextFrame").count(), 1, "repeated resize replaces its own wrapper");
+}
+
+#[test]
+fn resized_frames_keep_alignment_and_mixed_source_styles() {
+    for mixed in [false, true] {
+        for align in [added::Align::Left, added::Align::Center, added::Align::Right] {
+            let text = if mixed { "(Hi ) Tj 0 0 1 rg (there) Tj" } else { "(Hi there) Tj" };
+            let mut doc = text_page(&format!("BT /F1 12 Tf 72 700 Td {text} ET"));
+            let colors = text::text_lines(&doc, 0).unwrap().iter().map(|l| l.color).collect::<Vec<_>>();
+            for width in [120.0, 150.0] {
+                text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(width), align: Some(align), ..Default::default() })
+                    .unwrap();
+                let b = text::text_blocks(&reopen(&doc), 0).unwrap()[0].clone();
+                let frame = b.editing_rect();
+                assert!((frame[0] - 72.0).abs() < 0.1 && (frame[2] - frame[0] - width).abs() < 0.1, "{b:?}");
+                let anchor = match align {
+                    added::Align::Center => (b.rect[0] + b.rect[2] - frame[0] - frame[2]) / 2.0,
+                    added::Align::Right => b.rect[2] - frame[2],
+                    _ => b.rect[0] - frame[0],
+                };
+                assert!(anchor.abs() < 0.5, "{align:?}: {b:?}");
+            }
+            assert_eq!(text::text_lines(&doc, 0).unwrap().iter().map(|l| l.color).collect::<Vec<_>>(), colors);
+            text::replace_block(&mut doc, 0, 0, "Hi there and more words to wrap within the chosen frame").unwrap();
+            let blocks = text::text_blocks(&reopen(&doc), 0).unwrap();
+            assert_eq!(blocks.len(), 1);
+            assert!(blocks[0].rows.len() > 1, "{blocks:?}");
+            assert_eq!(blocks[0].horizontal_frame, Some([72.0, 222.0]));
+        }
+    }
+}
+
+#[test]
+fn a_refused_resized_frame_does_not_embed_fallback_fonts() {
+    for content in ["(Hi) Tj", "(Hi ) Tj 0 0 1 rg (there) Tj"] {
+        let mut doc = text_page(&format!("BT /F1 12 Tf 72 700 Td {content} ET"));
+        let before = doc.read_state();
+        let style = text::BlockStyle { width: Some(90.0), offset: Some([1e10, 0.0]), ..Default::default() };
+        assert!(text::rewrite_block(&mut doc, 0, 0, Some("Hi Ω there"), &style).is_err());
+        assert!(before.matches(&doc), "invalid geometry must be refused before adding fonts");
+    }
+}
+
+#[test]
+fn an_unchanged_word_can_overflow_an_explicitly_narrowed_frame() {
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Unbreakable) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(24.0), ..Default::default() }).unwrap();
+    let layout = text::text_edit_layout(&doc, 0, 0, "Unbreakable", &Default::default()).unwrap();
+    assert!(layout.overflow, "the frame can be narrower than an indivisible word: {layout:?}");
+}
+
+#[test]
+fn an_unclosed_private_frame_does_not_join_unrelated_paragraphs() {
+    let mut doc =
+        text_page("/PCTextFrame << /Baseline [72 700 162 700] >> BDC BT /F1 12 Tf 72 700 Td (Hi) Tj ET BT /F1 12 Tf 72 100 Td (Footer) Tj ET");
+    let before = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(before.len(), 2, "an unclosed frame is not authoritative: {before:?}");
+    text::replace_block(&mut doc, 0, 0, "Hello").unwrap();
+    let after = text::text_blocks(&reopen(&doc), 0).unwrap();
+    assert_eq!(after[1].text, "Footer");
+    assert!(close(before[1].rect, after[1].rect));
+}
+
+#[test]
+fn malformed_private_text_frames_fall_back_to_ink_bounds() {
+    for frame in ["[]", "[72 700 71 700]", "[72 700 200 600]", "[72 700 99999999999999 700]", "[72 700 /bad 700]"] {
+        let doc = text_page(&format!("/PCTextFrame << /Baseline {frame} >> BDC BT /F1 12 Tf 72 700 Td (Hi) Tj ET EMC"));
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks[0].text, "Hi");
+        assert_eq!(blocks[0].horizontal_frame, None);
+        assert_eq!(blocks[0].editing_rect(), blocks[0].rect);
+    }
+}
+
+#[test]
+fn an_explicit_vertical_frame_is_independent_of_the_text_ink() {
+    let doc = text_page("/PCTextFrame << /Baseline [72 700 162 700] /Vertical [72 640 72 730] >> BDC BT /F1 12 Tf 72 700 Td (Hi) Tj ET EMC");
+    let block = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+    assert_eq!(block.editing_rect(), [72.0, 640.0, 162.0, 730.0]);
+    assert!(block.rect[1] > 640.0 && block.rect[3] < 730.0, "the empty frame does not enlarge the ink");
+}
+
+#[test]
+fn vertical_frames_preserve_ink_and_survive_retyping_and_moves() {
+    for content in ["(Hi there) Tj", "(Hi ) Tj 0 0 1 rg (there) Tj"] {
+        let mut doc = text_page(&format!("q 2 0 0 2 10 20 cm BT /F1 12 Tf 36 340 Td {content} ET Q"));
+        let original = text::text_blocks(&doc, 0).unwrap().remove(0);
+        for bounds in [[640.0, 750.0], [700.0, 710.0], [650.0, 760.0]] {
+            text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { vertical_frame: Some(bounds), ..Default::default() }).unwrap();
+            let block = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+            assert_eq!(block.vertical_frame, Some(bounds));
+            for (before, after) in original.rect.into_iter().zip(block.rect) {
+                assert!((before - after).abs() < 0.1, "resizing the frame must not move ink: {original:?}, {block:?}");
+            }
+            assert_eq!(block.size, original.size);
+        }
+        let mut doc = reopen(&doc);
+        text::replace_block(&mut doc, 0, 0, "Hi there and many more words wrapping into several rows").unwrap();
+        let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+        assert!(block.rows.len() > 1);
+        assert_eq!(block.vertical_frame, Some([650.0, 760.0]));
+        text::translate_blocks(&mut doc, 0, &[0], [14.0, -25.0]).unwrap();
+        let moved = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+        assert_eq!(moved.vertical_frame, Some([625.0, 735.0]));
+        assert!((moved.editing_rect()[0] - block.editing_rect()[0] - 14.0).abs() < 0.1);
+        let layout = text::text_edit_layout(&doc, 0, 0, &moved.editor_text, &Default::default()).unwrap();
+        assert!(layout.overflow, "wrapped text below the frame must remain visible and report overflow: {layout:?}");
+    }
+}
+
+#[test]
+fn vertical_frame_preview_measures_the_requested_height_without_changing_text() {
+    let doc = text_page("BT /F1 12 Tf 72 700 Td (Hi) Tj ET");
+    let before = doc.read_state();
+    for (bounds, overflow) in [([690.0, 730.0], false), ([700.0, 705.0], true)] {
+        let layout = text::text_edit_layout(&doc, 0, 0, "Hi", &text::BlockStyle { vertical_frame: Some(bounds), ..Default::default() }).unwrap();
+        assert_eq!(layout.overflow, overflow, "{layout:?}");
+        assert_eq!(layout.draft_rect, Some([72.0, 697.0, 83.328, 710.8]));
+        assert!(before.matches(&doc));
+    }
+}
+
+#[test]
+fn changing_only_height_keeps_each_source_row_and_glyph_position() {
+    for content in [
+        "BT /F1 12 Tf 14 TL 72 700 Td (One) Tj T* (Two three four) Tj ET",
+        "BT /F1 12 Tf 72 700 Td [(Hello) 120 ( world)] TJ ET",
+        "BT /F1 12 Tf 72 700 Td (Hello) Tj [120] TJ () Tj ( world) Tj ET",
+        "BT /F1 12 Tf 72 700 Td (Hi ) Tj 0 0 1 rg [(there) 120 ( friend)] TJ ET",
+        "/P BMC BT /F1 12 Tf 14 TL 72 700 Td /Span <</Lang (en)>> BDC (One) Tj EMC T* /Span <</Lang (en)>> BDC (Two three four) Tj EMC ET EMC",
+        "/P BMC /Span <</Lang (en)>> BDC q 2 0 0 2 0 0 cm BT /F1 6 Tf 36 350 Td (One) Tj ET Q EMC /Span <</Lang (en)>> BDC q 2 0 0 2 0 0 cm BT /F1 6 Tf 36 343 Td (Two three four) Tj ET Q EMC EMC",
+    ] {
+        let mut doc = text_page(content);
+        let snapshot = |doc: &Document| {
+            text::text_lines(doc, 0)
+                .unwrap()
+                .into_iter()
+                .map(|line| (line.text, line.rect, line.ink, line.font, line.size, line.color))
+                .collect::<Vec<_>>()
+        };
+        let before = snapshot(&doc);
+        for bounds in [[600.0, 750.0], [695.0, 720.0]] {
+            text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { vertical_frame: Some(bounds), ..Default::default() }).unwrap();
+            assert_eq!(snapshot(&reopen(&doc)), before, "height alone cannot rewrite any glyph: {content}");
+        }
+        assert_eq!(streams(&doc, 0).join("\n").matches("/PCTextFrame").count(), 1, "repeated height edits replace their metadata");
+    }
+}
+
+#[test]
+fn height_frame_nesting_preserves_separate_text_graphics_and_compatibility_objects() {
+    let mut doc = text_page(
+        "q /Span <</Lang (en)>> BDC BX BT /F1 12 Tf 72 700 Td (One) Tj ET EX EMC Q q /Span <</Lang (en)>> BDC BX BT /F1 12 Tf 72 686 Td (Two three four) Tj ET EX EMC Q",
+    );
+    let before = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 1);
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { vertical_frame: Some([650.0, 740.0]), ..Default::default() }).unwrap();
+    let after = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(after.iter().zip(&before).all(|(a, b)| a.text == b.text && a.rect == b.rect && a.ink == b.ink));
+    let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+    let mut stack = Vec::new();
+    for op in &ops {
+        let (open, close) = match op.op.as_slice() {
+            b"q" => (Some("graphics"), None),
+            b"Q" => (None, Some("graphics")),
+            b"BT" => (Some("text"), None),
+            b"ET" => (None, Some("text")),
+            b"BX" => (Some("compatibility"), None),
+            b"EX" => (None, Some("compatibility")),
+            b"BDC" | b"BMC" => (Some("marked"), None),
+            b"EMC" => (None, Some("marked")),
+            _ => (None, None),
+        };
+        if let Some(open) = open {
+            stack.push(open);
+        }
+        if let Some(close) = close {
+            assert_eq!(stack.pop(), Some(close), "the frame must not cross object boundaries: {ops:?}");
+        }
+    }
+    assert!(stack.is_empty());
+}
+
+#[test]
+fn invalid_vertical_frames_are_refused_without_mutation() {
+    for content in ["BT /F1 12 Tf 72 700 Td (Hi) Tj ET", "BT /F1 12 Tf 72 700 Td (Hi ) Tj 0 0 1 rg (there) Tj ET"] {
+        for bounds in [[0.0, f64::NAN], [0.0, f64::INFINITY], [10.0, 10.0], [10.0, 9.0], [0.0, 14_401.0]] {
+            let mut doc = text_page(content);
+            let before = doc.read_state();
+            assert!(
+                text::rewrite_block(&mut doc, 0, 0, Some("Hi Ω there"), &text::BlockStyle { vertical_frame: Some(bounds), ..Default::default() })
+                    .is_err()
+            );
+            assert!(before.matches(&doc));
+        }
+    }
+    for vertical in ["[]", "[72 730 72 640]", "[72 640 90 730]", "[72 640 72 /bad]", "[72 0 72 14401]"] {
+        let doc = text_page(&format!("/PCTextFrame << /Baseline [72 700 162 700] /Vertical {vertical} >> BDC BT /F1 12 Tf 72 700 Td (Hi) Tj ET EMC"));
+        let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+        assert_eq!(block.editing_rect(), block.rect);
+    }
+    let mut doc = text_page(
+        "/Span BMC BT /F1 12 Tf 300 700 Td (Neighbour) Tj ET BT /F1 12 Tf 72 700 Td (One) Tj ET EMC /Span BMC BT /F1 12 Tf 72 686 Td (Two three four) Tj ET EMC",
+    );
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 2);
+    let before = doc.read_state();
+    let error =
+        text::rewrite_block(&mut doc, 0, 1, None, &text::BlockStyle { vertical_frame: Some([600.0, 750.0]), ..Default::default() }).unwrap_err();
+    assert!(error.to_string().contains("unrelated text"), "{error}");
+    assert!(before.matches(&doc), "a wrapper must not silently claim the neighbouring paragraph");
+}
+
+#[test]
+fn height_only_refuses_surplus_operand_text_outside_the_target() {
+    for neighbour in ["() (Neighbour) Tj", "[] [(Neighbour)] TJ", "() (Neighbour) '", "0 0 () (Neighbour) \""] {
+        let mut doc = text_page(&format!(
+            "/Span BMC BT /F1 12 Tf 300 700 Td {neighbour} ET BT /F1 12 Tf 72 700 Td (One) Tj ET EMC /Span BMC BT /F1 12 Tf 72 686 Td (Two three four) Tj ET EMC"
+        ));
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.len(), 2, "{neighbour}: {blocks:?}");
+        assert_eq!(blocks[0].text, "Neighbour", "the last operand is the displayed text");
+        assert_eq!(blocks[1].text, "One Two three four");
+        let before = doc.read_state();
+        let error =
+            text::rewrite_block(&mut doc, 0, 1, None, &text::BlockStyle { vertical_frame: Some([600.0, 750.0]), ..Default::default() }).unwrap_err();
+        assert!(error.to_string().contains("unrelated text"), "{neighbour}: {error}");
+        assert!(before.matches(&doc), "{neighbour}: a refused frame must not change the document");
+    }
 }
 
 #[test]
@@ -5394,6 +5685,358 @@ fn a_paragraph_at_a_slant_rewraps_at_the_width_it_has_upright() {
     for degrees in [30.0, 45.0, 60.0, 90.0, 135.0, 210.0, 330.0] {
         assert_eq!(rewrapped(degrees), upright, "{degrees}°");
     }
+}
+
+#[test]
+fn rotated_td_paragraph_width_reflows_without_changing_line_spacing() {
+    for degrees in [30.0_f64, 90.0, 180.0] {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        for leading in [0.0, 22.0] {
+            let mut doc =
+                text_page(&format!("BT /F1 12 Tf {leading} TL {cos} {sin} {} {cos} 300 400 Tm (One two) Tj 0 -14.4 TD (three four) Tj ET", -sin));
+            let before = doc.read_state();
+            let source = text::text_blocks(&doc, 0).unwrap().remove(0);
+            assert_eq!(source.editor_text, "One two\nthree four");
+            let style = text::BlockStyle { width: Some(28.0), ..Default::default() };
+            text::text_edit_layout(&doc, 0, 0, &source.editor_text, &style).unwrap();
+            assert!(before.matches(&doc), "preview must be read-only");
+            text::rewrite_block(&mut doc, 0, 0, None, &style).unwrap();
+            let reopened = reopen(&doc);
+            let block = text::text_blocks(&reopened, 0).unwrap().remove(0);
+            assert_eq!(block.editor_text, "One\ntwo\nthree\nfour");
+            let [left, right] = block.horizontal_frame.unwrap();
+            assert!((right - left - 28.0).abs() < 0.01);
+            let lines = text::text_lines(&reopened, 0).unwrap();
+            for (i, line) in lines.iter().enumerate() {
+                let [x, y] = line.baseline();
+                assert!((x - (300.0 + sin * 14.4 * i as f64)).abs() < 0.01);
+                assert!((y - (400.0 - cos * 14.4 * i as f64)).abs() < 0.01);
+            }
+        }
+    }
+}
+
+#[test]
+fn rotated_td_paragraph_can_be_retyped_with_its_source_row_positions() {
+    let mut doc = text_page("BT /F1 12 Tf 0 1 -1 0 300 400 Tm (One) Tj 0 -14.4 TD (two) Tj ET");
+    let source = text::text_lines(&doc, 0).unwrap();
+    text::replace_block(&mut doc, 0, 0, "One\nnew").unwrap();
+    let reopened = reopen(&doc);
+    assert_eq!(text::text_blocks(&reopened, 0).unwrap()[0].editor_text, "One\nnew");
+    let lines = text::text_lines(&reopened, 0).unwrap();
+    assert_eq!(lines.len(), source.len());
+    for (line, original) in lines.iter().zip(source) {
+        assert!(line.baseline().iter().zip(original.baseline()).all(|(a, b)| (a - b).abs() < 0.01));
+    }
+}
+
+#[test]
+fn rotated_text_width_survives_reopening_retyping_and_moves() {
+    for degrees in [30.0_f64, 45.0, 90.0, 135.0, 180.0, 270.0, 330.0] {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        let mut doc = text_page(&format!("BT /F1 12 Tf {cos} {sin} {} {cos} 300 400 Tm (Hi) Tj ET", -sin));
+        text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(90.0), ..Default::default() }).unwrap();
+        let mut doc = reopen(&doc);
+        let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+        let [left, right] = block.horizontal_frame.expect("a rotated width must survive reopening");
+        assert!((right - left - 90.0).abs() < 0.01, "{degrees} degrees: {block:?}");
+        text::replace_block(&mut doc, 0, 0, "One two three four five six seven").unwrap();
+        let block = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+        assert!(block.rows.len() > 1, "retyping must retain the chosen width at {degrees} degrees");
+        assert!((block.horizontal_frame.unwrap()[1] - right).abs() < 0.01);
+        text::translate_blocks(&mut doc, 0, &[0], [14.0, -25.0]).unwrap();
+        let moved = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+        let along = 14.0 * cos - 25.0 * sin;
+        assert!((moved.horizontal_frame.unwrap()[0] - left - along).abs() < 0.01);
+        assert!((moved.horizontal_frame.unwrap()[1] - right - along).abs() < 0.01);
+    }
+}
+
+#[test]
+fn rotated_text_height_keeps_each_source_glyph_and_reports_local_overflow() {
+    for degrees in [30.0_f64, 45.0, 90.0, 135.0, 180.0, 270.0, 330.0] {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        for shown in ["[(Hello) 120 ( world)] TJ", "(Hello ) Tj 0 0 1 rg (world) Tj"] {
+            let mut doc = text_page(&format!("BT /F1 12 Tf {cos} {sin} {} {cos} 300 400 Tm {shown} ET", -sin));
+            let snapshot = |doc: &Document| {
+                text::text_lines(doc, 0).unwrap().into_iter().map(|l| (l.text, l.rect, l.ink, l.font, l.size, l.color)).collect::<Vec<_>>()
+            };
+            let before = snapshot(&doc);
+            let baseline = 400.0 * cos - 300.0 * sin;
+            for (bounds, overflow) in [([baseline - 25.0, baseline + 30.0], false), ([baseline, baseline + 5.0], true)] {
+                let style = text::BlockStyle { vertical_frame: Some(bounds), ..Default::default() };
+                text::rewrite_block(&mut doc, 0, 0, None, &style).unwrap();
+                let reopened = reopen(&doc);
+                assert_eq!(snapshot(&reopened), before, "height must preserve every glyph at {degrees} degrees");
+                let block = text::text_blocks(&reopened, 0).unwrap().remove(0);
+                assert!(block.vertical_frame.unwrap().iter().zip(bounds).all(|(a, b)| (a - b).abs() < 0.01));
+                let layout = text::text_edit_layout(&reopened, 0, 0, &block.editor_text, &Default::default()).unwrap();
+                assert_eq!(layout.overflow, overflow, "overflow is measured normal to the baseline at {degrees} degrees");
+            }
+            text::translate_blocks(&mut doc, 0, &[0], [14.0, -25.0]).unwrap();
+            let moved = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+            let across = -25.0 * cos - 14.0 * sin;
+            assert!((moved.vertical_frame.unwrap()[0] - baseline - across).abs() < 0.01);
+        }
+    }
+}
+
+#[test]
+fn rotated_text_mixed_style_width_is_refused_without_flattening_source_runs() {
+    let mut doc = text_page("BT /F1 12 Tf 0 1 -1 0 300 400 Tm (Mixed ) Tj 0 0 1 rg (colour) Tj ET");
+    let before = doc.read_state();
+    assert!(text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(90.0), ..Default::default() }).is_err());
+    assert!(before.matches(&doc));
+}
+
+/// Repeated paint instructions are parsed at distinct byte offsets but describe the same state.
+fn resized_rotated_text_with_repeated_paint(paint: &str) -> Document {
+    let mut doc = text_page(&format!(
+        "BT /F1 12 Tf 14.4 TL 0.8660254037844386 0.5 -0.5 0.8660254037844386 300 400 Tm \
+         {paint} (One two ) Tj {paint} (three four) Tj ET"
+    ));
+    let source = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(source.len(), 1, "both source shows must belong to the paragraph being resized");
+    assert_eq!(source[0].editor_text, "One two three four");
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(28.0), ..Default::default() })
+        .expect("identical paint at different source offsets must allow rotated reflow");
+    let reopened = reopen(&doc);
+    let blocks = text::text_blocks(&reopened, 0).unwrap();
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].editor_text, "One\ntwo\nthree\nfour");
+    assert!((blocks[0].rotation - 30.0).abs() < 0.01, "reflow must retain the source orientation");
+    let [left, right] = blocks[0].horizontal_frame.expect("the chosen frame must survive save/reopen");
+    assert!((right - left - 28.0).abs() < 0.01, "the frame must stay 28 points wide along the baseline");
+    reopened
+}
+
+/// Repeating the same fill at another source offset permits rotated reflow and keeps its colour.
+#[test]
+fn rotated_text_repeated_fill_can_resize_and_reopen() {
+    let doc = resized_rotated_text_with_repeated_paint("0.2 0.4 0.6 rg");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.len(), 4);
+    assert!(lines.iter().all(|line| line.color == [0.2, 0.4, 0.6]), "every rewritten row must keep the source fill");
+}
+
+/// Repeating the same stored stroke permits rotated reflow and preserves that state on reopen.
+#[test]
+fn rotated_text_repeated_stroke_can_resize_and_reopen() {
+    // Tr remains 0 so the test isolates rotated-state validation from stroked-run grouping.
+    // The guard still compares the stored stroke state, even while glyphs use their fill.
+    let doc = resized_rotated_text_with_repeated_paint("1 0 0 RG");
+    let shown = painted_shows(&doc);
+    assert_eq!(shown.len(), 4);
+    assert!(shown.iter().all(|s| s.render_mode == 0 && s.stroke == ["1 0 0 RG"]), "reflow must preserve the stored stroke state");
+}
+
+/// Different fill or stroke values remain a refused mixed-state edit without document mutation.
+#[test]
+fn rotated_text_different_paint_resize_is_refused_without_mutation() {
+    for (first, second) in [("1 0 0 rg", "0 0 1 rg"), ("1 0 0 RG", "0 0 1 RG")] {
+        let mut doc = text_page(&format!(
+            "BT /F1 12 Tf 0.8660254037844386 0.5 -0.5 0.8660254037844386 300 400 Tm \
+             {first} (One ) Tj {second} (two) Tj ET"
+        ));
+        let source = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(source.len(), 1, "{first} / {second}: both paints must be in the selected paragraph");
+        assert_eq!(source[0].editor_text, "One two");
+        let before = doc.read_state();
+        assert!(
+            text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(28.0), ..Default::default() }).is_err(),
+            "{first} / {second}: differing paint must not be flattened"
+        );
+        assert!(before.matches(&doc), "a refused {first} / {second} edit must leave the document unchanged");
+    }
+}
+
+#[test]
+fn rotated_text_tracking_resize_is_refused_without_mutation() {
+    for state in ["2 Tc", "50 Tz", "3 Ts", "1 Tr", "4 Tw"] {
+        let mut doc = text_page(&format!("BT /F1 12 Tf 0 1 -1 0 300 400 Tm (One ) Tj {state} (two more) Tj ET"));
+        let before = doc.read_state();
+        assert!(
+            text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(140.0), ..Default::default() }).is_err(),
+            "{state} must not be flattened"
+        );
+        assert!(before.matches(&doc));
+        text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { vertical_frame: Some([-325.0, -275.0]), ..Default::default() }).unwrap();
+        let before = text_page(&format!("BT /F1 12 Tf 0 1 -1 0 300 400 Tm (One ) Tj {state} (two more) Tj ET"));
+        let original = text::text_lines(&before, 0).unwrap();
+        let resized = text::text_lines(&reopen(&doc), 0).unwrap();
+        assert_eq!(original.len(), resized.len());
+        assert!(original.iter().zip(resized).all(|(a, b)| a.rect == b.rect && a.ink == b.ink && a.text == b.text), "height preserves {state}");
+    }
+}
+
+/// Two 90-degree rows with identical text state; their baselines are (300,400) and (314,400).
+fn rotated_transform_rows(second_ctm: &str, second_tm: &str) -> Document {
+    text_page(&format!(
+        "q BT /F1 12 Tf 14 TL 0.2 0.4 0.6 rg 0 1 -1 0 300 400 Tm (One) Tj ET Q \
+         q {second_ctm} cm BT /F1 12 Tf 14 TL 0.2 0.4 0.6 rg {second_tm} Tm (two) Tj ET Q"
+    ))
+}
+
+/// A single paragraph with equal paint and glyph heights must reject differing baseline scales atomically.
+fn assert_rotated_transform_width_refused(mut doc: Document) {
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1, "both scales must be in the paragraph selected for reflow");
+    assert_eq!(blocks[0].editor_text, "One\ntwo");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].baseline(), [300.0, 400.0]);
+    assert_eq!(lines[1].baseline(), [314.0, 400.0]);
+    assert!(lines.iter().all(|line| line.size == 12.0 && line.color == [0.2, 0.4, 0.6]), "only the linear transform differs");
+    let before = doc.read_state();
+    let error = text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(90.0), ..Default::default() })
+        .expect_err("reflow must refuse to flatten a different horizontal glyph scale");
+    assert!(matches!(error, EditError::Invalid(_)), "{error}");
+    assert!(before.matches(&doc), "refused transformed text must not mutate the document");
+}
+
+/// Rows grouped by their direction may still have different Tm scales, which reflow must refuse.
+#[test]
+fn rotated_text_transform_tm_scale_changes_refuse_width_without_mutation() {
+    assert_rotated_transform_width_refused(rotated_transform_rows("1 0 0 1 0 0", "0 2 -1 0 314 400"));
+}
+
+/// A CTM can double the baseline axis without changing the text state or the glyph height.
+#[test]
+fn rotated_text_transform_ctm_scale_changes_refuse_width_without_mutation() {
+    assert_rotated_transform_width_refused(rotated_transform_rows("1 0 0 2 0 0", "0 1 -1 0 314 200"));
+}
+
+/// Every selected show must be checked even when extraction joins different scales into one line.
+#[test]
+fn rotated_text_transform_scale_change_inside_one_line_refuses_width_without_mutation() {
+    let mut doc = text_page(
+        "BT /F1 12 Tf 14 TL 0.2 0.4 0.6 rg 0 1 -1 0 300 400 Tm (One ) Tj \
+         0.2 0.4 0.6 rg 0 2 -1 0 300 430 Tm (two) Tj ET",
+    );
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].editor_text, "One two");
+    assert_eq!(text::text_lines(&doc, 0).unwrap().len(), 1, "checking only each extracted line's origin would miss the second scale");
+    let before = doc.read_state();
+    let error = text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(90.0), ..Default::default() })
+        .expect_err("a different scale inside one extracted line must still be refused");
+    assert!(matches!(error, EditError::Invalid(_)), "{error}");
+    assert!(before.matches(&doc));
+}
+
+/// Height changes only frame metadata, so both TM- and CTM-scaled source glyphs remain untouched.
+#[test]
+fn rotated_text_transform_height_only_preserves_different_scales_after_reopen() {
+    for (ctm, tm) in [("1 0 0 1 0 0", "0 2 -1 0 314 400"), ("1 0 0 2 0 0", "0 1 -1 0 314 200")] {
+        let mut doc = rotated_transform_rows(ctm, tm);
+        let before = text::text_lines(&doc, 0).unwrap();
+        assert_eq!(before.len(), 2);
+        assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 1);
+        text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { vertical_frame: Some([-350.0, -275.0]), ..Default::default() })
+            .expect("a metadata-only height edit must preserve different source scales");
+        let reopened = reopen(&doc);
+        let blocks = text::text_blocks(&reopened, 0).unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].editor_text, "One\ntwo");
+        assert_eq!(blocks[0].vertical_frame, Some([-350.0, -275.0]));
+        assert!((blocks[0].rotation - 90.0).abs() < 0.01);
+        let after = text::text_lines(&reopened, 0).unwrap();
+        assert_eq!(after.len(), 2);
+        assert_eq!(after[0].baseline(), [300.0, 400.0]);
+        assert_eq!(after[1].baseline(), [314.0, 400.0]);
+        for (original, resized) in before.iter().zip(&after) {
+            assert_eq!(resized.text, original.text);
+            assert_eq!(resized.ink, original.ink, "height must preserve each glyph's geometry");
+            assert_eq!(resized.rect, original.rect);
+            assert_eq!(resized.color, original.color);
+        }
+    }
+}
+
+/// Reflow compares the composed linear map: equivalent TM/CTM splits and translations stay valid.
+#[test]
+fn rotated_text_transform_equivalent_compositions_and_translations_keep_geometry_after_reopen() {
+    for (ctm, tm) in [("1 0 0 2 0 0", "0 0.5 -1 0 314 200"), ("1 0 0 1 14 -100", "0 1 -1 0 300 500")] {
+        let mut doc = rotated_transform_rows(ctm, tm);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].editor_text, "One\ntwo");
+        let before = text::text_lines(&doc, 0).unwrap();
+        text::rewrite_block(&mut doc, 0, 0, Some("One\ntwo"), &text::BlockStyle { width: Some(90.0), ..Default::default() })
+            .expect("equivalent effective transforms must permit rotated reflow");
+        let reopened = reopen(&doc);
+        let blocks = text::text_blocks(&reopened, 0).unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].editor_text, "One\ntwo");
+        assert!((blocks[0].rotation - 90.0).abs() < 0.01);
+        let [left, right] = blocks[0].horizontal_frame.expect("the resized frame must survive reopening");
+        assert!((left - 400.0).abs() < 0.01 && (right - 490.0).abs() < 0.01);
+        let after = text::text_lines(&reopened, 0).unwrap();
+        assert_eq!(after.len(), 2);
+        assert_eq!(after[0].baseline(), [300.0, 400.0]);
+        assert_eq!(after[1].baseline(), [314.0, 400.0]);
+        for (original, resized) in before.iter().zip(&after) {
+            assert!(close(resized.rect, original.rect), "equivalent transforms must keep the glyph widths and positions");
+            assert_eq!(resized.color, [0.2, 0.4, 0.6]);
+        }
+    }
+}
+
+#[test]
+fn rotated_text_frame_uses_the_insertion_ctm_and_keeps_its_left_anchor() {
+    let mut doc = text_page("q 0 0.5 -0.5 0 40 50 cm BT /F1 12 Tf 72 700 Td (Hi) Tj ET Q");
+    let before = text::text_lines(&doc, 0).unwrap();
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { vertical_frame: Some([300.0, 325.0]), ..Default::default() }).unwrap();
+    let block = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+    assert!(close(block.rect, before[0].rect));
+    assert!(block.editing_frame().iter().zip([86.0, 300.0, 91.664, 325.0]).all(|(a, b)| (a - b).abs() < 0.01));
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(60.0), offset: Some([0.0, -10.0]), ..Default::default() }).unwrap();
+    let block = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+    assert!(block.editing_frame().iter().zip([76.0, 300.0, 136.0, 325.0]).all(|(a, b)| (a - b).abs() < 0.01));
+    let expected_quad = [[-300.0, 76.0], [-300.0, 136.0], [-325.0, 136.0], [-325.0, 76.0]];
+    assert!(block.editing_quad().into_iter().flatten().zip(expected_quad.into_iter().flatten()).all(|(a, b)| (a - b).abs() < 0.01));
+    assert!((text::text_lines(&doc, 0).unwrap()[0].baseline()[1] - 76.0).abs() < 0.01);
+    text::translate_blocks(&mut doc, 0, &[0], [14.0, -25.0]).unwrap();
+    let moved = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+    assert!(moved.editing_frame().iter().zip([51.0, 286.0, 111.0, 311.0]).all(|(a, b)| (a - b).abs() < 0.01));
+}
+
+#[test]
+fn rotated_text_ignores_misaligned_or_nonperpendicular_frame_metadata() {
+    for marker in [
+        "/Baseline [300 400 390 400] /Vertical [300 380 300 420]",
+        "/Baseline [300 400 300 490] /Vertical [320 400 280 410]",
+        "/Baseline [300 400 300 490] /Vertical [280 400 320 400]",
+        "/Baseline [300 400 300 400]",
+    ] {
+        let doc = text_page(&format!("/PCTextFrame << {marker} >> BDC BT /F1 12 Tf 0 1 -1 0 300 400 Tm (Hi) Tj ET EMC"));
+        let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+        assert!(block.horizontal_frame.is_none() && block.vertical_frame.is_none(), "{marker}: {block:?}");
+        assert_eq!(block.editing_rect(), block.rect);
+    }
+}
+
+#[test]
+fn rotated_text_maximum_width_survives_numeric_roundoff() {
+    let (sin, cos) = 30.0_f64.to_radians().sin_cos();
+    let (x, y) = (300.0 * cos - 400.0 * sin, 300.0 * sin + 400.0 * cos);
+    let mut doc = text_page(&format!("BT /F1 12 Tf {cos} {sin} {} {cos} {x} {y} Tm (Hi) Tj ET", -sin));
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { width: Some(14_400.0), ..Default::default() }).unwrap();
+    let mut doc = reopen(&doc);
+    text::replace_block(&mut doc, 0, 0, "Hi again").unwrap();
+    let b = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+    assert!((b.editing_frame()[2] - b.editing_frame()[0] - 14_400.0).abs() < 0.001);
+}
+
+#[test]
+fn rotated_text_maximum_height_survives_numeric_roundoff() {
+    let (sin, cos) = 15.0_f64.to_radians().sin_cos();
+    let mut doc = text_page(&format!("BT /F1 12 Tf {cos} {sin} {} {cos} 300 400 Tm (Hi) Tj ET", -sin));
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { vertical_frame: Some([0.0, 14_400.0]), ..Default::default() }).unwrap();
+    let mut doc = reopen(&doc);
+    text::replace_block(&mut doc, 0, 0, "Hi again").unwrap();
+    let b = text::text_blocks(&reopen(&doc), 0).unwrap().remove(0);
+    assert!((b.editing_frame()[3] - b.editing_frame()[1] - 14_400.0).abs() < 0.001);
 }
 
 /// A paragraph in a Chrome-style subset font: `/W` leaves out the glyphs of the `/DW` width.
@@ -7490,6 +8133,39 @@ fn a_drafts_box_leaves_out_spaces_after_the_last_word() {
     let doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
     let layout = |text: &str| text::text_edit_layout(&doc, 0, 0, text, &text::BlockStyle::default()).unwrap().draft_rect;
     assert_eq!(layout("Hello there     "), layout("Hello there"));
+}
+
+/// Preserved trailing spaces stay outside the visible bounds after Apply and save/reopen;
+/// the unchanged-draft path must still report ink that really exceeds the frame's height.
+#[test]
+fn a_saved_frame_ignores_trailing_spaces_but_keeps_real_height_overflow() {
+    let draft = "Hi     ";
+    for (bounds, overflow) in [([690.0, 730.0], false), ([700.0, 705.0], true)] {
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hi) Tj ET");
+        let style = text::BlockStyle { width: Some(12.0), vertical_frame: Some(bounds), ..Default::default() };
+        let before = doc.read_state();
+        let preview = text::text_edit_layout(&doc, 0, 0, draft, &style).unwrap();
+        assert_eq!(preview.overflow, overflow, "edited preview: {preview:?}");
+        assert!(before.matches(&doc), "preview must not mutate the document");
+
+        text::rewrite_block(&mut doc, 0, 0, Some(draft), &style).unwrap();
+        let reopened = reopen(&doc);
+        for (stage, doc) in [("applied", &doc), ("reopened", &reopened)] {
+            let blocks = text::text_blocks(doc, 0).unwrap();
+            let block = &blocks[0];
+            assert_eq!(block.editor_text, draft, "{stage}: every typed space survives");
+            assert_eq!(block.vertical_frame, Some(bounds), "{stage}: the explicit height survives");
+            assert!(block.rect[2] > block.editing_rect()[2] + 0.5, "{stage}: trailing spaces extend beyond the explicit width");
+            let before = doc.read_state();
+            let layout = text::text_edit_layout(doc, 0, 0, &block.editor_text, &text::BlockStyle::default()).unwrap();
+            assert!(before.matches(doc), "{stage}: unchanged preview must not mutate the document");
+            assert_eq!(layout.overflow, overflow, "{stage}: unchanged preview must measure the same visible ink: {layout:?}");
+            assert!(
+                close(layout.draft_rect.unwrap(), preview.draft_rect.unwrap()),
+                "{stage}: unchanged preview bounds must match edited preview: {layout:?}, {preview:?}"
+            );
+        }
+    }
 }
 
 /// A lone carriage return (an old Mac line ending) breaks the row, as `\n` and `\r\n` do.

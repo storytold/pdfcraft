@@ -2458,6 +2458,7 @@ animation effects	Off	Выкл
 	field names can't contain a period: {name}	имена полей не могут содержать точку: {name}
 	two cells would both be named {name}	две ячейки получили бы одно имя {name}
 	a field named {name} already exists	поле с именем {name} уже существует
+	Text extends outside the frame.	Текст выходит за пределы рамки.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Сегодня

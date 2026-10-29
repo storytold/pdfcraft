@@ -1,3 +1,4 @@
+use super::super::text_frame::HorizontalFrame;
 use super::grouping::{across, is_centred, row_rect};
 use super::{
     BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
@@ -401,6 +402,33 @@ fn paragraph_geometry(doc: &Document, page: &pdfcraft_model::Page, block: &TextB
     Ok((dx, dy, style.width.unwrap_or(natural).clamp(1.0, 14_400.0)))
 }
 
+/// A width change rewrites every row and emits at the last source run. Validate its frame
+/// before embedding fallback fonts: a refused edit must leave no new objects.
+fn paragraph_frame(
+    block: &TextBlock,
+    lines: &[TextLine],
+    first: &TextLine,
+    style: &BlockStyle,
+    geometry: (f64, f64, f64),
+    align: crate::added::Align,
+) -> Result<Option<Op>, EditError> {
+    let (dx, dy, width) = geometry;
+    if style.width.is_none() {
+        return Ok(None);
+    }
+    let lead = block.lines.last().and_then(|i| lines.get(*i)).unwrap_or(first);
+    HorizontalFrame::start(
+        block.editing_rect()[0] + dx,
+        first.origin.baseline + dy,
+        width,
+        style.vertical_frame.map(|[bottom, top]| [bottom + dy, top + dy]),
+        align,
+        Matrix(lead.origin.ctm),
+        first.direction(),
+    )
+    .map(Some)
+}
+
 fn wrap_styled_rows(
     chars: &[StyledChar],
     width: f64,
@@ -678,6 +706,11 @@ pub(crate) fn rewrite_styled_block(
     let mut res = p.dict.get(b"Resources").and_then(|resource| doc.resolve(resource).as_dict().cloned()).unwrap_or_default();
     let (mut fonts, mut metrics) = page_font_metrics(doc, &res, block, lines);
     let (dx, dy, width) = paragraph_geometry(doc, &p, block, style)?;
+    let frame_left = block.editing_rect()[0];
+    let crop = p.crop(doc);
+    let centered = is_centred(block, lines, (crop[0] + crop[2]) / 2.0, first.size);
+    let align = style.align.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
+    let saved_frame = paragraph_frame(block, lines, first, style, (dx, dy, width), align)?;
     let prepared = CharacterPreparation {
         doc,
         first,
@@ -779,7 +812,10 @@ pub(crate) fn rewrite_styled_block(
     // The rewrite is placed after the last rewritten row unless a text-show operator there
     // would make a kept following row depend on that position.
     let anchor = rewrite_anchor(block, lines, first, &ops, &kept_lines, &mut kept);
-    let RewriteAnchor { lead, drop, start, split } = anchor;
+    let RewriteAnchor { lead, mut drop, start, split } = anchor;
+    if let Some(frame) = first.horizontal_frame {
+        frame.remove(&ops, &mut drop);
+    }
     let o = &lead.origin;
     // What is in force where the rewrite is drawn, and what the text after it expects.
     let after = if split { &o.state } else { &o.bt_state };
@@ -790,14 +826,13 @@ pub(crate) fn rewrite_styled_block(
     let glyph_resources = embed_shaped_resources(doc, &mut fonts, &shaped_runs)?;
     let n = pdfcraft_content::num;
     let mut block_ops = vec![Op::new("q", vec![])];
+    block_ops.extend(saved_frame.clone());
     block_ops.extend(reveal_ops(block, lines, style, o.ctm)?);
     let back = Matrix([o.ctm[0], o.ctm[1], o.ctm[2], o.ctm[3], 0.0, 0.0])
         .invert()
         .ok_or_else(|| EditError::Invalid("the paragraph is drawn in a space it cannot be edited in".into()))?;
     let (tx, ty) = back.apply(dx, dy);
     block_ops.push(Op::new("cm", vec![n(1.0), n(0.0), n(0.0), n(1.0), n(tx), n(ty)]));
-    let crop = p.crop(doc);
-    let centered = is_centred(block, lines, (crop[0] + crop[2]) / 2.0, first.size);
     let source_leading = block
         .rows
         .windows(2)
@@ -824,9 +859,8 @@ pub(crate) fn rewrite_styled_block(
             continue;
         }
         let w = measured.get(row_index).copied().unwrap_or(0.0);
-        let align = style.align.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
         let original_rect = block.rows.get(row_index).and_then(|row| row_rect(row, lines)).unwrap_or(block.rect);
-        let left = if style.width.is_none() && style.align.is_none() { original_rect[0] } else { block.rect[0] };
+        let left = if style.width.is_none() && style.align.is_none() { original_rect[0] } else { frame_left };
         let available = if style.width.is_none() && style.align.is_none() { original_rect[2] - original_rect[0] } else { width };
         let mut x = left
             + match align {
@@ -965,6 +999,9 @@ pub(crate) fn rewrite_styled_block(
         } else {
             style.line_spacing.unwrap_or(1.5).clamp(0.5, 5.0) * style.size.unwrap_or(anchor.size)
         };
+    }
+    if saved_frame.is_some() {
+        block_ops.push(Op::new("EMC", vec![]));
     }
     block_ops.push(Op::new("Q", vec![]));
     block_ops.extend(after.ops());

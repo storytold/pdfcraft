@@ -76,7 +76,7 @@ impl ObjectSelection {
             self.gesture = None;
             let expected = self.pending.take();
             let remapped = self.page.zip(expected).and_then(|(page, expected)| {
-                let inventory = doc.editable_objects(page).ok()?;
+                let inventory = selection_inventory(doc, page).ok()?;
                 let mut out = Vec::new();
                 for old in expected {
                     let mut matches = inventory.iter().filter(|o| {
@@ -122,8 +122,27 @@ impl ObjectSelection {
         if self.cache.len() >= 8 && !self.cache.contains_key(&page) {
             self.cache.clear();
         }
-        self.cache.entry(page).or_insert_with(|| doc.editable_objects(page)).clone()
+        self.cache.entry(page).or_insert_with(|| selection_inventory(doc, page)).clone()
     }
+}
+
+/// Selection includes both the chosen frame and any indivisible word that overflows it.
+/// The engine's object inventory keeps ink bounds; only UI selection needs this extra area.
+fn selection_inventory(doc: &Document, page: usize) -> Result<Vec<EditableObject>, String> {
+    let mut objects = doc.editable_objects(page)?;
+    let blocks = doc.text_blocks(page);
+    for object in &mut objects {
+        if object.target.kind == ObjectKind::Text
+            && let Some(block) = blocks.get(object.target.index)
+        {
+            let frame = block.editing_rect();
+            object.rect[0] = object.rect[0].min(frame[0]);
+            object.rect[1] = object.rect[1].min(frame[1]);
+            object.rect[2] = object.rect[2].max(frame[2]);
+            object.rect[3] = object.rect[3].max(frame[3]);
+        }
+    }
+    Ok(objects)
 }
 
 fn screen(xf: &PageXform, info: &DocInfo, page: usize, object: &EditableObject) -> Rect {
@@ -266,11 +285,31 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
         }
     };
     let additive = modified(ui);
+    let text_blocks = doc.text_blocks(page);
+    let image = crate::edit_text_ui::image_at(xf, info, page, &doc.page_images(page), p);
     // A page-sized background image must not hide editable labels or added notes.
-    // Within each kind, prefer the last object as the ordinary single-item tools do.
-    let hit = [ObjectKind::Added, ObjectKind::Text, ObjectKind::Image]
-        .into_iter()
-        .find_map(|kind| objects.iter().rev().find(|o| o.target.kind == kind && screen(xf, info, page, o).expand(2.0).contains(p)));
+    // Frame-only space is a fallback: it must not hide another visible object. Within each
+    // kind, prefer the last object as the ordinary single-item tools do.
+    let visible_hit = [ObjectKind::Added, ObjectKind::Text, ObjectKind::Image].into_iter().find_map(|kind| {
+        objects.iter().rev().find(|o| {
+            o.target.kind == kind
+                && match kind {
+                    ObjectKind::Added => screen(xf, info, page, o).expand(2.0).contains(p),
+                    ObjectKind::Text => {
+                        text_blocks.get(o.target.index).is_some_and(|b| crate::edit_text_ui::paragraph_ink_contains(xf, info, page, b, p))
+                    }
+                    ObjectKind::Image => image == Some(o.target.index),
+                }
+        })
+    });
+    // Blank frame space follows the text's orientation; its AABB is only for rectangular
+    // selection and moving a selection that already exists.
+    let hit = visible_hit.or_else(|| {
+        objects.iter().rev().find(|o| {
+            o.target.kind == ObjectKind::Text
+                && text_blocks.get(o.target.index).is_some_and(|b| crate::edit_text_ui::paragraph_contains(xf, info, page, b, p))
+        })
+    });
     if additive {
         if s.page != Some(page) {
             s.clear();
@@ -298,7 +337,7 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
     }
     if s.page == Some(page) && !s.selected.is_empty() {
         let union = s.selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o)));
-        if union.contains(p) && !resp.double_clicked() {
+        if union.contains(p) && visible_hit.is_none_or(|hit| s.selected.iter().any(|o| o.target == hit.target)) && !resp.double_clicked() {
             s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
             return true;
         }
@@ -307,7 +346,12 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
     // selects it (for the arrow keys), a drag moves it. Its text keeps the caret.
     if let Some(block) = view.line_editor.as_ref().filter(|e| e.page == page && !e.has_changes()).map(|e| e.block)
         && let Some(object) = objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
-        && on_frame(screen(xf, info, page, object), p)
+        && text_blocks.get(block).is_some_and(|b| {
+            crate::edit_text_ui::paragraph_on_frame(xf, info, page, b, p)
+                || (b.rotation.abs() < 0.001
+                    && info.pages.get(page).is_some_and(|p| (p.rotation + xf.rot).is_multiple_of(360))
+                    && on_frame(screen(xf, info, page, object), p))
+        })
     {
         s.clear();
         s.page = Some(page);
@@ -318,11 +362,13 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
         return true;
     }
     s.clear();
-    // A closed paragraph's width handle reaches past its box, and a press there rewraps the
-    // paragraph (as in `edit_text_ui`) instead of starting an area selection (#2276).
-    let on_edge = view.line_editor.as_ref().is_none_or(|e| e.page != page)
-        && crate::edit_text_ui::grabs_edge(xf, info, page, objects.iter().filter(|o| o.target.kind == ObjectKind::Text).map(|o| o.rect), p);
-    if hit.is_some() || on_edge {
+    // A closed paragraph's edge handle reaches past its box; leave those presses to the
+    // paragraph resize controls instead of starting an area selection (#2276).
+    let on_edge = view.line_editor.as_ref().is_none_or(|e| e.page != page) && crate::edit_text_ui::grabs_edge(xf, info, page, text_blocks.iter(), p);
+    let in_text_frame = text_blocks
+        .iter()
+        .any(|b| (b.horizontal_frame.is_some() || b.vertical_frame.is_some()) && crate::edit_text_ui::paragraph_contains(xf, info, page, b, p));
+    if hit.is_some() || on_edge || in_text_frame {
         return false;
     }
     leave_single(view);

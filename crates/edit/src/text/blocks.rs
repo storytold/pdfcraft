@@ -1,4 +1,4 @@
-use super::interp::{Carry, interpret};
+use super::interp::{Carry, frame_corners, from_frame, interpret};
 use super::lines::{content_streams, page_dict, reading_lines, rewritten_contents, splice, text_lines};
 use super::rewrite::{LineEdit, coincident_ops, rewrite_block};
 use super::{Document, EditError, HashMap, Object, Op, Pieces, TextLine, group_blocks, regions};
@@ -10,6 +10,14 @@ pub struct TextBlock {
     /// The lines' text joined with spaces (lines that ended in a hyphen are joined directly).
     pub text: String,
     pub rect: [f64; 4],
+    /// Ink bounds along and normal to the baseline, in page-user-space points.
+    pub ink_frame: [f64; 4],
+    /// Explicit left/right edges along the baseline, when resized. `rect` remains world-axis ink.
+    pub horizontal_frame: Option<[f64; 2]>,
+    /// Explicit bottom/top edges normal to the baseline. Text outside stays visible.
+    pub vertical_frame: Option<[f64; 2]>,
+    /// Alignment within an explicit horizontal frame; absent for inferred source regions.
+    pub horizontal_alignment: Option<crate::added::Align>,
     pub base_font: String,
     pub size: f64,
     pub bold: bool,
@@ -33,6 +41,36 @@ pub struct TextBlock {
 }
 
 impl TextBlock {
+    /// The editing bounds in baseline coordinates: upright text uses ordinary page coordinates.
+    pub fn editing_frame(&self) -> [f64; 4] {
+        let [left, right] = self.horizontal_frame.unwrap_or([self.ink_frame[0], self.ink_frame[2]]);
+        let [bottom, top] = self.vertical_frame.unwrap_or([self.ink_frame[1], self.ink_frame[3]]);
+        [left, bottom, right, top]
+    }
+
+    /// The editing frame's page-space corners, ordered bottom-left, bottom-right, top-right, top-left.
+    pub fn editing_quad(&self) -> [[f64; 2]; 4] {
+        frame_corners(self.editing_frame()).map(|p| {
+            let (x, y) = from_frame(self.direction(), p);
+            [x, y]
+        })
+    }
+
+    /// World-axis bounds of the editing frame, for inventories and rectangular selection.
+    pub fn editing_rect(&self) -> [f64; 4] {
+        if self.horizontal_frame.is_none() && self.vertical_frame.is_none() {
+            return self.rect;
+        }
+        self.editing_quad()
+            .into_iter()
+            .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])])
+    }
+
+    pub(super) fn direction(&self) -> (f64, f64) {
+        let (sin, cos) = self.rotation.to_radians().sin_cos();
+        (cos, sin)
+    }
+
     /// Preserve styles outside the changed ranges; inserted characters inherit the surrounding
     /// source run. The texts are aligned word by word, so words left untouched between two edits
     /// keep their own runs (#2198); past [`MAX_CHANGED_WORDS`] the draft counts as one change.
@@ -404,8 +442,13 @@ pub struct BlockStyle {
     pub scale: Option<f64>,
     /// Move the paragraph by `[dx, dy]` in user space (dragging its box).
     pub offset: Option<[f64; 2]>,
-    /// Rewrap to this width in user space (dragging the box's edge).
+    /// Rewrap to this width in user space (dragging the box's edge). Paragraphs retain
+    /// the explicit frame across subsequent edits and saves, independently of glyph bounds.
     pub width: Option<f64>,
+    /// Set bottom/top frame edges normal to the baseline, in page-user-space points,
+    /// without moving, scaling or clipping text. Upright text uses ordinary page y coordinates.
+    /// Each edge must be finite and the height must be positive and at most 14,400 points.
+    pub vertical_frame: Option<[f64; 2]>,
     /// For an invisible paragraph ([`TextBlock::invisible`]): fill its old area with this colour
     /// (RGB 0–1) before the new text, hiding the scanned word beneath it.
     pub cover: Option<[f64; 3]>,

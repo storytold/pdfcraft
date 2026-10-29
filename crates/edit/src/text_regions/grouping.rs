@@ -4,6 +4,7 @@ fn same_plane(a: &TextLine, b: &TextLine) -> bool {
     let at = Matrix(a.origin.tm).then(&Matrix(a.origin.ctm));
     let bt = Matrix(b.origin.tm).then(&Matrix(b.origin.ctm));
     a.scope == b.scope
+        && a.horizontal_frame == b.horizontal_frame
         && a.paint == b.paint
         && [0, 2].iter().all(|axis| {
             let ax = at.0.get(*axis).copied().unwrap_or(0.0);
@@ -231,6 +232,12 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
         let Some(first) = row.first().and_then(|i| lines.get(*i)) else { continue };
         let (Some(rect), Some(frame)) = (row_rect(&row, lines), frame_row_rect(&row, lines)) else { continue };
         let joins = blocks.last().is_some_and(|block| {
+            if mixed
+                && first.horizontal_frame.is_some()
+                && block.lines.first().and_then(|i| lines.get(*i)).is_some_and(|prev| prev.horizontal_frame == first.horizontal_frame)
+            {
+                return true;
+            }
             // A bullet of its own opens a list item (#2564): such a row is a new paragraph, and
             // letting it join is what made an edit of the row above delete this item and the ones
             // after it.
@@ -270,6 +277,10 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 editor_text: String::new(),
                 spans: Vec::new(),
                 rect,
+                ink_frame: frame,
+                horizontal_frame: first.horizontal_frame.map(|f| f.bounds),
+                vertical_frame: first.horizontal_frame.and_then(|f| f.vertical),
+                horizontal_alignment: first.horizontal_frame.map(|f| f.align),
                 base_font: first.base_font.clone(),
                 size: first.size,
                 bold: first.bold,
@@ -313,6 +324,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
         }
         block.text.push_str(row_text.trim_matches(paragraph_separator));
         block.rect = union(block.rect, rect);
+        block.ink_frame = union(block.ink_frame, frame);
         block.rows.push(row);
     }
     blocks

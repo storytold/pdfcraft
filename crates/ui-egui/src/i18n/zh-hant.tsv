@@ -2495,6 +2495,7 @@ animation effects	Off	關
 	field names can't contain a period: {name}	欄位名稱不能包含句點：{name}
 	two cells would both be named {name}	兩個儲存格的名稱都會是 {name}
 	a field named {name} already exists	已有名為 {name} 的欄位
+	Text extends outside the frame.	文字超出邊框。
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今天

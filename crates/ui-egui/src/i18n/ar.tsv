@@ -2821,6 +2821,7 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+	Text extends outside the frame.	يمتد النص خارج الإطار.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	اليوم

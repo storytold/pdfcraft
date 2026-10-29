@@ -8320,6 +8320,242 @@ fn mixed_visual_region_edit_preview_save_reopen_and_undo_through_tools() {
 }
 
 #[test]
+fn explicit_text_width_survives_save_reopen_and_later_edits_through_tools() {
+    let dir = workdir("paragraph-frame");
+    std::fs::write(dir.join("source.pdf"), fixture(1)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"text":"Hi","width":90}));
+    let resized = ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}))["paragraphs"][0].clone();
+    let frame = resized["editing_rect"].as_array().unwrap();
+    assert!((frame[2].as_f64().unwrap() - frame[0].as_f64().unwrap() - 90.0).abs() < 0.1);
+    assert_ne!(resized["rect"], resized["editing_rect"], "ink and editing geometry are distinct");
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"out/resized.pdf"}));
+    let re = ok(&mut a, "doc_open", json!({"path":"out/resized.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":re,"page":1}))["paragraphs"][0], resized);
+    ok(&mut a, "text_edit", json!({"doc":re,"page":1,"paragraph":1,"text":"One two three four five six seven"}));
+    let long = ok(&mut a, "text_paragraphs", json!({"doc":re,"page":1}))["paragraphs"][0].clone();
+    assert!(long["rows"].as_array().unwrap().len() > 1);
+    assert_eq!(long["editing_rect"][0], resized["editing_rect"][0]);
+    assert_eq!(long["editing_rect"][2], resized["editing_rect"][2]);
+    a.call("page_render", &json!({"doc":re,"page":1,"dpi":72})).unwrap();
+    ok(&mut a, "edit_undo", json!({"doc":re}));
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":re,"page":1}))["paragraphs"][0], resized);
+    ok(&mut a, "edit_redo", json!({"doc":re}));
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":re,"page":1}))["paragraphs"][0], long);
+}
+
+#[test]
+fn width_only_reflows_existing_paragraph_rows_through_tools() {
+    let dir = workdir("paragraph-width-only-reflow");
+    std::fs::write(dir.join("source.pdf"), win_ansi_paragraph_pdf("BT /F1 12 Tf 14.4 TL 40 700 Td (One two) Tj T* (three four) Tj ET")).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
+    assert_eq!(before["count"], 1);
+    assert_eq!(before["paragraphs"][0]["rows"].as_array().unwrap().len(), 2);
+    assert_eq!(before["paragraphs"][0]["text"], "One two three four");
+    ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"width":300}));
+    let after = ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
+    assert_eq!(after["count"], 1);
+    assert_eq!(after["paragraphs"][0]["text"], before["paragraphs"][0]["text"]);
+    assert_eq!(after["paragraphs"][0]["rows"].as_array().unwrap().len(), 1, "width-only edits reflow existing rows into the wider frame");
+}
+
+#[test]
+fn height_only_keeps_a_dehyphenated_paragraph_number_through_tools() {
+    let dir = workdir("paragraph-height-only-dehyphenated");
+    std::fs::write(dir.join("source.pdf"), win_ansi_paragraph_pdf("BT /F1 12 Tf 14.4 TL 40 700 Td (inter-) Tj T* (national) Tj ET")).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
+    assert_eq!(before["count"], 1);
+    assert_eq!(before["paragraphs"][0]["text"], "international");
+    assert_eq!(before["paragraphs"][0]["editor_text"], "inter-\nnational");
+    let lines = ok(&mut a, "text_lines", json!({"doc":doc,"page":1}));
+    // Both edits use the original listing; relisting between them would hide a stale-number bug.
+    for height in [10, 60] {
+        let edited = ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"height":height}));
+        assert!(edited.get("stale_paragraphs").is_none(), "height-only editing keeps the listed paragraph: {edited}");
+        assert_eq!(edited["paragraph"]["text"], "international");
+        assert_eq!(ok(&mut a, "text_lines", json!({"doc":doc,"page":1})), lines, "height preserves the source glyphs and line break");
+    }
+    let after = ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
+    let frame = after["paragraphs"][0]["editing_rect"].as_array().unwrap();
+    assert!((frame[3].as_f64().unwrap() - frame[1].as_f64().unwrap() - 60.0).abs() < 0.1);
+}
+
+#[test]
+fn explicit_text_height_survives_reopen_typing_and_history_through_tools() {
+    let dir = workdir("paragraph-height");
+    std::fs::write(dir.join("source.pdf"), fixture(1)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"text":"Hi","width":90}));
+    let listed = |a: &mut Automation, doc| ok(a, "text_paragraphs", json!({"doc":doc,"page":1}))["paragraphs"][0].clone();
+    let before = listed(&mut a, doc);
+    let top = before["editing_rect"][1].as_f64().unwrap();
+    ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"height":10}));
+    let resized = listed(&mut a, doc);
+    let frame = resized["editing_rect"].as_array().unwrap();
+    assert!((frame[1].as_f64().unwrap() - top).abs() < 0.1, "top edge stays fixed");
+    assert!((frame[3].as_f64().unwrap() - frame[1].as_f64().unwrap() - 10.0).abs() < 0.1);
+    assert_eq!(resized["rect"], before["rect"], "height does not scale or move glyphs");
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"out/height.pdf"}));
+    let re = ok(&mut a, "doc_open", json!({"path":"out/height.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(listed(&mut a, re), resized);
+    let text = "One two three four five six seven eight nine";
+    let preview = ok(&mut a, "text_edit_layout", json!({"doc":re,"page":1,"paragraph":1,"text":text,"height":10}));
+    assert_eq!(preview["overflow"], true, "short frames report overflowing text");
+    assert_eq!(listed(&mut a, re), resized, "preview is read only");
+    ok(&mut a, "text_edit", json!({"doc":re,"page":1,"paragraph":1,"text":text}));
+    let long = listed(&mut a, re);
+    assert_eq!(long["editing_rect"], resized["editing_rect"]);
+    assert!(long["rect"][3].as_f64().unwrap() > long["editing_rect"][3].as_f64().unwrap(), "overflow remains in ink bounds");
+    a.call("page_render", &json!({"doc":re,"page":1,"dpi":72})).unwrap();
+    ok(&mut a, "edit_undo", json!({"doc":re}));
+    assert_eq!(listed(&mut a, re), resized);
+    ok(&mut a, "edit_redo", json!({"doc":re}));
+    assert_eq!(listed(&mut a, re), long);
+    for tool in ["text_edit", "text_edit_layout"] {
+        for height in [json!(0), json!(-1), json!(14401), json!("NaN")] {
+            assert!(a.call(tool, &json!({"doc":re,"page":1,"paragraph":1,"height":height})).is_err());
+            assert_eq!(listed(&mut a, re), long, "invalid height leaves the document unchanged");
+        }
+    }
+    assert!(a.call("text_edit", &json!({"doc":re,"page":1,"line":1,"text":"must not replace a line","height":20})).is_err());
+    assert_eq!(listed(&mut a, re), long, "height requires a paragraph and cannot silently edit a line");
+}
+
+#[test]
+fn height_only_preserves_multiline_tj_text_and_rendering_through_tools() {
+    use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream, write_full};
+    let dir = workdir("height-only-source-operators");
+    let mut cos = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    cos.set(
+        ObjRef::new(5, 0),
+        Object::Stream(Stream::flate(
+            Dict::new(),
+            b"q 0.5 0 0 0.5 0 0 cm BT /F1 24 Tf 28 TL 40 400 Td [(One) -37 ( two)] TJ T* [(Three) 21 ( four)] TJ ET Q",
+        )),
+    );
+    std::fs::write(dir.join("source.pdf"), write_full(&cos, &Default::default()).unwrap()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "text_lines", json!({"doc":doc,"page":1}));
+    let paragraphs = ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
+    assert_eq!(paragraphs["count"], 1);
+    assert_eq!(paragraphs["paragraphs"][0]["rows"].as_array().unwrap().len(), 2);
+    let pixels = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":96})).unwrap();
+    for height in [10, 60, 15] {
+        ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"height":height}));
+        assert_eq!(
+            ok(&mut a, "text_lines", json!({"doc":doc,"page":1})),
+            before,
+            "height-only edits preserve every source row and its glyph geometry"
+        );
+        assert_eq!(
+            a.call("page_render", &json!({"doc":doc,"page":1,"dpi":96})).unwrap(),
+            pixels,
+            "height does not reflow, stretch or clip rendered text"
+        );
+    }
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"out/height-only.pdf"}));
+    let re = ok(&mut a, "doc_open", json!({"path":"out/height-only.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "text_lines", json!({"doc":re,"page":1})), before);
+    assert_eq!(a.call("page_render", &json!({"doc":re,"page":1,"dpi":96})).unwrap(), pixels);
+    let saved = Document::open(std::sync::Arc::new(std::fs::read(dir.join("out/height-only.pdf")).unwrap())).unwrap();
+    let page = pdfcraft_model::pages(&saved)[0].clone();
+    let contents = page.dict.get(b"Contents").unwrap();
+    let resolved = saved.resolve(contents);
+    let parts = match &*resolved {
+        Object::Array(parts) => parts.clone(),
+        _ => vec![contents.clone()],
+    };
+    let data: Vec<u8> = parts
+        .iter()
+        .flat_map(|part| {
+            let resolved = saved.resolve(part);
+            let Object::Stream(stream) = &*resolved else { panic!("page contents is a stream") };
+            stream.decoded().unwrap()
+        })
+        .collect();
+    let data = String::from_utf8(data).unwrap();
+    assert!(data.contains("[(One) -37 ( two)] TJ"), "the source TJ kerning stays encoded unchanged: {data}");
+    assert!(data.contains("T* [(Three) 21 ( four)] TJ"), "the second row keeps its original text placement: {data}");
+}
+
+#[test]
+fn rotated_text_frames_survive_tools_reopen_typing_and_history() {
+    use pdfcraft_cos::{Document, Object};
+    for (angle, page_rotation) in [(30_f64, 90), (90.0, 180), (180.0, 270), (270.0, 0)] {
+        let dir = workdir(&format!("rotated-frame-{}", angle as i32));
+        let (sin, cos) = angle.to_radians().sin_cos();
+        let content = format!("BT /F1 12 Tf {cos} {sin} {} {cos} 250 400 Tm (Hi) Tj ET", -sin);
+        let mut cos_doc = Document::open(std::sync::Arc::new(win_ansi_paragraph_pdf(&content))).unwrap();
+        let page = pdfcraft_model::pages(&cos_doc)[0].clone();
+        cos_doc.update_dict(page.obj, |d| d.set(b"Rotate".to_vec(), Object::Int(page_rotation))).unwrap();
+        std::fs::write(dir.join("source.pdf"), pdfcraft_cos::write_full(&cos_doc, &Default::default()).unwrap()).unwrap();
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+        let listed = |a: &mut Automation, doc| ok(a, "text_paragraphs", json!({"doc":doc,"page":1}))["paragraphs"][0].clone();
+        ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"width":90,"height":10}));
+        let resized = listed(&mut a, doc);
+        let quad = resized["editing_quad"].as_array().expect("oriented geometry is available to automation");
+        let distance = |i: usize, j: usize| {
+            (quad[i][0].as_f64().unwrap() - quad[j][0].as_f64().unwrap()).hypot(quad[i][1].as_f64().unwrap() - quad[j][1].as_f64().unwrap())
+        };
+        assert!((distance(0, 1) - 90.0).abs() < 0.1, "{angle}: {resized}");
+        assert!((distance(1, 2) - 10.0).abs() < 0.1, "{angle}: {resized}");
+        ok(&mut a, "doc_save", json!({"doc":doc,"path":"out/rotated.pdf"}));
+        let re = ok(&mut a, "doc_open", json!({"path":"out/rotated.pdf"}))["doc"].as_u64().unwrap();
+        assert_eq!(listed(&mut a, re), resized);
+        let text = "One two three four five six seven eight nine";
+        let draft = ok(&mut a, "text_edit_layout", json!({"doc":re,"page":1,"paragraph":1,"text":text}));
+        assert_eq!(draft["overflow"], true);
+        assert_eq!(listed(&mut a, re), resized, "preview is read-only");
+        ok(&mut a, "text_edit", json!({"doc":re,"page":1,"paragraph":1,"text":text}));
+        let typed = listed(&mut a, re);
+        assert_eq!(typed["editing_quad"], resized["editing_quad"], "typing preserves the rotated frame");
+        assert!(typed["rows"].as_array().unwrap().len() > 1);
+        a.call("page_render", &json!({"doc":re,"page":1,"dpi":72})).unwrap();
+        ok(&mut a, "edit_undo", json!({"doc":re}));
+        assert_eq!(listed(&mut a, re), resized);
+        ok(&mut a, "edit_redo", json!({"doc":re}));
+        assert_eq!(listed(&mut a, re), typed);
+    }
+}
+
+#[test]
+fn rotated_text_height_preserves_source_pixels_and_local_top_edge() {
+    for angle in [30_f64, 90.0, 180.0, 270.0] {
+        let dir = workdir(&format!("rotated-height-{}", angle as i32));
+        let (sin, cos) = angle.to_radians().sin_cos();
+        let content =
+            format!("q {cos} {sin} {} {cos} 250 400 cm BT /F1 12 Tf 14.4 TL 0 0 Td [(One) -37 ( two)] TJ T* [(Three) 21 ( four)] TJ ET Q", -sin);
+        std::fs::write(dir.join("source.pdf"), win_ansi_paragraph_pdf(&content)).unwrap();
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+        let before = ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
+        let lines = ok(&mut a, "text_lines", json!({"doc":doc,"page":1}));
+        let pixels = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72})).unwrap();
+        for height in [10, 60, 15] {
+            ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"height":height}));
+            let after = ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
+            assert_eq!(after["count"], 1);
+            for corner in [2, 3] {
+                assert_eq!(
+                    after["paragraphs"][0]["editing_quad"][corner], before["paragraphs"][0]["editing_quad"][corner],
+                    "local top stays anchored at {angle} degrees"
+                );
+            }
+            assert_eq!(ok(&mut a, "text_lines", json!({"doc":doc,"page":1})), lines);
+            assert_eq!(a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72})).unwrap(), pixels);
+        }
+    }
+}
+
+#[test]
 fn clipped_image_bounds_and_text_edit_save_reopen_through_tools() {
     use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};
     let dir = workdir("clipped-artwork");

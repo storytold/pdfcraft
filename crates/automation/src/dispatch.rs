@@ -1,5 +1,7 @@
 use super::error::{Result, ToolError, failed};
-use super::json::{Args, document_attachment_keys, info, one_based, parse_style_ranges, security, summary, text_style_levels};
+use super::json::{
+    Args, document_attachment_keys, info, one_based, parse_style_ranges, parse_text_height_frame, security, summary, text_style_levels,
+};
 use super::paths::{read_input, write_atomic};
 use super::{Arc, Automation, Edit, Value, block_overlapping, comments, json, tools};
 
@@ -445,6 +447,8 @@ impl Automation {
                             "rows": b.rows.iter().map(|row| row.iter().map(|i| i + 1).collect::<Vec<_>>()).collect::<Vec<_>>(),
                             "lines": b.lines.iter().map(|l| l + 1).collect::<Vec<_>>(),
                             "rect": [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))],
+                            "editing_rect": comments::rect_to_view(info, b.editing_rect().map(|v| v as f32)),
+                            "editing_quad": b.editing_quad().map(|p| info.user_to_view(p[0] as f32, p[1] as f32).map(r)),
                             "font": b.base_font,
                             "size": (b.size * 100.0).round() / 100.0,
                         })
@@ -514,6 +518,7 @@ impl Automation {
                 let style = pdfcraft_engine::BlockStyle {
                     size: a.opt_num("size")?,
                     width: a.opt_num("width")?,
+                    vertical_frame: parse_text_height_frame(&a, source)?,
                     resource: a.opt_str("font_resource")?.map(str::to_owned),
                     ranges: parse_style_ranges(a.get("ranges"))?,
                     ..Default::default()
@@ -538,7 +543,8 @@ impl Automation {
                 };
                 let index = self.paragraph_index(id, page, k, &blocks)?;
                 let block = blocks.get(index).cloned().ok_or_else(|| ToolError::InvalidArgs(format!("paragraph {k} is out of range")))?;
-                let text = a.opt_str("text")?.map(str::to_owned).unwrap_or(block.text);
+                let vertical_frame = parse_text_height_frame(&a, &block)?;
+                let requested_text = a.opt_str("text")?;
                 let mut style = pdfcraft_engine::BlockStyle {
                     ranges: parse_style_ranges(a.get("ranges"))?,
                     resource: a.opt_str("font_resource")?.map(str::to_owned),
@@ -549,6 +555,7 @@ impl Automation {
                     char_spacing: a.opt_num("char_spacing")?,
                     scale: a.opt_num("scale")?,
                     width: a.opt_num("width")?,
+                    vertical_frame,
                     ..Default::default()
                 };
                 let (dx, dy) = (a.opt_num("dx")?, a.opt_num("dy")?);
@@ -576,10 +583,16 @@ impl Automation {
                         other => return Err(ToolError::InvalidArgs(format!("unknown align {other:?}"))),
                     });
                 }
+                // Height alone preserves the source rows verbatim. Other edits keep their
+                // existing reflow behaviour instead of treating source row breaks as hard ones.
+                let vertical_only = style.vertical_frame.is_some()
+                    && requested_text.is_none_or(|text| text == block.editor_text)
+                    && pdfcraft_engine::BlockStyle { vertical_frame: None, ..style.clone() } == Default::default();
+                let text = requested_text.unwrap_or(if vertical_only { &block.editor_text } else { &block.text }).to_owned();
                 // Where the paragraph is drawn after the edit: moved by dx, dy (up is +dy).
                 let [dx, dy] = style.offset.unwrap_or([0.0, 0.0]);
                 let moved = [block.rect[0] + dx, block.rect[1] + dy, block.rect[2] + dx, block.rect[3] + dy];
-                let wanted: String = text.split_whitespace().collect();
+                let wanted: String = (if vertical_only { &block.text } else { &text }).split_whitespace().collect();
                 let mut out = self.apply(&a, Edit::EditTextBlock { page, block: index, text, style })?;
                 let doc = self.doc(&a)?;
                 let after = doc.text_blocks(page);
@@ -605,6 +618,9 @@ impl Automation {
                 out
             }
             "text_edit" => {
+                if a.get("height").is_some() {
+                    return Err(ToolError::InvalidArgs("height requires a paragraph, not a line".into()));
+                }
                 let page = self.page(&a)?;
                 let n = self.doc(&a)?.text_lines(page).len();
                 let line = a.int("line")?;
