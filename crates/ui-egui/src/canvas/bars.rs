@@ -124,7 +124,12 @@ pub(super) fn notices(
     }
     if let Some((icon, color, template, arg)) = signed {
         let mut open = false;
-        notice_bar(ui, t, icon, color, crate::i18n::fmt(tl!(template), &[("by", &arg)]), |ui| {
+        let mut text = crate::i18n::fmt(tl!(template), &[("by", &arg)]);
+        if info.has_legacy_flash {
+            text.push(' ');
+            text.push_str(tl!(pdfcraft_render::LEGACY_FLASH_WARNING));
+        }
+        notice_bar(ui, t, icon, color, text, |ui| {
             if crate::widgets::pill_button(ui, tl!("Signature panel"), false).clicked() {
                 open = true;
             }

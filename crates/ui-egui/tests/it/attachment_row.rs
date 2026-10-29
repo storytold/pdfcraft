@@ -237,3 +237,25 @@ fn a_legacy_flash_diagram_is_explained_and_saved_from_the_attachments_panel() {
     h.get_by_label_contains("interactive form fields");
     h.get_by_label_contains("Flash/SWF");
 }
+
+#[test]
+fn a_signed_legacy_flash_document_keeps_the_warning_and_signature_panel_action() {
+    let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
+    let digital_id = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap();
+    let mut session = pdfcraft_engine::Session::new();
+    let id = session.open("manual.pdf", None, std::sync::Arc::new(legacy_flash_pdf()), None).unwrap();
+    let signed = session.sign(id, &digital_id, pdfcraft_engine::SignOptions { page: 0, ..Default::default() }).unwrap().to_vec();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("signed-manual.pdf", None, signed).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label("Signature panel");
+    h.get_by_label_contains("At least one signature has problems.");
+    h.get_by_label_contains("Flash/SWF");
+    h.get_by_label("Signature panel").click();
+    h.run_steps(4);
+    assert_eq!(h.state().right, Some(pdfcraft_ui_egui::RightPanel::Signatures));
+}

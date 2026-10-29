@@ -136,6 +136,7 @@ pub fn tools() -> Vec<ToolDef> {
             .cmd("edit.attach")
             .with(schema(json!({"doc": doc(), "path": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}}), &["doc", "path"])),
         t("attachment_save", "Save an embedded attachment", "Save the attachment at index (1-based, in doc_info attachments order) to path without opening or executing it. Includes RichMedia embedded assets. External file references are refused; decoding is capped at 1 GiB. Output obeys the write root and uses the atomic writer.")
+            .destructive()
             .with(schema(json!({"doc":doc(), "index":{"type":"integer","minimum":1}, "path":{"type":"string"}}), &["doc","index","path"])),
         t("attachment_delete", "Delete an attachment", "Remove the document-level attachment with this name (as doc_info lists it). Undoable.")
             .destructive()

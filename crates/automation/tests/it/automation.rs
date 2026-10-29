@@ -10547,6 +10547,7 @@ fn legacy_flash_is_explained_and_its_asset_can_be_saved_without_changing_the_pdf
     let info = ok(&mut a, "doc_info", json!({"doc":doc}));
     assert!(info["warnings"].as_array().unwrap().iter().any(|w| w.as_str().is_some_and(|w| w.contains("Flash/SWF"))), "{info}");
     assert_eq!(info["attachments"][0]["name"], "diagram.swf");
+    std::fs::write(dir.path().join("diagram.swf"), b"existing output").unwrap();
     let saved = ok(&mut a, "attachment_save", json!({"doc":doc, "index":1, "path":"diagram.swf"}));
     assert_eq!(saved["bytes"], 16);
     let data = std::fs::read(dir.path().join("diagram.swf")).unwrap();
@@ -10566,4 +10567,13 @@ fn legacy_flash_is_explained_and_its_asset_can_be_saved_without_changing_the_pdf
     let locked = ok(&mut a, "doc_open", json!({"path":"encrypted.pdf", "password":"open"}))["doc"].as_u64().unwrap();
     ok(&mut a, "attachment_save", json!({"doc":locked, "index":1, "path":"encrypted.swf"}));
     assert_eq!(std::fs::read(dir.path().join("encrypted.swf")).unwrap(), data);
+}
+
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_attachment_save_reports_that_it_can_overwrite_files() {
+    let list = rpc(&mut McpServer::new(Automation::new()), 1, "tools/list", json!({}));
+    let tool = list["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "attachment_save").unwrap();
+    assert_eq!(tool["annotations"]["destructiveHint"], true);
+    assert_eq!(tool["annotations"]["readOnlyHint"], false);
 }
