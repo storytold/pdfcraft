@@ -1,4 +1,4 @@
-use super::{Args, Automation, Result, ToolError, Value, child, failed, json, write_atomic};
+use super::{Args, Automation, Result, ToolError, Value, child, failed, json, unused, write_atomic};
 
 impl Automation {
     pub(crate) fn doc_export_office(&self, a: &Args) -> Result<Value> {
@@ -147,7 +147,7 @@ impl Automation {
                         let stem =
                             std::path::Path::new(name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
                         let ext = std::path::Path::new(name).extension().and_then(|s| s.to_str()).unwrap_or("pdf");
-                        (2..10_000u32).map(|n| child(&folder, &format!("{stem} ({n}).{ext}"))).find(|p| !p.exists()).unwrap_or(target)
+                        unused(&folder, &stem, ext)
                     } else {
                         target
                     };
