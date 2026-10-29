@@ -367,6 +367,10 @@ fn the_printers_default_size_is_chosen_when_its_sizes_are_read() {
     d.printer_papers = Some(("Label_Queue".into(), vec![paper("Letter", (612.0, 792.0), true), paper("User defined", (162.0, 90.0), false)]));
     d.paper = d.paper_after_read((0.0, 0.0));
     assert_eq!((d.paper, d.paper_name().as_str(), d.media().map(|(_, m)| m).as_deref()), (0, "US Letter", Some("Letter")));
+    // A driver offering that size under two keywords: the job names its default one.
+    d.printer_papers = Some(("Label_Queue".into(), vec![paper("Letter", (612.0, 792.0), false), paper("Letter.Fullbleed", (612.0, 792.0), true)]));
+    d.paper = d.paper_after_read((0.0, 0.0));
+    assert_eq!((d.paper, d.media().map(|(_, m)| m).as_deref()), (0, Some("Letter.Fullbleed")));
     d.printer_papers = Some(("Label_Queue".into(), vec![paper("Letter", (612.0, 792.0), false), paper("User defined", (162.0, 90.0), true)]));
     assert_eq!(d.own_papers_listed().len(), 2, "the printer's sizes are all listed, a standard one too");
     d.printer_papers = Some(("Label_Queue".into(), vec![paper("Letter", (612.0, 792.0), false), paper("w162h288", (162.0, 288.0), false)]));

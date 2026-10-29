@@ -323,12 +323,18 @@ impl PrintDraft {
 
     /// The `media` option the job names, so the spooler feeds the sheet the PDF was laid out on
     /// rather than the queue's default: the printer's own keyword for the chosen size when it has
-    /// one, else the CUPS name of the standard size ([`print::media_option`]).
+    /// one (its default when that is this size as fed, since a driver can offer one size under
+    /// two keywords, `Letter` and `Letter.Fullbleed`), else the CUPS name of the standard size
+    /// ([`print::media_option`]).
     pub fn media(&self) -> Option<(String, String)> {
         let own = self.own_papers();
         let index = match self.paper.checked_sub(PAPERS.len()) {
             Some(i) => Some(i),
-            None => spool::paper_of_size(own, self.paper_size()),
+            None => {
+                let size = self.paper_size();
+                let fed = |p: &spool::PrinterPaper| (p.size.0 - size.0).abs() <= 0.5 && (p.size.1 - size.1).abs() <= 0.5;
+                own.iter().position(|p| p.default && fed(p)).or_else(|| spool::paper_of_size(own, size))
+            }
         };
         index.and_then(|i| own.get(i)).map(|p| ("media".to_string(), p.key.clone())).or_else(|| print::media_option(self.paper))
     }
