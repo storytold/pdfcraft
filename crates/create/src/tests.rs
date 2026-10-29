@@ -206,6 +206,26 @@ fn bmp_gif_and_multi_page_tiff_images() {
     assert!(matches!(from_images(&[("x.webp".into(), b"RIFF0000WEBP".to_vec())]), Err(CreateError::Image(..))));
 }
 
+/// #4937: a BMP whose header gives the pixel data's offset as 0 is placed as the same image as
+/// the intact file, not shifted by the header bytes.
+#[test]
+fn a_bmp_with_a_zero_pixel_offset_is_placed_like_the_intact_file() {
+    use image::ImageEncoder;
+    let mut bmp = Vec::new();
+    let pixels: Vec<u8> = (0..18).map(|i| i * 13).collect();
+    image::codecs::bmp::BmpEncoder::new(&mut bmp).write_image(&pixels, 3, 2, image::ExtendedColorType::Rgb8).unwrap();
+    let mut zero = bmp.clone();
+    zero[10..14].copy_from_slice(&0u32.to_le_bytes());
+    let samples = |data: Vec<u8>| {
+        let doc = reopen(&from_images(&[("a.bmp".into(), data)]).unwrap());
+        let res = doc.resolve(pages(&doc)[0].get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        let Object::Stream(s) = &*doc.resolve(xo.get(b"Im0").unwrap()) else { panic!("not an image") };
+        s.decoded().unwrap()
+    };
+    assert_eq!(samples(zero), samples(bmp));
+}
+
 /// #665 lifted the tiff crate's 256 MiB decode limit; a few bytes claiming a 60000x60000 page
 /// (3.6 GB of gray pixels) must still be refused, not allocated.
 #[test]

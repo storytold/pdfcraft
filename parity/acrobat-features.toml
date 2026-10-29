@@ -4559,8 +4559,8 @@ milestone = "M6"
 status = "partial"
 commands = ["form.fields"]
 tools = ["form_fill", "form_set_props"]
-evidence = ["crates/forms/src/tests.rs::text_fields_get_new_appearances", "crates/forms/src/tests.rs::auto_text_size_fits_single_and_multiline_text", "crates/forms/src/tests.rs::choices_accept_exports_or_display_text", "crates/forms/src/tests.rs::rotated_fields_draw_in_their_quadrant", "crates/engine/tests/it/form_rotation.rs::a_rotated_field_draws_along_the_vertical_edge", "crates/automation/tests/it/automation.rs::rotating_a_field_through_tools", "crates/ui-egui/tests/it/prepare.rs::position_tab_rotates_a_field", "crates/ui-egui/tests/it/prepare.rs::dropdown_alignment_is_editable_and_preserved", "crates/ui-egui/tests/it/prepare.rs::list_box_alignment_is_editable_and_preserved"]
-notes = "auto-size, comb, multiline, password, quadding (text, dropdown and list-box Options controls), /MK colours and /MK /R rotation (0, 90, 180, 270); approximate Helvetica metrics"
+evidence = ["crates/forms/src/tests.rs::text_fields_get_new_appearances", "crates/forms/src/tests.rs::auto_text_size_fits_single_and_multiline_text", "crates/automation/tests/it/automation.rs::auto_sized_text_follows_a_tall_field", "crates/forms/src/tests.rs::choices_accept_exports_or_display_text", "crates/forms/src/tests.rs::rotated_fields_draw_in_their_quadrant", "crates/engine/tests/it/form_rotation.rs::a_rotated_field_draws_along_the_vertical_edge", "crates/automation/tests/it/automation.rs::rotating_a_field_through_tools", "crates/ui-egui/tests/it/prepare.rs::position_tab_rotates_a_field", "crates/ui-egui/tests/it/prepare.rs::dropdown_alignment_is_editable_and_preserved", "crates/ui-egui/tests/it/prepare.rs::list_box_alignment_is_editable_and_preserved"]
+notes = "auto-size, comb, multiline, password, quadding (text, dropdown and list-box Options controls), /MK colours and /MK /R rotation (0, 90, 180, 270); approximate Helvetica metrics. Single-line auto-size follows the field height with no 12 pt cap, as Acrobat Reader draws it; multiline and comb auto-size still stop at 12 pt, not yet checked against Acrobat"
 
 [[feature]]
 id = "form.rich-text-fields"
@@ -4739,7 +4739,7 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.clear"]
 tools = ["form_reset"]
-evidence = ["crates/forms/src/tests.rs::reset_restores_defaults", "crates/ui-egui/tests/it/forms.rs::check_boxes_radios_and_choices"]
+evidence = ["crates/forms/src/tests.rs::reset_restores_defaults", "crates/ui-egui/tests/it/forms.rs::check_boxes_radios_and_choices", "crates/forms/src/tests.rs::clearing_a_kids_value_does_not_bring_back_its_parents"]
 notes = "back to /DV; undoable"
 
 [[feature]]
@@ -4859,8 +4859,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.add.radio"]
 tools = ["form_add_field"]
-evidence = ["crates/forms/src/tests.rs::every_field_type_can_be_added_named_and_drawn", "crates/automation/tests/it/automation.rs::preparing_a_form_through_tools"]
-notes = "new group Group1… or join the selected group with the next ChoiceN"
+evidence = ["crates/forms/src/tests.rs::every_field_type_can_be_added_named_and_drawn", "crates/automation/tests/it/automation.rs::preparing_a_form_through_tools", "crates/forms/src/tests.rs::a_radio_button_renamed_to_a_groups_name_joins_the_group", "crates/forms/src/tests.rs::a_joining_radio_button_with_a_taken_export_value_takes_a_free_one", "crates/forms/src/tests.rs::radio_fields_that_are_their_own_widget_join_and_are_joined", "crates/automation/tests/it/automation.rs::renaming_a_radio_button_to_a_groups_name_joins_the_group_through_tools"]
+notes = "new group Group1… or join the selected group with the next ChoiceN; renaming a radio button (Properties or form_set_props) to another radio group's name moves its buttons into that group (#4949), a clashing export value becoming the next free ChoiceN; refused when either group lists its values in /Opt; a button's export value is not yet editable in Properties"
 
 [[feature]]
 id = "form.check-box-style"
@@ -5003,8 +5003,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
 tools = ["form_set_props"]
-evidence = ["crates/forms/src/tests.rs::button_caption_preserves_other_widgets_and_shared_dictionaries", "crates/forms/src/tests.rs::a_button_caption_is_drawn_in_its_fields_font_size_and_color", "crates/ui-egui/tests/it/prepare.rs::button_label_is_editable_without_renaming_the_field", "crates/automation/tests/it/button_caption.rs::button_caption_can_be_changed_after_creation", "crates/forms/src/tests.rs::properties_rename_and_delete", "crates/automation/tests/it/automation.rs::preparing_a_form_through_tools", "crates/forms/src/tests.rs::options_tab_flags_alignment_and_defaults", "crates/ui-egui/tests/it/prepare.rs::options_tab_sets_flags_alignment_and_defaults", "crates/automation/tests/it/form_bulk.rs::bulk_options_apply_per_field_and_refuse_an_invalid_comb_atomically"]
-notes = "push buttons: per-widget normal label independent of the field name, including clearing and save/reopen, drawn in the font, size and color of the button's /DA (the form's /DR font, else Helvetica; an automatic size fits the button) and centered by Helvetica's widths; icon-only layout retained, rollover/down labels and icon layout editing remain unavailable; text: alignment, default, multi-line, scroll, rich text flag, limit, password, file selection, spell check, comb; choices: items, default, sort, custom text, multiple selection, commit immediately; check boxes and radios: checked by default, radios in unison. Shared GUI offers applicable text/choice flags, alignment, text limits and check styles; choices/defaults remain individual GUI edits"
+evidence = ["crates/forms/src/tests.rs::button_caption_preserves_other_widgets_and_shared_dictionaries", "crates/forms/src/tests.rs::a_button_caption_is_drawn_in_its_fields_font_size_and_color", "crates/ui-egui/tests/it/prepare.rs::button_label_is_editable_without_renaming_the_field", "crates/automation/tests/it/button_caption.rs::button_caption_can_be_changed_after_creation", "crates/forms/src/tests.rs::properties_rename_and_delete", "crates/automation/tests/it/automation.rs::preparing_a_form_through_tools", "crates/forms/src/tests.rs::options_tab_flags_alignment_and_defaults", "crates/ui-egui/tests/it/prepare.rs::options_tab_sets_flags_alignment_and_defaults", "crates/automation/tests/it/form_bulk.rs::bulk_options_apply_per_field_and_refuse_an_invalid_comb_atomically", "crates/forms/src/tests.rs::changing_a_lists_options_repoints_its_selected_indices", "crates/forms/src/tests.rs::shrinking_a_lists_options_scrolls_a_widget_with_its_own_top_row", "crates/forms/src/tests.rs::each_widget_with_its_own_top_row_scrolls_by_itself", "crates/forms/src/tests.rs::a_list_boxs_top_row_follows_a_font_size_changed_with_its_items", "crates/forms/src/tests.rs::sorting_a_combo_boxs_items_repoints_its_selected_index", "crates/automation/tests/it/automation.rs::changing_a_lists_options_through_tools_keeps_its_saved_selection_on_the_same_items", "crates/forms/src/tests.rs::clearing_a_kids_default_does_not_bring_back_its_parents", "crates/forms/src/tests.rs::clearing_a_buttons_default_under_a_parent_with_one_leaves_it_off", "crates/automation/tests/it/automation.rs::clearing_a_kids_default_through_tools_does_not_bring_back_its_parents"]
+notes = "push buttons: per-widget normal label independent of the field name, including clearing and save/reopen, drawn in the font, size and color of the button's /DA (the form's /DR font, else Helvetica; an automatic size fits the button) and centered by Helvetica's widths; icon-only layout retained, rollover/down labels and icon layout editing remain unavailable; text: alignment, default (clearing it leaves none, not a parent field's), multi-line, scroll, rich text flag, limit, password, file selection, spell check, comb; choices: items (the selected indices /I follow their items when the list is edited or sorted), default, sort, custom text, multiple selection, commit immediately; check boxes and radios: checked by default, radios in unison. Shared GUI offers applicable text/choice flags, alignment, text limits and check styles; choices/defaults remain individual GUI edits"
 
 [[feature]]
 id = "form.props-actions"

@@ -128,6 +128,7 @@ hayro-postscript = { path = "vendor/hayro-postscript" }
 hayro-jbig2 = { path = "vendor/hayro-jbig2" }
 lopdf = { path = "vendor/lopdf" }
 vello_common = { path = "vendor/vello_common" }
+vello_cpu = { path = "vendor/vello_cpu" }
 # The egui and winit crates below are pinned to immutable storytold git revisions (egui
 # 6d518fc799681571963842f95b55a6b68431b15a, winit a517b3846ee8457d84ee4975110bfda6797c44dc).
 # Only the retained `vendor/winit` and `vendor/egui-wgpu` copies are provenance for the app's

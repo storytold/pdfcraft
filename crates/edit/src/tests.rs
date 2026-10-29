@@ -8026,4 +8026,23 @@ fn restacking_a_paragraph_between_paragraphs_keeps_both_whole() {
     let back = editable_objects(&doc, 0).unwrap();
     assert_eq!(back.len(), 2);
     assert_eq!(back[0].text.as_deref(), Some("Group headline"));
+/// Inside a text object `q`/`Q` save and restore the text and text line matrices (ISO 32000-2
+/// §9.4.1, as corrected by the PDF Association's errata, issue 368), as the renderer does: the
+/// text after `Q` is found, and stays, where it is drawn.
+#[test]
+fn q_inside_a_text_object_restores_the_text_matrices() {
+    for (content, text, baseline) in [
+        ("BT /F1 12 Tf 72 700 Td q 0 -100 Td Q (After) Tj ET", "After", [72.0, 700.0]),
+        ("BT /F1 12 Tf 72 700 Td q 1 0 0 1 300 300 Tm Q (After) Tj ET", "After", [72.0, 700.0]),
+        // `T*` moves from the restored line, not the one set inside q/Q.
+        ("BT /F1 12 Tf 14 TL 72 700 Td q 0 -100 Td Q T* (Next) Tj ET", "Next", [72.0, 686.0]),
+    ] {
+        let mut doc = text_page(content);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!((lines[0].text.as_str(), lines[0].baseline()), (text, baseline), "{content}");
+        text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
+        let doc = reopen(&doc);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!((lines[0].text.as_str(), lines[0].baseline()), ("Edited", baseline), "{content} after editing");
+    }
 }

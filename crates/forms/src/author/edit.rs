@@ -1,5 +1,6 @@
+use super::join::{check_join, join_radio_group};
 use super::look::{BorderStyle, da_string, patch_da, patch_widget_look, redraw_widgets};
-use super::tree::{attach, check_place, child_named, clash, detach, ensure_form, inherited, name_parts, own_inherited};
+use super::tree::{ancestor_sets, attach, check_place, child_named, clash, detach, ensure_form, inherited, name_parts, own_inherited};
 use super::{Dict, Document, Field, FieldKind, FieldProps, FormError, MIN_FIELD_SIDE, ObjRef, Object, PdfString, fields, flags, invalid};
 
 /// Swap width and height, keeping the center. `None` when that is not a usable widget.
@@ -12,6 +13,68 @@ fn swapped_around_center(r: [f64; 4]) -> Option<[f64; 4]> {
     let (nw, nh) = (y1 - y0, x1 - x0);
     let out = [cx - nw / 2.0, cy - nh / 2.0, cx + nw / 2.0, cy + nh / 2.0];
     (out.iter().all(|v| v.is_finite()) && out[2] - out[0] >= MIN_FIELD_SIDE && out[3] - out[1] >= MIN_FIELD_SIDE).then_some(out)
+}
+
+/// Re-point a choice field's `/I`, positions in `/Opt`, at the new list `exports` after `/Opt` was
+/// replaced (ISO 32000-2 §12.7.5.4): the positions of the selected `values` still offered. `kept`
+/// are the old `/I` positions carried into the new list, which tell apart options sharing an
+/// export value; a selected value none of them covers takes its first position, by `set_value`'s
+/// rule. Returns them.
+fn repoint_selection(d: &mut Dict, values: &[String], exports: &[String], kept: &[usize]) -> Vec<usize> {
+    let mut indices: Vec<usize> = kept.iter().copied().filter(|&i| exports.get(i).is_some_and(|e| values.contains(e))).collect();
+    for v in values {
+        if !indices.iter().any(|&i| exports.get(i) == Some(v)) {
+            indices.extend(exports.iter().position(|e| e == v));
+        }
+    }
+    indices.sort_unstable();
+    indices.dedup();
+    if indices.is_empty() {
+        d.remove(b"I");
+    } else {
+        d.set(b"I".to_vec(), Object::Array(indices.iter().map(|&i| Object::Int(i64::try_from(i).unwrap_or(i64::MAX))).collect()));
+    }
+    indices
+}
+
+/// The positions in `/Opt` that a choice field's `/I` holds, those below `count`.
+fn selected_indices(doc: &Document, field: ObjRef, count: usize) -> Vec<usize> {
+    let Some(i) = doc.get(field).as_dict().and_then(|d| d.get(b"I").cloned()) else {
+        return Vec::new();
+    };
+    let positions = doc.resolve(&i);
+    positions.as_array().map(|a| a.iter().filter_map(|o| usize::try_from(o.as_int()?).ok()).filter(|&n| n < count).collect()).unwrap_or_default()
+}
+
+/// The items (export value, display text) "Sort items" orders: the new `props.options`, or else
+/// the field's own, whose selection, `/I` included, moves with them.
+fn items_to_sort(doc: &Document, f: &Field, props: &FieldProps) -> (Vec<(String, String)>, Vec<usize>) {
+    match &props.options {
+        Some(o) => (o.iter().map(|x| (x.clone(), x.clone())).collect(), Vec::new()),
+        None => (f.options.clone(), selected_indices(doc, f.obj, f.options.len())),
+    }
+}
+
+/// Sort a choice field's items (export value, display text) by display text, ignoring case, and
+/// write them as `/Opt`; export values stay with their items. Returns the export values in their
+/// new order and the `old` positions carried through the sort.
+fn write_sorted_opt(d: &mut Dict, items: &[(String, String)], old: &[usize]) -> (Vec<String>, Vec<usize>) {
+    let mut order: Vec<usize> = (0..items.len()).collect();
+    order.sort_by_key(|&i| items.get(i).map(|(_, display)| display.to_lowercase()));
+    let sorted: Vec<&(String, String)> = order.iter().filter_map(|&i| items.get(i)).collect();
+    let opt = sorted
+        .iter()
+        .map(|(e, disp)| {
+            if e == disp {
+                Object::String(PdfString::text(disp))
+            } else {
+                Object::Array(vec![Object::String(PdfString::text(e)), Object::String(PdfString::text(disp))])
+            }
+        })
+        .collect();
+    d.set(b"Opt".to_vec(), Object::Array(opt));
+    let carried = old.iter().filter_map(|o| order.iter().position(|i| i == o)).collect();
+    (sorted.into_iter().map(|(e, _)| e.clone()).collect(), carried)
 }
 
 /// Change a field's properties (General and Options tabs) and redraw it.
@@ -70,7 +133,9 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     if let Some(acts) = &props.actions {
         crate::set_field_actions(doc, name, acts)?;
     }
-    let new_name = rename_field(doc, &all, &f, name, props)?;
+    // A radio button renamed to another radio group's name joins that group (#4949). The other
+    // properties are written first, to this field, and its buttons then move.
+    let (new_name, join) = rename_field(doc, &all, &f, name, props)?;
     // The new default appearance when the size or the look changes.
     let size = props.font_size.unwrap_or_else(|| crate::appearance::parse_da(&f.da).size);
     let new_da = match &props.look {
@@ -121,6 +186,9 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     if props.check_style.is_some() && !matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) {
         return invalid("only check boxes and radio buttons have a check style");
     }
+    let mut list_picked = None;
+    let (sort_items, old_selection) = items_to_sort(doc, &f, props);
+    let parent_default = ancestor_sets(doc, f.obj, b"DV");
     doc.update_dict(f.obj, |d| {
         d.set(b"Ff".to_vec(), Object::Int(ff as i64));
         if let Some(t) = &props.tooltip {
@@ -138,27 +206,23 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
                 }
             }
         }
+        // The export values in `/Opt` order once it is rewritten, for re-pointing `/I`.
+        let mut new_exports: Option<Vec<String>> = None;
+        let mut kept = Vec::new();
         if let Some(opts) = &props.options {
             d.set(b"Opt".to_vec(), Object::Array(opts.iter().map(|o| Object::String(PdfString::text(o))).collect()));
+            new_exports = Some(opts.clone());
         }
         // "Sort items": the list itself is kept in order (export values stay with their items).
         if ff & flags::SORT != 0 && matches!(f.kind, FieldKind::Combo | FieldKind::List) {
-            let mut items: Vec<(String, String)> = match &props.options {
-                Some(o) => o.iter().map(|x| (x.clone(), x.clone())).collect(),
-                None => f.options.clone(),
-            };
-            items.sort_by_key(|(_, display)| display.to_lowercase());
-            let opt = items
-                .iter()
-                .map(|(e, disp)| {
-                    if e == disp {
-                        Object::String(PdfString::text(disp))
-                    } else {
-                        Object::Array(vec![Object::String(PdfString::text(e)), Object::String(PdfString::text(disp))])
-                    }
-                })
-                .collect();
-            d.set(b"Opt".to_vec(), Object::Array(opt));
+            let (exports, carried) = write_sorted_opt(d, &sort_items, &old_selection);
+            new_exports = Some(exports);
+            kept = carried;
+        }
+        if let Some(exports) = &new_exports
+            && matches!(f.kind, FieldKind::Combo | FieldKind::List)
+        {
+            list_picked = Some((repoint_selection(d, &f.value, exports, &kept), exports.len()));
         }
         if let Some(q) = props.quadding {
             d.set(b"Q".to_vec(), Object::Int(q));
@@ -167,6 +231,12 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
             // Buttons name their default state; text and choices hold a string.
             Some(Some(v)) if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) => d.set(b"DV".to_vec(), Object::Name(crate::name_bytes(v))),
             Some(Some(v)) => d.set(b"DV".to_vec(), PdfString::text(v)),
+            // `/DV` is inheritable: with an ancestor's in place, removing the field's own would
+            // bring that one back, so the field keeps an empty default of its own instead.
+            Some(None) if parent_default && matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) => {
+                d.set(b"DV".to_vec(), Object::Name(b"Off".to_vec()))
+            }
+            Some(None) if parent_default => d.set(b"DV".to_vec(), PdfString::text("")),
             Some(None) => {
                 d.remove(b"DV");
             }
@@ -246,15 +316,20 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         })?;
     }
     let only = apply_late_widget_props(doc, &f, props, &new_da, rotated_rect)?;
-    redraw_widgets(doc, &new_name, only)?;
+    scroll_list(doc, f.obj, list_picked)?;
+    redraw_or_join(doc, &f, name, &new_name, join.as_ref(), only)?;
     if props.calculate.is_some() {
         crate::recalculate(doc)?;
     }
     Ok(new_name)
 }
 
-fn rename_field(doc: &mut Document, all: &[Field], f: &Field, name: &str, props: &FieldProps) -> Result<String, FormError> {
+/// Apply a new name from `props`: rename the field, move it under the parents a full name
+/// names, or, for a radio button named after another radio group, pick that group to join.
+/// Returns the field's new full name and the group it joins.
+fn rename_field(doc: &mut Document, all: &[Field], f: &Field, name: &str, props: &FieldProps) -> Result<(String, Option<Field>), FormError> {
     let mut new_name = name.to_string();
+    let mut join = None;
     if let Some(n) = props.name.as_deref().map(str::trim).filter(|n| *n != f.name) {
         // A full name under the same parents only renames the field's own part (the editor
         // shows nested fields by their full name): it isn't moved, so it keeps its place and
@@ -263,7 +338,16 @@ fn rename_field(doc: &mut Document, all: &[Field], f: &Field, name: &str, props:
             (Some((parents, own)), Some((current, _))) if parents == current => own,
             _ => n,
         };
-        if n.contains('.') {
+        let full = match f.name.rsplit_once('.') {
+            Some((parents, _)) if !n.contains('.') => format!("{parents}.{n}"),
+            _ => n.to_string(),
+        };
+        let group = all.iter().find(|x| x.obj != f.obj && x.kind == FieldKind::Radio && x.name == full);
+        if let Some(group) = group.filter(|_| f.kind == FieldKind::Radio) {
+            check_join(doc, f, group)?;
+            join = Some(group.clone());
+            new_name = full;
+        } else if n.contains('.') {
             // A full name: the field moves under the parent fields it names (#2696).
             let parts = name_parts(n)?;
             if let Some(why) = all.iter().filter(|x| x.obj != f.obj).find_map(|x| clash(n, &x.name)) {
@@ -307,7 +391,7 @@ fn rename_field(doc: &mut Document, all: &[Field], f: &Field, name: &str, props:
             rename_in_calculations(doc, all, &f.name, &new_name)?;
         }
     }
-    Ok(new_name)
+    Ok((new_name, join))
 }
 
 fn apply_widget_style_props(doc: &mut Document, f: &Field, name: &str, props: &FieldProps) -> Result<(), FormError> {
@@ -355,6 +439,43 @@ fn apply_widget_style_props(doc: &mut Document, f: &Field, name: &str, props: &F
             return invalid("the field is too small");
         }
         doc.update_dict(w.obj, |d| d.set(b"Rect".to_vec(), Object::Array(r.iter().map(|v| Object::Real(*v)).collect())))?;
+    }
+    Ok(())
+}
+
+/// Redraw the edited widgets. A radio button joining another group (`join`) is redrawn under its
+/// old name `name` first; then its buttons move, and only they are redrawn as `new_name`, so the
+/// group's own buttons keep their appearances.
+fn redraw_or_join(doc: &mut Document, f: &Field, name: &str, new_name: &str, join: Option<&Field>, only: Option<usize>) -> Result<(), FormError> {
+    if let Some(group) = join {
+        redraw_widgets(doc, name, only)?;
+        join_radio_group(doc, f, group)?;
+        let moved: Vec<usize> = fields(doc)
+            .into_iter()
+            .find(|g| g.name == new_name)
+            .map(|g| g.widgets.iter().enumerate().filter(|(_, w)| f.widgets.iter().any(|m| m.obj == w.obj)).map(|(i, _)| i).collect())
+            .unwrap_or_default();
+        for index in moved {
+            redraw_widgets(doc, new_name, Some(index))?;
+        }
+        Ok(())
+    } else {
+        redraw_widgets(doc, new_name, only)
+    }
+}
+
+/// A list box scrolls, as for a new value, so its first row is still an option and the
+/// selection is in view. Its rows are measured with the edited font size and rectangle.
+fn scroll_list(doc: &mut Document, field: ObjRef, list_picked: Option<(Vec<usize>, usize)>) -> Result<(), FormError> {
+    if let Some((picked, count)) = list_picked
+        && let Some(g) = fields(doc).into_iter().find(|g| g.obj == field)
+    {
+        if let Some((old, new)) = crate::values::list_scroll(&g, &picked, count)
+            && old != new
+        {
+            doc.update_dict(field, |d| d.set(b"TI".to_vec(), Object::Int(i64::try_from(new).unwrap_or(0))))?;
+        }
+        crate::values::scroll_widgets(doc, &g, &picked, count)?;
     }
     Ok(())
 }

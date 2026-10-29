@@ -2640,6 +2640,29 @@ fn orphan_form_fields_through_tools() {
     assert_ne!(v, "Filled by an agent");
 }
 
+/// An auto-sized (`0 Tf`) single-line field fills to the size its height gives, as Acrobat
+/// draws it, not a 12 pt cap: 30 pt tall, less border and padding, is about 21 pt text.
+#[test]
+fn auto_sized_text_follows_a_tall_field() {
+    let objs: Vec<&str> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",                                     // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>",                     // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>",                                       // 3
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 6 0 R >> >> >>",          // 4
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (tall) /Rect [10 200 290 230] /P 3 0 R >>", // 5
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",     // 6
+    ];
+    let dir = workdir("auto-size-tall");
+    std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "tall": "Hi" } }));
+    let found = ok(&mut a, "text_find", json!({ "doc": doc, "query": "Hi" }));
+    let r = &found["matches"][0]["rects"][0];
+    let height = r[3].as_f64().unwrap() - r[1].as_f64().unwrap();
+    assert!(height > 16.0, "12 pt text would be about 12 tall, ~21 pt about 21: {height} ({found})");
+}
+
 #[test]
 fn reversing_pages_through_tools() {
     let dir = workdir("reverse");
@@ -4100,6 +4123,29 @@ fn preparing_a_form_through_tools() {
     assert_ne!(before, after, "the picture is drawn");
     assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Set the image of Image1");
     assert!(matches!(a.call("form_set_image", &json!({ "doc": doc, "field": "size", "path": "pics/a_page_1.png" })), Err(ToolError::Failed(_))));
+}
+
+#[test]
+fn renaming_a_radio_button_to_a_groups_name_joins_the_group_through_tools() {
+    // #4949: two buttons placed separately are two groups; naming one after the other makes
+    // them one group, and a clashing export value is renamed instead of shared.
+    let dir = workdir("radio-join");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "radio", "rect": [20, 100, 34, 114], "group": "size", "export": "S" }));
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "radio", "rect": [40, 100, 54, 114], "group": "other", "export": "S" }));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "size": "S" } }));
+    let r = ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "other", "name": "size" }));
+    assert_eq!(r["field"], "size");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "joined.pdf" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "joined.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let f = fields["fields"].as_array().unwrap();
+    assert_eq!(f.iter().map(|f| f["name"].as_str().unwrap()).collect::<Vec<_>>(), ["size"], "one group");
+    assert_eq!(f[0]["options"], json!(["S", "Choice1"]), "the joining button takes a free export value");
+    assert_eq!(f[0]["value"], "S", "the group keeps its selection");
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "size": "Choice1" } }));
+    assert_eq!(ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"][0]["value"], "Choice1");
 }
 
 #[test]
@@ -9550,4 +9596,55 @@ fn deleting_one_radio_button_through_tools_keeps_the_group() {
     }
     ok(&mut a, "edit_undo", json!({ "doc": doc }));
     assert_eq!(size(&mut a)["options"], json!(["S", "M", "L"]), "one undo step brings it back");
+}
+/// `/I` of the top-level field `name` in the saved file `path`.
+fn saved_selection_indices(path: &Path, name: &str) -> Option<Vec<i64>> {
+    let d = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(path).unwrap())).unwrap();
+    let root = d.get(d.root().unwrap()).as_dict().cloned().unwrap();
+    let form = d.resolve(root.get(b"AcroForm").unwrap()).as_dict().cloned().unwrap();
+    let all = d.resolve(form.get(b"Fields").unwrap()).as_array().cloned().unwrap();
+    let f = all
+        .iter()
+        .filter_map(|o| d.resolve(o).as_dict().cloned())
+        .find(|f| f.get(b"T").and_then(|t| d.resolve(t).as_string().map(|s| s.to_text())).as_deref() == Some(name))
+        .unwrap();
+    f.get(b"I").map(|i| d.resolve(i).as_array().unwrap().iter().map(|o| o.as_int().unwrap()).collect())
+}
+
+#[test]
+fn changing_a_lists_options_through_tools_keeps_its_saved_selection_on_the_same_items() {
+    let dir = workdir("choice-index");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let args = json!({ "doc": doc, "page": 1, "type": "list", "rect": [20, 60, 180, 140], "options": ["A", "B", "C"], "multi_select": true, "name": "letters" });
+    ok(&mut a, "form_add_field", args);
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "letters": ["B", "C"] } }));
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "letters", "options": ["B", "C", "D"] }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "letters.pdf" }));
+    assert_eq!(saved_selection_indices(&dir.join("letters.pdf"), "letters"), Some(vec![0, 1]), "B and C are now items 0 and 1");
+}
+
+/// Clearing a field's default through `form_set_props` (`"default": ""`) leaves it with none,
+/// even when its parent field has one it would otherwise inherit.
+#[test]
+fn clearing_a_kids_default_through_tools_does_not_bring_back_its_parents() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>",
+        "<< /Fields [5 0 R] /DA (/Helv 12 Tf 0 g) /DR << /Font << /Helv 7 0 R >> >> >>",
+        "<< /T (address) /FT /Tx /DV (Main St) /Kids [6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /T (city) /Parent 5 0 R /DV (Elm) /V (Elm) /Rect [10 250 150 268] /P 3 0 R >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ];
+    let dir = workdir("kid-default");
+    std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "address.city", "default": "" }));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "address.city": "Oak" } }));
+    ok(&mut a, "form_reset", json!({ "doc": doc }));
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let city = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "address.city").unwrap().clone();
+    assert!(city["value"].is_null() || city["value"] == "", "reset clears it rather than restoring the parent's Main St: {}", city["value"]);
 }

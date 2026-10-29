@@ -40,9 +40,11 @@ pub fn fmt(v: f64) -> String {
 }
 
 /// The font size an auto-sized (`0 Tf`) text field uses for `text` in a `width` × `height` box
-/// (inside the padding), measured by `width_of(text, size)`: at most 12 pt and at least 4 pt.
-/// Single-line text shrinks until it fits the width; multiline text takes the largest size whose
-/// wrapped lines fit the height. The page appearance and the on-screen editor share this.
+/// (inside the padding), measured by `width_of(text, size)`, never under 4 pt. Single-line text
+/// takes the size the height gives, as Acrobat Reader draws it however tall the box (the size is
+/// implementation-defined, ISO 32000-2 §12.7.4.3), and shrinks until it fits the width; multiline
+/// text takes the largest size up to 12 pt whose wrapped lines fit the height. The page
+/// appearance and the on-screen editor share this.
 pub fn auto_text_size(text: &str, width: f64, height: f64, multiline: bool, width_of: impl Fn(&str, f64) -> f64) -> f64 {
     let wrap_width = if width.is_finite() { width.max(1.0) } else { 1.0 };
     auto_text_size_by(
@@ -53,6 +55,17 @@ pub fn auto_text_size(text: &str, width: f64, height: f64, multiline: bool, widt
         |size| wrap_with(text, size, wrap_width, &width_of).len() as f64 * size * 1.15,
     )
 }
+
+/// The automatic font size of a comb field (`Field::is_comb`) whose cells are `height` tall inside
+/// the padding: 4 to 12 pt, as only the height bounds a one-character cell. The page appearance
+/// and the on-screen editor share this.
+pub fn comb_auto_text_size(height: f64) -> f64 {
+    if height.is_finite() { (height / 1.15).clamp(4.0, 12.0) } else { 4.0 }
+}
+
+/// The tallest box single-line auto-size follows, as a sanity bound: the largest page side
+/// ISO 32000-1 Annex C recommends.
+pub(crate) const MAX_AUTO_HEIGHT: f64 = 14_400.0;
 
 /// [`auto_text_size`] with the text measured by the caller: `line_width(size)` is its width on
 /// one line, `wrapped_height(size)` its height wrapped at `width`. The screen measures in its
@@ -67,7 +80,7 @@ pub fn auto_text_size_by(width: f64, height: f64, multiline: bool, line_width: i
         }
         return size;
     }
-    let size = (height / 1.15).clamp(4.0, 12.0);
+    let size = (height.min(MAX_AUTO_HEIGHT) / 1.15).max(4.0);
     let tw = line_width(size);
     if tw.is_finite() && tw > width { (size * width / tw).max(4.0) } else { size }
 }
@@ -109,7 +122,7 @@ pub fn text_box(doc: &Document, f: &Field, w: &Widget) -> TextBox {
         size: (da.size > 0.0 && da.size.is_finite()).then_some(da.size),
         multiline,
         password: f.has(flags::PASSWORD),
-        comb: f.has(flags::COMB) && !multiline && !f.has(flags::PASSWORD) && f.max_len.is_some_and(|m| m > 0),
+        comb: f.is_comb(),
     }
 }
 
@@ -813,7 +826,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
             }
         }
         _ => {
-            let comb = f.has(flags::COMB) && !f.has(flags::MULTILINE) && !f.has(flags::PASSWORD) && f.max_len.is_some_and(|m| m > 0);
+            let comb = f.is_comb();
             if f.kind == FieldKind::Text && f.has(flags::MULTILINE) {
                 if size == 0.0 {
                     size = auto_text_size(&text, inner_w, height - 2.0 * pad, true, width_of);
@@ -840,9 +853,8 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                 }
             } else {
                 if size == 0.0 {
-                    // Comb cells hold one character each, so only the height limits them.
                     size = if comb {
-                        ((height - 2.0 * pad) / 1.15).clamp(4.0, 12.0)
+                        comb_auto_text_size(height - 2.0 * pad)
                     } else {
                         auto_text_size(&text, inner_w, height - 2.0 * pad, false, width_of)
                     };

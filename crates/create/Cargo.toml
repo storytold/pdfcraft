@@ -12,6 +12,8 @@ workspace = true
 pdfcraft-cos = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-fonts = { workspace = true }
+# For `image::bmp_with_pixel_offset`, shared with XFA pictures.
+pdfcraft-xfa = { workspace = true }
 png = "0.18"
 tiff = "0.11"
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg"] }

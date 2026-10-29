@@ -1,8 +1,8 @@
 use super::appearances::{declares_pdfa, need_appearances};
 use super::read::{acroform, field_flags, fields, page_refs};
 use super::{
-    Dict, Document, Field, FieldEvent, FieldKind, FieldValue, FormError, NoScripts, ObjRef, Object, PdfString, Scripts, af, appearance, author,
-    calc_order, flags, invalid, name_obj, scripting,
+    Dict, Document, Field, FieldEvent, FieldKind, FieldValue, FormError, NoScripts, ObjRef, Object, PdfString, Scripts, Widget, af, appearance,
+    author, calc_order, flags, invalid, name_obj, scripting,
 };
 
 // ── writing ─────────────────────────────────────────────────────────────────────────────────
@@ -210,8 +210,9 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             let t = &af::keystroke(&f.actions.format, &f.name, t).map_err(FormError::Format)?;
             af::validate(&f.actions.validate, t).map_err(FormError::Invalid)?;
             let t = &scripting::accept(doc, f, t, scripts)?;
+            let shadow = t.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");
             doc.update_dict(f.obj, |d| {
-                if t.is_empty() {
+                if t.is_empty() && !shadow {
                     d.remove(b"V");
                 } else {
                     d.set(b"V".to_vec(), PdfString::text(t));
@@ -291,16 +292,13 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             indices.sort_unstable_by_key(Object::as_int);
             // A list box scrolls (`/TI`) so the picked options are among the rows it draws, as
             // in other viewers: a pick below the last visible row would otherwise not show (#1524).
-            let top = match (f.kind, f.widgets.first()) {
-                (FieldKind::List, Some(w)) => w.list.map(|rows| {
-                    let height = if matches!(w.rotation, 90 | 270) { w.rect[2] - w.rect[0] } else { w.rect[3] - w.rect[1] };
-                    let picked: Vec<usize> = indices.iter().filter_map(|i| i.as_int()).filter_map(|i| usize::try_from(i).ok()).collect();
-                    (rows.top, appearance::ListRows::top_showing(rows.top, &picked, rows.visible(height), f.options.len()))
-                }),
-                _ => None,
-            };
+            let picked: Vec<usize> = indices.iter().filter_map(|i| i.as_int()).filter_map(|i| usize::try_from(i).ok()).collect();
+            let top = list_scroll(f, &picked, f.options.len());
+            // An empty value of its own keeps a parent field's /V from showing through.
+            let shadow = exports.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");
             doc.update_dict(f.obj, |d| {
                 match exports.as_slice() {
+                    [] if shadow => d.set(b"V".to_vec(), PdfString::text("")),
                     [] => {
                         d.remove(b"V");
                     }
@@ -318,22 +316,42 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
                     d.set(b"TI".to_vec(), Object::Int(i64::try_from(new).unwrap_or(0)));
                 }
             })?;
-            // A widget with its own `/TI` (read before the field's) scrolls too.
-            if let Some((old, new)) = top
-                && old != new
-            {
-                for w in f.widgets.iter().filter(|w| w.obj != f.obj) {
-                    if doc.get(w.obj).as_dict().is_some_and(|d| d.contains(b"TI")) {
-                        doc.update_dict(w.obj, |d| d.set(b"TI".to_vec(), Object::Int(i64::try_from(new).unwrap_or(0))))?;
-                    }
-                }
-            }
+            scroll_widgets(doc, f, &picked, f.options.len())?;
             redraw(doc, f, &exports, scripts)
         }
         (FieldKind::PushButton, _) => invalid(format!("{:?} is a button; it has no value", f.name)),
         (FieldKind::Signature, _) => invalid(format!("{:?} is a signature field; sign it with Fill & Sign or a digital ID", f.name)),
         (kind, v) => invalid(format!("{:?} is a {kind:?} field and can't take {v:?}", f.name)),
     }
+}
+
+/// A list box's first visible row (`/TI`) before and after scrolling so the `picked` positions of
+/// its `count` options are among the rows it draws, as in other viewers: a pick below the last
+/// visible row would otherwise not show (#1524). `None` for any other field.
+pub(crate) fn list_scroll(f: &Field, picked: &[usize], count: usize) -> Option<(usize, usize)> {
+    f.widgets.first().filter(|_| f.kind == FieldKind::List).and_then(|w| widget_scroll(w, picked, count))
+}
+
+/// A list box widget's first row before and after scrolling so `picked` shows.
+fn widget_scroll(w: &Widget, picked: &[usize], count: usize) -> Option<(usize, usize)> {
+    w.list.map(|rows| {
+        let height = if matches!(w.rotation, 90 | 270) { w.rect[2] - w.rect[0] } else { w.rect[3] - w.rect[1] };
+        (rows.top, appearance::ListRows::top_showing(rows.top, picked, rows.visible(height), count))
+    })
+}
+
+/// Scroll every widget of `f` with its own `/TI` (read before the field's) by its own rows and
+/// size, so `picked` shows in each.
+pub(crate) fn scroll_widgets(doc: &mut Document, f: &Field, picked: &[usize], count: usize) -> Result<(), FormError> {
+    for w in f.widgets.iter().filter(|w| w.obj != f.obj) {
+        if doc.get(w.obj).as_dict().is_some_and(|d| d.contains(b"TI"))
+            && let Some((old, new)) = widget_scroll(w, picked, count)
+            && old != new
+        {
+            doc.update_dict(w.obj, |d| d.set(b"TI".to_vec(), Object::Int(i64::try_from(new).unwrap_or(0))))?;
+        }
+    }
+    Ok(())
 }
 
 /// Check boxes and radio buttons: `/V` on the field, `/AS` on each widget.

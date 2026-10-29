@@ -4338,6 +4338,7 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-fonts",
  "pdfcraft-model",
+ "pdfcraft-xfa",
  "png 0.18.1",
  "thiserror 2.0.21",
  "tiff",
@@ -7350,8 +7351,6 @@ dependencies = [
 [[package]]
 name = "vello_cpu"
 version = "0.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d8ded630e8316bb94a55881256506d1f3b9947b5f66db8a7d32ca7ba02decd0"
 dependencies = [
  "bytemuck",
  "glifo 0.1.1",

@@ -775,14 +775,18 @@ fn actions_tab_edits_the_script_of_an_existing_action() {
 /// One page with a push button "go": Mouse Up runs a script with a link chained after it, On Blur
 /// runs another script.
 fn chained_action_fixture() -> Vec<u8> {
-    let objs = [
+    pdf_of(&[
         "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) >> >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
         "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
         "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (go) /Rect [20 300 100 320] /P 3 0 R /A 5 0 R /AA << /Bl << /S /JavaScript /JS (this.dirty = true;) >> >> >>",
         "<< /S /JavaScript /JS (app.alert\\(1\\);) /Next 6 0 R >>",
         "<< /S /URI /URI (https://example.org) >>",
-    ];
+    ])
+}
+
+/// A PDF of `objs`, numbered from 1, with the first as its catalog.
+fn pdf_of(objs: &[&str]) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offs = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -796,6 +800,65 @@ fn chained_action_fixture() -> Vec<u8> {
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
     out
+}
+
+/// Two one-button radio groups placed apart on page 1: "Group1" (export `A`) and "Group2" (`B`).
+fn two_radio_groups_fixture() -> Vec<u8> {
+    let widget = |parent: u32, x: u32, state: &str| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent {parent} 0 R /Rect [{x} 300 {} 314] /P 3 0 R /AS /Off /AP << /N << /{state} 8 0 R /Off 8 0 R >> >> >>",
+            x + 14
+        )
+    };
+    let (a, b) = (widget(4, 40, "A"), widget(6, 120, "B"));
+    pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 7 0 R] >>",
+        "<< /FT /Btn /Ff 49152 /T (Group1) /Kids [5 0 R] >>",
+        &a,
+        "<< /FT /Btn /Ff 49152 /T (Group2) /Kids [7 0 R] >>",
+        &b,
+        "<< /Length 3 >>\nstream\n0 g\nendstream",
+    ])
+}
+
+/// #4949: renaming a radio button to another group's name moves it into that group, after the
+/// group's own buttons. The moved button stays the selected one, so a nudge moves it and not the
+/// group's first button, and undo and redo take the rename and the nudge back and forth.
+#[test]
+fn a_radio_button_joining_a_group_by_name_stays_selected() {
+    let mut h = harness_with("radios.pdf", two_radio_groups_fixture());
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    let rects = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let form = &s.session.get(s.views[0].id).unwrap().form;
+        form.iter().flat_map(|f| f.widgets.iter().map(|w| w.rect)).collect::<Vec<_>>()
+    };
+    let start = rects(&h);
+    h.state_mut().open_field_props("Group2", 0);
+    h.run_steps(2);
+    h.state_mut().field_props.as_mut().expect("open").name = "Group1".into();
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(names(&h), ["Group1"]);
+    assert_eq!(h.state().views[0].prepare.selected, Some(("Group1".to_string(), 1)), "the moved button");
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(2);
+    let nudged = rects(&h);
+    assert_eq!(nudged[0], start[0], "the group's own button stays");
+    assert!((nudged[1][0] - start[1][0] - 1.0).abs() < 0.01, "{:?} → {:?}", start[1], nudged[1]);
+    h.state_mut().execute("edit.undo");
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert_eq!(names(&h), ["Group1", "Group2"]);
+    assert_eq!(rects(&h), start);
+    h.state_mut().execute("edit.redo");
+    h.state_mut().execute("edit.redo");
+    h.run_steps(2);
+    assert_eq!(names(&h), ["Group1"]);
+    assert_eq!(rects(&h), nudged);
 }
 
 #[test]
