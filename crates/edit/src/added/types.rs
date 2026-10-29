@@ -104,6 +104,8 @@ pub struct AddedText {
     pub align: Align,
     /// Extra space after every character, in points: the PDF's character spacing (`Tc`).
     pub char_spacing: f64,
+    /// The fill behind the text box, if any: independent of the text colour.
+    pub background: Option<[f64; 3]>,
 }
 
 impl Default for AddedText {
@@ -118,6 +120,7 @@ impl Default for AddedText {
             color: [0.0; 3],
             align: Align::Left,
             char_spacing: 0.0,
+            background: None,
         }
     }
 }

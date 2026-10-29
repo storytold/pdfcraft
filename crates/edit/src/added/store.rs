@@ -3,6 +3,16 @@ use super::layout::{first_undrawable, is_thai, nums, shaped_arabic, thai_error};
 use super::types::{Added, AddedImage, AddedText, Align, CHAR_SPACING_LIMIT, Family, MarkerScan, TAG};
 use super::{Content, Dict, Document, EditError, GlyphError, MarkKind, ObjRef, Object, Stream, check, contents, page_list, place_tagged};
 
+/// A colour of exactly three finite numbers, each possibly an indirect reference. Anything else
+/// (a wrong length, a name among the numbers) is damaged, and the whole colour is dropped rather
+/// than read as some other one.
+fn colour(doc: &Document, o: &Object) -> Option<[f64; 3]> {
+    let array = doc.resolve(o);
+    let [r, g, b] = array.as_array()?.as_slice() else { return None };
+    let part = |x: &Object| doc.resolve(x).as_f64().filter(|v| v.is_finite());
+    Some([part(r)?, part(g)?, part(b)?])
+}
+
 fn parse(doc: &Document, d: &Dict) -> Option<Content> {
     let r = nums(doc, d.get(b"Rect"));
     let rect: [f64; 4] = r.try_into().ok()?;
@@ -26,6 +36,8 @@ fn parse(doc: &Document, d: &Dict) -> Option<Content> {
                 },
                 // Items written before character spacing have none.
                 char_spacing: d.get(b"CharSpacing").and_then(Object::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0),
+                // Items written before backgrounds have none; a damaged colour is none too.
+                background: d.get(b"Background").and_then(|o| colour(doc, o)),
             }))
         }
         b"Image" => {
@@ -130,6 +142,9 @@ fn validate(c: &Content) -> Result<(), EditError> {
                 return Err(EditError::Invalid(format!(
                     "the character spacing must be between -{CHAR_SPACING_LIMIT} and {CHAR_SPACING_LIMIT} points"
                 )));
+            }
+            if t.color.iter().chain(t.background.iter().flatten()).any(|v| !v.is_finite()) {
+                return Err(EditError::Invalid("the colours must be numbers".into()));
             }
             if (r[2] - r[0]).abs() < 1.0 {
                 return Err(EditError::Invalid("the text box is too narrow".into()));

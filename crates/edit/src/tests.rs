@@ -881,6 +881,36 @@ fn assert_marker_scan_matches_legacy(doc: &Document, label: &str, marks: &[MarkK
     scan
 }
 
+/// A damaged /Background is dropped whole, not read as some other colour, while a valid colour
+/// whose numbers are indirect objects is read: otherwise the next move or restyle writes the
+/// invented colour into the file, or loses the real one.
+#[test]
+fn added_text_background_is_read_as_an_exact_numeric_triple() {
+    let mut doc = fixture();
+    let text = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Note".into(), background: Some([0.0, 0.0, 1.0]), ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(text)).unwrap();
+    let item = list_added(&doc)[0].obj;
+    let indirect = doc.add(Object::Real(0.5));
+    let with = |doc: &mut Document, background: Object| {
+        let Object::Stream(mut stream) = (*doc.get(item)).clone() else { panic!("an item is a stream") };
+        let Some(Object::Dict(mut added)) = stream.dict.get(b"PCAdded").cloned() else { panic!("an item has its parameters") };
+        added.set(b"Background".to_vec(), background);
+        stream.dict.set(b"PCAdded".to_vec(), Object::Dict(added));
+        doc.set(item, Object::Stream(stream));
+        let Content::Text(t) = &list_added(doc)[0].content else { panic!() };
+        t.background
+    };
+    let num = |v: f64| Object::Real(v);
+    assert_eq!(with(&mut doc, Object::Array(vec![num(1.0), num(0.0), num(0.0)])), Some([1.0, 0.0, 0.0]));
+    assert_eq!(with(&mut doc, Object::Array(vec![num(1.0), Object::Ref(indirect), num(0.0)])), Some([1.0, 0.5, 0.0]), "indirect numbers are read");
+    assert_eq!(with(&mut doc, Object::Array(vec![num(1.0), Object::name("Bad"), num(0.0), num(0.0)])), None, "a name among the numbers");
+    assert_eq!(with(&mut doc, Object::Array(vec![num(1.0), Object::name("Bad"), num(0.0)])), None, "a name in place of a number");
+    assert_eq!(with(&mut doc, Object::Array(vec![num(1.0), num(0.0)])), None, "too short");
+    assert_eq!(with(&mut doc, Object::Array(vec![num(1.0), num(0.0), num(0.0), num(0.0)])), None, "too long");
+    assert_eq!(with(&mut doc, Object::Array(vec![num(1.0), num(f64::NAN), num(0.0)])), None, "not finite");
+    assert_eq!(with(&mut doc, Object::name("Red")), None, "not an array");
+}
+
 #[test]
 fn combined_marker_scan_matches_the_independent_scans() {
     let empty = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R >>"]);
@@ -991,6 +1021,48 @@ fn combined_marker_scan_matches_the_independent_scans() {
     let Content::Text(text) = &unit_scan.added[0].content else { panic!() };
     assert_eq!(text.rect, [20.0, 40.0, 220.0, 80.0]);
     assert_eq!(text.size, 24.0);
+}
+
+/// #4789: a background fill sits under the text, in its own colour, and survives save and reopen;
+/// taking it off removes the fill; no background draws no fill; a damaged or non-finite colour
+/// is refused or ignored.
+#[test]
+fn added_text_background_is_a_fill_under_the_text() {
+    let mut doc = fixture();
+    let text = AddedText {
+        rect: [72.0, 600.0, 300.0, 700.0],
+        text: "Approved".into(),
+        size: 14.0,
+        color: [0.0, 0.0, 1.0],
+        background: Some([1.0, 1.0, 0.0]),
+        ..AddedText::default()
+    };
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    let doc = reopen(&doc);
+    let Content::Text(t) = &list_added(&doc)[0].content else { panic!() };
+    assert_eq!(t.background, Some([1.0, 1.0, 0.0]), "kept through save and reopen");
+    assert_eq!(t.color, [0.0, 0.0, 1.0], "the text colour is its own");
+    let page = streams(&doc, 0).join("\n");
+    let fill = page.find("1 1 0 rg").expect(&page);
+    let draw = page.find("(Approved) Tj").expect(&page);
+    assert!(fill < draw, "the fill comes before the text: {page}");
+    assert!(page[fill..].contains(" re f"), "{page}");
+    assert!(page.contains("0 0 1 rg"), "the text keeps its colour: {page}");
+
+    // Off again.
+    let mut doc = doc;
+    update_content(&mut doc, 0, 0, &Content::Text(AddedText { background: None, ..text.clone() })).unwrap();
+    let doc = reopen(&doc);
+    let Content::Text(t) = &list_added(&doc)[0].content else { panic!() };
+    assert_eq!(t.background, None);
+    assert!(!streams(&doc, 0).join("\n").contains("re f"), "no fill without a background");
+
+    // A colour that is not a number is refused and changes nothing.
+    let mut doc = doc;
+    let bad = AddedText { background: Some([f64::NAN, 0.0, 0.0]), ..text };
+    assert!(update_content(&mut doc, 0, 0, &Content::Text(bad)).is_err());
+    let Content::Text(t) = &list_added(&doc)[0].content else { panic!() };
+    assert_eq!(t.background, None);
 }
 
 #[test]

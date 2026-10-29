@@ -4603,6 +4603,30 @@ fn printing_through_tools() {
     assert!(matches!(a.call("doc_print", &json!({ "doc": doc, "pages": "99", "path": "x.pdf" })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// #4789: a text box takes a background of its own, apart from the text colour; content_list
+/// reports it; `none` takes it off; a bad colour is refused and changes nothing.
+#[test]
+fn added_text_takes_a_background_through_tools() {
+    let dir = workdir("text-background");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "NOTE", "at": [20, 20], "color": "#0000ff", "background": "#ffff00" }));
+    let list = ok(&mut a, "content_list", json!({ "doc": doc }));
+    assert_eq!(list["items"][0]["background"], "#ffff00");
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 1, "background": "#00ff00" }));
+    assert_eq!(ok(&mut a, "content_list", json!({ "doc": doc }))["items"][0]["background"], "#00ff00");
+    assert!(matches!(
+        a.call("content_update", &json!({ "doc": doc, "page": 1, "index": 1, "background": "not-a-colour" })),
+        Err(ToolError::InvalidArgs(_))
+    ));
+    assert_eq!(ok(&mut a, "content_list", json!({ "doc": doc }))["items"][0]["background"], "#00ff00", "a refused colour changes nothing");
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 1, "background": "none" }));
+    assert!(ok(&mut a, "content_list", json!({ "doc": doc }))["items"][0]["background"].is_null());
+    // Without one, the item has none.
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "PLAIN", "at": [20, 60] }));
+    assert!(ok(&mut a, "content_list", json!({ "doc": doc }))["items"][1]["background"].is_null());
+}
+
 #[test]
 fn adding_content_through_tools() {
     let dir = workdir("content");

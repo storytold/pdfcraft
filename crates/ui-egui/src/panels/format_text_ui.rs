@@ -193,6 +193,20 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, look: &mut AddedText, extras:
         }
         planned(ui, "superscript", tl!("Superscript"));
         planned(ui, "subscript", tl!("Subscript"));
+        // Added text can also have a fill behind its box; a paragraph of the page cannot.
+        if extras.is_none() {
+            let fill = fill_button(ui, t, look.background);
+            egui::Popup::menu(&fill).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+                if ui.selectable_label(look.background.is_none(), tl!("No fill")).clicked() {
+                    look.background = None;
+                    ui.close();
+                }
+                if let Some(picked) = crate::comments::swatch_grid(ui, look.background) {
+                    look.background = Some(picked);
+                    ui.close();
+                }
+            });
+        }
     });
 
     // Line and paragraph spacing; horizontal scale and character spacing: two columns, each an
@@ -324,6 +338,25 @@ fn colour_button(ui: &mut egui::Ui, t: &Tokens, color: [f64; 3]) -> egui::Respon
     let stroke = if resp.hovered() { t.text } else { t.border };
     ui.painter().rect_stroke(fill, CornerRadius::same(2), Stroke::new(1.0, stroke), egui::StrokeKind::Outside);
     crate::theme::hand(resp).on_hover_text(tl!("Colour"))
+}
+
+/// The fill behind the text as a swatch that opens the palette; an empty box with a slash for none.
+fn fill_button(ui: &mut egui::Ui, t: &Tokens, color: Option<[f64; 3]>) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Fill colour")));
+    let fill = rect.shrink(4.0);
+    match color {
+        Some(c) => {
+            let [r, g, b] = c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+            ui.painter().rect_filled(fill, CornerRadius::same(2), Color32::from_rgb(r, g, b));
+        }
+        None => {
+            ui.painter().line_segment([fill.left_bottom(), fill.right_top()], Stroke::new(1.0, t.border));
+        }
+    }
+    let stroke = if resp.hovered() { t.text } else { t.border };
+    ui.painter().rect_stroke(fill, CornerRadius::same(2), Stroke::new(1.0, stroke), egui::StrokeKind::Outside);
+    crate::theme::hand(resp).on_hover_text(tl!("Fill colour"))
 }
 
 #[cfg(test)]

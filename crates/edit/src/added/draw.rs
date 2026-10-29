@@ -259,6 +259,23 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
     .into_bytes();
     match c {
         Content::Text(t) => {
+            // The background goes down first, under the text, whichever way the text is drawn.
+            if let Some([br, bg, bb]) = t.background {
+                let r = text_rect(t);
+                out.extend(
+                    format!(
+                        "{} {} {} rg {} {} {} {} re f\n",
+                        n(br.clamp(0.0, 1.0)),
+                        n(bg.clamp(0.0, 1.0)),
+                        n(bb.clamp(0.0, 1.0)),
+                        n(r[0]),
+                        n(r[1]),
+                        n(r[2] - r[0]),
+                        n(r[3] - r[1])
+                    )
+                    .bytes(),
+                );
+            }
             let base = t.family.base_font(t.bold, t.italic);
             let name = font_name(base);
             let mut font = Dict::new();
@@ -362,6 +379,9 @@ pub(super) fn params(c: &Content) -> Dict {
             d.set(b"Rect".to_vec(), arr(&text_rect(t)));
             if t.char_spacing != 0.0 {
                 d.set(b"CharSpacing".to_vec(), Object::Real(t.char_spacing));
+            }
+            if let Some(bg) = t.background {
+                d.set(b"Background".to_vec(), arr(&bg));
             }
         }
         Content::Image(i) => {

@@ -593,8 +593,14 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
             if let Some(source_rect) = source_rect.filter(|_| !background_ready) {
                 ui.painter().rect_filled(source_rect.union(r).expand(1.0), CornerRadius::ZERO, Color32::WHITE);
             }
-            // The box is white in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
-            ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(Color32::WHITE);
+            // A background of its own shows while typing, under the text: the page's copy of the
+            // item is left out of the preview, so nothing else would draw it.
+            let fill = t.style.background.map(|c| {
+                let [r, g, b] = c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+                Color32::from_rgb(r, g, b)
+            });
+            // The box is white in every theme (or the fill), so the caret must not follow the theme (pale in dark mode) (#655).
+            ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(fill.unwrap_or(Color32::WHITE));
             let [cr, cg, cb] = t.style.color.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
             // Laid out as the page draws it, so opening the box doesn't show it realigned.
             // shortcut: justified text is shown left-aligned here (TextEdit can't justify), until the editor gets its own layouter.
@@ -619,7 +625,7 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                     // Keep the page editor's original inset; the theme's larger button padding
                     // otherwise shifts narrow right-aligned boxes away from their text edge.
                     .margin(egui::Margin::symmetric(4, 2))
-                    .background_color(if background_ready { Color32::TRANSPARENT } else { Color32::WHITE })
+                    .background_color(fill.unwrap_or(if background_ready { Color32::TRANSPARENT } else { Color32::WHITE }))
                     .text_color(Color32::from_rgb(cr, cg, cb))
                     .hint_text(tl!("Type text"))
                     .id_salt("added-text-edit");

@@ -811,6 +811,73 @@ fn format_text_sets_character_spacing_for_added_text() {
     assert_eq!(h.state().text_style.char_spacing, 2.5);
 }
 
+/// #4789: the Format panel's Fill colour gives new text a background of its own, apart from the
+/// text colour, and No fill takes it off again.
+#[test]
+fn format_text_panel_sets_and_clears_the_background() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    assert_eq!(h.state().text_style.background, None, "no fill by default");
+    let text_colour = h.state().text_style.color;
+    h.get_by_label("Fill colour").click();
+    h.run_steps(3);
+    h.get_by_label("Red").click();
+    h.run_steps(3);
+    let red = h.state().text_style.background.expect("the swatch sets a background");
+    assert!(red[0] > 0.5 && red[1] < 0.5 && red[2] < 0.5, "red: {red:?}");
+    assert_eq!(h.state().text_style.color, text_colour, "the text colour is its own");
+    h.get_by_label("Fill colour").click();
+    h.run_steps(3);
+    h.get_by_label("No fill").click();
+    h.run_steps(3);
+    assert_eq!(h.state().text_style.background, None, "No fill takes it off");
+}
+
+/// #4789: the text editor draws the item's background while typing and when reopened: the page's
+/// copy of the item is left out of the preview, so without it white text on a dark fill would be
+/// white on white.
+#[test]
+fn the_text_editor_shows_the_background_fill() {
+    let _gpu = gpu();
+    // Real-time frames, so the two clicks of the double click are close enough together.
+    let mut h = harness_with_step_dt(1.0 / 60.0);
+    h.state_mut().text_style =
+        pdfcraft_engine::AddedText { color: [1.0, 1.0, 1.0], background: Some([0.0, 0.0, 0.4]), ..pdfcraft_engine::AddedText::default() };
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let p = at(&h, 40.0, 300.0);
+    click(&mut h, p);
+    h.event(egui::Event::Text("Hello".into()));
+    crate::support::settle(&mut h);
+    // A pixel just inside the editor's corner: past its focus outline, clear of the glyphs.
+    let corner = |h: &mut Harness<'static, PdfCraftApp>| {
+        let r = h.get_by_label("Added text").rect();
+        let shot = h.render().unwrap();
+        shot.get_pixel(r.min.x as u32 + 6, r.min.y as u32 + 3).0
+    };
+    let dark = |[r, g, b, _]: [u8; 4]| r < 40 && g < 40 && (80..140).contains(&b);
+    let typing = corner(&mut h);
+    assert!(dark(typing), "the new text's fill shows while typing: {typing:?}");
+    h.get_by_label("Done adding text").click();
+    h.run_steps(3);
+    let rect = added(&h)[0].content.rect();
+    let center = at(&h, ((rect[0] + rect[2]) / 2.0) as f32, (400.0 - (rect[1] + rect[3]) / 2.0) as f32);
+    h.run_steps(60);
+    h.hover_at(center);
+    h.run_steps(1);
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: center, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        }
+        h.run_steps(1);
+    }
+    crate::support::settle(&mut h);
+    assert!(h.state().views[0].content.draft.as_ref().is_some_and(|d| d.index == Some(0)), "double click reopens the text");
+    let reopened = corner(&mut h);
+    assert!(dark(reopened), "the fill shows when the text is reopened: {reopened:?}");
+}
+
 /// Where a mode bar tab is, by its label.
 fn mode_tab(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Rect {
     h.get_all_by_role_and_label(egui::accesskit::Role::Button, label).map(|n| n.rect()).find(|r| r.bottom() < 120.0).expect("a mode tab")

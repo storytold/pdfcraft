@@ -52,6 +52,10 @@ fn style(a: &Args, t: &mut AddedText) -> Result<()> {
     if let Some(c) = a.opt_str("color")? {
         t.color = parse_color(c)?;
     }
+    // "none" takes the background off.
+    if let Some(c) = a.opt_str("background")? {
+        t.background = if c.eq_ignore_ascii_case("none") { None } else { Some(parse_color(c)?) };
+    }
     if let Some(al) = a.opt_str("align")? {
         t.align = match al {
             "left" => TextAlign::Left,
@@ -92,6 +96,10 @@ impl Automation {
                         v["bold"] = json!(t.bold);
                         v["italic"] = json!(t.italic);
                         v["char_spacing"] = json!(t.char_spacing);
+                        v["background"] = t.background.map_or(Value::Null, |[r, g, b]| {
+                            let byte = |x: f64| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+                            json!(format!("#{:02x}{:02x}{:02x}", byte(r), byte(g), byte(b)))
+                        });
                     }
                     AddedContent::Image(_) => v["type"] = json!("image"),
                 }
@@ -171,8 +179,8 @@ impl Automation {
                 if a.get("text").is_some() {
                     return Err(bad("images have no text"));
                 }
-                if ["font", "size", "bold", "italic", "color", "align", "char_spacing"].iter().any(|k| a.get(k).is_some()) {
-                    return Err(bad("font, size, bold, italic, color, align and char_spacing apply to text"));
+                if ["font", "size", "bold", "italic", "color", "background", "align", "char_spacing"].iter().any(|k| a.get(k).is_some()) {
+                    return Err(bad("font, size, bold, italic, color, background, align and char_spacing apply to text"));
                 }
                 if let Some(deg) = a.opt_int("rotate")? {
                     if deg.rem_euclid(90) != 0 {
