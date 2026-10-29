@@ -441,12 +441,30 @@ where
             // whether the object is `null` before inserting it, but that caused problems
             // in some test cases where encryption + object streams are involved (as we would
             // attempt to read an object stream before having resolved the encryption dictionary).
-            on_entry(name, offset, r)?;
-
-            if ctx.in_content_stream() {
-                r.skip::<Object<'_>>(ctx.in_content_stream())?;
+            // PdfCraft patch (29): a value nested past the cap (`enter_container`) no longer
+            // fails the dictionary holding it, which lost a page for an unused entry of its
+            // dictionary 10,000 arrays deep. The value is stepped over unparsed, and its key is
+            // left out, so it reads as absent and nothing deeper than the cap is ever parsed.
+            // Any other value that can't be read still fails the dictionary, as before.
+            let refused_earlier = r.take_depth_refused();
+            let skipped = if ctx.in_content_stream() {
+                r.skip::<Object<'_>>(ctx.in_content_stream())
             } else {
-                r.skip::<MaybeRef<Object<'_>>>(ctx.in_content_stream())?;
+                r.skip::<MaybeRef<Object<'_>>>(ctx.in_content_stream())
+            };
+            let refused = r.take_depth_refused();
+            r.set_depth_refused(refused_earlier);
+            match skipped {
+                Some(_) => on_entry(name, offset, r)?,
+                None if refused => {
+                    if r.skip_unparsed_container().is_none() {
+                        // Leave the refusal for a dictionary further out.
+                        r.set_depth_refused(true);
+                        return None;
+                    }
+                    repaired = true;
+                }
+                None => return None,
             }
         }
     }

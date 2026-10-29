@@ -575,9 +575,13 @@ fn function_limits_public_construction_work_and_depth() {
     let over = format!("<< /FunctionType 3 /Domain [0 1] /Functions [{data}] /Bounds [] /Encode [0 1] >>");
     // The 64 functions above nest exactly 128 levels (each dictionary and its /Functions
     // array, then the leaf's /Domain array), the parser's nesting cap. 65 nest 130, so the
-    // parser refuses them before the function-depth guard sees them (a refusal either way).
+    // parser leaves the outer /Functions out (a value nested past the cap reads as absent)
+    // before the function-depth guard sees them, and the function is refused either way.
     // `function_limits_depth_guard_refuses_a_chain_of_references` tests the guard itself.
-    assert!(Object::from_bytes(over.as_bytes()).is_none(), "the parser refuses direct nesting past its cap");
+    let over = Object::from_bytes(over.as_bytes()).expect("the outer dictionary is read");
+    let Object::Dict(dict) = &over else { panic!("a dictionary: {over:?}") };
+    assert!(!dict.contains_key("Functions"), "the parser leaves direct nesting past its cap out");
+    assert!(Function::new(&over).is_none());
 
     // One root plus 10,000 leaves is one node past the common budget. This input remains
     // below a megabyte and does not attempt excessive recursion or an allocation failure.
@@ -4110,12 +4114,17 @@ fn keyless(depth: usize, closed: bool) -> String {
 /// A 40 × 40 page that runs `content`, with a correct xref table and `trailer` at the end
 /// of a trailer that also points at an `/Info` title.
 fn nesting_pdf(trailer: &str, content: &str) -> Vec<u8> {
+    nesting_pdf_with_page(trailer, "", content)
+}
+
+/// [`nesting_pdf`] with `page` added to the page dictionary.
+fn nesting_pdf_with_page(trailer: &str, page: &str, content: &str) -> Vec<u8> {
     let mut bytes = b"%PDF-1.7\n".to_vec();
     let mut offsets = vec![0];
     for (index, body) in [
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << >> >>".to_string(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << >> {page} >>"),
         format!("<< /Length {} >> stream\n{content}\nendstream", content.len()),
         "<< /Title (Nested) >>".to_string(),
     ]
@@ -4255,6 +4264,46 @@ fn dictionaries_nested_without_keys_are_read_up_to_the_nesting_cap() {
         let parsed = Pdf::new(bytes.clone()).expect("the trailer or repair finds the catalog");
         assert_eq!(parsed.metadata().title, within.then(|| b"Nested".to_vec()), "trailer: {depth}");
         assert_eq!(px40(&nesting_render(bytes), 1, 38), &red, "trailer: {depth}");
+    }
+}
+
+/// A value nested past the cap no longer fails the dictionary that holds it. A page whose
+/// dictionary had an unused entry 10,000 arrays deep was not read, so the file opened with
+/// "no pages", where Poppler and PDFium draw the page. The value is stepped over without
+/// being parsed and reads as absent; nothing past the cap is parsed, and a value that doesn't
+/// close still fails its dictionary.
+#[test]
+fn a_value_nested_past_the_cap_leaves_its_dictionary_readable() {
+    use hayro_syntax::object::{Dict, FromBytes, Object};
+    use hayro_syntax::reader::{Reader, ReaderExt};
+    let paint = "1 0 0 rg 0 0 4 4 re f";
+    for kind in ["array", "dict", "mixed"] {
+        for depth in [129, 10_000, 100_000] {
+            let deep = nested(depth, kind);
+            // In the page dictionary itself and one dictionary further in, next to strings,
+            // a comment and a hexadecimal string whose delimiters must not count.
+            let page = format!("/Junk {deep} /PieceInfo << /X {deep} /S (] >> \\) [) /H <5D3E3E> >> % ]]\n/Rotate 0");
+            let bytes = nesting_pdf_with_page("", &page, paint);
+            let info = crate::inspect(Arc::new(bytes.clone()), None).expect("the page is read");
+            assert_eq!(info.pages.len(), 1, "{kind}: depth {depth}");
+            let rendered = nesting_render(bytes);
+            assert_eq!(px40(&rendered, 1, 38), &[255, 0, 0, 255], "{kind}: depth {depth}");
+
+            let text = format!("<< /A 1 /Deep {deep} /B (x]) >>");
+            let dict = Dict::from_bytes(text.as_bytes()).expect("the dictionary is read");
+            assert_eq!(dict.get::<i32>("A"), Some(1), "{kind}: depth {depth}");
+            assert!(dict.get::<Object<'_>>("B").is_some(), "{kind}: depth {depth}");
+            assert!(!dict.contains_key("Deep"), "{kind}: depth {depth}: the deep value is left out");
+            // The cap still holds for the value read on its own.
+            assert!(Reader::new(deep.as_bytes()).skip::<Object<'_>>(false).is_none(), "{kind}: depth {depth}");
+        }
+    }
+    // Within the cap, the value is kept as before.
+    let within = format!("<< /Deep {} >>", nested(127, "array"));
+    assert!(Dict::from_bytes(within.as_bytes()).is_some_and(|d| d.get::<Object<'_>>("Deep").is_some()));
+    // A deep value that never closes, or closes past the end of the data, still fails its dictionary.
+    for unclosed in ["[".repeat(200), format!("{} >>", "[".repeat(200))] {
+        assert!(Dict::from_bytes(format!("<< /A 1 /Deep {unclosed}").as_bytes()).is_none());
     }
 }
 

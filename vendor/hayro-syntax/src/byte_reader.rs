@@ -20,6 +20,9 @@ pub struct Reader<'a> {
     // PdfCraft patch: bound direct-object nesting while skipping arrays and dictionaries
     // and while parsing dictionaries (`Dict::skip`, `Array::skip`, `parse_dict_with`).
     skip_depth: usize,
+    // PdfCraft patch (29): set when `enter_container` refused a level past the cap, so a
+    // dictionary can tell a value nested too deeply from a malformed one (`parse_dict_with`).
+    depth_refused: bool,
 }
 
 impl<'a> Reader<'a> {
@@ -32,7 +35,7 @@ impl<'a> Reader<'a> {
     /// Create a new reader at the given offset.
     #[inline]
     pub fn new_with(data: &'a [u8], offset: usize) -> Self {
-        Self { data, offset, past_end: Cell::new(false), skip_depth: 0 }
+        Self { data, offset, past_end: Cell::new(false), skip_depth: 0, depth_refused: false }
     }
 
     /// PdfCraft patch: whether a read needed bytes past the end of the data since the flag was
@@ -50,6 +53,7 @@ impl<'a> Reader<'a> {
 
     pub(crate) fn enter_container(&mut self) -> Option<()> {
         if self.skip_depth >= MAX_CONTAINER_DEPTH {
+            self.depth_refused = true;
             return None;
         }
         self.skip_depth += 1;
@@ -57,7 +61,76 @@ impl<'a> Reader<'a> {
     }
 
     pub(crate) fn leave_container(&mut self) {
-        self.skip_depth -= 1;
+        self.skip_depth = self.skip_depth.saturating_sub(1);
+    }
+
+    /// PdfCraft patch (29): whether `enter_container` refused a level since the last call, and
+    /// clears it.
+    pub(crate) fn take_depth_refused(&mut self) -> bool {
+        core::mem::take(&mut self.depth_refused)
+    }
+
+    /// PdfCraft patch (29): marks a refused level again (see `take_depth_refused`).
+    pub(crate) fn set_depth_refused(&mut self, refused: bool) {
+        self.depth_refused = refused;
+    }
+
+    /// PdfCraft patch (29): steps over the direct array or dictionary at the offset without
+    /// parsing it, in one pass and without recursion, however deeply it nests: brackets and
+    /// `<<` `>>` are counted, and strings and comments are stepped over so the delimiters in
+    /// them don't count. Nothing in it is read, so nothing can be reached through it. Returns
+    /// `None`, with the offset where it was, when no array or dictionary starts here or the
+    /// data ends before it closes.
+    pub(crate) fn skip_unparsed_container(&mut self) -> Option<()> {
+        let start = self.offset;
+        let skipped = self.skip_unparsed_container_inner();
+        if skipped.is_none() {
+            self.offset = start;
+        }
+        skipped
+    }
+
+    fn skip_unparsed_container_inner(&mut self) -> Option<()> {
+        if self.peek_tag(b"<<").is_none() && self.peek_tag(b"[").is_none() {
+            return None;
+        }
+        let mut depth = 0usize;
+        loop {
+            match self.read_byte()? {
+                b'[' => depth = depth.checked_add(1)?,
+                b'<' if self.peek_byte() == Some(b'<') => {
+                    self.forward();
+                    depth = depth.checked_add(1)?;
+                }
+                // A hexadecimal string: whatever it holds, it ends at the first `>`.
+                b'<' => while self.read_byte()? != b'>' {},
+                b']' => depth = depth.checked_sub(1)?,
+                b'>' if self.peek_byte() == Some(b'>') => {
+                    self.forward();
+                    depth = depth.checked_sub(1)?;
+                }
+                // A literal string, with its balanced parentheses and escapes.
+                b'(' => {
+                    let mut open = 1usize;
+                    while open > 0 {
+                        match self.read_byte()? {
+                            b'\\' => {
+                                self.read_byte()?;
+                            }
+                            b'(' => open = open.checked_add(1)?,
+                            b')' => open -= 1,
+                            _ => {}
+                        }
+                    }
+                }
+                // A comment runs to the end of its line.
+                b'%' => while !matches!(self.read_byte()?, b'\n' | b'\r') {},
+                _ => {}
+            }
+            if depth == 0 {
+                return Some(());
+            }
+        }
     }
 
     /// Returns `true` if the reader has reached the end of the data.
