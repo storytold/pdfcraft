@@ -1,7 +1,7 @@
 use super::error::PrintError;
 use super::imposition::decoded_contents;
 use super::settings::{Binding, BookletSubset, Layout, Orientation, PAPERS, PageOrder, Settings, SizeMode};
-use super::*;
+use super::{DecodeBudget, Dict, Document, Matrix, Object};
 
 /// Whether most of page `index`'s text runs bottom-to-top as the page displays (a label laid
 /// sideways on a letter or A4 sheet), counting each text-showing operator once; form XObjects
@@ -162,32 +162,7 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
             }
         }
         Layout::Label { flip } => {
-            let size = oriented(paper, settings.orientation, false);
-            let cell = [LABEL_MARGIN, LABEL_MARGIN, size.0 - LABEL_MARGIN, size.1 - LABEL_MARGIN];
-            for &p in &pages {
-                let d = sizes[p];
-                let crop = settings.crops.get(p).copied().flatten();
-                let rect = crop
-                    .map(|c| [c.rect[0].max(0.0), c.rect[1].max(0.0), c.rect[2].min(d.0), c.rect[3].min(d.1)])
-                    .filter(|r| r[2] - r[0] > 1.0 && r[3] - r[1] > 1.0)
-                    .unwrap_or([0.0, 0.0, d.0, d.1]);
-                let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
-                let turn = (w > h) != (cell[2] - cell[0] > cell[3] - cell[1]);
-                let mut quarter = match (turn, crop.is_some_and(|c| c.text_up)) {
-                    (false, _) => 0,
-                    (true, true) => 3,
-                    (true, false) => 1,
-                };
-                if flip {
-                    quarter = (quarter + 2) % 4;
-                }
-                let s = if turn {
-                    fit_scale((h, w), (cell[2] - cell[0], cell[3] - cell[1]))
-                } else {
-                    fit_scale((w, h), (cell[2] - cell[0], cell[3] - cell[1]))
-                };
-                sheets.push(Sheet { size, placed: vec![place_crop(p, rect, cell, s, quarter)], ..Sheet::default() });
-            }
+            sheets.extend(layout_labels(sizes, &pages, paper, settings.orientation, settings, flip));
         }
         Layout::Multiple { cols, rows, per_sheet, order, border, auto_rotate } => {
             let cells = cols.checked_mul(rows).filter(|&n| n > 0 && n <= 256);
@@ -347,4 +322,36 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
         }
     }
     Ok(sheets)
+}
+
+fn layout_labels(sizes: &[(f64, f64)], pages: &[usize], paper: (f64, f64), orientation: Orientation, settings: &Settings, flip: bool) -> Vec<Sheet> {
+    let size = oriented(paper, orientation, false);
+    let cell = [LABEL_MARGIN, LABEL_MARGIN, size.0 - LABEL_MARGIN, size.1 - LABEL_MARGIN];
+    pages
+        .iter()
+        .map(|&p| {
+            let d = sizes[p];
+            let crop = settings.crops.get(p).copied().flatten();
+            let rect = crop
+                .map(|c| [c.rect[0].max(0.0), c.rect[1].max(0.0), c.rect[2].min(d.0), c.rect[3].min(d.1)])
+                .filter(|r| r[2] - r[0] > 1.0 && r[3] - r[1] > 1.0)
+                .unwrap_or([0.0, 0.0, d.0, d.1]);
+            let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
+            let turn = (w > h) != (cell[2] - cell[0] > cell[3] - cell[1]);
+            let mut quarter = match (turn, crop.is_some_and(|c| c.text_up)) {
+                (false, _) => 0,
+                (true, true) => 3,
+                (true, false) => 1,
+            };
+            if flip {
+                quarter = (quarter + 2) % 4;
+            }
+            let s = if turn {
+                fit_scale((h, w), (cell[2] - cell[0], cell[3] - cell[1]))
+            } else {
+                fit_scale((w, h), (cell[2] - cell[0], cell[3] - cell[1]))
+            };
+            Sheet { size, placed: vec![place_crop(p, rect, cell, s, quarter)], ..Sheet::default() }
+        })
+        .collect()
 }

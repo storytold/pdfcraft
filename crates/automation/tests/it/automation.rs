@@ -516,6 +516,78 @@ fn autotag_form_fields_writes_reviewable_widget_tags() {
     assert_eq!(result["status"], "passed");
 }
 
+/// A two-page PDF with headings set apart only by their style: chapters in Helvetica-Bold 18,
+/// a section in Helvetica-Bold 14, text in Helvetica 11 (#1693).
+fn styled_headings_pdf() -> Vec<u8> {
+    let page1 = "BT /FB 18 Tf 72 700 Td (Introduction) Tj ET BT /FR 11 Tf 72 670 Td (Some text) Tj ET \
+                 BT /FB 14 Tf 72 640 Td (Background) Tj ET";
+    let page2 = "BT /FB 18 Tf 72 700 Td (Results) Tj ET BT /FR 11 Tf 72 670 Td (More text) Tj ET";
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] /Resources << /Font << /FB 7 0 R /FR 8 0 R >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R >>".into(),
+        format!("<< /Length {} >>\nstream\n{page1}\nendstream", page1.len()),
+        format!("<< /Length {} >>\nstream\n{page2}\nendstream", page2.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    bytes
+}
+
+/// #1693: text_styles lists the styles, largest first; bookmark_from_text_styles makes the
+/// bookmarks from the ones given per level, returns the tree, undoes in one step and says why
+/// when it can't.
+#[test]
+fn bookmarks_from_text_styles_through_tools() {
+    let dir = workdir("text-style-bookmarks");
+    std::fs::write(dir.join("styled.pdf"), styled_headings_pdf()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "styled.pdf" }))["doc"].as_u64().unwrap();
+    let styles = ok(&mut a, "text_styles", json!({ "doc": doc }))["styles"].clone();
+    assert_eq!(
+        styles,
+        json!([
+            { "font": "Helvetica-Bold", "size": 18.0, "bold": true, "italic": false, "lines": 2, "pages": 2, "sample": "Introduction" },
+            { "font": "Helvetica-Bold", "size": 14.0, "bold": true, "italic": false, "lines": 1, "pages": 1, "sample": "Background" },
+            { "font": "Helvetica", "size": 11.0, "bold": false, "italic": false, "lines": 2, "pages": 2, "sample": "Some text" },
+        ])
+    );
+    // The styles as text_styles gave them, the chapters first.
+    let levels = json!([styles[0].clone(), { "font": "Helvetica-Bold", "size": 14, "bold": true }]);
+    let r = ok(&mut a, "bookmark_from_text_styles", json!({ "doc": doc, "levels": levels }));
+    let top = &r["bookmarks"][0];
+    assert_eq!(top["title"], "Untitled");
+    let titles: Vec<(&str, u64)> =
+        top["children"].as_array().unwrap().iter().map(|c| (c["title"].as_str().unwrap(), c["page"].as_u64().unwrap())).collect();
+    assert_eq!(titles, [("Introduction", 1), ("Results", 2)]);
+    assert_eq!(top["children"][0]["children"][0]["title"], "Background");
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "New bookmarks from text styles");
+    // What can't be done says why.
+    let call = |a: &mut pdfcraft_automation::Automation, levels: Value| a.call("bookmark_from_text_styles", &json!({ "doc": doc, "levels": levels }));
+    assert!(matches!(call(&mut a, json!([])), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(call(&mut a, json!([{ "font": "Helvetica-Bold" }])), Err(ToolError::InvalidArgs(m)) if m.contains("size")));
+    assert!(
+        matches!(call(&mut a, json!([{ "font": "Helvetica-Bold", "size": 18, "bold": "yes" }])), Err(ToolError::InvalidArgs(m)) if m.contains("bold"))
+    );
+    let unused = call(&mut a, json!([{ "font": "Times-Roman", "size": 30 }]));
+    assert!(matches!(&unused, Err(ToolError::Failed(m)) if m.contains("no text is set in the chosen styles")), "{unused:?}");
+    let too_many: Vec<Value> = (0..10).map(|_| styles[0].clone()).collect();
+    assert!(matches!(call(&mut a, json!(too_many)), Err(ToolError::InvalidArgs(_))));
+}
+
 /// A one-page PDF whose form holds one text field named `name`.
 fn form_pdf(name: &str) -> Vec<u8> {
     let objs: Vec<String> = vec![
@@ -2030,21 +2102,33 @@ fn comments_through_tools() {
     let dir = workdir("comments");
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let id = add_comment_examples(&mut a, doc);
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let rect = verify_comment_listing(&list, &id);
+    edit_rectangle_comment(&mut a, doc, &rect);
+    edit_text_comment(&mut a, doc, &list);
+    verify_comment_errors(&mut a, doc, &id);
+    save_and_reopen_comments(&dir, &mut a, doc);
+}
+
+fn add_comment_examples(a: &mut Automation, doc: u64) -> String {
     // "Page 2" sits at y = 150 (user space) = 150 from the top of the 300 pt page.
-    let hl = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 2, "type": "highlight", "find": "page 2", "contents": "check", "author": "Ada" }));
+    let hl = ok(a, "comment_add", json!({ "doc": doc, "page": 2, "type": "highlight", "find": "page 2", "contents": "check", "author": "Ada" }));
     assert_eq!(hl["comment"]["lines"], 1);
     let id = hl["comment"]["id"].as_str().unwrap().to_string();
-    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 2, "type": "note", "at": [150, 20], "contents": "Sticky" }));
-    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "rectangle", "rect": [10, 10, 60, 40], "color": "blue", "width": 3 }));
-    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "textbox", "rect": [10, 200, 190, 240], "contents": "Hello", "font_size": 10 }));
-    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "ink", "strokes": [[[10, 280], [50, 260], [90, 285]]] }));
-    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 3, "type": "arrow", "from": [10, 10], "to": [100, 100] }));
-    ok(&mut a, "comment_reply", json!({ "doc": doc, "id": id, "text": "Looks right", "author": "Bob" }));
-    ok(&mut a, "comment_set_status", json!({ "doc": doc, "id": id, "status": "accepted", "author": "Bob" }));
+    ok(a, "comment_add", json!({ "doc": doc, "page": 2, "type": "note", "at": [150, 20], "contents": "Sticky" }));
+    ok(a, "comment_add", json!({ "doc": doc, "page": 1, "type": "rectangle", "rect": [10, 10, 60, 40], "color": "blue", "width": 3 }));
+    ok(a, "comment_add", json!({ "doc": doc, "page": 1, "type": "textbox", "rect": [10, 200, 190, 240], "contents": "Hello", "font_size": 10 }));
+    ok(a, "comment_add", json!({ "doc": doc, "page": 1, "type": "ink", "strokes": [[[10, 280], [50, 260], [90, 285]]] }));
+    ok(a, "comment_add", json!({ "doc": doc, "page": 3, "type": "arrow", "from": [10, 10], "to": [100, 100] }));
+    ok(a, "comment_reply", json!({ "doc": doc, "id": id, "text": "Looks right", "author": "Bob" }));
+    ok(a, "comment_set_status", json!({ "doc": doc, "id": id, "status": "accepted", "author": "Bob" }));
+    id
+}
 
-    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+fn verify_comment_listing(list: &Value, id: &str) -> Value {
     assert_eq!(list["count"], 6, "{list}");
-    let c = list["comments"].as_array().unwrap().iter().find(|c| c["id"] == id.as_str()).unwrap().clone();
+    let c = list["comments"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap().clone();
     assert_eq!((c["type"].as_str(), c["author"].as_str(), c["contents"].as_str()), (Some("Highlight"), Some("Ada"), Some("check")));
     assert_eq!(c["status"], "Accepted");
     assert_eq!(c["replies"].as_array().unwrap().len(), 1);
@@ -2057,33 +2141,38 @@ fn comments_through_tools() {
     assert_eq!(rect["rect"], json!([10.0, 10.0, 60.0, 40.0]));
     let note = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "Text").unwrap().clone();
     assert_eq!(note["rect"], json!([150.0, 20.0, 170.0, 40.0]), "note icon hangs from its top-left point");
+    rect
+}
 
+fn edit_rectangle_comment(a: &mut Automation, doc: u64, original: &Value) {
     // Edit by page + index; several changes are one undo step.
-    let (page, index) = (rect["page"].as_u64().unwrap(), rect["index"].as_u64().unwrap());
-    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": page, "index": index, "color": "#FF0000", "move": [5, 5], "contents": "moved" }));
-    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let (page, index) = (original["page"].as_u64().unwrap(), original["index"].as_u64().unwrap());
+    ok(a, "comment_edit", json!({ "doc": doc, "page": page, "index": index, "color": "#FF0000", "move": [5, 5], "contents": "moved" }));
+    let list = ok(a, "comment_list", json!({ "doc": doc, "page": 1 }));
     let rect = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "Square").unwrap().clone();
     assert_eq!((rect["color"].as_str(), rect["contents"].as_str()), (Some("#FF0000"), Some("moved")));
     assert_eq!(rect["rect"], json!([15.0, 15.0, 65.0, 45.0]));
-    let undo = ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    let undo = ok(a, "edit_undo", json!({ "doc": doc }));
     assert_eq!(undo["undone"], "Edit comment");
-    ok(&mut a, "edit_redo", json!({ "doc": doc }));
+    ok(a, "edit_redo", json!({ "doc": doc }));
     // Rectangles, ovals and polygons take a fill (#686); "none" removes it. Lines have none.
-    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": page, "index": index, "fill": "yellow" }));
-    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": page, "index": index, "fill": "none" }));
+    ok(a, "comment_edit", json!({ "doc": doc, "page": page, "index": index, "fill": "yellow" }));
+    ok(a, "comment_edit", json!({ "doc": doc, "page": page, "index": index, "fill": "none" }));
     assert!(matches!(a.call("comment_edit", &json!({ "doc": doc, "page": page, "index": index, "fill": "mauve" })), Err(ToolError::InvalidArgs(_))));
-    let arrow = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 3 }))["comments"][0].clone();
+    let arrow = ok(a, "comment_list", json!({ "doc": doc, "page": 3 }))["comments"][0].clone();
     assert!(matches!(
         a.call("comment_edit", &json!({ "doc": doc, "page": arrow["page"], "index": arrow["index"], "fill": "red" })),
         Err(ToolError::Failed(_))
     ));
+}
 
+fn edit_text_comment(a: &mut Automation, doc: u64, original_list: &Value) {
     // Editing a text box re-fits its rectangle to the new text: the wrap width and top edge
     // stay, the height follows the wrapped lines.
-    let tb = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "FreeText").unwrap().clone();
+    let tb = original_list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "FreeText").unwrap().clone();
     let long = "the quick brown fox jumps over the lazy dog ".repeat(3);
-    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": tb["page"], "index": tb["index"], "contents": long.trim_end() }));
-    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    ok(a, "comment_edit", json!({ "doc": doc, "page": tb["page"], "index": tb["index"], "contents": long.trim_end() }));
+    let list = ok(a, "comment_list", json!({ "doc": doc, "page": 1 }));
     let tb = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "FreeText").unwrap().clone();
     let r: Vec<f64> = tb["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
     assert_eq!((r[0], r[1], r[2] - r[0]), (10.0, 200.0, 180.0), "width and top edge stay: {r:?}");
@@ -2092,9 +2181,11 @@ fn comments_through_tools() {
     // The rendered page shows the rectangle's border.
     let png = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
     assert!(matches!(png[0], Content::Png { .. }));
+}
 
-    ok(&mut a, "comment_delete", json!({ "doc": doc, "id": id }));
-    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 5);
+fn verify_comment_errors(a: &mut Automation, doc: u64, id: &str) {
+    ok(a, "comment_delete", json!({ "doc": doc, "id": id }));
+    assert_eq!(ok(a, "comment_list", json!({ "doc": doc }))["count"], 5);
     assert!(matches!(a.call("comment_delete", &json!({ "doc": doc, "id": id })), Err(ToolError::Failed(_))));
     assert!(matches!(a.call("comment_add", &json!({ "doc": doc, "page": 1, "type": "highlight", "find": "nowhere" })), Err(ToolError::Failed(_))));
     assert!(matches!(a.call("comment_add", &json!({ "doc": doc, "page": 1, "type": "rectangle" })), Err(ToolError::InvalidArgs(_))));
@@ -2103,10 +2194,11 @@ fn comments_through_tools() {
         Err(ToolError::InvalidArgs(_))
     ));
     assert!(matches!(a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": 1 })), Err(ToolError::InvalidArgs(_))));
+}
 
-    // Comments survive a save and reopen.
-    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "commented.pdf" }));
-    let mut b = auto(&dir);
+fn save_and_reopen_comments(dir: &Path, a: &mut Automation, doc: u64) {
+    ok(a, "doc_save", json!({ "doc": doc, "path": "commented.pdf" }));
+    let mut b = auto(dir);
     let re = ok(&mut b, "doc_open", json!({ "path": "commented.pdf" }))["doc"].as_u64().unwrap();
     assert_eq!(ok(&mut b, "comment_list", json!({ "doc": re }))["count"], 5);
 }
@@ -2809,6 +2901,12 @@ fn accessibility_check_report_and_fixes_through_tools() {
     let manual_html = std::fs::read_to_string(dir.join("manual-report.html")).unwrap();
     assert!(manual_html.contains("<p>Needs manual check: 1</p>"));
     assert!(!manual_html.contains("no problems"));
+}
+
+#[test]
+fn accessibility_figure_tags_and_alternative_text_through_tools() {
+    let dir = workdir("a11y-figures");
+    let mut a = auto(&dir);
     // Figures: list, describe, mark decorative.
     std::fs::write(
         dir.join("figures.pdf"),
@@ -4915,6 +5013,23 @@ fn the_calculation_order_is_read_fixed_and_set() {
 }
 
 #[test]
+fn page_tab_orders_are_read_and_set_per_page_through_tools() {
+    let dir = workdir("pagetabs");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "form_tab_order", json!({ "doc": doc }));
+    assert_eq!(r["page_tabs"], json!(["annotations", "annotations", "annotations"]));
+    assert!(r["undo"].is_null(), "reading changes nothing: {r}");
+    let r = ok(&mut a, "form_tab_order", json!({ "doc": doc, "order": "column", "pages": [1, 3] }));
+    assert_eq!(r["page_tabs"], json!(["column", "annotations", "column"]));
+    assert_eq!((r["undo"].as_str(), r["dirty"].as_bool()), (Some("Set tab order"), Some(true)));
+    let r = ok(&mut a, "form_tab_order", json!({ "doc": doc, "order": "structure", "pages": [2] }));
+    assert_eq!(r["page_tabs"], json!(["column", "structure", "column"]));
+    let r = ok(&mut a, "form_tab_order", json!({ "doc": doc, "order": "unspecified", "pages": [1] }));
+    assert_eq!(r["page_tabs"], json!(["annotations", "structure", "column"]));
+}
+
+#[test]
 fn tab_order_and_field_appearance_through_tools() {
     let dir = workdir("taborder");
     let mut a = auto(&dir);
@@ -5260,6 +5375,18 @@ fn local_gotor_link_open_refuses_directories_devices_and_non_pdf_targets() {
 
 #[test]
 fn local_gotor_link_open_applies_destinations_and_honors_root() {
+    let root = local_gotor_fixtures();
+    let mut a = auto(&root);
+    assert_relative_gotor_destination(&mut a);
+    assert_absolute_gotor_policy(&mut a);
+    assert_unapplied_gotor_destinations(&mut a);
+    assert_encrypted_gotor_passwords(&mut a);
+    assert_unsupported_gotor_targets(&mut a);
+    assert_gotor_root_boundaries(&mut a);
+    assert_url_links_cannot_open_as_gotor(&mut a);
+}
+
+fn local_gotor_fixtures() -> PathBuf {
     let (base, root) = sandbox("gotor-open");
     std::fs::create_dir_all(root.join("sub")).unwrap();
     std::fs::write(root.join("target.pdf"), fixture(3)).unwrap();
@@ -5277,12 +5404,14 @@ fn local_gotor_link_open_applies_destinations_and_honors_root() {
     std::fs::write(root.join("absolute.pdf"), remote_link_pdf(root.join("target.pdf").to_str().unwrap(), Some("[1 /Fit]"))).unwrap();
     link_dir(&root, "outside-link", &base.join("outside"));
     std::fs::write(root.join("symlink.pdf"), remote_link_pdf("outside-link/secret.pdf", Some("[0 /Fit]"))).unwrap();
+    root
+}
 
-    let mut a = auto(&root);
-    let source = ok(&mut a, "doc_open", json!({ "path": "sub/source.pdf" }))["doc"].as_u64().unwrap();
-    let listed = ok(&mut a, "link_list", json!({ "doc": source }));
+fn assert_relative_gotor_destination(a: &mut Automation) {
+    let source = ok(a, "doc_open", json!({ "path": "sub/source.pdf" }))["doc"].as_u64().unwrap();
+    let listed = ok(a, "link_list", json!({ "doc": source }));
     assert_eq!(listed["links"][0]["other"], "GoToR");
-    let opened = ok(&mut a, "link_open", json!({ "doc": source, "page": 1, "index": 1 }));
+    let opened = ok(a, "link_open", json!({ "doc": source, "page": 1, "index": 1 }));
     assert_eq!(opened["path"], "target.pdf");
     assert_eq!(opened["destination_applied"], true);
     assert_eq!(opened["destination"]["page"], 3);
@@ -5290,51 +5419,63 @@ fn local_gotor_link_open_applies_destinations_and_honors_root() {
     assert_eq!(opened["document"]["pages"], 3);
     let target_id = opened["document"]["doc"].as_u64().unwrap();
     assert_eq!(a.session().get(pdfcraft_engine::DocId(target_id)).unwrap().info.pages.len(), 3);
+}
 
-    let absolute = ok(&mut a, "doc_open", json!({ "path": "absolute.pdf" }))["doc"].as_u64().unwrap();
+fn assert_absolute_gotor_policy(a: &mut Automation) {
+    let absolute = ok(a, "doc_open", json!({ "path": "absolute.pdf" }))["doc"].as_u64().unwrap();
     let before = a.session().docs().len();
     for args in [json!({ "doc": absolute, "page": 1, "index": 1 }), json!({ "doc": absolute, "page": 1, "index": 1, "allow_absolute": false })] {
-        assert!(matches!(err(&mut a, "link_open", args), ToolError::Failed(m) if m.contains("allow_absolute")));
+        assert!(matches!(err(a, "link_open", args), ToolError::Failed(m) if m.contains("allow_absolute")));
         assert_eq!(a.session().docs().len(), before);
     }
-    let opened = ok(&mut a, "link_open", json!({ "doc": absolute, "page": 1, "index": 1, "allow_absolute": true }));
+    let opened = ok(a, "link_open", json!({ "doc": absolute, "page": 1, "index": 1, "allow_absolute": true }));
     assert_eq!(opened["path"], "target.pdf");
     assert_eq!(opened["destination"]["page"], 2);
+}
 
+fn assert_unapplied_gotor_destinations(a: &mut Automation) {
     for (source_path, warning) in [("named.pdf", "named destination"), ("range.pdf", "out of range")] {
-        let source = ok(&mut a, "doc_open", json!({ "path": source_path }))["doc"].as_u64().unwrap();
-        let opened = ok(&mut a, "link_open", json!({ "doc": source, "page": 1, "index": 1 }));
+        let source = ok(a, "doc_open", json!({ "path": source_path }))["doc"].as_u64().unwrap();
+        let opened = ok(a, "link_open", json!({ "doc": source, "page": 1, "index": 1 }));
         assert_eq!(opened["destination_applied"], false);
         assert!(opened["warning"].as_str().unwrap().contains(warning), "{opened}");
     }
+}
 
-    let password_source = ok(&mut a, "doc_open", json!({ "path": "password-source.pdf" }))["doc"].as_u64().unwrap();
+fn assert_encrypted_gotor_passwords(a: &mut Automation) {
+    let password_source = ok(a, "doc_open", json!({ "path": "password-source.pdf" }))["doc"].as_u64().unwrap();
     let documents_before = a.session().docs().len();
-    assert!(matches!(err(&mut a, "link_open", json!({ "doc": password_source, "page": 1, "index": 1 })), ToolError::Failed(_)));
+    assert!(matches!(err(a, "link_open", json!({ "doc": password_source, "page": 1, "index": 1 })), ToolError::Failed(_)));
     assert_eq!(a.session().docs().len(), documents_before);
-    assert!(matches!(err(&mut a, "link_open", json!({ "doc": password_source, "page": 1, "index": 1, "password": "wrong" })), ToolError::Failed(_)));
+    assert!(matches!(err(a, "link_open", json!({ "doc": password_source, "page": 1, "index": 1, "password": "wrong" })), ToolError::Failed(_)));
     assert_eq!(a.session().docs().len(), documents_before);
-    let opened = ok(&mut a, "link_open", json!({ "doc": password_source, "page": 1, "index": 1, "password": "secret" }));
+    let opened = ok(a, "link_open", json!({ "doc": password_source, "page": 1, "index": 1, "password": "secret" }));
     assert_eq!(opened["document"]["encrypted"], true);
+}
 
+fn assert_unsupported_gotor_targets(a: &mut Automation) {
     for source_path in ["url.pdf", "missing-source.pdf", "non-pdf-source.pdf"] {
-        let source = ok(&mut a, "doc_open", json!({ "path": source_path }))["doc"].as_u64().unwrap();
+        let source = ok(a, "doc_open", json!({ "path": source_path }))["doc"].as_u64().unwrap();
         let documents_before = a.session().docs().len();
-        assert!(matches!(err(&mut a, "link_open", json!({ "doc": source, "page": 1, "index": 1 })), ToolError::Failed(_)));
+        assert!(matches!(err(a, "link_open", json!({ "doc": source, "page": 1, "index": 1 })), ToolError::Failed(_)));
         assert_eq!(a.session().docs().len(), documents_before, "a rejected target is not opened: {source_path}");
     }
+}
 
+fn assert_gotor_root_boundaries(a: &mut Automation) {
     for source_path in ["sub/escape.pdf", "symlink.pdf"] {
-        let source = ok(&mut a, "doc_open", json!({ "path": source_path }))["doc"].as_u64().unwrap();
+        let source = ok(a, "doc_open", json!({ "path": source_path }))["doc"].as_u64().unwrap();
         let documents_before = a.session().docs().len();
-        assert!(matches!(err(&mut a, "link_open", json!({ "doc": source, "page": 1, "index": 1 })), ToolError::Failed(m) if m.contains("outside")));
+        assert!(matches!(err(a, "link_open", json!({ "doc": source, "page": 1, "index": 1 })), ToolError::Failed(m) if m.contains("outside")));
         assert_eq!(a.session().docs().len(), documents_before, "a refused target is not opened");
     }
+}
 
-    let missing_source = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
-    ok(&mut a, "link_add", json!({ "doc": missing_source, "page": 1, "rect": [20, 30, 80, 50], "url": "https://example.org" }));
+fn assert_url_links_cannot_open_as_gotor(a: &mut Automation) {
+    let missing_source = ok(a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(a, "link_add", json!({ "doc": missing_source, "page": 1, "rect": [20, 30, 80, 50], "url": "https://example.org" }));
     assert!(
-        matches!(err(&mut a, "link_open", json!({ "doc": missing_source, "page": 1, "index": 1 })), ToolError::InvalidArgs(m) if m.contains("not a supported local PDF GoToR"))
+        matches!(err(a, "link_open", json!({ "doc": missing_source, "page": 1, "index": 1 })), ToolError::InvalidArgs(m) if m.contains("not a supported local PDF GoToR"))
     );
 }
 
@@ -5887,8 +6028,14 @@ fn a_dynamic_xfa_forms_signature_box_is_signed_under_its_som_path() {
 fn digital_ids_signing_and_validation_through_tools() {
     let dir = workdir("signing");
     let mut a = auto(&dir);
+    create_signing_identity(&mut a);
+    let doc = sign_document_and_verify_trust(&mut a, &dir);
+    verify_signature_revisions_and_bundle(&mut a, doc, &dir);
+}
+
+fn create_signing_identity(a: &mut Automation) {
     let id = ok(
-        &mut a,
+        a,
         "sign_id_create",
         json!({ "name": "Ada Lovelace", "organization": "Analytical Engines", "email": "ada@example.com", "country": "GB", "key": "p256", "password": "secret12", "path": "ada.p12" }),
     );
@@ -5897,13 +6044,15 @@ fn digital_ids_signing_and_validation_through_tools() {
     assert!(matches!(a.call("sign_id_create", &json!({ "name": "X", "password": "short", "path": "x.p12" })), Err(ToolError::InvalidArgs(_))));
     // Eight characters at least (#1847): seven is refused.
     assert!(matches!(a.call("sign_id_create", &json!({ "name": "X", "password": "seven77", "path": "x.p12" })), Err(ToolError::InvalidArgs(_))));
+}
 
-    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
-    assert_eq!(ok(&mut a, "sign_list", json!({ "doc": doc }))["count"], 0);
+fn sign_document_and_verify_trust(a: &mut Automation, dir: &Path) -> u64 {
+    let doc = ok(a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(a, "sign_list", json!({ "doc": doc }))["count"], 0);
     // A Keychain identity that doesn't exist (macOS) or Keychains at all (elsewhere).
     assert!(matches!(a.call("sign_document", &json!({ "doc": doc, "id": "keychain:No Such Signer", "out": "k.pdf" })), Err(ToolError::Failed(_))));
     assert!(matches!(a.call("sign_document", &json!({ "doc": doc, "id": "windows:No Such Signer", "out": "w.pdf" })), Err(ToolError::Failed(_))));
-    let store = ok(&mut a, "sign_windows_ids", json!({}));
+    let store = ok(a, "sign_windows_ids", json!({}));
     let ids = store["ids"].as_array().unwrap();
     assert_eq!(store["count"].as_u64().unwrap(), ids.len() as u64);
     assert!(ids.iter().all(|id| id["id"].as_str().unwrap().starts_with("windows:")));
@@ -5917,7 +6066,7 @@ fn digital_ids_signing_and_validation_through_tools() {
         Err(ToolError::InvalidArgs(_))
     ));
     let r = ok(
-        &mut a,
+        a,
         "sign_document",
         json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "page": 2, "rect": [20, 200, 180, 250], "reason": "Approved", "location": "London", "out": "signed.pdf" }),
     );
@@ -5929,33 +6078,37 @@ fn digital_ids_signing_and_validation_through_tools() {
     assert!(dir.join("signed.pdf").exists());
 
     // Trust the ID: valid; comment afterwards: still valid, change allowed.
-    let t = ok(&mut a, "sign_trust", json!({ "paths": ["ada.p12"], "password": "secret12" }));
+    let t = ok(a, "sign_trust", json!({ "paths": ["ada.p12"], "password": "secret12" }));
     assert_eq!(t["trusted"].as_array().unwrap().len(), 1);
-    let list = ok(&mut a, "sign_list", json!({ "doc": doc }));
+    let list = ok(a, "sign_list", json!({ "doc": doc }));
     assert_eq!((list["all_valid"].as_bool(), list["signatures"][0]["status"].as_str()), (Some(true), Some("valid")));
-    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [20, 20], "contents": "ok" }));
-    let s = &ok(&mut a, "sign_list", json!({ "doc": doc }))["signatures"][0];
+    ok(a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [20, 20], "contents": "ok" }));
+    let s = &ok(a, "sign_list", json!({ "doc": doc }))["signatures"][0];
     assert_eq!((s["status"].as_str(), s["modification"].as_str()), (Some("valid"), Some("allowed")));
+    doc
+}
+
+fn verify_signature_revisions_and_bundle(a: &mut Automation, doc: u64, dir: &Path) {
     // A full rewrite is refused for a signed document.
     assert!(matches!(a.call("doc_save", &json!({ "doc": doc, "path": "copy.pdf", "full": true })), Err(ToolError::Failed(_))));
-    ok(&mut a, "doc_save", json!({ "doc": doc }));
+    ok(a, "doc_save", json!({ "doc": doc }));
     // Three revisions: the original, the signature, the comment; the middle one is signed.
-    let revs = ok(&mut a, "doc_revisions", json!({ "doc": doc }))["revisions"].as_array().cloned().unwrap();
+    let revs = ok(a, "doc_revisions", json!({ "doc": doc }))["revisions"].as_array().cloned().unwrap();
     assert_eq!(revs.len(), 3, "{revs:?}");
     assert!(revs[0]["signed_by"].as_array().unwrap().is_empty() && revs[1]["signed_by"].as_array().unwrap().len() == 1, "{revs:?}");
-    let old = ok(&mut a, "doc_open_revision", json!({ "doc": doc, "revision": 2 }))["doc"].as_u64().unwrap();
-    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": old }))["comments"].as_array().map(Vec::len), Some(0), "before the comment");
-    assert_eq!(ok(&mut a, "sign_list", json!({ "doc": old }))["count"], 1);
+    let old = ok(a, "doc_open_revision", json!({ "doc": doc, "revision": 2 }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(a, "comment_list", json!({ "doc": old }))["comments"].as_array().map(Vec::len), Some(0), "before the comment");
+    assert_eq!(ok(a, "sign_list", json!({ "doc": old }))["count"], 1);
     assert!(matches!(a.call("doc_open_revision", &json!({ "doc": doc, "revision": 4 })), Err(ToolError::Failed(_))));
-    assert_eq!(ok(&mut a, "sign_trust", json!({ "clear": true }))["trusted"].as_array().unwrap().len(), 0);
-    assert_eq!(ok(&mut a, "sign_list", json!({ "doc": doc }))["signatures"][0]["status"], "unknown");
+    assert_eq!(ok(a, "sign_trust", json!({ "clear": true }))["trusted"].as_array().unwrap().len(), 0);
+    assert_eq!(ok(a, "sign_list", json!({ "doc": doc }))["signatures"][0]["status"], "unknown");
     // The same certificate from a PKCS #7 bundle (.p7b), as Windows, Acrobat and CAs export one.
     use pdfcraft_engine::sign::{cms, der, pkcs12};
     let cert = pkcs12::open(&std::fs::read(dir.join("ada.p12")).unwrap(), "secret12").unwrap().certificate.raw;
     let sd = der::seq(&[&der::int(1), &der::set_of(&[]), &der::seq(&[&der::oid(cms::DATA)]), &der::explicit(0, &cert), &der::set_of(&[])]);
     std::fs::write(dir.join("ada.p7b"), der::seq(&[&der::oid(cms::SIGNED_DATA), &der::explicit(0, &sd)])).unwrap();
-    assert_eq!(ok(&mut a, "sign_trust", json!({ "paths": ["ada.p7b"] }))["trusted"].as_array().unwrap().len(), 1);
-    assert_eq!(ok(&mut a, "sign_list", json!({ "doc": doc }))["signatures"][0]["status"], "valid");
+    assert_eq!(ok(a, "sign_trust", json!({ "paths": ["ada.p7b"] }))["trusted"].as_array().unwrap().len(), 1);
+    assert_eq!(ok(a, "sign_list", json!({ "doc": doc }))["signatures"][0]["status"], "valid");
 }
 
 /// The decoded text of every visible signature appearance (Helvetica forms) in a signed file.
@@ -6449,6 +6602,8 @@ fn ocr_recognize_files_with_distinct_names_runs_as_before() {
     }
 }
 
+/// Field scripts set through the tools validate, calculate and format, and `js_run` reports console
+/// lines, every message with its details, and requests.
 #[test]
 fn javascript_through_tools() {
     let dir = workdir("js");
@@ -6482,10 +6637,17 @@ fn javascript_through_tools() {
     let r = ok(
         &mut a,
         "js_run",
-        json!({ "doc": doc, "script": "console.println(getField('Total').value); getField('Qty').value = 3; this.pageNum = 1; app.alert('ok');" }),
+        json!({ "doc": doc, "script": "console.println(getField('Total').value); getField('Qty').value = 3; this.pageNum = 1; app.alert('ok'); app.alert({ cMsg: 'Clear?', cTitle: 'Order', nIcon: 2, nType: 3 });" }),
     );
     assert_eq!(r["console"][0], "2500");
-    assert_eq!(r["alerts"][0], "ok");
+    // Every message, in order, with its title, icon and buttons.
+    assert_eq!(
+        r["alerts"],
+        json!([
+            { "message": "ok", "title": null, "icon": "error", "buttons": "ok" },
+            { "message": "Clear?", "title": "Order", "icon": "question", "buttons": "yes_no_cancel" },
+        ])
+    );
     assert_eq!(r["requests"][0]["page"], 2);
     let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
     let total = f["fields"].as_array().unwrap().iter().find(|x| x["name"] == "Total").unwrap().clone();
@@ -7406,6 +7568,8 @@ fn repeated_xfa_print_buttons_work_through_tools_and_after_reopen() {
     check(&mut a, doc);
 }
 
+/// A dynamic XFA form's scripts run on open, on fills and for buttons through the tools, with undo,
+/// and `js_run` reports their messages.
 #[test]
 fn xfa_scripts_run_for_buttons_and_field_changes_through_tools() {
     let dir = workdir("xfa-scripts");
@@ -7434,7 +7598,7 @@ fn xfa_scripts_run_for_buttons_and_field_changes_through_tools() {
     ok(&mut a, "edit_undo", json!({ "doc": doc }));
     assert!(field(&mut a, "amount_2").is_none());
     let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "", "field": "hello" }));
-    assert_eq!(r["alerts"], json!(["Hello 4"]));
+    assert_eq!(r["alerts"], json!([{ "message": "Hello 4", "title": null, "icon": "error", "buttons": "ok" }]));
 }
 
 #[test]
@@ -7447,7 +7611,7 @@ fn active_xfa_skips_container_fallback_scripts_after_save_and_reopen() {
     ok(&mut a, "js_set_document_script", json!({"doc":doc,"name":"viewerFallback","script":fallback}));
     let out = ok(&mut a, "js_run", json!({"doc":doc,"script":"app.alert('Console message');"}));
     assert!(out["error"].is_null(), "{out}");
-    assert_eq!(out["alerts"], json!(["Console message"]));
+    assert_eq!(out["alerts"], json!([{ "message": "Console message", "title": null, "icon": "error", "buttons": "ok" }]));
     ok(&mut a, "doc_save", json!({"doc":doc,"path":"saved.pdf"}));
     ok(&mut a, "doc_close", json!({"doc":doc}));
     let doc = ok(&mut a, "doc_open", json!({"path":"saved.pdf"}))["doc"].as_u64().unwrap();
@@ -7457,7 +7621,7 @@ fn active_xfa_skips_container_fallback_scripts_after_save_and_reopen() {
     assert_eq!(out["alerts"], json!([]));
     let out = ok(&mut a, "js_run", json!({"doc":doc,"script":"","field":"hello"}));
     assert!(out["error"].is_null(), "{out}");
-    assert_eq!(out["alerts"], json!(["Hello 2"]));
+    assert_eq!(out["alerts"], json!([{ "message": "Hello 2", "title": null, "icon": "error", "buttons": "ok" }]));
     ok(&mut a, "xfa_to_static", json!({"doc":doc}));
     let out = ok(&mut a, "js_run", json!({"doc":doc,"script":""}));
     assert_eq!(out["alerts"].as_array().unwrap().len(), 1);
@@ -7881,7 +8045,7 @@ fn hebrew_text_through_tools_saves_reopens_extracts_and_renders() {
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
     let text = "שם משפחה: שרון, טל׳ 052-1234567 (נייד)";
-    let args = json!({"doc": doc, "page": 1, "text": text, "rect": [10, 20, 400, 40], "size": 11, "align": "right"});
+    let args = json!({"doc": doc, "page": 1, "text": text, "rect": [10, 20, 190, 40], "size": 7, "align": "right"});
     if pdfcraft_fonts::document_hebrew_font(false).is_none() {
         assert!(a.call("page_add_text", &args).unwrap_err().to_string().contains("U+05E9"));
         assert_eq!(ok(&mut a, "content_list", json!({"doc": doc}))["count"], 0);
@@ -9368,4 +9532,22 @@ fn a_vector_graphic_moves_and_resizes_through_tools() {
     let saved = ok(&mut a, "object_list", json!({"doc":reopened,"page":1}));
     assert_eq!(rect_of(&saved), target, "the new box survives save and reopen");
     assert!(page_text(&mut a, reopened)[0].contains("Keep me"));
+fn deleting_one_radio_button_through_tools_keeps_the_group() {
+    let dir = workdir("delete-radio");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (x, export) in [(20, "S"), (40, "M"), (60, "L")] {
+        let args = json!({ "doc": doc, "page": 1, "type": "radio", "rect": [x, 100, x + 14, 114], "group": "size", "export": export });
+        ok(&mut a, "form_add_field", args);
+    }
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "size": "L" } }));
+    ok(&mut a, "form_delete_field", json!({ "doc": doc, "field": "size", "widget": 2 }));
+    let size = |a: &mut Automation| ok(a, "form_fields", json!({ "doc": doc }))["fields"][0].clone();
+    assert_eq!((size(&mut a)["options"].clone(), size(&mut a)["value"].clone()), (json!(["S", "L"]), json!("L")), "only M is gone");
+    for widget in [0, 3, -1] {
+        let r = a.call("form_delete_field", &json!({ "doc": doc, "field": "size", "widget": widget }));
+        assert!(matches!(r, Err(ToolError::InvalidArgs(_))), "widget {widget}: {r:?}");
+    }
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(size(&mut a)["options"], json!(["S", "M", "L"]), "one undo step brings it back");
 }

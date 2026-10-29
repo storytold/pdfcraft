@@ -1,6 +1,9 @@
 use super::look::redraw_field;
 use super::tree::{add_to_page, attach, clash, detach, ensure_form, free_name, name_parts, top_names};
-use super::*;
+use super::{
+    Dict, Document, Field, FieldKind, FormError, MIN_FIELD_SIDE, NewField, ObjRef, Object, PdfString, Widget, appearance, fields, flags, invalid,
+    page_refs, rgb,
+};
 
 fn widget_dict(page: ObjRef, rect: [f64; 4]) -> Dict {
     let mut d = Dict::new();
@@ -194,8 +197,78 @@ pub fn delete_field_object(doc: &mut Document, obj: ObjRef) -> Result<(), FormEr
     delete_found_field(doc, f)
 }
 
+/// Delete widget `widget` (an index into the field's widgets) of the field `name`, keeping the
+/// field and its other widgets: one radio button of a group, or one copy of a duplicated field,
+/// as Acrobat's Prepare Form deletes the selected one (#4609). A field with one widget is deleted
+/// whole. A per-widget `/Opt` entry goes with its widget, and a check box or radio group that was
+/// on through the deleted widget alone turns off.
+pub fn delete_widget(doc: &mut Document, name: &str, widget: usize) -> Result<(), FormError> {
+    let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    let Some(w) = f.widgets.get(widget).cloned() else {
+        return invalid(format!("{name} has no widget {}", widget.saturating_add(1)));
+    };
+    // A field merged with its widget is that widget's only one.
+    if f.widgets.len() < 2 || w.obj == f.obj {
+        return delete_found_field(doc, f);
+    }
+    let per_widget_opt = matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) && f.options.len() == f.widgets.len();
+    // Turn the group off when no button left *shows* the deleted one's state: a twin with the same
+    // on-state name that is currently off does not keep the choice visible.
+    let on_only_here = w.on_state.as_deref().is_some_and(|on| {
+        f.value.iter().any(|v| v == on) && !f.widgets.iter().enumerate().any(|(i, o)| i != widget && o.state.as_deref() == Some(on))
+    });
+    drop_from_pages(doc, &std::iter::once(w.obj).collect())?;
+    detach(doc, w.obj)?;
+    drop_from_calculation_order(doc, |r| r == w.obj)?;
+    let mut d = doc.get(f.obj).as_dict().cloned().unwrap_or_default();
+    let mut changed = false;
+    // The field's own `/Kids` is what made the widget its: `detach` follows the widget's
+    // `/Parent`, which a damaged file can leave out or point elsewhere, so the field would keep
+    // a widget no page shows.
+    if let Some(kids) = d.get(b"Kids").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())
+        && kids.iter().any(|k| k.as_ref() == Some(w.obj))
+    {
+        d.set(b"Kids".to_vec(), Object::Array(kids.into_iter().filter(|k| k.as_ref() != Some(w.obj)).collect()));
+        changed = true;
+    }
+    if per_widget_opt
+        && let Some(opt) = d.get(b"Opt").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())
+        && opt.len() == f.widgets.len()
+    {
+        let kept: Vec<Object> = opt.into_iter().enumerate().filter(|(i, _)| *i != widget).map(|(_, o)| o).collect();
+        d.set(b"Opt".to_vec(), Object::Array(kept));
+        changed = true;
+    }
+    if on_only_here && d.get(b"V").is_some() {
+        d.set(b"V".to_vec(), Object::name("Off"));
+        changed = true;
+    }
+    // The default (`/DV`, what Reset puts back) can't name a state no button has any more.
+    let dv_only_here = w.on_state.as_deref().is_some_and(|on| {
+        d.get(b"DV").map(|v| doc.resolve(v)).and_then(|v| v.as_name().map(<[u8]>::to_vec)).is_some_and(|dv| dv == on.as_bytes())
+            && !f.widgets.iter().enumerate().any(|(i, o)| i != widget && o.on_state.as_deref() == Some(on))
+    });
+    if dv_only_here {
+        d.set(b"DV".to_vec(), Object::name("Off"));
+        changed = true;
+    }
+    if changed {
+        doc.set(f.obj, Object::Dict(d));
+    }
+    Ok(())
+}
+
 fn delete_found_field(doc: &mut Document, f: Field) -> Result<(), FormError> {
     let widgets: std::collections::HashSet<ObjRef> = f.widgets.iter().map(|w| w.obj).collect();
+    drop_from_pages(doc, &widgets)?;
+    detach(doc, f.obj)?;
+    // Out of the calculation order too: a `/CO` entry would keep the field, its value and its
+    // widgets reachable for a full save.
+    drop_from_calculation_order(doc, |r| r == f.obj || widgets.contains(&r))
+}
+
+/// Take the annotations `widgets` off every page's `/Annots`, held directly or by reference.
+fn drop_from_pages(doc: &mut Document, widgets: &std::collections::HashSet<ObjRef>) -> Result<(), FormError> {
     for p in page_refs(doc) {
         let Some(a) = doc.get(p).as_dict().and_then(|d| d.get(b"Annots").cloned()) else { continue };
         let list = doc.resolve(&a).as_array().cloned().unwrap_or_default();
@@ -207,10 +280,7 @@ fn delete_found_field(doc: &mut Document, f: Field) -> Result<(), FormError> {
             }
         }
     }
-    detach(doc, f.obj)?;
-    // Out of the calculation order too: a `/CO` entry would keep the field, its value and its
-    // widgets reachable for a full save.
-    drop_from_calculation_order(doc, |r| r == f.obj || widgets.contains(&r))
+    Ok(())
 }
 
 /// Remove the `/CO` entries `gone` matches, whether the form and the array are held directly or

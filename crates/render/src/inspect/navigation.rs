@@ -2,7 +2,10 @@
 use super::core::inspect;
 use super::core::spend;
 use super::model::{DestView, OutlineItem, PageInfo};
-use super::*;
+use super::{
+    BTreeMap, Dictionary, HashMap, HashSet, Inspector, MAX_LABEL_BYTES, MAX_LABEL_TOTAL_BYTES, MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK,
+    MAX_PREFIX_BYTES, MAX_PREFIX_TOTAL_BYTES, Object, ObjectId, alpha, roman,
+};
 
 /// `DocInfo::outline` holds the first this many bookmarks in outline order. Opening a document
 /// reads only this window; the rest are listed by page through `pdfcraft_organize`.

@@ -8,8 +8,8 @@ use pdfcraft_engine::signature_scan::{DEFAULT_SENSITIVITY, PREVIEW_MAX_SIDE, SCA
 use pdfcraft_engine::{Edit, FillMark, NewAnnotation, PhotoRect, Shape, SignatureImage, SignaturePhoto, Style, Turn};
 use pdfcraft_render::{DocInfo, PageInfo};
 
-use crate::canvas::{DocView, PageXform};
-use crate::page_pointer::PagePointer;
+use crate::canvas::{DocView, PageToolContext, PageXform};
+use crate::page_cursor::Layer;
 use crate::theme::Tokens;
 
 mod scan;
@@ -429,24 +429,21 @@ pub(crate) fn paint_saved(ui: &egui::Ui, rect: egui::Rect, saved: &SavedSig, cac
     }
 }
 
+/// Values that shape how Fill & Sign handles this page's input.
+pub(crate) struct PageInput<'a> {
+    pub(crate) tool: FillTool,
+    pub(crate) text_size: f64,
+    pub(crate) signature: Option<&'a SavedSig>,
+    pub(crate) initials: Option<&'a SavedSig>,
+    pub(crate) preview: &'a mut Option<(SavedSig, egui::TextureHandle)>,
+    pub(crate) author: &'a str,
+    pub(crate) date_text: &'a Result<String, String>,
+}
+
 /// Preview and clicks with a Fill & Sign tool on one page.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn page_input(
-    ui: &egui::Ui,
-    resp: &egui::Response,
-    xf: &PageXform,
-    ptr: &PagePointer,
-    page: usize,
-    info: &DocInfo,
-    tool: FillTool,
-    text_size: f64,
-    view: &mut DocView,
-    signature: Option<&SavedSig>,
-    initials: Option<&SavedSig>,
-    preview: &mut Option<(SavedSig, egui::TextureHandle)>,
-    author: &str,
-    date_text: &Result<String, String>,
-) -> Option<FillAction> {
+pub(crate) fn page_input(cx: PageToolContext<'_>, input: PageInput<'_>, view: &mut DocView) -> Option<FillAction> {
+    let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
+    let PageInput { tool, text_size, signature, initials, preview, author, date_text } = input;
     let pointer = ptr.within(xf.rect)?;
     let p = info.pages.get(page)?;
     let at = to_user(xf, info, page, pointer);
@@ -459,10 +456,10 @@ pub(crate) fn page_input(
         if let Some(rect) = image.rect(p, at, tool == FillTool::Initials) {
             let tex = image_texture(ui, image, preview);
             xf.paint_user_image(ui.painter(), tex, p, rect, i64::from(p.rotation), Color32::WHITE);
-            ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+            view.cursor.claim(Layer::ToolArea, egui::CursorIcon::None);
         }
     } else {
-        ui.ctx().set_cursor_icon(if tool == FillTool::Text { egui::CursorIcon::Text } else { egui::CursorIcon::Crosshair });
+        view.cursor.claim(Layer::ToolArea, if tool == FillTool::Text { egui::CursorIcon::Text } else { egui::CursorIcon::Crosshair });
     }
     if !resp.clicked() {
         return None;

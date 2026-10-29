@@ -5,6 +5,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
 use pdfcraft_render::{RenderConfig, RenderRequest, RequestKind, Tile};
 
 use crate::canvas::{DocView, PageXform};
+use crate::page_cursor::Layer;
 use crate::page_pointer::PagePointer;
 use crate::{PdfCraftApp, QuickTool};
 
@@ -16,7 +17,7 @@ pub type Marquee = (usize, Rect, [f32; 4]);
 pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, ptr: &PagePointer, page: usize, view: &mut DocView) {
     let (pointer, origin) = (ptr.pos, ptr.origin);
     if pointer.is_some_and(|p| xf.rect.contains(p)) {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
     }
     if resp.drag_started()
         && let Some(o) = origin.filter(|o| xf.rect.contains(*o))

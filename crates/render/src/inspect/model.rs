@@ -1,4 +1,4 @@
-use super::*;
+use super::HashMap;
 
 /// What kind of XFA form a document has (`/AcroForm /XFA`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

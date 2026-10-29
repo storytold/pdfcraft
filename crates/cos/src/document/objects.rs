@@ -1,7 +1,7 @@
 use super::reader::find;
 use super::state::{LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, objstm_member, owned_bytes};
 use super::xref::{Revision, XrefEntry};
-use super::*;
+use super::{Arc, CosError, Dict, Document, Lexer, ObjRef, Object, is_whitespace, parse_indirect_shared};
 
 impl Document {
     pub fn bytes(&self) -> &Arc<Vec<u8>> {

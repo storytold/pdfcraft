@@ -3,7 +3,7 @@ use super::dates::{MAX_DAYS, civil_from_days, days_from_civil, format_date, pars
 use super::parser::parse;
 use super::value::{Val, fixed, is_numeric_text, parse_num};
 use super::words::word_num;
-use super::*;
+use super::{Interp, MAX_STRING, R, STRING_TOO_LONG, XfaKind, is_limit};
 
 impl Interp<'_> {
     /// A built-in function: its result is never a string past [`MAX_STRING`], and work on
@@ -22,6 +22,15 @@ impl Interp<'_> {
     fn builtin_inner(&mut self, name: &str, args: &[Expr]) -> R<Val> {
         let lower = name.to_ascii_lowercase();
         let n = |v: f64| Ok(Val::Num(v));
+        if let Some(value) = self.date_builtin(&lower, args)? {
+            return Ok(value);
+        }
+        if let Some(value) = self.financial_builtin(&lower, args)? {
+            return Ok(value);
+        }
+        if let Some(value) = self.unit_builtin(&lower, args)? {
+            return Ok(value);
+        }
         Ok(match lower.as_str() {
             // ── arithmetic
             "abs" => return n(self.arg_num(args, 0)?.abs()),
@@ -271,7 +280,24 @@ impl Interp<'_> {
                 let cleaned: String = s.chars().filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-').collect();
                 parse_num(&cleaned).map_or(Val::Null, Val::Num)
             }
-            // ── dates and times (days since 1900-01-01 = 1; milliseconds since midnight)
+            "ref" => {
+                let Some(e) = args.first() else { return Ok(Val::Null) };
+                self.eval(e)?
+            }
+            "eval" => {
+                let src = self.arg_str(args, 0)?;
+                self.charge((src.len() / 16) as u64)?;
+                let body = parse(&src)?;
+                let (_, v) = self.block(&body)?;
+                v
+            }
+            "get" | "post" | "put" => return Err(format!("{name}: network access is not available to form scripts")),
+            _ => return Err(format!("unknown function {name}")),
+        })
+    }
+
+    fn date_builtin(&mut self, lower: &str, args: &[Expr]) -> R<Option<Val>> {
+        let value = match lower {
             "date" => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -304,7 +330,7 @@ impl Interp<'_> {
                 let days = self.arg_num(args, 0)?;
                 let pic = if args.len() > 1 { self.arg_str(args, 1)? } else { "MMM D, YYYY".into() };
                 if !days.is_finite() || days.abs() >= MAX_DAYS {
-                    return Ok(Val::Null);
+                    return Ok(Some(Val::Null));
                 }
                 let (y, m, d) = civil_from_days(days as i64);
                 Val::Str(format_date(y, m, d, &pic))
@@ -326,7 +352,7 @@ impl Interp<'_> {
             "num2time" | "num2gmtime" => {
                 let ms = self.arg_num(args, 0)?;
                 if !ms.is_finite() || ms < 0.0 {
-                    return Ok(Val::Null);
+                    return Ok(Some(Val::Null));
                 }
                 let s = (ms / 1000.0) as u64;
                 Val::Str(format!("{:02}:{:02}:{:02}", (s / 3600) % 24, (s / 60) % 60, s % 60))
@@ -344,7 +370,13 @@ impl Interp<'_> {
                     parts.next().and_then(|p| p.trim().parse::<f64>().ok()).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(0.0).min(1_000_000.0);
                 Val::Num(((h * 3600 + m * 60) * 1000) as f64 + (sec * 1000.0).round())
             }
-            // ── financial
+            _ => return Ok(None),
+        };
+        Ok(Some(value))
+    }
+
+    fn financial_builtin(&mut self, lower: &str, args: &[Expr]) -> R<Option<Val>> {
+        let value = match lower {
             "fv" => {
                 let (p, r, k) = (self.arg_num(args, 0)?, self.arg_num(args, 1)?, self.arg_num(args, 2)?);
                 Val::Num(if r == 0.0 { p * k } else { p * (((1.0 + r).powf(k) - 1.0) / r) })
@@ -428,7 +460,13 @@ impl Interp<'_> {
                 }
                 Val::Num((lo + hi) / 2.0 * 12.0)
             }
-            // ── units and references
+            _ => return Ok(None),
+        };
+        Ok(Some(value))
+    }
+
+    fn unit_builtin(&mut self, lower: &str, args: &[Expr]) -> R<Option<Val>> {
+        let value = match lower {
             "unittype" => {
                 let s = self.arg_str(args, 0)?;
                 let unit: String = s.trim().chars().skip_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+').collect();
@@ -459,19 +497,8 @@ impl Interp<'_> {
                 let target = if to.trim().is_empty() { unit.clone() } else { to };
                 Val::Num(v / per_in(&unit) * per_in(&target))
             }
-            "ref" => {
-                let Some(e) = args.first() else { return Ok(Val::Null) };
-                self.eval(e)?
-            }
-            "eval" => {
-                let src = self.arg_str(args, 0)?;
-                self.charge((src.len() / 16) as u64)?;
-                let body = parse(&src)?;
-                let (_, v) = self.block(&body)?;
-                v
-            }
-            "get" | "post" | "put" => return Err(format!("{name}: network access is not available to form scripts")),
-            _ => return Err(format!("unknown function {name}")),
-        })
+            _ => return Ok(None),
+        };
+        Ok(Some(value))
     }
 }

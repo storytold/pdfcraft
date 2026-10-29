@@ -190,9 +190,11 @@ const PAGES: &[&str] = &[
     "page.crop",
     "page.boxes",
     "page.number",
+    "page.properties",
     SEP,
     "bookmark.add",
     "bookmark.from_structure",
+    "bookmark.from_text_styles",
 ];
 /// Sign ▸ Fill & Sign, with the short labels of the Fill & Sign toolbar.
 const FILL: &[(&str, &str)] = &[
@@ -254,6 +256,10 @@ fn english(labeled: Labeled<'_>) -> Option<String> {
 }
 
 fn translate(english: &'static str) -> String {
+    // The bundled UI fonts do not all cover the menu's mathematical ellipsis.
+    if english == "\u{22ef}" {
+        return "...".to_owned();
+    }
     tl!(english).to_owned()
 }
 

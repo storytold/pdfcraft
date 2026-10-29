@@ -1,6 +1,9 @@
 use super::common::clean_name;
 use super::items::{Item, Rounded};
-use super::*;
+use super::{
+    Arc, Border, Ctx, Draw, ExclGroup, Face, Font, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Presence, Rect, SomIndices, Stroke,
+    Subform, Value, XfaError, data_path, text,
+};
 
 impl Layouter<'_> {
     // ───────────────────────────────────────────────────────────────────────── drawing

@@ -1216,3 +1216,77 @@ fn a_loop_has_its_own_card_that_opens_the_formula() {
     let draft = h.state().field_props.as_ref().map(|d| (d.field.clone(), d.tab));
     assert_eq!(draft, Some(("a".to_owned(), FieldTab::Calculate)));
 }
+
+/// A radio group `shirt` of three buttons, S, M and L, with L chosen, while preparing the form.
+fn radio_group_harness() -> Harness<'static, PdfCraftApp> {
+    let mut h = harness();
+    for (x, export) in [(20.0, "S"), (60.0, "M"), (100.0, "L")] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
+            page: 0,
+            rect: [x, 300.0, x + 14.0, 314.0],
+            kind: pdfcraft_engine::NewField::Radio { group: Some("shirt".into()), export: export.into() },
+            name: Some("shirt".into()),
+        });
+    }
+    h.state_mut()
+        .apply_edit(pdfcraft_engine::Edit::SetFieldValue { name: "shirt".into(), value: pdfcraft_engine::FieldValue::Radio(Some("L".into())) });
+    assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(3);
+    h
+}
+
+fn buttons(h: &Harness<'static, PdfCraftApp>) -> (Vec<String>, Vec<String>) {
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let f = doc.form.iter().find(|f| f.name == "shirt").expect("the group is still there");
+    (f.widgets.iter().filter_map(|w| w.on_state.clone()).collect(), f.value.clone())
+}
+
+/// #4609: Delete removes the one radio button clicked, not its whole group, as in Acrobat.
+#[test]
+fn deleting_one_radio_button_keeps_the_rest_of_its_group() {
+    let mut h = radio_group_harness();
+    assert_eq!(buttons(&h).0, ["S", "M", "L"]);
+    let p = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == "shirt").unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 1).expect("on screen").center()
+    };
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].prepare.selected, Some(("shirt".into(), 1)), "the middle button is selected");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(buttons(&h), (vec!["S".into(), "L".into()], vec!["L".into()]), "only M is gone; L stays chosen");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Delete field"));
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert_eq!(buttons(&h).0, ["S", "M", "L"]);
+}
+
+/// Two buttons of one group selected together both go, whichever was selected first.
+#[test]
+fn deleting_two_radio_buttons_of_a_group_at_once() {
+    let mut h = radio_group_harness();
+    {
+        let p = &mut h.state_mut().views[0].prepare;
+        p.selected = Some(("shirt".into(), 0));
+        p.also = vec![("shirt".into(), 2)];
+    }
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(buttons(&h), (vec!["M".into()], vec![]), "M is left, and nothing is chosen");
+    // Selecting every button deletes the group.
+    {
+        let p = &mut h.state_mut().views[0].prepare;
+        p.selected = Some(("shirt".into(), 0));
+    }
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert!(!names(&h).iter().any(|n| n == "shirt"));
+}

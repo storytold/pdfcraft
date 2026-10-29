@@ -2,7 +2,7 @@ use super::build::{Build, CONFLICT, CONTROL, NewNodes, STRUCTURED, TOO_MANY, bui
 use super::import::{ImportNode, serialize_nodes};
 use super::values::Want;
 use super::write::MAX_PACKET_WRITE;
-use super::*;
+use super::{DataPath, HashMap, MAX_NODES, XFA_DATA_NS};
 
 /// What a rewrite of the datasets packet does.
 #[derive(Clone, Copy)]

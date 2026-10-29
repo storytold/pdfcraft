@@ -10,9 +10,9 @@ use pdfcraft_engine::form_scripts::{CalcOp, Calculate, DATE_PRESETS, Format, TIM
 use pdfcraft_engine::{BorderStyle, Document, Edit, FieldFont, FieldLook, FieldProps, FormField, FormFieldKind, NewField};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{DocView, PageXform};
+use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::comments;
-use crate::page_pointer::PagePointer;
+use crate::page_cursor::Layer;
 use crate::theme;
 use crate::widgets;
 
@@ -253,19 +253,8 @@ pub(crate) struct Outcome {
 }
 
 /// Pointer input on one page while preparing a form.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn page_input(
-    ui: &egui::Ui,
-    resp: &egui::Response,
-    xf: &PageXform,
-    ptr: &PagePointer,
-    page: usize,
-    info: &DocInfo,
-    form: &[FormField],
-    tool: Option<FieldTool>,
-    allowed: bool,
-    view: &mut DocView,
-) -> Outcome {
+pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], tool: Option<FieldTool>, allowed: bool, view: &mut DocView) -> Outcome {
+    let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
     let mut out = Outcome { consumed: false, properties: false, placed: false, table: None };
     let pointer = ptr.pos;
     let prep = &mut view.prepare;
@@ -352,7 +341,7 @@ pub(crate) fn page_input(
         return out;
     }
     if let Some(tool) = tool {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         if resp.drag_started() || resp.clicked() {
             let origin = ptr.origin.filter(|o| xf.rect.contains(*o)).unwrap_or(p);
             prep.grab = Some((page, Grab::Draw(origin), origin));
@@ -405,9 +394,9 @@ pub(crate) fn page_input(
         f.widgets.iter().enumerate().find(|(_, w)| w.page == Some(page) && screen_rect(xf, info, page, w.rect).contains(p)).map(|(i, _)| (f, i))
     });
     if let Some((_, left, top)) = corner {
-        ui.ctx().set_cursor_icon(if left == top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
+        view.cursor.claim(Layer::Handle, if left == top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
     } else if hit.is_some() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
+        view.cursor.claim(Layer::Field, egui::CursorIcon::Move);
     }
     if resp.drag_started() {
         let origin = ptr.origin.unwrap_or(p);
@@ -556,17 +545,10 @@ pub fn arrange(form: &[FormField], anchor: &(String, usize), others: &[(String, 
 
 /// Fields with their light-blue fill and name tags, the selection with its handles, and the
 /// rectangle being drawn or dragged to the pages' `pointer`.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn paint_page(
-    ui: &egui::Ui,
-    painter: &egui::Painter,
-    xf: &PageXform,
-    page: usize,
-    info: &DocInfo,
-    form: &[FormField],
-    view: &DocView,
-    pointer: Option<Pos2>,
-) {
+pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], view: &DocView) {
+    let PageToolContext { ui, xf, page, info, ptr, .. } = cx;
+    let painter = ui.painter();
+    let pointer = ptr.pos;
     let prep = &view.prepare;
     let grab = prep.grab.filter(|(gp, ..)| *gp == page);
     let zoom = xf.zoom().clamp(0.5, 3.0);
@@ -612,20 +594,24 @@ pub(crate) fn paint_page(
 }
 
 /// Delete the selected field and every field selected with it (#95), as one undoable step, and
-/// clear the selection.
+/// clear the selection. Each selection is one widget, so selecting one radio button of a group,
+/// or one copy of a duplicated field, deletes only that one, as in Acrobat (#4609); a field's
+/// last widget takes the field with it.
 pub(crate) fn delete_selected(view: &mut DocView) -> Option<Edit> {
-    let (first, _) = view.prepare.selected.take()?;
-    let mut names = vec![first];
-    for (name, _) in std::mem::take(&mut view.prepare.also) {
-        if !names.contains(&name) {
-            names.push(name);
+    let first = view.prepare.selected.take()?;
+    let mut picked = vec![first];
+    for w in std::mem::take(&mut view.prepare.also) {
+        if !picked.contains(&w) {
+            picked.push(w);
         }
     }
-    if names.len() == 1 {
-        return names.pop().map(|name| Edit::DeleteField { name });
+    // A field's later widgets first, so the indices of the ones still to go don't shift.
+    picked.sort_by_key(|w| std::cmp::Reverse(w.1));
+    if picked.len() == 1 {
+        return picked.pop().map(|(name, widget)| Edit::DeleteWidget { name, widget });
     }
-    let label = format!("Delete {} fields", names.len());
-    Some(Edit::Batch { label, edits: names.into_iter().map(|name| Edit::DeleteField { name }).collect() })
+    let label = format!("Delete {} fields", picked.len());
+    Some(Edit::Batch { label, edits: picked.into_iter().map(|(name, widget)| Edit::DeleteWidget { name, widget }).collect() })
 }
 
 /// The arrow keys move the selected field a point, Shift and an arrow ten points, as in Acrobat,

@@ -95,6 +95,44 @@ fn line(chars: &str, x: f32, y: f32, w: f32, em: f32, direction: [f32; 2]) -> Pa
     PageText { glyphs, line_of: vec![0; n], space_before: vec![false; n] }
 }
 
+fn annotation(subtype: &str, contents: Option<&str>, fill_sign: bool) -> Annotation {
+    Annotation {
+        page: 0,
+        subtype: subtype.into(),
+        author: None,
+        contents: contents.map(str::to_string),
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent: None,
+        grouped: false,
+        rect: [0.0; 4],
+        color: None,
+        index: 0,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: None,
+        fill_sign,
+        no_rotate: false,
+        points: Vec::new(),
+    }
+}
+
+#[test]
+fn the_hover_tip_skips_fill_and_sign_marks_replies_and_bare_highlights_when_asked() {
+    let prefs = CommentPrefs::default();
+    assert_eq!(hover_tip(&annotation("FreeText", Some("Hello"), false), &prefs).as_deref(), Some("FreeText\nHello"));
+    assert_eq!(hover_tip(&annotation("FreeText", Some("Hello"), true), &prefs), None);
+    let reply = Annotation { in_reply_to: Some("1 0 R".into()), parent: Some((0, 1)), ..annotation("Text", Some("Agreed"), false) };
+    assert_eq!(hover_tip(&reply, &prefs), None);
+    let bare = Annotation { author: Some("Ana".into()), ..annotation("Highlight", None, false) };
+    assert_eq!(hover_tip(&bare, &prefs).as_deref(), Some("Ana"));
+    let hide = CommentPrefs { hide_empty_highlight_hover: true, ..CommentPrefs::default() };
+    assert_eq!(hover_tip(&bare, &hide), None);
+    assert_eq!(hover_tip(&annotation("Highlight", Some("Check this"), false), &hide).as_deref(), Some("Highlight\nCheck this"));
+}
+
 fn near(a: Option<([f32; 2], f32)>, b: ([f32; 2], f32)) -> bool {
     a.is_some_and(|([x, y], s)| (x - b.0[0]).abs() < 1e-3 && (y - b.0[1]).abs() < 1e-3 && (s - b.1).abs() < 1e-3)
 }

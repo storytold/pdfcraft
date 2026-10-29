@@ -1,7 +1,7 @@
 use super::globals::install;
 use super::host::{Shared, XHost};
 use super::model::{XfaDoc, XfaEvent, XfaNode, XfaOutcome, clip_result};
-use super::*;
+use super::{Attribute, Context, JsResult, Limits, RefCell, Source, js_string, refuse, s, text};
 
 /// Run `script` for `event` on the form `root` (the root subform), from node `event.target`.
 pub fn run_xfa(script: &str, event: &XfaEvent, doc: &XfaDoc, root: &XfaNode, limits: Limits) -> XfaOutcome {

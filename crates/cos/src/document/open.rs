@@ -1,7 +1,7 @@
 use super::reader::{find, generated_id};
 use super::state::Credentials;
 use super::xref::XrefIndex;
-use super::*;
+use super::{Arc, BTreeMap, CosError, Dict, Document, ObjRef, Object};
 
 impl Document {
     /// A new document with an empty page tree (for split / extract / combine). It has no

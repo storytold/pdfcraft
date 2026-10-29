@@ -5,6 +5,7 @@
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Shape, Stroke, vec2};
 
 use crate::canvas::{DocView, PageXform, ViewAction};
+use crate::page_cursor::Layer;
 use crate::page_pointer::PagePointer;
 use crate::theme::Tokens;
 pub use pdfcraft_engine::camera_clean::Look;
@@ -59,11 +60,11 @@ fn screen(xf: &PageXform, c: [f32; 2]) -> Pos2 {
 }
 
 /// Corner dragging on one page. A press on a page without the quadrilateral moves it there.
-pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, ptr: &PagePointer, page: usize, view: &mut DocView, allowed: bool) {
+pub(crate) fn page_input(resp: &egui::Response, xf: &PageXform, ptr: &PagePointer, page: usize, view: &mut DocView, allowed: bool) {
     let (pointer, origin) = (ptr.pos, ptr.origin);
     if !allowed {
         if pointer.is_some_and(|p| xf.rect.contains(p)) {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
+            view.cursor.claim(Layer::ToolArea, egui::CursorIcon::NotAllowed);
         }
         return;
     }
@@ -93,7 +94,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, p
     let Some(q) = view.camera.as_mut().filter(|q| q.page == page) else { return };
     let near = pointer.is_some_and(|p| q.corners.iter().any(|&c| screen(xf, c).distance(p) <= GRAB));
     if let Some(i) = q.grab {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        view.cursor.claim(Layer::Drag, egui::CursorIcon::Grabbing);
         if let Some(p) = pointer {
             let (x, y) = xf.screen_to_view(p);
             if let Some(c) = q.corners.get_mut(i) {
@@ -104,7 +105,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, p
             q.grab = None;
         }
     } else if near {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        view.cursor.claim(Layer::Handle, egui::CursorIcon::Grab);
     }
 }
 

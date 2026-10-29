@@ -1,7 +1,7 @@
 use super::error::{Result, ToolError, failed};
 use super::json::{Args, nest_rows, security, summary};
 use super::paths::{child, read_input, write_atomic};
-use super::*;
+use super::{Arc, Automation, BlockKey, DocId, Document, Edit, Path, PathBuf, TextBlock, Value, comments, file_access, json};
 
 /// How far a watermark may be moved from the page centre, in points (a page is at most 14,400).
 const WATERMARK_MAX_OFFSET: f64 = 20_000.0;

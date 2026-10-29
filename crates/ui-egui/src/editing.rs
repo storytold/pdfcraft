@@ -106,49 +106,8 @@ impl PdfCraftApp {
                     && doc.xfa.is_none()
                     && is_form_edit(&edit)
                 {
-                    let mut changed_pages = std::collections::BTreeSet::new();
-                    for f in doc.form.iter() {
-                        match form_before.iter().find(|old| old.name == f.name) {
-                            Some(old) => {
-                                if old != f {
-                                    for w in &f.widgets {
-                                        if let Some(p) = w.page {
-                                            changed_pages.insert(p);
-                                        }
-                                    }
-                                    for w in &old.widgets {
-                                        if let Some(p) = w.page {
-                                            changed_pages.insert(p);
-                                        }
-                                    }
-                                    if old.value != f.value {
-                                        for w in &f.widgets {
-                                            if let Some(p) = w.page {
-                                                view.forms.unbaked.insert((f.name.clone(), p));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            None => {
-                                for w in &f.widgets {
-                                    if let Some(p) = w.page {
-                                        changed_pages.insert(p);
-                                        view.forms.unbaked.insert((f.name.clone(), p));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    for old in form_before.iter() {
-                        if !doc.form.iter().any(|f| f.name == old.name) {
-                            for w in &old.widgets {
-                                if let Some(p) = w.page {
-                                    changed_pages.insert(p);
-                                }
-                            }
-                        }
-                    }
+                    let (changed_pages, unbaked) = form_edit_pages(&form_before, &doc.form);
+                    view.forms.unbaked.extend(unbaked);
                     for page in changed_pages {
                         view.page_changed(page);
                     }
@@ -745,6 +704,7 @@ fn is_form_edit(edit: &Edit) -> bool {
             | Edit::ResetForm { .. }
             | Edit::AddField { .. }
             | Edit::DeleteField { .. }
+            | Edit::DeleteWidget { .. }
             | Edit::DuplicateField { .. }
             | Edit::SetFieldProps { .. }
             | Edit::SetFieldImage { .. }
@@ -806,6 +766,11 @@ impl PdfCraftApp {
             A::FromStructure => {
                 self.right = Some(crate::RightPanel::Bookmarks);
                 Edit::BookmarksFromStructure
+            }
+            // A dialog chooses the styles; it makes the edit.
+            A::FromTextStyles => {
+                self.open_text_style_bookmarks(id);
+                return;
             }
         };
         self.apply_edit(edit);
