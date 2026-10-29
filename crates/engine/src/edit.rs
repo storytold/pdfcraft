@@ -363,7 +363,7 @@ pub enum Edit {
     /// Standards ▸ Save as PDF/A: fix what can be fixed for `level` (metadata, output intent,
     /// forbidden actions, annotation flags, …).
     ConvertPdfA {
-        level: pdfcraft_preflight::Level,
+        level: crate::pdfa::Level,
     },
     /// Remove what identifies the document as meeting `standard` (PDF/A or PDF/X).
     RemoveStandardId {
@@ -384,7 +384,7 @@ pub enum Edit {
     /// image (from [`ocr::OcrJob::run`](crate::ocr::OcrJob::run)).
     AddOcrText {
         page: usize,
-        words: Vec<pdfcraft_ocr::PlacedWord>,
+        words: Vec<crate::ocr::PlacedWord>,
     },
     /// Edit a PDF ▸ Edit text: replace the text of line `line` (from `Document::text_lines`) on
     /// `page`, in its own font when it can show it, else in Helvetica.

@@ -112,6 +112,7 @@ const ALREADY_ON_PAGE: f32 = 0.5;
 
 /// The long side of an A4 sheet in points (a letter page's, 792, is shorter): "Downsample to"
 /// is a resolution on paper this size or smaller.
+#[cfg(feature = "ocr")]
 const SHEET: f32 = 842.0;
 
 /// How much of `word` the `text` boxes cover, from 0 to 1. Boxes are `[x0, y0, x1, y1]` in page
@@ -297,7 +298,7 @@ impl Session {
 
     #[cfg(not(feature = "ocr"))]
     pub fn apply_ocr(&mut self, _id: DocId, _found: &[OcrPage]) -> Result<usize, EditError> {
-        Err(EditError::Unsupported("ocr"))
+        Err(EditError::Invalid("ocr is disabled in this build".into()))
     }
 
     /// Recognise text on `pages` and add it, in one call (the CLI and agents use this).

@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 use super::{
     AddedContent, Arc, Edit, EditError, FieldValue, ImageEdit, NewAnnotation, Shape, a11y, copy_image, decode_data_file, embed_image, fit_picture,
     image_content_type, is_xfa_data_file, js, mark_source, measure, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
@@ -160,7 +161,10 @@ pub(crate) struct EditCtx {
     pub(crate) js: Option<js::JsRunner>,
     /// A laid-out XFA form's template (`None`: not an XFA form, or JavaScript is off) and what
     /// its scripts produced.
+    #[cfg(feature = "xfa")]
     pub(crate) xfa: Option<Arc<pdfcraft_xfa::model::Template>>,
+    #[cfg(not(feature = "xfa"))]
+    pub(crate) xfa: Option<Arc<crate::xfa::Template>>,
     pub(crate) xfa_out: js::JsOutput,
     /// The datasets stream this edit wrote (later writes in the edit replace it in place).
     pub(crate) xfa_datasets: Option<pdfcraft_cos::ObjRef>,
@@ -440,27 +444,33 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             // laid-out form shows it from there: so only pictures the layout can show, and only
             // for image fields (a laid-out one carries its SOM path; a static form's field name
             // is its path).
+            #[cfg(feature = "xfa")]
             let is_xfa = pdfcraft_xfa::read_packets(doc).ok().flatten().is_some();
+            #[cfg(not(feature = "xfa"))]
+            let is_xfa = false;
             let image_field = is_xfa
                 && pdfcraft_forms::fields(doc).iter().any(|f| f.name == *name && f.button == Some(pdfcraft_forms::af::ButtonAction::ImportIcon));
             if image_field {
-                let Some(content_type) = image_content_type(image) else {
-                    return Err(EditError::Invalid(format!("{name}: an XFA form keeps a PNG, JPEG, GIF, BMP or TIFF picture; choose one of those")));
-                };
-                pdfcraft_forms::set_button_icon(doc, name, img, px)?;
-                let som = pdfcraft_xfa::fields_by_som(doc).into_iter().find(|(_, n)| n == name).map(|(s, _)| s).unwrap_or_else(|| name.clone());
-                let path = match cx.xfa.as_deref() {
-                    Some(tpl) => pdfcraft_xfa::data_path(tpl, &som),
-                    None => pdfcraft_xfa::som_to_path(&som),
-                };
-                let r =
-                    pdfcraft_xfa::write_data_image(doc, &path, content_type, image, cx.xfa_datasets).map_err(|e| EditError::Write(e.to_string()))?;
-                if !r.written && r.warnings.is_empty() {
-                    return Err(EditError::Write(format!("{name}: the picture could not be written into the form's data")));
+                #[cfg(feature = "xfa")]
+                {
+                    let Some(content_type) = image_content_type(image) else {
+                        return Err(EditError::Invalid(format!("{name}: an XFA form keeps a PNG, JPEG, GIF, BMP or TIFF picture; choose one of those")));
+                    };
+                    pdfcraft_forms::set_button_icon(doc, name, img, px)?;
+                    let som = pdfcraft_xfa::fields_by_som(doc).into_iter().find(|(_, n)| n == name).map(|(s, _)| s).unwrap_or_else(|| name.clone());
+                    let path = match cx.xfa.as_deref() {
+                        Some(tpl) => pdfcraft_xfa::data_path(tpl, &som),
+                        None => pdfcraft_xfa::som_to_path(&som),
+                    };
+                    let r =
+                        pdfcraft_xfa::write_data_image(doc, &path, content_type, image, cx.xfa_datasets).map_err(|e| EditError::Write(e.to_string()))?;
+                    if !r.written && r.warnings.is_empty() {
+                        return Err(EditError::Write(format!("{name}: the picture could not be written into the form's data")));
+                    }
+                    cx.xfa_datasets = r.stream.or(cx.xfa_datasets);
+                    cx.xfa_out.errors.extend(r.warnings);
+                    xfa_after_data_change(doc, cx, false)?;
                 }
-                cx.xfa_datasets = r.stream.or(cx.xfa_datasets);
-                cx.xfa_out.errors.extend(r.warnings);
-                xfa_after_data_change(doc, cx, false)?;
             } else {
                 pdfcraft_forms::set_button_icon(doc, name, img, px)?;
             }
@@ -519,12 +529,24 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             };
         }
         Edit::ConvertPdfA { level } => {
+            #[cfg(feature = "preflight")]
             pdfcraft_preflight::convert(doc, *level).map_err(|e| EditError::Invalid(e.to_string()))?;
+            #[cfg(not(feature = "preflight"))]
+            {
+                let _ = (doc, level);
+                return Err(EditError::Invalid("PDF/A preflight is disabled in this build".into()));
+            }
         }
         Edit::RemoveStandardId { standard } => pdfcraft_organize::remove_standard_id(doc, *standard)?,
         Edit::SetDocumentScript { name, script } => pdfcraft_forms::set_document_script(doc, name, script.as_deref())?,
         Edit::AddOcrText { page, words } => {
+            #[cfg(feature = "ocr")]
             pdfcraft_edit::stamp(doc, *page, "OCR", pdfcraft_ocr::text_layer(words))?;
+            #[cfg(not(feature = "ocr"))]
+            {
+                let _ = (page, words);
+                return Err(EditError::Invalid("OCR is disabled in this build".into()));
+            }
         }
         Edit::EditPageImage { page, index, change } => {
             let img = pdfcraft_edit::page_images(doc, *page)?
@@ -675,8 +697,12 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::ImportData { name, bytes } => {
             // An XFA form takes XFA data files (XDP, datasets, or a data document) as its data;
             // XFDF, FDF, Acrobat's XML and tables go the usual way.
+            #[cfg(feature = "xfa")]
             let text = (pdfcraft_xfa::read_packets(doc).ok().flatten().is_some()).then(|| decode_data_file(bytes)).flatten();
+            #[cfg(not(feature = "xfa"))]
+            let text: Option<Result<String, String>> = None;
             match text {
+                #[cfg(feature = "xfa")]
                 Some(Ok(text)) if is_xfa_data_file(&text) => {
                     let expect_root = cx.xfa.as_ref().and_then(|t| t.root.common.name.clone());
                     let r = pdfcraft_xfa::import_data(doc, &text, expect_root.as_deref(), cx.xfa_datasets)
@@ -714,9 +740,11 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             // An XFA form's fields baked into the pages: the XFA goes too, or Adobe's viewers
             // would lay the form out again from its template over the baked pages. A dynamic
             // form that was never laid out keeps its XFA: without it only placeholders remain.
+            #[cfg(feature = "xfa")]
             let shape = (*fields).then(|| pdfcraft_xfa::xfa_shape(doc)).flatten();
             let n = pdfcraft_model::pages(doc).len();
             pdfcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), *comments, *fields)?;
+            #[cfg(feature = "xfa")]
             match shape {
                 Some(shape) if shape.strippable() => strip_xfa(doc, cx)?,
                 Some(_) => cx.xfa_removed.push("The XFA was kept: this dynamic form was not laid out, so its fields were not baked in".into()),
@@ -724,13 +752,20 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
         }
         Edit::XfaToStatic => {
-            let Some(shape) = pdfcraft_xfa::xfa_shape(doc) else {
-                return Err(EditError::Invalid("this document is not an XFA form".into()));
-            };
-            if !shape.strippable() {
-                return Err(EditError::Invalid("this dynamic XFA form was not laid out, so there is no static form to keep".into()));
+            #[cfg(feature = "xfa")]
+            {
+                let Some(shape) = pdfcraft_xfa::xfa_shape(doc) else {
+                    return Err(EditError::Invalid("this document is not an XFA form".into()));
+                };
+                if !shape.strippable() {
+                    return Err(EditError::Invalid("this dynamic XFA form was not laid out, so there is no static form to keep".into()));
+                }
+                strip_xfa(doc, cx)?;
             }
-            strip_xfa(doc, cx)?;
+            #[cfg(not(feature = "xfa"))]
+            {
+                return Err(EditError::Invalid("XFA support is not enabled in this build".into()));
+            }
         }
         Edit::FlattenFillSign => {
             let n = pdfcraft_model::pages(doc).len();

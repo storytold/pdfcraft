@@ -6,6 +6,7 @@
 //! Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript is [`Session::set_javascript`]; with it
 //! off, scripts don't run and AF calls keep working natively.
 
+#[allow(unused_imports)]
 use pdfcraft_forms::{Field, FieldChange, FieldEvent, FieldKind, FieldProps, ScriptResult, Scripts};
 #[cfg(feature = "js")]
 pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Panel, Request};
@@ -37,6 +38,18 @@ pub enum MessageIcon {
 }
 
 #[cfg(not(feature = "js"))]
+impl MessageIcon {
+    pub fn name(self) -> &'static str {
+        match self {
+            MessageIcon::Error => "error",
+            MessageIcon::Warning => "warning",
+            MessageIcon::Question => "question",
+            MessageIcon::Status => "status",
+        }
+    }
+}
+
+#[cfg(not(feature = "js"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MessageButtons {
     #[default]
@@ -47,6 +60,18 @@ pub enum MessageButtons {
 }
 
 #[cfg(not(feature = "js"))]
+impl MessageButtons {
+    pub fn name(self) -> &'static str {
+        match self {
+            MessageButtons::Ok => "ok",
+            MessageButtons::OkCancel => "ok_cancel",
+            MessageButtons::YesNo => "yes_no",
+            MessageButtons::YesNoCancel => "yes_no_cancel",
+        }
+    }
+}
+
+#[cfg(not(feature = "js"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panel {
     Bookmarks,
@@ -54,6 +79,19 @@ pub enum Panel {
     Attachments,
     Signatures,
     Layers,
+}
+
+#[cfg(not(feature = "js"))]
+impl Panel {
+    pub fn id(self) -> &'static str {
+        match self {
+            Panel::Bookmarks => "bookmarks",
+            Panel::Pages => "pages",
+            Panel::Attachments => "attachments",
+            Panel::Signatures => "signatures",
+            Panel::Layers => "layers",
+        }
+    }
 }
 
 #[cfg(not(feature = "js"))]
@@ -110,6 +148,7 @@ impl JsOutput {
     /// Adds what a field's own script produced: its alerts, console lines, errors and requests,
     /// except a request to show a side panel or open Save As, which is noted on the console
     /// and dropped.
+    #[allow(dead_code)]
     fn absorb(&mut self, o: &Outcome) {
         self.alerts.extend(o.alerts.iter().cloned());
         self.console.extend(o.console.iter().cloned());
@@ -190,6 +229,7 @@ pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field) -> pdfcraft_js::Fiel
     field_state_with_display(f, display(doc, f))
 }
 
+#[cfg(feature = "js")]
 fn field_state_with_display(f: &Field, display: i32) -> pdfcraft_js::FieldState {
     let mut s = pdfcraft_js::FieldState::new(f.name.clone(), kind(f.kind), f.value.clone());
     s.default = f.default.clone();
@@ -428,7 +468,7 @@ impl Session {
 
     #[cfg(not(feature = "js"))]
     pub fn run_javascript(&mut self, _id: DocId, _script: &str, _target: Option<&str>) -> Result<Outcome, EditError> {
-        Err(EditError::Unsupported("js"))
+        Err(EditError::Invalid("JavaScript is disabled in this build".into()))
     }
 }
 

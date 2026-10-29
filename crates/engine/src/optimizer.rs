@@ -89,6 +89,7 @@ impl OptimizeJob {
         let OptimizeJob { mut cos, settings, discard, opts } = self;
         // Like every file written, without the values of Password-flag fields (#3926, #3944).
         pdfcraft_forms::clear_password_values(&mut cos).map_err(|e| EditError::Write(e.to_string()))?;
+        #[cfg(feature = "xfa")]
         pdfcraft_xfa::clear_password_values(&mut cos).map_err(|e| EditError::Write(e.to_string()))?;
         let mut step = |stage| if progress(stage) { Ok(()) } else { Err(EditError::Cancelled) };
         step(OptimizeStage::Discarding)?;

@@ -103,8 +103,13 @@ impl Session {
         guard(|| match format {
             DataFormat::Xfdf => Ok(pdfcraft_xfdf::export_xfdf(&cos, comments, fields, &doc.name).into_bytes()),
             DataFormat::Fdf => pdfcraft_xfdf::export_fdf(&cos, comments, fields, &doc.name).map_err(|e| e.to_string()),
+            #[cfg(feature = "xfa")]
             DataFormat::Xml | DataFormat::Xdp if xfa => {
                 pdfcraft_xfa::export_data(&cos, format == DataFormat::Xdp, &doc.name).map(String::into_bytes).map_err(|e| e.to_string())
+            }
+            #[cfg(not(feature = "xfa"))]
+            DataFormat::Xml | DataFormat::Xdp if xfa => {
+                Err("XFA export is not supported in this build".into())
             }
             other => Ok(pdfcraft_xfdf::export_data(&cos, other).into_bytes()),
         })
