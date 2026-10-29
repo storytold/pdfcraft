@@ -123,6 +123,33 @@ fn removing_hidden_text_keeps_the_alt_text_of_a_shading() {
     assert!(!c.contains("SECRET") && c.contains("(chart)"), "{c}");
 }
 
+/// #5255: a font whose ascent and descent span more than one em (Monaco: 1000 and −250), with
+/// lines set solid. A mark made from a text selection covers the selected line's em box, which
+/// the line below's glyph box reached into by 2 pt: marking "1234" also removed "CRET" below it.
+#[test]
+fn a_mark_on_one_line_leaves_the_line_below_when_lines_are_set_solid() {
+    let tall = FONT.replace("95 0 R", "6 0 R").replace("/Ascent 800 /Descent -200", "/Ascent 1000 /Descent -250");
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        stream("", b"BT /F1 10 Tf 10 120 Td (ABOVE123) Tj 0 -10 Td (AB1234CD) Tj 0 -10 Td (SECRET) Tj ET"),
+        tall.into_bytes(),
+        widths(),
+    ]);
+    // "1234" on the baseline at y 110 spans x 20–40; its em box is y 108–118.
+    mark(&mut doc, 0, &[[20.0, 108.0, 40.0, 118.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.glyphs, 4, "{r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains("1234"), "{c}");
+    assert!(c.contains("(SECRET) Tj") && c.contains("(ABOVE123) Tj"), "the lines above and below are whole: {c}");
+    // A rectangle that reaches into the line below still takes the glyphs it covers.
+    mark(&mut doc, 0, &[[20.0, 98.0, 40.0, 108.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 4);
+    assert!(!content(&doc, 0).contains("SECRET"));
+}
+
 #[test]
 fn glyphs_under_a_mark_go_and_the_rest_stays_put() {
     // "AB1234CD" from x = 10 at 10 pt: each glyph 5 pt wide; 1234 spans x 20–40.
