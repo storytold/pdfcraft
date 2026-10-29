@@ -2,7 +2,7 @@
 
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
 
 const PAGES: &[u8] = b"%PDF-1.7
@@ -97,6 +97,27 @@ fn new_rename_reorder_indent_delete_and_undo() {
     h.run_steps(3);
     assert_eq!(outline(&h).len(), 2, "delete is undoable");
     assert!(h.state().session.get(h.state().views[0].id).unwrap().dirty);
+}
+
+/// The bookmark of the page on screen is marked (and says so to a screen reader); a page
+/// without one marks the bookmark before it, and a bookmark clicked is marked with its page.
+#[test]
+fn the_bookmark_of_the_page_on_screen_is_marked() {
+    let mut h = harness();
+    add(&mut h, "Intro");
+    h.state_mut().set_option("page", "3").unwrap();
+    h.run_steps(3);
+    add(&mut h, "Results");
+    let marked =
+        |h: &Harness<'static, PdfCraftApp>, title: &str| h.get_by_label(title).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True);
+    assert!(marked(&h, "Results") && !marked(&h, "Intro"));
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(3);
+    assert!(marked(&h, "Intro") && !marked(&h, "Results"), "page 2 has none: the one before it");
+    h.get_by_label("Results").click();
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 2);
+    assert!(marked(&h, "Results") && !marked(&h, "Intro"));
 }
 
 /// The side panel's width as egui keeps it from one frame to the next.
