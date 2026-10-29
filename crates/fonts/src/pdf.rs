@@ -250,8 +250,9 @@ enum Glyphs {
 
 impl GlyphInk {
     /// The ink reader for `font` (a font dictionary whose [`Metrics`] are `metrics`), or `None`
-    /// when it has no program this can read.
-    pub fn from_dict(doc: &Document, font: &Dict, metrics: &Metrics) -> Option<Self> {
+    /// when it has no program this can read. Its program and `/CIDToGIDMap` are decoded from
+    /// `budget`, so a page that names many large fonts can't multiply the work.
+    pub fn from_dict(doc: &Document, font: &Dict, metrics: &Metrics, budget: &mut DecodeBudget) -> Option<Self> {
         use skrifa::instance::{LocationRef, Size};
         use skrifa::{GlyphId, MetadataProvider as _, raw::TableProvider as _};
         let descendant = dict(doc, font.get(b"DescendantFonts").and_then(|o| doc.resolve(o).as_array().and_then(|a| a.first()).cloned()).as_ref());
@@ -262,7 +263,7 @@ impl GlyphInk {
             let Some(object) = descriptor.get(key) else { continue };
             let object = doc.resolve(object);
             let Object::Stream(stream) = object.as_ref() else { continue };
-            let Ok(program) = stream.decoded_within(MAX_SFNT) else { continue };
+            let Ok(program) = budget.decode_within(stream, MAX_SFNT) else { continue };
             let Ok(face) = skrifa::FontRef::from_index(&program, 0) else { continue };
             let upem = f64::from(face.metrics(Size::unscaled(), LocationRef::default()).units_per_em);
             if upem == 0.0 {
@@ -272,7 +273,7 @@ impl GlyphInk {
                 match descendant.as_ref()?.get(b"CIDToGIDMap").map(|o| doc.resolve(o)).as_deref() {
                     None | Some(Object::Name(_)) => Glyphs::Identity,
                     Some(Object::Stream(map)) => {
-                        Glyphs::Map(map.decoded_within(1 << 17).ok()?.as_chunks::<2>().0.iter().map(|g| u16::from_be_bytes(*g)).collect())
+                        Glyphs::Map(budget.decode_within(map, 1 << 17).ok()?.as_chunks::<2>().0.iter().map(|g| u16::from_be_bytes(*g)).collect())
                     }
                     Some(_) => return None,
                 }
@@ -1674,7 +1675,7 @@ mod encoding_tests {
         let mut doc = Document::new_empty();
         let font = inter_font(&mut doc);
         let metrics = Metrics::from_dict(&doc, &font);
-        let ink = GlyphInk::from_dict(&doc, &font, &metrics).expect("Inter's program is readable");
+        let ink = GlyphInk::from_dict(&doc, &font, &metrics, &mut DecodeBudget::page()).expect("Inter's program is readable");
         let Ink::Box(e) = ink.ink(&metrics, u32::from(b'E')) else { panic!("E draws") };
         let Ink::Box(e_acute) = ink.ink(&metrics, 0xC9) else { panic!("É (WinAnsi 0xC9) draws") };
         // Capitals stop below 0.8 em; the accent on É rises above it, past the one-em box.
@@ -1685,6 +1686,67 @@ mod encoding_tests {
         assert_eq!(ink.ink(&metrics, 0x81), Ink::Unknown, "WinAnsi leaves 0x81 unassigned");
     }
 
+    /// Inter as the program of a Type 0 font (Identity-H, so code = CID), its CIDs mapped to
+    /// glyphs by `cid_to_gid`: a name (`/Identity`) or a stream object.
+    fn inter_type0(doc: &mut Document, cid_to_gid: Object) -> Dict {
+        let program = doc.add(pdfcraft_cos::Stream::flate(Dict::new(), crate::INTER_REGULAR));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+        let descriptor = doc.add(descriptor);
+        let mut cid_font = Dict::new();
+        cid_font.set(b"Type".to_vec(), Object::name("Font"));
+        cid_font.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+        cid_font.set(b"FontDescriptor".to_vec(), Object::Ref(descriptor));
+        cid_font.set(b"CIDToGIDMap".to_vec(), cid_to_gid);
+        let cid_font = doc.add(cid_font);
+        let mut font = Dict::new();
+        font.set(b"Type".to_vec(), Object::name("Font"));
+        font.set(b"Subtype".to_vec(), Object::name("Type0"));
+        font.set(b"Encoding".to_vec(), Object::name("Identity-H"));
+        font.set(b"DescendantFonts".to_vec(), Object::Array(vec![Object::Ref(cid_font)]));
+        font
+    }
+
+    #[test]
+    fn type0_glyph_ink_goes_through_the_cid_to_gid_map() {
+        use skrifa::MetadataProvider as _;
+        let gid = skrifa::FontRef::new(crate::INTER_REGULAR).expect("Inter parses").charmap().map('E').expect("Inter has E").to_u32();
+        let mut doc = Document::new_empty();
+        let simple = inter_font(&mut doc);
+        let simple_metrics = Metrics::from_dict(&doc, &simple);
+        let e =
+            GlyphInk::from_dict(&doc, &simple, &simple_metrics, &mut DecodeBudget::page()).expect("readable").ink(&simple_metrics, u32::from(b'E'));
+        assert!(matches!(e, Ink::Box(_)), "{e:?}");
+
+        // /Identity: CID = glyph id.
+        let font = inter_type0(&mut doc, Object::name("Identity"));
+        let metrics = Metrics::from_dict(&doc, &font);
+        let ink = GlyphInk::from_dict(&doc, &font, &metrics, &mut DecodeBudget::page()).expect("readable");
+        assert_eq!(ink.ink(&metrics, gid), e);
+
+        // A /CIDToGIDMap stream: CID 1 is E; CID 5 is past the map's end.
+        let hi = u8::try_from(gid >> 8).expect("glyph id fits two bytes");
+        let lo = u8::try_from(gid & 0xFF).expect("low byte");
+        let map = doc.add(pdfcraft_cos::Stream::flate(Dict::new(), &[0, 0, hi, lo]));
+        let font = inter_type0(&mut doc, Object::Ref(map));
+        let metrics = Metrics::from_dict(&doc, &font);
+        let ink = GlyphInk::from_dict(&doc, &font, &metrics, &mut DecodeBudget::page()).expect("readable");
+        assert_eq!(ink.ink(&metrics, 1), e);
+        assert_eq!(ink.ink(&metrics, 5), Ink::Unknown);
+        assert_eq!(ink.ink(&metrics, 0), Ink::Unknown, "CID 0 maps to .notdef");
+    }
+
+    #[test]
+    fn glyph_ink_decodes_from_the_budget() {
+        let mut doc = Document::new_empty();
+        let font = inter_font(&mut doc);
+        let metrics = Metrics::from_dict(&doc, &font);
+        let mut spent = DecodeBudget::new(1 << 24, 8);
+        assert!(GlyphInk::from_dict(&doc, &font, &metrics, &mut spent).is_some());
+        assert!(spent.remaining() < 1 << 24, "the program was charged");
+        assert!(GlyphInk::from_dict(&doc, &font, &metrics, &mut DecodeBudget::new(16, 8)).is_none(), "no allowance, no program read");
+    }
+
     #[test]
     fn fonts_without_a_readable_program_have_no_glyph_ink() {
         let mut doc = Document::new_empty();
@@ -1693,6 +1755,6 @@ mod encoding_tests {
         let descriptor = doc.add(Dict::new());
         font.set(b"FontDescriptor".to_vec(), Object::Ref(descriptor));
         let metrics = Metrics::from_dict(&doc, &font);
-        assert!(GlyphInk::from_dict(&doc, &font, &metrics).is_none());
+        assert!(GlyphInk::from_dict(&doc, &font, &metrics, &mut DecodeBudget::page()).is_none());
     }
 }

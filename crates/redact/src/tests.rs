@@ -118,10 +118,54 @@ fn a_mark_over_only_an_accent_removes_the_glyph_when_its_outline_is_known() {
     let font = font.get(b"Font").and_then(|f| doc.resolve(f).as_dict().cloned()).unwrap();
     let font = doc.resolve(font.get(b"F1").unwrap()).as_dict().cloned().unwrap();
     let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, &font);
-    let ink = pdfcraft_fonts::pdf::GlyphInk::from_dict(&doc, &font, &metrics).unwrap();
+    let ink = pdfcraft_fonts::pdf::GlyphInk::from_dict(&doc, &font, &metrics, &mut pdfcraft_cos::DecodeBudget::page()).unwrap();
     let pdfcraft_fonts::pdf::Ink::Box(accent) = ink.ink(&metrics, 0xC9) else { panic!("É draws") };
     assert!(accent[3] > 0.85, "the accent rises above one em: {accent:?}");
     mark(&mut doc, 0, &[[10.0, 100.0 + 0.805 * 24.0, 24.0, 100.0 + accent[3] * 24.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.glyphs_beside_marks), (1, 0), "{r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains("\\311") && c.contains("(E)"), "É removed, E kept: {c}");
+}
+
+/// A form's `/F1` is its own font. The page primes `/F1` = Inter; the form names `/F1` for a
+/// standard font with no program, so its "É" has no readable outline and must not be measured
+/// with Inter's: a mark over only the strip above one em keeps it, counted beside the mark.
+#[test]
+fn a_forms_font_is_not_measured_with_the_pages_font_of_the_same_name() {
+    let widths = format!("[{}]", vec!["600"; 224].join(" "));
+    let form = b"BT /F1 24 Tf 10 100 Td (\\311E) Tj ET";
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /X1 8 0 R >> >> >>".to_vec(),
+        stream("", b"BT /F1 24 Tf 10 200 Td (A) Tj ET /X1 Do"),
+        format!("<< /Type /Font /Subtype /TrueType /BaseFont /Inter /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 255 /Widths {widths} /FontDescriptor 6 0 R >>").into_bytes(),
+        b"<< /Type /FontDescriptor /FontName /Inter /Flags 32 /Ascent 969 /Descent -242 /FontFile2 7 0 R >>".to_vec(),
+        stream("", pdfcraft_fonts::INTER_REGULAR),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 9 0 R >> >>", &form[..]),
+        format!("<< /Type /Font /Subtype /TrueType /BaseFont /Other /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 255 /Widths {widths} >>").into_bytes(),
+    ]);
+    // 0.805 em to 0.9 em above the form's baseline: past its one-em box, where Inter's accent is.
+    mark(&mut doc, 0, &[[10.0, 100.0 + 0.805 * 24.0, 24.0, 100.0 + 0.9 * 24.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.glyphs_beside_marks), (0, 1), "the form's É is measured by its own font: {r:?}");
+}
+
+/// A font chosen only through an ExtGState's `/Font` is measured by its outline, as with `Tf`.
+#[test]
+fn a_font_set_by_an_extgstate_is_measured_by_its_outline() {
+    let widths = format!("[{}]", vec!["600"; 224].join(" "));
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /ExtGState << /G1 << /Font [5 0 R 24] >> >> >> >>".to_vec(),
+        stream("", b"BT /G1 gs 10 100 Td (\\311E) Tj ET"),
+        format!("<< /Type /Font /Subtype /TrueType /BaseFont /Inter /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 255 /Widths {widths} /FontDescriptor 6 0 R >>").into_bytes(),
+        b"<< /Type /FontDescriptor /FontName /Inter /Flags 32 /Ascent 969 /Descent -242 /FontFile2 7 0 R >>".to_vec(),
+        stream("", pdfcraft_fonts::INTER_REGULAR),
+    ]);
+    mark(&mut doc, 0, &[[10.0, 100.0 + 0.805 * 24.0, 24.0, 100.0 + 0.9 * 24.0]], "");
     let r = apply(&mut doc, None).unwrap();
     assert_eq!((r.glyphs, r.glyphs_beside_marks), (1, 0), "{r:?}");
     let c = content(&doc, 0);
