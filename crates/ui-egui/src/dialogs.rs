@@ -1808,6 +1808,7 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
         && let Dialog::ExportData(kind) = dialog
         && let Some(format) = crate::data_export_ui::chosen(app, kind)
     {
+        app.data_format = Some(format);
         app.export_data_as(kind, format);
     }
     if req.marks_now

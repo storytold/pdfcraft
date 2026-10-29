@@ -843,6 +843,33 @@ fn export_form_data_asks_for_the_format_and_writes_that_format() {
     h.get_by_label("Cancel").click();
     h.run_steps(2);
     assert_eq!(h.state().dialog, None);
+    // Export comments, which has no CSV, shows its own default; cancelling it keeps CSV.
+    h.state_mut().export_data_dialog(pdfcraft_ui_egui::DataKind::Comments);
+    h.run_steps(2);
+    assert!(format(&h, "XFDF (.xfdf)"), "comments are XFDF or FDF");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(h.state_mut().execute("form.export_data"));
+    h.run_steps(2);
+    assert!(format(&h, "CSV (.csv)"), "a cancelled comments export does not replace the form data's format");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A format the export does not offer is refused, not written as other data: comments have no
+/// CSV, and CSV would hold the form's values instead.
+#[test]
+fn export_data_refuses_a_format_its_kind_does_not_offer() {
+    let dir = scratch("export-refused");
+    let out = dir.join("comments.csv");
+    let mut h = harness();
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().export_data_as(pdfcraft_ui_egui::DataKind::Comments, pdfcraft_engine::DataFormat::Csv);
+    h.run_steps(2);
+    assert!(!out.exists(), "nothing is written");
+    let toast = h.state().toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    assert_eq!(toast, "CSV can't hold comments");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -66,7 +66,8 @@ fn active_is_xfa(app: &PdfCraftApp) -> bool {
 /// The dialog's body: the Format list, then Export and Cancel.
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, _t: &Tokens, kind: DataKind) -> (bool, bool) {
     let offered = formats(kind, active_is_xfa(app));
-    let mut current = chosen(app, kind);
+    let shown = chosen(app, kind);
+    let mut current = shown;
     ui.label(
         egui::RichText::new(match kind {
             DataKind::Comments => tl!("Export comments"),
@@ -86,7 +87,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, _t: &Tokens, kind: 
         // The visible label names the list for assistive technology and tests.
         combo.response.labelled_by(title.id);
     });
-    if current.is_some() {
+    // Only a choice the user makes is remembered: drawing another kind's default, then
+    // cancelling, keeps the format chosen before.
+    if current != shown {
         app.data_format = current;
     }
     ui.add_space(12.0);

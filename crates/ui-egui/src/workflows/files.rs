@@ -1027,21 +1027,27 @@ impl PdfCraftApp {
 
     /// Write `kind` as `format`: through the save panel, named and filtered for that format, or to
     /// the save override. A name the user changes to another offered format's extension is
-    /// written in that format.
+    /// written in that format. A format not offered for `kind` (comments as CSV, say) is refused,
+    /// rather than writing other data than was asked for.
     pub fn export_data_as(&mut self, kind: crate::data_export_ui::DataKind, format: pdfcraft_engine::DataFormat) {
-        use crate::data_export_ui::{DataKind, extension};
+        use crate::data_export_ui::{DataKind, extension, formats, name};
         if !self.commit_form_typing() {
             return;
         }
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
+        let offered = formats(kind, doc.info.xfa.is_some());
+        if !offered.contains(&format) {
+            let what = if kind == DataKind::Comments { tl!("comments") } else { tl!("form data") };
+            self.notify_fmt("{format} can't hold {what}", &[("format", &name(format)), ("what", what)]);
+            return;
+        }
         let (comments, fields) = (kind == DataKind::Comments, kind == DataKind::FormData);
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
         let file_name = format!("{stem}.{}", extension(format));
         #[cfg(not(target_arch = "wasm32"))]
         {
             let folder = doc.path.clone();
-            let offered = crate::data_export_ui::formats(kind, doc.info.xfa.is_some());
             let write = move |app: &mut Self, path: std::path::PathBuf| {
                 // Include what was typed while the save panel was open (#166).
                 if !app.commit_typing_in(id) {
@@ -1061,10 +1067,7 @@ impl PdfCraftApp {
                 Some(p) => write(self, p.into()),
                 None => {
                     let title = if comments { tl!("Export comments") } else { tl!("Export form data") };
-                    let d = rfd::AsyncFileDialog::new()
-                        .set_title(title)
-                        .set_file_name(file_name)
-                        .add_filter(crate::data_export_ui::name(format), &[extension(format)]);
+                    let d = rfd::AsyncFileDialog::new().set_title(title).set_file_name(file_name).add_filter(name(format), &[extension(format)]);
                     let d = crate::editing::in_document_folder(d, folder.as_deref());
                     self.ask_one(crate::pickers::Ask::Save(d), None, write);
                 }
