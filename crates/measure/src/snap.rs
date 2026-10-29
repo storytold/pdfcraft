@@ -741,6 +741,37 @@ impl Walker<'_> {
         closures.clear();
         true
     }
+    /// Whether the XObject `o` is an image.
+    fn is_image(&self, o: &Object) -> bool {
+        matches!(self.doc.resolve(o).as_ref(), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image"))
+    }
+    /// An image fills the unit square of `matrix`: its frame joins the geometry as a filled
+    /// rectangle's does, so its corners, the middles of its sides and its centre snap (a pasted
+    /// screenshot, a photo or a scanned detail on a plan).
+    fn image(&mut self, matrix: Matrix) {
+        if self.geometry.segments.len().saturating_add(4) > self.geometry.cap {
+            self.geometry.truncated = true;
+            return;
+        }
+        let corner = |x: f64, y: f64| {
+            let (x, y) = matrix.apply(x, y);
+            [x, y]
+        };
+        let [a, b, c, d] = [corner(0.0, 0.0), corner(1.0, 0.0), corner(1.0, 1.0), corner(0.0, 1.0)];
+        let mut frame = Geometry::with_limits(self.limits);
+        for (f, t) in [(a, b), (b, c), (c, d), (d, a)] {
+            frame.edge(f, t);
+        }
+        let mut sp = Subpath::new(a);
+        for p in [b, c, d] {
+            sp.add(p);
+        }
+        sp.closed = true;
+        // Its own path: one being built when the image is drawn ends with its own painting.
+        if !self.paint("f", &mut frame, &mut vec![sp], &mut Vec::new(), None, None) {
+            self.geometry.truncated = true;
+        }
+    }
     /// A form XObject `o` drawn by `Do` under `matrix`, with its own resources or else
     /// `resources`; one already being walked (a form drawing itself) is skipped.
     fn form(&mut self, o: &Object, resources: &Dict, matrix: Matrix, depth: usize) -> Result<()> {
@@ -940,10 +971,16 @@ impl Walker<'_> {
                             resources.get(b"XObject").map(|o| self.doc.resolve(o))
                         });
                         if let Some(o) = xobjects.as_ref().and_then(|o| o.as_dict()).and_then(|d| d.get(name)) {
-                            self.form(o, resources, matrix, depth)?;
+                            if self.is_image(o) {
+                                self.image(matrix);
+                            } else {
+                                self.form(o, resources, matrix, depth)?;
+                            }
                         }
                     }
                 }
+                // An inline image (`BI` … `EI`, kept whole by the parser).
+                "BI" => self.image(matrix),
                 _ => {}
             }
         }

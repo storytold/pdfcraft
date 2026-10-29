@@ -171,6 +171,21 @@ fn fills_close_all_open_subpaths_but_strokes_do_not() {
     assert_eq!(snap::geometry(&stroked, 0).unwrap().segments.len(), 4);
 }
 
+/// An image snaps by its frame, one drawn by `Do` (as a pasted screenshot is) and an inline one:
+/// its corners, the middles of its sides and its centre.
+#[test]
+fn images_snap_by_their_corners_sides_and_centre() {
+    let image = "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\nA\nendstream";
+    let d = fixture("q 100 0 0 50 20 30 cm /Nested Do Q q 10 0 0 10 300 400 cm BI /W 1 /H 1 /CS /G /BPC 8 ID A EI Q", "", &[image]);
+    let g = snap::geometry(&d, 0).unwrap();
+    assert_eq!(g.segments.len(), 8, "two frames of four sides");
+    let at = |p: Point| g.snap(p, 3.0, snap::SnapOptions::default()).unwrap().map(|s| (s.kind, s.point));
+    assert_eq!(at([21.0, 31.0]), Some((snap::SnapKind::Endpoint, [20.0, 30.0])));
+    assert_eq!(at([71.0, 31.0]), Some((snap::SnapKind::Midpoint, [70.0, 30.0])), "the middle of its bottom side");
+    assert_eq!(at([70.5, 55.5]), Some((snap::SnapKind::Centre, [70.0, 55.0])));
+    assert_eq!(at([301.0, 409.0]), Some((snap::SnapKind::Endpoint, [300.0, 410.0])), "an inline image's top-left corner");
+}
+
 #[test]
 fn nested_forms_transforms_curves_and_cycles_are_bounded() {
     let body = "0 0 m 10 0 l S 0 0 m 0 10 10 10 10 0 c S /Nested Do";
