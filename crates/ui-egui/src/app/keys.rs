@@ -146,9 +146,14 @@ impl PdfCraftApp {
         }
         // E and B swap the Draw tool and the Eraser (#3900): a tap of E switches to the Eraser and
         // stays, another tap of E or a tap of B goes back; holding E is the Eraser only while held.
-        // Only from one of the two, so E means nothing to any other tool.
+        // Only from one of the two, so E means nothing to any other tool. The press itself must be
+        // plain too: a Shift+E let go within the frame leaves the frame's modifiers empty.
         let first_press = |key: Key| {
-            ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Key { key: k, pressed: true, repeat: false, .. } if *k == key)))
+            ctx.input(|input| {
+                input.events.iter().any(
+                    |e| matches!(e, egui::Event::Key { key: k, pressed: true, repeat: false, modifiers, .. } if *k == key && modifiers.is_none()),
+                )
+            })
         };
         if first_press(Key::E) {
             if self.quick_tool == ERASER {

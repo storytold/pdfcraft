@@ -708,6 +708,32 @@ fn the_e_key_toggles_the_eraser_when_tapped_and_borrows_it_when_held() {
     assert_eq!(h.state().quick_tool, QuickTool::Comment(CommentTool::Rectangle), "E leaves other tools alone");
 }
 
+/// #3900: a modified E or B is not the tool key, even when the modifier is let go within the
+/// frame, so that the frame's own modifiers are empty and only the key event carries them.
+#[test]
+fn a_modified_e_or_b_leaves_the_draw_tool_and_the_eraser_alone() {
+    use eraser_key::*;
+    // Pressed and released with Shift, in events only: the frame's modifiers stay empty.
+    let modified = |h: &mut Harness<'static, PdfCraftApp>, key| {
+        for pressed in [true, false] {
+            h.event(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::SHIFT });
+        }
+    };
+    let mut h = eraser_harness();
+    modified(&mut h, egui::Key::E);
+    h.run_steps(4);
+    assert_eq!(tool_and_bar(&h), (DRAW, CommentTool::Ink), "Shift+E keeps the Draw tool");
+
+    h.key_press(egui::Key::E);
+    h.run_steps(4);
+    assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser));
+    for key in [egui::Key::E, egui::Key::B] {
+        modified(&mut h, key);
+        h.run_steps(4);
+        assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser), "Shift+{key:?} keeps the Eraser");
+    }
+}
+
 /// #3900: E let go while a dialog is open is read when it comes up, not when the dialog closes: a
 /// tap stays on the Eraser however long the dialog stays, a hold gives Draw back under it.
 #[test]
