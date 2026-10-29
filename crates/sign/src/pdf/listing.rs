@@ -519,7 +519,7 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
             verdict_shown: false,
             details: Vec::new(),
         };
-        validate_doc_timestamp(doc, bytes, d, &mut info, cache, trust);
+        validate_doc_timestamp(doc, bytes, d, &mut info, cache, trust, None);
         out.push(info);
     }
     if !whole {

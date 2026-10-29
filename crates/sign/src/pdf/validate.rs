@@ -86,7 +86,7 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
         info.sub_filter = Some("ETSI.RFC3161".to_string());
         info.doc_timestamp = true;
         info.timestamp = true;
-        validate_doc_timestamp(doc, bytes, v, info, cache, trust);
+        validate_doc_timestamp(doc, bytes, v, info, cache, trust, Some(own));
         return;
     }
     info.date = text(doc, v, b"M");
@@ -505,7 +505,18 @@ fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Optio
 
 /// Validate a standalone document timestamp dictionary (`/ETSI.RFC3161`): the token must be
 /// cryptographically valid and its message imprint must cover the file's signed bytes.
-pub(super) fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, info: &mut SignatureInfo, cache: &DigestCache, trust: &TrustStore) {
+/// `own` is the field holding a field-held timestamp, whose field and dictionary must be the
+/// timestamped ones (a later field naming the same dictionary was never timestamped); `None`
+/// for a standalone one.
+pub(super) fn validate_doc_timestamp(
+    doc: &Document,
+    bytes: &[u8],
+    v: &Dict,
+    info: &mut SignatureInfo,
+    cache: &DigestCache,
+    trust: &TrustStore,
+    own: Option<Own>,
+) {
     info.date = text(doc, v, b"M");
     let invalid = |info: &mut SignatureInfo, why: Detail| {
         info.status = Status::Invalid;
@@ -554,7 +565,7 @@ pub(super) fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, inf
     info.modification = if covered == bytes.len() || bytes[covered..].iter().all(|b| b.is_ascii_whitespace() || *b == 0) {
         Modification::None
     } else {
-        classify_changes(doc, cache.revision(doc, bytes, covered), None, None)
+        classify_changes(doc, cache.revision(doc, bytes, covered), None, own)
     };
     match &info.modification {
         Modification::None => info.details.push(Detail::plain("This document has not been modified since this timestamp was applied.")),

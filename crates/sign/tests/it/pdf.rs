@@ -344,6 +344,75 @@ fn a_field_reusing_the_signers_dictionary_added_after_signing_is_not_a_second_si
     assert_only_the_signers_field_is_valid(&forged, &trust, "the reused signature");
 }
 
+#[test]
+fn a_signed_field_renamed_through_its_parent_is_not_the_signed_one() {
+    // "Sigs.A": the parent (object 6) names the field "Sigs", the kid (object 7) "A" and holds the
+    // widget. After signing, a later revision renames the parent. The kid and its value are
+    // unchanged, but the signature would now show under a name the signer never signed.
+    let objs: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [7 0 R] >>",
+        b"<< /Length 44 >>\nstream\nBT /F1 14 Tf 20 250 Td (Contract text) Tj ET\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /FT /Sig /T (Sigs) /Kids [7 0 R] >>",
+        b"<< /Type /Annot /Subtype /Widget /T (A) /Parent 6 0 R /Rect [150 20 280 70] /P 3 0 R /F 4 >>",
+    ];
+    let mut base = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(base.len());
+        base.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        base.extend_from_slice(o);
+        base.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = base.len();
+    base.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        base.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    base.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let signed = pdfcraft_sign::sign(&open(&base), &id, &SignOptions { field: Some("Sigs.A".into()), ..opts() }).unwrap();
+    let s = signatures(&open(&signed), &signed, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!((s.field.as_str(), s.status), ("Sigs.A", Status::Valid), "untouched");
+    let renamed = edit_after(&signed, |doc| {
+        doc.update_dict(pdfcraft_cos::ObjRef { num: 6, generation: 0 }, |p| p.set(b"T".to_vec(), PdfString::text("Witness"))).unwrap();
+    });
+    let s = signatures(&open(&renamed), &renamed, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_ne!(s.status, Status::Valid, "the signature validated as {:?}: {:?} {:?}", s.field, s.modification, s.details);
+}
+
+#[test]
+fn a_field_reusing_a_field_held_document_timestamp_is_not_a_second_timestamp() {
+    // "Timestamp_1" holds a document timestamp. A later field whose /V names the same timestamp
+    // dictionary has a token that checks out, but the field was never timestamped.
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let trust = TrustStore { certs: vec![tsa.id.certificate.clone()] };
+    let stamped = fixture_timestamped_in_a_field(&tsa);
+    let forged = edit_after(&stamped, |doc| {
+        let held = doc
+            .object_numbers()
+            .into_iter()
+            .map(|num| pdfcraft_cos::ObjRef { num, generation: doc.generation(num) })
+            .find(|r| doc.get(*r).as_dict().is_some_and(|d| d.name(b"Type") == Some(b"DocTimeStamp")))
+            .expect("the timestamp dictionary");
+        add_forged_signature_field(doc, Object::Ref(held));
+    });
+    let sigs = signatures(&open(&forged), &forged, &trust);
+    let copy = sigs.iter().find(|s| s.field == "Forged").expect("the forged field is listed");
+    assert!(
+        copy.status == Status::Invalid && matches!(copy.modification, Modification::Disallowed(_)),
+        "the reused timestamp validated: {:?} {:?} {:?}",
+        copy.status,
+        copy.modification,
+        copy.details
+    );
+    let own = sigs.iter().find(|s| s.field == "Timestamp_1").expect("the timestamp field is listed");
+    assert_eq!(own.status, Status::Valid, "{:?} {:?}", own.modification, own.details);
+}
+
 /// A page whose /Annots is an object of its own: signing and commenting update that array in
 /// place, not the page. A second signature is a signature change for the first, as with an
 /// inline /Annots, and a comment is still a comment (refused under a form-fill certification).
