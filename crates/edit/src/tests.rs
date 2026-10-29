@@ -7557,3 +7557,36 @@ fn q_inside_a_text_object_restores_the_text_matrices() {
         assert_eq!((lines[0].text.as_str(), lines[0].baseline()), ("Edited", baseline), "{content} after editing");
     }
 }
+
+#[test]
+fn variation_public_line_and_block_edits_preserve_selectors_after_reopen() {
+    let replacement = "1\u{FE0F}";
+    let mut results = Vec::new();
+    for kind in ["line", "block"] {
+        let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+        if kind == "line" {
+            text::replace_line(&mut doc, 0, 0, replacement).unwrap();
+        } else {
+            text::replace_block(&mut doc, 0, 0, replacement).unwrap();
+        }
+        let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+        results.push((kind, lines[0].text.clone()));
+    }
+    assert_eq!(results, vec![("line", replacement.to_owned()), ("block", replacement.to_owned())]);
+}
+
+#[test]
+fn variation_public_selector_does_not_shift_centered_text_with_character_spacing() {
+    // қ requires the same bundled fallback for both drafts, without optional font inputs.
+    for spacing in [0.0, 2.0] {
+        let mut plain = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+        let mut selected = plain.clone();
+        let style = text::BlockStyle { width: Some(100.0), align: Some(added::Align::Center), char_spacing: Some(spacing), ..Default::default() };
+        text::rewrite_block(&mut plain, 0, 0, Some("1қ"), &style).unwrap();
+        text::rewrite_block(&mut selected, 0, 0, Some("1\u{FE0F}қ"), &style).unwrap();
+        let a = text::text_lines(&reopen(&plain), 0).unwrap();
+        let b = text::text_lines(&reopen(&selected), 0).unwrap();
+        assert_eq!(a[0].base_font, b[0].base_font);
+        assert!(close(a[0].rect, b[0].rect), "Tc={spacing}: plain {:?}, selector {:?}", a[0].rect, b[0].rect);
+    }
+}

@@ -5,7 +5,27 @@ use super::{
 };
 
 /// Text → the runs that show it: each run's font resource name and the bytes shown in that font.
-pub(super) type Encoder = Box<dyn Fn(&str) -> Option<Vec<(String, Vec<u8>)>>>;
+pub(super) type Encoder = Box<dyn Fn(&str) -> Option<Vec<Type3Run>>>;
+
+/// One run a rewrite shows: bytes drawn in one generated font. `spacing` set (a variation
+/// selector's run) shows at that character spacing: its empty glyph advances nothing, and the
+/// spacing in force must not add to it either.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Type3Run {
+    pub(super) name: String,
+    pub(super) bytes: Vec<u8>,
+    pub(super) spacing: Option<f64>,
+}
+
+/// A Unicode variation selector (U+FE00..U+FE0F): it picks a variant of the character before it
+/// and has no glyph of its own. The Type 3 fallback gives it an empty zero-width glyph instead of
+/// failing the edit on it.
+pub(super) fn is_variation_selector(ch: char) -> bool {
+    matches!(u32::from(ch), 0xFE00..=0xFE0F)
+}
+
+/// A variation selector's glyph procedure: nothing painted, zero advance.
+const SELECTOR_GLYPH_PROC: &[u8] = b"0 0 0 0 0 0 d1\n";
 
 fn is_win_ansi_char(c: char) -> bool {
     c == '\t' || pdfcraft_fonts::win_ansi_byte(c).is_some()
@@ -377,7 +397,13 @@ pub(super) fn type3_font(
     // The faces differ in coverage (e.g. of Cyrillic), so use the best face that has every
     // character. When none has them all, the best face reports the character it lacks. Hebrew
     // text keeps the Hebrew face and takes each character it lacks from the next face that has it.
-    let face = if hebrew { faces.first().copied() } else { fallback_face(&faces, &chars, |face, ch| japanese_glyph_from(face, ch).is_ok()) }
+    // A variation selector has no outline anywhere: it takes a glyph slot of its own below, so the
+    // face is chosen by the characters that have outlines.
+    let named: Vec<char> = chars.iter().copied().filter(|ch| !is_variation_selector(*ch)).collect();
+    if named.is_empty() {
+        return Err(EditError::Invalid("replacement text is empty".into()));
+    }
+    let face = if hebrew { faces.first().copied() } else { fallback_face(&faces, &named, |face, ch| japanese_glyph_from(face, ch).is_ok()) }
         .ok_or_else(|| no_fallback_font(text))?;
     let others: &[&CraftFont] = if hebrew { faces.get(1..).unwrap_or_default() } else { &[] };
     // Every outline is read before the document is touched, so a character that fails leaves it
@@ -385,15 +411,21 @@ pub(super) fn type3_font(
     let per_font = max_glyphs.clamp(1, MAX_TYPE3_GLYPHS);
     let mut glyphs = Vec::with_capacity(chars.len());
     for (i, ch) in chars.into_iter().enumerate() {
-        // The chosen face first, then the faces after it (Hebrew text takes a character the Hebrew
-        // face lacks from the next face that has it); a character no face draws is reported once.
-        let mut drawn = type3_glyph(face, ch)?;
-        for f in others.iter().copied() {
-            if drawn.is_some() {
-                break;
+        let drawn = if is_variation_selector(ch) {
+            Some((SELECTOR_GLYPH_PROC.to_vec(), 0.0))
+        } else {
+            // The chosen face first, then the faces after it (Hebrew text takes a character the
+            // Hebrew face lacks from the next face that has it); a character no face draws is
+            // reported once.
+            let mut drawn = type3_glyph(face, ch)?;
+            for f in others.iter().copied() {
+                if drawn.is_some() {
+                    break;
+                }
+                drawn = type3_glyph(f, ch)?;
             }
-            drawn = type3_glyph(f, ch)?;
-        }
+            drawn
+        };
         let Some((path, width)) = drawn else { return Err(no_glyph_for(face, ch)) };
         let code = u8::try_from((i % per_font).saturating_add(1))
             .map_err(|_| EditError::Invalid("replacement text has too many unique characters".into()))?;
@@ -494,17 +526,22 @@ pub(super) fn add_type3_font(doc: &mut Document, fonts_res: &mut Dict, face: &Cr
 }
 
 /// The runs that show `text` in the fallback: consecutive characters in one font form one run, so
-/// a font is switched only where the text moves to another font. `None` if a character has no code.
-pub(super) fn type3_encode(fallback: &Type3Fallback, text: &str) -> Option<Vec<(String, Vec<u8>)>> {
-    let mut runs: Vec<(usize, Vec<u8>)> = Vec::new();
+/// a font is switched only where the text moves to another font. A variation selector forms its
+/// own run, drawn at character spacing zero (see [`Type3Run`]). `None` if a character has no code.
+pub(super) fn type3_encode(fallback: &Type3Fallback, text: &str) -> Option<Vec<Type3Run>> {
+    let mut runs: Vec<(usize, Vec<u8>, Option<f64>)> = Vec::new();
     for ch in text.chars() {
         let (font, code) = *fallback.codes.get(&ch)?;
+        if is_variation_selector(ch) {
+            runs.push((font, vec![code], Some(0.0)));
+            continue;
+        }
         match runs.last_mut() {
-            Some((last, bytes)) if *last == font => bytes.push(code),
-            _ => runs.push((font, vec![code])),
+            Some((last, bytes, None)) if *last == font => bytes.push(code),
+            _ => runs.push((font, vec![code], None)),
         }
     }
-    runs.into_iter().map(|(font, bytes)| Some((fallback.names.get(font)?.clone(), bytes))).collect()
+    runs.into_iter().map(|(font, bytes, spacing)| Some(Type3Run { name: fallback.names.get(font)?.clone(), bytes, spacing })).collect()
 }
 
 /// The source font's own TrueType/OpenType program, when the document embeds a complete one whose
@@ -598,4 +635,27 @@ pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, 
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn variation_selectors_show_an_empty_glyph_at_zero_spacing() {
+        assert!(is_variation_selector('\u{FE0F}'));
+        assert!(!is_variation_selector('\u{27A1}'));
+        let fallback = Type3Fallback {
+            family: "Inter",
+            names: vec!["PCLat".into()],
+            widths: vec![('1', 0.556), ('\u{FE0F}', 0.0)],
+            codes: [('1', (0, 1)), ('\u{FE0F}', (0, 2))].into_iter().collect(),
+        };
+        let runs = type3_encode(&fallback, "1\u{FE0F}").expect("the selector after a drawn base is kept, not an error");
+        assert_eq!(runs.len(), 2, "the selector forms its own run");
+        assert_eq!(runs[0], Type3Run { name: "PCLat".into(), bytes: vec![1], spacing: None });
+        assert_eq!(runs[1], Type3Run { name: "PCLat".into(), bytes: vec![2], spacing: Some(0.0) }, "the selector draws at spacing zero");
+        let runs = type3_encode(&fallback, "\u{FE0F}").expect("a lone selector keeps its empty glyph rather than failing");
+        assert_eq!(runs, vec![Type3Run { name: "PCLat".into(), bytes: vec![2], spacing: Some(0.0) }]);
+    }
 }
