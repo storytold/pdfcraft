@@ -200,15 +200,21 @@ impl Default for Background {
 /// How a picture mark is drawn on a page: the factor from the picture's own size, and its drawn
 /// width and height in points. It is `width` points wide when that is positive, otherwise fitted
 /// to the page at `scale`. `None` when it can't be drawn: the picture's size (it comes from a
-/// file) isn't a usable number, or at a fixed `width` it would be taller than [`MAX_MARK_WIDTH`].
+/// file) isn't a usable number (or, at a fixed `width`, isn't positive), or at a fixed `width` it
+/// would be taller than [`MAX_MARK_WIDTH`].
 pub(crate) fn placement(src: &MarkSource, page: (f64, f64), scale: f64, width: f64) -> Option<(f64, f64, f64)> {
     let (w, h) = page;
     // `max` would turn a NaN or -inf into the minimum, so the size is checked first.
     if !(src.size.0.is_finite() && src.size.1.is_finite()) {
         return None;
     }
-    let (sw, sh) = (src.size.0.max(0.01), src.size.1.max(0.01));
     let fixed = width.is_finite() && width > 0.0;
+    // At a fixed width the height follows the picture's own proportions, so its real size counts:
+    // a side raised to the minimum would make a very narrow picture look short enough to draw.
+    if fixed && !(src.size.0 > 0.0 && src.size.1 > 0.0) {
+        return None;
+    }
+    let (sw, sh) = if fixed { src.size } else { (src.size.0.max(0.01), src.size.1.max(0.01)) };
     let k = if fixed { width / sw } else { (w / sw).min(h / sh) * if scale.is_finite() && scale > 0.0 { scale } else { 1.0 } };
     // At a fixed width the picture is exactly that wide (`sw * (width / sw)` can be a rounding
     // error more), and the limit on the height allows for that same rounding.

@@ -10361,6 +10361,23 @@ fn a_watermark_width_that_is_not_a_usable_size_is_refused() {
     }
 }
 
+/// A fixed width sizes the height from the picture's real proportions: a picture far narrower
+/// than tall (a JPEG's odd pixel density can make one 0.0011 pt wide and 100 pt tall) would be
+/// over the size limit at any width, and a picture with no width or height has no proportions.
+#[test]
+fn a_watermark_width_follows_the_picture_s_real_proportions() {
+    for size in [(0.0011, 100.0), (0.0, 50.0), (100.0, 0.0), (-5.0, 50.0)] {
+        let mut doc = fixture();
+        let wm = Watermark { source: Some(picture_mark(size, true)), width: 1.0, ..Watermark::default() };
+        assert!(matches!(add_watermark(&mut doc, &[0], &wm, false), Err(EditError::Invalid(_))), "{size:?}");
+        assert!(!doc.is_modified(), "{size:?}");
+    }
+    // Fitted to the page instead, the same narrow picture is drawn.
+    let mut doc = fixture();
+    let wm = Watermark { source: Some(picture_mark((0.0011, 100.0), true)), ..Watermark::default() };
+    add_watermark(&mut doc, &[0], &wm, false).unwrap();
+}
+
 /// The numbers of a `cm` line, `a b c d e f`.
 fn cm_numbers(cm: &str) -> Vec<f64> {
     cm.trim_end_matches(" cm").split(' ').map(|v| v.parse().unwrap_or_else(|_| panic!("a number in {cm:?}"))).collect()
