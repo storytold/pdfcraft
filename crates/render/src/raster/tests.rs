@@ -6734,6 +6734,35 @@ fn a_smaller_soft_mask_does_not_bleed_transparent_colour_when_minified() {
     assert!(r >= 254 && g.abs_diff(128) <= 1 && b == g, "half-covered red over white, got ({r}, {g}, {b})");
 }
 
+/// A smaller soft mask that asks for `/Interpolate` stays smooth when it is sampled onto the grid
+/// of an area-shrunk image. Here a 64 × 64 black image is drawn at 32 × 32 under a 2 × 2 mask,
+/// opaque on the left and clear on the right: the mask is enlarged while the image shrinks, and
+/// sampled nearest-neighbour onto the image's grid the edge became a hard black and white step.
+#[test]
+fn an_interpolated_smaller_soft_mask_stays_smooth_when_its_image_is_minified() {
+    let content = "q 32 0 0 32 0 0 cm /Im0 Do Q";
+    let (image, mask) = ("00".repeat(64 * 64), "FF00FF00");
+    let pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 32 32] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /XObject /Subtype /Image /Width 64 /Height 64 /ColorSpace /DeviceGray /BitsPerComponent 8 /SMask 6 0 R /Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+         6 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Interpolate true /Filter /ASCIIHexDecode /Length {} >> stream\n{mask}>\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len(),
+        image.len() + 1,
+        mask.len() + 1
+    );
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!((page.width, page.height), (32, 32));
+    let row: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().skip(16 * 32).take(32).map(|[r, ..]| *r).collect();
+    let ramp = row.iter().filter(|v| (1..255).contains(*v)).count();
+    assert!(ramp >= 8 && row.is_sorted() && row.first() == Some(&0) && row.last() == Some(&255), "a smooth black to white edge, got {row:?}");
+}
+
 #[test]
 fn non_interpolated_alpha_images_keep_their_colours_and_mask_when_minified() {
     let palette: [[u8; 3]; 8] = [[0, 0, 0], [255, 255, 255], [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0], [255, 0, 255], [0, 255, 255]];
