@@ -538,13 +538,17 @@ class PdfDocument(
     }
 
     /**
-     * Fast thumbnail generation using low-detail preview mode.
+     * Fast thumbnail generation using low-detail preview mode. Never crashes on invalid pages or render failures.
      */
     fun renderThumbnail(page: Int, maxDimension: Float = 160f): Bitmap? {
-        val geom = geometry(page)
-        val maxSide = kotlin.math.max(geom.width, geom.height)
-        val scale = if (maxSide > 0f) kotlin.math.min(1.0f, maxDimension / maxSide) else 0.2f
-        return renderPage(page, scale, preview = true)
+        return try {
+            val geom = geometry(page)
+            val maxSide = kotlin.math.max(geom.width, geom.height)
+            val scale = if (maxSide > 0f) kotlin.math.min(1.0f, maxDimension / maxSide) else 0.2f
+            renderPage(page, scale, preview = true)
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     /**

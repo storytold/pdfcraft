@@ -1326,7 +1326,11 @@ fun PdfView(
 
     // Page Grid Sheet
     if (showPageGrid) {
-        ModalBottomSheet(onDismissRequest = { showPageGrid = false }) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { showPageGrid = false },
+            sheetState = sheetState
+        ) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1335,9 +1339,16 @@ fun PdfView(
                 PdfPageGridView(
                     document = document,
                     onPageSelected = { selectedPage ->
-                        currentPage = selectedPage
-                        pdfPageViewRef?.setDocument(document, selectedPage)
-                        showPageGrid = false
+                        coroutineScope.launch {
+                            try {
+                                sheetState.hide()
+                            } catch (_: Throwable) {
+                            } finally {
+                                currentPage = selectedPage.coerceIn(0, (document.pageCount - 1).coerceAtLeast(0))
+                                pdfPageViewRef?.setDocument(document, currentPage)
+                                showPageGrid = false
+                            }
+                        }
                     }
                 )
             }
@@ -1346,29 +1357,70 @@ fun PdfView(
 
     // Command Palette Sheet
     if (showCommandPalette) {
-        ModalBottomSheet(onDismissRequest = { showCommandPalette = false }) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { showCommandPalette = false },
+            sheetState = sheetState
+        ) {
             PdfCommandPaletteView(
                 engine = document.engine,
                 onSelectTool = { tool ->
-                    showCommandPalette = false
-                    activeTool = tool
+                    coroutineScope.launch {
+                        try {
+                            sheetState.hide()
+                        } catch (_: Throwable) {
+                        } finally {
+                            showCommandPalette = false
+                            activeTool = tool
+                        }
+                    }
                 },
-                onDismiss = { showCommandPalette = false }
+                onDismiss = {
+                    coroutineScope.launch {
+                        try {
+                            sheetState.hide()
+                        } catch (_: Throwable) {
+                        } finally {
+                            showCommandPalette = false
+                        }
+                    }
+                }
             )
         }
     }
 
     // Tool Form Sheet
     activeTool?.let { tool ->
-        ModalBottomSheet(onDismissRequest = { activeTool = null }) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { activeTool = null },
+            sheetState = sheetState
+        ) {
             PdfToolFormView(
                 tool = tool,
                 document = document,
                 engine = document.engine,
                 onComplete = {
-                    pdfPageViewRef?.refreshPage()
+                    coroutineScope.launch {
+                        try {
+                            sheetState.hide()
+                        } catch (_: Throwable) {
+                        } finally {
+                            activeTool = null
+                            pdfPageViewRef?.refreshPage()
+                        }
+                    }
                 },
-                onDismiss = { activeTool = null }
+                onDismiss = {
+                    coroutineScope.launch {
+                        try {
+                            sheetState.hide()
+                        } catch (_: Throwable) {
+                        } finally {
+                            activeTool = null
+                        }
+                    }
+                }
             )
         }
     }
@@ -1606,16 +1658,36 @@ fun PdfView(
 
     // Outline / TOC Sheet
     if (showOutlineDialog) {
-        ModalBottomSheet(onDismissRequest = { showOutlineDialog = false }) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { showOutlineDialog = false },
+            sheetState = sheetState
+        ) {
             PdfOutlineDialog(
-                outline = try { document.outline() } catch (_: Exception) { emptyList() },
+                outline = try { document.outline() } catch (_: Throwable) { emptyList() },
                 currentPage = currentPage,
                 onPageSelected = { selected ->
-                    currentPage = selected
-                    pdfPageViewRef?.setDocument(document, selected)
-                    showOutlineDialog = false
+                    coroutineScope.launch {
+                        try {
+                            sheetState.hide()
+                        } catch (_: Throwable) {
+                        } finally {
+                            currentPage = selected.coerceIn(0, (document.pageCount - 1).coerceAtLeast(0))
+                            pdfPageViewRef?.setDocument(document, currentPage)
+                            showOutlineDialog = false
+                        }
+                    }
                 },
-                onDismiss = { showOutlineDialog = false }
+                onDismiss = {
+                    coroutineScope.launch {
+                        try {
+                            sheetState.hide()
+                        } catch (_: Throwable) {
+                        } finally {
+                            showOutlineDialog = false
+                        }
+                    }
+                }
             )
         }
     }

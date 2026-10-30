@@ -46,13 +46,17 @@ fun PdfPageGridView(
     }
 
     LaunchedEffect(document, pageCount) {
-        withContext(Dispatchers.IO) {
-            for (p in 0 until pageCount) {
-                if (!thumbnails.containsKey(p)) {
-                    val bmp = document.renderThumbnail(p, 200f)
-                    if (bmp != null) {
-                        thumbnails[p] = bmp
+        for (p in 0 until pageCount) {
+            if (!thumbnails.containsKey(p)) {
+                val bmp = withContext(Dispatchers.IO) {
+                    try {
+                        document.renderThumbnail(p, 200f)
+                    } catch (_: Throwable) {
+                        null
                     }
+                }
+                if (bmp != null && !bmp.isRecycled) {
+                    thumbnails[p] = bmp
                 }
             }
         }
@@ -158,7 +162,7 @@ fun PdfPageGridView(
                         }
                 ) {
                     Box(modifier = Modifier.fillMaxSize()) {
-                        if (bmp != null) {
+                        if (bmp != null && !bmp.isRecycled) {
                             Image(
                                 bitmap = bmp.asImageBitmap(),
                                 contentDescription = "Page ${pageIndex + 1}",
