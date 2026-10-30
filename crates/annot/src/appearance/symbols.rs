@@ -1,4 +1,4 @@
-use super::{Dict, Object, PdfString, Rgb, Stream, color, ext_gstate, form, literal, n, nums, rg, rg_stroke, text_width, win_ansi};
+use super::{Dict, Object, PdfString, Rgb, Stream, color, ext_gstate, form, helvetica_width, literal, n, nums, rg, rg_stroke, win_ansi};
 
 /// The label and colour of a standard rubber stamp name (ISO 32000-2 Table 184), for a stamp
 /// another program wrote without an appearance. Names are matched byte for byte, as PDF names
@@ -236,7 +236,7 @@ pub(super) fn line_layout(d: &Dict, [a, b]: [(f64, f64); 2], w: f64) -> LineLayo
     let mut gap = None;
     if let Some(text) = line_caption(d) {
         let size = CAPTION_SIZE;
-        let width = text_width(&text, size);
+        let width = helvetica_width(&text, size);
         // Reading direction, and "up" across it.
         let (tx, ty) = if ux < 0.0 || (ux == 0.0 && uy < 0.0) { (-ux, -uy) } else { (ux, uy) };
         let (vx, vy) = (-ty, tx);
@@ -350,11 +350,11 @@ pub(super) fn stamp(label: &str, sign_here: bool, rect: [f64; 4], col: Rgb, by: 
     let (title_h, by_h) = if by.is_some() { (h * 0.5, h * 0.22) } else { (h * 0.52, 0.0) };
     let text_area = if sign_here { (x0 + h * 0.45, x1 - lw * 2.0) } else { (x0 + lw * 2.0, x1 - lw * 2.0) };
     let mut size = title_h;
-    let tw = text_width(label, size) * 1.12;
+    let tw = helvetica_width(label, size) * 1.12;
     if tw > text_area.1 - text_area.0 - 4.0 {
         size *= (text_area.1 - text_area.0 - 4.0) / tw;
     }
-    let tw = text_width(label, size) * 1.12;
+    let tw = helvetica_width(label, size) * 1.12;
     let text_col = if sign_here { [1.0, 1.0, 1.0] } else { col };
     let ty = if by.is_some() { y0 + h * 0.48 } else { y0 + (h - size * 0.72) / 2.0 };
     let mut out = c.into_bytes();
@@ -366,11 +366,11 @@ pub(super) fn stamp(label: &str, sign_here: bool, rect: [f64; 4], col: Rgb, by: 
     out.extend_from_slice(b" Tj\n");
     if let Some(b) = by {
         let mut s = by_h;
-        let bw = text_width(b, s);
+        let bw = helvetica_width(b, s);
         if bw > text_area.1 - text_area.0 - 4.0 {
             s *= (text_area.1 - text_area.0 - 4.0) / bw;
         }
-        let bw = text_width(b, s);
+        let bw = helvetica_width(b, s);
         out.extend(
             format!("/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(s), n(text_area.0 + (text_area.1 - text_area.0 - bw) / 2.0), n(y0 + h * 0.18)).bytes(),
         );

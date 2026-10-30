@@ -13,6 +13,9 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }
+# Display order of right-to-left lines in text boxes and Fill & Sign text; already in the tree
+# via the interface and Edit text.
+unicode-bidi = "0.3"
 
 [dev-dependencies]
 hayro-syntax = { workspace = true }

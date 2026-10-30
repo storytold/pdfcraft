@@ -8,7 +8,7 @@ use super::types::{
     FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb, Shape, Style,
     StyleChange, TextReplacement,
 };
-use super::{AnnotError, Dict, Document, HashMap, HashSet, ObjRef, Object, PdfString, appearance};
+use super::{AnnotError, Dict, Document, HashMap, HashSet, ObjRef, Object, PdfString, appearance, shaped};
 
 /// A comment another program drew, whose text the standard fonts can't draw. Redrawing it would
 /// replace those characters with `?`, so the edit is refused before the dictionary changes.
@@ -51,7 +51,21 @@ pub(crate) fn rich_text(d: &mut Dict) {
         _ => "left",
     };
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
-    let body: String = text.split('\n').map(|line| format!("<p dir=\"ltr\">{}</p>", esc(line.trim_end_matches('\r')))).collect();
+    // Paragraphs break where the appearance breaks them: a CRLF pair once, a lone CR or LF each
+    // (CodeRabbit on #4153).
+    let body: String = text
+        .replace("\r\n", "\n")
+        .split(['\n', '\r'])
+        .map(|line| {
+            if !shaped::paragraph_rtl(line) {
+                return format!("<p dir=\"ltr\">{}</p>", esc(line));
+            }
+            // The appearance starts a right-to-left paragraph at the right edge when `/Q` is 0,
+            // and CSS `text-align:left` does not follow `dir` (CodeRabbit on #4153).
+            let style = if align == "left" { " style=\"text-align:right\"" } else { "" };
+            format!("<p dir=\"rtl\"{style}>{}</p>", esc(line))
+        })
+        .collect();
     let style = format!(
         "font-size:{}pt;text-align:{align};color:{hex};font-weight:normal;font-style:normal;font-family:Helvetica;font-stretch:normal",
         n(size)

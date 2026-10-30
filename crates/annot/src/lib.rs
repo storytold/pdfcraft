@@ -46,6 +46,7 @@ pub use types::{
 
 pub mod appearance;
 pub mod links;
+mod shaped;
 
 #[cfg(test)]
 mod tests;
