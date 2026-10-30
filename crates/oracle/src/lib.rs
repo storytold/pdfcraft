@@ -88,7 +88,8 @@ impl Absent {
     fn install_hint(program: &str) -> &'static str {
         match program {
             "qpdf" => "apt install qpdf / brew install qpdf",
-            "pdftoppm" | "pdftotext" => "apt install poppler-utils / brew install poppler",
+            "pdftoppm" | "pdftotext" | "pdfinfo" => "apt install poppler-utils / brew install poppler",
+            "mutool" => "apt install mupdf-tools / brew install mupdf-tools",
             _ => "install it and put it on PATH",
         }
     }
@@ -151,6 +152,17 @@ pub fn pdftoppm() -> Result<Oracle, Absent> {
 /// against it over the corpus).
 pub fn pdftotext() -> Result<Oracle, Absent> {
     find("pdftotext", "-v")
+}
+
+/// Poppler's `pdfinfo`: page count and encryption state (`cargo xtask interop`).
+pub fn pdfinfo() -> Result<Oracle, Absent> {
+    find("pdfinfo", "-v")
+}
+
+/// MuPDF's `mutool`: opens and renders files (`cargo xtask interop`). It has no version flag; any
+/// run of the program is enough to show it is installed.
+pub fn mutool() -> Result<Oracle, Absent> {
+    find("mutool", "-v")
 }
 
 /// Binds an oracle, or returns from the calling test after saying on stderr why it was skipped.

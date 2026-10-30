@@ -7,6 +7,7 @@ mod corpus;
 mod demo_pdf;
 mod fuzz;
 mod gates;
+mod interop;
 mod layers;
 mod macos_integration;
 mod parity;
@@ -43,6 +44,11 @@ const COMMANDS: &[(&str, &str, Command)] = &[
         "render-oracle",
         "Compare page rendering with Poppler over corpus/ (pixel disagreement rate; --dir, --dpi, --limit, --tolerance, --hide-annotations)",
         gates::render_oracle,
+    ),
+    (
+        "interop",
+        "Open every kind of output we write (plain, incremental, encrypted, signed, form, annotated, page-edited) in MuPDF and Poppler (--out DIR)",
+        interop::run,
     ),
     ("screenshots", "Regenerate the README screenshots in docs/images/ and their ATTRIBUTION entries", screenshots::run),
     ("models", "Fetch the OCR models (ATTRIBUTION.toml kind = \"model\") into assets/models/, verified by SHA-256", assets::models),
