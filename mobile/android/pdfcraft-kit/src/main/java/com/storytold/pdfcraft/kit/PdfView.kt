@@ -41,6 +41,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -239,18 +240,23 @@ fun PdfView(
                     TopAppBar(
                         title = {
                             Column(
-                                modifier = Modifier.clickable { showGoToPageDialog = true }
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showGoToPageDialog = true }
                             ) {
                                 Text(
-                                    text = document.name,
+                                    text = document.name.ifBlank { "Document" },
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "Page ${currentPage + 1} of ${document.pageCount} (tap to jump)",
+                                    text = "Page ${currentPage + 1} of ${document.pageCount}",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.secondary
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         },
@@ -262,42 +268,6 @@ fun PdfView(
                             }
                         },
                         actions = {
-                            // Previous page
-                            IconButton(
-                                onClick = {
-                                    if (currentPage > 0) {
-                                        currentPage--
-                                        pdfPageViewRef?.setDocument(document, currentPage)
-                                    }
-                                },
-                                enabled = currentPage > 0
-                            ) {
-                                Icon(Icons.AutoMirrored.Filled.NavigateBefore, contentDescription = "Previous Page")
-                            }
-
-                            // Next page
-                            IconButton(
-                                onClick = {
-                                    if (currentPage < document.pageCount - 1) {
-                                        currentPage++
-                                        pdfPageViewRef?.setDocument(document, currentPage)
-                                    }
-                                },
-                                enabled = currentPage < document.pageCount - 1
-                            ) {
-                                Icon(Icons.AutoMirrored.Filled.NavigateNext, contentDescription = "Next Page")
-                            }
-
-                            // Table of Contents / Outline
-                            IconButton(onClick = { showOutlineDialog = true }) {
-                                Icon(Icons.AutoMirrored.Outlined.FormatListBulleted, contentDescription = "Table of Contents")
-                            }
-
-                            // Thumbnails / Grid
-                            IconButton(onClick = { showPageGrid = true }) {
-                                Icon(Icons.Outlined.GridView, contentDescription = "Thumbnails")
-                            }
-
                             // Search
                             IconButton(onClick = {
                                 isSearchActive = !isSearchActive
@@ -306,9 +276,9 @@ fun PdfView(
                                 Icon(Icons.Outlined.Search, contentDescription = "Find in Document")
                             }
 
-                            // Tools
-                            IconButton(onClick = { showCommandPalette = true }) {
-                                Icon(Icons.Outlined.Handyman, contentDescription = "Tools")
+                            // Thumbnails / Grid
+                            IconButton(onClick = { showPageGrid = true }) {
+                                Icon(Icons.Outlined.GridView, contentDescription = "Thumbnails")
                             }
 
                             // More Menu
@@ -348,6 +318,28 @@ fun PdfView(
                                         )
                                     }
                                     DropdownMenuItem(
+                                        text = { Text("Previous Page") },
+                                        enabled = currentPage > 0,
+                                        onClick = {
+                                            showMoreMenu = false
+                                            if (currentPage > 0) {
+                                                currentPage--
+                                                pdfPageViewRef?.setDocument(document, currentPage)
+                                            }
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Next Page") },
+                                        enabled = currentPage < document.pageCount - 1,
+                                        onClick = {
+                                            showMoreMenu = false
+                                            if (currentPage < document.pageCount - 1) {
+                                                currentPage++
+                                                pdfPageViewRef?.setDocument(document, currentPage)
+                                            }
+                                        }
+                                    )
+                                    DropdownMenuItem(
                                         text = { Text("Go to Page...") },
                                         onClick = {
                                             showMoreMenu = false
@@ -359,6 +351,13 @@ fun PdfView(
                                         onClick = {
                                             showMoreMenu = false
                                             showOutlineDialog = true
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("All Tools (Command Palette)...") },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            showCommandPalette = true
                                         }
                                     )
                                     HorizontalDivider()
@@ -747,11 +746,12 @@ fun PdfView(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                        .padding(horizontal = 12.dp, vertical = 6.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Row(
+                                        modifier = Modifier.weight(1f, fill = false),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
@@ -770,7 +770,9 @@ fun PdfView(
                                         Text(
                                             text = "Drag to move • Corners to resize",
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                     }
 
@@ -788,13 +790,16 @@ fun PdfView(
                                                 tint = MaterialTheme.colorScheme.error
                                             )
                                         }
-                                        FilledTonalButton(onClick = {
-                                            pdfPageViewRef?.selectContentItem(null)
-                                            selectedContentItemState = null
-                                        }) {
+                                        FilledTonalButton(
+                                            onClick = {
+                                                pdfPageViewRef?.selectContentItem(null)
+                                                selectedContentItemState = null
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                        ) {
                                             Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Deselect")
+                                            Text("Deselect", style = MaterialTheme.typography.labelMedium)
                                         }
                                     }
                                 }
@@ -802,7 +807,7 @@ fun PdfView(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                        .padding(horizontal = 12.dp, vertical = 6.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -810,48 +815,63 @@ fun PdfView(
                                         modifier = Modifier
                                             .weight(1f)
                                             .horizontalScroll(rememberScrollState()),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Button(onClick = { showAddTextDialog = true }) {
+                                        FilledTonalButton(
+                                            onClick = { showAddTextDialog = true },
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                                        ) {
                                             Icon(Icons.Outlined.TextFields, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Text")
+                                            Text("Text", style = MaterialTheme.typography.labelMedium)
                                         }
-                                        Button(onClick = { insertImageLauncher.launch("image/*") }) {
+                                        FilledTonalButton(
+                                            onClick = { insertImageLauncher.launch("image/*") },
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                                        ) {
                                             Icon(Icons.Outlined.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Image")
+                                            Text("Image", style = MaterialTheme.typography.labelMedium)
                                         }
-                                        OutlinedButton(onClick = { showRedactionView = true }) {
+                                        FilledTonalButton(
+                                            onClick = { showRedactionView = true },
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                                        ) {
                                             Icon(Icons.Outlined.VisibilityOff, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Redact")
+                                            Text("Redact", style = MaterialTheme.typography.labelMedium)
                                         }
-                                        OutlinedButton(onClick = {
-                                            try {
-                                                document.flatten(comments = true, fields = true)
-                                                statusNotification = "Document flattened"
-                                                pdfPageViewRef?.refreshPage()
-                                            } catch (e: Exception) {
-                                                statusNotification = "Flatten error: ${e.message}"
-                                            }
-                                        }) {
+                                        FilledTonalButton(
+                                            onClick = {
+                                                try {
+                                                    document.flatten(comments = true, fields = true)
+                                                    statusNotification = "Document flattened"
+                                                    pdfPageViewRef?.refreshPage()
+                                                } catch (e: Exception) {
+                                                    statusNotification = "Flatten error: ${e.message}"
+                                                }
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                                        ) {
                                             Icon(Icons.Outlined.LayersClear, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Flatten")
+                                            Text("Flatten", style = MaterialTheme.typography.labelMedium)
                                         }
                                     }
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    FilledTonalButton(onClick = {
-                                        viewerMode = ViewerMode.VIEW
-                                        pdfPageViewRef?.isEditContentMode = false
-                                        pdfPageViewRef?.selectContentItem(null)
-                                        selectedContentItemState = null
-                                    }) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Button(
+                                        onClick = {
+                                            viewerMode = ViewerMode.VIEW
+                                            pdfPageViewRef?.isEditContentMode = false
+                                            pdfPageViewRef?.selectContentItem(null)
+                                            selectedContentItemState = null
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                    ) {
                                         Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Done")
+                                        Text("Done", style = MaterialTheme.typography.labelMedium)
                                     }
                                 }
                             }
@@ -992,15 +1012,15 @@ fun PdfView(
                 }
             }
 
-            // Quick Floating Page Scrubber Pill (bottom-center)
-            if (isChromeVisible) {
+            // Quick Floating Page Scrubber Pill (shown in immersive reading mode when chrome is hidden)
+            if (!isChromeVisible) {
                 Surface(
                     shape = RoundedCornerShape(20.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f),
                     shadowElevation = 4.dp,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(bottom = 12.dp)
+                        .padding(bottom = 24.dp)
                         .clickable { showGoToPageDialog = true }
                 ) {
                     Row(
@@ -1022,9 +1042,10 @@ fun PdfView(
                 Surface(
                     shape = RoundedCornerShape(20.dp),
                     color = MaterialTheme.colorScheme.inverseSurface,
+                    shadowElevation = 6.dp,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(bottom = 54.dp)
+                        .padding(bottom = 24.dp)
                 ) {
                     Text(
                         text = msg,
