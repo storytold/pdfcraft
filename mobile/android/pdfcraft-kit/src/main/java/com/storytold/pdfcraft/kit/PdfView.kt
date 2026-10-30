@@ -488,16 +488,37 @@ fun PdfView(
                                     value = searchQuery,
                                     onValueChange = { searchQuery = it },
                                     placeholder = { Text("Find in document...") },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Outlined.Search,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(20.dp),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    },
+                                    trailingIcon = {
+                                        if (searchQuery.isNotEmpty()) {
+                                            IconButton(onClick = { searchQuery = "" }) {
+                                                Icon(
+                                                    Icons.Filled.Close,
+                                                    contentDescription = "Clear search",
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                    },
                                     singleLine = true,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(48.dp)
+                                    textStyle = MaterialTheme.typography.bodyMedium,
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 if (searchMatches.isNotEmpty()) {
                                     Text(
                                         text = "${searchMatches.size} on page",
-                                        style = MaterialTheme.typography.labelSmall
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Medium
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                 }
