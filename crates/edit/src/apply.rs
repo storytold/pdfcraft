@@ -1,5 +1,6 @@
 use super::marks::{
-    Background, Context, HeaderFooter, MarkKind, Watermark, add_picture_resource, bates_start, expand, matrix_number, n, picture, rgb, shrink_matrix,
+    Background, Context, HeaderFooter, MAX_MARK_WIDTH, MarkKind, Watermark, add_picture_resource, bates_start, check_placement, expand,
+    matrix_number, n, picture, placement, rgb, shrink_matrix,
 };
 use super::place::{
     END, Isolation, add_page_resources, add_resources, begin, check, check_on_top, contents, free_font_name, isolation, page_fonts, page_list, place,
@@ -136,9 +137,13 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
         && wm.rotation.is_finite()
         && wm.font_size.is_finite()
         && wm.font_size >= 0.0
+        && (wm.width == 0.0 || (1.0..=MAX_MARK_WIDTH).contains(&wm.width))
         && wm.offset.iter().all(|o| o.is_finite()))
     {
         return Err(EditError::Invalid("invalid watermark settings".into()));
+    }
+    if let Some(src) = &wm.source {
+        check_placement(doc, pages, src, wm.scale, wm.width)?;
     }
     if !wm.behind {
         for &i in pages {
@@ -156,7 +161,9 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
         if let Some(src) = &wm.source {
             let mut content = begin(MarkKind::Watermark, "Watermark", page.view_matrix(doc));
             content.push_str(&format!("/PCGS{} gs\n", (opacity * 100.0).round() as i64));
-            content.push_str(&picture(src, (w, h), wm.scale, wm.rotation, wm.offset));
+            let at =
+                placement(src, (w, h), wm.scale, wm.width).ok_or_else(|| EditError::Invalid("the picture cannot be placed at that size".into()))?;
+            content.push_str(&picture(src, at, (w, h), wm.rotation, wm.offset));
             content.push_str(END);
             add_resources(doc, &page, Some(opacity), None)?;
             add_picture_resource(doc, &page_list(doc)[i].clone(), src)?;
@@ -203,6 +210,9 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
 pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, replace: bool) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
+    if let Some(src) = &bg.source {
+        check_placement(doc, pages, src, bg.scale, 0.0)?;
+    }
     if replace {
         remove_marks(doc, pages, MarkKind::Background)?;
     }
@@ -214,7 +224,9 @@ pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, repl
         match &bg.source {
             Some(src) => {
                 content.push_str(&format!("/PCGS{} gs\n", (opacity * 100.0).round() as i64));
-                content.push_str(&picture(src, (w, h), bg.scale, 0.0, [0.0; 2]));
+                let at =
+                    placement(src, (w, h), bg.scale, 0.0).ok_or_else(|| EditError::Invalid("the picture cannot be placed at that size".into()))?;
+                content.push_str(&picture(src, at, (w, h), 0.0, [0.0; 2]));
             }
             None => content.push_str(&format!("/PCGS{} gs\n{}\n0 0 {} {} re f\n", (opacity * 100.0).round() as i64, rgb(bg.color), n(w), n(h))),
         }

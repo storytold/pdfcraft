@@ -417,7 +417,7 @@ impl Automation {
     }
 
     pub(crate) fn marks(&mut self, tool: &str, a: &Args) -> Result<Value> {
-        use pdfcraft_engine::{Background, HeaderFooter, MarkKind, Watermark};
+        use pdfcraft_engine::{Background, HeaderFooter, MAX_MARK_WIDTH, MarkKind, Watermark};
         let n = self.doc(a)?.info.pages.len();
         let pages = match a.opt_ints("pages")? {
             Some(_) => self.pages(a, "pages")?,
@@ -461,10 +461,16 @@ impl Automation {
                     Some(_) => a.opt_str("text")?.unwrap_or_default().to_string(),
                     None => a.str("text")?.to_string(),
                 };
+                let width = match a.opt_num("width")? {
+                    None => 0.0,
+                    Some(w) if (1.0..=MAX_MARK_WIDTH).contains(&w) => w,
+                    Some(_) => return Err(ToolError::InvalidArgs(format!("width must be between 1 and {MAX_MARK_WIDTH} points"))),
+                };
                 let wm = Watermark {
                     text,
                     source: None,
                     scale: a.opt_num("scale")?.unwrap_or(d.scale).clamp(0.01, 1.0),
+                    width,
                     font_size: a.opt_num("font_size")?.unwrap_or(0.0),
                     color: color("color", d.color)?,
                     opacity: a.opt_num("opacity")?.unwrap_or(d.opacity),

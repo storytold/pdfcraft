@@ -505,6 +505,77 @@ fn a_watermark_file_from_browse_lands_only_in_the_dialog_that_asked() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The watermark dialog with a file picked through Browse…, rotation 0 so the placement reads plainly.
+fn watermark_dialog_with_file(dir: &std::path::Path) -> Harness<'static, PdfCraftApp> {
+    let file = dir.join("mark.pdf");
+    std::fs::write(&file, fixture(1)).unwrap();
+    let mut h = harness(&[1]);
+    assert!(h.state_mut().execute("edit.watermark"));
+    h.state_mut().marks_draft.use_file = true;
+    h.state_mut().marks_draft.wm.rotation = 0.0;
+    h.state_mut().pick_override = Some(vec![file.to_string_lossy().into_owned()]);
+    h.run_steps(2);
+    h.get_by_label("Browse…").click();
+    h.run_steps(3);
+    assert_eq!(h.state().marks_draft.file.as_ref().map(|f| f.0.as_str()), Some("mark.pdf"));
+    h
+}
+
+/// The watermark's placement in the saved document: the `cm` on the line before the picture is
+/// drawn, read from the decoded content of the first page.
+fn watermark_cm(app: &PdfCraftApp) -> String {
+    use pdfcraft_cos::Object;
+    let (_, id) = app.active_ids().unwrap();
+    let saved = pdfcraft_cos::Document::open(app.session.save_bytes(id).unwrap()).unwrap();
+    let page = &pdfcraft_model::pages(&saved)[0];
+    let contents = page.dict.get(b"Contents").cloned().expect("page content");
+    let pieces = match &*saved.resolve(&contents) {
+        Object::Array(a) => a.clone(),
+        _ => vec![contents],
+    };
+    for piece in &pieces {
+        let Object::Stream(stream) = &*saved.resolve(piece) else { continue };
+        let text = String::from_utf8_lossy(&stream.decoded().unwrap()).into_owned();
+        let lines: Vec<&str> = text.lines().collect();
+        if let Some(draw) = lines.iter().position(|l| l.starts_with("/PCPic") && l.ends_with(" Do")) {
+            return lines[draw - 1].to_string();
+        }
+    }
+    panic!("no picture is drawn on the first page of the saved file");
+}
+
+#[test]
+fn a_watermark_width_chosen_in_the_dialog_sets_the_size_in_points() {
+    let dir = scratch("watermark-width");
+    // Page and mark file are both 200 x 300. By default the picture is half the page: 100 wide.
+    let mut h = watermark_dialog_with_file(&dir);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(watermark_cm(h.state()), "0.5 0 0 0.5 -50 -75 cm", "scale 0.5 of the page");
+
+    // Ticking Width sets two inches, and OK uses that however the scale slider is left.
+    let mut h = watermark_dialog_with_file(&dir);
+    h.get_by_label("Width").click();
+    h.run_steps(2);
+    assert!(h.state().marks_draft.fixed_width);
+    assert_eq!(h.state().marks_draft.wm.width, 144.0);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(watermark_cm(h.state()), "0.72 0 0 0.72 -72 -108 cm", "144 pt wide, 216 high");
+
+    // Ticking it off again goes back to the scale, and the value stays for the next time.
+    let mut h = watermark_dialog_with_file(&dir);
+    h.get_by_label("Width").click();
+    h.run_steps(2);
+    h.get_by_label("Width").click();
+    h.run_steps(2);
+    assert!(!h.state().marks_draft.fixed_width);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(watermark_cm(h.state()), "0.5 0 0 0.5 -50 -75 cm");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Browsers read picked files asynchronously and queue them on `requests` (#167): the request
 /// is made when the picker opens, so it is bound to the document active then.
 fn browser_insert(h: &Harness<'static, PdfCraftApp>, pages: usize) -> pdfcraft_ui_egui::FileRequest {

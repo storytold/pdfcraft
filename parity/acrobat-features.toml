@@ -2495,8 +2495,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.watermark"]
 tools = ["doc_watermark"]
-evidence = ["crates/engine/src/tests.rs::backgrounds_and_watermarks_from_files"]
-notes = "an image or a page of a PDF, scaled relative to the page, rotated, with opacity, behind or on top; the dialog's preview shows its frame and file name over the page, not the picture itself"
+evidence = ["crates/engine/src/tests.rs::backgrounds_and_watermarks_from_files", "crates/edit/src/tests.rs::a_picture_watermark_with_a_width_is_that_wide_on_every_page_size", "crates/edit/src/tests.rs::a_watermark_width_that_is_not_a_usable_size_is_refused", "crates/automation/tests/it/automation.rs::a_picture_watermark_with_a_width_is_the_same_size_on_pages_of_any_size", "crates/ui-egui/tests/it/pickers.rs::a_watermark_width_chosen_in_the_dialog_sets_the_size_in_points"]
+notes = "an image or a page of a PDF, rotated, with opacity, behind or on top. Sized relative to the page (a scale), or by a fixed width of 1 to 20000 points that is the same on every page size (the height follows the picture's shape, and a picture that would then be taller than 20000 points is refused; #3771). A picture whose size is not a usable number is refused before anything changes. Missing: a fixed height or both, a unit other than points; the dialog's preview shows its frame and file name over the page, not the picture itself, and draws that frame as a square because the picture's shape is only known once it is applied. Backgrounds still have only the relative scale. Signature images are sized separately (#1295, #2061)."
 
 [[feature]]
 id = "edit.watermark-update-remove"

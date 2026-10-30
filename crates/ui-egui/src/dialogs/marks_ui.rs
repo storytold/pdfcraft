@@ -6,13 +6,15 @@
 use std::collections::{HashMap, HashSet};
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
-use pdfcraft_engine::{Background, Edit, FontFamily, HeaderFooter, MarkKind, Watermark};
+use pdfcraft_engine::{Background, Edit, FontFamily, HeaderFooter, MAX_MARK_WIDTH, MarkKind, Watermark};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons, widgets};
 
 /// How far a watermark may be moved from the page centre, in points.
 const MAX_OFFSET: f64 = 20_000.0;
+/// The width a picture watermark starts with in the dialog, used once "Width" is ticked: two inches.
+const DEFAULT_MARK_WIDTH: f64 = 144.0;
 
 /// The preview page's longer side, in points.
 const PREVIEW_SIDE: f32 = 190.0;
@@ -91,6 +93,8 @@ pub struct MarksDraft {
     pub date_format: usize,
     /// Watermark: size the text to the page.
     pub fit: bool,
+    /// Watermark picture: `wm.width` points wide on every page, instead of `wm.scale` of the page.
+    pub fixed_width: bool,
     /// Source ▸ File (watermark or background): the file picked, and the page of a PDF (1-based).
     pub use_file: bool,
     pub file: Option<(String, std::sync::Arc<Vec<u8>>)>,
@@ -104,7 +108,9 @@ impl Default for MarksDraft {
     fn default() -> Self {
         Self {
             hf: HeaderFooter::default(),
-            wm: Watermark::default(),
+            // The width is remembered while "Width" is off (`watermark` leaves it out), so ticking it
+            // starts from a size that shows.
+            wm: Watermark { width: DEFAULT_MARK_WIDTH, ..Watermark::default() },
             bg: Background::default(),
             range: PageRange::default(),
             replace: false,
@@ -112,6 +118,7 @@ impl Default for MarksDraft {
             page_format: 0,
             date_format: 0,
             fit: true,
+            fixed_width: false,
             use_file: false,
             file: None,
             file_page: 1,
@@ -510,7 +517,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     let tint = if kind == MarkKind::Background && !d.use_file { behind(d.bg.color, d.bg.opacity) } else { Color32::WHITE };
     let hf = d.hf.clone();
     let size_h = page.1.max(1.0);
-    let (wm, fit) = (d.wm.clone(), d.fit);
+    let (wm, fit) = (d.watermark(), d.fit);
     let file_name = d.use_file.then(|| d.file.as_ref().map(|f| f.0.clone())).flatten();
     ui.horizontal(|ui| {
         preview(ui, t, page, picture, tint, |p, r, s| match kind {
@@ -541,7 +548,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 }
             }
             MarkKind::Watermark if file_name.is_some() => {
-                let side = r.width().min(r.height()) * wm.scale as f32;
+                // The picture's shape isn't known until it is applied, so it is drawn as a square.
+                let side = if wm.width > 0.0 { wm.width as f32 * s } else { r.width().min(r.height()) * wm.scale as f32 };
                 let centre = r.center() + vec2(wm.offset[0] as f32 * s, -wm.offset[1] as f32 * s);
                 p.rect_stroke(
                     Rect::from_center_size(centre, vec2(side, side)),
@@ -693,11 +701,34 @@ fn file_source(ui: &mut egui::Ui, d: &mut MarksDraft, kind: MarkKind) -> bool {
         ui.label(tl!("Scale relative to target page"));
         let scale = if kind == MarkKind::Background { &mut d.bg.scale } else { &mut d.wm.scale };
         let mut pct = *scale * 100.0;
-        if ui.add(egui::Slider::new(&mut pct, 5.0..=100.0).suffix("%")).changed() {
+        let relative = kind == MarkKind::Background || !d.fixed_width;
+        if ui.add_enabled(relative, egui::Slider::new(&mut pct, 5.0..=100.0).suffix("%")).changed() {
             *scale = pct / 100.0;
         }
     });
+    if kind == MarkKind::Watermark {
+        // A width in points is the same size on a letter page and an A0 one; the scale is not.
+        ui.horizontal(|ui| {
+            ui.add(widgets::checkbox(&mut d.fixed_width, tl!("Width")));
+            ui.add_enabled(d.fixed_width, egui::DragValue::new(&mut d.wm.width).range(1.0..=MAX_MARK_WIDTH).suffix(" pt"));
+        });
+    }
     browse
+}
+
+impl MarksDraft {
+    /// The watermark as the dialog's switches make it: text sized to the page when `fit`, and a
+    /// picture's width only when `fixed_width` (the value is kept while it is off).
+    pub fn watermark(&self) -> Watermark {
+        let mut wm = self.wm.clone();
+        if self.fit {
+            wm.font_size = 0.0;
+        }
+        if !self.fixed_width {
+            wm.width = 0.0;
+        }
+        wm
+    }
 }
 
 /// The edit the dialog's OK makes.
@@ -705,13 +736,7 @@ pub fn edit(d: &MarksDraft, kind: MarkKind, count: usize) -> Edit {
     let pages = d.range.pages(count);
     match kind {
         MarkKind::HeaderFooter => Edit::AddHeaderFooter { pages, settings: d.hf.clone(), replace: d.replace },
-        MarkKind::Watermark => {
-            let mut wm = d.wm.clone();
-            if d.fit {
-                wm.font_size = 0.0;
-            }
-            Edit::AddWatermark { pages, settings: wm, replace: d.replace, file: mark_file(d) }
-        }
+        MarkKind::Watermark => Edit::AddWatermark { pages, settings: d.watermark(), replace: d.replace, file: mark_file(d) },
         MarkKind::Background => Edit::AddBackground { pages, settings: d.bg.clone(), replace: d.replace, file: mark_file(d) },
     }
 }
@@ -802,6 +827,21 @@ mod tests {
         assert_eq!(behind([1.0, 0.0, 0.0], 0.0), Color32::WHITE);
         assert_eq!(behind([0.0, 0.0, 0.0], 0.5), Color32::from_rgb(128, 128, 128));
         assert_eq!(behind([0.2, 0.4, 0.6], f64::NAN), behind([0.2, 0.4, 0.6], 1.0), "opaque, as the engine has it");
+    }
+
+    #[test]
+    fn the_watermark_edit_carries_the_width_only_when_fixed() {
+        let mut d = MarksDraft::default();
+        d.wm.text = "DRAFT".into();
+        d.wm.width = 200.0;
+        let width = |d: &MarksDraft| match edit(d, MarkKind::Watermark, 3) {
+            Edit::AddWatermark { settings, .. } => settings.width,
+            other => panic!("expected AddWatermark, got {other:?}"),
+        };
+        assert_eq!(width(&d), 0.0, "off: the picture follows the page, though a width is remembered");
+        d.fixed_width = true;
+        assert_eq!(width(&d), 200.0);
+        assert_eq!(d.watermark().scale, 0.5, "the scale stays what it was");
     }
 
     #[test]

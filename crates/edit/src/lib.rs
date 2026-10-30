@@ -63,7 +63,7 @@ mod place;
 pub use apply::{add_background, add_header_footer, add_watermark, marks_present, remove_marks};
 #[cfg(test)]
 use marks::bates_start;
-pub use marks::{Background, Context, HeaderFooter, MarkKind, MarkSource, Watermark, expand};
+pub use marks::{Background, Context, HeaderFooter, MAX_MARK_WIDTH, MarkKind, MarkSource, Watermark, expand};
 use marks::{matrix_number, n};
 pub(crate) use place::undrawable;
 #[cfg(test)]

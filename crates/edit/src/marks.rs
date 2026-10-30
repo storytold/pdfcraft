@@ -1,3 +1,4 @@
+use super::place::page_list;
 use super::{Document, EditError, Object, Rgb, added};
 
 /// The kinds of page marks.
@@ -125,6 +126,10 @@ pub struct Watermark {
     pub source: Option<MarkSource>,
     /// Pictures: size relative to the page (1.0 fits the page).
     pub scale: f64,
+    /// Pictures: width in points, the same on every page whatever its size, with the height
+    /// following the picture's shape. 0 = size by `scale` instead; otherwise from 1 to
+    /// [`MAX_MARK_WIDTH`], and `scale` is ignored.
+    pub width: f64,
     /// 0 = fit: about half the page diagonal.
     pub font_size: f64,
     pub color: Rgb,
@@ -155,6 +160,7 @@ impl Default for Watermark {
             text: String::new(),
             source: None,
             scale: 0.5,
+            width: 0.0,
             font_size: 0.0,
             color: [0.6, 0.6, 0.6],
             opacity: 0.5,
@@ -164,6 +170,10 @@ impl Default for Watermark {
         }
     }
 }
+
+/// The widest a picture watermark may be set to, in points (a PDF page is at most 14 400 points
+/// across, so this is more than any page).
+pub const MAX_MARK_WIDTH: f64 = 20_000.0;
 
 /// A background behind the page content: a solid colour, or a picture from a file.
 #[derive(Clone, Debug, PartialEq)]
@@ -181,20 +191,56 @@ impl Default for Background {
     }
 }
 
-/// Drawing a picture mark: fitted to the page at `scale`, centred (plus `offset`), turned by
-/// `rotation` degrees. Returns the content and the resource name it uses.
-pub(crate) fn picture(src: &MarkSource, page: (f64, f64), scale: f64, rotation: f64, offset: [f64; 2]) -> String {
+/// How a picture mark is drawn on a page: the factor from the picture's own size, and its drawn
+/// width and height in points. It is `width` points wide when that is positive, otherwise fitted
+/// to the page at `scale`. `None` when it can't be drawn: the picture's size (it comes from a
+/// file) isn't a usable number (or, at a fixed `width`, isn't positive), or at a fixed `width` it
+/// would be taller than [`MAX_MARK_WIDTH`].
+pub(crate) fn placement(src: &MarkSource, page: (f64, f64), scale: f64, width: f64) -> Option<(f64, f64, f64)> {
     let (w, h) = page;
-    let (sw, sh) = (src.size.0.max(0.01), src.size.1.max(0.01));
-    let k = (w / sw).min(h / sh) * if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
-    let (dw, dh) = (sw * k, sh * k);
+    // `max` would turn a NaN or -inf into the minimum, so the size is checked first.
+    if !(src.size.0.is_finite() && src.size.1.is_finite()) {
+        return None;
+    }
+    let fixed = width.is_finite() && width > 0.0;
+    // At a fixed width the height follows the picture's own proportions, so its real size counts:
+    // a side raised to the minimum would make a very narrow picture look short enough to draw.
+    if fixed && !(src.size.0 > 0.0 && src.size.1 > 0.0) {
+        return None;
+    }
+    let (sw, sh) = if fixed { src.size } else { (src.size.0.max(0.01), src.size.1.max(0.01)) };
+    let k = if fixed { width / sw } else { (w / sw).min(h / sh) * if scale.is_finite() && scale > 0.0 { scale } else { 1.0 } };
+    // At a fixed width the picture is exactly that wide (`sw * (width / sw)` can be a rounding
+    // error more), and the limit on the height allows for that same rounding.
+    let (dw, dh) = (if fixed { width } else { sw * k }, sh * k);
+    let limit = if fixed { MAX_MARK_WIDTH * (1.0 + 1e-9) } else { f64::MAX };
+    (k.is_finite() && dw.is_finite() && dh.is_finite() && dw <= limit && dh <= limit).then_some((k, dw, dh))
+}
+
+/// Refuse a picture mark that can't be drawn on one of `pages`, before anything is changed.
+pub(crate) fn check_placement(doc: &Document, pages: &[usize], src: &MarkSource, scale: f64, width: f64) -> Result<(), EditError> {
+    let all = page_list(doc);
+    for &i in pages {
+        let page = all.get(i).ok_or_else(|| EditError::Invalid(format!("there is no page {}", i.saturating_add(1))))?;
+        if placement(src, page.display_size(doc), scale, width).is_none() {
+            return Err(EditError::Invalid("the picture cannot be placed at that size".into()));
+        }
+    }
+    Ok(())
+}
+
+/// Drawing a picture mark at its [`placement`], centred (plus `offset`) and turned by `rotation`
+/// degrees. Returns the content and the resource name it uses.
+pub(crate) fn picture(src: &MarkSource, (k, dw, dh): (f64, f64, f64), page: (f64, f64), rotation: f64, offset: [f64; 2]) -> String {
+    let (w, h) = page;
     let (s, c) = rotation.to_radians().sin_cos();
     let (cx, cy) = (w / 2.0 + offset[0], h / 2.0 + offset[1]);
-    // Centre, rotate, then place the picture's box (unit square for images).
+    // Centre, rotate, then place the picture's box (unit square for images). The sizes keep
+    // their precision: a small width on a large picture is a factor far below 0.001.
     let place = if src.image {
-        format!("{} 0 0 {} {} {} cm", n(dw), n(dh), n(-dw / 2.0), n(-dh / 2.0))
+        format!("{} 0 0 {} {} {} cm", matrix_number(dw), matrix_number(dh), n(-dw / 2.0), n(-dh / 2.0))
     } else {
-        format!("{} 0 0 {} {} {} cm", n(k), n(k), n(-dw / 2.0), n(-dh / 2.0))
+        format!("{} 0 0 {} {} {} cm", matrix_number(k), matrix_number(k), n(-dw / 2.0), n(-dh / 2.0))
     };
     format!("{} {} {} {} {} {} cm\n{place}\n/PCPic{} Do\n", n(c), n(s), n(-s), n(c), n(cx), n(cy), src.xobject.num)
 }

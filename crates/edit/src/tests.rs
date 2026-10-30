@@ -7557,3 +7557,165 @@ fn q_inside_a_text_object_restores_the_text_matrices() {
         assert_eq!((lines[0].text.as_str(), lines[0].baseline()), ("Edited", baseline), "{content} after editing");
     }
 }
+
+fn picture_mark(size: (f64, f64), image: bool) -> MarkSource {
+    MarkSource { xobject: pdfcraft_cos::ObjRef::new(9, 0), size, image }
+}
+
+/// The `cm` that places the picture, in the watermark's own stream.
+fn picture_cm(doc: &Document, page: usize) -> String {
+    let s = streams(doc, page);
+    let mark = s.iter().find(|c| c.contains("/PCMark /Watermark")).expect("the watermark stream");
+    let lines: Vec<&str> = mark.lines().collect();
+    let at = lines.iter().position(|l| l.contains("/PCPic9 Do")).expect("the picture is drawn");
+    lines[at - 1].to_string()
+}
+
+#[test]
+fn a_picture_watermark_with_a_width_is_that_wide_on_every_page_size() {
+    // Page 1 is 600 x 800; page 2 is rotated, so it shows 800 x 600. A scale would give each its
+    // own size; a width gives both the same (a 100 x 50 picture at 144 pt wide is 144 x 72).
+    let src = picture_mark((100.0, 50.0), true);
+    let mut doc = fixture();
+    let wm = Watermark { source: Some(src), width: 144.0, rotation: 0.0, scale: 1.0, ..Watermark::default() };
+    add_watermark(&mut doc, &[0, 1], &wm, false).unwrap();
+    for page in [0, 1] {
+        assert_eq!(picture_cm(&doc, page), "144 0 0 72 -72 -36 cm", "page {page}");
+    }
+    // Without a width the same picture follows the page.
+    let mut doc = fixture();
+    let wm = Watermark { source: Some(src), rotation: 0.0, scale: 0.5, ..Watermark::default() };
+    add_watermark(&mut doc, &[0, 1], &wm, false).unwrap();
+    assert_eq!(picture_cm(&doc, 0), "300 0 0 150 -150 -75 cm", "600 wide page, half of it");
+    assert_eq!(picture_cm(&doc, 1), "400 0 0 200 -200 -100 cm", "800 x 600 page: half of it, so a different size");
+}
+
+#[test]
+fn a_form_watermark_with_a_width_is_scaled_to_that_width_and_keeps_its_shape() {
+    let mut doc = fixture();
+    let wm = Watermark { source: Some(picture_mark((100.0, 50.0), false)), width: 144.0, rotation: 0.0, ..Watermark::default() };
+    add_watermark(&mut doc, &[0], &wm, false).unwrap();
+    assert_eq!(picture_cm(&doc, 0), "1.44 0 0 1.44 -72 -36 cm");
+    // The width survives a save and reopen: it is the content that was written.
+    assert_eq!(picture_cm(&reopen(&doc), 0), "1.44 0 0 1.44 -72 -36 cm");
+}
+
+#[test]
+fn a_watermark_width_that_is_not_a_usable_size_is_refused() {
+    for width in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -10.0, 0.5, MAX_MARK_WIDTH + 1.0] {
+        let mut doc = fixture();
+        let wm = Watermark { source: Some(picture_mark((100.0, 50.0), true)), width, ..Watermark::default() };
+        assert!(matches!(add_watermark(&mut doc, &[0], &wm, false), Err(EditError::Invalid(_))), "{width}");
+        assert!(!doc.is_modified(), "{width}");
+    }
+    for width in [0.0, 1.0, MAX_MARK_WIDTH] {
+        let mut doc = fixture();
+        let wm = Watermark { source: Some(picture_mark((100.0, 50.0), true)), width, ..Watermark::default() };
+        add_watermark(&mut doc, &[0], &wm, false).unwrap_or_else(|e| panic!("{width}: {e:?}"));
+    }
+}
+
+/// A fixed width sizes the height from the picture's real proportions: a picture far narrower
+/// than tall (a JPEG's odd pixel density can make one 0.0011 pt wide and 100 pt tall) would be
+/// over the size limit at any width, and a picture with no width or height has no proportions.
+#[test]
+fn a_watermark_width_follows_the_picture_s_real_proportions() {
+    for size in [(0.0011, 100.0), (0.0, 50.0), (100.0, 0.0), (-5.0, 50.0)] {
+        let mut doc = fixture();
+        let wm = Watermark { source: Some(picture_mark(size, true)), width: 1.0, ..Watermark::default() };
+        assert!(matches!(add_watermark(&mut doc, &[0], &wm, false), Err(EditError::Invalid(_))), "{size:?}");
+        assert!(!doc.is_modified(), "{size:?}");
+    }
+    // Fitted to the page instead, the same narrow picture is drawn.
+    let mut doc = fixture();
+    let wm = Watermark { source: Some(picture_mark((0.0011, 100.0), true)), ..Watermark::default() };
+    add_watermark(&mut doc, &[0], &wm, false).unwrap();
+}
+
+/// The numbers of a `cm` line, `a b c d e f`.
+fn cm_numbers(cm: &str) -> Vec<f64> {
+    cm.trim_end_matches(" cm").split(' ').map(|v| v.parse().unwrap_or_else(|_| panic!("a number in {cm:?}"))).collect()
+}
+
+#[test]
+fn a_small_width_on_a_large_picture_keeps_its_precision() {
+    // A 612 pt wide PDF page as a mark, 1 pt wide: the factor is 1/612, not 0.002 (which would
+    // draw it 1.22 pt wide), and a 10 000 pt one is 0.0001, not 0 (which would draw nothing).
+    for (size, image) in [((612.0, 792.0), false), ((10_000.0, 5_000.0), false)] {
+        let mut doc = fixture();
+        let wm = Watermark { source: Some(picture_mark(size, image)), width: 1.0, rotation: 0.0, ..Watermark::default() };
+        add_watermark(&mut doc, &[0], &wm, false).unwrap();
+        let cm = cm_numbers(&picture_cm(&doc, 0));
+        assert!(cm[0] > 0.0, "{size:?}: drawn at all");
+        assert!((cm[0] * size.0 - 1.0).abs() < 0.001, "{size:?} is 1 pt wide, not {}: {cm:?}", cm[0] * size.0);
+        assert_eq!(cm[0], cm[3], "the same factor both ways");
+    }
+    // A very wide image at a small width is a sliver, not nothing.
+    let mut doc = fixture();
+    let wm = Watermark { source: Some(picture_mark((10_000.0, 1.0), true)), width: 1.0, rotation: 0.0, ..Watermark::default() };
+    add_watermark(&mut doc, &[0], &wm, false).unwrap();
+    let cm = cm_numbers(&picture_cm(&doc, 0));
+    assert_eq!(cm[0], 1.0);
+    assert!(cm[3] > 0.0 && (cm[3] - 0.0001).abs() < 1e-9, "its height is 0.0001 pt: {cm:?}");
+}
+
+#[test]
+fn a_picture_that_cannot_be_placed_is_refused_before_anything_changes() {
+    // The size comes from a file, so it can be anything a file says. At a fixed width the height
+    // follows from the shape and can overflow; fitted to the page it can't, unless the size itself
+    // is not a number.
+    let overflows_at_a_width =
+        [(1.0, 1e308), (1.0, 1e300), (f64::INFINITY, 10.0), (10.0, f64::INFINITY), (f64::NAN, 10.0), (f64::NEG_INFINITY, 10.0)];
+    let never_drawable =
+        [(f64::INFINITY, 10.0), (10.0, f64::INFINITY), (f64::NAN, 10.0), (10.0, f64::NAN), (f64::NEG_INFINITY, 10.0), (10.0, f64::NEG_INFINITY)];
+    let refused = |size: (f64, f64), width: f64, background: bool| {
+        let mut doc = fixture();
+        // Something of the kind being replaced is already there, and `replace` must not take it
+        // away when the new one is refused.
+        if background {
+            add_background(&mut doc, &[0], &Background::default(), false).unwrap();
+        } else {
+            add_watermark(&mut doc, &[0], &Watermark { text: "DRAFT".into(), ..Watermark::default() }, false).unwrap();
+        }
+        let before = streams(&doc, 0);
+        let result = if background {
+            add_background(&mut doc, &[0], &Background { source: Some(picture_mark(size, true)), ..Background::default() }, true)
+        } else {
+            add_watermark(&mut doc, &[0], &Watermark { source: Some(picture_mark(size, true)), width, ..Watermark::default() }, true)
+        };
+        let is_refused = matches!(result, Err(EditError::Invalid(_)));
+        if is_refused {
+            assert_eq!(streams(&doc, 0), before, "{size:?} at width {width}: the old mark stays and nothing is added");
+        }
+        is_refused
+    };
+    for size in overflows_at_a_width {
+        assert!(refused(size, 20_000.0, false), "{size:?} at a fixed width");
+    }
+    for size in never_drawable {
+        assert!(refused(size, 0.0, false), "{size:?} fitted to the page");
+        assert!(refused(size, 0.0, true), "{size:?} as a background");
+    }
+    // Fitted to the page, a huge but finite shape still has a size, so it is not refused.
+    assert!(!refused((1.0, 1e308), 0.0, false) && !refused((1.0, 1e308), 0.0, true));
+    // At a fixed width, a picture that would be taller than the limit is refused too.
+    let mut doc = fixture();
+    let tall = Watermark { source: Some(picture_mark((1.0, 100_000.0), true)), width: 1_000.0, ..Watermark::default() };
+    assert!(matches!(add_watermark(&mut doc, &[0], &tall, false), Err(EditError::Invalid(_))));
+    assert!(!doc.is_modified());
+}
+
+#[test]
+fn a_watermark_exactly_at_the_size_limits_is_not_refused_by_rounding() {
+    // 145 / 145 * 20000 and 60 * (1000 / 3) are not exact in floating point.
+    for (size, width) in [((145.0, 100.0), MAX_MARK_WIDTH), ((3.0, 60.0), 1_000.0), ((7.0, 7.0), MAX_MARK_WIDTH), ((1.0, 20_000.0), 1.0)] {
+        let mut doc = fixture();
+        let wm = Watermark { source: Some(picture_mark(size, true)), width, rotation: 0.0, ..Watermark::default() };
+        add_watermark(&mut doc, &[0], &wm, false).unwrap_or_else(|e| panic!("{size:?} at {width}: {e:?}"));
+        assert_eq!(cm_numbers(&picture_cm(&doc, 0))[0], width, "{size:?}");
+    }
+    // One part in a thousand over the height limit is over.
+    let mut doc = fixture();
+    let wm = Watermark { source: Some(picture_mark((3.0, 60.06), true)), width: 1_000.0, ..Watermark::default() };
+    assert!(matches!(add_watermark(&mut doc, &[0], &wm, false), Err(EditError::Invalid(_))));
+}

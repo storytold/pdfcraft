@@ -1008,7 +1008,7 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc"],
         )),
-        t("doc_watermark", "Add watermark", "Add a watermark to pages: text, or a picture from `file` (an image, or page `file_page` of a PDF) at `scale` of the page (default 0.5); rotated (degrees counter-clockwise, default 45), semi-transparent (opacity 0–1, default 0.5), text fitted to the page unless font_size is given, on top unless behind: true; moved from the page centre by `offset_x` (right) and `offset_y` (up) points (default 0). replace: true swaps out existing ones. Undoable.")
+        t("doc_watermark", "Add watermark", "Add a watermark to pages: text, or a picture from `file` (an image, or page `file_page` of a PDF) at `scale` of the page (default 0.5), or `width` points wide on every page whatever its size (1 to 20000; the height follows the picture's shape, and scale is then ignored); rotated (degrees counter-clockwise, default 45), semi-transparent (opacity 0–1, default 0.5), text fitted to the page unless font_size is given, on top unless behind: true; moved from the page centre by `offset_x` (right) and `offset_y` (up) points (default 0). replace: true swaps out existing ones. Undoable.")
             .cmd("edit.watermark")
             .with(schema(
                 json!({
@@ -1018,6 +1018,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "file": { "type": "string" },
                     "file_page": { "type": "integer", "minimum": 1 },
                     "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+                    "width": { "type": "number", "minimum": 1, "maximum": 20000, "description": "Picture width in points, the same on every page (the height follows the picture's shape); overrides scale." },
                     "font_size": { "type": "number", "exclusiveMinimum": 0 },
                     "color": { "type": "string" },
                     "opacity": { "type": "number", "minimum": 0, "maximum": 1 },

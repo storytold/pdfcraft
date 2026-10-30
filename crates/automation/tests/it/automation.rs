@@ -9457,3 +9457,51 @@ fn clearing_a_kids_default_through_tools_does_not_bring_back_its_parents() {
     let city = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "address.city").unwrap().clone();
     assert!(city["value"].is_null() || city["value"] == "", "reset clears it rather than restoring the parent's Main St: {}", city["value"]);
 }
+
+/// The rectangle of the first picture on a page, as `page_images` lists it.
+fn first_image_rect(a: &mut Automation, doc: u64, page: u64) -> Vec<f64> {
+    let list = ok(a, "page_images", json!({ "doc": doc, "page": page }));
+    list["images"][0]["rect"].as_array().unwrap_or_else(|| panic!("a picture on page {page}: {list}")).iter().map(|v| v.as_f64().unwrap()).collect()
+}
+
+#[test]
+fn a_picture_watermark_with_a_width_is_the_same_size_on_pages_of_any_size() {
+    let dir = workdir("watermark-width");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "src", "dpi": 18, "pages": [1] }));
+    // The same file marks a page of the document and a page of another size (a crop box makes
+    // page 2 half as wide).
+    ok(&mut a, "page_set_box", json!({ "doc": doc, "pages": [2], "box": "crop", "rect": [0, 0, 150, 200] }));
+    let sizes = |a: &mut Automation| -> Vec<f64> {
+        let r1 = first_image_rect(a, doc, 1);
+        let r2 = first_image_rect(a, doc, 2);
+        vec![r1[2] - r1[0], r1[3] - r1[1], r2[2] - r2[0], r2[3] - r2[1]]
+    };
+    ok(&mut a, "doc_watermark", json!({ "doc": doc, "pages": [1, 2], "file": "src/a_page_1.png", "width": 90, "rotation": 0 }));
+    let s = sizes(&mut a);
+    assert!((s[0] - 90.0).abs() < 0.5 && (s[2] - 90.0).abs() < 0.5, "90 pt wide on both pages: {s:?}");
+    assert!((s[1] - s[3]).abs() < 0.5, "the same height too: {s:?}");
+
+    // A different width replaces it, and `scale` is ignored when a width is given.
+    ok(
+        &mut a,
+        "doc_watermark",
+        json!({ "doc": doc, "pages": [1, 2], "file": "src/a_page_1.png", "width": 60, "scale": 1, "rotation": 0, "replace": true }),
+    );
+    let s = sizes(&mut a);
+    assert!((s[0] - 60.0).abs() < 0.5 && (s[2] - 60.0).abs() < 0.5, "{s:?}");
+
+    // Without a width the picture follows each page's size.
+    ok(&mut a, "doc_watermark", json!({ "doc": doc, "pages": [1, 2], "file": "src/a_page_1.png", "scale": 0.5, "rotation": 0, "replace": true }));
+    let s = sizes(&mut a);
+    assert!((s[0] - s[2]).abs() > 1.0, "a scale gives pages of different sizes different marks: {s:?}");
+
+    // A width outside 1 to 20000 points, or not a number, is refused and changes nothing.
+    let before = ok(&mut a, "page_images", json!({ "doc": doc, "page": 1 }));
+    for bad in [json!(0), json!(0.5), json!(-5), json!(20001), json!("wide")] {
+        let args = json!({ "doc": doc, "pages": [1], "file": "src/a_page_1.png", "width": bad, "replace": true });
+        assert!(matches!(a.call("doc_watermark", &args), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert_eq!(ok(&mut a, "page_images", json!({ "doc": doc, "page": 1 })), before);
+}
