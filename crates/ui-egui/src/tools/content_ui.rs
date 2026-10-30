@@ -533,7 +533,14 @@ pub(crate) fn after_refresh(view: &mut DocView, added: &[Added]) {
 /// The in-place text editor, with Done and Discard beside it. Returns the edit once the text is
 /// committed (a click away, or Done), and whether Done finished adding text. Discard or Escape
 /// throws the draft away.
-pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, added: &[Added]) -> (Option<Edit>, bool) {
+pub(crate) fn editor(
+    ctx: &egui::Context,
+    view: &mut DocView,
+    info: &DocInfo,
+    added: &[Added],
+    interaction_rect: Rect,
+    ruler_interaction: bool,
+) -> (Option<Edit>, bool) {
     let Some(page) = view.content.draft.as_ref().map(|d| d.page) else { return (None, false) };
     let Some(xf) = view.page_xform(page) else { return (None, false) };
     let zoom = xf.zoom();
@@ -585,7 +592,7 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
         .fade_in(false)
         .order(egui::Order::Foreground)
         .fixed_pos(at)
-        .constrain_to(view.viewport_rect())
+        .constrain_to(interaction_rect)
         .constrain(false)
         .show(ctx, |ui| {
             let Some(t) = view.content.draft.as_mut() else { return };
@@ -648,7 +655,10 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                 // Pressing a button takes the focus from the text: that is not a click away.
                 let on_buttons = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| buttons.contains(p));
                 cancel |= ui.input(|i| i.key_pressed(egui::Key::Escape));
-                commit = done || resp.lost_focus() && !on_buttons && !view.objects.hold_editor;
+                if resp.lost_focus() && ruler_interaction {
+                    resp.request_focus();
+                }
+                commit = done || resp.lost_focus() && !ruler_interaction && !on_buttons && !view.objects.hold_editor;
             });
             // Page text is drawn with the standard fonts; anything else would be saved as `?` (#125).
             undrawable = self::undrawable(t, memo);

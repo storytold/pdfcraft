@@ -14,6 +14,7 @@
 	Edit	Bearbeiten
 	Pages	Seiten
 	View	Ansicht
+	Rulers	Lineale
 	Help	Hilfe
 	Preferences	Einstellungen
 	Preferences…	Einstellungen…
@@ -2558,3 +2559,68 @@ animation effects	Off	Aus
 	Rotate the selected pages clockwise	Ausgewählte Seiten im Uhrzeigersinn drehen
 	Extract the selected pages…	Ausgewählte Seiten extrahieren…
 	Delete the selected pages	Ausgewählte Seiten löschen
+# Rulers, guides, grid and guide sets
+	On every page	Auf allen Seiten
+	Delete guide	Hilfslinie löschen
+	Guide properties	Hilfslinie: Eigenschaften
+	Color	Farbe
+	Use the default look	Standardaussehen verwenden
+	Rulers, guides and grid	Lineale, Hilfslinien und Raster
+	Example set file	Beispiel einer Set-Datei
+	Copy example	Beispiel kopieren
+	Open Units and guides	Einheiten und Hilfslinien öffnen
+	For the rulers, the grid, page sizes and margins. Clicking the corner between the rulers steps to the next unit.	Für die Lineale, das Raster, Seitengrößen und Ränder. Ein Klick auf die Ecke zwischen den Linealen schaltet zur nächsten Einheit.
+	Grid	Raster
+	Width between lines	Abstand der senkrechten Linien
+	Height between lines	Abstand der waagerechten Linien
+	Grid offset from left edge	Versatz vom linken Rand
+	Grid offset from top edge	Versatz vom oberen Rand
+	Subdivisions	Unterteilungen
+	Show grid	Raster anzeigen
+	Snap to grid	Am Raster ausrichten
+	Look	Aussehen
+	Grid lines	Rasterlinien
+	Guides	Hilfslinien
+	Guides with a colour or thickness of their own (right-click a guide, or set it in a guide-set file) keep it.	Hilfslinien mit eigener Farbe oder Stärke (Rechtsklick auf die Linie oder in einer Set-Datei) behalten sie.
+	Restore defaults	Standard wiederherstellen
+	Show guides	Hilfslinien anzeigen
+	Drag a guide out of a ruler onto a page; hold Shift as you drop it to put it on every page. Drag it back onto a ruler to remove it, or right-click it for its colour, thickness and label. Guides and the grid are never saved in the PDF.	Zieh eine Hilfslinie aus einem Lineal auf eine Seite; halte beim Loslassen Umschalt gedrückt, um sie auf alle Seiten zu legen. Zieh sie zurück ins Lineal, um sie zu entfernen, oder klick sie mit rechts an für Farbe, Stärke und Beschriftung. Hilfslinien und Raster werden nie im PDF gespeichert.
+	Guide sets	Hilfslinien-Sets
+	thick	stark
+	No saved sets yet. Right-click a ruler ▸ Save guides as a set…, or put a set file in the folder.	Noch keine Sets gespeichert. Rechtsklick auf ein Lineal → Hilfslinien als Set speichern… oder eine Set-Datei in den Ordner legen.
+	guides	Hilfslinien
+	Edit in document	Im Dokument bearbeiten
+	Open folder	Ordner öffnen
+	Each set is a text file in	Jedes Set ist eine Textdatei in
+	{first} … {last} shows and hides the set with that shortcut. Set files can be edited in any text editor and shared with others; click Reload after changing them.	{first} … {last} blendet das Set mit diesem Kürzel ein und aus. Set-Dateien lassen sich in jedem Texteditor bearbeiten und weitergeben; klick nach Änderungen auf „Neu laden“.
+	Guide set “{name}” shown	Hilfslinien-Set „{name}“ eingeblendet
+	Guide set “{name}” hidden	Hilfslinien-Set „{name}“ ausgeblendet
+	No guide set has the shortcut {n}	Kein Hilfslinien-Set hat das Kürzel {n}
+	This document has no guides to save	Dieses Dokument hat keine Hilfslinien zum Speichern
+	Guide sets can't be saved in the web version	In der Webversion lassen sich keine Hilfslinien-Sets speichern
+	Clear guides	Hilfslinien entfernen
+	Save guides as a set…	Hilfslinien als Set speichern…
+	No saved sets yet	Noch keine Sets gespeichert
+	Replace this document's guides with the set's, to move and change them	Ersetzt die Hilfslinien dieses Dokuments durch die des Sets, damit du sie verschieben und ändern kannst
+	Save guides as a set	Hilfslinien als Set speichern
+	Shortcut	Tastenkürzel
+	Include the grid settings	Rastereinstellungen einschließen
+	Saves the guides, the unit and, if ticked, the grid as one set: a text file in the guide-set folder that can be edited, copied and shared.	Speichert die Hilfslinien, die Einheit und, wenn angehakt, das Raster als ein Set: eine Textdatei im Set-Ordner, die sich bearbeiten, kopieren und weitergeben lässt.
+	Saved guide set to {path}	Hilfslinien-Set gespeichert unter {path}
+	View ▸ Rulers ({rulers}) shows a ruler above and beside the pages. Click the corner between them to step to the next unit, or right-click a ruler to choose one.	Ansicht → Lineale ({rulers}) zeigt ein Lineal über und neben den Seiten. Ein Klick auf die Ecke dazwischen schaltet zur nächsten Einheit, ein Rechtsklick auf ein Lineal lässt dich eine wählen.
+	Drag from a ruler onto a page to place a guide: from the top ruler for a horizontal one, from the left ruler for a vertical one. Hold Shift as you drop it to put it on every page.	Zieh aus einem Lineal auf eine Seite, um eine Hilfslinie zu setzen: aus dem oberen Lineal eine waagerechte, aus dem linken eine senkrechte. Halte beim Loslassen Umschalt gedrückt, um sie auf alle Seiten zu legen.
+	Drag a guide to move it. Drag it back onto a ruler, or off the page, to remove it.	Zieh eine Hilfslinie, um sie zu verschieben. Zieh sie zurück ins Lineal oder neben die Seite, um sie zu entfernen.
+	Right-click a guide for a colour, Properties… (colour, thickness, label, every page) and Delete. Double-click opens Properties too.	Ein Rechtsklick auf eine Hilfslinie bietet Farben, Eigenschaften… (Farbe, Stärke, Beschriftung, alle Seiten) und Löschen. Ein Doppelklick öffnet ebenfalls die Eigenschaften.
+	View ▸ Guides ({guides}) hides and shows them; View ▸ Clear guides removes this document's guides. Guides are never saved in the PDF.	Ansicht → Hilfslinien ({guides}) blendet sie aus und ein; Ansicht → Hilfslinien entfernen löscht die Hilfslinien dieses Dokuments. Hilfslinien werden nie im PDF gespeichert.
+	View ▸ Grid ({grid}) draws a grid over the pages; View ▸ Snap to grid ({snap}) makes a dragged guide snap to it.	Ansicht → Raster ({grid}) legt ein Raster über die Seiten; Ansicht → Am Raster ausrichten ({snap}) lässt eine gezogene Hilfslinie daran einrasten.
+	Spacing, offset, subdivisions, colour and thickness are in Preferences ▸ Units and guides.	Abstand, Versatz, Unterteilungen, Farbe und Stärke findest du unter Einstellungen → Einheiten und Hilfslinien.
+	Right-click a ruler ▸ Save guides as a set… keeps the guides, the unit and, if you like, the grid under a name and a shortcut. {first} … {last} shows and hides a set over any document; Edit in document turns it back into guides you can move.	Rechtsklick auf ein Lineal → Hilfslinien als Set speichern… sichert die Hilfslinien, die Einheit und auf Wunsch das Raster unter einem Namen und einem Kürzel. {first} … {last} blendet ein Set über jedem Dokument ein und aus; „Im Dokument bearbeiten“ macht daraus wieder verschiebbare Hilfslinien.
+	Each set is a text file in the guide-set folder (Preferences ▸ Units and guides ▸ Open folder). Edit it in any text editor, send it to others, or drop theirs into the folder, then click Reload. Distances are measured from the edge you name, so a set fits other page sizes.	Jedes Set ist eine Textdatei im Set-Ordner (Einstellungen → Einheiten und Hilfslinien → Ordner öffnen). Bearbeite sie in einem Texteditor, schick sie anderen oder leg deren Dateien in den Ordner und klick auf „Neu laden“. Abstände zählen von der angegebenen Kante, darum passt ein Set auch auf andere Seitengrößen.
+	For scripts and AI agents	Für Skripte und KI-Agenten
+	With the control channel on, ui.state lists every guide (in the set format, and where it lies on screen) and the sets with their files and errors. ui.set document-guides <set as JSON or TOML> replaces the document's guides, guide-set <name>:on|off|toggle shows a set, guide-set-file <set> saves one, and guides, grid and snap-to-grid take on or off.	Bei eingeschaltetem Steuerkanal listet ui.state jede Hilfslinie (im Set-Format und mit ihrer Lage auf dem Bildschirm) sowie die Sets mit Dateien und Fehlern. ui.set document-guides <Set als JSON oder TOML> ersetzt die Hilfslinien des Dokuments, guide-set <Name>:on|off|toggle blendet ein Set ein, guide-set-file <Set> speichert eines, und guides, grid sowie snap-to-grid nehmen on oder off.
+	Points	Punkt
+	Inches	Zoll
+	Millimetres	Millimeter
+	Centimetres	Zentimeter
+	Units and guides	Einheiten und Hilfslinien
+	Hide guide sets	Hilfslinien-Sets ausblenden

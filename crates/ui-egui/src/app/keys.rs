@@ -36,6 +36,9 @@ impl PdfCraftApp {
         craft_menu::bar::leave_for_shortcut(ctx);
         if !craft_menu::bar::is_open(ctx) && !craft_menu::bar::is_focused(ctx) {
             self.registry_shortcuts(ctx);
+            if let Some(n) = crate::guides::set_shortcut(ctx) {
+                self.toggle_guide_set_shortcut(n);
+            }
         }
         // (Esc closes a Combine file shown large first.)
         if self.full_screen && self.combine_tab.preview.is_none() && ctx.input(|i| i.key_pressed(Key::Escape)) {

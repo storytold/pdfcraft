@@ -198,6 +198,15 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("edit.find", "Find…", EDIT, Some(Shortcut::cmd("F")), Document, "search"),
     c("edit.advanced_search", "Advanced search…", EDIT, Some(Shortcut::cmd_shift("F")), Document, "search"),
     c("view.palette", "Find tools and commands…", VIEW, Some(Shortcut::cmd("K")), Nothing, "search"),
+    // Checked explicitly in the View menu; `menu = None` avoids a duplicate generated item.
+    c("view.rulers", "Rulers", None, Some(Shortcut::cmd("R")), Document, "ruler"),
+    // Guides and the grid, checked explicitly in the View menu beside Rulers.
+    c("view.guides", "Guides", None, Some(Shortcut::cmd(";")), Document, "ruler"),
+    c("view.clear_guides", "Clear guides", None, None, Document, "ruler"),
+    c("view.grid", "Grid", None, Some(Shortcut::cmd("U")), Document, "grid-3x3"),
+    c("view.snap_to_grid", "Snap to grid", None, Some(Shortcut::cmd_shift("U")), Document, "grid-3x3"),
+    c("view.save_guide_set", "Save guides as a set…", None, None, Document, "ruler"),
+    c("view.hide_guide_sets", "Hide guide sets", None, None, Nothing, "ruler"),
     // Page display: View ▸ Page display and the rail's button list the base layouts as radios and
     // continuous scrolling as a checkbox, so `menu = None` keeps them out of the generated menus.
     // The palette still runs them.
@@ -396,6 +405,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.number", "Number pages…", PAGES, None, Assembly, "hash"),
     c("page.properties", "Page properties…", PAGES, None, Modification, "info"),
     c("help.shortcuts", "Keyboard shortcuts", HELP, None, Nothing, "circle-help"),
+    c("help.guides", "Rulers, guides and grid", HELP, None, Nothing, "ruler"),
     c("help.discord", "Join the ArtCraft Discord", HELP, None, Nothing, "messages-square"),
     c("help.app_page", "PdfCraft web page", HELP, None, Nothing, "globe"),
     c("help.github", "PdfCraft on GitHub", HELP, None, Nothing, "code-xml"),
@@ -491,6 +501,7 @@ mod tests {
         assert_eq!(s.label(true), "⇧⌘S");
         assert_eq!(s.label(false), "Ctrl+Shift+S");
         assert_eq!(command("view.read_mode").unwrap().shortcut.unwrap().label(true), "⌃⌘H");
+        assert_eq!(command("view.rulers").unwrap().shortcut.unwrap().label(false), "Ctrl+R");
         assert_eq!(Shortcut::cmd("+").label(false), "Ctrl++");
         assert_eq!(Shortcut::cmd_shift("−").label(true), "⇧⌘−");
         assert_eq!(Shortcut::cmd_shift("−").label(false), "Ctrl+Shift+−");

@@ -139,6 +139,12 @@ impl PdfCraftApp {
         });
         // Set apart: one more key inside the macro above passes serde_json's recursion limit.
         v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
+        v["show_rulers"] = serde_json::Value::Bool(self.show_rulers);
+        v["show_guides"] = serde_json::Value::Bool(self.show_guides);
+        v["show_grid"] = serde_json::Value::Bool(self.show_grid);
+        v["snap_to_grid"] = serde_json::Value::Bool(self.snap_to_grid);
+        v["grid"] = serde_json::to_value(self.grid).unwrap_or_default();
+        v["shown_guide_sets"] = serde_json::to_value(&self.shown_guide_sets).unwrap_or_default();
         v["redact_prefs"] = self.redact_defaults.to_json();
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
@@ -226,6 +232,24 @@ impl PdfCraftApp {
     fn restore_behavior_prefs(&mut self, v: &serde_json::Value) {
         if let Some(show) = v["default_page_gaps"].as_bool() {
             self.view_defaults.show_page_gaps = show;
+        }
+        if let Some(show) = v["show_rulers"].as_bool() {
+            self.show_rulers = show;
+        }
+        if let Some(show) = v["show_guides"].as_bool() {
+            self.show_guides = show;
+        }
+        if let Some(show) = v["show_grid"].as_bool() {
+            self.show_grid = show;
+        }
+        if let Some(on) = v["snap_to_grid"].as_bool() {
+            self.snap_to_grid = on;
+        }
+        if let Ok(grid) = serde_json::from_value::<guides::GridSettings>(v["grid"].clone()) {
+            self.grid = grid.sanitized();
+        }
+        if let Ok(shown) = serde_json::from_value::<std::collections::BTreeSet<String>>(v["shown_guide_sets"].clone()) {
+            self.shown_guide_sets = shown.into_iter().take(guide_sets::MAX_SETS).collect();
         }
         if let Ok(units) = serde_json::from_value::<units::Unit>(v["units"].clone()) {
             self.units = units;

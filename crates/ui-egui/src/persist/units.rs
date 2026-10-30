@@ -26,6 +26,16 @@ impl Unit {
         }
     }
 
+    /// The unit's name in English, for menus (passed through the catalog).
+    pub fn name(self) -> &'static str {
+        match self {
+            Unit::Points => "Points",
+            Unit::Inches => "Inches",
+            Unit::Millimetres => "Millimetres",
+            Unit::Centimetres => "Centimetres",
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Unit::Points => "pt",

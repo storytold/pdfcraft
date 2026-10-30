@@ -114,36 +114,43 @@ fn card(ui: &mut egui::Ui, t: &Tokens, title: &str, active: bool, themes: &[(The
     inner.inner || whole.clicked()
 }
 
-/// The Appearance section of Preferences.
+/// Preferences ▸ Appearance: the mode, the theme cards, field highlighting and, where the app
+/// draws it, the title bar.
 pub fn preferences_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
-    ui.label(RichText::new(tl_ctx!("theme", "Appearance")).font(theme::semibold(13.0)));
-    ui.horizontal(|ui| {
-        let label = ui.label(tl!("Appearance mode"));
-        let combo = craft_ui::ComboBox::from_id_salt("appearance-mode").selected_text(tl!(mode_label(app.theme_preference))).show_ui(ui, |ui| {
-            for preference in [ThemePreference::System, ThemePreference::Light, ThemePreference::Dark] {
-                if ui.selectable_label(app.theme_preference == preference, tl!(mode_label(preference))).clicked() {
-                    app.execute(mode_command(preference));
-                    ui.close();
+    crate::prefs::card(ui, t, None, |ui| {
+        let label = crate::prefs::field_label(ui, t, tl!("Appearance mode"));
+        let combo =
+            craft_ui::ComboBox::from_id_salt("appearance-mode").selected_text(tl!(mode_label(app.theme_preference))).width(220.0).show_ui(ui, |ui| {
+                for preference in [ThemePreference::System, ThemePreference::Light, ThemePreference::Dark] {
+                    if ui.selectable_label(app.theme_preference == preference, tl!(mode_label(preference))).clicked() {
+                        app.execute(mode_command(preference));
+                        ui.close();
+                    }
                 }
-            }
-        });
+            });
         // The visible label names the combo box for assistive technology and tests.
         combo.response.labelled_by(label.id);
+        ui.add_space(4.0);
+        let light_active = app.theme == ThemeKind::Light;
+        ui.columns(2, |cols| {
+            let [light, dark] = cols else { return };
+            if card(light, t, tl!("Light theme"), light_active, LIGHT_THEMES) {
+                app.execute(mode_command(ThemePreference::Light));
+            }
+            if card(dark, t, tl!("Dark theme"), !light_active, DARK_THEMES) {
+                app.execute(mode_command(ThemePreference::Dark));
+            }
+        });
     });
-    ui.add_space(4.0);
-    let light_active = app.theme == ThemeKind::Light;
-    ui.columns(2, |cols| {
-        let [light, dark] = cols else { return };
-        if card(light, t, tl!("Light theme"), light_active, LIGHT_THEMES) {
-            app.execute(mode_command(ThemePreference::Light));
-        }
-        if card(dark, t, tl!("Dark theme"), !light_active, DARK_THEMES) {
-            app.execute(mode_command(ThemePreference::Dark));
+    crate::prefs::card(ui, t, None, |ui| {
+        // Acrobat's "Highlight existing fields": shared with the toggle in the form bar.
+        ui.add(crate::widgets::checkbox(&mut app.view_defaults.highlight_fields, tl!("Highlight fields")));
+        // Only where the app draws the title bar (GNOME on Wayland); elsewhere the desktop draws it.
+        if app.window_controls.is_some() {
+            ui.add(widgets::checkbox(&mut app.system_title_bar, tl!("Use system title bar")))
+                .on_hover_text(tl!("Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme."));
         }
     });
-    ui.add_space(4.0);
-    // Acrobat's "Highlight existing fields": shared with the toggle in the form bar.
-    ui.add(crate::widgets::checkbox(&mut app.view_defaults.highlight_fields, tl!("Highlight fields")));
 }
 
 #[cfg(test)]

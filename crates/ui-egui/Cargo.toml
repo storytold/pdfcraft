@@ -10,6 +10,8 @@ rust-version = "1.95"
 workspace = true
 
 [dependencies]
+# Guide-set files (Preferences ▸ Units and guides); already in the graph through the build script.
+toml = "1"
 craft-ui = { workspace = true }
 # The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).
 craft-menu = { workspace = true }

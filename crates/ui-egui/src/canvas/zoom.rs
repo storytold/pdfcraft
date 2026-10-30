@@ -1,4 +1,9 @@
-use super::{DocInfo, DocView, Fit, GAP, MARGIN, PT, PageLayout, Pos2, Rect, SIDE, SavedDisplay, Vec2, device_pixels, pos2, vec2};
+use super::{
+    DocInfo, DocView, Fit, MARGIN, PAGE_ROW_GAP, PT, PageLayout, Pos2, Rect, SIDE, SavedDisplay, TWO_UP_COLUMN_GAP, Vec2, device_pixels, pos2, vec2,
+};
+
+/// The supported document zoom range: 1% through 6400%.
+pub const DOCUMENT_ZOOM_RANGE: std::ops::RangeInclusive<f32> = 0.01..=64.0;
 
 /// The page grid's zoom range and the step of its buttons and keys.
 pub const GRID_ZOOM_RANGE: std::ops::RangeInclusive<f32> = 0.5..=3.0;
@@ -102,9 +107,14 @@ impl DocView {
         self.show_page_gaps = show;
     }
 
-    /// Separation between adjacent page rectangles, in logical screen points.
+    /// Vertical separation between page rows, in logical screen points.
     pub(super) fn page_gap(&self) -> f32 {
-        if self.show_page_gaps { GAP } else { 0.0 }
+        if self.show_page_gaps { PAGE_ROW_GAP } else { 0.0 }
+    }
+
+    /// Separation between facing pages in a two-page row, in logical screen points.
+    fn two_up_column_gap(&self) -> f32 {
+        if self.show_page_gaps { TWO_UP_COLUMN_GAP } else { 0.0 }
     }
 
     /// Turn continuous scrolling on or off, keeping the current page in view. A no-op when it is
@@ -150,7 +160,7 @@ impl DocView {
         let Some((page, pr)) = self.screen_rects.iter().find(|(_, pr)| pr.contains(r.center())).copied() else { return };
         let k = (self.viewport_screen.width() / r.width().max(1.0)).min(self.viewport_screen.height() / r.height().max(1.0));
         let f = (r.center() - pr.min) / pr.size();
-        self.zoom = (self.zoom * k).clamp(0.08, 64.0);
+        self.zoom = (self.zoom * k).clamp(*DOCUMENT_ZOOM_RANGE.start(), *DOCUMENT_ZOOM_RANGE.end());
         self.fit = Fit::None;
         self.zoom_anchor = Some((page, f.x.clamp(0.0, 1.0), f.y.clamp(0.0, 1.0), self.viewport_screen.center() - self.viewport_screen.min));
     }
@@ -163,7 +173,7 @@ impl DocView {
         let Some((_, pr)) = self.screen_rects.iter().find(|(p, _)| *p == page).copied() else { return false };
         let w = (content[2] - content[0]).max(0.01) * pr.width();
         let k = (self.viewport_screen.width() - 2.0 * PAD).max(50.0) / w.max(1.0);
-        self.zoom = (self.zoom * k).clamp(0.08, 64.0);
+        self.zoom = (self.zoom * k).clamp(*DOCUMENT_ZOOM_RANGE.start(), *DOCUMENT_ZOOM_RANGE.end());
         self.fit = Fit::None;
         self.zoom_anchor = Some((page, content[0].clamp(0.0, 1.0), content[1].clamp(0.0, 1.0), vec2(PAD, MARGIN)));
         true
@@ -211,7 +221,7 @@ impl DocView {
         if !zoom.is_finite() || !screen_pos.is_finite() {
             return;
         }
-        let zoom = zoom.clamp(0.08, 64.0);
+        let zoom = zoom.clamp(*DOCUMENT_ZOOM_RANGE.start(), *DOCUMENT_ZOOM_RANGE.end());
         if zoom == self.zoom && self.fit == Fit::None {
             return;
         }
@@ -240,11 +250,18 @@ impl DocView {
         (percent.is_finite() && percent > 0.0).then_some(percent / 100.0)
     }
 
-    /// Standard zoom steps (as in Acrobat's zoom menu).
+    /// The feature branch's 21 zoom stops from 1% through 6400%. Fit-derived and typed zooms
+    /// remain valid between stops.
+    const WHEEL_ZOOM_STEPS: [f32; 21] =
+        [0.01, 0.0625, 0.125, 0.25, 0.333_333_34, 0.5, 0.55, 0.666_666_7, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0, 64.0];
+
     pub fn zoom_step(&mut self, up: bool) {
-        const STEPS: [f32; 17] = [0.1, 0.25, 0.33, 0.5, 0.66, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 32.0];
         let z = self.zoom;
-        let next = if up { STEPS.iter().copied().find(|s| *s > z * 1.01) } else { STEPS.iter().rev().copied().find(|s| *s < z * 0.99) };
+        let next = if up {
+            Self::WHEEL_ZOOM_STEPS.iter().copied().find(|s| *s > z * 1.001)
+        } else {
+            Self::WHEEL_ZOOM_STEPS.iter().rev().copied().find(|s| *s < z * 0.999)
+        };
         if let Some(n) = next {
             self.set_zoom(n);
         }
@@ -280,16 +297,16 @@ impl DocView {
         let avail_w = (self.viewport_w - 2.0 * SIDE).max(100.0);
         let per_row = if self.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
         match self.fit {
-            Fit::Width => self.zoom = (avail_w - self.page_gap() * (per_row - 1.0)) / (w * PT * per_row),
+            Fit::Width => self.zoom = (avail_w - self.two_up_column_gap() * (per_row - 1.0)) / (w * PT * per_row),
             Fit::Page => {
-                let zw = (avail_w - self.page_gap() * (per_row - 1.0)) / (w * PT * per_row);
+                let zw = (avail_w - self.two_up_column_gap() * (per_row - 1.0)) / (w * PT * per_row);
                 let zh = (self.viewport_h - 2.0 * MARGIN) / (h * PT);
                 self.zoom = zw.min(zh);
             }
             Fit::Height => self.zoom = (self.viewport_h - 2.0 * MARGIN) / (h * PT),
             Fit::None => {}
         }
-        self.zoom = self.zoom.clamp(0.08, 64.0);
+        self.zoom = self.zoom.clamp(*DOCUMENT_ZOOM_RANGE.start(), *DOCUMENT_ZOOM_RANGE.end());
     }
 
     /// Width of the scroll content. Single-page view sizes it to the page it shows, so a
@@ -305,7 +322,8 @@ impl DocView {
     /// Page rects in content coordinates (origin at the scroll content's top-left).
     pub(super) fn layout(&self, info: &DocInfo, content_w: f32, ppp: f32) -> Vec<Rect> {
         let s = self.zoom * PT;
-        let gap = self.page_gap();
+        let row_gap = self.page_gap();
+        let column_gap = self.two_up_column_gap();
         let page_size = |p: &pdfcraft_render::PageInfo| {
             let (w, h) = self.display_size(p);
             if self.show_page_gaps {
@@ -323,7 +341,7 @@ impl DocView {
                 for p in &info.pages {
                     let size = page_size(p);
                     rects.push(Rect::from_min_size(pos2(((content_w - size.x) / 2.0).max(SIDE), y), size));
-                    y += size.y + gap;
+                    y += size.y + row_gap;
                 }
             }
             PageLayout::TwoUp => {
@@ -335,14 +353,20 @@ impl DocView {
                 };
                 for (ri, pair) in rows.into_iter().enumerate() {
                     let sizes: Vec<Vec2> = pair.iter().map(page_size).collect();
-                    let row_w: f32 = sizes.iter().map(|v| v.x).sum::<f32>() + gap * (sizes.len() as f32 - 1.0);
                     let row_h = sizes.iter().map(|v| v.y).fold(0.0, f32::max);
-                    let mut x = if self.cover && ri == 0 { (content_w / 2.0 + gap / 2.0).max(SIDE) } else { ((content_w - row_w) / 2.0).max(SIDE) };
+                    // Preserve the feature branch's fixed spread spine. Complete rows put their
+                    // gutter around the content centre, and an unpaired final page keeps the left
+                    // slot. Centering each row independently breaks mixed-size spreads and makes
+                    // the document shift as rows change.
+                    let spine = content_w / 2.0;
+                    let first_width = sizes.first().map_or(0.0, |size| size.x);
+                    let mut x =
+                        if self.cover && ri == 0 { (spine + column_gap / 2.0).max(SIDE) } else { (spine - column_gap / 2.0 - first_width).max(SIDE) };
                     for size in sizes {
                         rects.push(Rect::from_min_size(pos2(x, y + (row_h - size.y) / 2.0), size));
-                        x += size.x + gap;
+                        x += size.x + column_gap;
                     }
-                    y += row_h + gap;
+                    y += row_h + row_gap;
                 }
             }
         }

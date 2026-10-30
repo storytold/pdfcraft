@@ -275,6 +275,18 @@ impl PdfCraftApp {
                 }
             }
             "view.palette" => self.palette_open = !self.palette_open,
+            "view.rulers" => self.show_rulers = !self.show_rulers,
+            "view.guides" => self.show_guides = !self.show_guides,
+            "help.guides" => self.guides_help_open = true,
+            "view.grid" => self.show_grid = !self.show_grid,
+            "view.snap_to_grid" => self.snap_to_grid = !self.snap_to_grid,
+            "view.save_guide_set" => self.guide_set_draft = Some((String::new(), None, self.show_grid)),
+            "view.hide_guide_sets" => self.shown_guide_sets.clear(),
+            "view.clear_guides" => {
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.guides.clear();
+                }
+            }
             layout if crate::canvas::PageLayout::from_command(layout).is_some() => {
                 if let (Some(i), Some(layout)) = (active, crate::canvas::PageLayout::from_command(layout)) {
                     self.views[i].set_layout(layout);

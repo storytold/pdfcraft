@@ -48,7 +48,7 @@ impl crate::PdfCraftApp {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn reveal(path: &std::path::Path) -> Result<(), String> {
+pub(crate) fn reveal(path: &std::path::Path) -> Result<(), String> {
     // Absolute paths also prevent a filename starting with '-' becoming an option.
     let path = std::path::absolute(path).map_err(|e| e.to_string())?;
     if !path.try_exists().map_err(|e| e.to_string())? {

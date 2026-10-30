@@ -707,7 +707,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/ui-egui/tests/it/ui.rs::a_file_opened_again_shows_its_last_view"]
-notes = "Desktop, on by default (Preferences ▸ Documents and view, #1767): a file opened again shows the page, zoom and page display it was last shown with, remembered by path when its tab closes or when settings are saved with it open (the last 100 files), and applied over the file's own initial view. Not remembered: the view rotation (display only) and the scroll position within the page; Fit height comes back as Fit width (the settings name only two fits)."
+notes = "Desktop, on by default (Preferences ▸ Page display, #1767): a file opened again shows the page, zoom and page display it was last shown with, remembered by path when its tab closes or when settings are saved with it open (the last 100 files), and applied over the file's own initial view. Not remembered: the view rotation (display only) and the scroll position within the page; Fit height comes back as Fit width (the settings name only two fits)."
 
 [[feature]]
 id = "core.usage-rights-preserve"
@@ -1607,11 +1607,17 @@ title = "Rulers"
 area = "B"
 tier = "P2"
 milestone = "M12"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["view.rulers"]
 tools = []
-evidence = []
-notes = ""
+evidence = [
+    "crates/ui-egui/tests/it/view.rs::rulers_command_requires_an_open_document_and_toggles_global_visibility",
+    "crates/ui-egui/tests/it/view.rs::ruler_visibility_persists_and_legacy_settings_keep_rulers_hidden",
+    "crates/ui-egui/src/ruler.rs::visible_ticks_are_clipped_ordered_and_labelled",
+    "crates/ui-egui/src/canvas/rulers.rs::independently_rounded_axes_keep_distinct_scales",
+    "crates/ui-egui/src/canvas/page_pointer/tests.rs::a_blocked_press_stays_blocked_through_every_release_pass",
+]
+notes = "Read-only horizontal and vertical document rulers use the configured display unit, final displayed page transforms, adaptive ticks and pointer indicators. View > Rulers, Ctrl/Command+R and the command palette toggle one persisted global setting. Missing: draggable origins, guides, grids and snap-to-grid."
 
 [[feature]]
 id = "view.grid"
@@ -1619,11 +1625,11 @@ title = "Grid and snap to grid"
 area = "B"
 tier = "P2"
 milestone = "M12"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["view.grid", "view.snap_to_grid"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/src/canvas/guides.rs::grid_lines_start_at_the_offset_and_mark_main_lines", "crates/ui-egui/src/canvas/guides.rs::crowded_grid_lines_are_left_out_and_bad_input_draws_nothing", "crates/ui-egui/src/canvas/guides.rs::snapping_reaches_the_nearest_grid_or_subdivision_line_within_the_tolerance"]
+notes = "View ▸ Grid (Ctrl+U) draws a grid over the pages from the rulers' geometry, with spacing, offset, subdivisions, colour and line thickness from Preferences ▸ Units and guides; a shown guide set can bring its own grid. Snap to grid (Ctrl+Shift+U) snaps dragged guides. Missing: page content (images, comments, fields) does not snap to the grid."
 
 [[feature]]
 id = "view.guides"
@@ -1631,11 +1637,11 @@ title = "Guides"
 area = "B"
 tier = "P2"
 milestone = "M12"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["view.guides", "view.clear_guides", "view.save_guide_set", "view.hide_guide_sets"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/guides.rs::a_drag_out_of_the_top_ruler_drops_a_horizontal_guide_where_it_is_released", "crates/ui-egui/tests/it/guides.rs::a_guide_takes_the_drag_from_the_page_and_a_drop_on_the_ruler_removes_it", "crates/ui-egui/tests/it/guides.rs::a_drag_that_starts_on_a_guide_selects_no_text", "crates/ui-egui/src/canvas/guides.rs::a_line_from_the_top_ruler_is_a_horizontal_guide_at_the_page_distance", "crates/ui-egui/src/canvas/guides.rs::rotating_the_view_swaps_the_axes_and_keeps_the_guide_on_the_page", "crates/ui-egui/src/canvas/guides.rs::a_guide_moves_between_one_page_and_every_page", "crates/ui-egui/src/persist/guide_sets.rs::a_hand_written_file_reads_in_points_with_its_edges_pages_and_styles", "crates/ui-egui/src/persist/guide_sets.rs::writing_and_reading_back_gives_the_same_set"]
+notes = "Drag a guide out of a ruler onto one page (Shift on drop: every page), drag to move, back onto a ruler or off the page to remove; right-click for colour swatches, Properties (colour, thickness, label, every page) and Delete; labels are drawn on the line. A press on a guide never reaches the page under it: the guide's widget lies above the page's, so it neither selects text nor pans with the Hand tool. Guides are view-only, per document, never written to the PDF and not kept when the document is closed. Guide sets: TOML files (JSON over the control channel) with edges (from top/bottom/left/right), pages (all/odd/even/list), styles, an optional grid and a Ctrl+Shift+1-9 shortcut, shown over any document or copied into it; ui.state reports guides with screen positions. Missing: page content does not snap to guides; no undo for guide edits; a page's own guides stay on its page number when pages are inserted, deleted or moved."
 
 [[feature]]
 id = "view.line-weights"
@@ -3968,7 +3974,7 @@ status = "shipped"
 commands = []
 tools = ["comment_add"]
 evidence = ["crates/ui-egui/tests/it/comments.rs::dragging_over_text_with_the_highlighter_highlights_it", "crates/ui-egui/tests/it/identity.rs::the_identity_name_signs_new_comments_and_is_remembered"]
-notes = "Preferences ▸ Identity: the name on new comments (default the login name, as Acrobat), remembered across restarts"
+notes = "Preferences ▸ Commenting ▸ Identity: the name on new comments (default the login name, as Acrobat), remembered across restarts"
 
 [[feature]]
 id = "comment.reply"
@@ -9193,7 +9199,7 @@ status = "shipped"
 commands = []
 tools = ["view_reading_colors"]
 evidence = ["crates/automation/tests/it/automation.rs::reading_colors_through_tools", "crates/render/src/raster/tests.rs::reading_colors_map_solid_paints_and_leave_images", "crates/render/src/raster/tests.rs::reading_colors_tiles_match_full_render", "crates/render/src/raster/tests.rs::print_preview_requests_render_with_reading_colors_off", "crates/render/src/raster/tests.rs::reading_colors_keep_highlight_annotations_readable", "crates/ui-egui/tests/it/reading_colors.rs::reading_colours_preference_round_trips", "crates/ui-egui/tests/it/reading_colors.rs::reading_colours_seed_on_open", "crates/ui-egui/tests/it/reading_colors.rs::pending_pages_use_document_reading_background", "crates/ui-egui/tests/it/reading_colors.rs::reading_presets_follow_appearance_and_do_not_change_the_interface_theme", "crates/ui-egui/tests/it/theme_button.rs::preferences_gear_is_right_of_theme_and_opens_preferences"]
-notes = "View only, off by default: Preferences ▸ Reading colours, directly below Appearance, offers colour samples and a live preview; the gear beside the theme button opens Preferences. Reading colours holds the app-wide preference, seeded into every document as it opens (including created ones), and view_reading_colors reads and sets it per document (Acrobat's Replace Document Colors). Solid text paints and, by default, line-art paints (including stencil-mask image paints) are remapped by luminance — each lerps between the preset's text and background colour by how dark or light the original paint is — while images, shadings and tiling patterns pass through untouched. Annotations keep the colours they were given (both /AP appearances and the no-/AP Highlight fallback), so a Multiply highlight over a dark background shows the marked-up words in the highlight's colour instead of a flat bar that hides them (#1548). Presets: black on white, white on black, yellow on black, green on black, or a custom #RRGGBB pair; only_black limits the mapping to near-black paints (a 10% luminance threshold — our choice; Acrobat's was not observed). Display only: the document is not changed and print and export are unaffected; print previews and view snapshots render with the document's true colours (a preview matches the uncoloured printout, and a snapshot is an export surface), so reading colours apply to the reading view only. Pending canvas pages use the configured reading background before their raster arrives (#2059). Closes #897 (duplicate #488)."
+notes = "View only, off by default: Preferences ▸ Appearance ▸ Reading colours, below the interface theme, offers colour samples and a live preview; the gear beside the theme button opens Preferences. Reading colours holds the app-wide preference, seeded into every document as it opens (including created ones), and view_reading_colors reads and sets it per document (Acrobat's Replace Document Colors). Solid text paints and, by default, line-art paints (including stencil-mask image paints) are remapped by luminance — each lerps between the preset's text and background colour by how dark or light the original paint is — while images, shadings and tiling patterns pass through untouched. Annotations keep the colours they were given (both /AP appearances and the no-/AP Highlight fallback), so a Multiply highlight over a dark background shows the marked-up words in the highlight's colour instead of a flat bar that hides them (#1548). Presets: black on white, white on black, yellow on black, green on black, or a custom #RRGGBB pair; only_black limits the mapping to near-black paints (a 10% luminance threshold — our choice; Acrobat's was not observed). Display only: the document is not changed and print and export are unaffected; print previews and view snapshots render with the document's true colours (a preview matches the uncoloured printout, and a snapshot is an export surface), so reading colours apply to the reading view only. Pending canvas pages use the configured reading background before their raster arrives (#2059). Closes #897 (duplicate #488)."
 
 [[feature]]
 id = "a11y.reflow-tagged"
@@ -10093,11 +10099,11 @@ title = "Preferences: units and guides"
 area = "N"
 tier = "P2"
 milestone = "M14"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/src/canvas/guides.rs::stored_grid_settings_are_brought_into_range", "crates/ui-egui/src/persist/guide_sets.rs::the_folder_lists_sets_and_reports_broken_files"]
+notes = "Preferences ▸ Units and guides (#2264 window): the unit, grid spacing/offset/subdivisions, grid and guide colour and thickness, show/snap switches, and the guide-set folder (show, edit in document, reload, open folder, file errors). Missing: Acrobat's ruler-origin and point-measuring settings."
 
 [[feature]]
 id = "misc.prefs-content-editing"

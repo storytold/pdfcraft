@@ -46,6 +46,7 @@ mod fill_sign;
 mod folders;
 mod fonts;
 mod forms;
+mod guides;
 mod identity;
 mod javascript;
 mod layer_actions;

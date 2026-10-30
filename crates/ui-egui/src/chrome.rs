@@ -321,6 +321,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 /// The right-click menu on the title bar's theme button.
 fn appearance_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if ui.button(tl!("Appearance settings…")).clicked() {
+        app.preferences_page = crate::PrefsPage::Appearance;
         app.dialog = Some(Dialog::Preferences);
         ui.close();
     }

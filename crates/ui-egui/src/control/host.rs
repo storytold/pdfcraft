@@ -71,7 +71,7 @@ impl Host for crate::PdfCraftApp {
             self.pending_opens.iter().map(|pending| json!({ "token": pending.token, "name": pending.name, "path": pending.path })).collect();
         #[cfg(target_arch = "wasm32")]
         let pending_opens: Vec<Value> = Vec::new();
-        json!({
+        let mut state = json!({
             "side_panels": crate::side_panels::state(self),
             "documents": docs,
             "pending_opens": pending_opens,
@@ -146,7 +146,10 @@ impl Host for crate::PdfCraftApp {
             "progress": self.progress_notice.as_ref().map(|p| json!({ "label": p.label, "fraction": p.fraction })),
             "password_prompt": self.password_prompt.is_some(),
             "close_prompt": self.close_request.is_some(),
-        })
+        });
+        // Set apart: the macro above is near serde_json's recursion limit.
+        state["guides"] = self.guides_state();
+        state
     }
 
     fn command(&mut self, id: &str) -> Reply {
