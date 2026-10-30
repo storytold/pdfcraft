@@ -2510,6 +2510,44 @@ fn xfa_password_field_values_are_not_saved_in_datasets_or_widgets() {
     }
 }
 
+/// #5155: each field edit of a static XFA form, with a save recorded between edits, must not
+/// leave an orphaned `xfa:datasets` stream behind. After `mark_saved` rebases onto the saved
+/// bytes the datasets stream is no longer in the overlay, so the next edit's sync must still
+/// overwrite the referenced stream in place rather than add a fresh object that supersedes it
+/// and orphans the previous one. The saved file must hold exactly one datasets stream however
+/// many edit/save cycles ran.
+#[test]
+fn xfa_field_edits_across_saves_do_not_orphan_datasets_streams() {
+    // How many distinct objects in `bytes` decode to an XFA datasets packet.
+    fn datasets_streams(bytes: &Arc<Vec<u8>>) -> usize {
+        let doc = pdfcraft_cos::Document::open(bytes.clone()).unwrap();
+        doc.object_numbers()
+            .into_iter()
+            .filter(|&num| match &*doc.get(pdfcraft_cos::ObjRef { num, generation: 0 }) {
+                pdfcraft_cos::Object::Stream(st) => st.decoded().is_ok_and(|d| d.windows(13).any(|w| w == b"xfa:datasets ")),
+                _ => false,
+            })
+            .count()
+    }
+
+    let xfa_pdf = pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::fields_template(""));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("xfa.pdf", None, Arc::new(xfa_pdf), None).unwrap();
+    let country = s.get(id).unwrap().form.iter().find(|f| f.name.contains("country")).unwrap().name.clone();
+    let other = s.get(id).unwrap().form.iter().find(|f| f.name.contains("other")).unwrap().name.clone();
+
+    // Edit, record the save (this rebases and clears the overlay), then edit another field and
+    // save again — the interactive type / save / type / save loop from the report.
+    s.apply(id, Edit::SetFieldValue { name: country, value: FieldValue::Text("Japan".into()) }).unwrap();
+    let first = s.save_bytes(id).unwrap();
+    assert_eq!(datasets_streams(&first), 1, "the first save writes one datasets stream");
+    s.mark_saved(id, first, Some("saved.pdf".into())).unwrap();
+
+    s.apply(id, Edit::SetFieldValue { name: other, value: FieldValue::Text("B".into()) }).unwrap();
+    let second = s.save_bytes(id).unwrap();
+    assert_eq!(datasets_streams(&second), 1, "a field edit after a recorded save overwrites the datasets stream in place, not orphan it");
+}
+
 /// A value its field's font can't draw is kept, and the edit that drew it reports it in
 /// `edit_notices` (the interface shows it, tools return it): not a later unrelated edit, not a
 /// failed one, and not a value that can be drawn. The form (an inline AcroForm here) asks other
