@@ -292,7 +292,9 @@ fn system_fallback_covers_thai() {
         assert!(defs.families.values().all(|stack| !stack.iter().any(|n| n == theme::SYSTEM_THAI_FALLBACK)));
         return;
     }
-    if !defs.font_data.contains_key(theme::SYSTEM_THAI_FALLBACK) {
+    // Windows (Leelawadee UI) and macOS (Thonburi) always have a Thai face, so only elsewhere
+    // may one be missing.
+    if !defs.font_data.contains_key(theme::SYSTEM_THAI_FALLBACK) && !cfg!(any(windows, target_os = "macos")) {
         eprintln!("skipping system_fallback_covers_thai: no installed Thai fallback font");
         return;
     }
