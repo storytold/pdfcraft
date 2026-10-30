@@ -427,7 +427,7 @@ mod tests {
         std::fs::write(root.join("certificate.json"), serde_json::to_vec(&fixture.certificate.raw).unwrap()).unwrap();
         std::fs::write(root.join("serial"), "original-A").unwrap();
         let helper = root.join("helper");
-        std::fs::write(&helper, r#"#!/usr/bin/python3
+        std::fs::write(&helper, r#"#!/usr/bin/env python3
 import json, os, pathlib, struct, sys
 root = pathlib.Path(os.environ['PDFCRAFT_BOUND_SELECTION_TEST'])
 def frame():
