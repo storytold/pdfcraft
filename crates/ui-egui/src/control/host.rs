@@ -38,6 +38,8 @@ impl Host for crate::PdfCraftApp {
             self.active.and_then(|i| self.views.get(i)).and_then(|v| v.find.as_ref().map(|_| true)),
         )
         .hash(&mut hasher);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.disk_reload_confirmation_epoch().hash(&mut hasher);
         hasher.finish()
     }
 

@@ -43,9 +43,12 @@ pub(super) fn page_size_hint(
 }
 
 /// What the notice bar's buttons ask for.
+#[derive(Clone, Copy)]
 pub(super) enum Notice {
     /// Reload the file that changed on disk, dropping unsaved changes.
     Reload,
+    /// The destructive warning was concealed: show it in full before asking to reload.
+    ConfirmReload,
     Security,
     Signatures,
     Repairs,
@@ -79,24 +82,21 @@ pub(super) fn notices(
     // replacing it, ahead of every other notice.
     if view.disk_changed {
         let mut reload = false;
-        egui::Frame::NONE.fill(t.accent_soft).inner_margin(egui::Margin::symmetric(14, 7)).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.add(icons::image("rotate-cw", 16.0, t.accent_text));
-                ui.label(
-                    egui::RichText::new(tl!(
-                        "This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version."
-                    ))
-                    .color(t.text),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked() {
-                        view.disk_changed = false;
-                    }
-                    reload = crate::widgets::pill_button(ui, tl!("Reload"), false).clicked();
-                });
-            });
-        });
-        return reload.then_some(Notice::Reload);
+        let concealed = notice_bar(
+            ui,
+            t,
+            "rotate-cw",
+            t.accent_text,
+            tl!("This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.")
+                .to_owned(),
+            |ui| {
+                if icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked() {
+                    view.disk_changed = false;
+                }
+                reload = crate::widgets::pill_button(ui, tl!("Reload"), false).clicked();
+            },
+        );
+        return reload.then_some(if concealed { Notice::ConfirmReload } else { Notice::Reload });
     }
     // A historical snapshot (View signed version / View revision): what it is, above the
     // signature and security bars, so the tab is never mistaken for the live document.
@@ -251,29 +251,58 @@ pub(super) fn notices(
 /// of running under the buttons and past the document area into the side panel (#785). The
 /// buttons are centred on a row of button height, and the message's first line is centred on
 /// the same row; a wrapped message grows the bar downwards.
-fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, text: String, buttons: impl FnOnce(&mut egui::Ui)) {
+/// Returns whether any part of the message was elided or clipped.
+fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, text: String, buttons: impl FnOnce(&mut egui::Ui)) -> bool {
     const ROW: f32 = 28.0;
     const ICON: f32 = 16.0;
+    let mut concealed = false;
     egui::Frame::NONE.fill(t.accent_soft).inner_margin(egui::Margin::symmetric(14, 7)).show(ui, |ui| {
         let width = ui.available_width();
         ui.allocate_ui_with_layout(vec2(width, ROW), egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.set_min_height(ROW);
             buttons(ui);
+            let actions_left = ui.min_rect().left();
             let rest = ui.available_width().max(0.0);
             ui.allocate_ui_with_layout(vec2(rest, ROW), egui::Layout::top_down(egui::Align::Min), |ui| {
+                let clip = ui.clip_rect();
+                let right = clip.right().min(actions_left - ui.spacing().item_spacing.x);
+                ui.set_clip_rect(Rect::from_min_max(clip.min, egui::pos2(right, clip.bottom())));
                 let font = egui::TextStyle::Body.resolve(ui.style());
                 let line = ui.fonts_mut(|f| f.row_height(&font)).max(ICON);
                 ui.add_space(((ROW - line) / 2.0).max(0.0));
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                     let (slot, _) = ui.allocate_exact_size(vec2(ICON, line), Sense::hover());
                     icons::paint(ui, Rect::from_center_size(slot.center(), vec2(ICON, ICON)), icon, ICON, icon_color);
-                    let label = egui::Label::new(egui::RichText::new(text).color(t.text));
-                    // Wrapping into a sliver would stack the message a few letters per line.
-                    ui.add(if ui.available_width() >= 120.0 { label.wrap() } else { label.truncate() });
+                    let available = ui.available_width();
+                    let label_width = available.max(0.0);
+                    // Keep the existing wrapping policy and let the actual galley report elision.
+                    let mode = if label_width >= 120.0 { egui::TextWrapMode::Wrap } else { egui::TextWrapMode::Truncate };
+                    let galley = egui::WidgetText::from(egui::RichText::new(text).color(t.text)).into_galley(
+                        ui,
+                        Some(mode),
+                        label_width,
+                        egui::FontSelection::Default,
+                    );
+                    concealed = !available.is_finite() || galley.elided;
+                    let intrinsic = galley.intrinsic_size();
+                    // Even an ellipsis can be wider than a zero-width label slot. Never paint it
+                    // over the already reserved actions; the full warning is available on Reload.
+                    let left = ui.cursor().left();
+                    let clip = ui.clip_rect().intersect(Rect::from_min_max(
+                        egui::pos2(left, ui.clip_rect().top()),
+                        egui::pos2(left + label_width, ui.clip_rect().bottom()),
+                    ));
+                    let previous_clip = ui.clip_rect();
+                    ui.set_clip_rect(clip);
+                    let mut response = ui.add(egui::Label::new(galley));
+                    ui.set_clip_rect(previous_clip);
+                    response.set_intrinsic_size(intrinsic);
+                    concealed |= !response.rect.is_finite() || !clip.contains_rect(response.rect);
                 });
             });
         });
     });
+    concealed
 }
 
 /// The floating quick-action bar at the left edge of the document area.

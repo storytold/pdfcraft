@@ -282,6 +282,14 @@ impl PdfCraftApp {
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
     /// on the document underneath it.
     pub(crate) fn modal_open(&self) -> bool {
+        let open = self.other_modal_open();
+        #[cfg(not(target_arch = "wasm32"))]
+        let open = open || self.disk_reload_confirmation_identity().is_some();
+        open
+    }
+
+    /// Existing dialogs exclude the reload prompt itself, avoiding recursive/self-cancellation.
+    pub(crate) fn other_modal_open(&self) -> bool {
         self.dialog.is_some()
             || self.close_request.is_some()
             || self.password_prompt.is_some()
@@ -468,6 +476,8 @@ impl eframe::App for PdfCraftApp {
             let out = self.session.take_js_output(id);
             self.handle_js(id, out);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.prune_disk_reload_confirmation();
         if let Some(mut control) = self.control.take() {
             control.tick(ctx, self);
             self.control = Some(control);

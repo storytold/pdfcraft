@@ -71,6 +71,62 @@ pub(crate) fn save_prompt_key(ctx: &egui::Context, chosen: &mut PromptButton) ->
     })
 }
 
+/// The full destructive warning when the notice did not have room to show it.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn disk_reload_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    app.prune_disk_reload_confirmation();
+    if app.disk_reload_confirmation_identity().is_none() {
+        return;
+    }
+    let frame = ctx.cumulative_frame_nr();
+    let Some((doc, serial, first, accepting)) = app.disk_reload_confirmation_frame(frame) else {
+        ctx.request_repaint();
+        return;
+    };
+    let id = format!("disk_reload_confirmation_{}_{serial}", doc.0);
+    let mut choice = None;
+    let mut visible = false;
+    let modal = widgets::show_modal(ctx, &id, |ui| {
+        visible = ui.is_visible() && !ui.is_sizing_pass();
+        let accepting = accepting && visible;
+        let available = ctx.content_rect().width();
+        let width = if available.is_finite() { (available - 48.0).clamp(0.0, 420.0) } else { 420.0 };
+        ui.set_width(width);
+        ui.label(egui::RichText::new(tl!("Reload")).font(theme::semibold(18.0)));
+        ui.add_space(8.0);
+        ui.add(
+            egui::Label::new(tl!(
+                "This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version."
+            ))
+            .wrap(),
+        );
+        ui.add_space(14.0);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let cancel = widgets::pill_button(ui, tl!("Cancel"), true);
+            if first && visible {
+                cancel.request_focus();
+            }
+            if cancel.clicked() {
+                choice = Some(false);
+            }
+            if ui.add_enabled_ui(accepting, |ui| widgets::pill_button(ui, tl!("Reload"), false)).inner.clicked() {
+                choice = Some(true);
+            }
+        });
+    });
+    // Escape/backdrop always choose the non-destructive answer, even with another event.
+    if modal.should_close() {
+        choice = Some(false);
+    }
+    app.mark_disk_reload_confirmation_presented(serial, frame, visible && modal.is_top_modal);
+    if let Some(reload) = choice {
+        app.resolve_disk_reload_confirmation(serial, reload, frame);
+    }
+    if !accepting || !visible {
+        ctx.request_repaint();
+    }
+}
+
 /// "Save changes?" when closing a tab or quitting with unsaved edits.
 pub(super) fn save_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(req) = app.close_request else { return };

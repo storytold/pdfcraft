@@ -2355,9 +2355,13 @@ fn plan_renders(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, renders: Page
 fn apply_notice(app: &mut PdfCraftApp, index: usize, notice: Option<Notice>) {
     match notice {
         #[cfg(not(target_arch = "wasm32"))]
-        Some(Notice::Reload) => app.watch.reload_request = app.views.get(index).map(|view| view.id),
+        Some(Notice::Reload | Notice::ConfirmReload) => {
+            if let Some(id) = app.views.get(index).map(|view| view.id) {
+                app.request_disk_reload(id, matches!(notice, Some(Notice::ConfirmReload)));
+            }
+        }
         #[cfg(target_arch = "wasm32")]
-        Some(Notice::Reload) => {}
+        Some(Notice::Reload | Notice::ConfirmReload) => {}
         Some(Notice::Repairs) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Advanced)),
         Some(Notice::Security) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Security)),
         Some(Notice::Unlock) => {

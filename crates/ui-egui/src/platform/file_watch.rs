@@ -266,6 +266,21 @@ fn run(inbox: mpsc::Receiver<Vec<Watched>>, out: Arc<Mutex<Vec<Changed>>>, ctx: 
     }
 }
 
+/// The in-memory source and file a notice reload was requested for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReloadTarget {
+    doc: DocId,
+    path: String,
+    epoch: u64,
+}
+
+struct ReloadConfirmation {
+    target: ReloadTarget,
+    serial: u64,
+    requested_frame: u64,
+    presented_frame: Option<u64>,
+}
+
 /// The app's side of the watcher.
 #[derive(Default)]
 pub struct FileWatch {
@@ -288,6 +303,10 @@ pub struct FileWatch {
     epoch: HashMap<DocId, u64>,
     /// The notice bar's Reload was pressed for this document.
     pub reload_request: Option<DocId>,
+    /// Capture new UI requests without changing the legacy public request field's type.
+    reload_request_target: Option<ReloadTarget>,
+    reload_confirmation: Option<ReloadConfirmation>,
+    reload_confirmation_serial: u64,
 }
 
 impl FileWatch {
@@ -330,6 +349,112 @@ impl FileWatch {
 }
 
 impl PdfCraftApp {
+    fn disk_reload_blocked(&self) -> bool {
+        self.other_modal_open() || self.palette_open || self.pending_full_screen.is_some()
+    }
+
+    fn reload_target(&self, doc: DocId) -> Option<ReloadTarget> {
+        let (index, active) = self.active_ids()?;
+        if active != doc || !self.views.get(index)?.disk_changed {
+            return None;
+        }
+        let path = self.session.get(doc)?.path.clone()?;
+        Some(ReloadTarget { doc, path, epoch: self.watch.epoch(doc) })
+    }
+
+    fn reload_target_is_current(&self, target: &ReloadTarget) -> bool {
+        self.active_ids().is_some_and(|(index, id)| id == target.doc && self.views.get(index).is_some_and(|view| view.disk_changed))
+            && self.session.get(target.doc).is_some_and(|doc| doc.path.as_deref() == Some(target.path.as_str()))
+            && self.watch.epoch(target.doc) == target.epoch
+    }
+
+    /// A valid prompt's unique identity, shared by modal and synthetic-input admission.
+    pub(crate) fn disk_reload_confirmation_identity(&self) -> Option<(DocId, u64)> {
+        self.watch
+            .reload_confirmation
+            .as_ref()
+            .filter(|prompt| self.reload_target_is_current(&prompt.target) && !self.disk_reload_blocked())
+            .map(|prompt| (prompt.target.doc, prompt.serial))
+    }
+
+    /// Presentation changes the captured/input context even before focus moves.
+    pub(crate) fn disk_reload_confirmation_epoch(&self) -> Option<(DocId, u64, Option<u64>)> {
+        let (doc, serial) = self.disk_reload_confirmation_identity()?;
+        Some((doc, serial, self.watch.reload_confirmation.as_ref()?.presented_frame))
+    }
+
+    pub(crate) fn prune_disk_reload_confirmation(&mut self) {
+        if self.watch.reload_confirmation.is_some() && self.disk_reload_confirmation_identity().is_none() {
+            self.watch.reload_confirmation = None;
+        }
+    }
+
+    fn queue_disk_reload(&mut self, target: ReloadTarget) {
+        self.watch.reload_request = Some(target.doc);
+        self.watch.reload_request_target = Some(target);
+    }
+
+    /// A visible warning preserves one-click Reload; concealed text requires fresh consent.
+    pub(crate) fn request_disk_reload(&mut self, doc: DocId, confirmation: bool) {
+        self.prune_disk_reload_confirmation();
+        if self.disk_reload_blocked() || self.watch.reload_confirmation.is_some() {
+            return;
+        }
+        let Some(target) = self.reload_target(doc) else { return };
+        if !confirmation {
+            self.queue_disk_reload(target);
+            return;
+        }
+        let Some(ctx) = self.ctx.as_ref() else { return };
+        let Some(serial) = self.watch.reload_confirmation_serial.checked_add(1) else { return };
+        self.watch.reload_confirmation_serial = serial;
+        self.watch.reload_request = None;
+        self.watch.reload_request_target = None;
+        self.watch.reload_confirmation =
+            Some(ReloadConfirmation { target, serial, requested_frame: ctx.cumulative_frame_nr(), presented_frame: None });
+        ctx.request_repaint();
+    }
+
+    /// The opening frame cannot draw/activate the prompt. The first shown frame is Cancel-only.
+    pub(crate) fn disk_reload_confirmation_frame(&mut self, frame: u64) -> Option<(DocId, u64, bool, bool)> {
+        self.prune_disk_reload_confirmation();
+        let prompt = self.watch.reload_confirmation.as_ref()?;
+        if frame <= prompt.requested_frame {
+            return None;
+        }
+        let first = prompt.presented_frame.is_none_or(|shown| shown == frame);
+        let accepting = prompt.presented_frame.is_some_and(|shown| shown < frame);
+        Some((prompt.target.doc, prompt.serial, first, accepting))
+    }
+
+    pub(crate) fn mark_disk_reload_confirmation_presented(&mut self, serial: u64, frame: u64, visible: bool) {
+        if !visible {
+            return;
+        }
+        if let Some(prompt) = self.watch.reload_confirmation.as_mut()
+            && prompt.serial == serial
+            && prompt.requested_frame < frame
+        {
+            prompt.presented_frame.get_or_insert(frame);
+        }
+    }
+
+    /// Ignore old answers even when Cancel and a new prompt happened between control ticks.
+    pub(crate) fn resolve_disk_reload_confirmation(&mut self, serial: u64, reload: bool, frame: u64) {
+        self.prune_disk_reload_confirmation();
+        let Some(prompt) = self.watch.reload_confirmation.as_ref() else { return };
+        if prompt.serial != serial {
+            return;
+        }
+        if reload && prompt.presented_frame.is_none_or(|shown| shown >= frame) {
+            return;
+        }
+        let Some(prompt) = self.watch.reload_confirmation.take() else { return };
+        if reload && self.reload_target_is_current(&prompt.target) && !self.disk_reload_blocked() {
+            self.queue_disk_reload(prompt.target);
+        }
+    }
+
     /// The documents to watch: every open one with a file, while the preference is on.
     fn watched(&self) -> impl Iterator<Item = (DocId, &str, Option<Stamp>, u64)> {
         self.views.iter().filter(|_| self.reload_changed_files).filter_map(|v| {
@@ -341,8 +466,19 @@ impl PdfCraftApp {
     /// Every frame: tell the watcher about files opened, closed or saved (without allocating
     /// when nothing changed), and reload what changed on disk.
     pub(crate) fn watch_files(&mut self) {
+        self.prune_disk_reload_confirmation();
+        let captured = self.watch.reload_request_target.take();
         if let Some(id) = self.watch.reload_request.take() {
-            self.reload_from_disk(id);
+            match captured {
+                Some(target) if target.doc == id => {
+                    if self.reload_target_is_current(&target) && !self.disk_reload_blocked() {
+                        self.reload_from_disk(id);
+                    }
+                }
+                // Preserve explicit legacy writes to the public request field. A different
+                // requested id supersedes the private companion, never inherits its consent.
+                _ => self.reload_from_disk(id),
+            }
         }
         let mut sent = self.watch.sent.iter();
         let unchanged = self
@@ -652,5 +788,187 @@ mod tests {
         assert_eq!(d.path.as_deref(), Some(new_path.as_str()));
         assert_eq!(d.info.pages.len(), 2, "the old file's version was not applied to the new one");
         assert!(d.can_undo().is_some() && !d.dirty, "the saved document and its history stay");
+    }
+
+    fn dirty_reload_case(name: &str) -> (TempDir, String, Vec<u8>, Harness<'static, PdfCraftApp>) {
+        let (dir, path) = TempDir::new(name, &fixture(2));
+        let mut h = harness(&path);
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+        let external = fixture(4);
+        for changed in find_new_version(h.state_mut(), &path, &external) {
+            h.state_mut().file_changed(changed);
+        }
+        assert!(h.state().views[0].disk_changed && doc(&h).dirty);
+        (dir, path, external, h)
+    }
+
+    #[test]
+    fn cancelled_disk_reload_confirmation_keeps_edits_recovery_and_external_bytes() {
+        let (dir, path, external, mut h) = dirty_reload_case("reload-cancel");
+        let app = h.state_mut();
+        // Keep repeated dirty-document serializations byte-stable across wall-clock seconds.
+        app.session = std::mem::take(&mut app.session).with_clock(|| 1_700_000_000);
+        let id = app.views[0].id;
+        app.enable_recovery(crate::RecoveryStore::new(dir.0.join("recovery")));
+        app.autosave_now();
+        let store = app.recovery.as_ref().unwrap().clone();
+        let snapshots = store.list();
+        assert_eq!(snapshots.len(), 1);
+        let recovered = store.read(&snapshots[0].key).unwrap();
+        let edited = app.session.save_bytes(id).unwrap();
+        app.request_disk_reload(id, true);
+        let (_, serial) = app.disk_reload_confirmation_identity().unwrap();
+        assert!(app.modal_open());
+        app.resolve_disk_reload_confirmation(serial, false, app.ctx.as_ref().unwrap().cumulative_frame_nr());
+        assert!(!app.modal_open());
+        assert!(app.watch.reload_request.is_none());
+        assert!(app.views[0].disk_changed && app.session.get(id).unwrap().dirty);
+        assert_eq!(app.session.save_bytes(id).unwrap(), edited);
+        assert_eq!(store.read(&snapshots[0].key).unwrap(), recovered);
+        assert_eq!(std::fs::read(path).unwrap(), external);
+    }
+
+    #[test]
+    fn disk_reload_confirmation_requires_a_later_presented_frame() {
+        let (_dir, path, external, mut h) = dirty_reload_case("reload-presented");
+        let app = h.state_mut();
+        let id = app.views[0].id;
+        let frame = app.ctx.as_ref().unwrap().cumulative_frame_nr();
+        app.request_disk_reload(id, true);
+        let (_, serial) = app.disk_reload_confirmation_identity().unwrap();
+        assert!(app.disk_reload_confirmation_frame(frame).is_none());
+        app.mark_disk_reload_confirmation_presented(serial, frame, true);
+        app.resolve_disk_reload_confirmation(serial, true, frame + 1);
+        assert!(app.watch.reload_request.is_none(), "opening pass is not presentation");
+        app.mark_disk_reload_confirmation_presented(serial, frame + 1, false);
+        app.resolve_disk_reload_confirmation(serial, true, frame + 2);
+        assert!(app.watch.reload_request.is_none(), "an invisible sizing pass cannot enable Reload");
+        assert!(app.watch.reload_confirmation.as_ref().unwrap().presented_frame.is_none());
+        let (_, _, first, accepting) = app.disk_reload_confirmation_frame(frame + 2).unwrap();
+        assert!(first && !accepting);
+        app.mark_disk_reload_confirmation_presented(serial, frame + 2, true);
+        app.resolve_disk_reload_confirmation(serial, true, frame + 2);
+        assert!(app.watch.reload_request.is_none(), "first displayed frame cannot discard");
+        app.resolve_disk_reload_confirmation(serial, true, frame + 3);
+        assert!(app.disk_reload_confirmation_identity().is_none());
+        app.watch_files();
+        assert_eq!(app.session.get(id).unwrap().bytes.as_ref(), &external);
+        assert!(!app.session.get(id).unwrap().dirty);
+        assert_eq!(std::fs::read(path).unwrap(), external);
+    }
+
+    fn change_reload_target(app: &mut PdfCraftApp, dir: &TempDir, path: &str, change: &str) {
+        let id = app.views[0].id;
+        match change {
+            "flag" => app.views[0].disk_changed = false,
+            "path" => {
+                app.save_override = Some(dir.0.join("copy.pdf").to_string_lossy().into_owned());
+                assert!(app.save_active(SaveTarget::As));
+            }
+            "epoch" => app.watch.known_now(id, path),
+            "tab" => app.open_bytes("other.pdf", None, fixture(1)).unwrap(),
+            "close" => app.close_tab(0),
+            "dialog" => app.dialog = Some(crate::Dialog::Revert),
+            "palette" => app.palette_open = true,
+            "full-screen" => app.pending_full_screen = Some(id),
+            _ => panic!("unknown test change"),
+        }
+    }
+
+    #[test]
+    fn disk_reload_confirmation_does_not_survive_target_changes() {
+        for change in ["flag", "path", "epoch", "tab", "close", "dialog", "palette", "full-screen"] {
+            let (dir, path, external, mut h) = dirty_reload_case(&format!("reload-invalid-{change}"));
+            let app = h.state_mut();
+            let id = app.views[0].id;
+            let frame = app.ctx.as_ref().unwrap().cumulative_frame_nr();
+            app.request_disk_reload(id, true);
+            let (_, serial) = app.disk_reload_confirmation_identity().unwrap();
+            change_reload_target(app, &dir, &path, change);
+            assert!(app.disk_reload_confirmation_identity().is_none(), "{change}");
+            app.prune_disk_reload_confirmation();
+            assert!(app.watch.reload_confirmation.is_none(), "{change}");
+            app.resolve_disk_reload_confirmation(serial, true, frame + 10);
+            assert!(app.watch.reload_request.is_none(), "{change}");
+            assert_eq!(std::fs::read(path).unwrap(), external, "{change}");
+        }
+    }
+
+    #[test]
+    fn queued_notice_reload_revalidates_the_captured_source_at_consumption() {
+        for change in ["path", "epoch", "tab", "close"] {
+            let (dir, path, external, mut h) = dirty_reload_case(&format!("reload-queued-{change}"));
+            let app = h.state_mut();
+            let id = app.views[0].id;
+            app.request_disk_reload(id, false);
+            assert_eq!(app.watch.reload_request, Some(id));
+            change_reload_target(app, &dir, &path, change);
+            let before = app.session.get(id).map(|doc| (doc.bytes.clone(), doc.dirty, doc.info.pages.len()));
+            app.watch_files();
+            let after = app.session.get(id).map(|doc| (doc.bytes.clone(), doc.dirty, doc.info.pages.len()));
+            assert_eq!(after, before, "{change}: queued action cannot replace a changed target");
+            assert!(app.watch.reload_request.is_none());
+            assert_eq!(std::fs::read(path).unwrap(), external, "{change}");
+        }
+    }
+
+    #[test]
+    fn a_legacy_public_reload_id_can_supersede_a_different_ui_target() {
+        let (dir, _path, _external, mut h) = dirty_reload_case("reload-legacy");
+        let app = h.state_mut();
+        app.request_disk_reload(app.views[0].id, false);
+        let other_path = dir.0.join("other.pdf").to_string_lossy().into_owned();
+        std::fs::write(&other_path, fixture(1)).unwrap();
+        app.open_bytes("other.pdf", Some(other_path.clone()), fixture(1)).unwrap();
+        let id = app.active_ids().unwrap().1;
+        let replacement = fixture(3);
+        std::fs::write(&other_path, &replacement).unwrap();
+        app.watch.reload_request = Some(id);
+        app.watch_files();
+        assert_eq!(app.session.get(id).unwrap().bytes.as_ref(), &replacement);
+    }
+
+    #[test]
+    fn confirmed_disk_reload_read_failure_keeps_edits_and_recovery() {
+        let (dir, path, _external, mut h) = dirty_reload_case("reload-confirmed-read-error");
+        let id = h.state().views[0].id;
+        let app = h.state_mut();
+        app.session = std::mem::take(&mut app.session).with_clock(|| 1_700_000_000);
+        app.enable_recovery(crate::RecoveryStore::new(dir.0.join("recovery")));
+        h.state_mut().autosave_now();
+        let store = h.state().recovery.as_ref().unwrap().clone();
+        let snapshots = store.list();
+        assert_eq!(snapshots.len(), 1);
+        let recovered = store.read(&snapshots[0].key).unwrap();
+        let edited = h.state().session.save_bytes(id).unwrap();
+        h.state_mut().request_disk_reload(id, true);
+        // Use the existing prompt pass, including its invisible sizing pass, before consent.
+        for _ in 0..6 {
+            h.run_steps(1);
+            let app = h.state();
+            let frame = app.ctx.as_ref().unwrap().cumulative_frame_nr();
+            if app.watch.reload_confirmation.as_ref().is_some_and(|prompt| prompt.presented_frame.is_some_and(|shown| shown < frame)) {
+                break;
+            }
+        }
+        let app = h.state_mut();
+        let frame = app.ctx.as_ref().unwrap().cumulative_frame_nr();
+        let (_, serial) = app.disk_reload_confirmation_identity().unwrap();
+        assert!(app.watch.reload_confirmation.as_ref().unwrap().presented_frame.is_some_and(|shown| shown < frame));
+        std::fs::remove_file(&path).unwrap();
+        app.toast = None;
+        app.resolve_disk_reload_confirmation(serial, true, frame);
+        assert_eq!(app.watch.reload_request, Some(id), "confirmation reached the existing reload path");
+        app.watch_files();
+        assert!(app.toast.as_ref().is_some_and(|(message, _)| message.starts_with("Couldn't read ")), "the existing read-error handler ran");
+        let doc = app.session.get(id).unwrap();
+        assert!(doc.dirty && app.views[0].disk_changed);
+        assert_eq!(doc.info.pages.len(), 2);
+        assert_eq!(app.session.save_bytes(id).unwrap(), edited);
+        assert_eq!(store.read(&snapshots[0].key).unwrap(), recovered);
+        assert!(store.list().iter().any(|snapshot| snapshot.key == snapshots[0].key));
+        assert!(app.watch.reload_request.is_none() && app.watch.reload_request_target.is_none());
+        assert!(app.disk_reload_confirmation_identity().is_none());
+        assert!(!std::path::Path::new(&path).exists(), "failed Reload must not recreate or overwrite the source");
     }
 }

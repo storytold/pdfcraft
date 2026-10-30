@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::{By, Queryable};
-use pdfcraft_ui_egui::{PdfCraftApp, SaveTarget};
+use egui_kittest::kittest::{By, NodeT, Queryable};
+use pdfcraft_ui_egui::{PdfCraftApp, RecoveryStore, SaveTarget};
 
 /// An `n`-page document with a proper xref table; page `i` shows "Page i+1", and with `notes`
 /// each page has a sticky note.
@@ -74,8 +74,12 @@ impl Drop for TempPdf {
 }
 
 fn harness(path: &str) -> Harness<'static, PdfCraftApp> {
+    harness_at(path, egui::vec2(1400.0, 900.0))
+}
+
+fn harness_at(path: &str, size: egui::Vec2) -> Harness<'static, PdfCraftApp> {
     let path = path.to_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+    let mut h = Harness::builder().with_size(size).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         // The labels looked for are English, whatever the machine's language.
@@ -324,6 +328,249 @@ fn saving_over_a_file_changed_by_something_else_asks_first() {
     // Our own write is the version the document came from now.
     rotate_first_page(&mut h);
     assert!(h.state_mut().save_active(SaveTarget::InPlace), "written at once");
+}
+
+const DISK_CHANGE_NOTICE: &str =
+    "This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.";
+
+fn assert_disk_change_notice_geometry(h: &Harness<'static, PdfCraftApp>, size: egui::Vec2, narrow: bool) {
+    let notice = h.get_by_label(DISK_CHANGE_NOTICE).rect();
+    let reload = h.get_by_label("Reload").rect();
+    let dismiss = h.get_by_label("Dismiss").rect();
+    let inside = |rect: egui::Rect| rect.left() >= 0.0 && rect.top() >= 0.0 && rect.right() <= size.x && rect.bottom() <= size.y;
+    assert!(inside(notice), "notice text is clipped by the viewport: {notice:?}");
+    assert!(inside(reload), "Reload is outside the viewport: {reload:?}");
+    assert!(inside(dismiss), "Dismiss is outside the viewport: {dismiss:?}");
+    assert!(!notice.intersects(reload), "notice text overlaps Reload: {notice:?}, {reload:?}");
+    assert!(!notice.intersects(dismiss), "notice text overlaps Dismiss: {notice:?}, {dismiss:?}");
+    assert!(!reload.intersects(dismiss), "notice buttons overlap: {reload:?}, {dismiss:?}");
+    if narrow {
+        assert!(notice.height() > 24.0, "the message should wrap at the narrow size: {notice:?}");
+    }
+}
+
+/// The disk-change notice wraps before its actions at narrow widths, and both choices keep their
+/// distinct file/document outcomes.
+#[test]
+fn changed_file_notice_wraps_and_keeps_both_actions_reachable() {
+    for (name, size, narrow) in [("wide", egui::vec2(1400.0, 900.0), false), ("narrow", egui::vec2(800.0, 600.0), true)] {
+        let external = fixture(4);
+        let dismissed_file = TempPdf::new(&format!("notice-dismiss-{name}"), &fixture(2));
+        let mut dismissed = harness_at(&dismissed_file.path, size);
+        rotate_first_page(&mut dismissed);
+        dismissed_file.rebuild(&external);
+        dismissed.run_steps(3);
+        assert_disk_change_notice_geometry(&dismissed, size, narrow);
+        dismissed.get_by_label("Dismiss").click();
+        dismissed.run_steps(2);
+        assert!(dismissed.query_by_label(DISK_CHANGE_NOTICE).is_none(), "Dismiss hides the notice");
+        assert_eq!(pages(&dismissed), 2, "Dismiss keeps the open document");
+        assert!(dirty(&dismissed), "Dismiss keeps the unsaved rotation");
+        assert_eq!(std::fs::read(&dismissed_file.path).unwrap(), external, "Dismiss preserves the external file");
+
+        let reloaded_file = TempPdf::new(&format!("notice-reload-{name}"), &fixture(2));
+        let mut reloaded = harness_at(&reloaded_file.path, size);
+        rotate_first_page(&mut reloaded);
+        reloaded_file.rebuild(&external);
+        reloaded.run_steps(3);
+        assert_disk_change_notice_geometry(&reloaded, size, narrow);
+        reloaded.get_by_label("Reload").click();
+        reloaded.run_steps(3);
+        assert!(reloaded.query_by_label(DISK_CHANGE_NOTICE).is_none(), "Reload consumes the change notice");
+        assert_eq!(pages(&reloaded), 4, "Reload shows the external version");
+        assert!(!dirty(&reloaded), "Reload drops the unsaved rotation");
+        let doc = reloaded.state().session.get(reloaded.state().views[0].id).unwrap();
+        assert_eq!(doc.bytes.as_ref(), &external, "Reload adopts the external bytes");
+        assert_eq!(std::fs::read(&reloaded_file.path).unwrap(), external, "Reload does not overwrite the external file");
+    }
+}
+
+/// A reload click in the narrow both-pane layout asks for explicit confirmation. Cancel, Escape
+/// and backdrop dismissal all retain the working document and its recovery snapshot.
+#[test]
+fn concealed_changed_file_notice_requires_confirmation_before_discard() {
+    use egui::accesskit::Role;
+
+    struct TempRecovery {
+        dir: PathBuf,
+        store: RecoveryStore,
+    }
+    impl TempRecovery {
+        fn new() -> Self {
+            let nonce = SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            let dir = std::env::temp_dir().join(format!("pdfcraft-reload-confirm-{}-{nonce}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            Self { store: RecoveryStore::new(&dir), dir }
+        }
+    }
+    impl Drop for TempRecovery {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn click_at(h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2) {
+        h.hover_at(at);
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            h.run_steps(1);
+        }
+        h.run_steps(1);
+    }
+
+    fn wait_for_prompt(h: &mut Harness<'static, PdfCraftApp>) {
+        for _ in 0..8 {
+            if h.query_all_by_role_and_label(Role::Label, "Reload").any(|node| node.rect().center().y > 200.0) {
+                return;
+            }
+            h.run_steps(1);
+            assert_eq!((pages(h), dirty(h)), (2, true), "waiting for a visible warning must not discard edits");
+        }
+        panic!("confirmation card did not become visible");
+    }
+
+    fn assert_cancelled(h: &Harness<'static, PdfCraftApp>, recovery: &RecoveryStore, external: &[u8], answer: &str) {
+        assert_eq!((pages(h), dirty(h)), (2, true), "{answer} keeps the edited working document");
+        assert!(h.state().views[0].disk_changed, "{answer} keeps the change notice active");
+        assert_eq!(recovery.list().len(), 1, "{answer} keeps the unsaved recovery snapshot");
+        let path = h.state().session.get(h.state().views[0].id).unwrap().path.clone().unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), external, "{answer} leaves external bytes intact");
+        assert!(
+            h.get_all_by_role_and_label(Role::Button, "Reload").any(|node| node.rect().center().y < 180.0),
+            "{answer} leaves the banner available"
+        );
+    }
+
+    let original = fixture(2);
+    let external = fixture(4);
+    let file = TempPdf::new("notice-both-panes-confirm", &original);
+    let recovery = TempRecovery::new();
+    let size = egui::vec2(800.0, 600.0);
+    let path = file.path.clone();
+    let store = recovery.store.clone();
+    let mut h = Harness::builder().with_size(size).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.set_option("panel", "comments").unwrap();
+        app.left_open = true;
+        app.run_inline = true;
+        app.enable_recovery(store);
+        app.open_path(&path);
+        app
+    });
+    h.run_steps(4);
+    rotate_first_page(&mut h);
+    h.state_mut().autosave_now();
+    assert_eq!(recovery.store.list().len(), 1, "the edit has a recovery snapshot before the disk change");
+    file.rebuild(&external);
+    h.run_steps(3);
+
+    let click_banner_reload = |h: &Harness<'static, PdfCraftApp>| {
+        h.get_all_by_role_and_label(Role::Button, "Reload").find(|node| node.rect().center().y < 180.0).expect("the banner Reload action").click();
+    };
+    let modal_label = |h: &Harness<'static, PdfCraftApp>, label: &str| {
+        h.get_all_by_role_and_label(Role::Label, label)
+            .find(|node| node.rect().center().y > 200.0)
+            .expect("the centered confirmation card label")
+            .rect()
+    };
+    let modal_button_disabled = |h: &Harness<'static, PdfCraftApp>, label: &str| {
+        h.get_all_by_role_and_label(Role::Button, label)
+            .find(|node| node.rect().center().y > 200.0)
+            .expect("the centered confirmation card button")
+            .accesskit_node()
+            .is_disabled()
+    };
+    let click_modal_button = |h: &Harness<'static, PdfCraftApp>, label: &str| {
+        h.get_all_by_role_and_label(Role::Button, label)
+            .find(|node| node.rect().center().y > 200.0)
+            .expect("the centered confirmation card button")
+            .click();
+    };
+    let assert_prompt_open = |h: &Harness<'static, PdfCraftApp>| {
+        let heading = modal_label(h, "Reload");
+        assert!(heading.width() > 0.0, "the modal has its heading");
+        let warning = modal_label(h, DISK_CHANGE_NOTICE);
+        assert!(warning.height() > 24.0, "the full warning wraps in the modal: {warning:?}");
+        let cancel = h
+            .get_all_by_role_and_label(Role::Button, "Cancel")
+            .find(|node| node.rect().center().y > 200.0)
+            .expect("the confirmation card Cancel action");
+        let reload = h
+            .get_all_by_role_and_label(Role::Button, "Reload")
+            .find(|node| node.rect().center().y > 200.0)
+            .expect("the confirmation card Reload action");
+        assert!(!cancel.accesskit_node().is_disabled(), "Cancel is available immediately");
+        assert!(cancel.is_focused(), "Cancel has default focus on the first displayed frame");
+        assert!(reload.accesskit_node().is_disabled(), "confirming Reload is disabled on the first displayed frame");
+    };
+
+    let before_pending_prompt_zoom = (h.state().views[0].zoom, h.state().views[0].fit);
+    click_banner_reload(&h);
+    h.run_steps(1);
+
+    // Before the confirmation area has been presented, page navigation must already be blocked.
+    let gesture_pos = egui::pos2(300.0, 500.0);
+    let viewport = h.state().views[0].viewport_rect();
+    assert!(viewport.contains(gesture_pos), "the gesture point is on the page canvas: {viewport:?}");
+    h.hover_at(gesture_pos);
+    h.event(egui::Event::Zoom(1.5));
+    h.run_steps(1);
+
+    // This is deliberately the first document-state assertion after clicking the warning banner.
+    // Current direct-reload behavior fails here by replacing the edited two-page document.
+    assert_eq!((pages(&h), dirty(&h)), (2, true), "concealed warning must not discard unsaved work before confirmation");
+    assert_eq!(
+        (h.state().views[0].zoom, h.state().views[0].fit),
+        before_pending_prompt_zoom,
+        "pinch input is blocked as soon as reload confirmation is pending"
+    );
+
+    assert_eq!(std::fs::read(&file.path).unwrap(), external, "the prompt does not write over the external version");
+    assert_eq!(recovery.store.list().len(), 1, "the prompt keeps the recovery snapshot");
+    wait_for_prompt(&mut h);
+    assert_prompt_open(&h);
+    h.run_steps(2);
+    assert!(!modal_button_disabled(&h, "Reload"), "the explicit Reload action becomes available after the first frame");
+    click_modal_button(&h, "Cancel");
+    h.run_steps(2);
+    assert_cancelled(&h, &recovery.store, &external, "Cancel");
+    // The same delivered gesture works again after cancellation, so the blocked input was real.
+    h.hover_at(gesture_pos);
+    h.run_steps(1);
+    let cancelled_zoom = h.state().views[0].zoom;
+    h.event(egui::Event::Zoom(1.5));
+    h.run_steps(2);
+    assert!(h.state().views[0].zoom > cancelled_zoom * 1.4, "pinch input works again after cancellation");
+
+    click_banner_reload(&h);
+    h.run_steps(1);
+    assert_eq!((pages(&h), dirty(&h)), (2, true), "reopening the prompt does not discard edits");
+    wait_for_prompt(&mut h);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_cancelled(&h, &recovery.store, &external, "Escape");
+
+    click_banner_reload(&h);
+    h.run_steps(1);
+    assert_eq!((pages(&h), dirty(&h)), (2, true), "reopening after Escape keeps edits");
+    wait_for_prompt(&mut h);
+    click_at(&mut h, egui::pos2(5.0, 5.0));
+    assert_cancelled(&h, &recovery.store, &external, "backdrop click");
+
+    click_banner_reload(&h);
+    h.run_steps(2);
+    assert_eq!((pages(&h), dirty(&h)), (2, true), "confirmation still precedes replacement");
+    wait_for_prompt(&mut h);
+    h.run_steps(1);
+    click_modal_button(&h, "Reload");
+    h.run_steps(3);
+    assert_eq!((pages(&h), dirty(&h)), (4, false), "explicit confirmation adopts the external version");
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.bytes.as_ref(), &external, "the opened document adopts the external bytes");
+    assert_eq!(std::fs::read(&file.path).unwrap(), external, "Reload never overwrites the external file");
+    assert!(recovery.store.list().is_empty(), "successful reload clears the recovery snapshot");
 }
 
 /// With the watcher off nothing notices the change until Save looks at the file.

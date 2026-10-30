@@ -81,6 +81,8 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
 
 /// Draw the active modal dialog and apply the action the user chose.
 fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    #[cfg(not(target_arch = "wasm32"))]
+    prompts::disk_reload_prompt(app, ctx);
     password(app, ctx);
     save_prompt(app, ctx);
     link_prompt(app, ctx);

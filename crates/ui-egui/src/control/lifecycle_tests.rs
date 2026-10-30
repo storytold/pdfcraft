@@ -904,3 +904,63 @@ fn one_batch_is_consumed_by_one_pass() {
     plugin.input_hook(&egui::Context::default(), &mut third);
     assert!(third.events.is_empty(), "a consumed batch is never repeated");
 }
+
+/// A cancelled/reopened prompt for the same document is a new input and capture target.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn reopened_reload_confirmation_rejects_stale_control_input_and_answers() {
+    let ctx = egui::Context::default();
+    let mut app = crate::PdfCraftApp::new();
+    app.run_inline = true;
+    let path = std::env::temp_dir().join(format!("pdfcraft-control-reload-{}.pdf", std::process::id())).to_string_lossy().into_owned();
+    app.open_bytes("synthetic-form.pdf", Some(path), include_bytes!("../../tests/data/form.pdf").to_vec()).unwrap();
+    app.ctx = Some(ctx.clone());
+    let id = app.views[0].id;
+    app.views[0].disk_changed = true;
+    app.request_disk_reload(id, true);
+    let (_, old_serial) = app.disk_reload_confirmation_identity().unwrap();
+    let old_capture = Host::capture_epoch(&app);
+    let old_input = Host::input_epoch(&app);
+    app.mark_disk_reload_confirmation_presented(old_serial, 1, false);
+    assert_eq!(Host::capture_epoch(&app), old_capture, "sizing does not claim a presented dialog");
+    assert_eq!(Host::input_epoch(&app), old_input);
+    app.mark_disk_reload_confirmation_presented(old_serial, 1, true);
+    assert_ne!(Host::capture_epoch(&app), old_capture, "first presentation is a new capture context");
+    assert_ne!(Host::input_epoch(&app), old_input, "first presentation is a new input context without relying on focus");
+    app.resolve_disk_reload_confirmation(old_serial, false, 0);
+    app.request_disk_reload(id, true);
+    let (_, new_serial) = app.disk_reload_confirmation_identity().unwrap();
+    assert_ne!(new_serial, old_serial);
+    assert_ne!(Host::capture_epoch(&app), old_capture);
+    assert_ne!(Host::input_epoch(&app), old_input);
+    assert!(app.modal_open());
+    app.mark_disk_reload_confirmation_presented(new_serial, 1, true);
+    app.resolve_disk_reload_confirmation(old_serial, true, 2);
+    assert!(app.watch.reload_request.is_none(), "an old answer must not accept the new prompt");
+    assert_eq!(app.disk_reload_confirmation_identity(), Some((id, new_serial)));
+
+    let shared = Arc::new(Mutex::new(Shared::default()));
+    let mut plugin = ControlPlugin { shared: shared.clone() };
+    {
+        let mut state = shared.lock().unwrap();
+        state.epoch = Host::input_epoch(&app);
+        state.inject.push_back(RequestBatches {
+            request: 5116,
+            epoch: old_input,
+            started: false,
+            since: web_time::Instant::now(),
+            release: Vec::new(),
+            batches: VecDeque::from([vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }]]),
+        });
+    }
+    let mut raw = egui::RawInput::default();
+    plugin.input_hook(&ctx, &mut raw);
+    assert!(raw.events.is_empty());
+    assert_eq!(shared.lock().unwrap().dropped, vec![5116]);
+}
