@@ -36,6 +36,11 @@ Each source page becomes a Form XObject (its content wrapped in q/Q, plus the pr
 annotations); sheets place them with a clip. The result is a fresh, unencrypted,
 garbage-collected file (callers check the print permission).
 Annotation appearances receive unused XObject names, preserving existing page resources even when they use the same naming prefix.
+Appearance placement keeps the full PDF number precision, including small coefficients needed by large appearance bounding boxes or matrices.
+Existing printable NoRotate appearances keep their orientation and upper-left rectangle anchor when the source page is rotated.
+Text annotations use this upright placement even with the NoRotate flag clear (ISO 32000-1 section 12.5.6.4).
+Crop origins, UserUnit, sheet scaling, and later imposition rotations still apply; NoZoom does not cancel printing scale.
+Missing or unusable appearance streams still cannot be printed.
 
 The GUI Print dialog remembers its last selected paper size across application sessions,
 including when Print is cancelled. The preference stores a canonical name such as `A4`;
@@ -62,7 +67,7 @@ In a browser there is no spooler: the app (`pdfcraft-ui-egui`'s `web_print`) dra
 PDF's sheets with PdfCraft's renderer and prints them through the browser's print dialog, which
 sets copies, two-sided printing and colour. This crate stays free of web APIs.
 
-Not yet: print as image, poster labels, PostScript output, colour conversion for
+Not yet: poster labels, PostScript output, colour conversion for
 grayscale.
 
 ## Architectural sheets and scale
