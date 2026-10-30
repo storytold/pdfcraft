@@ -1887,6 +1887,49 @@ fn page_text_failure_preserves_valid_search_match_without_jitter() {
     assert!(v.goto.is_none());
 }
 
+/// Text recognised in the background stays the page's text layer when that layer is read
+/// again (scrolled away and back), so the page is not read a second time; an edit on the page
+/// (a comment) keeps it, and a change that may move pages drops it.
+#[test]
+fn recognised_text_is_kept_for_its_page_until_pages_may_move() {
+    let mut v = view(3, PageLayout::Single, true);
+    let ctx = egui::Context::default();
+    let empty = |v: &mut DocView| {
+        let req = RenderRequest { page: 1, kind: RequestKind::Text, ..Default::default() };
+        v.last_queue = vec![req];
+        let r = pdfcraft_render::RenderedPage {
+            request: req,
+            width: 0,
+            height: 0,
+            rgba: Default::default(),
+            error: None,
+            text: Some(Arc::new(PageText::default())),
+            warnings: Vec::new(),
+            millis: 0,
+        };
+        v.receive_result(&ctx, r);
+    };
+    empty(&mut v);
+    assert!(v.auto_ocr.wanted, "an empty text layer asks for recognition");
+    assert_eq!(v.text_glyph_count(1), Some(0));
+    let recognised = PageText {
+        glyphs: vec![pdfcraft_render::TextGlyph { text: "x".into(), rect: [0.0, 0.0, 10.0, 10.0], quad: [[0.0, 0.0]; 4], direction: [1.0, 0.0] }],
+        line_of: vec![0],
+        space_before: vec![false],
+    };
+    v.ocr_texts.insert(1, Arc::new(recognised));
+    v.texts.remove(&1);
+    empty(&mut v);
+    assert_eq!(v.page_plain_text(1).as_deref(), Some("x"), "read again, the page keeps its recognised text");
+    v.page_changed(1);
+    empty(&mut v);
+    assert_eq!(v.page_plain_text(1).as_deref(), Some("x"), "a comment on the page keeps it");
+    v.document_changed(&thumbnail_info(3));
+    assert!(v.ocr_texts.is_empty() && !v.auto_ocr.wanted, "pages may have moved");
+    empty(&mut v);
+    assert_eq!(v.text_glyph_count(1), Some(0));
+}
+
 /// A page whose picture moved can get its whole-page raster back before its last stale tile.
 /// From then on the raster has the picture where it went: it is drawn from there, not from
 /// where it was (which the raster now shows empty), and another drag starts from there too.

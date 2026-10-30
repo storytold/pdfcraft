@@ -348,3 +348,54 @@ fn only_the_edit_tool_recognizes_a_scanned_page() {
     h.run_steps(6);
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), None);
 }
+
+/// A scan opened in a viewer that can recognise it: steps through `h` until the view's first page
+/// has a text layer that `ready` accepts (or 30 s pass).
+fn open_scan(auto_ocr: bool) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.auto_ocr = auto_ocr;
+        app.run_inline = true;
+        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while h.state().views[0].text_glyph_count(0).is_none() || h.state().render_pending() {
+        assert!(std::time::Instant::now() < deadline, "the page's text layer never loaded");
+        h.step();
+    }
+    h.run_steps(4);
+    h
+}
+
+/// A scan is recognised in the background, as browsers do, so its words can be selected and
+/// found at once. The text is the view's: the document is not changed, has nothing to undo and
+/// asks nothing on closing (Recognize text still adds it to the file).
+#[test]
+fn scanned_pages_are_recognised_in_the_background_without_changing_the_file() {
+    if !pdfcraft_engine::ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let h = open_scan(true);
+    let app = h.state();
+    let text = app.views[0].page_plain_text(0).unwrap_or_default();
+    assert!(text.contains("scanned"), "recognised text: {text:?}");
+    assert_eq!(app.views[0].auto_ocr_progress(), None, "finished");
+    let id = app.active_ids().unwrap().1;
+    let doc = app.session.get(id).unwrap();
+    assert!(!doc.dirty, "the document was changed");
+    assert_eq!(doc.can_undo(), None);
+}
+
+#[test]
+fn background_recognition_can_be_turned_off() {
+    if !pdfcraft_engine::ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let h = open_scan(false);
+    assert_eq!(h.state().views[0].text_glyph_count(0), Some(0), "recognised although turned off");
+    assert_eq!(h.state().views[0].auto_ocr_progress(), None);
+}

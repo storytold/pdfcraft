@@ -162,6 +162,7 @@ impl DocView {
         self.waiting_since.clear();
         self.last_queue.clear();
         self.selection = None;
+        self.no_text = None;
         self.all_text = false;
         // A content change is not reader navigation: keep the automatic anchor so the
         // re-extracted layers still follow it, and keep `follow_ended` so a reader who already
@@ -204,6 +205,9 @@ impl DocView {
         self.last_queue.clear();
         if self.selection.is_some_and(|s| s.page == page) {
             self.selection = None;
+        }
+        if self.no_text.is_some_and(|n| n.page == page) {
+            self.no_text = None;
         }
     }
 
@@ -517,6 +521,13 @@ impl DocView {
         if r.request.kind == RequestKind::Text {
             match r.text {
                 Some(t) => {
+                    // A page without text may be a scan: recognise it, or use what was.
+                    let t = if t.is_empty() {
+                        self.auto_ocr.wanted = true;
+                        self.ocr_texts.get(&r.request.page).cloned().unwrap_or(t)
+                    } else {
+                        t
+                    };
                     self.texts.insert(r.request.page, t);
                     self.refresh_find_page(r.request.page);
                 }
