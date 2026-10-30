@@ -14,6 +14,7 @@ impl Session {
         let now = self.now();
         let today = self.today();
         let js_off = self.js_off;
+        let highlight = self.field_highlight;
         let xfa_time_scale = self.xfa_time_scale.unwrap_or(1);
         let doc = self.doc_mut(id)?;
         doc.edit_notices.clear();
@@ -26,6 +27,7 @@ impl Session {
         }
         cx.xfa_time_scale = xfa_time_scale;
         cx.pages = doc.info.pages.len();
+        cx.highlight = highlight;
         cx.today = today;
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let signed = doc.is_signed();
@@ -56,7 +58,7 @@ impl Session {
         }
         let mut next = editor.cos.clone();
         if !js_off && uses_scripts(&edit) {
-            cx.js = Some(js::JsRunner::new(&next, &name));
+            cx.js = Some(js::JsRunner::new(&next, &name, highlight));
         }
         cx.renamed_fields.clear();
         cx.redaction_overlays.clear();
@@ -122,11 +124,13 @@ impl Session {
             let mut reset = false;
             collect(&edit, &mut changed, &mut reset);
             if !changed.is_empty() || reset {
+                let highlight = cx.highlight();
                 let mut run = xfa::XfaRun {
                     page_count: cx.pages,
                     out: &mut cx.xfa_out,
                     datasets: cx.xfa_datasets,
                     ran_away: false,
+                    highlight,
                     time_scale: cx.xfa_time_scale,
                 };
                 // Every changed field's scripts, then the calculations once (after a reset,
@@ -135,6 +139,11 @@ impl Session {
                     .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
                 cx.xfa_datasets = run.datasets;
                 cx.xfa_ran_away |= run.ran_away;
+                // The next edit of a batch reads the highlight this one's scripts set.
+                // The next XFA run of a batch starts from the page count this one left.
+                cx.pages = run.page_count;
+                let on = run.highlight;
+                cx.set_highlight(on);
                 if let Err(e) = ran {
                     cx.xfa_out.errors.push(e);
                 }
@@ -157,6 +166,7 @@ impl Session {
                     // Layout replaces pages and widgets, even if the page count is unchanged.
                     // Undo/redo must rebuild these too instead of refreshing only field values.
                     scope = Scope::Full;
+                    rerun_layout_ready(&mut next, &mut cx);
                 }
             }
         }
@@ -519,6 +529,29 @@ impl Session {
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
         doc.bytes = bytes;
         Ok(())
+    }
+}
+
+/// After a new layout: the form's `layout:ready` scripts run again, reading its page count, as
+/// after a layout its scripts asked for. Not after a script of this edit ran away: the form's
+/// scripts turn off once it is done.
+fn rerun_layout_ready(next: &mut pdfcraft_cos::Document, cx: &mut EditCtx) {
+    if cx.xfa_ran_away {
+        return;
+    }
+    let Some(tpl) = cx.xfa.clone() else { return };
+    let highlight = cx.highlight();
+    let page_count = pdfcraft_organize::page_count(next).unwrap_or(cx.pages);
+    let mut run =
+        xfa::XfaRun { page_count, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false, highlight, time_scale: cx.xfa_time_scale };
+    let ran = guard(|| xfa::on_layout(next, &tpl, &mut run)).unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
+    cx.xfa_datasets = run.datasets;
+    cx.xfa_ran_away |= run.ran_away;
+    cx.pages = run.page_count;
+    let on = run.highlight;
+    cx.set_highlight(on);
+    if let Err(e) = ran {
+        cx.xfa_out.errors.push(e);
     }
 }
 

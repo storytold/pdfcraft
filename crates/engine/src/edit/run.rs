@@ -172,6 +172,8 @@ pub(crate) struct EditCtx {
     pub(crate) xfa_removed: Vec<String>,
     /// Pages in the document, for `xfa.layout.pageCount()`.
     pub(crate) pages: usize,
+    /// Whether the viewer highlights form fields, for `app.runtimeHighlight`.
+    pub(crate) highlight: bool,
     pub(crate) date: Option<String>,
     /// Today in local time, for date tokens.
     pub(crate) today: (i64, u32, u32),
@@ -188,6 +190,23 @@ pub(crate) struct EditCtx {
 }
 
 impl EditCtx {
+    /// The field highlight (`app.runtimeHighlight`) the edit's next script reads: the field
+    /// scripts' runner holds it while there is one (its scripts change it there), else the edit.
+    pub(crate) fn highlight(&self) -> bool {
+        self.js.as_ref().map_or(self.highlight, |js| js.doc.highlight)
+    }
+
+    /// A script changed the field highlight: both script runtimes of the edit read the new one,
+    /// so a later edit of a batch sees it whichever kind of script it runs.
+    pub(crate) fn set_highlight(&mut self, on: bool) {
+        self.highlight = on;
+        if let Some(js) = self.js.as_mut() {
+            js.doc.highlight = on;
+        }
+    }
+
+    /// The context for one edit: `now` (the session's clock) dates it, and with `salt` seeds the
+    /// ids it makes.
     pub(crate) fn new(now: Option<i64>, salt: u64) -> Self {
         let mut seed = 0x9E37_79B9_7F4A_7C15u64 ^ salt;
         if let Some(t) = now {
@@ -207,6 +226,7 @@ impl EditCtx {
             xfa_time_scale: 1,
             xfa_removed: Vec::new(),
             pages: 0,
+            highlight: false,
             date: now.map(pdfcraft_cos::pdf_date),
             today: (1970, 1, 1),
             seed,
@@ -422,11 +442,23 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         },
         Edit::XfaEvent { som, activity } => {
             let tpl = cx.xfa.clone().ok_or_else(|| EditError::Invalid("this is not a laid-out XFA form, or JavaScript is off".into()))?;
-            let mut run =
-                xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false, time_scale: cx.xfa_time_scale };
+            let highlight = cx.highlight();
+            let mut run = xfa::XfaRun {
+                page_count: cx.pages,
+                out: &mut cx.xfa_out,
+                datasets: cx.xfa_datasets,
+                ran_away: false,
+                highlight,
+                time_scale: cx.xfa_time_scale,
+            };
             let ran = xfa::on_event(doc, &tpl, som, activity, &mut run);
             cx.xfa_datasets = run.datasets;
             cx.xfa_ran_away |= run.ran_away;
+            // The next edit of a batch reads the highlight this one's scripts set.
+            // The next XFA run of a batch starts from the page count this one left.
+            cx.pages = run.page_count;
+            let on = run.highlight;
+            cx.set_highlight(on);
             ran.map_err(EditError::Invalid)?;
         }
         Edit::SetFieldImage { name, image } => {

@@ -88,6 +88,8 @@ impl PdfCraftApp {
         self.try_open(name, path, std::sync::Arc::new(bytes), None, activate)
     }
 
+    /// Hand `request` to the background open worker (started on first use); the result arrives
+    /// later as a pending open, under the returned token.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn schedule_open(&mut self, request: OpenRequest) -> Result<u64, String> {
         if self.open_worker.is_none() {
@@ -104,8 +106,10 @@ impl PdfCraftApp {
         if let Some(ctx) = &self.ctx {
             worker.set_context(ctx);
         }
-        let receiver =
-            worker.submit(token, self.session.open_context(), request.name.clone(), request.path.clone(), request.password, request.input)?;
+        // A new document opens with the remembered Highlight fields, which its scripts read; the
+        // session keeps the document in front's.
+        let context = self.session.open_context().with_highlight(self.view_defaults.highlight_fields);
+        let receiver = worker.submit(token, context, request.name.clone(), request.path.clone(), request.password, request.input)?;
         self.next_open_token = token;
         self.pending_opens.push(PendingOpen {
             token,
@@ -212,6 +216,8 @@ impl PdfCraftApp {
         }
     }
 
+    /// Open `bytes` on this thread: ask for a password if the document needs one, else add it
+    /// as a tab (in front when `activate`).
     fn try_open(
         &mut self,
         name: &str,
@@ -221,7 +227,10 @@ impl PdfCraftApp {
         activate: bool,
     ) -> Result<(), String> {
         use pdfcraft_render::OpenError;
-        let prepared = match self.session.prepare_open(name, path.clone(), bytes.clone(), password) {
+        // A new document opens with the remembered Highlight fields, which its scripts read; the
+        // session keeps the document in front's.
+        let context = self.session.open_context().with_highlight(self.view_defaults.highlight_fields);
+        let prepared = match context.prepare_open(name, path.clone(), bytes.clone(), password) {
             Ok(prepared) => prepared,
             Err(e @ (OpenError::NeedsPassword | OpenError::WrongPassword)) => {
                 let error = matches!(e, OpenError::WrongPassword).then(|| "Incorrect password. Try again.".to_string());
@@ -247,6 +256,8 @@ impl PdfCraftApp {
         self.finish_open(name, path, bytes.len(), prepared, activate).map(|_| ())
     }
 
+    /// Add a prepared document as a tab: its view, the recent-files entry, and what its scripts
+    /// said while it opened (at once in front, or when a background tab is first selected).
     fn finish_open(
         &mut self,
         name: &str,
@@ -332,6 +343,9 @@ impl PdfCraftApp {
         if activate {
             let out = self.session.take_js_output(id);
             self.handle_js(id, out);
+        } else if let Some(on) = self.session.take_js_highlight(id) {
+            // The field highlight a form asks for isn't about the current document: now.
+            self.script_highlight(id, on);
         }
         Ok(id)
     }

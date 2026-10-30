@@ -5,7 +5,7 @@
 //! presence and access changes become overrides kept in the PDF, added or removed rows change
 //! the datasets, and any of those lays the form out again.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use pdfcraft_js::xfa::{XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode};
@@ -128,6 +128,8 @@ pub(crate) struct XfaRun<'a> {
     pub datasets: Option<pdfcraft_cos::ObjRef>,
     /// A script ran past its time limit and was abandoned: the form's scripts should stay off.
     pub ran_away: bool,
+    /// Whether the viewer highlights form fields, for `app.runtimeHighlight`.
+    pub highlight: bool,
     /// What every time limit of the scripts is multiplied by (the event's budget, the engine's
     /// start and each script's own): 1, unless the session was given another
     /// ([`crate::Session::with_xfa_time_scale`]).
@@ -159,6 +161,21 @@ fn to_js(n: &FormNode) -> XfaNode {
     }
 }
 
+/// The SOM paths of the live form's fields under `n`, at most 64 levels deep, into `out`.
+fn field_soms(n: &FormNode, out: &mut HashSet<String>, depth: usize) {
+    if depth > 64 {
+        return;
+    }
+    if n.kind == Some(NodeKind::Field) {
+        out.insert(n.som.clone());
+    }
+    for c in &n.children {
+        field_soms(c, out, depth + 1);
+    }
+}
+
+/// The subform or other container at SOM path `som` in the live form under `n` (fields are
+/// skipped), searched at most 64 levels deep.
 fn find_container<'a>(n: &'a FormNode, som: &str, depth: usize) -> Option<&'a FormNode> {
     if depth > 64 {
         return None;
@@ -256,6 +273,9 @@ struct Runner<'a, 'b> {
     skipped: usize,
     relayouts: usize,
     relayouts_skipped: bool,
+    /// The form was laid out again since its layout:ready scripts last ran: they run once more
+    /// when the event ends.
+    laid_out: bool,
     dropped_output: usize,
     truncated_warned: bool,
     data: Option<pdfcraft_xfa::DataNode>,
@@ -275,9 +295,14 @@ struct Runner<'a, 'b> {
     /// rebuilt when the structure changed).
     session: Option<XfaSession>,
     changes: Changes,
+    /// Fields the layout numbers (a field whose own layout:ready script puts a page number in
+    /// it): while layout:ready scripts run, a value written to one is dropped, so each page keeps
+    /// the number the layout gave it.
+    numbered: HashSet<String>,
 }
 
 impl<'a, 'b> Runner<'a, 'b> {
+    /// A runner for one event on `doc` and its template, its scripts sharing `budget_ms`.
     fn new(doc: &'a mut pdfcraft_cos::Document, tpl: &'a Template, run: &'a mut XfaRun<'b>, budget_ms: u64) -> Self {
         let data = pdfcraft_xfa::data_of(doc);
         let ov = pdfcraft_xfa::overrides(doc);
@@ -291,6 +316,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             skipped: 0,
             relayouts: 0,
             relayouts_skipped: false,
+            laid_out: false,
             dropped_output: 0,
             truncated_warned: false,
             data,
@@ -304,6 +330,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             cached: None,
             session: None,
             changes: Changes::default(),
+            numbered: HashSet::new(),
         }
     }
 
@@ -315,7 +342,7 @@ impl<'a, 'b> Runner<'a, 'b> {
 
     /// The script engine for this event.
     fn session(&mut self) -> &mut XfaSession {
-        let doc_info = XfaDoc { file_name: String::new(), page: 0, page_count: self.run.page_count };
+        let doc_info = XfaDoc { file_name: String::new(), page: 0, page_count: self.run.page_count, highlight: self.run.highlight };
         let scale = self.run.time_scale;
         self.session.get_or_insert_with(|| XfaSession::new(doc_info).with_time_scale(scale))
     }
@@ -397,6 +424,29 @@ impl<'a, 'b> Runner<'a, 'b> {
                 self.dropped_output += 1;
             }
         }
+    }
+
+    /// Run validate script `ev` on `value`: one that answers false, or fails, shows its message
+    /// (else one naming field `name`) unless the value is empty; the value stays, as another
+    /// viewer marks the field invalid rather than reverting it.
+    fn validate(&mut self, ev: &ScriptEvent, name: &str, value: &str) -> Result<(), String> {
+        let Some(o) = self.run(ev, value)? else { return Ok(()) };
+        if (o.result_bool == Some(false) || o.error.is_some()) && !value.trim().is_empty() {
+            self.alert(crate::js::Message::plain(ev.message.clone().unwrap_or_else(|| format!("{name}: the value is not valid"))));
+        }
+        Ok(())
+    }
+
+    /// Every validate script of the form, in document order, each on its field's value
+    /// ([`Runner::validate`]): on opening, after the calculations, another viewer validates every
+    /// field that has a script, and only one with a value that fails says so.
+    fn validates(&mut self) -> Result<(), String> {
+        for ev in self.events_named("validate") {
+            let name = self.by_som().get(&ev.som).cloned().unwrap_or_else(|| ev.som.clone());
+            let value = self.fields().get(&name).map(|f| f.value.join("\n")).unwrap_or_default();
+            self.validate(&ev, &name, &value)?;
+        }
+        Ok(())
     }
 
     /// Show message `m`, up to [`MAX_ALERTS_PER_EVENT`] for one event; the rest are counted.
@@ -520,8 +570,14 @@ impl<'a, 'b> Runner<'a, 'b> {
             return Ok(());
         }
         self.relayouts += 1;
+        self.laid_out = true;
         self.flush()?;
         let report = pdfcraft_xfa::rerender(self.doc, self.tpl).map_err(|e| e.to_string())?;
+        if report.pages != self.run.page_count {
+            // Later scripts read the new page count (`xfa.layout.pageCount()`) from a new session.
+            self.run.page_count = report.pages;
+            self.session = None;
+        }
         self.console(report.warnings);
         crate::xfa_redraw(self.doc)?;
         self.console(crate::undrawn_field_warnings(self.doc));
@@ -596,7 +652,9 @@ impl<'a, 'b> Runner<'a, 'b> {
             }
             match e {
                 XfaEffect::SetValue { som, value } => {
-                    self.set_value(som, value);
+                    if !self.numbered.contains(som) {
+                        self.set_value(som, value);
+                    }
                 }
                 XfaEffect::SetPresence { som, presence } => {
                     if self.ov.presence.insert(som.clone(), presence.clone()).as_ref() != Some(presence) {
@@ -644,6 +702,13 @@ impl<'a, 'b> Runner<'a, 'b> {
                     }
                 }
                 XfaEffect::Beep => self.run.out.requests.push(Request::Beep),
+                XfaEffect::Highlight(on) => {
+                    self.run.highlight = *on;
+                    // The session's scripts read the setting it started with: the next script
+                    // gets a session that reads the new one.
+                    self.session = None;
+                    self.run.out.requests.push(Request::Highlight(*on));
+                }
                 XfaEffect::Recalculate => {}
                 XfaEffect::Relayout => relayout = true,
             }
@@ -714,15 +779,57 @@ impl<'a, 'b> Runner<'a, 'b> {
         self.live().events.iter().filter(|e| e.som == som && e.activity == activity).cloned().collect()
     }
 
-    /// End the event: write what is left, lay the form out if a capped relayout is owed, and
-    /// report what the limits cut.
-    fn finish(mut self) -> Result<Changes, String> {
-        #[cfg(test)]
-        self.check_live();
+    /// Every script of `activity`, in document order (parents before their children).
+    fn events_named(&mut self, activity: &str) -> Vec<ScriptEvent> {
+        self.live().events.iter().filter(|e| e.activity == activity).cloned().collect()
+    }
+
+    /// Every layout:ready script, parents first. A field that numbers pages keeps the number the
+    /// layout gave each page: the value a script writes to it is dropped (one value would put the
+    /// same number on every page).
+    fn layout_ready(&mut self) -> Result<(), String> {
+        self.laid_out = false;
+        let (ready, numbered) = {
+            let live = self.live();
+            let ready: Vec<ScriptEvent> = live.events.iter().filter(|e| e.activity == "layoutReady").cloned().collect();
+            // The fields, gathered in one walk rather than one per script.
+            let mut fields = HashSet::new();
+            field_soms(&live.root, &mut fields, 0);
+            let numbered: HashSet<String> = ready
+                .iter()
+                .filter(|e| fields.contains(&e.som) && pdfcraft_xfa::numbers_pages(&e.script, e.formcalc))
+                .map(|e| e.som.clone())
+                .collect();
+            (ready, numbered)
+        };
+        self.numbered = numbered;
+        for ev in &ready {
+            self.run(ev, "")?;
+        }
+        self.numbered.clear();
+        Ok(())
+    }
+
+    /// Lay the form out once more if a capped relayout is owed.
+    fn owed_relayout(&mut self) -> Result<(), String> {
         if self.relayouts_skipped {
             self.relayouts = 0;
             self.relayouts_skipped = false;
             self.relayout()?;
+        }
+        Ok(())
+    }
+
+    /// End the event: lay the form out if a capped relayout is owed, run the layout:ready scripts
+    /// again if the form was laid out again (once: what they lay out doesn't run them a third
+    /// time), write what is left, and report what the limits cut.
+    fn finish(mut self) -> Result<Changes, String> {
+        #[cfg(test)]
+        self.check_live();
+        self.owed_relayout()?;
+        if self.laid_out {
+            self.layout_ready()?;
+            self.owed_relayout()?;
         }
         self.flush()?;
         self.session = None;
@@ -822,15 +929,77 @@ pub(crate) fn relayout_changed_text(
     Ok(Some(report.warnings))
 }
 
-/// On open: initialize scripts, then calculations. Returns what they changed.
+/// On open, in the order another viewer runs them: initialize scripts (children before their
+/// parent), form:ready (parents first), layout:ready (parents first; the form is laid out by
+/// now), docReady, then the calculations. Returns what they changed.
+///
+/// layout:ready runs here, where forms set themselves up (turning field highlighting on, say),
+/// and again whenever a later script lays the form out again ([`Runner::finish`]).
 pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mut XfaRun) -> Result<Changes, String> {
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
-    let events: Vec<ScriptEvent> = r.live().events.iter().filter(|e| e.activity == "initialize" || e.activity == "docReady").cloned().collect();
-    for ev in &events {
+    let initialize = children_first(r.events_named("initialize"));
+    for ev in &initialize {
         r.run(ev, "")?;
     }
+    // The calculations and then the validations, before form:ready (XFA 3.3 fires the form
+    // ready event once they have run; another viewer runs them there too).
     r.calculates()?;
+    r.validates()?;
+    let calculated = r.field_changes.clone();
+    // `ready` without `ref="$layout"` is form:ready: in the reverse of initialize's order, the
+    // root first and the objects inside it last to first, as another viewer runs it.
+    for ev in &objects_reversed(children_first(r.events_named("ready"))) {
+        r.run(ev, "")?;
+    }
+    r.layout_ready()?;
+    for ev in &r.events_named("docReady") {
+        r.run(ev, "")?;
+    }
+    // A ready script wrote a value: the calculations run again, as after any change (which of
+    // them read it isn't known here, so all of them).
+    if r.field_changes != calculated {
+        r.calculates()?;
+    }
     r.finish()
+}
+
+/// `events` with their objects in the reverse order, each object's own events keeping theirs.
+fn objects_reversed(events: Vec<ScriptEvent>) -> Vec<ScriptEvent> {
+    let mut objects: Vec<Vec<ScriptEvent>> = Vec::new();
+    for ev in events {
+        match objects.last_mut() {
+            Some(last) if last.first().is_some_and(|e| e.som == ev.som) => last.push(ev),
+            _ => objects.push(vec![ev]),
+        }
+    }
+    objects.into_iter().rev().flatten().collect()
+}
+
+/// `events` (in document order) reordered so that each object's come after those of the objects
+/// inside it, siblings keeping their order; an object's own events keep theirs.
+fn children_first(events: Vec<ScriptEvent>) -> Vec<ScriptEvent> {
+    let mut out = Vec::with_capacity(events.len());
+    // The objects whose events wait for their children's, outermost first.
+    let mut open: Vec<Vec<ScriptEvent>> = Vec::new();
+    for ev in events {
+        while let Some(top) = open.last() {
+            let parent = top.first().map_or("", |e| e.som.as_str());
+            // The same object, or one inside it (the root may have an empty path).
+            let inside = parent.is_empty() || ev.som == parent || ev.som.strip_prefix(parent).is_some_and(|rest| rest.starts_with('.'));
+            if inside {
+                break;
+            }
+            out.extend(open.pop().unwrap_or_default());
+        }
+        match open.last_mut() {
+            Some(top) if top.first().is_some_and(|e| e.som == ev.som) => top.push(ev),
+            _ => open.push(vec![ev]),
+        }
+    }
+    while let Some(top) = open.pop() {
+        out.extend(top);
+    }
+    out
 }
 
 /// After fields `names` took new values: each one's change, exit and validate scripts, then
@@ -847,13 +1016,18 @@ pub(crate) fn on_changes(doc: &mut pdfcraft_cos::Document, tpl: &Template, names
             r.run(&ev, &value)?;
         }
         for ev in r.events_of(&som, "validate") {
-            let Some(o) = r.run(&ev, &value)? else { continue };
-            if (o.result_bool == Some(false) || o.error.is_some()) && !value.trim().is_empty() {
-                r.alert(crate::js::Message::plain(ev.message.clone().unwrap_or_else(|| format!("{name}: the value is not valid"))));
-            }
+            r.validate(&ev, name, &value)?;
         }
     }
     r.calculates()?;
+    r.finish().map(|_| ())
+}
+
+/// The form was laid out again outside its scripts (a field's text grew or shrank): its
+/// layout:ready scripts run, as after any new layout, and what they change is written.
+pub(crate) fn on_layout(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mut XfaRun) -> Result<(), String> {
+    let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
+    r.layout_ready()?;
     r.finish().map(|_| ())
 }
 
