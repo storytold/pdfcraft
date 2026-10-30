@@ -5394,6 +5394,20 @@ fn detecting_comb_boxes_adds_one_comb_field_per_row() {
 }
 
 #[test]
+fn comparing_a_document_without_text_says_so_instead_of_reporting_no_changes() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let text = s.create_from_text("t", "The contract starts on Monday.").unwrap();
+    let scan = s.create_blank(200.0, 300.0, 1).unwrap();
+    let text = s.open("text.pdf", None, text, None).unwrap();
+    let scan = s.open("scan.pdf", None, scan, None).unwrap();
+    for (old, new) in [(text, scan), (scan, text), (scan, scan)] {
+        let Err(EditError::Invalid(m)) = s.compare(old, new) else { panic!("a document without text is refused") };
+        assert!(m.contains("scan.pdf has no text to compare") && m.contains("Recognize text"), "{m}");
+    }
+    assert!(s.compare(text, text).is_ok());
+}
+
+#[test]
 fn comparing_two_versions_of_a_document() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let v1 = s.create_from_text("t", "The contract starts on Monday.\n\nPayment is due within thirty days.\n\nSigned by both parties.").unwrap();

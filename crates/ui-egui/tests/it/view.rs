@@ -16,6 +16,21 @@ const PAGES: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
+/// [`PAGES`] with a line of text on page 2: compare refuses a document that has none.
+const PAGES_WITH_TEXT: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] /Resources << /Font << /F1 7 0 R >> >> >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Annots [6 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /Contents 8 0 R >> endobj
+5 0 obj << /Type /Page /Parent 2 0 R >> endobj
+6 0 obj << /Type /Annot /Subtype /Link /Rect [50 300 250 350] /Border [0 0 0] /Dest [5 0 R /Fit] >> endobj
+7 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+8 0 obj << /Length 44 >> stream
+BT /F1 12 Tf 40 300 Td (Hello compare) Tj ET
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
 use crate::gpu;
 
 fn harness(options: &'static [(&'static str, &'static str)]) -> Harness<'static, PdfCraftApp> {
@@ -185,8 +200,8 @@ fn page_gaps_comparison_harness() -> Harness<'static, PdfCraftApp> {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.set_option("left", "closed").unwrap();
-        app.open_bytes("old.pdf", None, PAGES.to_vec()).unwrap();
-        app.open_bytes("new.pdf", None, PAGES.to_vec()).unwrap();
+        app.open_bytes("old.pdf", None, PAGES_WITH_TEXT.to_vec()).unwrap();
+        app.open_bytes("new.pdf", None, PAGES_WITH_TEXT.to_vec()).unwrap();
         app.set_option("zoom", "50").unwrap();
         app.compare_old = Some(app.views[0].id);
         app.run_compare();
@@ -222,7 +237,7 @@ fn page_gaps_comparison_control_preserves_both_states() {
         h.run_steps(4);
         assert!(h.state().views.iter().all(|v| v.show_page_gaps == show), "comparison rejected page-gaps={value}");
     }
-    h.state_mut().open_bytes("unrelated.pdf", None, PAGES.to_vec()).unwrap();
+    h.state_mut().open_bytes("unrelated.pdf", None, PAGES_WITH_TEXT.to_vec()).unwrap();
     h.state_mut().set_option("page-gaps", "off").unwrap();
     assert!(h.state().views[0].show_page_gaps && h.state().views[1].show_page_gaps);
     assert!(!h.state().views[2].show_page_gaps);

@@ -60,7 +60,17 @@ impl Session {
         let b = self.get(new).ok_or(EditError::NoDocument)?;
         a.check_copying()?;
         b.check_copying()?;
-        Ok(pdfcraft_compare::compare(&a.words(), &b.words()))
+        let (old_words, new_words) = (a.words(), b.words());
+        // A scanned page is a picture: with no text to read, "no changes" would be a false answer.
+        for (d, words) in [(a, &old_words), (b, &new_words)] {
+            if words.is_empty() {
+                return Err(EditError::Invalid(format!(
+                    "{} has no text to compare (it may be a scan). Run Recognize text on it first, or use the visual compare.",
+                    d.name
+                )));
+            }
+        }
+        Ok(pdfcraft_compare::compare(&old_words, &new_words))
     }
 
     /// Visual compare: regions where page n of `new` looks different from page n of `old`
