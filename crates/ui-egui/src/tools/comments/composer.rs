@@ -27,6 +27,7 @@ pub(crate) fn composer(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, 
         prefs,
         allowed: true,
         hidden: false,
+        hidden_types: &[],
         redact_mark: ([0.89, 0.13, 0.13], 1.0),
         keys,
     };
