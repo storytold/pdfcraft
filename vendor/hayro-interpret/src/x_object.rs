@@ -486,6 +486,26 @@ pub(crate) struct ImageXObject<'a> {
 }
 
 impl<'a> ImageXObject<'a> {
+    /// PdfCraft patch: deliberately narrow eligibility for caching before decode. The ordinary
+    /// device Gray/RGB path cannot emit a colour-fallback warning; a failed decode produces no
+    /// cache entry. Masked, substituted, inline, transferred and JPX images keep the old path.
+    pub(crate) fn resampling_cache_key(&self) -> Option<(u128, bool)> {
+        let cache = self.decoded_cache.as_ref()?;
+        let dict = self.stream.dict();
+        let cs = dict.get::<Name<'_>>(COLORSPACE).or_else(|| dict.get::<Name<'_>>(CS))?;
+        if self.is_mask
+            || self.default_space.is_some()
+            || self.decode_reads_target()
+            || dict.get::<Object<'_>>(SMASK).is_some()
+            || dict.get::<Object<'_>>(MASK).is_some()
+            || !matches!(cs.deref(), b"DeviceRGB" | b"DeviceGray" | b"RGB" | b"G")
+        {
+            return None;
+        }
+        let key = self.decode_key(cache, false, None)?;
+        Some((crate::util::hash128(&key), self.interpolate))
+    }
+
     /// PdfCraft patch (38): an image in a device space is drawn in its default colour space
     /// from `defaults`. Masks have none to replace, and `resolve_cs` (an inline image's named
     /// colour space) substitutes its own.

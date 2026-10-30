@@ -256,6 +256,7 @@ Estimates unchanged.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
+| 2026-10-25 | minor | M2: record the unmerged bounded derived-image cache candidate and measured evidence; #2068 migration remains coordinated separately. Estimates unchanged. |
 | 2026-10-24 | minor | M3, #3970 follow-up: the button release given back after a window move or resize goes before the pointer leaving, so hover doesn't stick. Estimates unchanged. |
 | 2026-10-23 | minor | M8, #3205 follow-up: phone-pattern redaction includes the +39 country code on labelled Italian geographic numbers with a slash; dates, protocol identifiers and whole-run guards remain. Estimates unchanged. |
 | 2026-10-23 | minor | M10: Word table cells use the grid columns they span, including cells after a merged cell; synthetic export regression and CLI reproduction. Estimates unchanged. |

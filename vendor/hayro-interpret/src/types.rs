@@ -69,6 +69,15 @@ impl CacheKey for StencilImage<'_, '_> {
 pub struct RasterImage<'a>(pub(crate) ImageXObject<'a>);
 
 impl RasterImage<'_> {
+    /// PdfCraft patch: opaque identity and interpolation flag for caching resampled pixels.
+    /// Includes the decode context and preview quality. Returns `None` for masks, JPX,
+    /// transfer functions, inline images and colour spaces requiring resource substitution.
+    /// The caller must additionally key output dimensions and backend transparency settings.
+    #[doc(hidden)]
+    pub fn resampling_cache_key(&self) -> Option<(u128, bool)> {
+        self.0.resampling_cache_key()
+    }
+
     /// Perform some operation with the RGB and alpha channel of the image.
     ///
     /// The second argument allows you to give the image decoder a hint for

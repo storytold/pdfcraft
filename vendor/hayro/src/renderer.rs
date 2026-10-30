@@ -1,3 +1,4 @@
+use crate::derived_image_cache::{DerivedImageCache, Key as DerivedImageKey};
 use crate::{ColorReplacement, RenderCache, derive_settings};
 use hayro_interpret::color::Color;
 use hayro_interpret::encode::EncodedShadingPattern;
@@ -465,6 +466,9 @@ pub(crate) struct Renderer {
     /// drawn for a preview, which may leave out tiny images, never reaches a final render.
     pub(crate) soft_mask_cache: HashMap<u128, Mask>,
     pub(crate) outline_cache: Rc<std::cell::RefCell<HashMap<u128, Rc<BezPath>>>>,
+    derived_images: Rc<std::cell::RefCell<DerivedImageCache>>,
+    // Set only around a successful eligible raster decode; recursive masked draws never use it.
+    pending_image: Option<DerivedImageKey>,
     pub(crate) cur_mask: Option<Mask>,
     pub(crate) in_type3_glyph: bool,
     pub(crate) scaler: Scaler,
@@ -576,6 +580,8 @@ impl Renderer {
             inside_pattern: false,
             soft_mask_cache: HashMap::default(),
             outline_cache: cache.outline_cache.clone(),
+            derived_images: cache.derived_images.clone(),
+            pending_image: None,
             cur_mask: None,
             in_type3_glyph: false,
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
@@ -682,6 +688,8 @@ impl Renderer {
                 inside_pattern: false,
                 soft_mask_cache: HashMap::default(),
                 outline_cache: self.outline_cache.clone(),
+                derived_images: self.derived_images.clone(),
+                pending_image: None,
                 cur_mask: None,
                 in_type3_glyph: false,
                 scaler: self.scaler,
@@ -1126,7 +1134,87 @@ impl Renderer {
             Some((_, _, x0, y0)) => Affine::translate((x0, y0)),
             None => cur_transform * additional_transform,
         };
-        self.draw_pixmap(Arc::new(pixmap), quality, draw_transform);
+        let pixmap = Arc::new(pixmap);
+        if let Some(key) = self.pending_image.take()
+            && key.width == u32::from(pixmap.width())
+            && key.height == u32::from(pixmap.height())
+            && let Ok(mut cache) = self.derived_images.try_borrow_mut()
+        {
+            cache.insert(key, pixmap.clone());
+        }
+        self.draw_pixmap(pixmap, quality, draw_transform);
+    }
+
+    /// Plan exactly the existing resize/snap operation before decoding. Pixel generation depends
+    /// on the resource, final dimensions and opacity hint; placement/clip/blending stay live.
+    /// Reject ambiguous sizing and fallback paths instead of caching an approximation.
+    fn derived_image_candidate(
+        &self,
+        image: &hayro_interpret::RasterImage<'_>,
+        transform: Affine,
+    ) -> Option<(DerivedImageKey, ImageQuality, Affine)> {
+        if self.in_type3_glyph
+            || self.inside_pattern
+            || self.in_knockout()
+            || !transform.as_coeffs().iter().all(|v| v.is_finite())
+        {
+            return None;
+        }
+        let source = (image.width(), image.height());
+        let (x, y) = x_y_advances(&transform);
+        let (xs, ys) = (x.length() as f32, y.length() as f32);
+        if !(xs < 1.0 || ys < 1.0) {
+            return None;
+        }
+        let (identity, interpolate) = image.resampling_cache_key()?;
+        let plan = |channels| {
+            image_resampling_size(
+                source.0,
+                source.1,
+                channels,
+                source_byte_len(source.0, source.1, channels, MAX_IMAGE_PIXELS)?,
+                xs,
+                ys,
+                MAX_IMAGE_PIXELS,
+                interpolate,
+            )
+        };
+        // The decoder returns Gray or RGB. Require identical bounded plans for either.
+        let planned = plan(3)?;
+        if plan(1)? != planned || planned == source {
+            return None;
+        }
+        let snapped = if interpolate {
+            snap_minified_image(&transform, source, planned)
+        } else {
+            None
+        };
+        let (width, height) = snapped.map_or(planned, |s| (s.0, s.1));
+        if (width, height) == source {
+            return None;
+        }
+        if image_byte_len(width, height, 4, MAX_IMAGE_PIXELS)? > crate::derived_image_cache::MAX_BYTES {
+            return None;
+        }
+        let draw = match snapped {
+            Some((_, _, x0, y0)) => Affine::translate((x0, y0)),
+            None => {
+                transform * Affine::scale_non_uniform(
+                    f64::from(source.0) / f64::from(width),
+                    f64::from(source.1) / f64::from(height),
+                )
+            }
+        };
+        Some((
+            DerivedImageKey {
+                image: identity,
+                width,
+                height,
+                transparency: self.force_images_may_have_transparency(),
+            },
+            if interpolate { ImageQuality::Medium } else { ImageQuality::Low },
+            draw,
+        ))
     }
 
     fn push_clip_path_inner(&mut self, clip_path: &BezPath, fill: FillRule) {
@@ -1453,6 +1541,8 @@ impl Renderer {
                                 inside_pattern: true,
                                 soft_mask_cache: HashMap::default(),
                                 outline_cache: self.outline_cache.clone(),
+                                derived_images: self.derived_images.clone(),
+                                pending_image: None,
                                 in_type3_glyph: false,
                                 scaler: self.scaler,
                                 preview: self.preview,
@@ -1517,6 +1607,8 @@ impl Renderer {
                             inside_pattern: true,
                             soft_mask_cache: HashMap::default(),
                             outline_cache: self.outline_cache.clone(),
+                            derived_images: self.derived_images.clone(),
+                            pending_image: None,
                             in_type3_glyph: false,
                             scaler: self.scaler,
                             preview: self.preview,
@@ -1822,6 +1914,8 @@ impl<'a> Device<'a> for Renderer {
                                         inside_pattern: false,
                                         soft_mask_cache: HashMap::default(),
                                         outline_cache: self.outline_cache.clone(),
+                                        derived_images: self.derived_images.clone(),
+                                        pending_image: None,
                                         cur_mask: None,
                                         in_type3_glyph: false,
                                         scaler: self.scaler,
@@ -1872,8 +1966,31 @@ impl<'a> Device<'a> for Renderer {
                 );
             }
             hayro_interpret::Image::Raster(r) => {
+                let candidate = self.derived_image_candidate(&r, transform);
+                let hit = candidate.and_then(|(key, quality, draw)| {
+                    self.derived_images
+                        .try_borrow()
+                        .ok()?
+                        .get(&key)
+                        .map(|pixels| (pixels, quality, draw))
+                });
+                if let Some((pixels, quality, draw)) = hit {
+                    self.draw_pixmap(pixels, quality, draw);
+                    self.ctx.set_aliasing_threshold(None);
+                    return;
+                }
                 r.with_rgba(
                     |image, alpha| {
+                        // A malformed/truncated decode or unexpected mask must not populate the
+                        // pre-decode key, whose geometry assumes the PDF's declared dimensions.
+                        self.pending_image = candidate
+                            .filter(|_| {
+                                alpha.is_none()
+                                    && image.width() == r.width()
+                                    && image.height() == r.height()
+                                    && image.scale_factors() == (1.0, 1.0)
+                            })
+                            .map(|(key, _, _)| key);
                         let (sx, sy) = image.scale_factors();
                         transform *= Affine::scale_non_uniform(sx as f64, sy as f64);
                         self.ctx.set_transform(transform);
@@ -1881,6 +1998,7 @@ impl<'a> Device<'a> for Renderer {
                     },
                     Some((target_width, target_height)),
                 );
+                self.pending_image = None;
             }
         }
 
@@ -2340,6 +2458,8 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         cur_mask: None,
         soft_mask_cache: HashMap::default(),
         outline_cache: Rc::new(std::cell::RefCell::new(HashMap::new())),
+        derived_images: Rc::default(),
+        pending_image: None,
         in_type3_glyph: false,
         scaler: Scaler::new(ResamplingFunction::CatmullRom),
         preview,

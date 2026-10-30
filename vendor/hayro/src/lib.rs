@@ -59,6 +59,7 @@ use vello_cpu::color::palette::css::TRANSPARENT;
 use vello_cpu::color::palette::css::WHITE;
 use vello_cpu::{Level, Pixmap, RenderMode};
 
+mod derived_image_cache;
 mod renderer;
 /// PdfCraft patch: exported for its regression test.
 pub use renderer::{image_resampling_size, tiling_cell_pixels, tiling_cell_scale, usable_cell_scale};
@@ -74,6 +75,8 @@ pub use renderer::set_skip_offscreen_paths;
 pub struct RenderCache<'a> {
     pub(crate) interpreter_cache: InterpreterCache<'a>,
     pub(crate) outline_cache: Rc<RefCell<HashMap<u128, Rc<kurbo::BezPath>>>>,
+    // PdfCraft patch: same document/worker lifetime and invalidation as interpreter resources.
+    pub(crate) derived_images: Rc<RefCell<derived_image_cache::DerivedImageCache>>,
 }
 
 impl<'a> RenderCache<'a> {
@@ -82,6 +85,7 @@ impl<'a> RenderCache<'a> {
         Self {
             interpreter_cache: InterpreterCache::new(),
             outline_cache: Rc::new(RefCell::new(HashMap::new())),
+            derived_images: Rc::default(),
         }
     }
 }
