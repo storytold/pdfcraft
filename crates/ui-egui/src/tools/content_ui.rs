@@ -181,6 +181,8 @@ struct Preview {
     rect: [f64; 4],
     /// The item is resized by a corner, not moved.
     resizing: bool,
+    /// Where the box is on screen, for a move: over another page it is drawn there.
+    shown: Option<Rect>,
 }
 
 /// The open box as the page body paints it: the white paper and the laid-out text. The editor draws
@@ -214,6 +216,10 @@ pub struct ContentView {
     pub draft: Option<TextDraft>,
     /// Select the item an add creates (the page's item count before it).
     pub select_added: Option<(usize, usize)>,
+    /// The item being moved: where the press was, and the item's box on screen then.
+    held: Option<(usize, usize, Pos2, Rect)>,
+    /// Why a move was refused, for the app to show (the page code can't reach its toast).
+    pub(crate) notice: Option<String>,
     /// Done was pressed on the open box: the page body returns to Select ([`ContentView::take_done`]).
     done: bool,
     preview: Option<Preview>,
@@ -381,6 +387,10 @@ impl MoveBackground {
         let (Some((_, kp, ki)), Some(background), Some(item), Some(from)) = (self.key, self.texture.as_ref(), self.item.as_ref(), self.from) else {
             return;
         };
+        if placed.page != kp {
+            self.paint_over_page(draw, placed, info, cv, (kp, ki), from);
+            return;
+        }
         let Some(frame) = PageFrame::of(placed, info).filter(|f| f.page == kp) else { return };
         let r = frame.screen_rect(from);
         let to = if let Some(p) = cv.preview.filter(|p| (p.page, p.index) == (kp, ki)) {
@@ -428,6 +438,28 @@ impl MoveBackground {
     }
 }
 
+impl MoveBackground {
+    /// The moving item drawn on another page it is dragged over: its own pixels only, where the
+    /// pointer carries it, cut to that page.
+    fn paint_over_page(&self, draw: &Draw<'_>, placed: &PlacedPage, info: &DocInfo, cv: &ContentView, (kp, ki): (usize, usize), from: [f64; 4]) {
+        let (Some(item), Some(src)) = (self.item.as_ref(), info.pages.get(kp)) else { return };
+        let Some(shown) = cv.preview.filter(|p| (p.page, p.index) == (kp, ki) && !p.resizing).and_then(|p| p.shown) else { return };
+        let page = placed.rect;
+        let dest = shown.intersect(page);
+        if !page.contains(shown.center()) || !dest.is_positive() || !shown.is_positive() {
+            return;
+        }
+        let (w, h) = (f64::from(src.width.max(1.0)), f64::from(src.height.max(1.0)));
+        let (u0, u1) = ((from[0].min(from[2]) / w) as f32, (from[0].max(from[2]) / w) as f32);
+        let (v0, v1) = (((h - from[1].max(from[3])) / h) as f32, ((h - from[1].min(from[3])) / h) as f32);
+        let at = |p: Pos2| ((p.x - shown.min.x) / shown.width(), (p.y - shown.min.y) / shown.height());
+        let ((a, b), (c, d)) = (at(dest.min), at(dest.max));
+        let lerp = |from: f32, to: f32, t: f32| from + (to - from) * t;
+        let uv = Rect::from_min_max(Pos2::new(lerp(u0, u1, a), lerp(v0, v1, b)), Pos2::new(lerp(u0, u1, c), lerp(v0, v1, d)));
+        draw.texture(dest, item.id, uv);
+    }
+}
+
 /// The two rasters of a move preview.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Raster {
@@ -465,6 +497,16 @@ pub(crate) fn page_parts(session: &PageSession, doc: &Document, page: usize, pla
         .collect()
 }
 
+/// The part of the item being moved when its page is not in this pass (the view scrolled it away
+/// while the item was held): the press stays with it, so its release is still read.
+pub(crate) fn held_part(session: &PageSession, pages: &[PlacedPage]) -> Option<PagePart> {
+    let (page, index, _, shown) = session.content.held?;
+    if pages.iter().any(|p| p.page == page) {
+        return None;
+    }
+    Some(PagePart::new(Owner::Added { index }, page, HitShape::Rect(shown), PageLayer::Placed))
+}
+
 /// A press on an added item (`press.owner` is its part), or, on any other owner, the page's
 /// picture selection following the picture controller. A drag shows the item at the dragged box
 /// and a release that moved it at least a point applies the move; a release that didn't changes
@@ -483,26 +525,56 @@ pub(crate) fn added_press(session: &mut PageSession, doc: &Document, pages: &[Pl
     };
     let (_, item) = on_page(added, page).into_iter().find(|(i, _)| *i == index)?;
     let AddedContent::Text(text) = &item.content else { return None };
-    let frame = PageFrame::of_page(pages, &doc.info, page)?;
+    let frame = PageFrame::of_page(pages, &doc.info, page);
     let cv = &mut session.content;
+    // The item's box on screen at the press, kept for a release after the view scrolled its page away.
+    if let (PressPhase::DragStart { start, .. }, Some(frame)) = (&press.phase, &frame) {
+        cv.held = Some((page, index, start.origin, frame.screen_rect(text.rect)));
+    }
     match press.phase {
         PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } => {
+            let frame = frame?;
             cv.selected = Some((page, index));
             let rect = frame.moved(text.rect, start.origin, pos);
-            cv.preview = Some(Preview { page, index, rect, resizing: false });
+            cv.preview = Some(Preview { page, index, rect, resizing: false, shown: Some(frame.screen_rect(rect)) });
             None
         }
         PressPhase::Release { start, pos, click: false, .. } => {
             cv.preview = None;
+            let held = cv.held.take();
             if (pos - start.origin).length() < 1.0 {
                 return None;
             }
+            // Released over another page: the box is added there and removed from its own page.
+            if let Some(to) = pages.iter().find(|p| p.page != page && p.rect.contains(pos)).and_then(|p| PageFrame::of(p, &doc.info)) {
+                // The box where the pointer carries it, from where it was at the press: its own page
+                // may have scrolled out of the pass since.
+                let shown = held
+                    .map(|(.., origin, r)| r.translate(pos - origin))
+                    .or_else(|| frame.map(|f| f.screen_rect(f.moved(text.rect, start.origin, pos))))
+                    .filter(|r| r.is_finite())?;
+                let (a, b) = (to.display(shown.min), to.display(shown.max));
+                let landed = [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])];
+                return match doc.move_content_to_page(page, index, to.page, landed) {
+                    Ok(edit) => {
+                        cv.select_added = Some((to.page, on_page(added, to.page).len()));
+                        Some(edit)
+                    }
+                    Err(why) => {
+                        // The engine refused it: the item stays where it was, and the app says why.
+                        cv.notice = Some(why);
+                        None
+                    }
+                };
+            }
+            let frame = frame?;
             // A moved text box keeps its size, so its top edge moves with it (its height follows its lines).
             let rect = frame.moved(text.rect, start.origin, pos);
             Some(Edit::UpdateContent { page, index, content: item.content.with_rect(rect) })
         }
         PressPhase::Release { start, click: true, .. } => {
             cv.preview = None;
+            cv.held = None;
             cv.selected = Some((page, index));
             if start.clicks < 2 && !edit_on_click {
                 return None;
@@ -520,6 +592,7 @@ pub(crate) fn added_press(session: &mut PageSession, doc: &Document, pages: &[Pl
         }
         PressPhase::Cancel { .. } => {
             cv.preview = None;
+            cv.held = None;
             None
         }
         _ => None,
@@ -768,7 +841,7 @@ fn item_controls(
     if events.cancel_reason().is_some() {
         session.content.preview = None;
     } else if let Some(live) = events.value() {
-        session.content.preview = Some(Preview { page, index, rect: display_rect(&body.view, frame, live), resizing: true });
+        session.content.preview = Some(Preview { page, index, rect: display_rect(&body.view, frame, live), resizing: true, shown: None });
     }
     None
 }

@@ -979,6 +979,7 @@ fn page_parts_of(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSessi
         for placed in body.pages.iter().filter(|placed| Some(placed.page) != cropping) {
             parts.extend(crate::content_ui::page_parts(session, cx.doc, placed.page, placed));
         }
+        parts.extend(crate::content_ui::held_part(session, body.pages));
     }
     if matches!(cx.tool, QuickTool::Select | QuickTool::Link) {
         links_of(session, cx, body).parts(&mut parts);
