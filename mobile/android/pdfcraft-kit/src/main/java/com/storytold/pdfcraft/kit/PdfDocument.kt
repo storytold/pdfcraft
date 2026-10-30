@@ -1,12 +1,26 @@
 package com.storytold.pdfcraft.kit
 
 import android.graphics.Bitmap
+import android.graphics.RectF
+import org.json.JSONArray
+import org.json.JSONObject
 import uniffi.pdfcraft_ffi.*
 import java.io.Closeable
 import java.io.File
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+
+/**
+ * Represents an added content element (image or text) on a page.
+ */
+data class PdfAddedItem(
+    val page: Int,       // 0-based page index
+    val index: Int,      // 1-based index on page
+    val type: String,    // "image" or "text"
+    val rect: RectF,     // [left, top, right, bottom] in page coordinates
+    val text: String? = null
+)
 
 /**
  * Thread-safe wrapper around a PdfEngine document.
@@ -862,23 +876,118 @@ class PdfDocument(
         invokeTool("doc_export_office", """{"doc": $docId, "path": "$outPath"}""")
     }
 
+    private fun parseToolOutput(outputJson: String): JSONObject {
+        val trimmed = outputJson.trim()
+        return try {
+            if (trimmed.startsWith("[")) {
+                val arr = JSONArray(trimmed)
+                if (arr.length() > 0) arr.optJSONObject(0) ?: JSONObject() else JSONObject()
+            } else if (trimmed.startsWith("{")) {
+                JSONObject(trimmed)
+            } else {
+                JSONObject()
+            }
+        } catch (_: Exception) {
+            JSONObject()
+        }
+    }
+
+    /**
+     * Lists added page content (images and text) created with addImage / addPageText.
+     */
+    fun listAddedContent(page: Int? = null): List<PdfAddedItem> {
+        val res = invokeTool("content_list", """{"doc": $docId}""")
+        val items = mutableListOf<PdfAddedItem>()
+        if (res.outputJson.isNullOrBlank()) return items
+        val result = parseToolOutput(res.outputJson)
+        val itemsArray = result.optJSONArray("items") ?: return items
+        for (i in 0 until itemsArray.length()) {
+            val obj = itemsArray.optJSONObject(i) ?: continue
+            val itemPage = (obj.optInt("page", 1) - 1)
+            if (page != null && itemPage != page) continue
+            val index = obj.optInt("index", 1)
+            val type = obj.optString("type", "image")
+            val text = if (obj.has("text")) obj.optString("text") else null
+            val rectArr = obj.optJSONArray("rect")
+            val rect = if (rectArr != null && rectArr.length() == 4) {
+                RectF().apply {
+                    left = rectArr.getDouble(0).toFloat()
+                    top = rectArr.getDouble(1).toFloat()
+                    right = rectArr.getDouble(2).toFloat()
+                    bottom = rectArr.getDouble(3).toFloat()
+                }
+            } else {
+                RectF().apply { left = 0f; top = 0f; right = 100f; bottom = 100f }
+            }
+            items.add(PdfAddedItem(itemPage, index, type, rect, text))
+        }
+        return items
+    }
+
+    /**
+     * Updates an added content item's position, bounding rect, or text.
+     */
+    fun updateContent(page: Int, index: Int, rect: RectF? = null, text: String? = null) {
+        val rectArg = if (rect != null) {
+            ", \"rect\": [${rect.left}, ${rect.top}, ${rect.right}, ${rect.bottom}]"
+        } else ""
+        val textArg = if (text != null) {
+            val escText = JSONObject.quote(text)
+            ", \"text\": $escText"
+        } else ""
+        invokeTool("content_update", """{"doc": $docId, "page": ${page + 1}, "index": $index$rectArg$textArg}""")
+        geometryCache.clear()
+    }
+
+    /**
+     * Deletes an added content item from a page.
+     */
+    fun deleteContent(page: Int, index: Int) {
+        invokeTool("content_delete", """{"doc": $docId, "page": ${page + 1}, "index": $index}""")
+        geometryCache.clear()
+    }
+
     /**
      * Adds an image file (PNG, JPEG, TIFF, GIF, BMP) as permanent page content.
      */
-    fun addImage(page: Int, imagePath: String, rect: List<Float>? = null) {
+    fun addImage(page: Int, imagePath: String, rect: List<Float>? = null): PdfAddedItem? {
         val rectArg = if (rect != null && rect.size == 4) {
             ", \"rect\": [${rect[0]}, ${rect[1]}, ${rect[2]}, ${rect[3]}]"
         } else ""
-        invokeTool("page_add_image", """{"doc": $docId, "page": ${page + 1}, "path": "$imagePath"$rectArg}""")
+        val res = invokeTool("page_add_image", """{"doc": $docId, "page": ${page + 1}, "path": "$imagePath"$rectArg}""")
         geometryCache.clear()
+        val json = parseToolOutput(res.outputJson)
+        val idx = json.optInt("index", 1)
+        val rectArr = json.optJSONArray("rect")
+        val r = if (rectArr != null && rectArr.length() == 4) {
+            RectF().apply {
+                left = rectArr.getDouble(0).toFloat()
+                top = rectArr.getDouble(1).toFloat()
+                right = rectArr.getDouble(2).toFloat()
+                bottom = rectArr.getDouble(3).toFloat()
+            }
+        } else {
+            RectF().apply { left = 50f; top = 50f; right = 250f; bottom = 250f }
+        }
+        return PdfAddedItem(page, idx, "image", r)
     }
 
     /**
      * Adds text as permanent page content.
      */
-    fun addPageText(page: Int, text: String, atX: Float = 54f, atY: Float = 72f, fontSize: Float = 14f) {
-        invokeTool("page_add_text", """{"doc": $docId, "page": ${page + 1}, "text": "$text", "at": [$atX, $atY], "size": $fontSize}""")
+    fun addPageText(page: Int, text: String, atX: Float = 54f, atY: Float = 72f, fontSize: Float = 14f): PdfAddedItem? {
+        val res = invokeTool("page_add_text", """{"doc": $docId, "page": ${page + 1}, "text": "$text", "at": [$atX, $atY], "size": $fontSize}""")
         geometryCache.clear()
+        val json = parseToolOutput(res.outputJson)
+        val idx = json.optInt("index", 1)
+        val list = listAddedContent(page)
+        return list.firstOrNull { it.index == idx } ?: PdfAddedItem(
+            page,
+            idx,
+            "text",
+            RectF().apply { left = atX; top = atY; right = atX + 200f; bottom = atY + fontSize + 10f },
+            text
+        )
     }
 
     /**

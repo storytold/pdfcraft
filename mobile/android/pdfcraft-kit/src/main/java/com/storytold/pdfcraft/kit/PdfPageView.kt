@@ -18,6 +18,14 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
 
+enum class ResizeHandle {
+    NONE,
+    TOP_LEFT,
+    TOP_RIGHT,
+    BOTTOM_LEFT,
+    BOTTOM_RIGHT
+}
+
 /**
  * High-performance, high-DPI Android View for rendering PDF pages with crisp vector fidelity,
  * native gestures (pinch-zoom, momentum pan, double-tap zoom), interactive AcroForm editing,
@@ -64,6 +72,30 @@ class PdfPageView @JvmOverloads constructor(
     var onSelectChoiceField: ((uniffi.pdfcraft_ffi.FfiFormField) -> Unit)? = null
     var onToggleChrome: (() -> Unit)? = null
     var onTextSelected: ((String) -> Unit)? = null
+    var onContentItemSelected: ((PdfAddedItem?) -> Unit)? = null
+    var onContentItemUpdated: ((PdfAddedItem) -> Unit)? = null
+    var onContentItemDeleted: ((PdfAddedItem) -> Unit)? = null
+
+    // Content Addition & Manipulation State
+    var isEditContentMode: Boolean = false
+        set(value) {
+            field = value
+            if (!value) {
+                selectedContentItem = null
+            }
+            invalidate()
+        }
+
+    var addedContent: List<PdfAddedItem> = emptyList()
+        private set
+    var selectedContentItem: PdfAddedItem? = null
+        private set
+    val liveItemRect = RectF()
+    private val dragInitialRect = RectF()
+    private var isDraggingContent = false
+    private var activeResizeHandle = ResizeHandle.NONE
+    private var dragStartTouchX = 0f
+    private var dragStartTouchY = 0f
 
     // Gestures & Physics
     private val scroller = OverScroller(context)
@@ -184,6 +216,63 @@ class PdfPageView @JvmOverloads constructor(
         invalidate()
     }
 
+    // MARK: - Added Content Selection & Manipulation
+    fun reloadAddedContent() {
+        val doc = document ?: return
+        val page = pageIndex
+        scope.launch(Dispatchers.IO) {
+            val items = try { doc.listAddedContent(page) } catch (_: Exception) { emptyList() }
+            withContext(Dispatchers.Main) {
+                if (pageIndex == page) {
+                    addedContent = items
+                    val sel = selectedContentItem
+                    if (sel != null) {
+                        val matching = items.firstOrNull { it.index == sel.index }
+                        selectedContentItem = matching
+                        if (matching != null) {
+                            liveItemRect.set(matching.rect)
+                        }
+                    }
+                    invalidate()
+                }
+            }
+        }
+    }
+
+    fun selectContentItem(item: PdfAddedItem?) {
+        selectedContentItem = item
+        if (item != null) {
+            liveItemRect.set(item.rect)
+        }
+        onContentItemSelected?.invoke(item)
+        invalidate()
+    }
+
+    fun deleteSelectedContent() {
+        val doc = document ?: return
+        val item = selectedContentItem ?: return
+        val page = pageIndex
+        scope.launch(Dispatchers.IO) {
+            try {
+                doc.deleteContent(page, item.index)
+                withContext(Dispatchers.Main) {
+                    selectedContentItem = null
+                    refreshPage()
+                    onContentItemDeleted?.invoke(item)
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun hitTestResizeHandle(pageX: Float, pageY: Float, rect: RectF, touchRadius: Float): ResizeHandle {
+        val r = touchRadius
+        if (kotlin.math.abs(pageX - rect.left) <= r && kotlin.math.abs(pageY - rect.top) <= r) return ResizeHandle.TOP_LEFT
+        if (kotlin.math.abs(pageX - rect.right) <= r && kotlin.math.abs(pageY - rect.top) <= r) return ResizeHandle.TOP_RIGHT
+        if (kotlin.math.abs(pageX - rect.left) <= r && kotlin.math.abs(pageY - rect.bottom) <= r) return ResizeHandle.BOTTOM_LEFT
+        if (kotlin.math.abs(pageX - rect.right) <= r && kotlin.math.abs(pageY - rect.bottom) <= r) return ResizeHandle.BOTTOM_RIGHT
+        return ResizeHandle.NONE
+    }
+
     // Rendering & Caching
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val highlightPaint = Paint().apply {
@@ -208,6 +297,21 @@ class PdfPageView @JvmOverloads constructor(
         color = Color.rgb(33, 150, 243)
         style = Paint.Style.STROKE
         strokeWidth = 2f
+    }
+    private val contentSelectionBorderPaint = Paint().apply {
+        color = Color.rgb(25, 118, 210)
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+    }
+    private val contentDashedPaint = Paint().apply {
+        color = Color.argb(140, 33, 150, 243)
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        pathEffect = DashPathEffect(floatArrayOf(8f, 8f), 0f)
+    }
+    private val contentDragFillPaint = Paint().apply {
+        color = Color.argb(35, 33, 150, 243)
+        style = Paint.Style.FILL
     }
     var isInkMode: Boolean = false
     var isEraserMode: Boolean = false
@@ -391,24 +495,26 @@ class PdfPageView @JvmOverloads constructor(
             }
 
             override fun onLongPress(e: MotionEvent) {
-                if (isInkMode || isEraserMode) return
+                if (isInkMode || isEraserMode || isDraggingContent || activeResizeHandle != ResizeHandle.NONE) return
                 val doc = document ?: return
                 val pageX = (e.x - offsetX) / scale
                 val pageY = (e.y - offsetY) / scale
 
                 // Find text at long press position
-                val pageText = try { doc.text(pageIndex) } catch (_: Exception) { "" }
-                if (pageText.isNotBlank()) {
-                    val words = pageText.split(Regex("\\s+")).filter { it.length >= 2 }
-                    for (word in words) {
-                        val matches = doc.find(pageIndex, word)
-                        val match = matches.firstOrNull { it.rect.contains(pageX, pageY) }
-                        if (match != null) {
-                            selectText(match.startGlyph.toInt(), match.endGlyph.toInt())
-                            return
+                try {
+                    val pageText = doc.text(pageIndex)
+                    if (pageText.isNotBlank()) {
+                        val words = pageText.split(Regex("\\s+")).filter { it.length >= 2 }.take(30)
+                        for (word in words) {
+                            val matches = try { doc.find(pageIndex, word) } catch (_: Exception) { emptyList() }
+                            val match = matches.firstOrNull { it.rect.contains(pageX, pageY) }
+                            if (match != null) {
+                                selectText(match.startGlyph.toInt(), match.endGlyph.toInt())
+                                return
+                            }
                         }
                     }
-                }
+                } catch (_: Exception) {}
             }
         })
     }
@@ -423,10 +529,12 @@ class PdfPageView @JvmOverloads constructor(
         this.pageGeometry = try { doc.geometry(page) } catch (_: Exception) { null }
         this.zoomLevel = 1.0f
         this.baseBitmap = null
+        this.selectedContentItem = null
         tileCache.evictAll()
         inFlightTiles.clear()
 
         loadBaseBitmap()
+        reloadAddedContent()
         requestLayout()
         invalidate()
     }
@@ -435,6 +543,7 @@ class PdfPageView @JvmOverloads constructor(
         tileCache.evictAll()
         inFlightTiles.clear()
         loadBaseBitmap()
+        reloadAddedContent()
         requestVisibleTiles()
         invalidate()
     }
@@ -581,9 +690,140 @@ class PdfPageView @JvmOverloads constructor(
                 }
             }
         }
-        var ret = scaleDetector.onTouchEvent(event)
-        ret = gestureDetector.onTouchEvent(event) || ret
-        return ret || super.onTouchEvent(event)
+
+        val geom = pageGeometry
+        if (geom != null && (isEditContentMode || addedContent.isNotEmpty())) {
+            val pageX = (event.x - offsetX) / scale
+            val pageY = (event.y - offsetY) / scale
+            val handleRadius = 24f / scale
+
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    val sel = selectedContentItem
+                    if (sel != null) {
+                        val handle = hitTestResizeHandle(pageX, pageY, liveItemRect, handleRadius)
+                        if (handle != ResizeHandle.NONE) {
+                            activeResizeHandle = handle
+                            dragStartTouchX = event.x
+                            dragStartTouchY = event.y
+                            dragInitialRect.set(liveItemRect)
+                            parent?.requestDisallowInterceptTouchEvent(true)
+                            invalidate()
+                            return true
+                        }
+                        if (liveItemRect.contains(pageX, pageY)) {
+                            isDraggingContent = true
+                            activeResizeHandle = ResizeHandle.NONE
+                            dragStartTouchX = event.x
+                            dragStartTouchY = event.y
+                            dragInitialRect.set(liveItemRect)
+                            parent?.requestDisallowInterceptTouchEvent(true)
+                            invalidate()
+                            return true
+                        }
+                    }
+
+                    // Check if tapped another added content item
+                    val hitItem = addedContent.find { it.rect.contains(pageX, pageY) }
+                    if (hitItem != null) {
+                        selectContentItem(hitItem)
+                        isDraggingContent = true
+                        activeResizeHandle = ResizeHandle.NONE
+                        dragStartTouchX = event.x
+                        dragStartTouchY = event.y
+                        dragInitialRect.set(hitItem.rect)
+                        parent?.requestDisallowInterceptTouchEvent(true)
+                        invalidate()
+                        return true
+                    } else if (selectedContentItem != null && !isDraggingContent && activeResizeHandle == ResizeHandle.NONE) {
+                        if (!isEditContentMode) {
+                            selectContentItem(null)
+                        }
+                    }
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (isDraggingContent) {
+                        val dx = (event.x - dragStartTouchX) / scale
+                        val dy = (event.y - dragStartTouchY) / scale
+                        val w = dragInitialRect.width()
+                        val h = dragInitialRect.height()
+                        val newLeft = (dragInitialRect.left + dx).coerceIn(0f, geom.width - w)
+                        val newTop = (dragInitialRect.top + dy).coerceIn(0f, geom.height - h)
+                        liveItemRect.set(newLeft, newTop, newLeft + w, newTop + h)
+                        invalidate()
+                        return true
+                    } else if (activeResizeHandle != ResizeHandle.NONE) {
+                        val dx = (event.x - dragStartTouchX) / scale
+                        val dy = (event.y - dragStartTouchY) / scale
+                        val minSize = 20f
+
+                        when (activeResizeHandle) {
+                            ResizeHandle.TOP_LEFT -> {
+                                val newLeft = min(dragInitialRect.right - minSize, dragInitialRect.left + dx).coerceAtLeast(0f)
+                                val newTop = min(dragInitialRect.bottom - minSize, dragInitialRect.top + dy).coerceAtLeast(0f)
+                                liveItemRect.set(newLeft, newTop, dragInitialRect.right, dragInitialRect.bottom)
+                            }
+                            ResizeHandle.TOP_RIGHT -> {
+                                val newRight = max(dragInitialRect.left + minSize, dragInitialRect.right + dx).coerceAtMost(geom.width)
+                                val newTop = min(dragInitialRect.bottom - minSize, dragInitialRect.top + dy).coerceAtLeast(0f)
+                                liveItemRect.set(dragInitialRect.left, newTop, newRight, dragInitialRect.bottom)
+                            }
+                            ResizeHandle.BOTTOM_LEFT -> {
+                                val newLeft = min(dragInitialRect.right - minSize, dragInitialRect.left + dx).coerceAtLeast(0f)
+                                val newBottom = max(dragInitialRect.top + minSize, dragInitialRect.bottom + dy).coerceAtMost(geom.height)
+                                liveItemRect.set(newLeft, dragInitialRect.top, dragInitialRect.right, newBottom)
+                            }
+                            ResizeHandle.BOTTOM_RIGHT -> {
+                                val newRight = max(dragInitialRect.left + minSize, dragInitialRect.right + dx).coerceAtMost(geom.width)
+                                val newBottom = max(dragInitialRect.top + minSize, dragInitialRect.bottom + dy).coerceAtMost(geom.height)
+                                liveItemRect.set(dragInitialRect.left, dragInitialRect.top, newRight, newBottom)
+                            }
+                            ResizeHandle.NONE -> {}
+                        }
+                        invalidate()
+                        return true
+                    }
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (isDraggingContent || activeResizeHandle != ResizeHandle.NONE) {
+                        val doc = document
+                        val sel = selectedContentItem
+                        val page = pageIndex
+                        val hasMoved = (kotlin.math.abs(liveItemRect.left - dragInitialRect.left) > 1f ||
+                                kotlin.math.abs(liveItemRect.top - dragInitialRect.top) > 1f ||
+                                kotlin.math.abs(liveItemRect.width() - dragInitialRect.width()) > 1f ||
+                                kotlin.math.abs(liveItemRect.height() - dragInitialRect.height()) > 1f)
+
+                        isDraggingContent = false
+                        activeResizeHandle = ResizeHandle.NONE
+
+                        if (hasMoved && doc != null && sel != null) {
+                            val committedRect = RectF(liveItemRect)
+                            selectedContentItem = sel.copy(rect = committedRect)
+                            scope.launch(Dispatchers.IO) {
+                                try {
+                                    doc.updateContent(page, sel.index, committedRect)
+                                    withContext(Dispatchers.Main) {
+                                        refreshPage()
+                                        onContentItemUpdated?.invoke(sel.copy(rect = committedRect))
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                        }
+                        invalidate()
+                        return true
+                    }
+                }
+            }
+        }
+
+        return try {
+            var ret = scaleDetector.onTouchEvent(event)
+            ret = gestureDetector.onTouchEvent(event) || ret
+            ret || super.onTouchEvent(event)
+        } catch (_: Exception) {
+            true
+        }
     }
 
     override fun computeScroll() {
@@ -762,6 +1002,45 @@ class PdfPageView @JvmOverloads constructor(
                 (inkColorRgb and 0xFFu).toInt()
             )
             canvas.drawPath(liveInkPath, liveInkPaint)
+        }
+
+        // 7. Added Content Selection & Transform Handles Overlay
+        if (isEditContentMode) {
+            for (item in addedContent) {
+                if (item.index != selectedContentItem?.index) {
+                    val r = RectF(
+                        item.rect.left * scale,
+                        item.rect.top * scale,
+                        item.rect.right * scale,
+                        item.rect.bottom * scale
+                    )
+                    canvas.drawRect(r, contentDashedPaint)
+                }
+            }
+        }
+
+        val selectedContent = selectedContentItem
+        if (selectedContent != null) {
+            val r = RectF(
+                liveItemRect.left * scale,
+                liveItemRect.top * scale,
+                liveItemRect.right * scale,
+                liveItemRect.bottom * scale
+            )
+            canvas.drawRect(r, contentDragFillPaint)
+            canvas.drawRect(r, contentSelectionBorderPaint)
+
+            val handleRadius = 8f * context.resources.displayMetrics.density
+            val corners = arrayOf(
+                PointF(r.left, r.top),
+                PointF(r.right, r.top),
+                PointF(r.left, r.bottom),
+                PointF(r.right, r.bottom)
+            )
+            for (c in corners) {
+                canvas.drawCircle(c.x, c.y, handleRadius, handlePaint)
+                canvas.drawCircle(c.x, c.y, handleRadius, handleStrokePaint)
+            }
         }
 
         canvas.restore()

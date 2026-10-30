@@ -121,6 +121,7 @@ fun PdfView(
     var showMoreMenu by remember { mutableStateOf(false) }
     var statusNotification by remember { mutableStateOf<String?>(null) }
     var pdfPageViewRef by remember { mutableStateOf<PdfPageView?>(null) }
+    var selectedContentItemState by remember { mutableStateOf<PdfAddedItem?>(null) }
 
     // Content Addition (Text & Image)
     var showAddTextDialog by remember { mutableStateOf(false) }
@@ -139,9 +140,15 @@ fun PdfView(
                         inputStream.copyTo(out)
                     }
                     inputStream.close()
-                    document.addImage(currentPage, tempFile.absolutePath)
-                    statusNotification = "Image inserted on page ${currentPage + 1}"
+                    val added = document.addImage(currentPage, tempFile.absolutePath)
+                    statusNotification = "Image inserted — drag to move or resize"
+                    viewerMode = ViewerMode.EDIT
+                    selectedContentItemState = added
+                    pdfPageViewRef?.isEditContentMode = true
                     pdfPageViewRef?.refreshPage()
+                    if (added != null) {
+                        pdfPageViewRef?.selectContentItem(added)
+                    }
                 }
             } catch (e: Exception) {
                 statusNotification = "Failed to insert image: ${e.message}"
@@ -736,54 +743,116 @@ fun PdfView(
                             }
                         }
                         ViewerMode.EDIT -> {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
+                            if (selectedContentItemState != null) {
                                 Row(
                                     modifier = Modifier
-                                        .weight(1f)
-                                        .horizontalScroll(rememberScrollState()),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Button(onClick = { showAddTextDialog = true }) {
-                                        Icon(Icons.Outlined.TextFields, contentDescription = null, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Text")
-                                    }
-                                    Button(onClick = { insertImageLauncher.launch("image/*") }) {
-                                        Icon(Icons.Outlined.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Image")
-                                    }
-                                    OutlinedButton(onClick = { showRedactionView = true }) {
-                                        Icon(Icons.Outlined.VisibilityOff, contentDescription = null, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Redact")
-                                    }
-                                    OutlinedButton(onClick = {
-                                        try {
-                                            document.flatten(comments = true, fields = true)
-                                            statusNotification = "Document flattened"
-                                            pdfPageViewRef?.refreshPage()
-                                        } catch (e: Exception) {
-                                            statusNotification = "Flatten error: ${e.message}"
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = MaterialTheme.colorScheme.primaryContainer
+                                        ) {
+                                            Text(
+                                                text = if (selectedContentItemState?.type == "image") "Image" else "Text",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                            )
                                         }
-                                    }) {
-                                        Icon(Icons.Outlined.LayersClear, contentDescription = null, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Flatten")
+                                        Text(
+                                            text = "Drag to move • Corners to resize",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        IconButton(onClick = {
+                                            pdfPageViewRef?.deleteSelectedContent()
+                                            selectedContentItemState = null
+                                        }) {
+                                            Icon(
+                                                Icons.Outlined.Delete,
+                                                contentDescription = "Delete",
+                                                tint = MaterialTheme.colorScheme.error
+                                            )
+                                        }
+                                        FilledTonalButton(onClick = {
+                                            pdfPageViewRef?.selectContentItem(null)
+                                            selectedContentItemState = null
+                                        }) {
+                                            Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Deselect")
+                                        }
                                     }
                                 }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                FilledTonalButton(onClick = { viewerMode = ViewerMode.VIEW }) {
-                                    Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Done")
+                            } else {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .horizontalScroll(rememberScrollState()),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Button(onClick = { showAddTextDialog = true }) {
+                                            Icon(Icons.Outlined.TextFields, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Text")
+                                        }
+                                        Button(onClick = { insertImageLauncher.launch("image/*") }) {
+                                            Icon(Icons.Outlined.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Image")
+                                        }
+                                        OutlinedButton(onClick = { showRedactionView = true }) {
+                                            Icon(Icons.Outlined.VisibilityOff, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Redact")
+                                        }
+                                        OutlinedButton(onClick = {
+                                            try {
+                                                document.flatten(comments = true, fields = true)
+                                                statusNotification = "Document flattened"
+                                                pdfPageViewRef?.refreshPage()
+                                            } catch (e: Exception) {
+                                                statusNotification = "Flatten error: ${e.message}"
+                                            }
+                                        }) {
+                                            Icon(Icons.Outlined.LayersClear, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Flatten")
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    FilledTonalButton(onClick = {
+                                        viewerMode = ViewerMode.VIEW
+                                        pdfPageViewRef?.isEditContentMode = false
+                                        pdfPageViewRef?.selectContentItem(null)
+                                        selectedContentItemState = null
+                                    }) {
+                                        Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Done")
+                                    }
                                 }
                             }
                         }
@@ -835,6 +904,17 @@ fun PdfView(
                         this.onTextSelected = { text ->
                             selectedText = text
                         }
+                        this.onContentItemSelected = { item ->
+                            selectedContentItemState = item
+                        }
+                        this.onContentItemUpdated = { item ->
+                            selectedContentItemState = item
+                            statusNotification = "Updated ${item.type} position"
+                        }
+                        this.onContentItemDeleted = { item ->
+                            selectedContentItemState = null
+                            statusNotification = "Deleted ${item.type}"
+                        }
 
                         pdfPageViewRef = this
                     }
@@ -850,6 +930,7 @@ fun PdfView(
                     view.isEraserMode = isEraserMode
                     view.inkColorRgb = activeInkColor
                     view.inkStrokeWidth = activeInkWidth
+                    view.isEditContentMode = (viewerMode == ViewerMode.EDIT)
                 }
             )
 
@@ -1285,17 +1366,23 @@ fun PdfView(
                     onClick = {
                         if (addTextInput.isNotBlank()) {
                             try {
-                                document.addPageText(
+                                val added = document.addPageText(
                                     page = currentPage,
                                     text = addTextInput,
                                     atX = 72f,
                                     atY = 100f,
                                     fontSize = addTextFontSize
                                 )
-                                statusNotification = "Text added to page ${currentPage + 1}"
+                                statusNotification = "Text added — drag to move or resize"
                                 showAddTextDialog = false
                                 addTextInput = ""
+                                viewerMode = ViewerMode.EDIT
+                                selectedContentItemState = added
+                                pdfPageViewRef?.isEditContentMode = true
                                 pdfPageViewRef?.refreshPage()
+                                if (added != null) {
+                                    pdfPageViewRef?.selectContentItem(added)
+                                }
                             } catch (e: Exception) {
                                 statusNotification = "Add text error: ${e.message}"
                             }

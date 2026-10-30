@@ -530,13 +530,15 @@ class PdfDocumentTest {
         val doc = PdfDocument.openBytes(bytes = bytes, name = "content_add.pdf")
 
         // 1. Add Text
-        doc.addPageText(
+        val addedText = doc.addPageText(
             page = 0,
             text = "Inserted Page Text",
             atX = 72f,
             atY = 144f,
             fontSize = 16f
         )
+        assertNotNull(addedText)
+        assertEquals("text", addedText?.type)
 
         // 2. Add Image
         val pngBytes = byteArrayOf(
@@ -551,11 +553,47 @@ class PdfDocumentTest {
         val tempImg = File.createTempFile("sample_img", ".png")
         tempImg.writeBytes(pngBytes)
 
-        doc.addImage(
+        val addedImg = doc.addImage(
             page = 0,
             imagePath = tempImg.absolutePath,
             rect = listOf(50f, 50f, 150f, 150f)
         )
+        assertNotNull(addedImg)
+        assertEquals("image", addedImg?.type)
+
+        // 3. List Added Content
+        val items = doc.listAddedContent(page = 0)
+        assertEquals(2, items.size)
+
+        // 4. Update Content (Move / Resize Image)
+        val newRect = android.graphics.RectF().apply {
+            left = 80f
+            top = 120f
+            right = 220f
+            bottom = 260f
+        }
+        doc.updateContent(page = 0, index = addedImg!!.index, rect = newRect)
+
+        val updatedItems = doc.listAddedContent(page = 0)
+        val updatedImg = updatedItems.firstOrNull { it.index == addedImg.index }
+        assertNotNull(updatedImg)
+        assertEquals(80f, updatedImg!!.rect.left, 1f)
+        assertEquals(120f, updatedImg.rect.top, 1f)
+
+        // 5. Render Page after added image and move (Must never crash)
+        val renderResult = doc.engine.renderTile(
+            doc.docId,
+            uniffi.pdfcraft_ffi.FfiRenderRequest(0u, null, 1.0f, 0u, false, null, false)
+        )
+        assertNull(renderResult.error)
+        assertTrue(renderResult.width > 0u)
+        assertTrue(renderResult.height > 0u)
+        assertTrue(renderResult.pixels.isNotEmpty())
+
+        // 6. Delete Content
+        doc.deleteContent(page = 0, index = addedImg.index)
+        val itemsAfterDelete = doc.listAddedContent(page = 0)
+        assertEquals(1, itemsAfterDelete.size)
 
         val outDir = File(System.getProperty("java.io.tmpdir"), "extracted_imgs_${System.currentTimeMillis()}")
         outDir.mkdirs()

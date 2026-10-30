@@ -46,6 +46,7 @@ android {
 dependencies {
     implementation("net.java.dev.jna:jna:5.14.0@aar")
     testImplementation("net.java.dev.jna:jna:5.14.0")
+    testImplementation("org.json:json:20240303")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.0")
     implementation(platform("androidx.compose:compose-bom:2024.06.00"))
