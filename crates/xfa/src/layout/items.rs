@@ -135,6 +135,8 @@ pub struct Page {
     pub width: f64,
     pub height: f64,
     pub items: Vec<Item>,
+    /// The name of the page area the page was made from (`None` for an unnamed one).
+    pub area: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

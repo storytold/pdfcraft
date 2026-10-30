@@ -36,6 +36,11 @@ pub const CLICK_KEY: &[u8] = b"PCXfaClick";
 /// fields they hold.
 pub const NODE_KEY: &[u8] = b"PCXfaNode";
 
+/// Private key on each page laying the form out writes: the name of the page area the page was
+/// made from. The n-th page with a name is that area's `[n-1]` instance, which scripts address
+/// even when no field on the page is left to show it (see `page_area_uses`).
+pub const AREA_KEY: &[u8] = b"PCXfaArea";
+
 pub struct Written {
     pub pages: usize,
     pub fields: usize,
@@ -663,6 +668,9 @@ impl Emitter<'_> {
         pd.set(b"MediaBox".to_vec(), Object::Array([0.0, 0.0, page.width, page.height].iter().map(|v| Object::Real(*v)).collect()));
         pd.set(b"Resources".to_vec(), Object::Dict(res));
         pd.set(b"Contents".to_vec(), Object::Ref(contents));
+        if let Some(area) = &page.area {
+            pd.set(AREA_KEY.to_vec(), Object::String(PdfString::text(area)));
+        }
         if !annots.is_empty() {
             pd.set(b"Annots".to_vec(), Object::Array(annots));
         }
