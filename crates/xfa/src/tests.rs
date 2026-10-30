@@ -4620,6 +4620,47 @@ fn a_split_field_closes_its_border_on_each_piece_and_a_sliver_moves_whole() {
     assert!(whole.iter().any(|y| (y - 36.0).abs() < 1.0) && whole.iter().any(|y| (y - 252.0).abs() < 1.0), "whole on the next page: {whole:?}");
 }
 
+/// A field split inside a bordered section breaks the section with it, as a field moving on whole
+/// does: the section's border closes on the first page under its bottom margin, which the field
+/// leaves free, and opens again on the next, where the rest of the field sits under its top margin.
+#[test]
+fn a_field_split_inside_a_bordered_section_keeps_the_section_border_on_each_page() {
+    let body = r#"<subform name="sec" layout="tb" w="7.5in">
+ <margin topInset="0.25in" bottomInset="0.25in"/>
+ <border><edge/></border>
+ <draw name="filler" w="7.5in" h="8in"><value><text>above</text></value></draw>
+ <field name="notes" w="7in" minH="3in">
+  <border><edge/></border>
+  <ui><textEdit multiLine="1"/></ui>
+  <caption reserve="0.5in" placement="top"><value><text>Notes</text></value></caption>
+ </field>
+</subform>"#;
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, body)).unwrap();
+    assert_eq!(form.pages.len(), 2);
+    // Level lines `width` long on `page`, top to bottom: the section's are 540 long, the field's 504.
+    let levels = |page: &Page, width: f64| -> Vec<f64> {
+        let mut ys: Vec<f64> = page
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Line { from, to, .. } if (from.1 - to.1).abs() < 0.01 && ((to.0 - from.0).abs() - width).abs() < 1.0 => Some(from.1),
+                _ => None,
+            })
+            .collect();
+        ys.sort_by(f64::total_cmp);
+        ys
+    };
+    let near = |got: &[f64], want: &[f64]| got.len() == want.len() && got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1.0);
+    // The section opens at 36 and its filler ends at 36 + 18 + 576 = 630, where the field starts.
+    let (sec, field) = (levels(&form.pages[0], 540.0), levels(&form.pages[0], 504.0));
+    assert!(near(&sec, &[36.0, 756.0]), "the section closed at the bottom of the area: {sec:?}");
+    assert!(near(&field, &[630.0, 738.0]), "the field's first piece ends above the section's bottom margin: {field:?}");
+    // 216 - 108 = 108 of the field are left, under the section's top margin.
+    let (sec, field) = (levels(&form.pages[1], 540.0), levels(&form.pages[1], 504.0));
+    assert!(near(&sec, &[36.0, 180.0]), "the section opened again round the rest: {sec:?}");
+    assert!(near(&field, &[54.0, 162.0]), "the rest of the field under the section's top margin: {field:?}");
+}
+
 /// A field with no room above the break for a line of its widget is placed exactly as one that
 /// can't split: inside a bordered section with a top margin that goes on to the next page, it
 /// sits where a field kept intact does, under the section's margin there.

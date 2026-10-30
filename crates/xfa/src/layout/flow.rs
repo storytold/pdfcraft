@@ -47,7 +47,7 @@ impl Layouter<'_> {
             self.place(h);
             return Ok(());
         }
-        let Some(som) = (if splits { self.splittable_widget_since(first, rect.bottom()) } else { None }) else {
+        let Some(som) = (if splits { self.splittable_widget_since(first, rect.bottom() - self.frames_bottom()) } else { None }) else {
             if let Some((fields, names)) = undo {
                 // Not split after all (a value, or no room for a line of it here): undone, and
                 // placed as before, moving to the next content area whole.
@@ -148,7 +148,9 @@ impl Layouter<'_> {
         let mut first_segment = true;
         loop {
             let (rect, _, placed) = self.cursor();
-            let limit = rect.bottom() + shift;
+            // A field being split leaves room for the bottom margins of the flowed subforms round it.
+            let margins = if field.is_some() { self.frames_bottom() } else { 0.0 };
+            let limit = rect.bottom() - margins + shift;
             let mut cut = limit;
             if rect.h < 1.0 {
                 // No room to split into: leave the rest here.
@@ -229,9 +231,23 @@ impl Layouter<'_> {
             rest = below;
             seg_top = cut;
             first_segment = false;
-            self.next_area()?;
-            let (rect, _, _) = self.cursor();
-            shift = cut - rect.y;
+            let (rect, y) = if field.is_some() {
+                // A field breaks the flowed subforms round it as a field moving on whole does:
+                // each closes its part at the break and opens a new one, after its top margin,
+                // in the next content area.
+                if let Some(c) = &mut self.cur {
+                    c.y = (cut - shift).min(c.rect.bottom()).max(c.y);
+                    c.placed = true;
+                }
+                self.break_frames(0.0, false)?;
+                let (rect, y, _) = self.cursor();
+                (rect, y)
+            } else {
+                self.next_area()?;
+                let (rect, _, _) = self.cursor();
+                (rect, rect.y)
+            };
+            shift = cut - y;
             dx = rect.x - origin_x;
         }
     }

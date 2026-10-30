@@ -188,6 +188,13 @@ impl Layouter<'_> {
         Ok(())
     }
 
+    /// The bottom margins of the flowed subforms being laid out, which a break leaves below their
+    /// content ([`Self::break_frames`]).
+    pub(super) fn frames_bottom(&self) -> f64 {
+        // `max` first: a NaN margin counts as none.
+        self.frames.iter().map(|f| f.margin.bottom.max(0.0)).sum()
+    }
+
     /// Close flowed subform `f` once its content is placed: its last part ends where the flow
     /// is, and its border (edges and fill) is drawn round each part, closed on every side, under
     /// that part's content. One holding something that didn't fit its content area ([`Frame::lost`])
