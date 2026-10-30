@@ -1957,6 +1957,10 @@
 	Fill & Sign: change signature	Kitöltés és aláírás: aláírás módosítása
 	Fill & Sign: change initials	Kitöltés és aláírás: monogram módosítása
 	Fill & Sign: remove saved signature	Kitöltés és aláírás: mentett aláírás eltávolítása
+	Fill & Sign: add another saved signature	Kitöltés és aláírás: újabb mentett aláírás hozzáadása
+	Signature {n}	Aláírás {n}
+	Work, Personal, a name…	Munka, Személyes, egy név…
+	You can keep up to {n} signatures. Remove one to add another.	Legfeljebb {n} aláírást tárolhatsz. Újabb hozzáadásához távolíts el egyet.
 	Fill & Sign: remove saved initials	Kitöltés és aláírás: mentett monogram eltávolítása
 	Change signature	Aláírás módosítása
 	Change initials	Monogram módosítása
@@ -2556,3 +2560,8 @@ animation effects	Off	Ki
 	Rotate the selected pages clockwise	A kijelölt oldalak forgatása az óramutató járásával megegyezően
 	Extract the selected pages…	A kijelölt oldalak kibontása…
 	Delete the selected pages	A kijelölt oldalak törlése
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Kitöltés és aláírás: újabb mentett monogram hozzáadása
+	Initials {n}	Monogram {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Legfeljebb {n} monogramot tárolhatsz. Újabb hozzáadásához távolíts el egyet.

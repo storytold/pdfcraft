@@ -2804,3 +2804,12 @@ theme	Appearance	ظاهر
 	two cells would both be named {name}	دو خانه هر دو با نام {name} نام‌گذاری می‌شوند
 	a field named {name} already exists	فیلدی با نام {name} از قبل وجود دارد
 	Today	امروز
+
+# Saved signature and initials lists (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	پر کردن و امضا: افزودن امضای ذخیره‌شدهٔ دیگر
+	Signature {n}	امضا {n}
+	Work, Personal, a name…	کاری، شخصی، یک نام…
+	You can keep up to {n} signatures. Remove one to add another.	حداکثر {n} امضا را می‌توانید نگه دارید. برای افزودن امضای دیگر، یکی را حذف کنید.
+	Fill & Sign: add other saved initials	پر کردن و امضا: افزودن حروف اول ذخیره‌شدهٔ دیگر
+	Initials {n}	حروف اول {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	حداکثر {n} مجموعه حروف اول را می‌توانید نگه دارید. برای افزودن مجموعه‌ای دیگر، یکی را حذف کنید.

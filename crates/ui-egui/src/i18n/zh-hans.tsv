@@ -2047,6 +2047,10 @@
 	Fill & Sign: change signature	填写与签名：更改签名
 	Fill & Sign: remove saved initials	填写与签名：移除已保存的姓名首字母
 	Fill & Sign: remove saved signature	填写与签名：移除已保存的签名
+	Fill & Sign: add another saved signature	填写与签名：再添加一个已保存的签名
+	Signature {n}	签名 {n}
+	Work, Personal, a name…	工作、个人、姓名…
+	You can keep up to {n} signatures. Remove one to add another.	最多可保存 {n} 个签名。请先移除一个，再添加新的。
 	Fill in {name}	填写 {name}
 	Flatten	拼合
 	Flip image	翻转图像
@@ -2521,3 +2525,8 @@ animation effects	Off	关
 	Rotate the selected pages clockwise	顺时针旋转所选页面
 	Extract the selected pages…	提取所选页面…
 	Delete the selected pages	删除所选页面
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	填写与签名：再添加一组已保存的姓名首字母
+	Initials {n}	姓名首字母 {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	最多可保存 {n} 组姓名首字母。请先移除一组，再添加新的。

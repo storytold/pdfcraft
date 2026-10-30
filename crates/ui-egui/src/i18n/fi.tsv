@@ -2827,3 +2827,14 @@ theme	Appearance	Teema
 	Rotate the selected pages clockwise	Kierrä valittuja sivuja myötäpäivään
 	Extract the selected pages…	Pura valitut sivut…
 	Delete the selected pages	Poista valitut sivut
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	Täytä ja allekirjoita: lisää uusi tallennettu allekirjoitus
+	Signature {n}	Allekirjoitus {n}
+	Work, Personal, a name…	Työ, Henkilökohtainen, nimi…
+	You can keep up to {n} signatures. Remove one to add another.	Voit tallentaa enintään {n} allekirjoitusta. Poista yksi lisätäksesi uuden.
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Täytä ja allekirjoita: lisää uudet tallennetut nimikirjaimet
+	Initials {n}	Nimikirjaimet {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Voit tallentaa enintään {n} nimikirjainsarjaa. Poista yksi lisätäksesi uuden.

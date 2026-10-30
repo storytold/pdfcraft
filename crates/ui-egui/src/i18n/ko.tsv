@@ -2794,3 +2794,14 @@ theme	Appearance	모양
 	Rotate the selected pages clockwise	선택한 페이지를 시계 방향으로 회전
 	Extract the selected pages…	선택한 페이지 추출…
 	Delete the selected pages	선택한 페이지 삭제
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	채우기 및 서명: 저장된 서명 추가
+	Signature {n}	서명 {n}
+	Work, Personal, a name…	업무, 개인, 이름…
+	You can keep up to {n} signatures. Remove one to add another.	서명은 최대 {n}개까지 저장할 수 있습니다. 다른 서명을 추가하려면 하나를 제거하세요.
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	채우기 및 서명: 저장된 이니셜 추가
+	Initials {n}	이니셜 {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	이니셜은 최대 {n}개까지 저장할 수 있습니다. 다른 이니셜을 추가하려면 하나를 제거하세요.

@@ -1972,6 +1972,10 @@
 	Fill & Sign: change signature	Ausfüllen und unterschreiben: Unterschrift ändern
 	Fill & Sign: change initials	Ausfüllen und unterschreiben: Initialen ändern
 	Fill & Sign: remove saved signature	Ausfüllen und unterschreiben: Gespeicherte Unterschrift entfernen
+	Fill & Sign: add another saved signature	Ausfüllen und unterschreiben: Weitere gespeicherte Unterschrift hinzufügen
+	Signature {n}	Unterschrift {n}
+	Work, Personal, a name…	Arbeit, Privat, ein Name…
+	You can keep up to {n} signatures. Remove one to add another.	Du kannst bis zu {n} Unterschriften speichern. Entferne eine, um eine weitere hinzuzufügen.
 	Fill & Sign: remove saved initials	Ausfüllen und unterschreiben: Gespeicherte Initialen entfernen
 	Change signature	Unterschrift ändern
 	Change initials	Initialen ändern
@@ -2558,3 +2562,8 @@ animation effects	Off	Aus
 	Rotate the selected pages clockwise	Ausgewählte Seiten im Uhrzeigersinn drehen
 	Extract the selected pages…	Ausgewählte Seiten extrahieren…
 	Delete the selected pages	Ausgewählte Seiten löschen
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Ausfüllen und unterschreiben: Weitere gespeicherte Initialen hinzufügen
+	Initials {n}	Initialen {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Du kannst bis zu {n} Initialen-Einträge speichern. Entferne einen, um einen weiteren hinzuzufügen.

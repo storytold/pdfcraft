@@ -1403,6 +1403,10 @@
 	Fill & Sign: change signature	Συμπλήρωση και υπογραφή: αλλαγή υπογραφής
 	Fill & Sign: change initials	Συμπλήρωση και υπογραφή: αλλαγή μονογραφής
 	Fill & Sign: remove saved signature	Συμπλήρωση και υπογραφή: αφαίρεση αποθηκευμένης υπογραφής
+	Fill & Sign: add another saved signature	Συμπλήρωση και υπογραφή: προσθήκη άλλης αποθηκευμένης υπογραφής
+	Signature {n}	Υπογραφή {n}
+	Work, Personal, a name…	Εργασία, Προσωπική, ένα όνομα…
+	You can keep up to {n} signatures. Remove one to add another.	Μπορείτε να κρατήσετε έως {n} υπογραφές. Αφαιρέστε μία για να προσθέσετε άλλη.
 	Fill & Sign: remove saved initials	Συμπλήρωση και υπογραφή: αφαίρεση αποθηκευμένης μονογραφής
 	Change signature	Αλλαγή υπογραφής
 	Change initials	Αλλαγή μονογραφής
@@ -2563,3 +2567,8 @@ animation effects	Off	Ανενεργά
 	Rotate the selected pages clockwise	Περιστροφή των επιλεγμένων σελίδων δεξιόστροφα
 	Extract the selected pages…	Εξαγωγή των επιλεγμένων σελίδων…
 	Delete the selected pages	Διαγραφή των επιλεγμένων σελίδων
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Συμπλήρωση και υπογραφή: προσθήκη άλλης αποθηκευμένης μονογραφής
+	Initials {n}	Μονογραφή {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Μπορείτε να κρατήσετε έως {n} μονογραφές. Αφαιρέστε μία για να προσθέσετε άλλη.

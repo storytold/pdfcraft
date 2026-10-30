@@ -296,7 +296,7 @@ impl PdfCraftApp {
         self.refresh_os_key_store_ids();
         let mut draft = SignDraft::new(page, rect, field, certify, &self.digital_ids);
         draft.graphic = match &self.sign_graphic {
-            SignGraphic::FillSign if self.signature.is_none() => SignGraphic::Name,
+            SignGraphic::FillSign if self.signature().is_none() => SignGraphic::Name,
             g => g.clone(),
         };
         if let SignGraphic::Image(image) = &self.sign_graphic {
@@ -523,7 +523,7 @@ impl PdfCraftApp {
 
     /// The saved signature or image `g` stands for (`None`: the name).
     fn graphic_sig(&self, g: &SignGraphic) -> Option<SavedSig> {
-        graphic_of(self.signature.as_ref(), g)
+        graphic_of(self.signature(), g)
     }
 
     /// Sign as ▸ Choose image…: answered only into the signing dialog that asked.

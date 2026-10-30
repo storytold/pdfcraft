@@ -2945,8 +2945,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let generation = doc.edit_generation();
     let can_fill = doc.allows_form_filling();
     let can_crop = doc.allows_assembly();
-    let signature = app.signature.clone();
-    let initials = app.initials.clone();
+    let signature = app.signatures.active().cloned();
+    let initials = app.initials.active().cloned();
     let author = app.comment_prefs.author.clone();
     let today = app.session.today();
     // In Preferences ▸ Date format, or why it can't be stamped into the PDF.
@@ -3253,7 +3253,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         app.notify_error(why);
     }
     if open_signature || open_initials {
-        app.signature_draft = crate::fill_sign::SigDraft::new(open_initials, &app.comment_prefs.author);
+        app.signature_draft = app.new_signature_draft(open_initials);
         app.dialog = Some(crate::Dialog::Signature);
     }
     if open_boxes {

@@ -596,15 +596,18 @@ pub struct PdfCraftApp {
     pub export_draft: export_ui::ExportDraft,
     /// A running export's progress.
     export_status: Option<export_ui::ExportStatus>,
-    /// The saved Fill & Sign signature and initials (drawn or typed).
-    pub signature: Option<fill_sign::SavedSig>,
-    pub initials: Option<fill_sign::SavedSig>,
+    /// The saved Fill & Sign signatures, drawn, typed or imported, each with a label
+    /// ([`Self::signature`] is the active one).
+    pub signatures: fill_sign::SignatureLibrary,
+    /// The saved Fill & Sign initials, a list of their own.
+    pub initials: fill_sign::SignatureLibrary,
     /// The Create signature / initials dialog, and its typed preview.
     pub signature_draft: fill_sign::SigDraft,
     pub(crate) signature_preview: Option<(fill_sign::SavedSig, egui::TextureHandle)>,
     /// The Scan tab's photo, keyed by its version.
     pub(crate) signature_photo: Option<(u64, egui::TextureHandle)>,
-    pub(crate) saved_signature_previews: [Option<(fill_sign::SavedSig, egui::TextureHandle)>; 2],
+    /// The saved cards' previews: initials first, then one per saved signature.
+    pub(crate) saved_signature_previews: Vec<Option<(fill_sign::SavedSig, egui::TextureHandle)>>,
     /// What visible digital signatures show on their left, and its preview in Sign as.
     pub sign_graphic: sign_ui::SignGraphic,
     pub(crate) sign_graphic_preview: Option<(fill_sign::SavedSig, egui::TextureHandle)>,

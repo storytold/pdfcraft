@@ -228,12 +228,12 @@ impl PdfCraftApp {
             unmarked_page: Default::default(),
             export_draft: Default::default(),
             export_status: None,
-            signature: None,
-            initials: None,
+            signatures: Default::default(),
+            initials: fill_sign::SignatureLibrary::new_initials(Vec::new(), 0),
             signature_draft: Default::default(),
             signature_preview: None,
             signature_photo: None,
-            saved_signature_previews: [None, None],
+            saved_signature_previews: Vec::new(),
             sign_graphic: sign_ui::SignGraphic::Name,
             sign_graphic_preview: None,
             #[cfg(target_arch = "wasm32")]
@@ -314,6 +314,16 @@ impl PdfCraftApp {
     /// Notify with a `{name}`-style template in the UI language (placeholders filled once).
     pub fn notify_fmt(&mut self, template: &str, args: &[(&str, &str)]) {
         self.notify(i18n::fmt(tl!(template), args));
+    }
+
+    /// Say why a full signature (or initials) list refused another entry.
+    pub(crate) fn notify_full_list(&mut self, initials: bool) {
+        let n = fill_sign::MAX_SAVED_SIGNATURES.to_string();
+        if initials {
+            self.notify_fmt("You can keep up to {n} sets of initials. Remove one to add another.", &[("n", &n)]);
+        } else {
+            self.notify_fmt("You can keep up to {n} signatures. Remove one to add another.", &[("n", &n)]);
+        }
     }
 
     /// `true` while any open document still waits for page renders (used by headless capture).

@@ -2036,6 +2036,10 @@
 	Fill & Sign: change signature	تعبئة وتوقيع: تغيير التوقيع
 	Fill & Sign: change initials	تعبئة وتوقيع: تغيير الأحرف الأولى
 	Fill & Sign: remove saved signature	تعبئة وتوقيع: إزالة التوقيع المحفوظ
+	Fill & Sign: add another saved signature	تعبئة وتوقيع: إضافة توقيع محفوظ آخر
+	Signature {n}	توقيع {n}
+	Work, Personal, a name…	العمل، شخصي، اسم…
+	You can keep up to {n} signatures. Remove one to add another.	يمكنك الاحتفاظ بـ {n} توقيعًا كحد أقصى. أزِل أحدها لإضافة توقيع آخر.
 	Fill & Sign: remove saved initials	تعبئة وتوقيع: إزالة الأحرف الأولى المحفوظة
 	Change signature	تغيير التوقيع
 	Change initials	تغيير الأحرف الأولى
@@ -2833,3 +2837,8 @@ certificate	Version	الإصدار
 	Rotate the selected pages clockwise	تدوير الصفحات المحددة باتجاه عقارب الساعة
 	Extract the selected pages…	استخراج الصفحات المحددة…
 	Delete the selected pages	حذف الصفحات المحددة
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	تعبئة وتوقيع: إضافة أحرف أولى محفوظة أخرى
+	Initials {n}	أحرف أولى {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	يمكنك الاحتفاظ بـ {n} مجموعة من الأحرف الأولى كحد أقصى. أزِل إحداها لإضافة مجموعة أخرى.

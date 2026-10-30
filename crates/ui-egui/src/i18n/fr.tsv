@@ -1967,6 +1967,10 @@
 	Fill & Sign: change signature	Remplir et signer : modifier la signature
 	Fill & Sign: change initials	Remplir et signer : modifier les initiales
 	Fill & Sign: remove saved signature	Remplir et signer : retirer la signature enregistrée
+	Fill & Sign: add another saved signature	Remplir et signer : ajouter une autre signature enregistrée
+	Signature {n}	Signature {n}
+	Work, Personal, a name…	Travail, Personnel, un nom…
+	You can keep up to {n} signatures. Remove one to add another.	Vous pouvez conserver jusqu'à {n} signatures. Retirez-en une pour en ajouter une autre.
 	Fill & Sign: remove saved initials	Remplir et signer : retirer les initiales enregistrées
 	Change signature	Modifier la signature
 	Change initials	Modifier les initiales
@@ -2823,3 +2827,8 @@ certificate	Version	Version
 	Rotate the selected pages clockwise	Faire pivoter les pages sélectionnées dans le sens horaire
 	Extract the selected pages…	Extraire les pages sélectionnées…
 	Delete the selected pages	Supprimer les pages sélectionnées
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Remplir et signer : ajouter d'autres initiales enregistrées
+	Initials {n}	Initiales {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Vous pouvez conserver jusqu'à {n} jeux d'initiales. Retirez-en un pour en ajouter un autre.

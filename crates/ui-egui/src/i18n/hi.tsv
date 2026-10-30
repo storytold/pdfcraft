@@ -2794,3 +2794,14 @@ theme	Appearance	स्वरूप
 	Rotate the selected pages clockwise	चयनित पृष्ठों को दक्षिणावर्त घुमाएँ
 	Extract the selected pages…	चयनित पृष्ठ निकालें…
 	Delete the selected pages	चयनित पृष्ठ हटाएँ
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	फ़िल और साइन: एक और सहेजा गया हस्ताक्षर जोड़ें
+	Signature {n}	हस्ताक्षर {n}
+	Work, Personal, a name…	कार्य, निजी, कोई नाम…
+	You can keep up to {n} signatures. Remove one to add another.	आप अधिकतम {n} हस्ताक्षर रख सकते हैं। दूसरा जोड़ने के लिए एक हटाएँ।
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	फ़िल और साइन: और सहेजे गए आद्याक्षर जोड़ें
+	Initials {n}	आद्याक्षर {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	आप अधिकतम {n} आद्याक्षर सेट रख सकते हैं। दूसरा जोड़ने के लिए एक हटाएँ।

@@ -2749,3 +2749,14 @@ certificate	Version	وەشان
 	Rotate the selected pages clockwise	پەڕە هەڵبژێردراوەکان بە ئاڕاستەی میلی کاتژمێر بسوڕێنە
 	Extract the selected pages…	پەڕە هەڵبژێردراوەکان دەربهێنە…
 	Delete the selected pages	پەڕە هەڵبژێردراوەکان بسڕەوە
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	پڕکردنەوە و واژووکردن: زیادکردنی واژوویەکی پاشەکەوتکراوی تر
+	Signature {n}	واژوو {n}
+	Work, Personal, a name…	کار، کەسی، ناوێک…
+	You can keep up to {n} signatures. Remove one to add another.	دەتوانیت تا {n} واژوو هەڵبگریت. یەکێکیان لابە بۆ زیادکردنی یەکێکی تر.
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	پڕکردنەوە و واژووکردن: زیادکردنی پیتە سەرەتاییەکانی پاشەکەوتکراوی تر
+	Initials {n}	پیتە سەرەتاییەکان {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	دەتوانیت تا {n} کۆمەڵە پیتی سەرەتایی هەڵبگریت. یەکێکیان لابە بۆ زیادکردنی یەکێکی تر.

@@ -2042,6 +2042,10 @@
 	Fill & Sign: change signature	Compila e firma: cambia firma
 	Fill & Sign: change initials	Compila e firma: cambia iniziali
 	Fill & Sign: remove saved signature	Compila e firma: rimuovi firma salvata
+	Fill & Sign: add another saved signature	Compila e firma: aggiungi un'altra firma salvata
+	Signature {n}	Firma {n}
+	Work, Personal, a name…	Lavoro, Personale, un nome…
+	You can keep up to {n} signatures. Remove one to add another.	Puoi conservare fino a {n} firme. Rimuovine una per aggiungerne un'altra.
 	Fill & Sign: remove saved initials	Compila e firma: rimuovi iniziali salvate
 	Change signature	Cambia firma
 	Change initials	Cambia iniziali
@@ -2789,3 +2793,8 @@ certificate	SHA-256 digest	Impronta SHA-256
 	Rotate the selected pages clockwise	Ruota le pagine selezionate in senso orario
 	Extract the selected pages…	Estrai le pagine selezionate…
 	Delete the selected pages	Elimina le pagine selezionate
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Compila e firma: aggiungi altre iniziali salvate
+	Initials {n}	Iniziali {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Puoi conservare fino a {n} serie di iniziali. Rimuovine una per aggiungerne un'altra.

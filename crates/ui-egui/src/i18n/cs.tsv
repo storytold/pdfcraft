@@ -2086,6 +2086,10 @@ key	Space	Mezerník
 	Fill & Sign: change signature	Vyplnit a podepsat: změnit podpis
 	Fill & Sign: change initials	Vyplnit a podepsat: změnit iniciály
 	Fill & Sign: remove saved signature	Vyplnit a podepsat: odebrat uložený podpis
+	Fill & Sign: add another saved signature	Vyplnit a podepsat: přidat další uložený podpis
+	Signature {n}	Podpis {n}
+	Work, Personal, a name…	Práce, Osobní, jméno…
+	You can keep up to {n} signatures. Remove one to add another.	Uložit lze nejvýše {n} podpisů. Chcete-li přidat další, některý odeberte.
 	Fill & Sign: remove saved initials	Vyplnit a podepsat: odebrat uložené iniciály
 	Change signature	Změnit podpis
 	Change initials	Změnit iniciály
@@ -2864,3 +2868,8 @@ certificate	Version	Verze
 	Rotate the selected pages clockwise	Otočit vybrané stránky po směru hodinových ručiček
 	Extract the selected pages…	Extrahovat vybrané stránky…
 	Delete the selected pages	Odstranit vybrané stránky
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Vyplnit a podepsat: přidat další uložené iniciály
+	Initials {n}	Iniciály {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Uložit lze nejvýše {n} sad iniciál. Chcete-li přidat další, některou odeberte.

@@ -1313,7 +1313,7 @@ fn organize_overview_is_reachable_through_the_control_channel() {
 #[test]
 fn saved_signature_can_be_changed_through_the_control_channel() {
     let (mut h, c) = harness();
-    h.state_mut().signature = Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().signatures.set_active(Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("Ada Lovelace".into())));
     ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.signature.change" }));
     h.run_steps(3);
     assert_eq!(h.state().signature_draft.text, "Ada Lovelace");
@@ -1325,13 +1325,89 @@ fn saved_signature_can_be_changed_through_the_control_channel() {
     ok(&mut h, &c, "ui.key", json!({ "key": "A", "modifiers": ["command"] }));
     ok(&mut h, &c, "ui.type", json!({ "text": "Grace Hopper" }));
     ok(&mut h, &c, "ui.click", json!({ "label": "Apply" }));
-    assert_eq!(h.state().signature, Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("Grace Hopper".into())));
+    assert_eq!(h.state().signature().cloned(), Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("Grace Hopper".into())));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["quick_tool"], "fill-signature");
     ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.signature.remove" }));
-    assert_eq!(h.state().signature, None);
-    h.state_mut().initials = Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("GH".into()));
+    assert_eq!(h.state().signature().cloned(), None);
+    h.state_mut().initials.set_active(Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("GH".into())));
     ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.initials.remove" }));
-    assert_eq!(h.state().initials, None);
+    assert_eq!(h.state().initials.active(), None);
+}
+
+#[test]
+fn saved_signatures_are_listed_and_chosen_through_the_control_channel() {
+    use pdfcraft_ui_egui::fill_sign::SavedSig;
+    let (mut h, c) = harness();
+    let none = call(&mut h, &c, "ui.set", json!({ "key": "signature", "value": "1" })).unwrap_err();
+    assert!(none.contains("no signature is saved"), "{none}");
+    h.state_mut().signatures.add("Work", SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().signatures.add("Home", SavedSig::Typed("Ada".into()));
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(state["signatures"], json!(["Work", "Home"]));
+    assert_eq!(state["active_signature"], 2);
+    ok(&mut h, &c, "ui.set", json!({ "key": "signature", "value": "1" }));
+    assert_eq!(h.state().signature().cloned(), Some(SavedSig::Typed("Ada Lovelace".into())));
+    ok(&mut h, &c, "ui.set", json!({ "key": "signature", "value": " home " }));
+    assert_eq!(h.state().signatures.active_index(), Some(1));
+    for bad in ["0", "3", "Office"] {
+        let e = call(&mut h, &c, "ui.set", json!({ "key": "signature", "value": bad })).unwrap_err();
+        assert!(e.contains("from 1 to 2") && e.contains("Work, Home"), "{bad}: {e}");
+    }
+    assert_eq!(h.state().signatures.active_index(), Some(1), "a refused choice changes nothing");
+    ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.signature.add" }));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Signature));
+    assert_eq!(h.state().signature_draft.label, "Signature 1");
+    assert!(!h.state().signature_draft.editing);
+    ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": "none" }));
+    h.run_steps(2);
+
+    // Initials are a list of their own, listed and chosen the same way.
+    let none = call(&mut h, &c, "ui.set", json!({ "key": "initials", "value": "1" })).unwrap_err();
+    assert!(none.contains("no initials are saved"), "{none}");
+    h.state_mut().initials.add("Mine", SavedSig::Typed("AL".into()));
+    h.state_mut().initials.add("", SavedSig::Typed("AdL".into()));
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(state["initials"], json!(["Mine", "Initials 1"]));
+    assert_eq!(state["active_initials"], 2);
+    assert_eq!(state["signatures"], json!(["Work", "Home"]), "the signatures are left alone");
+    ok(&mut h, &c, "ui.set", json!({ "key": "initials", "value": "mine" }));
+    assert_eq!(h.state().initials.active().cloned(), Some(SavedSig::Typed("AL".into())));
+    let e = call(&mut h, &c, "ui.set", json!({ "key": "initials", "value": "3" })).unwrap_err();
+    assert!(e.contains("initials must be a number from 1 to 2") && e.contains("Mine, Initials 1"), "{e}");
+    ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.initials.add" }));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Signature));
+    assert!(h.state().signature_draft.initials);
+    assert_eq!(h.state().signature_draft.label, "Initials 2");
+}
+
+#[test]
+fn a_full_signature_list_says_why_a_new_signature_was_not_kept() {
+    use pdfcraft_ui_egui::fill_sign::{MAX_SAVED_SIGNATURES, SavedSig};
+    let (mut h, c) = harness();
+    for n in 0..MAX_SAVED_SIGNATURES {
+        assert!(h.state_mut().signatures.add("", SavedSig::Typed(format!("Signer {n}"))));
+    }
+    // The pad opened directly, not through Add signature, which a full list hides.
+    ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": "signature" }));
+    h.run_steps(3);
+    h.state_mut().signature_draft.text = "Grace Hopper".into();
+    h.run_steps(2);
+    let tool_before = ok(&mut h, &c, "ui.state", json!({}))["quick_tool"].clone();
+    ok(&mut h, &c, "ui.click", json!({ "label": "Apply" }));
+    h.run_steps(3);
+    assert_eq!(h.state().signatures.len(), MAX_SAVED_SIGNATURES);
+    let toast = h.state().toast.as_ref().map(|(t, _)| t.clone());
+    assert_eq!(toast.as_deref(), Some("You can keep up to 20 signatures. Remove one to add another."));
+    // The pad stays open with what was typed, and no tool is armed to place the old active
+    // signature on the next click (CodeRabbit on #3876).
+    assert!(h.state().dialog.is_some(), "the pad stays open");
+    assert_eq!(h.state().signature_draft.text, "Grace Hopper");
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["quick_tool"], tool_before);
+    ok(&mut h, &c, "ui.click", json!({ "label": "Cancel" }));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
 }
 
 #[test]

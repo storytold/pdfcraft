@@ -1324,19 +1324,32 @@ fn dialog_signature(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending)
     if browse {
         app.pick_signature_image();
     }
+    // A new signature a full list refused: the pad stays open with the draft, and
+    // the Signature tool is not armed, which would place the old active signature.
+    let mut refused = false;
     if req.apply {
         let d = std::mem::take(&mut app.signature_draft);
-        let tool = if d.initials {
-            app.initials = d.saved();
-            crate::fill_sign::FillTool::Initials
-        } else {
-            app.signature = d.saved();
-            crate::fill_sign::FillTool::Signature
-        };
-        app.quick_tool = crate::QuickTool::Fill(tool);
+        // Cleared first, so a notice raised below (a full signature list) stays shown.
         app.toast = None;
+        let library = if d.initials { &mut app.initials } else { &mut app.signatures };
+        if let Some(sig) = d.saved() {
+            if d.editing {
+                library.replace_active(&d.label, sig);
+            } else if !library.add(&d.label, sig) {
+                refused = true;
+            }
+        }
+        if refused {
+            app.notify_full_list(d.initials);
+        }
+        let tool = if d.initials { crate::fill_sign::FillTool::Initials } else { crate::fill_sign::FillTool::Signature };
+        if refused {
+            app.signature_draft = d;
+        } else {
+            app.quick_tool = crate::QuickTool::Fill(tool);
+        }
     }
-    req.close = req.apply || cancel;
+    req.close = (req.apply && !refused) || cancel;
     false
 }
 

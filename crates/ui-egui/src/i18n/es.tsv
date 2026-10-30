@@ -2052,6 +2052,10 @@ action wizard	Start	Iniciar
 	Fill & Sign: change signature	Rellenar y firmar: cambiar firma
 	Fill & Sign: change initials	Rellenar y firmar: cambiar iniciales
 	Fill & Sign: remove saved signature	Rellenar y firmar: quitar la firma guardada
+	Fill & Sign: add another saved signature	Rellenar y firmar: añadir otra firma guardada
+	Signature {n}	Firma {n}
+	Work, Personal, a name…	Trabajo, Personal, un nombre…
+	You can keep up to {n} signatures. Remove one to add another.	Puedes guardar hasta {n} firmas. Quita una para añadir otra.
 	Fill & Sign: remove saved initials	Rellenar y firmar: quitar las iniciales guardadas
 	Change signature	Cambiar firma
 	Change initials	Cambiar iniciales
@@ -2880,3 +2884,8 @@ theme	Appearance	Aspecto
 	Rotate the selected pages clockwise	Girar las páginas seleccionadas en sentido horario
 	Extract the selected pages…	Extraer las páginas seleccionadas…
 	Delete the selected pages	Eliminar las páginas seleccionadas
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Rellenar y firmar: añadir otras iniciales guardadas
+	Initials {n}	Iniciales {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Puedes guardar hasta {n} juegos de iniciales. Quita uno para añadir otro.

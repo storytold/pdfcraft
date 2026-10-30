@@ -2544,3 +2544,14 @@ animation effects	Off	Joaktiv
 	Rotate the selected pages clockwise	Rrotullo faqet e përzgjedhura në drejtim të orës
 	Extract the selected pages…	Nxirr faqet e përzgjedhura…
 	Delete the selected pages	Fshi faqet e përzgjedhura
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	Plotëso dhe nënshkruaj: shto një nënshkrim tjetër të ruajtur
+	Signature {n}	Nënshkrimi {n}
+	Work, Personal, a name…	Puna, Personale, një emër…
+	You can keep up to {n} signatures. Remove one to add another.	Mund të ruani deri në {n} nënshkrime. Hiqni njërin për të shtuar një tjetër.
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Plotëso dhe nënshkruaj: shto inicialet e tjera të ruajtura
+	Initials {n}	Inicialet {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Mund të ruani deri në {n} grupe inicialesh. Hiqni njërin për të shtuar një tjetër.

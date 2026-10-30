@@ -364,7 +364,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let mut pick = false;
     if d.rect.is_some() || d.field.is_some() {
         ui.label(egui::RichText::new(tl!("Appearance")).font(theme::semibold(12.5)));
-        let graphic = graphic_of(app.signature.as_ref(), &d.graphic);
+        let graphic = graphic_of(app.signatures.active(), &d.graphic);
         let (labels, in_english) = appearance_labels(crate::i18n::current());
         let lines = detail_lines(&d.appearance, &labels, &entry.name, &d.reason, &d.location, &date);
         preview(ui, t, &entry.name, &d.appearance, &lines, graphic.as_ref(), &mut app.sign_graphic_preview);
@@ -388,7 +388,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         ui.horizontal_wrapped(|ui| {
             ui.label(tl!("Graphic"));
             widgets::radio_value(ui, &mut d.graphic, SignGraphic::Name, tl!("Signer's name"));
-            ui.add_enabled_ui(app.signature.is_some(), |ui| {
+            ui.add_enabled_ui(app.signatures.active().is_some(), |ui| {
                 if ui.add(widgets::radio(d.graphic == SignGraphic::FillSign, tl!("Fill & Sign signature"))).clicked() {
                     d.graphic = SignGraphic::FillSign;
                 }

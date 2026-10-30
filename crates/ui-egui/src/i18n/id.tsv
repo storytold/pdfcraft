@@ -2795,3 +2795,14 @@ theme	Appearance	Tampilan
 	Rotate the selected pages clockwise	Putar halaman yang dipilih searah jarum jam
 	Extract the selected pages…	Ekstrak halaman yang dipilih…
 	Delete the selected pages	Hapus halaman yang dipilih
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	Isi & Tanda Tangani: tambahkan tanda tangan tersimpan lainnya
+	Signature {n}	Tanda tangan {n}
+	Work, Personal, a name…	Kantor, Pribadi, sebuah nama…
+	You can keep up to {n} signatures. Remove one to add another.	Anda dapat menyimpan hingga {n} tanda tangan. Hapus satu untuk menambahkan yang lain.
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Isi & Tanda Tangani: tambahkan inisial tersimpan lainnya
+	Initials {n}	Inisial {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Anda dapat menyimpan hingga {n} set inisial. Hapus satu untuk menambahkan yang lain.

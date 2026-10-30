@@ -2037,6 +2037,10 @@
 	Fill & Sign: change signature	Попълни и подпиши: промяна на подписа
 	Fill & Sign: remove saved initials	Попълни и подпиши: премахване на запазените инициали
 	Fill & Sign: remove saved signature	Попълни и подпиши: премахване на запазения подпис
+	Fill & Sign: add another saved signature	Попълни и подпиши: добавяне на още един запазен подпис
+	Signature {n}	Подпис {n}
+	Work, Personal, a name…	Работа, Лично, име…
+	You can keep up to {n} signatures. Remove one to add another.	Можете да запазите до {n} подписа. Премахнете един, за да добавите друг.
 	Fill in {name}	Попълни {name}
 	Flatten	Сплескай
 	Flip image	Обърни изображението
@@ -2520,3 +2524,8 @@ animation effects	Off	Изключени
 	Rotate the selected pages clockwise	Завъртане на избраните страници по часовниковата стрелка
 	Extract the selected pages…	Извличане на избраните страници…
 	Delete the selected pages	Изтриване на избраните страници
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Попълни и подпиши: добавяне на още едни запазени инициали
+	Initials {n}	Инициали {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Можете да запазите до {n} комплекта инициали. Премахнете един, за да добавите друг.

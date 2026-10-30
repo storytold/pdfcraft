@@ -804,6 +804,10 @@
 	Fill & Sign: line	Izpolni in podpiši: črta
 	Fill & Sign: remove saved initials	Izpolni in podpiši: odstrani shranjene začetnice
 	Fill & Sign: remove saved signature	Izpolni in podpiši: odstrani shranjeni podpis
+	Fill & Sign: add another saved signature	Izpolni in podpiši: dodaj še en shranjeni podpis
+	Signature {n}	Podpis {n}
+	Work, Personal, a name…	Služba, Osebno, ime…
+	You can keep up to {n} signatures. Remove one to add another.	Shranite lahko do {n} podpisov. Za dodajanje novega enega odstranite.
 	Fill & Sign: sign	Izpolni in podpiši: podpiši
 	Fill Color:	Barva polnila:
 	Fill in {name}	Izpolni: {name}
@@ -2562,3 +2566,8 @@ animation effects	Off	Izklopljeni
 	Rotate the selected pages clockwise	Zavrti izbrane strani v smeri urnega kazalca
 	Extract the selected pages…	Izvleci izbrane strani…
 	Delete the selected pages	Izbriši izbrane strani
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Izpolni in podpiši: dodaj še ene shranjene začetnice
+	Initials {n}	Začetnice {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Shranite lahko do {n} naborov začetnic. Za dodajanje novega enega odstranite.

@@ -1956,6 +1956,10 @@ action wizard	Start	ప్రారంభించు
 	Fill & Sign: change signature	నింపడం & సంతకం: సంతకాన్ని మార్చు
 	Fill & Sign: change initials	నింపడం & సంతకం: పొడి అక్షరాలను మార్చు
 	Fill & Sign: remove saved signature	నింపడం & సంతకం: సేవ్ చేసిన సంతకాన్ని తీసివేయి
+	Fill & Sign: add another saved signature	నింపడం & సంతకం: మరో సేవ్ చేసిన సంతకాన్ని జోడించు
+	Signature {n}	సంతకం {n}
+	Work, Personal, a name…	పని, వ్యక్తిగతం, ఒక పేరు…
+	You can keep up to {n} signatures. Remove one to add another.	మీరు గరిష్ఠంగా {n} సంతకాలను ఉంచుకోవచ్చు. మరొకటి జోడించడానికి ఒకదాన్ని తీసివేయండి.
 	Fill & Sign: remove saved initials	నింపడం & సంతకం: సేవ్ చేసిన పొడి అక్షరాలను తీసివేయి
 	Change signature	సంతకాన్ని మార్చు
 	Change initials	పొడి అక్షరాలను మార్చు
@@ -2466,3 +2470,8 @@ animation effects	Off	ఆఫ్
 	Rotate the selected pages clockwise	ఎంచుకున్న పేజీలను సవ్య దిశలో తిప్పు
 	Extract the selected pages…	ఎంచుకున్న పేజీలను సంగ్రహించు…
 	Delete the selected pages	ఎంచుకున్న పేజీలను తొలగించు
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	నింపడం & సంతకం: మరిన్ని సేవ్ చేసిన పొడి అక్షరాలను జోడించు
+	Initials {n}	పొడి అక్షరాలు {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	మీరు గరిష్ఠంగా {n} పొడి అక్షరాల సెట్‌లను ఉంచుకోవచ్చు. మరొకటి జోడించడానికి ఒకదాన్ని తీసివేయండి.

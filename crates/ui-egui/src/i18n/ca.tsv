@@ -2818,3 +2818,14 @@ theme	Appearance	Aspecte
 	Rotate the selected pages clockwise	Gira les pàgines seleccionades en sentit horari
 	Extract the selected pages…	Extreu les pàgines seleccionades…
 	Delete the selected pages	Suprimeix les pàgines seleccionades
+
+# Saved signature list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add another saved signature	Emplena i signa: afegeix una altra signatura desada
+	Signature {n}	Signatura {n}
+	Work, Personal, a name…	Feina, Personal, un nom…
+	You can keep up to {n} signatures. Remove one to add another.	Es poden desar fins a {n} signatures. Elimina'n una per afegir-ne una altra.
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Emplena i signa: afegeix unes altres inicials desades
+	Initials {n}	Inicials {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Es poden desar fins a {n} conjunts d'inicials. Elimina'n un per afegir-ne un altre.

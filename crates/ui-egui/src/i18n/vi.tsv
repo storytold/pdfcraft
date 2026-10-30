@@ -1492,6 +1492,10 @@ theme	Appearance	Giao diện
 	Fill & Sign: line	Điền & Ký: đường thẳng
 	Fill & Sign: remove saved initials	Điền & Ký: xóa chữ viết tắt đã lưu
 	Fill & Sign: remove saved signature	Điền & Ký: xóa chữ ký đã lưu
+	Fill & Sign: add another saved signature	Điền & Ký: thêm một chữ ký đã lưu khác
+	Signature {n}	Chữ ký {n}
+	Work, Personal, a name…	Công việc, Cá nhân, một tên…
+	You can keep up to {n} signatures. Remove one to add another.	Bạn có thể lưu tối đa {n} chữ ký. Hãy xóa một chữ ký để thêm chữ ký khác.
 	Fill & Sign: sign	Điền & Ký: ký
 	Find text and redact	Tìm văn bản và đánh dấu xóa
 	Find text and redact…	Tìm văn bản và đánh dấu xóa…
@@ -2824,3 +2828,8 @@ key	Space	Space
 	Rotate the selected pages clockwise	Xoay các trang đã chọn theo chiều kim đồng hồ
 	Extract the selected pages…	Trích xuất các trang đã chọn…
 	Delete the selected pages	Xóa các trang đã chọn
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Điền & Ký: thêm một chữ viết tắt đã lưu khác
+	Initials {n}	Chữ viết tắt {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Bạn có thể lưu tối đa {n} chữ viết tắt. Hãy xóa một chữ viết tắt để thêm chữ viết tắt khác.

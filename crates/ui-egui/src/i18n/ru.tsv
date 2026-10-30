@@ -2037,6 +2037,10 @@
 	Fill & Sign: change signature	Заполнить и подписать: изменить подпись
 	Fill & Sign: change initials	Заполнить и подписать: изменить инициалы
 	Fill & Sign: remove saved signature	Заполнить и подписать: удалить сохранённую подпись
+	Fill & Sign: add another saved signature	Заполнить и подписать: добавить ещё одну сохранённую подпись
+	Signature {n}	Подпись {n}
+	Work, Personal, a name…	Работа, Личная, имя…
+	You can keep up to {n} signatures. Remove one to add another.	Можно хранить не более {n} подписей. Удалите одну, чтобы добавить новую.
 	Fill & Sign: remove saved initials	Заполнить и подписать: удалить сохранённые инициалы
 	Change signature	Изменить подпись
 	Change initials	Изменить инициалы
@@ -2470,3 +2474,8 @@ animation effects	Off	Выкл
 	Rotate the selected pages clockwise	Повернуть выбранные страницы по часовой стрелке
 	Extract the selected pages…	Извлечь выбранные страницы…
 	Delete the selected pages	Удалить выбранные страницы
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	Заполнить и подписать: добавить ещё одни сохранённые инициалы
+	Initials {n}	Инициалы {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	Можно хранить не более {n} наборов инициалов. Удалите один, чтобы добавить новый.

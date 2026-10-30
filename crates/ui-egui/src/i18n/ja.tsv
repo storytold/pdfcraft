@@ -2049,6 +2049,10 @@
 	Fill & Sign: change signature	入力と署名：署名を変更
 	Fill & Sign: change initials	入力と署名：イニシャルを変更
 	Fill & Sign: remove saved signature	入力と署名：保存済みの署名を削除
+	Fill & Sign: add another saved signature	入力と署名：保存済みの署名を追加
+	Signature {n}	署名 {n}
+	Work, Personal, a name…	仕事用、個人用、名前…
+	You can keep up to {n} signatures. Remove one to add another.	保存できる署名は {n} 個までです。追加するには、いずれかを削除してください。
 	Fill & Sign: remove saved initials	入力と署名：保存済みのイニシャルを削除
 	Change signature	署名を変更
 	Change initials	イニシャルを変更
@@ -2557,3 +2561,8 @@ animation effects	Off	オフ
 	Rotate the selected pages clockwise	選択したページを時計回りに回転
 	Extract the selected pages…	選択したページを抽出…
 	Delete the selected pages	選択したページを削除
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	入力と署名：保存済みのイニシャルを追加
+	Initials {n}	イニシャル {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	保存できるイニシャルは {n} 個までです。追加するには、いずれかを削除してください。

@@ -2036,6 +2036,10 @@
 	Fill & Sign: change signature	填寫與簽署：變更簽名
 	Fill & Sign: change initials	填寫與簽署：變更姓名縮寫
 	Fill & Sign: remove saved signature	填寫與簽署：刪除已儲存的簽名
+	Fill & Sign: add another saved signature	填寫與簽署：再新增一個已儲存的簽名
+	Signature {n}	簽名 {n}
+	Work, Personal, a name…	工作、個人、姓名…
+	You can keep up to {n} signatures. Remove one to add another.	最多可儲存 {n} 個簽名。請先刪除一個，再新增新的。
 	Fill & Sign: remove saved initials	填寫與簽署：刪除已儲存的姓名縮寫
 	Change signature	變更簽名
 	Change initials	變更姓名縮寫
@@ -2507,3 +2511,8 @@ animation effects	Off	關
 	Rotate the selected pages clockwise	順時針旋轉所選頁面
 	Extract the selected pages…	擷取所選頁面…
 	Delete the selected pages	刪除所選頁面
+
+# Saved initials list (AI-assisted, not separately native-reviewed)
+	Fill & Sign: add other saved initials	填寫與簽署：再新增一組已儲存的姓名縮寫
+	Initials {n}	姓名縮寫 {n}
+	You can keep up to {n} sets of initials. Remove one to add another.	最多可儲存 {n} 組姓名縮寫。請先刪除一組，再新增新的。
