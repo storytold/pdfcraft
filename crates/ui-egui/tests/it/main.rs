@@ -43,6 +43,7 @@ mod editing;
 mod editor_taps;
 mod export;
 mod fill_sign;
+mod find_accents;
 mod folders;
 mod fonts;
 mod forms;

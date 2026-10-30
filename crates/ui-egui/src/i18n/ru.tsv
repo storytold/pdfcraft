@@ -1394,6 +1394,7 @@
 	Find options	Параметры поиска
 	Whole words only	Только целые слова
 	Case-sensitive	С учётом регистра
+	Accent-sensitive	С учётом диакритики
 	Close (Esc)	Закрыть (Esc)
 	Align	Выровнять
 	Top	Верх

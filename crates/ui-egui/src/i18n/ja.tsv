@@ -1394,6 +1394,7 @@
 	Find options	検索オプション
 	Whole words only	単語単位で検索
 	Case-sensitive	大文字と小文字を区別
+	Accent-sensitive	アクセント記号を区別
 	Close (Esc)	閉じる（Esc）
 	Align	整列
 	Top	上

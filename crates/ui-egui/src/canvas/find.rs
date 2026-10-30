@@ -21,11 +21,24 @@ pub struct Find {
     pub follow_ended: bool,
     pub focus: bool,
     pub case_query: String,
-    /// Find options (Acrobat's: case-sensitive, whole words only).
+    /// Find options (Acrobat's: case-sensitive, whole words only) and accent-sensitive, which is
+    /// off unless asked for: `cafe` finds `café` (#3460).
     pub case_sensitive: bool,
     pub whole_words: bool,
+    pub accent_sensitive: bool,
     /// Shown in the Search panel (Advanced Search) instead of the find bar.
     pub in_panel: bool,
+}
+
+impl Find {
+    /// The options the matches are found with.
+    fn options(&self) -> pdfcraft_render::text::FindOptions {
+        pdfcraft_render::text::FindOptions {
+            case_sensitive: self.case_sensitive,
+            whole_words: self.whole_words,
+            accent_sensitive: self.accent_sensitive,
+        }
+    }
 }
 
 /// What a text layer arriving after a search began may do with the automatic choice.
@@ -103,7 +116,7 @@ impl DocView {
         pages.sort();
         for &p in &pages {
             if let Some(text) = self.texts.get(&p) {
-                f.matches.extend(text.find_opts(&f.case_query, f.case_sensitive, f.whole_words).into_iter().map(|r| (p, r)));
+                f.matches.extend(text.find_options(&f.case_query, f.options(), usize::MAX).into_iter().map(|r| (p, r)));
             }
         }
         f.matches.sort_by_key(|(p, r)| (*p, r.start));
@@ -128,7 +141,7 @@ impl DocView {
         // this arrival must not pull them back; the choice then becomes theirs to keep.
         let follow = f.follow_page(self.current);
         f.matches.retain(|(p, _)| *p != page);
-        f.matches.extend(text.find_opts(&f.case_query, f.case_sensitive, f.whole_words).into_iter().map(|r| (page, r)));
+        f.matches.extend(text.find_options(&f.case_query, f.options(), usize::MAX).into_iter().map(|r| (page, r)));
         f.matches.sort_by_key(|(p, r)| (*p, r.start));
         if let Follow::Active(from) = follow {
             f.current = f.first_at_or_after(from);
@@ -273,11 +286,18 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
                         if icons::button(ui, "chevron-down", 26.0, false, &tip).clicked() {
                             step = Some(true);
                         }
-                        let opts = icons::button(ui, "settings-2", 26.0, find.case_sensitive || find.whole_words, tl!("Find options"));
+                        let opts = icons::button(
+                            ui,
+                            "settings-2",
+                            26.0,
+                            find.case_sensitive || find.whole_words || find.accent_sensitive,
+                            tl!("Find options"),
+                        );
                         egui::Popup::menu(&opts).show(|ui| {
                             let a = ui.add(widgets::checkbox(&mut find.whole_words, tl!("Whole words only"))).changed();
                             let b = ui.add(widgets::checkbox(&mut find.case_sensitive, tl!("Case-sensitive"))).changed();
-                            if a || b {
+                            let c = ui.add(widgets::checkbox(&mut find.accent_sensitive, tl!("Accent-sensitive"))).changed();
+                            if a || b || c {
                                 // Search again with the new options.
                                 find.case_query.clear();
                             }

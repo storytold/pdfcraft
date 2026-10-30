@@ -9457,3 +9457,33 @@ fn clearing_a_kids_default_through_tools_does_not_bring_back_its_parents() {
     let city = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "address.city").unwrap().clone();
     assert!(city["value"].is_null() || city["value"] == "", "reset clears it rather than restoring the parent's Main St: {}", city["value"]);
 }
+
+#[test]
+fn text_find_ignores_accents_unless_asked_not_to() {
+    let dir = workdir("find-accents");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "Café menu", "at": [20, 60], "size": 14 }));
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 2, "text": "cafe table", "at": [20, 60], "size": 14 }));
+    let count = |a: &mut Automation, args: Value| ok(a, "text_find", args)["count"].as_u64().unwrap();
+    // Without the option, both spellings are found by either: it is how the find bar works.
+    assert_eq!(count(&mut a, json!({ "doc": doc, "query": "cafe" })), 2);
+    assert_eq!(count(&mut a, json!({ "doc": doc, "query": "café" })), 2);
+    assert_eq!(count(&mut a, json!({ "doc": doc, "query": "CAFÉ" })), 2, "case is still ignored");
+    // Accent-sensitive: the letters must match as written.
+    assert_eq!(count(&mut a, json!({ "doc": doc, "query": "cafe", "accent_sensitive": true })), 1);
+    assert_eq!(count(&mut a, json!({ "doc": doc, "query": "café", "accent_sensitive": true })), 1);
+    assert_eq!(count(&mut a, json!({ "doc": doc, "query": "cafe", "accent_sensitive": false })), 2);
+    // The match is on the accented page, whichever way it is asked.
+    let found = ok(&mut a, "text_find", json!({ "doc": doc, "query": "cafe", "accent_sensitive": true }));
+    assert_eq!(found["matches"][0]["page"], 2);
+    let found = ok(&mut a, "text_find", json!({ "doc": doc, "query": "cafe" }));
+    assert_eq!(found["matches"][0]["text"], "Café", "the text returned is the document's, not the folded one");
+    // A continuation keeps the option the caller passes again.
+    let first = ok(&mut a, "text_find", json!({ "doc": doc, "query": "cafe", "limit": 1 }));
+    let next = first["next"].clone();
+    let rest = ok(&mut a, "text_find", json!({ "doc": doc, "query": "cafe", "limit": 1, "start_page": next["start_page"], "skip": next["skip"] }));
+    assert_eq!((first["matches"][0]["page"].as_u64(), rest["matches"][0]["page"].as_u64()), (Some(1), Some(2)));
+    // Not a boolean is refused.
+    assert!(matches!(a.call("text_find", &json!({ "doc": doc, "query": "cafe", "accent_sensitive": "yes" })), Err(ToolError::InvalidArgs(_))));
+}

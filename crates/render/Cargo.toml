@@ -21,6 +21,9 @@ log = { workspace = true }
 serde = { workspace = true }
 # Reads rendered pixel words as bytes; already in the tree through hayro.
 bytemuck = { version = "1" }
+# Accent-insensitive Find splits an accented letter into its base and marks; already in the tree
+# (through the text shaping stack), so this adds no new crate to the build.
+unicode-normalization = { version = "0.1" }
 
 # lopdf (bootstrap) draws random bytes for encryption; on the web they come from the browser.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

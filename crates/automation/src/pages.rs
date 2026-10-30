@@ -240,6 +240,8 @@ impl Automation {
             Some(p) => return Err(ToolError::InvalidArgs(format!("start_page {p} is out of range: the document has {n} pages"))),
         };
         let skip = usize::try_from(a.opt_int("skip")?.unwrap_or(0).max(0)).unwrap_or(usize::MAX);
+        // Like the find bar: accents are ignored unless asked for, so `cafe` finds `café`.
+        let options = pdfcraft_render::text::FindOptions { accent_sensitive: a.opt_bool("accent_sensitive")?.unwrap_or(false), ..Default::default() };
         let mut matches = Vec::new();
         let mut next = None;
         let mut warnings = Vec::new();
@@ -267,7 +269,7 @@ impl Automation {
                 // One extra match proves that the caller needs a continuation. Include skipped
                 // matches on the starting page when bounding the temporary per-page result.
                 let needed = limit.saturating_sub(matches.len()).saturating_add(skip_here).saturating_add(1);
-                for (k, r) in text.find_opts_limited(query, false, false, needed).into_iter().enumerate().skip(skip_here) {
+                for (k, r) in text.find_options(query, options, needed).into_iter().enumerate().skip(skip_here) {
                     if matches.len() == limit {
                         next = Some(json!({ "start_page": p + 1, "skip": k }));
                         break 'search;
