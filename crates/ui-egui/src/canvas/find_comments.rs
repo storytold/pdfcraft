@@ -49,14 +49,18 @@ impl FindHit {
 }
 
 /// A comment (or one reply) the Find bar can search. Several rows may name the same thread.
+///
+/// The comment text stays on the annotation. `source` is its position in that list, and
+/// `text_hash` only notices an edit so the search runs again. The result list keeps a short excerpt.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct FindComment {
     page: usize,
     index: usize,
+    source: usize,
     author: String,
     kind: String,
     root_kind: String,
-    body: String,
+    text_hash: u64,
     top: f32,
     rect: [f32; 4],
 }
@@ -66,7 +70,7 @@ pub(super) fn comment_find_index(info: &DocInfo) -> Vec<FindComment> {
     let tops = pdfcraft_render::thread_tops(&info.annotations);
     let roots: HashMap<(usize, usize), &Annotation> = info.annotations.iter().filter(|a| a.is_comment()).map(|a| ((a.page, a.index), a)).collect();
     let mut out = Vec::new();
-    for annotation in &info.annotations {
+    for (source, annotation) in info.annotations.iter().enumerate() {
         if annotation.subtype == "Popup" {
             continue;
         }
@@ -86,10 +90,11 @@ pub(super) fn comment_find_index(info: &DocInfo) -> Vec<FindComment> {
         out.push(FindComment {
             page: root.page,
             index: root.index,
+            source,
             author: annotation.author.clone().unwrap_or_default(),
             kind: kind_label(annotation).to_string(),
             root_kind: kind_label(root).to_string(),
-            body: annotation.contents.clone().unwrap_or_default(),
+            text_hash: text_hash(annotation.contents.as_deref().unwrap_or("")),
             top,
             rect,
         });
@@ -106,16 +111,23 @@ fn view_top(page: &PageInfo, rect: [f32; 4]) -> Option<f32> {
     top.is_finite().then_some(top)
 }
 
-pub(super) fn comment_hits(comments: &[FindComment], query: &str, case_sensitive: bool, whole_words: bool) -> Vec<FindHit> {
+pub(super) fn comment_hits(
+    comments: &[FindComment],
+    annotations: &[Annotation],
+    query: &str,
+    case_sensitive: bool,
+    whole_words: bool,
+) -> Vec<FindHit> {
     let needle = normalize(query, case_sensitive);
     if needle.is_empty() {
         return Vec::new();
     }
     // Best field wins: the comment's own text, then its author, then its type. A reply that
-    // matches better than the thread replaces the row, still selecting the thread.
+    // matches better than the thread replaces the row, still selecting the thread. The text is
+    // read from the annotation, not from a copy kept on the index.
     let mut best: HashMap<(usize, usize), (u8, FindHit)> = HashMap::new();
     for comment in comments {
-        let Some((rank, field)) = matched_field(comment, &needle, case_sensitive, whole_words) else { continue };
+        let Some((rank, excerpt)) = matched_excerpt(comment, annotations, &needle, case_sensitive, whole_words) else { continue };
         let key = (comment.page, comment.index);
         if best.get(&key).is_some_and(|(old, _)| *old >= rank) {
             continue;
@@ -130,7 +142,7 @@ pub(super) fn comment_hits(comments: &[FindComment], query: &str, case_sensitive
                     top: comment.top,
                     rect: comment.rect,
                     kind: comment.root_kind.clone(),
-                    excerpt: snippet(field),
+                    excerpt,
                 },
             ),
         );
@@ -139,16 +151,24 @@ pub(super) fn comment_hits(comments: &[FindComment], query: &str, case_sensitive
 }
 
 /// Author, text and type, the same fields the Comments panel searches. Rank 3 is the text.
-fn matched_field<'a>(comment: &'a FindComment, needle: &str, case_sensitive: bool, whole_words: bool) -> Option<(u8, &'a str)> {
-    for (rank, field) in [(3u8, comment.body.as_str()), (2, comment.author.as_str()), (1, comment.kind.as_str())] {
+fn matched_excerpt(comment: &FindComment, annotations: &[Annotation], needle: &str, case_sensitive: bool, whole_words: bool) -> Option<(u8, String)> {
+    let body = annotations.get(comment.source).and_then(|annotation| annotation.contents.as_deref()).unwrap_or("");
+    for (rank, field) in [(3u8, body), (2, comment.author.as_str()), (1, comment.kind.as_str())] {
         if field.is_empty() {
             continue;
         }
         if text_has(&normalize(field, case_sensitive), needle, whole_words) {
-            return Some((rank, field));
+            return Some((rank, snippet(field)));
         }
     }
     None
+}
+
+fn text_hash(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn normalize(text: &str, case_sensitive: bool) -> String {
