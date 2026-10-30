@@ -639,30 +639,34 @@ pub(crate) fn delete_selected(view: &mut DocView) -> Option<Edit> {
 /// as the object nudge does (`object_ui::nudge_keys`) and as dragging it does (#2608). The keys
 /// are consumed before the view turns the page with them; one press is one undo step.
 pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document) {
-    // `consume_key` lets an extra Alt through, and Alt+↑/↓ belongs to Calculation order's move.
-    if ctx.egui_wants_keyboard_input() || view.prepare.grab.is_some() || ctx.input(|i| i.modifiers.alt) {
+    if ctx.egui_wants_keyboard_input() || view.prepare.grab.is_some() {
         return;
     }
     let Some((name, wi)) = view.prepare.selected.clone() else { return };
     let Some(w) = doc.form.iter().find(|f| f.name == name).and_then(|f| f.widgets.get(wi)) else { return };
     let Some(page) = w.page else { return };
     let Some(xf) = view.page_xform(page) else { return };
-    use egui::{Key, Modifiers};
+    use egui::Key;
     let mut step = egui::Vec2::ZERO;
     ctx.input_mut(|i| {
-        for (key, direction) in [
-            (Key::ArrowLeft, egui::vec2(-1.0, 0.0)),
-            (Key::ArrowRight, egui::vec2(1.0, 0.0)),
-            (Key::ArrowUp, egui::vec2(0.0, -1.0)),
-            (Key::ArrowDown, egui::vec2(0.0, 1.0)),
-        ] {
-            // Shift first: a plain key pattern also matches a Shift press.
-            if i.consume_key(Modifiers::SHIFT, key) {
-                step += direction * 10.0;
-            } else if i.consume_key(Modifiers::NONE, key) {
-                step += direction;
+        // Only an arrow pressed alone or with Shift, judged by each press's own modifiers (the
+        // frame's can differ when a key is let go in the same frame). Alt+← / Alt+→ go back and
+        // forward through the view history (#3632) and Alt+↑ / ↓ is Calculation order's move.
+        i.events.retain(|e| {
+            let egui::Event::Key { key, pressed: true, modifiers, .. } = e else { return true };
+            if modifiers.alt || modifiers.ctrl || modifiers.command || modifiers.mac_cmd {
+                return true;
             }
-        }
+            let direction = match key {
+                Key::ArrowLeft => egui::vec2(-1.0, 0.0),
+                Key::ArrowRight => egui::vec2(1.0, 0.0),
+                Key::ArrowUp => egui::vec2(0.0, -1.0),
+                Key::ArrowDown => egui::vec2(0.0, 1.0),
+                _ => return true,
+            };
+            step += direction * if modifiers.shift { 10.0 } else { 1.0 };
+            false
+        });
     });
     if step == egui::Vec2::ZERO {
         return;

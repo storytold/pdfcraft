@@ -955,6 +955,14 @@
 	Replacement text	Erstatningstekst
 	Replacement: pages of {name}	Erstatning: sider fra {name}
 	Replaces the existing one on those pages.	Erstatter den eksisterende på disse sidene.
+	Checking pages…	Kontrollerer sidene…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Side {pages} maler sin egen hvite flate, som ville skjult bakgrunnen. Erstatt den
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Sidene {pages} maler sine egne hvite flater, som ville skjult bakgrunnen. Erstatt dem
+	Removing the background puts the page's own backdrop back.	Når bakgrunnen fjernes, kommer sidens egen hvite flate tilbake.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Et bilde dekker side {pages} (en skanning?), så bakgrunnen vises ikke der.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Bilder dekker sidene {pages} (skanninger?), så bakgrunnen vises ikke der.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Side {pages} ble endret etter at bakgrunnen ble lagt til, så sidens egen hvite flate forblir slått av. På hvitt papir ser den lik ut.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Sidene {pages} ble endret etter at bakgrunnen ble lagt til, så sidenes egne hvite flater forblir slått av. På hvitt papir ser de like ut.
 	Report	Rapport
 	Report…	Rapport…
 	Requires user to enter a password for:	Krever at brukeren skriver inn et passord for:
@@ -2060,6 +2068,9 @@
 	Formulas and similar non-text elements need alternate text. Add alternate text to them.	Formler og lignende elementer som ikke er tekst, trenger alternativ tekst. Legg til alternativ tekst på dem.
 	Gray	Grå
 	Grayscale Images	Gråtonebilder
+	Monochrome Images	Svart-hvitt-bilder
+	CCITT Group 4	CCITT gruppe 4
+	JBIG2 (lossless)	JBIG2 (tapsfri)
 	Green	Grønn
 	Green on black	Grønn på svart
 	H / Space (hold)	H / Mellomrom (hold)
@@ -2733,3 +2744,18 @@ key	Space	Mellomrom
 	Rotate the selected pages clockwise	Roter de valgte sidene med klokken
 	Extract the selected pages…	Trekk ut de valgte sidene…
 	Delete the selected pages	Slett de valgte sidene
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Alternativer for dette svaret
+# Untranslated: English text until a translator fills these in.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Reads {name}, which the form doesn't have, so it gets no value there.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.
+	Missing field	Missing field
+	Unchecked reads	Unchecked reads
+	{field} reads fields named as it runs	{field} reads fields named as it runs
+	Some names are built as it runs	Some names are built as it runs
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} more formula reads a missing field.|{n} more formulas read missing fields.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.
+@plural	{fields} is missing|{fields} are missing	{fields} is missing|{fields} are missing

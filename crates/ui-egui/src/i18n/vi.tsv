@@ -697,6 +697,12 @@ theme	Appearance	Giao diện
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Đọc {names}, các trường này lại đọc ngược nó. Không thứ tự nào sửa được vòng lặp: hãy đổi một trong các công thức.
 	Not in order	Không có trong thứ tự
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Không có trong thứ tự tính toán lưu trong PDF: các trình xem PDF khác có thể không tính trường này.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Đọc {name}, nhưng biểu mẫu không có trường này, nên không nhận được giá trị nào từ đó.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Tập lệnh của nó còn đọc các trường có tên được tạo ra khi chạy, nên không thể kiểm tra các lần đọc đó.
+	Missing field	Thiếu trường
+	Unchecked reads	Lần đọc chưa kiểm tra
+	{field} reads fields named as it runs	{field} đọc các trường được đặt tên khi chạy
+	Some names are built as it runs	Một số tên được tạo ra khi chạy
 	Back to Prepare a form	Quay lại Chuẩn bị biểu mẫu
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Chưa có trường nào trong biểu mẫu này tự tính giá trị. Hãy đặt phép tính cho một trường ở thẻ Tính toán trong thuộc tính của nó, trường đó sẽ hiện ở đây.
 	{names} and {last}	{names} và {last}
@@ -992,6 +998,14 @@ theme	Appearance	Giao diện
 	Replacement text	Văn bản được thay vào
 	Replacement: pages of {name}	Thay thế: các trang của {name}
 	Replaces the existing one on those pages.	Thay thế cái hiện có trên các trang đó.
+	Checking pages…	Đang kiểm tra các trang…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Trang {pages} có lớp tô trắng riêng, sẽ che mất nền. Thay thế
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Các trang {pages} có lớp tô trắng riêng, sẽ che mất nền. Thay thế
+	Removing the background puts the page's own backdrop back.	Gỡ nền sẽ khôi phục lớp tô trắng riêng của trang.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Một hình ảnh phủ kín trang {pages} (bản quét?), nên nền sẽ không hiện ở đó.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Hình ảnh phủ kín các trang {pages} (bản quét?), nên nền sẽ không hiện ở đó.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Trang {pages} đã thay đổi sau khi thêm nền, nên lớp tô trắng riêng của nó vẫn tắt. Trên giấy trắng trông vẫn như cũ.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Các trang {pages} đã thay đổi sau khi thêm nền, nên lớp tô trắng riêng của chúng vẫn tắt. Trên giấy trắng trông vẫn như cũ.
 	Report	Báo cáo
 	Report…	Báo cáo…
 	Requires user to enter a password for:	Yêu cầu người dùng nhập mật khẩu cho:
@@ -2111,6 +2125,9 @@ comment menu	Edit	Sửa
 	Formulas and similar non-text elements need alternate text. Add alternate text to them.	Công thức và các phần tử không phải văn bản tương tự cần có văn bản thay thế. Hãy thêm văn bản thay thế cho chúng.
 	Gray	Xám
 	Grayscale Images	Ảnh thang xám
+	Monochrome Images	Ảnh đơn sắc
+	CCITT Group 4	CCITT nhóm 4
+	JBIG2 (lossless)	JBIG2 (không mất dữ liệu)
 	Green	Xanh lá
 	Green on black	Xanh lá trên nền đen
 	H / Space (hold)	H / Space (giữ)
@@ -2656,6 +2673,11 @@ certificate	SHA-256 digest	Giá trị băm SHA-256
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} được tính trước {fields} mà nó đọc.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Còn {n} trường khác được tính quá sớm.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} không có trong thứ tự lưu trong PDF, nên các trình xem PDF khác có thể không tính.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} công thức đọc trường không có trong biểu mẫu
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} đọc {fields}, nhưng biểu mẫu không có.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Còn {n} công thức khác đọc trường bị thiếu.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} tạo một số tên trường khi chạy, nên các lần đọc đó không được kiểm tra.
+@plural	{fields} is missing|{fields} are missing	Thiếu {fields}
 key	Ctrl	Ctrl
 key	Shift	Shift
 key	Delete	Delete
@@ -2824,3 +2846,7 @@ key	Space	Space
 	Rotate the selected pages clockwise	Xoay các trang đã chọn theo chiều kim đồng hồ
 	Extract the selected pages…	Trích xuất các trang đã chọn…
 	Delete the selected pages	Xóa các trang đã chọn
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Tùy chọn cho câu trả lời này
+	Export value	Giá trị xuất

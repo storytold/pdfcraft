@@ -5,11 +5,12 @@
 //! Edits never touch the original bytes; the writer appends them (incremental save) or rewrites
 //! the file (full save).
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, Weak};
 
 use crate::CosError;
-use crate::object::{Dict, ObjRef, Object};
+use crate::object::{Dict, MAX_DECODED, ObjRef, Object, Stream};
 use crate::parser::{EndstreamIndex, Lexer, is_whitespace, parse_indirect, parse_indirect_shared};
 
 mod objects;

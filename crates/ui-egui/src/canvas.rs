@@ -464,6 +464,8 @@ pub struct DocView {
     pub org_drag: Option<Vec<usize>>,
     /// Pages panel: the pages being dragged to a new place.
     pub panel_drag: Option<Vec<usize>>,
+    /// Transient keyboard owner for this document's Pages sidebar.
+    pub(crate) pages_focus_id: Option<egui::Id>,
     /// Marquee Zoom / Snapshot: the rectangle being dragged (page, start), and a finished one.
     pub marquee: Option<(usize, Pos2)>,
     pub marquee_done: Option<crate::zoom_snap::Marquee>,
@@ -727,6 +729,7 @@ impl DocView {
             sign: Default::default(),
             org_drag: None,
             panel_drag: None,
+            pages_focus_id: None,
             marquee: None,
             marquee_done: None,
             fill_text: None,
@@ -880,6 +883,7 @@ struct PageEnv<'a> {
     visible_pages: &'a Vec<usize>,
     y_shift: f32,
     fill_text_size: f64,
+    fill_text_color: [f64; 3],
     today: (i64, u32, u32),
 }
 
@@ -923,7 +927,7 @@ struct PageFrame<'a> {
     current_overlap: f32,
     current_height: f32,
     pressed_page: Option<usize>,
-    calc_hover: Option<String>,
+    calc_hover: Option<crate::calc_order_ui::Focus>,
 }
 
 /// Visible heights (points) closer than this are equal: one page size can meet the viewport a
@@ -1123,6 +1127,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         tool,
         units,
         fill_text_size,
+        fill_text_color,
         ..
     } = frame.env;
     let PageSlot { i, xf, .. } = *slot;
@@ -1221,6 +1226,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
             crate::fill_sign::PageInput {
                 tool: ft,
                 text_size: fill_text_size,
+                text_color: fill_text_color,
                 signature: signature.as_ref(),
                 initials: initials.as_ref(),
                 preview: frame.signature_preview,
@@ -1726,8 +1732,8 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
         }
         if calc_order {
             let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
-            if let Some(name) = crate::calc_order_ui::paint_page(tool_cx, form, &view.calc_order, generation, selected) {
-                frame.calc_hover = Some(name);
+            if let Some(field) = crate::calc_order_ui::paint_page(tool_cx, form, &view.calc_order, generation, selected) {
+                frame.calc_hover = Some(field);
             }
         }
     } else {
@@ -1875,6 +1881,11 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     let preview_target = (matches!(tool, QuickTool::Select | QuickTool::Fill(_)) && !comments_hidden).then_some(view.comments.selected).flatten();
     view.signature_drag.prepare(ui.ctx(), doc, preview_target, scale);
     view.signature_drag.paint(painter, &pcx, &view.comments, view.pending_edit.as_ref());
+    // Any other comment being moved: drawn where it goes, over the page that still shows it
+    // where it was.
+    let stale = view.signature_drag.moving_page().is_some_and(|p| view.page_out_of_date(p));
+    view.signature_drag.prepare_move(ui.ctx(), doc, &view.comments, view.pending_edit.as_ref(), stale, scale);
+    view.signature_drag.paint_move(painter, &pcx, &view.comments, view.pending_edit.as_ref());
 
     // Any press on the page ends Select All of the document: text read or not, any tool,
     // on a link too.
@@ -2008,6 +2019,11 @@ fn draw_pages(
     // its owner; in the gap between pages it has none).
     if ptr.pressed().is_some() {
         view.router.cancel();
+        // The page widget is not focusable. Explicitly return keyboard ownership from Pages
+        // when the user presses the document, without stealing focus through a modal.
+        if let Some(id) = view.pages_focus_id {
+            ui.memory_mut(|m| m.surrender_focus(id));
+        }
     }
     let pointer = ptr.pos;
     // A press on a page makes it the current one (as in Acrobat), so a page command with
@@ -2216,7 +2232,8 @@ fn draw_pages(
                 ui.separator();
             }
         }
-        canvas_action = comments::context_menu(ui, view, info, prefs, allowed, can_modify).or(copy_image);
+        canvas_action =
+            comments::context_menu(ui, view, info, &|page, index| doc.annotation_deletable(page, index), prefs, allowed, can_modify).or(copy_image);
     });
     *out = PageOut {
         canvas_action,
@@ -3208,6 +3225,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         visible_pages: &visible_pages,
         y_shift,
         fill_text_size: app.fill_text_size,
+        fill_text_color: app.fill_text_color,
         today,
     };
     let mut page_out = PageOut::default();

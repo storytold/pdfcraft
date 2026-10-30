@@ -45,6 +45,8 @@ pub(crate) use menu::{attachment_items, context_menu, quick_bar_controls};
 pub(crate) use paint::paint_page;
 #[cfg(test)]
 use paint::{changing_points, drawn_shape, edited_in_view};
+#[cfg(test)]
+use state::after_delete;
 use state::login_name;
 pub use state::{CommentView, Composer, ComposerKind, Gesture, SortBy};
 pub(crate) use state::{EditorFocus, PageCx};

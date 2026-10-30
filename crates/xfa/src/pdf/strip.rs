@@ -126,7 +126,7 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
             }
             // One XDP: the packets it holds are the envelope's children.
             let text = s.decoded_within(64 << 20).ok().and_then(|b| crate::packets::decode(&b)).map(|(t, _)| t).unwrap_or_default();
-            let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: 1_000_000 };
+            let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: 1_000_000, ..Default::default() };
             if crate::xml_nesting_depth(&text) <= crate::MAX_XML_DEPTH
                 && let Ok(parsed) = roxmltree::Document::parse_with_options(&text, opts)
             {

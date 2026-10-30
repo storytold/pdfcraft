@@ -618,19 +618,28 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, info: &DocInfo
     if !movable {
         return;
     }
-    use egui::{Key, Modifiers};
+    use egui::Key;
     let mut step = egui::Vec2::ZERO;
     ctx.input_mut(|i| {
-        for (key, direction) in
-            [(Key::ArrowLeft, vec2(-1.0, 0.0)), (Key::ArrowRight, vec2(1.0, 0.0)), (Key::ArrowUp, vec2(0.0, -1.0)), (Key::ArrowDown, vec2(0.0, 1.0))]
-        {
-            // The modified patterns first: a plain one also matches a Shift press.
-            if i.consume_key(Modifiers::COMMAND, key) || i.consume_key(Modifiers::SHIFT, key) {
-                step += direction * 10.0;
-            } else if i.consume_key(Modifiers::NONE, key) {
-                step += direction;
+        // Only an arrow pressed alone or with ⌘/Ctrl or Shift, judged by each press's own
+        // modifiers. Alt+← / Alt+→ go back and forward through the view history in
+        // `canvas::shortcuts` (#3632), and egui's key patterns would let an extra Alt through.
+        // A Ctrl that isn't the command key (macOS) is left alone, as the patterns left it.
+        i.events.retain(|e| {
+            let egui::Event::Key { key, pressed: true, modifiers, .. } = e else { return true };
+            if modifiers.alt || (modifiers.ctrl && !modifiers.command) {
+                return true;
             }
-        }
+            let direction = match key {
+                Key::ArrowLeft => vec2(-1.0, 0.0),
+                Key::ArrowRight => vec2(1.0, 0.0),
+                Key::ArrowUp => vec2(0.0, -1.0),
+                Key::ArrowDown => vec2(0.0, 1.0),
+                _ => return true,
+            };
+            step += direction * if modifiers.command || modifiers.shift { 10.0 } else { 1.0 };
+            false
+        });
     });
     if step == egui::Vec2::ZERO {
         return;

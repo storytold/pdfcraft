@@ -567,6 +567,9 @@
 	Clean Up	پاککردنەوە
 	Color Images	وێنە ڕەنگاوڕەنگەکان
 	Grayscale Images	وێنە خۆڵەمێشییەکان
+	Monochrome Images	وێنە یەکڕەنگەکان
+	CCITT Group 4	CCITT گرووپی 4
+	JBIG2 (lossless)	JBIG2 (بێ لەدەستدان)
 	Bicubic downsampling to	کەمکردنەوەی نموونە بە شێوازی Bicubic بۆ
 	for images above	بۆ ئەو وێنانەی سەرووی
 	Compression	پەستاندن
@@ -835,6 +838,14 @@
 	Applies to 1 page	بۆ 1 پەڕە جێبەجێ دەکرێت
 	Applies to {n} pages	بۆ {n} پەڕە جێبەجێ دەکرێت
 	Replaces the existing one on those pages.	ئەوەی ئێستا هەیە لەسەر ئەو پەڕانە دەگۆڕێت.
+	Checking pages…	پشکنینی پەڕەکان…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	پەڕەی {pages} پڕکردنەوەیەکی سپیی خۆی هەیە کە پاشبنەماکە دەشارێتەوە. جێگرتنەوە
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	پەڕەکانی {pages} پڕکردنەوەیەکی سپیی خۆیان هەیە کە پاشبنەماکە دەشارێتەوە. جێگرتنەوە
+	Removing the background puts the page's own backdrop back.	لابردنی پاشبنەما پڕکردنەوە سپییەکەی خودی پەڕەکە دەگەڕێنێتەوە.
+	A picture covers page {pages} (a scan?), so the background won't show there.	وێنەیەک پەڕەی {pages} دادەپۆشێت (سکان؟)، بۆیە پاشبنەماکە لەوێ دەرناکەوێت.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	وێنەکان پەڕەکانی {pages} دادەپۆشن (سکان؟)، بۆیە پاشبنەماکە لەوێ دەرناکەوێت.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	پەڕەی {pages} دوای زیادکردنی پاشبنەما گۆڕا، بۆیە پڕکردنەوە سپییەکەی خۆی کوژاوە دەمێنێتەوە. لەسەر کاغەزی سپی هەمان شێوەیە.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	پەڕەکانی {pages} دوای زیادکردنی پاشبنەما گۆڕان، بۆیە پڕکردنەوە سپییەکانی خۆیان کوژاوە دەمێننەوە. لەسەر کاغەزی سپی هەمان شێوەن.
 	PDF or image	PDF یان وێنە
 	No file chosen	هیچ فایلێک هەڵنەبژێردراوە
 	Page number	ژمارەی پەڕە
@@ -2749,3 +2760,18 @@ certificate	Version	وەشان
 	Rotate the selected pages clockwise	پەڕە هەڵبژێردراوەکان بە ئاڕاستەی میلی کاتژمێر بسوڕێنە
 	Extract the selected pages…	پەڕە هەڵبژێردراوەکان دەربهێنە…
 	Delete the selected pages	پەڕە هەڵبژێردراوەکان بسڕەوە
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	هەڵبژاردەکانی ئەم وەڵامە
+# Untranslated: English text until a translator fills these in.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Reads {name}, which the form doesn't have, so it gets no value there.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.
+	Missing field	Missing field
+	Unchecked reads	Unchecked reads
+	{field} reads fields named as it runs	{field} reads fields named as it runs
+	Some names are built as it runs	Some names are built as it runs
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} more formula reads a missing field.|{n} more formulas read missing fields.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.
+@plural	{fields} is missing|{fields} are missing	{fields} is missing|{fields} are missing

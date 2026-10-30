@@ -955,6 +955,14 @@
 	Replacement text	Text de înlocuire
 	Replacement: pages of {name}	Înlocuire: pagini din {name}
 	Replaces the existing one on those pages.	Înlocuiește-l pe cel existent pe acele pagini.
+	Checking pages…	Se verifică paginile…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Pagina {pages} are o umplere albă proprie, care ar ascunde fundalul. Înlocuiește-o
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Paginile {pages} au o umplere albă proprie, care ar ascunde fundalul. Înlocuiește-o
+	Removing the background puts the page's own backdrop back.	Eliminarea fundalului readuce umplerea albă proprie a paginii.
+	A picture covers page {pages} (a scan?), so the background won't show there.	O imagine acoperă pagina {pages} (o scanare?), deci fundalul nu se va vedea acolo.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Imagini acoperă paginile {pages} (scanări?), deci fundalul nu se va vedea acolo.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Pagina {pages} s-a schimbat după adăugarea fundalului, așa că umplerea ei albă proprie rămâne oprită. Pe hârtie albă arată la fel.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Paginile {pages} s-au schimbat după adăugarea fundalului, așa că umplerile lor albe proprii rămân oprite. Pe hârtie albă arată la fel.
 	Report	Raport
 	Report…	Raport…
 	Requires user to enter a password for:	Utilizatorul trebuie să introducă o parolă pentru:
@@ -2066,6 +2074,9 @@ comment menu	Edit	Editare
 	Formulas and similar non-text elements need alternate text. Add alternate text to them.	Formulele și alte elemente non-text similare au nevoie de text alternativ. Adăugați-le text alternativ.
 	Gray	Gri
 	Grayscale Images	Imagini în tonuri de gri
+	Monochrome Images	Imagini monocrome
+	CCITT Group 4	CCITT grupa 4
+	JBIG2 (lossless)	JBIG2 (fără pierderi)
 	Green	Verde
 	Green on black	Verde pe negru
 	H / Space (hold)	H / Spațiu (ținut apăsat)
@@ -2723,6 +2734,12 @@ theme	Appearance	Aspect
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Citește {names}, care îl citesc la rândul lor. Nicio ordine nu poate rezolva o buclă: modificați una dintre formule.
 	Not in order	În afara ordinii
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Lipsește din ordinea de calcul salvată în PDF: alte aplicații de vizualizare PDF s-ar putea să nu-l calculeze.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Citește {name}, care nu există în formular, deci nu primește nicio valoare de acolo.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Scriptul său citește și câmpuri ale căror nume le construiește în timpul rulării, deci aceste citiri nu pot fi verificate.
+	Missing field	Câmp lipsă
+	Unchecked reads	Citiri neverificate
+	{field} reads fields named as it runs	{field} citește câmpuri numite în timpul rulării
+	Some names are built as it runs	Unele nume sunt construite în timpul rulării
 	Back to Prepare a form	Înapoi la Pregătire formular
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Niciun câmp din acest formular nu își calculează încă valoarea. Adăugați un calcul unui câmp în fila Calcul din proprietățile lui și va apărea aici.
 	{names} and {last}	{names} și {last}
@@ -2750,6 +2767,11 @@ theme	Appearance	Aspect
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} se calculează înaintea câmpului {fields}, pe care îl citește.|{field} se calculează înaintea câmpurilor {fields}, pe care le citește.|{field} se calculează înaintea câmpurilor {fields}, pe care le citește.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Încă {n} câmp se calculează prea devreme.|Încă {n} câmpuri se calculează prea devreme.|Încă {n} de câmpuri se calculează prea devreme.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} lipsește din ordinea salvată în PDF, deci alte aplicații de vizualizare PDF s-ar putea să nu-l calculeze.|{fields} lipsesc din ordinea salvată în PDF, deci alte aplicații de vizualizare PDF s-ar putea să nu le calculeze.|{fields} lipsesc din ordinea salvată în PDF, deci alte aplicații de vizualizare PDF s-ar putea să nu le calculeze.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formulă citește un câmp care nu există în formular|{n} formule citesc câmpuri care nu există în formular|{n} de formule citesc câmpuri care nu există în formular
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} citește {fields}, care nu există în formular.|{field} citește {fields}, care nu există în formular.|{field} citește {fields}, care nu există în formular.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Încă {n} formulă citește un câmp lipsă.|Încă {n} formule citesc câmpuri lipsă.|Încă {n} de formule citesc câmpuri lipsă.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} construiește unele nume de câmpuri în timpul rulării, deci aceste citiri nu sunt verificate.|{fields} construiesc unele nume de câmpuri în timpul rulării, deci aceste citiri nu sunt verificate.|{fields} construiesc unele nume de câmpuri în timpul rulării, deci aceste citiri nu sunt verificate.
+@plural	{fields} is missing|{fields} are missing	{fields} lipsește|{fields} lipsesc|{fields} lipsesc
 	Bulleted list	Listă cu marcatori
 	Numbered list	Listă numerotată
 	Alignment	Aliniere
@@ -2818,3 +2840,6 @@ theme	Appearance	Aspect
 	Rotate the selected pages clockwise	Rotește paginile selectate în sens orar
 	Extract the selected pages…	Extrage paginile selectate…
 	Delete the selected pages	Șterge paginile selectate
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Opțiuni pentru acest răspuns

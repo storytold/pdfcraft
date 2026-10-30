@@ -560,6 +560,9 @@
 	Clean Up	Siivoa
 	Color Images	Värikuvat
 	Grayscale Images	Harmaasävykuvat
+	Monochrome Images	Mustavalkokuvat
+	CCITT Group 4	CCITT ryhmä 4
+	JBIG2 (lossless)	JBIG2 (häviötön)
 	Bicubic downsampling to	Bikuubinen alinäytteistys tarkkuuteen
 	for images above	kuville, joiden tarkkuus yli
 	Compression	Pakkaus
@@ -824,6 +827,14 @@
 	Applies to 1 page	Koskee yhtä sivua
 	Applies to {n} pages	Koskee {n} sivua
 	Replaces the existing one on those pages.	Korvaa näiden sivujen nykyisen.
+	Checking pages…	Tarkistetaan sivuja…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Sivulla {pages} on oma valkoinen täyttö, joka peittäisi taustan. Korvaa se
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Sivuilla {pages} on oma valkoinen täyttö, joka peittäisi taustan. Korvaa ne
+	Removing the background puts the page's own backdrop back.	Taustan poistaminen palauttaa sivun oman valkoisen täytön.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Kuva peittää sivun {pages} (skannaus?), joten tausta ei näy siinä.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Kuvat peittävät sivut {pages} (skannauksia?), joten tausta ei näy niissä.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Sivu {pages} muuttui taustan lisäämisen jälkeen, joten sen oma valkoinen täyttö pysyy pois päältä. Valkoisella paperilla se näyttää samalta.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Sivut {pages} muuttuivat taustan lisäämisen jälkeen, joten niiden omat valkoiset täytöt pysyvät pois päältä. Valkoisella paperilla ne näyttävät samalta.
 	PDF or image	PDF tai kuva
 	No file chosen	Tiedostoa ei ole valittu
 	Page number	Sivunumero
@@ -2732,6 +2743,12 @@ theme	Appearance	Teema
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Lukee kenttiä {names}, jotka lukevat sitä takaisin. Mikään järjestys ei korjaa silmukkaa: muuta jotakin kaavoista.
 	Not in order	Ei järjestyksessä
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Puuttuu PDF:ään tallennetusta laskentajärjestyksestä: muut PDF-katseluohjelmat eivät ehkä laske sitä.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Lukee kenttää {name}, jota lomakkeessa ei ole, joten se ei saa siitä arvoa.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Sen komentosarja lukee myös kenttiä, joiden nimet se muodostaa suorituksen aikana, joten näitä viittauksia ei voi tarkistaa.
+	Missing field	Puuttuva kenttä
+	Unchecked reads	Tarkistamattomat viittaukset
+	{field} reads fields named as it runs	{field} lukee kenttiä, joiden nimet muodostuvat suorituksen aikana
+	Some names are built as it runs	Osa nimistä muodostuu suorituksen aikana
 	Back to Prepare a form	Takaisin kohtaan Valmistele lomake
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Mikään tämän lomakkeen kenttä ei vielä laske arvoaan. Anna kentälle laskenta sen ominaisuuksien Laskenta-välilehdellä, niin se näkyy tässä.
 	{names} and {last}	{names} ja {last}
@@ -2759,6 +2776,11 @@ theme	Appearance	Teema
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} lasketaan ennen lukemaansa kenttää {fields}.|{field} lasketaan ennen lukemiaan kenttiä {fields}.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} muu kenttä lasketaan liian aikaisin.|{n} muuta kenttää lasketaan liian aikaisin.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} puuttuu PDF:ään tallennetusta järjestyksestä, joten muut PDF-katseluohjelmat eivät ehkä laske sitä.|{fields} puuttuvat PDF:ään tallennetusta järjestyksestä, joten muut PDF-katseluohjelmat eivät ehkä laske niitä.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} kaava lukee kenttää, jota lomakkeessa ei ole|{n} kaavaa lukee kenttiä, joita lomakkeessa ei ole
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} lukee kenttää {fields}, jota lomakkeessa ei ole.|{field} lukee kenttiä {fields}, joita lomakkeessa ei ole.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} muu kaava lukee puuttuvaa kenttää.|{n} muuta kaavaa lukee puuttuvia kenttiä.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} muodostaa osan kenttien nimistä suorituksen aikana, joten näitä viittauksia ei tarkisteta.|{fields} muodostavat osan kenttien nimistä suorituksen aikana, joten näitä viittauksia ei tarkisteta.
+@plural	{fields} is missing|{fields} are missing	{fields} puuttuu|{fields} puuttuvat
 	Bulleted list	Luettelomerkit
 	Numbered list	Numeroitu luettelo
 	Alignment	Tasaus
@@ -2827,3 +2849,6 @@ theme	Appearance	Teema
 	Rotate the selected pages clockwise	Kierrä valittuja sivuja myötäpäivään
 	Extract the selected pages…	Pura valitut sivut…
 	Delete the selected pages	Poista valitut sivut
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Tämän vastauksen asetukset

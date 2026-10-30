@@ -512,6 +512,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Ezeket olvassa: {names}, amelyek visszaolvassák. Hurkot semmilyen sorrend nem javít meg: módosítsd az egyik képletet.
 	Not in order	Nincs a sorrendben
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Hiányzik a PDF-ben mentett számítási sorrendből: más PDF-megjelenítők talán nem számítják ki.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Ezt olvassa: {name}, amely nincs az űrlapon, így onnan nem kap értéket.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	A szkriptje olyan mezőket is olvas, amelyek nevét futás közben állítja össze, így ezek az olvasások nem ellenőrizhetők.
+	Missing field	Hiányzó mező
+	Unchecked reads	Ellenőrizetlen olvasások
+	{field} reads fields named as it runs	{field} futás közben elnevezett mezőket olvas
+	Some names are built as it runs	Néhány név futás közben áll össze
 	Back to Prepare a form	Vissza az Űrlap előkészítéséhez
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Ennek az űrlapnak még egyik mezője sem számítja ki az értékét. Adj egy mezőnek számítást a tulajdonságai Számítás lapján, és itt megjelenik.
 	{names} and {last}	{names} és {last}
@@ -568,6 +574,9 @@
 	Clean Up	Tisztítás
 	Color Images	Színes képek
 	Grayscale Images	Szürkeárnyalatos képek
+	Monochrome Images	Monokróm képek
+	CCITT Group 4	CCITT 4. csoport
+	JBIG2 (lossless)	JBIG2 (veszteségmentes)
 	Bicubic downsampling to	Kettős köbös újramintázás erre
 	for images above	az ennél nagyobb képeknél
 	Compression	Tömörítés
@@ -837,6 +846,14 @@
 	Applies to 1 page	1 oldalra vonatkozik
 	Applies to {n} pages	{n} oldalra vonatkozik
 	Replaces the existing one on those pages.	Lecseréli a meglévőt ezeken az oldalakon.
+	Checking pages…	Oldalak ellenőrzése…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Ennek az oldalnak saját fehér kitöltése van, amely eltakarná a hátteret: {pages}. Csere
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Ezeknek az oldalaknak saját fehér kitöltése van, amely eltakarná a hátteret: {pages}. Csere
+	Removing the background puts the page's own backdrop back.	A háttér eltávolítása visszaállítja az oldal saját fehér kitöltését.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Egy kép fedi le ezt az oldalt: {pages} (szkennelt?), így ott nem látszik a háttér.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Képek fedik le ezeket az oldalakat: {pages} (szkenneltek?), így ott nem látszik a háttér.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Ez az oldal megváltozott a háttér hozzáadása után, ezért a saját fehér kitöltése kikapcsolva marad: {pages}. Fehér papíron ugyanúgy néz ki.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Ezek az oldalak megváltoztak a háttér hozzáadása után, ezért a saját fehér kitöltésük kikapcsolva marad: {pages}. Fehér papíron ugyanúgy néznek ki.
 	PDF or image	PDF vagy kép
 	No file chosen	Nincs fájl kiválasztva
 	Page number	Oldalszám
@@ -2404,6 +2421,11 @@ animation effects	Off	Ki
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} előbb számítódik, mint {fields}, amelyet olvas.|{field} előbb számítódik, mint {fields}, amelyeket olvas.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	További {n} mező túl korán számítódik.|További {n} mező túl korán számítódik.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} hiányzik a PDF-ben mentett sorrendből, ezért más PDF-megjelenítők esetleg nem számítják ki.|{fields} hiányoznak a PDF-ben mentett sorrendből, ezért más PDF-megjelenítők esetleg nem számítják ki őket.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} képlet olyan mezőt olvas, amely nincs az űrlapon|{n} képlet olyan mezőket olvas, amelyek nincsenek az űrlapon
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} ezt olvassa: {fields}, amely nincs az űrlapon.|{field} ezeket olvassa: {fields}, amelyek nincsenek az űrlapon.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	További {n} képlet hiányzó mezőt olvas.|További {n} képlet hiányzó mezőket olvas.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} futás közben állít össze néhány mezőnevet, így ezek az olvasások nincsenek ellenőrizve.|{fields} futás közben állítanak össze néhány mezőnevet, így ezek az olvasások nincsenek ellenőrizve.
+@plural	{fields} is missing|{fields} are missing	{fields} hiányzik|{fields} hiányoznak
 	Scan	Beolvasás
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Írja alá a nevét egy fehér papírlapon, és fényképezze le erős, egyenletes fényben (vakuval). Válassza ki a fényképet, vagy húzza ide: a PdfCraft megkeresi az aláírást, és eltávolítja a papírt.
 	Choose photo…	Fénykép kiválasztása…
@@ -2556,3 +2578,7 @@ animation effects	Off	Ki
 	Rotate the selected pages clockwise	A kijelölt oldalak forgatása az óramutató járásával megegyezően
 	Extract the selected pages…	A kijelölt oldalak kibontása…
 	Delete the selected pages	A kijelölt oldalak törlése
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	A válasz beállításai
+	Export value	Exportérték

@@ -26,6 +26,9 @@ pub(crate) struct ObjectSelection {
     pub hold_editor: bool,
     blocked_page: Option<usize>,
     input_blocked: bool,
+    /// A paragraph (page, block) to select once the document is at hand: Esc in the inline
+    /// editor asks for it, and the next `prepare` selects it.
+    select_paragraph: Option<(usize, usize)>,
 }
 
 #[derive(Clone, Copy)]
@@ -63,6 +66,14 @@ impl ObjectSelection {
         self.gesture = None;
         self.pending = None;
         self.blocked_page = None;
+        self.select_paragraph = None;
+    }
+
+    /// Select paragraph `block` of `page` as an object at the next `prepare`, as Acrobat does
+    /// when Esc leaves a text box: the box is then selected, so Delete removes it, the arrow keys
+    /// move it and its frame drags it, without aiming for the frame.
+    pub(crate) fn select_paragraph_next(&mut self, page: usize, block: usize) {
+        self.select_paragraph = Some((page, block));
     }
 
     pub fn prepare(&mut self, doc: &Document, enabled: bool, ctx: &egui::Context) {
@@ -106,6 +117,15 @@ impl ObjectSelection {
         }
         if self.page.is_some() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.clear();
+        }
+        // After the Escape check: the Esc that closed the editor must not clear what it selected.
+        if let Some((page, block)) = self.select_paragraph.take()
+            && let Ok(objects) = self.inventory(doc, page)
+            && let Some(object) = objects.into_iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
+        {
+            self.clear();
+            self.page = Some(page);
+            self.selected.push(object);
         }
     }
 
@@ -351,22 +371,28 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document
     let objects = view.objects.page.filter(|_| !view.objects.selected.is_empty() && view.objects.gesture.is_none());
     let Some(page) = objects.or(image.map(|(page, _)| page)) else { return };
     let Some(xf) = view.page_xform(page) else { return };
-    use egui::{Key, Modifiers};
+    use egui::Key;
     let mut step = egui::Vec2::ZERO;
     ctx.input_mut(|i| {
-        for (key, direction) in [
-            (Key::ArrowLeft, egui::vec2(-1.0, 0.0)),
-            (Key::ArrowRight, egui::vec2(1.0, 0.0)),
-            (Key::ArrowUp, egui::vec2(0.0, -1.0)),
-            (Key::ArrowDown, egui::vec2(0.0, 1.0)),
-        ] {
-            // Shift first: a plain key pattern also matches a Shift press.
-            if i.consume_key(Modifiers::SHIFT, key) {
-                step += direction * 10.0;
-            } else if i.consume_key(Modifiers::NONE, key) {
-                step += direction;
+        // Only an arrow pressed alone or with Shift, judged by each press's own modifiers (the
+        // frame's can differ when a key is let go in the same frame). Alt+← / Alt+→ go back and
+        // forward through the view history (#3632) and Ctrl/⌘+← / → turn the page, both in
+        // `canvas::shortcuts`.
+        i.events.retain(|e| {
+            let egui::Event::Key { key, pressed: true, modifiers, .. } = e else { return true };
+            if modifiers.alt || modifiers.ctrl || modifiers.command || modifiers.mac_cmd {
+                return true;
             }
-        }
+            let direction = match key {
+                Key::ArrowLeft => egui::vec2(-1.0, 0.0),
+                Key::ArrowRight => egui::vec2(1.0, 0.0),
+                Key::ArrowUp => egui::vec2(0.0, -1.0),
+                Key::ArrowDown => egui::vec2(0.0, 1.0),
+                _ => return true,
+            };
+            step += direction * if modifiers.shift { 10.0 } else { 1.0 };
+            false
+        });
     });
     if step == egui::Vec2::ZERO {
         return;
