@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.storytold.pdfcraft.kit.PdfAboutView
 import com.storytold.pdfcraft.kit.PdfDocument
+import com.storytold.pdfcraft.kit.PdfImageProcessor
 import com.storytold.pdfcraft.kit.PdfView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -426,6 +427,62 @@ fun AppRootScreen(
         launcher.launch(arrayOf("application/pdf"))
     }
 
+    var showScanChoiceDialog by remember { mutableStateOf(false) }
+    var cameraCaptureUri by remember { mutableStateOf<Uri?>(null) }
+
+    val takePictureLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success: Boolean ->
+        val uri = cameraCaptureUri
+        if (success && uri != null) {
+            isLoading = true
+            errorMessage = null
+            coroutineScope.launch {
+                try {
+                    val imageBytes = withContext(Dispatchers.IO) {
+                        PdfImageProcessor.processImageUriToJpegBytes(context, uri)
+                    }
+                    if (imageBytes != null) {
+                        val fileName = "Scan_${System.currentTimeMillis() % 100000}.pdf"
+                        val pdfFile = withContext(Dispatchers.IO) {
+                            val f = File(context.filesDir, fileName)
+                            val doc = PdfDocument.createFromImages(
+                                name = fileName,
+                                images = listOf(imageBytes)
+                            )
+                            val bytes = doc.saveBytes()
+                            doc.close()
+                            f.writeBytes(bytes)
+                            f
+                        }
+                        loadUri(Uri.fromFile(pdfFile))
+                    } else {
+                        errorMessage = "Could not process captured camera photo"
+                    }
+                } catch (e: Throwable) {
+                    errorMessage = e.message ?: "Failed to create PDF from scan"
+                } finally {
+                    isLoading = false
+                }
+            }
+        }
+    }
+
+    fun launchCamera() {
+        try {
+            val cacheFile = File(context.cacheDir, "camera_scan_${System.currentTimeMillis()}.jpg")
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                cacheFile
+            )
+            cameraCaptureUri = uri
+            takePictureLauncher.launch(uri)
+        } catch (e: Throwable) {
+            errorMessage = "Could not open camera: ${e.message}"
+        }
+    }
+
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetMultipleContents()
     ) { uris: List<Uri> ->
@@ -436,23 +493,28 @@ fun AppRootScreen(
                 try {
                     val images = withContext(Dispatchers.IO) {
                         uris.mapNotNull { u ->
-                            context.contentResolver.openInputStream(u)?.use { it.readBytes() }
+                            PdfImageProcessor.processImageUriToJpegBytes(context, u)
                         }
                     }
                     if (images.isNotEmpty()) {
-                        val doc = withContext(Dispatchers.Default) {
-                            PdfDocument.createFromImages(
-                                name = "scan_${System.currentTimeMillis()}.pdf",
+                        val fileName = "Photos_${System.currentTimeMillis() % 100000}.pdf"
+                        val pdfFile = withContext(Dispatchers.IO) {
+                            val f = File(context.filesDir, fileName)
+                            val doc = PdfDocument.createFromImages(
+                                name = fileName,
                                 images = images
                             )
+                            val bytes = doc.saveBytes()
+                            doc.close()
+                            f.writeBytes(bytes)
+                            f
                         }
-                        activeDoc?.close()
-                        activeDoc = doc
-                        currentUri = null
-                        onDocumentChanged(doc)
+                        loadUri(Uri.fromFile(pdfFile))
+                    } else {
+                        errorMessage = "No valid photos could be processed"
                     }
                 } catch (e: Throwable) {
-                    errorMessage = e.message ?: "Failed to convert images to PDF"
+                    errorMessage = e.message ?: "Failed to convert photos to PDF"
                 } finally {
                     isLoading = false
                 }
@@ -665,7 +727,7 @@ fun AppRootScreen(
                                     TextButton(
                                         onClick = {
                                             isFabExpanded = false
-                                            photoPickerLauncher.launch("image/*")
+                                            showScanChoiceDialog = true
                                         }
                                     ) {
                                         Icon(Icons.Outlined.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -764,7 +826,7 @@ fun AppRootScreen(
                                     modifier = Modifier
                                         .weight(1f)
                                         .height(90.dp)
-                                        .clickable { photoPickerLauncher.launch("image/*") }
+                                        .clickable { showScanChoiceDialog = true }
                                  ) {
                                      Column(
                                          modifier = Modifier
@@ -1335,6 +1397,115 @@ fun AppRootScreen(
             },
             dismissButton = {
                 TextButton(onClick = { passwordPromptUri = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showScanChoiceDialog) {
+        AlertDialog(
+            onDismissRequest = { showScanChoiceDialog = false },
+            icon = {
+                Icon(
+                    Icons.Outlined.PhotoCamera,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(28.dp)
+                )
+            },
+            title = {
+                Text(
+                    text = "Scan or Import",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showScanChoiceDialog = false
+                                launchCamera()
+                            }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(14.dp)
+                        ) {
+                            Icon(
+                                Icons.Outlined.PhotoCamera,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(14.dp))
+                            Column {
+                                Text(
+                                    text = "Scan with Camera",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "Capture a page using your camera",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showScanChoiceDialog = false
+                                try {
+                                    photoPickerLauncher.launch("image/*")
+                                } catch (e: Throwable) {
+                                    errorMessage = "Could not open photo picker: ${e.message}"
+                                }
+                            }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(14.dp)
+                        ) {
+                            Icon(
+                                Icons.Outlined.PhotoLibrary,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(14.dp))
+                            Column {
+                                Text(
+                                    text = "Choose from Photos",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "Select images from your gallery",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showScanChoiceDialog = false }) {
                     Text("Cancel")
                 }
             }

@@ -623,19 +623,24 @@ class PdfPageView @JvmOverloads constructor(
         val rc = readingColors
         val hc = hideComments
 
-        val targetScale = (if (width > 0) width.toFloat() / geom.width else fitWidthScale)
-            .coerceIn(1.2f, 3.5f)
+        val fitScale = if (width > 0 && geom.width > 0) width.toFloat() / geom.width else fitWidthScale
+        val maxBaseDimension = 2048f
+        var safeScale = fitScale.coerceIn(0.1f, 2.5f)
+        if (geom.width * safeScale > maxBaseDimension || geom.height * safeScale > maxBaseDimension) {
+            val scaleCap = maxBaseDimension / maxOf(geom.width, geom.height)
+            safeScale = minOf(safeScale, scaleCap)
+        }
 
         scope.launch(Dispatchers.IO) {
             val bmp = try {
-                doc.renderPage(page, targetScale, preview = false, readingColors = rc, hideComments = hc)
-            } catch (_: Exception) {
+                doc.renderPage(page, safeScale, preview = false, readingColors = rc, hideComments = hc)
+            } catch (_: Throwable) {
                 null
             }
             withContext(Dispatchers.Main) {
                 if (pageIndex == page && bmp != null) {
                     baseBitmap = bmp
-                    baseBitmapScale = targetScale
+                    baseBitmapScale = safeScale
                     clampOffsets()
                     invalidate()
                 }
@@ -690,7 +695,7 @@ class PdfPageView @JvmOverloads constructor(
                         val ffiTile = PdfTileRenderer.computeTile(geom, rectInPoints, currentScale)
                         val bmp = try {
                             doc.renderTile(currentPage, ffiTile, currentScale, readingColors = rc, hideComments = hc)
-                        } catch (_: Exception) {
+                        } catch (_: Throwable) {
                             null
                         }
                         withContext(Dispatchers.Main) {

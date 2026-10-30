@@ -154,13 +154,10 @@ fun PdfView(
     ) { uri: Uri? ->
         if (uri != null) {
             try {
-                val inputStream = context.contentResolver.openInputStream(uri)
-                if (inputStream != null) {
-                    val tempFile = java.io.File(context.cacheDir, "insert_img_${System.currentTimeMillis()}.png")
-                    java.io.FileOutputStream(tempFile).use { out ->
-                        inputStream.copyTo(out)
-                    }
-                    inputStream.close()
+                val processedBytes = PdfImageProcessor.processImageUriToJpegBytes(context, uri)
+                if (processedBytes != null) {
+                    val tempFile = java.io.File(context.cacheDir, "insert_img_${System.currentTimeMillis()}.jpg")
+                    tempFile.writeBytes(processedBytes)
                     val added = document.addImage(currentPage, tempFile.absolutePath)
                     statusNotification = "Image inserted — drag to move or resize"
                     viewerMode = ViewerMode.EDIT
@@ -170,6 +167,8 @@ fun PdfView(
                     if (added != null) {
                         pdfPageViewRef?.selectContentItem(added)
                     }
+                } else {
+                    statusNotification = "Could not decode selected image"
                 }
             } catch (e: Exception) {
                 statusNotification = "Failed to insert image: ${e.message}"

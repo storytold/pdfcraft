@@ -512,16 +512,20 @@ class PdfDocument(
             readingColors,
             hideComments
         )
-        val result = engine.renderTile(docId, req)
-        if (result.error != null) {
-            throw FfiException.Internal(result.error!!)
+        return try {
+            val result = engine.renderTile(docId, req)
+            if (result.error != null) {
+                null
+            } else if (result.width == 0u || result.height == 0u || result.pixels.isEmpty()) {
+                null
+            } else {
+                val bmp = Bitmap.createBitmap(result.width.toInt(), result.height.toInt(), Bitmap.Config.ARGB_8888)
+                bmp.copyPixelsFromBuffer(ByteBuffer.wrap(result.pixels))
+                bmp
+            }
+        } catch (_: Throwable) {
+            null
         }
-        if (result.width == 0u || result.height == 0u || result.pixels.isEmpty()) {
-            return null
-        }
-        val bmp = Bitmap.createBitmap(result.width.toInt(), result.height.toInt(), Bitmap.Config.ARGB_8888)
-        bmp.copyPixelsFromBuffer(ByteBuffer.wrap(result.pixels))
-        return bmp
     }
 
     /**
