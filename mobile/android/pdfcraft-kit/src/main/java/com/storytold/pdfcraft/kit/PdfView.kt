@@ -5,6 +5,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -84,8 +86,34 @@ fun PdfView(
     var activeTool by remember { mutableStateOf<FfiToolInfo?>(null) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var statusNotification by remember { mutableStateOf<String?>(null) }
-
     var pdfPageViewRef by remember { mutableStateOf<PdfPageView?>(null) }
+
+    // Content Addition (Text & Image)
+    var showAddTextDialog by remember { mutableStateOf(false) }
+    var addTextInput by remember { mutableStateOf("") }
+    var addTextFontSize by remember { mutableFloatStateOf(14f) }
+
+    val insertImageLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val inputStream = context.contentResolver.openInputStream(uri)
+                if (inputStream != null) {
+                    val tempFile = java.io.File(context.cacheDir, "insert_img_${System.currentTimeMillis()}.png")
+                    java.io.FileOutputStream(tempFile).use { out ->
+                        inputStream.copyTo(out)
+                    }
+                    inputStream.close()
+                    document.addImage(currentPage, tempFile.absolutePath)
+                    statusNotification = "Image inserted on page ${currentPage + 1}"
+                    pdfPageViewRef?.refreshPage()
+                }
+            } catch (e: Exception) {
+                statusNotification = "Failed to insert image: ${e.message}"
+            }
+        }
+    }
 
     fun refreshPageHighlights() {
         val view = pdfPageViewRef ?: return
@@ -271,6 +299,20 @@ fun PdfView(
                                         }
                                     )
                                     DropdownMenuItem(
+                                        text = { Text("Add Text...") },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            showAddTextDialog = true
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Insert Image...") },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            insertImageLauncher.launch("image/*")
+                                        }
+                                    )
+                                    DropdownMenuItem(
                                         text = { Text("Export & Convert...") },
                                         onClick = {
                                             showMoreMenu = false
@@ -439,6 +481,22 @@ fun PdfView(
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Text("Strikeout", style = MaterialTheme.typography.labelSmall)
+                        }
+
+                        // Add Text
+                        OutlinedButton(
+                            onClick = { showAddTextDialog = true },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text("+ Text", style = MaterialTheme.typography.labelSmall)
+                        }
+
+                        // Add Image
+                        OutlinedButton(
+                            onClick = { insertImageLauncher.launch("image/*") },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text("+ Image", style = MaterialTheme.typography.labelSmall)
                         }
 
                         // Undo
@@ -794,6 +852,15 @@ fun PdfView(
             PdfExportDialog(
                 document = document,
                 onDismiss = { showExportDialog = false },
+                onExportOffice = { formatExt, outPath ->
+                    try {
+                        document.exportOffice(outPath)
+                        statusNotification = "Office document exported to $outPath"
+                        showExportDialog = false
+                    } catch (e: Exception) {
+                        statusNotification = "Export error: ${e.message}"
+                    }
+                },
                 onExportText = { outPath ->
                     try {
                         document.exportText(outPath)
@@ -810,6 +877,15 @@ fun PdfView(
                         showExportDialog = false
                     } catch (e: Exception) {
                         statusNotification = "Export error: ${e.message}"
+                    }
+                },
+                onExtractAllImages = { outDir ->
+                    try {
+                        document.extractAllImages(outDir)
+                        statusNotification = "Images extracted to $outDir"
+                        showExportDialog = false
+                    } catch (e: Exception) {
+                        statusNotification = "Extract error: ${e.message}"
                     }
                 },
                 onConvertToPdfA = { level ->
@@ -834,6 +910,64 @@ fun PdfView(
                 }
             )
         }
+    }
+
+    // Add Text Dialog
+    if (showAddTextDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddTextDialog = false },
+            title = { Text("Add Text to Page") },
+            text = {
+                Column {
+                    Text("Enter text to place onto the current page:", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = addTextInput,
+                        onValueChange = { addTextInput = it },
+                        label = { Text("Text content") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("Font size: ${addTextFontSize.toInt()} pt", style = MaterialTheme.typography.labelMedium)
+                    Slider(
+                        value = addTextFontSize,
+                        onValueChange = { addTextFontSize = it },
+                        valueRange = 8f..36f,
+                        steps = 6
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (addTextInput.isNotBlank()) {
+                            try {
+                                document.addPageText(
+                                    page = currentPage,
+                                    text = addTextInput,
+                                    atX = 72f,
+                                    atY = 100f,
+                                    fontSize = addTextFontSize
+                                )
+                                statusNotification = "Text added to page ${currentPage + 1}"
+                                showAddTextDialog = false
+                                addTextInput = ""
+                                pdfPageViewRef?.refreshPage()
+                            } catch (e: Exception) {
+                                statusNotification = "Add text error: ${e.message}"
+                            }
+                        }
+                    }
+                ) {
+                    Text("Add")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddTextDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     // Metadata Dialog

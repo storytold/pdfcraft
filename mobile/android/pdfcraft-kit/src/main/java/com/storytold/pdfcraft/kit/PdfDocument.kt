@@ -837,6 +837,43 @@ class PdfDocument(
     }
 
     /**
+     * Exports the document to Microsoft Word (.docx), PowerPoint (.pptx), HTML (.html), or RTF (.rtf),
+     * determined by the target file extension.
+     */
+    fun exportOffice(outPath: String) {
+        invokeTool("doc_export_office", """{"doc": $docId, "path": "$outPath"}""")
+    }
+
+    /**
+     * Adds an image file (PNG, JPEG, TIFF, GIF, BMP) as permanent page content.
+     */
+    fun addImage(page: Int, imagePath: String, rect: List<Float>? = null) {
+        val rectArg = if (rect != null && rect.size == 4) {
+            ", \"rect\": [${rect[0]}, ${rect[1]}, ${rect[2]}, ${rect[3]}]"
+        } else ""
+        invokeTool("page_add_image", """{"doc": $docId, "page": ${page + 1}, "path": "$imagePath"$rectArg}""")
+        geometryCache.clear()
+    }
+
+    /**
+     * Adds text as permanent page content.
+     */
+    fun addPageText(page: Int, text: String, atX: Float = 54f, atY: Float = 72f, fontSize: Float = 14f) {
+        invokeTool("page_add_text", """{"doc": $docId, "page": ${page + 1}, "text": "$text", "at": [$atX, $atY], "size": $fontSize}""")
+        geometryCache.clear()
+    }
+
+    /**
+     * Extracts all embedded images on pages into an output directory.
+     */
+    fun extractAllImages(outFolder: String, pages: List<Int>? = null) {
+        val pagesJson = if (pages != null) {
+            "\"pages\": [" + pages.joinToString(",") { (it + 1).toString() } + "], "
+        } else ""
+        invokeTool("doc_export_all_images", """{"doc": $docId, ${pagesJson}"folder": "$outFolder"}""")
+    }
+
+    /**
      * Exports pages as image files (PNG, JPEG or TIFF) into an output directory.
      */
     fun exportImages(outDir: String, format: String = "png", dpi: Float = 150f) {

@@ -493,4 +493,76 @@ class PdfDocumentTest {
 
         doc.close()
     }
+
+    @Test
+    fun testExportOfficeFormats() {
+        val bytes = SAMPLE_PDF_WITH_TEXT.toByteArray(StandardCharsets.UTF_8)
+        val doc = PdfDocument.openBytes(bytes = bytes, name = "office_export.pdf")
+
+        val tempDir = File(System.getProperty("java.io.tmpdir"), "pdfcraft_office_test_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+
+        // 1. Export Word (.docx)
+        val docxFile = File(tempDir, "export.docx")
+        doc.exportOffice(docxFile.absolutePath)
+        assertTrue(docxFile.exists())
+        assertTrue(docxFile.length() > 0)
+
+        // 2. Export HTML (.html)
+        val htmlFile = File(tempDir, "export.html")
+        doc.exportOffice(htmlFile.absolutePath)
+        assertTrue(htmlFile.exists())
+        assertTrue(htmlFile.length() > 0)
+
+        // 3. Export RTF (.rtf)
+        val rtfFile = File(tempDir, "export.rtf")
+        doc.exportOffice(rtfFile.absolutePath)
+        assertTrue(rtfFile.exists())
+        assertTrue(rtfFile.length() > 0)
+
+        tempDir.deleteRecursively()
+        doc.close()
+    }
+
+    @Test
+    fun testAddContentTextAndImage() {
+        val bytes = SAMPLE_PDF_WITH_TEXT.toByteArray(StandardCharsets.UTF_8)
+        val doc = PdfDocument.openBytes(bytes = bytes, name = "content_add.pdf")
+
+        // 1. Add Text
+        doc.addPageText(
+            page = 0,
+            text = "Inserted Page Text",
+            atX = 72f,
+            atY = 144f,
+            fontSize = 16f
+        )
+
+        // 2. Add Image
+        val pngBytes = byteArrayOf(
+            0x89.toByte(), 0x50.toByte(), 0x4E.toByte(), 0x47.toByte(), 0x0D.toByte(), 0x0A.toByte(), 0x1A.toByte(), 0x0A.toByte(),
+            0x00, 0x00, 0x00, 0x0D, 0x49.toByte(), 0x48.toByte(), 0x44.toByte(), 0x52.toByte(),
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4.toByte(), 0x89.toByte(),
+            0x00, 0x00, 0x00, 0x0A, 0x49.toByte(), 0x44.toByte(), 0x41.toByte(), 0x54.toByte(),
+            0x78.toByte(), 0x9C.toByte(), 0x63.toByte(), 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4.toByte(),
+            0x00, 0x00, 0x00, 0x00, 0x49.toByte(), 0x45.toByte(), 0x4E.toByte(), 0x44.toByte(),
+            0xAE.toByte(), 0x42.toByte(), 0x60.toByte(), 0x82.toByte()
+        )
+        val tempImg = File.createTempFile("sample_img", ".png")
+        tempImg.writeBytes(pngBytes)
+
+        doc.addImage(
+            page = 0,
+            imagePath = tempImg.absolutePath,
+            rect = listOf(50f, 50f, 150f, 150f)
+        )
+
+        val outDir = File(System.getProperty("java.io.tmpdir"), "extracted_imgs_${System.currentTimeMillis()}")
+        outDir.mkdirs()
+        doc.extractAllImages(outDir.absolutePath)
+
+        tempImg.delete()
+        outDir.deleteRecursively()
+        doc.close()
+    }
 }
