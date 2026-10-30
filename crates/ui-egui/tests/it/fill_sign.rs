@@ -2,7 +2,7 @@
 
 use egui::{Pos2, pos2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::fill_sign::{FillTool, SavedSig};
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool};
 
@@ -376,9 +376,9 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     let original = format!("{:?}", h.state().session.get(h.state().views[0].id).unwrap().info.annotations);
 
     // The quick toolbar exposes replacement without changing the normal placement action.
-    h.get_by_label("Fill & Sign").click();
+    h.get_by_label("Fill & Sign: Place saved signature").click();
     h.run_steps(2);
-    h.get_by_label("Fill & Sign").click();
+    h.get_by_label("Fill & Sign: Place saved signature").click();
     h.run_steps(2);
     h.get_by_label("Change signature").click();
     h.run_steps(2);
@@ -398,9 +398,9 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     click(&mut h, 40.0, 200.0);
     assert_eq!(items(&h).len(), 2);
 
-    h.get_by_label("Fill & Sign").click();
+    h.get_by_label("Fill & Sign: Place saved signature").click();
     h.run_steps(2);
-    h.get_by_label("Fill & Sign").click();
+    h.get_by_label("Fill & Sign: Place saved signature").click();
     h.run_steps(2);
     h.get_by_label("Change initials").click();
     h.run_steps(2);
@@ -1764,4 +1764,34 @@ fn mode_tabs_keep_the_hand_over_a_type_box_scrolled_under_them() {
     h.drop_at(convert);
     h.run_steps(3);
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Convert, "the tab takes the click, not the text box");
+}
+
+#[test]
+fn the_quick_bar_fill_button_shows_the_tool_it_picks() {
+    let mut h = harness();
+    h.get_by_label("Fill & Sign: Add signature").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Signature));
+    assert_eq!(h.state().dialog, Some(Dialog::Signature));
+
+    h.state_mut().dialog = None;
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Place saved signature").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Signature));
+    assert_eq!(h.state().dialog, None);
+    h.get_by_label("Fill & Sign: Place saved signature").click();
+    h.run_steps(2);
+    assert_eq!(h.get_by_label("Use signature").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "the active tool's card is marked");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+
+    h.state_mut().execute("sign.fill.check");
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Checkmark").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check), "the button keeps the last Fill & Sign tool");
 }

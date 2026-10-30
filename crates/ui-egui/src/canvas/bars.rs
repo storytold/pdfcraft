@@ -367,14 +367,20 @@ pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                         QuickTool::Fill(f) => Some(f),
                         _ => None,
                     };
-                    let shown = current_fill.unwrap_or(crate::fill_sign::FillTool::Text);
-                    let resp = icons::button(
-                        ui,
-                        if current_fill.is_some() { shown.icon() } else { "pen-line" },
-                        32.0,
-                        current_fill.is_some(),
-                        tl!("Fill & Sign"),
-                    );
+                    let shown = app.fill_tool;
+                    let tip = match shown {
+                        crate::fill_sign::FillTool::Signature | crate::fill_sign::FillTool::Initials => {
+                            let initials = shown == crate::fill_sign::FillTool::Initials;
+                            let saved = if initials { app.initials.is_some() } else { app.signature.is_some() };
+                            crate::i18n::fmt(
+                                tl!(if saved { "Place saved {what}" } else { "Add {what}" }),
+                                &[("what", tl!(if initials { "initials" } else { "signature" }))],
+                            )
+                        }
+                        _ => tl!(shown.label()).to_string(),
+                    };
+                    let tip = format!("{}: {tip}", tl!("Fill & Sign"));
+                    let resp = icons::button(ui, shown.icon(), 32.0, current_fill.is_some(), &tip);
                     let r = resp.rect;
                     let tri = [r.right_bottom() + vec2(-4.0, -4.0), r.right_bottom() + vec2(-9.0, -4.0), r.right_bottom() + vec2(-4.0, -9.0)];
                     ui.painter().add(egui::Shape::convex_polygon(
