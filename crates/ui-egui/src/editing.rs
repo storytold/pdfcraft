@@ -6,6 +6,8 @@ use pdfcraft_platform::staging::{StagingName, staging_suffixes};
 
 use crate::PdfCraftApp;
 
+#[cfg(any(target_arch = "wasm32", test))]
+mod browser_download;
 mod close;
 mod save;
 

@@ -20,6 +20,20 @@ pub enum SaveTarget {
     As,
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+pub(super) struct WebSave {
+    pub(super) doc: pdfcraft_engine::DocId,
+    pub(super) name: String,
+    pub(super) bytes: std::sync::Arc<Vec<u8>>,
+    pub(super) after: Box<dyn FnOnce(&mut PdfCraftApp) + Send>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+pub(super) enum WebSaveDelivery {
+    Host,
+    DownloadStarted,
+}
+
 impl PdfCraftApp {
     /// Save the active document. Returns `true` if it was written.
     pub fn save_active(&mut self, target: SaveTarget) -> bool {
@@ -37,7 +51,8 @@ impl PdfCraftApp {
     }
 
     /// [`Self::save_view`], then `after` once the document is written: now, or on a later frame
-    /// when the user had to choose where. `after` never runs when the save fails or is cancelled.
+    /// when the user had to choose where. `after` never runs when the save fails, is cancelled,
+    /// or only requests an unconfirmed browser download.
     pub(crate) fn save_then(&mut self, index: usize, target: SaveTarget, after: impl FnOnce(&mut Self) + Send + 'static) -> bool {
         // What's typed in a field is part of what's saved (#166).
         if let Some(id) = self.views.get(index).map(|v| v.id)
@@ -89,29 +104,38 @@ impl PdfCraftApp {
                 Some(save) => save(&name, &bytes, matches!(target, SaveTarget::As)),
                 None => download(&name, &bytes),
             };
-            match delivered {
-                Ok(()) => {
-                    let _ = self.session.mark_saved(id, bytes, None);
-                    if let Some(doc) = self.session.get(id)
-                        && let Some(view) = self.views.get_mut(index)
-                    {
-                        view.document_changed(&doc.info);
-                    }
-                    // The host reports where the file went (and any failure) itself.
-                    if !to_host {
-                        self.notify_fmt("Downloaded {name}", &[("name", &name)]);
-                    }
-                    after(self);
-                    true
+            self.finish_web_save(
+                WebSave { doc: id, name, bytes, after: Box::new(after) },
+                delivered.map(|()| if to_host { WebSaveDelivery::Host } else { WebSaveDelivery::DownloadStarted }),
+            )
+        }
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(super) fn finish_web_save(&mut self, save: WebSave, delivered: Result<WebSaveDelivery, String>) -> bool {
+        let WebSave { doc: id, name, bytes, after } = save;
+        match delivered {
+            // The existing embedding callback owns its save contract. Browser downloads have no
+            // completion acknowledgement and must never share this clean/close path (#2167).
+            Ok(WebSaveDelivery::Host) => {
+                let _ = self.session.mark_saved(id, bytes, None);
+                if let Some(doc) = self.session.get(id)
+                    && let Some(view) = self.views.iter_mut().find(|view| view.id == id)
+                {
+                    view.document_changed(&doc.info);
                 }
-                Err(e) if to_host => {
-                    self.notify_fmt("Couldn't save {name}: {e}", &[("name", &name), ("e", &e)]);
-                    false
-                }
-                Err(e) => {
-                    self.notify_fmt("Couldn't download {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
-                    false
-                }
+                after(self);
+                true
+            }
+            Ok(WebSaveDelivery::DownloadStarted) => {
+                // A click can be blocked or cancelled without telling the page. Keep the saved
+                // baseline, undo history, dirty indicator and close/quit warning intact.
+                self.notify_fmt("Download requested for {name}. Check your downloads; unsaved work stays open.", &[("name", &name)]);
+                false
+            }
+            Err(e) => {
+                self.notify_fmt("Couldn't save {name}: {e}", &[("name", &name), ("e", &e)]);
+                false
             }
         }
     }
@@ -283,22 +307,6 @@ fn short_name(path: &str) -> String {
     std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
 }
 
-/// Offer bytes as a browser download.
+/// Offer bytes as a browser download. Success means dispatch only, never persistence.
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
-    use wasm_bindgen::JsCast;
-    let err = |e: wasm_bindgen::JsValue| format!("{e:?}");
-    let array = js_sys::Uint8Array::from(bytes);
-    let parts = js_sys::Array::of1(&array);
-    let opts = web_sys::BlobPropertyBag::new();
-    opts.set_type("application/pdf");
-    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts).map_err(err)?;
-    let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(err)?;
-    let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
-    let a: web_sys::HtmlAnchorElement = document.create_element("a").map_err(err)?.dyn_into().map_err(|_| "anchor")?;
-    a.set_href(&url);
-    a.set_download(name);
-    a.click();
-    let _ = web_sys::Url::revoke_object_url(&url);
-    Ok(())
-}
+pub(crate) use super::browser_download::download;

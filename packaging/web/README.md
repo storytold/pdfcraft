@@ -24,6 +24,19 @@ from the same origin or allow the app's origin through CORS. If the user starts 
 the download finishes, the downloaded file opens in a background tab; the current document,
 workspace and Save target stay selected. Click the downloaded file's tab to switch to it.
 
+## Saving downloads
+
+Save requests a browser download.
+PdfCraft cannot tell whether the browser blocked it or whether you saved or cancelled it, so edited documents stay open and marked unsaved after the request.
+The close prompt and leave-page warning remain active.
+Check the browser's downloads list and the downloaded file before closing the document and choosing **Don't save** to discard the open copy.
+Native filesystem saves and the embedding host's save callback keep their existing behavior.
+
+Download URLs are retained for a one-minute handoff grace period, then cleaned up; timers in a suspended tab may take longer.
+At most eight pending downloads and 128 MiB of download payload are retained per app instance.
+When that limit is reached, wait a minute and retry, or use the desktop app for larger files.
+URL cleanup does not confirm that the browser kept the file.
+
 ## Required server settings
 
 - **MIME type:** serve `.wasm` as `application/wasm`. Browsers refuse to stream-compile it under

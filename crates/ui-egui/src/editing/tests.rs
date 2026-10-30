@@ -296,6 +296,94 @@ fn one_page_pdf() -> Vec<u8> {
     out
 }
 
+fn browser_save_request(app: &crate::PdfCraftApp, after: impl FnOnce(&mut crate::PdfCraftApp) + Send + 'static) -> super::save::WebSave {
+    let id = app.views[0].id;
+    super::save::WebSave { doc: id, name: "a.pdf".into(), bytes: app.session.save_bytes(id).unwrap(), after: Box::new(after) }
+}
+
+fn dirty_browser_document() -> crate::PdfCraftApp {
+    let mut app = crate::PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.open_bytes("a.pdf", None, one_page_pdf()).unwrap();
+    assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    app
+}
+
+#[test]
+fn browser_download_dispatch_keeps_unsaved_work() {
+    let mut app = dirty_browser_document();
+    let id = app.views[0].id;
+    let save = browser_save_request(&app, |_| {});
+    let completed = app.finish_web_save(save, Ok(super::save::WebSaveDelivery::DownloadStarted));
+    assert!(app.session.get(id).unwrap().dirty, "dispatch does not confirm that the browser retained the PDF");
+    app.sync_unsaved_flag();
+    assert!(app.unsaved_flag.load(std::sync::atomic::Ordering::Relaxed), "leaving still warns about unsaved work");
+    assert!(!completed);
+    assert!(app.toast.as_ref().is_some_and(|(notice, _)| notice.contains("Check your downloads") && !notice.contains("Downloaded")));
+}
+
+#[test]
+fn browser_download_dispatch_does_not_run_close() {
+    let mut app = dirty_browser_document();
+    let id = app.views[0].id;
+    let save = browser_save_request(&app, move |app| {
+        if let Some(index) = app.views.iter().position(|view| view.id == id) {
+            app.close_tab(index);
+        }
+    });
+    app.finish_web_save(save, Ok(super::save::WebSaveDelivery::DownloadStarted));
+    assert!(app.views.iter().any(|view| view.id == id), "an unconfirmed download must not close the edited document");
+    assert!(app.session.get(id).unwrap().dirty);
+}
+
+#[test]
+fn browser_download_dispatch_failure_preserves_work() {
+    let mut app = dirty_browser_document();
+    let id = app.views[0].id;
+    let save = browser_save_request(&app, |_| panic!("a failed download must not run its continuation"));
+    assert!(!app.finish_web_save(save, Err("download unavailable".into())));
+    assert!(app.session.get(id).unwrap().dirty);
+    assert!(app.views.iter().any(|view| view.id == id));
+    assert!(app.toast.as_ref().is_some_and(|(notice, _)| notice.contains("download unavailable")));
+}
+
+#[test]
+fn browser_download_keeps_saved_baseline_and_undo_history() {
+    let mut app = dirty_browser_document();
+    let id = app.views[0].id;
+    let saved = app.session.get(id).unwrap().saved_bytes().clone();
+    let save = browser_save_request(&app, |_| panic!("dispatch must not continue a save"));
+    assert!(!app.finish_web_save(save, Ok(super::save::WebSaveDelivery::DownloadStarted)));
+    assert_eq!(app.session.get(id).unwrap().saved_bytes(), saved);
+    app.session.undo(id).unwrap();
+    assert!(!app.session.get(id).unwrap().dirty, "undo still reaches the original saved version");
+    app.session.redo(id).unwrap();
+    assert!(app.session.get(id).unwrap().dirty);
+}
+
+#[test]
+fn browser_download_of_clean_document_stays_clean() {
+    let mut app = crate::PdfCraftApp::new();
+    app.open_bytes("a.pdf", None, one_page_pdf()).unwrap();
+    let id = app.views[0].id;
+    let save = browser_save_request(&app, |_| panic!("dispatch does not acknowledge a write"));
+    assert!(!app.finish_web_save(save, Ok(super::save::WebSaveDelivery::DownloadStarted)));
+    assert!(!app.session.get(id).unwrap().dirty);
+}
+
+#[test]
+fn existing_host_save_callback_keeps_its_completion_contract() {
+    let mut app = dirty_browser_document();
+    let id = app.views[0].id;
+    let save = browser_save_request(&app, move |app| {
+        assert!(!app.session.get(id).unwrap().dirty);
+        let index = app.views.iter().position(|view| view.id == id).unwrap();
+        app.close_tab(index);
+    });
+    assert!(app.finish_web_save(save, Ok(super::save::WebSaveDelivery::Host)));
+    assert!(!app.views.iter().any(|view| view.id == id));
+}
+
 #[test]
 fn save_commits_the_open_text_box() {
     let dir = staging_dir("open-text-box");
