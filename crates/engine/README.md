@@ -105,8 +105,9 @@ own encrypted permission word. `certificate_security::authenticate` checks all e
 before using a private key, and Linux `TokenResolver` borrows the selected card and PIN
 only while opening. Headless tools expose listing, token opening and certificate protection.
 Desktop dialogs and headless tools expose these workflows. Linux providers run in bounded,
-cancellable helper processes; no device handle is retained by the session. Physical-card
-and PIN-pad qualification remain unfinished.
+cancellable helper processes; no device handle is retained by the session. A contributor
+reports successful signing and encrypted PDF opening with a physical card and reader
+PIN pad (2026-10-30); broader hardware qualification remains unfinished.
 
 `Session::prepare_sign` captures an immutable document snapshot and the session clock.
 Its `SigningJob::sign` method runs on a worker thread and returns signed bytes.

@@ -1,6 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
-> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-10-30 · **Change:** minor (gap 10: isolated Linux PKCS #11 operations pass SoftHSM tests; physical cards and PIN pads remain unqualified; estimates unchanged)
+> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-10-30 · **Change:** minor (gap 10: isolated Linux PKCS #11 operations pass SoftHSM tests; a contributor reports physical-card signing and encrypted PDF opening through a reader PIN pad; broader hardware qualification remains; estimates unchanged)
 
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -212,7 +212,7 @@ update the numbers.
 
 ### 10. Signatures: smartcard qualification, timestamp servers and online revocation
 
-- **Missing:** physical-card and PIN-pad qualification on Linux,
+- **Missing:** broader card, reader and module qualification on Linux,
   direct PKCS #11 on macOS; timestamp-server preferences;
   fetching OCSP/CRL online for LTV; FieldMDP and locking fields on signing; the OS trust store; EU
   Trusted Lists; signature graphics and saved appearances; compare signed version; signing in the
@@ -419,6 +419,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Contributor reports successful physical-card signing and encrypted PDF opening through a reader PIN pad. Card, reader and module details were not recorded; broader hardware qualification remains. Estimates unchanged. |
 | 2026-10-30 | minor | Linux signing and identity discovery run on cancellable background jobs. Late results preserve changed documents and destination files. Physical cards and PIN pads remain unqualified. Estimates unchanged. |
 | 2026-10-30 | minor | Gap 10: isolated Linux PKCS #11 operations pass SoftHSM tests; physical cards, PIN pads and responsive signing jobs remain unqualified. Estimates unchanged. |
 | 2026-10-25 | minor | Gaps 5 and 14 current state: native release builds embed LXGW WenKai Lite for Simplified Chinese, while the web build has no Hans face; Arabic catalogs stay logical with explicit RTL label direction and mirrored stock chrome, while native/browser RTL input, IME and complex workflows remain unqualified. Estimates unchanged. |

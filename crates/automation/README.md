@@ -310,5 +310,6 @@ has Cancel. A late result cannot replace a changed document or destination file.
 An authentication error restores the dialog with an empty PIN field for an explicit retry.
 `Session::prepare_sign` exposes the snapshot API used by the desktop. Headless
 `sign_document` uses the same signing path and returns its result synchronously.
-Physical-card and PIN-pad qualification remain unfinished.
+A contributor reports successful signing and encrypted PDF opening with a physical
+card and reader PIN pad (2026-10-30). Broader hardware qualification remains unfinished.
 Certificate-security parity stays partial.

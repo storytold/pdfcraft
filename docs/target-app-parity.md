@@ -1,6 +1,6 @@
 # PdfCraft parity with Adobe Acrobat Pro
 
-> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-10-30 · **Change:** minor (Linux card signing and discovery use cancellable background jobs; physical-card qualification remains; breadth scores retain the earlier measurement)
+> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-10-30 · **Change:** minor (Linux card signing and discovery use cancellable background jobs; manual physical-card signing and encrypted PDF opening through a reader PIN pad reported; broader hardware qualification remains; breadth scores retain the earlier measurement)
 
 > Integration update 2026-10-30: lossless JBIG2 generic and exact-copy symbol coding are included; no lossy substitution. Combined tests passed at bdf5620; the subsequent review fixes require fresh CI.
 
@@ -300,6 +300,7 @@ licensed OCR or AI model.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Contributor reports successful physical-card signing and encrypted PDF opening through a reader PIN pad. Card, reader and module details were not recorded; broader hardware qualification remains. Estimates unchanged. |
 | 2026-10-30 | minor | Linux card signing and discovery use cancellable background jobs. Physical cards and PIN pads remain unqualified. Breadth scores retain the earlier measurement. |
 | 2026-10-30 | minor | Linux PKCS #11 worker and SoftHSM evidence recorded; physical cards, PIN pads and responsive signing jobs remain unqualified. Breadth scores retain the earlier measurement; no readiness re-estimate. |
 | 2026-10-26 | minor | K Optimize and standards no longer lists monochrome downsampling as missing (black-and-white images above 450 ppi are averaged down to 300). Scores and estimates unchanged. |

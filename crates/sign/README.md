@@ -64,7 +64,9 @@ Tests connect these PDF dictionaries to real CMS envelopes and verify decryption
 The engine and renderer can retain an authenticated context across edits and saves.
 The native engine and headless tools can encrypt for certificate recipients and open with
 an explicitly selected Linux token. Desktop dialogs also support these workflows.
-Physical-card and PIN-pad qualification remain unfinished.
+The contributor reports successful signing and encrypted PDF opening with a physical
+smartcard and a reader PIN pad (2026-10-30). Card, reader and module details were not
+recorded. Broader hardware qualification remains unfinished.
 Certificate-security parity remains partial. Set `PDFCRAFT_PYHANKO_PYTHON` to a Python interpreter with pyHanko installed to
 run the independent PDF oracle in the object-layer envelope test.
 
@@ -107,8 +109,8 @@ cargo test -p pdfcraft-sign envelope::software_token_decrypts_an_encryption_only
 
 Not yet: revocation fetching (AIA/CRLDP extraction and a fetcher), timestamp-server
 configuration, FieldMDP locks, and complete user workflows for certificate security.
-Linux PKCS #11 signing and decryption remain under development pending physical-card
-and PIN-pad qualification.
+Linux PKCS #11 signing and decryption remain under development pending broader
+card, reader and module qualification.
 macOS Keychain and Windows Current User Personal (My) store identities sign through
 `ExternalKey` without exporting private keys. Windows CNG supports RSA PKCS #1 v1.5 and
 ECDSA P-256/P-384; the store integration is tested with software-backed keys. A smart card
