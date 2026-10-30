@@ -933,6 +933,8 @@
 	Redaction code:	Sladdekode:
 	Reload	Last inn på nytt
 	Reload documents when their files change on disk	Last inn dokumenter på nytt når filene endres på disk
+	Don't show again	Ikke vis igjen
+	Show a notice when a document is secured	Vis et varsel når et dokument er sikret
 	Remove checkmark	Fjern hake
 	Remove invalid links and bookmarks	Fjern ugyldige lenker og bokmerker
 	Remove page	Fjern side
@@ -1018,6 +1020,15 @@
 	Scroll tabs right	Rull faner til høyre
 	Search comments	Søk i kommentarer
 	Search tools and commands…	Søk etter verktøy og kommandoer…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Lagt til tekst
+	Link URL	URL for lenken
+	Search tools and commands	Søk etter verktøy og kommandoer
+	Text editing line	Tekstredigeringslinje
+	Text to place	Tekst som skal plasseres
+	Tooltip	Verktøytips
+	Words or phrases to redact	Ord eller fraser som skal sladdes
 	Searchable Image (Exact)	Søkbart bilde (eksakt)
 	Searching… {s} of {p} pages	Søker… {s} av {p} sider
 	Searching… {s}/{p}	Søker… {s}/{p}
@@ -1228,6 +1239,7 @@
 	Update	Oppdater
 	Use 72 DPI (one point per pixel)	Bruk 72 DPI (ett punkt per piksel)
 	Use Flate to encode streams that are not encoded	Bruk Flate til å kode strømmer som ikke er kodet
+	In streams that use LZW encoding, use Flate instead	Bruk Flate i stedet for LZW i strømmer som er LZW-kodet
 	Use a Digital ID from a file	Bruk en digital ID fra en fil
 	Use custom DPI	Bruk egendefinert DPI
 	Use each image's embedded DPI; use 72 DPI when it is absent.	Bruk hvert bildes innebygde DPI; bruk 72 DPI når den mangler.
@@ -1401,6 +1413,10 @@
 	Draw freehand	Tegn på frihånd
 	Drawing	Tegning
 	Drawing scale	Tegneskala
+	Scale	Målestokk
+	Common scales	Vanlige målestokker
+	Enter a scale such as 1:50.	Skriv inn en målestokk, for eksempel 1:50.
+	Applying a scale switches units to m / mm.	Når du bruker en målestokk, byttes enhetene til m / mm.
 	Drop-down list	Nedtrekksliste
 	Duplicate pages	Dupliser sider
 	Edit a PDF	Rediger en PDF
@@ -2607,6 +2623,14 @@
 	Make properties default	Bruk egenskapene som standard
 	Pages selected	Valgte sider
 	Page properties	Sideegenskaper
+	Create & Edit	Opprett og rediger
+	Review & Compare	Gjennomgå og sammenlign
+	Forms & Signatures	Skjemaer og signaturer
+	Protect & Standardize	Beskytt og standardiser
+	Customize & Automate	Tilpass og automatiser
+	No tools match your search.	Ingen verktøy samsvarer med søket.
+	Expand all tools	Utvid alle verktøy
+	Collapse all tools	Fold sammen alle verktøy
 	Cut Image	Klipp ut bilde
 	Redact Image	Sladd bilde
 	Create Link…	Opprett lenke…
@@ -2694,3 +2718,18 @@ key	Space	Mellomrom
 # Page gaps (AI-assisted, not separately native-reviewed)
 	Show gaps between pages	Vis mellomrom mellom sidene
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skjul mellomrommene slik at sidekantene møtes. Margene inne i PDF-en endres ikke.
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	I dag
+
+# AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
+	Restore the last view (page, zoom and page display) when a document is opened again	Gjenopprett den siste visningen (side, zoom og sidevisning) når et dokument åpnes igjen
+@plural	{n} reply|{n} replies	{n} svar|{n} svar
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Sideverktøy
+	Insert pages from a file after the selection…	Sett inn sider fra en fil etter utvalget…
+	Rotate the selected pages counterclockwise	Roter de valgte sidene mot klokken
+	Rotate the selected pages clockwise	Roter de valgte sidene med klokken
+	Extract the selected pages…	Trekk ut de valgte sidene…
+	Delete the selected pages	Slett de valgte sidene

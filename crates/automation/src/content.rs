@@ -2,7 +2,7 @@
 //! move/resize/retype/restyle it, delete it. Geometry is in points from the top-left of the
 //! displayed page (y down), like every other tool.
 
-use pdfcraft_engine::{AddedContent, AddedText, Edit, FontFamily, TextAlign};
+use pdfcraft_engine::{ADDED_CHAR_SPACING_LIMIT, AddedContent, AddedText, Edit, FontFamily, TextAlign};
 use serde_json::{Value, json};
 
 use crate::comments::parse_color;
@@ -61,6 +61,12 @@ fn style(a: &Args, t: &mut AddedText) -> Result<()> {
             other => return Err(bad(format!("unknown align {other:?}"))),
         };
     }
+    if let Some(c) = a.opt_num("char_spacing")? {
+        if !(-ADDED_CHAR_SPACING_LIMIT..=ADDED_CHAR_SPACING_LIMIT).contains(&c) {
+            return Err(bad(format!("char_spacing must be between -{ADDED_CHAR_SPACING_LIMIT} and {ADDED_CHAR_SPACING_LIMIT} points")));
+        }
+        t.char_spacing = c;
+    }
     Ok(())
 }
 
@@ -85,6 +91,7 @@ impl Automation {
                         v["size"] = json!(t.size);
                         v["bold"] = json!(t.bold);
                         v["italic"] = json!(t.italic);
+                        v["char_spacing"] = json!(t.char_spacing);
                     }
                     AddedContent::Image(_) => v["type"] = json!("image"),
                 }
@@ -118,7 +125,7 @@ impl Automation {
         let page = self.page(a)?;
         let ph = self.doc(a)?.info.pages[page].height as f64;
         let path = self.resolve(a.str("path")?, false)?;
-        let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+        let bytes = crate::read_input(&path)?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let rect = rect_arg(a, "rect")?.map(|r| to_display(r, ph));
         let mut out = self.apply(a, Edit::AddImage { page, rect, name, bytes: std::sync::Arc::new(bytes) })?;
@@ -164,8 +171,8 @@ impl Automation {
                 if a.get("text").is_some() {
                     return Err(bad("images have no text"));
                 }
-                if ["font", "size", "bold", "italic", "color", "align"].iter().any(|k| a.get(k).is_some()) {
-                    return Err(bad("font, size, bold, italic, color and align apply to text"));
+                if ["font", "size", "bold", "italic", "color", "align", "char_spacing"].iter().any(|k| a.get(k).is_some()) {
+                    return Err(bad("font, size, bold, italic, color, align and char_spacing apply to text"));
                 }
                 if let Some(deg) = a.opt_int("rotate")? {
                     if deg.rem_euclid(90) != 0 {
@@ -181,14 +188,16 @@ impl Automation {
                     i.flip_v = !i.flip_v;
                 }
                 if let Some(c) = rect_arg(a, "crop")? {
-                    if !c.iter().all(|v| (0.0..0.5).contains(v)) {
-                        return Err(bad("crop takes fractions from 0 to under 0.5 (left, bottom, right, top)"));
+                    if !pdfcraft_engine::AddedImage::crop_valid(c) {
+                        return Err(bad(
+                            "crop takes fractions from 0 to under 1 (left, bottom, right, top); left and right together, and bottom and top together, trim at most 0.95",
+                        ));
                     }
                     i.crop = c;
                 }
                 if let Some(p) = a.opt_str("image")? {
                     let path = self.resolve(p, false)?;
-                    let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+                    let bytes = crate::read_input(&path)?;
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     // Box and transforms first, then the new picture.
                     self.apply(a, Edit::UpdateContent { page, index, content: content.clone() })?;
@@ -202,6 +211,63 @@ impl Automation {
     pub(crate) fn content_delete(&mut self, a: &Args) -> Result<Value> {
         let (page, index, _, _) = self.item(a)?;
         self.apply(a, Edit::DeleteContent { page, index })
+    }
+
+    /// Edit ▸ Copy, then Paste: an added item onto `to_page` of `to_doc` (its own page and
+    /// document by default), as it is, at `at` (its top-left) or where it was, stepped down and to
+    /// the right past copies of it already on that page.
+    pub(crate) fn content_copy(&mut self, a: &Args) -> Result<Value> {
+        let (page, index, content, _) = self.item(a)?;
+        let source = self.doc(a)?;
+        source.check_copying()?;
+        let from = source.id;
+        let file = match &content {
+            AddedContent::Text(_) => None,
+            AddedContent::Image(_) => {
+                let (ext, bytes) = source.added_image_file(page, index).map_err(failed)?;
+                Some((format!("Pasted image.{ext}"), std::sync::Arc::new(bytes)))
+            }
+        };
+        let to_doc = match a.opt_int("to_doc")? {
+            Some(d) => {
+                let d = u64::try_from(d).map_err(|_| bad("to_doc must be positive"))?;
+                self.session.get(pdfcraft_engine::DocId(d)).ok_or_else(|| failed(format!("no open document with id {d} (see doc_list)")))?.id
+            }
+            None => from,
+        };
+        let doc = self.session.get(to_doc).ok_or_else(|| failed("the document is no longer open"))?;
+        let n = doc.info.pages.len();
+        let to_page = match a.opt_int("to_page")? {
+            Some(p) => usize::try_from(p)
+                .ok()
+                .and_then(|p| p.checked_sub(1))
+                .filter(|p| *p < n)
+                .ok_or_else(|| bad(format!("to_page {p} is out of range: the document has {n} pages")))?,
+            None if page < n => page,
+            None => return Err(bad(format!("page {} is out of range in the target: it has {n} pages; pass to_page", page + 1))),
+        };
+        let info = doc.info.pages.get(to_page).ok_or_else(|| bad("the page no longer exists"))?;
+        let (pw, ph) = (f64::from(info.width), f64::from(info.height));
+        let at = match a.get("at") {
+            Some(v) => {
+                let p: Option<Vec<f64>> = v.as_array().and_then(|x| x.iter().map(Value::as_f64).collect());
+                let [x, y]: [f64; 2] = p.and_then(|p| p.try_into().ok()).ok_or_else(|| bad("at must be [x, y]"))?;
+                Some([x, ph - y])
+            }
+            None => None,
+        };
+        let on_page = || doc.added().iter().filter(|x| x.page == to_page);
+        let rect = match at {
+            Some(at) => pdfcraft_engine::added_paste_rect(content.rect(), [pw, ph], 0, Some(at)),
+            None => pdfcraft_engine::added_paste_place(on_page().map(|x| &x.content), &content, [pw, ph]),
+        };
+        let before = on_page().count();
+        let target = json!({ "doc": to_doc.0 });
+        let mut out = self.apply(&Args(&target), Edit::PasteContent { page: to_page, content: content.with_rect(rect), file })?;
+        out["page"] = json!(to_page + 1);
+        out["index"] = json!(before + 1);
+        out["rect"] = json!(to_view(rect, ph).map(|x| (x * 100.0).round() / 100.0));
+        Ok(out)
     }
 }
 

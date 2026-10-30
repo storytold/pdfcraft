@@ -33,7 +33,7 @@ its undo/redo history.
 - For proportional image signature resizing, use the embedded image layer's width/height ratio rather than a previously stretched annotation rectangle. The GUI preserves this ratio at corners with the opposite corner anchored; edge midpoint handles change only their own axis. `comment_edit` accepts the resulting rectangle.
 - `doc_close` refuses to drop unsaved changes unless `discard_changes: true`. `doc_save` writes atomically, incrementally in place, and in full for a new path. Atomic output writes call `sync_all` on the staging file before replacing the destination. A write or sync error leaves the destination intact, removes staging and leaves the document dirty for retry. A filesystem that does not support syncing returns an error; there is no unsynced fallback. This flushes file contents, but does not guarantee persistence of the parent-directory rename across power loss.
 - With a root set, every read and write path must resolve inside it (symlinks and `..` included). Relative paths resolve inside the root, and `..` is resolved by name before the check. Every path outside the root gets the same refusal (`<path> is outside the allowed directory <root>`), whether or not it exists, so a confined agent can't probe the rest of the disk; on Windows another network share or device path (`\\host\share`, `\\?\UNC\…`, `\\.\…`) is refused without being contacted. "Not found" and other filesystem errors are reported only for paths inside the root. Tools that write several files into a folder name them after the document or input file, with separators, colons and control characters replaced by `_`, so a name can't lead them out of the folder. The root itself must be a folder.
-- `Automation::with_automation_roots` holds a read folder and a write folder (`pdfcraft-cli mcp --automation-read-root DIR --automation-write-root DIR`, see [docs/mcp.md](../../docs/mcp.md)). Reads must lie inside the read root and writes inside the write root, links followed. A root left out grants none of its access. Refusals read `automation path rejected: outside the read root <root>: <path>`. It applies on top of `with_root`.
+- `Automation::with_automation_roots` holds a read folder and a write folder (`pdfcraft-cli mcp --automation-read-root DIR --automation-write-root DIR`, see [docs/mcp.md](../../docs/mcp.md)). Reads must lie inside the read root and writes inside the write root, links followed. A root left out grants none of its access. Refusals read `automation path rejected: outside the read root <root>: <path>`. As with a root set, on Windows a path on another network share or device path is refused with that refusal without being contacted (#4003). It applies on top of `with_root`.
 
 ## Text search and cache limits
 
@@ -112,13 +112,13 @@ The release packages ship `pdfcraft-cli` alongside the desktop app, so no build 
 
 | Install | CLI |
 |---|---|
-| Windows (MSI) | `C:\Program Files\PdfCraft\pdfcraft-cli.exe` by default (wherever you installed it otherwise), not on `PATH` |
+| Windows (MSI) | `%LOCALAPPDATA%\Programs\ArtCraft\PdfCraft\pdfcraft-cli.exe` by default (`C:\Program Files\ArtCraft\PdfCraft\pdfcraft-cli.exe` for an all-users install, under `Program Files (x86)` instead for the 32-bit build, or wherever you installed it otherwise), not on `PATH` |
 | Linux (deb, rpm) | `/usr/bin/pdfcraft-cli` |
 | macOS | the separate `pdfcraft-cli-<version>-macos-<arch>.zip` release asset (the `.app` holds only the desktop app) |
 
 ```sh
-# Windows, default install folder
-claude mcp add pdfcraft -- "C:\Program Files\PdfCraft\pdfcraft-cli.exe" mcp --root <dir>
+# Windows (PowerShell), default install folder
+claude mcp add pdfcraft -- "$env:LOCALAPPDATA\Programs\ArtCraft\PdfCraft\pdfcraft-cli.exe" mcp --root <dir>
 # Linux, or macOS with the CLI unzipped onto PATH
 claude mcp add pdfcraft -- pdfcraft-cli mcp --root <dir>
 ```

@@ -173,6 +173,15 @@ pub struct Context<'a> {
     /// a limit was reached, the clip count to return to at its `Q`.
     saved_bytes: usize,
     skipped_saves: Vec<usize>,
+    /// PdfCraft patch (68): the `num_states` at which the nested content stream (a form, an
+    /// appearance, a glyph or pattern cell) being interpreted started, or 0 in page content. A
+    /// `Q` there has no `q` of its own stream to match (see `stream_floor_reached`).
+    stream_floor: usize,
+    // PdfCraft patch (63).
+    /// This is the content of a luminosity soft mask whose group colour space is `/DeviceCMYK`,
+    /// so a `/DeviceCMYK` fill or stroke colour paints as its gray (ISO 32000-2 §11.5.3,
+    /// §10.4.2.3) rather than through the CMYK profile used for display.
+    pub(crate) luminosity_in_device_cmyk: bool,
 }
 
 /// PdfCraft patch: most graphics states saved at once. Every `q` copies the current state, dash
@@ -209,6 +218,8 @@ impl<'a> Context<'a> {
         NESTED_PAINTS.with(|n| n.set(0));
         CONTENT_LEFT.with(|c| c.set(MAX_PAGE_CONTENT));
         CONTENT_TRUNCATED.with(|truncated| truncated.set(false));
+        // PdfCraft patch (55): a fallback left over from another page is not this page's.
+        crate::color::take_color_fallback();
         crate::encode::reset_mesh_budget();
 
         Self::new_with(initial_transform, bbox, cache, xref, settings, state, 0)
@@ -249,6 +260,8 @@ impl<'a> Context<'a> {
             nesting_depth,
             saved_bytes: 0,
             skipped_saves: Vec::new(),
+            stream_floor: 0,
+            luminosity_in_device_cmyk: false,
         }
     }
 
@@ -446,6 +459,25 @@ impl<'a> Context<'a> {
 
     pub(crate) fn stroke_props(&self) -> StrokeProps {
         self.get().graphics_state.stroke_props.clone()
+    }
+
+    /// PdfCraft patch (68): starts a nested content stream at the current depth and returns the
+    /// floor of the stream it runs inside, for `leave_stream`.
+    pub(crate) fn enter_stream(&mut self) -> usize {
+        let depth = self.num_states();
+        std::mem::replace(&mut self.stream_floor, depth)
+    }
+
+    /// PdfCraft patch (68): ends a content stream begun with `enter_stream`.
+    pub(crate) fn leave_stream(&mut self, outer_floor: usize) {
+        self.stream_floor = outer_floor;
+    }
+
+    /// PdfCraft patch (68): every `q` of the current content stream has been matched, so a `Q`
+    /// now would restore a state its caller saved (a stream balances its own `q` and `Q`,
+    /// ISO 32000-2 §8.4.2, §8.10.1).
+    pub(crate) fn stream_floor_reached(&self) -> bool {
+        self.num_states() <= self.stream_floor
     }
 
     pub(crate) fn num_states(&self) -> usize {

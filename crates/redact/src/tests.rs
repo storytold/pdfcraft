@@ -281,12 +281,142 @@ fn vectors_are_removed_or_clipped_and_inline_images_go() {
     let mut doc = one_page(src, "", vec![]);
     mark(&mut doc, 0, &[[5.0, 5.0, 35.0, 35.0], [45.0, 45.0, 65.0, 65.0]], "");
     let r = apply(&mut doc, None).unwrap();
-    assert_eq!((r.paths_removed, r.paths_clipped, r.images_removed), (1, 1, 1), "{r:?}");
+    assert_eq!((r.paths_removed, r.paths_clipped, r.images_removed), (2, 0, 1), "{r:?}");
     let c = content(&doc, 0);
     assert!(!c.contains("10 10 20 20 re"), "{c}");
-    assert!(c.contains("W*\nn\n0 0 300 300 re\nf\nQ"), "the page-size rect is clipped: {c}");
+    assert!(!c.contains("300 300 re"), "the intersecting rect is removed: {c}");
     assert!(!c.contains("BI"), "{c}");
     assert!(c.contains("150 150 m"), "the line elsewhere stays");
+}
+
+#[test]
+fn partially_covered_vector_paths_do_not_leak_drawing_commands() {
+    // A vector path with detailed drawing commands (e.g. outlined text or confidential geometry)
+    // that is only partially covered by a redaction mark must be completely removed, not retained
+    // behind a clipping path (F-008).
+    let src = b"0 g 100 100 m 150 150 l 200 100 l h f 10 10 m 20 20 l W b 300 300 m 350 350 l S";
+    let mut doc = one_page(src, "", vec![]);
+    // Redaction mark covers only part of the triangle (100..200, 100..150):
+    // mark is [120, 120, 160, 160], partially intersecting the triangle.
+    // Also partially intersect the clip-and-stroke path [10..20, 10..20] with [15, 15, 25, 25].
+    mark(&mut doc, 0, &[[120.0, 120.0, 160.0, 160.0], [15.0, 15.0, 25.0, 25.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.paths_removed, 2, "both partially intersected paths removed");
+    assert_eq!(r.paths_clipped, 0, "no paths retained via clipping");
+
+    let c = content(&doc, 0);
+    // Neither the drawing operators nor the coordinates should leak in the content stream.
+    assert!(!c.contains("100 100 m"), "underlying geometry must not leak: {c}");
+    assert!(!c.contains("150 150 l"), "underlying geometry must not leak: {c}");
+    assert!(!c.contains("200 100 l"), "underlying geometry must not leak: {c}");
+    assert!(!c.contains("10 10 m"), "partial clip geometry must not leak: {c}");
+    assert!(!c.contains("20 20 l"), "partial clip geometry must not leak: {c}");
+    // Unrelated non-intersecting path remains untouched.
+    assert!(c.contains("300 300 m\n350 350 l\nS"), "unaffected vector path must be kept: {c}");
+}
+
+/// A chain of nested forms deeper than the pass can walk was removed from the page, taking
+/// whatever else it drew with it even when nothing in it was marked. The limit now reaches as
+/// deep as the renderer and Edit text read (50), so anything a reader can see can be walked;
+/// past that nothing is drawn either, so removing it costs nothing visible (#3645).
+#[test]
+fn a_deeply_nested_form_keeps_the_text_nobody_marked() {
+    /// A page that draws `HEAD` at the top, then a chain of `depth` forms whose innermost draws
+    /// `DEEP`, then `TAIL`. Only `HEAD` is marked.
+    fn page_with_chain(depth: usize) -> Document {
+        let first = 7;
+        let mut objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R                  /Resources << /Font << /F1 5 0 R >> /XObject << /Fm1 {first} 0 R >> >> >>"
+            )
+            .into_bytes(),
+            stream("", b"BT /F1 10 Tf 10 280 Td (HEAD) Tj ET /Fm1 Do BT /F1 10 Tf 10 10 Td (TAIL) Tj ET"),
+            FONT.replace("95 0 R", "6 0 R").into_bytes(),
+            widths(),
+        ];
+        for k in 1..=depth {
+            let res = if k < depth {
+                format!("/Resources << /Font << /F1 5 0 R >> /XObject << /Fm{} {} 0 R >> >>", k + 1, first + k)
+            } else {
+                "/Resources << /Font << /F1 5 0 R >> >>".to_string()
+            };
+            let body: Vec<u8> = if k < depth { format!("/Fm{} Do", k + 1).into_bytes() } else { b"BT /F1 10 Tf 10 150 Td (DEEP) Tj ET".to_vec() };
+            objs.push(stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] {res}"), &body));
+        }
+        pdf(objs)
+    }
+
+    // Deeper than the old limit of 12 and within the new one: the innermost text survives.
+    for depth in [1, 12, 13, 20, 50] {
+        let mut doc = page_with_chain(depth);
+        mark(&mut doc, 0, &[[5.0, 275.0, 60.0, 295.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!(report.forms_removed, 0, "depth {depth}: a form was removed");
+        let c = content(&doc, 0);
+        assert!(c.contains("(TAIL)"), "depth {depth}: {c}");
+        // The innermost form's text is still in the saved file.
+        let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        assert!(saved.windows(6).any(|w| w == b"(DEEP)"), "depth {depth}: the innermost form's text was deleted");
+    }
+
+    // Past what any reader follows, the form is still removed: the fail-safe, and nothing the
+    // renderer draws is lost because it stops at 50 too.
+    let mut doc = page_with_chain(crate::interp::MAX_DEPTH + 1);
+    mark(&mut doc, 0, &[[5.0, 275.0, 60.0, 295.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().forms_removed, 1, "a chain past the limit is removed");
+}
+
+/// Depth alone does not bound the walk: a form that draws the next level twice, or a cycle of two
+/// forms, costs 2^depth interpretations, which at a depth limit of 50 is a hang on a file anyone
+/// can send. The pass also counts the forms it enters, and a page past that budget is treated as
+/// one it cannot read.
+#[test]
+fn a_form_that_fans_out_or_loops_is_bounded_by_the_page_budget() {
+    /// A page drawing `Fm1`, where each of `n` forms draws the next **twice** and the last draws
+    /// text: 2^n paths if nothing stops the walk. With `looping`, the last form draws the first
+    /// one again instead, so the chain has no end at all.
+    fn fan_out(n: usize, looping: bool) -> Document {
+        let first = 7;
+        let mut objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R                  /Resources << /Font << /F1 5 0 R >> /XObject << /Fm1 {first} 0 R >> >> >>"
+            )
+            .into_bytes(),
+            stream("", b"BT /F1 10 Tf 10 280 Td (HEAD) Tj ET /Fm1 Do"),
+            FONT.replace("95 0 R", "6 0 R").into_bytes(),
+            widths(),
+        ];
+        for k in 1..=n {
+            let (next, body) = if k < n {
+                (first + k, format!("/Fm{0} Do /Fm{0} Do", k + 1))
+            } else if looping {
+                (first, "/Fm1 Do /Fm1 Do".to_string())
+            } else {
+                (first, "BT /F1 10 Tf 10 150 Td (DEEP) Tj ET".to_string())
+            };
+            let name = if k < n { format!("/Fm{}", k + 1) } else { "/Fm1".to_string() };
+            let res = format!("/Resources << /Font << /F1 5 0 R >> /XObject << {name} {next} 0 R >> >>");
+            objs.push(stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] {res}"), body.as_bytes()));
+        }
+        pdf(objs)
+    }
+
+    for looping in [false, true] {
+        let start = std::time::Instant::now();
+        let mut doc = fan_out(crate::interp::MAX_DEPTH, looping);
+        mark(&mut doc, 0, &[[5.0, 275.0, 60.0, 295.0]], "");
+        let result = apply(&mut doc, None);
+        let took = start.elapsed();
+        // An unbounded walk would never end; the limit leaves room for a loaded test machine.
+        assert!(took < std::time::Duration::from_secs(120), "looping {looping}: the walk took {took:?}");
+        // The page's form budget stops the walk, and Apply refuses the page rather than
+        // removing forms it could not read.
+        assert!(result.is_err(), "looping {looping}: the page past its form budget is refused");
+    }
 }
 
 #[test]
@@ -720,19 +850,19 @@ fn form_chain_at_max_depth_is_counted_and_removed_by_hidden_layer_sanitization()
     use crate::sanitize::{Hidden, remove_hidden, scan};
 
     const PRIVATE: &[u8] = b"PRIVATE_FORM_BEYOND_MAX_DEPTH";
-    // MAX_DEPTH is 12. The final Form is encountered at that depth and is removed
-    // conservatively without being entered. Verify must count that removal or sanitize
-    // can skip the HiddenLayers pass entirely.
+    // The final Form is encountered at MAX_DEPTH and is removed conservatively without being
+    // entered. Verify must count that removal or sanitize can skip the HiddenLayers pass entirely.
+    let max = crate::interp::MAX_DEPTH;
     let mut forms = Vec::new();
-    for depth in 0..=12 {
-        let content = if depth == 12 {
+    for depth in 0..=max {
+        let content = if depth == max {
             b"BT /F1 10 Tf 10 100 Td (PRIVATE_FORM_BEYOND_MAX_DEPTH) Tj ET".to_vec()
         } else {
             format!("/F{} Do", depth + 1).into_bytes()
         };
         forms.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", &content));
     }
-    let xobjects = (0..=12).map(|depth| format!("/F{depth} {} 0 R", 7 + depth)).collect::<Vec<_>>().join(" ");
+    let xobjects = (0..=max).map(|depth| format!("/F{depth} {} 0 R", 7 + depth)).collect::<Vec<_>>().join(" ");
     let mut doc = one_page(b"/F0 Do", &format!("/XObject << {xobjects} >>"), forms);
     assert!(
         write_full(&doc, &SaveOptions::default()).unwrap().windows(PRIVATE.len()).any(|w| w == PRIVATE),
@@ -1039,6 +1169,41 @@ fn nothing_to_apply_and_clearing_marks() {
     assert_eq!(clear_marks(&mut doc, None), Ok(1));
     assert!(marks(&doc).is_empty());
     assert!(content(&doc, 0).contains("(AB) Tj"));
+}
+
+/// Clearing marks puts a page's annotation list back as it was: a page that had none has no
+/// `/Annots` again, replies to the marks included, and one listed through an indirect array keeps
+/// pointing at that array.
+#[test]
+fn clearing_marks_leaves_the_annotation_list_as_it_was() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB) Tj ET", "", vec![]);
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    let before = doc.get(page);
+    mark(&mut doc, 0, &[[0.0, 0.0, 50.0, 50.0]], "");
+    pdfcraft_annot::add_reply(&mut doc, 0, 0, "a reply", "Tester", &Meta::default()).unwrap();
+    // And a reply written inline, as a file can.
+    let mut inline = Dict::new();
+    inline.set(b"Subtype".to_vec(), Object::name("Text"));
+    inline.set(b"IRT".to_vec(), Object::Ref(marks(&doc)[0].obj));
+    let mut listed = annots_of(&doc, doc.get(page).as_dict().unwrap());
+    listed.push(Object::Dict(inline));
+    doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(listed))).unwrap();
+    assert_eq!(clear_marks(&mut doc, None), Ok(1), "one mark");
+    assert_eq!(doc.get(page), before, "the page has no /Annots again: both replies went with their mark");
+
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots 4 0 R >>".to_vec(),
+        b"[5 0 R]".to_vec(),
+        b"<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] >>".to_vec(),
+    ]);
+    let (page, list) = (ObjRef::new(3, 0), ObjRef::new(4, 0));
+    let before = (doc.get(page), doc.get(list));
+    mark(&mut doc, 0, &[[0.0, 0.0, 50.0, 50.0]], "");
+    assert_eq!(doc.get(list).as_array().map(|a| a.len()), Some(2), "the mark is listed in the shared array");
+    clear_marks(&mut doc, None).unwrap();
+    assert_eq!((doc.get(page), doc.get(list)), before, "the page points at its array, which lists the link alone");
 }
 
 #[test]
@@ -2126,6 +2291,74 @@ fn unselected_pages_keep_inherited_forms() {
     assert_eq!(under(&mut saved, 1, &[[0.0, 190.0, 300.0, 220.0]]), 6);
 }
 
+#[test]
+fn nested_resource_less_forms_keep_live_resources_after_redacting_another_page() {
+    for own_resources in [false, true] {
+        for still_drawn in [false, true] {
+            let original = b"BT /F1 10 Tf 10 200 Td (SECRET) Tj ET";
+            let mut extra = vec![
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", original),
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", if still_drawn { b"/Fm Do".as_slice() } else { b"q Q".as_slice() }),
+            ];
+            if own_resources {
+                extra.push(stream(
+                    "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> /XObject << /Fm 7 0 R /Relay 8 0 R >> >>",
+                    b"/Relay Do",
+                ));
+            }
+            let resources =
+                if own_resources { "/XObject << /Fm 7 0 R /Relay 8 0 R /Wrapper 9 0 R >>" } else { "/XObject << /Fm 7 0 R /Relay 8 0 R >>" };
+            let mut doc = one_page(b"/Fm Do", resources, extra);
+            let mut page = doc.get(ObjRef::new(3, 0)).as_dict().unwrap().clone();
+            let inherited = page.remove(b"Resources").unwrap();
+            doc.set(ObjRef::new(3, 0), Object::Dict(page.clone()));
+            let second_content =
+                doc.add(Object::Stream(Stream::from_raw(Dict::new(), if own_resources { b"/Wrapper Do".to_vec() } else { b"/Relay Do".to_vec() })));
+            page.set(b"Contents".to_vec(), Object::Ref(second_content));
+            let second = doc.add(Object::Dict(page));
+            doc.update_dict(ObjRef::new(2, 0), |d| {
+                d.set(b"Resources".to_vec(), inherited);
+                d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(3, 0)), Object::Ref(second)]));
+                d.set(b"Count".to_vec(), Object::Int(2));
+            })
+            .unwrap();
+
+            let region = [[0.0, 190.0, 300.0, 220.0]];
+            let surviving = if still_drawn { 6 } else { 0 };
+            assert_eq!(under(&mut doc, 0, &region), 6, "the marked occurrence is real text");
+            assert_eq!(under(&mut doc, 1, &region), surviving, "the relay's original nested content is visible");
+            mark(&mut doc, 0, &region, "");
+            let report = apply(&mut doc, Some(&[0])).unwrap();
+            assert_eq!((report.marks, report.glyphs), (1, 6));
+            assert_eq!(under(&mut doc, 0, &region), 0);
+            assert_eq!(under(&mut doc, 1, &region), surviving, "redacting another page must preserve live nested content");
+
+            // A full saved document must retain both the reachable resource and its content,
+            // without relying on an old incremental revision's otherwise-unreachable objects.
+            let mut saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+            assert_eq!(under(&mut saved, 0, &region), 0);
+            assert_eq!(under(&mut saved, 1, &region), surviving);
+            let page = pdfcraft_model::pages(&saved).swap_remove(1);
+            let res = saved.resolve(page.dict.get(b"Resources").unwrap());
+            let xo = saved.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+            let mut holder = xo.as_dict().unwrap().clone();
+            if own_resources {
+                let wrapper = saved.resolve(holder.get(b"Wrapper").unwrap());
+                let Object::Stream(wrapper) = &*wrapper else { panic!("a real wrapper form") };
+                let res = saved.resolve(wrapper.dict.get(b"Resources").unwrap());
+                let xo = saved.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+                holder = xo.as_dict().unwrap().clone();
+            }
+            assert_eq!(holder.contains(b"Fm"), still_drawn, "keep only resources a surviving nested form actually uses");
+            if still_drawn {
+                let form = saved.resolve(holder.get(b"Fm").unwrap());
+                let Object::Stream(form) = &*form else { panic!("the preserved original form") };
+                assert_eq!(form.decoded().unwrap(), original);
+            }
+        }
+    }
+}
+
 /// A page tree of `n` pages that all draw form /Fm and inherit a direct `/Resources` from the root.
 fn inheriting_pages(n: usize) -> (Document, Vec<ObjRef>) {
     let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"BT /F1 10 Tf 10 200 Td (SECRET) Tj ET");
@@ -2567,6 +2800,27 @@ fn removing_form_fields_takes_hidden_widgets_and_their_values_out_of_the_file() 
     remove_hidden(&mut doc, &[Hidden::FormFields]).unwrap();
     assert_no_secret(&doc, b"LEAK_");
     assert!(annots_of(&doc, &pdfcraft_model::pages(&doc).swap_remove(0).dict).is_empty());
+}
+
+/// F-021: removing form fields on a document with an AcroForm dictionary (even one with no
+/// enumerable terminal fields) removes the AcroForm dictionary, processes widgets, and requires full save.
+#[test]
+fn removing_form_fields_removes_acroform_even_without_terminal_fields() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc =
+        one_page(b"BT /F1 10 Tf 10 100 Td (Visible) Tj ET", "", vec![b"<< /Type /Annot /Subtype /Widget /Rect [10 200 150 220] >>".to_vec()]);
+    doc.update_dict(doc.root().unwrap(), |d| d.set(b"AcroForm".to_vec(), fields_dict(&[]))).unwrap();
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Annots".to_vec(), ref_array(&[7]))).unwrap();
+    let counts = scan(&doc);
+    assert_eq!(counts.iter().find(|c| c.0 == Hidden::FormFields).map(|c| c.1), Some(1));
+    assert!(doc.get(doc.root().unwrap()).as_dict().is_some_and(|d| d.contains(b"AcroForm")));
+    assert!(!doc.full_save_required());
+
+    let done = remove_hidden(&mut doc, &[Hidden::FormFields]).unwrap();
+    assert_eq!(done, [(Hidden::FormFields, 1)]);
+    assert!(!doc.get(doc.root().unwrap()).as_dict().is_some_and(|d| d.contains(b"AcroForm")));
+    assert!(annots_of(&doc, &pdfcraft_model::pages(&doc).swap_remove(0).dict).is_empty());
+    assert!(doc.full_save_required());
 }
 
 /// Removing hidden text cleans the structure tree as redaction does: the elements describing the

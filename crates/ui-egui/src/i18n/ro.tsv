@@ -933,6 +933,8 @@
 	Redaction code:	Cod de anonimizare:
 	Reload	Reîncărcare
 	Reload documents when their files change on disk	Reîncarcă documentele când fișierele lor se modifică pe disc
+	Don't show again	Nu mai afișa
+	Show a notice when a document is secured	Afișează o notificare când un document este securizat
 	Remove checkmark	Eliminare bifă
 	Remove invalid links and bookmarks	Eliminare linkuri și semne de carte nevalide
 	Remove page	Eliminare pagină
@@ -1018,6 +1020,15 @@
 	Scroll tabs right	Derulare file la dreapta
 	Search comments	Căutare în comentarii
 	Search tools and commands…	Căutare instrumente și comenzi…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Text adăugat
+	Link URL	URL-ul linkului
+	Search tools and commands	Căutare instrumente și comenzi
+	Text editing line	Linie de editare a textului
+	Text to place	Text de plasat
+	Tooltip	Sfat ecran
+	Words or phrases to redact	Cuvinte sau expresii de anonimizat
 	Searchable Image (Exact)	Imagine în care se poate căuta (exactă)
 	Searching… {s} of {p} pages	Se caută… {s} din {p} pagini
 	Searching… {s}/{p}	Se caută… {s}/{p}
@@ -1228,6 +1239,7 @@
 	Update	Actualizare
 	Use 72 DPI (one point per pixel)	Folosire 72 DPI (un punct pe pixel)
 	Use Flate to encode streams that are not encoded	Folosire Flate pentru codarea fluxurilor necodate
+	In streams that use LZW encoding, use Flate instead	Folosire Flate în locul LZW pentru fluxurile codate LZW
 	Use a Digital ID from a file	Folosire ID digital dintr-un fișier
 	Use custom DPI	Folosire DPI personalizat
 	Use each image's embedded DPI; use 72 DPI when it is absent.	Folosește DPI-ul încorporat al fiecărei imagini; 72 DPI când lipsește.
@@ -1399,6 +1411,10 @@
 	Draw freehand	Desenare liberă
 	Drawing	Desen
 	Drawing scale	Scara desenului
+	Scale	Scară
+	Common scales	Scări uzuale
+	Enter a scale such as 1:50.	Introduceți o scară, de exemplu 1:50.
+	Applying a scale switches units to m / mm.	Aplicarea unei scări schimbă unitățile în m / mm.
 	Drop-down list	Listă derulantă
 	Duplicate pages	Duplicare pagini
 	Edit a PDF	Editare PDF
@@ -2647,6 +2663,14 @@ key	Space	Spațiu
 	Optimizing… merging image fragments	Se optimizează… unificare fragmente de imagine
 	Outline colour:	Culoare contur:
 	Page properties	Proprietăți pagină
+	Create & Edit	Creare și editare
+	Review & Compare	Revizuire și comparare
+	Forms & Signatures	Formulare și semnături
+	Protect & Standardize	Protejare și standardizare
+	Customize & Automate	Personalizare și automatizare
+	No tools match your search.	Niciun instrument nu corespunde căutării.
+	Expand all tools	Extinderea tuturor instrumentelor
+	Collapse all tools	Restrângerea tuturor instrumentelor
 	Pages counted	Pagini numărate
 	Pages selected	Pagini selectate
 	Print as image	Imprimare ca imagine
@@ -2774,3 +2798,23 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Astăzi
+
+# AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
+	Restore the last view (page, zoom and page display) when a document is opened again	Restabilește ultima vizualizare (pagina, zoomul și afișarea paginilor) când un document este redeschis
+	Attach a file…	Atașare fișier…
+	Attach {name}	Atașare {name}
+	Attaching files is not available on the web yet	Atașarea fișierelor nu este încă disponibilă pe web
+	Delete attachment	Ștergere atașament
+	Delete attachment {key}	Ștergere atașament {key}
+@plural	{n} reply|{n} replies	{n} răspuns|{n} răspunsuri|{n} de răspunsuri
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Instrumente pentru pagini
+	Insert pages from a file after the selection…	Inserează pagini dintr-un fișier după selecție…
+	Rotate the selected pages counterclockwise	Rotește paginile selectate în sens antiorar
+	Rotate the selected pages clockwise	Rotește paginile selectate în sens orar
+	Extract the selected pages…	Extrage paginile selectate…
+	Delete the selected pages	Șterge paginile selectate

@@ -182,6 +182,15 @@
 	Available	ພ້ອມໃຊ້ງານ
 	Ready	ພ້ອມແລ້ວ
 	Search tools and commands…	ຄົ້ນຫາເຄື່ອງມື ແລະ ຄຳສັ່ງ…
+
+# Accessible names for inputs that have no visible label.
+	Added text	ຂໍ້ຄວາມທີ່ເພີ່ມ
+	Link URL	URL ຂອງລິ້ງຄ໌
+	Search tools and commands	ຄົ້ນຫາເຄື່ອງມື ແລະ ຄຳສັ່ງ
+	Text editing line	ແຖວແກ້ໄຂຂໍ້ຄວາມ
+	Text to place	ຂໍ້ຄວາມທີ່ຈະວາງ
+	Tooltip	ຄຳແນະນຳເຄື່ອງມື
+	Words or phrases to redact	ຄຳ ຫຼື ວະລີທີ່ຈະປິດບັງ
 	No matching tools	ບໍ່ພົບເຄື່ອງມືທີ່ກົງກັນ
 	Tool	ເຄື່ອງມື
 	Command	ຄຳສັ່ງ
@@ -579,6 +588,7 @@
 	Discard private data of other applications	ຕັດຂໍ້ມູນສ່ວນຕົວຂອງແອັບພລິເຄຊັນອື່ນອອກ
 	Discard hidden text	ຕັດຂໍ້ຄວາມທີ່ເຊື່ອງໄວ້ອອກ
 	Use Flate to encode streams that are not encoded	ໃຊ້ Flate ເພື່ອເຂົ້າລະຫັດສະຕຣີມທີ່ຍັງບໍ່ໄດ້ເຂົ້າລະຫັດ
+	In streams that use LZW encoding, use Flate instead	ໃຊ້ Flate ແທນ LZW ໃນສະຕຣີມທີ່ເຂົ້າລະຫັດດ້ວຍ LZW
 	Remove invalid links and bookmarks	ລຶບລິ້ງຄ໌ ແລະ ບຸກມາກທີ່ໃຊ້ການບໍ່ໄດ້
 	Remove unreferenced named destinations	ລຶບຈຸດໝາຍປາຍທາງທີ່ມີຊື່ເຊິ່ງບໍ່ມີການອ້າງອີງ
 	Compress document structure (object streams)	ບີບອັດໂຄງສ້າງເອກະສານ (ສະຕຣີມວັດຖຸ)
@@ -2014,6 +2024,10 @@
 	Perimeter	ລວງຮອບ
 	Area	ເນື້ອທີ່
 	Drawing scale	ມາດຕາສ່ວນຮູບແຕ້ມ
+	Scale	ມາດຕາສ່ວນ
+	Common scales	ມາດຕາສ່ວນທີ່ໃຊ້ທົ່ວໄປ
+	Enter a scale such as 1:50.	ປ້ອນມາດຕາສ່ວນ ເຊັ່ນ 1:50.
+	Applying a scale switches units to m / mm.	ການນຳໃຊ້ມາດຕາສ່ວນຈະປ່ຽນຫົວໜ່ວຍເປັນ m / mm.
 	Snapping	ການດູດຈັບ
 	Export measurements	ສົ່ງອອກການວັດແທກ
 	Open a PDF to measure it.	ເປີດ PDF ເພື່ອວັດແທກ.
@@ -2279,6 +2293,8 @@ key	Space	Space
 	Printer paper and scaling may differ. Check driver settings.	ເຈ້ຍເຄື່ອງພິມ ແລະ ມາດຕາສ່ວນອາດແຕກຕ່າງກັນ. ກວດສອບການຕັ້ງຄ່າໄດຣເວີ.
 	Drawing scale changes. Use Actual size for full-scale plans.	ມາດຕາສ່ວນຮູບແຕ້ມປ່ຽນແປງ. ໃຊ້ "ຂະໜາດຈິງ" ສຳລັບແບບແຜນເຕັມສ່ວນ.
 	Reload documents when their files change on disk	ໂຫຼດເອກະສານຄືນໃໝ່ເມື່ອໄຟລ໌ໃນດິສກ໌ມີການປ່ຽນແປງ
+	Don't show again	ບໍ່ຕ້ອງສະແດງອີກ
+	Show a notice when a document is secured	ສະແດງການແຈ້ງເຕືອນເມື່ອເອກະສານຖືກປ້ອງກັນໄວ້
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	ໄຟລ໌ນີ້ມີການປ່ຽນແປງໃນດິສກ໌. "ໂຫຼດຄືນໃໝ່" ຈະສະແດງເວີຊັນໃໝ່ ແລະ ປະຖິ້ມການປ່ຽນແປງທີ່ຍັງບໍ່ໄດ້ບັນທຶກ; "ບັນທຶກ" ຈະຂຽນທັບດ້ວຍເວີຊັນນີ້.
 	Reload	ໂຫຼດຄືນໃໝ່
 	Couldn't reload {name}: {e}	ບໍ່ສາມາດໂຫຼດ {name} ຄືນໃໝ່ໄດ້: {e}
@@ -2429,3 +2445,23 @@ animation effects	Off	ປິດ
 	Make properties default	ກຳນົດຄຸນສົມບັດເປັນຄ່າເລີ່ມຕົ້ນ
 	Pages selected	ໜ້າທີ່ເລືອກ
 	Page properties	ຄຸນສົມບັດໜ້າ
+	Create & Edit	ສ້າງ & ແກ້ໄຂ
+	Review & Compare	ກວດກາຄືນ & ປຽບທຽບ
+	Forms & Signatures	ຟອມ & ລາຍເຊັນ
+	Protect & Standardize	ປ້ອງກັນ & ມາດຕະຖານ
+	Customize & Automate	ປັບແຕ່ງ & ອັດຕະໂນມັດ
+	No tools match your search.	ບໍ່ມີເຄື່ອງມືທີ່ກົງກັບການຄົ້ນຫາຂອງທ່ານ.
+	Expand all tools	ຂະຫຍາຍເຄື່ອງມືທັງໝົດ
+	Collapse all tools	ຫຍໍ້ເຄື່ອງມືທັງໝົດເຂົ້າ
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	ມື້ນີ້
+@plural	{n} reply|{n} replies	ການຕອບກັບ {n} ລາຍການ
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	ເຄື່ອງມືໜ້າ
+	Insert pages from a file after the selection…	ແຊກໜ້າຈາກໄຟລ໌ຫຼັງການເລືອກ…
+	Rotate the selected pages counterclockwise	ໝູນໜ້າທີ່ເລືອກທວນເຂັມໂມງ
+	Rotate the selected pages clockwise	ໝູນໜ້າທີ່ເລືອກຕາມເຂັມໂມງ
+	Extract the selected pages…	ແຍກໜ້າທີ່ເລືອກອອກ…
+	Delete the selected pages	ລຶບໜ້າທີ່ເລືອກ

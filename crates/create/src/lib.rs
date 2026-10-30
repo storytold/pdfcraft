@@ -562,7 +562,7 @@ fn embed(name: &str, bytes: &[u8], wanted: usize) -> Result<Vec<Embedded>, Creat
     } else if is_tiff(bytes) {
         tiff_pages(name, bytes, wanted)
     } else if bytes.starts_with(b"BM") {
-        Ok(vec![decoded(name, bytes, image::ImageFormat::Bmp)?])
+        Ok(vec![decoded(name, &pdfcraft_xfa::image::bmp_with_pixel_offset(bytes), image::ImageFormat::Bmp)?])
     } else if is_gif(bytes) {
         Ok(vec![decoded(name, bytes, image::ImageFormat::Gif)?])
     } else if bytes.starts_with(JP2_SIGNATURE) || bytes.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]) {

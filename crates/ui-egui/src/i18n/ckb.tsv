@@ -16,9 +16,9 @@
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
 # the trailing "…" of dialog commands is kept. Digits are Western (0-9).
 #
-# Write every entry in logical (typing) order. The interface draws text left to right, so
-# i18n/mod.rs puts each entry into display order when it loads the catalog (bidi::display_rtl);
-# spaces and a colon at either end of an entry stay at that end, next to what the code appends.
+# Write every entry in logical (typing) order. Catalogs stay logical: epaint shapes and
+# reorders each line with UAX #9, so preordering here would reverse right-to-left text twice.
+# Spaces and a colon at either end of an entry stay at that end, next to what the code appends.
 
 	Menu	پێڕست
 	File	فایل
@@ -184,6 +184,15 @@
 	Available	بەردەست
 	Ready	ئامادە
 	Search tools and commands…	گەڕان لە ئامرازەکان و فەرمانەکان…
+
+# Accessible names for inputs that have no visible label.
+	Added text	دەقی زیادکراو
+	Link URL	ناونیشانی URLی بەستەر
+	Search tools and commands	گەڕان لە ئامرازەکان و فەرمانەکان
+	Text editing line	هێڵی دەستکاریکردنی دەق
+	Text to place	دەقی دانان
+	Tooltip	ڕێنمایی
+	Words or phrases to redact	وشە یان دەستەواژەکان بۆ شاردنەوە
 	No matching tools	هیچ ئامرازێکی گونجاو نییە
 	Tool	ئامراز
 	Command	فەرمان
@@ -581,6 +590,7 @@
 	Discard private data of other applications	فڕێدانی داتا تایبەتەکانی بەرنامەکانی تر
 	Discard hidden text	فڕێدانی دەقی شاراوە
 	Use Flate to encode streams that are not encoded	بەکارهێنانی Flate بۆ کۆدکردنی ئەو لێشاوانەی کۆد نەکراون
+	In streams that use LZW encoding, use Flate instead	بەکارهێنانی Flate لە جیاتی LZW بۆ ئەو لێشاوانەی بە LZW کۆد کراون
 	Remove invalid links and bookmarks	لابردنی بەستەر و دڵخوازە نادروستەکان
 	Remove unreferenced named destinations	لابردنی مەبەستە ناونراوەکانی ئاماژەپێنەکراو
 	Compress document structure (object streams)	پەستاندنی پێکهاتەی بەڵگەنامە (لێشاوەکانی تەن)
@@ -2003,6 +2013,10 @@
 	Perimeter	چێوە
 	Area	ڕووبەر
 	Drawing scale	پێوەری وێنەکێشان
+	Scale	پێوەر
+	Common scales	پێوەرە باوەکان
+	Enter a scale such as 1:50.	پێوەرێک بنووسە وەک 1:50.
+	Applying a scale switches units to m / mm.	جێبەجێکردنی پێوەر یەکەکان دەگۆڕێت بۆ م / ملم.
 	Snapping	لکاندن
 	Export measurements	هەناردەکردنی پێوانەکان
 	Open a PDF to measure it.	PDFێک بکەرەوە بۆ پێوانەکردنی.
@@ -2303,6 +2317,8 @@ key	Space	بۆشایی
 	Printer paper and scaling may differ. Check driver settings.	ڕەنگە کاغەز و پێوەری چاپکەر جیاواز بن. ڕێکخستنەکانی درایڤەر بپشکنە.
 	Drawing scale changes. Use Actual size for full-scale plans.	پێوەری وێنەکێشان دەگۆڕێت. «قەبارەی ڕاستەقینە» بەکاربهێنە بۆ پلانەکان بە پێوەری تەواو.
 	Reload documents when their files change on disk	دووبارە بارکردنی بەڵگەنامەکان کاتێک فایلەکانیان لەسەر دیسک دەگۆڕێن
+	Don't show again	جارێکی تر پیشان مەدە
+	Show a notice when a document is secured	پیشاندانی ئاگادارکردنەوە کاتێک بەڵگەنامەیەک پارێزراوە
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	ئەم فایلە لەسەر دیسک گۆڕاوە. «دووبارە بارکردن» وەشانی نوێ پیشان دەدات و گۆڕانکارییە پاشەکەوتنەکراوەکانت فڕێدەدات؛ «پاشەکەوتکردن» بەم وەشانە جێگەی دەگرێتەوە.
 	Reload	دووبارە بارکردن
 	Couldn't reload {name}: {e}	دووبارە بارکردنی {name} نەکرا: {e}
@@ -2713,3 +2729,23 @@ certificate	Version	وەشان
 	Make properties default	کردنی تایبەتمەندییەکان بە بنەڕەتی
 	Pages selected	پەڕە هەڵبژێردراوەکان
 	Page properties	تایبەتمەندییەکانی پەڕە
+	Create & Edit	دروستکردن و دەستکاریکردن
+	Review & Compare	پێداچوونەوە و بەراوردکردن
+	Forms & Signatures	فۆڕمەکان و واژووەکان
+	Protect & Standardize	پاراستن و ستانداردکردن
+	Customize & Automate	تایبەتکردن و خۆکارکردن
+	No tools match your search.	هیچ ئامرازێک لەگەڵ گەڕانەکەت ناگونجێت.
+	Expand all tools	فراوانکردنی هەموو ئامرازەکان
+	Collapse all tools	کۆکردنەوەی هەموو ئامرازەکان
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	ئەمڕۆ
+@plural	{n} reply|{n} replies	{n} وەڵام|{n} وەڵام
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	ئامرازەکانی پەڕە
+	Insert pages from a file after the selection…	پەڕەکان لە فایلێکەوە لە دوای هەڵبژاردەکە دابنێ…
+	Rotate the selected pages counterclockwise	پەڕە هەڵبژێردراوەکان پێچەوانەی میلی کاتژمێر بسوڕێنە
+	Rotate the selected pages clockwise	پەڕە هەڵبژێردراوەکان بە ئاڕاستەی میلی کاتژمێر بسوڕێنە
+	Extract the selected pages…	پەڕە هەڵبژێردراوەکان دەربهێنە…
+	Delete the selected pages	پەڕە هەڵبژێردراوەکان بسڕەوە

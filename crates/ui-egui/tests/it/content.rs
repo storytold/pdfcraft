@@ -335,6 +335,9 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
 /// written to the page as `?` (or lost).
 #[test]
 fn text_the_standard_fonts_cant_draw_stays_in_the_editor() {
+    if crate::support::skip_without_glyphs("text_the_standard_fonts_cant_draw_stays_in_the_editor", "en", "Hello 世界") {
+        return;
+    }
     let _gpu = gpu();
     let mut h = harness();
     assert!(h.state_mut().execute("edit.text"));
@@ -372,6 +375,9 @@ fn text_the_standard_fonts_cant_draw_stays_in_the_editor() {
 /// is left blocking Save out of sight.
 #[test]
 fn a_kept_draft_goes_with_its_deleted_page() {
+    if crate::support::skip_without_glyphs("a_kept_draft_goes_with_its_deleted_page", "en", "日本語") {
+        return;
+    }
     let mut h = harness();
     assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::InsertBlankPage { at: 1, width: 612.0, height: 792.0 }));
     h.run_steps(2);
@@ -609,6 +615,39 @@ fn dragged_text_follows_the_pointer_before_release() {
     assert_ne!(added(&h)[0].content.rect(), rect, "releasing moves it");
 }
 
+/// #4464: what a dragged text box covered in its first place stays there; only the text follows
+/// the pointer. The page has a red square under the text's first place and nothing elsewhere.
+#[test]
+fn dragged_text_leaves_what_it_covered_behind() {
+    let _gpu = gpu();
+    let content = "1 0 0 rg 20 60 240 70 re f";
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    );
+    let mut h = harness_bytes(pdf.into_bytes());
+    let (rect, from, to, end) = drag_added_text(&mut h);
+    assert!(rect[0] > 20.0 && rect[2] < 260.0 && rect[1] > 60.0 && rect[3] < 130.0, "the text starts on the red square: {rect:?}");
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/added-text-drag-over-red.png")).unwrap();
+    }
+    let pixels = h.render().unwrap();
+    let red = |r: egui::Rect| {
+        let (x0, y0, x1, y1) = (r.left().max(0.0) as u32, r.top().max(0.0) as u32, r.right() as u32, r.bottom() as u32);
+        (y0..y1.min(pixels.height()))
+            .flat_map(|y| (x0..x1.min(pixels.width())).map(move |x| (x, y)))
+            .filter(|(x, y)| matches!(pixels.get_pixel(*x, *y).0, [r, g, b, _] if r > 200 && g < 80 && b < 80))
+            .count()
+    };
+    let (old, new) = ink_at(&mut h, from, to);
+    assert!(new > 20 && old == 0, "the text follows the pointer ({old} old, {new} new)");
+    assert!(red(from) > 100, "the red square stays where the text was ({} red pixels)", red(from));
+    assert_eq!(red(to), 0, "and doesn't come along with the text");
+    h.drop_at(end);
+    h.run_steps(3);
+    assert_ne!(added(&h)[0].content.rect(), rect, "releasing moves it");
+}
+
 /// After release the text stays in its new place while the page is re-rendered with the move,
 /// instead of jumping back to where it was for those frames.
 #[test]
@@ -700,6 +739,76 @@ fn format_text_panel_sets_alignment_and_lists_planned_controls_disabled() {
     h.get_by_label("Bold").click();
     h.run_steps(2);
     assert!(h.state().text_style.bold);
+}
+
+/// Opening right-aligned added text to edit it shows it right-aligned, as the page does, not at
+/// the box's left edge, where it never was.
+#[test]
+fn the_text_editor_keeps_the_boxs_alignment() {
+    let _gpu = gpu();
+    let mut h = harness();
+    let rect = [40.0, 195.0, 240.0, 210.0];
+    let text = pdfcraft_engine::AddedText { rect, text: "Hi".into(), align: pdfcraft_engine::TextAlign::Right, ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let point = at(&h, 200.0, 195.0);
+    click(&mut h, point);
+    assert_eq!(h.state().views[0].content.draft.as_ref().and_then(|d| d.index), Some(0), "the editor opened on the text");
+    h.run_steps(3);
+    let r = item_on_screen(&h, rect);
+    let pixels = h.render().unwrap();
+    let left = ink(&pixels, egui::Rect::from_min_max(r.min, pos2(r.center().x, r.max.y)));
+    let right = ink(&pixels, egui::Rect::from_min_max(pos2(r.center().x, r.min.y), r.max));
+    assert!(left == 0 && right > 20, "the text is drawn at the right ({left} dark pixels left, {right} right)");
+}
+
+/// A box narrower than the editor's least width (60 points on screen): right-aligned text stays
+/// at the box's right edge, not the wider editor's, which lies past it.
+#[test]
+fn the_text_editor_aligns_a_narrow_box_to_its_own_edge() {
+    let _gpu = gpu();
+    let mut h = harness();
+    let rect = [40.0, 195.0, 60.0, 210.0];
+    let text = pdfcraft_engine::AddedText { rect, text: "Hi".into(), align: pdfcraft_engine::TextAlign::Right, ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let point = at(&h, 50.0, 195.0);
+    click(&mut h, point);
+    assert_eq!(h.state().views[0].content.draft.as_ref().and_then(|d| d.index), Some(0), "the editor opened on the text");
+    h.run_steps(3);
+    let r = item_on_screen(&h, rect);
+    assert!(r.width() < 60.0, "the box is narrower than the editor: {}", r.width());
+    let pixels = h.render().unwrap();
+    let inside = ink(&pixels, r);
+    let edge = ink(&pixels, egui::Rect::from_min_max(pos2(r.right() - r.width() * 0.25, r.min.y), r.max));
+    let past = ink(&pixels, egui::Rect::from_min_max(pos2(r.right() + 2.0, r.min.y), pos2(r.right() + 40.0, r.max.y)));
+    assert!(
+        inside > 20 && edge > 0 && past == 0,
+        "the text is drawn in its box, up to its right edge ({inside} dark pixels in it, {edge} in its last quarter, {past} past it)"
+    );
+}
+
+/// Added text takes character spacing from Format text (#4245), typed like a paragraph's; its
+/// line spacing and horizontal scale stay disabled until added text has them.
+#[test]
+fn format_text_sets_character_spacing_for_added_text() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let disabled = |h: &Harness<'static, PdfCraftApp>, label: &str| h.get_by_role_and_label(Role::SpinButton, label).accesskit_node().is_disabled();
+    assert!(disabled(&h, "Horizontal scale"), "added text has no scale yet");
+    assert!(!disabled(&h, "Character spacing"), "added text takes character spacing");
+    h.get_by_role_and_label(Role::SpinButton, "Character spacing").click();
+    h.run_steps(2);
+    h.event(egui::Event::Text("2.5".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert_eq!(h.state().text_style.char_spacing, 2.5);
 }
 
 /// Where a mode bar tab is, by its label.

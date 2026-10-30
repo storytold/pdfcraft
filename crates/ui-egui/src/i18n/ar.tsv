@@ -16,9 +16,9 @@
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
 # the trailing "…" of dialog commands is kept. Digits are Western (0-9).
 #
-# Write every entry in logical (typing) order. The interface draws text left to right, so
-# i18n/mod.rs puts each entry into display order when it loads the catalog (bidi::display_rtl);
-# spaces and a colon at either end of an entry stay at that end, next to what the code appends.
+# Write every entry in logical (typing) order. Catalogs stay logical: epaint shapes and
+# reorders each line with UAX #9, so preordering here would reverse right-to-left text twice.
+# Spaces and a colon at either end of an entry stay at that end, next to what the code appends.
 
 	Menu	القائمة
 	File	ملف
@@ -184,6 +184,15 @@
 	Available	متاح
 	Ready	جاهز
 	Search tools and commands…	البحث في الأدوات والأوامر…
+
+# Accessible names for inputs that have no visible label.
+	Added text	النص المضاف
+	Link URL	عنوان URL للرابط
+	Search tools and commands	البحث في الأدوات والأوامر
+	Text editing line	سطر تحرير النص
+	Text to place	النص المراد وضعه
+	Tooltip	تلميح
+	Words or phrases to redact	الكلمات أو العبارات المراد حجبها
 	No matching tools	لا توجد أدوات مطابقة
 	Tool	أداة
 	Command	أمر
@@ -611,6 +620,7 @@
 	Discard private data of other applications	تجاهل البيانات الخاصة بالتطبيقات الأخرى
 	Discard hidden text	تجاهل النص المخفي
 	Use Flate to encode streams that are not encoded	استخدام Flate لترميز التدفقات غير المرمَّزة
+	In streams that use LZW encoding, use Flate instead	في التدفقات التي تستخدم ترميز LZW، استخدام Flate بدلاً منه
 	Remove invalid links and bookmarks	إزالة الروابط والإشارات المرجعية غير الصالحة
 	Remove unreferenced named destinations	إزالة الوجهات المسماة غير المشار إليها
 	Compress document structure (object streams)	ضغط بنية المستند (تدفقات الكائنات)
@@ -2040,6 +2050,10 @@
 	Perimeter	المحيط
 	Area	المساحة
 	Drawing scale	مقياس الرسم
+	Scale	المقياس
+	Common scales	مقاييس شائعة
+	Enter a scale such as 1:50.	أدخل مقياسًا مثل 1:50.
+	Applying a scale switches units to m / mm.	يؤدي تطبيق المقياس إلى تحويل الوحدات إلى م / مم.
 	Snapping	الانجذاب
 	Export measurements	تصدير القياسات
 	Open a PDF to measure it.	افتح ملف PDF لقياسه.
@@ -2193,6 +2207,7 @@ calendar date	October	أكتوبر
 calendar date	November	نوفمبر
 calendar date	December	ديسمبر
 	Reopen the files that were open when PdfCraft last closed	إعادة فتح الملفات التي كانت مفتوحة عند آخر إغلاق لـ PdfCraft
+	Restore the last view (page, zoom and page display) when a document is opened again	استعادة آخر عرض (الصفحة والتكبير وعرض الصفحات) عند فتح المستند مرة أخرى
 	Clear Recent Files	مسح الملفات الأخيرة
 	Remove from Recent	إزالة من الأخيرة
 	Remove {name} from Recent	إزالة {name} من الأخيرة
@@ -2340,6 +2355,8 @@ key	Space	مسافة
 	Printer paper and scaling may differ. Check driver settings.	قد يختلف ورق الطابعة ومقياس الطباعة. تحقق من إعدادات برنامج التشغيل.
 	Drawing scale changes. Use Actual size for full-scale plans.	يتغير مقياس الرسم. استخدم الحجم الفعلي لطباعة المخططات بمقياسها الأصلي.
 	Reload documents when their files change on disk	إعادة تحميل المستندات عند تغيّر ملفاتها على القرص
+	Don't show again	عدم الإظهار مرة أخرى
+	Show a notice when a document is secured	إظهار إشعار عندما يكون المستند مؤمَّنًا
 	Always use my default zoom and page layout	استخدام التكبير وتخطيط الصفحة الافتراضيين دائمًا
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	تغيّر هذا الملف على القرص. «إعادة التحميل» تعرض النسخة الجديدة وتُسقط تغييراتك غير المحفوظة؛ و«حفظ» يستبدلها بهذه النسخة.
 	Reload	إعادة تحميل
@@ -2758,6 +2775,19 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+	Create & Edit	الإنشاء والتحرير
+	Review & Compare	المراجعة والمقارنة
+	Forms & Signatures	النماذج والتوقيعات
+	Protect & Standardize	الحماية والتوحيد القياسي
+	Customize & Automate	التخصيص والأتمتة
+	No tools match your search.	لا توجد أدوات تطابق بحثك.
+	Expand all tools	توسيع كل الأدوات
+	Collapse all tools	طي كل الأدوات
+	Attach a file…	إرفاق ملف…
+	Delete attachment	حذف المرفق
+	Attaching files is not available on the web yet	إرفاق الملفات غير متاح على الويب بعد
+	Attach {name}	إرفاق {name}
+	Delete attachment {key}	حذف المرفق {key}
 	Bulleted list	قائمة نقطية
 	Numbered list	قائمة مرقمة
 	Alignment	المحاذاة
@@ -2791,3 +2821,15 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	اليوم
+@plural	{n} reply|{n} replies	{n} رد|{n} رد|{n} ردّان|{n} ردود|{n} ردًا|{n} رد
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	أدوات الصفحات
+	Insert pages from a file after the selection…	إدراج صفحات من ملف بعد التحديد…
+	Rotate the selected pages counterclockwise	تدوير الصفحات المحددة عكس اتجاه عقارب الساعة
+	Rotate the selected pages clockwise	تدوير الصفحات المحددة باتجاه عقارب الساعة
+	Extract the selected pages…	استخراج الصفحات المحددة…
+	Delete the selected pages	حذف الصفحات المحددة

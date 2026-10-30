@@ -178,6 +178,15 @@
 	Available	Käytettävissä
 	Ready	Valmis
 	Search tools and commands…	Hae työkaluja ja komentoja…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Lisätty teksti
+	Link URL	Linkin URL-osoite
+	Search tools and commands	Hae työkaluja ja komentoja
+	Text editing line	Tekstin muokkausrivi
+	Text to place	Sijoitettava teksti
+	Tooltip	Työkaluvihje
+	Words or phrases to redact	Peitettävät sanat tai lauseet
 	No matching tools	Ei vastaavia työkaluja
 	Tool	Työkalu
 	Command	Komento
@@ -574,6 +583,7 @@
 	Discard private data of other applications	Hylkää muiden sovellusten yksityiset tiedot
 	Discard hidden text	Hylkää piilotettu teksti
 	Use Flate to encode streams that are not encoded	Koodaa koodaamattomat virrat Flate-menetelmällä
+	In streams that use LZW encoding, use Flate instead	Koodaa LZW-koodatut virrat Flate-menetelmällä
 	Remove invalid links and bookmarks	Poista virheelliset linkit ja kirjanmerkit
 	Remove unreferenced named destinations	Poista viittaamattomat nimetyt kohteet
 	Compress document structure (object streams)	Pakkaa asiakirjan rakenne (objektivirrat)
@@ -1978,6 +1988,10 @@
 	Perimeter	Ympärysmitta
 	Area	Pinta-ala
 	Drawing scale	Piirustuksen mittakaava
+	Scale	Mittakaava
+	Common scales	Yleiset mittakaavat
+	Enter a scale such as 1:50.	Anna mittakaava, esimerkiksi 1:50.
+	Applying a scale switches units to m / mm.	Mittakaavan käyttö vaihtaa yksiköiksi m / mm.
 	Snapping	Tartunta
 	Export measurements	Vie mittaukset
 	Open a PDF to measure it.	Avaa PDF mitataksesi sitä.
@@ -2268,6 +2282,8 @@ key	Space	Välilyönti
 	Printer paper and scaling may differ. Check driver settings.	Tulostimen paperi ja skaalaus voivat poiketa. Tarkista ohjaimen asetukset.
 	Drawing scale changes. Use Actual size for full-scale plans.	Piirustuksen mittakaava muuttuu. Käytä mittakaavaisille piirustuksille Todellinen koko -valintaa.
 	Reload documents when their files change on disk	Lataa asiakirjat uudelleen, kun niiden tiedostot muuttuvat levyllä
+	Don't show again	Älä näytä uudelleen
+	Show a notice when a document is secured	Näytä ilmoitus, kun asiakirja on suojattu
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Tämä tiedosto muuttui levyllä. Lataa se uudelleen nähdäksesi uuden version; tallentamattomat muutokset menetetään.
 	Reload	Lataa uudelleen
 	Couldn't reload {name}: {e}	Kohdetta {name} ei voitu ladata uudelleen: {e}
@@ -2496,7 +2512,7 @@ animation effects	Off	Ei käytössä
 	The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).	Allekirjoittajan varmennetta ei ole myönnetty asiakirjojen allekirjoittamiseen (sen laajennettu avaimen käyttö ei sisällä asiakirjojen allekirjoitusta).
 	The signer's certificate has critical extensions PdfCraft does not recognize ({}).	Allekirjoittajan varmenteessa on kriittisiä laajennuksia, joita PdfCraft ei tunnista ({}).
 	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	Kohteen {} varmenne ei ole varmenteita myöntävä CA-varmenne, joten sitä ei käytetä kohteen {} vahvistamiseen.
-	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	Kohteen {} varmenteessa on kriittisiä laajennuksia, joita PdfCraft ei tunnista, joten sitä ei käytetä kohteen {} vahvistamiseen.
 	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	Kohteen {} varmenne ei salli näin montaa alempaa CA-varmennetta (polun pituus), joten sitä ei käytetä kohteen {} vahvistamiseen.
 	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	Kohteen {} varmenne ei ollut voimassa allekirjoitushetkellä, joten sitä ei käytetä kohteen {} vahvistamiseen.
 	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	Allekirjoittajan henkilöllisyys on tuntematon, koska sitä ei ole lisätty luotettujen varmenteiden luetteloon eikä mikään sen ylemmistä varmenteista ole luotettu varmenne.
@@ -2516,7 +2532,7 @@ animation effects	Off	Ei käytössä
 	The timestamp token could not be read ({}).	Aikaleimatunnistetta ei voitu lukea ({}).
 	The document has been altered or corrupted since the timestamp was applied.	Asiakirjaa on muutettu tai se on vioittunut aikaleiman lisäämisen jälkeen.
 	The timestamp authority's certificate was not valid at the time of timestamping.	Aikaleiman myöntäjän varmenne ei ollut voimassa aikaleimaushetkellä.
-	The timestamp authority's certificate is not issued for time stamping.	The timestamp authority's certificate is not issued for time stamping.
+	The timestamp authority's certificate is not issued for time stamping.	Aikaleiman myöntäjän varmennetta ei ole myönnetty aikaleimaukseen.
 	This document has not been modified since this timestamp was applied.	Asiakirjaa ei ole muokattu tämän aikaleiman lisäämisen jälkeen.
 	The document has been modified since this timestamp was applied, but the changes are permitted ({}).	Asiakirjaa on muokattu tämän aikaleiman lisäämisen jälkeen, mutta muutokset ovat sallittuja ({}).
 	The document has been altered since this timestamp was applied in ways it does not permit ({}).	Asiakirjaa on muutettu tämän aikaleiman lisäämisen jälkeen tavoilla, joita se ei salli ({}).
@@ -2691,74 +2707,82 @@ certificate	SHA-256 digest	SHA-256-tiiviste
 	Make properties default	Aseta ominaisuudet oletuksiksi
 	Pages selected	Valitut sivut
 	Page properties	Sivun ominaisuudet
+	Create & Edit	Luo ja muokkaa
+	Review & Compare	Tarkasta ja vertaa
+	Forms & Signatures	Lomakkeet ja allekirjoitukset
+	Protect & Standardize	Suojaa ja standardoi
+	Customize & Automate	Mukauta ja automatisoi
+	No tools match your search.	Hakuasi vastaavia työkaluja ei löytynyt.
+	Expand all tools	Laajenna kaikki työkalut
+	Collapse all tools	Kutista kaikki työkalut
 	The password must have at least 8 characters.	Salasanassa on oltava vähintään 8 merkkiä.
 theme	Appearance	Teema
 # Labels added upstream 2026-10-16…18.
 	the name is not a plain file name	nimi ei ole pelkkä tiedostonimi
 	Zoom — type a percentage and press Enter	Zoomaus — kirjoita prosentti ja paina Enter
-# Untranslated: English text until a translator fills these in.
-	Calculation order	Calculation order
-	Fix order	Fix order
-	Move only what must move, so every field calculates after the fields it reads.	Move only what must move, so every field calculates after the fields it reads.
-	Earlier in calculation order	Earlier in calculation order
-	Later in calculation order	Later in calculation order
-	Too early	Too early
-	Reads {name}, which calculates later, so it shows an old value.	Reads {name}, which calculates later, so it shows an old value.
-	Loop	Loop
-	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.
-	Not in order	Not in order
-	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.
-	Back to Prepare a form	Back to Prepare a form
-	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.
-	{names} and {last}	{names} and {last}
-	{field} reads no other field	{field} reads no other field
-	{field} reads {fields}	{field} reads {fields}
-	No field reads it	No field reads it
-	The order saved in the PDF needs tidying	The order saved in the PDF needs tidying
-	Moves only what must move	Moves only what must move
-	Every field calculates after the fields it reads.	Every field calculates after the fields it reads.
-	Every field outside a loop calculates after the fields it reads.	Every field outside a loop calculates after the fields it reads.
-	{field} reads its own value	{field} reads its own value
-	{fields} read each other	{fields} read each other
-	No order can fix a loop. Change one of the formulas.	No order can fix a loop. Change one of the formulas.
-	Edit {field}'s formula	Edit {field}'s formula
-	Order · top calculates first	Order · top calculates first
-	Script	Script
-	Links on page	Links on page
-	Show on the page which fields each field reads	Show on the page which fields each field reads
-	Drag a field to move it, or select it and press {up} or {down}.	Drag a field to move it, or select it and press {up} or {down}.
-	Set calculation order	Set calculation order
-@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} calculation now uses the new name.|{n} calculations now use the new name.
-@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.
-@plural	{fields} reads it|{fields} read it	{fields} reads it|{fields} read it
-@plural	{n} field shows an old value|{n} fields show old values	{n} field shows an old value|{n} fields show old values
-@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.
-@plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} more field calculates too early.|{n} more fields calculate too early.
-@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.
-	Bulleted list	Bulleted list
-	Numbered list	Numbered list
-	Alignment	Alignment
-	Superscript	Superscript
-	Subscript	Subscript
-	Paragraph spacing	Paragraph spacing
-	Less	Less
-	Other options	Other options
-	Always use my default zoom and page layout	Always use my default zoom and page layout
-	Larger thumbnails	Larger thumbnails
-	Layer options	Layer options
-	Printer default	Printer default
-	Reading the printer's settings…	Reading the printer's settings…
-	Reset to Initial Visibility	Reset to Initial Visibility
-	Shrink the page content to make room for the header and footer	Shrink the page content to make room for the header and footer
-	Smaller thumbnails	Smaller thumbnails
-	The document's security settings don't allow printing	The document's security settings don't allow printing
-	Thumbnail size	Thumbnail size
-	Reshape comment	Reshape comment
-	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	The signature's signed attributes have no content type, which CMS requires; it was read anyway.
-	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.
-	The signature's signed attributes have no message digest, so the signature does not cover the document.	The signature's signed attributes have no message digest, so the signature does not cover the document.
-	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	The signature's signed attributes name a content type other than data, so it is not a signature of the document.
-	Remove {standard} identification	Remove {standard} identification
+# Calculation order, text formatting, print and signature labels (AI-assisted, not separately native-reviewed)
+	Calculation order	Laskentajärjestys
+	Fix order	Korjaa järjestys
+	Move only what must move, so every field calculates after the fields it reads.	Siirrä vain se, mikä on pakko, jotta jokainen kenttä lasketaan lukemiensa kenttien jälkeen.
+	Earlier in calculation order	Aiemmaksi laskentajärjestyksessä
+	Later in calculation order	Myöhemmäksi laskentajärjestyksessä
+	Too early	Liian aikaisin
+	Reads {name}, which calculates later, so it shows an old value.	Lukee kenttää {name}, joka lasketaan myöhemmin, joten se näyttää vanhan arvon.
+	Loop	Silmukka
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Lukee kenttiä {names}, jotka lukevat sitä takaisin. Mikään järjestys ei korjaa silmukkaa: muuta jotakin kaavoista.
+	Not in order	Ei järjestyksessä
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Puuttuu PDF:ään tallennetusta laskentajärjestyksestä: muut PDF-katseluohjelmat eivät ehkä laske sitä.
+	Back to Prepare a form	Takaisin kohtaan Valmistele lomake
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Mikään tämän lomakkeen kenttä ei vielä laske arvoaan. Anna kentälle laskenta sen ominaisuuksien Laskenta-välilehdellä, niin se näkyy tässä.
+	{names} and {last}	{names} ja {last}
+	{field} reads no other field	{field} ei lue muita kenttiä
+	{field} reads {fields}	{field} lukee: {fields}
+	No field reads it	Mikään kenttä ei lue sitä
+	The order saved in the PDF needs tidying	PDF:ään tallennettu järjestys kaipaa siistimistä
+	Moves only what must move	Siirtää vain sen, mikä on pakko
+	Every field calculates after the fields it reads.	Jokainen kenttä lasketaan lukemiensa kenttien jälkeen.
+	Every field outside a loop calculates after the fields it reads.	Jokainen silmukan ulkopuolinen kenttä lasketaan lukemiensa kenttien jälkeen.
+	{field} reads its own value	{field} lukee omaa arvoaan
+	{fields} read each other	{fields} lukevat toisiaan
+	No order can fix a loop. Change one of the formulas.	Mikään järjestys ei korjaa silmukkaa. Muuta jotakin kaavoista.
+	Edit {field}'s formula	Muokkaa kentän {field} kaavaa
+	Order · top calculates first	Järjestys · ylin lasketaan ensin
+	Script	Komentosarja
+	Links on page	Yhteydet sivulla
+	Show on the page which fields each field reads	Näytä sivulla, mitä kenttiä kukin kenttä lukee
+	Drag a field to move it, or select it and press {up} or {down}.	Siirrä kenttää vetämällä tai valitse se ja paina {up} tai {down}.
+	Set calculation order	Aseta laskentajärjestys
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} laskenta käyttää nyt uutta nimeä.|{n} laskentaa käyttää nyt uutta nimeä.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Laskentajärjestyksessä on {n} kohta, joka ei laske mitään. Korjaa järjestys poistaa sen.|Laskentajärjestyksessä on {n} kohtaa, jotka eivät laske mitään. Korjaa järjestys poistaa ne.
+@plural	{fields} reads it|{fields} read it	{fields} lukee sitä|{fields} lukevat sitä
+@plural	{n} field shows an old value|{n} fields show old values	{n} kenttä näyttää vanhan arvon|{n} kenttää näyttää vanhoja arvoja
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} lasketaan ennen lukemaansa kenttää {fields}.|{field} lasketaan ennen lukemiaan kenttiä {fields}.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} muu kenttä lasketaan liian aikaisin.|{n} muuta kenttää lasketaan liian aikaisin.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} puuttuu PDF:ään tallennetusta järjestyksestä, joten muut PDF-katseluohjelmat eivät ehkä laske sitä.|{fields} puuttuvat PDF:ään tallennetusta järjestyksestä, joten muut PDF-katseluohjelmat eivät ehkä laske niitä.
+	Bulleted list	Luettelomerkit
+	Numbered list	Numeroitu luettelo
+	Alignment	Tasaus
+	Superscript	Yläindeksi
+	Subscript	Alaindeksi
+	Paragraph spacing	Kappaleväli
+	Less	Vähemmän
+	Other options	Muut asetukset
+	Always use my default zoom and page layout	Käytä aina oletuszoomaustani ja -sivuasetteluani
+	Larger thumbnails	Suuremmat pikkukuvat
+	Layer options	Tasoasetukset
+	Printer default	Tulostimen oletus
+	Reading the printer's settings…	Luetaan tulostimen asetuksia…
+	Reset to Initial Visibility	Palauta alkuperäinen näkyvyys
+	Shrink the page content to make room for the header and footer	Pienennä sivun sisältöä, jotta ylä- ja alatunnisteelle jää tilaa
+	Smaller thumbnails	Pienemmät pikkukuvat
+	The document's security settings don't allow printing	Asiakirjan suojausasetukset eivät salli tulostamista
+	Thumbnail size	Pikkukuvan koko
+	Reshape comment	Muuta kommentin muotoa
+	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	Allekirjoituksen allekirjoitetuista määritteistä puuttuu sisältötyyppi, jota CMS edellyttää; se luettiin silti.
+	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	Tämä allekirjoitus käyttää alle 2048-bittistä RSA-avainta, jota ei enää pidetä riittävän vahvana allekirjoituksiin. Se tarkistuu yhä, mutta siihen ei pidä luottaa.
+	The signature's signed attributes have no message digest, so the signature does not cover the document.	Allekirjoituksen allekirjoitetuista määritteistä puuttuu viestitiiviste, joten allekirjoitus ei kata asiakirjaa.
+	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	Allekirjoituksen allekirjoitetut määritteet nimeävät muun sisältötyypin kuin data, joten se ei ole asiakirjan allekirjoitus.
+	Remove {standard} identification	Poista {standard}-tunniste
 
 # Prepare a form ▸ Text field table (AI-assisted, not separately native-reviewed)
 	Add text field table	Lisää tekstikenttätaulukko
@@ -2783,3 +2807,23 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Tänään
+
+# AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
+	Restore the last view (page, zoom and page display) when a document is opened again	Palauta viimeisin näkymä (sivu, zoomaus ja sivunäyttö), kun asiakirja avataan uudelleen
+	Attach a file…	Liitä tiedosto…
+	Attach {name}	Liitä {name}
+	Attaching files is not available on the web yet	Tiedostojen liittäminen ei ole vielä käytettävissä verkossa
+	Delete attachment	Poista liite
+	Delete attachment {key}	Poista liite {key}
+@plural	{n} reply|{n} replies	{n} vastaus|{n} vastausta
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Sivutyökalut
+	Insert pages from a file after the selection…	Lisää sivuja tiedostosta valinnan jälkeen…
+	Rotate the selected pages counterclockwise	Kierrä valittuja sivuja vastapäivään
+	Rotate the selected pages clockwise	Kierrä valittuja sivuja myötäpäivään
+	Extract the selected pages…	Pura valitut sivut…
+	Delete the selected pages	Poista valitut sivut
