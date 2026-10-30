@@ -122,32 +122,61 @@ impl<'a> Stream<'a> {
     ///
     /// Stream filters will not be applied.
     pub fn raw_data(&self) -> Cow<'a, [u8]> {
+        self.raw_data_checked().unwrap_or_default()
+    }
+
+    /// Fallible internal path: a failed decrypt must not become a successful empty stream.
+    pub(crate) fn raw_data_checked(&self) -> Result<Cow<'a, [u8]>, DecodeFailure> {
         let ctx = self.dict.ctx();
 
         // PdfCraft patch: authenticated object decryption, including metadata and explicit Crypt filters.
         let ty = self.dict.get::<Name<'_>>(TYPE);
         if ctx.xref().needs_decryption(ctx) && ty.as_deref() != Some(b"XRef".as_slice()) {
             let parsed = self.filters_and_params();
-            let filter = parsed.filters.iter()
+            self.external_crypt(&parsed)?;
+            let filter = parsed
+                .filters
+                .iter()
                 .position(|f| *f == Filter::Crypt)
                 .and_then(|i| parsed.params.get(i))
-                .map(|params| {
-                    params.get::<Name<'_>>(b"Name")
-                        .map(|n| n.as_ref().to_vec())
-                        .unwrap_or_else(|| b"Identity".to_vec())
-                });
-            Cow::Owned(ctx.xref().decrypt(
-                self.obj_id(),
-                self.data,
-                DecryptionTarget::Stream {
-                    metadata: ty.as_deref() == Some(b"Metadata".as_slice()),
-                    embedded_file: ty.as_deref() == Some(b"EmbeddedFile".as_slice()),
-                    filter,
-                },
-            ).unwrap_or_default())
+                .map(|params| params.get::<Name<'_>>(b"Name").map(|n| n.as_ref().to_vec()).unwrap_or_else(|| b"Identity".to_vec()));
+            ctx.xref()
+                .decrypt(
+                    self.obj_id(),
+                    self.data,
+                    DecryptionTarget::Stream {
+                        metadata: ty.as_deref() == Some(b"Metadata".as_slice()),
+                        embedded_file: ty.as_deref() == Some(b"EmbeddedFile".as_slice()),
+                        filter,
+                    },
+                )
+                .map(Cow::Owned)
+                .ok_or(DecodeFailure::Decryption)
         } else {
-            Cow::Borrowed(self.data)
+            Ok(Cow::Borrowed(self.data))
         }
+    }
+
+    /// An external object decryptor handles a single leading Crypt stage before decoding.
+    fn external_crypt(&self, parsed: &FiltersAndParams<'_>) -> Result<bool, DecodeFailure> {
+        let ctx = self.dict.ctx();
+        if !ctx.xref().needs_decryption(ctx)
+            || !ctx.xref().external_decryption()
+            || self.dict.get::<Name<'_>>(TYPE).as_deref() == Some(b"XRef".as_slice())
+        {
+            return Ok(false);
+        }
+        let mut positions = parsed.filters.iter().enumerate().filter(|(_, f)| **f == Filter::Crypt);
+        let Some((first, _)) = positions.next() else { return Ok(false) };
+        if first != 0 || positions.next().is_some() {
+            return Err(DecodeFailure::Decryption);
+        }
+        if let Some(params) = parsed.params.first() {
+            if params.contains_key(b"Name") && params.get::<Name<'_>>(b"Name").is_none() {
+                return Err(DecodeFailure::Decryption);
+            }
+        }
+        Ok(true)
     }
 
     /// Return the raw, underlying dictionary of the stream.
@@ -218,7 +247,7 @@ impl<'a> Stream<'a> {
         image_params: &ImageDecodeParams,
         max: usize,
     ) -> Result<FilterResult<'a>, DecodeFailure> {
-        self.decode_raw_within(self.raw_data(), image_params, max)
+        self.decode_raw_within(self.raw_data_checked()?, image_params, max)
     }
 
     /// PdfCraft patch: decode caller-supplied raw/decrypted bytes with the same filters and limits.
@@ -231,38 +260,29 @@ impl<'a> Stream<'a> {
             .map(|r| r.data)
     }
 
-    fn decode_raw_within(
-        &self,
-        data: Cow<'a, [u8]>,
-        image_params: &ImageDecodeParams,
-        max: usize,
-    ) -> Result<FilterResult<'a>, DecodeFailure> {
+    fn decode_raw_within(&self, mut data: Cow<'a, [u8]>, image_params: &ImageDecodeParams, max: usize) -> Result<FilterResult<'a>, DecodeFailure> {
         let filters_and_params = self.filters_and_params();
         let count = filters_and_params.filters.len();
+        let crypt_handled = self.external_crypt(&filters_and_params)?;
+        if crypt_handled && count == 1 && data.len() > max {
+            // A Crypt-only stream follows the same materialization budget as compressed data.
+            data.to_mut().truncate(max);
+        }
 
         let mut current: Option<FilterResult<'a>> = None;
 
-        for (i, (filter, params)) in filters_and_params
-            .filters
-            .iter()
-            .zip(filters_and_params.params.iter())
-            .enumerate()
-        {
+        for (i, (filter, params)) in filters_and_params.filters.iter().zip(filters_and_params.params.iter()).enumerate() {
+            // raw_data_checked already ran this stage through the authenticated callback.
+            if crypt_handled && i == 0 && *filter == Filter::Crypt {
+                continue;
+            }
             // PdfCraft patch: see `filter::decode_limit`.
             let limit = crate::filter::decode_limit(image_params, i + 1 == count).min(max);
-            let new = filter.apply(
-                current.as_ref().map(|c| c.data.as_ref()).unwrap_or(&data),
-                params,
-                image_params,
-                limit,
-            )?;
+            let new = filter.apply(current.as_ref().map(|c| c.data.as_ref()).unwrap_or(&data), params, image_params, limit)?;
             current = Some(new);
         }
 
-        Ok(current.unwrap_or(FilterResult {
-            data,
-            image_data: None,
-        }))
+        Ok(current.unwrap_or(FilterResult { data, image_data: None }))
     }
 }
 

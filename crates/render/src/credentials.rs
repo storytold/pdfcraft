@@ -54,11 +54,11 @@ impl ExternalDecryptor for ObjectDecryptor {
         match target {
             DecryptionTarget::String => Some(self.0.decrypt_string(number, generation, data)),
             DecryptionTarget::Stream { metadata, embedded_file, filter } => {
-                if metadata && !self.0.encrypts_metadata() {
-                    return Some(data.to_vec());
-                }
                 if filter.as_deref().is_some_and(|n| n != b"DefaultCryptFilter" && n != b"Identity") {
                     return None;
+                }
+                if metadata && !self.0.encrypts_metadata() {
+                    return Some(data.to_vec());
                 }
                 let kind = match &filter {
                     Some(name) => pdfcraft_cos::CryptStreamKind::Named(name),

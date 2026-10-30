@@ -103,4 +103,5 @@ The reader preserves each recipient envelope and its array order. It reports
 Recipient permissions come from the decrypted envelope. They do not trust a plaintext `/P`.
 Engine and renderer APIs reuse an authenticated context across edits and encrypted saves.
 The engine and headless tools expose certificate protection and explicit Linux token opening.
-Desktop dialogs also expose these workflows; provider isolation and physical-card qualification remain unfinished.
+Desktop dialogs also expose these workflows. Linux providers run in bounded worker
+processes. Broader card, reader and module qualification remains unfinished.

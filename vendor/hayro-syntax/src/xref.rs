@@ -539,6 +539,11 @@ impl XRef {
         }
     }
 
+    /// PdfCraft patch: only external authentication consumes explicit stream Crypt filters.
+    pub(crate) fn external_decryption(&self) -> bool {
+        matches!(&self.0, Inner::Some(r) if matches!(r.decryptor.as_ref(), Decryptor::External(_)))
+    }
+
     #[inline]
     pub(crate) fn decrypt(
         &self,

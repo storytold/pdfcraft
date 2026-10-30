@@ -47,7 +47,7 @@ update the numbers.
 | 7 | OCR reads only unaccented Latin | feature | 40–75 | [file-format-parity.md](file-format-parity.md) |
 | 8 | Office export weak, Office import absent | file format | 55–100 | [file-format-parity.md](file-format-parity.md) |
 | 9 | No Preflight; PDF/A partial; PDF/X and PDF/UA absent | standards | 65–115 | [pdf-spec-parity.md](pdf-spec-parity.md) |
-| 10 | Signatures: no PKCS #11, timestamp servers or online revocation | feature, hardware | 40–70 | [pdf-spec-parity.md](pdf-spec-parity.md) |
+| 10 | Signatures: broader PKCS #11 hardware qualification, timestamp servers and online revocation | feature, hardware | 40–70 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 11 | Accessibility: checker only, no tagging tools | feature | 40–70 | [target-app-parity.md](target-app-parity.md) |
 | 12 | No measured fidelity harness against Acrobat | quality | (in 2) | [target-app-parity.md](target-app-parity.md) |
 | 13 | Performance budgets and lazy loading of very large files | performance | 25–45 | this file |
@@ -419,6 +419,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | PR #5492 review: retain selected-card binding and certificate credentials across signing, cancellation, redaction and printing; handle explicit Crypt streams, optional lengths and unavailable readers. Broader hardware qualification remains; estimates unchanged. |
 | 2026-10-30 | minor | Contributor reports successful physical-card signing and encrypted PDF opening through a reader PIN pad. Card, reader and module details were not recorded; broader hardware qualification remains. Estimates unchanged. |
 | 2026-10-30 | minor | Linux signing and identity discovery run on cancellable background jobs. Late results preserve changed documents and destination files. Physical cards and PIN pads remain unqualified. Estimates unchanged. |
 | 2026-10-30 | minor | Gap 10: isolated Linux PKCS #11 operations pass SoftHSM tests; physical cards, PIN pads and responsive signing jobs remain unqualified. Estimates unchanged. |

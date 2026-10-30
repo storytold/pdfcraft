@@ -24,8 +24,12 @@ pub(super) fn read(doc: &Document, dict: &Dict) -> Result<EncryptDict, CosError>
         (Some(5), Some(b"AESV3")) => (Algorithm::Aes256, 256),
         _ => return Err(malformed("only AES-128 V4 or AES-256 V5 is supported")),
     };
-    if filter.int(b"Length") != Some(bits) || dict.int(b"Length").is_some_and(|length| length != bits) {
-        return Err(malformed("public-key filter Length must be in bits and match its AES method"));
+    // Length is optional for AES, whose method fixes the key size. Present values may
+    // be indirect, but must resolve to an integer in bits matching that method.
+    for length in [filter.get(b"Length"), dict.get(b"Length")].into_iter().flatten() {
+        if !matches!(&*doc.resolve(length), Object::Int(length) if *length == bits) {
+            return Err(malformed("public-key Length must be an integer in bits and match its AES method"));
+        }
     }
     if dict.name(b"StmF") != Some(FILTER_NAME) || dict.name(b"StrF") != Some(FILTER_NAME) {
         return Err(malformed("strings and streams must use DefaultCryptFilter"));

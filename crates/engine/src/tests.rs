@@ -2872,7 +2872,7 @@ fn the_renderer_check_refuses_text_still_shown_under_a_mark() {
     let mut cos = doc.editor.as_ref().unwrap().cos.clone();
     let marks = pdfcraft_redact::marks(&cos);
     let refused = |cos: &pdfcraft_cos::Document| {
-        let shown = shown_under_redactions(cos, &marks, &[], &doc.info.pages, None);
+        let shown = shown_under_redactions(cos, &marks, &[], &doc.info.pages, &pdfcraft_render::RenderConfig::default());
         matches!(shown, Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(n))) if n > 0)
     };
     assert!(refused(&cos));

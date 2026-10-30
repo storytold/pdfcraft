@@ -35,6 +35,10 @@ pub use panel::{CertTab, CertViewer, PanelAction, certificate_pem};
 /// its password is asked for at each signing.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DigitalIdEntry {
+    /// Public discovery-time card binding; never persisted.
+    #[cfg(target_os = "linux")]
+    #[serde(skip)]
+    pub signing_identity: Option<sign::pkcs11::SigningIdentity>,
     pub path: String,
     pub name: String,
     pub issuer: String,
@@ -275,15 +279,10 @@ fn windows_id(reference: &str) -> Result<DigitalId, String> {
     Err(format!("{reference}: Windows certificate store identities are only available on Windows"))
 }
 
-/// A PKCS #11 token identity by its `pkcs11:` reference, signed in with the PIN when one is
-/// typed (tokens that don't need a PIN ignore it).
-#[cfg(target_os = "linux")]
-fn pkcs11_id(reference: &str, pin: Option<&str>) -> Result<DigitalId, String> {
-    sign::pkcs11::find_with_pin(reference, pin).map_err(|e| e.to_string())
-}
-
 pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
     DigitalIdEntry {
+        #[cfg(target_os = "linux")]
+        signing_identity: None,
         path: path.to_string(),
         name: c.display_name(),
         issuer: c.issuer.common_name().map(str::to_string).unwrap_or_else(|| c.issuer.display()),
@@ -298,6 +297,8 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
 #[cfg(target_os = "windows")]
 fn entry_unusable(u: &sign::windows::Unusable) -> DigitalIdEntry {
     DigitalIdEntry {
+        #[cfg(target_os = "linux")]
+        signing_identity: None,
         path: format!("windows:{}", u.fingerprint.split(' ').collect::<String>().to_ascii_lowercase()),
         name: u.subject.clone(),
         issuer: String::new(),
@@ -539,7 +540,7 @@ impl PdfCraftApp {
             }
             if token {
                 #[cfg(target_os = "linux")]
-                return app.start_token_signing(doc_id, entry.path, pin, opts, d, path);
+                return app.start_token_signing(doc_id, entry, pin, opts, d, path);
                 #[cfg(not(target_os = "linux"))]
                 return Err("Smartcard signing requires Linux.".into());
             }
@@ -839,6 +840,8 @@ mod tests {
 
     fn listed(path: &str, name: &str) -> DigitalIdEntry {
         DigitalIdEntry {
+            #[cfg(target_os = "linux")]
+            signing_identity: None,
             path: path.into(),
             name: name.into(),
             issuer: String::new(),

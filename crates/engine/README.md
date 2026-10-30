@@ -110,7 +110,8 @@ reports successful signing and encrypted PDF opening with a physical card and re
 PIN pad (2026-10-30); broader hardware qualification remains unfinished.
 
 `Session::prepare_sign` captures an immutable document snapshot and the session clock.
-Its `SigningJob::sign` method runs on a worker thread and returns signed bytes.
+Its `SigningJob::sign` method runs on the calling thread and returns signed bytes.
+Callers can run it on a worker thread; the method does not start one.
 It writes no file and changes no session. It excludes password-field values through the
 same path as synchronous signing. Callers must reject results for a changed document
 before saving. The Linux desktop also checks the active tab and destination file.

@@ -178,3 +178,10 @@ needs a prompt to open is listed and asks at signing (issue #179).
 
 Oracles: poppler's `pdfsig` reports our signatures valid; OpenSSL reads our `.p12` files and
 verifies our CMS; `tests/data/openssl-signed.pdf` is a signature OpenSSL made, which we validate.
+
+Desktop signing uses `pkcs11::signing_identities()` and retains a `SigningIdentity`
+from discovery through the file picker and signing job. `with_pin` binds the one-use
+PIN to that selection; card changes require refresh and clear the input. Legacy
+`list` and `find_with_pin` calls keep their certificate-selection semantics. Token
+serials are provider-reported identifiers, not hardware attestation. Decryption
+discovery skips unavailable modules and readers while retaining healthy cards.

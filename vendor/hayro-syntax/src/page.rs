@@ -295,7 +295,7 @@ impl<'a> ContentReader<'a> {
                 continue;
             }
 
-            let raw = stream.raw_data();
+            let Ok(raw) = stream.raw_data_checked() else { continue };
             if newly_counted {
                 compressed = compressed.saturating_add(raw.len());
             }

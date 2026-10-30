@@ -69,7 +69,7 @@ impl Session {
         if let Edit::ApplyRedactions { pages } = &edit {
             let marks: Vec<pdfcraft_redact::Mark> =
                 pdfcraft_redact::marks(&editor.cos).into_iter().filter(|m| pages.as_ref().is_none_or(|p| p.contains(&m.page))).collect();
-            guard(|| shown_under_redactions(&next, &marks, &cx.redaction_overlays, &doc.info.pages, doc.password.as_deref()))
+            guard(|| shown_under_redactions(&next, &marks, &cx.redaction_overlays, &doc.info.pages, &doc.config))
                 .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
         }
         // Renamed fields are said, not slipped in: a repair-log note (with the caveat that

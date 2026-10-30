@@ -769,7 +769,7 @@ pub(crate) fn shown_under_redactions(
     marks: &[pdfcraft_redact::Mark],
     overlays: &[pdfcraft_cos::ObjRef],
     pages: &[pdfcraft_render::PageInfo],
-    password: Option<&str>,
+    credentials: &RenderConfig,
 ) -> Result<(), EditError> {
     use pdfcraft_cos::Object;
     use pdfcraft_redact::RedactError;
@@ -788,7 +788,8 @@ pub(crate) fn shown_under_redactions(
         shown.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(kept))).map_err(|e| EditError::Write(e.to_string()))?;
     }
     let bytes = write_incremental(&shown, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?;
-    let config = RenderConfig { password: password.map(Arc::from), ..Default::default() };
+    // Only credentials carry over: viewer layer and comment visibility must not hide residue.
+    let config = RenderConfig { password: credentials.password.clone(), authenticated: credentials.authenticated.clone(), ..Default::default() };
     let mut renderer = pdfcraft_render::PageRenderer::new(Arc::new(bytes), config);
     let mut residue = 0;
     for &pi in &marked {

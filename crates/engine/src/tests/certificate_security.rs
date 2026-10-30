@@ -89,6 +89,152 @@ fn certificate_security_opens_renders_and_preserves_the_original() {
 }
 
 #[test]
+fn certificate_redaction_verifies_and_saves_without_another_authentication() {
+    for algorithm in [Algorithm::Aes128, Algorithm::Aes256] {
+        let calls = Cell::new(0);
+        let resolver = |params: &EncryptDict, _: &[u8]| {
+            calls.set(calls.get() + 1);
+            authenticate(params, -1)
+        };
+        let mut session = Session::new();
+        let id = session.open_with_security_resolver("redact.pdf", None, encrypted(algorithm, true), &resolver).unwrap();
+        let shape =
+            Shape::Redact { quads: vec![pdfcraft_annot::rect_quad([80.0, 140.0, 100.0, 180.0])], overlay: String::new(), look: Default::default() };
+        session
+            .apply(
+                id,
+                Edit::AddAnnotation(NewAnnotation {
+                    page: 0,
+                    style: Style::default_for(&shape),
+                    shape,
+                    contents: String::new(),
+                    author: String::new(),
+                }),
+            )
+            .unwrap();
+        session.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+        assert_eq!(calls.get(), 1);
+        let saved = session.save_bytes(id).unwrap();
+        let mut reopened = Session::new();
+        let next = reopened.open_with_security_resolver("redacted.pdf", None, saved, &resolver).unwrap();
+        let doc = reopened.get(next).unwrap();
+        let mut renderer = PageRenderer::new(doc.bytes.clone(), doc.config.clone());
+        let text = renderer.render(RenderRequestFor::text(0)).text.unwrap().plain_text();
+        assert!(text.contains("Page"));
+        assert!(!text.contains('1'));
+        assert!(doc.info.encrypted);
+        session.undo(id).unwrap();
+        assert_eq!(session.get(id).unwrap().redaction_marks(), 1);
+        let doc = session.get(id).unwrap();
+        let cos = &doc.editor.as_ref().unwrap().cos;
+        let marks = pdfcraft_redact::marks(cos);
+        assert!(
+            matches!(
+                shown_under_redactions(cos, &marks, &[], &doc.info.pages, &doc.config),
+                Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(n))) if n > 0
+            ),
+            "remaining text must still fail the verification pass"
+        );
+    }
+}
+
+#[test]
+fn certificate_redaction_verification_ignores_viewer_layer_hiding() {
+    let pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D << /Order [5 0 R] >> >> >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents 4 0 R /Resources << /Properties << /Hidden 5 0 R >> /Font << /F1 6 0 R >> >> >>")
+        .stream("", "/OC /Hidden BDC BT /F1 24 Tf 20 150 Td (SECRET) Tj ET EMC")
+        .obj("<< /Type /OCG /Name (Secret layer) >>")
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+        .build();
+    let mut source = pdfcraft_cos::Document::open(Arc::new(pdf)).unwrap();
+    source
+        .set_public_key_encryption(
+            SecurityHandler::create_public_key(Algorithm::Aes256, vec![b"test envelope".to_vec()], &[7; 20], true).unwrap(),
+            [9; 16],
+        )
+        .unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&source, &SaveOptions::default()).unwrap());
+    let resolver = |params: &EncryptDict, _: &[u8]| authenticate(params, -1);
+    let mut session = Session::new();
+    let id = session.open_with_security_resolver("layers.pdf", None, bytes.clone(), &resolver).unwrap();
+    let shape = Shape::Redact { quads: vec![pdfcraft_annot::rect_quad([0.0, 0.0, 200.0, 300.0])], overlay: String::new(), look: Default::default() };
+    session
+        .apply(
+            id,
+            Edit::AddAnnotation(NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: String::new() }),
+        )
+        .unwrap();
+    let doc = session.get(id).unwrap();
+    let mut hidden = doc.config.clone();
+    let layer = doc.info.layers.iter().find(|layer| layer.name == "Secret layer").unwrap();
+    hidden.layers = Arc::new(vec![(i32::try_from(layer.id.0).unwrap(), i32::from(layer.id.1), false)]);
+    hidden.hide_comments = true;
+    // Inspect the original page so the redaction-mark annotation cannot affect this control.
+    let mut visible = PageRenderer::new(bytes.clone(), doc.config.clone());
+    let visible_page = visible.render(RenderRequest::default());
+    assert!(visible_page.error.is_none());
+    assert!(visible_page.rgba.iter().any(|value| *value < 200), "the default layer shows text");
+    let mut renderer = PageRenderer::new(bytes, hidden.clone());
+    let hidden_page = renderer.render(RenderRequest::default());
+    assert!(hidden_page.error.is_none());
+    assert!(hidden_page.rgba.iter().all(|value| *value == 255), "the viewer really hides the marked text");
+    let cos = &doc.editor.as_ref().unwrap().cos;
+    assert!(
+        matches!(
+            shown_under_redactions(cos, &pdfcraft_redact::marks(cos), &[], &doc.info.pages, &hidden),
+            Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(n))) if n > 0
+        ),
+        "viewer hiding must not turn surviving text into a successful redaction check"
+    );
+}
+
+#[test]
+fn certificate_printing_supports_explicit_and_permission_forced_rasterization() {
+    for (permissions, raster) in [
+        (-1, Some(print::Raster { dpi: 72.0, grayscale: true })),
+        (1 << 2, None),
+        (1 << 2, Some(print::Raster { dpi: 600.0, grayscale: false })),
+        (0, None),
+    ] {
+        let calls = Cell::new(0);
+        let resolver = |params: &EncryptDict, _: &[u8]| {
+            calls.set(calls.get() + 1);
+            authenticate(params, permissions)
+        };
+        let mut session = Session::new();
+        let id = session.open_with_security_resolver("print.pdf", None, encrypted(Algorithm::Aes256, true), &resolver).unwrap();
+        let settings = print::Settings { pages: vec![0], raster, ..Default::default() };
+        let result = session.print_pdf(id, &settings);
+        assert_eq!(calls.get(), 1);
+        if permissions == 0 {
+            assert!(matches!(result, Err(EditError::NotPermitted("printing"))));
+            continue;
+        }
+        let bytes = Arc::new(result.unwrap());
+        let output = pdfcraft_cos::Document::open(bytes.clone()).unwrap();
+        let widths: Vec<_> = output
+            .scan_objects()
+            .filter_map(|(_, object)| match &*object {
+                pdfcraft_cos::Object::Stream(stream) if stream.dict.name(b"Subtype") == Some(b"Image") => stream.dict.int(b"Width"),
+                _ => None,
+            })
+            .collect();
+        assert!(!widths.is_empty());
+        if permissions == 1 << 2 {
+            let width = f64::from(session.get(id).unwrap().info.pages[0].width);
+            assert!(widths.iter().all(|w| *w as f64 <= width * 150.0 / 72.0 + 1.0));
+        }
+        let mut renderer = PageRenderer::new(bytes, RenderConfig::default());
+        assert!(renderer.render(RenderRequestFor::text(0)).text.unwrap().plain_text().trim().is_empty());
+        let page = renderer.render(RenderRequest::default());
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert!(page.rgba.as_chunks::<4>().0.iter().any(|p| p.get(..3).unwrap().iter().any(|c| *c < 200)), "printed page has ink");
+    }
+}
+
+#[test]
 fn certificate_security_does_not_confuse_all_content_permissions_with_security_control() {
     let bytes = encrypted(pdfcraft_cos::Algorithm::Aes256, true);
     let resolver = |params: &EncryptDict, _: &[u8]| authenticate(params, -3); // Every bit except security-change bit 2.

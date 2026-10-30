@@ -560,6 +560,99 @@ mod public_key {
     }
 
     #[test]
+    fn public_filter_lengths_allow_defaults_and_resolved_integer_values() {
+        #[derive(Clone, Copy)]
+        enum Length {
+            Missing,
+            Direct,
+            Indirect,
+        }
+        for algorithm in [Algorithm::Aes128, Algorithm::Aes256] {
+            let bits = if algorithm == Algorithm::Aes128 { 128 } else { 256 };
+            for (filter_length, top_length) in [
+                (Length::Missing, Length::Missing),
+                (Length::Direct, Length::Direct),
+                (Length::Indirect, Length::Indirect),
+                (Length::Missing, Length::Indirect),
+                (Length::Indirect, Length::Missing),
+            ] {
+                let mut source = Document::open(Arc::new(fixture())).unwrap();
+                source.set_public_key_encryption(writer(algorithm, true), [9; 16]).unwrap();
+                let length = source.add(Object::Int(bits));
+                let value = |encoding| match encoding {
+                    Length::Missing => None,
+                    Length::Direct => Some(Object::Int(bits)),
+                    Length::Indirect => Some(Object::Ref(length)),
+                };
+                let encrypt = source.trailer().reference(b"Encrypt").unwrap();
+                source
+                    .update_dict(encrypt, |dict| {
+                        match value(top_length) {
+                            Some(value) => {
+                                dict.set(b"Length".to_vec(), value);
+                            }
+                            None => {
+                                dict.remove(b"Length");
+                            }
+                        }
+                        let filter =
+                            dict.get_mut(b"CF").unwrap().as_dict_mut().unwrap().get_mut(b"DefaultCryptFilter").unwrap().as_dict_mut().unwrap();
+                        match value(filter_length) {
+                            Some(value) => {
+                                filter.set(b"Length".to_vec(), value);
+                            }
+                            None => {
+                                filter.remove(b"Length");
+                            }
+                        }
+                    })
+                    .unwrap();
+                let saved = Arc::new(write_full(&source, &SaveOptions::default()).unwrap());
+                let reopened = Document::open_with_security_resolver(saved, &reader).unwrap();
+                assert_eq!(content(&reopened), SECRET);
+                assert_eq!(reopened.security().unwrap().dict().length_bits, bits);
+            }
+        }
+    }
+
+    #[test]
+    fn public_filter_lengths_reject_invalid_values_before_authentication() {
+        for algorithm in [Algorithm::Aes128, Algorithm::Aes256] {
+            let bits = if algorithm == Algorithm::Aes128 { 128 } else { 256 };
+            for at_filter in [false, true] {
+                for indirect in [false, true] {
+                    for invalid in
+                        [Object::Bool(true), Object::Null, Object::name("invalid"), Object::Real(bits as f64 + 0.5), Object::Int(32), Object::Int(-1)]
+                    {
+                        let mut source = Document::open(Arc::new(fixture())).unwrap();
+                        source.set_public_key_encryption(writer(algorithm, true), [9; 16]).unwrap();
+                        let value = if indirect { Object::Ref(source.add(invalid)) } else { invalid };
+                        let encrypt = source.trailer().reference(b"Encrypt").unwrap();
+                        source
+                            .update_dict(encrypt, |dict| {
+                                let target = if at_filter {
+                                    dict.get_mut(b"CF").unwrap().as_dict_mut().unwrap().get_mut(b"DefaultCryptFilter").unwrap().as_dict_mut().unwrap()
+                                } else {
+                                    dict
+                                };
+                                target.set(b"Length".to_vec(), value);
+                            })
+                            .unwrap();
+                        let saved = Arc::new(write_full(&source, &SaveOptions::default()).unwrap());
+                        let calls = Cell::new(0);
+                        let resolver = |params: &EncryptDict, id: &[u8]| {
+                            calls.set(calls.get() + 1);
+                            reader(params, id)
+                        };
+                        assert!(matches!(Document::open_with_security_resolver(saved, &resolver), Err(CosError::Security(_))));
+                        assert_eq!(calls.get(), 0, "invalid lengths must fail before requesting credentials");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn recipient_order_and_metadata_changes_invalidate_context_reuse() {
         let mut source = Document::open(Arc::new(fixture())).unwrap();
         source.set_public_key_encryption(writer(Algorithm::Aes256, true), [9; 16]).unwrap();
