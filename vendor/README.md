@@ -103,6 +103,34 @@ D50/equal-energy neutral and chromatic oracles, D65 identity, and direct/Indexed
 consistency (including an asymmetric chromatic Range), and zero/overflowing
 cone-response fallback.
 
+### hayro-interpret patch (71): missing simple-font glyph outlines (#2908)
+
+`StandardKind` retains primary glyphs with drawable outlines and patch (26) composites, then resolves a missing
+single-byte character from its glyph name or single-scalar ToUnicode entry. The new
+`FontQuery::MissingGlyph` asks the host for an OpenType face for that character and standard
+family/style. Alternate outlines have separate per-code virtual IDs, remain in the original
+font's 1000-unit space, and narrow to a smaller original advance when one exists;
+they never widen to an oversized advance (the same rule as patch (57)). Without a PDF width
+or standard metric for the code, the alternate face supplies its natural advance; a missing
+glyph box uses 600 units. Unicode aliases that resolve to a primary glyph retain its standard
+advance without PDF widths. Primary entries with empty outlines reach fallback through both
+name and Unicode lookup. Explicit zero widths and /MissingWidth retain priority. Extraction,
+embedded font programs, Type0/CID, Type3 and save paths are unchanged. A bounded per-font cache retains
+outlines and parsed faces; absent/corrupt/noncovering faces produce an original missing-glyph
+box for known printable text. Invisible characters stay invisible, and arbitrary codes are
+not guessed. The default/example resolver returns `None`; PdfCraft provides approved bundled
+faces in `crates/render/src/glyph_fallback.rs`. The shared Differences cursor also uses
+saturating arithmetic so a malformed i64::MAX index cannot crash interpretation.
+
+Regression evidence: `crates/render/tests/nonembedded_fallback.rs` (all four reported fonts,
+per-letter raster assertions, mixed outline sources, primary/composite precedence, PDF
+positioning, afii/uni names, ToUnicode, Type1, embedded programs, missing/corrupt faces and
+malformed Differences). `greek_fallback_widths_never_widen_outlines_or_change_pdf_placement`
+covers Greek iota variants with oversized, narrow and zero widths in regular/bold TrueType
+and Type1 dictionaries. The original Cyrillic raster and overflow tests both fail on main.
+This resolver seam and interpreter patch are intended for submission upstream separately
+from PdfCraft's font policy. See `docs/development.md` for remaining family/style limitations.
+
 ## Clipping-only text reporting (#3109 / #3116)
 
 `hayro-interpret/src/interpret/text.rs` reports mode 7 glyphs after installing their

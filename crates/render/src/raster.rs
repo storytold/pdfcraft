@@ -81,12 +81,17 @@ pub struct RenderConfig {
 }
 
 impl RenderConfig {
+    /// Build interpreter settings for this document's layer overrides and comment visibility.
+    /// Try approved per-glyph faces, then the optional Japanese CID substitute, then hayro's default
+    /// resolver; unresolved queries retain those resolvers' existing fallback behavior.
     fn settings(&self) -> InterpreterSettings {
         let standard = InterpreterSettings::default().font_resolver;
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),
             hide_comments: self.hide_comments,
-            font_resolver: Arc::new(move |query| japanese_fallback(query).or_else(|| standard(query))),
+            font_resolver: Arc::new(move |query| {
+                crate::glyph_fallback::resolve(query).or_else(|| japanese_fallback(query)).or_else(|| standard(query))
+            }),
             ..InterpreterSettings::default()
         }
     }

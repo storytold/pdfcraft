@@ -16,6 +16,10 @@ fn load_asset(name: &str) -> Option<(FontData, u32)> {
     Some((Arc::new(data), 0))
 }
 
+/// Render input PDF pages to PNG with optional output-directory and scale arguments
+/// (defaults: current directory and 1.0, also for an unparsable scale). This example
+/// supplies no per-glyph fallback. Missing arguments, unreadable/invalid input and
+/// failed output creation or writing panic.
 fn main() {
     if let Ok(()) = log::set_logger(&LOGGER) {
         log::set_max_level(log::LevelFilter::Trace);
@@ -78,6 +82,8 @@ fn main() {
                 let name = pick_standard_font(&f.pick_standard_font());
                 load_asset(name).or_else(|| Some(f.pick_standard_font().get_font_data()))
             }
+            // PdfCraft patch (71): this example supplies no per-glyph fallback.
+            FontQuery::MissingGlyph { .. } => None,
         }),
         ..Default::default()
     };

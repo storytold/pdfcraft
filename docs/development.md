@@ -126,6 +126,39 @@ reach this retry instead of the uncaptured-error panic handler. This does not fi
 driver's shader compilation, and explicit `PDFCRAFT_RENDERER=wgpu` still disables the retry.
 `PDFCRAFT_RENDERER` skips it or chooses OpenGL from the start.
 
+## Missing non-embedded simple-font glyphs
+
+The renderer keeps each standard-14 substitute's supported glyphs and existing accent
+composites. A primary name/cmap entry is accepted only when it has a non-empty outline;
+otherwise printable text reaches the alternate outline or missing-glyph box. Unicode aliases
+and single-scalar ToUnicode entries that select a primary glyph use its standard advance when
+PDF widths are absent. For a missing glyph it decodes the Encoding/Differences glyph name (AGL, `afii`,
+`uni`/`u`); a single-scalar ToUnicode mapping is the last resort. Hayro's PdfCraft patch (71)
+requests an outline through `FontQuery::MissingGlyph`. Original PDF widths, text operators,
+transforms and extraction remain authoritative; fallback programs never become embedded font
+data or modify the document. When neither a PDF width nor a standard metric exists for a
+code (for example Cyrillic /Differences in Helvetica without /Widths), the alternate face
+supplies its natural advance, scaled to 1000 units per em. Missing-glyph boxes use 600 units.
+Explicit zero widths and /MissingWidth keep priority. Alternate outlines narrow to smaller
+PDF advances but never widen to larger ones, keeping narrow Greek letters readable even
+when a generator assigns every code the same oversized width. The PDF advance still places
+the following glyph. CLI rendering, `page_render`, the desktop and WASM share this path.
+
+Approved existing Inter Regular/SemiBold and JetBrains Mono supply deterministic coverage.
+Their bytes are exported by `pdfcraft-fonts` and shared with interface font registration,
+independent of installed fonts and `PDFCRAFT_SYSTEM_FONTS`. Optional craft-fonts Mincho faces
+are preferred for serif text when they cover the character. Without those faces, Cyrillic serif
+text uses Inter; SemiBold approximates bold, and upright fallback faces are slanted for italic.
+This preserves readable text and PDF placement, not the absent font's exact design. Known
+printable characters with no usable face get a contributor-original missing-glyph box; controls
+and default-ignorable characters remain invisible. Multi-scalar semantic mappings get a box
+rather than an invented first-character outline. Unknown codes are never assumed to be Cyrillic.
+
+The resolver is lazy and shares font bytes/coverage between workers. Each simple font caches
+at most 256 code mappings and eight parsed fallback faces, including failed lookups. Run
+`cargo test -p pdfcraft-render --test nonembedded_fallback` for synthetic per-letter raster,
+outline, positioning, encoding, embedded-font and malformed-input regressions for #2908.
+
 ## Preferences
 
 Linux and FreeBSD store `app.ron` in `$XDG_CONFIG_HOME/pdfcraft/`, or

@@ -123,6 +123,10 @@ pub struct InterpreterSettings {
 }
 
 impl Default for InterpreterSettings {
+    /// Use embedded standard/family substitutes with `embed-fonts`, otherwise resolve no
+    /// fonts. MissingGlyph queries return `None` unless the host supplies a resolver.
+    /// CMaps depend on `embed-cmaps`; annotations are enabled, with no viewer overrides,
+    /// cancellation, preview shortcuts or warning callback effects.
     fn default() -> Self {
         Self {
             #[cfg(not(feature = "embed-fonts"))]
@@ -131,6 +135,7 @@ impl Default for InterpreterSettings {
             font_resolver: Arc::new(|query| match query {
                 FontQuery::Standard(s) => Some(s.get_font_data()),
                 FontQuery::Fallback(f) => Some(f.pick_standard_font().get_font_data()),
+                FontQuery::MissingGlyph { .. } => None,
             }),
             #[cfg(feature = "embed-cmaps")]
             cmap_resolver: Arc::new(hayro_cmap::load_embedded),

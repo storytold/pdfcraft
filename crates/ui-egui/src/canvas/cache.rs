@@ -411,6 +411,10 @@ impl DocView {
                 && self.frame_visible.contains(&r.page)
                 && !self.errors.contains_key(&r.page)
         });
+        // Closed thumbnail consumers must release textures even while main-page
+        // rendering delays admission of new thumbnail requests.
+        self.thumbs.retain(|p, _| self.thumb_demand.contains_key(p));
+        self.stale_thumbs.retain(|p| self.thumb_demand.contains_key(p));
         if visible_mains_pending {
             // Caches are kept; demand is re-evaluated next frame once pixels arrive.
             return queue;

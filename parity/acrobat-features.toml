@@ -734,8 +734,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = ["page_render"]
-evidence = ["crates/render/src/raster/tests.rs::renders_a_blue_rectangle", "crates/automation/tests/it/automation.rs::open_inspect_render_and_find", "crates/render/src/raster/tests.rs::user_unit_scales_the_page_and_everything_on_it"]
-notes = "hayro bootstrap renderer; own DisplayList devices in M2.6. Pages with /UserUnit are shown at their size in points, as Acrobat reads the value"
+evidence = ["crates/render/tests/nonembedded_fallback.rs::greek_fallback_widths_never_widen_outlines_or_change_pdf_placement", "crates/render/tests/nonembedded_fallback.rs::unicode_aliases_without_pdf_widths_keep_primary_advances", "crates/render/tests/nonembedded_fallback.rs::empty_primary_glyphs_use_alternate_outlines_or_missing_boxes", "crates/render/tests/nonembedded_fallback.rs::empty_primary_aliases_without_pdf_widths_keep_fallback_metrics_consistent", "crates/render/tests/nonembedded_fallback.rs::all_four_reported_nonembedded_fonts_draw_every_cyrillic_letter", "crates/render/src/raster/tests.rs::renders_a_blue_rectangle", "crates/automation/tests/it/automation.rs::open_inspect_render_and_find", "crates/render/src/raster/tests.rs::user_unit_scales_the_page_and_everything_on_it"]
+notes = "#2908 review: primary Unicode aliases retain standard advances without PDF widths; empty primary named/cmap outlines reach alternate outlines or missing boxes. Non-embedded simple-font missing glyphs use approved bundled per-character outlines (#2908), preserving primary glyphs and PDF advances; absent PDF widths and standard metrics use natural fallback advances. Absent exact serif/bold/italic faces remain approximate; uncovered printable characters show boxes. Oversized PDF advances never widen fallback outlines; narrow and zero widths still fit. hayro bootstrap renderer; own DisplayList devices in M2.6. Pages with /UserUnit are shown at their size in points, as Acrobat reads the value"
 
 [[feature]]
 id = "view.render-shadings-patterns"

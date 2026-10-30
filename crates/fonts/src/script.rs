@@ -10,6 +10,12 @@ static FONT: &[u8] = include_bytes!("../../../assets/fonts/DancingScript.ttf");
 /// the script font lacks (Dancing Script is Latin and Vietnamese only: no Cyrillic or Greek).
 pub static INTER_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 
+/// Approved Inter SemiBold bytes shared by the interface and display fallback.
+pub static INTER_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf");
+
+/// Approved JetBrains Mono Regular bytes shared by the interface and display fallback.
+pub static JETBRAINS_MONO_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf");
+
 /// Forward slant of fallback glyphs in a typed signature (about 12°), so they lean like the script.
 const FALLBACK_SLANT: f64 = 0.21;
 

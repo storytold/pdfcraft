@@ -81,9 +81,12 @@ impl Type1Font {
         Some(Self(0, Kind::Standard(standard), None))
     }
 
+    /// Map through the embedded Type1/CFF program or the standard-face substitute.
+    /// Only the substitute uses ToUnicode for unknown-name recovery and per-glyph fallback;
+    /// embedded programs retain their own mapping. Unresolved codes yield .notdef.
     pub(crate) fn map_code(&self, code: u8) -> GlyphId {
         match &self.1 {
-            Kind::Standard(s) => s.map_code(code),
+            Kind::Standard(s) => s.map_code(code, self.2.as_ref()),
             Kind::Type1(s) => s.map_code(code),
             Kind::Cff(c) => c.map_code(code),
         }

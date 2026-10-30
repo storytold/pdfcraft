@@ -1191,6 +1191,24 @@ fn thumbnails_release_on_scroll_panel_close_and_request_again_after_eviction() {
     assert!(v.prepare_render_queue(&info, 1.0).is_empty(), "closing consumers cancels thumbnail work");
 }
 
+/// Closing a consumer releases its textures even when visible page pixels are still pending.
+#[test]
+fn closed_thumbnail_consumer_releases_cache_while_main_page_is_pending() {
+    let ctx = egui::Context::default();
+    let info = thumbnail_info(4);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.need_thumbnail(0, true);
+    v.last_queue = v.prepare_render_queue(&info, 1.0);
+    let request = v.last_queue[0];
+    assert!(v.receive_result(&ctx, solid_result(request, 132, 171)) > 0);
+    v.begin_render_frame();
+    let main = RenderRequest { page: 0, scale: 1.0, tag: 1000, ..Default::default() };
+    v.frame_visible = [0].into();
+    v.frame_queue = vec![main];
+    assert_eq!(v.prepare_render_queue(&info, 1.0), vec![main]);
+    assert!(v.thumbs.is_empty());
+}
+
 #[test]
 fn stale_results_are_rejected_before_conversion_after_dpi_invalidation_and_suspend() {
     let ctx = egui::Context::default();

@@ -168,10 +168,13 @@ impl TrueTypeFont {
         }
     }
 
+    /// Map through the embedded program or the standard-face substitute. Only the
+    /// substitute receives ToUnicode for unknown-name recovery and per-byte fallback;
+    /// embedded glyph selection stays with its own program. Unresolved codes yield .notdef.
     pub(crate) fn map_code(&self, code: u8) -> GlyphId {
         match &self.kind {
             Kind::Embedded(e) => e.map_code(code),
-            Kind::Standard(s) => s.map_code(code),
+            Kind::Standard(s) => s.map_code(code, self.to_unicode.as_ref()),
         }
     }
 
@@ -458,6 +461,9 @@ impl CacheKey for TrueTypeFont {
     }
 }
 
+/// Read the named/base encoding and byte-sized Differences overrides. Ignore malformed
+/// entries and indices outside 0..=255; saturate the cursor so later numeric entries
+/// can reset it safely. Missing or unknown bases use BuiltIn. Return the base and overrides.
 pub(crate) fn read_encoding(dict: &Dict<'_>) -> (Encoding, HashMap<u8, String>) {
     fn get_encoding_base(dict: &Dict<'_>, name: Name<'_>) -> Encoding {
         match dict.get::<Name<'_>>(name.as_ref()) {
@@ -493,7 +499,9 @@ pub(crate) fn read_encoding(dict: &Dict<'_>) -> (Encoding, HashMap<u8, String>) 
                         if let Ok(code) = code.try_into() {
                             map.insert(code, name.as_str().to_string());
                         }
-                        code += 1;
+                        // PdfCraft patch (71): a malformed index cannot overflow
+                        // before a later valid index resets the encoding cursor.
+                        code = code.saturating_add(1);
                     }
                     _ => {}
                 }
