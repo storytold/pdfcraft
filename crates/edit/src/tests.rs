@@ -1113,6 +1113,89 @@ fn a_paste_steps_past_copies_of_itself_only() {
     assert_eq!(paste_place([&turned], &image, page), step(0.0), "the same picture turned or cropped otherwise isn't a copy");
 }
 
+/// Bundled Cyrillic remains editable after saving without an optional font checkout.
+#[test]
+fn added_cyrillic_text_is_drawable_without_craft_fonts() {
+    let mut doc = fixture();
+    let text = AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "Привет, мир! Ёжик № 123 / Hello".into(), ..AddedText::default() };
+    assert_eq!(first_undrawable(&text), None);
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    let doc = reopen(&doc);
+    let added = list_added(&doc);
+    let Content::Text(saved) = &added[0].content else { panic!() };
+    assert_eq!(saved.text, text.text);
+}
+
+/// Soft wrapping must keep word separators in both PDF ActualText and extracted text.
+#[test]
+fn wrapped_cyrillic_actual_text_retains_word_separators() {
+    for original in ["Привет мир", "Привет  мир ещё", "Привет Hello мир", "  Привет мир  ", "Привет\nмир", "Привет\n\nмир"]
+    {
+        let mut doc = fixture();
+        let text = AddedText { text: original.into(), rect: [72.0, 550.0, 115.0, 700.0], ..AddedText::default() };
+        assert!(added::lines(&text).len() > 1, "the regression must wrap: {original}");
+        add_content(&mut doc, 0, &Content::Text(text)).unwrap();
+        let doc = reopen(&doc);
+        let actual: String = streams(&doc, 0)
+            .iter()
+            .flat_map(|s| pdfcraft_content::parse(s.as_bytes()).ops)
+            .filter(|op| op.is("BDC"))
+            .filter_map(|op| {
+                op.operands.get(1).and_then(Object::as_dict).and_then(|d| d.get(b"ActualText")).and_then(Object::as_string).map(|s| s.to_text())
+            })
+            .collect();
+        // Explicit paragraph breaks already have separate visual lines; do not invent a space.
+        let expected = original.replace('\n', "");
+        assert_eq!(actual, expected, "wrapped ActualText must preserve the logical phrase");
+        let extracted: String = text::text_lines(&doc, 0).unwrap().into_iter().filter(|line| line.text != "Hi").map(|line| line.text).collect();
+        assert_eq!(extracted, expected, "copy/search text must retain wrapped separators");
+    }
+}
+
+/// Wrapping and alignment measure the same Cyrillic advances that the PDF writer uses.
+#[test]
+fn cyrillic_wrapping_and_alignment_use_the_written_glyph_advances() {
+    let word = "Ширина";
+    let size = 20.0;
+    let glyph_width = pdfcraft_fonts::shape_cyrillic(word).unwrap().iter().map(|c| c.advance).sum::<f64>() * size;
+    for char_spacing in [-0.5, 0.0, 1.25] {
+        let width = glyph_width + char_spacing * word.chars().count() as f64;
+        let mut text =
+            AddedText { text: format!("{word} {word}"), size, char_spacing, rect: [10.0, 100.0, 10.0 + width + 0.1, 200.0], ..AddedText::default() };
+        assert_eq!(added::lines(&text), [word, word]);
+        assert!((added::text_width(&AddedText { text: word.into(), ..text.clone() }) - width).abs() < 0.001);
+        for align in [Align::Center, Align::Right, Align::Justify] {
+            let mut doc = fixture();
+            text.align = align;
+            add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+            let stream = streams(&doc, 0).into_iter().find(|s| s.contains("/PCAr")).unwrap();
+            let matrices: Vec<_> = pdfcraft_content::parse(stream.as_bytes()).ops.into_iter().filter(|op| op.is("Tm")).collect();
+            let expected = match align {
+                Align::Center => text.rect[0] + (text.rect[2] - text.rect[0] - width) / 2.0,
+                Align::Right => text.rect[2] - width,
+                _ => text.rect[0],
+            };
+            // Neither line draws the logical wrap separator. Both start at the same x;
+            // a justified single-word line has no painted spaces to stretch.
+            for matrix in [&matrices[0], &matrices[word.chars().count()]] {
+                let x = matrix.operands[4].as_f64().unwrap();
+                assert!((x - expected).abs() < 0.001, "{align:?}, Tc={char_spacing}: {x} vs {expected}");
+            }
+        }
+        text.text = format!("{word} {word} {word}");
+        text.align = Align::Justify;
+        let space = text.family.width(" ", size, false, false) + char_spacing;
+        text.rect[2] = text.rect[0] + 2.0 * width + space + 10.0;
+        assert_eq!(added::lines(&text), [format!("{word} {word}"), word.into()]);
+        let mut doc = fixture();
+        add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+        let stream = streams(&doc, 0).into_iter().find(|s| s.contains("/PCAr")).unwrap();
+        let matrices: Vec<_> = pdfcraft_content::parse(stream.as_bytes()).ops.into_iter().filter(|op| op.is("Tm")).collect();
+        let second_word_x = matrices[word.chars().count() + 1].operands[4].as_f64().unwrap();
+        assert!((second_word_x - (text.rect[2] - width)).abs() < 0.001, "justify must stretch only the painted space, Tc={char_spacing}");
+    }
+}
+
 #[test]
 fn added_arabic_text_is_shaped_in_display_order_and_stays_searchable() {
     let mut doc = fixture();

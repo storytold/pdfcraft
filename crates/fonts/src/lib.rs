@@ -28,7 +28,8 @@ pub use script::{
     GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, japanese_glyph, japanese_glyph_from, script_missing, script_outline,
 };
 pub use shaping::{
-    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, hebrew_has, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, thai_has,
+    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, cyrillic_has, hebrew_has, shape_arabic, shape_cyrillic, shape_hebrew, shape_thai,
+    shaped_glyph, thai_has,
 };
 pub use std14::Std14;
 

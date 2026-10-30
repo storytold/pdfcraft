@@ -1,6 +1,4 @@
-use super::layout::{
-    Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_thai, latin_width, lines, norm, shaped_layout, text_rect, thai_error, wrapped,
-};
+use super::layout::{Piece, is_arabic, is_cyrillic, is_hebrew, is_thai, latin_width, lines, norm, script_error, shaped_layout, text_rect, wrapped};
 use super::types::{AddedText, Align, Family};
 use super::{
     Content, Dict, Document, EditError, GlyphError, GlyphOutline, HashMap, HashSet, ObjRef, Object, PdfString, ShapedCluster, ShapedScript, Stream,
@@ -15,17 +13,17 @@ fn font_name(base: &str) -> String {
 /// per 240 distinct glyphs it needs.
 pub(super) const GLYPHS_PER_FONT: usize = 240;
 
-/// A line of a shaped-text item after layout: its text, whether its paragraph runs right to left,
-/// its pieces in drawing order and its width at the item's size.
+/// A line after layout: logical text including unpainted wrap separators, paragraph direction,
+/// drawing pieces and their width at the item's size.
 pub(super) type LaidLine = (String, bool, Vec<Piece>, f64);
 
-/// Draw a text item that has Arabic, Hebrew or Thai in it. Each line is laid out in display order; their glyphs
-/// come from Type 3 fonts drawn from the craft-fonts face's outlines (no font file is embedded),
+/// Draw a text item that has Arabic, Hebrew, Thai or Cyrillic in it. Each line is laid out in display order; their glyphs
+/// come from Type 3 fonts drawn from approved face outlines (no font file is embedded),
 /// with a ToUnicode map for copy and search. Other text uses the item's standard font.
 fn draw_shaped(doc: &mut Document, t: &AddedText, taken: &Dict, fonts: &mut Dict, out: &mut Vec<u8>) -> Result<(), EditError> {
     let laid = wrapped(t)
         .into_iter()
-        .map(|(line, rtl)| shaped_layout(t, &line, rtl).map(|(pieces, w)| (line, rtl, pieces, w)))
+        .map(|line| shaped_layout(t, &line.text, line.rtl).map(|(pieces, w)| (line.logical, line.rtl, pieces, w)))
         .collect::<Result<Vec<_>, _>>()?;
     draw_laid_shaped(doc, t, &laid, taken, fonts, out, shaped_glyph)
 }
@@ -62,11 +60,7 @@ pub(super) fn draw_laid_shaped(
     for c in &keys {
         for (id, _) in &c.glyphs {
             if let std::collections::hash_map::Entry::Vacant(entry) = outlines.entry((c.script, *id)) {
-                entry.insert(outline(c.script, *id).map_err(|e| match c.script {
-                    ShapedScript::Arabic => arabic_error(e, &c.text),
-                    ShapedScript::Hebrew => hebrew_error(e, &c.text),
-                    ShapedScript::Thai => thai_error(e, &c.text),
-                })?);
+                entry.insert(outline(c.script, *id).map_err(|e| script_error(e, &c.text, c.script))?);
             }
         }
     }
@@ -97,7 +91,7 @@ pub(super) fn draw_laid_shaped(
         // explicitly, including marks, ligatures, digits and mixed-script punctuation.
         let logical: String = line.encode_utf16().map(|u| format!("{u:04X}")).collect();
         out.extend(format!("/Span <</ActualText <FEFF{logical}>>> BDC\n").bytes());
-        let spaces = line.matches(' ').count();
+        let spaces = painted_spaces(pieces);
         // Justified: the spaces of every line but the last stretch to fill the box.
         let tw = if t.align == Align::Justify && i + 1 < laid.len() && spaces > 0 { ((r[2] - r[0]) - w).max(0.0) / spaces as f64 } else { 0.0 };
         let x = match t.align {
@@ -146,6 +140,17 @@ pub(super) fn draw_laid_shaped(
 /// What makes two clusters the same Type 3 glyph: text, glyphs, offsets and advance (bit for bit;
 /// equal clusters come from the same font units).
 type ClusterKey<'a> = (ShapedScript, &'a str, Vec<(u32, u64, u64)>, u64);
+
+/// Justification stretches painted spaces, excluding separators present only in ActualText.
+fn painted_spaces(pieces: &[Piece]) -> usize {
+    pieces
+        .iter()
+        .map(|piece| match piece {
+            Piece::Latin(s) => s.matches(' ').count(),
+            Piece::Shaped(clusters) => clusters.iter().map(|c| c.text.matches(' ').count()).sum(),
+        })
+        .sum()
+}
 
 fn cluster_key(c: &ShapedCluster) -> ClusterKey<'_> {
     (c.script, c.text.as_str(), c.glyphs.iter().map(|(id, [x, y])| (*id, x.to_bits(), y.to_bits())).collect(), c.advance.to_bits())
@@ -209,6 +214,7 @@ fn type3_shaped(doc: &mut Document, clusters: &[&ShapedCluster], outlines: &Hash
                 ShapedScript::Arabic => "Arabic",
                 ShapedScript::Hebrew => "Hebrew",
                 ShapedScript::Thai => "Thai",
+                ShapedScript::Cyrillic => "Inter",
             },
             |f| f.family,
         ),
@@ -245,6 +251,7 @@ fn type3_shaped(doc: &mut Document, clusters: &[&ShapedCluster], outlines: &Hash
 /// page's font names. `existing`: the item is being replaced, so a build without the Arabic or
 /// Hebrew face keeps drawing that text as `?`, as before it was supported, rather than refusing to
 /// move it.
+/// Build an item's drawing stream and resources in its page's display space.
 pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict, existing: bool) -> Result<(Vec<u8>, Dict), EditError> {
     let mut res = Dict::new();
     let mut out = format!(
@@ -271,7 +278,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
             let mut fonts = Dict::new();
             fonts.set(name.clone().into_bytes(), Object::Dict(font));
             let face_or_new = |has: fn(char) -> bool, face: bool| t.text.chars().any(has) && (face || !existing);
-            if t.text.chars().any(is_thai)
+            if t.text.chars().any(|c| is_thai(c) || is_cyrillic(c))
                 || face_or_new(is_arabic, pdfcraft_fonts::document_arabic_font().is_some())
                 || face_or_new(is_hebrew, pdfcraft_fonts::document_hebrew_font(false).is_some())
             {

@@ -1,5 +1,5 @@
 use super::draw::{draw, params};
-use super::layout::{first_undrawable, is_thai, nums, shaped_arabic, thai_error};
+use super::layout::{first_undrawable, is_cyrillic, is_thai, nums, script_error, shaped_arabic};
 use super::types::{Added, AddedImage, AddedText, Align, CHAR_SPACING_LIMIT, Family, MarkerScan, TAG};
 use super::{Content, Dict, Document, EditError, GlyphError, MarkKind, ObjRef, Object, Stream, check, contents, page_list, place_tagged};
 
@@ -113,6 +113,7 @@ pub fn scan_markers(doc: &Document) -> MarkerScan {
     scan
 }
 
+/// Validate item geometry, text style and script coverage before writing document objects.
 fn validate(c: &Content) -> Result<(), EditError> {
     let r = c.rect();
     if !r.iter().all(|v| v.is_finite()) {
@@ -135,15 +136,19 @@ fn validate(c: &Content) -> Result<(), EditError> {
                 return Err(EditError::Invalid("the text box is too narrow".into()));
             }
             if t.text.chars().any(is_thai) && pdfcraft_fonts::document_thai_font().is_none() {
-                return Err(thai_error(GlyphError::NoFont, &t.text));
+                return Err(script_error(GlyphError::NoFont, &t.text, super::ShapedScript::Thai));
             }
             // Without the Arabic face, `draw` decides for the Arabic letters themselves (#403): a new
             // item is refused with what's missing, and one that already holds Arabic stays movable.
             // Everything else in it is drawn in the standard font, so it still has to fit.
             let undrawable = if t.text.chars().any(shaped_arabic) && pdfcraft_fonts::document_arabic_font().is_none() {
                 t.text.split('\n').find_map(|line| {
-                    line.chars()
-                        .find(|c| !(shaped_arabic(*c) || is_thai(*c) && pdfcraft_fonts::thai_has(*c) || pdfcraft_fonts::win_ansi_encodable(*c)))
+                    line.chars().find(|c| {
+                        !(shaped_arabic(*c)
+                            || is_thai(*c) && pdfcraft_fonts::thai_has(*c)
+                            || is_cyrillic(*c) && pdfcraft_fonts::cyrillic_has(*c)
+                            || pdfcraft_fonts::win_ansi_encodable(*c))
+                    })
                 })
             } else {
                 first_undrawable(t)

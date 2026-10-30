@@ -8061,6 +8061,46 @@ fn command_batch_tells_a_tool_name_from_an_unknown_or_toolless_command() {
     );
 }
 
+/// Cyrillic stays searchable and editable through the public automation tools and saves.
+#[test]
+fn cyrillic_text_through_tools_saves_reopens_extracts_and_renders() {
+    let dir = workdir("cyrillic-content");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    let text = "Привет, мир! Ёжик № 123 / Hello";
+    ok(&mut a, "page_add_text", json!({"doc": doc, "page": 1, "text": text, "at": [10, 20], "width": 180, "size": 9}));
+    assert!(page_text(&mut a, doc)[0].contains(text), "{:?}", page_text(&mut a, doc));
+    ok(&mut a, "doc_save", json!({"doc": doc, "path": "cyrillic.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path": "cyrillic.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "content_list", json!({"doc": reopened}))["items"][0]["text"], text);
+    assert!(page_text(&mut a, reopened)[0].contains(text));
+    let found = ok(&mut a, "text_find", json!({"doc": reopened, "query": "Привет"}));
+    assert_eq!(found["matches"].as_array().map(Vec::len), Some(1), "{found}");
+    let rendered = a.call("page_render", &json!({"doc": reopened, "page": 1, "dpi": 144})).unwrap();
+    assert!(rendered.iter().any(|c| matches!(c, Content::Png { data, width, height } if !data.is_empty() && *width > 0 && *height > 0)));
+    ok(&mut a, "content_update", json!({"doc": reopened, "page": 1, "index": 1, "text": "Русский текст: ещё"}));
+    assert!(page_text(&mut a, reopened)[0].contains("Русский текст: ещё"));
+    ok(&mut a, "edit_undo", json!({"doc": reopened}));
+    assert!(page_text(&mut a, reopened)[0].contains(text));
+    ok(&mut a, "edit_redo", json!({"doc": reopened}));
+    assert!(page_text(&mut a, reopened)[0].contains("Русский текст: ещё"));
+    ok(&mut a, "doc_save", json!({"doc": reopened, "path": "cyrillic-edited.pdf"}));
+    let edited = ok(&mut a, "doc_open", json!({"path": "cyrillic-edited.pdf"}))["doc"].as_u64().unwrap();
+    assert!(page_text(&mut a, edited)[0].contains("Русский текст: ещё"));
+    ok(
+        &mut a,
+        "content_update",
+        json!({"doc": edited, "page": 1, "index": 1, "text": "Привет  мир", "rect": [10, 20, 53, 180], "size": 12, "char_spacing": 1.25, "align": "right"}),
+    );
+    ok(&mut a, "doc_save", json!({"doc": edited, "path": "cyrillic-wrapped.pdf"}));
+    let wrapped = ok(&mut a, "doc_open", json!({"path": "cyrillic-wrapped.pdf"}))["doc"].as_u64().unwrap();
+    let extracted = page_text(&mut a, wrapped)[0].split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(extracted.contains("Привет мир"), "{extracted}");
+    let found = ok(&mut a, "text_find", json!({"doc": wrapped, "query": "Привет мир"}));
+    assert_eq!(found["count"], 1, "{found}");
+    assert!(found["matches"][0]["rects"].as_array().unwrap().len() >= 2, "the phrase must span two visual lines: {found}");
+}
+
 #[test]
 fn thai_text_through_tools_saves_reopens_extracts_and_renders() {
     let dir = workdir("thai-content");

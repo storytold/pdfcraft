@@ -624,7 +624,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "page_add_text",
             "Add text to a page",
-            "Add text as page content (not a comment). Place it with at [x, y] (top-left, points from the top-left of the displayed page) and width (wrap width, default 200), or rect. Newlines start new lines; long lines wrap. Style: font helvetica/times/courier, size, bold, italic, color (#RRGGBB or a name), align left/center/right, char_spacing (points after each character). Text must be Western European (WinAnsi) characters, or Arabic, Hebrew or Thai when the build has their craft-fonts faces (drawn right to left where the text is); others are refused. It stays editable with content_update. Undoable.",
+            "Add text as page content (not a comment). Place it with at [x, y] (top-left, points from the top-left of the displayed page) and width (wrap width, default 200), or rect. Newlines start new lines; long lines wrap. Style: font helvetica/times/courier, size, bold, italic, color (#RRGGBB or a name), align left/center/right, char_spacing (points after each character). Supports Western European (WinAnsi) characters and Cyrillic using bundled Inter Regular; Arabic, Hebrew or Thai need their craft-fonts faces (drawn right to left where the text is). Script fallback glyphs use regular style; other characters are refused. It stays editable with content_update. Undoable.",
         )
         .cmd("edit.text")
         .with(schema(

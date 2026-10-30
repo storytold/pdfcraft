@@ -60,6 +60,13 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
   Sara Am; cluster ToUnicode entries preserve the original text. The shared Type 3 writer
   embeds outlines, so reopening does not depend on installed fonts.
 - `SHIPPORI_MINCHO`: Shippori Mincho's bytes, or `None`.
+- `shape_cyrillic` / `cyrillic_has`: Add Text shapes Cyrillic with the already bundled
+  Inter Regular face from `document_latin_fonts(false)`, shared with Edit Text, including
+  combining marks. Its bounded outlines use the same Type 3
+  writer as the other scripts, with ToUnicode and ActualText for copy/search. This fallback
+  preserves spaces omitted from visual lines during wrapping without moving the glyphs. It
+  works without craft-fonts; Cyrillic uses regular sans-serif glyphs regardless of the selected
+  standard-14 family, bold or italic setting.
 
 Generated Japanese Type 3 fonts record the fallback face's family and style in an indirect
 `FontDescriptor`. `pdf::Metrics::base_font` uses its `FontName` when the Type 3 dictionary has

@@ -1,4 +1,4 @@
-//! Arabic, Hebrew and Thai text shaping with the matching craft-fonts face and bounded glyph outlines.
+//! Script shaping with approved bundled/craft-fonts faces and bounded glyph outlines.
 
 use std::sync::OnceLock;
 
@@ -28,26 +28,33 @@ pub enum ShapedScript {
     Arabic,
     Hebrew,
     Thai,
+    Cyrillic,
 }
 
 impl ShapedScript {
+    /// The approved bundled or optional face that owns this script's glyph ids.
     pub fn font(self) -> Option<&'static crate::CraftFont> {
         match self {
             Self::Arabic => crate::document_arabic_font(),
             Self::Hebrew => crate::document_hebrew_font(false),
             Self::Thai => crate::document_thai_font(),
+            // Share the bundled document fallback already used by Edit Text.
+            Self::Cyrillic => crate::document_latin_fonts(false).into_iter().next(),
         }
     }
 }
 
+/// Cache a parsed face and its shaping tables together, so glyph ids never cross faces.
 fn face(script: ShapedScript) -> Option<&'static (FontRef<'static>, ShaperData)> {
     static FACE: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static HEBREW: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static THAI: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static CYRILLIC: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     let cache = match script {
         ShapedScript::Arabic => &FACE,
         ShapedScript::Hebrew => &HEBREW,
         ShapedScript::Thai => &THAI,
+        ShapedScript::Cyrillic => &CYRILLIC,
     };
     cache
         .get_or_init(|| {
@@ -91,6 +98,17 @@ pub fn shape_thai(text: &str) -> Result<Vec<ShapedCluster>, GlyphError> {
     shape_script(text, false, ShapedScript::Thai)
 }
 
+/// Whether the bundled Inter face has a glyph for `c`.
+pub fn cyrillic_has(c: char) -> bool {
+    face(ShapedScript::Cyrillic).is_some_and(|(font, _)| font.charmap().map(c).is_some_and(|gid| gid.to_u32() != 0))
+}
+
+/// Cyrillic Add Text uses Inter Regular, with combining marks kept on their base letter.
+pub fn shape_cyrillic(text: &str) -> Result<Vec<ShapedCluster>, GlyphError> {
+    shape_script(text, false, ShapedScript::Cyrillic)
+}
+
+/// Shape a directional run, retaining its logical clusters and rejecting missing glyphs.
 fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedCluster>, GlyphError> {
     let (font, data) = face(kind).ok_or(GlyphError::NoFont)?;
     let shaper = data.shaper(font).build();
@@ -102,11 +120,12 @@ fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedC
         ShapedScript::Arabic => script::ARABIC,
         ShapedScript::Hebrew => script::HEBREW,
         ShapedScript::Thai => script::THAI,
+        ShapedScript::Cyrillic => script::CYRILLIC,
     });
     // Preserve the historical Arabic per-character mapping; Hebrew and Thai marks stay with their base.
     buffer.set_cluster_level(match kind {
         ShapedScript::Arabic => BufferClusterLevel::Characters,
-        ShapedScript::Hebrew | ShapedScript::Thai => BufferClusterLevel::MonotoneGraphemes,
+        ShapedScript::Hebrew | ShapedScript::Thai | ShapedScript::Cyrillic => BufferClusterLevel::MonotoneGraphemes,
     });
     let shaped = shaper.shape(buffer, ShapeOptions::new());
     // Clusters are byte offsets into `text`; a cluster shows the characters up to the next one.
@@ -167,6 +186,31 @@ pub fn shaped_glyph(script: ShapedScript, id: u32) -> Result<GlyphOutline, Glyph
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Bundled Cyrillic shapes real outlines and keeps combining marks with their base.
+    #[test]
+    fn bundled_cyrillic_shapes_and_outlines_without_craft_fonts() {
+        let text = "Привет, мир! Ёжик № 123";
+        let clusters = shape_cyrillic(text).unwrap();
+        assert_eq!(clusters.iter().map(|c| c.text.as_str()).collect::<String>(), text);
+        assert!(clusters.iter().all(|c| c.script == ShapedScript::Cyrillic && c.advance > 0.0));
+        for c in &clusters {
+            for (id, _) in &c.glyphs {
+                let outline = shaped_glyph(c.script, *id).unwrap();
+                assert!(outline.width > 0.0);
+                if !c.text.chars().all(char::is_whitespace) {
+                    assert!(!outline.contours.is_empty(), "{} must have ink", c.text);
+                }
+            }
+        }
+        let marked = shape_cyrillic("е\u{0308}").unwrap();
+        assert_eq!(marked.len(), 1, "a decomposed ё keeps its mark with its base");
+        assert_eq!(marked[0].text, "е\u{0308}");
+        assert!(cyrillic_has('ы') && cyrillic_has('Ё') && cyrillic_has('№'));
+        assert!(!cyrillic_has('世'));
+        assert_eq!(shape_cyrillic("世"), Err(GlyphError::Missing));
+        assert_eq!(shaped_glyph(ShapedScript::Cyrillic, u32::MAX), Err(GlyphError::Missing));
+    }
 
     fn face_or_skip() -> bool {
         if crate::document_arabic_font().is_none() {
