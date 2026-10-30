@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (Persian (`fa`, 2,785 entries) added right-to-left like Arabic and Kurdish; Arabic current state corrected: catalogs stay logical, RTL labels take an explicit direction and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native release Hans face via LXGW WenKai Lite; release-pinned craft-fonts still has no Telugu face. Current union 2,798 keys. Scores and estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** minor (German (`de`) completed to 2,774 entries with an AI-assisted terminology and style pass; Persian (`fa`, 2,785 entries) added right-to-left like Arabic and Kurdish; Arabic current state corrected: catalogs stay logical, RTL labels take an explicit direction and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native release Hans face via LXGW WenKai Lite; release-pinned craft-fonts still has no Telugu face. Current union 2,798 keys. Scores and estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Per-language status of PdfCraft's interface against Acrobat Pro's. How translations work and how to
 add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../ROADMAP.md).
@@ -42,7 +42,7 @@ add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../R
 | Portuguese (Brazil) | `pt-br` | 2,798 (100% of current union) | dialogs and tooltips; no help | Latin | community (#288) | partial | yes | 1–2 |
 | Indonesian | `id` | 0 | none | Latin | no | none | no | 3–5 |
 | Japanese | `ja` | 2,123 (99.1%) | dialogs and tooltips; no help | BIZ UDPGothic from craft-fonts; IME patched on macOS, Windows, X11, Wayland; vertical text renders but can't be edited | no | partial | yes | 4–8 |
-| German | `de` | 2,128 (99.3%) | dialogs and tooltips; no help | Latin | community, in progress (#828: terminology, clipping) | partial | yes | 2–4 |
+| German | `de` | 2,774 entries (100% of the current 2,802-string report; context rows fall back to the plain translation) | dialogs and tooltips; no help | Latin | AI-assisted terminology and style pass (2026-10-26), not yet proofread line by line by a native speaker | partial | yes | 1–2 |
 | Korean | `ko` | 0 | none | Hangul IME patched (Microsoft and Apple Korean, `vendor/README.md` winit 3, 6, 9, 10); no Hangul UI face in craft-fonts | no | none | yes | 6–10 |
 | Vietnamese | `vi` | 2,798 (100% of current key union) | dialogs and tooltips; no help | Latin with stacked diacritics; bundled Inter covers them (fonts test) | community | partial | no | 2–4 |
 
@@ -89,6 +89,7 @@ Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | German: the 256 keys the other catalogs had and `de.tsv` lacked (engine sentences, signature and accessibility details, shared buttons, weekday heads), and an AI-assisted pass over the existing rows: informal "du" throughout, one term per concept (Werkzeug, zusammenführen, getaggt, Wellenlinie, Ellipse, einklappen/ausklappen). Not yet proofread line by line by a native speaker; the mean still rounds to ≈ 68% |
 | 2026-10-25 | minor | Arabic current state corrected: catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build still has no Hans face and the release-pinned craft-fonts still has no Telugu face. Scores and estimates unchanged |
 | 2026-10-25 | minor | Added Persian (`fa`, 2,785 entries, all but 13 of the current 2,798-key union); right-to-left like Arabic and Kurdish, with logical entries reordered by egui 0.37's epaint; AI-assisted, not yet native-reviewed |
 | 2026-10-21 | minor | Brazilian Portuguese (`pt-br`) now covers all 2,674 distinct keys in the current catalog union; no help or engine/OS error-detail localization; twelve-language mean still rounds to ≈ 68% |
