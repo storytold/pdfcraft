@@ -18,6 +18,8 @@ struct Recipe<'a> {
     steps: Vec<&'a str>,
     images: optimize::ImageSettings,
     ocr: ocr::OcrSettings,
+    /// The calling session's JavaScript preference, carried into each file's own session.
+    javascript: bool,
 }
 
 impl<'a> Recipe<'a> {
@@ -54,7 +56,7 @@ impl<'a> Recipe<'a> {
         if args.opt_num("dpi")?.is_some_and(|dpi| !(72.0..=600.0).contains(&dpi)) {
             return Err(Args::wrong("dpi", "72 to 600"));
         }
-        Ok(Self { steps, images, ocr: auto.ocr_settings(args)? })
+        Ok(Self { steps, images, ocr: auto.ocr_settings(args)?, javascript: auto.session.javascript() })
     }
 
     fn accepts(&self, path: &Path) -> bool {
@@ -64,7 +66,9 @@ impl<'a> Recipe<'a> {
 
     fn process(&self, path: &Path) -> Result<(Arc<Vec<u8>>, Vec<Value>)> {
         // A fresh session per file bounds retained document state and never touches caller tabs.
+        // It keeps the caller's JavaScript preference, set before any open runs open-time scripts.
         let mut session = Session::new();
+        session.set_javascript(self.javascript);
         let mut input = Vec::new();
         std::fs::File::open(path).map_err(failed)?.take(MAX_INPUT + 1).read_to_end(&mut input).map_err(failed)?;
         if input.len() as u64 > MAX_INPUT {
@@ -79,7 +83,7 @@ impl<'a> Recipe<'a> {
                 "convert" => bytes = session.convert_to_pdf(name, &bytes)?.1,
                 "ocr" => {
                     let engine = ocr::engine().map_err(failed)?;
-                    let result = ocr::recognize_file(name, bytes, None, self.ocr.clone(), &engine, |_, _| true).map_err(failed)?;
+                    let result = ocr::recognize_file(name, bytes, None, self.ocr.clone(), &engine, self.javascript, |_, _| true).map_err(failed)?;
                     log.push(
                         json!({"step":"ocr","words":result.words(),"skipped_pages":result.pages.iter().filter(|p| p.skipped.is_some()).count()}),
                     );

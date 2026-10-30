@@ -234,17 +234,21 @@ impl FileResult {
     }
 }
 
-/// Recognize text in multiple files: one PDF's bytes in, the searchable PDF out. `progress`
-/// works as for [`OcrJob::run`].
+/// Recognize text in multiple files: one PDF's bytes in, the searchable PDF out. `javascript` is
+/// the caller's [`Session::javascript`] preference (when off, no open-time script runs).
+/// `progress` works as for [`OcrJob::run`].
 pub fn recognize_file(
     name: &str,
     bytes: Arc<Vec<u8>>,
     password: Option<&str>,
     settings: OcrSettings,
     ocr: &Ocr,
+    javascript: bool,
     progress: impl FnMut(usize, usize) -> bool,
 ) -> Result<FileResult, String> {
     let mut s = Session::new();
+    // Before the open: open-time (XFA) scripts read it there.
+    s.set_javascript(javascript);
     let id = s.open(name, None, bytes.clone(), password).map_err(|e| e.to_string())?;
     if let Some(why) = s.get(id).and_then(|d| d.read_only_reason.clone()) {
         return Err(why);

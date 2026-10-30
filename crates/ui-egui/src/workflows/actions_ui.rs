@@ -96,6 +96,8 @@ impl PdfCraftApp {
         let p = progress.clone();
         // The summary is written on the worker thread: draw it in the UI's language.
         let lang = crate::i18n::current();
+        // Each file runs in its own session; it keeps this one's JavaScript preference.
+        let javascript = self.session.javascript();
         let work = move || {
             crate::i18n::set_current(lang);
             let (mut ok, mut failed) = (0, Vec::new());
@@ -103,7 +105,7 @@ impl PdfCraftApp {
                 if let Ok(mut s) = p.lock() {
                     s.done = i;
                 }
-                let r = pdfcraft_engine::actions::run_on(&action, &name, Arc::new(bytes), |_, _| {}).and_then(|r| {
+                let r = pdfcraft_engine::actions::run_on(&action, &name, Arc::new(bytes), javascript, |_, _| {}).and_then(|r| {
                     #[cfg(not(target_arch = "wasm32"))]
                     write_result(&dir, &name, &r.bytes).map_err(|e| e.to_string())?;
                     #[cfg(target_arch = "wasm32")]

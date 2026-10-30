@@ -203,9 +203,19 @@ fn apply_step(s: &mut Session, id: DocId, step: &Step, log: &mut Vec<String>) ->
     Ok(None)
 }
 
-/// Run `action` on one file. `progress(step, steps)` is called before each step.
-pub fn run_on(action: &Action, name: &str, bytes: Arc<Vec<u8>>, mut progress: impl FnMut(usize, usize)) -> Result<FileResult, String> {
+/// Run `action` on one file. `javascript` is the caller's [`Session::javascript`] preference:
+/// when off, neither open-time scripts nor "Run a JavaScript" steps run. `progress(step, steps)`
+/// is called before each step.
+pub fn run_on(
+    action: &Action,
+    name: &str,
+    bytes: Arc<Vec<u8>>,
+    javascript: bool,
+    mut progress: impl FnMut(usize, usize),
+) -> Result<FileResult, String> {
     let mut s = Session::new();
+    // Before the open: open-time (XFA) scripts read it there.
+    s.set_javascript(javascript);
     let mut id = s.open(name, None, bytes, None).map_err(|e| e.to_string())?;
     if let Some(why) = s.get(id).and_then(|d| d.read_only_reason.clone()) {
         return Err(why);
