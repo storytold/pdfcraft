@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 pdfcraft-fonts = { workspace = true }
 ocrs = { version = "0.13.1", default-features = false, features = ["rten"] }
-rten = { version = "0.26.0", default-features = false, features = ["onnx_format", "rten_format"] }
+rten = { version = "0.27.0", default-features = false, features = ["onnx_format", "rten_format"] }
 thiserror.workspace = true
 
 [dev-dependencies]
