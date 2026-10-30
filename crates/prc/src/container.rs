@@ -181,7 +181,7 @@ impl<'a> Bytes<'a> {
 
 /// A stored `u32` offset or count as a `usize` (saturating on a 16-bit target, where no data
 /// that large could exist).
-fn offset(v: u32) -> usize {
+pub(crate) fn offset(v: u32) -> usize {
     usize::try_from(v).unwrap_or(usize::MAX)
 }
 
@@ -316,6 +316,7 @@ impl PrcFile {
         }
 
         let mut budget = Budget { left: limit, limit };
+        // prc-rs: the last section runs to the model file's start.
         let last = mf_start.min(data.len());
         let file_structures =
             descriptions.iter().map(|(id, offs)| file_structure(data, *id, &Extent { offs, last }, &mut budget)).collect::<Result<Vec<_>, _>>()?;

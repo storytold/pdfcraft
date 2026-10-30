@@ -201,6 +201,8 @@ impl<'a> BitReader<'a> {
     /// [`PrcError::UnknownDoubleCode`], [`PrcError::Truncated`], or [`PrcError::Malformed`]
     /// for a back-reference outside the value.
     pub fn double(&mut self) -> Result<f64, PrcError> {
+        // prc-rs: the decoding steps (code lookup, sign, exponent, byte-wise mantissa with
+        // back-references) follow prc-rs's.
         let mut code = 0u32;
         let mut entry = None;
         for n in 1..=acof::MAX_CODE_BITS {

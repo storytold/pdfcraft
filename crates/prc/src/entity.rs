@@ -4,6 +4,7 @@
 use crate::PrcError;
 use crate::bits::BitReader;
 use crate::schema::Schema;
+use crate::tree::Graphics;
 
 const ATTRIBUTE: u32 = 201;
 
@@ -21,11 +22,15 @@ pub(crate) struct Ctx<'a, 's> {
     /// The current name: what a `same_name` entity reuses; every entity's own name replaces
     /// it [WD 7.2.3.4]. Each section starts with none.
     pub(crate) name: Option<String>,
+    /// The PRC unique id of the last `ContentPRCRefBase` read [WD 7.2.3.2].
+    pub(crate) uid: u32,
+    /// The current graphics: what a `same_graphics` entity reuses [WD 7.2.4].
+    pub(crate) graphics: Graphics,
 }
 
 impl<'a, 's> Ctx<'a, 's> {
     pub(crate) fn new(r: BitReader<'a>, schema: &'s Schema, version: u32) -> Self {
-        Ctx { r, schema, version, name: None }
+        Ctx { r, schema, version, name: None, uid: 0, graphics: Graphics::default() }
     }
 
     /// Reads an entity type code; any value but `want` is malformed.

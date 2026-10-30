@@ -223,6 +223,13 @@ fn too_many_texture_sets_are_refused_before_anything_is_allocated() {
     assert!(decode(&section(1, &ok), &Schema::default(), 8137).is_ok());
 }
 
+/// A tessellation section holding one TESS_3D: [`SQUARE`] as two faces of one triangle each.
+pub(crate) fn two_face_square() -> W {
+    let mut b = W::default();
+    tess_3d(&mut b, 8137, &Mesh { indices: &[0, 0, 0, 3, 0, 6, 0, 0, 0, 6, 0, 9], faces: &[(0x2, 0, &[1]), (0x2, 6, &[1])], ..Mesh::default() });
+    section(1, &b)
+}
+
 #[test]
 fn two_faces_partition_the_triangles() {
     let m = one(&[0, 0, 0, 3, 0, 6, 0, 0, 0, 6, 0, 9], &[(0x2, 0, &[1]), (0x2, 6, &[1])], 0);

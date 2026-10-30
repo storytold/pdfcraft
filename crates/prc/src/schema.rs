@@ -213,6 +213,8 @@ impl Exec<'_, '_, '_> {
                 self.repeat(prog, pos, count, run, depth)?;
             }
             16 => {
+                // prc-rs: reads SimpleFor's count as an Integer; this reader deliberately reads an
+                // UnsignedInteger (module doc).
                 let count = if run { i64::from(self.r.unsigned_integer()?) } else { 0 };
                 self.repeat(prog, pos, count, run, depth)?;
             }

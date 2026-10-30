@@ -416,4 +416,4 @@ fn point_at(pts: &[[f64; 3]], idx: u32) -> Result<[f64; 3], PrcError> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
