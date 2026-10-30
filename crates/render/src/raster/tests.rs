@@ -575,9 +575,9 @@ fn function_limits_public_construction_work_and_depth() {
     let over = format!("<< /FunctionType 3 /Domain [0 1] /Functions [{data}] /Bounds [] /Encode [0 1] >>");
     // The 64 functions above nest exactly 128 levels (each dictionary and its /Functions
     // array, then the leaf's /Domain array), the parser's nesting cap. 65 nest 130, so the
-    // parser cuts the chain at the cap (the dictionary nearest to the level past it leaves
-    // that entry out, so it reads as absent) before the function-depth guard sees it, and the
-    // function is refused either way.
+    // parser leaves the outer dictionary's `/Functions` out (the outermost dictionary drops
+    // the entry holding a value nested past the cap) before the function-depth guard sees
+    // it, and the function is refused either way.
     // `function_limits_depth_guard_refuses_a_chain_of_references` tests the guard itself.
     let over = Object::from_bytes(over.as_bytes()).expect("the outer dictionary is read");
     assert!(matches!(over, Object::Dict(_)), "a dictionary: {over:?}");
@@ -4120,27 +4120,38 @@ fn nesting_pdf(trailer: &str, content: &str) -> Vec<u8> {
 /// [`nesting_pdf`] with `resources` in the page's resource dictionary and `page` added to the
 /// page dictionary.
 fn nesting_pdf_with_page(trailer: &str, resources: &str, page: &str, content: &str) -> Vec<u8> {
+    nesting_pdf_with_objects(trailer, &format!("<< {resources} >>"), page, content, None)
+}
+
+/// [`nesting_pdf_with_page`] with the resource dictionary `<< resources >>` as an object of its
+/// own, which the page refers to.
+fn nesting_pdf_with_indirect_resources(resources: &str, content: &str) -> Vec<u8> {
+    nesting_pdf_with_objects("", "6 0 R", "", content, Some(format!("<< {resources} >>")))
+}
+
+/// The page's `/Resources` is `resources`, and `extra` is object 6 when given.
+fn nesting_pdf_with_objects(trailer: &str, resources: &str, page: &str, content: &str, extra: Option<String>) -> Vec<u8> {
     let mut bytes = b"%PDF-1.7\n".to_vec();
     let mut offsets = vec![0];
-    for (index, body) in [
+    let mut objects = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << {resources} >> {page} >>"),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources {resources} {page} >>"),
         format!("<< /Length {} >> stream\n{content}\nendstream", content.len()),
         "<< /Title (Nested) >>".to_string(),
-    ]
-    .iter()
-    .enumerate()
-    {
+    ];
+    objects.extend(extra);
+    for (index, body) in objects.iter().enumerate() {
         offsets.push(bytes.len());
         bytes.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", index + 1).as_bytes());
     }
     let xref = bytes.len();
-    bytes.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
+    let size = objects.len() + 1;
+    bytes.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
     for offset in &offsets[1..] {
         bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
     }
-    bytes.extend_from_slice(format!("trailer << /Size 6 /Root 1 0 R /Info 5 0 R {trailer} >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    bytes.extend_from_slice(format!("trailer << /Size {size} /Root 1 0 R /Info 5 0 R {trailer} >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
     bytes
 }
 
@@ -4171,8 +4182,8 @@ fn deeply_nested_direct_objects_do_not_overflow_the_stack() {
             let value = nested(depth, kind);
             let siblings = format!("{value} [] []");
             let mut reader = Reader::new(siblings.as_bytes());
-            // Past the cap, arrays of arrays fail; a value with dictionaries in it is cut at
-            // the cap by the dictionary nearest to the level past it (patch 29).
+            // Past the cap, arrays of arrays fail; a value that is itself a dictionary leaves
+            // out its entry holding the rest (patch 29).
             let skips = depth <= 128 || kind != "array";
             assert_eq!(reader.skip::<Object<'_>>(false).is_some(), skips, "{kind}: depth {depth}");
             if !skips {
@@ -4273,11 +4284,11 @@ fn dictionaries_nested_without_keys_are_read_up_to_the_nesting_cap() {
 
 /// A value nested past the cap no longer fails the dictionary that holds it. A page whose
 /// dictionary had an unused entry 10,000 arrays deep was not read, so the file opened with
-/// "no pages", where Poppler and PDFium draw the page. The dictionary nearest to the level past
-/// the cap steps over its value there without parsing it, and that entry reads as absent:
-/// arrays of arrays go as a whole, while dictionaries further out keep their entries (a chain
-/// of dictionaries is cut at the cap). Nothing past the cap is parsed, and a value that doesn't
-/// close, or closes a level with the wrong delimiter, still fails its dictionary.
+/// "no pages", where Poppler and PDFium draw the page. The outermost dictionary of the object
+/// steps over its entry holding the value without parsing it, and that entry reads as absent,
+/// whether the value is arrays, dictionaries or both: no value is read with a part of it
+/// missing. Nothing past the cap is parsed, and a value that doesn't close, or closes a level
+/// with the wrong delimiter, still fails its dictionary.
 #[test]
 fn a_value_nested_past_the_cap_leaves_its_dictionary_readable() {
     use hayro_syntax::object::{Dict, FromBytes, Object};
@@ -4299,13 +4310,16 @@ fn a_value_nested_past_the_cap_leaves_its_dictionary_readable() {
             let dict = Dict::from_bytes(text.as_bytes()).expect("the dictionary is read");
             assert_eq!(dict.get::<i32>("A"), Some(1), "{kind}: depth {depth}");
             assert!(dict.get::<Object<'_>>("B").is_some(), "{kind}: depth {depth}");
-            if kind == "array" {
-                assert!(!dict.contains_key("Deep"), "{kind}: depth {depth}: the deep value is left out");
-            } else {
-                assert!(dict.contains_key("Deep"), "{kind}: depth {depth}: the deep value is cut at the cap");
-            }
-            // Read on its own, arrays nested past the cap still fail; a value with dictionaries
-            // in it is cut at the cap by the dictionary nearest to it.
+            // Left out as a whole, not kept with its innermost entry cut off (#5320 review).
+            assert!(!dict.contains_key("Deep"), "{kind}: depth {depth}: the deep value is left out");
+            assert!(dict.get::<Object<'_>>("Deep").is_none(), "{kind}: depth {depth}");
+            // So is an entry of the page holding a dictionary that holds the value.
+            let page = format!("<< /Type /Page {page} >>");
+            let page = Dict::from_bytes(page.as_bytes()).expect("the page is read");
+            assert!(!page.contains_key("Junk") && !page.contains_key("PieceInfo"), "{kind}: depth {depth}");
+            assert_eq!(page.get::<i32>("Rotate"), Some(0), "{kind}: depth {depth}");
+            // Read on its own, arrays nested past the cap still fail; a value that is a
+            // dictionary is the outermost one, and leaves out its entry holding the rest.
             let alone = Reader::new(deep.as_bytes()).skip::<Object<'_>>(false);
             assert_eq!(alone.is_none(), kind == "array", "{kind}: depth {depth}");
         }
@@ -4337,11 +4351,12 @@ fn a_value_nested_past_the_cap_leaves_its_dictionary_readable() {
     assert!(!dict.contains_key("Deep"));
 }
 
-/// A value nested past the cap inside a dictionary of the page, here its `/Resources`, leaves
-/// only that entry out: the font next to it is kept and the page draws its text. The whole
-/// `/Resources` was dropped, so the text was drawn in a substitute font.
+/// A value nested past the cap inside a dictionary of the page, here its `/Resources`, takes
+/// out the page's entry holding it, the whole `/Resources`, so no resource dictionary is read
+/// with an entry of it missing (#5320 review). When the resources are an object of their own,
+/// that object is the one that leaves the entry out, and the font next to it is kept.
 #[test]
-fn a_value_nested_past_the_cap_keeps_the_entries_next_to_it() {
+fn a_value_nested_past_the_cap_takes_out_its_objects_entry() {
     use hayro_syntax::object::{Dict, FromBytes, Object};
     // A blue capital I in Courier, with its serifs.
     let text = "0 0 1 rg BT /F1 36 Tf 4 6 Td (I) Tj ET";
@@ -4350,6 +4365,7 @@ fn a_value_nested_past_the_cap_keeps_the_entries_next_to_it() {
     let reference = nesting_render(nesting_pdf_with_page("", font, "", text));
     let ink = blue(&reference);
     assert!(ink > 50, "the text is drawn: {ink} pixels");
+    assert_eq!(blue(&nesting_render(nesting_pdf_with_indirect_resources(font, text))), ink, "an object of its own");
     // Without its font the page draws something else (or nothing), so the count tells.
     let without = blue(&nesting_render(nesting_pdf_with_page("", "", "", text)));
     assert_ne!(without, ink, "the font makes a difference");
@@ -4357,15 +4373,56 @@ fn a_value_nested_past_the_cap_keeps_the_entries_next_to_it() {
         for depth in [129, 10_000] {
             let deep = nested(depth, kind);
             for resources in [format!("{font} /Unused {deep}"), format!("/Unused {deep} {font}")] {
-                let rendered = nesting_render(nesting_pdf_with_page("", &resources, "", text));
-                assert_eq!(blue(&rendered), ink, "{kind}: depth {depth}: {}", &resources[..20]);
+                let direct = nesting_render(nesting_pdf_with_page("", &resources, "", text));
+                assert_eq!(blue(&direct), without, "{kind}: depth {depth}: {}", &resources[..20]);
+                let indirect = nesting_render(nesting_pdf_with_indirect_resources(&resources, text));
+                assert_eq!(blue(&indirect), ink, "{kind}: depth {depth}: {}", &resources[..20]);
             }
             let page = format!("<< /Type /Page /Resources << /Unused {deep} {font} /ExtGState << >> >> /Rotate 90 >>");
             let page = Dict::from_bytes(page.as_bytes()).expect("the page dictionary is read");
             assert_eq!(page.get::<i32>("Rotate"), Some(90), "{kind}: depth {depth}");
-            let resources = page.get::<Dict<'_>>("Resources").expect("the resources are kept");
+            assert!(!page.contains_key("Resources"), "{kind}: depth {depth}");
+            let resources = format!("<< /Unused {deep} {font} /ExtGState << >> >>");
+            let resources = Dict::from_bytes(resources.as_bytes()).expect("the resources are read");
+            assert!(!resources.contains_key("Unused"), "{kind}: depth {depth}");
             assert!(resources.get::<Dict<'_>>("Font").is_some_and(|f| f.contains_key("F1")), "{kind}: depth {depth}");
             assert!(resources.get::<Object<'_>>("ExtGState").is_some(), "{kind}: depth {depth}");
+        }
+    }
+}
+
+/// A `/Rotate` or `/AS` whose value nests past the cap is left out, not read with a part of it
+/// missing (#5320 review): a value cut short and read as valid could change what the
+/// dictionary means. The page keeps its parent's rotation, here none, and an appearance state
+/// nested that deeply is absent, so a widget's `/AP` is not looked up under a name read from it.
+#[test]
+fn a_rotate_or_appearance_state_nested_past_the_cap_is_not_applied() {
+    use hayro_syntax::object::{Dict, FromBytes, Name, Object};
+    let paint = "1 0 0 rg 0 0 4 4 re f";
+    for kind in ["array", "dict", "mixed"] {
+        for depth in [129, 10_000] {
+            let deep = nested(depth, kind);
+            // A deep /Rotate 90 in the value, a rotation nested inside what is left out.
+            let rotate = deep.replacen("null", "90", 1);
+            let bytes = nesting_pdf_with_page("", "", &format!("/Rotate {rotate}"), paint);
+            let info = crate::inspect(Arc::new(bytes.clone()), None).expect("the page is read");
+            assert_eq!(info.pages.len(), 1, "{kind}: depth {depth}");
+            let rendered = nesting_render(bytes);
+            assert_eq!((rendered.width, rendered.height), (40, 40), "{kind}: depth {depth}");
+            // The red square stays in the lower left corner: the page isn't rotated.
+            assert_eq!(px40(&rendered, 1, 38), &[255, 0, 0, 255], "{kind}: depth {depth}");
+            let page = format!("<< /Type /Page /Rotate {rotate} /MediaBox [0 0 40 40] >>");
+            let page = Dict::from_bytes(page.as_bytes()).expect("the page dictionary is read");
+            assert!(!page.contains_key("Rotate"), "{kind}: depth {depth}: /Rotate is left out");
+            assert!(page.get::<Object<'_>>("Rotate").is_none(), "{kind}: depth {depth}");
+
+            let state = deep.replacen("null", "/On", 1);
+            let widget = format!("<< /Type /Annot /Subtype /Widget /FT /Btn /AS {state} /V /Off /AP << /N << /On 7 0 R /Off 8 0 R >> >> >>");
+            let widget = Dict::from_bytes(widget.as_bytes()).expect("the widget dictionary is read");
+            assert!(!widget.contains_key("AS"), "{kind}: depth {depth}: /AS is left out");
+            assert!(widget.get::<Object<'_>>("AS").is_none() && widget.get::<Name<'_>>("AS").is_none(), "{kind}: depth {depth}");
+            assert_eq!(widget.get::<Name<'_>>("V").as_deref(), Some(&b"Off"[..]), "{kind}: depth {depth}");
+            assert!(widget.get::<Dict<'_>>("AP").is_some(), "{kind}: depth {depth}");
         }
     }
 }

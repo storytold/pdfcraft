@@ -6,7 +6,7 @@ use core::ops::Range;
 
 /// PdfCraft patch: how deeply direct arrays and dictionaries may nest (the same cap as `pdfcraft-cos`; a
 /// chain of 64 direct stitching functions is exactly this deep).
-const MAX_CONTAINER_DEPTH: usize = 128;
+pub(crate) const MAX_CONTAINER_DEPTH: usize = 128;
 
 /// A reader for reading bytes and PDF objects.
 #[derive(Clone, Debug)]
@@ -74,6 +74,12 @@ impl<'a> Reader<'a> {
     /// PdfCraft patch (29): marks a refused level again (see `take_depth_refused`).
     pub(crate) fn set_depth_refused(&mut self, refused: bool) {
         self.depth_refused = refused;
+    }
+
+    /// PdfCraft patch (29): whether the reader is inside exactly one array or dictionary, the
+    /// outermost one of the object it reads.
+    pub(crate) fn in_outermost_container(&self) -> bool {
+        self.skip_depth == 1
     }
 
     /// PdfCraft patch (29): steps over the direct array or dictionary at the offset without
