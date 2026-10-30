@@ -226,6 +226,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 && (s.text.trim().is_empty()
                     || lines.last().is_some_and(|l| {
                         (s.size - l.size).abs() < 0.01
+                            && same_size_sign(l, &s)
                             && s.bold == l.bold
                             && s.italic == l.italic
                             && fill_color(&s.state.fill) == l.color
@@ -338,6 +339,12 @@ fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
 
 /// The line `s` continues, or a new one: `last` is the previous run of the same stream
 /// (`bt`, baseline, end x, size).
+/// Whether `s` is set in a `Tf` size of the same sign as the line's: a line's size is the
+/// magnitude, and a run that mirrors its glyphs the other way is not the same line of text.
+fn same_size_sign(l: &TextLine, s: &Shown) -> bool {
+    l.origin.state.font.as_ref().is_none_or(|(_, size)| (*size < 0.0) == (s.state.size < 0.0))
+}
+
 fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream: usize) {
     let joins = last.is_some_and(|pen| {
         let bt = pen.bt;
@@ -347,6 +354,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             && (s.text.trim().is_empty()
                 || lines.last().is_some_and(|l| {
                     (s.size - l.size).abs() < 0.01
+                        && same_size_sign(l, &s)
                         && s.bold == l.bold
                         && s.italic == l.italic
                         && fill_color(&s.state.fill) == l.color

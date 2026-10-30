@@ -489,7 +489,9 @@ fn underline_ops(fill: &[Op], tm: &[f64; 6], size: f64, underlines: &[(f64, f64,
     let n = pdfcraft_content::num;
     let mut ops = vec![Op::new("q", vec![]), Op::new("cm", tm.iter().map(|v| n(*v)).collect())];
     ops.extend(fill.iter().map(stroke_twin));
-    ops.push(Op::new("w", vec![n(size * 0.06)]));
+    // The offset below the baseline keeps `size`'s sign (a negative `Tf` turns the glyphs over in
+    // this space); a line width is a length.
+    ops.push(Op::new("w", vec![n(size.abs() * 0.06)]));
     for (x0, x1, y) in underlines {
         ops.push(Op::new("m", vec![n(*x0), n(*y)]));
         ops.push(Op::new("l", vec![n(*x1), n(*y)]));
@@ -751,8 +753,9 @@ struct ParaStyle {
 fn paragraph_style(o: &Origin, style: &BlockStyle) -> Result<(String, ParaStyle), EditError> {
     let (font_name, old_size) = o.state.font.clone().ok_or_else(|| EditError::Invalid("the paragraph has no font".into()))?;
     let k = o.k.max(1e-6);
-    // The size in text space: points ÷ the text-to-user scale.
-    let size = style.size.map_or(old_size, |pt| (pt / k).max(0.1));
+    // The size in text space: points ÷ the text-to-user scale, with the sign of the source's `Tf`
+    // (a negative size mirrors the glyphs, which a flipped CTM turns upright again).
+    let size = style.size.map_or(old_size, |pt| (pt / k).max(0.1).copysign(old_size));
     let mut state = o.state.clone();
     if let Some(c) = style.char_spacing {
         state.char_spacing = c / k;
