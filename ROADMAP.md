@@ -204,6 +204,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- 2026-10-30 — M12 / #3941: consolidate duplicate milestone entries, retaining upstream text-only tagging, limited form-field tagging, CLI layout and XFA improvements alongside our occurrence, rollback and pagination fixes. Remaining accessibility and XFA limitations stay explicit; estimates unchanged.
+
 - 2026-10-30 — M12 / #3941: integrate upstream `fa5f9f8c`, preserving the new rendering, security and XML-reader changes alongside zero-instance, rollback and horizontal-frame regressions. Keep both integration-test module sets. Estimates unchanged.
 
 - 2026-10-29 — M12 (#3941, #4744): integrate current upstream module splits, layout and security changes; preserve blank-merge initial groups atomically through edits, data import and save/reopen. Regression coverage includes minimum counts, removal, undo/redo and rollback; cloned defaults consume the script payload budget. Broader binding limitations and estimates unchanged.
