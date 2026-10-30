@@ -39,7 +39,10 @@ or, from `cmd` or an RMM component:
 reg add "HKLM\SOFTWARE\Policies\PdfCraft" /v DisableJavaScript /t REG_DWORD /d 1 /f
 ```
 
-Only administrators can write either key, `HKCU\SOFTWARE\Policies` included.
+Only administrators can write the `HKLM` key, so use it for a lock people can't undo. `HKCU` is
+the user's own hive, and depending on the key's permissions the user may be able to write
+`HKCU\SOFTWARE\Policies\PdfCraft` too, and so remove a value set there; check the permissions on
+your machines before relying on it. A value under `HKCU` never weakens one under `HKLM`.
 
 ### macOS
 
