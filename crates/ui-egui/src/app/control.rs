@@ -296,7 +296,6 @@ impl PdfCraftApp {
                 if let Some(f) = v.find.as_mut() {
                     f.query = value.to_string();
                 }
-                v.rerun_find();
             }
             // `--find-comments on`: the Find bar's Include comments option.
             ("find-comments", Some(v)) => {
@@ -315,7 +314,6 @@ impl PdfCraftApp {
                     f.include_comments = on;
                     f.case_query.clear();
                 }
-                v.rerun_find();
             }
             ("fields", Some(v)) => v.highlight_fields = value != "off",
             ("select", Some(v)) => {
@@ -455,6 +453,9 @@ impl PdfCraftApp {
                 return Err(format!("`{k}` needs an open document"));
             }
             (other, _) => return Err(format!("unknown option {other}")),
+        }
+        if key == "find" || key == "find-comments" {
+            crate::canvas::rerun_active_find(self);
         }
         Ok(())
     }

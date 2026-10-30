@@ -12,7 +12,7 @@ use crate::widgets;
 const CONTEXT: usize = 36;
 
 /// Draw the Search panel with its query, options, progress and clickable result excerpts.
-pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: usize) {
+pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: usize, annotations: &[pdfcraft_render::Annotation]) {
     crate::widgets::begin_dialog(ui);
     let searched = view.texts.len() + view.text_failed.len();
     let Some(find) = view.find.as_mut() else { return };
@@ -44,7 +44,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
         }
     });
     if find.query != find.case_query {
-        view.rerun_find();
+        view.rerun_find_in(annotations);
     }
     let Some(find) = view.find.as_ref() else { return };
     ui.add_space(6.0);

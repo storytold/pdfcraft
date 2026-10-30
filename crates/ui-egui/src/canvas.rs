@@ -2637,7 +2637,7 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
             });
         });
     }
-    find_bar(view, info.pages.len(), avail, ui, t);
+    find_bar(view, info.pages.len(), &info.annotations, avail, ui, t);
     page_size_hint(view, info, units, avail, unobstructed, ui, t);
     if tool == QuickTool::EnhanceCamera {
         crate::camera_ui::bar(ui.ctx(), view, avail, t, can_modify);
@@ -2912,8 +2912,6 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
     scroll
 }
 
-/// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
-/// scroll area with this frame's zoom, scrolling, tool input, overlays and render requests.
 /// Load the open document's comments into the active view before a find command searches.
 pub(crate) fn sync_active_find_comments(app: &mut PdfCraftApp) {
     let Some(index) = app.active else { return };
@@ -2927,6 +2925,18 @@ pub(crate) fn sync_active_find_comments(app: &mut PdfCraftApp) {
     }
 }
 
+/// Search again, reading comment text from the open document rather than a stored copy.
+pub(crate) fn rerun_active_find(app: &mut PdfCraftApp) {
+    let Some(index) = app.active else { return };
+    let Some(id) = app.views.get(index).map(|view| view.id) else { return };
+    let PdfCraftApp { session, views, .. } = app;
+    let Some(view) = views.get_mut(index) else { return };
+    let annotations = session.get(id).map(|doc| doc.info.annotations.as_slice()).unwrap_or(&[]);
+    view.rerun_find_in(annotations);
+}
+
+/// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
+/// scroll area with this frame's zoom, scrolling, tool input, overlays and render requests.
 pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let can_paste_key = egui::Id::unique("can-paste-image");

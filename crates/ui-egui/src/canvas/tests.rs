@@ -2255,12 +2255,12 @@ fn find_bar_includes_a_comment_and_steps_to_it() {
     v.open_find();
     v.find.as_mut().unwrap().query = "zebra".into();
     v.sync_find_comments(&info);
-    v.rerun_find();
+    v.rerun_find_in(&info.annotations);
     assert_eq!(v.find.as_ref().unwrap().matches.len(), 1, "comments stay out until Include comments is on");
     assert!(!v.find.as_ref().unwrap().matches[0].is_comment());
 
     v.find.as_mut().unwrap().include_comments = true;
-    v.rerun_find();
+    v.rerun_find_in(&info.annotations);
     let hits = &v.find.as_ref().unwrap().matches;
     assert_eq!(hits.len(), 2);
     assert!(!hits[0].is_comment() && hits[1].is_comment(), "the page's text comes before its comment");
@@ -2285,25 +2285,39 @@ fn find_comments_honour_case_whole_words_and_type() {
         f.query = "note".into();
     }
     v.sync_find_comments(&info);
-    v.rerun_find();
+    v.rerun_find_in(&info.annotations);
     assert!(v.find.as_ref().unwrap().matches.is_empty(), "note is not the whole word notebook");
 
     v.find.as_mut().unwrap().query = "callout".into();
-    v.rerun_find();
+    v.rerun_find_in(&info.annotations);
     assert_eq!(v.find.as_ref().unwrap().matches.len(), 1, "the comment type matches, as in the panel");
 
     v.find.as_mut().unwrap().case_sensitive = true;
     v.find.as_mut().unwrap().query = "callout".into();
-    v.rerun_find();
+    v.rerun_find_in(&info.annotations);
     assert!(v.find.as_ref().unwrap().matches.is_empty(), "Callout does not match a case-sensitive callout");
     v.find.as_mut().unwrap().query = "Callout".into();
-    v.rerun_find();
+    v.rerun_find_in(&info.annotations);
     assert_eq!(v.find.as_ref().unwrap().matches.len(), 1);
 
     v.find.as_mut().unwrap().case_sensitive = false;
     v.find.as_mut().unwrap().query = "Ada".into();
-    v.rerun_find();
+    v.rerun_find_in(&info.annotations);
     assert_eq!(v.find.as_ref().unwrap().matches.len(), 1, "the author matches");
+}
+
+#[test]
+fn find_comments_read_text_past_the_excerpt() {
+    let mut v = view(1, PageLayout::Single, true);
+    let body = format!("{}needle", "word ".repeat(80));
+    let info = commented(1, vec![note(0, 0, &body, None)]);
+    v.open_find();
+    v.find.as_mut().unwrap().include_comments = true;
+    v.find.as_mut().unwrap().query = "needle".into();
+    v.sync_find_comments(&info);
+    v.rerun_find_in(&info.annotations);
+    let hit = v.find.as_ref().unwrap().matches.first().expect("the word past the excerpt is still a hit");
+    assert!(matches!(hit, FindHit::Comment { excerpt, .. } if excerpt.len() <= 160 && !excerpt.contains("needle")));
 }
 
 #[test]
@@ -2315,7 +2329,7 @@ fn a_reply_match_selects_its_thread_and_survives_a_failed_text_page() {
     v.find.as_mut().unwrap().include_comments = true;
     v.find.as_mut().unwrap().query = "zebra".into();
     v.sync_find_comments(&info);
-    v.rerun_find();
+    v.rerun_find_in(&info.annotations);
     let hits = &v.find.as_ref().unwrap().matches;
     assert_eq!(hits.len(), 2, "one row for the thread, plus the page text");
     assert!(hits[0].is_comment() && hits[0].page() == 0);

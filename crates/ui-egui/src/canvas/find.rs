@@ -88,7 +88,14 @@ impl DocView {
     }
 
     /// Re-run the search on all pages whose text is known (after the query changed).
+    ///
+    /// Comment text is read from `annotations` for this pass only. Callers that are not
+    /// searching comments pass an empty slice.
     pub fn rerun_find(&mut self) {
+        self.rerun_find_in(&[]);
+    }
+
+    pub(crate) fn rerun_find_in(&mut self, annotations: &[pdfcraft_render::Annotation]) {
         let Some(f) = self.find.as_mut() else { return };
         f.case_query = f.query.clone();
         f.matches.clear();
@@ -114,7 +121,7 @@ impl DocView {
             }
         }
         if f.include_comments {
-            f.matches.extend(find_comments::comment_hits(&self.find_comments, &f.case_query, f.case_sensitive, f.whole_words));
+            f.matches.extend(find_comments::comment_hits(&self.find_comments, annotations, &f.case_query, f.case_sensitive, f.whole_words));
         }
         f.matches.sort_by_key(FindHit::sort_key);
         // First match at or after the page the search started from.
@@ -254,7 +261,7 @@ impl DocView {
 }
 
 /// Acrobat-style floating find bar at the top-right of the document area.
-pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut egui::Ui, t: &Tokens) {
+pub(super) fn find_bar(view: &mut DocView, pages: usize, annotations: &[pdfcraft_render::Annotation], area: Rect, ui: &mut egui::Ui, t: &Tokens) {
     let Some(find) = view.find.as_mut() else { return };
     // The Search panel shows this search.
     if find.in_panel {
@@ -344,7 +351,7 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
         return;
     }
     if find.query != find.case_query {
-        view.rerun_find();
+        view.rerun_find_in(annotations);
     }
     if let Some(forward) = step {
         view.find_step(forward);
