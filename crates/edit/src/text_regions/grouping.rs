@@ -398,6 +398,11 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
     for block in &mut blocks {
         block.reflow_text = reflow_text(block, lines);
     }
+    for block in blocks.iter_mut().filter(|block| block.invisible && block.lines.len() > 1) {
+        if let Some(size) = median_size(block.lines.iter().filter_map(|i| lines.get(*i)).map(|line| line.size)) {
+            block.size = size;
+        }
+    }
     blocks
 }
 
@@ -451,4 +456,15 @@ fn break_gap(block: &TextBlock, lines: &[TextLine], row_index: usize) -> Option<
     // Short rows define the right edge by their own letters. A body line that fills the
     // measure leaves almost no room for the next word.
     (slack <= size * 0.75 && width >= size * 8.0 && (next[2] - next[0]) + size * 0.25 > slack).then_some(1)
+}
+
+/// The size an OCR phrase is set in. Recognize text sizes each word from its own box and a guess
+/// at how much of the em its letters fill, so one phrase's words come out several points apart
+/// (#3313); a rewrite draws the phrase at this one size. `None` when no size is usable.
+fn median_size(sizes: impl Iterator<Item = f64>) -> Option<f64> {
+    let mut sizes: Vec<f64> = sizes.filter(|size| size.is_finite() && *size > 0.0).collect();
+    sizes.sort_by(f64::total_cmp);
+    let middle = sizes.len() / 2;
+    let upper = sizes.get(middle).copied()?;
+    if sizes.len().is_multiple_of(2) { sizes.get(middle.saturating_sub(1)).map(|lower| (lower + upper) / 2.0) } else { Some(upper) }
 }

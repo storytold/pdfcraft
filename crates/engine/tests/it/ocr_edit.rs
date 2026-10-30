@@ -160,6 +160,51 @@ fn a_rewritten_ocr_phrase_keeps_its_word_widths() {
     }
 }
 
+/// Recognize text sizes each word from its box and a guess at how much of the em its letters fill,
+/// so one phrase's words come out several points apart (#3313). Here the first word is the
+/// largest and the middle one the smallest; the phrase is set in 11 pt.
+fn uneven_phrase() -> (Session, pdfcraft_engine::DocId) {
+    scanned_with(vec![
+        scanned_word("John", 20.0, 45.0, 70.0, 15.0),
+        scanned_word("Smith", 49.0, 78.0, 70.0, 9.0),
+        scanned_word("Example", 82.0, 124.0, 70.0, 11.0),
+    ])
+}
+
+/// An edited OCR phrase is redrawn in one size, the median of its words', and each word keeps
+/// the width the scan shows it at (#3313).
+#[test]
+fn an_edited_ocr_phrase_is_drawn_at_one_size() {
+    let (mut s, id) = uneven_phrase();
+    let block = s.get(id).unwrap().text_blocks(0).remove(0);
+    assert!((block.size - 11.0).abs() < 0.05, "the phrase's size is its words' median: {}", block.size);
+
+    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "John Example".into(), style: Default::default() }).unwrap();
+    let lines = s.get(id).unwrap().text_lines(0);
+    assert_eq!(lines.iter().map(|l| l.text.trim()).collect::<Vec<_>>(), ["John", "Example"]);
+    for line in &lines {
+        assert!((line.size - 11.0).abs() < 0.05, "{:?} is drawn at {} pt, not the phrase's 11", line.text, line.size);
+    }
+    // Each word keeps its width; the rest of the phrase closes up where Smith was.
+    assert!((lines[0].rect[2] - lines[0].rect[0] - 25.0).abs() < 0.5, "John keeps its width: {:?}", lines[0].rect);
+    assert!((lines[1].rect[2] - lines[1].rect[0] - 42.0).abs() < 0.5, "Example keeps its width: {:?}", lines[1].rect);
+    assert!(lines[1].rect[0] >= lines[0].rect[2] - 0.5, "Example runs into John");
+}
+
+/// Choosing a font sends the phrase through the single-style rewrite, which takes its size from
+/// the first run: that is the phrase's size too, not the first word's guess.
+#[test]
+fn a_new_font_for_an_ocr_phrase_keeps_its_one_size() {
+    let (mut s, id) = uneven_phrase();
+    let style = pdfcraft_engine::BlockStyle { family: Some((pdfcraft_engine::FontFamily::Times, false, false)), ..Default::default() };
+    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: "John Smith Example".into(), style }).unwrap();
+    let lines = s.get(id).unwrap().text_lines(0);
+    assert!(!lines.is_empty());
+    for line in &lines {
+        assert!((line.size - 11.0).abs() < 0.05, "{:?} is drawn at {} pt, not the phrase's 11", line.text, line.size);
+    }
+}
+
 /// Visible text set with a horizontally stretched text matrix (3 × 1), as some generators write.
 fn stretched_visible() -> std::sync::Arc<Vec<u8>> {
     use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream};
