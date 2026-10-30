@@ -36,11 +36,14 @@ pub(crate) fn decoded_contents(doc: &Document, page: &Dict, budget: &mut DecodeB
 
 /// Reduce `doc`'s pages to what [`impose`] draws of them under `content`: the annotations that
 /// don't print are dropped, and with [`Content::FormFieldsOnly`] the page content too. For
-/// printing pages as pictures, where a renderer draws each page as it stands.
+/// printing pages as pictures, where a renderer draws each page as it stands: the annotations
+/// kept lose NoView, which keeps one off the screen only (ISO 32000-2 Table 167), so the renderer
+/// draws them as the printout has them.
 pub fn keep_printed(doc: &mut Document, content: Content) {
     for page in pdfcraft_model::pages(doc) {
         let annots = page.dict.get(b"Annots").and_then(|a| doc.resolve(a).as_array().cloned()).unwrap_or_default();
         let kept: Vec<Object> = annots.into_iter().filter(|a| doc.resolve(a).as_dict().is_some_and(|d| prints(doc, d, content))).collect();
+        let kept: Vec<Object> = kept.into_iter().map(|a| shown_on_screen(doc, a)).collect();
         // Fails only when the page object isn't a dictionary, and such a page draws nothing.
         let _ = doc.update_dict(page.obj, |d| {
             if content == Content::FormFieldsOnly {
@@ -50,6 +53,31 @@ pub fn keep_printed(doc: &mut Document, content: Content) {
                 d.set(b"Annots".to_vec(), Object::Array(kept));
             }
         });
+    }
+}
+
+/// `annot` without its NoView flag (ISO 32000-2 Table 167), written into `doc` when it is an
+/// indirect object; an inline dictionary is returned changed.
+fn shown_on_screen(doc: &mut Document, annot: Object) -> Object {
+    const NO_VIEW: i64 = 32;
+    let flags_of = |doc: &Document, d: &Dict| d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+    match annot {
+        Object::Ref(r) => {
+            let flags = doc.get(r).as_dict().map_or(0, |d| flags_of(doc, d));
+            if flags & NO_VIEW != 0 {
+                // Fails only when the object isn't a dictionary, and then it was not kept.
+                let _ = doc.update_dict(r, |d| d.set(b"F".to_vec(), Object::Int(flags & !NO_VIEW)));
+            }
+            Object::Ref(r)
+        }
+        Object::Dict(mut d) => {
+            let flags = flags_of(doc, &d);
+            if flags & NO_VIEW != 0 {
+                d.set(b"F".to_vec(), Object::Int(flags & !NO_VIEW));
+            }
+            Object::Dict(d)
+        }
+        other => other,
     }
 }
 

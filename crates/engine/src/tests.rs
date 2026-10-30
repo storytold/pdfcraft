@@ -8629,6 +8629,33 @@ fn dynamic_calculation_reads_and_side_effects_reach_later_fields() {
     assert!(s.take_js_output(id).errors.is_empty());
 }
 
+/// #5041: `field.display` reads the widget's resolved `/F` the way Field Properties does: an
+/// absent flag is 0, and a flag behind a reference counts.
+#[test]
+fn field_display_reads_absent_and_indirect_flags_like_the_properties_dialog() {
+    use pdfcraft_cos::Object;
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    let display = |cos: &pdfcraft_cos::Document, name: &str| {
+        let all = pdfcraft_forms::fields(cos);
+        crate::js::field_state(cos, all.iter().find(|f| f.name == name).unwrap()).display
+    };
+    let widget = |cos: &pdfcraft_cos::Document, name: &str| pdfcraft_forms::fields(cos).iter().find(|f| f.name == name).unwrap().widgets[0].obj;
+    assert_eq!(display(&cos, "price"), pdfcraft_js::DISPLAY_VISIBLE);
+    let (price, qty) = (widget(&cos, "price"), widget(&cos, "qty"));
+    // Hidden | Print behind a reference, and a widget with no /F.
+    let r = cos.add(Object::Int(2 | 4));
+    cos.update_dict(price, |d| d.set(b"F".to_vec(), Object::Ref(r))).unwrap();
+    cos.update_dict(qty, |d| {
+        d.remove(b"F");
+    })
+    .unwrap();
+    assert_eq!(display(&cos, "price"), pdfcraft_js::DISPLAY_HIDDEN);
+    assert_eq!(display(&cos, "qty"), pdfcraft_js::DISPLAY_NO_PRINT);
+    let r = cos.add(Object::Int(4 | 32 | 128));
+    cos.update_dict(price, |d| d.set(b"F".to_vec(), Object::Ref(r))).unwrap();
+    assert_eq!(display(&cos, "price"), pdfcraft_js::DISPLAY_NO_VIEW);
+}
+
 #[test]
 fn scripted_display_changes_survive_warm_cache_and_new_edit() {
     use pdfcraft_forms::{FieldEvent, Scripts};

@@ -4967,8 +4967,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
 tools = ["form_set_props"]
-evidence = ["crates/forms/src/tests.rs::properties_rename_and_delete", "crates/ui-egui/tests/it/prepare.rs::placing_moving_editing_and_deleting_a_field", "crates/automation/tests/it/automation.rs::preparing_a_form_through_tools", "crates/ui-egui/tests/it/bulk_fields.rs::locked_field_refuses_the_entire_batch_and_keeps_the_draft_for_correction", "crates/ui-egui/tests/it/bulk_fields.rs::visiting_shared_property_tabs_without_changes_does_not_dirty_the_document"]
-notes = "name, tooltip, read only, required, locked; shared tooltip/flags are opt-in, mixed values preserved, failures keep the draft and roll back the batch (visibility pending)"
+evidence = ["crates/forms/src/tests.rs::properties_rename_and_delete", "crates/ui-egui/tests/it/prepare.rs::placing_moving_editing_and_deleting_a_field", "crates/automation/tests/it/automation.rs::preparing_a_form_through_tools", "crates/ui-egui/tests/it/bulk_fields.rs::locked_field_refuses_the_entire_batch_and_keeps_the_draft_for_correction", "crates/ui-egui/tests/it/bulk_fields.rs::visiting_shared_property_tabs_without_changes_does_not_dirty_the_document", "crates/forms/src/tests.rs::a_fields_display_is_written_to_every_widget_and_read_back", "crates/ui-egui/tests/it/prepare.rs::general_tab_sets_the_form_field_display", "crates/automation/tests/it/automation.rs::a_field_can_be_visible_but_not_print"]
+notes = "name, tooltip, read only, required, locked; shared tooltip/flags are opt-in, mixed values preserved, failures keep the draft and roll back the batch. Form Field: Visible, Hidden, Visible but doesn't print, Hidden but printable (#5041) in Field Properties and through form_set_props display, written to every widget's /F (Hidden, Print, NoView) and read back, also by the field.display script property; a widget with no Print flag lists as Visible but doesn't print, as in Acrobat. Not yet: the shared (multi-field) dialog has no Form Field choice"
 
 [[feature]]
 id = "form.props-appearance"

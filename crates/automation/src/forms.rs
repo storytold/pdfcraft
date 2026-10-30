@@ -210,6 +210,20 @@ impl Automation {
                 if let Some(t) = &f.tooltip {
                     o.insert("tooltip".into(), json!(t));
                 }
+                // How the field shows and prints, when it is not the usual shown-and-printed. Its own
+                // key: `display` is the formatted value below.
+                let display = w.map(|w| w.display).unwrap_or_default();
+                if display != pdfcraft_engine::FieldDisplay::Visible {
+                    o.insert(
+                        "field_display".into(),
+                        json!(match display {
+                            pdfcraft_engine::FieldDisplay::Visible => "visible",
+                            pdfcraft_engine::FieldDisplay::Hidden => "hidden",
+                            pdfcraft_engine::FieldDisplay::VisibleNoPrint => "visible_no_print",
+                            pdfcraft_engine::FieldDisplay::HiddenPrintable => "hidden_printable",
+                        }),
+                    );
+                }
                 if let Some(s) = doc.field_check_style(&f.name) {
                     o.insert("check_style".into(), json!(s.label().to_lowercase()));
                 }
@@ -538,6 +552,14 @@ impl Automation {
             },
             default_value: a.opt_str("default")?.map(|d| (!d.is_empty()).then(|| d.to_owned())),
             locked: a.opt_bool("locked")?,
+            display: match a.opt_str("display")? {
+                None => None,
+                Some("visible") => Some(pdfcraft_engine::FieldDisplay::Visible),
+                Some("hidden") => Some(pdfcraft_engine::FieldDisplay::Hidden),
+                Some("visible_no_print") => Some(pdfcraft_engine::FieldDisplay::VisibleNoPrint),
+                Some("hidden_printable") => Some(pdfcraft_engine::FieldDisplay::HiddenPrintable),
+                Some(o) => return Err(bad(format!("unknown display {o:?} (visible, hidden, visible_no_print, hidden_printable)"))),
+            },
             flags: match a.get("flags") {
                 None => Vec::new(),
                 Some(v) => {

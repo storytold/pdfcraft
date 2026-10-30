@@ -118,6 +118,8 @@ pub struct FieldProps {
     /// Changing between horizontal and vertical swaps that widget's width and height around its
     /// center, unless [`Self::rect`] is also set.
     pub rotation: Option<(usize, i64)>,
+    /// General tab ▸ Form Field: how the field shows and prints (every widget).
+    pub display: Option<crate::FieldDisplay>,
 }
 
 fn invalid<T>(m: impl Into<String>) -> Result<T, FormError> {

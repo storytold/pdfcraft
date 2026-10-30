@@ -77,6 +77,20 @@ fn write_sorted_opt(d: &mut Dict, items: &[(String, String)], old: &[usize]) -> 
     (sorted.into_iter().map(|(e, _)| e.clone()).collect(), carried)
 }
 
+/// Write `display`, when given, into every widget's `/F`, keeping its other flag bits (an absent
+/// or non-integer `/F` counts as 0). Unchanged widgets are left alone.
+fn set_display(doc: &mut Document, f: &Field, display: Option<crate::FieldDisplay>) -> Result<(), FormError> {
+    let Some(display) = display else { return Ok(()) };
+    for w in &f.widgets {
+        let old = doc.get(w.obj).as_dict().and_then(|d| d.get(b"F").and_then(|v| doc.resolve(v).as_int())).unwrap_or(0);
+        let new = display.apply_to(old);
+        if new != old {
+            doc.update_dict(w.obj, |d| d.set(b"F".to_vec(), Object::Int(new)))?;
+        }
+    }
+    Ok(())
+}
+
 /// Change a field's properties (General and Options tabs) and redraw it.
 pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<String, FormError> {
     if props.font_size.is_some_and(|size| !size.is_finite() || size < 0.0) {
@@ -126,9 +140,11 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
             let v = if lock { flags | 128 } else { flags & !128 };
             doc.update_dict(w.obj, |d| d.set(b"F".to_vec(), Object::Int(v)))?;
         }
-        if *props == (FieldProps { locked: props.locked, ..FieldProps::default() }) {
-            return Ok(name.to_string());
-        }
+    }
+    set_display(doc, &f, props.display)?;
+    // Locking and the Form Field display only touch the widgets' `/F`: nothing else to redraw.
+    if *props != FieldProps::default() && *props == (FieldProps { locked: props.locked, display: props.display, ..FieldProps::default() }) {
+        return Ok(name.to_string());
     }
     if let Some(acts) = &props.actions {
         crate::set_field_actions(doc, name, acts)?;

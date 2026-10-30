@@ -93,23 +93,21 @@ fn kind(k: FieldKind) -> pdfcraft_js::FieldType {
     }
 }
 
-/// `field.display` from the first widget's annotation flags.
-fn display(doc: &pdfcraft_cos::Document, f: &Field) -> i32 {
-    let flags = f.widgets.first().and_then(|w| doc.get(w.obj).as_dict().and_then(|d| d.int(b"F"))).unwrap_or(4);
-    if flags & 2 != 0 {
-        pdfcraft_js::DISPLAY_HIDDEN
-    } else if flags & 32 != 0 {
-        pdfcraft_js::DISPLAY_NO_VIEW
-    } else if flags & 4 == 0 {
-        pdfcraft_js::DISPLAY_NO_PRINT
-    } else {
-        pdfcraft_js::DISPLAY_VISIBLE
+/// `field.display` from the first widget's annotation flags (resolved, an absent `/F` is 0, as
+/// the Field Properties dialog reads it).
+fn display(f: &Field) -> i32 {
+    use crate::FieldDisplay as D;
+    match f.widgets.first().map_or(D::Visible, |w| w.display) {
+        D::Visible => pdfcraft_js::DISPLAY_VISIBLE,
+        D::Hidden => pdfcraft_js::DISPLAY_HIDDEN,
+        D::VisibleNoPrint => pdfcraft_js::DISPLAY_NO_PRINT,
+        D::HiddenPrintable => pdfcraft_js::DISPLAY_NO_VIEW,
     }
 }
 
 /// A form field as scripts see it.
-pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field) -> pdfcraft_js::FieldState {
-    field_state_with_display(f, display(doc, f))
+pub fn field_state(_doc: &pdfcraft_cos::Document, f: &Field) -> pdfcraft_js::FieldState {
+    field_state_with_display(f, display(f))
 }
 
 fn field_state_with_display(f: &Field, display: i32) -> pdfcraft_js::FieldState {
@@ -158,12 +156,9 @@ pub struct JsRunner {
     pub doc: pdfcraft_js::DocInfo,
     pub doc_scripts: Vec<String>,
     pub output: JsOutput,
-    /// Immutable document snapshot from the start of the edit (for widget `display`).
-    cos: pdfcraft_cos::Document,
-    // `cos` is the same immutable pre-edit snapshot for the runner's lifetime. Cache only
-    // its scalar display readings, not COS objects: large forms exceed the object cache and
-    // otherwise reparse every widget for every calculation. Values/flags still come from
-    // the live `fields` snapshot on each call. A new edit gets a new runner and cache.
+    // The first reading of each widget's display is kept for the runner's lifetime (a new edit
+    // gets a new runner), so a script that changes a field's display does not change what the
+    // next calculation reads. Values/flags still come from the live `fields` snapshot each call.
     displays: std::collections::HashMap<pdfcraft_cos::ObjRef, i32>,
 }
 
@@ -180,7 +175,7 @@ impl JsRunner {
         // Packets alone are not enough: static XFA and an unlaid-out shell keep their scripts.
         let xfa_active = xfa && pdfcraft_xfa::existing_layout(cos).is_some();
         let doc_scripts = if xfa_active { Vec::new() } else { pdfcraft_forms::document_scripts(cos) };
-        JsRunner { doc, doc_scripts, output: JsOutput::default(), cos: cos.clone(), displays: std::collections::HashMap::new() }
+        JsRunner { doc, doc_scripts, output: JsOutput::default(), displays: std::collections::HashMap::new() }
     }
 }
 
@@ -203,7 +198,7 @@ impl Scripts for JsRunner {
             .iter()
             .map(|f| {
                 let display = match f.widgets.first() {
-                    Some(w) => *self.displays.entry(w.obj).or_insert_with(|| display(&self.cos, f)),
+                    Some(w) => *self.displays.entry(w.obj).or_insert_with(|| display(f)),
                     None => pdfcraft_js::DISPLAY_VISIBLE,
                 };
                 field_state_with_display(f, display)

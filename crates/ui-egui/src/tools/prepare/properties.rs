@@ -65,6 +65,27 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                     let l = ui.label(tl!("Tooltip:"));
                     ui.add(crate::widgets::line(&mut d.tooltip).desired_width(340.0)).labelled_by(l.id);
                     ui.end_row();
+                    // Shown or hidden on screen, and printed or not: a Submit or Print button is
+                    // shown but left out of the printout (#5041).
+                    let l = ui.label(tl!("Form Field:"));
+                    use pdfcraft_engine::FieldDisplay as Display;
+                    let shown = |d: Display| match d {
+                        Display::Visible => tl!("Visible"),
+                        Display::Hidden => tl!("Hidden"),
+                        Display::VisibleNoPrint => tl!("Visible but doesn't print"),
+                        Display::HiddenPrintable => tl!("Hidden but printable"),
+                    };
+                    craft_ui::ComboBox::from_id_salt("field-display")
+                        .selected_text(shown(d.display))
+                        .width(340.0)
+                        .show_ui(ui, |ui| {
+                            for choice in [Display::Visible, Display::Hidden, Display::VisibleNoPrint, Display::HiddenPrintable] {
+                                ui.selectable_value(&mut d.display, choice, shown(choice));
+                            }
+                        })
+                        .response
+                        .labelled_by(l.id);
+                    ui.end_row();
                 });
                 ui.add_space(12.0);
                 widgets::section_title(ui, tl!("Common Properties"));

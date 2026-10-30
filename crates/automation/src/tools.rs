@@ -391,7 +391,7 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc", "from", "to"],
         )),
-        t("form_fields", "List form fields", "Every interactive form field: name, type (text, checkbox, radio, combo, list, button, signature), value, options, page, rect (top-left-origin points) and rotation (0, 90, 180 or 270 degrees counterclockwise), read-only and required flags. Push buttons include caption (first widget's normal label) and captions [{widget, caption}] for all widgets (1-based).")
+        t("form_fields", "List form fields", "Every interactive form field: name, type (text, checkbox, radio, combo, list, button, signature), value, options, page, rect (top-left-origin points) and rotation (0, 90, 180 or 270 degrees counterclockwise), read-only and required flags, and field_display (visible_no_print, hidden or hidden_printable) when the field is not the usual shown-and-printed. Push buttons include caption (first widget's normal label) and captions [{widget, caption}] for all widgets (1-based).")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),
         t(
@@ -484,6 +484,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "options": { "type": "array", "items": { "type": "string" } },
                 "align": { "type": "string", "enum": ["left", "center", "right"] },
                 "locked": { "type": "boolean", "description": "Lock the field's properties (only unlocking is accepted while locked)." },
+                "display": { "type": "string", "enum": ["visible", "hidden", "visible_no_print", "hidden_printable"], "description": "How the field shows and prints, as Acrobat's Form Field choice: visible (shown and printed), hidden, visible_no_print (shown on screen, left out of the printout: a Submit or Print button), hidden_printable. Set on every widget; keeps their other flags." },
                 "default": { "type": "string" },
                 "check_style": { "type": "string", "enum": ["check", "circle", "cross", "diamond", "square", "star"], "description": "Check boxes and radio buttons: the mark shown when on." },
                 "flags": { "type": "object", "additionalProperties": { "type": "boolean" } },

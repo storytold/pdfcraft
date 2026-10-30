@@ -46,6 +46,11 @@ pub struct Focus {
     /// Whether the text box had the keyboard at the end of the editor's last frame
     /// ([`crate::edit_text_ui::lost_focus_once`]).
     pub(crate) had_focus: bool,
+    /// The field refused this draft while its widget was hidden, and the editor reopened with
+    /// it: it stays open for correcting until it is left, rather than being committed (and
+    /// refused) again every frame. A draft refused while the widget showed is not marked, so
+    /// hiding the widget later still commits it once.
+    pub(crate) refused: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -125,6 +130,7 @@ fn open_focus(f: &FormField, widget: usize) -> Focus {
         calendar_rect: None,
         calendar_text: None,
         had_focus: false,
+        refused: false,
     }
 }
 
@@ -693,11 +699,21 @@ fn tab_to_next_field(view: &mut DocView, form: &[FormField], f: &FormField, widg
         .flat_map(|x| x.widgets.iter().enumerate().filter(|(_, w)| w.page.is_some() && !w.hidden).map(move |(wi, w)| (w.tab, x, wi)))
         .collect();
     order.sort_by_key(|o| o.0);
-    if let Some(pos) =
-        order.iter().position(|(_, x, wi)| x.name == f.name && *wi == widget).or_else(|| order.iter().position(|(_, x, _)| x.name == f.name))
-    {
-        let k = if forward { (pos + 1) % order.len() } else { (pos + order.len() - 1) % order.len() };
-        let (_, target, wi) = order[k];
+    let found = order.iter().position(|(_, x, wi)| x.name == f.name && *wi == widget).or_else(|| order.iter().position(|(_, x, _)| x.name == f.name));
+    let next = match found {
+        Some(pos) => Some(if forward { (pos + 1) % order.len() } else { (pos + order.len() - 1) % order.len() }),
+        // The field itself is hidden (a refused draft kept open over it): the widget after or
+        // before its own place in the tab order, wrapping.
+        None if !order.is_empty() => f.widgets.get(widget).map(|w| {
+            if forward {
+                order.iter().position(|o| o.0 > w.tab).unwrap_or(0)
+            } else {
+                order.iter().rposition(|o| o.0 < w.tab).unwrap_or(order.len() - 1)
+            }
+        }),
+        None => None,
+    };
+    if let Some(&(_, target, wi)) = next.and_then(|k| order.get(k)) {
         view.forms.focus = Some(Focus { select_all: true, ..open_focus(target, wi) });
         if let Some(p) = target.widgets[wi].page
             && view.page_screen_rect(p).is_none()
@@ -751,6 +767,13 @@ pub(crate) fn overlay(
         return None;
     };
     let w = f.widgets.get(focus.widget)?;
+    // A widget hidden since it took the keyboard (its display changed in Field Properties, or by
+    // a script) lets go of it, keeping what was typed as a click away does. A draft the field
+    // refused while hidden stays open instead, so it can be corrected; it is committed when left.
+    if w.hidden && !focus.refused {
+        commit(view, form);
+        return None;
+    }
     let page = w.page?;
     let Some(xf) = view.page_xform(page) else {
         // A check box or radio button scrolled out of view lets go (it has no draft to keep):

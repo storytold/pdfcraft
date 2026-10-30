@@ -320,6 +320,35 @@ fn position_tab_rotates_a_field() {
 }
 
 #[test]
+fn general_tab_sets_the_form_field_display() {
+    use pdfcraft_engine::FieldDisplay as Display;
+    let mut h = harness();
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    let widget = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "city").unwrap().widgets[0].clone()
+    };
+    // The fixture's widget has no Print flag: Acrobat lists that as "Visible but doesn't print".
+    assert_eq!(widget(&h).display, Display::VisibleNoPrint);
+    h.get_by_label("Form Field:");
+    assert_eq!(h.state().field_props.as_ref().unwrap().display, Display::VisibleNoPrint);
+    assert!(h.state().field_props.as_ref().unwrap().props().is_none(), "an unchanged draft is not an edit");
+    // Pick the choice from the list the way a user does.
+    h.get_by_role_and_label(Role::ComboBox, "Form Field:").click();
+    h.run_steps(3);
+    h.get_by_label("Visible").click();
+    h.run_steps(3);
+    assert_eq!(h.state().field_props.as_ref().unwrap().display, Display::Visible);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(widget(&h).display, Display::Visible);
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    assert_eq!(widget(&h).display, Display::VisibleNoPrint);
+}
+
+#[test]
 fn options_tab_sets_the_check_box_style() {
     // #94: Check Box Style on the Options tab.
     use pdfcraft_engine::CheckStyle;

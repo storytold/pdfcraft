@@ -122,6 +122,8 @@ pub struct FieldDraft {
     pub flags: u32,
     /// Field Properties ▸ General ▸ Locked.
     pub locked: bool,
+    /// Field Properties ▸ General ▸ Form Field: how the field shows and prints.
+    pub display: pdfcraft_engine::FieldDisplay,
     /// `/Q`: 0 left, 1 centre, 2 right.
     pub quadding: i64,
     /// `/DV` (text and choices), or the default state (buttons: empty = off).
@@ -198,6 +200,7 @@ impl FieldDraft {
             new_option: String::new(),
             flags: f.flags,
             locked: f.locked(),
+            display: f.widgets.get(widget).or(f.widgets.first()).map(|w| w.display).unwrap_or_default(),
             quadding: f.quadding,
             default: f.default.first().cloned().unwrap_or_default(),
             on_state: f.widgets.get(widget).and_then(|w| w.on_state.clone()).unwrap_or_default(),
@@ -272,6 +275,7 @@ impl FieldDraft {
             flags: OPTION_FLAGS.iter().filter(|b| (self.flags ^ o.flags) & **b != 0).map(|b| (*b, self.flags & b != 0)).collect(),
             quadding: (self.quadding != o.quadding).then_some(self.quadding),
             locked: ch(self.locked, o.locked),
+            display: (self.display != o.display).then_some(self.display),
             actions: (self.actions != o.actions).then(|| self.actions.clone()),
             default_value: (self.default != o.default).then(|| (!self.default.is_empty()).then(|| self.default.clone())),
         };

@@ -5356,3 +5356,108 @@ endstream".into(),
         assert!(f.value.iter().all(String::is_empty), "{kind:?}: reset leaves it off, not the parent's Yes: {:?}", f.value);
     }
 }
+
+/// #5041: a field's display is the Hidden, Print and NoView bits of its widgets' `/F`; setting it
+/// keeps every other flag, and reading it back gives the same choice.
+#[test]
+fn a_fields_display_is_written_to_every_widget_and_read_back() {
+    let flags_of = |doc: &Document, name: &str| -> Vec<i64> {
+        let all = fields(doc);
+        let f = all.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("no field {name}"));
+        f.widgets.iter().map(|w| doc.get(w.obj).as_dict().and_then(|d| d.int(b"F")).unwrap_or(0)).collect()
+    };
+    let display_of = |doc: &Document, name: &str| -> Vec<FieldDisplay> {
+        let all = fields(doc);
+        all.iter().find(|f| f.name == name).unwrap().widgets.iter().map(|w| w.display).collect()
+    };
+    let mut doc = fixture();
+    // The fixture's widgets have no /F: shown, and (the flag absent) not printed, as the file says.
+    assert_eq!(display_of(&doc, "name"), [FieldDisplay::VisibleNoPrint]);
+    for (choice, bits) in [
+        (FieldDisplay::Visible, 4),
+        (FieldDisplay::VisibleNoPrint, 0),
+        (FieldDisplay::Hidden, 2 | 4),
+        (FieldDisplay::HiddenPrintable, 4 | 32),
+        (FieldDisplay::Visible, 4),
+    ] {
+        set_props(&mut doc, "name", &FieldProps { display: Some(choice), ..Default::default() }).unwrap();
+        assert_eq!(flags_of(&doc, "name"), [bits], "{choice:?}");
+        assert_eq!(display_of(&doc, "name"), [choice]);
+        // And after saving and reopening.
+        let again = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert_eq!(display_of(&again, "name"), [choice], "{choice:?} survives save and reopen");
+    }
+    // A radio group: every one of its widgets.
+    set_props(&mut doc, "size", &FieldProps { display: Some(FieldDisplay::VisibleNoPrint), ..Default::default() }).unwrap();
+    assert_eq!(flags_of(&doc, "size"), [0, 0]);
+    // Other flags are kept: Locked (128) and NoRotate (16) on a widget stay when its display changes.
+    let go = fields(&doc).iter().find(|f| f.name == "go").unwrap().widgets[0].obj;
+    doc.update_dict(go, |d| d.set(b"F".to_vec(), Object::Int(4 | 16))).unwrap();
+    set_props(&mut doc, "go", &FieldProps { display: Some(FieldDisplay::VisibleNoPrint), ..Default::default() }).unwrap();
+    assert_eq!(flags_of(&doc, "go"), [16], "NoRotate kept, Print cleared");
+    set_props(&mut doc, "go", &FieldProps { locked: Some(true), ..Default::default() }).unwrap();
+    assert_eq!(flags_of(&doc, "go"), [16 | 128]);
+    // A locked field only takes unlocking: its display is refused, and nothing changes.
+    assert!(set_props(&mut doc, "go", &FieldProps { display: Some(FieldDisplay::Hidden), ..Default::default() }).is_err());
+    assert_eq!(flags_of(&doc, "go"), [16 | 128]);
+    // Together with another property it applies after the rest, and an unknown field is refused.
+    set_props(&mut doc, "id", &FieldProps { tooltip: Some("an id".into()), display: Some(FieldDisplay::Hidden), ..Default::default() }).unwrap();
+    assert_eq!(flags_of(&doc, "id"), [2 | 4]);
+    assert!(set_props(&mut doc, "nope", &FieldProps { display: Some(FieldDisplay::Hidden), ..Default::default() }).is_err());
+}
+
+/// #5041: a script's `display.*` change resolves an indirect `/F`, keeps its unrelated bits, and
+/// reads an absent `/F` as 0, as the properties API does.
+#[test]
+fn script_display_changes_resolve_indirect_flags_and_keep_other_bits() {
+    let mut doc = fixture();
+    let widget = |doc: &Document, name: &str| fields(doc).iter().find(|f| f.name == name).unwrap().widgets[0].obj;
+    let flags = |doc: &Document, obj| doc.get(obj).as_dict().and_then(|d| d.get(b"F")).and_then(|f| doc.resolve(f).as_int());
+    let change = |name: &str, display: i32| FieldChange { name: name.into(), display: Some(display), ..Default::default() };
+    // Print | NoRotate | Locked, behind a reference: only the display bits change.
+    let w = widget(&doc, "name");
+    let r = doc.add(Object::Int(4 | 16 | 128));
+    doc.update_dict(w, |d| d.set(b"F".to_vec(), Object::Ref(r))).unwrap();
+    assert_eq!(fields(&doc).iter().find(|f| f.name == "name").unwrap().widgets[0].display, FieldDisplay::Visible);
+    apply_script_changes(&mut doc, &[change("name", 2)], &mut NoScripts).unwrap();
+    assert_eq!(flags(&doc, w), Some(16 | 128), "display.noPrint keeps NoRotate and Locked");
+    apply_script_changes(&mut doc, &[change("name", 3)], &mut NoScripts).unwrap();
+    assert_eq!(flags(&doc, w), Some(4 | 16 | 32 | 128), "display.noView");
+    apply_script_changes(&mut doc, &[change("name", 0)], &mut NoScripts).unwrap();
+    assert_eq!(flags(&doc, w), Some(4 | 16 | 128), "display.visible");
+    // No /F at all is 0: the script setter builds on that, not on 4.
+    let w = widget(&doc, "size");
+    assert_eq!(flags(&doc, w), None);
+    apply_script_changes(&mut doc, &[change("size", 1)], &mut NoScripts).unwrap();
+    assert_eq!(flags(&doc, w), Some(2 | 4));
+}
+
+/// #5041: the flag arithmetic, and that scripts' `display.*` codes and a field's `/F` agree.
+#[test]
+fn field_display_flags_round_trip_through_every_other_flag() {
+    for old in 0..=255i64 {
+        for choice in [FieldDisplay::Visible, FieldDisplay::Hidden, FieldDisplay::VisibleNoPrint, FieldDisplay::HiddenPrintable] {
+            let new = choice.apply_to(old);
+            assert_eq!(new & !(2 | 4 | 32), old & !(2 | 4 | 32), "only the display bits change: {old} {choice:?}");
+            assert_eq!(FieldDisplay::from_flags(new), choice, "{old} {choice:?}");
+        }
+    }
+    for (code, choice) in [
+        (0, FieldDisplay::Visible),
+        (1, FieldDisplay::Hidden),
+        (2, FieldDisplay::VisibleNoPrint),
+        (3, FieldDisplay::HiddenPrintable),
+        (9, FieldDisplay::Visible),
+        (-1, FieldDisplay::Visible),
+    ] {
+        assert_eq!(FieldDisplay::from_script_code(code), choice, "{code}");
+    }
+    // What the document has: no flags at all is shown and not printed; Print alone is the usual.
+    assert_eq!(FieldDisplay::from_flags(4), FieldDisplay::Visible);
+    assert_eq!(FieldDisplay::from_flags(0), FieldDisplay::VisibleNoPrint);
+    assert_eq!(FieldDisplay::from_flags(2), FieldDisplay::Hidden);
+    assert_eq!(FieldDisplay::from_flags(32 | 4), FieldDisplay::HiddenPrintable);
+    // NoView without Print neither shows nor prints: Hidden, not "hidden but printable".
+    assert_eq!(FieldDisplay::from_flags(32), FieldDisplay::Hidden);
+    assert_eq!(FieldDisplay::from_flags(32 | 128), FieldDisplay::Hidden);
+}

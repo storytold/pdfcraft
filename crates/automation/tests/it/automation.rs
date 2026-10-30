@@ -611,6 +611,102 @@ fn form_pdf(name: &str) -> Vec<u8> {
     bytes
 }
 
+/// A one-page form with two text fields, "plain" and "submit", both shown and printed (`/F 4`),
+/// each with a value and a red or blue fill so the printout shows which of them it drew.
+fn print_form_pdf() -> Vec<u8> {
+    // Each field has a normal appearance of its own: a solid red or blue box with the value.
+    let ap = |rgb: &str, value: &str| {
+        let body = format!("{rgb} rg 0 0 120 40 re f BT /Helv 12 Tf 1 g 8 14 Td ({value}) Tj ET");
+        format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 120 40] /Resources << /Font << /Helv 6 0 R >> >> /Length {} >>\nstream\n{body}\nendstream",
+            body.len()
+        )
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /DA (/Helv 12 Tf 0 g) /DR << /Font << /Helv 6 0 R >> >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (plain) /V (KEEPME) /F 4 /AP << /N 7 0 R >> /Rect [20 120 140 160] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (submit) /V (DROPME) /F 4 /AP << /N 8 0 R >> /Rect [160 120 280 160] /P 3 0 R >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        ap("1 0 0", "KEEPME"),
+        ap("0 0 1", "DROPME"),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    bytes
+}
+
+/// #5041: a field can be shown on screen and left out of the printout, through the properties
+/// tool: `display` is written, listed by form_fields, printed or not accordingly, and undoable.
+#[test]
+fn a_field_can_be_visible_but_not_print() {
+    let dir = workdir("field-display");
+    std::fs::write(dir.join("form.pdf"), print_form_pdf()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    // How many pixels of the printout are the red of "plain" and the blue of "submit" (the page is
+    // scaled to the sheet, so the counts are what tells, not the places).
+    let printed_as = |a: &mut Automation, name: &str, as_image: bool| -> (bool, bool) {
+        ok(a, "doc_print", json!({ "doc": doc, "path": name, "as_image": as_image, "dpi": 72 }));
+        let out = ok(a, "doc_open", json!({ "path": name }))["doc"].as_u64().unwrap();
+        let png = a.call("page_render", &json!({ "doc": out, "page": 1, "dpi": 72 })).unwrap();
+        let Content::Png { data, width, .. } = &png[0] else { panic!("expected an image") };
+        let mut reader = png::Decoder::new(std::io::Cursor::new(data.as_slice())).read_info().unwrap();
+        let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+        let frame = reader.next_frame(&mut buf).unwrap();
+        let channels = frame.line_size / *width as usize;
+        let count = |colour: [u8; 3]| buf.chunks(channels).filter(|p| p.len() >= 3 && p[..3] == colour).count();
+        (count([255, 0, 0]) > 2000, count([0, 0, 255]) > 2000)
+    };
+    let printed = |a: &mut Automation, name: &str| printed_as(a, name, false);
+    let display_of = |a: &mut Automation, field: &str| -> Option<String> {
+        let list = ok(a, "form_fields", json!({ "doc": doc }));
+        let f = list["fields"].as_array().unwrap().iter().find(|f| f["name"] == field).unwrap().clone();
+        f["field_display"].as_str().map(str::to_string)
+    };
+    // Both shown and printed to begin with.
+    assert_eq!(display_of(&mut a, "submit"), None);
+    assert_eq!(printed(&mut a, "before.pdf"), (true, true), "both fields are printed");
+
+    // Visible but doesn't print: still on screen (it is not hidden), left out of the printout.
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "submit", "display": "visible_no_print" }));
+    assert_eq!(display_of(&mut a, "submit").as_deref(), Some("visible_no_print"));
+    assert_eq!(display_of(&mut a, "plain"), None, "the other field is untouched");
+    assert_eq!(printed(&mut a, "after.pdf"), (true, false), "the printout has the first field and not the second");
+
+    // The other choices, and back to visible; each is listed as it was set.
+    for (choice, listed) in [("hidden", Some("hidden")), ("hidden_printable", Some("hidden_printable")), ("visible", None)] {
+        ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "submit", "display": choice }));
+        assert_eq!(display_of(&mut a, "submit").as_deref(), listed, "{choice}");
+    }
+    assert_eq!(printed(&mut a, "restored.pdf"), (true, true), "visible again, and printed");
+    // One undo step each.
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(display_of(&mut a, "submit").as_deref(), Some("hidden_printable"));
+
+    // Bad values are refused and change nothing.
+    for bad in [json!("shown"), json!("Hidden"), json!(1)] {
+        let r = a.call("form_set_props", &json!({ "doc": doc, "field": "submit", "display": bad }));
+        assert!(matches!(r, Err(ToolError::InvalidArgs(_))), "{bad}: {r:?}");
+    }
+    assert_eq!(display_of(&mut a, "submit").as_deref(), Some("hidden_printable"));
+    // Hidden but printable prints, also as an image, where the renderer that draws each page
+    // would otherwise leave a NoView annotation off as it does on screen.
+    assert_eq!(printed_as(&mut a, "hidden-printable.pdf", false), (true, true), "printed");
+    assert_eq!(printed_as(&mut a, "hidden-printable-image.pdf", true), (true, true), "printed as an image");
+}
+
 #[test]
 fn accessibility_check_locates_field_description_on_page() {
     let dir = workdir("accessibility-field-location");
@@ -4933,6 +5029,11 @@ fn form_formats_and_calculations_through_tools() {
     let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
     let total = f["fields"].as_array().unwrap().iter().find(|x| x["name"] == "Total").unwrap().clone();
     assert_eq!((total["value"].as_str(), total["display"].as_str()), (Some("59.97"), Some("$59.97")), "{total}");
+    // The form-field display has its own key, so a formatted field keeps both.
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "Total", "display": "visible_no_print" }));
+    let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let total = f["fields"].as_array().unwrap().iter().find(|x| x["name"] == "Total").unwrap();
+    assert_eq!((total["display"].as_str(), total["field_display"].as_str()), (Some("$59.97"), Some("visible_no_print")), "{total}");
     assert_eq!(total["calculate"]["notation"], "Price * Qty");
     assert!(page_text(&mut a, doc)[0].contains("$59.97"));
     let err = a.call("form_fill", &json!({ "doc": doc, "values": { "Price": "-5" } })).unwrap_err();
