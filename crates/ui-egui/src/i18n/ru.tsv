@@ -534,6 +534,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Читает {names}, которые в свою очередь читают его. Никакой порядок не исправит цикл: измените одну из формул.
 	Not in order	Вне порядка
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Отсутствует в порядке вычислений, сохранённом в PDF: другие программы просмотра PDF могут его не вычислять.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Читает {name}, которого нет в форме, поэтому не получает оттуда значения.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Его скрипт также читает поля, имена которых составляет во время выполнения, поэтому эти чтения нельзя проверить.
+	Missing field	Нет поля
+	Unchecked reads	Непроверенные чтения
+	{field} reads fields named as it runs	{field} читает поля, имена которых задаются при выполнении
+	Some names are built as it runs	Некоторые имена составляются при выполнении
 	Back to Prepare a form	Назад к «Подготовить форму»
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Ни одно поле этой формы пока не вычисляет своё значение. Задайте полю вычисление на вкладке «Вычислить» его свойств, и оно появится здесь.
 	{names} and {last}	{names} и {last}
@@ -590,6 +596,9 @@
 	Clean Up	Очистить
 	Color Images	Цветные изображения
 	Grayscale Images	Изображения в оттенках серого
+	Monochrome Images	Монохромные изображения
+	CCITT Group 4	CCITT группа 4
+	JBIG2 (lossless)	JBIG2 (без потерь)
 	Bicubic downsampling to	Бикубическое уменьшение до
 	for images above	для изображений выше
 	Compression	Сжатие
@@ -860,6 +869,14 @@
 	Applies to 1 page	Применяется к 1 странице
 	Applies to {n} pages	Применяется к {n} страницам
 	Replaces the existing one on those pages.	Заменяет существующий на этих страницах.
+	Checking pages…	Проверка страниц…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Страница с собственной белой заливкой, которая скроет фон: {pages}. Заменить
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Страницы с собственной белой заливкой, которая скроет фон: {pages}. Заменить
+	Removing the background puts the page's own backdrop back.	При удалении фона собственная белая заливка страницы возвращается.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Страница, закрытая изображением (скан?): {pages}; фон там не будет виден.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Страницы, закрытые изображениями (сканы?): {pages}; фон там не будет виден.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Страница изменена после добавления фона, поэтому её собственная белая заливка остаётся выключенной: {pages}. На белой бумаге она выглядит так же.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Страницы изменены после добавления фона, поэтому их собственные белые заливки остаются выключенными: {pages}. На белой бумаге они выглядят так же.
 	PDF or image	PDF или изображение
 	No file chosen	Файл не выбран
 	Page number	Номер страницы
@@ -2318,6 +2335,11 @@ animation effects	Off	Выкл
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} вычисляется раньше {fields}, которое оно читает.|{field} вычисляется раньше {fields}, которые оно читает.|{field} вычисляется раньше {fields}, которые оно читает.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Ещё {n} поле вычисляется слишком рано.|Ещё {n} поля вычисляются слишком рано.|Ещё {n} полей вычисляются слишком рано.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} нет в порядке, сохранённом в PDF, поэтому другие программы просмотра PDF могут его не вычислить.|{fields} нет в порядке, сохранённом в PDF, поэтому другие программы просмотра PDF могут их не вычислить.|{fields} нет в порядке, сохранённом в PDF, поэтому другие программы просмотра PDF могут их не вычислить.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} формула читает поле, которого нет в форме|{n} формулы читают поля, которых нет в форме|{n} формул читают поля, которых нет в форме
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} читает {fields}, которого нет в форме.|{field} читает {fields}, которых нет в форме.|{field} читает {fields}, которых нет в форме.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Ещё {n} формула читает отсутствующее поле.|Ещё {n} формулы читают отсутствующие поля.|Ещё {n} формул читают отсутствующие поля.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} составляет некоторые имена полей при выполнении, поэтому эти чтения не проверяются.|{fields} составляют некоторые имена полей при выполнении, поэтому эти чтения не проверяются.|{fields} составляют некоторые имена полей при выполнении, поэтому эти чтения не проверяются.
+@plural	{fields} is missing|{fields} are missing	{fields} отсутствует|{fields} отсутствуют|{fields} отсутствуют
 	Scan	Сканировать
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Распишитесь на листе белой бумаги и сфотографируйте его при ярком равномерном освещении (со вспышкой). Выберите фото или перетащите его сюда: PdfCraft найдёт подпись и уберёт бумагу.
 	Choose photo…	Выбрать фото…
@@ -2470,3 +2492,7 @@ animation effects	Off	Выкл
 	Rotate the selected pages clockwise	Повернуть выбранные страницы по часовой стрелке
 	Extract the selected pages…	Извлечь выбранные страницы…
 	Delete the selected pages	Удалить выбранные страницы
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Параметры этого ответа
+	Export value	Значение экспорта

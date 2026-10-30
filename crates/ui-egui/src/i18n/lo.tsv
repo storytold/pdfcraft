@@ -565,6 +565,9 @@
 	Clean Up	ອະນາໄມ
 	Color Images	ຮູບພາບສີ
 	Grayscale Images	ຮູບພາບລະດັບສີເທົາ
+	Monochrome Images	ຮູບພາບຂາວດຳ
+	CCITT Group 4	CCITT ກຸ່ມ 4
+	JBIG2 (lossless)	JBIG2 (ບໍ່ສູນເສຍ)
 	Bicubic downsampling to	ຫຼຸດຄວາມລະອຽດແບບ Bicubic ລົງເປັນ:
 	for images above	ສຳລັບຮູບພາບທີ່ເກີນ:
 	Compression	ການບີບອັດ
@@ -834,6 +837,14 @@
 	Applies to 1 page	ນຳໃຊ້ກັບ 1 ໜ້າ
 	Applies to {n} pages	ນຳໃຊ້ກັບ {n} ໜ້າ
 	Replaces the existing one on those pages.	ປ່ຽນແທນສິ່ງທີ່ມີຢູ່ແລ້ວໃນໜ້າເຫຼົ່ານັ້ນ.
+	Checking pages…	ກຳລັງກວດສອບໜ້າ…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	ໜ້າ {pages} ມີພື້ນສີຂາວຂອງມັນເອງ ເຊິ່ງຈະບັງພື້ນຫຼັງ. ປ່ຽນແທນ
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	ໜ້າ {pages} ມີພື້ນສີຂາວຂອງພວກມັນເອງ ເຊິ່ງຈະບັງພື້ນຫຼັງ. ປ່ຽນແທນ
+	Removing the background puts the page's own backdrop back.	ການລຶບພື້ນຫຼັງຈະເອົາພື້ນສີຂາວເດີມຂອງໜ້າກັບຄືນມາ.
+	A picture covers page {pages} (a scan?), so the background won't show there.	ມີຮູບພາບປົກໜ້າ {pages} ຢູ່ (ພາບສະແກນ?), ສະນັ້ນພື້ນຫຼັງຈະບໍ່ສະແດງຢູ່ບ່ອນນັ້ນ.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	ມີຮູບພາບຫຼາຍຮູບປົກໜ້າ {pages} ຢູ່ (ພາບສະແກນ?), ສະນັ້ນພື້ນຫຼັງຈະບໍ່ສະແດງຢູ່ບ່ອນນັ້ນ.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	ໜ້າ {pages} ປ່ຽນໄປຫຼັງຈາກເພີ່ມພື້ນຫຼັງ, ສະນັ້ນພື້ນສີຂາວຂອງມັນເອງຍັງປິດຢູ່. ເທິງເຈ້ຍສີຂາວມັນເບິ່ງຄືເກົ່າ.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	ໜ້າ {pages} ປ່ຽນໄປຫຼັງຈາກເພີ່ມພື້ນຫຼັງ, ສະນັ້ນພື້ນສີຂາວຂອງພວກມັນເອງຍັງປິດຢູ່. ເທິງເຈ້ຍສີຂາວພວກມັນເບິ່ງຄືເກົ່າ.
 	PDF or image	PDF ຫຼື ຮູບພາບ
 	No file chosen	ຍັງບໍ່ໄດ້ເລືອກໄຟລ໌
 	Page number	ໝາຍເລກໜ້າ
@@ -2465,3 +2476,13 @@ animation effects	Off	ປິດ
 	Rotate the selected pages clockwise	ໝູນໜ້າທີ່ເລືອກຕາມເຂັມໂມງ
 	Extract the selected pages…	ແຍກໜ້າທີ່ເລືອກອອກ…
 	Delete the selected pages	ລຶບໜ້າທີ່ເລືອກ
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	ຕົວເລືອກຂອງການຕອບກັບນີ້
+# Untranslated: English text until a translator fills these in.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Reads {name}, which the form doesn't have, so it gets no value there.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.
+	Missing field	Missing field
+	Unchecked reads	Unchecked reads
+	{field} reads fields named as it runs	{field} reads fields named as it runs
+	Some names are built as it runs	Some names are built as it runs

@@ -31,6 +31,37 @@ impl Default for PdfCraftApp {
 }
 
 impl PdfCraftApp {
+    /// The window's title and, on the web, the page's, from the active document (#3640). Done in
+    /// `logic` too, which also runs while the window or browser tab is hidden: a document opened
+    /// then (a `?file=` download finishing) still names the page an embedding host reads.
+    fn sync_titles(&mut self, ctx: &egui::Context) {
+        // The window shows the active document's name (or title, if it asks for that), with •
+        // while it has unsaved changes, as the other Craft apps write it (#3640). Unsaved means
+        // what closing would ask about, so a draft not yet applied counts too.
+        let dirty = self.active.is_some_and(|i| self.has_unsaved_work(i));
+        let mark = if dirty { " •" } else { "" };
+        let titled = |name: Option<String>| {
+            name.or_else(|| self.combine_showing().then(|| tl!("Combine files").to_owned()))
+                .map_or_else(|| "PdfCraft".to_owned(), |name| format!("{name}{mark} — PdfCraft"))
+        };
+        let title = titled(self.active.and_then(|i| crate::canvas::tab_label(self, i)));
+        // The web page's title is what an embedding host reads to tell which file opened, so it
+        // names the file even when the document asks to show its own title.
+        let page_title = titled(self.active.and_then(|i| self.views.get(i)).and_then(|v| self.session.get(v.id)).map(|d| d.name.clone()));
+        if title != self.window_title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.window_title = title;
+        }
+        if page_title != self.page_title {
+            // eframe's web runner ignores Title: set the page's own.
+            #[cfg(target_arch = "wasm32")]
+            if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+                document.set_title(&page_title);
+            }
+            self.page_title = page_title;
+        }
+    }
+
     /// Construct an application with the default session, panels, theme and control state.
     pub fn new() -> Self {
         Self {
@@ -73,6 +104,7 @@ impl PdfCraftApp {
             ui_scale_applied: None,
             flatten_fill_sign_on_save: false,
             fill_text_size: fill_sign::TEXT_SIZE,
+            fill_text_color: [0.0; 3],
             dialog: None,
             updates: updates::Updates::default(),
             printer_source: None,
@@ -198,6 +230,7 @@ impl PdfCraftApp {
             field_table_draft: None,
             form_preview: false,
             window_title: String::new(),
+            page_title: String::new(),
             recovery: None,
             recoverable: Vec::new(),
             recovery_keys: Default::default(),
@@ -527,6 +560,7 @@ impl eframe::App for PdfCraftApp {
         // Last, after everything that can open or answer the "save changes?" question.
         self.attend_save_prompt(ctx);
         self.sync_native_menu(ctx);
+        self.sync_titles(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -546,16 +580,7 @@ impl eframe::App for PdfCraftApp {
         for view in &mut self.views {
             view.begin_render_frame();
         }
-        // The window shows the active document's name (or title, if it asks for that).
-        let title = self
-            .active
-            .and_then(|i| crate::canvas::tab_label(self, i))
-            .or_else(|| self.combine_showing().then(|| tl!("Combine files").to_owned()))
-            .map_or_else(|| "PdfCraft".to_owned(), |name| format!("{name} — PdfCraft"));
-        if title != self.window_title {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
-            self.window_title = title;
-        }
+        self.sync_titles(&ctx);
         // The accessible window takes the same name, so a screen reader (AT-SPI on Linux, UIA on
         // Windows) can tell it apart (#4614). egui builds the root node afresh every pass.
         ctx.accesskit_node_builder(egui::accesskit_root_id(), |root| root.set_label(self.window_title.as_str()));

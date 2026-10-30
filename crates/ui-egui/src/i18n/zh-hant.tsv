@@ -164,6 +164,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	讀取 {names}，而它們又讀取此欄位。任何順序都無法修正迴圈：請修改其中一個公式。
 	Not in order	不在順序中
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF 中儲存的計算順序缺少此欄位：其他 PDF 檢視器可能不會計算它。
+	Reads {name}, which the form doesn't have, so it gets no value there.	讀取表單中不存在的 {name}，因此從中得不到值。
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	其指令碼還會讀取執行時才組出名稱的欄位，因此無法檢查這些讀取。
+	Missing field	缺少欄位
+	Unchecked reads	未檢查的讀取
+	{field} reads fields named as it runs	{field} 讀取執行時才確定名稱的欄位
+	Some names are built as it runs	部分名稱在執行時才組出
 	Back to Prepare a form	返回準備表單
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	此表單中還沒有計算自身值的欄位。在欄位內容的「計算」索引標籤中為欄位設定計算後，它會顯示在這裡。
 	{names} and {last}	{names}和{last}
@@ -221,6 +227,9 @@
 	Clean Up	清理
 	Color Images	彩色圖片
 	Grayscale Images	灰階圖片
+	Monochrome Images	單色圖片
+	CCITT Group 4	CCITT 第 4 組
+	JBIG2 (lossless)	JBIG2（無損）
 	Bicubic downsampling to	雙三次降取樣至
 	for images above	（高於此解析度的圖片）
 	Compression	壓縮
@@ -487,6 +496,14 @@
 	Applies to 1 page	套用於 1 頁
 	Applies to {n} pages	套用於 {n} 頁
 	Replaces the existing one on those pages.	替換這些頁面上的現有內容。
+	Checking pages…	正在檢查頁面…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	第 {pages} 頁有自己的白色填色，會遮住背景。取代它
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	第 {pages} 頁各有自己的白色填色，會遮住背景。取代它們
+	Removing the background puts the page's own backdrop back.	移除背景後，頁面自己的白色填色會恢復。
+	A picture covers page {pages} (a scan?), so the background won't show there.	第 {pages} 頁被一張圖片覆蓋（掃描檔？），因此那裡不會顯示背景。
+	Pictures cover pages {pages} (scans?), so the background won't show there.	第 {pages} 頁被圖片覆蓋（掃描檔？），因此那裡不會顯示背景。
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	第 {pages} 頁在加入背景後有變更，因此其本身的白色填色維持關閉。在白紙上看起來一樣。
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	第 {pages} 頁在加入背景後有變更，因此它們本身的白色填色維持關閉。在白紙上看起來一樣。
 	PDF or image	PDF 或圖片
 	No file chosen	未選擇檔案
 	Page number	頁碼
@@ -2268,6 +2285,11 @@ animation effects	Off	關
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} 在它讀取的 {fields} 之前計算。
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	另有 {n} 個欄位計算過早。
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} 不在 PDF 中儲存的順序裡，其他 PDF 檢視器可能不會計算。
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} 個公式讀取了表單中不存在的欄位
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} 讀取表單中不存在的 {fields}。
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	另有 {n} 個公式讀取了缺少的欄位。
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} 在執行時才組出部分欄位名稱，因此這些讀取不會被檢查。
+@plural	{fields} is missing|{fields} are missing	缺少 {fields}
 	Scan	掃描
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	在白紙上簽名，並在明亮、均勻的光線下拍照（使用閃光燈）。選擇相片或將其拖放到此處：PdfCraft 會找到簽名並去除紙張背景。
 	Choose photo…	選擇相片…
@@ -2507,3 +2529,7 @@ animation effects	Off	關
 	Rotate the selected pages clockwise	順時針旋轉所選頁面
 	Extract the selected pages…	擷取所選頁面…
 	Delete the selected pages	刪除所選頁面
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	此回覆的選項
+	Export value	匯出值

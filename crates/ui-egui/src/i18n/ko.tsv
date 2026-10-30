@@ -544,6 +544,9 @@
 	Clean Up	정리
 	Color Images	컬러 이미지
 	Grayscale Images	회색조 이미지
+	Monochrome Images	흑백 이미지
+	CCITT Group 4	CCITT 그룹 4
+	JBIG2 (lossless)	JBIG2(무손실)
 	Bicubic downsampling to	다음 값으로 바이큐빅 다운샘플링
 	for images above	다음 값을 초과하는 이미지에 적용
 	Compression	압축
@@ -808,6 +811,14 @@
 	Applies to 1 page	1개 페이지에 적용됩니다
 	Applies to {n} pages	{n}개 페이지에 적용됩니다
 	Replaces the existing one on those pages.	해당 페이지의 기존 항목을 대체합니다.
+	Checking pages…	페이지 확인 중…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	{pages}페이지에는 배경을 가리는 자체 흰색 채우기가 있습니다. 바꾸기
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	{pages}페이지에 배경을 가리는 자체 흰색 채우기가 있습니다. 바꾸기
+	Removing the background puts the page's own backdrop back.	배경을 제거하면 페이지 자체의 흰색 채우기가 복원됩니다.
+	A picture covers page {pages} (a scan?), so the background won't show there.	이미지가 {pages}페이지를 덮고 있어(스캔본?) 배경이 보이지 않습니다.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	이미지들이 {pages}페이지를 덮고 있어(스캔본?) 배경이 보이지 않습니다.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	배경을 추가한 뒤 {pages}페이지가 바뀌어서 자체 흰색 채우기가 꺼진 채로 남습니다. 흰 종이에서는 똑같이 보입니다.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	배경을 추가한 뒤 {pages}페이지가 바뀌어서 자체 흰색 채우기가 꺼진 채로 남습니다. 흰 종이에서는 똑같이 보입니다.
 	PDF or image	PDF 또는 이미지
 	No file chosen	선택한 파일 없음
 	Page number	페이지 번호
@@ -2721,6 +2732,12 @@ theme	Appearance	모양
 	Links on page	Links on page
 	Loop	Loop
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Reads {name}, which the form doesn't have, so it gets no value there.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.
+	Missing field	Missing field
+	Unchecked reads	Unchecked reads
+	{field} reads fields named as it runs	{field} reads fields named as it runs
+	Some names are built as it runs	Some names are built as it runs
 	Move only what must move, so every field calculates after the fields it reads.	Move only what must move, so every field calculates after the fields it reads.
 	Moves only what must move	Moves only what must move
 	No field reads it	No field reads it
@@ -2794,3 +2811,6 @@ theme	Appearance	모양
 	Rotate the selected pages clockwise	선택한 페이지를 시계 방향으로 회전
 	Extract the selected pages…	선택한 페이지 추출…
 	Delete the selected pages	선택한 페이지 삭제
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	이 답글의 옵션

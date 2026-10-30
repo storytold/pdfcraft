@@ -23,6 +23,7 @@ PdfCraft is a clean-room, open-source, Rust-native PDF application targeting Ado
 - **Layering.** Nothing below L7 depends on egui/winit/eframe/rfd (`plan/architecture.md` §3). `cos`/`filters`/`crypt`/`arlington` stay standalone.
 - **Page input.** Page modules read `PagePointer` (`crates/ui-egui/src/page_pointer.rs`), never egui's raw pointer state (`hover_pos`, `interact_pos`, `latest_pos`, `press_origin`, button reads); `page_pointer::tests::page_modules_read_the_pointer_only_through_page_pointer` enforces it.
 - **Page cursor.** Page modules claim the cursor for what is under the pointer (`view.cursor.claim(Layer::…, icon)`, `crates/ui-egui/src/canvas/page_cursor.rs`), never set it (`set_cursor_icon`, `cursor_icon =`, `on_hover_cursor`); `document_area` sets it once, from the claim on the highest layer the active tool reaches. `page_pointer::tests::page_modules_claim_the_cursor_and_never_set_it` enforces it.
+- **Page presses.** A page module decides what of its own is under a point in one hit test, which returns a `Hit` (owner, layer, cursor, tip; `crates/ui-egui/src/canvas/page_router.rs`) and gives its cursor, its tip and its press. It acts on a press only when the router says the press is its own (`view.router.owner(page)`), never by testing the press point again or by asking another module whether it wants it. Escape cancels any press the pages hold (`cancel_on_escape`), and that press is ignored until the button is up. `page_modules_take_presses_from_the_router_without_repeating_hit_tests` guards the centralized hit calls and captured-owner handlers; runtime routing tests cover gesture behavior.
 - **Fidelity.** The PDF object graph is the model. Preserve unknown data. Saves are incremental unless a full rewrite is required. Never silently drop or repair data without recording it.
 - **Never panic.** Every PDF, script, MCP call, settings file and keystroke is untrusted input, and none of it may crash the app or lose the user's work. This outranks feature work. Return `Result` (the crate's error enum) and propagate with `?`, or fall back leniently and record it. In non-test code:
   - No `unwrap`/`expect`/`panic!`/`unreachable!`/`todo!` unless it is provably infallible, with a comment saying why.
@@ -57,3 +58,8 @@ PdfCraft is a clean-room, open-source, Rust-native PDF application targeting Ado
 
 ## Current bootstrap debt (tracked in STATUS.md)
 - `pdfcraft-render` renders through the `hayro` crate directly and inspects documents through `lopdf`. Both get replaced by `cos` / `model` / the DisplayList device (M1–M2, ADR-0004).
+
+## CI workflows
+- Workflows in `.github/workflows/` call the shared workflows in [`storytold/craft-common-actions`](https://github.com/storytold/craft-common-actions) at `@main`, with their inputs and secrets. No other jobs: if no shared workflow does what's needed, it doesn't go here.
+- Don't add or change CI in a feature or fix PR. If the existing workflows can't build or test a change, link an existing craft-common-actions issue or PR, or open a new issue, or a PR only for a small fix that is safe for every app and does not increase CI time.
+- Some workflow files here still run their own jobs. Don't add to them. Moving a job into craft-common-actions is its own task, never part of another PR, and the job stays here until a shared workflow runs it.
