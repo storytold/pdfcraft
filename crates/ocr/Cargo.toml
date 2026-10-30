@@ -14,7 +14,19 @@ workspace = true
 pdfcraft-fonts = { workspace = true }
 ocrs = { version = "0.13.1", default-features = false, features = ["rten"] }
 rten = { version = "0.26.0", default-features = false, features = ["onnx_format", "rten_format"] }
+rten-imageproc = "0.26.0"
+rten-tensor = { version = "0.26.0", optional = true }
 thiserror.workspace = true
+log = { workspace = true, optional = true }
+
+[features]
+default = []
+# Recognise text on the GPU (pdfcraft-ml) when PDFCRAFT_OCR_GPU=1 and the models are ONNX; the
+# CPU path stays, as the fallback for any GPU error.
+gpu = ["dep:pdfcraft-ml", "pdfcraft-ml/gpu", "dep:rten-tensor", "dep:log"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pdfcraft-ml = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3.27"

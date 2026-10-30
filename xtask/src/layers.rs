@@ -111,6 +111,10 @@ pub const SIDEWAYS: &[(&str, &str)] = &[
 pub const UI_CRATES: &[&str] = &["egui", "eframe", "winit", "egui_kittest", "craft-ui", "egui_extras", "egui_dock", "egui_tiles", "rfd", "wgpu*"];
 pub const UI_MIN_LAYER: u8 = 7;
 
+/// Crates below L7 that may use wgpu (`wgpu*`) for compute only: no window, surface or UI
+/// toolkit. `ml` runs the OCR models in compute shaders; every other UI crate stays out of it.
+pub const GPU_COMPUTE: &[&str] = &["ml"];
+
 pub fn short_name(pkg: &str) -> &str {
     pkg.strip_prefix("pdfcraft-").unwrap_or(pkg)
 }
@@ -118,6 +122,12 @@ pub fn short_name(pkg: &str) -> &str {
 pub fn classify(pkg: &str) -> Option<Class> {
     let s = short_name(pkg);
     TABLE.iter().find(|(n, _)| *n == s).map(|(_, c)| *c)
+}
+
+/// Whether `krate` (short name) may depend on `dep` although it is in [`UI_CRATES`]: a
+/// [`GPU_COMPUTE`] crate on wgpu.
+fn compute_exempt(krate: &str, dep: &str) -> bool {
+    GPU_COMPUTE.contains(&short_name(krate)) && dep.starts_with("wgpu")
 }
 
 fn is_ui_crate(name: &str) -> bool {
@@ -227,7 +237,10 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
             }
             if d.workspace {
                 check_workspace_dep(c, class, layer, d, &mut out);
-            } else if layer < UI_MIN_LAYER && is_ui_crate(&d.name) && !(class == Class::Testkit || d.kind == DepKind::Dev && d.name == "egui_kittest")
+            } else if layer < UI_MIN_LAYER
+                && is_ui_crate(&d.name)
+                && !(class == Class::Testkit || d.kind == DepKind::Dev && d.name == "egui_kittest")
+                && !compute_exempt(&c.name, &d.name)
             {
                 out.push(Violation::UiBelowL7 { krate: c.name.clone(), dep: d.name.clone(), layer });
             }
@@ -323,6 +336,12 @@ mod tests {
             assert!(matches!(v[..], [Violation::UiBelowL7 { layer: 6, .. }]), "{dep}");
         }
         assert!(check(&[c("pdfcraft-platform", &[("winit", Normal, false)])]).is_empty());
+        // ml may use wgpu for compute, and nothing else of the UI; no other crate below L7 may.
+        assert!(check(&[c("pdfcraft-ml", &[("wgpu", Normal, false)])]).is_empty());
+        for dep in ["egui", "winit", "eframe"] {
+            assert!(matches!(check(&[c("pdfcraft-ml", &[(dep, Normal, false)])])[..], [Violation::UiBelowL7 { .. }]), "{dep}");
+        }
+        assert!(matches!(check(&[c("pdfcraft-ocr", &[("wgpu", Normal, false)])])[..], [Violation::UiBelowL7 { .. }]));
         assert!(check(&[c("pdfcraft-ui-egui", &[("craft-ui", Normal, false)])]).is_empty());
     }
 

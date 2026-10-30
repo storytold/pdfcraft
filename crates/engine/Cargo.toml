@@ -8,6 +8,10 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Text recognition on the GPU (opt-in at run time with PDFCRAFT_OCR_GPU=1).
+ocr-gpu = ["pdfcraft-ocr/gpu"]
+
 [dependencies]
 craft-docpath = { workspace = true }
 pdfcraft-measure = { workspace = true }

@@ -304,6 +304,81 @@ mod tests {
         }
     }
 
+    /// The first and last letters of a line are read: ocrs' own 3-pixel margin clipped them at
+    /// 300 dpi ("The" read as "he", "and" as "an", full stops lost, about 4 % of the words).
+    /// Needs the OCR models (`cargo xtask models`).
+    #[test]
+    fn the_first_and_last_letters_of_a_line_are_read() {
+        if !available() {
+            eprintln!("skipped: OCR models not installed");
+            return;
+        }
+        let paragraph = "The quarterly report summarizes revenue, operating costs and the outlook for the coming year. \
+            Sales in the northern region grew by twelve percent, while the southern offices remained flat. \
+            Management expects stable margins despite higher prices for energy and transport. ";
+        let text = paragraph.repeat(6);
+        let s = Session::new();
+        let pdf = s.create_from_text("t", &text).unwrap();
+        let mut viewer = Session::new();
+        let id = viewer.open("text.pdf", None, pdf, None).unwrap();
+        assert_eq!(viewer.get(id).unwrap().info.pages.len(), 1, "the text fits one page");
+        let png = export::Exporter::new(viewer.get(id).unwrap()).png(0, 300.0).unwrap();
+        let scan = s.create_from_images(&[("1.png".into(), png)]).unwrap();
+        let mut reader = Session::new();
+        let id = reader.open("scan.pdf", None, scan, None).unwrap();
+        let read = reader.recognize_text(id, &[], OcrSettings::default()).unwrap()[0].text();
+        let (got, want): (Vec<&str>, Vec<&str>) = (read.split_whitespace().collect(), text.split_whitespace().collect());
+        // Word-level edit distance.
+        let mut row: Vec<usize> = (0..=want.len()).collect();
+        for g in &got {
+            let mut prev = row[0];
+            row[0] += 1;
+            for (j, w) in want.iter().enumerate() {
+                let next = (prev + usize::from(g != w)).min(row[j] + 1).min(row[j + 1] + 1);
+                prev = row[j + 1];
+                row[j + 1] = next;
+            }
+        }
+        let errors = row[want.len()];
+        assert!(errors * 100 <= want.len(), "{errors} word errors in {} words:\n{read}", want.len());
+    }
+
+    /// The GPU path reads a page as the CPU path does: the same lines and words, and word boxes
+    /// within a few pixels. Needs the ONNX models and a GPU; skipped otherwise.
+    #[cfg(feature = "ocr-gpu")]
+    #[test]
+    fn the_gpu_reads_a_page_as_the_cpu_does() {
+        let Some(models) = pdfcraft_ocr::Models::find() else {
+            eprintln!("skipped: OCR models not installed");
+            return;
+        };
+        let gpu = pdfcraft_ocr::Ocr::load_with_gpu(&models, true).unwrap();
+        if !gpu.backend().starts_with("GPU") {
+            eprintln!("skipped: {}", gpu.backend());
+            return;
+        }
+        let cpu = pdfcraft_ocr::Ocr::load_with_gpu(&models, false).unwrap();
+        let paragraph = "The quarterly report summarizes revenue, operating costs and the outlook for the coming year. \
+            Sales in the northern region grew by twelve percent, while the southern offices remained flat. ";
+        let s = Session::new();
+        let pdf = s.create_from_text("t", &paragraph.repeat(5)).unwrap();
+        let mut viewer = Session::new();
+        let id = viewer.open("text.pdf", None, pdf, None).unwrap();
+        let shot = PageRenderer::new(viewer.get(id).unwrap().bytes.clone(), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            scale: 300.0 / 72.0,
+            ..Default::default()
+        });
+        let (a, b) = (gpu.recognize(&shot.rgba, shot.width, shot.height).unwrap(), cpu.recognize(&shot.rgba, shot.width, shot.height).unwrap());
+        assert_eq!(a.iter().map(|l| l.text()).collect::<Vec<_>>(), b.iter().map(|l| l.text()).collect::<Vec<_>>());
+        for (la, lb) in a.iter().zip(&b) {
+            for (wa, wb) in la.words.iter().zip(&lb.words) {
+                let off = wa.rect.iter().zip(&wb.rect).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max);
+                assert!(off <= 8.0, "{} at {:?} on the GPU, {:?} on the CPU", wa.text, wa.rect, wb.rect);
+            }
+        }
+    }
+
     #[test]
     fn coverage_of_overlapping_or_broken_boxes_stays_between_zero_and_one() {
         // A glyph drawn twice (fake bold) does not cover more than the whole word.
