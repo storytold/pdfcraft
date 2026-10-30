@@ -477,6 +477,12 @@ pub enum Edit {
         page: usize,
         index: usize,
     },
+    /// Move an added item in the drawing order of the page's added items (`index` among them).
+    ArrangeContent {
+        page: usize,
+        index: usize,
+        to: pdfcraft_edit::added::Arrange,
+    },
     /// Replace an added image with another file (keeping its box and transforms).
     ReplaceImage {
         page: usize,

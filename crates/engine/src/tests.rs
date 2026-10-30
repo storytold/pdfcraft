@@ -3735,6 +3735,53 @@ fn added_text_and_images_render_and_stay_editable() {
     assert_eq!(s.get(id).unwrap().added().len(), 2);
 }
 
+/// Arrange added content (#3798): one undoable step per move, named by the direction, saved in
+/// the file, and an item already at the end is refused without a history step.
+#[test]
+fn arranging_added_content_is_one_undoable_step_that_is_saved() {
+    let (mut s, id) = session_with(1);
+    for word in ["ONE", "TWO", "THREE"] {
+        let t = AddedText { rect: [20.0, 250.0, 180.0, 264.4], text: word.into(), ..AddedText::default() };
+        s.apply(id, Edit::AddText { page: 0, text: t }).unwrap();
+    }
+    let order = |s: &Session| order_of(s, id);
+    s.apply(id, Edit::ArrangeContent { page: 0, index: 0, to: ArrangeContent::Front }).unwrap();
+    assert_eq!(order(&s), ["TWO", "THREE", "ONE"]);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Bring to front"));
+    let bytes = s.save_bytes(id).unwrap();
+    let mut other = Session::new();
+    let reopened = other.open("again.pdf", None, bytes, None).unwrap();
+    assert_eq!(order_of(&other, reopened), ["TWO", "THREE", "ONE"], "the order is in the saved file");
+    s.undo(id).unwrap();
+    assert_eq!(order(&s), ["ONE", "TWO", "THREE"]);
+    s.redo(id).unwrap();
+    assert_eq!(order(&s), ["TWO", "THREE", "ONE"]);
+    for (to, label) in
+        [(ArrangeContent::Back, "Send to back"), (ArrangeContent::Forward, "Bring forward"), (ArrangeContent::Backward, "Send backward")]
+    {
+        s.apply(id, Edit::ArrangeContent { page: 0, index: 1, to }).unwrap();
+        assert_eq!(s.get(id).unwrap().can_undo(), Some(label));
+    }
+    // At the end already: refused, and no step is recorded for it.
+    let steps = s.get(id).unwrap().can_undo().map(str::to_string);
+    let first = order(&s);
+    assert!(s.apply(id, Edit::ArrangeContent { page: 0, index: 2, to: ArrangeContent::Front }).is_err());
+    assert_eq!(order(&s), first);
+    assert_eq!(s.get(id).unwrap().can_undo().map(str::to_string), steps);
+}
+
+fn order_of(s: &Session, id: DocId) -> Vec<String> {
+    s.get(id)
+        .unwrap()
+        .added()
+        .iter()
+        .map(|a| match &a.content {
+            AddedContent::Text(t) => t.text.clone(),
+            AddedContent::Image(_) => "image".into(),
+        })
+        .collect()
+}
+
 /// Edit ▸ Copy and Paste of added content (#2636): a text box comes back with all its style, an
 /// image with its picture and transforms, in the same document and in another.
 #[test]

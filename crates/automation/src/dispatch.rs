@@ -677,6 +677,7 @@ impl Automation {
             "page_add_image" => self.page_add_image(&a)?,
             "content_update" => self.content_update(&a)?,
             "content_delete" => self.content_delete(&a)?,
+            "content_arrange" => self.content_arrange(&a)?,
             "content_copy" => self.content_copy(&a)?,
             "doc_print" => self.doc_print(&a)?,
             "attachment_add" => {

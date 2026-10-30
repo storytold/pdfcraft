@@ -105,6 +105,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::UpdateContent { .. }
         | Edit::MoveObjects { .. }
         | Edit::DeleteContent { .. }
+        | Edit::ArrangeContent { .. }
         | Edit::ReplaceImage { .. }
         | Edit::PasteContent { .. }
         | Edit::ClearRedactions
@@ -617,6 +618,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::UpdateContent { page, index, content } => pdfcraft_edit::update_content(doc, *page, *index, content)?,
         Edit::DeleteContent { page, index } => pdfcraft_edit::delete_content(doc, *page, *index)?,
+        Edit::ArrangeContent { page, index, to } => drop(pdfcraft_edit::added::arrange_content(doc, *page, *index, *to)?),
         Edit::ReplaceImage { page, index, name, bytes } => {
             let item = pdfcraft_edit::list_added(doc).into_iter().filter(|a| a.page == *page).nth(*index);
             let Some(AddedContent::Image(old)) = item.map(|a| a.content) else {

@@ -213,11 +213,22 @@ impl PdfCraftApp {
 
     fn history_step(&mut self, undo: bool) {
         let Some((i, id)) = self.active_ids() else { return };
+        // The selected added item, by its place in the page's content: the undo may reorder them.
+        let selected = self.views[i].content.selected.and_then(|(page, index)| {
+            let doc = self.session.get(id)?;
+            let item = doc.added().iter().filter(|a| a.page == page).nth(index)?;
+            Some((page, item.obj))
+        });
         let result = if undo { self.session.undo(id) } else { self.session.redo(id) };
         match result {
             Ok(label) => {
                 if let Some(doc) = self.session.get(id) {
                     self.views[i].document_changed(&doc.info);
+                    // It stays selected where it now is, or not at all if it is gone.
+                    if let Some((page, obj)) = selected {
+                        self.views[i].content.selected =
+                            doc.added().iter().filter(|a| a.page == page).position(|a| a.obj == obj).map(|index| (page, index));
+                    }
                 }
                 self.views[i].comments.selected = None;
                 let label = crate::i18n::edit_label(&label);
@@ -637,6 +648,7 @@ fn content_page(edit: &Edit) -> Option<usize> {
         | Edit::AddImage { page, .. }
         | Edit::UpdateContent { page, .. }
         | Edit::DeleteContent { page, .. }
+        | Edit::ArrangeContent { page, .. }
         | Edit::ReplaceImage { page, .. } => Some(*page),
         _ => None,
     }

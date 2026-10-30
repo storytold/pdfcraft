@@ -811,6 +811,102 @@ fn format_text_sets_character_spacing_for_added_text() {
     assert_eq!(h.state().text_style.char_spacing, 2.5);
 }
 
+/// #3798: Ctrl+Up and Ctrl+Down move the selected added item over or under its neighbour, with
+/// Shift to the very front or back, as one undo step each; the item stays selected, and at either
+/// end the key does nothing.
+#[test]
+fn arrange_keys_move_the_selected_item_in_the_drawing_order() {
+    let mut h = harness();
+    for (i, word) in ["ONE", "TWO", "THREE"].into_iter().enumerate() {
+        let text = pdfcraft_engine::AddedText {
+            rect: [20.0, 300.0 - 40.0 * i as f64, 180.0, 314.0 - 40.0 * i as f64],
+            text: word.into(),
+            ..Default::default()
+        };
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+    }
+    assert!(h.state_mut().execute("edit.text"));
+    crate::support::settle(&mut h);
+    let order = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> {
+        added(h)
+            .iter()
+            .map(|a| match &a.content {
+                pdfcraft_engine::AddedContent::Text(t) => t.text.clone(),
+                pdfcraft_engine::AddedContent::Image(_) => "image".into(),
+            })
+            .collect()
+    };
+    let press = |h: &mut Harness<'static, PdfCraftApp>, shift: bool, key: egui::Key| {
+        let modifiers = if shift { egui::Modifiers::COMMAND | egui::Modifiers::SHIFT } else { egui::Modifiers::COMMAND };
+        h.key_press_modifiers(modifiers, key);
+        h.run_steps(3);
+    };
+    h.state_mut().views[0].content.selected = Some((0, 0));
+    h.run_steps(2);
+    press(&mut h, false, egui::Key::ArrowUp);
+    assert_eq!(order(&h), ["TWO", "ONE", "THREE"], "one step forward");
+    assert_eq!(h.state().views[0].content.selected, Some((0, 1)), "ONE is still the selected one");
+    press(&mut h, true, egui::Key::ArrowUp);
+    assert_eq!(order(&h), ["TWO", "THREE", "ONE"], "to the front");
+    assert_eq!(h.state().views[0].content.selected, Some((0, 2)));
+    let steps = h.state().session.get(h.state().views[0].id).unwrap().can_undo().map(str::to_string);
+    press(&mut h, false, egui::Key::ArrowUp);
+    assert_eq!(order(&h), ["TWO", "THREE", "ONE"], "already in front: nothing happens");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo().map(str::to_string), steps, "and no undo step is made");
+    press(&mut h, false, egui::Key::ArrowDown);
+    assert_eq!(order(&h), ["TWO", "ONE", "THREE"], "one step backward");
+    press(&mut h, true, egui::Key::ArrowDown);
+    assert_eq!(order(&h), ["ONE", "TWO", "THREE"], "to the back");
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)));
+    // One undo step puts the last move back.
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    assert_eq!(order(&h), ["TWO", "ONE", "THREE"]);
+    assert_eq!(h.state().views[0].content.selected, Some((0, 1)), "ONE is still the selected item after the undo");
+    assert!(h.state_mut().execute("edit.redo"));
+    h.run_steps(3);
+    assert_eq!(order(&h), ["ONE", "TWO", "THREE"]);
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)), "and after the redo");
+    // Undoing past the item's own creation leaves nothing selected rather than another item.
+    for _ in 0..8 {
+        h.state_mut().execute("edit.undo");
+        h.run_steps(2);
+    }
+    assert!(added(&h).is_empty());
+    assert_eq!(h.state().views[0].content.selected, None);
+}
+
+/// #3798: the arrange keys leave a dialog's keyboard alone.
+#[test]
+fn arrange_keys_do_nothing_under_a_dialog() {
+    let mut h = harness();
+    for (i, word) in ["ONE", "TWO"].into_iter().enumerate() {
+        let text = pdfcraft_engine::AddedText {
+            rect: [20.0, 300.0 - 40.0 * i as f64, 180.0, 314.0 - 40.0 * i as f64],
+            text: word.into(),
+            ..Default::default()
+        };
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+    }
+    assert!(h.state_mut().execute("edit.text"));
+    crate::support::settle(&mut h);
+    h.state_mut().views[0].content.selected = Some((0, 0));
+    h.state_mut().set_option("dialog", "about").unwrap();
+    h.run_steps(4);
+    assert!(h.state().dialog.is_some());
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::ArrowUp);
+    h.run_steps(3);
+    let texts: Vec<String> = added(&h)
+        .iter()
+        .map(|a| match &a.content {
+            pdfcraft_engine::AddedContent::Text(t) => t.text.clone(),
+            pdfcraft_engine::AddedContent::Image(_) => "image".into(),
+        })
+        .collect();
+    assert_eq!(texts, ["ONE", "TWO"], "the shortcut did not reach the page under the dialog");
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)));
+}
+
 /// Where a mode bar tab is, by its label.
 fn mode_tab(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Rect {
     h.get_all_by_role_and_label(egui::accesskit::Role::Button, label).map(|n| n.rect()).find(|r| r.bottom() < 120.0).expect("a mode tab")

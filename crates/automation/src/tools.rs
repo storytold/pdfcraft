@@ -679,6 +679,18 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc", "page", "index"],
         )),
+        t(
+            "content_arrange",
+            "Arrange added content",
+            "Move an added item (page, index from content_list) in the drawing order of the page's added items: to front (over every other added item), forward (over the next one), backward (under the previous one) or back (under all of them). The page's own content stays where it is. The result's index is the item's new number, and content_list follows the new order. An item already at that end is an error. Undoable.",
+        )
+        .with(schema(
+            json!({
+                "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 },
+                "to": { "type": "string", "enum": ["front", "forward", "backward", "back"] },
+            }),
+            &["doc", "page", "index", "to"],
+        )),
         t("content_delete", "Delete added content", "Delete an added item (page, index from content_list). Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 } }), &["doc", "page", "index"])),

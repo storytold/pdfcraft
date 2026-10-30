@@ -4,7 +4,7 @@
 //! Delete to remove it. Each change is one undoable engine edit.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
-use pdfcraft_engine::{Added, AddedContent, AddedText, Edit};
+use pdfcraft_engine::{Added, AddedContent, AddedText, ArrangeContent, Edit};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
@@ -503,9 +503,41 @@ pub(crate) fn paint_page(
     }
 }
 
-/// Delete removes the selected item; Escape clears the selection.
-pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView) {
+/// Delete removes the selected item; Escape clears the selection. Ctrl/Cmd+Up and Down move it one
+/// step over or under the next added item, and with Shift all the way to the front or the back
+/// (#3798).
+pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, added: &[Added], unobstructed: bool) {
     if view.content.selected.is_none() || view.content.draft.is_some() || ctx.egui_wants_keyboard_input() {
+        return;
+    }
+    // Not under a dialog or the palette: the shortcut is left alone there.
+    let to = unobstructed
+        .then(|| {
+            ctx.input_mut(|i| {
+                use egui::{Key, KeyboardShortcut as Shortcut, Modifiers};
+                let both = Modifiers::COMMAND | Modifiers::SHIFT;
+                // With Shift first: a shortcut without it would match these too.
+                [
+                    (Shortcut::new(both, Key::ArrowUp), ArrangeContent::Front),
+                    (Shortcut::new(both, Key::ArrowDown), ArrangeContent::Back),
+                    (Shortcut::new(Modifiers::COMMAND, Key::ArrowUp), ArrangeContent::Forward),
+                    (Shortcut::new(Modifiers::COMMAND, Key::ArrowDown), ArrangeContent::Backward),
+                ]
+                .into_iter()
+                .find_map(|(shortcut, to)| i.consume_shortcut(&shortcut).then_some(to))
+            })
+        })
+        .flatten();
+    if let Some(to) = to
+        && let Some((page, index)) = view.content.selected
+    {
+        let target = to.target(index, on_page(added, page).len());
+        // An item already at that end has nowhere to go: no edit, no history step.
+        if target != index {
+            view.pending_edit = Some(Edit::ArrangeContent { page, index, to });
+            // The item keeps the selection where it lands.
+            view.content.selected = Some((page, target));
+        }
         return;
     }
     let (del, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace), i.key_pressed(egui::Key::Escape)));

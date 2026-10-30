@@ -402,6 +402,7 @@ impl Session {
                     | Edit::AddImage { .. }
                     | Edit::UpdateContent { .. }
                     | Edit::DeleteContent { .. }
+                    | Edit::ArrangeContent { .. }
                     | Edit::ReplaceImage { .. }
                     | Edit::PasteContent { .. }
             ) || matches!(e, Edit::MoveObjects { objects, .. } if objects.iter().any(|o| o.kind == ObjectKind::Added))

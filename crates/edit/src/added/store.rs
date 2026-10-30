@@ -242,6 +242,69 @@ pub fn update_content(doc: &mut Document, page: usize, index: usize, c: &Content
     Ok(())
 }
 
+/// Where to move an added item in the page's drawing order, among the items PdfCraft added there
+/// (the page's own content stays where it is).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Arrange {
+    /// Over every other added item.
+    Front,
+    /// Over the next added item.
+    Forward,
+    /// Under the previous added item.
+    Backward,
+    /// Under every other added item.
+    Back,
+}
+
+impl Arrange {
+    /// Where item `index` of `count` ends up (`count` at least 1; an index past the end counts as the last).
+    pub fn target(self, index: usize, count: usize) -> usize {
+        let last = count.saturating_sub(1);
+        match self {
+            Arrange::Front => last,
+            Arrange::Forward => index.saturating_add(1).min(last),
+            Arrange::Backward => index.min(last).saturating_sub(1),
+            Arrange::Back => 0,
+        }
+    }
+}
+
+/// Move item `index` of `page` in the drawing order of the page's added items. Returns its new
+/// index. An item already as far as it can go is an error, so nothing is recorded for it.
+///
+/// Every added item is its own content stream and draws from the initial graphics state, so items
+/// trade places freely: only the streams the items sit in are rearranged, and whatever else the
+/// page's contents hold stays put.
+pub fn arrange_content(doc: &mut Document, page: usize, index: usize, to: Arrange) -> Result<usize, EditError> {
+    let items: Vec<ObjRef> = list_added(doc).into_iter().filter(|a| a.page == page).map(|a| a.obj).collect();
+    let item = *items
+        .get(index)
+        .ok_or_else(|| EditError::Invalid(format!("page {} has no added item {}", page.saturating_add(1), index.saturating_add(1))))?;
+    let target = to.target(index, items.len());
+    if target == index {
+        let side = if matches!(to, Arrange::Front | Arrange::Forward) { "front" } else { "back" };
+        return Err(EditError::Invalid(format!("the item is already at the {side}")));
+    }
+    let p = page_list(doc).swap_remove(page);
+    let mut list = contents(doc, &p)?;
+    // The places in the page's contents the items occupy, in drawing order: items trade these.
+    // Counted entry by entry, so a stream the contents name twice holds two places, not one.
+    let slots: Vec<usize> = list.iter().enumerate().filter(|(_, e)| e.as_ref().is_some_and(|r| items.contains(&r))).map(|(i, _)| i).collect();
+    if slots.len() != items.len() {
+        return Err(EditError::Invalid("the page's added items can't be found in its contents".into()));
+    }
+    let mut order = items;
+    order.remove(index);
+    order.insert(target, item);
+    for (slot, obj) in slots.into_iter().zip(order) {
+        if let Some(entry) = list.get_mut(slot) {
+            *entry = Object::Ref(obj);
+        }
+    }
+    doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), Object::Array(list)))?;
+    Ok(target)
+}
+
 /// Remove item `index` of `page`.
 pub fn delete_content(doc: &mut Document, page: usize, index: usize) -> Result<(), EditError> {
     let a = find(doc, page, index)?;

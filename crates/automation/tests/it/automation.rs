@@ -4603,6 +4603,47 @@ fn printing_through_tools() {
     assert!(matches!(a.call("doc_print", &json!({ "doc": doc, "pages": "99", "path": "x.pdf" })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// #3798: content_arrange moves an added item in the drawing order; content_list follows it and
+/// the result names the new index; the end of the order is an error and changes nothing.
+#[test]
+fn content_arrange_reorders_added_items() {
+    let dir = workdir("content-arrange");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (i, word) in ["ONE", "TWO", "THREE"].into_iter().enumerate() {
+        ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": word, "at": [20, 20 + 30 * i] }));
+    }
+    let order = |a: &mut Automation| -> Vec<String> {
+        ok(a, "content_list", json!({ "doc": doc }))["items"].as_array().unwrap().iter().map(|i| i["text"].as_str().unwrap().to_string()).collect()
+    };
+    assert_eq!(order(&mut a), ["ONE", "TWO", "THREE"]);
+    let r = ok(&mut a, "content_arrange", json!({ "doc": doc, "page": 1, "index": 1, "to": "front" }));
+    assert_eq!(r["index"], 3);
+    assert_eq!(order(&mut a), ["TWO", "THREE", "ONE"]);
+    let r = ok(&mut a, "content_arrange", json!({ "doc": doc, "page": 1, "index": 3, "to": "backward" }));
+    assert_eq!(r["index"], 2);
+    assert_eq!(order(&mut a), ["TWO", "ONE", "THREE"]);
+    let r = ok(&mut a, "content_arrange", json!({ "doc": doc, "page": 1, "index": 3, "to": "back" }));
+    assert_eq!(r["index"], 1);
+    assert_eq!(order(&mut a), ["THREE", "TWO", "ONE"]);
+    let r = ok(&mut a, "content_arrange", json!({ "doc": doc, "page": 1, "index": 1, "to": "forward" }));
+    assert_eq!(r["index"], 2);
+    assert_eq!(order(&mut a), ["TWO", "THREE", "ONE"]);
+    // One undo step, and it puts the order back.
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(order(&mut a), ["THREE", "TWO", "ONE"]);
+    ok(&mut a, "edit_redo", json!({ "doc": doc }));
+    // The end of the order, a missing item and a bad direction are refused and change nothing.
+    for args in [json!({ "index": 3, "to": "front" }), json!({ "index": 1, "to": "back" }), json!({ "index": 9, "to": "front" })] {
+        let mut call = args.clone();
+        call["doc"] = json!(doc);
+        call["page"] = json!(1);
+        assert!(matches!(a.call("content_arrange", &call), Err(ToolError::Failed(_))), "{args}");
+    }
+    assert!(matches!(a.call("content_arrange", &json!({ "doc": doc, "page": 1, "index": 1, "to": "up" })), Err(ToolError::InvalidArgs(_))));
+    assert_eq!(order(&mut a), ["TWO", "THREE", "ONE"]);
+}
+
 #[test]
 fn adding_content_through_tools() {
     let dir = workdir("content");

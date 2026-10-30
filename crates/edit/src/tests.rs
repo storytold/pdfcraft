@@ -993,6 +993,110 @@ fn combined_marker_scan_matches_the_independent_scans() {
     assert_eq!(text.size, 24.0);
 }
 
+/// #3798: added items trade places in the drawing order, whatever else the page holds; an item
+/// already at the end it is sent to is an error and changes nothing.
+#[test]
+fn added_items_are_arranged_in_the_drawing_order() {
+    use crate::added::{Arrange, arrange_content};
+    let mut doc = fixture();
+    let page_before = streams(&doc, 0)[0].clone();
+    for word in ["AAA", "BBB", "CCC"] {
+        let t = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: word.into(), ..AddedText::default() };
+        add_content(&mut doc, 0, &Content::Text(t)).unwrap();
+    }
+    let texts = |doc: &Document| -> Vec<&'static str> {
+        list_added(doc)
+            .iter()
+            .filter(|a| a.page == 0)
+            .map(|a| match &a.content {
+                Content::Text(t) => ["AAA", "BBB", "CCC"].into_iter().find(|w| *w == t.text).unwrap_or("?"),
+                Content::Image(_) => "image",
+            })
+            .collect()
+    };
+    // The order they are drawn in, read off the page's streams.
+    let drawn = |doc: &Document| -> Vec<&'static str> {
+        let all = streams(doc, 0).join("\n");
+        let mut at: Vec<(usize, &'static str)> =
+            ["AAA", "BBB", "CCC"].into_iter().filter_map(|w| all.find(&format!("({w})")).map(|i| (i, w))).collect();
+        at.sort();
+        at.into_iter().map(|(_, w)| w).collect()
+    };
+    assert_eq!(texts(&doc), ["AAA", "BBB", "CCC"]);
+    assert_eq!(drawn(&doc), ["AAA", "BBB", "CCC"]);
+
+    assert_eq!(arrange_content(&mut doc, 0, 0, Arrange::Front).unwrap(), 2);
+    assert_eq!((texts(&doc), drawn(&doc)), (vec!["BBB", "CCC", "AAA"], vec!["BBB", "CCC", "AAA"]));
+    assert_eq!(arrange_content(&mut doc, 0, 2, Arrange::Backward).unwrap(), 1);
+    assert_eq!(drawn(&doc), ["BBB", "AAA", "CCC"]);
+    assert_eq!(arrange_content(&mut doc, 0, 1, Arrange::Forward).unwrap(), 2);
+    assert_eq!(drawn(&doc), ["BBB", "CCC", "AAA"]);
+    assert_eq!(arrange_content(&mut doc, 0, 2, Arrange::Back).unwrap(), 0);
+    assert_eq!((texts(&doc), drawn(&doc)), (vec!["AAA", "BBB", "CCC"], vec!["AAA", "BBB", "CCC"]));
+
+    // Already at the end: an error, and the document is as it was.
+    let before = streams(&doc, 0);
+    for (index, to) in [(0, Arrange::Back), (0, Arrange::Backward), (2, Arrange::Front), (2, Arrange::Forward)] {
+        assert!(arrange_content(&mut doc, 0, index, to).is_err(), "{index} {to:?}");
+    }
+    assert!(arrange_content(&mut doc, 0, 3, Arrange::Front).is_err(), "no such item");
+    assert!(arrange_content(&mut doc, 9, 0, Arrange::Front).is_err(), "no such page");
+    assert_eq!(streams(&doc, 0), before);
+
+    // The page's own content is untouched, and the order survives save and reopen.
+    arrange_content(&mut doc, 0, 0, Arrange::Front).unwrap();
+    assert!(streams(&doc, 0).contains(&page_before), "the page's own content stream is untouched");
+    let doc = reopen(&doc);
+    assert_eq!((texts(&doc), drawn(&doc)), (vec!["BBB", "CCC", "AAA"], vec!["BBB", "CCC", "AAA"]));
+    // Another page's items are not mixed in.
+    let mut doc = doc;
+    add_content(&mut doc, 1, &Content::Text(AddedText { rect: [10.0, 10.0, 100.0, 40.0], text: "DDD".into(), ..AddedText::default() })).unwrap();
+    assert!(arrange_content(&mut doc, 1, 0, Arrange::Front).is_err(), "a lone item has nowhere to go");
+    arrange_content(&mut doc, 0, 2, Arrange::Back).unwrap();
+    assert_eq!(drawn(&doc), ["AAA", "BBB", "CCC"]);
+}
+
+/// A stream the page's contents name twice holds two places in the drawing order: arranging
+/// swaps the right entries instead of writing the first match twice. Indexes and pages far past
+/// the end are errors, not overflows.
+#[test]
+fn arranging_copes_with_a_repeated_stream_and_huge_indexes() {
+    use crate::added::{Arrange, arrange_content};
+    let mut doc = fixture();
+    for word in ["AAA", "BBB"] {
+        let t = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: word.into(), ..AddedText::default() };
+        add_content(&mut doc, 0, &Content::Text(t)).unwrap();
+    }
+    let [a, b] = [list_added(&doc)[0].obj, list_added(&doc)[1].obj];
+    let page = pdfcraft_model::pages(&doc)[0].clone();
+    let contents = |doc: &Document| -> Vec<Object> {
+        let list = pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned().unwrap();
+        doc.resolve(&list).as_array().cloned().unwrap()
+    };
+    // Contents: [..., A, B] becomes [..., A, B, A] by naming A again.
+    let mut list = contents(&doc);
+    list.push(Object::Ref(a));
+    doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(list))).unwrap();
+    let items: Vec<_> = list_added(&doc).iter().map(|i| i.obj).collect();
+    assert_eq!(items, [a, b, a], "the repeated stream is listed at both places");
+    let tail = |doc: &Document| -> Vec<Option<_>> { contents(doc).iter().rev().take(3).rev().map(Object::as_ref).collect() };
+    assert_eq!(arrange_content(&mut doc, 0, 1, Arrange::Front).unwrap(), 2);
+    assert_eq!(tail(&doc), [Some(a), Some(a), Some(b)], "B goes last, both places of A keep A");
+    assert_eq!(arrange_content(&mut doc, 0, 2, Arrange::Back).unwrap(), 0);
+    assert_eq!(tail(&doc), [Some(b), Some(a), Some(a)]);
+
+    // Far past the end: errors, whatever the arithmetic would do.
+    for (page, index) in [(usize::MAX, 0), (0, usize::MAX), (usize::MAX, usize::MAX)] {
+        for to in [Arrange::Front, Arrange::Forward, Arrange::Backward, Arrange::Back] {
+            assert!(arrange_content(&mut doc, page, index, to).is_err(), "{page} {index} {to:?}");
+        }
+    }
+    assert_eq!(Arrange::Forward.target(usize::MAX, 3), 2);
+    assert_eq!(Arrange::Backward.target(usize::MAX, 3), 1);
+    assert_eq!(Arrange::Back.target(usize::MAX, 0), 0);
+    assert_eq!(Arrange::Front.target(0, 0), 0);
+}
+
 #[test]
 fn added_text_and_images_are_page_content_that_stays_editable() {
     let mut doc = fixture();

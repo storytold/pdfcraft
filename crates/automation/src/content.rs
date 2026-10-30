@@ -208,6 +208,23 @@ impl Automation {
         self.apply(a, Edit::UpdateContent { page, index, content })
     }
 
+    /// Move an added item in the drawing order of the page's added items. The result carries the
+    /// item's new 1-based index.
+    pub(crate) fn content_arrange(&mut self, a: &Args) -> Result<Value> {
+        let (page, index, _, _) = self.item(a)?;
+        let to = match a.str("to")? {
+            "front" => pdfcraft_engine::ArrangeContent::Front,
+            "forward" => pdfcraft_engine::ArrangeContent::Forward,
+            "backward" => pdfcraft_engine::ArrangeContent::Backward,
+            "back" => pdfcraft_engine::ArrangeContent::Back,
+            other => return Err(bad(format!("unknown to {other:?} (front, forward, backward, back)"))),
+        };
+        let count = self.doc(a)?.added().iter().filter(|x| x.page == page).count();
+        let mut result = self.apply(a, Edit::ArrangeContent { page, index, to })?;
+        result["index"] = json!(to.target(index, count) + 1);
+        Ok(result)
+    }
+
     pub(crate) fn content_delete(&mut self, a: &Args) -> Result<Value> {
         let (page, index, _, _) = self.item(a)?;
         self.apply(a, Edit::DeleteContent { page, index })
