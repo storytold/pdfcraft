@@ -38,7 +38,7 @@ use imposition::{PAGES_LISTED, appearance, appearance_matrix, decoded_contents, 
 pub use imposition::{impose, keep_printed, sheet_pages};
 pub use settings::{
     Binding, BookletSubset, Content, Crop, LABEL_PAPER, Layout, Orientation, PAPERS, PageOrder, Raster, Settings, SizeMode, booklet_duplex,
-    cups_media, media_option,
+    cups_media, find_paper, media_option,
 };
 #[cfg(test)]
 use sheets::text_direction;

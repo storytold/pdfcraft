@@ -2702,6 +2702,13 @@ certificate	SHA-256 digest	SHA-256 다이제스트
 	Make properties default	속성을 기본값으로 설정
 	Pages selected	선택한 페이지
 	Page properties	페이지 속성
+	Japanese Postcard	일본 엽서
+	Japanese Double Postcard	일본 왕복엽서
+	Japanese Envelope #3	일본 봉투 3호
+	Japanese Envelope #4	일본 봉투 4호
+	Kaku #2	카쿠 봉투 2호
+	Kaku #3	카쿠 봉투 3호
+	Yonroku-ban	Yonroku-ban 용지
 	Create & Edit	만들기 및 편집
 	Review & Compare	검토 및 비교
 	Forms & Signatures	양식 및 서명
