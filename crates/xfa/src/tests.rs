@@ -4145,3 +4145,46 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
 }
+
+/// Two PDF fields never share a name: a made-up `_2`, `_3` name skips one the template gives
+/// another field. Whichever comes first in layout order, the field the template names `Cell4_2`
+/// keeps that name and the second `Cell4` takes the next free one. Before, the second `Cell4`
+/// became `Cell4_2` as well, so a script writing by that name hit the wrong cell.
+#[test]
+fn a_made_up_field_name_never_takes_one_the_template_uses() {
+    for rows in [["Cell4", "Cell4_2", "Cell4"], ["Cell4", "Cell4", "Cell4_2"]] {
+        let body: String = rows
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                format!(r#"<subform name="row{i}" layout="tb"><field name="{name}" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>"#)
+            })
+            .collect();
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        let all = widgets(&form.pages[0]);
+        let names: Vec<&str> = all.iter().map(|w| w.name.as_str()).collect();
+        let mut unique = names.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), names.len(), "{rows:?}: {names:?}");
+        let template_named = rows.iter().position(|n| *n == "Cell4_2").unwrap();
+        let som = format!("form[0].row{template_named}[0].Cell4_2[0]");
+        let got = all.iter().find(|w| w.som == som).map(|w| w.name.as_str());
+        assert_eq!(got, Some("Cell4_2"), "{rows:?}: the template's own name is kept ({names:?})");
+    }
+}
+
+/// An unnamed field's made-up name (`field`) doesn't take the name a later field has in the
+/// template: the field the template names `field` keeps it, and the unnamed one before it takes
+/// the next free name.
+#[test]
+fn an_unnamed_field_never_takes_a_name_the_template_uses() {
+    let body = r#"<field w="2in" h="0.3in"><ui><textEdit/></ui></field>
+<field name="field" w="2in" h="0.3in"><ui><textEdit/></ui></field>"#;
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, body)).unwrap();
+    let all = widgets(&form.pages[0]);
+    // In layout order: the unnamed field, then the one the template names `field`.
+    let names: Vec<&str> = all.iter().map(|w| w.name.as_str()).collect();
+    assert_eq!(names.get(1), Some(&"field"), "{names:?}");
+    assert_ne!(names.first(), Some(&"field"), "{names:?}");
+}

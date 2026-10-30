@@ -1,5 +1,5 @@
 use super::items::{Action, Item, Rounded};
-use super::{HashMap, Layout, MAX_DEPTH, Node, Rect, Script, date_letters, iso_to_pattern};
+use super::{HashMap, HashSet, Layout, MAX_DEPTH, Node, Rect, Script, date_letters, iso_to_pattern};
 
 pub(super) fn collect_values(nodes: &[Node], out: &mut HashMap<String, String>, depth: usize) {
     if depth > MAX_DEPTH {
@@ -22,6 +22,39 @@ pub(super) fn collect_values(nodes: &[Node], out: &mut HashMap<String, String>, 
             }
             Node::Area(a) => collect_values(&a.children, out, depth + 1),
             Node::ExclGroup(_) | Node::Draw(_) => {}
+        }
+    }
+}
+
+/// The PDF field names the template's fields and exclusion groups take as written
+/// ([`clean_name`]): a name the layout makes up for a repeated field (`Cell4` → `Cell4_2`) must
+/// not be one of these, or two PDF fields would share it.
+pub(super) fn collect_names(nodes: &[Node], out: &mut HashSet<String>, depth: usize) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    for n in nodes {
+        match n {
+            Node::Field(f) => {
+                if let Some(name) = &f.common.name {
+                    out.insert(clean_name(name));
+                }
+            }
+            Node::ExclGroup(g) => {
+                if let Some(name) = &g.common.name {
+                    out.insert(clean_name(name));
+                }
+            }
+            Node::Subform(s) => {
+                collect_names(&s.children, out, depth + 1);
+                if let Some(ps) = &s.page_set {
+                    for a in &ps.areas {
+                        collect_names(&a.items, out, depth + 1);
+                    }
+                }
+            }
+            Node::Area(a) => collect_names(&a.children, out, depth + 1),
+            Node::Draw(_) => {}
         }
     }
 }
