@@ -5,6 +5,8 @@ fn fields() -> Vec<FieldState> {
     agree.options = vec![("Yes".into(), "Yes".into())];
     let mut size = FieldState::new("size", FieldType::ComboBox, vec!["m".into()]);
     size.options = vec![("s".into(), "Small".into()), ("m".into(), "Medium".into()), ("l".into(), "Large".into())];
+    let mut comb = FieldState::new("comb", FieldType::Text, vec!["123".into()]);
+    comb.is_comb = true;
     vec![
         FieldState::new("price", FieldType::Text, vec!["12.5".into()]),
         FieldState::new("qty", FieldType::Text, vec!["4".into()]),
@@ -12,6 +14,7 @@ fn fields() -> Vec<FieldState> {
         FieldState::new("zip", FieldType::Text, vec!["02134".into()]),
         agree,
         size,
+        comb,
     ]
 }
 
@@ -2057,4 +2060,51 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
     assert_eq!(o.error, None);
     assert_eq!(o.value, "undefined number 3.5");
     assert_eq!(o.alerts, [Message::plain("old viewer")]);
+}
+#[test]
+fn field_choice_index_setter_maps_options_and_rejects_bad_indices() {
+    let o = go(
+        "var s=getField('size'); s.currentValueIndices=2; event.value=[getField('size').value,getField('size').currentValueIndices].join('|');",
+        &Event::field("Mouse Up", "size", ""),
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "l|2");
+    let size = o.changed.iter().find(|f| f.name == "size").unwrap();
+    assert_eq!(size.value, ["l"]);
+    for script in ["getField('size').currentValueIndices=NaN", "getField('size').currentValueIndices=3"] {
+        let rejected = go(script, &Event::doc("Open"));
+        assert!(rejected.error.is_some(), "accepted {script}");
+        assert!(rejected.changed.is_empty(), "mutated on refusal: {script}");
+    }
+    let rejected = go("getField('size').currentValueIndices=[0,2]", &Event::doc("Open"));
+    assert!(rejected.error.is_some(), "accepted multiple combo-box selections");
+    assert!(rejected.changed.is_empty(), "mutated on refused multiple combo-box selections");
+}
+
+#[test]
+fn default_value_setter_is_live() {
+    let o = go("var q=getField('qty'); q.defaultValue='9'; event.value=getField('qty').defaultValue;", &Event::doc("Open"));
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "9");
+    assert_eq!(o.changed.iter().find(|f| f.name == "qty").unwrap().default, ["9"]);
+}
+
+#[test]
+fn char_limit_setter_is_bounded_and_text_only() {
+    let o = go("var q=getField('qty'); q.charLimit=3; event.value=getField('qty').charLimit;", &Event::doc("Open"));
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "3");
+    assert_eq!(o.changed.iter().find(|f| f.name == "qty").unwrap().char_limit, Some(3));
+    for script in [
+        "getField('qty').charLimit=-1",
+        "getField('qty').charLimit=1.5",
+        "getField('qty').charLimit=NaN",
+        "getField('qty').charLimit=1e100",
+        "getField('size').charLimit=3",
+        "getField('comb').charLimit=0",
+    ] {
+        let rejected = go(script, &Event::doc("Open"));
+        assert!(rejected.error.is_some(), "accepted {script}");
+        assert!(rejected.changed.is_empty(), "mutated on refusal: {script}");
+    }
 }

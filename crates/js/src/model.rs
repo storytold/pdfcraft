@@ -49,6 +49,7 @@ pub struct FieldState {
     /// values, one per widget.
     pub options: Vec<(String, String)>,
     pub char_limit: Option<usize>,
+    pub is_comb: bool,
     /// `textColor` / `fillColor` as Acrobat colour arrays (`["RGB", r, g, b]` etc.), when set.
     pub text_color: Option<Vec<String>>,
     pub fill_color: Option<Vec<String>>,
@@ -66,6 +67,7 @@ impl FieldState {
             display: DISPLAY_VISIBLE,
             options: Vec::new(),
             char_limit: None,
+            is_comb: false,
             text_color: None,
             fill_color: None,
         }
