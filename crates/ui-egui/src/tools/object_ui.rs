@@ -151,6 +151,25 @@ fn screen(xf: &PageXform, info: &DocInfo, page: usize, object: &EditableObject) 
     xf.user_rect(info, page, object.rect.map(|v| v as f32))
 }
 
+/// The part of a drag by `delta` that keeps `rect` on its page. A move can't take content to
+/// another page (#5264): past the edge it would be clipped away. An axis where `rect` is
+/// already larger than the page moves freely.
+pub(crate) fn keep_on_page(rect: Rect, page: Rect, delta: egui::Vec2) -> egui::Vec2 {
+    let axis = |lo: f32, hi: f32, page_lo: f32, page_hi: f32, d: f32| {
+        if hi - lo > page_hi - page_lo { d } else { d.max(page_lo - lo).min(page_hi - hi) }
+    };
+    egui::vec2(
+        axis(rect.left(), rect.right(), page.left(), page.right(), delta.x),
+        axis(rect.top(), rect.bottom(), page.top(), page.bottom(), delta.y),
+    )
+}
+
+/// The drag from `start` to `now` for the selected objects, kept on the page.
+fn selection_drag(xf: &PageXform, info: &DocInfo, page: usize, selected: &[EditableObject], start: Pos2, now: Pos2) -> egui::Vec2 {
+    let union = selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o)));
+    if union == Rect::NOTHING { now - start } else { keep_on_page(union, xf.rect, now - start) }
+}
+
 fn modified(ui: &egui::Ui) -> bool {
     ui.input(|i| {
         let modifiers = i
@@ -267,7 +286,8 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
                     s.clear();
                 }
             } else if gesture.start.distance(gesture.now) > 3.0 && view.pending_edit.is_none() {
-                let (a, b) = (xf.screen_to_view(gesture.start), xf.screen_to_view(gesture.now));
+                let end = gesture.start + selection_drag(xf, info, page, &s.selected, gesture.start, gesture.now);
+                let (a, b) = (xf.screen_to_view(gesture.start), xf.screen_to_view(end));
                 match doc.object_move_offset(page, [f64::from(b.0 - a.0), f64::from(b.1 - a.1)]) {
                     Ok(offset) => view.pending_edit = Some(s.move_by(page, offset)),
                     Err(_) => s.notice = Some(tl!("These objects could not be moved. Select them again and try a smaller move.").into()),
@@ -464,7 +484,8 @@ pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: 
     if selection.page != Some(page) {
         return;
     }
-    let delta = selection.gesture.filter(|g| !g.marquee).map_or(egui::Vec2::ZERO, |g| g.now - g.start);
+    let delta =
+        selection.gesture.filter(|g| !g.marquee).map_or(egui::Vec2::ZERO, |g| selection_drag(xf, info, page, &selection.selected, g.start, g.now));
     let mut union = Rect::NOTHING;
     for object in &selection.selected {
         let rect = screen(xf, info, page, object).translate(delta);
@@ -520,6 +541,17 @@ mod tests {
             })
             .collect();
         assert_eq!(order, [('t', 3), ('t', 1), ('i', 0), ('a', 2), ('a', 0)]);
+    }
+
+    #[test]
+    fn a_drag_stays_on_the_page() {
+        let page = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(100.0, 100.0));
+        let rect = Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(20.0, 20.0));
+        assert_eq!(keep_on_page(rect, page, egui::vec2(5.0, 5.0)), egui::vec2(5.0, 5.0));
+        assert_eq!(keep_on_page(rect, page, egui::vec2(500.0, 500.0)), egui::vec2(80.0, 80.0));
+        assert_eq!(keep_on_page(rect, page, egui::vec2(-500.0, -500.0)), egui::vec2(-10.0, -10.0));
+        let wide = Rect::from_min_max(Pos2::new(-10.0, 10.0), Pos2::new(120.0, 20.0));
+        assert_eq!(keep_on_page(wide, page, egui::vec2(500.0, 500.0)), egui::vec2(500.0, 80.0));
     }
 
     #[test]

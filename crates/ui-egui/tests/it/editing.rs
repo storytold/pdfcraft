@@ -5159,6 +5159,33 @@ fn dragging_a_paragraph_moves_it_and_its_edge_rewraps_it() {
     assert!(h.state().views[0].line_editor.is_none());
 }
 
+#[test]
+fn dragging_a_paragraph_onto_the_next_page_keeps_it_on_its_own() {
+    let mut h = harness(2, |app| {
+        app.set_option("zoom", "50").unwrap();
+    });
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let block = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(0)[0].clone()
+    };
+    let (r0, r1) = (h.state().views[0].page_screen_rect(0), h.state().views[0].page_screen_rect(1));
+    let (r0, r1) = (r0.expect("page 0 on screen"), r1.expect("page 1 on screen"));
+    let k = r0.width() / 200.0;
+    let before = block(&h);
+    let mid = egui::pos2(
+        r0.left() + ((before.rect[0] + before.rect[2]) / 2.0) as f32 * k,
+        r0.top() + (300.0 - (before.rect[1] + before.rect[3]) as f32 / 2.0) * k,
+    );
+    drag(&mut h, mid, r1.center());
+    let moved = block(&h);
+    assert_eq!(moved.text, before.text);
+    let r = moved.rect;
+    assert!(r[0] >= -0.5 && r[1] >= -0.5 && r[2] <= 200.5 && r[3] <= 300.5, "still on its page: {r:?}");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move object"));
+}
+
 /// Press and release at `at` without moving.
 fn click_at(h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2) {
     h.hover_at(at);
