@@ -480,6 +480,10 @@ fn finish_appearance(context: &AppearanceContext<'_>, mut drawing: AppearanceDra
     Some(form(context.rect, &out, drawing.resources))
 }
 
+/// Zigzag vertices one squiggly underline's appearance draws in all: past it the zigzag is coarser
+/// (about 5 MB of content stream at most).
+const MAX_SQUIGGLY_VERTICES: usize = 200_000;
+
 fn draw_markup(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) -> Option<()> {
     let d = context.dict;
     let subtype = context.subtype;
@@ -487,6 +491,9 @@ fn draw_markup(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing)
     let c = &mut drawing.content;
     let q = nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0)?;
     let col = stroke?;
+    // Zigzag vertices for all the squiggly quads together: a file can list tens of thousands of
+    // long, thin areas, and each alone is within its own cap.
+    let mut vertices = MAX_SQUIGGLY_VERTICES;
     for quad in q.as_chunks::<8>().0.iter() {
         let p = |i: usize| (quad[2 * i], quad[2 * i + 1]);
         let (p1, p2, p3, p4) = (p(0), p(1), p(2), p(3));
@@ -510,7 +517,8 @@ fn draw_markup(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing)
                 let amp = (h * 0.06).max(0.75);
                 let len = (p4.0 - p3.0).hypot(p4.1 - p3.1);
                 let step = (h / 4.0).max(1.5);
-                let steps = ((len / step).ceil() as usize).clamp(1, 10_000);
+                let steps = ((len / step).ceil() as usize).clamp(1, 10_000).min(vertices.saturating_sub(1).max(1));
+                vertices = vertices.saturating_sub(steps + 1);
                 c.push_str(&format!("{}{} w 1 j\n", rg_stroke(col), n(lw)));
                 for i in 0..=steps {
                     let t = i as f64 / steps as f64;

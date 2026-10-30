@@ -3631,8 +3631,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.highlight"]
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/it/comments.rs::dragging_over_text_with_the_highlighter_highlights_it", "crates/ui-egui/tests/it/comments.rs::a_new_highlight_opens_its_note_for_typing", "crates/engine/src/tests.rs::highlight_multiplies_over_text"]
-notes = "drag over text, or pick the tool with text selected; a new highlight opens its note for typing in the Comments panel; agents can highlight by text search"
+evidence = ["crates/ui-egui/tests/it/comments.rs::dragging_over_text_with_the_highlighter_highlights_it", "crates/ui-egui/tests/it/comments.rs::a_new_highlight_opens_its_note_for_typing", "crates/engine/src/tests.rs::highlight_multiplies_over_text", "crates/ui-egui/tests/it/comments.rs::a_highlights_range_is_changed_to_the_selected_text", "crates/automation/tests/it/automation.rs::a_markups_marked_text_can_be_changed", "crates/annot/src/tests.rs::set_quads_changes_the_marked_range_and_keeps_the_rest"]
+notes = "drag over text, or pick the tool with text selected; a new highlight opens its note for typing in the Comments panel; agents can highlight by text search. The range of a highlight, underline, strikethrough or squiggly underline is changed by selecting text and choosing Mark the selected text instead in its context menu (#4824), or through comment_edit find/quads; colour, note and replies are kept, one undo step. Not yet: dragging a handle at either end of the markup to extend or reduce it"
 
 [[feature]]
 id = "comment.underline"

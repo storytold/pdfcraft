@@ -40,7 +40,8 @@ pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), Annot
 /// Draw the appearance for an annotation dictionary: the expensive half of [`set_appearance`].
 /// Pure from the dictionary and the objects it points at, so [`AppearanceCache`] can reuse it.
 fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
-    let mut stream = appearance::build(d)?;
+    let drawn = resolved_for_drawing(doc, d);
+    let mut stream = appearance::build(&drawn)?;
     // Picture-stamp restyling must retain the placement's page-axis correction.
     if d.get(b"PCPicture").is_some() {
         let matrix = d.get(b"AP").and_then(|ap| {
@@ -54,6 +55,23 @@ fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
         }
     }
     Some(stream)
+}
+
+/// The entries the appearance builder reads without a document (opacity, colours, border, area),
+/// as direct values: a file may keep any of them behind a reference, and drawn as if absent the
+/// opacity would be lost and a colour refused. `d` itself is left as it is.
+fn resolved_for_drawing<'a>(doc: &Document, d: &'a Dict) -> std::borrow::Cow<'a, Dict> {
+    const KEYS: [&[u8]; 7] = [b"CA", b"C", b"IC", b"Border", b"BS", b"QuadPoints", b"Rect"];
+    if !KEYS.iter().any(|k| matches!(d.get(k), Some(Object::Ref(_)))) {
+        return std::borrow::Cow::Borrowed(d);
+    }
+    let mut out = d.clone();
+    for k in KEYS {
+        if let Some(o @ Object::Ref(_)) = d.get(k) {
+            out.set(k.to_vec(), (*doc.resolve(o)).clone());
+        }
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 /// Store a built appearance on the annotation: the cheap half of [`set_appearance`].

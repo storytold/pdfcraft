@@ -88,6 +88,23 @@ pub(crate) fn context_menu(
                 ui.ctx().copy_text(a.contents.clone().unwrap_or_default());
                 ui.close();
             }
+            // A highlight, underline, strikethrough or squiggly underline marks the text selected on
+            // its page instead: extend or reduce the range without drawing it again (#4824).
+            if matches!(a.subtype.as_str(), "Highlight" | "Underline" | "StrikeOut" | "Squiggly") {
+                let selection = view.selection_quads(info).filter(|(p, _)| *p == page);
+                let has_selection = selection.is_some();
+                let mut item = ui.add_enabled(allowed && !a.locked && has_selection, egui::Button::new(tl!("Mark the selected text instead")));
+                if allowed && !a.locked && !has_selection {
+                    item = item.on_disabled_hover_text(tl!("Select the text it should mark first"));
+                }
+                if let Some((_, quads)) = selection
+                    && item.clicked()
+                {
+                    view.clear_selection();
+                    action = Some(CanvasAction::Edit(Box::new(Edit::SetMarkupRange { page, index, quads })));
+                    ui.close();
+                }
+            }
             ui.separator();
             if ui.add_enabled(allowed && !a.locked, egui::Button::new(tl!("Delete"))).clicked() {
                 view.comments.selected = None;

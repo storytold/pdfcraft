@@ -244,6 +244,44 @@ impl Automation {
         Ok(json!({ "count": roots.len(), "comments": roots }))
     }
 
+    /// The text area `find` (the first hit on the page, every one with `all`) or `quads` (page
+    /// coordinates) names, as quadrilaterals in user space; `None` when neither is given.
+    fn text_area(&mut self, a: &Args, page: usize, info: &PageInfo) -> Result<Option<Vec<[f64; 8]>>> {
+        let quads = match (a.opt_str("find")?, a.get("quads")) {
+            (Some(needle), _) => {
+                let id = self.doc(a)?.id;
+                let text = self.page_texts(id, &[page])?.remove(0);
+                let mut hits = text.find(needle);
+                if hits.is_empty() {
+                    return Err(failed(format!("{needle:?} was not found on page {}", page + 1)));
+                }
+                if !a.opt_bool("all")?.unwrap_or(false) {
+                    hits.truncate(1);
+                }
+                hits.into_iter().flat_map(|r| text.line_rects(r)).map(|r| info.view_rect_to_quad(r)).collect()
+            }
+            (None, Some(q)) => {
+                let wrong = || ToolError::InvalidArgs("quads must be arrays of 8 numbers".into());
+                let quads = q.as_array().ok_or_else(wrong)?;
+                quads
+                    .iter()
+                    .map(|q| {
+                        let v: Vec<f64> = q.as_array().ok_or_else(wrong)?.iter().map(|x| x.as_f64()).collect::<Option<_>>().ok_or_else(wrong)?;
+                        let v: [f64; 8] = v.try_into().map_err(|_| wrong())?;
+                        let mut out = [0.0; 8];
+                        for i in 0..4 {
+                            let [x, y] = to_user(info, v[2 * i], v[2 * i + 1]);
+                            (out[2 * i], out[2 * i + 1]) = (x, y);
+                        }
+                        Ok(out)
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            }
+            (None, None) => return Ok(None),
+        };
+        Ok(Some(quads))
+    }
+
     pub(crate) fn comment_add(&mut self, a: &Args) -> Result<Value> {
         let page = self.page(a)?;
         let info = self.doc(a)?.info.pages[page].clone();
@@ -260,37 +298,8 @@ impl Automation {
             _ => None,
         };
         let shape = if let Some(markup) = markup {
-            let quads = match (a.opt_str("find")?, a.get("quads")) {
-                (Some(needle), _) => {
-                    let id = self.doc(a)?.id;
-                    let text = self.page_texts(id, &[page])?.remove(0);
-                    let mut hits = text.find(needle);
-                    if hits.is_empty() {
-                        return Err(failed(format!("{needle:?} was not found on page {}", page + 1)));
-                    }
-                    if !a.opt_bool("all")?.unwrap_or(false) {
-                        hits.truncate(1);
-                    }
-                    hits.into_iter().flat_map(|r| text.line_rects(r)).map(|r| info.view_rect_to_quad(r)).collect()
-                }
-                (None, Some(q)) => {
-                    let wrong = || ToolError::InvalidArgs("quads must be arrays of 8 numbers".into());
-                    let quads = q.as_array().ok_or_else(wrong)?;
-                    quads
-                        .iter()
-                        .map(|q| {
-                            let v: Vec<f64> = q.as_array().ok_or_else(wrong)?.iter().map(|x| x.as_f64()).collect::<Option<_>>().ok_or_else(wrong)?;
-                            let v: [f64; 8] = v.try_into().map_err(|_| wrong())?;
-                            let mut out = [0.0; 8];
-                            for i in 0..4 {
-                                let [x, y] = to_user(&info, v[2 * i], v[2 * i + 1]);
-                                (out[2 * i], out[2 * i + 1]) = (x, y);
-                            }
-                            Ok(out)
-                        })
-                        .collect::<Result<Vec<_>>>()?
-                }
-                (None, None) => return Err(ToolError::InvalidArgs(format!("{kind} needs `find` (text to mark) or `quads`"))),
+            let Some(quads) = self.text_area(a, page, &info)? else {
+                return Err(ToolError::InvalidArgs(format!("{kind} needs `find` (text to mark) or `quads`")));
             };
             Shape::TextMarkup { kind: markup, quads }
         } else {
@@ -664,6 +673,9 @@ impl Automation {
             let (o, d) = (to_user(&info, 0.0, 0.0), to_user(&info, dx, dy));
             edits.push(Edit::MoveAnnotation { page, index, dx: d[0] - o[0], dy: d[1] - o[1] });
         }
+        if let Some(quads) = self.text_area(a, page, &info)? {
+            edits.push(Edit::SetMarkupRange { page, index, quads });
+        }
         if let Some(pts) = a.get("points") {
             let wrong = || ToolError::InvalidArgs("points must be an array of [x, y] points (a line's two ends, or every corner)".into());
             let points = pts
@@ -679,7 +691,7 @@ impl Automation {
         }
         if edits.is_empty() {
             return Err(ToolError::InvalidArgs(
-                "nothing to change: pass contents, color, opacity, width, fill, font_size, rect, move or points".into(),
+                "nothing to change: pass contents, color, opacity, width, fill, font_size, rect, move, points, find or quads".into(),
             ));
         }
         let edit = if edits.len() == 1 { edits.remove(0) } else { Edit::Batch { label: "Edit comment".into(), edits } };

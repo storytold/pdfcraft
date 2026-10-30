@@ -400,6 +400,40 @@ pub fn set_points(doc: &mut Document, page: usize, index: usize, points: &[[f64;
     redraw_or_restore(doc, r, before)
 }
 
+const MAX_QUADS: usize = 50_000;
+
+/// Give a highlight, underline, strikethrough or squiggly underline new text area `quads` (user
+/// space, a `/QuadPoints` quadrilateral each): the range it covers is extended or reduced, as
+/// Acrobat lets one select the markup and change the text it marks. `/Rect` follows the
+/// quadrilaterals and the appearance is redrawn; the colour, opacity, contents, replies and every
+/// other entry are kept. A locked markup, another kind of comment, a redaction (its area is what
+/// is removed) or an empty or non-finite area is refused, and nothing changes.
+pub fn set_quads(doc: &mut Document, page: usize, index: usize, quads: &[[f64; 8]], meta: &Meta) -> Result<(), AnnotError> {
+    let (_, r) = annot_ref(doc, page, index)?;
+    unlocked(doc, r)?;
+    let d = annot_dict(doc, r);
+    let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+    let kind = match subtype.as_str() {
+        "Highlight" => Markup::Highlight,
+        "Underline" => Markup::Underline,
+        "StrikeOut" => Markup::StrikeOut,
+        "Squiggly" => Markup::Squiggly,
+        other => return Err(AnnotError::Invalid(format!("{other} comments have no text range to change"))),
+    };
+    if quads.len() > MAX_QUADS {
+        return Err(AnnotError::Invalid(format!("at most {MAX_QUADS} text areas")));
+    }
+    // Checks the area too: not empty, finite.
+    let rect = rect_for(&Shape::TextMarkup { kind, quads: quads.to_vec() }, &Style::default())?;
+    let before = d;
+    doc.update_dict(r, |d| {
+        d.set(b"QuadPoints".to_vec(), num_array(&quads.concat()));
+        d.set(b"Rect".to_vec(), num_array(&rect));
+        touch(d, meta);
+    })?;
+    redraw_or_restore(doc, r, before)
+}
+
 /// Scale a drawing's strokes into `rect`. The margin between the strokes and the old `/Rect` (half
 /// the line width and a little more) stays the same on each side, so the line isn't clipped.
 fn resize_ink(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta) -> Result<(), AnnotError> {
