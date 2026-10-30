@@ -85,7 +85,7 @@ impl PdfCraftApp {
             }
             return r;
         }
-        self.try_open(name, path, std::sync::Arc::new(bytes), None, activate)
+        self.try_open(name, path, std::sync::Arc::new(bytes), None, activate).map(|_| ())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -179,9 +179,7 @@ impl PdfCraftApp {
                         if pending.path.is_some() {
                             self.watch.known_as(id, pending.stamp);
                         }
-                        if let Some(destination) = pending.after_open {
-                            self.apply_remote_destination(destination);
-                        }
+                        self.apply_open_destinations(id, pending.after_open);
                         if let Some(meta) = &pending.recovered {
                             self.finish_recovery(meta);
                         }
@@ -219,7 +217,7 @@ impl PdfCraftApp {
         bytes: std::sync::Arc<Vec<u8>>,
         password: Option<&str>,
         activate: bool,
-    ) -> Result<(), String> {
+    ) -> Result<Option<DocId>, String> {
         use pdfcraft_render::OpenError;
         let prepared = match self.session.prepare_open(name, path.clone(), bytes.clone(), password) {
             Ok(prepared) => prepared,
@@ -238,13 +236,13 @@ impl PdfCraftApp {
                     activate,
                     recovered: None,
                     then: None,
-                    after_open: None,
+                    after_open: Vec::new(),
                 });
-                return Ok(());
+                return Ok(None);
             }
             Err(e) => return Err(e.to_string()),
         };
-        self.finish_open(name, path, bytes.len(), prepared, activate).map(|_| ())
+        self.finish_open(name, path, bytes.len(), prepared, activate).map(Some)
     }
 
     fn finish_open(
@@ -444,20 +442,12 @@ impl PdfCraftApp {
         match self.try_open(&p.name, p.path, p.bytes, Some(&pw), p.activate) {
             Err(e) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &p.name), ("e", &e.to_string())]),
             // A recovered encrypted document is open once its prompt is gone.
-            Ok(()) if self.password_prompt.is_none() => {
+            Ok(Some(id)) => {
                 #[cfg(not(target_arch = "wasm32"))]
-                if let Some(path) = path_for_watch.as_deref()
-                    && let Some(id) = self
-                        .views
-                        .iter()
-                        .rev()
-                        .find_map(|view| self.session.get(view.id).and_then(|doc| (doc.path.as_deref() == Some(path)).then_some(view.id)))
-                {
+                if path_for_watch.is_some() {
                     self.watch.known_as(id, stamp_for_watch);
                 }
-                if let Some(destination) = after_open {
-                    self.apply_remote_destination(destination);
-                }
+                self.apply_open_destinations(id, after_open);
                 if let Some(meta) = &p.recovered {
                     self.finish_recovery(meta);
                 }
@@ -467,7 +457,7 @@ impl PdfCraftApp {
             }
             // Wrong password: the new prompt is for the same bytes, so it keeps the snapshot
             // and the tool waiting for it.
-            Ok(()) => {
+            Ok(None) => {
                 if let Some(prompt) = self.password_prompt.as_mut() {
                     prompt.recovered = p.recovered;
                     prompt.then = p.then;
@@ -533,17 +523,47 @@ impl PdfCraftApp {
     /// the file opened, focused its tab, was handed to the background worker, or failed.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn open_path_then(&mut self, path: &str, then: Option<&'static str>) -> OpenOutcome {
+        self.open_path_with_destinations(path, then, Vec::new())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn open_path_with_destinations(
+        &mut self,
+        path: &str,
+        then: Option<&'static str>,
+        destinations: Vec<pdfcraft_render::RemoteDestination>,
+    ) -> OpenOutcome {
         // One file, one tab (#2166): a file that is open already comes to the front instead,
         // and the tool it was opened for runs on it. One still being opened is left to that.
         if let Some(i) = self.tab_showing(path) {
             self.startup_superseded = true;
             self.active = Some(i);
+            if let Some(id) = self.views.get(i).map(|view| view.id) {
+                self.apply_open_destinations(id, destinations);
+            }
             if let Some(command) = then {
                 self.execute(command);
             }
             return OpenOutcome::Focused;
         }
-        if self.pending_opens.iter().any(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
+        if let Some(pending) = self.pending_opens.iter_mut().find(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
+            if !destinations.is_empty() {
+                pending.after_open = destinations;
+            }
+            pending.activate = true;
+            if then.is_some() {
+                pending.then = then;
+            }
+            return OpenOutcome::Pending;
+        }
+        if let Some(prompt) = self.password_prompt.as_mut().filter(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
+            if !destinations.is_empty() {
+                prompt.after_open = destinations;
+            }
+            prompt.activate = true;
+            if then.is_some() {
+                prompt.then = then;
+            }
             return OpenOutcome::Pending;
         }
         let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
@@ -552,7 +572,7 @@ impl PdfCraftApp {
         // Before the first frame there is no interaction to keep responsive; this also preserves
         // deterministic inline startup and test flows. Once live, reading and preparation use
         // the bounded worker and commit on the UI thread.
-        if self.ctx.is_none() || self.run_inline {
+        if (self.ctx.is_none() || self.run_inline) && self.password_prompt.is_none() && self.pending_opens.is_empty() {
             match std::fs::read(path) {
                 Ok(bytes) => {
                     let before = self.views.len();
@@ -563,9 +583,11 @@ impl PdfCraftApp {
                     if let Some(prompt) = self.password_prompt.as_mut().filter(|p| p.path.as_deref() == Some(path)) {
                         // Encrypted: the tool runs once the password is in.
                         prompt.then = then;
+                        prompt.after_open = destinations;
                     } else if self.views.len() > before {
-                        if let Some(doc) = self.views.last().map(|view| view.id) {
+                        if let Some(doc) = self.views.get(before).map(|view| view.id) {
                             self.watch.known_as(doc, stamp);
+                            self.apply_open_destinations(doc, destinations);
                         }
                         if let Some(command) = then {
                             self.execute(command);
@@ -591,7 +613,7 @@ impl PdfCraftApp {
                 input: open_worker::Input::Path(std::path::PathBuf::from(path)),
                 password: None,
                 activate: true,
-                after_open: None,
+                after_open: destinations,
                 recovered: None,
                 then,
             }) {

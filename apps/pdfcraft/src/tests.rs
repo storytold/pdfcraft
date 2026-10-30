@@ -684,3 +684,42 @@ fn start_up_and_the_panic_hook_never_use_eprintln() {
         offenders.join("\n")
     );
 }
+
+#[test]
+fn native_launch_rejoining_keeps_a_following_independent_file() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-launch-rejoin-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let manual = dir.join("manual with spaces.pdf");
+    let other = dir.join("other.pdf");
+    std::fs::write(&manual, b"original fixture").unwrap();
+    std::fs::write(&other, b"original fixture").unwrap();
+    let args =
+        vec![dir.join("manual").to_string_lossy().into_owned(), "with spaces.pdf#nameddest=there".into(), other.to_string_lossy().into_owned()];
+    let joined = super::rejoin_split_paths(args, |p| {
+        pdfcraft_ui_egui::NativeOpenTarget::from_arg(p).is_ok_and(|target| std::path::Path::new(target.path()).is_file())
+    });
+    assert_eq!(joined, [format!("{}#nameddest=there", manual.display()), other.to_string_lossy().into_owned()]);
+    let literal = format!("{}#nameddest=there more.pdf", manual.display());
+    std::fs::write(&literal, b"original literal fixture").unwrap();
+    let args = vec![dir.join("manual").to_string_lossy().into_owned(), "with spaces.pdf#nameddest=there".into(), "more.pdf".into()];
+    let joined = super::rejoin_split_paths(args, |p| {
+        pdfcraft_ui_egui::NativeOpenTarget::from_arg(p).is_ok_and(|target| std::path::Path::new(target.path()).is_file())
+    });
+    assert_eq!(joined, [literal], "a longer real literal filename still wins");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn native_launch_absolutization_keeps_destination_path_characters() {
+    let file = std::env::temp_dir().join(format!("pdfcraft-launch-absolute-{}.pdf", std::process::id()));
+    std::fs::write(&file, b"original fixture").unwrap();
+    for name in ["section//target", "section/../target"] {
+        let argument = format!("{}#nameddest={name}", file.display());
+        let original = pdfcraft_ui_egui::NativeOpenTarget::from_arg(&argument).unwrap();
+        let normalized = super::single_instance::absolute(&[argument]);
+        let received = pdfcraft_ui_egui::NativeOpenTarget::from_arg(&normalized[0]).unwrap();
+        assert_eq!(std::path::Path::new(received.path()), file.as_path());
+        assert_eq!(received.destinations(), original.destinations());
+    }
+    let _ = std::fs::remove_file(file);
+}

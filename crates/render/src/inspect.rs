@@ -32,7 +32,7 @@ mod resources;
 #[cfg(test)]
 use annotations::{MAX_ANNOTATION_BYTES, MAX_LINK_ATTACHMENT_TEXT_BYTES, MAX_REMOTE_FILE_SPEC_BYTES, retained};
 use core::Inspector;
-pub use core::{check_pages, inspect, pretty_date};
+pub use core::{check_pages, inspect, named_destination, named_destinations, pretty_date};
 #[cfg(test)]
 use core::{inspect_structure, spend};
 pub use model::{
@@ -87,3 +87,6 @@ pub struct DocInfo {
 
 #[cfg(test)]
 mod tests;
+
+/// One result in an ordered, bounded named-destination batch.
+pub type NamedDestinationResult = Result<Option<(usize, DestView)>, OpenError>;

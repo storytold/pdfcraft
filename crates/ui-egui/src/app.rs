@@ -458,8 +458,21 @@ impl eframe::App for PdfCraftApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
+                #[cfg(not(target_arch = "wasm32"))]
+                OsEvent::OpenArguments(arguments) => {
+                    for argument in arguments {
+                        match NativeOpenTarget::from_arg(&argument) {
+                            Ok(target) => {
+                                self.open_target(target);
+                            }
+                            Err(error) => self.notify(error),
+                        }
+                    }
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
                 #[cfg(target_arch = "wasm32")]
-                OsEvent::Open(_) => {}
+                OsEvent::Open(_) | OsEvent::OpenArguments(_) => {}
                 // Like closing the window: `guard_quit` asks about unsaved changes.
                 OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }

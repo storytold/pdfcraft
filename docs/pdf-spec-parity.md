@@ -1,6 +1,6 @@
 # PDF specification and standards parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (§14.3: custom properties edited in Document Properties) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M3: bounded desktop named destinations and readable links after malformed tree entries; remaining opening parameters and estimates unchanged) | **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How much of ISO 32000-2 (PDF 2.0) and the PDF subset standards PdfCraft implements, set against
 what Acrobat Pro implements. This is PdfCraft's equivalent of a "geometry" or "codec" checklist:
@@ -81,7 +81,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | Action | Acrobat | PdfCraft |
 |---|---|---|
 | GoTo | yes | yes (page with Fit; named destinations and zoom partial) |
-| GoToR | yes | partial: local PDF paths open in a PdfCraft tab; `/F` strings and file-spec dictionaries (`/UF`, then `/F`), source-relative paths, and explicit numeric-page destinations are supported. Automation uses the same resolver and `--root` confinement. Named destinations open at the target's default view with a warning; `/NewWindow` is a tab hint. Network/URL file systems are refused. |
+| GoToR | yes | partial: local PDF paths open in a PdfCraft tab; `/F` strings and file-spec dictionaries (`/UF`, then `/F`), source-relative paths, and explicit numeric-page destinations are supported. Automation uses the same resolver and `--root` confinement. Desktop named destinations resolve through bounded lookup; standalone `link_open` reports their names without a viewport; `/NewWindow` is a tab hint. Network/URL file systems are refused. |
 | GoToE | yes | none (preserved; the Optimizer can remove invalid ones) |
 | Launch | yes (restricted) | none |
 | Thread | yes | none |
@@ -128,8 +128,12 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 
 ## Revision history
 
+**2026-10-27 | minor:** Desktop launch destinations and local remote-link named destinations share bounded lookup.
+Other opening parameters and parity estimates are unchanged.
+
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | §14.3: custom properties edited in Document Properties. |
 | 2026-10-14 | minor | §12.4.4: `/Trans` and `/Dur` read into `DocInfo::transitions` and reported by `doc_info` |
 | 2026-10-11 | minor | §7.6.4: encrypted files we write open in Acrobat (#774, fixed by #836) |
 | 2026-10-10 | major | Created from the code, `vendor/README.md` and `parity/acrobat-features.toml`, against ISO 32000-2 and Acrobat Pro 26.002.21931's documented capabilities |

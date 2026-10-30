@@ -391,6 +391,9 @@ cargo xtask demo-pdf                              # build the showcase PDF used 
 cargo xtask screenshots                           # regenerate every screenshot in this README
 ```
 
+The desktop launcher can open `"manual.pdf#nameddest=chapterTwo"` or `"manual.pdf#page=2"` at a requested help topic or physical page.
+See [launch destinations](docs/launch-destinations.md) for filename escaping, multiple files and limits.
+
 The interface language is chosen in **Menu → Edit → Preferences…** (Command-comma on macOS,
 Ctrl-comma elsewhere, also with no document open; Auto follows the system language;
 see [docs/localization.md](docs/localization.md)) and saved. Japanese covers commands,

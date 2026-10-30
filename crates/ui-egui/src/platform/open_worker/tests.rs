@@ -764,3 +764,124 @@ fn a_new_file_from_the_os_brings_the_window_forward_before_it_is_prepared() {
     assert_eq!(doc.info.pages.len(), 2);
     let _ = std::fs::remove_file(path);
 }
+
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+fn native_destination_fixture() -> Vec<u8> {
+    use pdfcraft_cos::{Dict, Document, Object, SaveOptions, write_full};
+    let mut source = Document::open(Arc::new(fixture(2))).expect("synthetic manual");
+    let destination = pdfcraft_model::pages(&source)[1].obj;
+    let mut names = Dict::new();
+    names.set(b"chapterTwo".to_vec(), Object::Array(vec![Object::Ref(destination), Object::Name(b"Fit".to_vec())]));
+    source.update_dict(source.root().expect("catalog"), |d| d.set(b"Dests".to_vec(), Object::Dict(names))).expect("named destination");
+    write_full(&source, &SaveOptions::default()).expect("write manual")
+}
+
+#[test]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+fn native_launch_destination_opens_the_file_and_overrides_its_current_page() {
+    let bytes = native_destination_fixture();
+    let file = tool_open_file("launch destination", "pdf", &bytes);
+    for fragment in ["nameddest=chapterTwo", "page=2"] {
+        let mut app = PdfCraftApp::new();
+        app.open_path(&file.0.to_string_lossy());
+        assert_eq!(app.views.len(), 1, "the bare manual opens");
+        assert_eq!(app.views[0].current, 0);
+        app.open_bytes("unrelated.pdf", None, fixture(3)).expect("another tab");
+        let argument = format!("{}#{fragment}", file.0.display());
+        let outcome = app.open_target(crate::NativeOpenTarget::from_arg(&argument).expect("launch target"));
+        assert!(matches!(outcome, crate::state::OpenOutcome::Focused), "the target focuses the existing manual");
+        assert_eq!(app.views.len(), 2);
+        assert_eq!(app.active, Some(0));
+        assert_eq!(app.views[1].current, 0, "the last tab is not the destination recipient");
+        assert_eq!(app.views[0].current, 1, "the requested physical destination is shown");
+        assert!(!app.session.get(app.views[0].id).expect("manual").dirty);
+    }
+}
+
+#[test]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+fn native_launch_destination_survives_wrong_password_and_duplicate_requests() {
+    let mut session = pdfcraft_engine::Session::new();
+    let id = session.open("manual.pdf", None, Arc::new(native_destination_fixture()), None).expect("manual");
+    session
+        .apply(id, pdfcraft_engine::Edit::Protect(pdfcraft_engine::Protection { open_password: Some("tool-password".into()), ..Default::default() }))
+        .expect("encrypt");
+    let file = tool_open_file("native-password", "pdf", &session.save_bytes(id).expect("encrypted manual"));
+    let mut app = PdfCraftApp::new();
+    app.open_target(crate::NativeOpenTarget::from_arg(&format!("{}#page=1", file.0.display())).unwrap());
+    assert!(app.password_prompt.is_some());
+    app.open_target(crate::NativeOpenTarget::from_arg(&format!("{}#nameddest=chapterTwo", file.0.display())).unwrap());
+    app.open_path(&file.0.to_string_lossy());
+    app.submit_password(Some("wrong".into()));
+    assert!(app.password_prompt.as_ref().unwrap().error.is_some());
+    app.submit_password(Some("tool-password".into()));
+    assert!(app.password_prompt.is_none());
+    assert_eq!(app.views.len(), 1);
+    assert_eq!(app.views[0].current, 1);
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert_eq!(doc.path.as_deref(), Some(file.0.to_string_lossy().as_ref()));
+    assert!(!doc.dirty);
+}
+
+#[test]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+fn native_launch_destination_updates_its_pending_file_and_preserves_other_tabs() {
+    let (mut h, _) = harness();
+    let held = HeldToolOpen::install(&mut h);
+    let file = tool_open_file("native-pending", "pdf", &native_destination_fixture());
+    h.state_mut().views[0].go_to_page(2);
+    h.state_mut().open_target(crate::NativeOpenTarget::from_arg(&format!("{}#page=1", file.0.display())).unwrap());
+    held.wait_started();
+    let repeated = h.state_mut().open_target(crate::NativeOpenTarget::from_arg(&format!("{}#nameddest=chapterTwo", file.0.display())).unwrap());
+    h.state_mut().open_path(&file.0.to_string_lossy());
+    held.complete(&mut h);
+    assert!(matches!(repeated, crate::state::OpenOutcome::Pending));
+    assert_eq!(h.state().views.len(), 2);
+    assert_eq!(h.state().views[0].current, 2);
+    assert_eq!(h.state().views[1].current, 1);
+}
+
+#[test]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+fn native_launch_destination_leaves_prior_navigation_when_a_later_name_is_missing() {
+    let file = tool_open_file("native-sequence", "pdf", &native_destination_fixture());
+    let mut app = PdfCraftApp::new();
+    app.open_target(crate::NativeOpenTarget::from_arg(&format!("{}#page=2&nameddest=unknown", file.0.display())).unwrap());
+    assert_eq!(app.views[0].current, 1);
+    // Literal-path consumers do not acquire launcher semantics.
+    let mut literal = PdfCraftApp::new();
+    literal.open_path(&format!("{}#page=2", file.0.display()));
+    assert!(literal.views.is_empty());
+}
+
+#[test]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+fn native_launch_destination_from_forwarded_arguments_survives_preparation() {
+    let (mut h, _) = harness();
+    let held = HeldToolOpen::install(&mut h);
+    let file = tool_open_file("native-forwarded", "pdf", &native_destination_fixture());
+    let mut events = vec![crate::OsEvent::OpenArguments(vec![format!("{}#nameddest=chapterTwo", file.0.display())])];
+    h.state_mut().os_events = Some(Box::new(move || std::mem::take(&mut events)));
+    h.step();
+    held.wait_started();
+    held.complete(&mut h);
+    assert_eq!(h.state().views.len(), 2);
+    assert_eq!(h.state().views[1].current, 1);
+    assert_eq!(h.state().session.get(h.state().views[1].id).unwrap().path.as_deref(), Some(file.0.to_string_lossy().as_ref()));
+}
+
+#[test]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+fn a_named_remote_link_uses_the_same_bounded_destination_lookup() {
+    let (mut h, _) = harness();
+    let held = HeldToolOpen::install(&mut h);
+    let file = tool_open_file("remote-named", "pdf", &native_destination_fixture());
+    let source = h.state().views[0].id;
+    h.state_mut().open_remote_link(source, file.0.to_string_lossy().into_owned(), pdfcraft_render::RemoteDestination::Named("chapterTwo".into()));
+    h.state_mut().resolve_pending_remote_link(true);
+    held.wait_started();
+    held.complete(&mut h);
+    assert_eq!(h.state().views.len(), 2);
+    assert_eq!(h.state().views[0].current, 0);
+    assert_eq!(h.state().views[1].current, 1);
+}

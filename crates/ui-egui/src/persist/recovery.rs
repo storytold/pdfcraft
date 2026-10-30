@@ -355,7 +355,7 @@ impl PdfCraftApp {
                     input: crate::open_worker::Input::Recovery(store.clone(), key.clone()),
                     password: None,
                     activate: true,
-                    after_open: None,
+                    after_open: Vec::new(),
                     recovered: Some(meta.clone()),
                     then: None,
                 });

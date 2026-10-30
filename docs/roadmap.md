@@ -1,5 +1,6 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M3, #3425: native launch page/named destinations retain per-file navigation and literal filename escaping; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M14 localization current state: Arabic logical catalog, explicit RTL label direction and mirrored stock chrome; native/browser RTL workflows unqualified. Native release Hans face via LXGW WenKai Lite; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M7, #2636 partial: pasting added text boxes and images in the engine and through `content_copy`; estimates unchanged)
@@ -242,6 +243,11 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 - Unmeasured fidelity: without an Acrobat comparison harness, quality gaps surface as user reports.
 
 ## Revision history
+
+**2026-10-27 | minor:** M3, #3425: native launch arguments separate local filenames from ordered page/named destinations.
+Navigation follows its file through forwarding, preparation, password retries and focusing an existing tab.
+Named lookup is bounded and shared with desktop local-PDF links.
+Other opening parameters, the destinations panel and estimates remain unchanged.
 
 **2026-10-25 · minor:** M14 localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build has no Hans face. Estimates unchanged.
 

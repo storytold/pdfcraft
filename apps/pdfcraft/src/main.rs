@@ -177,8 +177,22 @@ fn rejoin_split_paths(args: Vec<String>, exists: impl Fn(&str) -> bool) -> Vec<S
             i += 1;
             continue;
         }
-        // The longest run starting here that names a file; capped so a long list stays cheap.
-        let end = (i + 2..=args.len().min(i + 32)).rev().find(|&j| args.get(i..j).is_some_and(|run| exists(&run.join(" "))));
+        // Prefer the longest real literal path, or the first completed navigation target.
+        // Extending a named value with another independent file still names the same base
+        // PDF, so navigation-bearing probes must not overwrite the first match.
+        let mut literal = None;
+        let mut navigation = None;
+        for end in i + 2..=args.len().min(i + 32) {
+            let Some(candidate) = args.get(i..end).map(|run| run.join(" ")) else { continue };
+            if exists(&candidate) {
+                if pdfcraft_ui_egui::NativeOpenTarget::from_arg(&candidate).is_ok_and(|target| target.has_launch_parameters()) {
+                    navigation.get_or_insert(end);
+                } else {
+                    literal = Some(end);
+                }
+            }
+        }
+        let end = literal.or(navigation);
         match end.and_then(|j| Some((j, args.get(i..j)?.join(" ")))) {
             Some((j, joined)) => {
                 out.push(joined);
@@ -236,10 +250,17 @@ fn main() -> eframe::Result {
                 let value = args.next().unwrap_or_default();
                 options.push((flag.trim_start_matches("--").to_string(), value));
             }
-            _ => files.push(path_from_arg(a)),
+            _ => files.push(a),
         }
     }
-    let files = rejoin_split_paths(files, |p| std::path::Path::new(p).is_file());
+    let files = rejoin_split_paths(files, |p| {
+        if create_images {
+            std::path::Path::new(&path_from_arg(p.to_string())).is_file()
+        } else {
+            pdfcraft_ui_egui::NativeOpenTarget::from_arg(p).is_ok_and(|target| std::path::Path::new(target.path()).is_file())
+        }
+    });
+    let files = if create_images { files.into_iter().map(path_from_arg).collect() } else { files };
     let integrated = cfg!(target_os = "macos");
     // GNOME on Wayland leaves the window frame to the app (src/decorations.rs).
     let window_controls = if cfg!(any(target_os = "macos", target_os = "windows")) { None } else { decorations::app_drawn() };
@@ -263,8 +284,12 @@ fn main() -> eframe::Result {
     let may_hand_off = !new_window && !files.is_empty() && options.is_empty() && control_file.is_none() && !create_images;
     // Absolute for this instance too: links relative to a document resolve against its folder,
     // never the working directory.
-    let files = single_instance::absolute(&files);
-    let instance = match single_instance::claim(&files, may_hand_off) {
+    let files = if create_images {
+        files.into_iter().map(|path| std::path::absolute(&path).map(|p| p.to_string_lossy().into_owned()).unwrap_or(path)).collect()
+    } else {
+        single_instance::absolute(&files)
+    };
+    let instance = match single_instance::claim(&files, may_hand_off && single_instance::can_hand_off(&files)) {
         single_instance::Claim::HandedOff => return Ok(()),
         single_instance::Claim::Primary(server) => Some(server),
         single_instance::Claim::Alone => None,
@@ -474,9 +499,16 @@ fn app_creator<'a>(
         } else {
             // With the preference on, last session's files come back first; files named on
             // the command line open after them, in front (#442).
-            app.reopen_last_files(&files);
-            for f in files {
-                app.open_path(&f);
+            let targets: Vec<_> = files.iter().map(|file| pdfcraft_ui_egui::NativeOpenTarget::from_arg(file)).collect();
+            let paths: Vec<_> = targets.iter().filter_map(|target| target.as_ref().ok().map(|target| target.path().to_string())).collect();
+            app.reopen_last_files(&paths);
+            for target in targets {
+                match target {
+                    Ok(target) => {
+                        app.open_target(target);
+                    }
+                    Err(error) => app.notify(error),
+                }
             }
         }
         for (k, v) in options {

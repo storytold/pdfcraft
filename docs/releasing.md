@@ -70,7 +70,8 @@ embed its Japanese fonts and fail rather than ship without them (`AGENTS.md` §1
 deliberately.
 
 **OCR models:** desktop packaging stages the Scan & OCR models (#103).
-The packaging scripts call `stage_models` (`packaging/env.sh`; `package.ps1` on Windows), which runs `cargo xtask models` to fetch every `kind = "model"` file in `ATTRIBUTION.toml` and verify its SHA-256.
+Unix packaging calls `stage_models` from `packaging/env.sh`; Windows `package.ps1` invokes `cargo xtask models` directly.
+Both paths fetch every `kind = "model"` file in `ATTRIBUTION.toml` and verify its SHA-256.
 The current detection and recognition files are `text-detection.onnx` and `text-recognition.onnx`.
 Each model ships with its licence text and the directory's `ATTRIBUTION.txt`, so packaging needs the network.
 Upstream announced the legacy RTEN download URLs' brownout in [ocrs #282](https://github.com/robertknight/ocrs/issues/282) on 2026-10-27 and directs consumers to the ONNX models.

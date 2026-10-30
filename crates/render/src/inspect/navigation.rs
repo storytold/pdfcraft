@@ -3,8 +3,8 @@ use super::core::inspect;
 use super::core::spend;
 use super::model::{DestView, OutlineItem, PageInfo};
 use super::{
-    BTreeMap, Dictionary, HashMap, HashSet, Inspector, MAX_LABEL_BYTES, MAX_LABEL_TOTAL_BYTES, MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK,
-    MAX_PREFIX_BYTES, MAX_PREFIX_TOTAL_BYTES, Object, ObjectId, alpha, roman,
+    BTreeMap, Dictionary, HashSet, Inspector, MAX_LABEL_BYTES, MAX_LABEL_TOTAL_BYTES, MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK, MAX_PREFIX_BYTES,
+    MAX_PREFIX_TOTAL_BYTES, Object, ObjectId, alpha, roman,
 };
 
 /// `DocInfo::outline` holds the first this many bookmarks in outline order. Opening a document
@@ -13,6 +13,38 @@ pub(super) const OUTLINE_WINDOW: usize = 10_000;
 
 /// Deepest level `DocInfo::outline` nests (the top level is 0); deeper bookmarks are left out.
 pub(super) const OUTLINE_DEPTH: usize = 32;
+
+pub(super) const NAME_TREE_WORK: usize = 1 << 20;
+
+pub(super) const NAME_DECODE_BYTES: usize = 16 << 20;
+
+#[derive(Clone, Copy)]
+pub(super) struct NameWalk {
+    pub(super) remaining: usize,
+    pub(super) complete: bool,
+    pub(super) exhausted: bool,
+}
+impl NameWalk {
+    pub(super) fn new() -> Self {
+        Self { remaining: NAME_TREE_WORK, complete: true, exhausted: false }
+    }
+    fn spend(&mut self) -> bool {
+        if self.exhausted {
+            return false;
+        }
+        match self.remaining.checked_sub(1) {
+            Some(remaining) => {
+                self.remaining = remaining;
+                true
+            }
+            None => {
+                self.complete = false;
+                self.exhausted = true;
+                false
+            }
+        }
+    }
+}
 
 impl<'a> Inspector<'a> {
     /// The destination `/OpenAction` opens at (ISO 32000-2 §7.7.2 Table 29): an explicit
@@ -63,45 +95,231 @@ impl<'a> Inspector<'a> {
         }
     }
 
-    fn named_dest(&self, key: &[u8]) -> Option<&'a Object> {
-        let catalog = self.doc.catalog().ok()?;
-        if let Some(v) = self.named.get(key) {
-            return Some(v);
-        }
-        // PDF 1.1 style /Dests dictionary.
-        catalog.get(b"Dests").ok().and_then(|o| self.dict(o)).and_then(|d| d.get(key).ok())
+    pub(super) fn destination_tree(&self) -> Result<Option<&'a Dictionary>, ()> {
+        let catalog = self.doc.catalog().map_err(|_| ())?;
+        let Ok(names) = catalog.get(b"Names") else { return Ok(None) };
+        let names = self.dict(names).ok_or(())?;
+        let Ok(tree) = names.get(b"Dests") else { return Ok(None) };
+        self.dict(tree).map(Some).ok_or(())
     }
 
-    /// A name tree's leaves keyed by their raw key bytes (first occurrence wins).
-    pub(super) fn name_tree_raw(
+    fn lookup_named(&self, key: &[u8]) -> Result<Option<&'a Object>, ()> {
+        if let Some(named) = &self.named {
+            if let Some(value) = named.get(key) {
+                return Ok(Some(value));
+            }
+            if self.named_index_limited {
+                return Err(());
+            }
+        } else {
+            if key.len() > 4098 {
+                self.limit_name_query();
+                return Err(());
+            }
+            let mut walk = self.query_work.get();
+            if !walk.complete {
+                return Err(());
+            }
+            let tree = match self.destination_tree() {
+                Ok(tree) => tree,
+                Err(()) => {
+                    walk.complete = false;
+                    self.query_work.set(walk);
+                    return Err(());
+                }
+            };
+            if let Some(tree) = tree {
+                let mut byte_limited = false;
+                let found = self.visit_names(tree, &mut HashSet::new(), 0, &mut walk, &mut |name, value| {
+                    if name.len() != key.len() {
+                        return None;
+                    }
+                    if !self.spend_name_bytes(key.len()) {
+                        byte_limited = true;
+                        return Some(value);
+                    }
+                    (name == key).then_some(value)
+                });
+                walk.complete &= !byte_limited;
+                walk.exhausted |= byte_limited;
+                self.query_work.set(walk);
+                if !walk.complete {
+                    return Err(());
+                }
+                if found.is_some() {
+                    return Ok(found);
+                }
+            }
+        }
+        let catalog = self.doc.catalog().map_err(|_| ())?;
+        let Ok(legacy) = catalog.get(b"Dests") else { return Ok(None) };
+        // Dictionary binary search can compare this key once per usize address bit.
+        // Keep ordinary indexed inspection unchanged; only on-demand queries share this cap.
+        if self.named.is_none() && !self.spend_name_bytes(key.len().saturating_mul(usize::BITS as usize)) {
+            return Err(());
+        }
+        Ok(self.dict(legacy).ok_or(())?.get(key).ok())
+    }
+
+    fn named_dest(&self, key: &[u8]) -> Option<&'a Object> {
+        self.lookup_named(key).ok().flatten()
+    }
+
+    fn limit_name_query(&self) {
+        let mut work = self.query_work.get();
+        work.complete = false;
+        work.exhausted = true;
+        self.query_work.set(work);
+    }
+
+    fn spend_name_bytes(&self, cost: usize) -> bool {
+        if let Some(left) = self.query_decode_left.get().checked_sub(cost) {
+            self.query_decode_left.set(left);
+            true
+        } else {
+            self.limit_name_query();
+            false
+        }
+    }
+
+    fn spend_name_decode(&self, key: &[u8]) -> bool {
+        if key.len() > 4098 {
+            self.limit_name_query();
+            return false;
+        }
+        // The length cap makes this multiplication infallible, including on wasm32.
+        self.spend_name_bytes(key.len() * 3)
+    }
+
+    pub(super) fn destination_named(&self, name: &str) -> Option<(usize, DestView)> {
+        let raw = match self.lookup_named(name.as_bytes()) {
+            Ok(raw) => raw,
+            Err(()) => {
+                let mut walk = self.query_work.get();
+                walk.complete = false;
+                self.query_work.set(walk);
+                return None;
+            }
+        };
+        let value = raw.or_else(|| {
+            let mut walk = self.query_work.get();
+            let tree = match self.destination_tree() {
+                Ok(tree) => tree,
+                Err(()) => {
+                    walk.complete = false;
+                    self.query_work.set(walk);
+                    return None;
+                }
+            };
+            if let Some(tree) = tree {
+                let mut decode_limited = false;
+                let found = self.visit_names(tree, &mut HashSet::new(), 0, &mut walk, &mut |key, value| {
+                    // Charge before allocation/decoding, including repeated indirect keys.
+                    if !self.spend_name_decode(key) {
+                        decode_limited = true;
+                        return Some(value);
+                    }
+                    (text_string(key) == name).then_some(value)
+                });
+                walk.complete &= !decode_limited;
+                walk.exhausted |= decode_limited;
+                self.query_work.set(walk);
+                if !walk.complete {
+                    return None;
+                }
+                if found.is_some() {
+                    return found;
+                }
+            }
+            let catalog = self.doc.catalog().ok()?;
+            let Ok(legacy) = catalog.get(b"Dests") else { return None };
+            let Some(legacy) = self.dict(legacy) else {
+                walk.complete = false;
+                self.query_work.set(walk);
+                return None;
+            };
+            let mut found = None;
+            for (key, value) in legacy.iter() {
+                if !walk.spend() || !self.spend_name_decode(key) {
+                    walk.complete = false;
+                    walk.exhausted = true;
+                    break;
+                }
+                if text_string(key) == name {
+                    found = Some(value);
+                    break;
+                }
+            }
+            self.query_work.set(walk);
+            walk.complete.then_some(found).flatten()
+        })?;
+        self.dest(value, 0).filter(|(page, _)| *page < self.page_ids.len())
+    }
+
+    /// Collect readable entries without resetting global bounds after malformed input.
+    /// Strict query callers reject any incomplete traversal, including a found result.
+    pub(super) fn visit_names(
         &self,
         node: &'a Dictionary,
         seen: &mut HashSet<*const Dictionary>,
         depth: u32,
-        out: &mut HashMap<Vec<u8>, &'a Object>,
-    ) {
-        if depth > 32 || !seen.insert(node as *const _) {
-            return;
+        walk: &mut NameWalk,
+        visit: &mut impl FnMut(&[u8], &'a Object) -> Option<&'a Object>,
+    ) -> Option<&'a Object> {
+        if depth > 32 {
+            walk.complete = false;
+            return None;
         }
-        if let Ok(Object::Array(pairs)) = node.get(b"Names").map(|o| self.resolve(o)) {
-            for pair in pairs.chunks(2) {
-                if let [k, v] = pair {
-                    let key = match self.resolve(k) {
-                        Object::String(s, _) => s.clone(),
-                        Object::Name(n) => n.clone(),
-                        _ => continue,
+        if !walk.spend() || !seen.insert(node as *const _) {
+            return None;
+        }
+        if let Ok(names) = node.get(b"Names") {
+            if let Object::Array(pairs) = self.resolve(names) {
+                for pair in pairs.chunks(2) {
+                    if !walk.spend() {
+                        return None;
+                    }
+                    let [key, value] = pair else {
+                        walk.complete = false;
+                        continue;
                     };
-                    out.entry(key).or_insert(v);
+                    let key = match self.resolve(key) {
+                        Object::String(key, _) | Object::Name(key) => key,
+                        _ => {
+                            walk.complete = false;
+                            continue;
+                        }
+                    };
+                    if let Some(found) = visit(key, value) {
+                        return Some(found);
+                    }
                 }
+            } else {
+                walk.complete = false;
             }
         }
-        if let Ok(Object::Array(kids)) = node.get(b"Kids").map(|o| self.resolve(o)) {
-            for k in kids {
-                if let Some(d) = self.dict(k) {
-                    self.name_tree_raw(d, seen, depth + 1, out);
+        if let Ok(kids) = node.get(b"Kids") {
+            if let Object::Array(kids) = self.resolve(kids) {
+                for kid in kids {
+                    if !walk.spend() {
+                        return None;
+                    }
+                    let Some(dict) = self.dict(kid) else {
+                        walk.complete = false;
+                        continue;
+                    };
+                    if let Some(found) = self.visit_names(dict, seen, depth + 1, walk, visit) {
+                        return Some(found);
+                    }
+                    if walk.exhausted {
+                        return None;
+                    }
                 }
+            } else {
+                walk.complete = false;
             }
         }
+        None
     }
 
     /// The entries of an embedded-files name tree. Each string key is spent from `text_budget`
@@ -549,5 +767,165 @@ mod open_dest_tests {
         // A shallow one is read.
         let shallow = ["<< /Kids [7 0 R] >>".to_string(), "<< /Kids [8 0 R] >>".into(), "<< /Names [(x) [4 0 R /Fit]] >>".into()];
         assert_eq!(open_dest("/OpenAction (x) /Names << /Dests 6 0 R >>", &shallow), Some((1, DestView::Fit)));
+    }
+
+    #[test]
+    fn on_demand_named_destinations_reuse_views_aliases_and_encoded_keys() {
+        for (catalog, extra, name, expected) in [
+            ("/Dests << /there [5 0 R /XYZ 100 500 2] >>", vec![], "there", (2, XYZ)),
+            ("/Dests << /alias /there /there [4 0 R /Fit] >>", vec![], "alias", (1, DestView::Fit)),
+            (
+                "/Names << /Dests 6 0 R >>",
+                vec!["<< /Kids [7 0 R] >>".into(), "<< /Names [(there) 8 0 R] >>".into(), "<< /D [5 0 R /FitH 400] >>".into()],
+                "there",
+                (2, DestView::FitH { top: Some(400.0) }),
+            ),
+            ("/Names << /Dests << /Names [<FEFF00630061006600E9> [4 0 R /Fit]] >> >>", vec![], "café", (1, DestView::Fit)),
+            ("/Names << /Dests << /Names [<636166E9> [4 0 R /Fit]] >> >>", vec![], "café", (1, DestView::Fit)),
+            ("/Names << /Dests << /Names [<EFBBBF636166C3A9> [4 0 R /Fit]] >> >>", vec![], "café", (1, DestView::Fit)),
+            ("/Names << /Dests << /Names [<636166C3A9> [3 0 R /Fit] <FEFF00630061006600E9> [4 0 R /Fit]] >> >>", vec![], "café", (0, DestView::Fit)),
+        ] {
+            assert_eq!(crate::named_destination(Arc::new(pdf(catalog, &extra)), None, name).unwrap(), Some(expected), "{catalog}");
+        }
+    }
+
+    #[test]
+    fn on_demand_named_destinations_refuse_missing_cyclic_and_out_of_range_targets() {
+        for catalog in [
+            "",
+            "/Dests << /x /x >>",
+            "/Dests << /x << /D /x >> >>",
+            "/Dests << /x [20 /Fit] >>",
+            "/Dests << /x [2 0 R /Fit] >>",
+            "/Names << /Dests 6 0 R >>",
+        ] {
+            assert_eq!(crate::named_destination(Arc::new(pdf(catalog, &["<< /Kids [6 0 R] >>".into()])), None, "x").unwrap(), None);
+        }
+        let depth = 40;
+        let mut nodes: Vec<String> = (0..depth).map(|i| format!("<< /Kids [{} 0 R] >>", 7 + i)).collect();
+        nodes.push("<< /Names [(x) [4 0 R /Fit]] >>".into());
+        assert!(!matches!(crate::named_destination(Arc::new(pdf("/Names << /Dests 6 0 R >>", &nodes)), None, "x"), Ok(Some(_))));
+        assert!(crate::named_destination(Arc::new(b"invalid PDF".to_vec()), None, "x").is_err());
+        assert!(crate::named_destination(Arc::new(pdf("", &[])), None, &"x".repeat(1025)).is_err());
+    }
+
+    #[test]
+    fn on_demand_name_tree_work_is_bounded_and_stops_at_the_first_match() {
+        let bytes = pdf("/Names << /Dests << /Names [(a) [3 0 R /Fit] (b) [4 0 R /Fit]] >> >>", &[]);
+        let doc = lopdf::Document::load_mem(&bytes).unwrap();
+        let inspector = super::Inspector::without_named_index(&doc);
+        assert!(inspector.named.is_none(), "one query does not index every name");
+        let tree = inspector.destination_tree().unwrap().unwrap();
+        let mut work = super::NameWalk { remaining: 1, ..super::NameWalk::new() };
+        let result = inspector.visit_names(tree, &mut std::collections::HashSet::new(), 0, &mut work, &mut |_, value| Some(value));
+        assert!(result.is_none());
+        assert_eq!(work.remaining, 0);
+        assert!(!work.complete);
+        let mut work = super::NameWalk { remaining: 2, ..super::NameWalk::new() };
+        let result = inspector.visit_names(tree, &mut std::collections::HashSet::new(), 0, &mut work, &mut |_, value| Some(value));
+        assert_eq!(inspector.dest(result.unwrap(), 0), Some((0, DestView::Fit)));
+    }
+    #[test]
+    fn on_demand_incomplete_trees_do_not_choose_a_conflicting_fallback() {
+        let depth = 40;
+        let leaf = 7 + depth;
+        let shadow = leaf + 1;
+        let mut nodes = vec![format!("<< /Kids [7 0 R {shadow} 0 R] >>")];
+        nodes.extend((0..depth).map(|i| format!("<< /Kids [{} 0 R] >>", 8 + i)));
+        nodes.push("<< /Names [<636166C3A9> [3 0 R /Fit]] >>".into());
+        nodes.push("<< /Names [<FEFF00630061006600E9> [4 0 R /Fit]] >>".into());
+        for legacy in ["", "/Dests << /caf#C3#A9 [5 0 R /Fit] >>"] {
+            let bytes = pdf(&format!("/Names << /Dests 6 0 R >> {legacy}"), &nodes);
+            assert!(
+                !matches!(crate::named_destination(Arc::new(bytes), None, "café"), Ok(Some(_))),
+                "an unread exact key must not select another destination"
+            );
+        }
+    }
+
+    #[test]
+    fn on_demand_repeated_indirect_keys_have_a_cumulative_decoding_bound() {
+        let repeated = "7 0 R [3 0 R /Fit] ".repeat(5000);
+        let nodes = [format!("<< /Names [{repeated} <FEFF00630061006600E9> [4 0 R /Fit]] >>"), format!("({})", "x".repeat(4098))];
+        let bytes = pdf("/Names << /Dests 6 0 R >>", &nodes);
+        assert!(bytes.len() < 128 * 1024, "small malformed source must not trigger unbounded text decoding");
+        assert!(!matches!(crate::named_destination(Arc::new(bytes), None, "café"), Ok(Some(_))));
+    }
+    #[test]
+    fn on_demand_batches_share_budgets_and_keep_earlier_successful_results() {
+        let repeated = "7 0 R [3 0 R /Fit] ".repeat(800);
+        let nodes = [format!("<< /Names [{repeated} <FEFF00630061006600E9> [4 0 R /Fit]] >>"), format!("({})", "x".repeat(4098))];
+        let results = crate::named_destinations(Arc::new(pdf("/Names << /Dests 6 0 R >>", &nodes)), None, &["café", "café"]).unwrap();
+        assert!(matches!(results[0], Ok(Some((1, DestView::Fit)))));
+        assert!(results[1].is_err(), "the next query cannot reset the shared decoding budget");
+        let invalid = "x".repeat(1025);
+        let results = crate::named_destinations(Arc::new(pdf("/Dests << /there [4 0 R /Fit] >>", &[])), None, &["there", &invalid, "there"]).unwrap();
+        assert!(matches!(results[0], Ok(Some((1, DestView::Fit)))));
+        assert!(results[1].is_err());
+        assert!(matches!(results[2], Ok(Some((1, DestView::Fit)))));
+    }
+    #[test]
+    fn on_demand_short_names_cannot_expand_into_oversized_raw_aliases() {
+        let alias = format!("{}z", "x".repeat(4098));
+        let near = format!("{}y", "x".repeat(4098));
+        let nodes = [format!("<< /Names [{} 7 0 R [4 0 R /Fit]] >>", "8 0 R [3 0 R /Fit] ".repeat(64)), format!("({alias})"), format!("({near})")];
+        let bytes = pdf("/Names << /Dests 6 0 R >> /Dests << /external 7 0 R >>", &nodes);
+        assert!(bytes.len() < 16 * 1024);
+        assert!(!matches!(crate::named_destination(Arc::new(bytes), None, "external"), Ok(Some(_))));
+    }
+
+    #[test]
+    fn on_demand_raw_key_comparisons_share_the_cumulative_byte_budget() {
+        let key = format!("{}z", "q".repeat(999));
+        let near = format!("{}y", "q".repeat(999));
+        let nodes = [format!("<< /Names [{} ({key}) [4 0 R /Fit]] >>", "7 0 R [3 0 R /Fit] ".repeat(20_000)), format!("({near})")];
+        let bytes = pdf("/Names << /Dests 6 0 R >>", &nodes);
+        assert!(bytes.len() < 1024 * 1024);
+        assert!(!matches!(crate::named_destination(Arc::new(bytes), None, &key), Ok(Some(_))));
+    }
+
+    #[test]
+    fn indexed_name_tree_keeps_readable_entries_after_damage() {
+        let cases = [
+            ("/Names << /Dests << /Names [17 [3 0 R /Fit] (good) [4 0 R /Fit]] >> >>", vec![]),
+            ("/Names << /Dests 6 0 R >>", vec!["<< /Kids [17 7 0 R] >>".into(), "<< /Names [(good) [4 0 R /Fit]] >>".into()]),
+            ("/Names << /Dests 6 0 R >>", vec!["<< /Names [(broken)] /Kids [7 0 R] >>".into(), "<< /Names [(good) [4 0 R /Fit]] >>".into()]),
+            ("/Names << /Dests 6 0 R >>", vec!["<< /Names 17 /Kids [7 0 R] >>".into(), "<< /Names [(good) [4 0 R /Fit]] >>".into()]),
+        ];
+        for (catalog, extra) in cases {
+            let bytes = Arc::new(pdf(&format!("/OpenAction (good) {catalog}"), &extra));
+            let info = inspect(bytes.clone(), None).unwrap();
+            assert_eq!(info.open_dest, Some((1, DestView::Fit)), "later readable entries survive: {catalog}");
+            assert!(info.warnings.iter().any(|warning| warning.contains("named destinations")));
+            assert!(!matches!(crate::named_destination(bytes, None, "good"), Ok(Some(_))), "strict queries still refuse preceding damage");
+        }
+    }
+
+    #[test]
+    fn indexed_name_tree_continues_after_a_depth_limited_branch() {
+        let depth = 40;
+        let good = 8 + depth;
+        let mut nodes = vec![format!("<< /Kids [7 0 R {good} 0 R] >>")];
+        nodes.extend((0..depth).map(|index| format!("<< /Kids [{} 0 R] >>", 8 + index)));
+        nodes.push("<< /Names [(deep) [3 0 R /Fit]] >>".into());
+        nodes.push("<< /Names [(good) [4 0 R /Fit]] >>".into());
+        let bytes = Arc::new(pdf("/OpenAction (good) /Names << /Dests 6 0 R >>", &nodes));
+        assert_eq!(inspect(bytes.clone(), None).unwrap().open_dest, Some((1, DestView::Fit)));
+        assert!(!matches!(crate::named_destination(bytes, None, "good"), Ok(Some(_))));
+    }
+
+    #[test]
+    fn indexed_name_tree_recovery_never_resets_the_work_allowance() {
+        let bytes = pdf("/Names << /Dests << /Names [17 [3 0 R /Fit] (good) [4 0 R /Fit]] >> >>", &[]);
+        let doc = lopdf::Document::load_mem(&bytes).unwrap();
+        let inspector = super::Inspector::without_named_index(&doc);
+        let tree = inspector.destination_tree().unwrap().unwrap();
+        let mut work = super::NameWalk { remaining: 2, ..super::NameWalk::new() };
+        let found = inspector.visit_names(tree, &mut std::collections::HashSet::new(), 0, &mut work, &mut |_, value| Some(value));
+        assert!(found.is_none());
+        assert_eq!(work.remaining, 0);
+        assert!(!work.complete);
+        let before_damage = Arc::new(pdf("/Names << /Dests << /Names [(good) [4 0 R /Fit] 17 [3 0 R /Fit]] >> >>", &[]));
+        assert!(matches!(crate::named_destination(before_damage, None, "good"), Ok(Some((1, DestView::Fit)))));
     }
 }

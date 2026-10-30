@@ -30,7 +30,7 @@ impl PdfCraftApp {
                         input: open_worker::Input::Bytes(std::sync::Arc::new(bytes)),
                         password: None,
                         activate: true,
-                        after_open: None,
+                        after_open: Vec::new(),
                         recovered: None,
                         then: None,
                     });

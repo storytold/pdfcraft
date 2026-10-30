@@ -328,7 +328,7 @@ pub struct PasswordPrompt {
     /// the document is unlocked.
     pub(crate) then: Option<&'static str>,
     /// A link destination to apply after the linked PDF is unlocked.
-    pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
+    pub(crate) after_open: Vec<pdfcraft_render::RemoteDestination>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -339,7 +339,7 @@ pub(crate) struct OpenRequest {
     pub(crate) input: open_worker::Input,
     pub(crate) password: Option<String>,
     pub(crate) activate: bool,
-    pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
+    pub(crate) after_open: Vec<pdfcraft_render::RemoteDestination>,
     pub(crate) recovered: Option<RecoveryMeta>,
     pub(crate) then: Option<&'static str>,
 }

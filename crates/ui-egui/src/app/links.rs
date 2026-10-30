@@ -46,7 +46,7 @@ impl PdfCraftApp {
             input: open_worker::Input::RemotePath(std::path::PathBuf::from(path)),
             password: None,
             activate: true,
-            after_open: Some(destination),
+            after_open: vec![destination],
             recovered: None,
             then: None,
         });
@@ -65,20 +65,43 @@ impl PdfCraftApp {
         self.pending_remote_link = None;
     }
 
-    pub(super) fn apply_remote_destination(&mut self, destination: pdfcraft_render::RemoteDestination) {
-        let Some(index) = self.views.len().checked_sub(1) else { return };
-        let Some(doc) = self.session.get(self.views[index].id) else { return };
-        let warning = match destination {
-            pdfcraft_render::RemoteDestination::Default => None,
-            pdfcraft_render::RemoteDestination::Named(_) => Some("The linked PDF opened, but its named destination was not applied."),
-            pdfcraft_render::RemoteDestination::Page { page, view } if page < doc.info.pages.len() => {
-                self.views[index].go_to_dest(page, view, &doc.info);
-                None
+    pub(super) fn apply_open_destinations(&mut self, id: DocId, destinations: Vec<pdfcraft_render::RemoteDestination>) {
+        let Some(index) = self.views.iter().position(|view| view.id == id) else { return };
+        let Some(doc) = self.session.get(id) else { return };
+        let names: Vec<_> = destinations
+            .iter()
+            .filter_map(|destination| match destination {
+                pdfcraft_render::RemoteDestination::Named(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        let mut named = match pdfcraft_render::named_destinations(doc.bytes.clone(), doc.password.as_deref(), &names) {
+            Ok(results) => results,
+            Err(error) => {
+                self.notify_fmt("The PDF opened, but its destinations could not be read: {reason}", &[("reason", &error.to_string())]);
+                Vec::new()
             }
-            pdfcraft_render::RemoteDestination::Page { .. } => Some("The linked PDF opened, but its page destination was out of range."),
-        };
-        if let Some(warning) = warning {
-            self.notify_tr(warning);
+        }
+        .into_iter();
+        for destination in destinations {
+            let Some(doc) = self.session.get(id) else { return };
+            let resolved = match destination {
+                pdfcraft_render::RemoteDestination::Default => continue,
+                pdfcraft_render::RemoteDestination::Page { page, view } => Ok((page < doc.info.pages.len()).then_some((page, view))),
+                pdfcraft_render::RemoteDestination::Named(_) => {
+                    let Some(result) = named.next() else { continue };
+                    result
+                }
+            };
+            match resolved {
+                Ok(Some((page, view))) => {
+                    if let Some(target) = self.views.get_mut(index) {
+                        target.go_to_dest(page, view, &doc.info);
+                    }
+                }
+                Ok(None) => self.notify_tr("The PDF opened, but a requested destination could not be applied."),
+                Err(error) => self.notify_fmt("The PDF opened, but its destination could not be read: {reason}", &[("reason", &error.to_string())]),
+            }
         }
     }
 

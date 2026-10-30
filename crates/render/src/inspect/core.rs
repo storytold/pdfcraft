@@ -1,9 +1,11 @@
+use std::cell::Cell;
+
 use super::annotations::MAX_LINK_ATTACHMENT_TEXT_BYTES;
 use super::model::{AttachmentSource, PageInfo, Xfa};
 use super::navigation::text_string;
 use super::{
-    Arc, AssertUnwindSafe, DecryptionError, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, LoadOptions, LoadPdfError, Object,
-    ObjectId, OnceCell, OpenError, Pdf, Structure, catch_unwind,
+    Arc, AssertUnwindSafe, DecryptionError, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, LoadOptions, LoadPdfError,
+    NamedDestinationResult, Object, ObjectId, OnceCell, OpenError, Pdf, Structure, catch_unwind,
 };
 
 /// lopdf decodes object and cross-reference streams while it loads, with no limit unless one is
@@ -113,6 +115,80 @@ pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, O
     Ok(info)
 }
 
+/// Resolve one named destination through the bounded batch resolver.
+pub fn named_destination(bytes: Arc<Vec<u8>>, password: Option<&str>, name: &str) -> NamedDestinationResult {
+    named_destinations(bytes, password, &[name])?.into_iter().next().unwrap_or(Ok(None))
+}
+
+/// Resolve up to 64 names with one temporary reader and cumulative traversal/decoding budgets.
+/// Per-name errors retain earlier successful results; exact raw key bytes take precedence over
+/// PDF text decoding. No map of every destination is retained for these queries.
+pub fn named_destinations(bytes: Arc<Vec<u8>>, password: Option<&str>, names: &[&str]) -> Result<Vec<NamedDestinationResult>, OpenError> {
+    if names.len() > 64 {
+        return Err(OpenError::Invalid("too many destination queries".into()));
+    }
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    catch_unwind(AssertUnwindSafe(|| {
+        let lazy = if let Ok(doc) = LazyStructure::new(bytes.clone(), password) {
+            let results = query_destinations(&Inspector::without_named_index(&doc), names);
+            if !doc.failed() {
+                return Ok(results);
+            }
+            Some(results)
+        } else {
+            None
+        };
+        let compatibility = catch_unwind(AssertUnwindSafe(|| {
+            let doc = Document::load_mem_with_options(&bytes, load_options(password)).map_err(|e| OpenError::Invalid(e.to_string()))?;
+            Ok::<_, OpenError>(query_destinations(&Inspector::without_named_index(&doc), names))
+        }))
+        .map_err(|p| OpenError::Invalid(format!("the destination parser crashed: {}", crate::raster::panic_message(&p))))
+        .and_then(|result| result);
+        match compatibility {
+            Ok(fallback) => Ok(if let Some(lazy) = lazy {
+                fallback
+                    .into_iter()
+                    .zip(lazy)
+                    .map(
+                        |(fallback, original)| {
+                            if matches!(&original, Ok(Some(_))) && !matches!(&fallback, Ok(Some(_))) { original } else { fallback }
+                        },
+                    )
+                    .collect()
+            } else {
+                fallback
+            }),
+            Err(error) => lazy.ok_or(error),
+        }
+    }))
+    .map_err(|p| OpenError::Invalid(format!("the destination parser crashed: {}", crate::raster::panic_message(&p))))?
+}
+
+fn query_destinations(inspector: &Inspector<'_>, names: &[&str]) -> Vec<NamedDestinationResult> {
+    names
+        .iter()
+        .map(|name| {
+            if name.len() > 1024 || name.contains('\0') {
+                return Err(OpenError::Invalid("the destination name is too long or contains NUL".into()));
+            }
+            let result = catch_unwind(AssertUnwindSafe(|| inspector.destination_named(name)));
+            match result {
+                Ok(destination) if inspector.query_work.get().complete => Ok(destination),
+                Ok(_) => Err(OpenError::Invalid("the destination tree could not be searched within its safety limits".into())),
+                Err(panic) => {
+                    let mut work = inspector.query_work.get();
+                    work.complete = false;
+                    work.exhausted = true;
+                    inspector.query_work.set(work);
+                    Err(OpenError::Invalid(format!("the destination parser crashed: {}", crate::raster::panic_message(&panic))))
+                }
+            }
+        })
+        .collect()
+}
+
 // Commit auxiliary metadata only after inspection succeeds; renderer geometry is the fallback.
 pub(super) fn inspect_structure(info: &mut DocInfo, fill: impl FnOnce(&mut DocInfo) -> Result<(), String>) {
     let structure = catch_unwind(AssertUnwindSafe(|| {
@@ -139,7 +215,10 @@ pub(super) struct Inspector<'a> {
     pub(super) page_index: HashMap<ObjectId, usize>,
     /// Named destinations (`/Names /Dests` tree), keyed by raw string bytes, built once.
     /// Looking each name up by walking the tree was O(links × names): minutes on manuals.
-    pub(super) named: HashMap<Vec<u8>, &'a Object>,
+    pub(super) named: Option<HashMap<Vec<u8>, &'a Object>>,
+    pub(super) named_index_limited: bool,
+    pub(super) query_work: Cell<super::navigation::NameWalk>,
+    pub(super) query_decode_left: Cell<usize>,
     /// The page of each annotation (the first page that lists it), built when a field's widget
     /// has no `/P`. Searching every page's `/Annots` for each such field was O(fields ×
     /// annotations): a second on a form of 8,000 fields.
@@ -148,20 +227,52 @@ pub(super) struct Inspector<'a> {
 
 impl<'a> Inspector<'a> {
     pub(super) fn new(doc: &'a dyn Structure) -> Self {
-        let page_ids = doc.page_ids();
-        let page_index = page_ids.iter().copied().enumerate().map(|(index, id)| (id, index)).collect();
-        let mut me = Self { doc, page_ids, page_index, named: HashMap::new(), annotation_pages: OnceCell::new() };
+        let mut me = Self::without_named_index(doc);
         let mut named = HashMap::new();
-        if let Some(tree) =
-            doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| me.dict(o)).and_then(|n| n.get(b"Dests").ok()).and_then(|o| me.dict(o))
-        {
-            me.name_tree_raw(tree, &mut HashSet::new(), 0, &mut named);
+        match me.destination_tree() {
+            Ok(Some(tree)) => {
+                let mut work = super::navigation::NameWalk::new();
+                let mut key_bytes = super::navigation::NAME_DECODE_BYTES;
+                let mut key_limit = false;
+                me.visit_names(tree, &mut HashSet::new(), 0, &mut work, &mut |key, value| {
+                    if let Some(left) = key_bytes.checked_sub(key.len()) {
+                        key_bytes = left;
+                        named.entry(key.to_vec()).or_insert(value);
+                        None
+                    } else {
+                        key_limit = true;
+                        Some(value)
+                    }
+                });
+                me.named_index_limited = !work.complete || key_limit;
+            }
+            Ok(None) => {}
+            Err(()) => me.named_index_limited = true,
         }
-        me.named = named;
+        me.named = Some(named);
         me
     }
 
+    /// One on-demand query must not rebuild and retain every destination name.
+    pub(super) fn without_named_index(doc: &'a dyn Structure) -> Self {
+        let page_ids = doc.page_ids();
+        let page_index = page_ids.iter().copied().enumerate().map(|(index, id)| (id, index)).collect();
+        Self {
+            doc,
+            page_ids,
+            page_index,
+            named: None,
+            named_index_limited: false,
+            query_work: Cell::new(super::navigation::NameWalk::new()),
+            query_decode_left: Cell::new(super::navigation::NAME_DECODE_BYTES),
+            annotation_pages: OnceCell::new(),
+        }
+    }
+
     pub(super) fn fill(&self, info: &mut DocInfo) {
+        if self.named_index_limited {
+            info.warnings.push("Some named destinations were skipped because the tree is malformed or exceeds safe traversal limits.".into());
+        }
         // lopdf drops /Encrypt from the trailer once it has decrypted the file.
         info.encrypted = self.doc.encrypted();
         if let Some(d) = self.doc.trailer().get(b"Info").ok().and_then(|o| self.dict(o)) {

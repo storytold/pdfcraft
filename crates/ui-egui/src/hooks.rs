@@ -11,6 +11,8 @@ pub type FailedInbox = std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>;
 pub enum OsEvent {
     /// Open these files.
     Open(Vec<String>),
+    /// Native launch arguments, which may include file URI escaping and PDF navigation.
+    OpenArguments(Vec<String>),
     /// Quit (the Dock's Quit, logging out), asking about unsaved changes first.
     Quit,
 }

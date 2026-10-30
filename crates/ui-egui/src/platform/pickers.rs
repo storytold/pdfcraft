@@ -373,7 +373,7 @@ mod tests {
             path: None,
             stamp: None,
             activate: true,
-            after_open: None,
+            after_open: Vec::new(),
             recovered: None,
             then: None,
         });

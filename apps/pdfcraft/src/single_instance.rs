@@ -12,8 +12,9 @@
 //! only the user can reach, so other accounts can't create, replace or reach it: nobody else can
 //! intercept a launch or open files in this user's window. Inside a Flatpak, `$XDG_RUNTIME_DIR` is
 //! the app's own and is shared by every run of it, so the handoff works there too. The exchange is
-//! one line each way, a JSON request naming absolute paths and `ok`, and the running app opens the
-//! paths exactly as File ▸ Open would.
+//! one line each way, a JSON request naming canonical local file URIs and `ok`, and the running
+//! app opens the launch arguments through the same parser as a new window.
+//! Legacy `open` requests remain literal paths; `open_arguments` preserves launcher semantics.
 //!
 //! Every failure falls back to the old behaviour: a launch that can't hand its files over within
 //! a few seconds opens its own window. `--new-window`, any other option, or no files at all also
@@ -57,7 +58,7 @@ pub enum Claim {
 /// Files that later launches handed over, and how to wake the UI for them.
 #[derive(Default)]
 struct Inbox {
-    paths: Vec<String>,
+    events: Vec<OsEvent>,
     wake: Option<Box<dyn Fn() + Send>>,
 }
 
@@ -75,9 +76,9 @@ impl Server {
 
     /// Queue files from another launch and wake the UI.
     #[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
-    fn deliver(&self, paths: Vec<String>) {
+    fn deliver_event(&self, event: OsEvent) {
         let mut inbox = self.inbox.lock().unwrap_or_else(PoisonError::into_inner);
-        inbox.paths.extend(paths);
+        inbox.events.push(event);
         if let Some(wake) = &inbox.wake {
             wake();
         }
@@ -94,8 +95,8 @@ impl Server {
         let inbox = Arc::clone(&self.inbox);
         let ctx = ctx.clone();
         Box::new(move || {
-            let paths = std::mem::take(&mut inbox.lock().unwrap_or_else(PoisonError::into_inner).paths);
-            if paths.is_empty() {
+            let events = std::mem::take(&mut inbox.lock().unwrap_or_else(PoisonError::into_inner).events);
+            if events.is_empty() {
                 return Vec::new();
             }
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -103,33 +104,54 @@ impl Server {
             if native_wayland {
                 ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational));
             }
-            vec![OsEvent::Open(paths)]
+            events
         })
     }
 }
 
-/// The request a launch sends: `{"open":[…]}` and a newline.
+/// New peers use a distinct field so older peers refuse launcher syntax and open a new window.
 #[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
 pub fn request(paths: &[String]) -> String {
-    let mut line = serde_json::json!({ "open": paths }).to_string();
+    let mut line = serde_json::json!({ "open_arguments": paths }).to_string();
     line.push('\n');
     line
 }
 
-/// The paths a request names, or `None` when it isn't a request: anything but one JSON object
-/// whose `open` is a non-empty list of non-empty strings.
+/// Keep legacy filesystem paths and launcher arguments distinct, refusing ambiguous requests.
 #[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
-pub fn parse_request(line: &str) -> Option<Vec<String>> {
+pub fn parse_request(line: &str) -> Option<OsEvent> {
     let value: serde_json::Value = serde_json::from_str(line.trim_end()).ok()?;
-    let open = value.get("open")?.as_array()?;
+    let object = value.as_object()?;
+    let (open, arguments) = match (object.get("open"), object.get("open_arguments")) {
+        (Some(open), None) => (open.as_array()?, false),
+        (None, Some(open)) => (open.as_array()?, true),
+        _ => return None,
+    };
     let paths = open.iter().map(|p| p.as_str().filter(|s| !s.is_empty()).map(str::to_string)).collect::<Option<Vec<String>>>()?;
-    (!paths.is_empty()).then_some(paths)
+    if paths.is_empty() {
+        return None;
+    }
+    Some(if arguments { OsEvent::OpenArguments(paths) } else { OsEvent::Open(paths) })
 }
 
 /// File arguments made absolute against this launch's working folder, which the running app
-/// doesn't share. A path that can't be made absolute is sent as it is.
+/// doesn't share. Invalid arguments remain for this launch to report, never for handoff.
 pub fn absolute(paths: &[String]) -> Vec<String> {
-    paths.iter().map(|p| std::path::absolute(p).map_or_else(|_| p.clone(), |a| a.to_string_lossy().into_owned())).collect()
+    paths
+        .iter()
+        .map(|argument| {
+            pdfcraft_ui_egui::NativeOpenTarget::from_arg(argument).and_then(|target| target.absolute_argument()).unwrap_or_else(|_| argument.clone())
+        })
+        .collect()
+}
+
+/// A failed normalization/encoding must never send a sender-relative fallback to another app.
+pub fn can_hand_off(arguments: &[String]) -> bool {
+    arguments.iter().all(|argument| {
+        pdfcraft_ui_egui::NativeOpenTarget::from_arg(argument)
+            .and_then(|target| target.absolute_argument())
+            .is_ok_and(|canonical| canonical == *argument)
+    }) && request(arguments).len() <= MAX_REQUEST as usize
 }
 
 /// Decide what this launch does. `files` are absolute ([`absolute`]); `may_hand_off` is false
@@ -342,8 +364,8 @@ fn receive(stream: &UnixStream, server: &Server) -> std::io::Result<()> {
     if line.is_empty() {
         return Ok(());
     }
-    let paths = parse_request(&line).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "not an open request"))?;
-    server.deliver(paths);
+    let event = parse_request(&line).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "not an open request"))?;
+    server.deliver_event(event);
     let mut writer = stream;
     writer.write_all(b"ok\n")
 }
@@ -357,7 +379,7 @@ mod tests {
         let paths = vec![r"C:\Users\me\Documents\Quote.pdf".to_string(), r"D:\Scans\Plan „A“ 1.pdf".to_string()];
         let line = request(&paths);
         assert!(line.ends_with('\n') && !line.trim_end().contains('\n'), "one line");
-        assert_eq!(parse_request(&line), Some(paths));
+        assert_eq!(parse_request(&line), Some(OsEvent::OpenArguments(paths)));
     }
 
     #[test]
@@ -370,9 +392,15 @@ mod tests {
     #[test]
     fn relative_paths_are_made_absolute_against_this_launch() {
         let out = absolute(&["Quote.pdf".to_string()]);
-        assert_eq!(out, vec![std::env::current_dir().unwrap().join("Quote.pdf").to_string_lossy().into_owned()]);
+        assert_eq!(
+            pdfcraft_ui_egui::NativeOpenTarget::from_arg(&out[0]).unwrap().path(),
+            std::env::current_dir().unwrap().join("Quote.pdf").to_str().unwrap()
+        );
+        assert!(can_hand_off(&out));
+        assert!(!can_hand_off(&["Quote.pdf".to_string()]));
+        assert!(!can_hand_off(&["bad\0path.pdf".to_string()]));
         let already = std::env::current_dir().unwrap().join("x.pdf").to_string_lossy().into_owned();
-        assert_eq!(absolute(std::slice::from_ref(&already)), vec![already]);
+        assert_eq!(pdfcraft_ui_egui::NativeOpenTarget::from_arg(&absolute(std::slice::from_ref(&already))[0]).unwrap().path(), already);
     }
 
     #[test]
@@ -397,12 +425,12 @@ mod tests {
     fn delivered_files_reach_the_ui_once_wake_it_and_bring_the_window_forward() {
         let server = Server::new();
         // Before the window exists: queued, nothing to wake yet.
-        server.deliver(vec!["a.pdf".into()]);
+        server.deliver_event(OsEvent::Open(vec!["a.pdf".into()]));
         let ctx = egui::Context::default();
         let mut poll = server.connect(&ctx, false);
-        server.deliver(vec!["b.pdf".into()]);
+        server.deliver_event(OsEvent::OpenArguments(vec!["b.pdf".into()]));
         let events = poll();
-        assert!(matches!(events.as_slice(), [OsEvent::Open(p)] if p == &["a.pdf", "b.pdf"]));
+        assert_eq!(events, vec![OsEvent::Open(vec!["a.pdf".into()]), OsEvent::OpenArguments(vec!["b.pdf".into()])]);
         assert!(poll().is_empty(), "each file is delivered once");
     }
 
@@ -444,7 +472,7 @@ mod tests {
         let Claim::Primary(first) = claim_at(&path, &[], true) else { panic!("the first launch listens") };
         let mut poll = first.connect(&egui::Context::default(), false);
         assert!(matches!(claim_at(&path, &["C:\\a.pdf".into()], true), Claim::HandedOff));
-        assert!(matches!(poll().as_slice(), [OsEvent::Open(p)] if p == &["C:\\a.pdf"]));
+        assert!(matches!(poll().as_slice(), [OsEvent::OpenArguments(p)] if p == &["C:\\a.pdf"]));
         // A launch with options keeps its own window and doesn't take over the socket.
         assert!(matches!(claim_at(&path, &["C:\\b.pdf".into()], false), Claim::Alone));
         assert!(poll().is_empty());
@@ -483,5 +511,50 @@ mod tests {
         // `symlink_metadata`, not `exists`, which follows the socket's reparse point and can fail.
         assert!(std::fs::symlink_metadata(&path).is_ok(), "the socket file stays behind");
         assert!(matches!(claim_at(&path, &["C:\\a.pdf".into()], true), Claim::Primary(_)));
+    }
+    #[test]
+    fn file_uris_keep_raw_escapes_while_plain_launch_paths_use_the_senders_folder() {
+        let uri = "file:///tmp/manual%23draft.pdf#nameddest=chapter%26two".to_string();
+        let plain = "manual with spaces.pdf#page=2".to_string();
+        let normalized = absolute(&[plain.clone(), uri.clone()]);
+        let received = pdfcraft_ui_egui::NativeOpenTarget::from_arg(&normalized[0]).unwrap();
+        assert_eq!(std::path::Path::new(received.path()), std::path::absolute("manual with spaces.pdf").unwrap());
+        assert_eq!(received.destinations(), pdfcraft_ui_egui::NativeOpenTarget::from_arg(&plain).unwrap().destinations());
+        let original = pdfcraft_ui_egui::NativeOpenTarget::from_arg(&uri).unwrap();
+        let received = pdfcraft_ui_egui::NativeOpenTarget::from_arg(&normalized[1]).unwrap();
+        assert_eq!(std::path::Path::new(received.path()), std::path::absolute("/tmp/manual#draft.pdf").unwrap().as_path());
+        assert_eq!(received.destinations(), original.destinations());
+        assert!(normalized[1].contains("%23"), "the filename hash remains escaped");
+        assert!(normalized[1].contains("%26"), "the destination separator remains escaped");
+    }
+    #[test]
+    fn native_launch_protocol_is_not_accepted_as_legacy_literal_paths() {
+        let line = request(&["file:///tmp/manual%23draft.pdf#page=2".into()]);
+        let legacy: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert!(legacy.get("open").is_none(), "older peers must reject launcher semantics instead of opening them as literal paths");
+    }
+
+    #[test]
+    fn native_launch_legacy_delivery_keeps_literal_path_provenance() {
+        let server = Server::new();
+        let context = egui::Context::default();
+        let mut poll = server.connect(&context, false);
+        server.deliver_event(parse_request(r#"{"open":["manual.pdf#page=2"]}"#).unwrap());
+        assert!(matches!(poll().as_slice(), [OsEvent::Open(paths)] if paths == &["manual.pdf#page=2"]));
+    }
+
+    #[test]
+    fn launch_request_rejects_ambiguous_and_invalid_new_schemas() {
+        for line in [
+            r#"{"open":[],"open_arguments":["a.pdf"]}"#,
+            r#"{"open":["a.pdf"],"open_arguments":null}"#,
+            r#"{"open_arguments":[]}"#,
+            r#"{"open_arguments":[""]}"#,
+            r#"{"open_arguments":[3]}"#,
+        ] {
+            assert_eq!(parse_request(line), None, "{line}");
+        }
+        let files = vec!["a.pdf#page=2".to_string()];
+        assert_eq!(parse_request(&request(&files)), Some(OsEvent::OpenArguments(files)));
     }
 }
