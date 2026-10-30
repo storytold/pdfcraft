@@ -581,7 +581,13 @@ fun PdfView(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Row(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .horizontalScroll(rememberScrollState()),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
                                         FilterChip(
                                             selected = annotationTool == AnnotationTool.PEN,
                                             onClick = {
@@ -629,6 +635,8 @@ fun PdfView(
                                             label = { Text("Eraser") }
                                         )
                                     }
+
+                                    Spacer(modifier = Modifier.width(6.dp))
 
                                     Row(
                                         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -685,7 +693,12 @@ fun PdfView(
                                         0xCC5DE8u to Color(0xFFCC5DE8), // Purple
                                         0x212529u to Color(0xFF212529)  // Dark
                                     )
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Row(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .horizontalScroll(rememberScrollState()),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
                                         colorList.forEach { (rgb, col) ->
                                             Box(
                                                 modifier = Modifier
@@ -704,6 +717,8 @@ fun PdfView(
                                             )
                                         }
                                     }
+
+                                    Spacer(modifier = Modifier.width(8.dp))
 
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text("${activeInkWidth.toInt()}pt", style = MaterialTheme.typography.labelSmall)
@@ -724,40 +739,47 @@ fun PdfView(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState())
                                     .padding(horizontal = 12.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Button(onClick = { showAddTextDialog = true }) {
-                                    Icon(Icons.Outlined.TextFields, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Text")
-                                }
-                                Button(onClick = { insertImageLauncher.launch("image/*") }) {
-                                    Icon(Icons.Outlined.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Image")
-                                }
-                                OutlinedButton(onClick = { showRedactionView = true }) {
-                                    Icon(Icons.Outlined.VisibilityOff, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Redact")
-                                }
-                                OutlinedButton(onClick = {
-                                    try {
-                                        document.flatten(comments = true, fields = true)
-                                        statusNotification = "Document flattened"
-                                        pdfPageViewRef?.refreshPage()
-                                    } catch (e: Exception) {
-                                        statusNotification = "Flatten error: ${e.message}"
+                                Row(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Button(onClick = { showAddTextDialog = true }) {
+                                        Icon(Icons.Outlined.TextFields, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Text")
                                     }
-                                }) {
-                                    Icon(Icons.Outlined.LayersClear, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Flatten")
+                                    Button(onClick = { insertImageLauncher.launch("image/*") }) {
+                                        Icon(Icons.Outlined.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Image")
+                                    }
+                                    OutlinedButton(onClick = { showRedactionView = true }) {
+                                        Icon(Icons.Outlined.VisibilityOff, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Redact")
+                                    }
+                                    OutlinedButton(onClick = {
+                                        try {
+                                            document.flatten(comments = true, fields = true)
+                                            statusNotification = "Document flattened"
+                                            pdfPageViewRef?.refreshPage()
+                                        } catch (e: Exception) {
+                                            statusNotification = "Flatten error: ${e.message}"
+                                        }
+                                    }) {
+                                        Icon(Icons.Outlined.LayersClear, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Flatten")
+                                    }
                                 }
-                                Spacer(modifier = Modifier.weight(1f))
+                                Spacer(modifier = Modifier.width(8.dp))
                                 FilledTonalButton(onClick = { viewerMode = ViewerMode.VIEW }) {
                                     Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(4.dp))
