@@ -684,6 +684,121 @@ fn released_text_does_not_jump_back_before_the_page_is_redrawn() {
     assert!(new > 20 && old == 0, "the redrawn page has the text in its new place ({old} old, {new} new)");
 }
 
+/// A one-page 300 x 400 document with `content` and Helvetica as /F1.
+fn paragraph_pdf(content: &str) -> Vec<u8> {
+    format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    )
+    .into_bytes()
+}
+
+fn paragraphs(h: &Harness<'static, PdfCraftApp>) -> Vec<pdfcraft_engine::TextBlock> {
+    let s = h.state();
+    s.session.get(s.views[0].id).unwrap().text_blocks(0)
+}
+
+/// Turns on Edit text and drags paragraph `block` up without releasing, until the drag preview
+/// shows. Returns its box, its screen rectangles before and after, and the pointer.
+fn drag_paragraph(h: &mut Harness<'static, PdfCraftApp>, block: usize) -> ([f64; 4], egui::Rect, egui::Rect, Pos2) {
+    assert!(h.state_mut().execute("edit.edit_text"));
+    let rect = paragraphs(h)[block].rect;
+    let from = item_on_screen(h, rect);
+    let mut shown = 0;
+    for _ in 0..100 {
+        h.run_steps(2);
+        shown = ink(&h.render().unwrap(), probe(from));
+        if shown > 20 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(shown > 20, "the paragraph is on the page ({shown} dark pixels)");
+    let grab = from.center();
+    let shift = egui::vec2(0.0, -150.0);
+    h.hover_at(grab);
+    h.run_steps(1);
+    h.drag_at(grab);
+    h.run_steps(1);
+    h.hover_at(grab + shift);
+    let to = from.translate(shift);
+    let mut seen = (0, 0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        h.run_steps(2);
+        seen = ink_at(h, from, to);
+        if seen.0 == 0 && seen.1 > 20 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(seen.0 == 0 && seen.1 > 20, "the text follows the pointer (old, new ink: {seen:?})");
+    (rect, from, to, grab + shift)
+}
+
+/// #5212: while a paragraph of the page is dragged, its text follows the pointer, and only its
+/// text: what it covered and the paragraph below stay where they are.
+#[test]
+fn dragged_paragraph_follows_the_pointer_before_release() {
+    let _gpu = gpu();
+    let mut h = harness_bytes(paragraph_pdf(
+        "1 0 0 rg 20 200 240 70 re f 0 g BT /F1 24 Tf 40 220 Td (MMMMMMMM) Tj ET BT /F1 24 Tf 40 60 Td (NNNNNNNN) Tj ET",
+    ));
+    let other = item_on_screen(&h, paragraphs(&h)[1].rect);
+    let (rect, from, to, end) = drag_paragraph(&mut h, 0);
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/paragraph-drag.png")).unwrap();
+    }
+    let pixels = h.render().unwrap();
+    let red = |r: egui::Rect| {
+        let (x0, y0, x1, y1) = (r.left().max(0.0) as u32, r.top().max(0.0) as u32, r.right() as u32, r.bottom() as u32);
+        (y0..y1.min(pixels.height()))
+            .flat_map(|y| (x0..x1.min(pixels.width())).map(move |x| (x, y)))
+            .filter(|(x, y)| matches!(pixels.get_pixel(*x, *y).0, [r, g, b, _] if r > 200 && g < 80 && b < 80))
+            .count()
+    };
+    let (old, new) = (ink(&pixels, probe(from)), ink(&pixels, probe(to)));
+    assert!(new > 20, "the text is drawn where the paragraph was dragged ({new} dark pixels)");
+    assert_eq!(old, 0, "and no longer where it was");
+    assert!(red(from) > 100, "the red square stays where the text was ({} red pixels)", red(from));
+    assert_eq!(red(to), 0, "and doesn't come along with the text");
+    assert!(ink(&pixels, probe(other)) > 20, "the other paragraph stays");
+    assert_eq!(paragraphs(&h)[0].rect, rect, "nothing is applied before release");
+    h.drop_at(end);
+    h.run_steps(3);
+    assert_ne!(paragraphs(&h)[0].rect, rect, "releasing moves it");
+}
+
+/// #5212: after release the paragraph stays in its new place while the page is re-rendered with
+/// the move, instead of jumping back for those frames.
+#[test]
+fn released_paragraph_does_not_jump_back_before_the_page_is_redrawn() {
+    let _gpu = gpu();
+    // Slow to render, as in the added-text test: pale squares, too light to count as ink.
+    let mut content = String::from("0.9 g\n");
+    for i in 0..20_000 {
+        content.push_str(&format!("{} {} 1 1 re f\n", i % 290, (i / 290) % 390));
+    }
+    content.push_str("0 g BT /F1 24 Tf 40 220 Td (MMMMMMMM) Tj ET");
+    let mut h = harness_bytes(paragraph_pdf(&content));
+    let (rect, from, to, end) = drag_paragraph(&mut h, 0);
+    h.drop_at(end);
+    let mut shown = Vec::new();
+    while h.state().render_pending() || shown.is_empty() {
+        h.run_steps(1);
+        assert!(shown.len() < 500, "the page is re-rendered");
+        let (old, new) = ink_at(&mut h, from, to);
+        assert_eq!(old, 0, "frame {} after release: the text is back where it was", shown.len() + 1);
+        shown.push(new);
+    }
+    assert!(shown.len() > 2, "frames before the new raster: {shown:?}");
+    assert!(shown.iter().filter(|n| **n <= 20).count() <= 1, "the text stays where it was released: {shown:?}");
+    assert_ne!(paragraphs(&h)[0].rect, rect, "the move is applied");
+    h.run_steps(2);
+    let (old, new) = ink_at(&mut h, from, to);
+    assert!(new > 20 && old == 0, "the redrawn page has the text in its new place ({old} old, {new} new)");
+}
+
 /// Format text is laid out as Acrobat's: alignment from its flyout, style buttons by name, and
 /// the controls PdfCraft can't apply yet present but disabled.
 /// Format text lines its rows up (#3037): the size list is centred beside the colour swatch and

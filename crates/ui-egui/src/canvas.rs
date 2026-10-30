@@ -1868,6 +1868,7 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     view.text_background.paint(painter, &xf, i, view.line_editor.as_ref(), view.content.draft.as_ref());
     if editing_content {
         view.move_background.paint(painter, &xf, i, info, &view.content, pointer);
+        view.move_background.paint_paragraph(painter, &xf, i, info, view.block_drag, pointer);
     }
     if view.show_page_gaps {
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
@@ -3167,7 +3168,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     } else {
         view.content.selected = None;
     }
-    view.move_background.prepare(ui.ctx(), doc, &view.content, scale);
+    view.move_background.prepare(ui.ctx(), doc, &view.content, view.block_drag, scale);
 
     scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
     let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);

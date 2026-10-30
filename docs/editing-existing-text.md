@@ -10,6 +10,11 @@ moved because an earlier row wrapped, are rewritten, and formatting a selection 
 only the rows it covers. Changing the whole paragraph's formatting, width or position rewrites
 every row.
 
+Dragging a closed paragraph moves its own pixels with the pointer, over the page rendered without
+it, until the page is rendered again with the move. What it covered and everything else on the page
+stay put. Rewrapping from an edge, and moving a selection or an open paragraph by its frame, show
+only the outline until release, and so does a paragraph that can't be previewed.
+
 Add Text also opens existing text when it is clicked; a blank-space click starts a new item.
 Both text tools retype an added text item with one click. Draft boxes grow to the page edge
 before wrapping, and the saved item uses that width. A single visual source row grows across font/style boundaries;

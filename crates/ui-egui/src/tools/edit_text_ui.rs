@@ -383,6 +383,13 @@ pub struct BlockDrag {
     grip: Grip,
 }
 
+impl BlockDrag {
+    /// The page and paragraph being moved, and where the drag started; `None` for a rewrap.
+    pub(crate) fn moving(&self) -> Option<(usize, usize, Pos2)> {
+        (self.grip == Grip::Move).then_some((self.page, self.block, self.start))
+    }
+}
+
 /// How far an edge grip reaches either side of a box's edge (screen pixels).
 const EDGE_REACH: f32 = 6.0;
 /// How far outside an open paragraph's frame the pointer still means the frame (screen pixels):
@@ -420,7 +427,7 @@ fn grab_at(boxes: &[Rect], p: Pos2, upright: bool) -> Option<(usize, Grip)> {
 }
 
 /// A paragraph's box on screen: its text rect (user space), with a little room around it.
-fn paragraph_box(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) -> Rect {
+pub(crate) fn paragraph_box(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) -> Rect {
     xf.user_rect(info, page, rect.map(|v| v as f32)).expand(2.0)
 }
 

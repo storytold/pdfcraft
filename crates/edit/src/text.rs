@@ -38,8 +38,8 @@ use blocks::paragraph_separator;
 #[cfg(test)]
 use blocks::wrap;
 pub use blocks::{
-    BlockKey, BlockStyle, RangeStyle, ReadingBlocks, TextBlock, block_overlapping, clear_block, reading_blocks, reading_blocks_checked,
-    replace_block, text_blocks,
+    BlockKey, BlockStyle, RangeStyle, ReadingBlocks, TextBlock, block_overlapping, clear_block, isolate_block, reading_blocks,
+    reading_blocks_checked, replace_block, text_blocks,
 };
 use editor::layout_draft;
 pub use editor::{TextEditLayout, TextEditorFont, register_text_font, text_edit_layout, text_editor_fonts};

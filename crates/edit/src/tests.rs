@@ -2429,6 +2429,36 @@ fn spaces_in_another_subset_do_not_split_a_line() {
     assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].text, "Goodbye");
 }
 
+/// The pixels that follow a dragged paragraph (#5212): nothing else on the page paints, clips
+/// stay, and the text before it keeps its advance, so the paragraph stays in place.
+#[test]
+fn isolating_a_paragraph_leaves_only_its_glyphs() {
+    let mut doc = text_page(
+        "1 0 0 rg 0 0 100 100 re f 0 0 50 50 re S q 0 0 600 800 re W n /Fm Do BI /W 1 /H 1 /BPC 8 /CS /G ID x EI /Sh sh Q \
+         BT /F1 12 Tf 72 700 Td (Hello) Tj [-3000] TJ /F2 12 Tf (ab) Tj ET",
+    );
+    let before = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(before.len(), 2);
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    doc.update_dict(page.obj, |d| d.set(b"Annots".to_vec(), Object::Array(Vec::new()))).unwrap();
+    assert!(text::isolate_block(&mut doc, 0, 9).is_err(), "no such paragraph");
+    text::isolate_block(&mut doc, 0, 1).unwrap();
+    let after = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].text, "ab");
+    for (a, b) in after[0].rect.iter().zip(before[1].rect) {
+        assert!((a - b).abs() < 1e-6, "the paragraph moved");
+    }
+    let content = streams(&doc, 0).join("\n");
+    let tokens: Vec<&str> = content.split_whitespace().collect();
+    for painter in ["f", "S", "Do", "BI", "sh"] {
+        assert!(!tokens.contains(&painter), "{painter} still paints: {content}");
+    }
+    assert!(tokens.contains(&"W"), "the clip stays: {content}");
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    assert!(page.dict.get(b"Annots").is_none(), "no annotations are drawn over it");
+}
+
 #[test]
 fn editor_background_removes_glyphs_but_preserves_following_text_advance() {
     for show in ["(Hello) Tj", "[(He) -20 (llo)] TJ", "(Hello) '", "2 1 (Hello) \""] {
