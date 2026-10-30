@@ -219,9 +219,10 @@ fn scan_page(doc: &Document, page: &pdfcraft_model::Page, pieces: &Pieces) -> Sc
                     open_watermarks = open_watermarks.saturating_sub(1);
                 }
                 if scope.watermark && open_watermarks == 0 {
-                    // Where a text object or a path was open around it, it would change that
-                    // object's matrix or that path (`q … Q` restores neither), so such a scope is
-                    // never cut: nor one that closes or opens one, or changes state after it.
+                    // Conservatively refuse a scope inside, opening or closing a text object or
+                    // path: cutting it could change surrounding text placement or that path.
+                    // `q … Q` restores text matrices inside a text object (errata 368), but not
+                    // the current path; this guard does not rely on text-matrix restoration.
                     let effects = last_change.get(scope.depth).is_some_and(|last| *last > scope.opened);
                     let clean = depth == scope.depth && scope.floor >= scope.depth && !effects && !scope.text && !scope.path && !text && !path;
                     if clean {

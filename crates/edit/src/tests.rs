@@ -10520,9 +10520,10 @@ fn pages_a_foreign_watermark_could_not_be_removed_from_are_reported() {
     assert_eq!(foreign_watermarks_present(&named), Some(true));
 }
 
-/// #4957: a watermark inside a text object or a path that the surrounding content owns would move
-/// that object's matrix or change that path when cut out, and `q … Q` restores neither: it is
-/// reported, whether or not the object is still open where the watermark ends.
+/// #4957: conservatively refuse a watermark inside a text object or path owned by surrounding
+/// content: cutting it could change text placement or that path. `q … Q` restores text matrices
+/// inside a text object (errata 368), but not the current path; the scan does not rely on that
+/// restoration. The watermark is reported whether or not the object is still open at its end.
 #[test]
 fn a_foreign_watermark_inside_an_open_text_object_or_path_is_not_cut_out() {
     use crate::{Blocked, ForeignWatermarks};
