@@ -36,6 +36,11 @@ Each source page becomes a Form XObject (its content wrapped in q/Q, plus the pr
 annotations); sheets place them with a clip. The result is a fresh, unencrypted,
 garbage-collected file (callers check the print permission).
 Annotation appearances receive unused XObject names, preserving existing page resources even when they use the same naming prefix.
+Vector printing also carries each annotation's optional-content membership onto its own appearance invocation.
+Hidden groups, membership policies, visibility expressions and existing layer overrides therefore remain effective in the generated PDF, including when appearances are shared.
+Malformed top-level membership or required resource containers produce a print error instead of an unguarded appearance.
+Nested policy data is preserved without a new evaluator; readers remain responsible for optional-content semantics.
+The separate on-screen and Print as image annotation-visibility gap is tracked in #3572 / #3624.
 
 The GUI Print dialog remembers its last selected paper size across application sessions,
 including when Print is cancelled. The preference stores a canonical name such as `A4`;
@@ -62,8 +67,7 @@ In a browser there is no spooler: the app (`pdfcraft-ui-egui`'s `web_print`) dra
 PDF's sheets with PdfCraft's renderer and prints them through the browser's print dialog, which
 sets copies, two-sided printing and colour. This crate stays free of web APIs.
 
-Not yet: print as image, poster labels, PostScript output, colour conversion for
-grayscale.
+Not yet: poster labels, PostScript output and vector colour conversion for grayscale.
 
 ## Architectural sheets and scale
 
