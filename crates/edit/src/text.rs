@@ -241,6 +241,16 @@ mod tests {
     }
 
     #[test]
+    fn thai_text_wraps_between_dictionary_words_and_keeps_marks_on_their_word() {
+        let width = |s: &str| s.chars().count() as f64;
+        // Without word breaks the whole run is one word and overflows a single row.
+        assert_eq!(wrap("ภาษาไทยไม่มีช่องว่าง", 8.0, width), ["ภาษาไทย", "ไม่มี", "ช่องว่าง"]);
+        // Mai Yamok stays with the word it repeats; pieces join without a space, words keep theirs.
+        assert_eq!(wrap("เด็กๆชอบกิน ขนม", 6.0, width), ["เด็กๆ", "ชอบกิน", "ขนม"]);
+        assert_eq!(wrap("ไฟล์ PDF ประปาส่วนภูมิภาค", 9.0, width), ["ไฟล์ PDF", "ประปาส่วน", "ภูมิภาค"]);
+    }
+
+    #[test]
     fn fallback_face_moves_on_when_the_best_face_lacks_a_character() {
         static JPAN: &[&str] = &["Jpan"];
         let mincho = CraftFont { family: "Mincho", style: "Regular", scripts: JPAN, bytes: b"" };

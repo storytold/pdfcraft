@@ -4128,6 +4128,57 @@ fn added_thai_text_wraps_clusters_and_survives_reopen() {
 }
 
 #[test]
+fn added_thai_text_wraps_between_dictionary_words() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        eprintln!("skipping the Thai word wrapping checks: built without craft-fonts (set CRAFT_FONTS_DIR)");
+        return;
+    }
+    let text = "การประปาส่วนภูมิภาคให้บริการน้ำประปาที่สะอาดแก่ประชาชนทั่วประเทศ";
+    let t = AddedText { rect: [0.0, 0.0, 90.0, 400.0], text: text.into(), size: 16.0, ..AddedText::default() };
+    let rows = super::added::lines(&t);
+    assert!(rows.len() > 2, "{rows:?}");
+    assert_eq!(rows.concat(), text, "no space is added or lost between the rows");
+    // Every row ends where the dictionary lets one end, never inside a word such as ประปา.
+    let cuts = crate::linebreak::breaks(text);
+    let mut at = 0;
+    for row in rows.iter().take(rows.len() - 1) {
+        at += row.len();
+        assert!(cuts.contains(&at), "row {row:?} ends inside a word: {rows:?}");
+    }
+    // Spaces where a row ends are dropped, as for Latin text, and a word wider than the row is
+    // still broken between clusters.
+    let spaced =
+        AddedText { text: "น้ำประปา สะอาด ปลอดภัย".into(), rect: [0.0, 0.0, 60.0, 400.0], ..t.clone() };
+    let rows = super::added::lines(&spaced);
+    assert!(rows.iter().all(|r| !r.starts_with(' ') && !r.ends_with(' ')), "{rows:?}");
+    assert_eq!(rows.concat(), "น้ำประปาสะอาดปลอดภัย");
+    let narrow = AddedText { rect: [0.0, 0.0, 16.0, 200.0], text: "กิ่กิ่กิ่".into(), ..t.clone() };
+    assert_eq!(super::added::lines(&narrow), ["กิ่", "กิ่", "กิ่"]);
+    // Spaces that open a paragraph are kept, but they are not a row of their own: a first word
+    // too wide to fit after them stays on the first row (or breaks between clusters there).
+    for width in [16.0, 40.0, 60.0, 90.0] {
+        let indented = AddedText { rect: [0.0, 0.0, width, 400.0], text: "      ประปาสะอาด".into(), ..t.clone() };
+        let rows = super::added::lines(&indented);
+        assert!(rows.iter().all(|r| !r.trim().is_empty()), "an empty row at width {width}: {rows:?}");
+        assert!(rows[0].starts_with("      "), "the opening spaces are kept at width {width}: {rows:?}");
+        assert_eq!(rows.concat().trim_start(), "ประปาสะอาด");
+    }
+    // A first word that fits a row alone but not after the opening spaces breaks between clusters
+    // on the first row rather than running past its end.
+    let word = "ประปา";
+    let word_w = super::added::shaped_width(&t, word, false);
+    let indent_w = super::added::shaped_width(&t, "      ", false);
+    let width = word_w + indent_w / 2.0;
+    let indented = AddedText { rect: [0.0, 0.0, width, 400.0], text: format!("      {word}"), ..t.clone() };
+    let rows = super::added::lines(&indented);
+    for row in &rows {
+        assert!(super::added::shaped_width(&t, row, false) <= width + 0.5, "{row:?} overflows {width}: {rows:?}");
+    }
+    assert!(rows.len() > 1 && rows[0].starts_with("      "), "{rows:?}");
+    assert_eq!(rows.concat().trim_start(), word);
+}
+
+#[test]
 fn group_moves_preserve_glyph_bytes_and_unselected_text_state() {
     for content in [
         "BT /F1 12 Tf 1.3 Tc 2 Tw 80 Tz 14 TL 1 0.2 -0.1 1 50 600 Tm (A\\101) Tj 1 0 0 rg (Neighbour) Tj T* (Next) Tj ET",

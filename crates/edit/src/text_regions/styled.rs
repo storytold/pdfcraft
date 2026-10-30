@@ -401,11 +401,34 @@ fn paragraph_geometry(doc: &Document, page: &pdfcraft_model::Page, block: &TextB
     Ok((dx, dy, style.width.unwrap_or(natural).clamp(1.0, 14_400.0)))
 }
 
+/// For each of `chars`, whether a row may end just before it inside a run of non-space characters
+/// (Chinese, Japanese and Thai), worked out once per run: Thai words need the whole run, not just
+/// two neighbours.
+fn styled_break_before(chars: &[StyledChar]) -> Vec<bool> {
+    let mut break_before = vec![false; chars.len()];
+    let mut run_start = 0;
+    while run_start < chars.len() {
+        let mut run_end = run_start;
+        while chars.get(run_end).is_some_and(|c| !c.0.is_whitespace()) {
+            run_end += 1;
+        }
+        let run: String = chars.get(run_start..run_end).unwrap_or_default().iter().map(|c| c.0).collect();
+        for (i, cut) in crate::linebreak::breaks_before_chars(&run).into_iter().enumerate() {
+            if let Some(slot) = break_before.get_mut(run_start.saturating_add(i)) {
+                *slot = cut;
+            }
+        }
+        run_start = run_end.max(run_start.saturating_add(1));
+    }
+    break_before
+}
+
 fn wrap_styled_rows(
     chars: &[StyledChar],
     width: f64,
     measure: impl Fn(&[StyledChar]) -> Result<f64, EditError>,
 ) -> Result<(StyledRows, RowRanges), EditError> {
+    let break_before = styled_break_before(chars);
     let mut rows: Vec<Vec<StyledChar>> = Vec::new();
     let mut row_ranges = Vec::new();
     let mut row_start = 0;
@@ -428,11 +451,8 @@ fn wrap_styled_rows(
         }
         let mut end = at + 1;
         if !item.0.is_whitespace() {
-            // A word ends at a space, or where Chinese or Japanese text may break between characters.
-            while let (Some(before), Some(current)) = (chars.get(end - 1), chars.get(end))
-                && !current.0.is_whitespace()
-                && !crate::linebreak::between(before.0, current.0)
-            {
+            // A word ends at a space, or where Chinese, Japanese or Thai text may break inside it.
+            while chars.get(end).is_some_and(|c| !c.0.is_whitespace()) && !break_before.get(end).copied().unwrap_or(false) {
                 end += 1;
             }
         }

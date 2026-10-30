@@ -19,6 +19,9 @@ kurbo = { workspace = true }
 # Display order of right-to-left lines in added text, and reading and writing order in Edit text;
 # already in the tree via the interface.
 unicode-bidi = "0.3"
+# Thai word boundaries for rewrapping and Add text (dictionary data compiled in, no LSTM model);
+# the ICU4X 2.3 crates it builds on are already in the tree.
+icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
 
 [dev-dependencies]
 hayro-syntax = { workspace = true }
