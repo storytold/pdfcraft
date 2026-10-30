@@ -2494,7 +2494,7 @@ author = "John Slegers"
 source = "https://github.com/jslegers/emoji-icon-font"
 licence = "MIT"
 kind = "font"
-usage = "Small special-icon subset embedded by egui default_fonts; retained in FontDefinitions::default(). Provenance: https://github.com/storytold/egui/blob/6d518fc799681571963842f95b55a6b68431b15a/crates/epaint_default_fonts/fonts/egui-icons.txt; complete MIT copyright and permission text in NOTICE."
+usage = "Small special-icon subset embedded by egui default_fonts; retained in FontDefinitions::default(). Provenance: https://github.com/storytold/egui/blob/69750b71a97dc4672e2fbb70863b838e6795c910/crates/epaint_default_fonts/fonts/egui-icons.txt; complete MIT copyright and permission text in NOTICE."
 sha256 = "122806555c73df7cef55aa1d945289ae27fbc4dbbd31abbb4204ee0cda829cc8"
 
 [[asset]]

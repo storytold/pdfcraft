@@ -4,7 +4,7 @@
 
 The checked-in, resolved Cargo graph pins `winit` to storytold/winit
 `a517b3846ee8457d84ee4975110bfda6797c44dc` and the egui crates to storytold/egui
-`6d518fc799681571963842f95b55a6b68431b15a`. Neither `vendor/winit` nor
+`69750b71a97dc4672e2fbb70863b838e6795c910`. Neither `vendor/winit` nor
 `vendor/egui-wgpu` is a root `[patch.crates-io]` path entry. The retained copies
 record the app's earlier patches; their source-reading tests establish provenance,
 while the resolved forks and their behavioral tests establish runtime behavior.
