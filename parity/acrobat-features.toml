@@ -9580,8 +9580,8 @@ milestone = "M13"
 status = "shipped"
 commands = []
 tools = ["doc_info", "text_extract", "page_render"]
-evidence = ["crates/automation/tests/it/automation.rs::mcp_resources_expose_open_documents", "crates/automation/src/mcp.rs::resource_uris_parse", "crates/automation/tests/it/automation.rs::conventions_resources"]
-notes = "resources/list, resources/templates/list and resources/read: pdfcraft://doc/{doc}/info (JSON), /text, /page/{page}/text, /page/{page}/image?dpi= (PNG)"
+evidence = ["crates/automation/tests/it/automation.rs::mcp_resources_expose_open_documents", "crates/automation/src/mcp.rs::resource_uris_parse", "crates/automation/tests/it/automation.rs::conventions_resources", "crates/automation/tests/it/automation/mcp_resource_warnings.rs::image_resource_returns_warning_companion_and_repeat_reads_are_stable", "crates/automation/tests/it/automation/mcp_resource_warnings.rs::resource_warning_survives_incremental_and_full_save_reopen", "crates/automation/tests/it/automation/mcp_resource_warnings.rs::image_resource_keeps_invalid_requests_as_json_rpc_errors"]
+notes = "resources/list, resources/templates/list and resources/read: pdfcraft://doc/{doc}/info (JSON), /text, /page/{page}/text, /page/{page}/image?dpi= (PNG). Nonfatal image-resource render warnings add same-URI application/json text after the PNG with a one-based page and warning sentences; clean images retain one PNG part."
 
 [[feature]]
 id = "misc.ui-control-channel"

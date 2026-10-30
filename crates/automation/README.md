@@ -106,6 +106,11 @@ or fill colour. Names, rectangles, rotations and captions require the single-fie
 
 Implemented: `initialize` (protocol 2025-06-18, 2025-03-26, 2024-11-05), `ping`, `tools/list` (with `readOnlyHint`/`destructiveHint` annotations), `tools/call` (JSON results also returned as `structuredContent`; images as `image/png`), and `resources/list`, `resources/templates/list` and `resources/read`. The resources expose the open documents read-only: `pdfcraft://doc/{doc}/info` (JSON), `…/text`, `…/page/{page}/text` and `…/page/{page}/image{?dpi}` (PNG, 1–600 dpi). Tool failures come back as `isError: true` results, so the agent can read and recover from them.
 
+MCP page-image resource reads return the PNG first.
+When the renderer reports a nonfatal warning, the response also contains `application/json` text at the same URI with a 1-based `page` and `warnings: [sentence, ...]`.
+The sentences match `pdfcraft-cli render`; clean images retain their single PNG part.
+Warnings describe the rendered pixels and do not repair content or change the document.
+
 ### From an installed release
 
 The release packages ship `pdfcraft-cli` alongside the desktop app, so no build is needed:

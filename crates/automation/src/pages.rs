@@ -66,6 +66,13 @@ impl Automation {
     }
 
     pub(crate) fn page_render(&mut self, a: &Args) -> Result<Content> {
+        let out = self.render_page(a)?;
+        let data = encode_png(out.width, out.height, &out.rgba)?;
+        Ok(Content::Png { data, width: out.width, height: out.height })
+    }
+
+    /// The existing page-render validation and pixels, including nonfatal diagnostics.
+    pub(crate) fn render_page(&mut self, a: &Args) -> Result<pdfcraft_render::RenderedPage> {
         let id = self.doc(a)?.id;
         let page = self.page(a)?;
         let dpi = a.opt_num("dpi")?.unwrap_or(DEFAULT_DPI);
@@ -95,11 +102,10 @@ impl Automation {
         } else {
             self.renderer(id)?.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale, tag: 0, preview: false })
         };
-        if let Some(e) = out.error {
+        if let Some(e) = &out.error {
             return Err(failed(format!("page {} could not be rendered: {e}", page + 1)));
         }
-        let data = encode_png(out.width, out.height, &out.rgba)?;
-        Ok(Content::Png { data, width: out.width, height: out.height })
+        Ok(out)
     }
 
     /// A page as RGBA pixels, without encoding a PNG. `page` is 1-based and `scale` is pixels

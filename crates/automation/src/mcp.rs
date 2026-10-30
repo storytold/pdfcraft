@@ -16,6 +16,7 @@ use std::io::{BufRead, Write};
 use base64::Engine as _;
 use serde_json::{Value, json};
 
+use crate::json::Args;
 use crate::{Automation, Content, ToolError};
 
 /// Protocol revisions we speak, newest first.
@@ -200,7 +201,7 @@ impl McpServer {
             "resources/templates/list" => Ok(json!({ "resourceTemplates": resource_templates() })),
             "resources/read" => {
                 let uri = params.get("uri").and_then(Value::as_str).ok_or((INVALID_PARAMS, "resources/read needs a uri".to_string()))?;
-                self.read_resource(uri).map(|c| json!({ "contents": [c] }))
+                self.read_resource(uri).map(|contents| json!({ "contents": contents }))
             }
             other => Err((METHOD_NOT_FOUND, format!("method not found: {other}"))),
         }
@@ -457,7 +458,7 @@ fn resource_templates() -> Value {
         { "uriTemplate": "pdfcraft://doc/{doc}/page/{page}/text", "name": "Page text", "mimeType": "text/plain",
           "description": "The text of one page (1-based) in reading order." },
         { "uriTemplate": "pdfcraft://doc/{doc}/page/{page}/image{?dpi}", "name": "Page image", "mimeType": "image/png",
-          "description": "One page (1-based) rendered to PNG; dpi 1–600, default 96." },
+          "description": "One page (1-based) rendered to PNG; dpi 1–600, default 96. Nonfatal render warnings accompany the image as JSON." },
     ])
 }
 
@@ -489,7 +490,7 @@ impl McpServer {
         out
     }
 
-    fn read_resource(&mut self, uri: &str) -> Result<Value, (i64, String)> {
+    fn read_resource(&mut self, uri: &str) -> Result<Vec<Value>, (i64, String)> {
         if let Some(tool) = match uri {
             "pdfcraft://document" => Some("doc_inspect"),
             "pdfcraft://commands" => Some("command_list"),
@@ -503,7 +504,7 @@ impl McpServer {
                     _ => None,
                 })
                 .ok_or((INVALID_PARAMS, "resource returned no JSON".into()))?;
-            return Ok(json!({"uri":uri,"mimeType":"application/json","text":value.to_string()}));
+            return Ok(vec![json!({"uri":uri,"mimeType":"application/json","text":value.to_string()})]);
         }
         let r = parse_uri(uri).ok_or((INVALID_PARAMS, format!("unknown resource {uri:?}")))?;
         let call = |a: &mut Automation, tool: &str, args: Value| a.call(tool, &args).map_err(|e| (INVALID_PARAMS, e.to_string()));
@@ -519,7 +520,7 @@ impl McpServer {
                 .collect();
             parts.join("\n\n")
         };
-        Ok(match r {
+        let value = match r {
             Resource::Info(doc) => {
                 let v = json_of(call(&mut self.automation, "doc_info", json!({ "doc": doc }))?);
                 json!({ "uri": uri, "mimeType": "application/json", "text": serde_json::to_string_pretty(&v).unwrap_or_default() })
@@ -537,13 +538,30 @@ impl McpServer {
                 if let Some(d) = dpi {
                     args["dpi"] = json!(d);
                 }
-                let png = call(&mut self.automation, "page_render", args)?
-                    .into_iter()
-                    .find_map(|c| if let Content::Png { data, .. } = c { Some(data) } else { None });
-                let png = png.ok_or((INVALID_PARAMS, "the page could not be rendered".to_string()))?;
-                json!({ "uri": uri, "mimeType": "image/png", "blob": base64::engine::general_purpose::STANDARD.encode(png) })
+                // Share the tool's validation and render, retaining diagnostics before PNG encoding.
+                let rendered = self.automation.render_page(&Args(&args)).map_err(|e| (INVALID_PARAMS, e.to_string()))?;
+                let png = crate::pages::encode_png(rendered.width, rendered.height, &rendered.rgba).map_err(|e| (INVALID_PARAMS, e.to_string()))?;
+                let warnings: Vec<&str> = rendered.warnings.iter().map(|&warning| resource_warning_text(warning)).collect();
+                // Release the raw raster before allocating its base64 payload.
+                drop(rendered);
+                let mut contents =
+                    vec![json!({ "uri": uri, "mimeType": "image/png", "blob": base64::engine::general_purpose::STANDARD.encode(png) })];
+                if !warnings.is_empty() {
+                    let metadata = json!({ "page": page, "warnings": warnings });
+                    contents.push(json!({ "uri": uri, "mimeType": "application/json", "text": metadata.to_string() }));
+                }
+                return Ok(contents);
             }
-        })
+        };
+        Ok(vec![value])
+    }
+}
+
+/// Fixed diagnostic sentences, matching the CLI and the proposed tool warning contract.
+fn resource_warning_text(warning: pdfcraft_render::RenderWarning) -> &'static str {
+    match warning {
+        pdfcraft_render::RenderWarning::ContentTruncated => "content past the page's safety budget was skipped",
+        pdfcraft_render::RenderWarning::ColourFallback => "a colour that could not be computed was painted in a fallback colour",
     }
 }
 
