@@ -8,8 +8,10 @@
 //! | macOS | managed preferences for `ai.storyteller.pdfcraft` (a configuration profile from an MDM); flags are booleans |
 //! | Linux, BSD | `/etc/pdfcraft/policy.json` (`/usr/local/etc/pdfcraft/policy.json` on FreeBSD), a JSON object such as `{"DisableJavaScript": true}` |
 //!
-//! Only administrators can write any of these (`HKCU\SOFTWARE\Policies` included), and a value a
-//! user sets in their own preferences domain on macOS isn't "forced", so it's ignored.
+//! Only administrators can write `HKLM`, `/etc` and managed preferences, and a value a user sets
+//! in their own preferences domain on macOS isn't "forced", so it's ignored. `HKCU` is the user's
+//! own hive: depending on its permissions they may be able to remove a value there, so it never
+//! weakens `HKLM` (the stricter of the two wins).
 //!
 //! With no policy, nothing changes. A policy that is there but can't be read (the wrong type,
 //! an unknown value, a damaged file, no permission to read it) counts as the most restrictive
