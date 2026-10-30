@@ -1134,6 +1134,77 @@ fn files_and_quit_from_the_operating_system() {
     assert!(closing);
 }
 
+/// #585: File Explorer's "Combine files in PdfCraft" starts one launch per selected file, and the
+/// running PdfCraft collects them (an `OsEvent::Combine` each) into its Combine files tab.
+#[test]
+fn files_to_combine_from_the_operating_system() {
+    use pdfcraft_ui_egui::OsEvent;
+    let dir = std::env::temp_dir().join(format!("pdfcraft-os-combine-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let paths: Vec<String> = ["one.pdf", "two.pdf"]
+        .iter()
+        .map(|n| {
+            let p = dir.join(n);
+            std::fs::write(&p, FIXTURE).unwrap();
+            p.to_string_lossy().into_owned()
+        })
+        .collect();
+    let queue = std::rc::Rc::new(std::cell::RefCell::new(vec![OsEvent::Combine(vec![paths[0].clone()])]));
+    let q = queue.clone();
+    let mut h = harness(move |app| app.os_events = Some(Box::new(move || q.borrow_mut().drain(..).collect())));
+    assert!(h.state().combine_showing(), "the Combine files tab shows");
+    assert!(h.state().views.is_empty(), "nothing opens as a document");
+    queue.borrow_mut().push(OsEvent::Combine(vec![paths[1].clone()]));
+    h.run_steps(3);
+    let _ = std::fs::remove_dir_all(&dir);
+    let names: Vec<_> = h.state().combine_draft.iter().map(|f| f.name.clone()).collect();
+    assert_eq!(names, ["one.pdf", "two.pdf"], "each launch's file joins the list, in order");
+    assert!(h.state().combine_showing() && h.state().views.is_empty());
+}
+
+/// #2503 review: a PDF still opening when Combine arrives opens behind the Combine files tab
+/// instead of hiding it; an Open that comes after Combine still shows its document.
+#[test]
+fn an_open_finishing_after_combine_keeps_the_combine_tab() {
+    use pdfcraft_ui_egui::OsEvent;
+    let dir = std::env::temp_dir().join(format!("pdfcraft-os-combine-pending-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let paths: Vec<String> = ["opening.pdf", "combined.pdf", "later.pdf"]
+        .iter()
+        .map(|n| {
+            let p = dir.join(n);
+            std::fs::write(&p, FIXTURE).unwrap();
+            p.to_string_lossy().into_owned()
+        })
+        .collect();
+    let queue = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let q = queue.clone();
+    let mut h = harness(move |app| app.os_events = Some(Box::new(move || q.borrow_mut().drain(..).collect())));
+    h.run_steps(2);
+    // Both in one frame: the open goes to the worker and is still pending when Combine shows.
+    queue.borrow_mut().extend([OsEvent::Open(vec![paths[0].clone()]), OsEvent::Combine(vec![paths[1].clone()])]);
+    for _ in 0..200 {
+        h.run_steps(1);
+        if !h.state().views.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(h.state().views.len(), 1, "the earlier open finished");
+    assert!(h.state().combine_showing(), "and the Combine files tab still shows");
+    queue.borrow_mut().push(OsEvent::Open(vec![paths[2].clone()]));
+    for _ in 0..200 {
+        h.run_steps(1);
+        if h.state().views.len() == 2 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(h.state().views.len(), 2);
+    assert!(!h.state().combine_showing() && h.state().active == Some(1), "a later Open shows its document");
+}
+
 #[test]
 fn default_workspace_mode_persists_and_tolerates_invalid_settings() {
     use pdfcraft_ui_egui::Mode;
