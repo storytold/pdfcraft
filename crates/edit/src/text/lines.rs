@@ -1,6 +1,7 @@
 use super::fallback::{same_font, same_paint};
 use super::interp::{Carry, Origin, Pen, Shown, TextState, Ts, direction, interpret, to_frame, union};
 use super::{DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Object, Op, Pieces, Stream, TextLine, parse, serialize_ops};
+use pdfcraft_content::overlaps;
 
 impl TextLine {
     /// The baseline's height in user space.
@@ -538,8 +539,10 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
                 // Text after a form starts a new line.
                 last = None;
             }
-            // A run a form's `/BBox` clips away is not drawn, so it is not read either (#3503).
-            if w.clip.iter().any(|c| !overlaps(s.rect, *c, 0.0)) {
+            // A run that a form's `/BBox`, or a content-stream `re`/`W`/`n` clip, hides is not
+            // drawn, so it is not read either (#3503).
+            let clipped = w.clip.iter().any(|c| !overlaps(s.rect, *c, 0.0)) || s.state.clip.is_some_and(|c| !overlaps(s.rect, c, 0.0));
+            if clipped {
                 last = None;
                 continue;
             }
