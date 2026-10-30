@@ -1576,3 +1576,230 @@ fn a_form_button_shows_and_hides_the_attachments_panel() {
     h.run_steps(2);
     assert_eq!(h.state().right, None);
 }
+
+/// A field's mouse and focus actions (ISO 32000-2 Table 197) run as the pointer and the focus
+/// move, in the order another viewer runs them on a synthetic form: hovering runs Mouse Enter and
+/// Exit; a click runs Mouse Down, then what the field left commits and its Blur, then Focus, then
+/// Mouse Up; Tab runs Blur and Focus. A push button, which doesn't take the focus here, runs
+/// Mouse Down, then the Blur of the field left, then its click (Mouse Up); a check box, which takes
+/// the focus on the release, runs its Mouse Up after that Focus.
+#[test]
+fn a_fields_mouse_and_focus_actions_run_in_another_viewers_order() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("triggers.pdf", None, pdfcraft_engine::form_fixtures::trigger_form()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    let log = |h: &Harness<'static, PdfCraftApp>| value(h, "log").first().cloned().unwrap_or_default();
+    let at = |h: &Harness<'static, PdfCraftApp>, name: &str| {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == name).unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center()
+    };
+    // A mouse click: the pointer stays where it was (kittest's `drop_at` also takes the pointer
+    // away, as a touch's lift does, which is a Mouse Exit).
+    let click = |h: &mut Harness<'static, PdfCraftApp>, pos: egui::Pos2| {
+        h.hover_at(pos);
+        h.run_steps(1);
+        h.drag_at(pos);
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(3);
+    };
+    // Above the fields, on the page.
+    let away = at(&h, "a") - egui::vec2(0.0, 60.0);
+    h.hover_at(at(&h, "a"));
+    h.run_steps(2);
+    h.hover_at(away);
+    h.run_steps(2);
+    assert_eq!(log(&h), "a Mouse Enter|a Mouse Exit", "hovering");
+    let p = at(&h, "a");
+    click(&mut h, p);
+    assert_eq!(log(&h), "a Mouse Enter|a Mouse Exit|a Mouse Enter|a Mouse Down|a Focus|a Mouse Up", "a click in a");
+    h.event(egui::Event::Text("x".into()));
+    h.run_steps(2);
+    let before = log(&h).len();
+    let p = at(&h, "b");
+    click(&mut h, p);
+    assert_eq!(
+        log(&h).get(before..).unwrap_or_default(),
+        "|a Mouse Exit|b Mouse Enter|b Mouse Down|a Keystroke commit|a Validate|a Blur|b Focus|b Mouse Up",
+        "from a, typed in, to b"
+    );
+    let before = log(&h).len();
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(log(&h).get(before..).unwrap_or_default(), "|b Blur|cb Focus", "Tab, to the check box (push buttons take no Tab stop here)");
+    let before = log(&h).len();
+    let p = at(&h, "btn");
+    click(&mut h, p);
+    assert_eq!(
+        log(&h).get(before..).unwrap_or_default(),
+        "|b Mouse Exit|btn Mouse Enter|btn Mouse Down|cb Blur|btn Mouse Up",
+        "from b to the push button"
+    );
+    // A check box takes the focus on the release, so its Mouse Up waits for that Focus.
+    let before = log(&h).len();
+    let p = at(&h, "cb");
+    click(&mut h, p);
+    assert_eq!(log(&h).get(before..).unwrap_or_default(), "|btn Mouse Exit|cb Mouse Enter|cb Mouse Down|cb Focus|cb Mouse Up", "the check box");
+}
+
+/// Off a click, a field's action may not run a menu item: hovering a field whose Mouse Enter
+/// prints opens no Print dialog, while clicking a field whose Mouse Up prints does.
+#[test]
+fn only_a_click_runs_a_fields_print_action() {
+    let bytes = pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /DA (/Helv 0 Tf 0 g) >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (hover) /Rect [20 350 280 372] /P 3 0 R /F 4 /AA << /E << /S /Named /N /Print >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (click) /Rect [20 300 280 322] /P 3 0 R /F 4 /AA << /U << /S /Named /N /Print >> >> >>",
+    ]);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("print.pdf", None, bytes).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(6);
+    let at = |h: &Harness<'static, PdfCraftApp>, name: &str| {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == name).unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center()
+    };
+    h.hover_at(at(&h, "hover"));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None, "hovering prints nothing");
+    let p = at(&h, "click");
+    click_at(&mut h, p);
+    assert!(h.state().dialog.is_some(), "a click on the field may print");
+}
+
+/// A press on a field whose Mouse Down action resets another keeps what was typed into the field
+/// the press leaves: the reset applies first and the typing is committed after it, rather than
+/// the reset taking the typing's place.
+#[test]
+fn a_mouse_down_reset_keeps_the_text_typed_into_the_field_left() {
+    let bytes = pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (typed) /Rect [20 350 280 372] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (resets) /Rect [20 300 280 322] /P 3 0 R /F 4 /AA << /D << /S /ResetForm /Fields [(other)] >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (other) /V (kept until reset) /Rect [20 250 280 272] /P 3 0 R /F 4 >>",
+    ]);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("reset.pdf", None, bytes).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(6);
+    click_field(&mut h, "typed", 0);
+    h.event(egui::Event::Text("x".into()));
+    h.run_steps(2);
+    click_field(&mut h, "resets", 0);
+    assert_eq!(value(&h, "typed"), ["x"], "the typing is kept");
+    assert!(value(&h, "other").iter().all(|v| v.is_empty()), "and the other field reset: {:?}", value(&h, "other"));
+}
+
+/// A field being edited, reset by another field's action while it stays open (the pointer
+/// entering a field whose Mouse Enter resets it): its editor shows the reset value, as after a
+/// script's change, so it doesn't go on showing the old text. Text typed there first stays the
+/// person's to commit.
+#[test]
+fn a_reset_of_the_field_being_edited_shows_in_its_editor() {
+    let bytes = pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /DA (/Helv 0 Tf 0 g) >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (edited) /V (old) /Rect [20 350 280 372] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (resets) /Rect [20 300 280 322] /P 3 0 R /F 4 /AA << /E << /S /ResetForm /Fields [(edited)] >> >> >>",
+    ]);
+    let open = || {
+        let b = bytes.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("reset.pdf", None, b.clone()).unwrap();
+            app.set_option("left", "closed").unwrap();
+            app.set_option("zoom", "150").unwrap();
+            app
+        });
+        h.run_steps(6);
+        h
+    };
+    let editor = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].forms.focus.as_ref().map(|f| (f.name.clone(), f.text.clone()));
+    let over_resets = |h: &mut Harness<'static, PdfCraftApp>| {
+        let p = {
+            let s = h.state();
+            let doc = s.session.get(s.views[0].id).unwrap();
+            let f = doc.form.iter().find(|f| f.name == "resets").unwrap();
+            pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center()
+        };
+        h.hover_at(p);
+        h.run_steps(3);
+    };
+    // Opened, not typed into: the reset shows in the editor.
+    let mut h = open();
+    click_field(&mut h, "edited", 0);
+    assert_eq!(editor(&h), Some(("edited".to_string(), "old".to_string())));
+    over_resets(&mut h);
+    assert!(value(&h, "edited").iter().all(|v| v.is_empty()), "reset: {:?}", value(&h, "edited"));
+    assert_eq!(editor(&h), Some(("edited".to_string(), String::new())), "the editor shows it");
+    // Typed into first: the typing stays in the editor.
+    let mut h = open();
+    click_field(&mut h, "edited", 0);
+    h.event(egui::Event::Text("new".into()));
+    h.run_steps(2);
+    let typed = editor(&h);
+    assert!(typed.as_ref().is_some_and(|(_, t)| t.contains("new")), "{typed:?}");
+    over_resets(&mut h);
+    assert_eq!(editor(&h), typed, "the typing stays");
+}
+
+/// Where the document's security doesn't allow filling in the form, the pointer passing over a
+/// field runs none of its actions, as a click on it runs none: a script there could only be
+/// refused, with a message on every pass.
+#[test]
+fn hovering_a_form_that_may_not_be_filled_in_runs_nothing() {
+    let mut session = pdfcraft_engine::Session::new();
+    let id = session.open("triggers.pdf", None, std::sync::Arc::new(pdfcraft_engine::form_fixtures::trigger_form()), None).unwrap();
+    let protect =
+        pdfcraft_engine::Protection { permissions_password: Some("owner".into()), changes: pdfcraft_engine::Changes::None, ..Default::default() };
+    session.apply(id, pdfcraft_engine::Edit::Protect(protect)).unwrap();
+    let bytes = session.save_bytes(id).unwrap().as_ref().clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("restricted.pdf", None, bytes).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().allows_form_filling());
+    let p = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == "a").unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center()
+    };
+    h.hover_at(p);
+    h.run_steps(3);
+    h.hover_at(p - egui::vec2(0.0, 60.0));
+    h.run_steps(3);
+    assert!(value(&h, "log").iter().all(|v| v.is_empty()), "{:?}", value(&h, "log"));
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.clone()), None, "no message on hovering");
+}
