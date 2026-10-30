@@ -162,11 +162,20 @@ fn unreadable(source_of: impl Fn(&str) -> String, reason: &str) -> Policy {
 
 /// The policies in the file at `path`. Nothing there means no policies; a link that can't be
 /// followed, at `path` or at the nearest folder above it that exists, is a policy that can't be
-/// read (see `missing_but_present`).
+/// read (see `missing_but_present`). So is anything there that isn't a regular file.
 pub fn from_file(path: &std::path::Path) -> Policy {
     use std::io::Read;
     let source = path.display().to_string();
     let source_of = |key: &str| format!("{source} ({key})");
+    // Only a regular file is opened: opening a FIFO for reading waits for a writer, which would
+    // hang the app at launch, and a device or folder is no policy file either.
+    match std::fs::metadata(path) {
+        Ok(m) if !m.is_file() => return unreadable(source_of, "it isn't a regular file"),
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return unreadable(source_of, &format!("it couldn't be checked ({e})"));
+        }
+        _ => {}
+    }
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
         // Only a path with nothing there is "no policy". A link whose target is missing, at the
@@ -381,6 +390,29 @@ mod tests {
         let folder = dir.join("folder.json");
         std::fs::create_dir_all(&folder).unwrap();
         assert!(from_file(&folder).javascript_lock().unwrap().1.is_some());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A FIFO at the policy path: opening it for reading would wait for a writer, so the app
+    /// would hang at launch. It is refused as not a regular file, at once.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_at_the_policy_path_is_refused_without_waiting() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-policy-fifo-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("policy.json");
+        // No mkfifo in std, and no unsafe libc call: the system's mkfifo makes one.
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status().unwrap();
+        assert!(made.success(), "mkfifo failed");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let path = fifo.clone();
+        // On a worker, so a regression shows as a timeout here instead of a hung test run.
+        std::thread::spawn(move || {
+            let _ = tx.send(from_file(&path));
+        });
+        let policy = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("from_file waited on the FIFO");
+        let (_, why) = policy.javascript_lock().expect("a FIFO keeps JavaScript off");
+        assert!(why.is_some_and(|w| w.contains("isn't a regular file")));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

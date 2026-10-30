@@ -75,8 +75,9 @@ can't see the host's `/etc` and doesn't read this file yet.
 ## When a policy can't be read
 
 A policy that is there but can't be read, such as a `REG_SZ` where a `REG_DWORD` belongs, a value
-other than 0 or 1, a damaged or unreadable `policy.json`, or one larger than 64 KB, counts as
-the most restrictive setting: JavaScript stays off. Preferences says the policy couldn't be read,
-shows where it is and what was wrong, and the same goes to the log. An administrator who put
-something there meant to manage the setting, and falling back to the default would leave
+other than 0 or 1, a damaged or unreadable `policy.json`, one larger than 64 KB, or something at
+that path that isn't a regular file (a folder, a pipe, a device, or a link that leads nowhere),
+counts as the most restrictive setting: JavaScript stays off. Preferences says the policy couldn't
+be read, shows where it is and what was wrong, and the same goes to the log. An administrator who
+put something there meant to manage the setting, and falling back to the default would leave
 JavaScript on where they believe it is off, with nothing to show it.
