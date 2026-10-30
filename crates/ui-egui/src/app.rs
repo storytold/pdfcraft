@@ -16,6 +16,7 @@ mod input;
 mod keys;
 mod links;
 mod prefs;
+mod tabs;
 mod window;
 
 pub(crate) use clipboard::{copy_refused, print_refused};
@@ -23,6 +24,7 @@ pub(crate) use clipboard::{copy_refused, print_refused};
 pub(crate) use files::same_file;
 use frame::migrate_panel_state;
 pub(crate) use prefs::{MAX_AUTHOR_CHARS, date_text_for_pdf};
+pub(crate) use tabs::TabSelection;
 
 impl Default for PdfCraftApp {
     fn default() -> Self {
@@ -38,6 +40,7 @@ impl PdfCraftApp {
             views: Vec::new(),
             closed_tabs: Vec::new(),
             active: None,
+            tab_selection: Default::default(),
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,
             view_defaults: Default::default(),

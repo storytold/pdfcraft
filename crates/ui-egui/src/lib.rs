@@ -248,6 +248,8 @@ pub struct PdfCraftApp {
     pub(crate) closed_tabs: Vec<String>,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
+    /// Tabs picked with Ctrl/⌘- or Shift-click besides the active one (#4590).
+    pub(crate) tab_selection: app::TabSelection,
     pub mode: Mode,
     /// Workspace used for newly opened PDFs; independent of PDF Initial View metadata.
     pub default_mode: Mode,

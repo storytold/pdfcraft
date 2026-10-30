@@ -1526,16 +1526,20 @@ fn combine_tab_uses_tab_interaction_without_changing_close_or_document_state() {
 
 /// Presses the named tab, drags it to `to` in a few steps and, unless `release` is false, lets go.
 fn drag_named_tab(h: &mut Harness<'static, PdfCraftApp>, name: &str, to: egui::Pos2, release: bool) {
+    drag_named_tab_with_button(h, name, to, egui::PointerButton::Primary, release);
+}
+
+fn drag_named_tab_with_button(h: &mut Harness<'static, PdfCraftApp>, name: &str, to: egui::Pos2, button: egui::PointerButton, release: bool) {
     let from = h.get_by_role_and_label(egui::accesskit::Role::Tab, name).rect().center();
     h.event(egui::Event::PointerMoved(from));
-    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.event(egui::Event::PointerButton { pos: from, button, pressed: true, modifiers: egui::Modifiers::NONE });
     h.run_steps(1);
     for k in 1..=6 {
         h.event(egui::Event::PointerMoved(from.lerp(to, k as f32 / 6.0)));
         h.run_steps(1);
     }
     if release {
-        h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.event(egui::Event::PointerButton { pos: to, button, pressed: false, modifiers: egui::Modifiers::NONE });
         h.run_steps(3);
     }
 }
@@ -1620,6 +1624,219 @@ fn a_tab_dropped_where_it_was_stays_and_a_click_still_selects_it() {
     h.run_steps(3);
     assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[0]));
     assert_eq!(h.state().views.iter().map(|view| view.id).collect::<Vec<_>>(), ids);
+}
+
+/// Five tabs, a to e, with e active.
+fn five_tab_harness() -> Harness<'static, PdfCraftApp> {
+    harness(|app| {
+        for name in ["a.pdf", "b.pdf", "c.pdf", "d.pdf", "e.pdf"] {
+            app.open_bytes(name, None, FIXTURE.to_vec()).unwrap();
+        }
+    })
+}
+
+/// #4590: Ctrl/⌘-click adds a tab to the selection or takes it out, Shift-click selects the run
+/// from the last tab clicked without Shift, and a plain click selects that tab alone.
+#[test]
+fn command_and_shift_clicks_select_several_tabs() {
+    use egui::Modifiers;
+    use egui::accesskit::Role;
+    let mut h = five_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+    let click = |h: &mut Harness<'static, PdfCraftApp>, name: &str, modifiers: Modifiers| {
+        h.get_by_role_and_label(Role::Tab, name).click_modifiers(modifiers);
+        h.run_steps(3);
+    };
+    assert_eq!(h.state().selected_tabs(), [ids[4]]);
+    click(&mut h, "b.pdf", Modifiers::NONE);
+    click(&mut h, "d.pdf", Modifiers::COMMAND);
+    assert_eq!(h.state().selected_tabs(), [ids[1], ids[3]]);
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[3]), "the tab added is shown");
+    // Taken out again: the one shown hands over to the other.
+    click(&mut h, "d.pdf", Modifiers::COMMAND);
+    assert_eq!(h.state().selected_tabs(), [ids[1]]);
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[1]));
+    // The last selected tab stays selected.
+    click(&mut h, "b.pdf", Modifiers::COMMAND);
+    assert_eq!(h.state().selected_tabs(), [ids[1]]);
+    // From b, the last tab clicked without Shift, to d; then from b to a.
+    click(&mut h, "d.pdf", Modifiers::SHIFT);
+    assert_eq!(h.state().selected_tabs(), [ids[1], ids[2], ids[3]]);
+    click(&mut h, "a.pdf", Modifiers::SHIFT);
+    assert_eq!(h.state().selected_tabs(), [ids[0], ids[1]]);
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[0]));
+    // A plain click on a selected tab selects it alone.
+    click(&mut h, "b.pdf", Modifiers::NONE);
+    assert_eq!(h.state().selected_tabs(), [ids[1]]);
+    // Showing another document some other way, here with Ctrl+Tab, selects its tab alone.
+    click(&mut h, "c.pdf", Modifiers::COMMAND);
+    assert_eq!(h.state().selected_tabs(), [ids[1], ids[2]]);
+    h.key_press_modifiers(Modifiers::CTRL, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[3]));
+    assert_eq!(h.state().selected_tabs(), [ids[3]]);
+    // Back to c the same way: b doesn't come back with it.
+    h.key_press_modifiers(Modifiers::CTRL | Modifiers::SHIFT, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[2]));
+    assert_eq!(h.state().selected_tabs(), [ids[2]]);
+    // A tab taken out with Ctrl/⌘ is still where the next Shift-click's run starts.
+    click(&mut h, "a.pdf", Modifiers::NONE);
+    click(&mut h, "c.pdf", Modifiers::COMMAND);
+    click(&mut h, "a.pdf", Modifiers::COMMAND);
+    assert_eq!(h.state().selected_tabs(), [ids[2]]);
+    click(&mut h, "e.pdf", Modifiers::SHIFT);
+    assert_eq!(h.state().selected_tabs(), ids);
+}
+
+/// #4590: dragging one of several selected tabs moves them all, kept in their order on the strip
+/// and together, and the same document stays shown and the same tabs selected.
+#[test]
+fn dragging_a_selected_tab_moves_every_selected_tab() {
+    use egui::Modifiers;
+    use egui::accesskit::Role;
+    let mut h = five_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+    let order = |h: &Harness<'static, PdfCraftApp>| h.state().views.iter().map(|view| view.id).collect::<Vec<_>>();
+    // d, then b, then a: picked in another order than the strip's.
+    h.get_by_role_and_label(Role::Tab, "d.pdf").click();
+    h.run_steps(3);
+    for name in ["b.pdf", "a.pdf"] {
+        h.get_by_role_and_label(Role::Tab, name).click_modifiers(Modifiers::COMMAND);
+        h.run_steps(3);
+    }
+    // b dragged past the end: a, b and d follow e in the strip's order.
+    let to = h.get_by_role_and_label(Role::Tab, "e.pdf").rect().right_center() + egui::vec2(20.0, 0.0);
+    drag_named_tab(&mut h, "b.pdf", to, true);
+    assert_eq!(order(&h), [ids[2], ids[4], ids[0], ids[1], ids[3]]);
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[0]));
+    assert_eq!(h.state().selected_tabs(), [ids[0], ids[1], ids[3]]);
+    // Again, to the front.
+    let to = h.get_by_role_and_label(Role::Tab, "c.pdf").rect().left_center() - egui::vec2(10.0, 0.0);
+    drag_named_tab(&mut h, "d.pdf", to, true);
+    assert_eq!(order(&h), [ids[0], ids[1], ids[3], ids[2], ids[4]]);
+    // A tab not selected moves alone, and the selection stays.
+    let to = h.get_by_role_and_label(Role::Tab, "a.pdf").rect().left_center() - egui::vec2(10.0, 0.0);
+    drag_named_tab(&mut h, "e.pdf", to, true);
+    assert_eq!(order(&h), [ids[4], ids[0], ids[1], ids[3], ids[2]]);
+    assert_eq!(h.state().selected_tabs(), [ids[0], ids[1], ids[3]]);
+    // Moving tabs touches no document.
+    for doc in h.state().session.docs() {
+        assert_eq!(doc.bytes.as_slice(), FIXTURE);
+        assert!(!doc.dirty);
+    }
+    if let Ok(dir) = std::env::var("PDFCRAFT_TAB_SHOTS") {
+        let _gpu = crate::gpu();
+        let to = h.get_by_role_and_label(Role::Tab, "c.pdf").rect().right_center() + egui::vec2(20.0, 0.0);
+        drag_named_tab(&mut h, "b.pdf", to, false);
+        h.render().unwrap().save(format!("{dir}/dragging-selected-tabs.png")).unwrap();
+    }
+}
+
+#[test]
+fn escape_cancels_a_grouped_tab_drag() {
+    use egui::{Event, Key, Modifiers, PointerButton, accesskit::Role};
+    let production_step = |h: &mut Harness<'static, PdfCraftApp>| {
+        let ctx = h.ctx.clone();
+        let mut raw = std::mem::take(h.input_mut());
+        h.state_mut().prepare_raw_input(&ctx, &mut raw);
+        *h.input_mut() = raw;
+        h.step();
+    };
+    for release_with_escape in [false, true] {
+        let mut h = five_tab_harness();
+        let order = |h: &Harness<'static, PdfCraftApp>| h.state().views.iter().map(|view| view.id).collect::<Vec<_>>();
+        let ids = order(&h);
+        h.get_by_role_and_label(Role::Tab, "d.pdf").click();
+        h.run_steps(3);
+        for name in ["b.pdf", "a.pdf"] {
+            h.get_by_role_and_label(Role::Tab, name).click_modifiers(Modifiers::COMMAND);
+            h.run_steps(3);
+        }
+        let selected = h.state().selected_tabs();
+        let active = h.state().active_ids().map(|(_, id)| id);
+        assert_eq!(selected, [ids[0], ids[1], ids[3]]);
+        let to = h.get_by_role_and_label(Role::Tab, "e.pdf").rect().right_center() + egui::vec2(20.0, 0.0);
+        drag_named_tab(&mut h, "b.pdf", to, false);
+        assert!(h.ctx.dragged_id().is_some(), "a grouped drag is in progress");
+        assert_eq!(order(&h), ids, "moving tabs is deferred until a drop");
+        // Queue raw events together, then run the production hook before egui handles Escape.
+        h.input_mut().events.push(Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        if release_with_escape {
+            h.input_mut().events.push(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        }
+        production_step(&mut h);
+        assert!(h.ctx.dragged_id().is_none(), "Escape cancels the egui drag");
+        assert_eq!(order(&h), ids, "Escape must not commit a reorder (simultaneous release: {release_with_escape})");
+        assert_eq!(h.state().active_ids().map(|(_, id)| id), active);
+        assert_eq!(h.state().selected_tabs(), selected);
+        h.input_mut().events.push(Event::Key { key: Key::Escape, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
+        if !release_with_escape {
+            h.input_mut().events.push(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        }
+        production_step(&mut h);
+        h.run_steps(3);
+        assert_eq!(order(&h), ids, "letting go after cancellation must not move tabs");
+        assert_eq!(h.state().active_ids().map(|(_, id)| id), active);
+        assert_eq!(h.state().selected_tabs(), selected);
+        if !release_with_escape && let Ok(dir) = std::env::var("PDFCRAFT_TAB_SHOTS") {
+            let _gpu = crate::gpu();
+            h.render().unwrap().save(format!("{dir}/cancelled-selected-tabs.png")).unwrap();
+        }
+        drag_named_tab(&mut h, "b.pdf", to, true);
+        assert_eq!(order(&h), [ids[2], ids[4], ids[0], ids[1], ids[3]], "a fresh drag still commits on a real release");
+        assert_eq!(h.state().active_ids().map(|(_, id)| id), active);
+        assert_eq!(h.state().selected_tabs(), selected);
+    }
+}
+
+#[test]
+fn only_a_primary_button_drag_previews_and_reorders_tabs() {
+    use egui::{Color32, CursorIcon, Modifiers, PointerButton, Rect, Shape, accesskit::Role};
+    fn markers(shape: &Shape, band: Rect, color: Color32) -> usize {
+        match shape {
+            Shape::Vec(shapes) => shapes.iter().map(|shape| markers(shape, band, color)).sum(),
+            Shape::LineSegment { points: [a, b], stroke } => {
+                usize::from(a.x == b.x && band.contains(*a) && band.contains(*b) && stroke.width == 2.0 && stroke.color == color)
+            }
+            _ => 0,
+        }
+    }
+    for button in [PointerButton::Primary, PointerButton::Secondary, PointerButton::Middle] {
+        let mut h = five_tab_harness();
+        let order = |h: &Harness<'static, PdfCraftApp>| h.state().views.iter().map(|view| view.id).collect::<Vec<_>>();
+        let ids = order(&h);
+        h.get_by_role_and_label(Role::Tab, "b.pdf").click();
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::Tab, "d.pdf").click_modifiers(Modifiers::COMMAND);
+        h.run_steps(3);
+        let selected = h.state().selected_tabs();
+        let active = h.state().active_ids().map(|(_, id)| id);
+        let first = h.get_by_role_and_label(Role::Tab, "a.pdf").rect();
+        let last = h.get_by_role_and_label(Role::Tab, "e.pdf").rect();
+        let band = first.union(last).expand2(egui::vec2(30.0, 0.0));
+        let to = last.right_center() + egui::vec2(20.0, 0.0);
+        drag_named_tab_with_button(&mut h, "b.pdf", to, button, false);
+        assert!(h.ctx.dragged_id().is_some(), "egui recognizes the {button:?} drag");
+        let accent = pdfcraft_ui_egui::theme::Tokens::get(&h.ctx).accent;
+        let count: usize = h.output().shapes.iter().map(|shape| markers(&shape.shape, band, accent)).sum();
+        assert_eq!(count, usize::from(button == PointerButton::Primary), "only a primary drag paints the drop marker ({button:?})");
+        assert_eq!(h.output().platform_output.cursor_icon == CursorIcon::Grabbing, button == PointerButton::Primary);
+        assert_eq!(order(&h), ids);
+        if let Ok(dir) = std::env::var("PDFCRAFT_TAB_SHOTS") {
+            let _gpu = crate::gpu();
+            h.render().unwrap().save(format!("{dir}/tab-drag-{button:?}.png")).unwrap();
+        }
+        h.event(egui::Event::PointerButton { pos: to, button, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+        if button == PointerButton::Primary {
+            assert_eq!(order(&h), [ids[0], ids[2], ids[4], ids[1], ids[3]]);
+        } else {
+            assert_eq!(order(&h), ids, "a non-primary drag does not reorder tabs");
+        }
+        assert_eq!(h.state().active_ids().map(|(_, id)| id), active);
+        assert_eq!(h.state().selected_tabs(), selected);
+    }
 }
 
 #[test]

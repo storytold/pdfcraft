@@ -672,11 +672,8 @@ impl PdfCraftApp {
         if from >= self.views.len() || to >= self.views.len() || from == to {
             return;
         }
-        let active = self.active_ids().map(|(_, id)| id);
-        let view = self.views.remove(from);
-        self.views.insert(to, view);
-        if let Some(id) = active {
-            self.active = self.views.iter().position(|v| v.id == id);
+        if let Some(id) = self.views.get(from).map(|v| v.id) {
+            self.move_tabs(&[id], to);
         }
     }
 }
