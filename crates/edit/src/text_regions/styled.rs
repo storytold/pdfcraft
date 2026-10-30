@@ -323,13 +323,17 @@ fn calibration_factors(
 
 /// The calibration factors fit each word to its box at its own size (its `Tf` in its text space,
 /// which a range's size doesn't change). An OCR phrase drawn at one size needs the inverse ratio
-/// too, so every word still spans the box the scan shows it in.
+/// too, so every word still spans the box the scan shows it in. The ratio is not clamped again:
+/// a word OCR sized at three times the phrase's needs three times the calibration.
 fn fit_to_phrase(calibration: &mut HashMap<usize, f64>, lines: &[TextLine], phrase: Option<f64>) {
     let Some(phrase) = phrase else { return };
     for (index, factor) in calibration.iter_mut() {
         let own = lines.get(*index).and_then(|source| Some(source.origin.state.font.as_ref()?.1 * source.origin.k));
         if let Some(own) = own.filter(|own| own.is_finite() && *own > 0.0) {
-            *factor = (*factor * own / phrase).clamp(0.5, 2.0);
+            let fitted = *factor * own / phrase;
+            if fitted.is_finite() {
+                *factor = fitted;
+            }
         }
     }
 }

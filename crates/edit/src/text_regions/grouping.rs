@@ -399,7 +399,13 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
         block.reflow_text = reflow_text(block, lines);
     }
     for block in blocks.iter_mut().filter(|block| block.invisible && block.lines.len() > 1) {
-        if let Some(size) = median_size(block.lines.iter().filter_map(|i| lines.get(*i)).map(|line| line.size)) {
+        // Each word counts once: neighbouring words OCR sized alike share a run.
+        let words = block
+            .lines
+            .iter()
+            .filter_map(|i| lines.get(*i))
+            .flat_map(|line| std::iter::repeat_n(line.size, line.text.split_whitespace().count().max(1)));
+        if let Some(size) = median_size(words) {
             block.size = size;
         }
     }

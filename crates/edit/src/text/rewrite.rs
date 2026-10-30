@@ -763,6 +763,11 @@ fn paragraph_style(o: &Origin, style: &BlockStyle, phrase: Option<f64>) -> Resul
     if let Some(sc) = style.scale {
         state.scale = (sc / 100.0).clamp(0.1, 10.0);
     }
+    // At the phrase's size, the first word's text matrix still carries its own width: scale it
+    // back, so the line is as wide as the scan whatever size OCR guessed for that word.
+    if phrase.is_some() && style.size.is_none() && style.scale.is_none() {
+        state.scale = (state.scale * old_size / size).clamp(0.1, 10.0);
+    }
     Ok((font_name, ParaStyle { state, size, old_size, k }))
 }
 
