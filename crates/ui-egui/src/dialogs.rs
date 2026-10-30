@@ -256,6 +256,10 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
                 return false;
             }
         }
+        Dialog::ImportCertificates => {
+            dialog_import_certificates(ui, app, req);
+            return false;
+        }
         Dialog::AuditSpace => {
             if crate::optimize_ui::audit_body(ui, &app.space_audit, &t) {
                 req.next = Some(Dialog::Optimize);
@@ -1183,6 +1187,30 @@ fn dialog_duplicate_field(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pe
     false
 }
 
+/// `Dialog::ImportCertificates` content: it has its own buttons.
+fn dialog_import_certificates(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) {
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(620.0);
+    let trusted = app.session.trusted_certificates().to_vec();
+    let Some(v) = app.cert_import.as_mut() else {
+        req.close = true;
+        return;
+    };
+    match crate::sign_ui::import_dialog(ui, v, &trusted, &t) {
+        Some(crate::sign_ui::ImportAction::Trust(certs)) => {
+            let added = app.trust_certificates(certs);
+            app.notify_fmt("Added {n} to your trusted certificates.", &[("n", &added.to_string())]);
+            app.cert_import = None;
+            req.close = true;
+        }
+        Some(crate::sign_ui::ImportAction::Cancel) => {
+            app.cert_import = None;
+            req.close = true;
+        }
+        None => {}
+    }
+}
+
 /// `Dialog::CertificateViewer` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_certificate_viewer(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
     let t = Tokens::get(ui.ctx());
@@ -1862,6 +1890,10 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     } else if dialog == Dialog::CreateImages && app.dialog != Some(Dialog::CreateImages) {
         app.image_import = None;
     }
+    // Escape, a click outside or another dialog drops the certificates read for import too.
+    if dialog == Dialog::ImportCertificates && app.dialog != Some(Dialog::ImportCertificates) {
+        app.cert_import = None;
+    }
     if req.ocr_now {
         app.start_ocr();
     }
@@ -1909,4 +1941,22 @@ fn draft_changes(app: &PdfCraftApp) -> Option<Vec<Edit>> {
 
 fn yes(b: bool) -> String {
     tl!(if b { "Yes" } else { "No" }).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Closing Import certificates any way at all (here the modal's own close: Escape or a
+    /// click outside) drops what was read for it; staying open keeps it.
+    #[test]
+    fn closing_the_certificate_import_drops_what_it_read() {
+        let mut app = PdfCraftApp::new();
+        app.cert_import = Some(crate::sign_ui::CertImport::new("bundle.p7b"));
+        app.dialog = Some(Dialog::ImportCertificates);
+        finish_close(&mut app, Dialog::ImportCertificates, false, &mut Pending::default());
+        assert!(app.cert_import.is_some() && app.dialog == Some(Dialog::ImportCertificates));
+        finish_close(&mut app, Dialog::ImportCertificates, true, &mut Pending::default());
+        assert!(app.cert_import.is_none() && app.dialog.is_none());
+    }
 }

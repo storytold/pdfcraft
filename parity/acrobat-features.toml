@@ -6372,8 +6372,11 @@ milestone = "M9"
 status = "partial"
 commands = []
 tools = ["sign_trust"]
-evidence = ["crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools"]
-notes = "import .cer/.pem/.der/.p7b/.p7c/.p12 through the tool; per-certificate trust settings not yet"
+evidence = [
+    "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools",
+    "crates/ui-egui/src/tools/sign_ui.rs::an_import_trusts_only_the_ticked_certificates_on_confirmation",
+]
+notes = "import .cer/.pem/.der/.p7b/.p7c/.p12 through the tool, and .cer/.crt/.pem/.der/.p7b/.p7c in the app (Signatures panel ▸ Import certificates…, confirmed per certificate); per-certificate trust settings not yet"
 
 [[feature]]
 id = "sign.eutl"

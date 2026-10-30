@@ -186,6 +186,8 @@ pub enum Dialog {
     AuditSpace,
     /// Signatures ▸ Show certificate.
     CertificateViewer,
+    /// Signatures ▸ Import certificates…: choose which of a file's certificates to trust.
+    ImportCertificates,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -488,6 +488,11 @@ pub struct PdfCraftApp {
     /// List the OS key store's signing identities among the digital IDs (the desktop app).
     pub os_key_store_ids: bool,
     pub cert_viewer: Option<sign_ui::CertViewer>,
+    /// The certificates read for Import certificates…, until trusted or cancelled.
+    pub cert_import: Option<sign_ui::CertImport>,
+    /// The read behind Import certificates…, until it reports back.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) cert_import_job: Option<std::sync::mpsc::Receiver<Result<sign_ui::CertImport, String>>>,
     /// The last space audit.
     pub space_audit: Vec<pdfcraft_engine::optimize::SpaceUse>,
     /// The document and edit generation `space_audit` was measured from.

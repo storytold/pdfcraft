@@ -2868,3 +2868,15 @@ theme	Appearance	Aparência
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opções desta resposta
 	Export value	Valor de exportação
+
+# Signatures panel: Import certificates… (AI-assisted, not separately native-reviewed)
+	Import certificates…	Importar certificados…
+	Couldn't import the certificates: {e}	Não foi possível importar os certificados: {e}
+	Import Certificates	Importar certificados
+	Certificates in {file}	Certificados em {file}
+	Signatures made under a trusted certificate are shown as valid. Trust only certificates from a source you trust, and compare each fingerprint with the one its authority publishes.	Assinaturas feitas sob um certificado confiável aparecem como válidas. Confie apenas em certificados de uma fonte em que você confia e compare cada impressão digital com a publicada pela autoridade.
+	Already trusted	Já confiável
+	Issued by {issuer}	Emitido por {issuer}
+	Valid from {from} to {to}	Válido de {from} a {to}
+	Trust selected ({n})	Confiar nos selecionados ({n})
+	Added {n} to your trusted certificates.	{n} adicionados aos seus certificados confiáveis.
