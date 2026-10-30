@@ -28,8 +28,8 @@ fn s15f16(value: f64) -> [u8; 4] {
 }
 
 /// An ICC v2 profile (ICC.1:2001-04 §6) of device class `class` for the colour space `space`,
-/// with `tags` (signature, data) in that order. The device model is left blank: hayro takes a
-/// profile whose model reads `sRGB` for standard sRGB and skips its transform.
+/// with `tags` (signature, data) in that order.
+/// The descriptive device model is left unspecified.
 fn icc(class: &[u8; 4], space: &[u8; 4], pcs: &[u8; 4], tags: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
     let start = 128 + 4 + 12 * tags.len();
     let (mut table, mut data) = (Vec::new(), Vec::new());
@@ -200,6 +200,39 @@ fn device_gray_operators_draw_in_default_gray() {
     }
     for (got, what) in colours(content, "<< >>", &objects, &points).into_iter().zip(what) {
         assert_eq!(got, BLACK, "{what} without DefaultGray");
+    }
+}
+
+/// Device-model metadata cannot change the component count or transform of a non-RGB ICC space.
+#[test]
+fn non_rgb_icc_device_models_keep_their_components_and_transforms() {
+    for (n, profile, sample, image, expected) in
+        [(1, gray_profile(), "0", vec![0], MID_GREY), (4, cmyk_profile(), "0 0 0 1", vec![0, 0, 0, 255], INK_BLUE)]
+    {
+        let mut reference: Option<Vec<u8>> = None;
+        for model in [b"\0\0\0\0", b"TEST", b"sRGB"] {
+            let mut marked = profile.clone();
+            marked[52..56].copy_from_slice(model);
+            marked[84..100].fill(0);
+            let dict = format!("<< /N {n} /Length {} >>", marked.len());
+            let image_dict = format!(
+                "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace [/ICCBased 5 0 R] /BitsPerComponent 8 /Length {} >>",
+                image.len()
+            );
+            let rendered = render_first_page(image_cache_pdf(
+                &format!("/C cs {sample} sc 10 20 30 30 re f q 30 0 0 30 60 20 cm /Im Do Q"),
+                "<< /ColorSpace << /C [/ICCBased 5 0 R] >> /XObject << /Im 6 0 R >> >>",
+                &[(&dict, &marked), (&image_dict, &image)],
+            ));
+            for (name, x) in [("vector", 25), ("image", 75)] {
+                assert_near(rgb_at(&rendered.rgba, WIDTH, x, 35), expected, &format!("N={n}, {name}, model={model:?}"));
+            }
+            if let Some(reference) = &reference {
+                assert_eq!(&rendered.rgba[..], reference.as_slice(), "N={n}: model metadata cannot change rendered pixels");
+            } else {
+                reference = Some(rendered.rgba.to_vec());
+            }
+        }
     }
 }
 

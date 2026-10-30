@@ -103,6 +103,17 @@ D50/equal-energy neutral and chromatic oracles, D65 identity, and direct/Indexed
 consistency (including an asymmetric chromatic Range), and zero/overflowing
 cone-response fallback.
 
+ICC profile rendering follow-up (#1201): ICCBased color spaces use the profile's transfer curves and colorants for both vector colors and image samples.
+The header's Device Model field, including `sRGB`, does not select a device-space shortcut or override an explicit ICCBased color space.
+The lazy f32 transform caches construction failure and reports the existing color-fallback warning instead of panicking.
+The `icc_device_model_metadata_does_not_replace_profile_transform`, `icc_device_model_metadata_does_not_change_f32_image_transform`, `srgb_marked_profiles_keep_distinct_colorants_in_both_cache_orders`, `explicit_icc_profiles_do_not_turn_into_device_rgb_defaults`, and `invalid_srgb_marked_profiles_keep_alternate_fallback_without_panics` regressions cover model-tag invariance, 8/16-bit image conversion, cache order, `/DefaultRGB`, and profile-validation fallback.
+
+`non_rgb_icc_device_models_keep_their_components_and_transforms` also covers gray and CMYK vector/image profiles without changing their component counts.
+
+The strict interpreter-library lint check also uses typed fixed-size chunks with the same ignored remainder, consistent integer suffixes, and code-formatted documentation identifiers.
+The Type 1 font fallback propagates the same parse failure through `?`.
+The project name remains prose through Clippy's documented identifier dictionary; all other checks remain enabled.
+
 ## Clipping-only text reporting (#3109 / #3116)
 
 `hayro-interpret/src/interpret/text.rs` reports mode 7 glyphs after installing their

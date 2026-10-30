@@ -1,3 +1,4 @@
+// PdfCraft patch: fixed-size component chunks preserve the ignored short tail.
 use crate::cache::{Cache, DecodedImageCache, DecodedImageKey};
 use crate::cmyk_group::{CmykGroup, blends_in_device_cmyk, names_a_blending_space};
 use crate::color::{ColorComponents, ColorSpace, DefaultColorSpaces, DeviceFamily, ToRgb};
@@ -969,7 +970,7 @@ fn decode_raster(
                     }
                 }
                 ActiveTransferFunction::Four(f) => {
-                    for data in rgb_data.data.chunks_exact_mut(3) {
+                    for data in rgb_data.data.as_chunks_mut::<3>().0 {
                         data[0] = apply_single(data[0], &f[0]);
                         data[1] = apply_single(data[1], &f[1]);
                         data[2] = apply_single(data[2], &f[2]);
@@ -1115,7 +1116,7 @@ fn resolve_alpha(
         for pixel in components.chunks_exact(color_space.num_components() as usize) {
             let mut mask_val = 0;
 
-            for (component, min_max) in pixel.iter().zip(color_key_mask.chunks_exact(2)) {
+            for (component, min_max) in pixel.iter().zip(color_key_mask.as_chunks::<2>().0.iter()) {
                 if *component > min_max[1] || *component < min_max[0] {
                     mask_val = 255;
                 }
@@ -1167,7 +1168,7 @@ fn resolve_matte(
 fn unpremultiply(image: &mut ImageData, alpha: &[u8], matte_rgb: &[u8]) {
     match image {
         ImageData::Rgb(rgb) => {
-            for (pixel, &a) in rgb.data.chunks_exact_mut(3).zip(alpha.iter()) {
+            for (pixel, &a) in rgb.data.as_chunks_mut::<3>().0.iter_mut().zip(alpha.iter()) {
                 if a == 0 {
                     continue;
                 }
@@ -1337,7 +1338,7 @@ const MAX_LOOKUP_BITS: usize = 16;
 /// shifts the colours after that pixel. The table converts each entry on its own
 /// ([`convert_each`]), so a wrong-sized entry changes only itself, and a value the image never
 /// uses cannot change the colour of one it does.
-/// A Separation or DeviceN tint transform is a PDF function, often a PostScript calculator
+/// A Separation or `DeviceN` tint transform is a PDF function, often a PostScript calculator
 /// program: run once per pixel, an 8-bit spot-colour background of 3304 × 4105 took four
 /// seconds and 430 MB to draw; looked up from 256 entries it takes milliseconds.
 #[allow(clippy::too_many_arguments)]
@@ -1370,13 +1371,13 @@ fn rgb_via_lookup(
     };
     let pixels = usize::try_from(width).ok()?.checked_mul(usize::try_from(height).ok()?)?;
     let total = pixels.checked_mul(n)?;
-    let entries = 1usize << bits;
+    let entries = 1_usize << bits;
     if pixels <= entries {
         return None;
     }
 
     // Every possible pixel value, its samples in order, decoded as `apply_decode_array` would.
-    let mask = (1usize << bpc) - 1;
+    let mask = (1_usize << bpc) - 1;
     let mut table_input = Vec::with_capacity(entries * n);
     for code in 0..entries {
         for (k, range) in decode.iter().take(n).enumerate() {
@@ -1390,8 +1391,8 @@ fn rgb_via_lookup(
     let mut data = vec![0; pixels.checked_mul(3)?];
     let whole = used / n;
     let samples = components.get(..whole * n)?;
-    for (pixel, rgb) in samples.chunks_exact(n).zip(data.chunks_exact_mut(3)) {
-        let code = pixel.iter().fold(0usize, |code, s| (code << bpc) | (usize::from(*s) & mask));
+    for (pixel, rgb) in samples.chunks_exact(n).zip(data.as_chunks_mut::<3>().0.iter_mut()) {
+        let code = pixel.iter().fold(0_usize, |code, s| (code << bpc) | (usize::from(*s) & mask));
         if let Some(colour) = table.get(code * 3..code * 3 + 3) {
             rgb.copy_from_slice(colour);
         }
@@ -1417,7 +1418,7 @@ fn rgb_via_lookup(
 }
 
 /// PdfCraft patch (28): `input`, `n` decoded samples a pixel, converted into `output` (RGB) one
-/// pixel at a time. A Separation or DeviceN tint transform may give more or fewer components
+/// pixel at a time. A Separation or `DeviceN` tint transform may give more or fewer components
 /// than its alternate space takes (a Type 4 program's count is only warned about): converted as
 /// one batch, such a result shifts every pixel after it; converted alone, it affects only its
 /// own. A failed conversion leaves black, as in `get_rgb_data`.
@@ -1425,7 +1426,7 @@ fn convert_each(cs: &ColorSpace, input: &[f32], n: usize, output: &mut [u8]) {
     if n == 0 {
         return;
     }
-    for (pixel, rgb) in input.chunks_exact(n).zip(output.chunks_exact_mut(3)) {
+    for (pixel, rgb) in input.chunks_exact(n).zip(output.as_chunks_mut::<3>().0.iter_mut()) {
         let _ = cs.convert_f32(pixel, rgb, false);
     }
 }

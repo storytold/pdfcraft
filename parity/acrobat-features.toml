@@ -734,8 +734,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = ["page_render"]
-evidence = ["crates/render/src/raster/tests.rs::renders_a_blue_rectangle", "crates/automation/tests/it/automation.rs::open_inspect_render_and_find", "crates/render/src/raster/tests.rs::user_unit_scales_the_page_and_everything_on_it"]
-notes = "hayro bootstrap renderer; own DisplayList devices in M2.6. Pages with /UserUnit are shown at their size in points, as Acrobat reads the value"
+evidence = ["crates/render/src/raster/tests.rs::renders_a_blue_rectangle", "crates/automation/tests/it/automation.rs::open_inspect_render_and_find", "crates/render/src/raster/tests.rs::user_unit_scales_the_page_and_everything_on_it", "crates/render/src/raster/tests/icc_profile_cache.rs::icc_device_model_metadata_does_not_replace_profile_transform", "crates/render/src/raster/tests/icc_profile_cache.rs::icc_device_model_metadata_does_not_change_f32_image_transform", "crates/render/src/raster/tests/icc_profile_cache.rs::srgb_marked_profiles_keep_distinct_colorants_in_both_cache_orders", "crates/render/src/raster/tests/icc_profile_cache.rs::explicit_icc_profiles_do_not_turn_into_device_rgb_defaults", "crates/render/src/raster/tests/icc_profile_cache.rs::invalid_srgb_marked_profiles_keep_alternate_fallback_without_panics", "crates/render/src/raster/tests/default_colour_spaces.rs::non_rgb_icc_device_models_keep_their_components_and_transforms"]
+notes = "hayro bootstrap renderer; own DisplayList devices in M2.6. Pages with /UserUnit are shown at their size in points, as Acrobat reads the value. ICCBased profiles apply their transfer curves and colorants to vector colors and image samples regardless of the header Device Model field; explicit ICCBased spaces remain distinct from /DefaultRGB, and decoded-profile validation retains the existing /Alternate fallback. General color management remains incomplete."
 
 [[feature]]
 id = "view.render-shadings-patterns"

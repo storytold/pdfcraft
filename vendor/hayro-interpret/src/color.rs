@@ -1,4 +1,5 @@
 //! PDF colors and color spaces.
+//! PdfCraft patch: fixed-size component chunks retain the existing ignored short-tail behavior.
 
 use crate::cache::{Cache, CacheKey};
 use crate::function::Function;
@@ -46,7 +47,7 @@ pub(crate) fn take_color_fallback() -> bool {
     COLOR_FALLBACK.with(|fell_back| fell_back.replace(false))
 }
 
-/// PdfCraft patch (34): how many colours this thread has run through a Separation or DeviceN
+/// PdfCraft patch (34): how many colours this thread has run through a Separation or `DeviceN`
 /// tint transform, for diagnostics and tests. An image converted through patch (28)'s lookup
 /// table runs it once per possible sample value, not once per pixel. Per thread, so a caller
 /// counting its own render is not disturbed by renders on other threads.
@@ -196,17 +197,9 @@ impl ColorSpaceType {
                             cache.count_icc_profile_read();
                             if let Some(decoded) = icc_stream.decoded().ok().as_ref() {
                                 ICCProfile::new(decoded, num_components)
-                                    .map(|icc| {
-                                        // TODO: For SVG and PNG we can assume that the output color space is
-                                        // sRGB. If we ever implement PDF-to-PDF, we probably want to
-                                        // let the user pass the native color type and don't make this optimization
-                                        // if it's not sRGB.
-                                        if icc.is_srgb() {
-                                            Self::DeviceRgb
-                                        } else {
-                                            Self::ICCBased(icc)
-                                        }
-                                    })
+                                    // PdfCraft patch: an explicit ICC space retains its
+                                    // transform and is not subject to /DefaultRGB.
+                                    .map(Self::ICCBased)
                                     .or_else(|| {
                                         dict.get::<Object<'_>>(ALTERNATE)
                                             .and_then(|o| Self::new(o, cache))
@@ -503,7 +496,7 @@ impl DeviceFamily {
 /// PdfCraft patch (38): the default colour spaces (`/DefaultGray`, `/DefaultRGB` and
 /// `/DefaultCMYK`, ISO 32000-2 §8.6.5.6) of the resources content is drawn with, each read the
 /// first time the content selects its device space. Like any named resource, a default comes
-/// from those resources' `/ColorSpace` or from the resources they inherit: a form XObject
+/// from those resources' `/ColorSpace` or from the resources they inherit: a form `XObject`
 /// without one of its own draws in its page's.
 pub(crate) struct DefaultColorSpaces<'r, 'a> {
     resources: &'r Resources<'a>,
@@ -573,7 +566,7 @@ impl ToRgb for ColorSpace {
                 }
             }
             ColorSpaceType::DeviceGray => {
-                for (gray, output) in input.iter().zip(output.chunks_exact_mut(3)) {
+                for (gray, output) in input.iter().zip(output.as_chunks_mut::<3>().0.iter_mut()) {
                     let gray = f32_to_u8(*gray);
                     output.copy_from_slice(&[gray, gray, gray]);
                 }
@@ -618,7 +611,7 @@ impl ToRgb for ColorSpace {
         match self.0.as_ref() {
             ColorSpaceType::DeviceCmyk => CMYK_TRANSFORM.convert_u8(input, output),
             ColorSpaceType::DeviceGray => {
-                for (input, output) in input.iter().zip(output.chunks_exact_mut(3)) {
+                for (input, output) in input.iter().zip(output.as_chunks_mut::<3>().0.iter_mut()) {
                     output.copy_from_slice(&[*input, *input, *input]);
                 }
 
@@ -675,7 +668,7 @@ impl CalGray {
 
 impl ToRgb for CalGray {
     fn convert_f32(&self, input: &[f32], output: &mut [u8], _: bool) -> Option<()> {
-        for (input, output) in input.iter().copied().zip(output.chunks_exact_mut(3)) {
+        for (input, output) in input.iter().copied().zip(output.as_chunks_mut::<3>().0.iter_mut()) {
             let g = self.gamma;
             let (_xw, yw, _zw) = {
                 let wp = self.white_point;
@@ -832,7 +825,7 @@ impl CalRgb {
 
 impl ToRgb for CalRgb {
     fn convert_f32(&self, input: &[f32], output: &mut [u8], _: bool) -> Option<()> {
-        for (input, output) in input.chunks_exact(3).zip(output.chunks_exact_mut(3)) {
+        for (input, output) in input.as_chunks::<3>().0.iter().zip(output.as_chunks_mut::<3>().0.iter_mut()) {
             let input = [
                 input[0].clamp(0.0, 1.0),
                 input[1].clamp(0.0, 1.0),
@@ -901,7 +894,7 @@ impl Lab {
     }
 
     /// Bradford adaptation scales cone responses, so both white points must
-    /// be expressed in LMS before taking their ratios. CalRGB's separate
+    /// be expressed in LMS before taking their ratios. `CalRGB`'s separate
     /// flat-white/black-point pipeline retains its existing normalization.
     fn adapt_to_d65(white_point: &[f32; 3], xyz: &[f32; 3]) -> [f32; 3] {
         let source_lms = CalRgb::matrix_product(&CalRgb::BRADFORD_SCALE_MATRIX, white_point);
@@ -939,7 +932,7 @@ impl ToRgb for Lab {
         let white_point = self.usable_white_point();
         let [xw, yw, zw] = white_point;
 
-        for (input, output) in input.chunks_exact(3).zip(output.chunks_exact_mut(3)) {
+        for (input, output) in input.as_chunks::<3>().0.iter().zip(output.as_chunks_mut::<3>().0.iter_mut()) {
             // PdfCraft patch: `manual_scale` means the components arrive
             // normalised to [0, 1] (an `/Indexed` palette over Lab looks its
             // bytes up as `byte / 255`). Map them linearly onto L* 0..100 and
@@ -1065,7 +1058,7 @@ pub(crate) struct Separation {
 /// read or evaluated, the initial colour of `alternate_space` (black in every device space), with
 /// the fallback recorded. hayro already fell back this way when evaluation failed, silently; a
 /// transform it could not read made the whole colour space unreadable, and the space's
-/// paints were drawn in DeviceGray from their first tint instead (white for a full tint).
+/// paints were drawn in `DeviceGray` from their first tint instead (white for a full tint).
 fn eval_tint_transform(
     tint_transform: Option<&Function>,
     alternate_space: &ColorSpace,
@@ -1109,7 +1102,7 @@ impl ToRgb for Separation {
             // PdfCraft patch (66): §8.6.6.4: the tint applies to every colourant, and on an
             // additive device it is complemented first, so tint t is the gray 1 − t on each of
             // R, G and B whatever the alternate space and tint transform say.
-            for (tint, rgb) in input.iter().zip(output.chunks_exact_mut(3)) {
+            for (tint, rgb) in input.iter().zip(output.as_chunks_mut::<3>().0.iter_mut()) {
                 // `clamp` keeps NaN, and `f32_to_u8`'s cast saturates it to 0.
                 let gray = f32_to_u8(1.0 - tint.clamp(0.0, 1.0));
                 rgb.copy_from_slice(&[gray, gray, gray]);
@@ -1199,10 +1192,9 @@ struct ICCColorRepr {
     src_profile: ColorProfile,
     src_layout: Layout,
     number_components: usize,
-    is_srgb: bool,
     is_lab: bool,
     transform_u8: Arc<Transform8BitExecutor>,
-    transform_f32: OnceLock<Arc<TransformF32Executor>>,
+    transform_f32: OnceLock<Option<Arc<TransformF32Executor>>>,
 }
 
 #[derive(Clone)]
@@ -1217,21 +1209,15 @@ impl Debug for ICCProfile {
 impl ICCProfile {
     fn new(profile: &[u8], number_components: usize) -> Option<Self> {
         let src_profile = ColorProfile::new_from_slice(profile).ok()?;
-
-        const SRGB_MARKER: &[u8] = b"sRGB";
-
-        let is_srgb = profile
-            .get(52..56)
-            .map(|device_model| device_model == SRGB_MARKER)
-            .unwrap_or(false);
+        // PdfCraft patch: ICC.1 section 7.2.13 defines bytes 52..56 as the
+        // descriptive device model, not evidence that the profile is sRGB.
         let is_lab = src_profile.color_space == DataColorSpace::Lab;
 
-        Self::new_from_src_profile(src_profile, is_srgb, is_lab, number_components)
+        Self::new_from_src_profile(src_profile, is_lab, number_components)
     }
 
     fn new_from_src_profile(
         src_profile: ColorProfile,
-        is_srgb: bool,
         is_lab: bool,
         number_components: usize,
     ) -> Option<Self> {
@@ -1261,15 +1247,10 @@ impl ICCProfile {
             src_profile,
             src_layout,
             number_components,
-            is_srgb,
             is_lab,
             transform_u8,
             transform_f32: OnceLock::new(),
         })))
-    }
-
-    fn is_srgb(&self) -> bool {
-        self.0.is_srgb
     }
 
     fn is_lab(&self) -> bool {
@@ -1280,35 +1261,45 @@ impl ICCProfile {
         &self.0.transform_u8
     }
 
-    fn transform_f32(&self) -> &Arc<TransformF32Executor> {
+    fn transform_f32(&self) -> Option<&Arc<TransformF32Executor>> {
         // From my benchmarking, creating the f32 transforms is usually much
         // more expensive than u8. Therefore, we only create it lazily when
         // really needed.
-        self.0.transform_f32.get_or_init(|| {
-            let dest_profile = ColorProfile::new_srgb();
-            self.0
-                .src_profile
-                .clone()
-                .create_transform_f32(
-                    self.0.src_layout,
-                    &dest_profile,
-                    Layout::Rgb,
-                    TransformOptions::default(),
-                )
-                // Since the u8 version was valid, hopefully this should never panic?
-                .unwrap()
-        })
+        // PdfCraft patch: the separate f32 constructor is fallible even after
+        // u8 validation; cache failure and propagate the usual conversion error.
+        self.0
+            .transform_f32
+            .get_or_init(|| {
+                let dest_profile = ColorProfile::new_srgb();
+                self.0
+                    .src_profile
+                    .clone()
+                    .create_transform_f32(
+                        self.0.src_layout,
+                        &dest_profile,
+                        Layout::Rgb,
+                        TransformOptions::default(),
+                    )
+                    .ok()
+            })
+            .as_ref()
     }
 }
 
 impl ToRgb for ICCProfile {
     fn convert_f32(&self, input: &[f32], output: &mut [u8], _: bool) -> Option<()> {
+        let Some(transform) = self.transform_f32() else {
+            note_color_fallback();
+            return None;
+        };
         let mut temp = vec![0.0_f32; output.len()];
 
         if self.is_lab() {
             // moxcms expects normalized values.
             let scaled = input
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .flat_map(|i| {
                     [
                         i[0] * (1.0 / 100.0),
@@ -1317,9 +1308,9 @@ impl ToRgb for ICCProfile {
                     ]
                 })
                 .collect::<Vec<_>>();
-            self.transform_f32().transform(&scaled, &mut temp).ok()?;
+            transform.transform(&scaled, &mut temp).ok()?;
         } else {
-            self.transform_f32().transform(input, &mut temp).ok()?;
+            transform.transform(input, &mut temp).ok()?;
         };
 
         for (input, output) in temp.iter().zip(output.iter_mut()) {
@@ -1334,11 +1325,8 @@ impl ToRgb for ICCProfile {
     }
 
     fn convert_u8(&self, input: &[u8], output: &mut [u8]) -> Option<()> {
-        if self.is_srgb() {
-            output.copy_from_slice(input);
-        } else {
-            self.transform_u8().transform(input, output).ok()?;
-        }
+        // PdfCraft patch: apply the parsed profile regardless of its device model.
+        self.transform_u8().transform(input, output).ok()?;
 
         Some(())
     }

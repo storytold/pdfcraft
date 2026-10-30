@@ -5,6 +5,8 @@
 //!
 //! The profiles are synthetic ones built here: a linear profile with the sRGB colorants, and the
 //! same profile with red and blue swapped, which draws red as blue. They have the same length.
+//! Device-model metadata must not change their transforms or make an explicit ICC space into
+//! a device space subject to resource defaults.
 
 use super::{image_cache_pdf, render_first_page, rgb_at};
 
@@ -24,17 +26,21 @@ const SRGB_COLORANTS: [[f64; 3]; 3] = [[0.4361, 0.2225, 0.0139], [0.3851, 0.7169
 
 /// An ICC v2 RGB display profile (ICC.1:2001-04) with linear tone curves, whose red, green and
 /// blue take the sRGB colorants `primaries` names: `[0, 1, 2]` is linear sRGB, and `[2, 1, 0]`
-/// draws red as blue. The device model is left blank: hayro takes a profile whose model reads
-/// `sRGB` for standard sRGB and skips its transform. Every profile is 300 bytes long.
+/// draws red as blue. The device-model field starts empty and can be varied independently of
+/// the transform. Every linear profile is 300 bytes long.
 fn rgb_profile(primaries: [usize; 3]) -> Vec<u8> {
+    // A curveType with no entries is the identity.
+    rgb_profile_with_curve(primaries, &[b"curv".as_slice(), &[0; 8]].concat())
+}
+
+fn rgb_profile_with_curve(primaries: [usize; 3], curve: &[u8]) -> Vec<u8> {
     let mut tags: Vec<([u8; 4], Vec<u8>)> = Vec::new();
     for (signature, primary) in [*b"rXYZ", *b"gXYZ", *b"bXYZ"].into_iter().zip(primaries) {
         let [x, y, z] = SRGB_COLORANTS[primary];
         tags.push((signature, [b"XYZ ".as_slice(), &[0; 4], &s15f16(x), &s15f16(y), &s15f16(z)].concat()));
     }
     for signature in [*b"rTRC", *b"gTRC", *b"bTRC"] {
-        // A `curveType` with no entries: the identity.
-        tags.push((signature, [b"curv".as_slice(), &[0; 8]].concat()));
+        tags.push((signature, curve.to_vec()));
     }
     let start = 128 + 4 + 12 * tags.len();
     let (mut table, mut data) = (Vec::new(), Vec::new());
@@ -156,5 +162,149 @@ fn icc_profiles_used_again_are_read_once() {
         let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, 130.0, 70.0), &cache, page.xref(), InterpreterSettings::default());
         interpret_page(page, &mut ctx, &mut Nothing);
         assert_eq!(cache.icc_profile_reads(), 4, "after the {render} render: each different profile is read once");
+    }
+}
+
+/// The sRGB encoding's inverse transfer curve (ICC parametricCurveType function 4), together
+/// with the existing D50-adapted colorants, gives an ordinary sRGB control built from source.
+fn srgb_profile() -> Vec<u8> {
+    let mut curve = [b"para".as_slice(), &[0; 4], &4u16.to_be_bytes(), &[0; 2]].concat();
+    for parameter in [2.4, 1.0 / 1.055, 0.055 / 1.055, 1.0 / 12.92, 0.04045, 0.0, 0.0] {
+        curve.extend_from_slice(&s15f16(parameter));
+    }
+    let mut profile = rgb_profile_with_curve([0, 1, 2], &curve);
+    // Parametric curves are defined by ICC v4; all size/offset fields come from the builder.
+    profile[8..12].copy_from_slice(&[4, 0x40, 0, 0]);
+    profile
+}
+
+fn with_device_model(mut profile: Vec<u8>, model: &[u8; 4]) -> Vec<u8> {
+    profile[52..56].copy_from_slice(model);
+    // Header edits never leave a stale profile-ID digest in these generated fixtures.
+    profile[84..100].fill(0);
+    profile
+}
+
+fn gray_samples(profile: &[u8], bits_per_component: u8, image_data: &[u8]) -> Vec<u8> {
+    let dict = format!("<< /N 3 /Alternate /DeviceRGB /Length {} >>", profile.len());
+    let image_dict = format!(
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace [/ICCBased 5 0 R] /BitsPerComponent {bits_per_component} /Length {} >>",
+        image_data.len()
+    );
+    image_cache_pdf(
+        "/C cs 0.5 0.5 0.5 sc 10 20 30 30 re f q 30 0 0 30 60 20 cm /Im Do Q",
+        "<< /ColorSpace << /C [/ICCBased 5 0 R] >> /XObject << /Im 6 0 R >> >>",
+        &[(&dict, profile), (&image_dict, image_data)],
+    )
+}
+
+/// The expected gray levels come from the transfer curves: half-linear light encodes near
+/// 188 in sRGB, while half-sRGB remains 128. Header model strings do not define either curve.
+#[test]
+fn icc_device_model_metadata_does_not_replace_profile_transform() {
+    for (name, profile, expected) in [("linear RGB", rgb_profile([0, 1, 2]), [188; 3]), ("sRGB", srgb_profile(), [128; 3])] {
+        let mut reference: Option<Vec<u8>> = None;
+        for model in [b"\0\0\0\0", b"TEST", b"sRGB"] {
+            let marked = with_device_model(profile.clone(), model);
+            assert_eq!(&marked[..52], &profile[..52]);
+            assert_eq!(&marked[56..], &profile[56..], "only device-model metadata differs");
+            let rendered = render_first_page(gray_samples(&marked, 8, &[128; 3]));
+            assert_near(rgb_at(&rendered.rgba, WIDTH, 25, 35), expected, &format!("{name}, vector, model={model:?}"));
+            assert_near(rgb_at(&rendered.rgba, WIDTH, 75, 35), expected, &format!("{name}, image, model={model:?}"));
+            if let Some(reference) = &reference {
+                assert_eq!(&rendered.rgba[..], reference.as_slice(), "{name}: model metadata cannot change any rendered pixel");
+            } else {
+                reference = Some(rendered.rgba.to_vec());
+            }
+        }
+    }
+}
+
+/// A 16-bit RGB image bypasses the 8-bit fast path and the lookup table (48 sample bits),
+/// so decoding its half-range samples reaches the lazily constructed f32 ICC transform.
+/// The vector alongside it still checks the single-sample u8 transform of the same profile.
+#[test]
+fn icc_device_model_metadata_does_not_change_f32_image_transform() {
+    for (name, profile, expected) in [("linear RGB", rgb_profile([0, 1, 2]), [188; 3]), ("sRGB", srgb_profile(), [128; 3])] {
+        let mut reference: Option<Vec<u8>> = None;
+        for model in [b"\0\0\0\0", b"TEST", b"sRGB"] {
+            let marked = with_device_model(profile.clone(), model);
+            let rendered = render_first_page(gray_samples(&marked, 16, &[0x80, 0, 0x80, 0, 0x80, 0]));
+            assert_near(rgb_at(&rendered.rgba, WIDTH, 25, 35), expected, &format!("{name}, u8 vector, model={model:?}"));
+            assert_near(rgb_at(&rendered.rgba, WIDTH, 75, 35), expected, &format!("{name}, f32 image, model={model:?}"));
+            if let Some(reference) = &reference {
+                assert_eq!(&rendered.rgba[..], reference.as_slice(), "{name}: model metadata cannot change f32 image pixels");
+            } else {
+                reference = Some(rendered.rgba.to_vec());
+            }
+        }
+    }
+}
+
+#[test]
+fn srgb_marked_profiles_keep_distinct_colorants_in_both_cache_orders() {
+    let red = with_device_model(rgb_profile([0, 1, 2]), b"sRGB");
+    let blue = with_device_model(rgb_profile([2, 1, 0]), b"sRGB");
+    assert_eq!(red.len(), blue.len());
+    let dict = format!("<< /N 3 /Length {} >>", red.len());
+    for reverse in [false, true] {
+        let names = if reverse { ["B", "A", "B", "A", "B", "A"] } else { ["A", "B", "A", "B", "A", "B"] };
+        let content =
+            names.iter().enumerate().map(|(i, name)| format!("/{name} cs 1 0 0 sc {} 20 20 30 re f", 2 + 21 * i)).collect::<Vec<_>>().join("\n");
+        let rendered = render_first_page(image_cache_pdf(
+            &content,
+            "<< /ColorSpace << /A [/ICCBased 5 0 R] /B [/ICCBased 6 0 R] >> >>",
+            &[(&dict, &red), (&dict, &blue)],
+        ));
+        for (i, name) in names.into_iter().enumerate() {
+            assert_near(
+                rgb_at(&rendered.rgba, WIDTH, 12 + 21 * i, 35),
+                if name == "A" { RED } else { BLUE },
+                "same model, independent cached profile",
+            );
+        }
+    }
+}
+
+#[test]
+fn explicit_icc_profiles_do_not_turn_into_device_rgb_defaults() {
+    let default = rgb_profile([2, 1, 0]);
+    let dict = format!("<< /N 3 /Length {} >>", default.len());
+    for model in [b"\0\0\0\0", b"sRGB"] {
+        let explicit = with_device_model(rgb_profile([0, 1, 2]), model);
+        let rendered = render_first_page(image_cache_pdf(
+            "/A cs 1 0 0 sc 2 20 20 30 re f q 20 0 0 30 44 20 cm /Im Do Q 1 0 0 rg 86 20 20 30 re f",
+            "<< /ColorSpace << /A [/ICCBased 5 0 R] /DefaultRGB [/ICCBased 6 0 R] >> /XObject << /Im 7 0 R >> >>",
+            &[
+                (&dict, &explicit),
+                (&dict, &default),
+                ("<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace [/ICCBased 5 0 R] /BitsPerComponent 8 /Length 3 >>", &[255, 0, 0]),
+            ],
+        ));
+        assert_near(rgb_at(&rendered.rgba, WIDTH, 12, 35), RED, "explicit ICC vector keeps its own colorants");
+        assert_near(rgb_at(&rendered.rgba, WIDTH, 54, 35), RED, "explicit ICC image keeps its own colorants");
+        assert_near(rgb_at(&rendered.rgba, WIDTH, 96, 35), BLUE, "device RGB still uses DefaultRGB");
+    }
+}
+
+#[test]
+fn invalid_srgb_marked_profiles_keep_alternate_fallback_without_panics() {
+    for model in [b"\0\0\0\0", b"sRGB"] {
+        // A short profile can contain the model field without containing a valid ICC header.
+        let mut short = vec![0; 56];
+        short[52..56].copy_from_slice(model);
+        let mismatched = with_device_model(rgb_profile([0, 1, 2]), model);
+        for (name, profile, components, alternate, sample, expected) in [
+            ("short header", short.as_slice(), 3, "/DeviceRGB", "1 0 0", RED),
+            ("RGB profile with N=1", mismatched.as_slice(), 1, "/DeviceGray", "0.5", [128; 3]),
+        ] {
+            let dict = format!("<< /N {components} /Alternate {alternate} /Length {} >>", profile.len());
+            let rendered = render_first_page(image_cache_pdf(
+                &format!("/A cs {sample} sc 10 20 30 30 re f"),
+                "<< /ColorSpace << /A [/ICCBased 5 0 R] >> >>",
+                &[(&dict, profile)],
+            ));
+            assert_near(rgb_at(&rendered.rgba, WIDTH, 25, 35), expected, name);
+        }
     }
 }
