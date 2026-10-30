@@ -204,6 +204,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-30 (M10, #1595):** File ▸ Export ▸ Markdown… (`export.markdown`, also in All tools ▸ Export to) saves the document as a `.md` file through the Markdown export #5208 added, with the label in every catalogue. Estimates unchanged.
 - **2026-10-29 (M7, #2517):** Widening a paragraph rejoins a wrap with the number of spaces that wrap consumed, including a typed run and none for a Chinese or Japanese word split. The count survives an incremental save and a full rewrite, and a width-only `text_edit` uses it. Estimates unchanged.
 - **2026-10-26 (M11, JBIG2 symbols):** Lossless JBIG2 now stores each distinct mark of a black-and-white image once, as a symbol, and places its exact copies, when that is smaller than the generic region: on six pages of rendered 300 dpi text 28% of the generic region's size and 17% of Group 4's, and the same bits back through two independent decoders (hayro-jbig2 and Poppler). Scans, whose letters are seldom identical, gain little until refinement coding; a dictionary shared between pages (`/JBIG2Globals`) is next. Estimates unchanged.
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
