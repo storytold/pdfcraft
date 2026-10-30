@@ -84,18 +84,15 @@ impl ScrollSpeed {
     }
 }
 
-/// Preferences ▸ Make the Hand tool zoom with the mouse wheel, Acrobat's "Make Hand tool use
-/// mouse-wheel zooming" (#1399): while the Hand tool is held over the pages, a plain wheel notch
-/// zooms there as ⌘/Ctrl with the wheel does, at the same rate. Only notched wheels (line or
-/// page steps): a trackpad's point deltas keep scrolling, and so does the wheel with a key held
-/// (Shift scrolls sideways). Call before [`ScrollSpeed::apply`], which keeps that zoom's rate.
-pub(crate) fn wheel_zooms(raw: &mut egui::RawInput) {
-    for event in &mut raw.events {
-        if let egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page, modifiers, .. } = event
-            && modifiers.is_none()
-        {
-            *modifiers = egui::Modifiers::COMMAND;
-        }
+/// Convert one plain wheel notch to ⌘/Ctrl-wheel for the Hand tool preference (#1399),
+/// after the caller checks its event-time pointer against the document view. Trackpad point
+/// deltas and modified wheels keep their behavior. Call before [`ScrollSpeed::apply`],
+/// which keeps the zoom rate independent of the scroll-speed choice.
+pub(crate) fn wheel_zooms(event: &mut egui::Event) {
+    if let egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page, modifiers, .. } = event
+        && modifiers.is_none()
+    {
+        *modifiers = egui::Modifiers::COMMAND;
     }
 }
 

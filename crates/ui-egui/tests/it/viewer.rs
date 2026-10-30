@@ -2457,6 +2457,82 @@ fn arrow_keys_follow_the_scroll_speed_preference() {
     assert!(fast * 3 < normal * 2 && normal * 3 < slow * 2, "presses to page 2: slow {slow}, normal {normal}, fast {fast}");
 }
 
+/// #1399: coalesced wheel events keep the pointer position they arrived at, in both orders.
+#[test]
+fn the_hand_tool_wheel_classifies_each_notch_at_its_event_position() {
+    use egui::{Event, Modifiers};
+    fn classify(h: &mut Harness<'static, PdfCraftApp>, events: Vec<Event>) -> Vec<Modifiers> {
+        let mut raw = egui::RawInput { events, ..Default::default() };
+        let ctx = h.ctx.clone();
+        h.state_mut().prepare_raw_input(&ctx, &mut raw);
+        raw.events
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::MouseWheel { modifiers, .. } => Some(modifiers),
+                _ => None,
+            })
+            .collect()
+    }
+    let mut h = harness();
+    h.state_mut().set_option("hand-wheel-zoom", "true").unwrap();
+    h.state_mut().set_option("mode", "edit").unwrap();
+    h.state_mut().set_option("left", "open").unwrap();
+    h.state_mut().set_option("panel", "none").unwrap();
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
+    h.run_steps(8);
+    let viewport = h.state().views[h.state().active.unwrap()].viewport_rect();
+    let document = viewport.max - egui::vec2(40.0, 40.0);
+    let panel = egui::pos2(viewport.left() - 10.0, document.y);
+    assert!(viewport.width() > 100.0 && viewport.height() > 100.0);
+    assert!(viewport.contains(document) && !viewport.contains(panel) && panel.x >= 0.0, "{viewport:?}, {document:?}, {panel:?}");
+    let wheel = || Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    };
+    let (mut actual, mut expected) = (Vec::new(), Vec::new());
+    for (first, second, modifiers) in
+        [(document, panel, vec![Modifiers::COMMAND, Modifiers::NONE]), (panel, document, vec![Modifiers::NONE, Modifiers::COMMAND])]
+    {
+        for first_move in [true, false] {
+            // Also cover a wheel before the first move: it uses the previous frame's pointer.
+            h.hover_at(first);
+            h.run_steps(2);
+            let mut events = Vec::new();
+            if first_move {
+                events.push(Event::PointerMoved(first));
+            }
+            events.extend([wheel(), Event::PointerMoved(second), wheel()]);
+            actual.push(classify(&mut h, events));
+            expected.push(modifiers.clone());
+        }
+    }
+    h.hover_at(document);
+    h.run_steps(2);
+    actual.push(classify(&mut h, vec![Event::PointerGone, wheel()]));
+    expected.push(vec![Modifiers::NONE]);
+
+    // A popup can overlap the viewport: test the layer gate at each event position too.
+    h.state_mut().set_option("left", "closed").unwrap();
+    h.run_steps(4);
+    let viewport = h.state().views[h.state().active.unwrap()].viewport_rect();
+    let document = viewport.max - egui::vec2(40.0, 40.0);
+    crate::support::open_menu(&mut h, "View");
+    let menu = crate::support::menu_row(&h, "Page display").rect().center();
+    assert!(viewport.contains(menu), "the popup overlaps the document viewport");
+    assert!(h.ctx.layer_id_at(menu).is_some_and(|layer| layer.order != egui::Order::Background));
+    for (first, second, modifiers) in
+        [(document, menu, vec![Modifiers::COMMAND, Modifiers::NONE]), (menu, document, vec![Modifiers::NONE, Modifiers::COMMAND])]
+    {
+        actual.push(classify(&mut h, vec![Event::PointerMoved(first), wheel(), Event::PointerMoved(second), wheel()]));
+        expected.push(modifiers);
+    }
+    // Assert after collecting every case so a reverted run exercises both event orders.
+    assert_eq!(actual, expected, "each wheel keeps its event-time document/panel/popup target");
+}
+
 /// #2665: next to a very wide page the normal pages sit far to its right, outside the window.
 /// Going to one changed the page counter but kept the horizontal scroll, so it stayed out of
 /// sight; as in Acrobat, it is brought into view.

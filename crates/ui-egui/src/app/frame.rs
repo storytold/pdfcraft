@@ -83,9 +83,7 @@ impl PdfCraftApp {
             control.set_epoch(self.input_epoch());
         }
         // Before egui reads this frame's wheel input, and before the scroll speed scales it.
-        if self.hand_wheel_zooms(ctx, raw) {
-            scroll_speed::wheel_zooms(raw);
-        }
+        self.hand_wheel_zooms(ctx, raw);
         self.scroll_speed.apply(ctx, raw);
         // The native menu's key equivalents.
         if let Some(native) = self.native_menu.as_mut() {
@@ -95,28 +93,42 @@ impl PdfCraftApp {
 }
 
 impl PdfCraftApp {
-    /// Whether this frame's wheel zooms rather than scrolls ([`scroll_speed::wheel_zooms`]):
-    /// the preference is on, the Hand tool is held, no dialog is open, and the pointer is over
-    /// the document view (its pages and the space around them), including either comparison
-    /// half. A page grid or expanded All tools view does not qualify. A menu or popup over
-    /// the document view keeps the wheel. Viewports and covering layers are from the last frame.
-    fn hand_wheel_zooms(&self, ctx: &egui::Context, raw: &egui::RawInput) -> bool {
+    /// Convert eligible wheel events over the document view (its pages and surrounding space),
+    /// including either comparison half, with the Hand preference on and no dialog open.
+    /// Page grids and expanded All tools do not qualify; a covering menu or popup keeps the
+    /// wheel. Each event uses its own pointer position against the last frame's viewports/layers.
+    fn hand_wheel_zooms(&self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         if !self.hand_wheel_zoom || self.quick_tool != QuickTool::Hand || self.modal_open() {
-            return false;
+            return;
         }
         // The expanded All tools view is shown in the document's place; its list scrolls.
         if self.mode == Mode::AllTools && self.all_tools_full {
-            return false;
+            return;
         }
-        let moved = raw.events.iter().rev().find_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None });
-        let Some(pointer) = moved.or_else(|| ctx.input(|i| i.pointer.latest_pos())) else { return false };
-        // The document view is drawn in the window's background layer; menus and popups above it.
-        if ctx.layer_id_at(pointer).is_some_and(|layer| layer.order != egui::Order::Background) {
-            return false;
-        }
-        let Some(active) = self.active else { return false };
+        let Some(active) = self.active else { return };
         let partner = compare_ui::side_by_side(self, active).map(|(old, _)| old);
-        std::iter::once(active).chain(partner).filter_map(|i| self.views.get(i)).any(|view| !view.organize && view.viewport_rect().contains(pointer))
+        let mut pointer = ctx.input(|i| i.pointer.latest_pos());
+        for event in &mut raw.events {
+            match event {
+                egui::Event::PointerMoved(at) => pointer = Some(*at),
+                egui::Event::PointerGone => pointer = None,
+                egui::Event::MouseWheel { .. } => {
+                    let Some(pointer) = pointer else { continue };
+                    // Menus and popups above the document keep the wheel at this position.
+                    if ctx.layer_id_at(pointer).is_some_and(|layer| layer.order != egui::Order::Background) {
+                        continue;
+                    }
+                    if std::iter::once(active)
+                        .chain(partner)
+                        .filter_map(|i| self.views.get(i))
+                        .any(|view| !view.organize && view.viewport_rect().contains(pointer))
+                    {
+                        scroll_speed::wheel_zooms(event);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     pub(crate) fn finish_render_frame(&mut self, ctx: &egui::Context) {
