@@ -405,3 +405,5 @@ Estimates unchanged.
 PR #2133 retains document-local Pages sidebar focus for Ctrl/Cmd+A and Escape after the UI module split. The selection does not navigate. The focused regression is in `crates/ui-egui/tests/it/view.rs`; current-head hosted validation is pending. Feature counts and estimates are unchanged.
 
 - 2026-10-30: patch — M12 / #3941: reconcile upstream integration with XFA occurrence, rollback and border regressions; preserve upstream improvements and both test registries. Estimates unchanged.
+
+- 2026-10-30: patch — M12 / #3941: validate published-evidence HTTPS source metadata after merge review; provenance revision review, download behavior and compatibility estimates unchanged.

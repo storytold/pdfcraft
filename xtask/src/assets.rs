@@ -333,6 +333,16 @@ pub fn check(root: &Path, m: &Manifest, repo_files: &[String], lock: &BTreeSet<(
             problems.push(format!("{}: URLs must be https", f.file));
         }
     }
+    for f in &m.evidence {
+        // URL parsing alone normalizes embedded whitespace; it would still be copied
+        // verbatim into attribution. Revision pinning remains part of provenance review.
+        let valid_source = f.source.starts_with("https://")
+            && !f.source.chars().any(|c| c.is_whitespace() || c.is_control())
+            && url::Url::parse(&f.source).is_ok_and(|u| u.scheme() == "https" && u.has_host());
+        if !valid_source {
+            problems.push(format!("{}: source must be a valid HTTPS URL (AGENTS.md §1.3)", f.file));
+        }
+    }
     for b in &m.build_input {
         licence_ok(&b.name, &b.licence, &mut problems);
         if visual(&b.kind) && !ofl_font(&b.kind, &b.licence) && (mentions_adobe(&b.author) || mentions_adobe(&b.source) || mentions_adobe(&b.title)) {
@@ -573,6 +583,31 @@ mod tests {
             let mut m = evidence_manifest();
             m.evidence[0].licence = licence.into();
             assert!(check(&root(), &m, &[], &lock(&[])).is_empty(), "{licence}");
+        }
+    }
+
+    #[test]
+    fn evidence_requires_a_valid_https_source_url() {
+        for source in [
+            "",
+            " ",
+            "source/v1",
+            "http://example.org/source/v1",
+            "https://",
+            "https:///",
+            "https://example.org:invalid/source/v1",
+            "https://exa mple.org/source/v1",
+            "https://example.org/source/\nv1",
+        ] {
+            let mut m = evidence_manifest();
+            m.evidence[0].source = source.into();
+            let problems = check(&root(), &m, &[], &lock(&[]));
+            assert!(problems.iter().any(|p| p.contains("source must be a valid HTTPS URL")), "{source:?}: {problems:?}");
+        }
+        for source in ["https://example.org/source/v1", "https://example.org/commit/0123456789abcdef0123456789abcdef01234567"] {
+            let mut m = evidence_manifest();
+            m.evidence[0].source = source.into();
+            assert!(check(&root(), &m, &[], &lock(&[])).is_empty(), "{source}");
         }
     }
 

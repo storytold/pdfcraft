@@ -796,3 +796,5 @@ PR #2133 retains document-local Pages sidebar focus for Ctrl/Cmd+A and Escape af
 ## Button export-value refresh (2026-10-30)
 
 PR #1952 retains per-widget checkbox/radio export-value editing in the split form-authoring and Prepare modules. Caption editing remains supported. Tests cover preserved appearances and selection, invalid/locked refusals, data-format round trips, and Apply/Cancel/Undo. Current-head hosted validation is pending; feature estimates are unchanged.
+
+- 2026-10-30 — M12 / #3941 CodeRabbit follow-up: reject empty, malformed and non-HTTPS published-evidence source URLs, with a failing-before-fix regression; no change to build downloads or XFA behavior.

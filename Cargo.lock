@@ -8375,6 +8375,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "toml",
+ "url",
 ]
 
 [[package]]
