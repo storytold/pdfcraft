@@ -3137,6 +3137,35 @@ fn px40(page: &RenderedPage, x: usize, y: usize) -> &[u8] {
     &page.rgba[((y * 40 + x) * 4)..][..4]
 }
 
+/// #5035: more than 127 same-direction subpaths around the page piled up in an `i8` counter in
+/// the tiler: the render failed with "attempt to add with overflow" instead of filling the page.
+/// Every count, direction and fill rule must give what the fill rule says.
+#[test]
+fn many_overlapping_subpaths_around_the_page_fill_by_their_winding() {
+    // `-10 -10 60 60 re` winds one way around the 40 pt page, `-10 50 60 -60 re` the other.
+    let (forward, reversed) = ("-10 -10 60 60 re\n", "-10 50 60 -60 re\n");
+    let black = [0, 0, 0, 255];
+    let white = [255, 255, 255, 255];
+    let cases: [(String, &str, [u8; 4]); 9] = [
+        (forward.repeat(127), "f", black),
+        (forward.repeat(128), "f", black),
+        (forward.repeat(129), "f", black),
+        (forward.repeat(1000), "f", black),
+        (reversed.repeat(129), "f", black),
+        // Equal and opposite: the winding is zero, nothing is filled.
+        (format!("{}{}", forward.repeat(200), reversed.repeat(200)), "f", white),
+        // Even-odd: an odd number fills, an even one does not.
+        (forward.repeat(129), "f*", black),
+        (forward.repeat(128), "f*", white),
+        (format!("{}{}", forward.repeat(200), reversed.repeat(201)), "f*", black),
+    ];
+    for (rects, paint, want) in cases {
+        let page = render_with_gs1(&format!("0 g\n{rects}{paint}"), "<< >>");
+        assert_eq!(px40(&page, 20, 20), want, "{} subpaths, {paint}", rects.matches(" re").count());
+        assert_eq!(px40(&page, 2, 37), want, "{} subpaths, {paint}, near a corner", rects.matches(" re").count());
+    }
+}
+
 /// From `cargo xtask fuzz`: an ExtGState `/D [[11] 0]` on a line that starts at x =
 /// 92234775807 cut it into billions of dashes, and stroke expansion allocated more than
 /// 5 GB. A tiny dash on an ordinary line does the same (`[0.000001] 0 d` on 20 pt passed
