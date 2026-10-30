@@ -435,4 +435,62 @@ class PdfDocumentTest {
 
         doc.close()
     }
+
+    @Test
+    fun testOutlineAndBookmarks() {
+        val bytes = SAMPLE_PDF_WITH_TEXT.toByteArray(StandardCharsets.UTF_8)
+        val doc = PdfDocument.openBytes(bytes = bytes, name = "outline_test.pdf")
+
+        val emptyOutline = doc.outline()
+        assertNotNull(emptyOutline)
+        assertTrue(emptyOutline.isEmpty())
+        doc.close()
+
+        val nestedOutlineFile = File("../../../corpus/pdfjs/test/pdfs/nested_outline.pdf")
+        if (nestedOutlineFile.exists()) {
+            val nestedDoc = PdfDocument.openFile(path = nestedOutlineFile.absolutePath)
+            val outline = nestedDoc.outline()
+            assertNotNull(outline)
+            assertTrue(outline.isNotEmpty())
+            val first = outline[0]
+            assertNotNull(first.title)
+            nestedDoc.close()
+        }
+    }
+
+    @Test
+    fun testInkDrawingStrokeEraseAndUndoRedo() {
+        val bytes = SAMPLE_PDF_WITH_TEXT.toByteArray(StandardCharsets.UTF_8)
+        val doc = PdfDocument.openBytes(bytes = bytes, name = "ink_test.pdf")
+
+        // 1. Add ink stroke
+        doc.addInkStroke(
+            page = 0,
+            points = listOf(
+                uniffi.pdfcraft_ffi.FfiPoint(20f, 20f),
+                uniffi.pdfcraft_ffi.FfiPoint(60f, 60f),
+                uniffi.pdfcraft_ffi.FfiPoint(100f, 60f)
+            ),
+            colorRgb = 0x0000FFu,
+            width = 3f
+        )
+        assertTrue(doc.isDirty)
+
+        // 2. Undo ink
+        val undone = doc.undo()
+        assertNotNull(undone)
+
+        // 3. Redo ink
+        val redone = doc.redo()
+        assertNotNull(redone)
+
+        // 4. Erase ink
+        doc.eraseInk(
+            page = 0,
+            path = listOf(uniffi.pdfcraft_ffi.FfiPoint(60f, 60f)),
+            radius = 25f
+        )
+
+        doc.close()
+    }
 }

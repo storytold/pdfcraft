@@ -1,7 +1,10 @@
 package com.storytold.pdfcraft.kit
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,17 +27,26 @@ fun PdfView(
     document: PdfDocument,
     initialPageIndex: Int = 0,
     onClose: (() -> Unit)? = null,
+    onSave: (() -> Unit)? = null,
+    onSaveAs: (() -> Unit)? = null,
+    onShare: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var currentPage by remember { mutableStateOf(initialPageIndex) }
     var readingColors by remember { mutableStateOf<FfiReadingColors?>(null) }
     var hideComments by remember { mutableStateOf(false) }
 
+    // Drawing & Markup State
+    var isInkMode by remember { mutableStateOf(false) }
+    var isEraserMode by remember { mutableStateOf(false) }
+
     // Search state
     var isSearchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var searchMatches by remember { mutableStateOf<List<FfiFindMatch>>(emptyList()) }
     // Modals
+    var showOutlineDialog by remember { mutableStateOf(false) }
+    var showGoToPageDialog by remember { mutableStateOf(false) }
     var showPageGrid by remember { mutableStateOf(false) }
     var showCommandPalette by remember { mutableStateOf(false) }
     var showRedactionView by remember { mutableStateOf(false) }
@@ -70,7 +82,9 @@ fun PdfView(
             Column(modifier = Modifier.fillMaxWidth()) {
                 TopAppBar(
                     title = {
-                        Column {
+                        Column(
+                            modifier = Modifier.clickable { showGoToPageDialog = true }
+                        ) {
                             Text(
                                 text = document.name,
                                 style = MaterialTheme.typography.titleMedium,
@@ -78,7 +92,7 @@ fun PdfView(
                                 maxLines = 1
                             )
                             Text(
-                                text = "Page ${currentPage + 1} of ${document.pageCount}",
+                                text = "Page ${currentPage + 1} of ${document.pageCount} (tap to jump)",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.secondary
                             )
@@ -117,6 +131,11 @@ fun PdfView(
                             Text(">", fontWeight = FontWeight.Bold)
                         }
 
+                        // Table of Contents / Outline
+                        IconButton(onClick = { showOutlineDialog = true }) {
+                            Text("TOC", style = MaterialTheme.typography.labelSmall)
+                        }
+
                         // Thumbnails / Grid
                         IconButton(onClick = { showPageGrid = true }) {
                             Text("Grid", style = MaterialTheme.typography.labelSmall)
@@ -144,6 +163,48 @@ fun PdfView(
                                 expanded = showMoreMenu,
                                 onDismissRequest = { showMoreMenu = false }
                             ) {
+                                onSave?.let { saveAction ->
+                                    DropdownMenuItem(
+                                        text = { Text("Save") },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            saveAction()
+                                        }
+                                    )
+                                }
+                                onSaveAs?.let { saveAsAction ->
+                                    DropdownMenuItem(
+                                        text = { Text("Save As...") },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            saveAsAction()
+                                        }
+                                    )
+                                }
+                                onShare?.let { shareAction ->
+                                    DropdownMenuItem(
+                                        text = { Text("Share PDF...") },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            shareAction()
+                                        }
+                                    )
+                                }
+                                DropdownMenuItem(
+                                    text = { Text("Go to Page...") },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        showGoToPageDialog = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Table of Contents / Outline...") },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        showOutlineDialog = true
+                                    }
+                                )
+                                HorizontalDivider()
                                 DropdownMenuItem(
                                     text = { Text(if (readingColors == null) "Dark Mode" else "Normal Mode") },
                                     onClick = {
@@ -265,12 +326,43 @@ fun PdfView(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceAround,
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // Pan / Select mode
+                    FilterChip(
+                        selected = !isInkMode && !isEraserMode,
+                        onClick = {
+                            isInkMode = false
+                            isEraserMode = false
+                        },
+                        label = { Text("Select") }
+                    )
+
+                    // Draw / Ink mode
+                    FilterChip(
+                        selected = isInkMode,
+                        onClick = {
+                            isInkMode = !isInkMode
+                            if (isInkMode) isEraserMode = false
+                        },
+                        label = { Text("Pen") }
+                    )
+
+                    // Eraser mode
+                    FilterChip(
+                        selected = isEraserMode,
+                        onClick = {
+                            isEraserMode = !isEraserMode
+                            if (isEraserMode) isInkMode = false
+                        },
+                        label = { Text("Eraser") }
+                    )
+
                     // Highlight
-                    Button(
+                    OutlinedButton(
                         onClick = {
                             pdfPageViewRef?.markupSelection(
                                 kind = FfiTextMarkupKind.HIGHLIGHT,
@@ -284,7 +376,7 @@ fun PdfView(
                     }
 
                     // Underline
-                    Button(
+                    OutlinedButton(
                         onClick = {
                             pdfPageViewRef?.markupSelection(
                                 kind = FfiTextMarkupKind.UNDERLINE,
@@ -298,7 +390,7 @@ fun PdfView(
                     }
 
                     // Strikeout
-                    Button(
+                    OutlinedButton(
                         onClick = {
                             pdfPageViewRef?.markupSelection(
                                 kind = FfiTextMarkupKind.STRIKE_OUT,
@@ -349,6 +441,8 @@ fun PdfView(
                         setDocument(document, currentPage)
                         this.readingColors = readingColors
                         this.hideComments = hideComments
+                        this.isInkMode = isInkMode
+                        this.isEraserMode = isEraserMode
                         pdfPageViewRef = this
                     }
                 },
@@ -359,6 +453,8 @@ fun PdfView(
                     }
                     view.readingColors = readingColors
                     view.hideComments = hideComments
+                    view.isInkMode = isInkMode
+                    view.isEraserMode = isEraserMode
                 }
             )
 
@@ -572,6 +668,38 @@ fun PdfView(
                         statusNotification = "Header/Footer error: ${e.message}"
                     }
                 }
+            )
+        }
+    }
+
+    // Outline / TOC Dialog
+    if (showOutlineDialog) {
+        Dialog(onDismissRequest = { showOutlineDialog = false }) {
+            PdfOutlineDialog(
+                outline = try { document.outline() } catch (_: Exception) { emptyList() },
+                currentPage = currentPage,
+                onPageSelected = { selected ->
+                    currentPage = selected
+                    pdfPageViewRef?.setDocument(document, selected)
+                    showOutlineDialog = false
+                },
+                onDismiss = { showOutlineDialog = false }
+            )
+        }
+    }
+
+    // Go To Page Dialog
+    if (showGoToPageDialog) {
+        Dialog(onDismissRequest = { showGoToPageDialog = false }) {
+            PdfGoToPageDialog(
+                currentPage = currentPage,
+                pageCount = document.pageCount,
+                onPageSelected = { selected ->
+                    currentPage = selected
+                    pdfPageViewRef?.setDocument(document, selected)
+                    showGoToPageDialog = false
+                },
+                onDismiss = { showGoToPageDialog = false }
             )
         }
     }
