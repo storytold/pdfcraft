@@ -1,6 +1,5 @@
 use super::{
-    Color32, CornerRadius, DocInfo, DocView, Edit, PdfCraftApp, Pos2, QuickTool, Rect, Sense, SnapshotKind, Stroke, Tokens, comments, icons, theme,
-    vec2,
+    Color32, CornerRadius, DocView, Edit, PdfCraftApp, Pos2, QuickTool, Rect, Sense, SnapshotKind, Stroke, Tokens, comments, icons, theme, vec2,
 };
 
 /// Whether `p` lies in the bottom-left quadrant of `area`, where the page size shows (#1855).
@@ -9,23 +8,26 @@ pub(super) fn in_size_hint_zone(area: Rect, p: Pos2) -> bool {
 }
 
 /// The current page's size, floating at the bottom-left of the document area while the pointer is
-/// in that quadrant, as Acrobat does. Same formatter and unit as Document Properties.
+/// in that quadrant, as Acrobat does, or all the time when `always` is set (#4908). Same
+/// formatter and unit as Document Properties.
 pub(super) fn page_size_hint(
-    view: &DocView,
-    info: &DocInfo,
+    size: Option<(f32, f32)>,
     units: crate::units::Unit,
+    always: bool,
     area: Rect,
     unobstructed: bool,
     ui: &mut egui::Ui,
     t: &Tokens,
 ) {
-    let Some(page) = info.pages.get(view.current) else { return };
-    let inside = unobstructed && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| in_size_hint_zone(area, p));
-    if !inside {
+    let Some((width, height)) = size else { return };
+    let inside = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| in_size_hint_zone(area, p));
+    // Under a dialog or the palette the label stays hidden, whatever the preference says.
+    if !unobstructed || !(always || inside) {
         return;
     }
-    let text = units.size(f64::from(page.width), f64::from(page.height));
-    egui::Area::new(egui::Id::unique("page-size-hint"))
+    let text = units.size(f64::from(width), f64::from(height));
+    // One per document view: a side-by-side comparison draws two at once.
+    egui::Area::new(ui.scope_id().with("page-size-hint"))
         .order(egui::Order::Foreground)
         .interactable(false)
         .pivot(egui::Align2::LEFT_BOTTOM)

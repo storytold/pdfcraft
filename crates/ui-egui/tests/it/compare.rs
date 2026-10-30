@@ -279,3 +279,14 @@ fn export_to_word_html_and_rtf() {
     }
     assert!(std::fs::read_to_string(dir.join("e.html")).unwrap().contains("Exported words"));
 }
+
+/// #4908: with the page size always on, each half of a side-by-side comparison shows its own label.
+#[test]
+fn each_half_of_a_comparison_shows_its_own_page_size() {
+    let mut h = side_by_side();
+    let labels = |h: &Harness<'static, PdfCraftApp>| h.query_all_by_label_contains(" × ").count();
+    assert_eq!(labels(&h), 0, "off by default, with the pointer away from the corners");
+    h.state_mut().set_option("always-show-page-size", "on").unwrap();
+    h.run_steps(4);
+    assert_eq!(labels(&h), 2, "one label per half");
+}

@@ -488,6 +488,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         }
     });
     ui.label(egui::RichText::new(tl!("For page sizes and margins.")).small().color(t.text_muted));
+    ui.add(widgets::checkbox(&mut app.always_show_page_size, tl!("Always show the page size")));
     // The web build has no file paths to reopen.
     #[cfg(not(target_arch = "wasm32"))]
     ui.add(widgets::checkbox(&mut app.reopen_last_session, tl!("Reopen the files that were open when PdfCraft last closed")));

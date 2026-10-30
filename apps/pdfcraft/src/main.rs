@@ -7,7 +7,7 @@
 //! `--page N  --zoom 150  --layout single|continuous|two-up|two-page  --continuous on|off  --panel comments|bookmarks|pages|fields|layers|attachments|none
 //!  --theme light|dark|system  --language auto|<code>  --mode all|read|edit|convert|sign  --tool <catalogue id>  --left open|closed
 //!  --organize on  --fields on  --dialog properties|shortcuts|about  --palette <query>  --home on
-//!  --cover on|off  --default-layout single|continuous|two-up|two-page  --default-continuous on|off  --default-zoom fit-width|fit-page|<percent>  --always-default-view on|off
+//!  --cover on|off  --default-layout single|continuous|two-up|two-page  --default-continuous on|off  --default-zoom fit-width|fit-page|<percent>  --always-default-view on|off  --always-show-page-size on|off
 //!  --page-gaps on|off  --default-page-gaps on|off
 //!  --combine-view grid|list  --combine-zoom 60..200`
 //!

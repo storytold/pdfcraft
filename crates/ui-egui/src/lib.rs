@@ -355,6 +355,9 @@ pub struct PdfCraftApp {
     /// Preferences: open every document at Default zoom and Default page display, whatever
     /// layout or zoom it asks for (#1618).
     pub always_default_view: bool,
+    /// Preferences: keep the current page's size showing at the bottom-left of the page view,
+    /// not only while the pointer is in that corner (#4908).
+    pub always_show_page_size: bool,
     /// Open documents' files, watched for changes on disk.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) watch: file_watch::FileWatch,

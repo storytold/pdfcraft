@@ -2257,3 +2257,18 @@ fn the_pages_panel_tools_are_off_without_page_editing_permission() {
     assert!(h.query_by_label("Delete the selected pages").is_none(), "its menu doesn't open");
     assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 3);
 }
+
+#[test]
+fn always_show_the_page_size_survives_a_restart() {
+    let mut app = PdfCraftApp::new();
+    assert!(!app.always_show_page_size, "off by default");
+    app.always_show_page_size = true;
+    let mut restarted = PdfCraftApp::new();
+    restarted.restore(&app.persist());
+    assert!(restarted.always_show_page_size, "the choice is kept");
+    restarted.restore(r#"{"always_show_page_size":"bogus"}"#);
+    assert!(restarted.always_show_page_size, "garbage leaves it alone");
+    let mut legacy = PdfCraftApp::new();
+    legacy.restore("{}");
+    assert!(!legacy.always_show_page_size, "a legacy file without the key keeps it off");
+}

@@ -198,6 +198,13 @@ impl PdfCraftApp {
                     _ => return Err("always-default-view must be on or off".into()),
                 };
             }
+            ("always-show-page-size", _) => {
+                self.always_show_page_size = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("always-show-page-size must be on or off".into()),
+                };
+            }
             ("tools-side", _) => {
                 self.side_panels.tools_side = match value {
                     "left" => side_panels::ToolsSide::Left,

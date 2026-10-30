@@ -23,12 +23,19 @@ fn page_texts(app: &PdfCraftApp) -> Vec<String> {
 }
 
 fn fixture(n: usize) -> Vec<u8> {
+    fixture_boxes(&vec![None; n])
+}
+
+/// One page per entry: 200 × 300 pt from the page tree, or its own `/MediaBox` width and height.
+fn fixture_boxes(boxes: &[Option<(u32, u32)>]) -> Vec<u8> {
+    let n = boxes.len();
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
     let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
     objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")));
     objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into());
-    for i in 0..n {
-        objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + 2 * i));
+    for (i, own) in boxes.iter().enumerate() {
+        let media = own.map(|(w, h)| format!(" /MediaBox [0 0 {w} {h}]")).unwrap_or_default();
+        objs.push(format!("<< /Type /Page /Parent 2 0 R{media} /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + 2 * i));
         let body = format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1);
         objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
     }
@@ -56,13 +63,17 @@ fn harness_pages(pages: usize) -> (Harness<'static, PdfCraftApp>, ControlClient)
 }
 
 fn harness_pages_at(pages: usize, width: f32, scale: f32) -> (Harness<'static, PdfCraftApp>, ControlClient) {
+    harness_bytes_at(fixture(pages), width, scale)
+}
+
+fn harness_bytes_at(bytes: Vec<u8>, width: f32, scale: f32) -> (Harness<'static, PdfCraftApp>, ControlClient) {
     let slot: Arc<Mutex<Option<ControlClient>>> = Arc::default();
     let s = slot.clone();
     let mut h = Harness::builder().with_size(egui::vec2(width, 900.0)).with_pixels_per_point(scale).build_eframe(move |cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         *s.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
-        app.open_bytes("doc.pdf", None, fixture(pages)).unwrap();
+        app.open_bytes("doc.pdf", None, bytes).unwrap();
         app
     });
     h.run_steps(4);
@@ -1971,28 +1982,83 @@ fn click_and_drag_refuse_coordinates_that_overflow_like_move() {
     ok(&mut h, &c, "ui.drag", json!({ "from": [x, y], "to": [x + 10.0, y], "steps": 2 }));
 }
 
+/// How many page-size labels (`612 × 792 pt`) are on screen.
+fn size_labels(h: &Harness<'static, PdfCraftApp>) -> usize {
+    h.query_all_by_label_contains(" × ").count()
+}
+
 #[test]
 fn page_size_shows_while_the_pointer_is_in_the_bottom_left_quadrant() {
     let (mut h, _c) = harness();
     let area = h.state().views[0].viewport_rect();
-    let shown = |h: &Harness<'static, PdfCraftApp>| {
-        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("page-size-hint"));
-        h.ctx.memory(|m| m.areas().visible_last_frame(&layer))
-    };
+    let shown = size_labels;
     let away = area.center() + egui::vec2(300.0, -200.0);
     h.event(egui::Event::PointerMoved(away));
     h.run_steps(3);
-    assert!(!shown(&h), "top-right: hidden");
+    assert_eq!(shown(&h), 0, "top-right: hidden");
     h.event(egui::Event::PointerMoved(area.left_bottom() + egui::vec2(80.0, -80.0)));
     h.run_steps(3);
-    assert!(shown(&h), "bottom-left: shown");
+    assert_eq!(shown(&h), 1, "bottom-left: shown");
     if let Ok(dir) = std::env::var("PDFCRAFT_SHOT_DIR") {
         let _gpu = crate::gpu();
         h.render().unwrap().save(format!("{dir}/page-size-hint.png")).unwrap();
     }
     h.event(egui::Event::PointerMoved(away));
     h.run_steps(3);
-    assert!(!shown(&h), "pointer left: hidden again");
+    assert_eq!(shown(&h), 0, "pointer left: hidden again");
+}
+
+/// #4908: with "Always show the page size" on, the label stays up wherever the pointer is.
+#[test]
+fn page_size_stays_up_when_always_show_is_on() {
+    let (mut h, _c) = harness();
+    let area = h.state().views[0].viewport_rect();
+    let shown = size_labels;
+    let away = area.center() + egui::vec2(300.0, -200.0);
+    h.event(egui::Event::PointerMoved(away));
+    h.run_steps(3);
+    assert_eq!(shown(&h), 0, "off by default: hidden away from the corner");
+    h.state_mut().set_option("always-show-page-size", "on").unwrap();
+    h.run_steps(3);
+    assert_eq!(shown(&h), 1, "on: shown with the pointer elsewhere");
+    h.state_mut().set_option("always-show-page-size", "off").unwrap();
+    h.run_steps(3);
+    assert_eq!(shown(&h), 0, "off again: hidden");
+    assert!(h.state_mut().set_option("always-show-page-size", "maybe").is_err());
+}
+
+/// The label follows the current page: after going to a page of another size it shows that size,
+/// not the first page's.
+#[test]
+fn page_size_follows_the_current_page() {
+    let (mut h, c) = harness_bytes_at(fixture_boxes(&[None, Some((400, 250)), None]), 1400.0, 1.0);
+    h.state_mut().units = pdfcraft_ui_egui::units::Unit::Points;
+    h.state_mut().set_option("always-show-page-size", "on").unwrap();
+    h.run_steps(3);
+    let label = |h: &Harness<'static, PdfCraftApp>, text: &str| h.query_all_by_label_contains(text).count();
+    assert_eq!((label(&h, "200.0 × 300.0 pt"), size_labels(&h)), (1, 1), "page 1: its own size");
+    ok(&mut h, &c, "ui.set", json!({ "key": "page", "value": 2 }));
+    h.run_steps(3);
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["page"], 2);
+    assert_eq!((label(&h, "400.0 × 250.0 pt"), size_labels(&h)), (1, 1), "page 2: the new size, and only it");
+    ok(&mut h, &c, "ui.set", json!({ "key": "page", "value": 3 }));
+    h.run_steps(3);
+    assert_eq!((label(&h, "200.0 × 300.0 pt"), size_labels(&h)), (1, 1), "page 3: back to 200 × 300");
+}
+
+/// The label stays under a dialog: ticking the preference in an open dialog does not bring it up.
+#[test]
+fn page_size_stays_hidden_under_a_dialog_even_when_always_show_is_on() {
+    let (mut h, _c) = harness();
+    h.state_mut().set_option("dialog", "preferences").unwrap();
+    h.run_steps(4);
+    h.state_mut().set_option("always-show-page-size", "on").unwrap();
+    h.run_steps(4);
+    assert!(h.state().dialog.is_some());
+    assert_eq!(size_labels(&h), 0, "hidden under Preferences");
+    h.state_mut().dialog = None;
+    h.run_steps(4);
+    assert_eq!(size_labels(&h), 1, "back once the dialog is closed");
 }
 
 #[test]
