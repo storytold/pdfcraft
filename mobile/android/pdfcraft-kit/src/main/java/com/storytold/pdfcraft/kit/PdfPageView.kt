@@ -75,6 +75,22 @@ class PdfPageView @JvmOverloads constructor(
     var onContentItemSelected: ((PdfAddedItem?) -> Unit)? = null
     var onContentItemUpdated: ((PdfAddedItem) -> Unit)? = null
     var onContentItemDeleted: ((PdfAddedItem) -> Unit)? = null
+    var onRedactionMarked: (() -> Unit)? = null
+
+    // Touch Redaction Mode
+    var isRedactMode: Boolean = false
+        set(value) {
+            field = value
+            if (!value) {
+                isDraggingRedact = false
+                liveRedactRect.setEmpty()
+            }
+            invalidate()
+        }
+    private var isDraggingRedact = false
+    private val liveRedactRect = RectF()
+    private var redactStartTouchX = 0f
+    private var redactStartTouchY = 0f
 
     // Content Addition & Manipulation State
     var isEditContentMode: Boolean = false
@@ -178,6 +194,24 @@ class PdfPageView @JvmOverloads constructor(
         tileCache.evictAll()
         loadBaseBitmap()
         invalidate()
+    }
+
+    fun redactSelection(overlayText: String = "REDACTED") {
+        val doc = document ?: return
+        val rects = selectedTextRects
+        if (rects.isEmpty()) return
+        scope.launch(Dispatchers.IO) {
+            try {
+                for (r in rects) {
+                    doc.markRedaction(pageIndex, r, overlayText)
+                }
+                withContext(Dispatchers.Main) {
+                    clearTextSelection()
+                    refreshPage()
+                    onRedactionMarked?.invoke()
+                }
+            } catch (_: Exception) {}
+        }
     }
 
     var selectedAnnotation: uniffi.pdfcraft_ffi.FfiAnnotationSummary? = null
@@ -313,6 +347,15 @@ class PdfPageView @JvmOverloads constructor(
         color = Color.argb(35, 33, 150, 243)
         style = Paint.Style.FILL
     }
+    private val redactLiveStrokePaint = Paint().apply {
+        color = Color.rgb(229, 57, 53)
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+    }
+    private val redactLiveFillPaint = Paint().apply {
+        color = Color.argb(60, 229, 57, 53)
+        style = Paint.Style.FILL
+    }
     var isInkMode: Boolean = false
     var isEraserMode: Boolean = false
     var inkColorRgb: UInt = 0x0000FFu
@@ -428,7 +471,7 @@ class PdfPageView @JvmOverloads constructor(
             }
 
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                if (isInkMode || isEraserMode) return false
+                if (isInkMode || isEraserMode || isRedactMode) return false
                 val doc = document ?: return false
                 val geom = pageGeometry ?: return false
 
@@ -495,7 +538,7 @@ class PdfPageView @JvmOverloads constructor(
             }
 
             override fun onLongPress(e: MotionEvent) {
-                if (isInkMode || isEraserMode || isDraggingContent || activeResizeHandle != ResizeHandle.NONE) return
+                if (isInkMode || isEraserMode || isRedactMode || isDraggingContent || activeResizeHandle != ResizeHandle.NONE) return
                 val doc = document ?: return
                 val pageX = (e.x - offsetX) / scale
                 val pageY = (e.y - offsetY) / scale
@@ -641,6 +684,73 @@ class PdfPageView @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (isRedactMode) {
+            val geom = pageGeometry ?: return super.onTouchEvent(event)
+            val pageX = ((event.x - offsetX) / scale).coerceIn(0f, geom.width)
+            val pageY = ((event.y - offsetY) / scale).coerceIn(0f, geom.height)
+
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    redactStartTouchX = pageX
+                    redactStartTouchY = pageY
+                    liveRedactRect.set(pageX, pageY, pageX, pageY)
+                    isDraggingRedact = true
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                    invalidate()
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (isDraggingRedact) {
+                        val l = min(redactStartTouchX, pageX)
+                        val t = min(redactStartTouchY, pageY)
+                        val r = max(redactStartTouchX, pageX)
+                        val b = max(redactStartTouchY, pageY)
+                        liveRedactRect.set(l, t, r, b)
+                        invalidate()
+                        return true
+                    }
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (isDraggingRedact) {
+                        isDraggingRedact = false
+                        val w = liveRedactRect.width()
+                        val h = liveRedactRect.height()
+                        if (w >= 8f && h >= 8f) {
+                            val doc = document
+                            val page = pageIndex
+                            val rectToMark = FfiRect(
+                                x = liveRedactRect.left,
+                                y = liveRedactRect.top,
+                                width = w,
+                                height = h
+                            )
+                            liveRedactRect.setEmpty()
+                            scope.launch(Dispatchers.IO) {
+                                try {
+                                    doc?.markRedaction(page, rectToMark, overlayText = "REDACTED")
+                                    withContext(Dispatchers.Main) {
+                                        refreshPage()
+                                        onRedactionMarked?.invoke()
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                        } else {
+                            liveRedactRect.setEmpty()
+                            invalidate()
+                        }
+                        return true
+                    }
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    isDraggingRedact = false
+                    liveRedactRect.setEmpty()
+                    invalidate()
+                    return true
+                }
+            }
+            return true
+        }
+
         if (isInkMode || isEraserMode) {
             val vx = (event.x - offsetX) / scale
             val vy = (event.y - offsetY) / scale
@@ -1041,6 +1151,18 @@ class PdfPageView @JvmOverloads constructor(
                 canvas.drawCircle(c.x, c.y, handleRadius, handlePaint)
                 canvas.drawCircle(c.x, c.y, handleRadius, handleStrokePaint)
             }
+        }
+
+        // 8. Live Redaction Drag Rectangle
+        if (isRedactMode && !liveRedactRect.isEmpty) {
+            val r = RectF(
+                liveRedactRect.left * scale,
+                liveRedactRect.top * scale,
+                liveRedactRect.right * scale,
+                liveRedactRect.bottom * scale
+            )
+            canvas.drawRect(r, redactLiveFillPaint)
+            canvas.drawRect(r, redactLiveStrokePaint)
         }
 
         canvas.restore()

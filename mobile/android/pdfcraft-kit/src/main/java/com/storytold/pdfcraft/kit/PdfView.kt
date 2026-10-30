@@ -45,12 +45,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import uniffi.pdfcraft_ffi.*
 
 enum class ViewerMode {
     VIEW,
     ANNOTATE,
-    EDIT
+    EDIT,
+    REDACT
 }
 
 enum class AnnotationTool {
@@ -77,6 +81,7 @@ fun PdfView(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var currentPage by remember { mutableStateOf(initialPageIndex) }
     var readingColors by remember { mutableStateOf<FfiReadingColors?>(null) }
     var hideComments by remember { mutableStateOf(false) }
@@ -123,6 +128,7 @@ fun PdfView(
     var statusNotification by remember { mutableStateOf<String?>(null) }
     var pdfPageViewRef by remember { mutableStateOf<PdfPageView?>(null) }
     var selectedContentItemState by remember { mutableStateOf<PdfAddedItem?>(null) }
+    var showConfirmApplyRedactions by remember { mutableStateOf(false) }
 
     // Content Addition (Text & Image)
     var showAddTextDialog by remember { mutableStateOf(false) }
@@ -186,7 +192,9 @@ fun PdfView(
                 insertImageLauncher.launch("image/*")
             }
             "redact" -> {
-                showRedactionView = true
+                viewerMode = ViewerMode.REDACT
+                pdfPageViewRef?.isRedactMode = true
+                statusNotification = "Redact mode: Drag finger across area to mark"
             }
             "watermark" -> {
                 showWatermarkDialog = true
@@ -391,7 +399,8 @@ fun PdfView(
                                         text = { Text("Redact Content...") },
                                         onClick = {
                                             showMoreMenu = false
-                                            showRedactionView = true
+                                            viewerMode = ViewerMode.REDACT
+                                            statusNotification = "Redact mode: Drag finger across area to mark"
                                         }
                                     )
                                     DropdownMenuItem(
@@ -835,7 +844,11 @@ fun PdfView(
                                             Text("Image", style = MaterialTheme.typography.labelMedium)
                                         }
                                         FilledTonalButton(
-                                            onClick = { showRedactionView = true },
+                                            onClick = {
+                                                viewerMode = ViewerMode.REDACT
+                                                pdfPageViewRef?.isRedactMode = true
+                                                statusNotification = "Redact mode: Drag finger across area to mark"
+                                            },
                                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                                         ) {
                                             Icon(Icons.Outlined.VisibilityOff, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -868,6 +881,70 @@ fun PdfView(
                                             selectedContentItemState = null
                                         },
                                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                    ) {
+                                        Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Done", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                }
+                            }
+                        }
+                        ViewerMode.REDACT -> {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    modifier = Modifier.weight(1f, fill = false),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = MaterialTheme.colorScheme.errorContainer
+                                    ) {
+                                        Text(
+                                            text = "Redact",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onErrorContainer,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                        )
+                                    }
+                                    Text(
+                                        text = "Drag finger over area to mark",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Button(
+                                        onClick = { showConfirmApplyRedactions = true },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.error,
+                                            contentColor = MaterialTheme.colorScheme.onError
+                                        ),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                    ) {
+                                        Icon(Icons.Outlined.VisibilityOff, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Apply", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                    FilledTonalButton(
+                                        onClick = {
+                                            viewerMode = ViewerMode.VIEW
+                                            pdfPageViewRef?.isRedactMode = false
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                                     ) {
                                         Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(4.dp))
@@ -935,6 +1012,9 @@ fun PdfView(
                             selectedContentItemState = null
                             statusNotification = "Deleted ${item.type}"
                         }
+                        this.onRedactionMarked = {
+                            statusNotification = "Area marked for redaction. Tap 'Apply' to permanently erase."
+                        }
 
                         pdfPageViewRef = this
                     }
@@ -951,6 +1031,7 @@ fun PdfView(
                     view.inkColorRgb = activeInkColor
                     view.inkStrokeWidth = activeInkWidth
                     view.isEditContentMode = (viewerMode == ViewerMode.EDIT)
+                    view.isRedactMode = (viewerMode == ViewerMode.REDACT)
                 }
             )
 
@@ -990,6 +1071,13 @@ fun PdfView(
                             selectedText = null
                         }) {
                             Text("Underline")
+                        }
+                        TextButton(onClick = {
+                            pdfPageViewRef?.redactSelection()
+                            statusNotification = "Text marked for redaction. Tap 'Apply' to permanently erase."
+                            selectedText = null
+                        }) {
+                            Text("Redact", color = MaterialTheme.colorScheme.error)
                         }
                         TextButton(onClick = {
                             val shareIntent = Intent(Intent.ACTION_SEND).apply {
@@ -1530,19 +1618,56 @@ fun PdfView(
         }
     }
 
-    // Go To Page Dialog
-    if (showGoToPageDialog) {
-        Dialog(onDismissRequest = { showGoToPageDialog = false }) {
-            PdfGoToPageDialog(
-                currentPage = currentPage,
-                pageCount = document.pageCount,
-                onPageSelected = { selected ->
-                    currentPage = selected
-                    pdfPageViewRef?.setDocument(document, selected)
-                    showGoToPageDialog = false
-                },
-                onDismiss = { showGoToPageDialog = false }
-            )
-        }
+    // Confirm Apply Redactions Dialog
+    if (showConfirmApplyRedactions) {
+        AlertDialog(
+            onDismissRequest = { showConfirmApplyRedactions = false },
+            icon = {
+                Icon(
+                    Icons.Outlined.Warning,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = {
+                Text("Apply Redactions Permanently?")
+            },
+            text = {
+                Text("All marked areas on this document will be permanently erased. Text, vectors, and bitmap pixels under the redaction marks will be removed and sanitized. This action cannot be undone.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showConfirmApplyRedactions = false
+                        coroutineScope.launch(Dispatchers.IO) {
+                            try {
+                                document.applyRedactions()
+                                withContext(Dispatchers.Main) {
+                                    statusNotification = "Redactions applied permanently"
+                                    pdfPageViewRef?.refreshPage()
+                                    viewerMode = ViewerMode.VIEW
+                                    pdfPageViewRef?.isRedactMode = false
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    statusNotification = "Apply redactions failed: ${e.message}"
+                                }
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    )
+                ) {
+                    Text("Apply & Erase")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirmApplyRedactions = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }

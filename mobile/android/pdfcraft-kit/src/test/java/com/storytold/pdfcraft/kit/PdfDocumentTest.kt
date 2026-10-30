@@ -200,6 +200,27 @@ class PdfDocumentTest {
     }
 
     @Test
+    fun testRedactionMarkRectAuditAndApply() {
+        val bytes = SAMPLE_PDF_WITH_TEXT.toByteArray(StandardCharsets.UTF_8)
+        val doc = PdfDocument.openBytes(bytes = bytes, name = "redact_rect_test.pdf")
+
+        // Mark a specific rectangle over the text area
+        doc.markRedaction(page = 0, rect = FfiRect(50f, 50f, 300f, 100f), overlayText = "TOP SECRET")
+
+        val findings = doc.auditRedactions()
+        assertTrue(findings.any { it.kind == "unapplied-mark" })
+
+        val applyResult = doc.applyRedactions()
+        assertTrue(applyResult.appliedCount >= 1u)
+        assertTrue(applyResult.auditPassed)
+
+        val afterFindings = doc.auditRedactions()
+        assertEquals(0, afterFindings.filter { it.kind == "unapplied-mark" }.size)
+
+        doc.close()
+    }
+
+    @Test
     fun testDigitalIdCreationInspectionAndDocumentSigning() {
         val p12Data = PdfDocument.createSelfSignedDigitalId(
             name = "Ada Lovelace",
