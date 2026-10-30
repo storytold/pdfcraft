@@ -389,9 +389,10 @@ fn vendor_provenance_egui_wgpu_catch_errors_identity() {
 }
 
 #[test]
-fn the_configured_device_asks_a_real_adapter_for_capped_bindings() {
-    // Issue #5355: the descriptor `configure_gpu` installs, not just `binding_limits` on its own.
-    // Direct3D 12 adapters offer a million bindings; one that offers fewer keeps its own number.
+fn the_configured_device_asks_a_real_adapter_for_capped_bindings_and_small_memory_blocks() {
+    // Issues #5355 and #5400: the descriptor `configure_gpu` installs, not just `binding_limits`
+    // on its own. Direct3D 12 adapters offer a million bindings; one that offers fewer keeps its
+    // own number.
     use eframe::wgpu;
     let _gpu = gpu();
     let native = super::native_options(false, false, eframe::Renderer::Wgpu);
@@ -403,8 +404,10 @@ fn the_configured_device_asks_a_real_adapter_for_capped_bindings() {
         return;
     };
     let offered = adapter.limits().max_non_sampler_bindings;
-    let requested = (setup.device_descriptor)(&adapter).required_limits.max_non_sampler_bindings;
+    let descriptor = (setup.device_descriptor)(&adapter);
+    let requested = descriptor.required_limits.max_non_sampler_bindings;
     assert_eq!(requested, offered.min(super::MAX_NON_SAMPLER_BINDINGS), "the adapter offers {offered}");
+    assert!(matches!(descriptor.memory_hints, wgpu::MemoryHints::MemoryUsage), "{:?}", descriptor.memory_hints);
 }
 
 #[test]

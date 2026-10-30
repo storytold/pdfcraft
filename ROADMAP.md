@@ -247,6 +247,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-10-30 (M3, Windows, #5355 partial):** The GPU device asks for 65,536 live bindings instead of wgpu's 1,000,000. Direct3D 12 allocates a descriptor heap of that size at startup, so this saves about 85 MiB of private memory on an AMD integrated GPU and about 30 MiB on a discrete one. Paging through a 2,000-page document in the Organize grid stayed under 1,024 bindings. The duplicate system-font buffers from the same report are not addressed. Estimates unchanged.
 
+- **2026-10-30 (M3, Windows, #5400 partial):** The GPU device favours memory over speed in its allocations (wgpu's `MemoryHints::MemoryUsage`): its pools start at 8 MiB for GPU memory and 4 MiB for upload memory instead of 128 and 64 MiB, and grow as they fill. On Direct3D 12 this took about 128 MiB of private memory off startup on both an AMD integrated and a discrete GPU, with no slower rendering when zoomed into scans. Allocator telemetry, the other part of #5400, is not addressed. Estimates unchanged.
+
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.
 
 - **2026-11-01 (M14, #5572):** Preferences ▸ Documents and view sets how many recent files to keep, from 0 to 50 with 12 by default. At 0 Home has no Recent section and File ▸ Open Recent is disabled. The list is cut when Preferences closes, so the number can pass through 0 on its way to another.
