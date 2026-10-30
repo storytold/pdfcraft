@@ -13,7 +13,9 @@
 //! marked-content sequences before the new mark.
 //!
 //! Text uses standard Helvetica (WinAnsi) added to the page resources as `/PCHelv`; headers and
-//! footers may use standard Times (`/PCTimes`) or Courier (`/PCCour`) instead (#3754).
+//! footers may use standard Times (`/PCTimes`) or Courier (`/PCCour`) instead (#3754). A line
+//! those faces can't draw is drawn in the bundled Inter face, embedded once per run as a full
+//! face (`/PCFull…`), when Inter can draw all of it (#2013).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -60,6 +62,7 @@ pub use added::{
 };
 
 mod apply;
+mod mark_font;
 mod marks;
 mod place;
 

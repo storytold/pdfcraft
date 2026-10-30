@@ -4349,7 +4349,9 @@ fn hebrew_letters_the_page_font_lacks_use_the_hebrew_face() {
 }
 
 /// #2013: the dialog asks `first_undrawable` before offering OK, so it must refuse exactly what
-/// applying refuses: a Cyrillic footer was previewed (in the interface font) and then failed.
+/// applying refuses: a Cyrillic footer was previewed (in the interface font) and then failed. A
+/// Cyrillic or Greek line is drawn in the bundled Inter face now, so only what that face can't
+/// draw either is refused, and the refusal names that character.
 #[test]
 fn header_and_watermark_drawability_matches_what_applying_refuses() {
     let footer = |t: &str| HeaderFooter {
@@ -4357,25 +4359,123 @@ fn header_and_watermark_drawability_matches_what_applying_refuses() {
         ..HeaderFooter::default()
     };
     for (text, refused) in [
-        ("Страница <<1>> из 1 / Page <<1>> of 1", Some('С')),
+        ("Страница <<1>> из 1 / Page <<1>> of 1", None),
         ("TEST-001 <<Page 1 of n>>", None),
         ("Café — 5€ ™ <<Bates Number#6#1#ACME-#>>", None),
         ("Left\r\nRight", None),
         ("A\rB", Some('\r')),
-        ("line one\nΕλληνικά", Some('Ε')),
+        ("line one\nΕλληνικά", None),
+        ("Страница <<1>> / 第<<1>>页", Some('第')),
     ] {
         let hf = footer(text);
         assert_eq!(hf.first_undrawable(), refused, "{text:?}");
         let mut doc = fixture();
         let applied = add_header_footer(&mut doc, &[0], &hf, false, &cx());
         match refused {
-            Some(c) => assert_eq!(applied.unwrap_err().to_string(), undrawable_message(c), "{text:?}"),
+            Some(c) => assert_eq!(applied.unwrap_err().to_string(), mark_font::undrawable_message(c), "{text:?}"),
             None => applied.unwrap(),
         }
         let wm = Watermark { text: text.into(), ..Watermark::default() };
         assert_eq!(wm.first_undrawable(), refused, "{text:?}");
         let applied = add_watermark(&mut fixture(), &[0], &wm, false);
-        assert_eq!(applied.err().map(|e| e.to_string()), refused.map(undrawable_message), "{text:?}");
+        assert_eq!(applied.err().map(|e| e.to_string()), refused.map(mark_font::undrawable_message), "{text:?}");
+    }
+}
+
+/// #2013: a header, footer or text watermark line the standard faces can't draw (Cyrillic, Greek,
+/// Central European) is drawn in the bundled Inter face and reads back as typed. The document gets one copy
+/// of the face for every page, and Update reuses it; Latin lines keep the chosen standard face, and
+/// a centred or right-aligned line is placed by the width of the face it is drawn in.
+#[test]
+fn cyrillic_and_greek_headers_footers_and_watermarks_are_drawn_in_the_bundled_face() {
+    let mut doc = fixture();
+    let hf = HeaderFooter {
+        text: [
+            "Договор № 15".into(),
+            "Kraków, Łódź".into(),
+            "Page <<1>>".into(),
+            String::new(),
+            "Страница <<1>> от <<n>>".into(),
+            "Σελίδα <<1>>".into(),
+        ],
+        font: added::Family::Times,
+        underline: true,
+        ..HeaderFooter::default()
+    };
+    add_header_footer(&mut doc, &[0, 1, 2], &hf, false, &cx()).unwrap();
+    let wm = Watermark { text: "ЧЕРНОВА\nDraft".into(), ..Watermark::default() };
+    add_watermark(&mut doc, &[0, 1, 2], &wm, false).unwrap();
+    // Update replaces the header and footer, and adds no second copy of the face.
+    add_header_footer(&mut doc, &[0, 1, 2], &hf, true, &cx()).unwrap();
+    let doc = reopen(&doc);
+    let type0: Vec<_> = doc
+        .scan_objects()
+        .filter(|(_, o)| o.as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Type0") && d.name(b"BaseFont") == Some(b"Inter")))
+        .map(|(r, _)| r)
+        .collect();
+    assert_eq!(type0.len(), 1, "one Inter font for every page and run: {type0:?}");
+    let programs = doc.scan_objects().filter(|(_, o)| matches!(o.as_ref(), Object::Stream(s) if s.dict.get(b"PCFullFont").is_some())).count();
+    assert_eq!(programs, 1);
+    for page in 0..3 {
+        let p = &pdfcraft_model::pages(&doc)[page];
+        let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+        let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap()).as_dict().cloned().unwrap();
+        assert_eq!(fonts.reference(b"PCFull0"), Some(type0[0]), "page {page}");
+        assert!(fonts.contains(b"PCTimes"), "page {page}: the Latin line keeps Times");
+        let marks = streams(&doc, page).join("\n");
+        assert!(marks.contains(&format!("(Page {}) Tj", page + 1)) && marks.contains("(Draft) Tj"), "page {page}: {marks}");
+        assert!(!marks.contains('?'), "page {page}: {marks}");
+    }
+    let shared = doc.get(pdfcraft_cos::ObjRef::new(6, 0));
+    let shared_fonts = doc.resolve(shared.as_dict().unwrap().get(b"Font").unwrap());
+    assert!(!shared_fonts.as_dict().unwrap().contains(b"PCFull0"), "the shared dictionary is untouched");
+    // Page 2 (unrotated, inherited resources): the text reads back, and the right-aligned Greek
+    // footer ends at the right margin by Inter's widths.
+    let lines = text::text_lines(&doc, 2).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>().join(" | ");
+    for want in ["Договор № 15", "Kraków, Łódź", "Page 3", "Страница 3 от 3", "Σελίδα 3", "ЧЕРНОВА", "Draft"] {
+        assert!(lines.contains(want), "{want:?} in {lines:?}");
+    }
+    let x = 600.0 - 72.0 - pdfcraft_fonts::inter_width("Σελίδα 3", 8.0);
+    let mark = streams(&doc, 2).join("\n");
+    assert!(mark.contains(&format!("/PCFull0 8 Tf\n1 0 0 1 {} 36 Tm <", n(x))), "{mark}");
+    // Latin-only marks embed nothing.
+    let mut doc = fixture();
+    let hf = HeaderFooter { text: ["Contract 15".into(), String::new(), String::new(), String::new(), String::new(), String::new()], ..hf };
+    add_header_footer(&mut doc, &[0], &hf, false, &cx()).unwrap();
+    add_watermark(&mut doc, &[0], &Watermark { text: "DRAFT".into(), ..Watermark::default() }, false).unwrap();
+    assert!(!doc.scan_objects().any(|(_, o)| o.as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Type0"))));
+}
+
+/// #2013: a page that already has the bundled face under an unusual key still gets its Cyrillic
+/// footer. A key with a space (`/PCFull#20Inter`) is reused and written with its escapes, so `Tf`
+/// selects it; a key that isn't UTF-8 is left alone and the face is added under a new name.
+#[test]
+fn the_bundled_face_a_page_has_under_an_unusual_key_still_draws() {
+    let face = pdfcraft_fonts::document_latin_fonts(false).into_iter().next().unwrap();
+    let footer = HeaderFooter {
+        text: [String::new(), String::new(), String::new(), String::new(), "Страница <<1>>".into(), String::new()],
+        ..HeaderFooter::default()
+    };
+    for (key, reused) in [(&b"PCFull Inter"[..], true), (&b"PCFull\xFF"[..], false)] {
+        let mut doc = fixture();
+        let page = pdfcraft_model::pages(&doc)[0].clone();
+        let mut fonts = page_fonts(&doc, &page);
+        let name = pdfcraft_fonts::embedding::embed(&mut doc, &mut fonts, face.bytes, face.family).unwrap();
+        let inter = fonts.remove(name.as_bytes()).unwrap();
+        fonts.set(key.to_vec(), inter);
+        let mut res = Dict::new();
+        res.set(b"Font".to_vec(), Object::Dict(fonts));
+        doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res))).unwrap();
+        add_header_footer(&mut doc, &[0], &footer, false, &cx()).unwrap();
+        let doc = reopen(&doc);
+        let lines = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>().join(" | ");
+        assert!(lines.contains("Страница 1"), "{key:?}: {lines:?}");
+        let type0 = doc.scan_objects().filter(|(_, o)| o.as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Type0"))).count();
+        assert_eq!(type0, if reused { 1 } else { 2 }, "{key:?}");
+        if reused {
+            let marks = streams(&doc, 0).join("\n");
+            assert!(marks.contains("/PCFull#20Inter 8 Tf\n"), "{marks}");
+        }
     }
 }
 
@@ -4388,11 +4488,12 @@ fn page_text_the_standard_fonts_cant_draw_is_refused() {
     let text = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "日本語のテキスト".into(), ..AddedText::default() };
     let err = add_content(&mut doc, 0, &Content::Text(text)).unwrap_err().to_string();
     assert!(err.contains("\"日\" (U+65E5)"), "{err}");
+    // Greek is drawn in the bundled Inter face (#2013); the Japanese after it is what is refused.
     let hf = HeaderFooter {
-        text: ["Ελληνικά".into(), String::new(), String::new(), String::new(), String::new(), String::new()],
+        text: ["Ελληνικά 日本".into(), String::new(), String::new(), String::new(), String::new(), String::new()],
         ..HeaderFooter::default()
     };
-    assert!(add_header_footer(&mut doc, &[0, 1], &hf, true, &cx()).unwrap_err().to_string().contains("U+0395"));
+    assert!(add_header_footer(&mut doc, &[0, 1], &hf, true, &cx()).unwrap_err().to_string().contains("U+65E5"));
     let wm = Watermark { text: "机密".into(), ..Watermark::default() };
     assert!(add_watermark(&mut doc, &[0], &wm, true).unwrap_err().to_string().contains("U+673A"));
     let after: Vec<Vec<String>> = (0..3).map(|p| streams(&reopen(&doc), p)).collect();
