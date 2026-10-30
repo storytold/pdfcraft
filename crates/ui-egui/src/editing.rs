@@ -7,7 +7,10 @@ use pdfcraft_platform::staging::{StagingName, staging_suffixes};
 use crate::PdfCraftApp;
 
 mod close;
+mod deletion_selection;
 mod save;
+
+pub(crate) use deletion_selection::DeletionHistory;
 
 pub use close::CloseRequest;
 #[cfg(not(target_arch = "wasm32"))]
@@ -105,6 +108,8 @@ impl PdfCraftApp {
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
         let label = edit.label();
+        let previous_step = self.session.get(id).and_then(|doc| doc.next_undo_id());
+        let deleted = self.session.get(id).zip(self.views.get(i)).and_then(|(doc, view)| deletion_selection::Selection::capture(&edit, view, doc));
         let (form_before, page_count_before, had_xfa) = if let Some(d) = self.session.get(id) {
             (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some())
         } else {
@@ -115,6 +120,10 @@ impl PdfCraftApp {
                 let Some(doc) = self.session.get(id) else { return true };
                 let info = &doc.info;
                 let view = &mut self.views[i];
+                if deleted.is_some() || matches!(edit, Edit::DeleteContent { .. }) {
+                    view.content.selected = None;
+                }
+                view.deletion_history.applied(doc, previous_step.as_ref(), deleted);
                 view.applied_editor = None;
                 // A picture picked with the Select tool may be the one this edit removed or moved:
                 // drop its highlight now, not on the next frame (which only comes with the next input).
@@ -168,6 +177,9 @@ impl PdfCraftApp {
             }
             Err(e) => {
                 if let Some(view) = self.views.get_mut(i) {
+                    if let Some(doc) = self.session.get(id) {
+                        view.deletion_history.prune(doc);
+                    }
                     // A drawing whose annotation wasn't added must not stay painted.
                     view.comments.drawings_refused();
                     // A paragraph that couldn't be applied opens again with its typing, instead of
@@ -211,13 +223,31 @@ impl PdfCraftApp {
         }
     }
 
+    /// Move the active document through undo or redo and restore an eligible deletion selection.
+    /// Check page and navigation state before refresh, and restore only after its matching undo succeeds.
     fn history_step(&mut self, undo: bool) {
         let Some((i, id)) = self.active_ids() else { return };
+        let deletion = self.session.get(id).zip(self.views.get(i)).and_then(|(doc, view)| view.deletion_history.before_step(doc, undo));
+        // Read navigation before document_changed clears its queued destination.
+        let restore_on_page = deletion.as_ref().zip(self.views.get(i)).is_some_and(|(selection, view)| selection.on_current_page(view));
+        let content_active = crate::content_ui::is_active(self);
         let result = if undo { self.session.undo(id) } else { self.session.redo(id) };
         match result {
             Ok(label) => {
-                if let Some(doc) = self.session.get(id) {
-                    self.views[i].document_changed(&doc.info);
+                if let Some(doc) = self.session.get(id)
+                    && let Some(view) = self.views.get_mut(i)
+                {
+                    view.document_changed(&doc.info);
+                    view.objects.history_changed();
+                    if deletion.is_some() {
+                        view.content.cancel_pointer_gesture();
+                        view.content.selected = None;
+                        view.content.select_added = None;
+                    }
+                    view.deletion_history.prune(doc);
+                    if let Some(selection) = deletion.filter(|_| undo && restore_on_page) {
+                        selection.restore(view, doc, self.quick_tool, content_active);
+                    }
                 }
                 self.views[i].comments.selected = None;
                 let label = crate::i18n::edit_label(&label);
@@ -227,7 +257,14 @@ impl PdfCraftApp {
                     self.notify_fmt("Redid {label}", &[("label", &label)]);
                 }
             }
-            Err(e) => self.notify_error(e),
+            Err(e) => {
+                if let Some(doc) = self.session.get(id)
+                    && let Some(view) = self.views.get_mut(i)
+                {
+                    view.deletion_history.prune(doc);
+                }
+                self.notify_error(e);
+            }
         }
     }
 

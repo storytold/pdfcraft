@@ -449,6 +449,11 @@ fn finished_text_over_form_field_keeps_selection_and_drag_ownership() {
     for (actual, expected) in moved.into_iter().zip([rect[0], rect[1] + 80.0, rect[2], rect[3] + 80.0]) {
         assert!((actual - expected).abs() < 1.0, "text should move upward: {rect:?} -> {moved:?}");
     }
+    assert_content_delete_ready(&h, 0);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(4);
+    assert_eq!(added(&h)[0].content.rect(), rect, "ordinary move Undo restores placement");
+    assert_content_delete_ready(&h, 0);
     assert!(h.state().views[0].forms.focus.is_none());
     let bare = at(&h, 270.0, 210.0);
     click(&mut h, bare);
@@ -945,4 +950,179 @@ fn a_resized_added_picture_shows_only_at_its_new_size() {
     h.run_steps(2);
     let pixels = h.render().unwrap();
     assert!(red(&pixels, kept) > 100 && red(&pixels, gone) == 0, "the page raster has the picture at its new size");
+}
+
+fn add_text_with_ui(h: &mut Harness<'static, PdfCraftApp>, text: &str, x: f32, y: f32) {
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let p = at(h, x, y);
+    click(h, p);
+    h.event(egui::Event::Text(text.into()));
+    h.run_steps(2);
+    h.get_by_label("Done adding text").click();
+    h.run_steps(3);
+    assert!(h.state().views[0].content.draft.is_none());
+}
+
+fn assert_content_delete_ready(h: &Harness<'static, PdfCraftApp>, index: usize) {
+    let app = h.state();
+    assert!(app.views[0].content.draft.is_none(), "Delete must reach the item, not an open text editor");
+    assert_eq!(app.views[0].content.selected, Some((0, index)));
+    assert!(app.left_open && app.left == pdfcraft_ui_egui::LeftPanel::Tool("edit"), "the Edit tool owns the selection");
+}
+
+// Select an added item through the Edit tool's real drag path. A small move also commits a
+// harmless visible geometry change, avoiding a synthetic selection or private field mutation.
+/// Select through a short actual drag, which commits a separate Move history entry.
+fn select_added_by_drag(h: &mut Harness<'static, PdfCraftApp>, index: usize) {
+    let rect = added(h)[index].content.rect();
+    let center = at(h, ((rect[0] + rect[2]) / 2.0) as f32, (400.0 - (rect[1] + rect[3]) / 2.0) as f32);
+    let end = center + egui::vec2(8.0, 0.0);
+    h.drag_at(center);
+    h.run_steps(1);
+    for step in 1..=4 {
+        h.hover_at(center + (end - center) * (step as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(end);
+    h.run_steps(4);
+    assert_content_delete_ready(h, index);
+}
+
+#[test]
+fn undoing_content_selection_delete_restores_it_for_immediate_delete() {
+    let mut h = harness();
+    add_text_with_ui(&mut h, "Undo me", 40.0, 300.0);
+    assert_eq!(texts(&h), ["Undo me"]);
+    assert_content_delete_ready(&h, 0);
+
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert!(added(&h).is_empty());
+    assert_eq!(h.state().views[0].content.selected, None);
+
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(4);
+    assert_eq!(texts(&h), ["Undo me"]);
+    assert_content_delete_ready(&h, 0);
+
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert!(added(&h).is_empty(), "the restored selection is immediately actionable");
+}
+
+#[test]
+fn delete_save_undo_restores_content_selection_and_immediate_delete() {
+    let mut h = harness();
+    add_text_with_ui(&mut h, "Saved deletion", 40.0, 300.0);
+    assert_content_delete_ready(&h, 0);
+
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert!(added(&h).is_empty());
+    let id = h.state().views[0].id;
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    h.state_mut().session.mark_saved(id, bytes, None).unwrap();
+    h.run_steps(3);
+    assert!(!h.state().session.get(id).unwrap().dirty);
+
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(4);
+    assert_eq!(texts(&h), ["Saved deletion"]);
+    assert_content_delete_ready(&h, 0);
+    assert!(h.state().session.get(id).unwrap().dirty);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert!(added(&h).is_empty(), "the post-save Undo selection can be deleted again");
+}
+
+#[test]
+fn saving_while_delete_redo_exists_preserves_the_undo_branch() {
+    let mut h = harness();
+    add_text_with_ui(&mut h, "Redo survives save", 40.0, 300.0);
+    assert_content_delete_ready(&h, 0);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert!(added(&h).is_empty());
+
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(4);
+    assert_eq!(texts(&h), ["Redo survives save"]);
+    assert_content_delete_ready(&h, 0);
+
+    let id = h.state().views[0].id;
+    assert!(h.state().session.get(id).unwrap().can_redo().is_some());
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    h.state_mut().session.mark_saved(id, bytes, None).unwrap();
+    h.run_steps(3);
+    assert!(!h.state().session.get(id).unwrap().dirty);
+    assert!(h.state().session.get(id).unwrap().can_redo().is_some(), "saving does not discard redo");
+
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z);
+    h.run_steps(4);
+    assert!(added(&h).is_empty());
+    assert!(h.state().session.get(id).unwrap().dirty);
+}
+
+/// Follow each deletion's identity when an added-text index is reused across an interposed Move step.
+#[test]
+fn repeated_added_text_deletions_restore_after_same_kind_index_reuse() {
+    let mut h = harness();
+    add_text_with_ui(&mut h, "First", 40.0, 300.0);
+    add_text_with_ui(&mut h, "Second", 170.0, 200.0);
+    assert_eq!(texts(&h), ["First", "Second"]);
+
+    // Select the earlier item by its actual rendered bounds. Its small drag commits before Delete.
+    select_added_by_drag(&mut h, 0);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert_eq!(texts(&h), ["Second"]);
+
+    // The remaining same-kind item now has index zero.
+    let second_before_move = added(&h)[0].content.rect();
+    select_added_by_drag(&mut h, 0);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert!(added(&h).is_empty());
+
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(4);
+    assert_eq!(texts(&h), ["Second"]);
+    assert_content_delete_ready(&h, 0);
+
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(4);
+    assert_eq!(texts(&h), ["Second"], "the interposed move is its own history step");
+    assert_eq!(added(&h)[0].content.rect(), second_before_move);
+    assert_content_delete_ready(&h, 0);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(4);
+    assert_eq!(texts(&h), ["First", "Second"]);
+    assert_content_delete_ready(&h, 0);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert_eq!(texts(&h), ["Second"], "the earlier item is selected after same-kind index reuse");
+}
+
+#[test]
+fn branching_after_undo_discards_the_old_delete_redo() {
+    let mut h = harness();
+    add_text_with_ui(&mut h, "Keep", 40.0, 300.0);
+    assert_content_delete_ready(&h, 0);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert!(added(&h).is_empty());
+
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(4);
+    assert_eq!(texts(&h), ["Keep"]);
+    assert_content_delete_ready(&h, 0);
+
+    add_text_with_ui(&mut h, "New branch", 160.0, 200.0);
+    let id = h.state().views[0].id;
+    assert_eq!(texts(&h), ["Keep", "New branch"]);
+    assert!(h.state().session.get(id).unwrap().can_redo().is_none(), "a new UI edit branches from the restored state");
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z);
+    h.run_steps(4);
+    assert_eq!(texts(&h), ["Keep", "New branch"], "the old delete is no longer redoable");
 }

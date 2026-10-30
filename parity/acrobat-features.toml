@@ -478,8 +478,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["edit.undo", "edit.redo"]
 tools = ["edit_undo", "edit_redo"]
-evidence = ["crates/engine/src/tests.rs::undo_and_redo_restore_exact_states", "crates/ui-egui/tests/it/editing.rs::organize_delete_then_undo_and_redo_with_keys"]
-notes = ""
+evidence = ["crates/engine/src/tests.rs::undo_and_redo_restore_exact_states", "crates/ui-egui/tests/it/editing.rs::organize_delete_then_undo_and_redo_with_keys", "crates/ui-egui/tests/it/content.rs::undoing_content_selection_delete_restores_it_for_immediate_delete", "crates/ui-egui/tests/it/object_selection.rs::undoing_a_selected_text_group_restores_it_for_immediate_delete", "crates/ui-egui/tests/it/object_selection.rs::undoing_added_text_deletion_restores_selection_for_immediate_delete"]
+notes = "In Edit text & images, undoing a supported deletion restores its selection only when the deleted page remains current and no navigation is pending. An unfinished text draft or changed paragraph editor keeps its typing. Reload and Revert still clear undo history."
 
 [[feature]]
 id = "core.undo-labels"
@@ -502,8 +502,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["edit.undo"]
 tools = ["edit_undo"]
-evidence = ["crates/engine/src/tests.rs::undo_still_works_after_save"]
-notes = ""
+evidence = ["crates/engine/src/tests.rs::undo_still_works_after_save", "crates/ui-egui/tests/it/content.rs::delete_save_undo_restores_content_selection_and_immediate_delete", "crates/ui-egui/tests/it/content.rs::saving_while_delete_redo_exists_preserves_the_undo_branch", "crates/ui-egui/tests/it/object_selection.rs::deleting_group_saves_undo_selection_and_immediate_delete_restore_the_inventory"]
+notes = "Saving retains the deletion history entry, so Undo can restore the selection and Redo can apply the deletion again."
 
 [[feature]]
 id = "core.atomic-batch-edits"

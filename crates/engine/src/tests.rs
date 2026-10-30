@@ -679,6 +679,56 @@ fn undo_and_redo_restore_exact_states() {
     assert_eq!(s.get(id).unwrap().info.pages.len(), 4);
 }
 
+/// History identities survive save and undo/redo, remain document-specific, and expire with their history entries.
+#[test]
+fn opaque_history_step_ids_follow_undo_redo_save_and_branches() {
+    let (mut session, first) = session_with(2);
+    let second = session.open("second.pdf", None, Arc::new(fixture(2)), None).expect("opens second document");
+
+    // A refused edit does not create an identity or disturb either stack.
+    let err = session.apply(first, Edit::DeletePages { pages: vec![0, 1] }).unwrap_err();
+    assert_eq!(err, EditError::Organize(pdfcraft_organize::OrganizeError::WouldRemoveAllPages));
+    assert!(session.get(first).unwrap().next_undo_id().is_none());
+    assert!(session.get(first).unwrap().next_redo_id().is_none());
+
+    session.apply(first, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    let first_step = session.get(first).unwrap().next_undo_id().expect("new undo step");
+    assert!(session.get(first).unwrap().contains_history_step(&first_step));
+
+    // Saving rebases document bytes but preserves the logical history step.
+    let saved = session.save_bytes(first).unwrap();
+    session.mark_saved(first, saved, None).unwrap();
+    assert_eq!(session.get(first).unwrap().next_undo_id(), Some(first_step.clone()));
+
+    session.undo(first).unwrap();
+    assert_eq!(session.get(first).unwrap().next_redo_id(), Some(first_step.clone()));
+    assert!(session.get(first).unwrap().contains_history_step(&first_step));
+    session.redo(first).unwrap();
+    assert_eq!(session.get(first).unwrap().next_undo_id(), Some(first_step.clone()));
+
+    // The same token remains unique to its owning document.
+    session.apply(second, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    let second_step = session.get(second).unwrap().next_undo_id().expect("second document undo step");
+    assert_ne!(first_step, second_step);
+    assert!(!session.get(first).unwrap().contains_history_step(&second_step));
+    assert!(!session.get(second).unwrap().contains_history_step(&first_step));
+
+    // A new edit after undo discards the old redo identity and creates a distinct step.
+    session.undo(first).unwrap();
+    assert_eq!(session.get(first).unwrap().next_redo_id(), Some(first_step.clone()));
+    session.apply(first, Edit::SetInfo { key: "Title".into(), value: "Branch".into() }).unwrap();
+    let branch_step = session.get(first).unwrap().next_undo_id().expect("branch undo step");
+    assert_ne!(first_step, branch_step);
+    assert!(!session.get(first).unwrap().contains_history_step(&first_step));
+    assert!(session.get(first).unwrap().contains_history_step(&branch_step));
+    assert!(session.get(second).unwrap().contains_history_step(&second_step));
+
+    for index in 0..=crate::history::MAX_UNDO {
+        session.apply(first, Edit::SetInfo { key: "Title".into(), value: format!("Step {index}") }).unwrap();
+    }
+    assert!(!session.get(first).unwrap().contains_history_step(&branch_step), "depth eviction removes the old identity");
+}
+
 #[test]
 fn failed_edit_changes_nothing() {
     let (mut s, id) = session_with(2);
@@ -8279,6 +8329,7 @@ fn undo_and_redo_roll_back_on_a_refresh_panic_or_error() {
         let d = s.get(id).unwrap();
         (d.bytes.clone(), d.generation)
     };
+    let step_id = s.get(id).unwrap().next_undo_id().expect("undo step identity");
 
     // 1. A panic during undo's refresh catches the unwind and rolls back cos, undo/redo, info, and working bytes.
     panic_on_refresh(1);
@@ -8294,6 +8345,8 @@ fn undo_and_redo_roll_back_on_a_refresh_panic_or_error() {
         assert!(ed.cos.is_modified());
         assert_eq!(ed.undo.len(), 1);
         assert!(ed.redo.is_empty());
+        assert_eq!(d.next_undo_id(), Some(step_id.clone()));
+        assert!(d.contains_history_step(&step_id));
     }
     let _ = shown(&s, id, 0);
 
@@ -8326,6 +8379,8 @@ fn undo_and_redo_roll_back_on_a_refresh_panic_or_error() {
         assert!(!ed.cos.is_modified());
         assert!(ed.undo.is_empty());
         assert_eq!(ed.redo.len(), 1);
+        assert_eq!(d.next_redo_id(), Some(step_id.clone()));
+        assert!(d.contains_history_step(&step_id));
     }
     let _ = shown(&s, id, 0);
 

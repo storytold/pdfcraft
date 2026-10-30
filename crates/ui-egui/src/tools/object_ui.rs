@@ -36,6 +36,13 @@ struct Gesture {
 }
 
 impl ObjectSelection {
+    /// Drop references into the state left by a successful undo or redo.
+    pub(crate) fn history_changed(&mut self) {
+        self.clear();
+        self.cache.clear();
+        self.generation = None;
+    }
+
     /// Clear any object-selection gesture and the page it was blocking.
     pub(crate) fn cancel_pointer_gesture(&mut self) {
         self.gesture = None;
@@ -159,6 +166,37 @@ fn leave_single(view: &mut DocView) {
     view.image_selection = None;
     view.line_editor = None;
     view.block_drag = None;
+}
+
+/// Restore exact references from the snapshot an undo just adopted, never by geometry.
+pub(crate) fn restore_deleted(view: &mut DocView, doc: &Document, page: usize, targets: &[ObjectTarget], added: bool) -> bool {
+    if targets.is_empty() || targets.len() > MAX_MOVE_OBJECTS {
+        return false;
+    }
+    let Ok(inventory) = doc.editable_objects(page) else { return false };
+    let mut selected = Vec::with_capacity(targets.len());
+    for target in targets {
+        let Some(object) = inventory.iter().find(|object| object.target == *target) else { return false };
+        if selected.iter().any(|object: &EditableObject| object.target == *target) {
+            return false;
+        }
+        selected.push(object.clone());
+    }
+    let added_target = added.then(|| targets.first().copied()).flatten();
+    if added && (targets.len() != 1 || added_target.is_none_or(|target| target.kind != ObjectKind::Added)) {
+        return false;
+    }
+    leave_single(view);
+    view.objects.history_changed();
+    view.objects.generation = Some(doc.edit_generation());
+    if let Some(target) = added_target {
+        view.content.selected = Some((page, target.index));
+    } else {
+        view.objects.page = Some(page);
+        view.objects.selected = selected;
+        view.objects.cache.insert(page, Ok(inventory));
+    }
+    true
 }
 
 /// Returns true while group selection owns the interaction. Ordinary clicks still reach the

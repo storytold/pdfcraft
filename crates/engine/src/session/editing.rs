@@ -9,6 +9,7 @@ use super::{
 
 impl Session {
     /// Apply an edit. On success the previous state is undoable and the view data is refreshed.
+    /// Model-edit errors leave the graph unchanged; refresh errors restore the previous graph and keys and remove the new undo entry.
     pub fn apply(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
         let now = self.now();
         let today = self.today();
@@ -176,7 +177,7 @@ impl Session {
         let previous = std::mem::replace(&mut editor.cos, next);
         let keys = keys_after(&edit).unwrap_or_else(|| editor.keys.clone());
         let previous_keys = std::mem::replace(&mut editor.keys, keys);
-        editor.undo.push((label, previous, previous_keys, scope));
+        editor.undo.push((label, previous, previous_keys, scope, crate::history::HistoryStepId::fresh()));
         if editor.undo.len() > MAX_UNDO {
             editor.undo.remove(0);
         }
@@ -187,7 +188,7 @@ impl Session {
         if let Err(e) = refreshed {
             // Roll back: the edit produced something we cannot display.
             if let Some(ed) = doc.editor.as_mut()
-                && let Some((_, prev, keys, _)) = ed.undo.pop()
+                && let Some((_, prev, keys, _, _)) = ed.undo.pop()
             {
                 ed.cos = prev;
                 ed.keys = keys;
@@ -222,22 +223,24 @@ impl Session {
         Ok(())
     }
 
+    /// Undo the newest edit and return its label, moving its history identity to redo.
+    /// If refreshing fails, retain the pre-call graph, keys and history stack positions.
     pub fn undo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToUndo)?;
-        let (label, prev, keys, scope) = editor.undo.pop().ok_or(EditError::NothingToUndo)?;
+        let (label, prev, keys, scope, step_id) = editor.undo.pop().ok_or(EditError::NothingToUndo)?;
         let current = std::mem::replace(&mut editor.cos, prev);
         let current_keys = std::mem::replace(&mut editor.keys, keys);
-        editor.redo.push((label.clone(), current, current_keys, scope));
+        editor.redo.push((label.clone(), current, current_keys, scope, step_id));
         Self::adopt_keys(doc);
         let refreshed = guard(|| Self::refresh_scoped(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
             if let Some(ed) = doc.editor.as_mut()
-                && let Some((label, current, current_keys, scope)) = ed.redo.pop()
+                && let Some((label, current, current_keys, scope, step_id)) = ed.redo.pop()
             {
                 let prev = std::mem::replace(&mut ed.cos, current);
                 let keys = std::mem::replace(&mut ed.keys, current_keys);
-                ed.undo.push((label, prev, keys, scope));
+                ed.undo.push((label, prev, keys, scope, step_id));
             }
             Self::adopt_keys(doc);
             if !matches!(guard(|| Self::refresh(doc)), Ok(Ok(()))) {
@@ -251,22 +254,24 @@ impl Session {
         Ok(label)
     }
 
+    /// Redo the newest undone edit and return its label, moving its history identity to undo.
+    /// If refreshing fails, retain the pre-call graph, keys and history stack positions.
     pub fn redo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToRedo)?;
-        let (label, next, keys, scope) = editor.redo.pop().ok_or(EditError::NothingToRedo)?;
+        let (label, next, keys, scope, step_id) = editor.redo.pop().ok_or(EditError::NothingToRedo)?;
         let current = std::mem::replace(&mut editor.cos, next);
         let current_keys = std::mem::replace(&mut editor.keys, keys);
-        editor.undo.push((label.clone(), current, current_keys, scope));
+        editor.undo.push((label.clone(), current, current_keys, scope, step_id));
         Self::adopt_keys(doc);
         let refreshed = guard(|| Self::refresh_scoped(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
             if let Some(ed) = doc.editor.as_mut()
-                && let Some((label, current, current_keys, scope)) = ed.undo.pop()
+                && let Some((label, current, current_keys, scope, step_id)) = ed.undo.pop()
             {
                 let next = std::mem::replace(&mut ed.cos, current);
                 let keys = std::mem::replace(&mut ed.keys, current_keys);
-                ed.redo.push((label, next, keys, scope));
+                ed.redo.push((label, next, keys, scope, step_id));
             }
             Self::adopt_keys(doc);
             if !matches!(guard(|| Self::refresh(doc)), Ok(Ok(()))) {

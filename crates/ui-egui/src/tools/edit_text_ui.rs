@@ -818,6 +818,29 @@ mod tests {
     }
 
     #[test]
+    fn undoing_an_item_deletion_keeps_an_unsaved_paragraph_editor() {
+        let (mut app, mut ed) = preview_app();
+        let id = app.views[0].id;
+        assert!(app.execute("edit.edit_text"));
+        assert!(app.apply_edit(Edit::AddText {
+            page: 0,
+            text: pdfcraft_engine::AddedText { text: "Temporary item".into(), rect: [20.0, 100.0, 140.0, 120.0], ..Default::default() },
+        }));
+        assert!(app.apply_edit(Edit::DeleteContent { page: 0, index: 0 }));
+        app.views[0].goto = None;
+        assert!(app.views[0].history_selection_on_page(0));
+        assert!(app.views[0].content.draft.is_none());
+        assert!(app.views[0].pending_text_open.is_none() && app.views[0].pending_edit.is_none());
+        ed.text = "Unsaved paragraph work".into();
+        assert!(ed.has_changes());
+        app.views[0].line_editor = Some(ed.clone());
+        app.undo();
+        assert_eq!(app.session.get(id).unwrap().added().len(), 1, "Undo restores the deleted item");
+        assert_eq!(app.views[0].line_editor, Some(ed), "restoring a selection must not discard another editor's typing");
+        assert_eq!(app.views[0].objects.count(), 0);
+    }
+
+    #[test]
     fn text_background_is_cached_without_editing_and_released_on_cancel() {
         let (app, ed) = preview_app();
         let doc = app.session.get(app.views[0].id).unwrap();

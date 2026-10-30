@@ -385,3 +385,196 @@ fn modifier_selection_picks_foreground_text_and_added_items_over_background_artw
         assert!(new.rect.iter().enumerate().all(|(i, value)| (value - old.rect[i] - shift[i % 2]).abs() < 0.01), "{old:?} -> {new:?}");
     }
 }
+
+#[test]
+fn undoing_a_selected_text_group_restores_it_for_immediate_delete() {
+    let mut h = harness();
+    let before = objects(&h);
+    assert!(before.iter().any(|o| o.text.as_deref() == Some("Group headline")));
+    assert!(before.iter().any(|o| o.text.as_deref() == Some("Keep here")));
+    assert!(before.iter().any(|o| o.text.as_deref() == Some("Added note")));
+
+    // Enter the first paragraph, then Shift-click another paragraph to select both text boxes.
+    let first_text = at(&h, 55.0, 70.0);
+    click(&mut h, first_text, Modifiers::NONE);
+    assert!(h.state().views[0].line_editor.is_some());
+    let second_text = at(&h, 250.0, 410.0);
+    click(&mut h, second_text, Modifiers::SHIFT);
+    h.get_by_label("2 objects selected");
+    assert!(h.state().views[0].line_editor.is_none());
+
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    let after_delete = objects(&h);
+    assert_eq!(after_delete.len() + 2, before.len(), "one Delete removes both selected text boxes");
+    assert!(after_delete.iter().all(|o| !matches!(o.text.as_deref(), Some("Group headline" | "Keep here"))));
+    assert!(after_delete.iter().any(|o| o.text.as_deref() == Some("Added note")), "unselected added text remains");
+
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(4);
+    assert_eq!(objects(&h), before, "one Undo restores both text boxes and all other page content");
+    h.get_by_label("2 objects selected");
+
+    // No pointer reselection: the same Delete must act on the restored selection.
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    assert_eq!(objects(&h), after_delete, "the restored text selection is the same selection that was deleted");
+}
+
+#[test]
+fn undoing_added_text_deletion_restores_selection_for_immediate_delete() {
+    let mut h = harness();
+    let before = objects(&h);
+    assert!(before.iter().any(|o| o.text.as_deref() == Some("Added note")));
+
+    // The added note occupies x=130..230 and y=130..160 from the page's screen-space top-left.
+    // This pointer marquee excludes the nearby source image and both source text blocks.
+    let (a, b) = (at(&h, 125.0, 120.0), at(&h, 235.0, 165.0));
+    h.hover_at(a);
+    h.run_steps(2);
+    h.drag_at(a);
+    h.run_steps(2);
+    h.hover_at(b);
+    h.run_steps(2);
+    h.drop_at(b);
+    h.run_steps(4);
+    h.get_by_label("1 object selected");
+
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    let after_delete = objects(&h);
+    assert_eq!(after_delete.len() + 1, before.len());
+    assert!(after_delete.iter().all(|o| o.text.as_deref() != Some("Added note")));
+    assert!(after_delete.iter().any(|o| o.text.as_deref() == Some("Group headline")));
+    assert!(after_delete.iter().any(|o| o.text.as_deref() == Some("Keep here")));
+
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(4);
+    assert_eq!(objects(&h), before, "one Undo restores the added text object");
+    h.get_by_label("1 object selected");
+
+    // No pointer reselection: Delete removes only the restored added text again.
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    assert_eq!(objects(&h), after_delete);
+}
+
+fn mark_saved(h: &mut Harness<'static, PdfCraftApp>) {
+    let id = h.state().views[0].id;
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    h.state_mut().session.mark_saved(id, bytes, None).unwrap();
+    h.run_steps(3);
+}
+
+#[test]
+fn deleting_group_saves_undo_selection_and_immediate_delete_restore_the_inventory() {
+    let mut h = harness();
+    let before = objects(&h);
+    marquee(&mut h);
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    let after_delete = objects(&h);
+    assert_eq!(after_delete.len(), before.len() - 3);
+    assert!(
+        h.query_all_by_label_contains("object selected").next().is_none() && h.query_all_by_label_contains("objects selected").next().is_none(),
+        "Delete clears the group selection"
+    );
+    mark_saved(&mut h);
+    let id = h.state().views[0].id;
+    assert!(!h.state().session.get(id).unwrap().dirty);
+
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(4);
+    assert_eq!(objects(&h), before);
+    h.get_by_label("3 objects selected");
+    assert!(h.state().session.get(id).unwrap().dirty);
+
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    assert_eq!(objects(&h), after_delete, "restored group selection is immediately deletable");
+}
+
+#[test]
+fn refused_group_deletion_keeps_the_selected_objects_and_history() {
+    let mut h = harness_with(true);
+    let before = objects(&h);
+    let id = h.state().views[0].id;
+    let step = h.state().session.get(id).unwrap().next_undo_id();
+    marquee(&mut h);
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    assert_eq!(objects(&h), before, "the clipped paragraph refuses the whole deletion");
+    h.get_by_label("3 objects selected");
+    assert_eq!(h.state().session.get(id).unwrap().next_undo_id(), step);
+}
+
+#[test]
+fn undo_on_another_page_does_not_restore_a_hidden_or_delayed_selection() {
+    let mut h = harness();
+    assert!(h.state_mut().apply_edit(Edit::DuplicatePages { pages: vec![0], at: None }));
+    h.run_steps(4);
+    let before = objects(&h);
+    marquee(&mut h);
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(4);
+    assert_eq!(objects(&h), before);
+    assert_eq!(h.state().views[0].current, 1, "Undo keeps the reader's place");
+    assert!(h.query_all_by_label_contains("object selected").next().is_none());
+    assert!(h.query_all_by_label_contains("objects selected").next().is_none());
+    h.state_mut().set_option("page", "1").unwrap();
+    h.run_steps(4);
+    assert!(h.query_all_by_label_contains("object selected").next().is_none());
+    assert!(h.query_all_by_label_contains("objects selected").next().is_none());
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    assert_eq!(objects(&h), before, "returning to the page does not activate a delayed selection");
+}
+
+/// Identical text and placement must not collapse two distinct targets when restoring their selection.
+#[test]
+fn undo_restores_distinct_added_objects_with_identical_text_and_geometry() {
+    let mut h = harness();
+    let id = h.state().views[0].id;
+    let text = h
+        .state()
+        .session
+        .get(id)
+        .unwrap()
+        .added()
+        .iter()
+        .find_map(|item| if let pdfcraft_engine::AddedContent::Text(text) = &item.content { Some(text.clone()) } else { None })
+        .unwrap();
+    assert!(h.state_mut().apply_edit(Edit::AddText { page: 0, text }));
+    h.run_steps(4);
+    let before = objects(&h);
+    let twins = before.iter().filter(|object| object.text.as_deref() == Some("Added note")).collect::<Vec<_>>();
+    assert_eq!(twins.len(), 2);
+    assert_ne!(twins[0].target, twins[1].target);
+    assert_eq!(twins[0].rect, twins[1].rect);
+    let (a, b) = (at(&h, 125.0, 120.0), at(&h, 235.0, 165.0));
+    h.hover_at(a);
+    h.run_steps(2);
+    h.drag_at(a);
+    h.run_steps(2);
+    h.hover_at(b);
+    h.run_steps(2);
+    h.drop_at(b);
+    h.run_steps(4);
+    h.get_by_label("2 objects selected");
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    let after_delete = objects(&h);
+    assert_eq!(after_delete.len() + 2, before.len());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(4);
+    assert_eq!(objects(&h), before);
+    h.get_by_label("2 objects selected");
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    assert_eq!(objects(&h), after_delete);
+}

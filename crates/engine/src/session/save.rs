@@ -116,7 +116,7 @@ impl Session {
         reopen_as_owner(&editor.cos, &mut editor.keys);
         // Other states with the same restricted access are unlocked too; states opened with
         // other passwords (protection changed and saved since) stay as they are.
-        for (_, cos, keys, _) in editor.undo.iter_mut().chain(editor.redo.iter_mut()) {
+        for (_, cos, keys, _, _) in editor.undo.iter_mut().chain(editor.redo.iter_mut()) {
             if cos.permissions().is_some_and(|p| !p.owner) && cos.unlock(password).is_ok() {
                 reopen_as_owner(cos, keys);
             }

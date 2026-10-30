@@ -130,7 +130,7 @@ use document::{display_bytes, info_fields, recovered_render_password, same_pages
 pub use edit::{BATCH_LABELS, EDIT_LABELS, Edit};
 pub use error::{EditError, SourceProblem};
 pub use fill_sign::{displayed_offset, text_box_at, typed_signature_graphic, typed_signature_shape};
-pub use history::Label;
+pub use history::{HistoryStepId, Label};
 use layers::{apply_layer_state, set_default_layer_state, use_layer_choices};
 pub use open::{OpenContext, PreparedDocument};
 pub use page_filter::{PageOrientation, PageParity, filter_pages};

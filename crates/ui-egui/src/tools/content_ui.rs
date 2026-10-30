@@ -509,11 +509,16 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView) {
         return;
     }
     let (del, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace), i.key_pressed(egui::Key::Escape)));
-    if del && let Some((page, index)) = view.content.selected.take() {
+    if del && let Some((page, index)) = view.content.selected {
         view.pending_edit = Some(Edit::DeleteContent { page, index });
     } else if esc {
         view.content.selected = None;
     }
+}
+
+/// Whether the current tool or open Edit panel exposes added-content editing.
+pub(crate) fn is_active(app: &crate::PdfCraftApp) -> bool {
+    (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, crate::QuickTool::AddText | crate::QuickTool::EditText)
 }
 
 /// After an add: select the new item.

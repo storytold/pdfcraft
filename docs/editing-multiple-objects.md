@@ -29,11 +29,22 @@ and image transforms even if the page was rotated after the item was added. Thei
 coordinate basis is retained in `/PCAdded/MoveOrigin` so metadata and source placement agree after
 repeated moves. Ordinary content updates replace that stream and reset the basis.
 
-Existing text moves without retyping, font substitution, or reflow: its original encoded glyph
-strings and kerning are replayed with temporary numeric `TJ` adjustments and text rise. The reader
-performs the original glyph advances, so following unselected text keeps its position. Paragraph
-indices can change when detection groups lines differently after a move. The UI remaps its own
-selection only when the new geometry matches uniquely; other document edits clear stale selection.
+Existing text moves without retyping, font substitution, or reflow: its original encoded glyph strings and kerning are replayed with temporary numeric `TJ` adjustments and text rise.
+The reader performs the original glyph advances, so following unselected text keeps its position.
+Paragraph indices can change when detection groups lines differently after a move.
+The UI remaps its own selection only when the new geometry matches uniquely; other document edits clear stale selection unless a supported deletion is undone under the conditions below.
+
+## Undoing deletions
+
+Delete or Backspace removes the selected objects in one undo step.
+Undo restores the exact deleted selection when its page is still current and no page jump is pending, so another Delete removes the same items without a new selection gesture.
+For a group selection, keep the Edit text & images quick tool active.
+For one added text or image, keep the Edit a PDF panel open or stay in Add Text or Edit text & images.
+Undo leaves the current page and tool unchanged.
+An unfinished added-text draft or changed paragraph editor keeps its typing instead of being replaced by the restored selection.
+Saving keeps the deletion history entry, so Undo can restore the selection and Redo can apply the deletion again.
+Returning to a page after Undo does not activate a delayed selection.
+Reload and Revert discard the document's undo history as before.
 
 ## Engine
 

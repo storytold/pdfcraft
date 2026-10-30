@@ -429,6 +429,7 @@ pub struct DocView {
     /// Edit text & images: the images per page (by document generation), and the selected one.
     pub(crate) edit_images: HashMap<usize, (u64, Vec<pdfcraft_engine::PageImage>)>,
     pub(crate) objects: crate::object_ui::ObjectSelection,
+    pub(crate) deletion_history: crate::editing::DeletionHistory,
     pub image_selection: Option<crate::edit_text_ui::ImageSelection>,
     /// Select tool: the picture clicked, to copy in its original format.
     pub picked_image: Option<crate::image_pick::PickedImage>,
@@ -683,6 +684,7 @@ impl DocView {
             move_background: Default::default(),
             edit_images: HashMap::new(),
             objects: Default::default(),
+            deletion_history: Default::default(),
             image_selection: None,
             picked_image: None,
             block_drag: None,
@@ -801,6 +803,11 @@ impl DocView {
     /// Select pages in the organize grid (tests, automation). Empty clears the selection.
     pub(crate) fn page_count(&self) -> usize {
         self.page_count
+    }
+
+    /// History retains the reader's place; never restore a selection on another or queued page.
+    pub(crate) fn history_selection_on_page(&self, page: usize) -> bool {
+        self.current == page && self.goto.is_none() && self.goto_point.is_none()
     }
 
     /// Drops wheel state after a discontinuous jump so the destination cannot
@@ -2834,8 +2841,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // Prepare a form ▸ Calculation order: the order's steps and links on the page.
     let calc_order = preparing && app.left_open && app.left == crate::LeftPanel::CalculationOrder;
     // Edit a PDF: added text and images can be selected, moved and edited.
-    let editing_content =
-        (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
+    let editing_content = crate::content_ui::is_active(app);
     let text_style = app.text_style.clone();
     let show_secured_notice = app.show_secured_notice;
     let view = &mut app.views[index];

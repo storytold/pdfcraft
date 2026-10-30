@@ -96,8 +96,28 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
     }
 }
 
-/// One undo/redo step: its label, the document state, its passwords, and what it changed.
-pub(crate) type Snapshot = (Label, pdfcraft_cos::Document, Keys, Scope);
+/// Opaque identity for one applied history step. Clones retain identity across undo/redo movement.
+///
+/// The token is intentionally not serializable and exposes no document state.
+#[derive(Clone, Debug)]
+pub struct HistoryStepId(Arc<()>);
+
+impl HistoryStepId {
+    pub(crate) fn fresh() -> Self {
+        Self(Arc::new(()))
+    }
+}
+
+impl PartialEq for HistoryStepId {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for HistoryStepId {}
+
+/// One undo/redo step: its label, document state, passwords, scope, and opaque identity.
+pub(crate) type Snapshot = (Label, pdfcraft_cos::Document, Keys, Scope, HistoryStepId);
 
 /// Editing state of a document (absent when the document cannot be edited yet, e.g. encrypted).
 #[derive(Clone)]

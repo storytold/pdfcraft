@@ -60,6 +60,14 @@ let bytes = s.save_full_bytes(id)?;   // full rewrite, garbage-collected
 s.mark_saved(id, bytes.clone(), path)?;
 ```
 
+### History entry identities
+
+`Document::next_undo_id()` and `next_redo_id()` return opaque `HistoryStepId` values for frontend state associated with the next history entry.
+Clones of an ID continue to identify that entry while it moves between the undo and redo stacks or is retained across saving.
+Use `Document::contains_history_step(&id)` to discard cached frontend state when branching or history eviction removes the entry.
+These process-local IDs expose no PDF state and are not serializable.
+They do not change the existing `Session::undo` or `redo` return types or automation-generation semantics.
+
 `Edit` is one enum of 75 variants — every undoable change in the product, from
 `RotatePages` to `AddAnnotation`, `SetFieldValue`, `ApplyRedactions` and `AddWatermark`. Adding a
 feature means adding a variant and handling it in `apply`, which is what keeps undo, the dirty

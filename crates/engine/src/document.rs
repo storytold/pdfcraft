@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 use pdfcraft_cos::{SaveOptions, write_incremental};
 use pdfcraft_render::{DocInfo, RenderConfig, RenderPool};
 
-use crate::history::Editor;
+use crate::history::{Editor, HistoryStepId};
 use crate::{
     CalculationOrder, CheckStyle, DocId, Edit, EditError, EditableObject, FormFieldKind, Hidden, InitialView, Label, MarkKind, SecuritySummary,
     SignatureInfo, TabOrder, TrustStore, XfaLayout, a11y, form_appearance, guard, js, measure, optimize, renderer_password, unrestricted,
@@ -336,6 +336,21 @@ impl Document {
     /// What Redo would redo, in parts.
     pub fn redo_label(&self) -> Option<&Label> {
         self.editor.as_ref().and_then(|e| e.redo.last()).map(|(l, ..)| l)
+    }
+
+    /// Identity of the next undo step, retained across save and undo/redo movement.
+    pub fn next_undo_id(&self) -> Option<HistoryStepId> {
+        self.editor.as_ref().and_then(|e| e.undo.last()).map(|snapshot| snapshot.4.clone())
+    }
+
+    /// Identity of the next redo step, retained across undo/redo movement.
+    pub fn next_redo_id(&self) -> Option<HistoryStepId> {
+        self.editor.as_ref().and_then(|e| e.redo.last()).map(|snapshot| snapshot.4.clone())
+    }
+
+    /// Whether this document still retains `id` on either history stack.
+    pub fn contains_history_step(&self, id: &HistoryStepId) -> bool {
+        self.editor.as_ref().is_some_and(|e| e.undo.iter().chain(&e.redo).any(|snapshot| snapshot.4 == *id))
     }
 
     pub fn editable(&self) -> bool {
