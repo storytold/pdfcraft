@@ -1,7 +1,7 @@
 use super::types::{AddedImage, AddedText};
 use super::{
     Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedCluster, ShapedScript, shape_arabic, shape_hebrew,
-    shape_thai,
+    shape_korean, shape_thai,
 };
 
 pub(super) fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
@@ -39,8 +39,9 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
     for para in t.text.split('\n') {
         // Arabic or Hebrew: laid out with the bidirectional algorithm and shaped.
         let rtl_script = para.chars().any(|c| is_arabic(c) || is_hebrew(c));
-        let thai = para.chars().any(is_thai);
-        if thai
+        // Korean is measured shaped too; only Thai has its own line breaker.
+        let thai = para.chars().any(is_thai) || para.chars().any(korean_drawn);
+        if para.chars().any(is_thai)
             && !rtl_script
             && let Ok(lines) = thai_lines(t, para, width)
         {
@@ -102,6 +103,17 @@ fn thai_lines(t: &AddedText, para: &str, width: f64) -> Result<Vec<String>, Edit
     Ok(lines)
 }
 
+/// A character the standard fonts can't draw and the supplied Korean face can: Hangul, and the
+/// face's other symbols. It is drawn with that face.
+pub(super) fn korean_drawn(c: char) -> bool {
+    !matches!(c, '\n' | '\r')
+        && !pdfcraft_fonts::win_ansi_encodable(c)
+        && !is_thai(c)
+        && !is_arabic(c)
+        && !is_hebrew(c)
+        && pdfcraft_fonts::korean_has(c)
+}
+
 pub(super) fn is_thai(c: char) -> bool {
     matches!(u32::from(c), 0x0E00..=0x0E7F)
 }
@@ -156,6 +168,7 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
 fn shaped_by_a_face(t: &AddedText) -> bool {
     (pdfcraft_fonts::document_arabic_font().is_some() && t.text.chars().any(is_arabic))
         || (pdfcraft_fonts::document_hebrew_font(false).is_some() && t.text.chars().any(is_hebrew))
+        || t.text.chars().any(korean_drawn)
 }
 
 /// An Arabic character the face shapes and draws (U+061C, a direction mark, is dropped).
@@ -214,6 +227,8 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
             let after_hebrew = segments.last().is_some_and(|(kind, _)| *kind == Some(ShapedScript::Hebrew));
             let script = if is_thai(c) {
                 Some(ShapedScript::Thai)
+            } else if korean_drawn(c) {
+                Some(ShapedScript::Korean)
             } else if is_hebrew(c) || (run_rtl && after_hebrew && !c.is_alphanumeric() && pdfcraft_fonts::hebrew_has(c)) {
                 Some(ShapedScript::Hebrew)
             } else if is_arabic(c) || (run_rtl && !c.is_alphanumeric() && pdfcraft_fonts::arabic_has(c)) {
@@ -235,6 +250,7 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
                     ShapedScript::Arabic => shape_arabic(&s, run_rtl).map_err(|e| arabic_error(e, &s))?,
                     ShapedScript::Hebrew => shape_hebrew(&s, run_rtl).map_err(|e| hebrew_error(e, &s))?,
                     ShapedScript::Thai => shape_thai(&s).map_err(|e| thai_error(e, &s))?,
+                    ShapedScript::Korean => shape_korean(&s).map_err(|e| korean_error(e, &s))?,
                 };
                 Piece::Shaped(shaped)
             } else if run_rtl {
@@ -278,6 +294,14 @@ pub(super) fn hebrew_error(e: GlyphError, text: &str) -> EditError {
             .into(),
         GlyphError::Missing => format!("the Hebrew font can't show \"{text}\""),
         GlyphError::TooComplex => format!("the Hebrew font's glyphs for \"{text}\" are too complex"),
+    })
+}
+
+pub(super) fn korean_error(e: GlyphError, text: &str) -> EditError {
+    EditError::Invalid(match e {
+        GlyphError::NoFont => "Korean text needs a Korean face supplied with pdfcraft_fonts::set_document_korean_font".into(),
+        GlyphError::Missing => format!("the Korean font can't show \"{text}\""),
+        GlyphError::TooComplex => "the Korean glyphs are too complex; use a shorter text box".into(),
     })
 }
 

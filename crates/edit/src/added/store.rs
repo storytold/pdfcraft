@@ -1,5 +1,5 @@
 use super::draw::{draw, params};
-use super::layout::{first_undrawable, is_thai, nums, shaped_arabic, thai_error};
+use super::layout::{first_undrawable, is_thai, korean_drawn, nums, shaped_arabic, thai_error};
 use super::types::{Added, AddedImage, AddedText, Align, CHAR_SPACING_LIMIT, Family, MarkerScan, TAG};
 use super::{Content, Dict, Document, EditError, GlyphError, MarkKind, ObjRef, Object, Stream, check, contents, page_list, place_tagged};
 
@@ -142,8 +142,12 @@ fn validate(c: &Content) -> Result<(), EditError> {
             // Everything else in it is drawn in the standard font, so it still has to fit.
             let undrawable = if t.text.chars().any(shaped_arabic) && pdfcraft_fonts::document_arabic_font().is_none() {
                 t.text.split('\n').find_map(|line| {
-                    line.chars()
-                        .find(|c| !(shaped_arabic(*c) || is_thai(*c) && pdfcraft_fonts::thai_has(*c) || pdfcraft_fonts::win_ansi_encodable(*c)))
+                    line.chars().find(|c| {
+                        !(shaped_arabic(*c)
+                            || is_thai(*c) && pdfcraft_fonts::thai_has(*c)
+                            || korean_drawn(*c)
+                            || pdfcraft_fonts::win_ansi_encodable(*c))
+                    })
                 })
             } else {
                 first_undrawable(t)

@@ -28,6 +28,9 @@ pub enum ShapedScript {
     Arabic,
     Hebrew,
     Thai,
+    /// Hangul (and other characters the standard fonts lack) drawn with the face an embedding
+    /// app supplies through [`set_document_korean_font`]; no face is built in.
+    Korean,
 }
 
 impl ShapedScript {
@@ -36,6 +39,7 @@ impl ShapedScript {
             Self::Arabic => crate::document_arabic_font(),
             Self::Hebrew => crate::document_hebrew_font(false),
             Self::Thai => crate::document_thai_font(),
+            Self::Korean => None,
         }
     }
 }
@@ -44,14 +48,24 @@ fn face(script: ShapedScript) -> Option<&'static (FontRef<'static>, ShaperData)>
     static FACE: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static HEBREW: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static THAI: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static KOREAN: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     let cache = match script {
         ShapedScript::Arabic => &FACE,
         ShapedScript::Hebrew => &HEBREW,
         ShapedScript::Thai => &THAI,
+        // Not cached before the face arrives, so a face supplied later is still used.
+        ShapedScript::Korean => {
+            KOREAN_FONT.get()?;
+            &KOREAN
+        }
     };
     cache
         .get_or_init(|| {
-            let font = FontRef::new(script.font()?.bytes).ok()?;
+            let bytes = match script {
+                ShapedScript::Korean => KOREAN_FONT.get().copied()?,
+                _ => script.font()?.bytes,
+            };
+            let font = FontRef::new(bytes).ok()?;
             let data = ShaperData::new(&font);
             Some((font, data))
         })
@@ -81,6 +95,25 @@ pub fn shape_hebrew(text: &str, rtl: bool) -> Result<Vec<ShapedCluster>, GlyphEr
     shape_script(text, rtl, ShapedScript::Hebrew)
 }
 
+/// The Korean face an embedding app supplied, if any. Only openly licensed faces (§1.2) may be
+/// passed; PdfCraft draws the glyphs it uses into the PDF as Type 3 outlines and never embeds the file.
+static KOREAN_FONT: OnceLock<&'static [u8]> = OnceLock::new();
+
+/// Supply the face Add text uses for Hangul. The first face wins; false when it can't be read.
+pub fn set_document_korean_font(bytes: &'static [u8]) -> bool {
+    FontRef::new(bytes).is_ok() && KOREAN_FONT.set(bytes).is_ok()
+}
+
+/// Whether the supplied Korean face has a glyph for `c` (false without the face).
+pub fn korean_has(c: char) -> bool {
+    face(ShapedScript::Korean).is_some_and(|(font, _)| font.charmap().map(c).is_some_and(|g| g.to_u32() != 0))
+}
+
+/// Shape one left-to-right run with the Korean face, clusters in drawing order.
+pub fn shape_korean(text: &str) -> Result<Vec<ShapedCluster>, GlyphError> {
+    shape_script(text, false, ShapedScript::Korean)
+}
+
 pub fn thai_has(c: char) -> bool {
     face(ShapedScript::Thai).is_some_and(|(font, _)| font.charmap().map(c).is_some())
 }
@@ -102,11 +135,12 @@ fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedC
         ShapedScript::Arabic => script::ARABIC,
         ShapedScript::Hebrew => script::HEBREW,
         ShapedScript::Thai => script::THAI,
+        ShapedScript::Korean => script::HANGUL,
     });
     // Preserve the historical Arabic per-character mapping; Hebrew and Thai marks stay with their base.
     buffer.set_cluster_level(match kind {
         ShapedScript::Arabic => BufferClusterLevel::Characters,
-        ShapedScript::Hebrew | ShapedScript::Thai => BufferClusterLevel::MonotoneGraphemes,
+        ShapedScript::Hebrew | ShapedScript::Thai | ShapedScript::Korean => BufferClusterLevel::MonotoneGraphemes,
     });
     let shaped = shaper.shape(buffer, ShapeOptions::new());
     // Clusters are byte offsets into `text`; a cluster shows the characters up to the next one.
