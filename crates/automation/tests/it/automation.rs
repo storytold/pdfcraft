@@ -4707,6 +4707,49 @@ fn adding_content_through_tools() {
     assert!(matches!(a.call("content_delete", &json!({ "doc": doc, "page": 1, "index": 5 })), Err(ToolError::Failed(_))));
 }
 
+/// content_update's to_page moves an added item onto another page as one undo step, like dragging
+/// it there (#4655).
+#[test]
+fn content_update_moves_an_added_item_to_another_page() {
+    let dir = workdir("content-to-page");
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 40, 20);
+        enc.set_color(png::ColorType::Rgb);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&[200u8; 2400]).unwrap();
+    }
+    std::fs::write(dir.join("logo.png"), png).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "MOVED", "at": [20, 20], "size": 18 }));
+    ok(&mut a, "page_add_image", json!({ "doc": doc, "page": 1, "path": "logo.png", "rect": [100, 200, 180, 240] }));
+    let pages = |a: &mut Automation| -> Vec<u64> {
+        let list = ok(a, "content_list", json!({ "doc": doc }));
+        list["items"].as_array().unwrap().iter().map(|i| i["page"].as_u64().unwrap()).collect()
+    };
+    assert_eq!(pages(&mut a), [1, 1]);
+    // Text: onto page 3 at a given box.
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 1, "to_page": 3, "rect": [50, 60, 250, 80] }));
+    assert_eq!(pages(&mut a), [1, 3], "the text left page 1 and is on page 3");
+    assert!(page_text(&mut a, doc)[2].contains("MOVED"));
+    // One undo puts it back.
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(pages(&mut a), [1, 1]);
+    assert!(page_text(&mut a, doc)[0].contains("MOVED"));
+    // A picture, with no rect: its box is kept, pushed back inside the page when it reaches out.
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 2, "to_page": 2 }));
+    assert_eq!(pages(&mut a), [1, 2]);
+    // Out of range, other changes in the same call, and its own page.
+    assert!(matches!(a.call("content_update", &json!({ "doc": doc, "page": 1, "index": 1, "to_page": 9 })), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(
+        a.call("content_update", &json!({ "doc": doc, "page": 1, "index": 1, "to_page": 2, "text": "X" })),
+        Err(ToolError::InvalidArgs(_))
+    ));
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 1, "to_page": 1, "rect": [30, 30, 230, 50] }));
+    assert_eq!(pages(&mut a), [1, 2], "to_page equal to page is an ordinary move");
+}
+
 /// Edit ▸ Copy and Paste headlessly (#2636): an added text box or image, as it is, onto its own
 /// page beside it, onto a point, and into another document.
 #[test]

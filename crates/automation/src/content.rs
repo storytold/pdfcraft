@@ -184,6 +184,30 @@ impl Automation {
 
     pub(crate) fn content_update(&mut self, a: &Args) -> Result<Value> {
         let (page, index, content, ph) = self.item(a)?;
+        if let Some(to) = a.opt_int("to_page")? {
+            let doc = self.doc(a)?;
+            let n = doc.info.pages.len();
+            let to = usize::try_from(to)
+                .ok()
+                .and_then(|p| p.checked_sub(1))
+                .filter(|p| *p < n)
+                .ok_or_else(|| bad(format!("to_page {to} is out of range: the document has {n} pages")))?;
+            if to != page {
+                if ["text", "font", "size", "bold", "italic", "color", "align", "char_spacing", "rotate", "flip_h", "flip_v", "crop", "image"]
+                    .iter()
+                    .any(|k| a.get(k).is_some())
+                {
+                    return Err(bad("to_page only moves the item (rect places it); change it in a separate call"));
+                }
+                let to_height = doc.info.pages.get(to).map_or(0.0, |p| f64::from(p.height));
+                let rect = match rect_arg(a, "rect")? {
+                    Some(r) => to_display(r, to_height),
+                    None => content.rect(),
+                };
+                let edit = doc.move_content_to_page(page, index, to, rect).map_err(failed)?;
+                return self.apply(a, edit);
+            }
+        }
         let mut content = match rect_arg(a, "rect")? {
             Some(r) => content.with_rect(to_display(r, ph)),
             None => content,

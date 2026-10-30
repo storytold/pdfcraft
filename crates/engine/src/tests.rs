@@ -3922,6 +3922,25 @@ fn added_text_and_images_render_and_stay_editable() {
     assert_eq!(s.get(id).unwrap().added().len(), 2);
 }
 
+/// Moving an added item onto another page reports a bad page or index as an error, whatever the
+/// numbers (a tool's or a gesture's input is never trusted to be small).
+#[test]
+fn moving_added_content_to_another_page_refuses_bad_pages_and_indexes() {
+    let mut s = Session::new();
+    let id = s.open("a.pdf", None, Arc::new(fixture(2)), None).unwrap();
+    s.apply(id, Edit::AddText { page: 0, text: AddedText { rect: [20.0, 250.0, 100.0, 280.0], text: "Moved".into(), ..Default::default() } })
+        .unwrap();
+    let d = s.get(id).unwrap();
+    let rect = [20.0, 20.0, 100.0, 40.0];
+    for (page, index, to) in
+        [(0, 0, 0), (0, 0, 9), (0, 0, usize::MAX), (0, usize::MAX, 1), (0, 5, 1), (usize::MAX, 0, 1), (usize::MAX, 0, usize::MAX)]
+    {
+        assert!(d.move_content_to_page(page, index, to, rect).is_err(), "{page}, {index}, {to}");
+    }
+    let Edit::Batch { edits, .. } = d.move_content_to_page(0, 0, 1, rect).unwrap() else { panic!("one batch") };
+    assert!(matches!(&edits[..], [Edit::PasteContent { page: 1, .. }, Edit::DeleteContent { page: 0, index: 0 }]), "{edits:?}");
+}
+
 /// Edit ▸ Copy and Paste of added content (#2636): a text box comes back with all its style, an
 /// image with its picture and transforms, in the same document and in another.
 #[test]
