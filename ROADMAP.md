@@ -766,3 +766,7 @@ Newest first: the date, what moved, and the new overall estimate.
 - 2026-10-29 — M12 / #3941 review follow-up: reject document evidence with Adobe provenance and licence expressions without identifiers; synthetic regression coverage, no XFA behavior change.
 
 - 2026-10-29 — M12 / #3941: resolve instance managers through their live owning container when unnamed wrappers share a SOM; preserve nested initial and empty groups after add, undo/redo and save/reopen. Lookup work remains budgeted.
+
+- 2026-10-30 — M12 / #3941: align growable horizontal keep-hint pagination with reference behavior reported in review and #5124; retain fixed-height placement. Correct field/table/frame horizontal origins across content areas; add geometry and edit/undo/save regressions. Public-form layout probes improve SV17 8→7, Labiola 5→4 and Swissmedic 18→17; broader fidelity remains incomplete.
+
+- 2026-10-30 — M12 / #3941: reproduce and fix disappearing parent borders/fills at horizontal leaf-boundary breaks; retain nested margins, column origins and oversized-content warnings. Synthetic geometry and rendered lifecycle regressions cover the fix.

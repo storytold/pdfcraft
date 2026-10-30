@@ -35,8 +35,13 @@ that warning and keeps the existing layout and accepted widget values.
   trigger page breaks; absent table headers are not repeated on continuation pages.
   Unnamed containers retain their initial occurrence counts even with populated datasets.
   This applies in flowed content and in a top-to-bottom container inside positioned content (a table in an area) alike. Intrinsic horizontal flow can split across
-  pages after a row is removed; explicit `keep intact="contentArea"` or `keep intact="pageArea"`
-  keeps such a section together when it fits in a fresh area. Repeated containers measure each
+  pages after a row is removed, including sections with `keep intact="contentArea"` or
+  `keep intact="pageArea"` hints. This matches observed reference-viewer behavior for growable
+  horizontal groups; it is not general keep-rule support. Fixed-height blocks still move
+  together when they fit in a fresh area. Breaks between whole horizontal leaves preserve enclosing
+  flowed borders, fills and repeated margins; oversized-leaf splits still omit those borders with
+  a warning. Following fields, table rows and frame borders
+  retain their horizontal inset when flow moves to another content area. Repeated containers measure each
   instance in its own data scope, including optional children and growing text fields.
   Fields that compute the page number or count on layout show the numbers.
 - **PDF** (`pdf::write_form`): pages with content streams in the standard 14 fonts (Arial and

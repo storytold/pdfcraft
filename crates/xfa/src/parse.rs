@@ -647,7 +647,6 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subfor
         break_before_page: break_to_page("breakBefore")
             || child(n, "break").is_some_and(|b| b.attribute("before").is_some_and(|v| v == "pageArea" || v == "contentArea")),
         break_after_page: break_to_page("breakAfter"),
-        keep_intact: child(n, "keep").and_then(|k| k.attribute("intact")).is_some_and(|v| matches!(v, "contentArea" | "pageArea")),
         column_widths,
         overflow_leader: child(n, "overflow").and_then(|o| o.attribute("leader")).map(str::to_string).filter(|s| !s.is_empty()),
     }

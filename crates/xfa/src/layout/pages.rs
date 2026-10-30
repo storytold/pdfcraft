@@ -158,6 +158,7 @@ impl Layouter<'_> {
     /// child's own page break), which breaks the subforms around it the same way.
     pub(super) fn break_frames(&mut self, need: f64, to_page: bool) -> Result<(), XfaError> {
         let (rect, mut y, _) = self.cursor();
+        let old_x = rect.x;
         let page = self.pages.len().saturating_sub(1);
         let here: Vec<bool> = self.frames.iter().map(|f| self.on_area(&f.part)).collect();
         let filled: Vec<bool> = self.frames.iter().map(|f| self.has_items_from(page, f.part.items)).collect();
@@ -179,6 +180,7 @@ impl Layouter<'_> {
         for i in 0..self.frames.len() {
             let Some(mark) = self.flow_mark() else { break };
             let Some(f) = self.frames.get_mut(i) else { break };
+            f.x += rect.x - old_x;
             f.part = mark;
             // `max` before `min`: a NaN margin counts as none and leaves `room` a number.
             let top = f.margin.top.max(0.0).min(room);

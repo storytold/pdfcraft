@@ -7,15 +7,19 @@ impl Layouter<'_> {
     /// Other blocks move to the next area when they fit there; oversized blocks are split.
     fn flow_block(&mut self, node: &Node, x: f64, (w, h): (f64, f64), ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         let (rect, y, _) = self.cursor();
+        let x_offset = x - rect.x;
         // Removing the final optional row can shrink a flowing section from taller than a
         // page to shorter than one. That must not suddenly make the section indivisible and
-        // discard the space left on this page. split_block keeps its fields and text whole.
+        // discard the space left on this page. For compatibility with reference-viewer
+        // pagination, keep/intact hints do not make these growable groups indivisible.
+        // split_block still keeps individual fields and text whole.
         let horizontal_flow = matches!(node, Node::Subform(s)
-            if matches!(s.layout, Layout::LrTb | Layout::RlTb) && s.common.h.is_none() && !s.keep_intact);
+            if matches!(s.layout, Layout::LrTb | Layout::RlTb) && s.common.h.is_none());
         if !horizontal_flow && y + h > rect.bottom() + 0.01 && h <= rect.h + 0.01 {
             self.make_room(h, 0.0)?;
         }
         let (rect, y, _) = self.cursor();
+        let x = rect.x + x_offset;
         let first = self.pages.last().map_or(0, |p| p.items.len());
         self.leaves.clear();
         self.draw_node(node, Rect::new(x, y, w, h), ctx, depth, sib)?;
@@ -55,7 +59,8 @@ impl Layouter<'_> {
     /// Spread the items the last page holds from index `first` on (a block drawn from `top` to
     /// `end`, past the bottom of its content area) over this and the following content areas.
     /// Breaks fall between text, pictures and fields, never through one that fits in an area;
-    /// fills and lines are cut at the break.
+    /// fills and lines are cut at the break. A break between whole leaves segments the
+    /// enclosing flowed frames too; splitting an oversized leaf still loses their borders.
     fn split_block(&mut self, first: usize, top: f64, end: f64) -> Result<(), XfaError> {
         let items: Vec<Item> = match self.pages.last_mut() {
             Some(p) if first <= p.items.len() => p.items.split_off(first),
@@ -65,7 +70,8 @@ impl Layouter<'_> {
         // whole (its border with its text), unless it is taller than a content area.
         let area_h = self.cursor().0.h;
         let mut extents: Vec<Option<(f64, f64)>> = vec![None; items.len()];
-        for (start, end, top, bottom) in std::mem::take(&mut self.leaves) {
+        let leaves = std::mem::take(&mut self.leaves);
+        for &(start, end, top, bottom) in &leaves {
             if bottom - top <= area_h + 0.01
                 && let Some(slots) = start.checked_sub(first).and_then(|s| extents.get_mut(s..end.saturating_sub(first)))
             {
@@ -73,6 +79,10 @@ impl Layouter<'_> {
             }
         }
         let mut rest: Vec<(Item, Option<(f64, f64)>)> = items.into_iter().zip(extents).collect();
+        // Solid items move whole, so their original coordinates can be sorted once and
+        // discarded as each part is placed, rather than sorted again for every area.
+        let mut solid: Vec<(f64, f64)> = rest.iter().filter_map(|(item, kept)| kept.or_else(|| solid_extent(item))).collect();
+        solid.sort_by(|a, b| b.0.total_cmp(&a.0));
         let origin_x = self.cursor().0.x;
         // An item's place on the current page is its drawn place moved by (dx, -shift).
         let (mut dx, mut shift) = (0.0, 0.0);
@@ -89,10 +99,7 @@ impl Layouter<'_> {
                 // The lowest break at or above the bottom that crosses no solid item: going
                 // through them from the lowest top up, a break moved to an item's top can't
                 // cross one already passed.
-                let mut solid: Vec<(f64, f64)> =
-                    rest.iter().filter_map(|(item, kept)| kept.or_else(|| solid_extent(item))).filter(|e| e.0 < limit - 0.01).collect();
-                solid.sort_by(|a, b| b.0.total_cmp(&a.0));
-                for (t, b) in solid {
+                for &(t, b) in solid.iter().filter(|e| e.0 < limit - 0.01) {
                     if t < cut - 0.01 && b > cut + 0.01 {
                         cut = t;
                     }
@@ -138,10 +145,31 @@ impl Layouter<'_> {
             rest = below;
             seg_top = cut;
             first_segment = false;
-            self.next_area()?;
-            let (rect, _, _) = self.cursor();
-            shift = cut - rect.y;
+            let cuts_leaf =
+                leaves.iter().any(|&(_, _, t, b)| t < cut - 0.01 && b > cut + 0.01) || solid.iter().any(|&(t, b)| t < cut - 0.01 && b > cut + 0.01);
+            if cuts_leaf {
+                // Preserve the oversized-leaf fallback: its enclosing frames no longer fit
+                // their content, so finish_frame omits them and records the warning.
+                self.next_area()?;
+            } else {
+                // Reserve the next band's whole leaves (including overlapping leaves and
+                // any leading space), so repeated top margins cannot push them off the area.
+                let mut bottom = None::<f64>;
+                for &(t, b) in solid.iter().rev().filter(|e| e.0 >= cut - 0.01) {
+                    if bottom.is_some_and(|end| t >= end - 0.01) {
+                        break;
+                    }
+                    bottom = Some(bottom.map_or(b, |end| end.max(b)));
+                }
+                if let Some(c) = &mut self.cur {
+                    c.y = cut - shift;
+                }
+                self.break_frames(bottom.map_or(0.0, |b| (b - cut).max(0.0)), false)?;
+            }
+            let (rect, y, _) = self.cursor();
+            shift = cut - y;
             dx = rect.x - origin_x;
+            solid.retain(|e| e.0 >= cut - 0.01);
         }
     }
 
@@ -163,6 +191,8 @@ impl Layouter<'_> {
         if instances == 0 {
             return Ok(());
         }
+        // Keep inherited horizontal placement relative to the content area across breaks.
+        let avail = avail.map(|(x, w)| (x - self.cursor().0.x, w));
         if sf.break_before_page && self.page_has_flow() {
             self.break_frames(0.0, true)?;
         }
@@ -174,7 +204,7 @@ impl Layouter<'_> {
             self.check_measures()?;
             let ctx = ctx_parent.with_som(&sf.common, sib + i);
             let (rect, _, _) = self.cursor();
-            let (x, w) = avail.unwrap_or((rect.x, rect.w));
+            let (x, w) = avail.map(|(offset, w)| (rect.x + offset, w)).unwrap_or((rect.x, rect.w));
             let w = clamp_opt(sf.common.w.unwrap_or(w), sf.common.min_w, sf.common.max_w).min(w.max(1.0));
             if !matches!(sf.layout, Layout::Tb | Layout::Table) || sf.common.h.is_some() {
                 // Not splittable: one block.
@@ -206,12 +236,14 @@ impl Layouter<'_> {
                         if let Node::Subform(_) = child
                             && splittable(child)
                         {
-                            self.flow_subform(child, Some((inner_x, inner_w)), &ctx, depth + 1, csib)?;
+                            let child_x = self.cursor().0.x + inner_x - rect.x;
+                            self.flow_subform(child, Some((child_x, inner_w)), &ctx, depth + 1, csib)?;
                             continue;
                         }
                         for instance in 0..self.instances(child, &ctx.som) {
                             let (cw, ch) = self.size_of(child, inner_w, &ctx, depth + 1, csib + instance);
-                            self.flow_block(child, inner_x, (cw, ch), &ctx, depth + 1, csib + instance)?;
+                            let child_x = self.cursor().0.x + inner_x - rect.x;
+                            self.flow_block(child, child_x, (cw, ch), &ctx, depth + 1, csib + instance)?;
                         }
                     }
                 }
@@ -237,6 +269,7 @@ impl Layouter<'_> {
 
     /// Flow each data row at its own height, allowing room for a present overflow leader.
     fn flow_table(&mut self, sf: &Subform, x: f64, inner_w: f64, ctx: &Ctx, depth: usize) -> Result<(), XfaError> {
+        let x_offset = x - self.cursor().0.x;
         let cols = self.columns(sf, inner_w);
         let leader =
             sf.overflow_leader.as_ref().and_then(|name| sf.children.iter().position(|c| c.common().name.as_deref() == Some(name) && is_row(c)));
@@ -264,11 +297,13 @@ impl Layouter<'_> {
                     if self.make_room(h, led.map_or(0.0, |_| lead_h))?
                         && let Some((li, l)) = led
                     {
-                        let (_, y, _) = self.cursor();
+                        let (area, y, _) = self.cursor();
+                        let x = area.x + x_offset;
                         self.draw_row(l, &cols, Rect::new(x, y, inner_w, lead_h), ctx, depth + 1, sibs.at(li))?;
                         self.place(lead_h);
                     }
-                    let (_, y, _) = self.cursor();
+                    let (area, y, _) = self.cursor();
+                    let x = area.x + x_offset;
                     self.draw_row(row, &cols, Rect::new(x, y, inner_w, h), ctx, depth + 1, csib + inst)?;
                     self.place(h);
                 }
@@ -277,11 +312,13 @@ impl Layouter<'_> {
             if splittable(child)
                 && let Node::Subform(_) = child
             {
+                let x = self.cursor().0.x + x_offset;
                 self.flow_subform(child, Some((x, inner_w)), ctx, depth + 1, csib)?;
                 continue;
             }
             for instance in 0..self.instances(child, &ctx.som) {
                 let (cw, ch) = self.size_of(child, inner_w, ctx, depth + 1, csib + instance);
+                let x = self.cursor().0.x + x_offset;
                 self.flow_block(child, x, (cw, ch), ctx, depth + 1, csib + instance)?;
             }
         }

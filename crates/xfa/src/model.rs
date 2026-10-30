@@ -428,9 +428,6 @@ pub struct Subform {
     /// `<breakBefore targetType="pageArea">`: start on a new page.
     pub break_before_page: bool,
     pub break_after_page: bool,
-    /// Explicit `<keep intact="contentArea|pageArea">`: an intrinsically sized horizontal
-    /// flow stays together when it fits in a fresh content area.
-    pub keep_intact: bool,
     /// Tables: the width of each column.
     pub column_widths: Vec<f64>,
     /// `<overflow leader="…">`: the named child (a header row) is repeated after a page break.

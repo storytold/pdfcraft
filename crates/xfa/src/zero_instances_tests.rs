@@ -153,16 +153,268 @@ fn removing_the_last_optional_row_does_not_push_a_flowing_section_to_the_next_pa
     }
 }
 
-/// Explicit keep constraints and fixed heights continue to move fitting sections as a unit.
+/// Compatibility with public-form pagination: keep hints do not make a growable
+/// horizontal group indivisible. Assert placement and content, not only page counts.
 #[test]
-fn explicitly_kept_and_fixed_height_horizontal_sections_still_move_whole() {
+fn growable_horizontal_keep_hints_do_not_add_pages_after_optional_row_removal() {
     for mode in ["lr-tb", "rl-tb"] {
-        for constraint in [r#"<keep intact="contentArea"/>"#, r#"<keep intact="pageArea"/>"#] {
-            let form = render(&shrinking_section(mode, constraint, ""), Some("<form><section/></form>"));
+        for constraint in ["", r#"<keep intact="contentArea"/>"#, r#"<keep intact="pageArea"/>"#] {
+            let body =
+                format!("{}<field name=\"footer\" w=\"300pt\" h=\"300pt\"><ui><textEdit/></ui></field>", shrinking_section(mode, constraint, ""));
+            for (data, count) in [("<form><section/></form>", 5), ("<form><section><optional/></section></form>", 6)] {
+                let form = render(&body, Some(data));
+                assert_eq!(first_field_page(&form), 0, "{mode}/{constraint}: start in the space left");
+                assert_eq!(form.pages.len(), 2, "{mode}/{constraint}: keep must not add a page");
+                let fields = widgets(&form);
+                assert_eq!(fields.len(), count);
+                for field in &fields {
+                    assert!(field.rect.y >= 36.0 && field.rect.bottom() <= 756.01, "{field:?}");
+                }
+                for page in &form.pages {
+                    let fields: Vec<_> = page.items.iter().filter_map(|item| if let Item::Widget(f) = item { Some(f) } else { None }).collect();
+                    for pair in fields.windows(2) {
+                        assert!(pair[0].rect.bottom() <= pair[1].rect.y + 0.01, "fields must not overlap: {pair:?}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Splitting must use the next content area's origin, not force an extra physical page.
+#[test]
+fn horizontal_keep_hints_split_between_content_areas_without_losing_geometry() {
+    for mode in ["lr-tb", "rl-tb"] {
+        for intact in ["contentArea", "pageArea"] {
+            let body = format!(
+                r#"
+                <pageSet><pageArea name="body">
+                    <contentArea x="10pt" y="10pt" w="300pt" h="60pt"/>
+                    <contentArea x="330pt" y="10pt" w="300pt" h="60pt"/>
+                    <medium short="640pt" long="80pt"/>
+                </pageArea></pageSet>
+                <field name="intro" w="300pt" h="20pt"><ui><textEdit/></ui></field>
+                <subform name="section" layout="{mode}" w="300pt"><keep intact="{intact}"/>
+                    <field name="first" w="300pt" h="20pt"><ui><textEdit/></ui></field>
+                    <field name="second" w="300pt" h="20pt"><ui><textEdit/></ui></field>
+                    <field name="third" w="300pt" h="20pt"><ui><textEdit/></ui></field>
+                </subform>
+                <field name="footer" w="300pt" h="20pt"><ui><textEdit/></ui></field>"#
+            );
+            let form = render(&body, None);
+            assert_eq!(form.pages.len(), 1, "{mode}/{intact}");
+            let fields = widgets(&form);
+            assert_eq!(fields.len(), 5);
+            for (field, (x, y)) in fields.iter().zip([(10.0, 10.0), (10.0, 30.0), (10.0, 50.0), (330.0, 10.0), (330.0, 30.0)]) {
+                assert!((field.rect.x - x).abs() < 0.01 && (field.rect.y - y).abs() < 0.01, "{mode}/{intact}: {field:?}");
+                assert!((field.rect.h - 20.0).abs() < 0.01);
+            }
+        }
+    }
+}
+
+/// A break between whole leaves keeps the enclosing flowed section on both areas.
+#[test]
+fn horizontal_leaf_breaks_preserve_parent_borders_and_fills() {
+    for mode in ["lr-tb", "rl-tb"] {
+        for columns in [false, true] {
+            for intact in ["contentArea", "pageArea"] {
+                let second = if columns { r#"<contentArea x="330pt" y="20pt" w="300pt" h="60pt"/>"# } else { "" };
+                let body = format!(
+                    r#"<pageSet><pageArea><contentArea x="10pt" y="10pt" w="300pt" h="60pt"/>{second}
+                        <medium short="640pt" long="100pt"/></pageArea></pageSet>
+                    <subform name="box" layout="tb" w="290pt">
+                        <border><edge thickness="1pt"/><fill><color value="0,0,255"/></fill></border>
+                        <field name="intro" w="290pt" h="40pt"><ui><textEdit/></ui></field>
+                        <subform name="section" layout="{mode}" w="290pt"><keep intact="{intact}"/>
+                            <field name="first" w="290pt" h="20pt"><ui><textEdit/></ui></field>
+                            <field name="second" w="290pt" h="20pt"><ui><textEdit/></ui></field>
+                        </subform>
+                    </subform>"#
+                );
+                let form = render(&body, None);
+                assert_eq!(form.pages.len(), if columns { 1 } else { 2 });
+                let fields = widgets(&form);
+                assert_eq!(fields.len(), 3);
+                assert_eq!((fields[1].rect.x, fields[1].rect.y), (10.0, 50.0), "first leaf stays on the first area");
+                let (last_x, last_y) = if columns { (330.0, 20.0) } else { (10.0, 10.0) };
+                assert_eq!((fields[2].rect.x, fields[2].rect.y), (last_x, last_y));
+                let fills: Vec<_> = form
+                    .pages
+                    .iter()
+                    .flat_map(|p| &p.items)
+                    .filter_map(|item| if let Item::Fill { rect, color } = item { (*color == [0.0, 0.0, 1.0]).then_some(*rect) } else { None })
+                    .collect();
+                assert_eq!(fills.len(), 2, "{mode}/{columns}/{intact}: {:?}", form.warnings);
+                assert_eq!((fills[0].x, fills[0].y, fills[0].h), (10.0, 10.0, 60.0));
+                assert_eq!((fills[1].x, fills[1].y, fills[1].h), (last_x, last_y, 20.0));
+                assert_eq!(form.pages.iter().flat_map(|p| &p.items).filter(|i| matches!(i, Item::Line { .. })).count(), 8);
+                for page in &form.pages {
+                    for (index, item) in page.items.iter().enumerate() {
+                        if let Item::Widget(w) = item {
+                            assert!(
+                                page.items[..index].iter().any(|i| matches!(i, Item::Fill { rect, .. }
+                                if rect.x <= w.rect.x && rect.y <= w.rect.y && rect.bottom() >= w.rect.bottom())),
+                                "fill must be under its field"
+                            );
+                        }
+                    }
+                }
+                assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+            }
+        }
+    }
+}
+
+/// Wrapping the same full-width leaves in a growable horizontal group must retain the
+/// existing nested-frame margins, draw order and column origins of top-to-bottom flow.
+#[test]
+fn horizontal_leaf_breaks_repeat_nested_margins_without_empty_frames() {
+    for intro in [20, 59] {
+        let fields: String = [20, 45, 20, 20]
+            .iter()
+            .enumerate()
+            .map(|(i, h)| format!(r#"<field name="f{i}" w="270pt" h="{h}pt"><ui><textEdit/></ui></field>"#))
+            .collect();
+        let body = |mode| {
+            format!(
+                r#"
+            <pageSet><pageArea><contentArea x="10pt" y="10pt" w="300pt" h="60pt"/>
+                <contentArea x="330pt" y="20pt" w="300pt" h="50pt"/>
+                <medium short="640pt" long="100pt"/></pageArea></pageSet>
+            <field name="intro" w="300pt" h="{intro}pt"><ui><textEdit/></ui></field>
+            <subform name="outer" layout="tb" w="290pt"><margin leftInset="5pt" topInset="5pt" bottomInset="3pt"/>
+                <border><edge/><fill><color value="0,0,255"/></fill></border>
+                <subform name="inner" layout="tb" w="280pt"><margin leftInset="10pt" topInset="7pt" bottomInset="4pt"/>
+                    <border><edge/><fill><color value="0,255,0"/></fill></border>
+                    <subform name="section" layout="{mode}" w="270pt"><keep intact="contentArea"/>{fields}</subform>
+                </subform>
+            </subform>
+            <field name="footer" w="300pt" h="10pt"><ui><textEdit/></ui></field>"#
+            )
+        };
+        let expected = render(&body("tb"), None);
+        assert!(expected.warnings.is_empty(), "{:?}", expected.warnings);
+        for mode in ["lr-tb", "rl-tb"] {
+            let actual = render(&body(mode), None);
+            assert_eq!(actual, expected, "{mode}, intro={intro}");
+        }
+    }
+}
+
+/// The next row may contain overlapping vertical extents. Reserve the whole connected
+/// band before repeating parent margins, not just its first or shortest field.
+#[test]
+fn horizontal_leaf_breaks_reserve_overlapping_fields_before_top_margins() {
+    for mode in ["lr-tb", "rl-tb"] {
+        let body = format!(
+            r#"
+            <pageSet><pageArea><contentArea x="10pt" y="10pt" w="300pt" h="60pt"/>
+                <contentArea x="330pt" y="20pt" w="300pt" h="50pt"/>
+                <medium short="640pt" long="100pt"/></pageArea></pageSet>
+            <field name="intro" w="300pt" h="40pt"><ui><textEdit/></ui></field>
+            <subform name="box" layout="tb" w="300pt"><margin topInset="10pt"/>
+                <border><edge/><fill><color value="0,0,255"/></fill></border>
+                <subform layout="{mode}" w="300pt"><keep intact="contentArea"/>
+                    <subform layout="position" w="300pt" h="45pt">
+                        <field name="a" w="100pt" h="20pt"><ui><textEdit/></ui></field>
+                        <field name="b" x="120pt" y="15pt" w="100pt" h="30pt"><ui><textEdit/></ui></field>
+                    </subform>
+                </subform>
+            </subform>"#
+        );
+        let form = render(&body, None);
+        assert_eq!(form.pages.len(), 1);
+        let fields = widgets(&form);
+        assert_eq!(fields.len(), 3);
+        assert_eq!((fields[1].rect.x, fields[1].rect.y), (330.0, 25.0));
+        assert_eq!((fields[2].rect.x, fields[2].rect.y, fields[2].rect.bottom()), (450.0, 40.0, 70.0));
+        let fills: Vec<_> = form.pages[0].items.iter().filter_map(|i| if let Item::Fill { rect, .. } = i { Some(rect) } else { None }).collect();
+        assert_eq!(fills.len(), 1, "no empty frame left in the first column");
+        assert_eq!((fills[0].x, fills[0].y, fills[0].bottom()), (330.0, 20.0, 70.0));
+        assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+    }
+}
+
+/// Fields, table rows and their frame borders retain their inset when flow changes columns.
+#[test]
+fn flowed_fields_table_rows_and_borders_follow_the_content_area_origin() {
+    for layout in ["tb", "table"] {
+        let fields: String = ["first", "second", "third"]
+            .iter()
+            .map(|name| {
+                let field = format!(r#"<field name="{name}" w="280pt" h="20pt"><ui><textEdit/></ui></field>"#);
+                if layout == "table" { format!(r#"<subform layout="row">{field}</subform>"#) } else { field }
+            })
+            .collect();
+        let body = format!(
+            r#"
+            <pageSet><pageArea><contentArea x="10pt" y="10pt" w="300pt" h="60pt"/>
+                <contentArea x="330pt" y="10pt" w="300pt" h="60pt"/>
+                <medium short="640pt" long="80pt"/></pageArea></pageSet>
+            <field name="intro" w="300pt" h="40pt"><ui><textEdit/></ui></field>
+            <subform name="box" layout="{layout}" w="290pt" columnWidths="280pt">
+                <margin leftInset="5pt"/>
+                <border><fill><color value="0,0,255"/></fill></border>{fields}
+            </subform>
+            <field name="footer" w="300pt" h="20pt"><ui><textEdit/></ui></field>"#
+        );
+        let form = render(&body, None);
+        assert_eq!(form.pages.len(), 1, "{layout}");
+        let fields = widgets(&form);
+        assert_eq!(fields.len(), 5);
+        for (field, (x, y)) in fields.iter().zip([(10.0, 10.0), (15.0, 50.0), (335.0, 10.0), (335.0, 30.0), (330.0, 50.0)]) {
+            assert!((field.rect.x - x).abs() < 0.01 && (field.rect.y - y).abs() < 0.01, "{layout}: {field:?}");
+        }
+        let fills: Vec<_> = form.pages[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Fill { rect, color } if *color == [0.0, 0.0, 1.0] => Some(rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(fills.len(), 2, "{layout}: {fills:?}");
+        assert!(fills.iter().any(|r| (r.x - 10.0).abs() < 0.01 && (r.y - 50.0).abs() < 0.01));
+        assert!(fills.iter().any(|r| (r.x - 330.0).abs() < 0.01 && (r.y - 10.0).abs() < 0.01));
+    }
+}
+
+/// Repeated table leaders follow their rows into another column; later content can return
+/// to the first column of a new page without retaining the previous column's offset.
+#[test]
+fn repeated_headers_and_following_fields_use_each_content_areas_origin() {
+    let body = r#"<pageSet><pageArea>
+        <contentArea x="10pt" y="10pt" w="300pt" h="60pt"/>
+        <contentArea x="330pt" y="10pt" w="300pt" h="60pt"/>
+        <medium short="640pt" long="80pt"/></pageArea></pageSet>
+        <field name="intro" w="300pt" h="40pt"><ui><textEdit/></ui></field>
+        <subform name="table" layout="table" columnWidths="280pt" w="290pt"><margin leftInset="5pt"/>
+            <overflow leader="header"/>
+            <subform name="header" layout="row"><field name="heading" w="280pt" h="10pt"><ui><textEdit/></ui></field></subform>
+            <subform name="row" layout="row"><occur min="2" max="2"/>
+                <field name="value" w="280pt" h="20pt"><ui><textEdit/></ui></field>
+            </subform>
+        </subform>
+        <field name="footer" w="300pt" h="20pt"><ui><textEdit/></ui></field>"#;
+    let form = render(body, None);
+    assert_eq!(form.pages.len(), 2);
+    let fields = widgets(&form);
+    assert_eq!(fields.len(), 6);
+    for (field, (x, y)) in fields.iter().zip([(10.0, 10.0), (15.0, 50.0), (335.0, 10.0), (335.0, 20.0), (335.0, 40.0), (10.0, 10.0)]) {
+        assert!((field.rect.x - x).abs() < 0.01 && (field.rect.y - y).abs() < 0.01, "{field:?}");
+    }
+    assert!(matches!(form.pages[1].items.last(), Some(Item::Widget(f)) if f.name == "footer"));
+}
+
+/// Fixed-height horizontal sections still move as a unit, with or without keep hints.
+#[test]
+fn fixed_height_horizontal_sections_still_move_whole() {
+    for mode in ["lr-tb", "rl-tb"] {
+        for constraint in ["", r#"<keep intact="contentArea"/>"#, r#"<keep intact="pageArea"/>"#] {
+            let form = render(&shrinking_section(mode, constraint, r#"h="540pt""#), Some("<form><section/></form>"));
             assert_eq!(first_field_page(&form), 1);
         }
-        let form = render(&shrinking_section(mode, "", r#"h="540pt""#), Some("<form><section/></form>"));
-        assert_eq!(first_field_page(&form), 1);
     }
 }
 
@@ -289,7 +541,7 @@ fn repeated_flowing_subforms_measure_their_own_instances() {
     }
 }
 
-/// A later, taller horizontal instance must reserve its actual height at a page break.
+/// A later, taller horizontal instance splits at leaf boundaries using its actual height.
 #[test]
 fn repeated_horizontal_subforms_paginate_by_instance_height() {
     for mode in ["lr-tb", "rl-tb"] {
@@ -310,8 +562,10 @@ fn repeated_horizontal_subforms_paginate_by_instance_height() {
         assert_eq!(form.pages.len(), 2, "{mode}");
         let fields = widgets(&form);
         assert_eq!(fields.len(), 3);
-        assert!((fields[1].rect.y - 10.0).abs() < 0.01);
-        assert!((fields[2].rect.y - 50.0).abs() < 0.01);
+        assert!((fields[1].rect.y - 30.0).abs() < 0.01);
+        assert!((fields[2].rect.y - 10.0).abs() < 0.01);
+        assert_eq!(form.pages[0].items.iter().filter(|item| matches!(item, Item::Widget(_))).count(), 2);
+        assert_eq!(form.pages[1].items.iter().filter(|item| matches!(item, Item::Widget(_))).count(), 1);
         assert!(fields.iter().all(|f| f.rect.bottom() <= 70.01));
     }
 }
