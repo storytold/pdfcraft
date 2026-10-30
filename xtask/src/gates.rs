@@ -117,6 +117,7 @@ pub fn ci(_: &[String]) -> anyhow::Result<()> {
         ("layers", Box::new(|| layers(&[]))),
         ("wasm", Box::new(|| wasm(&[]))),
         ("assets", Box::new(|| crate::assets::run(&[]))),
+        ("progress-docs", Box::new(|| crate::progress_docs::run(&[]))),
         ("deny", Box::new(|| deny(&[]))),
         ("parity", Box::new(|| crate::parity::run(&[]))),
     ];

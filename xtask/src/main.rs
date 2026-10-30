@@ -10,6 +10,7 @@ mod gates;
 mod layers;
 mod macos_integration;
 mod parity;
+mod progress_docs;
 mod screenshots;
 mod version;
 
@@ -23,11 +24,12 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ("deny", "Dependency licences, bans, sources and advisories (deny.toml; needs cargo-deny)", gates::deny),
     (
         "ci",
-        "fmt --check, clippy -D warnings, the CLI without default features, test, i18n-report, layers, wasm, assets, deny, parity (stops at first failure)",
+        "fmt --check, clippy -D warnings, the CLI without default features, test, i18n-report, layers, wasm, assets, progress-docs, deny, parity (stops at first failure)",
         gates::ci,
     ),
     ("test", "Workspace tests: cargo nextest (cargo test when it is missing), then doctests", gates::test),
     ("i18n-report", "Print the strings each interface language lacks (counts and a few keys); never fails", gates::i18n_report),
+    ("progress-docs", "One status line and one row per milestone in ROADMAP.md and docs/*.md", progress_docs::run),
     ("assets", "Enforce the asset policy (AGENTS.md §1) against ATTRIBUTION.toml; --write regenerates ATTRIBUTION.md", assets::run),
     ("corpus", "Fetch the pinned pdf.js test corpus into corpus/ (git-ignored) and verify it; --update-pin re-records the pin", gates::corpus),
     ("check", "Robustness sweep over corpus/ with pdfcraft-cli; fails on crashes or regressions vs xtask/baselines", gates::check),

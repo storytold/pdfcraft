@@ -2,8 +2,6 @@
 
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (localization current state: Arabic logical catalog, explicit RTL direction and mirrored stock chrome; native/browser RTL workflows unqualified. Native release Hans face via LXGW WenKai Lite. Scores and estimates unchanged)
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (localization ≈59% → ≈68%; weighted readiness 49.25 → 49.7 ≈ 50%) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-
 The authoritative assessment of how close PdfCraft is to Acrobat Pro. [ROADMAP.md](../ROADMAP.md)
 summarizes it; [gaps.md](gaps.md) lists every shortfall one by one; the deep-dive checklists are
 [pdf-spec-parity.md](pdf-spec-parity.md), [file-format-parity.md](file-format-parity.md),
@@ -43,7 +41,7 @@ Hours are calibrated as in [Effort and calibration](#effort-and-calibration) (�
 The gap between the numbers is the story of this release: most of what an Acrobat user reaches
 for *exists*, but much of it is shallower than Acrobat's, rendering is still borrowed, quality has
 never been measured side by side with Acrobat, and the first public releases (0.4.0, 0.5.0) drew
-245 open issues in two days, including one that made our encrypted files unreadable in Acrobat
+245 open issues in two days (1,259 are open on 2026-10-26), including one that made our encrypted files unreadable in Acrobat
 ([#774](https://github.com/storytold/pdfcraft/issues/774), fixed by #836).
 
 ## How this was measured
@@ -67,8 +65,8 @@ never been measured side by side with Acrobat, and the first public releases (0.
   against a menu dump, so it can miss features; that risk is one of the gaps.
 - **Ready for real work by judgement, from evidence:** the code (152k lines of Rust in `crates/`,
   `apps/` and `xtask`, 1,765 tests, 184 registered commands, 141 automation tools); the vendored
-  renderer's patch list (`vendor/README.md`); user reports on GitHub (245 open, 107 closed issues on
-  2026-10-10); release packaging (`.github/workflows/release.yml`); and knowledge of Acrobat Pro's
+  renderer's patch list (`vendor/README.md`); user reports on GitHub (1,259 open, 928 closed issues on
+  2026-10-26); release packaging (`.github/workflows/release.yml`); and knowledge of Acrobat Pro's
   feature set from Adobe's public documentation.
 - **Not measured, and the largest uncertainty:** no side-by-side comparison of rendering, text
   extraction or form behaviour against Acrobat exists yet. Every "ready" figure below is an
@@ -185,7 +183,7 @@ features total and are shown for orientation; the others add to it.
 | Hardware | ≈ 35% | 4% | 25–50 | additional | Page raster is CPU only (Acrobat has GPU rendering); Windows CNG and macOS Keychain keys sign, no PKCS #11; no scanners; web printing goes through the browser's print dialog as pictures, not vectors | [hardware-parity.md](hardware-parity.md) |
 | Localization | ≈ 68% over the 12 key languages | 5% | 35–60 | additional | 22 catalogs + English (23 interface languages); native craft-fonts builds embed a Simplified Chinese face (LXGW WenKai Lite) but the web build has none; Arabic labels stay logical with explicit RTL direction and mirrored stock chrome, while native/browser/IME workflows are unqualified; no Hindi, Indonesian, Korean | [localization-parity.md](localization-parity.md) |
 | Performance | ≈ 40% | 6% | 25–45 | additional | 500-page smooth scrolling and large-file memory work (#307) done; no performance budgets (`misc.performance-budgets`), no lazy loading of GB files; blurry text at 1080p/1440p (#730) | [gaps.md](gaps.md) |
-| Stability | ≈ 50% | 8% | 45–80 | additional | Never-crash rules and nightly fuzzing; 245 open issues on 2026-10-10, many of them `fix(...)` reports of wrong results in shipped features (the #799–#821 batch is fixed) | [gaps.md](gaps.md) |
+| Stability | ≈ 50% | 8% | 45–80 | additional | Never-crash rules and nightly fuzzing; 1,259 open issues on 2026-10-26, many of them `fix(...)` reports of wrong results in shipped features (the #799–#821 batch is fixed) | [gaps.md](gaps.md) |
 | Platforms | ≈ 70% | 5% | 15–30 | additional | macOS (signed, notarized), Windows x64/x86/ARM64 (signed), Linux (AppImage, deb, rpm, Flatpak), FreeBSD, web (WASM). Acrobat has no Linux, FreeBSD or full web editor; we lack web OCR and web recovery | [hardware-parity.md](hardware-parity.md) |
 | Ecosystem and plug-ins | ≈ 30% | 1% | 10–20 | within features | No plug-in SDK or folder-level JavaScript; Action Wizard partial. Agent automation (CLI, MCP, UI control channel) has no Acrobat equivalent | [gaps.md](gaps.md) |
 | AI features | ≈ 0% (in scope) | 1% | 20–40 | within features | Acrobat's AI Assistant is cloud-only (out of scope). Local, opt-in provider interface (`misc.ai-provider`) not started | [gaps.md](gaps.md) |
@@ -280,7 +278,7 @@ stage set to pre-alpha; see the revision history.)
 
 The previous estimate (2026-10-07) was **600–1,100 h** to full parity. Since then XFA, signature
 timestamps/LTV and signing encrypted documents progressed (≈ −60 h), but the first public releases
-surfaced work the estimate did not hold: 245 open issues, missing Windows printing, Acrobat
+surfaced work the estimate did not hold: 1,259 open issues (2026-10-26), missing Windows printing, Acrobat
 interoperability of encrypted output, Chinese UI glyphs and Word-export layout (≈ +200–300 h).
 Hence **≈ 780–1,400 h** now. Roughly 60–70% parallelizes across crates (3–5 agents: ≈ 300–550 h
 wall clock).
