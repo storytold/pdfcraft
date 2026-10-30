@@ -18,12 +18,18 @@
 //! centroid-aligned greyscale into pristine master prototypes, [`vectorize`](mod@vectorize) traces
 //! each master bitmap into a hole-aware Bézier outline, and [`type3`](mod@type3) writes that outline
 //! into a Type 3 font with a `/ToUnicode` map so the glyphs stay searchable.
-//! See the [`preprocess`](mod@preprocess), [`annotations`](mod@annotations), [`components`](mod@components), [`align`](mod@align), [`cluster`](mod@cluster), [`vectorize`](mod@vectorize) and [`type3`](mod@type3) modules.
+//! [`background`](mod@background) then paints those glyphs out of the scan — the paper colour
+//! around each one, so the fuzzy ink cannot halo the vectors — and writes the cleaned raster
+//! under a content stream that shows the Type 3 text.
+//! See [`preprocess`](mod@preprocess), [`annotations`](mod@annotations), [`components`](mod@components),
+//! [`align`](mod@align), [`cluster`](mod@cluster), [`vectorize`](mod@vectorize), [`type3`](mod@type3)
+//! and [`background`](mod@background).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod align;
 pub mod annotations;
+pub mod background;
 pub mod binarize;
 pub mod cluster;
 pub mod components;
@@ -37,6 +43,10 @@ use std::path::{Path, PathBuf};
 
 pub use align::{AlignParams, CharRef, MatchRole, PageAlignment, ResolvedGlyph, TouchingStrategy, align, iou};
 pub use annotations::{AnnotatedLine, AnnotatedWord, CharBox};
+pub use background::{
+    BackgroundEncoding, BackgroundImage, CleanedPage, ClearScanLayer, DerenderParams, GlyphShow, InkRegion, PageRaster, content_stream, derender,
+    embed_background, encoding_for, protected_regions, text_regions,
+};
 pub use cluster::{ClusterParams, Clusters, GlyphCluster, Prototype, SkipReason, cluster, cluster_pages};
 pub use components::{AnalyzeOptions, Component, ComponentKind, ComponentSet, Connectivity, FilterParams, analyze, analyze_page};
 pub use preprocess::{PreprocessedOptions, PreprocessedPage};
@@ -76,6 +86,9 @@ pub enum OcrError {
     /// A Type 3 font could not be built. The message names the glyph and the limit.
     #[error("Type 3 font: {0}")]
     Type3(String),
+    /// The cleaned background could not be built or written. The message names the limit.
+    #[error("background: {0}")]
+    Background(String),
 }
 
 /// Where the two model files are.

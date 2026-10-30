@@ -4500,6 +4500,7 @@ dependencies = [
 name = "pdfcraft-ocr"
 version = "0.16.1"
 dependencies = [
+ "image",
  "kurbo 0.13.1",
  "ocrs",
  "pdfcraft-cos",
