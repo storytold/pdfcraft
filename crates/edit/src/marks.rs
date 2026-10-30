@@ -67,7 +67,14 @@ impl HeaderFooter {
     /// (and a `\r` that would be drawn is refused too). The dialog asks this too, so its preview
     /// never offers text that applying refuses (#2013).
     pub fn first_undrawable(&self) -> Option<char> {
-        self.text.iter().flat_map(|t| t.lines()).find_map(pdfcraft_fonts::first_non_win_ansi)
+        self.text.iter().flat_map(|t| t.lines()).find_map(crate::mark_font::refused_char)
+    }
+
+    /// Whether the text needs Inter (Vietnamese, Cyrillic, Greek...) instead of the standard face:
+    /// it has something WinAnsi can't encode, and Inter draws all of it. Every box is then drawn
+    /// in Inter.
+    pub(crate) fn needs_unicode(&self) -> bool {
+        crate::mark_font::needs_inter(self.text.iter().flat_map(|t| t.lines()))
     }
 
     /// The room the header and the footer take at the top and the bottom of a page, in points:
@@ -144,8 +151,13 @@ impl Watermark {
     pub fn first_undrawable(&self) -> Option<char> {
         match self.source {
             Some(_) => None,
-            None => self.text.trim().lines().find_map(pdfcraft_fonts::first_non_win_ansi),
+            None => self.text.trim().lines().find_map(crate::mark_font::refused_char),
         }
+    }
+
+    /// Whether the text needs Inter instead of the standard face (see HeaderFooter).
+    pub(crate) fn needs_unicode(&self) -> bool {
+        self.source.is_none() && crate::mark_font::needs_inter(self.text.trim().lines())
     }
 }
 

@@ -5340,7 +5340,8 @@ fn hebrew_letters_the_page_font_lacks_use_the_hebrew_face() {
 }
 
 /// #2013: the dialog asks `first_undrawable` before offering OK, so it must refuse exactly what
-/// applying refuses: a Cyrillic footer was previewed (in the interface font) and then failed.
+/// applying refuses. Text Inter draws (Cyrillic, Greek, Vietnamese) is applied, in Inter; text
+/// no bundled face has (Han) is still refused, in the dialog and when applying alike.
 #[test]
 fn header_and_watermark_drawability_matches_what_applying_refuses() {
     let footer = |t: &str| HeaderFooter {
@@ -5348,12 +5349,14 @@ fn header_and_watermark_drawability_matches_what_applying_refuses() {
         ..HeaderFooter::default()
     };
     for (text, refused) in [
-        ("Страница <<1>> из 1 / Page <<1>> of 1", Some('С')),
+        ("Страница <<1>> из 1 / Page <<1>> of 1", None),
         ("TEST-001 <<Page 1 of n>>", None),
         ("Café — 5€ ™ <<Bates Number#6#1#ACME-#>>", None),
         ("Left\r\nRight", None),
         ("A\rB", Some('\r')),
-        ("line one\nΕλληνικά", Some('Ε')),
+        ("line one\nΕλληνικά", None),
+        ("Dự án: Cầu Mỹ Thuận", None),
+        ("Dự án 项目", Some('项')),
     ] {
         let hf = footer(text);
         assert_eq!(hf.first_undrawable(), refused, "{text:?}");
@@ -5380,10 +5383,10 @@ fn page_text_the_standard_fonts_cant_draw_is_refused() {
     let err = add_content(&mut doc, 0, &Content::Text(text)).unwrap_err().to_string();
     assert!(err.contains("\"日\" (U+65E5)"), "{err}");
     let hf = HeaderFooter {
-        text: ["Ελληνικά".into(), String::new(), String::new(), String::new(), String::new(), String::new()],
+        text: ["日本語".into(), String::new(), String::new(), String::new(), String::new(), String::new()],
         ..HeaderFooter::default()
     };
-    assert!(add_header_footer(&mut doc, &[0, 1], &hf, true, &cx()).unwrap_err().to_string().contains("U+0395"));
+    assert!(add_header_footer(&mut doc, &[0, 1], &hf, true, &cx()).unwrap_err().to_string().contains("U+65E5"));
     let wm = Watermark { text: "机密".into(), ..Watermark::default() };
     assert!(add_watermark(&mut doc, &[0], &wm, true).unwrap_err().to_string().contains("U+673A"));
     let after: Vec<Vec<String>> = (0..3).map(|p| streams(&reopen(&doc), p)).collect();
@@ -10340,4 +10343,58 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
             );
         }
     }
+}
+
+/// Vietnamese headers, footers and watermarks (the AEC case: project and contractor names, "BẢN VẼ THI CÔNG")
+/// are drawn from Inter's outlines as Type 3 glyphs, with no font program embedded, and read back as typed.
+#[test]
+fn vietnamese_header_footer_and_watermark_are_drawn_as_type3_and_read_back() {
+    let mut doc = fixture();
+    let hf = HeaderFooter {
+        text: ["Dự án: Cầu Mỹ Thuận".into(), String::new(), "<<Page 1 of n>>".into(), String::new(), String::new(), String::new()],
+        ..HeaderFooter::default()
+    };
+    assert_eq!(hf.first_undrawable(), None);
+    add_header_footer(&mut doc, &[0, 2], &hf, false, &cx()).unwrap();
+    let wm = Watermark { text: "BẢN VẼ HOÀN CÔNG".into(), ..Watermark::default() };
+    assert_eq!(wm.first_undrawable(), None);
+    add_watermark(&mut doc, &[0], &wm, false).unwrap();
+    let doc = reopen(&doc);
+    let page0 = streams(&doc, 0).join("\n");
+    assert!(page0.contains("/PCMk0 8 Tf") && !page0.contains('?'), "{page0}");
+    // No font program is embedded: every mark font is a Type 3 font.
+    let fonts: Vec<_> = doc.scan_objects().filter_map(|(_, o)| o.as_dict().and_then(|d| d.name(b"Subtype").map(<[u8]>::to_vec))).collect();
+    assert!(fonts.iter().any(|s| s == b"Type3") && !fonts.iter().any(|s| s == b"Type0" || s == b"CIDFontType2"), "{fonts:?}");
+    // The marks' text reads back as typed.
+    let read: String = text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.clone()).collect::<Vec<_>>().join("\n");
+    assert!(read.contains("Dự án: Cầu Mỹ Thuận") && read.contains("BẢN VẼ HOÀN CÔNG"), "{read}");
+    // The page that shares its fonts with the others keeps them: the glyph fonts go in a copy.
+    let shared = doc.get(pdfcraft_cos::ObjRef::new(6, 0));
+    let shared_fonts = doc.resolve(shared.as_dict().unwrap().get(b"Font").unwrap());
+    assert!(!shared_fonts.as_dict().unwrap().contains(b"PCMk0"));
+}
+
+/// Decomposed (Telex-typed) Vietnamese is composed first, so the marks never draw loose accents.
+#[test]
+fn decomposed_vietnamese_in_a_header_is_composed() {
+    let mut doc = fixture();
+    let hf = HeaderFooter {
+        text: ["Tie\u{0302}\u{0301}ng Vie\u{0323}\u{0302}t".into(), String::new(), String::new(), String::new(), String::new(), String::new()],
+        ..HeaderFooter::default()
+    };
+    add_header_footer(&mut doc, &[0], &hf, false, &cx()).unwrap();
+    let read: String = text::text_lines(&reopen(&doc), 0).unwrap().iter().map(|l| l.text.clone()).collect::<Vec<_>>().join("\n");
+    assert!(read.contains("Tiếng Việt"), "{read:?}");
+}
+
+/// Western-European text keeps the standard face: nothing is generated for it.
+#[test]
+fn winansi_marks_still_use_the_standard_face() {
+    let mut doc = fixture();
+    let hf =
+        HeaderFooter { text: ["Café".into(), String::new(), String::new(), String::new(), String::new(), String::new()], ..HeaderFooter::default() };
+    add_header_footer(&mut doc, &[0], &hf, false, &cx()).unwrap();
+    let page0 = streams(&reopen(&doc), 0).join("\n");
+    assert!(page0.contains("/PCHelv") && !page0.contains("/PCMk"), "{page0}");
+}
 }
