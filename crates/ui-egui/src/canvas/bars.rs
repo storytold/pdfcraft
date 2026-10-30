@@ -367,9 +367,12 @@ pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                         QuickTool::Fill(f) => Some(f),
                         _ => None,
                     };
+                    if let Some(f) = current_fill {
+                        app.fill_tool = f;
+                    }
                     let shown = app.fill_tool;
                     let tip = match shown {
-                        crate::fill_sign::FillTool::Signature | crate::fill_sign::FillTool::Initials => {
+                        crate::fill_sign::FillTool::Signature | crate::fill_sign::FillTool::Initials if current_fill.is_none() => {
                             let initials = shown == crate::fill_sign::FillTool::Initials;
                             let saved = if initials { app.initials.is_some() } else { app.signature.is_some() };
                             crate::i18n::fmt(

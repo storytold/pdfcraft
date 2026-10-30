@@ -299,12 +299,9 @@ impl PdfCraftApp {
                     field if field.starts_with("field-") => QuickTool::Field(
                         prepare::FieldTool::from_command(&format!("form.add.{}", &field[6..])).ok_or_else(|| format!("unknown tool {field}"))?,
                     ),
-                    fill if fill.starts_with("fill-") => {
-                        let f =
-                            fill_sign::FillTool::from_command(&format!("sign.fill.{}", &fill[5..])).ok_or_else(|| format!("unknown tool {fill}"))?;
-                        self.fill_tool = f;
-                        QuickTool::Fill(f)
-                    }
+                    fill if fill.starts_with("fill-") => QuickTool::Fill(
+                        fill_sign::FillTool::from_command(&format!("sign.fill.{}", &fill[5..])).ok_or_else(|| format!("unknown tool {fill}"))?,
+                    ),
                     other => {
                         let t = comments::CommentTool::from_command(&format!("comment.{other}")).ok_or_else(|| format!("unknown tool {other}"))?;
                         self.comment_prefs.group_tool[t.group()] = t;

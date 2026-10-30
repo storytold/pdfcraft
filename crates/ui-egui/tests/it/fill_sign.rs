@@ -378,7 +378,7 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     // The quick toolbar exposes replacement without changing the normal placement action.
     h.get_by_label("Fill & Sign: Place saved signature").click();
     h.run_steps(2);
-    h.get_by_label("Fill & Sign: Place saved signature").click();
+    h.get_by_label("Fill & Sign: Sign").click();
     h.run_steps(2);
     h.get_by_label("Change signature").click();
     h.run_steps(2);
@@ -400,7 +400,7 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
 
     h.get_by_label("Fill & Sign: Place saved signature").click();
     h.run_steps(2);
-    h.get_by_label("Fill & Sign: Place saved signature").click();
+    h.get_by_label("Fill & Sign: Sign").click();
     h.run_steps(2);
     h.get_by_label("Change initials").click();
     h.run_steps(2);
@@ -1782,7 +1782,7 @@ fn the_quick_bar_fill_button_shows_the_tool_it_picks() {
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Signature));
     assert_eq!(h.state().dialog, None);
-    h.get_by_label("Fill & Sign: Place saved signature").click();
+    h.get_by_label("Fill & Sign: Sign").click();
     h.run_steps(2);
     assert_eq!(h.get_by_label("Use signature").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "the active tool's card is marked");
     h.key_press(egui::Key::Escape);
@@ -1794,4 +1794,12 @@ fn the_quick_bar_fill_button_shows_the_tool_it_picks() {
     h.get_by_label("Fill & Sign: Checkmark").click();
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check), "the button keeps the last Fill & Sign tool");
+
+    h.state_mut().quick_tool = QuickTool::Fill(FillTool::Initials);
+    h.run_steps(2);
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Add initials").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Initials), "a tool restored without a command still updates the button");
 }
