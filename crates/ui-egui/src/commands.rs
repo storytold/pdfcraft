@@ -210,6 +210,11 @@ impl PdfCraftApp {
                     self.notify_tr("Security will be removed when you save");
                 }
             }
+            "help.report_issue" => {
+                let os = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
+                let ext = self.active_ids().map(|_| "pdf");
+                self.open_url(&pdfcraft_engine::links::report_issue_url(&pdfcraft_engine::build_info::version(), &os, ext));
+            }
             link if pdfcraft_engine::links::for_command(link).is_some() => {
                 if let Some(l) = pdfcraft_engine::links::for_command(link) {
                     self.open_url(l.url);
