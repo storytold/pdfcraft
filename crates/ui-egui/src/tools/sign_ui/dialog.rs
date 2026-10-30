@@ -114,10 +114,20 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         ui.add_space(10.0);
     }
     let removable = d.selected.filter(|&i| ids.get(i).is_some_and(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")));
+    #[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(unused_mut))]
+    let mut refresh = false;
     ui.horizontal(|ui| {
         if widgets::pill_button(ui, tl!("Configure New Digital ID"), false).clicked() {
             d.step = SignStep::Configure;
             d.error = None;
+        }
+        // A USB token or smart card plugged in while the dialog is open.
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        if widgets::pill_button(ui, tl!("Refresh"), false)
+            .on_hover_text(tl!("Insert the USB token or smart card, then refresh to list its digital IDs."))
+            .clicked()
+        {
+            refresh = true;
         }
         if d.confirm_remove.is_none() && ui.add_enabled_ui(removable.is_some(), |ui| widgets::pill_button(ui, tl!("Remove"), false)).inner.clicked() {
             d.confirm_remove = removable;
@@ -134,6 +144,19 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     });
     if let Some(i) = remove {
         app.remove_digital_id(i);
+    }
+    if refresh {
+        // Keep the chosen ID (by path: the OS key store entries are listed again); the first
+        // usable one only if it has gone.
+        let chosen = app.sign_draft.as_ref().and_then(|d| d.selected).and_then(|i| app.digital_ids.get(i)).map(|e| e.path.clone());
+        app.refresh_os_key_store_ids();
+        let ids = &app.digital_ids;
+        if let Some(d) = app.sign_draft.as_mut() {
+            d.selected = chosen
+                .and_then(|path| ids.iter().position(|e| e.path == path && e.unusable.is_none()))
+                .or_else(|| ids.iter().position(|e| e.unusable.is_none()));
+            d.confirm_remove = None;
+        }
     }
     close
 }
@@ -343,6 +366,7 @@ fn preview(
 
 fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let ids = app.digital_ids.clone();
+    let page_count = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.info.pages.len());
     // The time as the signature will show it (signing takes the session clock then).
     let date = sign::pdf::display_date(&app.session.signing_date());
     let Some(d) = app.sign_draft.as_mut() else { return true };
@@ -405,6 +429,13 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 pick = true;
             }
         });
+        // A new visible signature can show on other pages too (one signature, a widget each).
+        if d.rect.is_some() && d.field.is_none() && page_count > 1 {
+            ui.add(widgets::checkbox(&mut d.also_on, tl!("Show on other pages too")));
+            if d.also_on {
+                d.also.ui(ui, page_count);
+            }
+        }
         ui.add_space(6.0);
     } else {
         ui.label(egui::RichText::new(tl!("The signature will be invisible.")).color(t.text_muted));

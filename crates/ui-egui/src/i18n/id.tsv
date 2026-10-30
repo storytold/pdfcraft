@@ -2776,6 +2776,12 @@ theme	Appearance	Tampilan
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
 
+# Digital signature on several pages; digital IDs on a token.
+	Repeat on pages	Ulangi di halaman
+	Show on other pages too	Tampilkan juga di halaman lain
+	There are no other pages in that range.	Tidak ada halaman lain dalam rentang itu.
+	Insert the USB token or smart card, then refresh to list its digital IDs.	Masukkan token USB atau kartu pintar, lalu segarkan untuk menampilkan ID digitalnya.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini
 

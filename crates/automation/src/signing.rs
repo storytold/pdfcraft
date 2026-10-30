@@ -218,6 +218,26 @@ impl Automation {
             }
             None => None,
         };
+        // The same rectangle, in the same place relative to each page, on other pages too.
+        let also = match (a.get("also_pages"), a.nums::<4>("rect")?) {
+            (None | Some(Value::Null), _) => Vec::new(),
+            (Some(_), _) if field.is_some() => return Err(bad("also_pages needs a new signature: pass rect, not field")),
+            (Some(_), None) => return Err(bad("also_pages needs a visible signature: pass rect")),
+            (Some(_), Some(_)) => {
+                // `rect` is the validated user-space rectangle on the signed page; the signed
+                // page's size is kept, and its centre is placed alike relative to each crop box.
+                let (Some(from), Some(r)) = (doc.info.pages.get(page), rect) else {
+                    return Err(bad("the document has no page to put the signature on"));
+                };
+                let mut also = Vec::new();
+                for p in self.pages(a, "also_pages")? {
+                    if let Some(to) = doc.info.pages.get(p) {
+                        also.push((p, pdfcraft_engine::same_rect(from, to, r)));
+                    }
+                }
+                also
+            }
+        };
         let certify = match a.get("certify") {
             None | Some(Value::Null) => None,
             Some(Value::String(s)) => Some(match s.as_str() {
@@ -256,6 +276,7 @@ impl Automation {
             appearance,
             appearance_labels,
             graphic,
+            also,
             ..SignOptions::default()
         };
         let signed = self.session.sign(doc_id, &id, opts).map_err(|e| match e {

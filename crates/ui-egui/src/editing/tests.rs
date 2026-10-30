@@ -343,3 +343,21 @@ fn save_asks_where_to_keep_an_email_attachment_and_leaves_the_temporary_copy_alo
     assert!(app.save_active(SaveTarget::InPlace));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn fill_and_sign_repeat_survives_comment_edits_but_not_page_list_edits() {
+    let mut app = crate::PdfCraftApp::new();
+    app.open_bytes("one.pdf", None, one_page_pdf()).unwrap();
+    let sig = crate::fill_sign::SavedSig::Typed("Ada".into());
+    app.views[0].last_fill_sig = Some((0, [50.0, 50.0], false, sig.clone()));
+    let page = app.session.get(app.views[0].id).unwrap().info.pages[0].clone();
+    let placed = crate::fill_sign::place(0, &page, [50.0, 50.0], &sig, false, "Ada").unwrap();
+    assert!(app.apply_edit(placed));
+    assert!(app.views[0].last_fill_sig.is_some(), "placing it (a comment edit) keeps it");
+    assert!(app.apply_edit(pdfcraft_engine::Edit::InsertBlankPage { at: 0, width: 200.0, height: 300.0 }));
+    assert!(app.views[0].last_fill_sig.is_none(), "page 0 is another page now");
+    // Revert takes the placement with the unsaved edits.
+    app.views[0].last_fill_sig = Some((0, [50.0, 50.0], false, sig));
+    app.revert_active();
+    assert!(app.views[0].last_fill_sig.is_none(), "revert clears it");
+}

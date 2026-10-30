@@ -2808,6 +2808,12 @@ theme	Appearance	Teema
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
 
+# Digital signature on several pages; digital IDs on a token.
+	Repeat on pages	Toista sivuilla
+	Show on other pages too	Näytä myös muilla sivuilla
+	There are no other pages in that range.	Alueella ei ole muita sivuja.
+	Insert the USB token or smart card, then refresh to list its digital IDs.	Aseta USB-tunnus tai älykortti paikalleen ja päivitä, niin sen digitaaliset tunnukset näytetään.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään
 

@@ -9308,6 +9308,32 @@ fn bookmark_list_reports_colour_and_style() {
     assert_eq!(style(&ok(&mut b, "bookmark_list", json!({ "doc": re }))["bookmarks"]), style(&set), "saved");
 }
 
+/// sign_document also_pages keeps the signature in the same place relative to each page's crop
+/// box, also on a page shown turned (the rectangle is not re-read through the turned view).
+#[test]
+fn also_pages_places_the_signature_alike_on_a_turned_page() {
+    let dir = workdir("also-pages-rotated");
+    let mut a = auto(&dir);
+    ok(&mut a, "sign_id_create", json!({ "name": "Ada Lovelace", "key": "p256", "password": "secret12", "path": "ada.p12" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_rotate", json!({ "doc": doc, "pages": [2], "degrees": 90 }));
+    let args = json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "page": 1, "rect": [20, 40, 150, 90], "also_pages": [2, 3], "out": "signed.pdf" });
+    ok(&mut a, "sign_document", args);
+    let d = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("signed.pdf")).unwrap())).unwrap();
+    let root = d.get(d.root().unwrap()).as_dict().and_then(|c| c.get(b"Pages").cloned()).unwrap();
+    let kids = d.resolve(&root).as_dict().and_then(|p| p.get(b"Kids").map(|k| d.resolve(k))).and_then(|k| k.as_array().cloned()).unwrap();
+    let rect = |page: &pdfcraft_cos::Object| -> Vec<f64> {
+        let annots = d.resolve(page).as_dict().and_then(|p| p.get(b"Annots").map(|a| d.resolve(a))).and_then(|a| a.as_array().cloned()).unwrap();
+        let w = d.resolve(&annots[0]).as_dict().cloned().unwrap();
+        d.resolve(w.get(b"Rect").unwrap()).as_array().unwrap().iter().map(|n| d.resolve(n).as_f64().unwrap()).collect()
+    };
+    // The fixture's pages share one media box: the same place is the same rectangle.
+    let first = rect(&kids[0]);
+    assert_eq!(rect(&kids[1]), first, "the turned page");
+    assert_eq!(rect(&kids[2]), first);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// An editable combo box (ISO 32000-2 Table 233, Edit) takes a value that isn't one of its
 /// options, and its page appearance shows it, before and after a save; one without Edit takes
 /// only its options.

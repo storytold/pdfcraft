@@ -432,6 +432,9 @@ pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                                 app.execute(command);
                                 ui.close();
                             }
+                            if crate::fill_sign::repeat_entry(ui, app) {
+                                ui.close();
+                            }
                         });
                     if matches!(current_fill, Some(crate::fill_sign::FillTool::Text | crate::fill_sign::FillTool::Date)) {
                         ui.label(tl!("Font size:"));

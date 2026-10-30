@@ -34,8 +34,12 @@ pub struct Session {
     /// injected time AS local time and zeroes the zone, so injecting only it leaves either the
     /// local dates or the UTC ones wrong by the zone's offset.
     utc_offset: Option<fn() -> i64>,
-    /// Certificates trusted for signing (Acrobat: Trusted Certificates).
+    /// Certificates trusted for signing: the user's and the operating system's, together.
     pub(crate) trust: Arc<TrustStore>,
+    /// The user's own trusted certificates (Acrobat: Trusted Certificates), which are saved.
+    user_trust: Vec<pdfcraft_sign::Certificate>,
+    /// Root certificates the operating system trusts (never saved; listed again each run).
+    system_trust: Vec<pdfcraft_sign::Certificate>,
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript, inverted (on by default).
     pub(crate) js_off: bool,
     /// Preferences ▸ Date format, when not the default (see [`dates`]).

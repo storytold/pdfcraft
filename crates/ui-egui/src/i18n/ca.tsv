@@ -2799,6 +2799,12 @@ theme	Appearance	Aspecte
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
 
+# Digital signature on several pages; digital IDs on a token.
+	Repeat on pages	Repeteix a les pàgines
+	Show on other pages too	Mostra també a altres pàgines
+	There are no other pages in that range.	No hi ha cap altra pàgina en aquest interval.
+	Insert the USB token or smart card, then refresh to list its digital IDs.	Inseriu el testimoni USB o la targeta intel·ligent i actualitzeu per mostrar-ne els identificadors digitals.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui
 

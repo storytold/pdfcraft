@@ -2460,6 +2460,10 @@ animation effects	Off	Desativados
 	This document is trying to open a local file:	Este documento está tentando abrir um arquivo local:
 	Move tag earlier	Mover tag para antes
 	Move tag later	Mover tag para depois
+	Repeat on pages	Repetir nas páginas
+	Show on other pages too	Mostrar também em outras páginas
+	There are no other pages in that range.	Não há outras páginas nesse intervalo.
+	Insert the USB token or smart card, then refresh to list its digital IDs.	Insira o token USB ou o cartão inteligente e atualize para listar seus IDs digitais.
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Você está vendo a versão assinada de “{from}” (revisão {rev}). É um instantâneo: as alterações aqui não afetarão o original.

@@ -2759,6 +2759,10 @@ key	Space	Space
 	Word count…	Đếm từ…
 	Words	Từ
 	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	“{name}” đã thay đổi trên đĩa sau khi được mở hoặc lưu lần cuối. Lưu lúc này sẽ thay thế phiên bản mới hơn đó bằng phiên bản này.
+	Repeat on pages	Lặp lại trên các trang
+	Show on other pages too	Cũng hiển thị trên các trang khác
+	There are no other pages in that range.	Không có trang nào khác trong phạm vi đó.
+	Insert the USB token or smart card, then refresh to list its digital IDs.	Hãy cắm USB token hoặc thẻ thông minh, sau đó làm mới để liệt kê các ID kỹ thuật số của nó.
 @id	file.word_count	Đếm từ…
 	Bulleted list	Danh sách dấu đầu dòng
 	Numbered list	Danh sách đánh số

@@ -2775,6 +2775,12 @@ theme	Appearance	모양
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
 
+# Digital signature on several pages; digital IDs on a token.
+	Repeat on pages	페이지에 반복
+	Show on other pages too	다른 페이지에도 표시
+	There are no other pages in that range.	해당 범위에 다른 페이지가 없습니다.
+	Insert the USB token or smart card, then refresh to list its digital IDs.	USB 토큰이나 스마트 카드를 넣은 다음 새로 고쳐 디지털 ID 목록을 표시하세요.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	오늘
 

@@ -742,6 +742,56 @@ fn an_imported_digital_id_can_be_removed() {
     h.get_by_label("Configure a Digital ID for Signing");
 }
 
+#[test]
+fn a_digital_signature_shows_on_every_page_in_the_same_place() {
+    let dir = dir().join("pages");
+    std::fs::create_dir_all(&dir).unwrap();
+    let three = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] >> endobj
+5 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let out = dir.join("contract_signed.pdf");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("three.pdf", None, three.to_vec()).expect("opens");
+        app.save_override = Some(out.to_string_lossy().into_owned());
+        app
+    });
+    h.run_steps(6);
+    let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
+    let cert = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap().certificate;
+    h.state_mut().start_signing(0, Some([150.0, 20.0, 280.0, 60.0]), None, None);
+    let entry = h.state_mut().add_digital_id(p12, &cert);
+    let d = h.state_mut().sign_draft.as_mut().unwrap();
+    (d.selected, d.step, d.password) = (Some(entry), SignStep::SignAs, "test".into());
+    h.run_steps(2);
+    h.get_by_label("Show on other pages too").click();
+    h.run_steps(2);
+    if let Ok(dir) = std::env::var("PDFCRAFT_SIGNING_SHOTS") {
+        h.render().unwrap().save(std::path::Path::new(&dir).join("sign-on-pages.png")).unwrap();
+    }
+    support::outside_menus(&h, "Sign").click();
+    h.run_steps(6);
+    let s = h.state();
+    assert_eq!(s.sign_draft.as_ref().and_then(|d| d.error.clone()), None);
+    let signed = std::fs::read(dir.join("contract_signed.pdf")).unwrap();
+    let doc = pdfcraft_cos::Document::open(std::sync::Arc::new(signed)).unwrap();
+    // The fixture's page tree is flat: the catalog's /Pages /Kids are the pages.
+    let pages = doc.get(doc.root().unwrap()).as_dict().and_then(|c| c.get(b"Pages").cloned()).unwrap();
+    let kids = doc.resolve(&pages).as_dict().and_then(|p| p.get(b"Kids").map(|k| doc.resolve(k))).and_then(|k| k.as_array().cloned()).unwrap();
+    assert_eq!(kids.len(), 3);
+    for (i, p) in kids.iter().enumerate() {
+        let annots = doc.resolve(p).as_dict().and_then(|d| d.get(b"Annots").map(|a| doc.resolve(a))).and_then(|a| a.as_array().cloned());
+        assert_eq!(annots.map(|a| a.len()), Some(1), "page {} shows the signature", i + 1);
+    }
+    assert_eq!(s.session.get(s.views[0].id).unwrap().signatures.iter().filter(|x| x.signed).count(), 1);
+}
+
 /// Sign-and-save must use the same destination metadata policy as Save As.
 #[cfg(target_os = "macos")]
 #[test]

@@ -2410,6 +2410,11 @@ animation effects	Off	关
 	This document is trying to open a local file:	此文档正尝试打开本地文件：
 	Move tag earlier	将标签前移
 	Move tag later	将标签后移
+	Refresh	刷新
+	Repeat on pages	在页面上重复
+	Show on other pages too	同时显示在其他页面上
+	There are no other pages in that range.	该范围内没有其他页面。
+	Insert the USB token or smart card, then refresh to list its digital IDs.	插入 USB 令牌或智能卡，然后刷新以列出其数字身份证。
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	您正在查看“{from}”的已签名版本（修订版本 {rev}）。这是快照：在此处所做的更改不会影响原始文档。

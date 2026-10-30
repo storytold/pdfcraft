@@ -2799,6 +2799,12 @@ theme	Appearance	Aspect
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
 
+# Digital signature on several pages; digital IDs on a token.
+	Repeat on pages	Repetă pe pagini
+	Show on other pages too	Afișează și pe alte pagini
+	There are no other pages in that range.	Nu există alte pagini în acest interval.
+	Insert the USB token or smart card, then refresh to list its digital IDs.	Introduceți tokenul USB sau cardul inteligent, apoi reîmprospătați pentru a lista ID-urile digitale de pe el.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi
 

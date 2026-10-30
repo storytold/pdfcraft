@@ -2706,6 +2706,12 @@ key	Space	Space
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
 
+# Digital signature on several pages; digital IDs on a token.
+	Repeat on pages	ทำซ้ำในหน้า
+	Show on other pages too	แสดงในหน้าอื่นด้วย
+	There are no other pages in that range.	ไม่มีหน้าอื่นในช่วงนั้น
+	Insert the USB token or smart card, then refresh to list its digital IDs.	เสียบโทเค็น USB หรือสมาร์ตการ์ด แล้วรีเฟรชเพื่อแสดงรายการ ID ดิจิทัลในนั้น
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	วันนี้
 

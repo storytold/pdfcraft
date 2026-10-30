@@ -2775,6 +2775,12 @@ theme	Appearance	स्वरूप
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
 
+# Digital signature on several pages; digital IDs on a token.
+	Repeat on pages	पृष्ठों पर दोहराएँ
+	Show on other pages too	अन्य पृष्ठों पर भी दिखाएँ
+	There are no other pages in that range.	उस श्रेणी में कोई अन्य पृष्ठ नहीं है।
+	Insert the USB token or smart card, then refresh to list its digital IDs.	USB टोकन या स्मार्ट कार्ड लगाएँ, फिर उसकी डिजिटल ID की सूची देखने के लिए रीफ़्रेश करें।
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज
 

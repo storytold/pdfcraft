@@ -125,6 +125,9 @@ pub struct SignDraft {
     pub error: Option<String>,
     /// Sign with a Digital ID ▸ Remove was clicked for this list entry: asking to confirm.
     pub confirm_remove: Option<usize>,
+    /// Show a new visible signature on other pages too, in the same place: these pages.
+    pub also_on: bool,
+    pub also: crate::marks_ui::PageRange,
 }
 
 impl SignDraft {
@@ -147,6 +150,8 @@ impl SignDraft {
             new_id: NewIdDraft::default(),
             error: None,
             confirm_remove: None,
+            also_on: false,
+            also: Default::default(),
         }
     }
 }
@@ -306,6 +311,23 @@ impl PdfCraftApp {
         self.dialog = Some(crate::Dialog::Sign);
     }
 
+    /// Validate signatures against the roots Windows trusts too (Acrobat: Windows Integration),
+    /// so a DSC issued under a CA installed in Windows shows as valid. Elsewhere: nothing.
+    pub fn trust_os_roots(&mut self) {
+        #[cfg(target_os = "windows")]
+        match sign::windows::trusted_roots() {
+            Ok(roots) => {
+                // Revalidation rebuilds each document's display copy, so the views redraw too
+                // (as in apply_trusted_certificates).
+                self.session.set_system_trust(roots);
+                for view in &mut self.views {
+                    view.invalidate_content();
+                }
+            }
+            Err(e) => self.notify_fmt("The Windows trusted root certificates couldn't be read: {e}", &[("e", &e.to_string())]),
+        }
+    }
+
     /// List OS key store signing identities (after the file-based IDs).
     fn refresh_os_key_store_ids(&mut self) {
         self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:"));
@@ -453,6 +475,20 @@ impl PdfCraftApp {
             _ => None,
         };
         let choice = d.graphic.clone();
+        // The other pages, each with the rectangle in the same place as on the signed page.
+        let also = match (d.also_on, d.rect, &d.field, self.session.get(doc_id)) {
+            (true, Some(rect), None, Some(doc)) => match doc.info.pages.get(d.page) {
+                Some(from) => d
+                    .also
+                    .pages(doc.info.pages.len())
+                    .into_iter()
+                    .filter(|&p| p != d.page)
+                    .filter_map(|p| doc.info.pages.get(p).map(|to| (p, crate::fill_sign::same_rect(from, to, rect))))
+                    .collect(),
+                None => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
         let opts = SignOptions {
             field: d.field.clone(),
             page: d.page,
@@ -464,6 +500,7 @@ impl PdfCraftApp {
             // The labels the preview shows: in the interface language, or all in English.
             appearance_labels: appearance_labels(crate::i18n::current()).0,
             graphic,
+            also,
             ..SignOptions::default()
         };
         // Signing saves, as in Acrobat: choose where (a cancelled save cancels signing). The

@@ -2525,6 +2525,13 @@ animation effects	Off	Joaktiv
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
 
+# Digital signature on several pages; digital IDs on a token.
+	Refresh	Rifresko
+	Repeat on pages	Përsërite në faqe
+	Show on other pages too	Shfaqe edhe në faqet e tjera
+	There are no other pages in that range.	Nuk ka faqe të tjera në atë interval.
+	Insert the USB token or smart card, then refresh to list its digital IDs.	Futni tokenin USB ose kartën inteligjente, pastaj rifreskoni për të shfaqur ID-të e tij dixhitale.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Sot
 

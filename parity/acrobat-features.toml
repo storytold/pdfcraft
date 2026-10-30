@@ -6060,8 +6060,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.digital"]
 tools = ["sign_document"]
-evidence = ["crates/ui-egui/tests/it/signing.rs::drawing_a_signature_creating_an_id_signing_and_trusting", "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/sign/tests/it/pdf.rs::visible_signatures_read_upright_on_rotated_pages", "crates/engine/src/tests.rs::visible_signatures_keep_displayed_orientation_on_rotated_pages"]
-notes = "drag a rectangle; Acrobat's name-and-details appearance; reads upright on rotated pages (/MK /R)"
+evidence = ["crates/ui-egui/tests/it/signing.rs::drawing_a_signature_creating_an_id_signing_and_trusting", "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/sign/tests/it/pdf.rs::visible_signatures_read_upright_on_rotated_pages", "crates/engine/src/tests.rs::visible_signatures_keep_displayed_orientation_on_rotated_pages", "crates/sign/tests/it/pdf.rs::one_signature_shows_on_several_pages"]
+notes = "drag a rectangle; Acrobat's name-and-details appearance; reads upright on rotated pages (/MK /R). One signature can also show on a page range (a widget per page, same place relative to each crop box, each turned for its own page; sign_document also_pages). Not yet: checked against Acrobat or an external validator"
 
 [[feature]]
 id = "sign.sign-existing-field"
@@ -6381,11 +6381,11 @@ title = "Trust the operating system's root certificates"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/engine/src/tests.rs::system_roots_validate_signatures_but_are_not_the_users_list"]
+notes = "Windows: the desktop app reads Current User > Trusted Root Certification Authorities at start and validates against it, kept apart from (and never saved with) the user's trusted certificates. Always on (Acrobat makes it a preference). Not yet: macOS Keychain trust settings, a preference, an automation tool; the Windows store read is checked by hand only (CI has no store fixtures)"
 
 [[feature]]
 id = "sign.verification-time"

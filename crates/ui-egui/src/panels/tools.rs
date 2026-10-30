@@ -254,6 +254,7 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
             if let Some(cmd) = crate::fill_sign::signature_entries(ui, app, t) {
                 run = Some(cmd);
             }
+            crate::fill_sign::repeat_entry(ui, app);
         }
     });
     if footer {

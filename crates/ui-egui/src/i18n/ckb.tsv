@@ -2738,6 +2738,12 @@ certificate	Version	وەشان
 	Expand all tools	فراوانکردنی هەموو ئامرازەکان
 	Collapse all tools	کۆکردنەوەی هەموو ئامرازەکان
 
+# Digital signature on several pages; digital IDs on a token.
+	Repeat on pages	دووبارەکردنەوە لە پەڕەکاندا
+	Show on other pages too	لە پەڕەکانی تریشدا پیشان بدە
+	There are no other pages in that range.	هیچ پەڕەیەکی تر لەو مەودایەدا نییە.
+	Insert the USB token or smart card, then refresh to list its digital IDs.	تۆکنی USB یان کارتی زیرەک بخەرە ناوەوە، پاشان نوێی بکەرەوە بۆ پیشاندانی ناسنامە دیجیتاڵییەکانی.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ئەمڕۆ
 @plural	{n} reply|{n} replies	{n} وەڵام|{n} وەڵام

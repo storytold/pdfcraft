@@ -470,6 +470,9 @@ pub struct DocView {
     pub fill_text: Option<crate::fill_sign::TypeBox>,
     /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
     pub(crate) fill_signature_page: Option<usize>,
+    /// The last Fill & Sign signature or initials placed: (page, where, initials, the graphic),
+    /// to repeat. Page-list edits and undo/redo clear it (`editing.rs`).
+    pub(crate) last_fill_sig: Option<(usize, [f64; 2], bool, crate::fill_sign::SavedSig)>,
     pub(crate) signature_drag: crate::signature_drag::SignatureDrag,
     /// What the page modules claim for the cursor this frame; `document_area` sets it once.
     pub(crate) cursor: crate::page_cursor::PageCursor,
@@ -724,6 +727,7 @@ impl DocView {
             marquee_done: None,
             fill_text: None,
             fill_signature_page: None,
+            last_fill_sig: None,
             signature_drag: Default::default(),
             cursor: Default::default(),
         }
