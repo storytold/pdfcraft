@@ -1518,7 +1518,7 @@ fn formats_validation_and_calculations_run_like_acrobat() {
 fn a_script_that_spells_the_markers_in_a_string_runs_as_a_script() {
     struct Ran;
     impl Scripts for Ran {
-        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field]) -> ScriptResult {
+        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
             ScriptResult { rc: true, value: "ran".into(), changes: Vec::new(), message: None }
         }
     }
@@ -2928,7 +2928,7 @@ fn check_box_redraw_keeps_down_states_it_still_draws() {
 fn recalc_chain_where_script_changes_checkbox() {
     struct TestScripts;
     impl Scripts for TestScripts {
-        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, fields: &[Field]) -> ScriptResult {
+        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, fields: &[Field], _doc: &Document) -> ScriptResult {
             if script == "set_box" {
                 ScriptResult {
                     rc: true,
@@ -2939,6 +2939,7 @@ fn recalc_chain_where_script_changes_checkbox() {
                         read_only: None,
                         required: None,
                         display: None,
+                        ..Default::default()
                     }],
                     message: None,
                 }

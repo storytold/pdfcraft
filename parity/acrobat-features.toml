@@ -5248,8 +5248,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["tools.js_console"]
 tools = ["js_run"]
-evidence = ["crates/ui-egui/tests/it/javascript.rs::console_runs_scripts_against_the_document", "crates/automation/tests/it/automation.rs::javascript_through_tools"]
-notes = "\u2318J: run JavaScript against the document, with console output, results and errors."
+evidence = ["crates/ui-egui/tests/it/javascript.rs::console_runs_scripts_against_the_document", "crates/automation/tests/it/automation.rs::javascript_through_tools", "crates/engine/src/tests.rs::javascript_field_colours_persist_and_undo_without_changing_other_appearance_properties", "crates/engine/src/tests.rs::javascript_invalid_field_colour_array_is_refused_without_partial_changes"]
+notes = "\u2318J: run JavaScript against the document, with console output, results and errors. RGB `fillColor` and `textColor` changes persist through save/reopen and participate in undo/redo; unsupported or out-of-range colour arrays are refused without applying partial script changes."
 
 [[feature]]
 id = "form.js-debugger"

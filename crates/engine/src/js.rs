@@ -109,15 +109,14 @@ fn display(doc: &pdfcraft_cos::Document, f: &Field) -> i32 {
 
 /// A form field as scripts see it.
 pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field) -> pdfcraft_js::FieldState {
-    field_state_with_display(f, display(doc, f))
-}
-
-fn field_state_with_display(f: &Field, display: i32) -> pdfcraft_js::FieldState {
     let mut s = pdfcraft_js::FieldState::new(f.name.clone(), kind(f.kind), f.value.clone());
     s.default = f.default.clone();
     s.readonly = f.read_only();
     s.required = f.has(pdfcraft_forms::flags::REQUIRED);
-    s.display = display;
+    s.display = display(doc, f);
+    let look = pdfcraft_forms::look(doc, f);
+    s.text_color = Some(std::iter::once("RGB".to_string()).chain(look.text.map(|v| v.to_string())).collect());
+    s.fill_color = look.fill.map(|fill| std::iter::once("RGB".to_string()).chain(fill.map(|v| v.to_string())).collect());
     s.char_limit = f.max_len;
     s.options = match f.kind {
         FieldKind::CheckBox | FieldKind::Radio => f.widgets.iter().filter_map(|w| w.on_state.clone()).map(|o| (o.clone(), o)).collect(),
@@ -147,8 +146,16 @@ fn changes(before: &[pdfcraft_js::FieldState], after: &[pdfcraft_js::FieldState]
                 read_only: (a.readonly != b.readonly).then_some(a.readonly),
                 required: (a.required != b.required).then_some(a.required),
                 display: (a.display != b.display).then_some(a.display),
+                text_color: (a.text_color != b.text_color).then(|| a.text_color.clone()).flatten(),
+                fill_color: (a.fill_color != b.fill_color).then(|| a.fill_color.clone()).flatten(),
             };
-            (c.value.is_some() || c.read_only.is_some() || c.required.is_some() || c.display.is_some()).then_some(c)
+            (c.value.is_some()
+                || c.read_only.is_some()
+                || c.required.is_some()
+                || c.display.is_some()
+                || c.text_color.is_some()
+                || c.fill_color.is_some())
+            .then_some(c)
         })
         .collect()
 }
@@ -158,13 +165,6 @@ pub struct JsRunner {
     pub doc: pdfcraft_js::DocInfo,
     pub doc_scripts: Vec<String>,
     pub output: JsOutput,
-    /// Immutable document snapshot from the start of the edit (for widget `display`).
-    cos: pdfcraft_cos::Document,
-    // `cos` is the same immutable pre-edit snapshot for the runner's lifetime. Cache only
-    // its scalar display readings, not COS objects: large forms exceed the object cache and
-    // otherwise reparse every widget for every calculation. Values/flags still come from
-    // the live `fields` snapshot on each call. A new edit gets a new runner and cache.
-    displays: std::collections::HashMap<pdfcraft_cos::ObjRef, i32>,
 }
 
 impl JsRunner {
@@ -180,7 +180,7 @@ impl JsRunner {
         // Packets alone are not enough: static XFA and an unlaid-out shell keep their scripts.
         let xfa_active = xfa && pdfcraft_xfa::existing_layout(cos).is_some();
         let doc_scripts = if xfa_active { Vec::new() } else { pdfcraft_forms::document_scripts(cos) };
-        JsRunner { doc, doc_scripts, output: JsOutput::default(), cos: cos.clone(), displays: std::collections::HashMap::new() }
+        JsRunner { doc, doc_scripts, output: JsOutput::default() }
     }
 }
 
@@ -198,17 +198,8 @@ fn info(cos: &pdfcraft_cos::Document) -> Vec<(String, String)> {
 impl Scripts for JsRunner {
     /// Run field `target`'s script for `event` over the form's fields, keeping what it showed and
     /// asked for; a refusal carries its last message.
-    fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> ScriptResult {
-        let states: Vec<_> = fields
-            .iter()
-            .map(|f| {
-                let display = match f.widgets.first() {
-                    Some(w) => *self.displays.entry(w.obj).or_insert_with(|| display(&self.cos, f)),
-                    None => pdfcraft_js::DISPLAY_VISIBLE,
-                };
-                field_state_with_display(f, display)
-            })
-            .collect();
+    fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], doc: &pdfcraft_cos::Document) -> ScriptResult {
+        let states: Vec<_> = fields.iter().map(|f| field_state(doc, f)).collect();
         let states = std::sync::Arc::new(states);
         let ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
         let o = pdfcraft_js::run_shared(script, &ev, &self.doc, std::sync::Arc::clone(&states), &self.doc_scripts, Limits::default());

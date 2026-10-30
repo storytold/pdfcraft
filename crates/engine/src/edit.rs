@@ -369,8 +369,8 @@ pub enum Edit {
     RemoveStandardId {
         standard: Standard,
     },
-    /// What a script (button or console) changed in form fields: values, read-only, required
-    /// and visibility.
+    /// What a script (button or console) changed in form fields: values, appearance colours,
+    /// read-only, required and visibility.
     ApplyScriptChanges {
         changes: Vec<pdfcraft_forms::FieldChange>,
     },
