@@ -17,12 +17,14 @@ impl Layouter<'_> {
         }
         let ctx = ctx.with_som(&row.common, sib);
         let inner = rect.inset(&row.common.margin);
+        for child in row.children.iter().filter(|k| k.common().presence.occupies()) {
+            self.warn_truncated(child, &ctx.som, self.instances(child, &ctx.som));
+        }
         let (cells, _) = self.cells(row, cols, inner.w, &ctx, depth);
-        let sibs = SomIndices::of(&row.children);
-        for (i, r) in cells {
+        for (i, index, r) in cells {
             if let Some(k) = row.children.get(i) {
                 // Cells stretch to the row height.
-                self.draw_node(k, Rect::new(inner.x + r.x, inner.y, r.w, inner.h), &ctx, depth + 1, sibs.at(i))?;
+                self.draw_node(k, Rect::new(inner.x + r.x, inner.y, r.w, inner.h), &ctx, depth + 1, index)?;
             }
         }
         Ok(())
@@ -30,12 +32,20 @@ impl Layouter<'_> {
 
     pub(super) fn draw_positioned_child(&mut self, k: &Node, inner: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         let c = k.common();
-        if !c.presence.occupies() || self.instances(k, &ctx.som) == 0 {
+        if !c.presence.occupies() {
             return Ok(());
         }
-        let (w, h) = self.size_of(k, (inner.w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1, sib);
-        let (x, y) = c.top_left(w, h);
-        self.draw_node(k, Rect::new(inner.x + x, inner.y + y, w, h), ctx, depth + 1, sib)
+        // Positioned instances keep the template's offset (they can overlap), but
+        // each has its own data, dimensions and SOM identity, just as flowed ones do.
+        let instances = self.instances(k, &ctx.som);
+        self.warn_truncated(k, &ctx.som, instances);
+        for instance in 0..instances {
+            let index = sib + instance;
+            let (w, h) = self.size_of(k, (inner.w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1, index);
+            let (x, y) = c.top_left(w, h);
+            self.draw_node(k, Rect::new(inner.x + x, inner.y + y, w, h), ctx, depth + 1, index)?;
+        }
+        Ok(())
     }
 
     pub(super) fn draw_node(&mut self, node: &Node, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
@@ -116,7 +126,7 @@ impl Layouter<'_> {
                         }
                     }
                     Layout::Table => {
-                        let cols = self.columns(s, inner.w);
+                        let cols = self.columns(s, inner.w, &ctx);
                         let mut y = inner.y;
                         for (i, k) in s.children.iter().enumerate() {
                             if !k.common().presence.occupies() || self.instances(k, &ctx.som) == 0 {
@@ -141,7 +151,7 @@ impl Layouter<'_> {
                         }
                     }
                     Layout::Row => {
-                        let cols = self.columns(s, inner.w);
+                        let cols = self.columns(s, inner.w, &ctx);
                         self.draw_row(s, &cols, rect, parent_ctx, depth, sib)?;
                     }
                 }

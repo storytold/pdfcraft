@@ -43,6 +43,12 @@ that warning and keeps the existing layout and accepted widget values.
   a warning. Following fields, table rows and frame borders
   retain their horizontal inset when flow moves to another content area. Repeated containers measure each
   instance in its own data scope, including optional children and growing text fields.
+  Positioned children, area contents and page-master objects draw every instance at its own
+  measured size and template offset; copies can overlap, as positioned layout specifies.
+  Their containers include the largest instance extents. Repeated table cells consume separate
+  column spans and contribute their own heights; inferred equal-width columns count the live
+  cells in each row. Declared column widths remain authoritative. Column inference and empty
+  repeated containers consume bounded work; truncated positioned/cell repeats report a warning.
   Fields that compute the page number or count on layout show the numbers.
 - **PDF** (`pdf::write_form`): pages with content streams in the standard 14 fonts (Arial and
   friends → Helvetica, Courier New → Courier, serif faces → Times; nothing is embedded), JPEG
@@ -72,6 +78,20 @@ that warning and keeps the existing layout and accepted widget values.
 Layout caches container measurements by node, width, inherited style and parent SOM scope:
 width-less containers would otherwise
 be measured exponentially often in their nesting. A measurement budget backs this up.
+
+Occurrence regression coverage (`occurrence_layout_tests`, plus the automation integration
+test `repeated_instances_survive_the_tool_lifecycle_in_every_layout`):
+
+| Path | Checked behavior |
+| --- | --- |
+| Positioned, areas, vertical/horizontal flow, tables and cells | Zero, one and multiple instances; blank/data merges; minimum/maximum counts; values and distinct SOM indices; fixed and intrinsic containers |
+| Positioned and areas | Largest instance first or last; maximum width/height; anchor offsets; hidden versus invisible presence |
+| Table cells | Separate column spans, per-instance data/height, inferred columns across different row instances, bounded allocation |
+| Page masters | Zero/one/multiple positioned instances with independent values |
+| Engine/tool lifecycle | Add from zero, fill three instances, enforce maximum, remove first/reindex, undo/redo, populated and empty save/reopen, re-add defaults; exact field metadata and rendered-pixel comparisons |
+| Failed engine edits | Field/import/click finalization failure, with and without script abandonment, across vertical, positioned, horizontal and table roots; bytes, geometry, history and scripts-off safety state |
+
+These synthetic checks cover occurrence handling, not general XFA fidelity or all binding modes.
 
 - **Scripts** (`script`): the live form as scripts see it (`form_tree`: the instance tree with
   values, presence and access, and the `ScriptEvent`s in document order, built within

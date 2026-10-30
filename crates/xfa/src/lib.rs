@@ -188,3 +188,6 @@ mod tests;
 
 #[cfg(test)]
 mod zero_instances_tests;
+
+#[cfg(test)]
+mod occurrence_layout_tests;

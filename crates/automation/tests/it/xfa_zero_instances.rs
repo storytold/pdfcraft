@@ -137,3 +137,87 @@ fn removing_a_row_from_a_kept_section_preserves_pagination_through_tools() {
     assert_eq!(pages(&mut a, reopened), 2);
     assert_eq!([a.render_pixels(reopened, 1, 1.0).unwrap(), a.render_pixels(reopened, 2, 1.0).unwrap()], after);
 }
+
+/// The same public lifecycle in every supported container strategy. Positioned copies
+/// deliberately overlap; every copy must still be an independently editable field.
+#[test]
+fn repeated_instances_survive_the_tool_lifecycle_in_every_layout() {
+    for mode in ["position", "area", "tb", "lr-tb", "rl-tb", "table", "row"] {
+        let temp = tempfile::tempdir().unwrap();
+        let child_layout = if mode == "table" { "row" } else { "tb" };
+        let repeated = format!(
+            r#"<subform name="rep" layout="{child_layout}" w="80pt"><occur min="0" initial="0" max="3"/>
+            <field name="entry" w="80pt"><ui><textEdit multiLine="1"/></ui><value><text>default</text></value></field></subform>"#
+        );
+        let container = if mode == "area" {
+            format!(r#"<area name="box">{repeated}</area>"#)
+        } else {
+            format!(r#"<subform name="box" layout="{mode}" w="300pt" columnWidths="80pt 80pt 80pt">{repeated}</subform>"#)
+        };
+        let (container, manager) = if mode == "row" {
+            (format!(r#"<subform name="table" layout="table" w="300pt" columnWidths="80pt 80pt 80pt">{container}</subform>"#), "table.box._rep")
+        } else {
+            (container, "box._rep")
+        };
+        let xml = format!(
+            r#"<template><subform name="form" layout="tb" w="300pt">{container}
+            <field name="add" w="80pt" h="20pt"><ui><button/></ui><caption><value><text>Add</text></value></caption>
+                <event activity="click"><script contentType="application/x-javascript">{manager}.addInstance(1);</script></event></field>
+            <field name="remove" w="80pt" h="20pt"><ui><button/></ui><caption><value><text>Remove</text></value></caption>
+                <event activity="click"><script contentType="application/x-javascript">{manager}.removeInstance(0);</script></event></field>
+            </subform></template>"#
+        );
+        std::fs::write(temp.path().join("instances.pdf"), pdfcraft_xfa::fixtures::shell(&xml)).unwrap();
+        let mut a = Automation::new().with_root(temp.path()).unwrap().with_clock(|| 1_700_000_000);
+        let id = tool(&mut a, "doc_open", json!({"path":"instances.pdf"}))["doc"].as_u64().unwrap();
+        let fields = |a: &mut Automation, id| tool(a, "form_fields", json!({"doc":id}))["fields"].as_array().unwrap().clone();
+        let entries =
+            |a: &mut Automation, id| fields(a, id).into_iter().filter(|f| f["name"].as_str().unwrap().starts_with("entry")).collect::<Vec<_>>();
+        let empty = (fields(&mut a, id), a.render_pixels(id, 1, 1.0).unwrap());
+        assert!(entries(&mut a, id).is_empty(), "{mode}");
+        let values = ["first", "second\nline two\nline three\nline four\nline five\nline six\nline seven", "third\nlast line"];
+        for (i, value) in values.iter().enumerate() {
+            let click = tool(&mut a, "js_run", json!({"doc":id,"field":"add","script":""}));
+            assert!(click["error"].is_null(), "{mode}: {click}");
+            let current = entries(&mut a, id);
+            assert_eq!(current.len(), i + 1, "{mode}");
+            let name = current[i]["name"].as_str().unwrap();
+            tool(&mut a, "form_fill", json!({"doc":id,"values":{name: value}}));
+        }
+        let filled = entries(&mut a, id);
+        assert_eq!(filled.iter().map(|f| f["value"].as_str().unwrap().to_owned()).collect::<Vec<_>>(), values, "{mode}");
+        let height = |field: &Value| field["rect"][3].as_f64().unwrap() - field["rect"][1].as_f64().unwrap();
+        assert!(height(&filled[1]) > height(&filled[0]) + 20.0, "{mode}: editing must grow the later instance independently");
+        let populated = (fields(&mut a, id), a.render_pixels(id, 1, 1.0).unwrap());
+        assert!(populated.1 != empty.1, "{mode}: filled form must render differently");
+        // A fourth add must respect max without changing values or geometry.
+        tool(&mut a, "js_run", json!({"doc":id,"field":"add","script":""}));
+        assert_eq!(fields(&mut a, id), populated.0, "{mode}");
+        tool(&mut a, "doc_save", json!({"doc":id,"path":"populated.pdf"}));
+        let reopened = tool(&mut a, "doc_open", json!({"path":"populated.pdf"}))["doc"].as_u64().unwrap();
+        assert!(
+            (fields(&mut a, reopened), a.render_pixels(reopened, 1, 1.0).unwrap()) == populated,
+            "{mode}: populated reopen changed fields/pixels"
+        );
+        for removed in 1..=3 {
+            let before = (fields(&mut a, reopened), a.render_pixels(reopened, 1, 1.0).unwrap());
+            let click = tool(&mut a, "js_run", json!({"doc":reopened,"field":"remove","script":""}));
+            assert!(click["error"].is_null(), "{mode}: {click}");
+            let remaining = entries(&mut a, reopened);
+            assert_eq!(remaining.iter().map(|f| f["value"].as_str().unwrap().to_owned()).collect::<Vec<_>>(), values[removed..], "{mode}");
+            let after = (fields(&mut a, reopened), a.render_pixels(reopened, 1, 1.0).unwrap());
+            tool(&mut a, "edit_undo", json!({"doc":reopened}));
+            assert!((fields(&mut a, reopened), a.render_pixels(reopened, 1, 1.0).unwrap()) == before, "{mode}: undo changed fields/pixels");
+            tool(&mut a, "edit_redo", json!({"doc":reopened}));
+            assert!((fields(&mut a, reopened), a.render_pixels(reopened, 1, 1.0).unwrap()) == after, "{mode}: redo changed fields/pixels");
+        }
+        assert!((fields(&mut a, reopened), a.render_pixels(reopened, 1, 1.0).unwrap()) == empty, "{mode}: final removal changed empty fields/pixels");
+        tool(&mut a, "doc_save", json!({"doc":reopened,"path":"empty.pdf"}));
+        let last = tool(&mut a, "doc_open", json!({"path":"empty.pdf"}))["doc"].as_u64().unwrap();
+        assert!((fields(&mut a, last), a.render_pixels(last, 1, 1.0).unwrap()) == empty, "{mode}: empty reopen changed fields/pixels");
+        tool(&mut a, "js_run", json!({"doc":last,"field":"add","script":""}));
+        let added = entries(&mut a, last);
+        assert_eq!(added.len(), 1, "{mode}");
+        assert_eq!(added[0]["value"], "default", "{mode}");
+    }
+}

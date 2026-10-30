@@ -8954,10 +8954,12 @@ fn xfa_import_work_exhaustion_rolls_back_imported_data() {
 #[test]
 fn xfa_post_abandon_failure_preserves_safety_state_and_rolls_back() {
     for abandoned in [true, false] {
-        for path in ["field", "import", "click"] {
+        for (path, layout) in ["field", "import", "click"].into_iter().flat_map(|p| ["tb", "position", "lr-tb", "rl-tb", "table"].map(|l| (p, l))) {
             let effects = r#"_row.addInstance(1); other.rawValue = "changed"; remove.access = "readOnly";
                 xfa.host.messageBox("before failure"); console.println("before failure");"#;
-            let mut tpl = pdfcraft_xfa::fixtures::optional_rows(1).replace(r#"max="2""#, r#"max="-1""#);
+            let mut tpl = pdfcraft_xfa::fixtures::optional_rows(1)
+                .replace(r#"max="2""#, r#"max="-1""#)
+                .replace(r#"<subform name="form" layout="tb""#, &format!(r#"<subform name="form" layout="{layout}""#));
             if path == "click" {
                 tpl = tpl.replace("_row.addInstance(1);", &format!(r#"{effects} xfa.host.print(); xfa.host.setFocus("other");"#));
             } else {

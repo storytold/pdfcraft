@@ -96,7 +96,7 @@ impl Layouter<'_> {
                         }
                         Layout::LrTb | Layout::RlTb => self.pack_instances(&s.children, inner_w, &ctx, depth, &som).1,
                         Layout::Table => {
-                            let cols = self.columns(s, inner_w);
+                            let cols = self.columns(s, inner_w, &ctx);
                             let sibs = SomIndices::of(&s.children);
                             s.children
                                 .iter()
@@ -113,7 +113,7 @@ impl Layouter<'_> {
                                 })
                                 .sum()
                         }
-                        Layout::Row => self.cells(s, &self.columns(s, inner_w), inner_w, &ctx, depth + 1).1,
+                        Layout::Row => self.cells(s, &self.columns(s, inner_w, &ctx), inner_w, &ctx, depth + 1).1,
                     },
                 };
                 content + c.margin.vertical()
@@ -152,7 +152,7 @@ impl Layouter<'_> {
             Layout::LrTb | Layout::RlTb | Layout::Row => {
                 let sum: f64 = visible
                     .map(|(i, k)| {
-                        let count = if layout == Layout::Row { 1 } else { self.instances(k, &ctx.som) };
+                        let count = self.instances(k, &ctx.som);
                         (0..count).map(|n| self.size_of(k, avail_w, ctx, depth + 1, sibs.at(i) + n).0).sum::<f64>()
                     })
                     .sum();
@@ -160,8 +160,12 @@ impl Layouter<'_> {
             }
             Layout::Positioned => visible
                 .map(|(i, k)| {
-                    let (w, h) = self.size_of(k, avail_w, ctx, depth + 1, sibs.at(i));
-                    k.common().top_left(w, h).0 + w
+                    (0..self.instances(k, &ctx.som))
+                        .map(|n| {
+                            let (w, h) = self.size_of(k, avail_w, ctx, depth + 1, sibs.at(i) + n);
+                            k.common().top_left(w, h).0 + w
+                        })
+                        .fold(0.0, f64::max)
                 })
                 .fold(0.0, f64::max)
                 .min(avail_w),
@@ -329,8 +333,12 @@ impl Layouter<'_> {
             .filter(|(_, k)| k.common().presence.occupies() && self.instances(k, &ctx.som) > 0)
             .map(|(i, k)| {
                 let c = k.common();
-                let (w, h) = self.size_of(k, (inner_w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1, sibs.at(i));
-                c.top_left(w, h).1 + h
+                (0..self.instances(k, &ctx.som))
+                    .map(|n| {
+                        let (w, h) = self.size_of(k, (inner_w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1, sibs.at(i) + n);
+                        c.top_left(w, h).1 + h
+                    })
+                    .fold(0.0, f64::max)
             })
             .fold(0.0, f64::max)
     }
@@ -371,8 +379,9 @@ impl Layouter<'_> {
         self.pack(children, inner_w, ctx, depth).1
     }
 
-    /// Cell rectangles of a row (relative to the row's inner box) and the row height.
-    pub(super) fn cells(&self, row: &Subform, cols: &[f64], inner_w: f64, ctx: &Ctx, depth: usize) -> (Vec<(usize, Rect)>, f64) {
+    /// Cell rectangles (child, SOM index, box relative to the row) and row height.
+    /// Every instance consumes its own column span and is measured in its own scope.
+    pub(super) fn cells(&self, row: &Subform, cols: &[f64], inner_w: f64, ctx: &Ctx, depth: usize) -> (Vec<(usize, usize, Rect)>, f64) {
         let ctx = ctx.child(&row.common);
         let mut out = Vec::new();
         let mut col = 0usize;
@@ -384,12 +393,15 @@ impl Layouter<'_> {
                 continue;
             }
             let span = k.common().col_span.max(1);
-            let w = if col < cols.len() { cols.iter().skip(col).take(span).sum::<f64>() } else { k.common().w.unwrap_or((inner_w - x).max(1.0)) };
-            let (_, ch) = self.size_of(k, w, &ctx, depth + 1, sibs.at(i));
-            out.push((i, Rect::new(x, 0.0, w, ch)));
-            h = h.max(ch);
-            x += w;
-            col += span;
+            for instance in 0..self.instances(k, &ctx.som) {
+                let w = if col < cols.len() { cols.iter().skip(col).take(span).sum::<f64>() } else { k.common().w.unwrap_or((inner_w - x).max(1.0)) };
+                let index = sibs.at(i) + instance;
+                let (_, ch) = self.size_of(k, w, &ctx, depth + 1, index);
+                out.push((i, index, Rect::new(x, 0.0, w, ch)));
+                h = h.max(ch);
+                x += w;
+                col = col.saturating_add(span);
+            }
         }
         let h = match row.common.h {
             Some(rh) => rh,

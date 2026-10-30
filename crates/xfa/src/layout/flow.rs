@@ -1,6 +1,6 @@
 use super::common::{clamp_opt, divide, is_row, moved, solid_extent, splittable};
 use super::items::Item;
-use super::{Ctx, Frame, Layout, Layouter, MAX_DEPTH, Node, Rect, SomIndices, Subform, XfaError, data_path, instance_count};
+use super::{Ctx, Frame, Layout, Layouter, MAX_DEPTH, MAX_ITEMS, MAX_MEASURES, Node, Rect, SomIndices, Subform, XfaError, data_path, instance_count};
 
 impl Layouter<'_> {
     /// Place `node` at the cursor, splitting an intrinsic horizontal flow between its leaves.
@@ -259,18 +259,56 @@ impl Layouter<'_> {
         Ok(())
     }
 
-    pub(super) fn columns(&self, sf: &Subform, inner_w: f64) -> Vec<f64> {
+    pub(super) fn columns(&self, sf: &Subform, inner_w: f64, ctx: &Ctx) -> Vec<f64> {
         if !sf.column_widths.is_empty() {
             return sf.column_widths.clone();
         }
-        let cells = sf.children.iter().filter_map(|c| if let Node::Subform(r) = c { Some(r.children.len()) } else { None }).max().unwrap_or(1).max(1);
+        // Without declared widths, keep the equal-column fallback, but derive its
+        // column count from instantiated cells rather than template declarations.
+        let mut cells = if sf.layout == Layout::Row { self.row_column_count(sf, ctx) } else { 1 };
+        if sf.layout != Layout::Row {
+            let sibs = SomIndices::of(&sf.children);
+            for (i, child) in sf.children.iter().enumerate() {
+                let Node::Subform(row) = child else { continue };
+                if row.layout != Layout::Row || !row.common.presence.occupies() {
+                    continue;
+                }
+                for instance in 0..self.instances(child, &ctx.som) {
+                    self.measures.set(self.measures.get().saturating_add(1));
+                    if self.measures.get() > MAX_MEASURES {
+                        return vec![inner_w]; // check_measures rejects the layout before publication.
+                    }
+                    cells = cells.max(self.row_column_count(row, &ctx.with_som(&row.common, sibs.at(i) + instance)));
+                }
+            }
+        }
+        let cells = cells.max(1);
         vec![inner_w / cells as f64; cells]
+    }
+
+    fn row_column_count(&self, row: &Subform, ctx: &Ctx) -> usize {
+        let mut columns = 0usize;
+        for child in &row.children {
+            self.measures.set(self.measures.get().saturating_add(1));
+            if self.measures.get() > MAX_MEASURES {
+                return 1;
+            }
+            if child.common().presence.occupies() {
+                columns = columns.saturating_add(self.instances(child, &ctx.som).saturating_mul(child.common().col_span.max(1)));
+                if columns > MAX_ITEMS {
+                    // Do not allocate a column vector amplified by repetitions/spans.
+                    self.measures.set(MAX_MEASURES + 1);
+                    return 1;
+                }
+            }
+        }
+        columns
     }
 
     /// Flow each data row at its own height, allowing room for a present overflow leader.
     fn flow_table(&mut self, sf: &Subform, x: f64, inner_w: f64, ctx: &Ctx, depth: usize) -> Result<(), XfaError> {
         let x_offset = x - self.cursor().0.x;
-        let cols = self.columns(sf, inner_w);
+        let cols = self.columns(sf, inner_w, ctx);
         let leader =
             sf.overflow_leader.as_ref().and_then(|name| sf.children.iter().position(|c| c.common().name.as_deref() == Some(name) && is_row(c)));
         // The overflow leader starts each part after the first, before the row that moved.
@@ -340,7 +378,7 @@ impl Layouter<'_> {
 
     /// The data holds more instances of `node` than `laid_out`: say so, since calculations
     /// then see only those.
-    fn warn_truncated(&mut self, node: &Node, parent_som: &str, laid_out: usize) {
+    pub(super) fn warn_truncated(&mut self, node: &Node, parent_som: &str, laid_out: usize) {
         let Node::Subform(sf) = node else { return };
         let from_data = match (&sf.common.name, self.data) {
             (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
