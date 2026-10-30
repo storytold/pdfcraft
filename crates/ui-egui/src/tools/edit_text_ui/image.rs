@@ -504,6 +504,34 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
     let moving = selected.filter(|_| dragging);
     let hovered_box = hover_pos.and_then(|p| boxes.iter().enumerate().rposition(|(i, b)| b.is_positive() && b.contains(p) && image_contains(i, p)));
     draw_outlines(painter, &boxes, OutlineState { selected, hovered_box, moving, dragging, faint_all });
+    // A double-click on grouped artwork ungroups it, whether or not it was selected first. Presses
+    // are counted here, with egui's own limits, as the text selection counts them (#1024): on a
+    // selected group the second press starts a drag, and a press and release that arrive in one
+    // pass are not reported as a double-click. Only presses the pages hold count (`PagePointer`):
+    // a menu over the group is not the group, so a double-click on a menu item over it must not
+    // ungroup it, and the button going down for anything else ends the count.
+    if ptr.primary_down && ptr.origin.is_none() {
+        view.group_press = None;
+    }
+    if allow_interaction
+        && let Some(p) = ptr.pressed()
+        && let Some(hit) = boxes.iter().enumerate().rposition(|(i, b)| b.is_positive() && b.contains(p) && image_contains(i, p))
+        && images.get(hit).is_some_and(|image| image.is_form)
+    {
+        let (now, (max_delay, max_dist)) =
+            (ui.input(|i| i.time), ui.ctx().options(|o| (o.input_options.max_double_click_delay, o.input_options.max_click_dist)));
+        // The same picture of the same page: one page at a time, the next page's group can sit
+        // where this one was (CodeRabbit on #3222).
+        let second =
+            view.group_press.is_some_and(|(t, at, on, index)| on == page && index == hit && now - t <= max_delay && at.distance(p) <= max_dist);
+        if second {
+            view.group_press = None;
+            view.image_selection = None;
+            view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: pdfcraft_engine::ImageEdit::Ungroup });
+            return true;
+        }
+        view.group_press = Some((now, p, page, hit));
+    }
     // The selected image: frame, corner handles, dragging.
     if let Some(i) = selected.filter(|i| boxes.get(*i).is_some_and(|b| b.is_positive())) {
         let b = boxes[i];
@@ -620,8 +648,22 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
 }
 
 /// The right-click menu of the picture `hit` (its rotate, flip, replace, copy, cut, redact, link,
-/// recognize and delete items).
+/// recognize, ungroup and delete items). It shares its popup with the page's own menu, so
+/// its widgets get their own id scope: the first items otherwise took the ids of the page menu's
+/// first items ("Second use of widget ID"), and could not be told apart or reached.
 fn image_menu(
+    ui: &mut egui::Ui,
+    page: usize,
+    hit: usize,
+    images: &[pdfcraft_engine::PageImage],
+    view: &mut DocView,
+    action: &mut Option<ImageAction>,
+) {
+    ui.push_id("image-menu", |ui| image_menu_items(ui, page, hit, images, view, action));
+}
+
+/// The items of [`image_menu`], inside its own id scope.
+fn image_menu_items(
     ui: &mut egui::Ui,
     page: usize,
     hit: usize,
@@ -692,6 +734,14 @@ fn image_menu(
         ui.close();
     }
     ui.separator();
+    // Grouped artwork (a CAD export often draws a whole page as one group): its text, images and
+    // nested groups become separate objects. A double-click on the group does the same. Near the
+    // end of the menu: its first rows can lie under the page menu's, which share the popup.
+    if images.get(hit).is_some_and(|image| image.is_form) && ui.button(tl!("Ungroup")).clicked() {
+        view.image_selection = None;
+        view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Ungroup });
+        ui.close();
+    }
     if ui.button(tl!("Delete")).clicked() {
         view.image_selection = None;
         view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Delete });

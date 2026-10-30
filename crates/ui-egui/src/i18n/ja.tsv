@@ -2018,6 +2018,8 @@
 	Rotate image	画像を回転
 	Flip image	画像を反転
 	Delete image	画像を削除
+	Ungroup	グループ解除
+	Ungroup artwork	アートワークのグループ解除
 	Add header & footer	ヘッダーとフッターを追加
 	Update header & footer	ヘッダーとフッターを更新
 	Update watermark	透かしを更新

@@ -2042,6 +2042,8 @@
 	Delete document JavaScript	删除文档 JavaScript
 	Delete field	删除字段
 	Delete image	删除图像
+	Ungroup	取消组合
+	Ungroup artwork	取消组合图稿
 	Delete link	删除链接
 	Delete page	删除页面
 	Device colour is used, but there is no PDF/A output intent	使用了设备颜色，但未设置 PDF/A 输出意图

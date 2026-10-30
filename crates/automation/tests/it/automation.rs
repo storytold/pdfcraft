@@ -3577,6 +3577,68 @@ fn editing_form_artwork_through_tools() {
     assert_eq!(a.call("page_render", &json!({"doc": doc, "page": 1, "dpi": 72})).unwrap(), rendered_before);
 }
 
+/// A page drawn as one Form XObject (as CAD exports draw it): `image_edit` ungroup puts its text
+/// and line work on the page, so the text becomes a paragraph, without changing the rendering.
+#[test]
+fn ungrouping_form_artwork_through_tools() {
+    use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_incremental};
+    let dir = workdir("form-ungroup");
+    let mut cos = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&cos)[0].clone();
+    let mut font = Dict::new();
+    font.set(b"Type".to_vec(), Object::name("Font"));
+    font.set(b"Subtype".to_vec(), Object::name("Type1"));
+    font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+    let font = cos.add(Object::Dict(font));
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array([0, 0, 1600, 2400].map(Object::Int).to_vec()));
+    let mut fonts = Dict::new();
+    fonts.set(b"F1".to_vec(), Object::Ref(font));
+    let mut res = Dict::new();
+    res.set(b"Font".to_vec(), Object::Dict(fonts));
+    form.set(b"Resources".to_vec(), Object::Dict(res));
+    let artwork =
+        cos.add(Object::Stream(Stream::flate(form, b"6 w 100 100 m 1500 100 l S BT 60 0 0 60 160 2000 Tm /F1 1.4 Tf (Raumregulierung) Tj ET")));
+    let contents = cos.add(Object::Stream(Stream::flate(Dict::new(), b"q 0.12 0 0 0.12 0 0 cm /Page Do Q")));
+    cos.update_dict(page.obj, |d| {
+        d.set(b"Contents".to_vec(), Object::Ref(contents));
+        let mut xo = Dict::new();
+        xo.set(b"Page".to_vec(), Object::Ref(artwork));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xo));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    std::fs::write(dir.join("cad.pdf"), write_incremental(&cos, &SaveOptions::default()).unwrap()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "cad.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "page_images", json!({"doc": doc, "page": 1}))["images"][0]["kind"], "form");
+    let paragraphs = |a: &mut Automation| -> Vec<String> {
+        ok(a, "text_paragraphs", json!({"doc": doc, "page": 1}))["paragraphs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["text"].as_str().map(str::to_owned))
+            .collect()
+    };
+    assert!(paragraphs(&mut a).is_empty(), "the text is inside the group");
+    let rendered = a.call("page_render", &json!({"doc": doc, "page": 1, "dpi": 72})).unwrap();
+
+    ok(&mut a, "image_edit", json!({"doc": doc, "page": 1, "image": 1, "action": "ungroup"}));
+    assert_eq!(ok(&mut a, "page_images", json!({"doc": doc, "page": 1}))["count"], 0);
+    assert_eq!(paragraphs(&mut a), ["Raumregulierung"]);
+    assert_eq!(a.call("page_render", &json!({"doc": doc, "page": 1, "dpi": 72})).unwrap(), rendered, "the page looks the same");
+    ok(&mut a, "doc_save", json!({"doc": doc, "path": "out/ungrouped.pdf"}));
+    let re = ok(&mut a, "doc_open", json!({"path": "out/ungrouped.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "page_images", json!({"doc": re, "page": 1}))["count"], 0);
+
+    ok(&mut a, "edit_undo", json!({"doc": doc}));
+    assert_eq!(ok(&mut a, "page_images", json!({"doc": doc, "page": 1}))["images"][0]["kind"], "form");
+    // Nothing left to ungroup on the saved copy: a clear error, not a change.
+    assert!(a.call("image_edit", &json!({"doc": re, "page": 1, "image": 1, "action": "ungroup"})).is_err());
+}
+
 #[test]
 fn auditing_space_through_tools() {
     let dir = workdir("audit");

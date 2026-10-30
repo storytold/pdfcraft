@@ -2157,6 +2157,18 @@ evidence = ["crates/edit/src/tests.rs::private_image_crop_with_intervening_state
 notes = "existing raster images and grouped Form artwork: select, drag to move, drag a corner to resize keeping proportions; Delete removes one placement. Forms include their nested content as a group; individual internal elements and inline images are not supported. See docs/editing-images.md; added images too Since #1116: raster images and grouped Forms move/resize/turn as placements; selected grips own the gesture and opposite anchor, with no PDF writes during movement. Curved path frames use analytic Bezier extrema and hit testing evaluates actual nonzero/even-odd fill rules, excluding holes; intersections can retain a loose frame. Selection and resize use the visible (clipped) frame; exclusive image clips move with their pixels across nested states, intervening operators and content streams, also inside a clip the picture shares with other content (its own clip scales, the shared one stays); shared clips stay fixed. Inline images and Form internals remain unsupported; see docs/editing-images.md"
 
 [[feature]]
+id = "edit.form-content-editing"
+title = "Edit text and images inside grouped Form artwork"
+area = "C"
+tier = "P1"
+milestone = "M7"
+status = "partial"
+commands = ["edit.edit_text"]
+tools = ["image_edit"]
+evidence = ["crates/edit/src/tests/ungroup.rs::ungrouping_a_page_sized_form_makes_its_content_editable", "crates/edit/src/tests/ungroup.rs::ungrouping_renames_clashing_resources", "crates/edit/src/tests/ungroup.rs::ungrouping_keeps_the_page_state_balanced", "crates/edit/src/tests/ungroup.rs::ungrouping_refuses_groups_whose_blending_matters", "crates/edit/src/tests/ungroup.rs::ungrouping_refuses_what_it_cannot_keep", "crates/edit/src/tests/ungroup.rs::ungrouping_keeps_optional_content_and_inline_image_spaces", "crates/edit/src/tests/ungroup.rs::ungrouping_changes_only_the_chosen_placement", "crates/engine/src/tests/ungroup.rs::ungrouping_cad_artwork_keeps_every_pixel_and_frees_its_objects", "crates/engine/src/tests/ungroup.rs::a_refused_ungroup_changes_nothing", "crates/automation/tests/it/automation.rs::ungrouping_form_artwork_through_tools", "crates/ui-egui/tests/it/editing.rs::ungrouping_page_sized_form_artwork_frees_its_text"]
+notes = "CAD and print exports (WSCAD among them) draw a whole page as one Form XObject, which Edit a PDF selected as one page-sized group. Ungroup (right-click ▸ Ungroup, or double-click the group; image_edit action ungroup) writes the form's content in place of its Do, inside q, its /Matrix and its /BBox clip, renaming only resource names that clash with the page's; the form object and its other placements stay as they are, and the rendering is unchanged (pixel-identical in the engine test). One level at a time: nested forms become groups of their own. One undo step. Refused with the reason: transparency groups whose blending would change (knockout, transparency inside or applied to the group, another blending space), forms in the structure tree (/StructParent(s)), other Default colour spaces, content the parser had to skip or that restores or closes more than it opens. Still missing: editing inside a form in place as Acrobat does (without ungrouping), and selecting individual vector paths (edit.vector-edit)."
+
+[[feature]]
 id = "edit.image-extract"
 title = "Save an image to a file"
 area = "C"
