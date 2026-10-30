@@ -1911,6 +1911,48 @@ fn an_untrusted_timestamp_does_not_set_the_validation_time() {
     assert_eq!(s.status, Status::Valid, "{:?}", s.details);
 }
 
+/// Preferences ▸ Signatures ▸ Verify signatures using: the signing time (the default), the secure
+/// time of a trusted timestamp, else the current time, or always the current time.
+#[test]
+fn the_verification_time_chooses_when_the_signers_certificate_is_checked() {
+    use pdfcraft_sign::VerificationTime::{Current, Secure, Signing};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let t = |year| Time { year, month: 1, day: 1, hour: 0, minute: 0, second: 0 };
+    // Signed in 2026; the certificate expires in 2036.
+    let plain = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let tsa = TestTsa { id: tsa_id(), time: t(2027) };
+    let stamped = pdfcraft_sign::sign_with_timestamp(&open(&fixture()), &id, &opts(), &tsa).unwrap();
+    let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
+    let trust = TrustStore { certs: vec![anchor, tsa.id.certificate.clone()] };
+    let check = |bytes: &[u8], at, now: Option<Time>| {
+        let s = pdfcraft_sign::pdf::list_at(&open(bytes), bytes, &trust, &pdfcraft_sign::DigestCache::default(), at, now)
+            .into_iter()
+            .find(|s| s.signed)
+            .unwrap();
+        let said = |text: &str| s.details.iter().any(|d| d.message.contains(text));
+        (
+            s.status,
+            said("not valid at the time of signing"),
+            said("not valid at the current time"),
+            said("checked at the current time"),
+            said("no trusted timestamp"),
+        )
+    };
+    // After the certificate expired, only the current time finds it expired.
+    assert_eq!(check(&plain, Signing, Some(t(2040))), (Status::Valid, false, false, false, false));
+    assert_eq!(check(&plain, Current, Some(t(2040))), (Status::Unknown, false, true, true, false));
+    assert_eq!(check(&plain, Secure, Some(t(2040))), (Status::Unknown, false, true, true, true));
+    assert_eq!(check(&stamped, Secure, Some(t(2040))), (Status::Valid, false, false, false, false), "the timestamp's 2027 is used");
+    assert_eq!(check(&stamped, Current, Some(t(2040))), (Status::Unknown, false, true, true, false));
+    // Before it expired the current time passes, and says it was used.
+    assert_eq!(check(&plain, Current, Some(t(2030))), (Status::Valid, false, false, true, false));
+    // Without a clock the signing time is used.
+    assert_eq!(check(&plain, Current, None), (Status::Valid, false, false, false, false));
+    let s = pdfcraft_sign::pdf::list_at(&open(&plain), &plain, &trust, &pdfcraft_sign::DigestCache::default(), Current, Some(t(2040)));
+    let detail = s.iter().flat_map(|s| &s.details).find(|d| d.message.contains("checked at the current time")).unwrap();
+    assert_eq!(detail.message, format!("The signer's certificate was checked at the current time, {}.", t(2040)));
+}
+
 #[test]
 fn a_timestamp_token_may_sign_with_a_different_digest_than_its_imprint() {
     let tsa = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();

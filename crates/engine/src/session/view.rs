@@ -1,6 +1,6 @@
 use super::{
     Arc, BookmarkPage, BookmarkRow, DocId, Document, EditError, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, Session, SummarySort,
-    apply_layer_state, comment_summary, local_utc_offset, outline_rows, parse_ymd, render_threads, use_layer_choices,
+    apply_layer_state, clock_now, comment_summary, local_utc_offset, outline_rows, parse_ymd, render_threads, use_layer_choices,
 };
 
 impl Session {
@@ -11,6 +11,8 @@ impl Session {
     /// Use a fixed clock (tests) instead of the system time.
     pub fn with_clock(mut self, clock: fn() -> i64) -> Self {
         self.clock = Some(clock);
+        Arc::make_mut(&mut self.trust).clock = Some(clock);
+        self.revalidate_signatures();
         self
     }
 
@@ -33,7 +35,9 @@ impl Session {
     /// [`Session::with_clock`], which is a test shortcut, nothing here is taken as local time.
     pub fn with_wall_clock(mut self, clock: fn() -> i64, utc_offset: fn() -> i64) -> Self {
         self.clock = Some(clock);
+        Arc::make_mut(&mut self.trust).clock = Some(clock);
         self.utc_offset = Some(utc_offset);
+        self.revalidate_signatures();
         self
     }
 
@@ -53,13 +57,7 @@ impl Session {
     }
 
     pub(crate) fn now(&self) -> Option<i64> {
-        if let Some(c) = self.clock {
-            return Some(c());
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        return std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs() as i64);
-        #[cfg(target_arch = "wasm32")]
-        return None;
+        clock_now(self.clock)
     }
 
     /// Today's date in local time: (year, month, day). With an injected clock (tests) the clock

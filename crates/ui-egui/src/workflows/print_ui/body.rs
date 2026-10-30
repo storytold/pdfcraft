@@ -1,4 +1,4 @@
-use super::draft::{Handling, PrintDraft, Which};
+use super::draft::{Handling, Margins, PrintDraft, Which};
 use super::{
     Binding, BookletSubset, Color32, Content, Orientation, PAPERS, PREVIEW_BOX, PREVIEW_H, PREVIEW_W, PageOrder, Pos2, Rect, SizeMode, Stroke,
     Subset, Tokens, pos2, print, printer_label, spool, still_looking, theme, vec2, widgets,
@@ -77,6 +77,37 @@ fn combo<T: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, name: &str, value: &m
         })
         .response
         .accessible_name(name);
+}
+
+/// Page Sizing's Margins row (#4674): a preset, or a width typed in the dialog's unit.
+fn margins_row(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
+    ui.horizontal(|ui| {
+        ui.label(tl!("Margins:"));
+        combo(
+            ui,
+            "margins",
+            tl!("Margins:"),
+            &mut d.margins,
+            &[(Margins::Default, tl!("Default")), (Margins::Narrow, tl!("Narrow")), (Margins::Zero, tl!("None")), (Margins::Custom, tl!("Custom"))],
+            100.0,
+        );
+        if d.margins == Margins::Custom {
+            let per = d.units.per_point();
+            let mut v = d.custom_margin * per;
+            // Up to two inches, whatever the unit.
+            let field = egui::DragValue::new(&mut v).range(0.0..=144.0 * per).speed(d.units.speed()).max_decimals(d.units.decimals());
+            if ui.add(field.suffix(format!(" {}", d.units.label()))).accessible_name(tl!("Custom margin")).changed() {
+                d.custom_margin = v / per;
+            }
+        }
+    });
+    if d.margins == Margins::Zero {
+        ui.label(
+            egui::RichText::new(tl!("Most printers can't print to the very edge, so the outside of the page may be cut off."))
+                .small()
+                .color(t.text_muted),
+        );
+    }
 }
 
 /// Draw the dialog. `thumb` gives a page's thumbnail texture when there is one. Returns
@@ -261,6 +292,11 @@ pub(crate) fn body(
             ui.horizontal(|ui| {
                 widgets::radio_value(ui, &mut d.which, Which::All, tl!("All"));
                 widgets::radio_value(ui, &mut d.which, Which::Current, tl!("Current page"));
+                // Offered when some of the current page showed as the dialog opened (#5097).
+                let view = ui.add_enabled_ui(d.view.is_some(), |ui| widgets::radio_value(ui, &mut d.which, Which::View, tl!("Current view")));
+                if view.inner.clicked() {
+                    d.set_handling(Handling::Size);
+                }
                 let pages = widgets::radio_value(ui, &mut d.which, Which::Range, tl!("Pages"));
                 let r = ui.add_enabled(
                     d.which == Which::Range,
@@ -318,6 +354,8 @@ pub(crate) fn body(
                         ui.add_enabled(custom, egui::DragValue::new(&mut d.custom_scale).range(1.0..=1000.0).suffix(" %"))
                             .accessible_name(tl!("Custom scale"));
                     });
+                    // Actual size and a custom scale centre the page as it is.
+                    ui.add_enabled_ui(matches!(d.size, SizeMode::Fit | SizeMode::Shrink), |ui| margins_row(ui, d, t));
                 }
                 Handling::Label => {
                     ui.add(widgets::checkbox(&mut d.label_flip, tl!("Turn upside down (180°)")));
@@ -360,6 +398,7 @@ pub(crate) fn body(
                         ui.add(widgets::checkbox(&mut d.border, tl!("Print page border")));
                         ui.add(widgets::checkbox(&mut d.auto_rotate, tl!("Auto-rotate pages")));
                     });
+                    margins_row(ui, d, t);
                     if d.order == PageOrder::CutStack {
                         ui.label(tl!(
                             "Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom."
@@ -384,6 +423,7 @@ pub(crate) fn body(
                         ui.label(tl!("Binding:"));
                         combo(ui, "binding", tl!("Binding:"), &mut d.binding, &[(Binding::Left, tl!("Left")), (Binding::Right, tl!("Right"))], 80.0);
                     });
+                    margins_row(ui, d, t);
                 }
             }
             ui.add_space(6.0);

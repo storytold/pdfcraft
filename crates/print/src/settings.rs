@@ -134,14 +134,22 @@ pub struct Settings {
     pub orientation: Orientation,
     pub layout: Layout,
     pub content: Content,
-    /// For [`Layout::Label`], per source page: the area to keep (display space) and whether its
-    /// text runs bottom-to-top (so a quarter turn clockwise makes it upright). `None` or a
-    /// missing entry keeps the whole page.
+    /// For [`Layout::Label`] and [`Layout::Size`], per source page: the area to keep (display
+    /// space) and, for Label, whether its text runs bottom-to-top (so a quarter turn clockwise
+    /// makes it upright). Size prints the area as though it were the page (Print ▸ Current
+    /// view). `None`, a missing entry or an area under a point wide keeps the whole page.
     pub crops: Vec<Option<Crop>>,
     /// Print as image (Acrobat's Advanced Print Setup): every page rendered to a picture at this
     /// resolution before it is placed on the paper. The engine does the rendering; `impose` is
     /// then given the image-only document.
     pub raster: Option<Raster>,
+    /// Space kept clear inside each sheet's edges, in points, for Fit, Shrink oversized pages,
+    /// Multiple and Booklet ([`MARGIN`] unless chosen; #4674). Actual size and a custom scale
+    /// centre the page as it is; Poster keeps [`MARGIN`] for its cut marks, Label [`LABEL_MARGIN`].
+    ///
+    /// [`MARGIN`]: crate::MARGIN
+    /// [`LABEL_MARGIN`]: crate::LABEL_MARGIN
+    pub margin: f64,
 }
 
 /// How pages are rendered when printing as image.
@@ -175,6 +183,7 @@ impl Default for Settings {
             content: Content::default(),
             raster: None,
             crops: Vec::new(),
+            margin: super::sheets::MARGIN,
         }
     }
 }

@@ -200,7 +200,10 @@ impl Automation {
         } else {
             None
         };
-        let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new() };
+        // #4674: the space fit, shrink, multiple and booklet keep inside the paper's edges.
+        let margin = a.opt_num("margin")?.unwrap_or(print::MARGIN);
+        let crops = self.print_region(a, &pages, &layout)?;
+        let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops, margin };
         let sizes: Vec<(f64, f64)> = self.doc(a)?.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
         let sheets = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?.len();
         let bytes = self.session.print_pdf(id, &settings).map_err(failed)?;
@@ -218,6 +221,28 @@ impl Automation {
             _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),
         }
         Ok(out)
+    }
+
+    /// `region` (Print ▸ Current view, #5097): the part of each printed page to print, given in
+    /// points from the displayed page's top-left corner as the other tools take rectangles.
+    fn print_region(&self, a: &Args, pages: &[usize], layout: &Layout) -> Result<Vec<Option<print::Crop>>> {
+        let Some(r) = a.nums::<4>("region")? else { return Ok(Vec::new()) };
+        if !matches!(layout, Layout::Size(_)) {
+            return Err(bad("region needs layout fit, actual, shrink or custom"));
+        }
+        let shown = &self.doc(a)?.info.pages;
+        let mut crops = vec![None; shown.len()];
+        for &p in pages {
+            let Some((page, slot)) = shown.get(p).zip(crops.get_mut(p)) else { continue };
+            let (w, h) = (f64::from(page.width), f64::from(page.height));
+            // The print layout measures up from the bottom-left corner.
+            let rect = [r[0].min(r[2]).max(0.0), (h - r[1].max(r[3])).max(0.0), r[0].max(r[2]).min(w), (h - r[1].min(r[3])).min(h)];
+            if rect[2] - rect[0] <= 1.0 || rect[3] - rect[1] <= 1.0 {
+                return Err(bad(format!("region leaves less than a point of page {}", p + 1)));
+            }
+            *slot = Some(print::Crop { rect, text_up: false });
+        }
+        Ok(crops)
     }
 }
 

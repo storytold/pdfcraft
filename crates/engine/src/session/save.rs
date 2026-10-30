@@ -1,6 +1,6 @@
 use super::{
-    Arc, DocId, EditError, Keys, OpenError, RecoverySnapshot, RenderPool, SaveOptions, Session, SignOptions, TrustStore, display_bytes, guard,
-    render_threads, signatures_of, writable, write_full, write_incremental, xfa_sync_datasets,
+    Arc, DocId, EditError, Keys, OpenError, RecoverySnapshot, RenderPool, SaveOptions, Session, SignOptions, TrustStore, VerificationTime,
+    display_bytes, guard, render_threads, signatures_of, writable, write_full, write_incremental, xfa_sync_datasets,
 };
 
 impl Session {
@@ -233,14 +233,30 @@ impl Session {
 
     /// The certificates trusted for signing.
     pub fn trusted_certificates(&self) -> &[pdfcraft_sign::Certificate] {
-        &self.trust.certs
+        &self.trust.store.certs
     }
 
     /// Replace the trusted certificates, revalidate every open document's signatures,
     /// and rebuild its display copy and renderer to match (working file untouched,
     /// generation/dirty unchanged: trust alone is not an edit).
     pub fn set_trusted_certificates(&mut self, certs: Vec<pdfcraft_sign::Certificate>) {
-        self.trust = Arc::new(TrustStore { certs });
+        Arc::make_mut(&mut self.trust).store = TrustStore { certs };
+        self.revalidate_signatures();
+    }
+
+    /// When signers' certificates are checked (Preferences ▸ Signatures ▸ Verify signatures using).
+    pub fn verification_time(&self) -> VerificationTime {
+        self.trust.at
+    }
+
+    /// Check signers' certificates at `at`, revalidating every open document as
+    /// [`Session::set_trusted_certificates`] does.
+    pub fn set_verification_time(&mut self, at: VerificationTime) {
+        Arc::make_mut(&mut self.trust).at = at;
+        self.revalidate_signatures();
+    }
+
+    pub(super) fn revalidate_signatures(&mut self) {
         for doc in &mut self.docs {
             doc.trust = self.trust.clone();
             let Some(editor) = doc.editor.as_mut() else { continue };

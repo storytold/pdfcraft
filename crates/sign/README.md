@@ -37,6 +37,10 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   checks. An untrusted TSA's time is reported as an unverified timestamp and never used as the
   validation time (the signer's claimed time is). `timestamp::respond` is the TSA-side signer behind the
   deterministic test authority.
+- **Verification time:** `pdf::list_at` takes a `VerificationTime` (Acrobat's Verify signatures
+  using) and the caller's current time: `Signing` is the above, `Secure` uses a trusted
+  timestamp's time else the current time, `Current` always the current time. The details say
+  when the current time was used. A caller that passes no current time gets `Signing`.
 - **Document timestamps and LTV:** `timestamp_document` appends a standalone RFC 3161
   document timestamp (`/ETSI.RFC3161`) covering the whole file; validation discovers and
   verifies these dictionaries (imprint over the signed bytes, token signature, TSA cert

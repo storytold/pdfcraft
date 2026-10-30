@@ -295,6 +295,18 @@ pub fn expand(template: &str, page_number: u32, count: usize, bates: u64, cx: &C
     out
 }
 
+/// What `template` shows on the `k`th page (0-based) of `count` a header or footer is added to.
+pub fn header_footer_text(hf: &HeaderFooter, template: &str, k: usize, count: usize, cx: &Context) -> String {
+    // Past their limits the numbers stop there; adding refuses such a run.
+    let number = u32::try_from(u64::from(hf.start_number).saturating_add(k as u64)).unwrap_or(u32::MAX);
+    expand(template, number, count, first_bates(hf).saturating_add(k as u64), cx)
+}
+
+/// The Bates number of the first page: the start in the first Bates token, else 1.
+pub(crate) fn first_bates(hf: &HeaderFooter) -> u64 {
+    hf.text.iter().find_map(|t| bates_start(t)).unwrap_or(1)
+}
+
 /// The Bates start number in a template (`<<Bates Number#digits#start#…>>`), if any.
 pub(crate) fn bates_start(template: &str) -> Option<u64> {
     let i = template.find("<<Bates Number")?;

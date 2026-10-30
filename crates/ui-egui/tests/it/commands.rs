@@ -149,6 +149,11 @@ fn every_registered_command_is_implemented() {
         if spec.id == "view.layout.cover" {
             app.set_option("layout", "two-up").unwrap();
         }
+        // Field Properties acts on the selected field.
+        if spec.id == "form.field.properties" {
+            let name = app.session.get(app.views[0].id).unwrap().form[0].name.clone();
+            app.views[0].prepare.selected = Some((name, 0));
+        }
         // History commands need a real jump (and Back first to make Forward available).
         if matches!(spec.id, "view.previous_view" | "view.next_view") {
             app.views[0].go_to_page(1);
@@ -179,6 +184,11 @@ fn disabled_commands_explain_themselves() {
     assert!(!app.execute("view.layout.cover"));
     assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Switch to two-page view first to show the cover page"));
     assert!(!app.execute("no.such.command"));
+    // A form with fields but none selected has nothing to show properties for.
+    app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+    assert!(!app.execute("form.field.properties"));
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Select a form field first"));
+    assert!(app.field_props.is_none());
 }
 
 #[test]

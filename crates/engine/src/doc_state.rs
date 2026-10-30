@@ -1,4 +1,4 @@
-use super::{Arc, EditError, Hidden, SignatureInfo, TrustStore, optimize};
+use super::{Arc, EditError, Hidden, SignatureInfo, TrustStore, VerificationTime, optimize};
 
 /// A change to an existing page image.
 #[derive(Clone, Debug, PartialEq)]
@@ -97,14 +97,31 @@ pub fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
     })
 }
 
+/// What signatures are checked against: the trusted certificates, when signers' certificates
+/// are checked (Preferences ▸ Signatures ▸ Verify signatures using) and the session clock that
+/// says what the current time is.
+#[derive(Clone, Default)]
+pub(crate) struct Trust {
+    pub(crate) store: TrustStore,
+    pub(crate) at: VerificationTime,
+    pub(crate) clock: Option<fn() -> i64>,
+}
+
 /// Validate the signature fields of `cos` (written as `bytes`).
-pub(crate) fn signatures_of(
-    cos: &pdfcraft_cos::Document,
-    bytes: &[u8],
-    trust: &TrustStore,
-    cache: &pdfcraft_sign::DigestCache,
-) -> Vec<SignatureInfo> {
-    pdfcraft_sign::pdf::list_cached(cos, bytes, trust, cache)
+pub(crate) fn signatures_of(cos: &pdfcraft_cos::Document, bytes: &[u8], trust: &Trust, cache: &pdfcraft_sign::DigestCache) -> Vec<SignatureInfo> {
+    let now = clock_now(trust.clock).map(pdfcraft_sign::Time::from_unix);
+    pdfcraft_sign::pdf::list_at(cos, bytes, &trust.store, cache, trust.at, now)
+}
+
+/// Seconds since the Unix epoch from `clock`, else the system's (none on wasm).
+pub(crate) fn clock_now(clock: Option<fn() -> i64>) -> Option<i64> {
+    if let Some(c) = clock {
+        return Some(c());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs() as i64);
+    #[cfg(target_arch = "wasm32")]
+    return None;
 }
 
 /// What Optimize PDF did.

@@ -355,6 +355,43 @@ fn save_as_keeps_a_signed_document_incremental() {
     assert_eq!(status(&h), Some(SignatureStatus::Valid));
 }
 
+/// Compare signed version to current version: the signed revision opens beside the current
+/// document as the older side, and the text added after signing is the difference.
+#[test]
+fn compare_signed_version_lists_what_changed_after_signing() {
+    let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
+    let digital_id = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap();
+    let mut s = pdfcraft_engine::Session::new();
+    let id = s.open("contract.pdf", None, std::sync::Arc::new(FIXTURE.to_vec()), None).unwrap();
+    let opts = pdfcraft_engine::SignOptions { page: 0, rect: Some([20.0, 20.0, 180.0, 60.0]), ..Default::default() };
+    let signed = s.sign(id, &digital_id, opts).unwrap();
+    let after = s.open("contract_signed.pdf", None, signed.clone(), None).unwrap();
+    let text = pdfcraft_engine::AddedText { rect: [20.0, 90.0, 280.0, 110.0], text: "Paid in full".into(), ..Default::default() };
+    s.apply(after, pdfcraft_engine::Edit::AddText { page: 0, text }).unwrap();
+    let current = s.save_bytes(after).unwrap().to_vec();
+    assert!(current.starts_with(&signed), "the change is an incremental update after the signature");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("contract_signed.pdf", None, current).expect("opens");
+        app.right = Some(RightPanel::Signatures);
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label_contains("Signed by Test Signer EC").click();
+    h.run_steps(2);
+    h.get_by_label("Compare signed version to current version").click();
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!(s.views.len(), 2);
+    assert!(s.views[1].snapshot.as_ref().is_some_and(|snap| snap.kind == pdfcraft_ui_egui::canvas::SnapshotKind::SignedVersion));
+    assert_eq!((s.active, s.right), (Some(0), Some(RightPanel::Compare)), "the current document stays in front");
+    let c = s.compare.as_ref().expect("compared");
+    assert_eq!((c.old, c.new), (s.views[1].id, s.views[0].id), "the signed version is the older side");
+    assert!(c.side_by_side);
+    assert!(c.result.changes.iter().any(|ch| ch.new.text.contains("Paid in full")), "{:?}", c.result.changes);
+}
+
 /// The fixture with an empty signature field across the bottom of the page.
 const WITH_FIELD: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >> endobj
