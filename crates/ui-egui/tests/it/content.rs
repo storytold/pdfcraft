@@ -353,6 +353,25 @@ fn a_screenshot_pasted_with_no_key_events_lands_on_the_page() {
     assert_eq!(images(&h), 1, "the Find field has the keyboard");
 }
 
+/// A Wayland session with no X11 can't read the clipboard a second time: the picture in the event
+/// is the one that lands on the page.
+#[test]
+fn a_pasted_screenshot_comes_from_its_event() {
+    let mut h = harness();
+    h.state_mut().system_clipboard = false;
+    let mut pixels = vec![egui::Color32::WHITE; 30 * 20];
+    pixels[0] = egui::Color32::from_rgb(200, 30, 120);
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::new([30, 20], pixels))));
+    h.run_steps(3);
+    assert_eq!(added(&h).len(), 1, "one paste, one picture");
+    let s = h.state();
+    let (_, png) = s.session.get(s.views[0].id).unwrap().added_image_file(0, 0).unwrap();
+    let img = image::load_from_memory_with_format(&png, image::ImageFormat::Png).unwrap().to_rgba8();
+    assert_eq!(img.dimensions(), (30, 20));
+    assert_eq!(img.get_pixel(0, 0).0, [200, 30, 120, 255], "its own pixels, in their own place");
+    assert_eq!(img.get_pixel(1, 0).0, [255, 255, 255, 255]);
+}
+
 /// #125: text the standard fonts can't draw stays in the editor with a warning instead of being
 /// written to the page as `?` (or lost).
 #[test]

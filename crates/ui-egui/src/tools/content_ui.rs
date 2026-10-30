@@ -1042,11 +1042,19 @@ impl crate::PdfCraftApp {
         if !pasted || !free || view.organize || view.forms.focus.is_some() || self.is_preparing() {
             return;
         }
-        let clip = match self.clipboard_override.clone() {
-            Some(c) => Some(c),
+        // egui-winit already read it; a second read fails on Wayland with no X11 (Flatpak on GNOME).
+        let event =
+            ctx.input(|inp| inp.events.iter().rev().find_map(|e| if let egui::Event::PasteImage(img) = e { Some(img.clone()) } else { None }));
+        let clip = match (self.clipboard_override.clone(), event) {
+            (Some(c), _) => Some(c),
+            (None, Some(img)) => Some(crate::create_ui::Clip::Image {
+                width: img.width(),
+                height: img.height(),
+                rgba: img.pixels.iter().flat_map(|p| p.to_srgba_unmultiplied()).collect(),
+            }),
             #[cfg(not(target_arch = "wasm32"))]
-            None if self.system_clipboard => crate::create_ui::read_clipboard(),
-            None => None,
+            (None, None) if self.system_clipboard => crate::create_ui::read_clipboard(),
+            (None, None) => None,
         };
         let Some(crate::create_ui::Clip::Image { width, height, rgba }) = clip else { return };
         match crate::create_ui::png_from_rgba(width, height, &rgba) {
