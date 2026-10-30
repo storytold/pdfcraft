@@ -5,6 +5,8 @@ mod automation;
 mod automation_roots;
 mod batch;
 mod button_caption;
+mod extract_indirect_kinds;
+mod extract_paint_resources;
 mod form_bulk;
 mod hostile_args;
 mod optimize_content_boundaries;
