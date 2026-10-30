@@ -2891,6 +2891,132 @@ fn copying_out_of_a_document_honours_its_security() {
     assert!(h.state().last_snapshot.is_some());
 }
 
+/// #2078: one click with the Snapshot tool copies the whole page, as in Acrobat; a drag still
+/// copies only the area dragged over.
+#[test]
+fn a_snapshot_click_copies_the_whole_page() {
+    let _gpu = gpu();
+    let mut h = harness(2, |app| {
+        app.system_clipboard = false;
+        app.set_option("quick", "snapshot").unwrap();
+    });
+    let r = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+    h.hover_at(r.center());
+    h.run_steps(2);
+    h.drag_at(r.center());
+    h.drop_at(r.center());
+    h.run_steps(4);
+    let (w, hgt, _) = h.state().last_snapshot.as_ref().expect("a click copies the page");
+    // The 200 × 300 pt page, whole, at the scale the snapshot renders at (the view's zoom on this
+    // display, as `snapshot` works it out), not a part of it in the same shape.
+    let scale = (h.state().views[0].zoom * h.ctx.pixels_per_point()).clamp(0.5, 8.0);
+    let (want_w, want_h) = (200.0 * scale, 300.0 * scale);
+    assert!((*w as f32 - want_w).abs() <= 2.0 && (*hgt as f32 - want_h).abs() <= 2.0, "{w} × {hgt} is the whole {want_w} × {want_h} page");
+    let page = (*w, *hgt);
+
+    // A drag over part of the page copies just that part.
+    h.state_mut().last_snapshot = None;
+    let (a, b) = (r.left_top() + r.size() * 0.25, r.left_top() + r.size() * 0.5);
+    h.hover_at(a);
+    h.run_steps(1);
+    h.drag_at(a);
+    h.run_steps(1);
+    h.hover_at(b);
+    h.run_steps(1);
+    h.drop_at(b);
+    h.run_steps(3);
+    let (w, hgt, _) = h.state().last_snapshot.as_ref().expect("a drag copies its area");
+    assert!(*w < page.0 && *hgt < page.1, "{w} × {hgt} is smaller than the page's {page:?}");
+}
+
+/// #2078: a whole page that would be larger than the renderer's 4096-pixel tile at this zoom is
+/// copied whole at a scale that fits, not cut off at 4096 pixels.
+#[test]
+fn a_snapshot_of_a_page_too_large_for_one_tile_is_scaled_to_fit() {
+    let _gpu = gpu();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        // The fixture's page, made 900 × 600 pt (the MediaBox keeps its length, so the xref holds).
+        let wide = String::from_utf8(fixture(1)).unwrap().replace("/MediaBox [0 0 200 300]", "/MediaBox [0 0 900 600]");
+        app.open_bytes("wide.pdf", None, wide.into_bytes()).expect("fixture opens");
+        app.system_clipboard = false;
+        app.set_option("quick", "snapshot").unwrap();
+        app.views[0].fit = pdfcraft_ui_egui::canvas::Fit::None;
+        app.views[0].zoom = 8.0;
+        app
+    });
+    h.run_steps(4);
+    let r = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+    let at = r.intersect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0))).center();
+    h.hover_at(at);
+    h.run_steps(2);
+    h.drag_at(at);
+    h.drop_at(at);
+    h.run_steps(4);
+    let (w, hgt, _) = h.state().last_snapshot.as_ref().expect("a click copies the page");
+    // At 8× the page would be 7200 × 4800 pixels: it comes out whole, 3 : 2, within one tile.
+    assert!(*w <= 4096 && *hgt <= 4096, "{w} × {hgt} fits one tile");
+    assert!(*w >= 4000 && (*w as f32 / *hgt as f32 - 1.5).abs() < 0.01, "{w} × {hgt} is the whole 900 × 600 page");
+}
+
+/// #2078: a snapshot copies the page as it is shown, so a comment the viewer draws for lack of an
+/// appearance of its own (a red square here) is in the copy too.
+#[test]
+fn a_snapshot_copies_comments_the_viewer_draws() {
+    let _gpu = gpu();
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Annots [5 0 R] >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+        "<< /Type /Annot /Subtype /Square /Rect [20 20 180 280] /C [1 0 0] /IC [1 0 0] /BS << /W 4 >> /F 4 >>",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("square.pdf", None, bytes).expect("fixture opens");
+        app.system_clipboard = false;
+        app.set_option("quick", "snapshot").unwrap();
+        app
+    });
+    h.run_steps(4);
+    let r = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+    h.hover_at(r.center());
+    h.run_steps(2);
+    h.drag_at(r.center());
+    h.drop_at(r.center());
+    h.run_steps(4);
+    let (_, _, rgba) = h.state().last_snapshot.as_ref().expect("a click copies the page");
+    let red = |rgba: &[u8]| rgba.as_chunks::<4>().0.iter().filter(|p| p[0] > 200 && p[1] < 80 && p[2] < 80).count();
+    let shown = red(rgba);
+    assert!(shown > 100, "the square comment is in the copy ({shown} red pixels)");
+    // With Hide all comments, the copy leaves it out, as the page does.
+    let id = h.state().views[0].id;
+    assert!(h.state_mut().session.set_hide_comments(id, true));
+    h.state_mut().last_snapshot = None;
+    h.run_steps(3);
+    h.hover_at(r.center());
+    h.run_steps(2);
+    h.drag_at(r.center());
+    h.drop_at(r.center());
+    h.run_steps(4);
+    let (_, _, rgba) = h.state().last_snapshot.as_ref().expect("a click copies the page");
+    assert_eq!(red(rgba), 0, "hidden comments stay out of the copy");
+}
+
 #[test]
 fn replace_pages_dialog_swaps_page_content() {
     let mut app = PdfCraftApp::new();

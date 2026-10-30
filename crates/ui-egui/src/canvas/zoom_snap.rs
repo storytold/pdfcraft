@@ -61,9 +61,17 @@ impl PdfCraftApp {
                 }
             }
             QuickTool::Snapshot => {
-                if view_rect[2] - view_rect[0] < 2.0 || view_rect[3] - view_rect[1] < 2.0 {
-                    return;
-                }
+                // A click (or a drag too small to be an area) copies the whole page, as Acrobat's
+                // Snapshot tool does (#2078). The page's own size comes from the same transform
+                // the gesture was measured in.
+                let view_rect = if view_rect[2] - view_rect[0] < 2.0 || view_rect[3] - view_rect[1] < 2.0 {
+                    let Some(xf) = self.views.get(index).and_then(|v| v.screen_xforms.iter().find(|(i, _)| *i == page)).map(|(_, xf)| xf) else {
+                        return;
+                    };
+                    [0.0, 0.0, xf.pw, xf.ph]
+                } else {
+                    view_rect
+                };
                 // The tool outlives the tab it was chosen on.
                 if self.views.get(index).map(|v| v.id).is_some_and(|id| !self.may_copy(id)) {
                     return;
@@ -122,7 +130,16 @@ impl PdfCraftApp {
         let view = &self.views[index];
         let doc = self.session.get(view.id).ok_or("no document")?;
         let ppp = self.ctx.as_ref().map_or(2.0, |c| c.pixels_per_point());
-        let scale = (view.zoom * ppp).clamp(0.5, 8.0);
+        // The renderer draws at most 4096 pixels a side in one tile and would cut a larger area
+        // short, so an area (a whole page at a high zoom, say) that would be larger is copied
+        // whole at the scale that fits instead. 4095 leaves room for rounding up.
+        let longest = (view_rect[2] - view_rect[0]).max(view_rect[3] - view_rect[1]).max(1.0);
+        let at_zoom = (view.zoom * ppp).clamp(0.5, 8.0);
+        let scale = at_zoom.min(4095.0 / longest);
+        // Below this the renderer draws at 0.01 anyway, which would cut the area short again.
+        if scale < 0.01 {
+            return Err("the area is too large to copy".into());
+        }
         let tile = Tile {
             x: (view_rect[0] * scale).floor().max(0.0) as u32,
             y: (view_rect[1] * scale).floor().max(0.0) as u32,
@@ -132,8 +149,10 @@ impl PdfCraftApp {
         if (tile.w as u64) * (tile.h as u64) > 64_000_000 {
             return Err("the area is too large at this zoom".into());
         }
-        let config = RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..RenderConfig::default() };
-        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
+        // What the page view shows, with its settings (the password, Hide all comments): comments
+        // without an appearance of their own are drawn, unless comments are hidden.
+        let config = self.session.render_config(view.id).ok_or("no document")?;
+        let mut r = pdfcraft_render::PageRenderer::new(doc.display.clone(), config);
         let out = r.render(RenderRequest { page, kind: RequestKind::Pixels, tile: Some(tile), scale, tag: 0, preview: false });
         if let Some(e) = out.error {
             return Err(e);

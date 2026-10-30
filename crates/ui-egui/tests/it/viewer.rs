@@ -2222,6 +2222,23 @@ fn arrow_keys_follow_the_scroll_speed_preference() {
     assert!(fast * 3 < normal * 2 && normal * 3 < slow * 2, "presses to page 2: slow {slow}, normal {normal}, fast {fast}");
 }
 
+/// #2078: a snapshot of an area so large that even the renderer's smallest scale can't fit it in
+/// one tile is refused with a reason, not copied cut short.
+#[test]
+fn a_snapshot_of_an_area_too_large_to_fit_any_tile_is_refused() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("huge.pdf", None, sized_fixture(&[(500_000, 300_000)])).unwrap();
+        app.system_clipboard = false;
+        app
+    });
+    h.run_steps(4);
+    let r = h.state_mut().snapshot(0, 0, [0.0, 0.0, 500_000.0, 300_000.0]);
+    assert!(r.as_ref().is_err_and(|e| e.contains("too large")), "{r:?}");
+    assert!(h.state().last_snapshot.is_none(), "nothing is copied");
+}
+
 /// #2665: next to a very wide page the normal pages sit far to its right, outside the window.
 /// Going to one changed the page counter but kept the horizontal scroll, so it stayed out of
 /// sight; as in Acrobat, it is brought into view.
