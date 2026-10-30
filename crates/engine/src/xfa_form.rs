@@ -217,12 +217,24 @@ pub(crate) fn image_content_type(bytes: &[u8]) -> Option<&'static str> {
 /// fields take the data's values.
 pub(crate) fn xfa_after_data_change(doc: &mut pdfcraft_cos::Document, cx: &mut EditCtx, calculate: bool) -> Result<(), EditError> {
     if let Some(tpl) = cx.xfa.clone() {
-        let mut run =
-            xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false, time_scale: cx.xfa_time_scale };
+        let highlight = cx.highlight();
+        let mut run = xfa::XfaRun {
+            page_count: cx.pages,
+            out: &mut cx.xfa_out,
+            datasets: cx.xfa_datasets,
+            ran_away: false,
+            highlight,
+            time_scale: cx.xfa_time_scale,
+        };
         let r = guard(|| xfa::on_data_replaced(doc, &tpl, calculate, &mut run))
             .unwrap_or_else(|m| Err(format!("laying the form out again failed unexpectedly ({m})")));
         cx.xfa_datasets = run.datasets;
         cx.xfa_ran_away |= run.ran_away;
+        // The next edit of a batch reads the highlight this one's scripts set.
+        // The next XFA run of a batch starts from the page count this one left.
+        cx.pages = run.page_count;
+        let on = run.highlight;
+        cx.set_highlight(on);
         if let Err(e) = r {
             cx.xfa_out.errors.push(e);
         }
