@@ -709,7 +709,9 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
             span(a, b).iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p.0), r[1].min(p.1), r[2].max(p.0), r[3].max(p.1)])
         })
         .collect();
-    let size_user = (trm0.0[2].powi(2) + trm0.0[3].powi(2)).sqrt() * ts.size;
+    // A negative `Tf` size mirrors the glyphs; some producers pair it with a flipped CTM so the
+    // text reads upright. The size the line is set in is the magnitude either way.
+    let size_user = (trm0.0[2].powi(2) + trm0.0[3].powi(2)).sqrt() * ts.size.abs();
     // A numeric-only TJ adjusts the current text matrix but paints no glyphs.
     // It must not create a phantom editable line or enlarge its neighbours' boxes.
     if !pieces.iter().any(|p| matches!(p, Object::String(s) if !s.bytes.is_empty())) {
@@ -747,7 +749,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         font: name,
         base_font: m.base_font.clone(),
         face: ts.face.clone(),
-        size: if size_user > 0.0 { size_user } else { ts.size },
+        size: if size_user > 0.0 { size_user } else { ts.size.abs() },
         bold: m.bold,
         italic: m.italic,
         visual_order: m.visual_order,

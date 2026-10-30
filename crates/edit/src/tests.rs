@@ -2553,6 +2553,49 @@ fn lines_in_a_font_without_a_base_font_stay_one_block() {
     assert_eq!(reading[0].text, "First second");
 }
 
+/// Some producers flip the CTM and set a negative `Tf` size (with a negative `Tz`) so the text
+/// still reads upright, and place every word with its own `Tm`. The line's size is the size's
+/// magnitude, so the words join into lines and the lines into one paragraph instead of a block
+/// per word, whose negative size also made the Office and Markdown exports call every longer
+/// word a heading.
+#[test]
+fn words_set_in_a_negative_font_size_under_a_flipped_ctm_join_into_a_paragraph() {
+    let doc = text_page(
+        "1 0 0 1 0 792 cm 1 0 0 -1 0 0 cm BT /F1 -10 Tf -100 Tz \
+         1 0 0 1 72 100 Tm (The) Tj 1 0 0 1 94 100 Tm (assembler) Tj 1 0 0 1 143.5 100 Tm (creates) Tj \
+         1 0 0 1 72 111 Tm (object) Tj 1 0 0 1 104 111 Tm (files.) Tj ET",
+    );
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().all(|l| (l.size - 10.0).abs() < 0.01), "{:?}", lines.iter().map(|l| l.size).collect::<Vec<_>>());
+    let reading = text::reading_blocks(&doc, 0).unwrap();
+    assert_eq!(reading.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["The assembler creates object files."]);
+    assert!((reading[0].size - 10.0).abs() < 0.01, "{}", reading[0].size);
+}
+
+/// Rewriting such a paragraph keeps the source's negative `Tf`, whether the paragraph is one style
+/// or mixed (here a word in red) and whether or not a new size is asked for: a positive one under
+/// the flipped CTM would draw the text mirrored, running left from where it started.
+#[test]
+fn rewriting_text_set_in_a_negative_font_size_keeps_it_upright() {
+    let page = |red: &str| {
+        text_page(&format!(
+            "1 0 0 1 0 792 cm 1 0 0 -1 0 0 cm BT /F1 -10 Tf -100 Tz \
+             1 0 0 1 72 100 Tm (The) Tj 1 0 0 1 94 100 Tm (assembler) Tj {red} 1 0 0 1 143.5 100 Tm (creates) Tj ET"
+        ))
+    };
+    let sized = text::BlockStyle { size: Some(12.0), ..Default::default() };
+    for (red, style) in [("", text::BlockStyle::default()), ("", sized.clone()), ("1 0 0 rg", text::BlockStyle::default()), ("1 0 0 rg", sized)] {
+        let mut doc = page(red);
+        text::rewrite_block(&mut doc, 0, 0, Some("The assembler creates object files"), &style).unwrap();
+        let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+        let shown = || lines.iter().map(|l| (&l.text, l.rect)).collect::<Vec<_>>();
+        assert!(lines.iter().all(|l| l.rect[0] > 71.0), "{red:?} {:?}: {:?}", style.size, shown());
+        assert!(lines.iter().any(|l| l.rect[2] > 200.0), "{red:?} {:?}: {:?}", style.size, shown());
+        let want = style.size.unwrap_or(10.0);
+        assert!(lines.iter().all(|l| (l.size - want).abs() < 0.01), "{red:?} {:?}", lines.iter().map(|l| l.size).collect::<Vec<_>>());
+    }
+}
+
 /// Two subsets of one font can carry different encodings: here the second names `-` and `l`
 /// through `/Differences` (codes 33 and 34), so the same letters have different codes. The visual
 /// line still joins and reads in coding order (#3661).
