@@ -4531,3 +4531,45 @@ fn a_container_is_as_wide_as_a_turned_draw_stands() {
         assert!((got - right).abs() < 0.01, "{rotate}: the neighbour stands {got} right of the anchor, not {right}");
     }
 }
+
+/// A page break splits an empty multi-line field that grows with its text (XFA 3.3 pp. 291–292:
+/// text splits between lines, and a field's `keep intact` is `none`): it starts where it is, its
+/// widget runs to the bottom of the content area, and the rest of its box, closed on every side,
+/// goes on at the top of the next. Kept intact, holding a value or on one line, the field moves
+/// to the next content area whole, as before.
+#[test]
+fn an_empty_growing_field_is_split_by_a_page_break() {
+    let form = |field_extra: &str, multi: &str| {
+        let body = format!(
+            r#"<draw name="filler" w="7.5in" h="8in"><value><text>above</text></value></draw>
+<field name="notes" w="7.5in" minH="3in">{field_extra}
+ <ui><textEdit {multi}><border><edge/></border></textEdit></ui>
+ <caption reserve="0.5in" placement="top"><value><text>Notes</text></value></caption>
+</field>"#
+        );
+        layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap()
+    };
+    let notes = |page: &Page| widgets(page).into_iter().find(|w| w.name == "notes").map(|w| w.rect);
+    // The content area runs from 36 to 756; the field starts at 36 + 576 = 612 and is 216 tall.
+    let split = form("", r#"multiLine="1""#);
+    assert_eq!(split.pages.len(), 2);
+    let first = notes(&split.pages[0]).expect("the widget starts on the first page");
+    assert!((first.y - 648.0).abs() < 0.5 && (first.bottom() - 756.0).abs() < 0.5, "down to the bottom of the area: {first:?}");
+    assert!(notes(&split.pages[1]).is_none(), "one widget");
+    let edges: Vec<((f64, f64), (f64, f64))> =
+        split.pages[1].items.iter().filter_map(|i| if let Item::Line { from, to, .. } = i { Some((*from, *to)) } else { None }).collect();
+    assert_eq!(edges.len(), 4, "the rest of the box, closed: {edges:?}");
+    let (top, bottom) = edges.iter().flat_map(|(a, b)| [a.1, b.1]).fold((f64::INFINITY, 0.0_f64), |(t, b), y| (t.min(y), b.max(y)));
+    assert!((top - 36.0).abs() < 1.0 && (bottom - 108.0).abs() < 1.0, "at the top of the next area, 72 tall: {top}..{bottom}");
+    for (extra, multi, why) in [
+        (r#"<keep intact="contentArea"/>"#, r#"multiLine="1""#, "kept intact"),
+        (r#"<value><text>typed</text></value>"#, r#"multiLine="1""#, "holding a value"),
+        ("", "", "on one line"),
+    ] {
+        let whole = form(extra, multi);
+        assert_eq!(whole.pages.len(), 2, "{why}");
+        assert!(notes(&whole.pages[0]).is_none(), "{why}: nothing of it on the first page");
+        let moved = notes(&whole.pages[1]).unwrap_or_else(|| panic!("{why}: the field is on the second page"));
+        assert!((moved.y - 72.0).abs() < 0.5, "{why}: whole, under its caption at the top: {moved:?}");
+    }
+}

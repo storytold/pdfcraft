@@ -1,4 +1,4 @@
-use super::common::{clamp_opt, divide, is_row, moved, solid_extent, splittable};
+use super::common::{clamp_opt, divide, is_row, moved, solid_extent, split_widget, splittable};
 use super::items::Item;
 use super::{Ctx, Frame, Layout, Layouter, MAX_DEPTH, Node, Rect, SomIndices, Subform, XfaError, data_path, instance_count};
 
@@ -8,13 +8,21 @@ impl Layouter<'_> {
     /// content area (a positioned or fixed-height subform holding more than a page).
     fn flow_block(&mut self, node: &Node, x: f64, (w, h): (f64, f64), ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         let (rect, y, _) = self.cursor();
-        if y + h > rect.bottom() + 0.01 && h <= rect.h + 0.01 {
+        // A field a page break may split starts here, and what doesn't fit goes on in the next
+        // content area (XFA 3.3 pp. 291–292), rather than the whole field moving there.
+        let splits = matches!(node, Node::Field(f) if f.splits_at_page_break());
+        if !splits && y + h > rect.bottom() + 0.01 && h <= rect.h + 0.01 {
             self.make_room(h, 0.0)?;
         }
         let (rect, y, _) = self.cursor();
         let first = self.pages.last().map_or(0, |p| p.items.len());
         self.leaves.clear();
         self.draw_node(node, Rect::new(x, y, w, h), ctx, depth, sib)?;
+        // Only while empty: one widget can't show a value that runs on into the next piece.
+        self.splitting = if splits { self.empty_widget_since(first) } else { None };
+        if self.splitting.is_some() {
+            self.leaves.clear();
+        }
         let page_h = self.pages.last().map_or(f64::INFINITY, |p| p.height);
         // What was drawn, when it is lower than the block's own height says (content that
         // outgrows a fixed height) and ends off the page.
@@ -29,10 +37,19 @@ impl Layouter<'_> {
             .fold(y + h, f64::max);
         if y + h <= rect.bottom() + 0.01 && drawn <= page_h + 0.01 {
             self.leaves.clear();
+            self.splitting = None;
             self.place(h);
             return Ok(());
         }
         self.split_block(first, y, drawn)
+    }
+
+    /// The SOM path of the widget drawn on the last page since item `first`, when it holds no value.
+    fn empty_widget_since(&self, first: usize) -> Option<String> {
+        self.pages.last()?.items.get(first..)?.iter().find_map(|item| match item {
+            Item::Widget(w) => w.value.as_deref().is_none_or(|v| v.trim().is_empty()).then(|| w.som.clone()),
+            _ => None,
+        })
     }
 
     /// Remember that the items the last page got since `start` are one field or draw at
@@ -68,6 +85,9 @@ impl Layouter<'_> {
                 slots.fill(Some((top, bottom)));
             }
         }
+        // The empty field being split: its widget is no solid item, so the break may go through it.
+        let splitting = self.splitting.take();
+        let loose = |item: &Item| matches!((item, &splitting), (Item::Widget(w), Some(som)) if w.som == *som);
         let mut rest: Vec<(Item, Option<(f64, f64)>)> = items.into_iter().zip(extents).collect();
         let origin_x = self.cursor().0.x;
         // An item's place on the current page is its drawn place moved by (dx, -shift).
@@ -85,8 +105,12 @@ impl Layouter<'_> {
                 // The lowest break at or above the bottom that crosses no solid item: going
                 // through them from the lowest top up, a break moved to an item's top can't
                 // cross one already passed.
-                let mut solid: Vec<(f64, f64)> =
-                    rest.iter().filter_map(|(item, kept)| kept.or_else(|| solid_extent(item))).filter(|e| e.0 < limit - 0.01).collect();
+                let mut solid: Vec<(f64, f64)> = rest
+                    .iter()
+                    .filter(|(item, _)| !loose(item))
+                    .filter_map(|(item, kept)| kept.or_else(|| solid_extent(item)))
+                    .filter(|e| e.0 < limit - 0.01)
+                    .collect();
                 solid.sort_by(|a, b| b.0.total_cmp(&a.0));
                 for (t, b) in solid {
                     if t < cut - 0.01 && b > cut + 0.01 {
@@ -102,6 +126,12 @@ impl Layouter<'_> {
             let mut here = Vec::new();
             let mut below = Vec::new();
             for (item, kept) in rest {
+                if loose(&item) {
+                    let (upper, lower) = split_widget(item, cut);
+                    here.extend(upper);
+                    below.extend(lower.into_iter().map(|it| (it, None)));
+                    continue;
+                }
                 if let Some((top, _)) = kept {
                     if top < cut - 0.01 {
                         here.push(item)

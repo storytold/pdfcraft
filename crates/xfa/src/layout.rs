@@ -152,6 +152,9 @@ struct Layouter<'t> {
     /// The fields and draws of the block being placed: (first item, one past the last, top,
     /// bottom) on the last page. A page break keeps each whole (see `split_block`).
     leaves: Vec<(usize, usize, f64, f64)>,
+    /// The SOM path of the empty field the block being placed is, when a page break may split it
+    /// (see `split_block`).
+    splitting: Option<String>,
     /// The flowed subforms being laid out, outermost first: a break between their children
     /// closes their parts on one content area and opens new ones on the next.
     frames: Vec<Frame>,
@@ -200,6 +203,7 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         measured: RefCell::new(HashMap::new()),
         measures: Cell::new(0),
         leaves: Vec::new(),
+        splitting: None,
         frames: Vec::new(),
     };
     let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new() };
