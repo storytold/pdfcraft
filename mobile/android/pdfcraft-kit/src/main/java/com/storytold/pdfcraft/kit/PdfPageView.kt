@@ -369,6 +369,31 @@ class PdfPageView @JvmOverloads constructor(
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
+    // Dark / Light Theme & Backdrop Paint
+    var isDarkTheme: Boolean = false
+        set(value) {
+            if (field != value) {
+                field = value
+                updatePaintsForTheme()
+                invalidate()
+            }
+        }
+
+    private val deskPaint = Paint().apply {
+        style = Paint.Style.FILL
+        color = Color.rgb(238, 235, 244)
+    }
+
+    private fun updatePaintsForTheme() {
+        if (isDarkTheme) {
+            deskPaint.color = Color.rgb(28, 27, 31) // Material 3 surfaceContainerDark (#1C1B1F)
+            borderPaint.color = Color.argb(45, 255, 255, 255)
+        } else {
+            deskPaint.color = Color.rgb(238, 235, 244) // Material 3 surfaceContainerLight (#EEEBF4)
+            borderPaint.color = Color.argb(35, 0, 0, 0)
+        }
+    }
+
     private val backgroundPaint = Paint().apply {
         color = Color.WHITE
         style = Paint.Style.FILL
@@ -990,6 +1015,9 @@ class PdfPageView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        // 0. Draw desk backdrop across entire viewport
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), deskPaint)
+
         val geom = pageGeometry ?: return
 
         canvas.save()

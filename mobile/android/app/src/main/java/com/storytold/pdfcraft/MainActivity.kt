@@ -532,6 +532,12 @@ fun AppRootScreen(
 
     val doc = activeDoc
     if (doc != null) {
+        val systemDark = isSystemInDarkTheme()
+        val isCurrentlyDark = when (themeMode) {
+            AppThemeMode.SYSTEM -> systemDark
+            AppThemeMode.LIGHT -> false
+            AppThemeMode.DARK -> true
+        }
         PdfView(
             document = doc,
             initialPageIndex = 0,
@@ -545,7 +551,11 @@ fun AppRootScreen(
             },
             onSave = { handleSave() },
             onSaveAs = { saveAsLauncher.launch(doc.name) },
-            onShare = { handleShare() }
+            onShare = { handleShare() },
+            isDarkTheme = isCurrentlyDark,
+            onToggleDarkTheme = {
+                onThemeChanged(if (isCurrentlyDark) AppThemeMode.LIGHT else AppThemeMode.DARK)
+            }
         )
     } else {
         // Acrobat-Grade Material 3 Home Dashboard & Navigation Suite

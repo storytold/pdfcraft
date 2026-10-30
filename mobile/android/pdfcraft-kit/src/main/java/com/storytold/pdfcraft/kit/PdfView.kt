@@ -16,6 +16,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -78,10 +79,23 @@ fun PdfView(
     onSave: (() -> Unit)? = null,
     onSaveAs: (() -> Unit)? = null,
     onShare: (() -> Unit)? = null,
+    isDarkTheme: Boolean? = null,
+    onToggleDarkTheme: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val prefs = remember { context.getSharedPreferences("pdfcraft_settings", Context.MODE_PRIVATE) }
+    var storedThemeMode by remember {
+        mutableStateOf(prefs.getString("app_theme_mode", "SYSTEM") ?: "SYSTEM")
+    }
+    val systemDark = isSystemInDarkTheme()
+    val isDark = isDarkTheme ?: when (storedThemeMode) {
+        "DARK" -> true
+        "LIGHT" -> false
+        else -> systemDark
+    }
+
     var currentPage by remember { mutableStateOf(initialPageIndex) }
     var readingColors by remember { mutableStateOf<FfiReadingColors?>(null) }
     var hideComments by remember { mutableStateOf(false) }
@@ -237,7 +251,10 @@ fun PdfView(
         }
     }
 
-    Scaffold(
+    MaterialTheme(
+        colorScheme = if (isDark) darkColorScheme() else lightColorScheme()
+    ) {
+        Scaffold(
         topBar = {
             AnimatedVisibility(
                 visible = isChromeVisible,
@@ -370,21 +387,19 @@ fun PdfView(
                                     )
                                     HorizontalDivider()
                                     DropdownMenuItem(
-                                        text = { Text(if (readingColors == null) "Dark Mode" else "Normal Mode") },
+                                        leadingIcon = {
+                                            Icon(
+                                                if (isDark) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
+                                                contentDescription = null
+                                            )
+                                        },
+                                        text = { Text(if (isDark) "Switch to Light Theme" else "Switch to Dark Theme") },
                                         onClick = {
                                             showMoreMenu = false
-                                            readingColors = if (readingColors == null) {
-                                                FfiReadingColors(
-                                                    mode = FfiReadingColorsMode.WHITE_ON_BLACK,
-                                                    customTextRgb = null,
-                                                    customBackgroundRgb = null,
-                                                    onlyBlack = false,
-                                                    lineArt = true
-                                                )
-                                            } else {
-                                                null
-                                            }
-                                            pdfPageViewRef?.readingColors = readingColors
+                                            val newMode = if (isDark) "LIGHT" else "DARK"
+                                            storedThemeMode = newMode
+                                            prefs.edit().putString("app_theme_mode", newMode).apply()
+                                            onToggleDarkTheme?.invoke()
                                         }
                                     )
                                     DropdownMenuItem(
@@ -962,6 +977,7 @@ fun PdfView(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .background(MaterialTheme.colorScheme.surfaceContainer)
                 .padding(paddingValues)
         ) {
             AndroidView(
@@ -969,6 +985,7 @@ fun PdfView(
                 factory = { ctx ->
                     PdfPageView(ctx).apply {
                         setDocument(document, currentPage)
+                        this.isDarkTheme = isDark
                         this.readingColors = readingColors
                         this.hideComments = hideComments
                         this.isInkMode = isInkMode
@@ -1024,6 +1041,7 @@ fun PdfView(
                     if (view.document != document || view.pageIndex != currentPage) {
                         view.setDocument(document, currentPage)
                     }
+                    view.isDarkTheme = isDark
                     view.readingColors = readingColors
                     view.hideComments = hideComments
                     view.isInkMode = isInkMode
@@ -1669,5 +1687,6 @@ fun PdfView(
                 }
             }
         )
+    }
     }
 }
