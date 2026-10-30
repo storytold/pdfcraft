@@ -1146,11 +1146,14 @@ fn spaced_job(text: &str, font: &egui::FontId, color: Color32, letter_spacing: f
 #[cfg(any(target_arch = "wasm32", test))]
 fn copy_image_through_egui(ctx: &egui::Context, w: u32, h: u32, rgba: &[u8]) -> Result<(), String> {
     let (width, height) = (usize::try_from(w).unwrap_or(usize::MAX), usize::try_from(h).unwrap_or(usize::MAX));
-    // `from_rgba_unmultiplied` asserts this, so a short buffer is an error here, not a panic.
+    // `from_rgba_premultiplied` asserts this, so a short buffer is an error here, not a panic.
     if width.checked_mul(height).and_then(|n| n.checked_mul(4)) != Some(rgba.len()) {
         return Err(format!("its pixels don't match its size ({w} × {h})"));
     }
-    ctx.copy_image(egui::ColorImage::from_rgba_unmultiplied([width, height], rgba));
+    // eframe encodes the image's bytes into the PNG as they are, so they must stay the straight RGBA
+    // the engine gives: `from_rgba_premultiplied` keeps them byte for byte, where
+    // `from_rgba_unmultiplied` would premultiply them and darken every translucent pixel.
+    ctx.copy_image(egui::ColorImage::from_rgba_premultiplied([width, height], rgba));
     Ok(())
 }
 
@@ -1291,7 +1294,17 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(images, vec![egui::ColorImage::from_rgba_unmultiplied([2, 1], &rgba)]);
+        let [copied] = images.as_slice() else { panic!("one image is queued, got {}", images.len()) };
+        assert_eq!(copied.size, [2, 1]);
+        // What eframe's web runner puts on the clipboard: the image's bytes, encoded as they are into
+        // a PNG. Decoded, they must be the engine's straight RGBA, translucent blue included.
+        let mut png = Vec::new();
+        ::image::RgbaImage::from_raw(2, 1, bytemuck::cast_slice(&copied.pixels).to_vec())
+            .expect("2 × 1 pixels")
+            .write_to(&mut std::io::Cursor::new(&mut png), ::image::ImageFormat::Png)
+            .expect("the PNG encodes");
+        let decoded = ::image::load_from_memory_with_format(&png, ::image::ImageFormat::Png).expect("the PNG decodes");
+        assert_eq!(decoded.to_rgba8().into_raw(), rgba.to_vec(), "the colours survive the clipboard PNG unchanged");
 
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
             assert!(copy_image_through_egui(ui.ctx(), 2, 2, &rgba).is_err(), "8 bytes are not 2 × 2 pixels");
