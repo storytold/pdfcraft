@@ -5665,6 +5665,32 @@ fn actions_fail_when_hidden_information_could_not_be_removed() {
     assert!(e.starts_with("Sanitize document:"), "{e}");
 }
 
+/// A PDF whose catalog names its language (`/Lang`) exports to Word and HTML in that language, so
+/// Word checks the spelling in it, not in English; one that names none exports as before.
+#[test]
+fn office_exports_take_the_documents_language() {
+    let pdf = |catalog: &str| {
+        pdfcraft_testkit::Pdf::new()
+            .obj(catalog)
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+            .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>")
+            .stream("", b"BT /F1 12 Tf 20 200 Td (Hello) Tj ET")
+            .build()
+    };
+    let mut s = Session::new();
+    let bg = s.open("lang.pdf", None, Arc::new(pdf("<< /Type /Catalog /Pages 2 0 R /Lang (bg-BG) >>")), None).unwrap();
+    let plain = s.open("plain.pdf", None, Arc::new(pdf("<< /Type /Catalog /Pages 2 0 R >>")), None).unwrap();
+    let d = s.get(bg).unwrap();
+    let docx = d.export_office(compare::OfficeFormat::Docx);
+    assert!(docx == pdfcraft_export::docx_with_language(&d.export_pages(), "lang", Some("bg-BG")), "Word names bg-BG");
+    assert!(docx != pdfcraft_export::docx(&d.export_pages(), "lang"), "Word names a language");
+    let html = String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap();
+    assert!(html.contains("<html lang=\"bg-BG\">"), "{html}");
+    let d = s.get(plain).unwrap();
+    assert!(d.export_office(compare::OfficeFormat::Docx) == pdfcraft_export::docx(&d.export_pages(), "plain"), "no language, as before");
+    assert!(String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap().contains("<html>\n"));
+}
+
 #[test]
 fn exporting_office_files_keeps_images() {
     let mut s = Session::new();
