@@ -266,6 +266,116 @@ fn horizontal_leaf_breaks_preserve_parent_borders_and_fills() {
     }
 }
 
+/// XFA 3.3, chapter 7 “Borders and Splitting” and chapter 17 “border”: the
+/// border's break policy changes decoration, never where the group's leaves go.
+#[test]
+fn horizontal_groups_close_their_own_border_on_each_fragment() {
+    for mode in ["lr-tb", "rl-tb"] {
+        for policy in ["", " break=\"close\"", " break=\"open\""] {
+            for rounded in [false, true] {
+                for count in [2, 7] {
+                    let corner = if rounded { "<corner radius=\"3pt\"/>" } else { "" };
+                    let fields =
+                        (0..count).map(|i| format!(r#"<field name="k{i}" w="100pt" h="20pt"><ui><textEdit/></ui></field>"#)).collect::<String>();
+                    let body = format!(
+                        r#"<pageSet><pageArea><contentArea x="10pt" y="10pt" w="100pt" h="60pt"/>
+                            <medium short="140pt" long="90pt"/></pageArea></pageSet>
+                        <field name="intro" w="100pt" h="40pt"><ui><textEdit/></ui></field>
+                        <subform name="group" layout="{mode}" w="100pt">
+                            <border{policy}><edge thickness="1pt"/>{corner}<fill><color value="0,0,255"/></fill></border>
+                            {fields}
+                        </subform>"#
+                    );
+                    let form = render(&body, None);
+                    assert_eq!(form.pages.len(), if count == 2 { 2 } else { 3 });
+                    let controls = widgets(&form);
+                    assert_eq!(controls[1].rect.y, 50.0, "the group must still split rather than move whole");
+                    assert_eq!(controls.len(), count + 1);
+                    for (page, p) in form.pages.iter().enumerate() {
+                        let open_top = policy.contains("open") && page > 0;
+                        let open_bottom = policy.contains("open") && page + 1 < form.pages.len();
+                        let top = if page == 0 { 50.0 } else { 10.0 };
+                        let height = if page == 0 || count == 2 { 20.0 } else { 60.0 };
+                        let expected = crate::model::Rect::new(10.0, top, 100.0, height);
+                        if rounded {
+                            let shapes: Vec<_> = p.items.iter().filter_map(|i| if let Item::Rounded(r) = i { Some(r) } else { None }).collect();
+                            assert_eq!(shapes.len(), 1);
+                            assert_eq!(shapes[0].rect, expected);
+                            assert_eq!((shapes[0].open_top, shapes[0].open_bottom), (open_top, open_bottom));
+                        } else {
+                            let fills: Vec<_> =
+                                p.items.iter().filter_map(|i| if let Item::Fill { rect, .. } = i { Some(*rect) } else { None }).collect();
+                            assert_eq!(fills, [expected]);
+                            let lines = p.items.iter().filter(|i| matches!(i, Item::Line { .. })).count();
+                            assert_eq!(lines, 4 - usize::from(open_top) - usize::from(open_bottom), "{mode}/{policy}/{count}, page {page}");
+                        }
+                    }
+                    assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+                }
+            }
+        }
+    }
+}
+
+/// Nested decorations retain their paint order and edge styles on offset content areas;
+/// an enclosing flowed frame and its horizontal child can have different break policies.
+#[test]
+fn nested_horizontal_border_policies_follow_column_origins() {
+    for mode in ["lr-tb", "rl-tb"] {
+        let body = format!(
+            r#"<pageSet><pageArea><contentArea x="10pt" y="10pt" w="100pt" h="60pt"/>
+                <contentArea x="130pt" y="20pt" w="100pt" h="60pt"/>
+                <medium short="250pt" long="100pt"/></pageArea></pageSet>
+            <subform layout="tb" w="100pt">
+                <border break="open"><edge thickness="1pt"><color value="255,0,0"/></edge></border>
+                <field name="intro" w="100pt" h="40pt"><ui><textEdit/></ui></field>
+                <subform layout="{mode}" w="100pt"><subform layout="tb" w="100pt">
+                    <border><edge thickness="1pt"/><edge thickness="2pt"/><edge thickness="3pt"/><edge thickness="4pt"/>
+                        <fill><color value="0,0,255"/></fill></border>
+                    <draw w="100pt" h="20pt"><border><edge><color value="0,255,0"/></edge></border><value><text>First</text></value></draw>
+                    <draw w="100pt" h="20pt"><border><edge><color value="0,255,0"/></edge></border><value><text>Second</text></value></draw>
+                </subform></subform>
+            </subform>"#
+        );
+        let form = render(&body, None);
+        assert_eq!(form.pages.len(), 1);
+        let items = &form.pages[0].items;
+        let red = items.iter().filter(|i| matches!(i, Item::Line { color, .. } if *color == [1.0, 0.0, 0.0])).count();
+        assert_eq!(red, 6, "the outer frame is open at both continuation edges");
+        let blue: Vec<_> = items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Fill { rect, color } if *color == [0.0, 0.0, 1.0] => Some(*rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(blue, [crate::model::Rect::new(10.0, 50.0, 100.0, 20.0), crate::model::Rect::new(130.0, 20.0, 100.0, 20.0)]);
+        let widths: Vec<_> = items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Line { width, color, .. } if *color == [0.0, 0.0, 0.0] => Some(*width),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(widths, [1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(
+            items.iter().filter(|i| matches!(i, Item::Line { color, .. } if *color == [0.0, 1.0, 0.0])).count(),
+            8,
+            "each text leaf keeps its complete border"
+        );
+        for (i, item) in items.iter().enumerate() {
+            if let Item::Text(span) = item {
+                assert!(
+                    items[..i].iter().any(|j| matches!(j, Item::Fill { rect, .. }
+                    if span.x >= rect.x && span.x < rect.right() && span.baseline > rect.y && span.baseline < rect.bottom())),
+                    "the fill stays behind its text"
+                );
+            }
+        }
+        assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+    }
+}
+
 /// Wrapping the same full-width leaves in a growable horizontal group must retain the
 /// existing nested-frame margins, draw order and column origins of top-to-bottom flow.
 #[test]

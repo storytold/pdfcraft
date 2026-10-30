@@ -191,7 +191,7 @@ impl Layouter<'_> {
     }
 
     /// Close flowed subform `f` once its content is placed: its last part ends where the flow
-    /// is, and its border (edges and fill) is drawn round each part, closed on every side, under
+    /// is, and its border (edges and fill) is drawn round each part, following its break policy, under
     /// that part's content. One holding something that didn't fit its content area ([`Frame::lost`])
     /// is drawn without its border, and the layout says so.
     pub(super) fn finish_frame(&mut self, mut f: Frame) -> Result<(), XfaError> {
@@ -214,17 +214,18 @@ impl Layouter<'_> {
             return Ok(());
         }
         // The last part first: a part's place on its page stays where it was found.
-        for (page, at, rect) in f.parts.into_iter().rev() {
-            self.insert_border(&b, rect, page, at)?;
+        let count = f.parts.len();
+        for (i, (page, at, rect)) in f.parts.into_iter().enumerate().rev() {
+            self.insert_border(&b, rect, page, at, b.break_open && i > 0, b.break_open && i + 1 < count)?;
         }
         Ok(())
     }
 
     /// Draw border `b` round `rect` on page `page` (an index), under what that page got from item
     /// `at` on.
-    fn insert_border(&mut self, b: &Border, rect: Rect, page: usize, at: usize) -> Result<(), XfaError> {
+    fn insert_border(&mut self, b: &Border, rect: Rect, page: usize, at: usize, open_top: bool, open_bottom: bool) -> Result<(), XfaError> {
         let before = self.pages.last().map_or(0, |p| p.items.len());
-        self.draw_border(b, rect)?;
+        self.draw_border_fragment(b, rect, open_top, open_bottom)?;
         let drawn: Vec<Item> = match self.pages.last_mut() {
             Some(p) => {
                 let from = before.min(p.items.len());

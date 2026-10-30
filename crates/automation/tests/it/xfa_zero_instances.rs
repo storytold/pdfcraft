@@ -138,6 +138,54 @@ fn removing_a_row_from_a_kept_section_preserves_pagination_through_tools() {
     assert_eq!([a.render_pixels(reopened, 1, 1.0).unwrap(), a.render_pixels(reopened, 2, 1.0).unwrap()], after);
 }
 
+/// Border policy reaches ordinary PDF output without changing pagination, and survives
+/// field edits, undo/redo and save/reopen through the same API as the UI and CLI.
+#[test]
+fn horizontal_border_fragments_keep_policy_through_save_and_undo() {
+    for policy in ["close", "open"] {
+        let temp = tempfile::tempdir().unwrap();
+        let xml = format!(
+            r#"<template><subform name="form" layout="tb" w="100pt">
+            <pageSet><pageArea><contentArea x="10pt" y="10pt" w="100pt" h="60pt"/>
+                <medium short="140pt" long="90pt"/></pageArea></pageSet>
+            <field name="intro" w="80pt" h="40pt"><ui><textEdit/></ui></field>
+            <subform name="section" layout="lr-tb" w="100pt">
+                <border break="{policy}"><edge thickness="2pt"><color value="255,0,0"/></edge>
+                    <fill><color value="0,0,255"/></fill></border>
+                <field name="first" w="80pt" h="20pt"><ui><textEdit/></ui></field>
+                <field name="second" w="80pt" h="20pt"><ui><textEdit/></ui></field>
+            </subform>
+        </subform></template>"#
+        );
+        std::fs::write(temp.path().join("border.pdf"), pdfcraft_xfa::fixtures::shell(&xml)).unwrap();
+        let mut a = Automation::new().with_root(temp.path()).unwrap().with_clock(|| 1_700_000_000);
+        let id = tool(&mut a, "doc_open", json!({"path":"border.pdf"}))["doc"].as_u64().unwrap();
+        let snapshot = |a: &mut Automation, id| {
+            assert_eq!(tool(a, "doc_info", json!({"doc":id}))["pages"].as_array().unwrap().len(), 2);
+            [a.render_pixels(id, 1, 1.0).unwrap(), a.render_pixels(id, 2, 1.0).unwrap()]
+        };
+        let before = snapshot(&mut a, id);
+        for (page, y) in [(0, 69), (1, 10)] {
+            let (width, _, pixels) = &before[page];
+            for x in 95..105 {
+                let at = (y * *width as usize + x) * 4;
+                let expected = if policy == "close" { [255, 0, 0] } else { [0, 0, 255] };
+                assert_eq!(&pixels[at..at + 3], &expected, "{policy}, page {page}, at {x},{y}");
+            }
+        }
+        tool(&mut a, "form_fill", json!({"doc":id,"values":{"first":"Edited"}}));
+        let edited = snapshot(&mut a, id);
+        assert!(edited != before);
+        tool(&mut a, "edit_undo", json!({"doc":id}));
+        assert!(snapshot(&mut a, id) == before, "{policy}: undo changed the original rendering");
+        tool(&mut a, "edit_redo", json!({"doc":id}));
+        assert!(snapshot(&mut a, id) == edited, "{policy}: redo changed the edited rendering");
+        tool(&mut a, "doc_save", json!({"doc":id,"path":"saved-border.pdf"}));
+        let reopened = tool(&mut a, "doc_open", json!({"path":"saved-border.pdf"}))["doc"].as_u64().unwrap();
+        assert!(snapshot(&mut a, reopened) == edited, "{policy}: reopening changed the rendering");
+    }
+}
+
 /// The same public lifecycle in every supported container strategy. Positioned copies
 /// deliberately overlap; every copy must still be an independently editable field.
 #[test]

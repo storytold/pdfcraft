@@ -204,6 +204,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- 2026-10-30 — M12 / #3941: preserve horizontal page breaks while drawing borders closed by default or open at continuation edges as specified; test nested decorations and relocate misplaced M12 revision notes. Estimates unchanged.
+
 - 2026-10-30 — M12 / #3941: audit occurrence handling across layout modes; draw and measure all positioned instances and repeated table cells, including their spans and inferred columns. Add cross-layout tool lifecycle, page-master, geometry and resource-limit regressions; expand failure/rollback coverage. Existing binding gaps and estimates unchanged.
 
 - 2026-10-30 — M12 / #3941: consolidate duplicate milestone entries, retaining upstream text-only tagging, limited form-field tagging, CLI layout and XFA improvements alongside our occurrence, rollback and pagination fixes. Remaining accessibility and XFA limitations stay explicit; estimates unchanged.

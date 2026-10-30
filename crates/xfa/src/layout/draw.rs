@@ -162,33 +162,35 @@ impl Layouter<'_> {
 
     /// Draw border `b` around `rect`: its fill, then each shown edge as a line inside the box, or
     /// the whole box as one rounded shape when its corners are rounded.
-    pub(super) fn draw_border(&mut self, b: &Border, rect: Rect) -> Result<(), XfaError> {
-        let vis = b.visible_edges();
+    pub(super) fn draw_border_fragment(&mut self, b: &Border, rect: Rect, open_top: bool, open_bottom: bool) -> Result<(), XfaError> {
+        let mut vis = b.visible_edges();
         // Rounded corners: the box is one shape, filled and edged along its curves, when its
         // edges are all alike (all shown and the same, or all hidden). Edges that differ keep
         // square corners.
-        let radii = b.radii(rect.w, rect.h);
+        let mut radii = b.radii(rect.w, rect.h);
         let alike = b.edges.iter().all(|e| *e == b.edges[0]);
         if radii.iter().any(|r| *r > 0.0) && (vis == [true; 4] && alike || vis == [false; 4]) {
+            if open_top {
+                radii[0] = 0.0;
+                radii[1] = 0.0;
+            }
+            if open_bottom {
+                radii[2] = 0.0;
+                radii[3] = 0.0;
+            }
             let e = b.edges[0];
             let edge = vis[0].then(|| {
                 let color = if e.stroke == Stroke::Relief { [0.55, 0.55, 0.55] } else { e.color.0 };
                 (e.thickness.clamp(0.1, 20.0), color, matches!(e.stroke, Stroke::Dashed | Stroke::Dotted))
             });
-            let shape = Rounded {
-                rect,
-                radii,
-                inverted: b.corners.map(|c| c.inverted),
-                fill: b.fill().map(|f| f.0),
-                edge,
-                open_top: false,
-                open_bottom: false,
-            };
+            let shape = Rounded { rect, radii, inverted: b.corners.map(|c| c.inverted), fill: b.fill().map(|f| f.0), edge, open_top, open_bottom };
             return self.push(Item::Rounded(Box::new(shape)));
         }
         if let Some(fill) = b.fill() {
             self.push(Item::Fill { rect, color: fill.0 })?;
         }
+        vis[0] &= !open_top;
+        vis[2] &= !open_bottom;
         let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right(), rect.bottom());
         // Top, right, bottom, left; lines sit inside the box.
         let segs = [((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x0, y1), (x1, y1)), ((x0, y0), (x0, y1))];
@@ -259,7 +261,8 @@ impl Layouter<'_> {
                 };
                 self.push(Item::Line { from, to, width: edge.thickness.clamp(0.1, 20.0), color: edge.color.0, dashed: edge.stroke == Stroke::Dashed })
             }
-            Value::Rectangle(b) => self.draw_border(b, inner),
+            // A rectangle value is a graphic, not the object's enclosing border.
+            Value::Rectangle(b) => self.draw_border_fragment(b, inner, false, false),
             Value::Empty => Ok(()),
         }
     }

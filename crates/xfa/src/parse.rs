@@ -150,7 +150,13 @@ fn parse_border(n: Option<XmlNode>) -> Option<Border> {
         3 => [e(0), e(1), e(2), e(1)],
         _ => [e(0), e(1), e(2), e(3)],
     };
-    Some(Border { presence: Presence::parse(n.attribute("presence")), edges: four, corners: parse_corners(n), fill: parse_fill(child(n, "fill")) })
+    Some(Border {
+        presence: Presence::parse(n.attribute("presence")),
+        break_open: n.attribute("break") == Some("open"),
+        edges: four,
+        corners: parse_corners(n),
+        fill: parse_fill(child(n, "fill")),
+    })
 }
 
 /// The `<corner>` children of a border or rectangle, top-left, top-right, bottom-right then

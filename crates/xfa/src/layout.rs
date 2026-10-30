@@ -20,6 +20,7 @@ use crate::model::{
 };
 use crate::text::{self, Block, Face, Span};
 
+mod borders;
 mod common;
 mod draw;
 mod field;
@@ -28,6 +29,7 @@ mod items;
 mod measure;
 mod pages;
 
+use borders::BlockBorder;
 use common::collect_values;
 pub(crate) use common::date_pattern;
 pub use common::formatted_value;
@@ -153,6 +155,9 @@ struct Layouter<'t> {
     /// The fields and draws of the block being placed: (first item, one past the last, top,
     /// bottom) on the last page. A page break keeps each whole (see `split_block`).
     leaves: Vec<(usize, usize, f64, f64)>,
+    /// Border item ranges while drawing a block that may split. Preserve their semantics
+    /// until pagination, instead of cutting the already-expanded edge lines individually.
+    block_borders: Option<Vec<BlockBorder>>,
     /// The flowed subforms being laid out, outermost first: a break between their children
     /// closes their parts on one content area and opens new ones on the next.
     frames: Vec<Frame>,
@@ -199,6 +204,7 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         measured: RefCell::new(HashMap::new()),
         measures: Cell::new(0),
         leaves: Vec::new(),
+        block_borders: None,
         frames: Vec::new(),
     };
     let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new() };

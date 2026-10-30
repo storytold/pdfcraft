@@ -1,4 +1,5 @@
-use super::common::{clamp_opt, divide, is_row, moved, solid_extent, splittable};
+use super::borders::{BlockBorder, BlockItem};
+use super::common::{clamp_opt, is_row, solid_extent, splittable};
 use super::items::Item;
 use super::{Ctx, Frame, Layout, Layouter, MAX_DEPTH, MAX_ITEMS, MAX_MEASURES, Node, Rect, SomIndices, Subform, XfaError, data_path, instance_count};
 
@@ -22,7 +23,12 @@ impl Layouter<'_> {
         let x = rect.x + x_offset;
         let first = self.pages.last().map_or(0, |p| p.items.len());
         self.leaves.clear();
-        self.draw_node(node, Rect::new(x, y, w, h), ctx, depth, sib)?;
+        // Fixed/positioned oversized blocks retain their legacy graphic clipping. This
+        // semantic fragmentation is for the growable horizontal groups handled above.
+        self.block_borders = horizontal_flow.then(Vec::new);
+        let drawn_result = self.draw_node(node, Rect::new(x, y, w, h), ctx, depth, sib);
+        let borders = self.block_borders.take().unwrap_or_default();
+        drawn_result?;
         let page_h = self.pages.last().map_or(f64::INFINITY, |p| p.height);
         // What was drawn, when it is lower than the block's own height says (content that
         // outgrows a fixed height) and ends off the page.
@@ -40,7 +46,7 @@ impl Layouter<'_> {
             self.place(h);
             return Ok(());
         }
-        self.split_block(first, y, drawn)
+        self.split_block(first, y, drawn, borders)
     }
 
     /// Remember that the items the last page got since `start` are one field or draw at
@@ -59,9 +65,9 @@ impl Layouter<'_> {
     /// Spread the items the last page holds from index `first` on (a block drawn from `top` to
     /// `end`, past the bottom of its content area) over this and the following content areas.
     /// Breaks fall between text, pictures and fields, never through one that fits in an area;
-    /// fills and lines are cut at the break. A break between whole leaves segments the
+    /// bare fills and lines are cut; borders follow their own break policy. A break between whole leaves segments the
     /// enclosing flowed frames too; splitting an oversized leaf still loses their borders.
-    fn split_block(&mut self, first: usize, top: f64, end: f64) -> Result<(), XfaError> {
+    fn split_block(&mut self, first: usize, top: f64, end: f64, borders: Vec<BlockBorder>) -> Result<(), XfaError> {
         let items: Vec<Item> = match self.pages.last_mut() {
             Some(p) if first <= p.items.len() => p.items.split_off(first),
             _ => return Ok(()),
@@ -78,10 +84,28 @@ impl Layouter<'_> {
                 slots.fill(Some((top, bottom)));
             }
         }
-        let mut rest: Vec<(Item, Option<(f64, f64)>)> = items.into_iter().zip(extents).collect();
+        // Replace each expanded border with one semantic item at the same paint position.
+        // Keep original item indices until leaf extents have been assigned above.
+        let mut borders = borders.into_iter().peekable();
+        let mut items = items.into_iter().zip(extents).enumerate().peekable();
+        let mut rest = Vec::new();
+        while let Some((i, (item, kept))) = items.next() {
+            if borders.peek().is_some_and(|b| b.start == first + i)
+                && let Some(b) = borders.next()
+            {
+                while items.peek().is_some_and(|(i, _)| first + i < b.end) {
+                    items.next();
+                }
+                // Replacement fragments are charged through draw_border_fragment/push.
+                self.items = self.items.saturating_sub(b.end.saturating_sub(b.start));
+                rest.push((BlockItem::Border(b.part), kept));
+            } else {
+                rest.push((BlockItem::Item(item), kept));
+            }
+        }
         // Solid items move whole, so their original coordinates can be sorted once and
         // discarded as each part is placed, rather than sorted again for every area.
-        let mut solid: Vec<(f64, f64)> = rest.iter().filter_map(|(item, kept)| kept.or_else(|| solid_extent(item))).collect();
+        let mut solid: Vec<(f64, f64)> = rest.iter().filter_map(|(item, kept)| kept.or_else(|| item.solid_extent())).collect();
         solid.sort_by(|a, b| b.0.total_cmp(&a.0));
         let origin_x = self.cursor().0.x;
         // An item's place on the current page is its drawn place moved by (dx, -shift).
@@ -121,7 +145,7 @@ impl Layouter<'_> {
                     }
                     continue;
                 }
-                match divide(item, cut) {
+                match item.divide(cut) {
                     (Some(a), None) => here.push(a),
                     (None, Some(b)) => below.push((b, None)),
                     (Some(a), Some(b)) => {
@@ -131,8 +155,8 @@ impl Layouter<'_> {
                     (None, None) => {}
                 }
             }
-            if let Some(p) = self.pages.last_mut() {
-                p.items.extend(here.into_iter().map(|it| moved(it, dx, -shift)));
+            for item in here {
+                item.place(self, dx, -shift)?;
             }
             if below.is_empty() {
                 if let Some(c) = &mut self.cur {

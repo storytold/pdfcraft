@@ -40,7 +40,10 @@ that warning and keeps the existing layout and accepted widget values.
   horizontal groups; it is not general keep-rule support. Fixed-height blocks still move
   together when they fit in a fresh area. Breaks between whole horizontal leaves preserve enclosing
   flowed borders, fills and repeated margins; oversized-leaf splits still omit those borders with
-  a warning. Following fields, table rows and frame borders
+  a warning. A horizontal group’s own border and nested decorations follow XFA’s
+  `break="close"` (default) or `break="open"` policy on each fragment, including rounded
+  corners, without moving the group whole or changing its page count. Fixed/positioned
+  oversized blocks retain their existing graphic clipping. Following fields, table rows and frame borders
   retain their horizontal inset when flow moves to another content area. Repeated containers measure each
   instance in its own data scope, including optional children and growing text fields.
   Positioned children, area contents and page-master objects draw every instance at its own
