@@ -2520,6 +2520,8 @@ animation effects	Off	Désactivés
 	Make properties default	Définir comme propriétés par défaut
 	Pages selected	Pages sélectionnées
 	Page properties	Propriétés de la page
+# Opening an EPUB book (#493).
+	Converted from an EPUB book. Details lists how it was laid out and what was left out.	Converti depuis un livre EPUB. Les détails indiquent comment il a été mis en page et ce qui a été omis.
 	Create & Edit	Créer et modifier
 	Review & Compare	Réviser et comparer
 	Forms & Signatures	Formulaires et signatures

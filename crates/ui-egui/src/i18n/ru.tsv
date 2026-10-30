@@ -2433,6 +2433,8 @@ animation effects	Off	Выкл
 	Make properties default	Сделать свойства стандартными
 	Pages selected	Выделенные страницы
 	Page properties	Свойства страницы
+# Opening an EPUB book (#493).
+	Converted from an EPUB book. Details lists how it was laid out and what was left out.	Преобразовано из книги EPUB. В подробностях сказано, как она свёрстана и что опущено.
 	Create & Edit	Создание и редактирование
 	Review & Compare	Рецензирование и сравнение
 	Forms & Signatures	Формы и подписи

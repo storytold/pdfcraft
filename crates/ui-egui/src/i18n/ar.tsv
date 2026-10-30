@@ -2797,6 +2797,8 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+# Opening an EPUB book (#493).
+	Converted from an EPUB book. Details lists how it was laid out and what was left out.	تم التحويل من كتاب EPUB. تعرض التفاصيل كيف نُسّق وما الذي لم يُضمَّن.
 	Create & Edit	الإنشاء والتحرير
 	Review & Compare	المراجعة والمقارنة
 	Forms & Signatures	النماذج والتوقيعات

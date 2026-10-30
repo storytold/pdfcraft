@@ -81,23 +81,70 @@ pub(crate) fn png_from_rgba(width: usize, height: usize, rgba: &[u8]) -> Result<
     Ok(out)
 }
 
+/// Why a book didn't convert, without the file name the engine puts first (the notice names it).
+pub(crate) fn book_error(name: &str, e: &pdfcraft_engine::EditError) -> String {
+    let message = e.to_string();
+    message.strip_prefix(&format!("{name}: ")).map_or(message.clone(), str::to_string)
+}
+
+/// The paper reflowed books are set on: the system region's (US Letter in the United States,
+/// Puerto Rico, Canada and Mexico, A4 elsewhere); US Letter when the region can't be told.
+pub(crate) fn regional_paper() -> (f64, f64) {
+    let region = system_locale().and_then(|tag| pdfcraft_engine::region_of(&tag)).unwrap_or_else(|| "US".into());
+    pdfcraft_engine::paper_for_region(&region)
+}
+
+/// The system's locale tag (`en-US`, `en_GB.UTF-8`), as `units::Unit::system` reads it: Windows
+/// asks the system (`sys-locale`, a Windows-only dependency), macOS reads `AppleLocale` (apps
+/// started from the Finder get no `LANG`), then the locale variables.
+fn system_locale() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    if let Some(tag) = sys_locale::get_locale() {
+        return Some(tag);
+    }
+    #[cfg(target_os = "macos")]
+    if let Ok(out) = std::process::Command::new("/usr/bin/defaults").args(["read", "-g", "AppleLocale"]).output()
+        && out.status.success()
+    {
+        let tag = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !tag.is_empty() {
+            return Some(tag);
+        }
+    }
+    ["LC_ALL", "LC_PAPER", "LANG"].iter().find_map(|var| std::env::var(var).ok().filter(|v| !v.is_empty()))
+}
+
 fn stem(name: &str) -> &str {
     name.rsplit_once('.').map_or(name, |(s, _)| s)
 }
 
 impl PdfCraftApp {
-    /// Convert a non-PDF file (image, text) into a new tab. Returns `None` when `bytes` is not
-    /// something Create understands (the caller then tries to open it as a PDF).
+    /// Convert a non-PDF file (image, text, EPUB book) into a new tab. Returns `None` when `bytes`
+    /// is not something Create understands (the caller then tries to open it as a PDF).
     pub(crate) fn open_converted(&mut self, name: &str, bytes: &[u8]) -> Option<Result<(), String>> {
         use pdfcraft_engine::SourceKind;
-        if !matches!(pdfcraft_engine::source_kind(name, bytes), Some(SourceKind::Image | SourceKind::Text)) {
-            return None;
+        match pdfcraft_engine::source_kind(name, bytes) {
+            Some(SourceKind::Image | SourceKind::Text) => {}
+            Some(SourceKind::Epub) => {
+                let book = self.session.create_from_epub(name, bytes).map_err(|e| book_error(name, &e));
+                return Some(self.open_book(name, book));
+            }
+            _ => return None,
         }
         let created = self.session.convert_to_pdf(name, &Arc::new(bytes.to_vec())).map(|(_, pdf)| pdf);
-        Some(self.open_created_bytes(&format!("{}.pdf", stem(name)), created.map_err(|e| e.to_string())))
+        Some(self.open_created_bytes(&format!("{}.pdf", stem(name)), created.map_err(|e| e.to_string())).map(|_| ()))
     }
 
-    fn open_created_bytes(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>) -> Result<(), String> {
+    /// A converted EPUB book in a new tab, its notes in the repair log (the notice bar says it was
+    /// converted and offers them).
+    pub(crate) fn open_book(&mut self, name: &str, book: Result<pdfcraft_engine::books::Book, String>) -> Result<(), String> {
+        let (pdf, notes) = book?;
+        let id = self.open_created_bytes(&format!("{}.pdf", stem(name)), Ok(pdf))?;
+        self.session.note_book(id, &notes);
+        Ok(())
+    }
+
+    fn open_created_bytes(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>) -> Result<pdfcraft_engine::DocId, String> {
         let bytes = created?;
         let id = self.session.open_new(name, bytes).map_err(|e| e.to_string())?;
         // The reading-colours preference is app-wide: the newly created document starts with it.
@@ -109,7 +156,7 @@ impl PdfCraftApp {
         }
         self.views.push(view);
         self.active = Some(self.views.len() - 1);
-        Ok(())
+        Ok(id)
     }
 
     /// Create ▸ Clipboard: a new document from the image (one page, its size) or the text on
@@ -138,7 +185,7 @@ impl PdfCraftApp {
             }
             Clip::Text(t) => self.session.create_from_text("Clipboard", &t),
         };
-        self.open_created_bytes("Clipboard.pdf", created.map_err(|e| e.to_string()))
+        self.open_created_bytes("Clipboard.pdf", created.map_err(|e| e.to_string())).map(|_| ())
     }
 
     /// Create ▸ Blank page: a new untitled US Letter document.

@@ -380,3 +380,71 @@ fn multiple_files_past_a_thousand_are_all_used() {
     let doc = app.session.get(app.views[0].id).unwrap();
     assert_eq!(doc.info.pages.len(), 1001, "every picked file is used, in order");
 }
+
+/// A one-chapter EPUB (`drm` adds encryption that isn't font obfuscation).
+fn tiny_epub(drm: bool) -> Vec<u8> {
+    let mut z = pdfcraft_export::Zip::default();
+    z.add("mimetype", b"application/epub+zip", false);
+    z.add(
+        "META-INF/container.xml",
+        br#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+        true,
+    );
+    if drm {
+        z.add(
+            "META-INF/encryption.xml",
+            br#"<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#"><enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes128-cbc"/><enc:CipherData><enc:CipherReference URI="a.xhtml"/></enc:CipherData></enc:EncryptedData></encryption>"#,
+            true,
+        );
+    }
+    z.add(
+        "c.opf",
+        br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="i"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="i">urn:uuid:0</dc:identifier><dc:title>Tiny Book</dc:title><dc:language>en</dc:language></metadata><manifest><item id="a" href="a.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="a"/></spine></package>"#,
+        true,
+    );
+    z.add(
+        "a.xhtml",
+        br#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>a</title></head><body><h1>First Chapter</h1><p>It was a bright cold day.</p></body></html>"#,
+        true,
+    );
+    z.finish()
+}
+
+#[test]
+fn opening_an_epub_book_converts_it_and_says_so() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("tiny.epub", None, tiny_epub(false)).unwrap();
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    let doc = h.state().session.get(id).unwrap();
+    assert!(doc.from_book && doc.name == "tiny.pdf" && doc.dirty);
+    assert_eq!(doc.info.title.as_deref(), Some("Tiny Book"));
+    h.get_by_label_contains("Converted from an EPUB book");
+    // A protected book doesn't open, and the reason names DRM.
+    let err = h.state_mut().open_bytes("locked.epub", None, tiny_epub(true)).unwrap_err();
+    assert!(err.contains("DRM"), "{err}");
+    assert_eq!(h.state().views.len(), 1);
+}
+
+#[test]
+fn a_book_conversion_with_nothing_to_report_still_says_it_was_converted() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("plain.txt", None, b"Some words.".to_vec()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    // A fixed-layout book can convert with an empty log.
+    h.state_mut().session.note_book(id, &[]);
+    h.run_steps(4);
+    assert!(h.state().session.get(id).unwrap().repair_log().is_empty());
+    h.get_by_label("Converted from an EPUB book.");
+}

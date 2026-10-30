@@ -2786,6 +2786,8 @@ key	Space	Tarpas
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
+# Opening an EPUB book (#493).
+	Converted from an EPUB book. Details lists how it was laid out and what was left out.	Konvertuota iš EPUB knygos. Išsamiau nurodo, kaip ji sumaketuota ir kas praleista.
 	Attach a file…	Pridėti failą…
 	Delete attachment	Ištrinti priedą
 	Attaching files is not available on the web yet	Failų pridėjimas žiniatinklyje dar negalimas
@@ -2840,6 +2842,7 @@ theme	Appearance	Išvaizda
 	Rotate the selected pages clockwise	Pasukti pasirinktus puslapius pagal laikrodžio rodyklę
 	Extract the selected pages…	Išskleisti pasirinktus puslapius…
 	Delete the selected pages	Ištrinti pasirinktus puslapius
+	Converted from an EPUB book.	Converted from an EPUB book.
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Šio atsakymo parinktys

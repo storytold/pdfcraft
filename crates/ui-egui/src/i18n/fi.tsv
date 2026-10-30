@@ -2829,6 +2829,7 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+	Converted from an EPUB book. Details lists how it was laid out and what was left out.	Muunnettu EPUB-kirjasta. Tiedot-kohdassa kerrotaan, miten se asenneltiin ja mitä jätettiin pois.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään
@@ -2849,6 +2850,7 @@ theme	Appearance	Teema
 	Rotate the selected pages clockwise	Kierrä valittuja sivuja myötäpäivään
 	Extract the selected pages…	Pura valitut sivut…
 	Delete the selected pages	Poista valitut sivut
+	Converted from an EPUB book.	Converted from an EPUB book.
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tämän vastauksen asetukset

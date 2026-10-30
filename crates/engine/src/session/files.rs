@@ -1,7 +1,7 @@
 use super::{
-    Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hidden, ImageResolution, LOW_RESOLUTION_PRINT_DPI, OptimizeReport, SaveOptions,
-    Session, SourceKind, SplitPart, decode_text, guard, open_source, open_source_with, optimize, print, print_raster, set_default_layer_state,
-    source_kind, writable, write_full,
+    Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hidden, ImageResolution, LOW_RESOLUTION_PRINT_DPI, OptimizeReport, Session,
+    SourceKind, SplitPart, decode_text, guard, open_source, open_source_with, optimize, print, print_raster, set_default_layer_state, source_kind,
+    writable, write_checked, write_dated,
 };
 
 impl Session {
@@ -43,7 +43,7 @@ impl Session {
     /// (it must open and allow copying pages) and returned as it is.
     pub fn convert_to_pdf(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
         let Some(kind) = source_kind(name, bytes) else {
-            return Err(EditError::Source(format!("{name}: this file type can't be converted; use a PDF, an image or a .txt file")));
+            return Err(EditError::Source(format!("{name}: this file type can't be converted; use a PDF, an image, a .txt file or an EPUB book")));
         };
         let title = name.rsplit_once('.').map_or(name, |(s, _)| s);
         // Image decoders read untrusted bytes: a panic in one must not take the app down.
@@ -51,6 +51,7 @@ impl Session {
             SourceKind::Pdf => open_source(name, bytes).map(|_| bytes.clone()),
             SourceKind::Image => self.create_from_images(&[(name.to_string(), bytes.to_vec())]),
             SourceKind::Text => self.create_from_text(title, &decode_text(bytes)),
+            SourceKind::Epub => self.create_from_epub(name, bytes).map(|(pdf, _notes)| pdf),
         })
         .map_err(|_| EditError::Source(format!("{name}: the file could not be read")))?;
         Ok((kind, created?))
@@ -62,7 +63,7 @@ impl Session {
     pub fn as_pdf(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, EditError> {
         let pdf = match source_kind(name, bytes) {
             Some(SourceKind::Pdf) => true,
-            Some(SourceKind::Image | SourceKind::Text) => false,
+            Some(SourceKind::Image | SourceKind::Text | SourceKind::Epub) => false,
             None => name.to_ascii_lowercase().ends_with(".pdf"),
         };
         if pdf { Ok(bytes.clone()) } else { self.convert_to_pdf(name, bytes).map(|(_, pdf)| pdf) }
@@ -385,19 +386,15 @@ impl Session {
     /// A new file (Combine, Extract, Split, Create) as bytes, checked like a save before anyone
     /// writes it (#1698, #2166): it reopens, and shows the pages it was built from.
     fn write_new(&self, doc: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>, EditError> {
-        let bytes = self.write_unchecked(doc)?;
-        let expected = pdfcraft_organize::page_count(doc)?;
-        pdfcraft_cos::Document::open(bytes.clone()).map_err(|e| EditError::Reopen(e.to_string()))?;
-        pdfcraft_render::check_pages(bytes.clone(), None, expected).map_err(|e| EditError::Reopen(e.to_string()))?;
-        Ok(bytes)
+        let doc = writable(doc)?;
+        write_checked(&doc, self.now())
     }
 
     /// [`Self::write_new`] without the check, for bytes nobody writes: measuring a part's size.
     /// Like a save, a new file never carries a typed Password-field value (#3926): Extract and
     /// Split copy the fields of the pages they take.
     fn write_unchecked(&self, doc: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>, EditError> {
-        let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
         let doc = writable(doc)?;
-        write_full(&doc, &opts).map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
+        write_dated(&doc, self.now())
     }
 }

@@ -1324,11 +1324,11 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_create",
             "Create a PDF",
-            "Create a new, unsaved document and return it like doc_open: `blank` (pages, width, height in points; default 1 US Letter page), `images` (paths of PNG, JPEG, TIFF (every page), GIF or BMP files, one page each at the image's resolution) or `text` (a .txt path, or `text` directly; Western European (WinAnsi) characters only, others are refused). Save it with doc_save and a path.",
+            "Create a new, unsaved document and return it like doc_open: `blank` (pages, width, height in points; default 1 US Letter page), `images` (paths of PNG, JPEG, TIFF (every page), GIF or BMP files, one page each at the image's resolution) or `text` (a .txt path, or `text` directly; Western European (WinAnsi) characters only, others are refused), or `epub` (an EPUB book at `path`: reflowed text set on `paper` letter or a4 (default US Letter, or the paper the host set for its region) in the book's own fonts, with its pictures, tables, links, contents as bookmarks, title, authors and language; a fixed-layout book gives a page per content document; a book protected by DRM is refused; `notes` says what was laid out how and what was left out, as doc_info's `repairs` does). Save it with doc_save and a path.",
         )
         .with(schema(
             json!({
-                "from": { "type": "string", "enum": ["blank", "images", "text"] },
+                "from": { "type": "string", "enum": ["blank", "images", "text", "epub"] },
                 "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
                 "dpi": { "type": "number", "minimum": 1, "maximum": 1200, "description": "For images: override the embedded resolution without resampling. 72 gives one point per pixel; omit to use each image's resolution (72 when absent)." },
                 "text": { "type": "string" },
@@ -1337,6 +1337,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "width": { "type": "number", "minimum": 3 },
                 "height": { "type": "number", "minimum": 3 },
                 "name": { "type": "string", "description": "Name for the new document (default derived from the source)." },
+                "paper": { "type": "string", "enum": ["letter", "a4"], "description": "For epub: the paper reflowed text is set on." },
             }),
             &["from"],
         )),

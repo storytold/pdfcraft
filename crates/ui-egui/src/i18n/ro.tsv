@@ -2820,6 +2820,7 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	Converted from an EPUB book. Details lists how it was laid out and what was left out.	Convertit dintr-o carte EPUB. Detalii arată cum a fost așezat și ce a rămas pe dinafară.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi
@@ -2840,6 +2841,7 @@ theme	Appearance	Aspect
 	Rotate the selected pages clockwise	Rotește paginile selectate în sens orar
 	Extract the selected pages…	Extrage paginile selectate…
 	Delete the selected pages	Șterge paginile selectate
+	Converted from an EPUB book.	Converted from an EPUB book.
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opțiuni pentru acest răspuns

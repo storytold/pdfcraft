@@ -14,10 +14,12 @@ use crate::{
 /// Immutable session state needed while a document is prepared away from its owning thread.
 #[derive(Clone)]
 pub struct OpenContext {
-    now: Option<i64>,
+    pub(crate) now: Option<i64>,
     js_off: bool,
     trust: Arc<TrustStore>,
     xfa_time_scale: u32,
+    /// The paper an EPUB opened through this context is set on.
+    pub(crate) book_paper: (f64, f64),
 }
 
 /// A fully prepared document that has not yet been registered in a session.
@@ -54,7 +56,13 @@ impl OpenContext {
 impl Session {
     /// Snapshot the session state that affects open-time scripts, dates and signature trust.
     pub fn open_context(&self) -> OpenContext {
-        OpenContext { now: self.now(), js_off: self.js_off, trust: self.trust.clone(), xfa_time_scale: self.xfa_time_scale.unwrap_or(1) }
+        OpenContext {
+            now: self.now(),
+            js_off: self.js_off,
+            trust: self.trust.clone(),
+            xfa_time_scale: self.xfa_time_scale.unwrap_or(1),
+            book_paper: self.book_paper(),
+        }
     }
 
     /// Prepare a document without adding it to this session.
@@ -334,6 +342,7 @@ impl Session {
             renderer,
             password: render_password,
             dirty: false,
+            from_book: false,
             generation: 0,
             snapshot_generation: 0,
             read_only_reason,

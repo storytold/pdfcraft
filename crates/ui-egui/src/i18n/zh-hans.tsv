@@ -2484,6 +2484,8 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+# Opening an EPUB book (#493).
+	Converted from an EPUB book. Details lists how it was laid out and what was left out.	已从 EPUB 图书转换。详细信息说明了排版方式以及省略的内容。
 	Create & Edit	创建和编辑
 	Review & Compare	审阅和比较
 	Forms & Signatures	表单和签名
