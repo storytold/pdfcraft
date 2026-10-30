@@ -29,9 +29,11 @@ fun PdfExportDialog(
     onExtractAllImages: (outDir: String) -> Unit,
     onConvertToPdfA: (level: String) -> Unit,
     onFlatten: (comments: Boolean, fields: Boolean) -> Unit,
+    initialTab: Int = 0,
+    initialOfficeFormat: String = "docx",
     modifier: Modifier = Modifier
 ) {
-    var selectedTab by remember { mutableStateOf(0) }
+    var selectedTab by remember { mutableIntStateOf(initialTab) }
     val tabs = listOf("Office", "Images", "Text", "PDF/A", "Flatten")
 
     Surface(
@@ -80,7 +82,7 @@ fun PdfExportDialog(
             when (selectedTab) {
                 0 -> {
                     // Export to Office formats: Word, PowerPoint, HTML, RTF
-                    var selectedFormat by remember { mutableStateOf("docx") }
+                    var selectedFormat by remember { mutableStateOf(initialOfficeFormat) }
                     val formats = listOf(
                         "docx" to "Word Document (.docx)",
                         "pptx" to "PowerPoint (.pptx)",

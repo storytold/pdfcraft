@@ -57,6 +57,7 @@ enum class AnnotationTool {
 fun PdfView(
     document: PdfDocument,
     initialPageIndex: Int = 0,
+    initialAction: String? = null,
     onClose: (() -> Unit)? = null,
     onSave: (() -> Unit)? = null,
     onSaveAs: (() -> Unit)? = null,
@@ -100,6 +101,8 @@ fun PdfView(
     var showRedactionView by remember { mutableStateOf(false) }
     var showAboutView by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
+    var exportInitialTab by remember { mutableIntStateOf(0) }
+    var exportInitialFormat by remember { mutableStateOf("docx") }
     var showMetadataDialog by remember { mutableStateOf(false) }
     var showSecurityDialog by remember { mutableStateOf(false) }
     var showWatermarkDialog by remember { mutableStateOf(false) }
@@ -131,6 +134,62 @@ fun PdfView(
                 }
             } catch (e: Exception) {
                 statusNotification = "Failed to insert image: ${e.message}"
+            }
+        }
+    }
+
+    LaunchedEffect(initialAction) {
+        when (initialAction) {
+            "export_word" -> {
+                exportInitialTab = 0
+                exportInitialFormat = "docx"
+                showExportDialog = true
+            }
+            "export_pptx" -> {
+                exportInitialTab = 0
+                exportInitialFormat = "pptx"
+                showExportDialog = true
+            }
+            "export_images" -> {
+                exportInitialTab = 1
+                showExportDialog = true
+            }
+            "convert_pdfa" -> {
+                exportInitialTab = 3
+                showExportDialog = true
+            }
+            "add_text" -> {
+                viewerMode = ViewerMode.EDIT
+                showAddTextDialog = true
+            }
+            "insert_image" -> {
+                viewerMode = ViewerMode.EDIT
+                insertImageLauncher.launch("image/*")
+            }
+            "redact" -> {
+                showRedactionView = true
+            }
+            "watermark" -> {
+                showWatermarkDialog = true
+            }
+            "organize" -> {
+                showPageGrid = true
+            }
+            "protect" -> {
+                showSecurityDialog = true
+            }
+            "draw" -> {
+                viewerMode = ViewerMode.ANNOTATE
+                annotationTool = AnnotationTool.PEN
+                isInkMode = true
+                isEraserMode = false
+                pdfPageViewRef?.isInkMode = true
+                pdfPageViewRef?.isEraserMode = false
+                pdfPageViewRef?.inkColorRgb = activeInkColor
+                pdfPageViewRef?.inkStrokeWidth = activeInkWidth
+            }
+            "toc" -> {
+                showOutlineDialog = true
             }
         }
     }
@@ -837,93 +896,159 @@ fun PdfView(
         }
     }
 
-    // Form Field Text Edit Dialog
+    // Form Field Text Edit Sheet
     activeEditField?.let { field ->
-        AlertDialog(
-            onDismissRequest = { activeEditField = null },
-            title = { Text("Edit Form Field") },
-            text = {
-                Column {
+        ModalBottomSheet(
+            onDismissRequest = { activeEditField = null }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 8.dp)
+                    .navigationBarsPadding()
+                    .imePadding()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        text = field.name,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.secondary
+                        text = "Edit Form Field",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = editFieldInput,
-                        onValueChange = { editFieldInput = it },
-                        label = { Text("Value") },
-                        singleLine = false,
-                        maxLines = 4,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    try {
-                        document.setFormFieldValue(field.name, editFieldInput)
-                        statusNotification = "Form field updated"
-                        pdfPageViewRef?.refreshPage()
-                    } catch (e: Exception) {
-                        statusNotification = "Error updating field: ${e.message}"
+                    TextButton(onClick = { activeEditField = null }) {
+                        Text("Cancel")
                     }
-                    activeEditField = null
-                }) {
-                    Text("Save")
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { activeEditField = null }) {
-                    Text("Cancel")
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = field.name,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = editFieldInput,
+                    onValueChange = { editFieldInput = it },
+                    label = { Text("Field Value") },
+                    singleLine = false,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { editFieldInput = "" },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Clear")
+                    }
+                    Button(
+                        onClick = {
+                            try {
+                                document.setFormFieldValue(field.name, editFieldInput)
+                                statusNotification = "Form field updated"
+                                pdfPageViewRef?.refreshPage()
+                            } catch (e: Exception) {
+                                statusNotification = "Error updating field: ${e.message}"
+                            }
+                            activeEditField = null
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Save")
+                    }
                 }
+                Spacer(modifier = Modifier.height(16.dp))
             }
-        )
+        }
     }
 
-    // Form Field Choice Selection Dialog
+    // Form Field Choice Selection Sheet
     activeChoiceField?.let { choiceField ->
-        AlertDialog(
-            onDismissRequest = { activeChoiceField = null },
-            title = { Text("Select Option") },
-            text = {
-                LazyColumn(modifier = Modifier.fillMaxWidth()) {
+        ModalBottomSheet(
+            onDismissRequest = { activeChoiceField = null }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 8.dp)
+                    .navigationBarsPadding()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Select Option",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    TextButton(onClick = { activeChoiceField = null }) {
+                        Text("Close")
+                    }
+                }
+                Text(
+                    text = choiceField.name,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 300.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     items(choiceField.options) { opt ->
+                        val isSelected = choiceField.value.contains(opt.exportValue)
                         Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (choiceField.value.contains(opt.exportValue)) {
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isSelected) {
                                 MaterialTheme.colorScheme.primaryContainer
                             } else {
-                                MaterialTheme.colorScheme.surface
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
                                     try {
                                         document.setFormFieldValue(choiceField.name, opt.exportValue)
+                                        statusNotification = "Selected ${opt.displayText.ifEmpty { opt.exportValue }}"
                                         pdfPageViewRef?.refreshPage()
                                     } catch (_: Exception) {}
                                     activeChoiceField = null
                                 }
-                                .padding(vertical = 4.dp)
                         ) {
-                            Text(
-                                text = opt.displayText.ifEmpty { opt.exportValue },
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.padding(12.dp)
-                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = opt.displayText.ifEmpty { opt.exportValue },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                )
+                                if (isSelected) {
+                                    Text("✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                                }
+                            }
                         }
                     }
                 }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { activeChoiceField = null }) {
-                    Text("Cancel")
-                }
+                Spacer(modifier = Modifier.height(16.dp))
             }
-        )
+        }
     }
 
     // Page Grid Sheet
@@ -1002,8 +1127,10 @@ fun PdfView(
         ModalBottomSheet(onDismissRequest = { showExportDialog = false }) {
             PdfExportDialog(
                 document = document,
+                initialTab = exportInitialTab,
+                initialOfficeFormat = exportInitialFormat,
                 onDismiss = { showExportDialog = false },
-                onExportOffice = { formatExt, outPath ->
+                onExportOffice = { _, outPath ->
                     try {
                         document.exportOffice(outPath)
                         statusNotification = "Office document exported to $outPath"

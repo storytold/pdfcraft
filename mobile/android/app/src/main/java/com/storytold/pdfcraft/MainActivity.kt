@@ -11,7 +11,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,6 +24,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -94,6 +99,7 @@ object RecentDocumentsManager {
     }
 
     fun removeRecent(context: Context, uriString: String) {
+        RecentThumbnailManager.removeThumbnail(context, uriString)
         val current = getRecents(context).filterNot { it.uriString == uriString }
         val arr = JSONArray()
         for (item in current) {
@@ -194,13 +200,16 @@ fun AppRootScreen(
     var passwordInput by remember { mutableStateOf("") }
     var homeSearchQuery by remember { mutableStateOf("") }
 
+    var pendingToolAction by remember { mutableStateOf<String?>(null) }
+    var activeInitialToolAction by remember { mutableStateOf<String?>(null) }
+
     var recentFiles by remember { mutableStateOf(RecentDocumentsManager.getRecents(context)) }
 
     fun refreshRecents() {
         recentFiles = RecentDocumentsManager.getRecents(context)
     }
 
-    fun loadUri(uri: Uri, password: String? = null) {
+    fun loadUri(uri: Uri, password: String? = null, action: String? = null) {
         isLoading = true
         errorMessage = null
         coroutineScope.launch {
@@ -212,13 +221,15 @@ fun AppRootScreen(
                     )
                 } catch (_: Throwable) {}
 
-                var fileName = "document.pdf"
-                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                    val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    if (nameIdx >= 0 && cursor.moveToFirst()) {
-                        fileName = cursor.getString(nameIdx)
+                var fileName = uri.lastPathSegment ?: "document.pdf"
+                try {
+                    context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        if (nameIdx >= 0 && cursor.moveToFirst()) {
+                            cursor.getString(nameIdx)?.let { fileName = it }
+                        }
                     }
-                }
+                } catch (_: Throwable) {}
 
                 val bytes = withContext(Dispatchers.IO) {
                     context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
@@ -227,9 +238,20 @@ fun AppRootScreen(
                 val doc = withContext(Dispatchers.Default) {
                     PdfDocument.openBytes(name = fileName, bytes = bytes, password = password)
                 }
+
+                withContext(Dispatchers.Default) {
+                    try {
+                        val thumb = doc.renderThumbnail(0, 160f)
+                        if (thumb != null) {
+                            RecentThumbnailManager.saveThumbnail(context, uri.toString(), thumb)
+                        }
+                    } catch (_: Exception) {}
+                }
+
                 activeDoc?.close()
                 activeDoc = doc
                 currentUri = uri
+                activeInitialToolAction = action
                 RecentDocumentsManager.addRecent(context, uri.toString(), fileName)
                 refreshRecents()
                 onDocumentChanged(doc)
@@ -248,7 +270,7 @@ fun AppRootScreen(
         }
     }
 
-    fun loadDemoDocument() {
+    fun loadDemoDocument(action: String? = null) {
         isLoading = true
         errorMessage = null
         coroutineScope.launch {
@@ -284,13 +306,12 @@ fun AppRootScreen(
                     %%EOF
                 """.trimIndent().toByteArray(Charsets.UTF_8)
 
-                val doc = withContext(Dispatchers.Default) {
-                    PdfDocument.openBytes(name = "pdfcraft_showcase.pdf", bytes = demoPdf)
+                val demoFile = withContext(Dispatchers.IO) {
+                    val f = File(context.filesDir, "pdfcraft_showcase.pdf")
+                    f.writeBytes(demoPdf)
+                    f
                 }
-                activeDoc?.close()
-                activeDoc = doc
-                currentUri = null
-                onDocumentChanged(doc)
+                loadUri(Uri.fromFile(demoFile), action = action)
             } catch (e: Throwable) {
                 errorMessage = e.message ?: "Failed to generate demo PDF"
             } finally {
@@ -299,18 +320,21 @@ fun AppRootScreen(
         }
     }
 
-    fun createBlankDocument() {
+    fun createBlankDocument(action: String? = null) {
         isLoading = true
         errorMessage = null
         coroutineScope.launch {
             try {
-                val doc = withContext(Dispatchers.Default) {
-                    PdfDocument.createBlank(name = "Untitled.pdf")
+                val fileName = "Untitled_${(System.currentTimeMillis() % 100000)}.pdf"
+                val blankFile = withContext(Dispatchers.IO) {
+                    val f = File(context.filesDir, fileName)
+                    val doc = PdfDocument.createBlank(name = fileName)
+                    val bytes = doc.saveBytes()
+                    doc.close()
+                    f.writeBytes(bytes)
+                    f
                 }
-                activeDoc?.close()
-                activeDoc = doc
-                currentUri = null
-                onDocumentChanged(doc)
+                loadUri(Uri.fromFile(blankFile), action = action)
             } catch (e: Throwable) {
                 errorMessage = e.message ?: "Failed to create blank document"
             } finally {
@@ -330,7 +354,15 @@ fun AppRootScreen(
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        uri?.let { loadUri(it) }
+        uri?.let {
+            loadUri(it, action = pendingToolAction)
+            pendingToolAction = null
+        }
+    }
+
+    fun launchTool(action: String) {
+        pendingToolAction = action
+        launcher.launch(arrayOf("application/pdf"))
     }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -442,10 +474,12 @@ fun AppRootScreen(
         PdfView(
             document = doc,
             initialPageIndex = 0,
+            initialAction = activeInitialToolAction,
             onClose = {
                 doc.close()
                 activeDoc = null
                 currentUri = null
+                activeInitialToolAction = null
                 onDocumentChanged(null)
             },
             onSave = { handleSave() },
@@ -819,18 +853,33 @@ fun AppRootScreen(
                                                     .padding(12.dp),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Surface(
-                                                    shape = RoundedCornerShape(6.dp),
-                                                    color = MaterialTheme.colorScheme.primaryContainer,
-                                                    modifier = Modifier.size(38.dp)
-                                                ) {
-                                                    Box(contentAlignment = Alignment.Center) {
-                                                        Text(
-                                                            text = "PDF",
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            fontWeight = FontWeight.Bold,
-                                                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                                                        )
+                                                val thumbBitmap = remember(recent.uriString) {
+                                                    RecentThumbnailManager.getThumbnail(context, recent.uriString)
+                                                }
+                                                if (thumbBitmap != null) {
+                                                    Image(
+                                                        bitmap = thumbBitmap.asImageBitmap(),
+                                                        contentDescription = recent.name,
+                                                        modifier = Modifier
+                                                            .size(40.dp)
+                                                            .clip(RoundedCornerShape(6.dp))
+                                                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp)),
+                                                        contentScale = ContentScale.Crop
+                                                    )
+                                                } else {
+                                                    Surface(
+                                                        shape = RoundedCornerShape(6.dp),
+                                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                                        modifier = Modifier.size(40.dp)
+                                                    ) {
+                                                        Box(contentAlignment = Alignment.Center) {
+                                                            Text(
+                                                                text = "PDF",
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                                            )
+                                                        }
                                                     }
                                                 }
 
@@ -949,19 +998,19 @@ fun AppRootScreen(
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     ToolCard(modifier = Modifier.weight(1f), icon = "📄", title = "Export Word", desc = "Export to .docx") {
-                                        launcher.launch(arrayOf("application/pdf"))
+                                        launchTool("export_word")
                                     }
                                     ToolCard(modifier = Modifier.weight(1f), icon = "📊", title = "PowerPoint", desc = "Export to .pptx") {
-                                        launcher.launch(arrayOf("application/pdf"))
+                                        launchTool("export_pptx")
                                     }
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     ToolCard(modifier = Modifier.weight(1f), icon = "🖼️", title = "Export Images", desc = "PNG, JPEG, TIFF") {
-                                        launcher.launch(arrayOf("application/pdf"))
+                                        launchTool("export_images")
                                     }
                                     ToolCard(modifier = Modifier.weight(1f), icon = "🏛️", title = "Convert PDF/A", desc = "Archival ISO 19005") {
-                                        launcher.launch(arrayOf("application/pdf"))
+                                        launchTool("convert_pdfa")
                                     }
                                 }
                             }
@@ -970,20 +1019,29 @@ fun AppRootScreen(
                                 Text("Edit & Content", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    ToolCard(modifier = Modifier.weight(1f), icon = "🔤", title = "Add Text", desc = "Insert page text") {
-                                        launcher.launch(arrayOf("application/pdf"))
+                                    ToolCard(modifier = Modifier.weight(1f), icon = "✏️", title = "Draw & Markup", desc = "Pen, highlight, ink") {
+                                        launchTool("draw")
                                     }
-                                    ToolCard(modifier = Modifier.weight(1f), icon = "📷", title = "Insert Image", desc = "Embed pictures") {
-                                        launcher.launch(arrayOf("application/pdf"))
+                                    ToolCard(modifier = Modifier.weight(1f), icon = "🔤", title = "Add Text", desc = "Insert page text") {
+                                        launchTool("add_text")
                                     }
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    ToolCard(modifier = Modifier.weight(1f), icon = "⬛", title = "Redact", desc = "Permanent sanitize") {
-                                        launcher.launch(arrayOf("application/pdf"))
+                                    ToolCard(modifier = Modifier.weight(1f), icon = "📷", title = "Insert Image", desc = "Embed pictures") {
+                                        launchTool("insert_image")
                                     }
+                                    ToolCard(modifier = Modifier.weight(1f), icon = "⬛", title = "Redact", desc = "Permanent sanitize") {
+                                        launchTool("redact")
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     ToolCard(modifier = Modifier.weight(1f), icon = "🌊", title = "Watermarks", desc = "Headers & Footers") {
-                                        launcher.launch(arrayOf("application/pdf"))
+                                        launchTool("watermark")
+                                    }
+                                    ToolCard(modifier = Modifier.weight(1f), icon = "📑", title = "TOC / Outline", desc = "Bookmarks & outline") {
+                                        launchTool("toc")
                                     }
                                 }
                             }
@@ -993,10 +1051,10 @@ fun AppRootScreen(
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     ToolCard(modifier = Modifier.weight(1f), icon = "▦", title = "Organize Pages", desc = "Rotate, reorder, delete") {
-                                        launcher.launch(arrayOf("application/pdf"))
+                                        launchTool("organize")
                                     }
                                     ToolCard(modifier = Modifier.weight(1f), icon = "🔒", title = "Protect PDF", desc = "AES-256 encryption") {
-                                        launcher.launch(arrayOf("application/pdf"))
+                                        launchTool("protect")
                                     }
                                 }
                                 Spacer(modifier = Modifier.height(16.dp))
