@@ -95,7 +95,7 @@ and add a line to the [progress log](#progress-log); when a gap closes, remove i
 
 | | Value | Kind |
 |---|---|---|
-| **Feature breadth** | **≈ 67%** tier-weighted (56.9% unweighted: 423 shipped + 74 partial of 808; P0 94.2%) | measured, `parity/acrobat-features.toml` |
+| **Feature breadth** | **≈ 67%** tier-weighted (57.1% unweighted: 424 shipped + 74 partial of 808; P0 94.2%) | measured, `parity/acrobat-features.toml` |
 | Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.2% unweighted; P0 95.3%) | measured ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, full Acrobat Pro | **≈ 50%** (45–53%) | estimated, weighted sum over [dimensions](#by-dimension) |
 | **Ready for real work**, mainstream practitioner | **≈ 55%** (50–60%) | estimated ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
@@ -200,6 +200,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-28 (M11, ocr.scan-pdfa):** Recognize Text can save the result as PDF/A-2b (tools: 2b or 3b), single documents and multiple files, in the same undo step, and says whether it complies or what remains. The PDF/A check now follows text rendering modes through what pages draw: a font only drawn invisibly (the OCR layer) needs no program (ISO 19005-2 6.2.11.4.1), and fonts written directly into resources, which it never saw before (Add text's Helvetica), are reported. Estimates unchanged.
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 - **2026-10-24 (M10, #4158 partial):** Word, HTML, RTF and PowerPoint export keep a block that continues another on its line (an italic case name, a link, a superscript) as a run in its own style inside that paragraph, with the source's word space, instead of a paragraph of its own. Style changes that wrap onto the next line still split paragraphs (the reading blocks keep style boundaries). Estimates unchanged.
 - **2026-10-24 (M3, window move on Wayland, #3970 follow-up):** After a move or resize by PdfCraft's own title bar or edges, the button release given back to egui goes before the pointer leaving the window, so hover no longer sticks at the old place until the pointer moves. Found by CodeRabbit in review of #3970; a unit test covers it. Estimates unchanged.

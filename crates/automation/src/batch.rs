@@ -32,7 +32,7 @@ impl<'a> Recipe<'a> {
                 return Err(Args::wrong("steps", "unique convert/ocr/optimize steps, with convert first when present"));
             }
         }
-        for (keys, step) in [(&["ppi", "quality"][..], "optimize"), (&["dpi", "language", "skip_text_pages"][..], "ocr")] {
+        for (keys, step) in [(&["ppi", "quality"][..], "optimize"), (&["dpi", "language", "skip_text_pages", "pdfa"][..], "ocr")] {
             if !steps.contains(&step) && keys.iter().any(|k| args.get(k).is_some()) {
                 return Err(failed(format!("{} settings need the {step} step", keys.join("/"))));
             }
@@ -80,9 +80,12 @@ impl<'a> Recipe<'a> {
                 "ocr" => {
                     let engine = ocr::engine().map_err(failed)?;
                     let result = ocr::recognize_file(name, bytes, None, self.ocr.clone(), &engine, |_, _| true).map_err(failed)?;
-                    log.push(
-                        json!({"step":"ocr","words":result.words(),"skipped_pages":result.pages.iter().filter(|p| p.skipped.is_some()).count()}),
-                    );
+                    let mut entry =
+                        json!({"step":"ocr","words":result.words(),"skipped_pages":result.pages.iter().filter(|p| p.skipped.is_some()).count()});
+                    if let Some(x) = &result.pdfa {
+                        entry["pdfa"] = crate::a11y::pdfa_json(x);
+                    }
+                    log.push(entry);
                     bytes = result.bytes;
                     continue;
                 }

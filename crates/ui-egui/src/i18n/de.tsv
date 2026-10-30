@@ -1287,6 +1287,13 @@
 	Adds invisible text over each word; the page image is not changed	Legt unsichtbaren Text über jedes Wort; das Seitenbild bleibt unverändert
 	Downsample to	Herunterrechnen auf
 	Also recognize pages that already have text	Auch Seiten erkennen, die bereits Text enthalten
+	Save as PDF/A-2b	Als PDF/A-2b speichern
+	Converts the result to PDF/A-2b for archiving and says what still keeps it from complying	Wandelt das Ergebnis zur Archivierung in PDF/A-2b um und nennt, was der Konformität noch im Weg steht
+	; saved as {level}	; als {level} gespeichert
+	; not saved as {level}: {why}	; nicht als {level} gespeichert: {why}
+	; converted to {level}, but not everything complies yet ({first}); see Apply PDF standards ▸ Save as PDF/A	; in {level} umgewandelt, aber noch nicht vollständig konform ({first}); siehe PDF-Standards anwenden ▸ Als PDF/A speichern
+	; {n} saved as PDF/A	; {n} als PDF/A gespeichert
+	; not PDF/A yet: {list} (open them in Apply PDF standards ▸ Save as PDF/A)	; noch nicht PDF/A: {list} (in PDF-Standards anwenden ▸ Als PDF/A speichern öffnen)
 	Pictures on those pages are recognized too; words already in the page's text are not added again	Bilder auf diesen Seiten werden ebenfalls erkannt; Wörter, die schon im Text der Seite stehen, werden nicht erneut hinzugefügt
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Die Texterkennung ist nicht installiert: ihre Modelldateien fehlen. Installiere PdfCraft neu oder setze PDFCRAFT_MODELS auf den Ordner, der sie enthält.
 	Settings	Einstellungen

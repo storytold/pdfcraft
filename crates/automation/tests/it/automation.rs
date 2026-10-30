@@ -6533,6 +6533,54 @@ fn ocr_tools_make_a_scan_searchable() {
     assert!(matches!(a.call("ocr_recognize", &json!({ "doc": scan, "language": "xx" })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// `pdfa` saves the recognised scan as PDF/A in the OCR undo step: the result passes
+/// `pdfa_verify`, saved and opened again, single, in multiple files and as a `doc_batch` step,
+/// and the text is still found. An unknown level is refused before anything is read.
+#[test]
+fn ocr_recognize_can_save_the_scan_as_pdfa() {
+    let dir = workdir("ocr-pdfa");
+    let mut a = auto(&dir);
+    assert!(matches!(a.call("ocr_recognize", &json!({ "doc": 1, "pdfa": "1b" })), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(a.call("ocr_recognize_files", &json!({ "paths": ["a.pdf"], "folder": "out", "pdfa": "x" })), Err(ToolError::InvalidArgs(_))));
+    assert!(!dir.join("out").exists());
+    if ok(&mut a, "ocr_status", json!({}))["available"] != true {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let text = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Archived scans stay searchable" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": text, "folder": "scan", "dpi": 150, "pages": [1] }));
+    let png = std::fs::read_dir(dir.join("scan")).unwrap().next().unwrap().unwrap().path();
+    let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": [png.to_string_lossy()] }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_save", json!({ "doc": scan, "path": "scan.pdf" }));
+    assert_eq!(ok(&mut a, "pdfa_verify", json!({ "doc": scan }))["compliant"], false);
+    let r = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "pdfa": "2b" }));
+    assert!(r["pages"][0]["text"].as_str().unwrap().to_lowercase().contains("searchable"), "{r}");
+    assert_eq!(r["pdfa"]["level"], "PDF/A-2b");
+    assert_eq!(r["pdfa"]["compliant"], true, "{r}");
+    ok(&mut a, "doc_save", json!({ "doc": scan, "path": "archived.pdf" }));
+    let back = ok(&mut a, "doc_open", json!({ "path": "archived.pdf" }))["doc"].as_u64().unwrap();
+    let v = ok(&mut a, "pdfa_verify", json!({ "doc": back }));
+    assert_eq!(v["compliant"], true, "{v}");
+    assert_eq!(v["declared"]["pdfa"], "PDF/A-2b");
+    assert_eq!(ok(&mut a, "text_find", json!({ "doc": back, "query": "searchable" }))["count"], 1);
+    // In multiple files, PDF/A-3b.
+    let r = ok(&mut a, "ocr_recognize_files", json!({ "paths": ["scan.pdf"], "folder": "out", "pdfa": "3b" }));
+    assert_eq!(r["files"][0]["pdfa"]["compliant"], true, "{r}");
+    let out = ok(&mut a, "doc_open", json!({ "path": "out/scan.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "pdfa_verify", json!({ "doc": out, "level": "3b" }))["compliant"], true);
+    // As a `doc_batch` step: the log reports the check, and the written file passes it.
+    let r = ok(&mut a, "doc_batch", json!({ "paths": ["scan.pdf"], "steps": ["ocr"], "out_dir": "batch", "pdfa": "2b" }));
+    assert_eq!(r["completed"], 1, "{r}");
+    let step = &r["files"][0]["steps"][0];
+    assert_eq!(step["pdfa"]["level"], "PDF/A-2b", "{r}");
+    assert_eq!(step["pdfa"]["compliant"], true, "{r}");
+    let batched = ok(&mut a, "doc_open", json!({ "path": "batch/scan.pdf" }))["doc"].as_u64().unwrap();
+    let v = ok(&mut a, "pdfa_verify", json!({ "doc": batched }));
+    assert_eq!(v["compliant"], true, "{v}");
+    assert_eq!(v["declared"]["pdfa"], "PDF/A-2b");
+    assert_eq!(ok(&mut a, "text_find", json!({ "doc": batched, "query": "searchable" }))["count"], 1);
+}
+
 /// #1028: `skip_text_pages: false` reads a picture on a page that has its own text, and the
 /// page's own words are left out (counted) instead of being added a second time.
 #[test]

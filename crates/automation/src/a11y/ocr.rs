@@ -2,7 +2,8 @@ use super::{Args, Automation, Result, ToolError, Value, child, failed, json, wri
 
 impl Automation {
     /// Recognition settings from the arguments: `dpi` (clamped to 72–600), `language` (refused
-    /// unless the models read it) and `skip_text_pages`, each left at its default when absent.
+    /// unless the models read it), `skip_text_pages` and `pdfa` (`2b` or `3b`: save as PDF/A
+    /// afterwards), each left at its default when absent.
     pub(crate) fn ocr_settings(&self, a: &Args) -> Result<pdfcraft_engine::ocr::OcrSettings> {
         let mut settings = pdfcraft_engine::ocr::OcrSettings::default();
         if let Some(d) = a.opt_num("dpi")? {
@@ -16,6 +17,12 @@ impl Automation {
         }
         if let Some(s) = a.opt_bool("skip_text_pages")? {
             settings.skip_text_pages = s;
+        }
+        if let Some(l) = a.opt_str("pdfa")? {
+            settings.pdfa = Some(
+                pdfcraft_engine::pdfa::Level::from_id(l)
+                    .ok_or_else(|| ToolError::InvalidArgs(format!("pdfa must be \"2b\" or \"3b\", not {l:?}")))?,
+            );
         }
         Ok(settings)
     }
@@ -57,7 +64,11 @@ impl Automation {
                     let target = child(&folder, &name);
                     write_atomic(&target, &r.bytes)?;
                     let skipped: Vec<usize> = r.pages.iter().filter(|p| p.skipped.is_some()).map(|p| p.page + 1).collect();
-                    json!({ "path": p, "output": target.to_string_lossy(), "words": r.words(), "skipped_pages": skipped })
+                    let mut v = json!({ "path": p, "output": target.to_string_lossy(), "words": r.words(), "skipped_pages": skipped });
+                    if let Some(x) = &r.pdfa {
+                        v["pdfa"] = pdfa_json(x);
+                    }
+                    v
                 }
                 Err(e) => json!({ "path": p, "error": e }),
             });
@@ -74,7 +85,7 @@ impl Automation {
         // Recognizing needs only permission to change the document; the words it found are
         // returned only when copying is allowed too.
         let (id, copy) = (doc.id, doc.allows_copying());
-        let found = self.session.recognize_text(id, &pages, settings).map_err(failed)?;
+        let (found, applied) = self.session.recognize_text_reporting(id, &pages, settings).map_err(failed)?;
         let list: Vec<Value> = found
             .iter()
             .map(|p| match &p.skipped {
@@ -83,7 +94,11 @@ impl Automation {
                 None => json!({ "page": p.page + 1, "words": p.words.len(), "already_on_page": p.already_on_page }),
             })
             .collect();
-        Ok(json!({ "words": found.iter().map(|p| p.words.len()).sum::<usize>(), "pages": list }))
+        let mut out = json!({ "words": found.iter().map(|p| p.words.len()).sum::<usize>(), "pages": list });
+        if let Some(x) = &applied.pdfa {
+            out["pdfa"] = pdfa_json(x);
+        }
+        Ok(out)
     }
 
     /// Whether text recognition's models are installed, the directories searched for them (in
@@ -94,6 +109,18 @@ impl Automation {
         let langs: Vec<Value> = ocr::LANGUAGES.iter().map(|(c, n)| json!({ "code": c, "name": n })).collect();
         Ok(json!({ "available": ocr::available(), "search_dirs": dirs, "languages": langs }))
     }
+}
+
+/// How `pdfa` went: the level, whether the result passes PdfCraft's PDF/A check, why the
+/// conversion was refused (the words were added without it), and what the result still breaks,
+/// as `pdfa_verify` lists it.
+pub(crate) fn pdfa_json(x: &pdfcraft_engine::ocr::OcrPdfA) -> Value {
+    let remaining: Vec<Value> = x
+        .remaining
+        .iter()
+        .map(|i| json!({ "clause": i.clause, "message": i.message, "page": i.page.map(|p| p + 1), "fixable": i.fixable }))
+        .collect();
+    json!({ "level": x.level.label(), "compliant": x.compliant(), "refused": x.refused, "remaining": remaining })
 }
 
 /// The file name an input is written under: its own file name, or `document.pdf` when it has none.

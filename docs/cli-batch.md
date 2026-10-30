@@ -33,7 +33,9 @@ only `.pdf` inputs are processed. Unsupported extensions are reported as skipped
   the bytes entering that step. This is not an images-only or lossless preset.
 - `ocr` uses the installed engine and its supported languages. `--dpi` (72–600,
   default 300), `--language` (default `en`) and `--ocr-all-pages` configure it.
-  By default pages already containing text are skipped. Missing models are
+  By default pages already containing text are skipped. `--pdfa 2b` or `--pdfa 3b`
+  saves each recognised file as PDF/A (as Save as PDF/A does; the file's `pdfa`
+  entry says whether it complies or what remains). Missing models are
   reported as file errors; nothing is downloaded or installed by the batch.
 - `--stop-on-error` stops processing after the first file error. By default the
   remaining files continue. Earlier successful outputs stay, and unprocessed

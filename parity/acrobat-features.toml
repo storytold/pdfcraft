@@ -6793,11 +6793,11 @@ title = "Make scans PDF/A compliant"
 area = "I"
 tier = "P2"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["ocr.recognize", "ocr.recognize_batch"]
+tools = ["ocr_recognize", "ocr_recognize_files", "doc_batch"]
+evidence = ["crates/engine/src/ocr.rs::recognized_scans_can_be_saved_as_pdfa", "crates/automation/tests/it/automation.rs::ocr_recognize_can_save_the_scan_as_pdfa", "crates/engine/src/ocr.rs::a_pdfa_conversion_the_security_refuses_still_adds_the_words", "crates/preflight/src/tests.rs::a_font_only_drawn_invisibly_needs_no_program", "crates/preflight/src/tests.rs::a_direct_font_drawn_visibly_is_reported_with_its_page"]
+notes = "Recognize Text ▸ Save as PDF/A-2b (the tools take pdfa 2b or 3b), single documents and multiple files: after recognition the document is converted as Save as PDF/A does, in the same undo step, then checked; the result says it complies or lists what remains. The OCR text layer is Helvetica (not embedded) in rendering mode 3, which PDF/A-2/3 allows (ISO 19005-2 6.2.11.4.1); the check now follows rendering modes. When the security doesn't allow removing the encryption, or a signed file would need a rewrite, the words are added and the refusal reported. Limits: what Save as PDF/A can't fix stays (visible text in fonts that aren't embedded, DeviceCMYK without a CMYK intent), only PDF/A-2b and 3b (no -1, u or a levels), compliance is PdfCraft's own check, not compared with veraPDF. The multiple-files command uses the Recognize Text dialog's last choices, PDF/A included."
 
 [[feature]]
 id = "ocr.ocr-engines"
@@ -7865,7 +7865,7 @@ status = "partial"
 commands = ["standards.pdfa"]
 tools = ["pdfa_verify"]
 evidence = ["crates/preflight/src/tests.rs::verify_reports_what_breaks_pdfa", "crates/preflight/src/tests.rs::standards_identification_uses_namespace_not_prefix", "crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/preflight/src/tests.rs::verify_reports_an_output_intent_that_does_not_match_device_colour", "crates/automation/tests/it/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/it/compare.rs::pdfa_dialog_verifies_and_converts"]
-notes = "PDF/A-2b/3b structural rules: identification, encryption, output intent (present, and RGB/CMYK to match DeviceRGB/DeviceCMYK use), fonts embedded, annotations, actions, images, embedded files. Not yet: content-stream operator checks, transparency details, PDF/A-1 and -4, a veraPDF comparison."
+notes = "PDF/A-2b/3b structural rules: identification, encryption, output intent (present, and RGB/CMYK to match DeviceRGB/DeviceCMYK use), fonts embedded, annotations, actions, images, embedded files. Fonts follow ISO 19005-2 6.2.11.4.1 from what the pages draw (content, forms, annotation appearances, with the text rendering mode through q/Q): a font only drawn in mode 3 (an OCR text layer) needs no program, and fonts written directly into resource dictionaries (PdfCraft's own Add text Helvetica, say) are now found and reported with their page; a font is excused only on complete evidence (all content read, not listed by a tiling pattern, Type 3 font or form defaults). Not yet: other content-stream operator checks, transparency details, PDF/A-1 and -4, a veraPDF comparison."
 
 [[feature]]
 id = "optimize.pdfa-convert"
