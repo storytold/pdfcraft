@@ -1271,6 +1271,7 @@ comment menu	Edit	సవరించు
 	Adds invisible text over each word; the page image is not changed	ప్రతి పదంపై కనిపించని టెక్స్ట్‌ను జోడిస్తుంది; పేజీ చిత్రం మారదు
 	Downsample to	ఈ రిజల్యూషన్‌కు తగ్గించు
 	Also recognize pages that already have text	ఇప్పటికే టెక్స్ట్ ఉన్న పేజీలను కూడా గుర్తించు
+	Deskew pages	పేజీల వంపును సరిచేయి
 	Pictures on those pages are recognized too; words already in the page's text are not added again	ఆ పేజీలలోని చిత్రాలు కూడా గుర్తించబడతాయి; పేజీ టెక్స్ట్‌లో ఇప్పటికే ఉన్న పదాలు మళ్లీ జోడించబడవు
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	టెక్స్ట్ గుర్తింపు ఇన్‌స్టాల్ కాలేదు: దాని మోడల్ ఫైల్‌లు లేవు. PdfCraftను మళ్లీ ఇన్‌స్టాల్ చేయండి, లేదా వాటిని కలిగి ఉన్న ఫోల్డర్‌కు PDFCRAFT_MODELSను సెట్ చేయండి.
 	Settings	సెట్టింగ్‌లు

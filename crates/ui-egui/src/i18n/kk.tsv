@@ -1246,6 +1246,7 @@
 	Adds invisible text over each word; the page image is not changed	Әр сөздің үстіне көрінбейтін мәтін қосады; бет суреті өзгермейді
 	Downsample to	Ажыратымдылықты төмендету
 	Also recognize pages that already have text	Мәтіні бар беттерді де тану
+	Deskew pages	Беттердің қисаюын түзету
 	Pictures on those pages are recognized too; words already in the page's text are not added again	Бұл беттердегі суреттер де танылады; беттің мәтінінде бұрыннан бар сөздер қайта қосылмайды
 	Settings	Параметрлер
 	Optional	Міндетті емес

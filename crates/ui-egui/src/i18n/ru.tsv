@@ -1302,6 +1302,7 @@
 	Adds invisible text over each word; the page image is not changed	Добавляет невидимый текст над каждым словом; изображение страницы не меняется
 	Downsample to	Уменьшить до
 	Also recognize pages that already have text	Распознавать и страницы, на которых уже есть текст
+	Deskew pages	Выравнивание наклона страниц
 	Pictures on those pages are recognized too; words already in the page's text are not added again	Изображения на этих страницах тоже распознаются; слова, которые уже есть в тексте страницы, повторно не добавляются
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Распознавание текста не установлено: отсутствуют файлы моделей. Переустановите PdfCraft или задайте в PDFCRAFT_MODELS папку, в которой они лежат.
 	Settings	Настройки

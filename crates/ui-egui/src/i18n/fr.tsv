@@ -1282,6 +1282,7 @@
 	Adds invisible text over each word; the page image is not changed	Ajoute du texte invisible sur chaque mot ; l'image de la page n'est pas modifiée
 	Downsample to	Sous-échantillonner à
 	Also recognize pages that already have text	Reconnaître aussi les pages qui contiennent déjà du texte
+	Deskew pages	Redresser les pages
 	Pictures on those pages are recognized too; words already in the page's text are not added again	Les images de ces pages sont aussi reconnues ; les mots déjà présents dans le texte de la page ne sont pas ajoutés une seconde fois
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	La reconnaissance de texte n'est pas installée : ses fichiers de modèles sont absents. Réinstallez PdfCraft, ou définissez PDFCRAFT_MODELS sur le dossier qui les contient.
 	Settings	Réglages

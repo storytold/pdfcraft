@@ -1245,6 +1245,7 @@
 	Adds invisible text over each word; the page image is not changed	เพิ่มข้อความที่มองไม่เห็นทับแต่ละคำ โดยไม่เปลี่ยนภาพของหน้า
 	Downsample to	ลดความละเอียดเป็น
 	Also recognize pages that already have text	รู้จำหน้าที่มีข้อความอยู่แล้วด้วย
+	Deskew pages	แก้ไขหน้าเอียง
 	Pictures on those pages are recognized too; words already in the page's text are not added again	รูปภาพในหน้าเหล่านั้นจะถูกรู้จำด้วย คำที่มีอยู่แล้วในข้อความของหน้าจะไม่ถูกเพิ่มซ้ำ
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	ยังไม่ได้ติดตั้งการรู้จำข้อความ: ไม่พบไฟล์โมเดล โปรดติดตั้ง PdfCraft ใหม่ หรือตั้ง PDFCRAFT_MODELS ไปยังโฟลเดอร์ที่มีไฟล์เหล่านั้น
 	Settings	การตั้งค่า

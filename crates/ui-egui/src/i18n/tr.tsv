@@ -1259,6 +1259,7 @@
 	Adds invisible text over each word; the page image is not changed	Her sözcüğün üzerine görünmez metin ekler; sayfa resmi değiştirilmez
 	Downsample to	Şu değere alt örnekle:
 	Also recognize pages that already have text	Zaten metin içeren sayfaları da tanı
+	Deskew pages	Sayfaların eğikliğini düzelt
 	Pictures on those pages are recognized too; words already in the page's text are not added again	Bu sayfalardaki resimler de tanınır; sayfanın metninde zaten bulunan sözcükler yeniden eklenmez
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Metin tanıma yüklü değil: model dosyaları eksik. PdfCraft'ı yeniden yükleyin veya PDFCRAFT_MODELS ortam değişkenini bunları içeren klasöre ayarlayın.
 	Settings	Ayarlar

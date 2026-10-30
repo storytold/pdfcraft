@@ -1269,6 +1269,7 @@
 	Adds invisible text over each word; the page image is not changed	دەقی نادیار بەسەر هەر وشەیەکدا زیاد دەکات؛ وێنەی پەڕەکە ناگۆڕێت
 	Downsample to	کەمکردنەوەی ڕوونی بۆ
 	Also recognize pages that already have text	هەروەها ئەو پەڕانە بناسەوە کە خۆیان دەقیان هەیە
+	Deskew pages	ڕاستکردنەوەی لاری پەڕەکان
 	Pictures on those pages are recognized too; words already in the page's text are not added again	وێنەکانی ئەو پەڕانەش دەناسرێنەوە؛ ئەو وشانەی پێشتر لە دەقی پەڕەکەدان دووبارە زیاد ناکرێن
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	ناسینەوەی دەق دانەمەزراوە: فایلەکانی مۆدێلەکەی نین. PdfCraft دووبارە دامەزرێنە، یان PDFCRAFT_MODELS بکە بە ئەو فۆڵدەرەی کە لەخۆی دەگرێت.
 	Settings	ڕێکخستنەکان

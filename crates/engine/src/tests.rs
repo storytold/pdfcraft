@@ -4888,6 +4888,8 @@ fn recognize_text_reads_a_picture_on_a_page_that_has_text() {
     let hybrid = ocr::OcrSettings { skip_text_pages: false, ..Default::default() };
     let found = s.recognize_text(id, &[], hybrid.clone()).unwrap();
     assert_eq!(found[0].skipped, None);
+    // A page with text of its own is never turned: the picture would move from under its text.
+    assert_eq!((found[0].turn, found[0].straighten), (0, None));
     assert!(found[0].already_on_page >= 2, "the page's own words were recognised and left out: {:?}", found[0]);
     let added = found[0].text().to_lowercase();
     assert!(added.contains("brown") && added.contains("lazy") && !added.contains("invoice"), "{added}");
@@ -9089,4 +9091,127 @@ fn need_appearances_buttons_are_displayed_from_their_captions() {
     for x in [20, 100, 180] {
         assert!(ink(&shown, inside(x, 100)) > 700, "the file's square at {x}");
     }
+}
+
+/// A scan, at 150 dpi, of a page of text whose picture was turned by `turn` (the upright
+/// rendering's pixels, RGBA) before it was scanned. No text layer.
+fn turned_scan(s: &mut Session, turn: impl Fn(Vec<u8>, u32, u32) -> (Vec<u8>, u32, u32)) -> DocId {
+    let text = s
+        .create_from_text(
+            "t",
+            "The quick brown fox jumps over the lazy dog.\nPack my box with five dozen liquor jugs.\nHow vexingly quick daft zebras jump.",
+        )
+        .unwrap();
+    let id = s.open("text.pdf", None, text, None).unwrap();
+    let doc = s.get(id).unwrap();
+    let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
+    let shot = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 150.0 / 72.0, ..Default::default() });
+    assert!(shot.error.is_none(), "{:?}", shot.error);
+    let (px, w, h) = turn(shot.rgba.to_vec(), shot.width, shot.height);
+    let png = export::encode_png(w, h, &px).unwrap();
+    let scan = s.create_from_images_with_resolution(&[("scan.png".into(), png)], ImageResolution::Dpi(150.0)).unwrap();
+    s.open("scan.pdf", None, scan, None).unwrap()
+}
+
+/// Recognize text turns a scan that lies sideways or upside down upright (/Rotate, the image
+/// untouched) and reads it; with auto_rotate off it leaves the page as it is.
+#[test]
+fn recognize_text_turns_sideways_and_upside_down_scans_upright() {
+    use pdfcraft_ocr::orient;
+    if !ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    // The scan turned q quarter turns clockwise reads upright after (4 - q) more.
+    for q in [0u8, 1, 2, 3] {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = turned_scan(&mut s, |px, w, h| orient::quarter_turn(&px, w, h, q));
+        let found = s.recognize_text(id, &[], ocr::OcrSettings::default()).unwrap();
+        assert_eq!(found[0].turn, (4 - q) % 4, "scan turned {q}");
+        assert_eq!(s.get(id).unwrap().info.pages[0].rotation, u16::from((4 - q) % 4) * 90, "scan turned {q}");
+        let text = page_texts(&s, id)[0].to_lowercase();
+        for w in ["quick", "brown", "liquor", "zebras"] {
+            assert!(text.contains(w), "scan turned {q}: {text}");
+        }
+        // The invisible words run along the upright lines: "quick" is left of "brown" as shown.
+        let shown = |w: &ocr::PlacedWord| s.get(id).unwrap().info.pages[0].user_to_view(w.origin[0] as f32, w.origin[1] as f32);
+        let at = |t: &str| found[0].words.iter().find(|w| w.text.to_lowercase().contains(t)).map(shown).unwrap();
+        assert!(at("quick")[0] < at("brown")[0] && (at("quick")[1] - at("brown")[1]).abs() < 5.0, "scan turned {q}");
+        if q != 0 {
+            assert_eq!(s.get(id).unwrap().can_undo(), Some("Recognize text"));
+            s.undo(id).unwrap();
+            assert_eq!(s.get(id).unwrap().info.pages[0].rotation, 0, "undo puts the page back");
+        }
+    }
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = turned_scan(&mut s, |px, w, h| orient::quarter_turn(&px, w, h, 2));
+    let off = ocr::OcrSettings { auto_rotate: false, ..Default::default() };
+    let found = s.recognize_text(id, &[], off).unwrap();
+    assert_eq!((found[0].turn, s.get(id).unwrap().info.pages[0].rotation), (0, 0));
+}
+
+/// Recognize text levels a slightly turned scan (the image is turned about its centre; its
+/// pixels stay as they are) and reads it; with deskew off it leaves the image as it is.
+#[test]
+fn recognize_text_levels_a_turned_scan() {
+    use pdfcraft_ocr::orient;
+    if !ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let tilt = |px: Vec<u8>, w: u32, h: u32| (orient::rotate(&px, w, h, -3.0, [w as f32 / 2.0, h as f32 / 2.0]), w, h);
+    let shown_skew = |s: &Session, id: DocId| {
+        let shot = render_page(s, id);
+        orient::skew(&shot.rgba, shot.width, shot.height).unwrap().degrees
+    };
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = turned_scan(&mut s, tilt);
+    assert!((shown_skew(&s, id) - 3.0).abs() <= 0.2, "the scan is turned 3° clockwise");
+    let found = s.recognize_text(id, &[], ocr::OcrSettings::default()).unwrap();
+    let level = found[0].straighten.unwrap();
+    assert!(level.image == 0 && (level.degrees - 3.0).abs() <= 0.2, "{level:?}");
+    assert_eq!(found[0].turn, 0);
+    assert!(shown_skew(&s, id).abs() <= 0.15, "the page shows level text");
+    let text = page_texts(&s, id)[0].to_lowercase();
+    for w in ["quick", "brown", "liquor", "zebras"] {
+        assert!(text.contains(w), "{text}");
+    }
+    s.undo(id).unwrap();
+    assert!((shown_skew(&s, id) - 3.0).abs() <= 0.2, "undo turns the scan back");
+
+    // Recognition runs in the background: a scan moved or a page turned meanwhile is not
+    // corrected from the old reading.
+    let engine = ocr::engine().unwrap();
+    let id = turned_scan(&mut s, tilt);
+    let job = s.ocr_job(id, &[], ocr::OcrSettings::default()).unwrap();
+    let rect = s.get(id).unwrap().page_images(0)[0].rect;
+    let moved = [rect[0] + 20.0, rect[1], rect[2] + 20.0, rect[3]];
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move(moved) }).unwrap();
+    let found = job.run(&engine, |_, _| true);
+    assert!(found[0].straighten.is_some());
+    assert!(s.apply_ocr(id, &found).is_err(), "the scan moved");
+    let id = turned_scan(&mut s, |px, w, h| orient::quarter_turn(&px, w, h, 2));
+    let job = s.ocr_job(id, &[], ocr::OcrSettings::default()).unwrap();
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    let found = job.run(&engine, |_, _| true);
+    assert_eq!(found[0].turn, 2);
+    assert!(s.apply_ocr(id, &found).is_err(), "the page turned");
+    // Any other change too (text added, a scan replaced): the reading is of an older document.
+    let id = turned_scan(&mut s, |px, w, h| orient::quarter_turn(&px, w, h, 2));
+    let job = s.ocr_job(id, &[], ocr::OcrSettings::default()).unwrap();
+    s.apply(id, rect_comment(0, [10.0, 10.0, 50.0, 50.0])).unwrap();
+    let found = job.run(&engine, |_, _| true);
+    assert!(s.apply_ocr(id, &found).is_err(), "a comment was added");
+    // Unchanged, the same reading applies.
+    let id = turned_scan(&mut s, |px, w, h| orient::quarter_turn(&px, w, h, 2));
+    let job = s.ocr_job(id, &[], ocr::OcrSettings::default()).unwrap();
+    let found = job.run(&engine, |_, _| true);
+    s.apply_ocr(id, &found).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages[0].rotation, 180);
+
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = turned_scan(&mut s, tilt);
+    let found = s.recognize_text(id, &[], ocr::OcrSettings { deskew: false, ..Default::default() }).unwrap();
+    assert_eq!(found[0].straighten, None);
+    assert!((shown_skew(&s, id) - 3.0).abs() <= 0.2, "deskew off leaves the scan turned");
 }

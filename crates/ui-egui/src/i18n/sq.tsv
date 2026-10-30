@@ -627,6 +627,7 @@
 	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Shkarkimi i bashkëngjitjeve në ueb vjen me M3.10 ({n} bajte gati)
 	Downsample to	Zvogëlo rezolucionin në
 	Also recognize pages that already have text	Njih edhe faqet që kanë tashmë tekst
+	Deskew pages	Drejto faqet
 	Pictures on those pages are recognized too; words already in the page's text are not added again	Edhe figurat në ato faqe njihen; fjalët që ekzistojnë tashmë në tekstin e faqes nuk shtohen përsëri
 	Drag a rectangle around the area to copy	Tërhiq një drejtkëndësh rreth zonës që do të kopjohet
 	Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes	Tërhiq një drejtkëndësh mbi një faqe për ta prerë; kliko dyfish një faqe për Cakto kutitë e faqes

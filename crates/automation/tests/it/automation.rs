@@ -6533,6 +6533,31 @@ fn ocr_tools_make_a_scan_searchable() {
     assert!(matches!(a.call("ocr_recognize", &json!({ "doc": scan, "language": "xx" })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// A page scanned upside down is turned upright (and reported) unless auto_rotate is false.
+#[test]
+fn ocr_recognize_turns_an_upside_down_scan_upright() {
+    let dir = workdir("ocr-rotate");
+    let mut a = auto(&dir);
+    if ok(&mut a, "ocr_status", json!({}))["available"] != true {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let text = "The quick brown fox jumps over the lazy dog.\nPack my box with five dozen liquor jugs.";
+    let text = ok(&mut a, "doc_create", json!({ "from": "text", "text": text }))["doc"].as_u64().unwrap();
+    // Turned before it is exported: the picture of it is upside down.
+    ok(&mut a, "page_rotate", json!({ "doc": text, "pages": [1], "degrees": 180 }));
+    ok(&mut a, "doc_export_images", json!({ "doc": text, "folder": "scan", "dpi": 150, "pages": [1] }));
+    let png = std::fs::read_dir(dir.join("scan")).unwrap().next().unwrap().unwrap().path();
+    let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": [png.to_string_lossy()] }))["doc"].as_u64().unwrap();
+    let off = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "auto_rotate": false, "deskew": false }));
+    assert_eq!((off["pages"][0]["rotated"].as_u64(), off["pages"][0]["deskewed"].as_f64()), (Some(0), Some(0.0)), "{off}");
+    ok(&mut a, "edit_undo", json!({ "doc": scan }));
+    let r = ok(&mut a, "ocr_recognize", json!({ "doc": scan }));
+    assert_eq!(r["pages"][0]["rotated"].as_u64(), Some(180), "{r}");
+    assert!(r["pages"][0]["text"].as_str().unwrap().to_lowercase().contains("liquor"), "{r}");
+    assert!(matches!(a.call("ocr_recognize", &json!({ "doc": scan, "auto_rotate": "yes" })), Err(ToolError::InvalidArgs(_))));
+}
+
 /// #1028: `skip_text_pages: false` reads a picture on a page that has its own text, and the
 /// page's own words are left out (counted) instead of being added a second time.
 #[test]

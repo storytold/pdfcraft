@@ -6605,7 +6605,7 @@ status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
 evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable"]
-notes = "Invisible text (Tr 3) fitted to each word box; the image is not deskewed or downsampled (exact mode only)."
+notes = "Invisible text (Tr 3) fitted to each word box; the image is not downsampled (exact mode only). Deskew turns where the image is drawn, not its pixels (ocr.deskew)."
 
 [[feature]]
 id = "ocr.searchable-image-exact"
@@ -6617,7 +6617,7 @@ status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
 evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable"]
-notes = "The image is left untouched."
+notes = "The image's pixels are left untouched (Deskew pages turns where it is drawn and can be switched off)."
 
 [[feature]]
 id = "ocr.editable-text-output"
@@ -6661,11 +6661,11 @@ title = "Detect and fix page rotation"
 area = "I"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["ocr.recognize", "ocr.recognize_batch"]
+tools = ["ocr_recognize", "ocr_recognize_files"]
+evidence = ["crates/engine/src/tests.rs::recognize_text_turns_sideways_and_upside_down_scans_upright", "crates/automation/tests/it/automation.rs::ocr_recognize_turns_an_upside_down_scan_upright", "crates/ocr/src/orient.rs::a_sideways_page_has_lines_running_down", "crates/ocr/src/orient.rs::upright_text_reads_as_words"]
+notes = "Recognize text (Auto-rotate pages, on by default; auto_rotate) sets the /Rotate that shows a page scanned sideways or upside down upright, so the image and its pixels are unchanged and undo restores it. A projection profile of the ink tells whether the lines run across or down the page; the page is then read both ways along them and kept the way whose text reads as more plausible words (letters in one case pattern, numbers). Only pages without text of their own. Tested on synthetic 150 dpi scans in all four quarter turns. Limits: the up/down choice relies on the Latin-only models, so non-Latin scans stay as they are; each page is recognised twice (four times when the line direction was misjudged)."
 
 [[feature]]
 id = "ocr.deskew"
@@ -6673,11 +6673,11 @@ title = "Deskew"
 area = "I"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["ocr.recognize", "ocr.recognize_batch"]
+tools = ["ocr_recognize", "ocr_recognize_files"]
+evidence = ["crates/engine/src/tests.rs::recognize_text_levels_a_turned_scan", "crates/ocr/src/orient.rs::finds_the_turn_that_levels_the_lines", "crates/ocr/src/orient.rs::straightening_the_pixels_levels_them"]
+notes = "Recognize text (Deskew pages, on by default; deskew) finds the skew of a scan with a projection profile (±15°, 0.05° steps) and turns the scan image (one covering at least half the page) level about its centre; the pixels are not resampled, so it stays lossless and undoable, and the text layer is read from the levelled rendering. A level the recognised text doesn't confirm as words (a photo, a drawing) is not applied. Only pages without text of their own. Tested on a synthetic scan turned 3°. Not yet: Acrobat's resampled output (the turned image's corners leave the page box and white shows at the opposite corners), deskew outside Recognize text (Enhance scans)."
 
 [[feature]]
 id = "ocr.despeckle"
