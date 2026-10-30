@@ -582,6 +582,14 @@ mod tests {
     }
 
     #[test]
+    fn u64_rejects_nine_bytes_with_nonzero_lead() {
+        let big = Tlv::parse_all(&[0x02, 0x09, 0x01, 0, 0, 0, 0, 0, 0, 0, 5]).unwrap();
+        assert!(big.u64().is_err());
+        let ok = Tlv::parse_all(&[0x02, 0x09, 0x00, 0x80, 0, 0, 0, 0, 0, 0, 0]).unwrap();
+        assert_eq!(ok.u64().unwrap(), 0x8000_0000_0000_0000);
+    }
+
+    #[test]
     fn round_trips() {
         let o = oid("1.2.840.113549.1.7.2");
         let t = Tlv::parse_all(&o).unwrap();
