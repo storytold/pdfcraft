@@ -14,7 +14,7 @@ fn varied_page(n: usize) -> Page {
             space_around: [false; 2],
         })
         .collect();
-    Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None }
+    Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() }
 }
 
 fn lookup_steps(f: impl FnOnce()) -> usize {
@@ -69,6 +69,7 @@ fn page() -> Page {
             rotation: 0.0,
         }],
         background: None,
+        rules: Vec::new(),
     }
 }
 
@@ -118,6 +119,7 @@ fn word_table_cell_widths_follow_the_columns_they_span() {
             vec![cell("All", 3)],
             vec![cell("First", 1)],
         ],
+        ruled: false,
     };
     let xml = docx_table(&table);
     assert!(xml.contains("<w:gridCol w:w=\"1000\"/><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"3000\"/>"), "{xml}");
@@ -342,6 +344,7 @@ fn table_page() -> Page {
         ],
         images: Vec::new(),
         background: None,
+        rules: Vec::new(),
     }
 }
 
@@ -358,7 +361,7 @@ fn grid_text_becomes_a_real_table_in_every_format() {
     let d = docx(std::slice::from_ref(&p), "Bill");
     assert!(d.starts_with(b"PK"));
     assert!(d.windows(b"word/document.xml".len()).any(|w| w == b"word/document.xml"));
-    let (tables, _) = tables(&p.blocks);
+    let (tables, _) = tables(&p.blocks, &p.rules);
     assert_eq!(tables.len(), 1);
     let table_xml = docx_table(&tables[0]);
     assert!(table_xml.contains("<w:tblGrid>"));
@@ -403,7 +406,7 @@ fn a_staircase_of_blocks_is_not_a_huge_table() {
         })
         .collect();
     let started = std::time::Instant::now();
-    let (tables, _) = tables(&blocks);
+    let (tables, _) = tables(&blocks, &[]);
     assert!(tables.iter().all(|t| t.cols.len() <= MAX_COLS), "{} columns", tables.iter().map(|t| t.cols.len()).max().unwrap_or(0));
     assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
 }
@@ -433,6 +436,7 @@ fn word_opens_tables_up_to_its_column_limit() {
             .collect(),
         images: Vec::new(),
         background: None,
+        rules: Vec::new(),
     };
     let grid_cols = |p: &Page| part(&docx(std::slice::from_ref(p), "Grid"), "word/document.xml").matches("<w:gridCol ").count();
     assert_eq!(grid_cols(&grid(63)), 63, "63 columns is still a table");
@@ -468,6 +472,7 @@ fn a_link_inside_a_sentence_is_not_a_table_column() {
         ],
         images: Vec::new(),
         background: None,
+        rules: Vec::new(),
     };
     let h = html(std::slice::from_ref(&p), "Regulations");
     assert!(!h.contains("<table>"), "running text became a table: {h}");
@@ -489,7 +494,7 @@ fn sentences_that_run_on_into_links_are_not_a_table() {
         blocks.push(block(lead, 72.0, y, 211.0, y + 12.0));
         blocks.push(blue("https://example.org/event", 212.5, y, 360.0, y + 12.0));
     }
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
     let h = html(std::slice::from_ref(&p), "Event");
     assert!(!h.contains("<table>"), "sentences became a table: {h}");
     assert_eq!(h.matches("https://example.org/event").count(), 3, "{h}");
@@ -511,7 +516,7 @@ fn table_spans_do_not_consume_text_they_do_not_emit() {
         }
     }
     let p = Page { width: 612.0, height: 792.0, blocks, ..Page::default() };
-    let (tables, consumed) = tables(&p.blocks);
+    let (tables, consumed) = tables(&p.blocks, &p.rules);
     assert_eq!(tables.len(), 1);
     assert_eq!(tables[0].rows[0][0].span, 2);
     assert!(!consumed[1], "a covered slot did not emit its text");
@@ -540,11 +545,11 @@ fn a_superscript_beside_a_number_keeps_its_table() {
         blocks.push(Block { size: 8.0, ..block(sup, 106.0, y + 5.0, 113.0, y + 13.0) });
         blocks.push(block(&format!("{},000", 30 - 5 * n), 300.0, y, 340.0, y + 12.0));
     }
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
     let h = html(std::slice::from_ref(&p), "Prizes");
     assert!(h.contains("<table>"), "the prize table was lost: {h}");
     assert!(h.contains("30,000") && h.contains("15,000"), "{h}");
-    let (tables, consumed) = tables(&p.blocks);
+    let (tables, consumed) = tables(&p.blocks, &p.rules);
     assert!(consumed.iter().all(|used| *used), "ordinary table continuations stay in their cells");
     let cells: Vec<&str> = tables.iter().flat_map(|t| &t.rows).flatten().map(|c| c.text.as_str()).collect();
     assert!(["st", "nd", "rd", "th"].iter().all(|suffix| cells.contains(suffix)));
@@ -573,6 +578,7 @@ fn two_column_body_text_is_not_mistaken_for_a_table() {
         ],
         images: Vec::new(),
         background: None,
+        rules: Vec::new(),
     };
     let h = html(&[p], "Paper");
     assert!(!h.contains("<table>"), "tall two-column text must stay paragraphs: {h}");
@@ -657,7 +663,7 @@ fn italic_sentence() -> Vec<Block> {
 fn an_italic_word_stays_in_its_sentence() {
     let mut blocks = italic_sentence();
     blocks.push(block("The next line is a paragraph of its own.", 72.0, 684.0, 300.0, 696.0));
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
     let xml = part(&docx(std::slice::from_ref(&p), "Opinion"), "word/document.xml");
     assert_eq!(
         word_paragraphs(&xml),
@@ -682,7 +688,7 @@ fn an_italic_word_stays_in_its_sentence() {
 fn a_sentence_keeps_its_reading_order() {
     let mut blocks = vec![block("Then the next line.", 72.0, 684.0, 200.0, 696.0)];
     blocks.extend(italic_sentence().into_iter().rev());
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
     let xml = part(&docx(std::slice::from_ref(&p), "Opinion"), "word/document.xml");
     assert_eq!(
         word_paragraphs(&xml),
@@ -703,7 +709,7 @@ fn runs_keep_the_spaces_the_source_had_between_them() {
         block("E = mc", 72.0, 660.0, 110.0, 672.0),
         Block { size: 8.0, ..block("2", 110.0, 665.0, 115.0, 673.0) },
     ];
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
     let xml = part(&docx(std::slice::from_ref(&p), "Spaces"), "word/document.xml");
     assert_eq!(
         word_paragraphs(&xml),
@@ -715,7 +721,7 @@ fn runs_keep_the_spaces_the_source_had_between_them() {
 #[test]
 fn turned_text_is_not_a_run_of_the_line_beside_it() {
     let blocks = vec![block("Before", 72.0, 700.0, 110.0, 712.0), Block { rotation: 90.0, ..block("SIDE", 111.0, 690.0, 123.0, 720.0) }];
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
     let h = html(std::slice::from_ref(&p), "Turned");
     assert!(h.contains("<p>Before</p>") && h.contains("<p>SIDE</p>"), "{h}");
 }
@@ -726,7 +732,7 @@ fn a_block_on_the_next_line_starts_a_paragraph() {
         block("The first line ends here", 72.0, 700.0, 190.0, 712.0),
         Block { italic: true, ..block("and the next starts there.", 190.5, 690.0, 320.0, 702.0) },
     ];
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
     let xml = part(&docx(std::slice::from_ref(&p), "Lines"), "word/document.xml");
     assert_eq!(word_paragraphs(&xml), vec![runs(&[("The first line ends here", false)]), runs(&[("and the next starts there.", true)])], "{xml}");
 }
@@ -743,7 +749,7 @@ fn table_cells_are_not_runs_of_a_paragraph() {
         blocks.push(block(&format!("{},000", 30 - 5 * n), 300.0, y, 340.0, y + 12.0));
     }
     blocks.extend(italic_sentence().into_iter().map(|b| Block { rect: [b.rect[0], b.rect[1] - 200.0, b.rect[2], b.rect[3] - 200.0], ..b }));
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
     let xml = part(&docx(std::slice::from_ref(&p), "Prizes"), "word/document.xml");
     assert_eq!(xml.matches("<w:tbl>").count(), 1, "{xml}");
     for cell in ["st", "nd", "rd", "30,000"] {
@@ -763,9 +769,42 @@ fn a_paragraph_is_a_heading_only_when_its_text_is() {
         Block { bold: true, ..block("Summary", 72.0, 700.0, 125.0, 712.0) },
         block("the year closed with more members than it opened with, and fewer debts.", 128.0, 700.0, 540.0, 712.0),
     ];
-    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None };
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
     let xml = part(&docx(std::slice::from_ref(&p), "Report"), "word/document.xml");
     assert_eq!(xml.matches("<w:pStyle w:val=\"Heading1\"/>").count(), 1, "{xml}");
     assert!(!xml.contains("Heading2"), "the lead-in made its paragraph a heading: {xml}");
     assert_eq!(word_paragraphs(&xml).len(), 2, "{xml}");
+}
+
+/// #5149: two columns of two rows are a table when ruled lines draw its grid, and the docx keeps
+/// its borders; the same text without rules (or with rules that only underline it) stays paragraphs.
+#[test]
+fn a_ruled_two_by_two_grid_is_a_table() {
+    let blocks = vec![
+        block("Name", 25.0, 250.0, 55.0, 261.0),
+        block("Value", 165.0, 250.0, 195.0, 261.0),
+        block("Alpha", 25.0, 225.0, 55.0, 236.0),
+        block("One", 165.0, 225.0, 185.0, 236.0),
+    ];
+    let grid = vec![
+        [20.0, 270.0, 300.0, 270.0],
+        [20.0, 245.0, 300.0, 245.0],
+        [20.0, 220.0, 300.0, 220.0],
+        [20.0, 220.0, 20.0, 270.0],
+        [160.0, 220.0, 160.0, 270.0],
+        [300.0, 220.0, 300.0, 270.0],
+    ];
+    let (found, consumed) = tables(&blocks, &grid);
+    assert_eq!(found.len(), 1);
+    assert!(found[0].ruled);
+    assert_eq!(found[0].rows.len(), 2);
+    assert!(consumed.iter().all(|used| *used));
+    let p = Page { width: 320.0, height: 300.0, blocks: blocks.clone(), rules: grid, ..Page::default() };
+    let xml = part(&docx(std::slice::from_ref(&p), "Grid"), "word/document.xml");
+    assert_eq!(xml.matches("<w:tbl>").count(), 1, "{xml}");
+    assert!(xml.contains("w:val=\"single\"") && !xml.contains("w:val=\"nil\""), "{xml}");
+
+    assert!(tables(&blocks, &[]).0.is_empty(), "alignment alone does not make two by two a table");
+    let underlines = [[20.0, 245.0, 300.0, 245.0]];
+    assert!(tables(&blocks, &underlines).0.is_empty(), "a rule between the rows alone is no grid");
 }

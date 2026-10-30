@@ -35,6 +35,8 @@ pub type Rgb = [f64; 3];
 
 mod background;
 pub use background::page_background;
+mod rules;
+pub use rules::page_rules;
 pub mod objects;
 pub use objects::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, editable_objects, move_objects};
 

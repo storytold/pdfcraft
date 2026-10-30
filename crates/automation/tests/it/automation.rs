@@ -7097,6 +7097,52 @@ BT /F1 11 Tf 20 20 Td (Total due: 150.00) Tj ET";
     assert!(rendered.iter().any(|c| matches!(c, Content::Png { .. })));
 }
 
+/// #5149: a two-column, two-row table drawn with ruled lines reaches Word as a table with its
+/// rules, not as four paragraphs one under another.
+#[test]
+fn exporting_a_ruled_two_by_two_table_to_word_keeps_the_table() {
+    let dir = workdir("ruled-table-word");
+    let content = "0.5 w 20 270 m 300 270 l S 20 245 m 300 245 l S 20 220 m 300 220 l S \
+20 220 m 20 270 l S 160 220 m 160 270 l S 300 220 m 300 270 l S \
+BT /F1 11 Tf 25 253 Td (Name) Tj 140 0 Td (Value) Tj -140 -25 Td (Alpha) Tj 140 0 Td (One) Tj ET \
+BT /F1 11 Tf 20 150 Td (A paragraph after the table.) Tj ET";
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 320 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        stream.as_str(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ];
+    std::fs::write(dir.join("table.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "table.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "table.docx" }));
+    let zip = std::fs::read(dir.join("table.docx")).unwrap();
+    let mut at = 0;
+    let mut xml = String::new();
+    while zip[at..].starts_with(b"PK\x03\x04") {
+        let size = u32::from_le_bytes(zip[at + 18..at + 22].try_into().unwrap()) as usize;
+        let len = u16::from_le_bytes(zip[at + 26..at + 28].try_into().unwrap()) as usize;
+        let data = at + 30 + len;
+        if &zip[at + 30..data] == b"word/document.xml" {
+            std::io::Read::read_to_string(&mut flate2::read::DeflateDecoder::new(&zip[data..data + size]), &mut xml).unwrap();
+            break;
+        }
+        at = data + size;
+    }
+    assert_eq!(xml.matches("<w:tbl>").count(), 1, "the ruled grid is a table: {xml}");
+    let table = xml.split_once("<w:tbl>").and_then(|(_, t)| t.split_once("</w:tbl>")).map(|(t, _)| t).unwrap();
+    assert_eq!(table.matches("<w:tr>").count(), 2, "{table}");
+    for word in ["Name", "Value", "Alpha", "One"] {
+        assert_eq!(table.matches(&format!(">{word}</w:t>")).count(), 1, "{word} is a cell: {xml}");
+        assert_eq!(xml.matches(&format!(">{word}</w:t>")).count(), 1, "{word} is written once");
+    }
+    assert!(table.contains("w:val=\"single\""), "the drawn rules become borders: {table}");
+    assert!(!table.contains("A paragraph after the table."));
+    assert_eq!(xml.matches(">A paragraph after the table.</w:t>").count(), 1);
+}
+
 /// #4158: a word set in italic inside a sentence ("Before *Chevron* after.") reaches Word as an
 /// italic run of the sentence's paragraph, not as a paragraph of its own between two halves.
 #[test]
