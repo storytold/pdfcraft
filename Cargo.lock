@@ -1392,13 +1392,14 @@ dependencies = [
 [[package]]
 name = "craft-update"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545#e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545"
+source = "git+https://github.com/storytold/craft-libs?rev=04aa1703b32d299e54f78fcde4182f2b393a9116#04aa1703b32d299e54f78fcde4182f2b393a9116"
 dependencies = [
  "chrono",
  "dunce",
  "egui",
  "flate2",
  "getrandom 0.3.4",
+ "image",
  "log",
  "plist",
  "semver",
@@ -4721,7 +4722,7 @@ dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-model",
- "roxmltree 0.20.0",
+ "roxmltree 0.21.2",
 ]
 
 [[package]]
@@ -4884,7 +4885,7 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-fonts",
  "png 0.18.1",
- "roxmltree 0.20.0",
+ "roxmltree 0.21.2",
  "sha2 0.11.1",
  "thiserror 2.0.21",
 ]
@@ -4897,7 +4898,7 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-forms",
  "pdfcraft-model",
- "roxmltree 0.20.0",
+ "roxmltree 0.21.2",
  "thiserror 2.0.21",
 ]
 
@@ -6962,7 +6963,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
@@ -8941,9 +8942,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.1.0"
+version = "9.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2886b00003a72c4ccee3f42cfc34908d33b2508a74d827dc2a4244706475c704"
+checksum = "1156b39d142a34b999c2310a50455e0cb3760bf7efad0122f796d813bee26ccb"
 dependencies = [
  "crc32fast",
  "flate2",

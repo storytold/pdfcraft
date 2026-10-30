@@ -9,6 +9,15 @@
 // The settings object in `persist` is one `json!` literal past the default limit of 128.
 #![recursion_limit = "256"]
 
+/// PdfCraft as craft-update knows it, with its 128 px icon and accent colour: the update
+/// prompt shows both, and an AppImage's menu entry gets the icon.
+#[cfg(not(target_arch = "wasm32"))]
+pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
+    icon_png: Some(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.pdfcraft.png")),
+    accent: Some([0xb7, 0x02, 0x28]),
+    ..craft_update::suite::PDFCRAFT
+};
+
 use crate::control::Host as _;
 
 /// Translate an English UI string into the current language (see [`i18n`]).

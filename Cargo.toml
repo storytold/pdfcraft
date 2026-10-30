@@ -23,7 +23,8 @@ craft-keymap = { git = "https://github.com/storytold/craft-libs", version = "0.1
 craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545" }
 # Whether a path stored in a document may be opened (GoToR link targets).
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545" }
-craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545", features = ["egui"] }
+# craft-update: app-specific pretend versions apply to startup and manual checks.
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "04aa1703b32d299e54f78fcde4182f2b393a9116", features = ["egui"] }
 # internal
 pdfcraft-geom = { path = "crates/geom", version = "0.15.0" }
 pdfcraft-filters = { path = "crates/filters", version = "0.15.0" }
