@@ -40,11 +40,17 @@ impl Type1FontBlob {
         self.0.as_ref()
     }
 
-    pub(crate) fn outline_glyph(&self, gid: GlyphId) -> BezPath {
+    /// PdfCraft patch: `None` when the font has no outline for `gid` at all, which an empty path
+    /// cannot say apart from a glyph that is drawn by drawing nothing -- a space. A clipping
+    /// render mode needs the difference: an empty outline clips to nothing, while a glyph the
+    /// font does not have leaves the clip unknown (noted in review of #3447).
+    pub(crate) fn outline_glyph(&self, gid: GlyphId) -> Option<BezPath> {
         let mut path = OutlinePath::new();
-        let _ = self.table().draw(gid, Some(UNITS_PER_EM), &mut path);
+        // A space draws no contours and returns `Ok`; a glyph id the font has no entry for
+        // returns `Err`.
+        self.table().draw(gid, Some(UNITS_PER_EM), &mut path).ok()?;
 
-        path.take()
+        Some(path.take())
     }
 }
 
@@ -108,17 +114,17 @@ impl CffFontBlob {
         self.0.as_ref().get().subfonts.get(index)
     }
 
-    pub(crate) fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
+    /// PdfCraft patch: `None` when this glyph has no sub-font to be drawn from, or cannot be
+    /// drawn -- see [`OpenTypeFontBlob::outline_glyph`] for why that is not an empty path.
+    pub(crate) fn outline_glyph(&self, glyph: GlyphId) -> Option<BezPath> {
         let mut path = OutlinePath::new();
-        let Some(subfont) = self.subfont(glyph) else {
-            return BezPath::new();
-        };
+        let subfont = self.subfont(glyph)?;
 
-        let _ = self
-            .font()
-            .draw(subfont, glyph, &[], Some(UNITS_PER_EM), &mut path);
+        self.font()
+            .draw(subfont, glyph, &[], Some(UNITS_PER_EM), &mut path)
+            .ok()?;
 
-        path.take()
+        Some(path.take())
     }
 
     pub(crate) fn glyph_names(&self) -> Vec<(GlyphId, String)> {
@@ -339,7 +345,9 @@ impl OpenTypeFontBlob {
         &self.yoke.as_ref().get().outline_glyphs
     }
 
-    pub(crate) fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
+    /// PdfCraft patch: `None` when the font lists no outline for this glyph -- see
+    /// [`OpenTypeFontBlob::outline_glyph`] for why that is not an empty path.
+    pub(crate) fn outline_glyph(&self, glyph: GlyphId) -> Option<BezPath> {
         if let Some(cff_blob) = self.cff_blob.as_ref() {
             return cff_blob.outline_glyph(glyph);
         }
@@ -355,12 +363,10 @@ impl OpenTypeFontBlob {
             DrawSettings::unhinted(Size::new(UNITS_PER_EM), LocationRef::default())
         };
 
-        let Some(outline) = self.outline_glyphs().get(glyph) else {
-            return BezPath::new();
-        };
+        let outline = self.outline_glyphs().get(glyph)?;
 
-        let _ = outline.draw(draw_settings, &mut path);
-        path.take()
+        outline.draw(draw_settings, &mut path).ok()?;
+        Some(path.take())
     }
 }
 

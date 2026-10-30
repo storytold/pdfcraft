@@ -92,7 +92,9 @@ impl CacheKey for OutlineFont {
 }
 
 impl OutlineFont {
-    pub(crate) fn outline_glyph(&self, glyph: GlyphId, code: u32) -> BezPath {
+    /// PdfCraft patch: `None` when the font has no outline for this glyph, which an empty path
+    /// cannot say apart from a glyph drawn by drawing nothing (noted in review of #3447).
+    pub(crate) fn outline_glyph(&self, glyph: GlyphId, code: u32) -> Option<BezPath> {
         match self {
             Self::Type1(t) => t.outline_glyph(glyph),
             Self::TrueType(t) => t.outline_glyph(glyph),

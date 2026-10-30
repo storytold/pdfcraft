@@ -89,7 +89,7 @@ impl Type1Font {
         }
     }
 
-    pub(crate) fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
+    pub(crate) fn outline_glyph(&self, glyph: GlyphId) -> Option<BezPath> {
         match &self.1 {
             Kind::Standard(s) => s.outline_glyph(glyph),
             Kind::Cff(c) => c.outline_glyph(glyph),
@@ -222,7 +222,7 @@ impl Type1Kind {
         .unwrap_or(GlyphId::NOTDEF)
     }
 
-    fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
+    fn outline_glyph(&self, glyph: GlyphId) -> Option<BezPath> {
         self.font.outline_glyph(glyph)
     }
 
@@ -332,7 +332,7 @@ impl CffKind {
         .unwrap_or(GlyphId::NOTDEF)
     }
 
-    fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
+    fn outline_glyph(&self, glyph: GlyphId) -> Option<BezPath> {
         self.font.outline_glyph(glyph)
     }
 

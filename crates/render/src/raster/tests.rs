@@ -7039,3 +7039,173 @@ fn test_clip_only_text_raster_preserves_clipping_without_painting() {
     assert!(pixels.contains(&[0, 0, 255, 255]), "fill shows through the 7 Tr clip");
     assert!(pixels.contains(&white), "the clip is text-shaped, not the whole page");
 }
+
+/// A glyph *shown* in a clipping mode clips what follows it even when it has no outline to clip
+/// to: a space clips to nothing, so nothing paints through it (ISO 32000-1 §9.3.6). Applying no
+/// clip instead left a fill that was meant to show through the text covering everything after
+/// it.
+///
+/// A text object that shows no glyph at all is the opposite case and leaves the clipping path
+/// alone, which is the second case below. An earlier version of this change clipped for that one
+/// too and called it the cause of #3123 and #3429; that was wrong, so no issue is claimed here
+/// (see the PR description, and `refuse` in #3447).
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_glyph_shown_in_a_clipping_mode_clips_even_with_no_outline() {
+    // Each page fills its whole 40x40 area with red; they differ in what clips the fill.
+    let fill = "1 0 0 rg 0 0 40 40 re f";
+    let cases = [
+        // A glyph shown in a clipping mode with nothing to clip to (a space): the clip is
+        // empty, so nothing paints through it.
+        (format!("q BT 7 Tr /F1 24 Tf 4 10 Td ( ) Tj ET {fill} Q"), 0u32),
+        // A text object that shows no glyph at all leaves the clipping path alone.
+        (format!("q BT 7 Tr /F1 24 Tf 4 10 Td ET {fill} Q"), 1600),
+        // No text object at all: the fill covers the page.
+        (format!("q {fill} Q"), 1600),
+        // A mode that paints rather than clips, showing a glyph with no outline: no clip.
+        (format!("q BT 0 Tr /F1 24 Tf 4 10 Td ( ) Tj ET {fill} Q"), 1600),
+    ];
+    for (content, want_red) in cases {
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n", content.len()).as_bytes());
+        pdf.extend_from_slice(
+            b"5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false }));
+        });
+        let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("the page must render");
+        assert!(page.error.is_none(), "{:?}", page.error);
+        let red = (0..page.width * page.height)
+            .filter(|i| {
+                let o = (*i * 4) as usize;
+                page.rgba[o] > 180 && page.rgba[o + 1] < 90
+            })
+            .count() as u32;
+        assert_eq!(red, want_red, "{content}");
+    }
+}
+
+/// A Type 3 glyph in modes 4 to 6 renders *and* clips, and it adds nothing to the clipping path,
+/// so the clip is unknown. Dispatching it as `Fill` meant `clip_glyph` never saw it and nothing
+/// marked that: a space in another font later in the same text object then left `ET` installing
+/// an empty clip, and the rest of the page was hidden (noted in review).
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_type3_glyph_in_a_clip_and_fill_mode_leaves_the_clip_unknown() {
+    // One text object: a Type 3 glyph in `mode Tr`, then a space in Helvetica, which resolves to
+    // an empty outline. Then a red fill over the whole page.
+    let red_of = |mode: u8| {
+        let content = format!("q BT {mode} Tr /F1 20 Tf 10 10 Td (A) Tj /F2 20 Tf ( ) Tj ET 1 0 0 rg 0 0 40 40 re f Q");
+        let glyph = "1 0 0 0 1 1 d1 0.12 0.12 0.71 0.71 re f";
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 7 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /FirstChar 65 /LastChar 65 /Widths [1]
+  /Encoding << /Differences [65 /a] >> /CharProcs << /a 6 0 R >> >> endobj
+6 0 obj << /Length {} >> stream
+{glyph}
+endstream endobj
+7 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len(),
+            glyph.len()
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false }));
+        });
+        let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("the page must render");
+        assert!(page.error.is_none(), "{mode} Tr: {:?}", page.error);
+        (0..page.width * page.height)
+            .filter(|i| {
+                let o = (*i * 4) as usize;
+                page.rgba[o] > 180 && page.rgba[o + 1] < 90
+            })
+            .count() as u32
+    };
+
+    // Modes 4 to 6: the clip is unknown, so the fill after `ET` is left alone. It used to be
+    // clipped away to nothing by the space's empty outline.
+    for mode in [4, 5, 6] {
+        assert_eq!(red_of(mode), 1600, "{mode} Tr: the fill after the text object is still painted");
+    }
+    // Mode 7 is the case patch 64 already handled, and goes the same way.
+    assert_eq!(red_of(7), 1600, "7 Tr: likewise");
+    // And a mode that does not clip at all is unchanged.
+    assert_eq!(red_of(0), 1600, "0 Tr installs no clip");
+}
+
+/// A glyph the font has no outline for is not a glyph whose outline is empty. Both came back as
+/// an empty `BezPath`, so a clipping mode installed an empty clip for a glyph id the font simply
+/// does not have and everything after `ET` disappeared (noted in review). An outline that
+/// resolves clips, even when it is empty -- the space case above -- and one that does not leaves
+/// what follows unclipped, since the real clip is unknown.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_glyph_the_font_has_no_outline_for_leaves_the_clip_unknown() {
+    // The embedded font has three glyphs, so glyph 500 has no outline at all. Identity-H makes
+    // the character code the glyph id, so the content stream asks for it directly.
+    let font = symbolic_truetype_cmap::disagreeing_font();
+    let red = |code: &str| -> u32 {
+        let content = format!("q BT 7 Tr /F1 24 Tf 4 10 Td <{code}> Tj ET 1 0 0 rg 0 0 40 40 re f Q");
+        let objects: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+            [format!("<< /Length {} >>\nstream\n", content.len()).into_bytes(), content.clone().into_bytes(), b"\nendstream".to_vec()].concat(),
+            b"<< /Type /Font /Subtype /Type0 /BaseFont /AAAAAA+Sym /Encoding /Identity-H /DescendantFonts [8 0 R] >>".to_vec(),
+            b"<< /Type /FontDescriptor /FontName /AAAAAA+Sym /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 /CapHeight 1000 /StemV 80 /FontFile2 7 0 R >>".to_vec(),
+            [format!("<< /Length {} >>\nstream\n", font.len()).into_bytes(), font.clone(), b"\nendstream".to_vec()].concat(),
+            b"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /AAAAAA+Sym /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor 6 0 R /DW 1000 /CIDToGIDMap /Identity >>".to_vec(),
+        ];
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, object) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend(format!("{} 0 obj\n", i + 1).into_bytes());
+            pdf.extend(object);
+            pdf.extend(b"\nendobj\n");
+        }
+        let xref = pdf.len();
+        pdf.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).into_bytes());
+        for offset in offsets {
+            pdf.extend(format!("{offset:010} 00000 n \n").into_bytes());
+        }
+        pdf.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).into_bytes());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+            let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false }));
+        });
+        let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("the page must render");
+        assert!(page.error.is_none(), "glyph {code}: {:?}", page.error);
+        (0..page.width * page.height)
+            .filter(|i| {
+                let o = (*i * 4) as usize;
+                page.rgba[o] > 180 && page.rgba[o + 1] < 90
+            })
+            .count() as u32
+    };
+
+    // Glyph 500: no outline in a three-glyph font, so the clip is unknown and the fill is left
+    // alone. It used to clip to nothing, and the page came out blank.
+    assert_eq!(red("01F4"), 1600, "the fill after the text object is still painted");
+
+    // Glyph 1 is the font's own empty glyph: an outline that resolves with no segments. That
+    // clips to nothing, as a space does, so none of the fill shows.
+    assert_eq!(red("0001"), 0, "an empty outline still clips the fill away");
+
+    // Glyph 2 is a square, so the fill shows through its shape: some of the page, not all.
+    let square = red("0002");
+    assert!(square > 0 && square < 1600, "a real outline clips to its own shape: {square}");
+}
