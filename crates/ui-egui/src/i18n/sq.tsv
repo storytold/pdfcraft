@@ -2546,6 +2546,12 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+	Couldn't rename {name}: {e}	Nuk u riemërtua dot {name}: {e}
+	Rename “{name}”	Riemërto “{name}”
+	Renamed to {name}	U riemërtua në {name}
+	Rename…	Riemërto…
+	Save and Rename	Ruaj dhe riemërto
+	This document has unsaved changes. They are saved first, then the file is renamed.	Ky dokument ka ndryshime të paruajtura. Ruhen së pari, pastaj skedari riemërtohet.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Sot

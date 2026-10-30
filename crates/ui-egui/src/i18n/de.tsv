@@ -2521,6 +2521,13 @@ animation effects	Off	Aus
 	Make properties default	Eigenschaften als Standard festlegen
 	Pages selected	Ausgewählte Seiten
 	Page properties	Seiteneigenschaften
+# Rename… on a document tab (#2102).
+	Rename…	Umbenennen…
+	Rename “{name}”	„{name}“ umbenennen
+	This document has unsaved changes. They are saved first, then the file is renamed.	Dieses Dokument hat nicht gespeicherte Änderungen. Sie werden zuerst gespeichert, dann wird die Datei umbenannt.
+	Save and Rename	Speichern und umbenennen
+	Renamed to {name}	Umbenannt in {name}
+	Couldn't rename {name}: {e}	{name} konnte nicht umbenannt werden: {e}
 	Create & Edit	Erstellen & Bearbeiten
 	Review & Compare	Prüfen & Vergleichen
 	Forms & Signatures	Formulare & Signaturen

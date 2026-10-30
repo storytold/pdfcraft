@@ -34,6 +34,7 @@ impl Automation {
             }
             "doc_close" => self.doc_close(&a)?,
             "doc_save" => self.doc_save(&a)?,
+            "doc_rename" => self.doc_rename(&a)?,
             "doc_set_info" => {
                 let edit = Edit::SetInfo { key: a.str("key")?.into(), value: a.str("value")?.into() };
                 self.apply(&a, edit)?

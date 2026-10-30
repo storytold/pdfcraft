@@ -2496,6 +2496,13 @@ animation effects	Off	Wyłączone
 	Make properties default	Ustaw właściwości jako domyślne
 	Pages selected	Zaznaczone strony
 	Page properties	Właściwości strony
+# Rename… on a document tab (#2102).
+	Rename…	Zmień nazwę…
+	Rename “{name}”	Zmień nazwę „{name}”
+	This document has unsaved changes. They are saved first, then the file is renamed.	Ten dokument ma niezapisane zmiany. Najpierw zostaną zapisane, a potem nazwa pliku zostanie zmieniona.
+	Save and Rename	Zapisz i zmień nazwę
+	Renamed to {name}	Zmieniono nazwę na {name}
+	Couldn't rename {name}: {e}	Nie można zmienić nazwy {name}: {e}
 	Create & Edit	Tworzenie i edycja
 	Review & Compare	Recenzja i porównanie
 	Forms & Signatures	Formularze i podpisy

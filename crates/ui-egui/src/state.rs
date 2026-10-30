@@ -186,6 +186,8 @@ pub enum Dialog {
     AuditSpace,
     /// Signatures ▸ Show certificate.
     CertificateViewer,
+    /// Rename… on a document tab.
+    RenameFile,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

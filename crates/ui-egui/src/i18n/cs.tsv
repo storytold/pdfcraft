@@ -2594,6 +2594,13 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+# Rename… on a document tab (#2102).
+	Rename…	Přejmenovat…
+	Rename “{name}”	Přejmenovat „{name}“
+	This document has unsaved changes. They are saved first, then the file is renamed.	Tento dokument má neuložené změny. Nejprve se uloží, potom se soubor přejmenuje.
+	Save and Rename	Uložit a přejmenovat
+	Renamed to {name}	Přejmenováno na {name}
+	Couldn't rename {name}: {e}	{name} nelze přejmenovat: {e}
 	Create & Edit	Vytváření a úpravy
 	Review & Compare	Revize a porovnání
 	Forms & Signatures	Formuláře a podpisy

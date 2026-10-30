@@ -2786,6 +2786,13 @@ key	Space	Tarpas
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
+# Rename… on a document tab (#2102).
+	Rename…	Pervardyti…
+	Rename “{name}”	Pervardyti „{name}“
+	This document has unsaved changes. They are saved first, then the file is renamed.	Šiame dokumente yra neįrašytų pakeitimų. Pirmiausia jie įrašomi, tada failas pervardijamas.
+	Save and Rename	Įrašyti ir pervardyti
+	Renamed to {name}	Pervardyta į {name}
+	Couldn't rename {name}: {e}	Nepavyko pervardyti {name}: {e}
 	Attach a file…	Pridėti failą…
 	Delete attachment	Ištrinti priedą
 	Attaching files is not available on the web yet	Failų pridėjimas žiniatinklyje dar negalimas

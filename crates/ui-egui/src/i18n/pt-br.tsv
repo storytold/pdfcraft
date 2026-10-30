@@ -2534,6 +2534,13 @@ animation effects	Off	Desativados
 	Make properties default	Tornar propriedades padrão
 	Pages selected	Páginas selecionadas
 	Page properties	Propriedades da página
+# Rename… on a document tab (#2102).
+	Rename…	Renomear…
+	Rename “{name}”	Renomear “{name}”
+	This document has unsaved changes. They are saved first, then the file is renamed.	Este documento tem alterações não salvas. Elas são salvas primeiro e depois o arquivo é renomeado.
+	Save and Rename	Salvar e renomear
+	Renamed to {name}	Renomeado para {name}
+	Couldn't rename {name}: {e}	Não foi possível renomear {name}: {e}
 	Create & Edit	Criar e editar
 	Review & Compare	Revisar e comparar
 	Forms & Signatures	Formulários e assinaturas

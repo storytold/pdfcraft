@@ -2829,6 +2829,12 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+	Couldn't rename {name}: {e}	Kohteen {name} nimeäminen uudelleen epäonnistui: {e}
+	Rename “{name}”	Nimeä uudelleen “{name}”
+	Renamed to {name}	Uusi nimi: {name}
+	Rename…	Nimeä uudelleen…
+	Save and Rename	Tallenna ja nimeä uudelleen
+	This document has unsaved changes. They are saved first, then the file is renamed.	Tässä asiakirjassa on tallentamattomia muutoksia. Ne tallennetaan ensin, ja sitten tiedosto nimetään uudelleen.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään

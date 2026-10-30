@@ -155,6 +155,25 @@ impl Automation {
         self.publish_save(id, &target, bytes, incremental, write)
     }
 
+    /// Rename the document's file in its own folder (#2102). Both the old and the new name are
+    /// writes there, so the automation write root must allow the folder; unsaved changes are refused
+    /// rather than left behind in a file that no longer matches the document.
+    pub(crate) fn doc_rename(&mut self, a: &Args) -> Result<Value> {
+        let doc = self.doc(a)?;
+        let id = doc.id;
+        let own = doc.path.clone().ok_or_else(|| failed("the document has no file yet: save it with doc_save and a path first"))?;
+        let name = a.str("name")?;
+        let own_path = PathBuf::from(&own);
+        self.resolve_for(&own, file_access::Access::Write, true)?;
+        if let Some(target) = pdfcraft_engine::rename_target(&own_path, name).map_err(failed)? {
+            let shown = target.to_string_lossy().into_owned();
+            self.resolve_for(&shown, file_access::Access::Write, true)?;
+        }
+        let path = self.session.rename_file(id, name).map_err(failed)?;
+        let doc = self.session.get(id).ok_or_else(|| failed("the renamed document is no longer open"))?;
+        Ok(json!({ "path": path, "name": doc.name.clone(), "document": summary(doc) }))
+    }
+
     /// Validate the prepared bytes before publishing them or marking the document saved.
     pub(crate) fn publish_save(
         &mut self,

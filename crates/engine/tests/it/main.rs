@@ -11,3 +11,4 @@ mod ocr_edit;
 mod office_export_images;
 mod private_image_resize;
 mod private_text_glyphs;
+mod rename_name_length;

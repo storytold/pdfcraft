@@ -2684,6 +2684,13 @@ animation effects	Off	Desactivados
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Estás viendo la versión firmada de «{from}» (revisión {rev}). Es una instantánea: los cambios aquí no afectarán al original.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Estás viendo la revisión {rev} de «{from}». Es una instantánea: los cambios aquí no afectarán al original.
+# Rename… on a document tab (#2102).
+	Rename…	Cambiar nombre…
+	Rename “{name}”	Cambiar el nombre de «{name}»
+	This document has unsaved changes. They are saved first, then the file is renamed.	Este documento tiene cambios sin guardar. Primero se guardan y después se cambia el nombre del archivo.
+	Save and Rename	Guardar y cambiar nombre
+	Renamed to {name}	Nombre cambiado a {name}
+	Couldn't rename {name}: {e}	No se pudo cambiar el nombre de {name}: {e}
 	Attach a file…	Adjuntar un archivo…
 	Delete attachment	Eliminar adjunto
 	Attaching files is not available on the web yet	Adjuntar archivos aún no está disponible en la web

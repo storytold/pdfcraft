@@ -2470,6 +2470,13 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+# Rename… on a document tab (#2102).
+	Rename…	重新命名…
+	Rename “{name}”	重新命名「{name}」
+	This document has unsaved changes. They are saved first, then the file is renamed.	此文件有未儲存的變更。會先儲存，然後再重新命名檔案。
+	Save and Rename	儲存並重新命名
+	Renamed to {name}	已重新命名為 {name}
+	Couldn't rename {name}: {e}	無法重新命名 {name}：{e}
 	Create & Edit	建立與編輯
 	Review & Compare	審閱與比較
 	Forms & Signatures	表單與簽名

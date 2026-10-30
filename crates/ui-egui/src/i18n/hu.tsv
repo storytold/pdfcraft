@@ -2519,6 +2519,13 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+# Rename… on a document tab (#2102).
+	Rename…	Átnevezés…
+	Rename “{name}”	„{name}” átnevezése
+	This document has unsaved changes. They are saved first, then the file is renamed.	A dokumentumban nem mentett módosítások vannak. Először ezek mentése történik meg, majd a fájl átnevezése.
+	Save and Rename	Mentés és átnevezés
+	Renamed to {name}	Átnevezve erre: {name}
+	Couldn't rename {name}: {e}	Nem sikerült átnevezni ezt: {name}: {e}
 	Create & Edit	Létrehozás és szerkesztés
 	Review & Compare	Áttekintés és összehasonlítás
 	Forms & Signatures	Űrlapok és aláírások

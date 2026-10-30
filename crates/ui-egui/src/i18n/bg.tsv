@@ -2483,6 +2483,13 @@ animation effects	Off	Изключени
 	Make properties default	Задаване като свойства по подразбиране
 	Pages selected	Избрани страници
 	Page properties	Свойства на страницата
+# Rename… on a document tab (#2102).
+	Rename…	Преименуване…
+	Rename “{name}”	Преименуване на „{name}“
+	This document has unsaved changes. They are saved first, then the file is renamed.	Този документ има незапазени промени. Първо се запазват, след това файлът се преименува.
+	Save and Rename	Запазване и преименуване
+	Renamed to {name}	Преименуван на {name}
+	Couldn't rename {name}: {e}	{name} не може да бъде преименуван: {e}
 	Create & Edit	Създаване и редактиране
 	Review & Compare	Преглед и сравнение
 	Forms & Signatures	Формуляри и подписи

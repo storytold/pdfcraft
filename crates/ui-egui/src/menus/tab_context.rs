@@ -5,6 +5,7 @@ pub(crate) enum Action {
     Close(DocId),
     Reopen,
     Reveal(DocId),
+    Rename(DocId),
 }
 
 impl crate::PdfCraftApp {
@@ -43,6 +44,7 @@ impl crate::PdfCraftApp {
                 #[cfg(target_arch = "wasm32")]
                 let _ = id;
             }
+            Action::Rename(id) => self.start_rename(id),
         }
     }
 }

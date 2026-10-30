@@ -165,6 +165,13 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc"],
         )),
+        t(
+            "doc_rename",
+            "Rename a document's file",
+            "Rename the open document's file on disk, in its own folder; the document stays open with its undo history. The extension is kept (added back when left out). Refused, with the reason, when the document has unsaved changes (save first), has no file yet, the name is taken, the file is read-only or in use, or the name can't be a file name on Windows, macOS or Linux (no / \\ : * ? \" < > |, no device names such as CON, no trailing dot, at most 255 bytes).",
+        )
+        .destructive()
+        .with(schema(json!({ "doc": doc(), "name": { "type": "string", "description": "The new file name, with or without the extension." } }), &["doc", "name"])),
         t("doc_set_info", "Set document metadata", "Set a document information entry such as Title, Author, Subject or Keywords, or a custom property under any other name (no spaces, delimiters, / or #; at most 127 bytes; doc_info lists them under custom); an empty value removes it. When the file has XMP metadata, the matching XMP property (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) is changed too, so viewers that read XMP first show the new value. Undoable.")
             .with(schema(json!({ "doc": doc(), "key": { "type": "string" }, "value": { "type": "string" } }), &["doc", "key", "value"])),
         t("page_render", "Render a page", "Render one page to a PNG image (default 96 dpi, at most 600). When the picture is incomplete or approximate (content cut at the page's safety budget, a colour painted in a fallback colour), a JSON part follows the image: { page, warnings: [sentence, ...] }.")

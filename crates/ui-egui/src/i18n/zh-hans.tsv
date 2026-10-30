@@ -2484,6 +2484,13 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+# Rename… on a document tab (#2102).
+	Rename…	重命名…
+	Rename “{name}”	重命名“{name}”
+	This document has unsaved changes. They are saved first, then the file is renamed.	此文档有未保存的更改。会先保存，然后再重命名文件。
+	Save and Rename	保存并重命名
+	Renamed to {name}	已重命名为 {name}
+	Couldn't rename {name}: {e}	无法重命名 {name}：{e}
 	Create & Edit	创建和编辑
 	Review & Compare	审阅和比较
 	Forms & Signatures	表单和签名

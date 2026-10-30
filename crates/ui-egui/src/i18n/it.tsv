@@ -2732,6 +2732,13 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+# Rename… on a document tab (#2102).
+	Rename…	Rinomina…
+	Rename “{name}”	Rinomina «{name}»
+	This document has unsaved changes. They are saved first, then the file is renamed.	Questo documento ha modifiche non salvate. Vengono salvate prima, poi il file viene rinominato.
+	Save and Rename	Salva e rinomina
+	Renamed to {name}	Rinominato in {name}
+	Couldn't rename {name}: {e}	Impossibile rinominare {name}: {e}
 	Create & Edit	Crea e modifica
 	Review & Compare	Revisione e confronto
 	Forms & Signatures	Moduli e firme
