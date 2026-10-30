@@ -313,7 +313,10 @@ fn text_turn(d: &Dict) -> i64 {
 pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
     let text = |key: &[u8]| d.get(key).and_then(Object::as_string).map(PdfString::to_text);
     let (what, text) = match d.name(b"Subtype")? {
-        b"FreeText" => ("the comment's text", text(b"Contents")?),
+        b"FreeText" => {
+            let text = text(b"Contents")?;
+            return Some(("the comment's text", pdfcraft_fonts::appearance_text::first_undrawable(&text)?));
+        }
         b"Line" if !d.contains(b"PCMeasureValue") => ("the line's caption", line_caption(d)?),
         b"Line" | b"PolyLine" | b"Polygon" => ("the measurement label", text(b"PCMeasureValue")?),
         b"Stamp" if matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) => ("the stamp's \"By\" line", text(b"PCByLine")?),
@@ -964,6 +967,31 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     let pad = 2.0 + bw;
     let width = (rect[2] - rect[0] - 2.0 * pad).max(1.0);
     let q = d.int(b"Q").unwrap_or(0);
+    // Keep this self-contained until it is installed: the appearance cache must never
+    // keep font references allocated only in one temporary display document.
+    if pdfcraft_fonts::appearance_text::has_shaped_text(&text) && pdfcraft_fonts::appearance_text::can_shape(&text) {
+        // A shaping/outline-budget failure must refuse the redraw, rather than create
+        // unmarked '?' that flattening could make permanent.
+        let lines = pdfcraft_fonts::appearance_text::wrap(&text, size, width).ok()?;
+        let (text_content, fonts) =
+            pdfcraft_fonts::appearance_text::draw(&lines, size, [rect[0] + pad, rect[1] + pad, rect[2] - pad, rect[3] - pad], q, text_color).ok()?;
+        c.push_str(&format!(
+            "{} {} {} {} re W n
+",
+            n(rect[0]),
+            n(rect[1]),
+            n(rect[2] - rect[0]),
+            n(rect[3] - rect[1])
+        ));
+        let mut content = c.into_bytes();
+        content.extend(text_content);
+        res.set(b"Font".to_vec(), Object::Dict(fonts));
+        let mut stream = form(full, &content, res);
+        if let Some(m) = matrix {
+            stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));
+        }
+        return Some(stream);
+    }
     c.push_str(&format!(
         "{} {} {} {} re W n\nBT\n/Helv {} Tf\n{}",
         n(rect[0]),

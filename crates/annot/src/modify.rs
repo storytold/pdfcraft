@@ -51,7 +51,14 @@ pub(crate) fn rich_text(d: &mut Dict) {
         _ => "left",
     };
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
-    let body: String = text.split('\n').map(|line| format!("<p dir=\"ltr\">{}</p>", esc(line.trim_end_matches('\r')))).collect();
+    let body: String = text
+        .split('\n')
+        .map(|line| {
+            let line = line.trim_end_matches('\r');
+            let direction = if pdfcraft_fonts::appearance_text::paragraph_rtl(line) { "rtl" } else { "ltr" };
+            format!("<p dir=\"{direction}\">{}</p>", esc(line))
+        })
+        .collect();
     let style = format!(
         "font-size:{}pt;text-align:{align};color:{hex};font-weight:normal;font-style:normal;font-family:Helvetica;font-stretch:normal",
         n(size)
@@ -129,7 +136,8 @@ pub fn with_replies_and_popups(doc: &Document, list: &[Object], doomed: impl Int
 /// new text: the wrap width and top edge stay, the height fits the wrapped lines.
 pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
-    let free_text = annot_dict(doc, r).name(b"Subtype") == Some(b"FreeText");
+    let before = annot_dict(doc, r);
+    let free_text = before.name(b"Subtype") == Some(b"FreeText");
     doc.update_dict(r, |d| {
         d.set(b"Contents".to_vec(), PdfString::text(text));
         // The rich-text version follows the new plain text (text boxes), or would contradict it.
@@ -145,9 +153,13 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
         // text editable (as in Acrobat), so the re-fit ignores the lock. New text is drawn even
         // where the standard fonts can't draw some of it (marked and reported, see
         // `draw_appearance`).
-        match fitted_box(doc, r, text) {
-            Some(rect) => apply_text_box(doc, r, rect, meta, true)?,
-            None => draw_appearance(doc, r)?,
+        let result = match fitted_box(doc, r, text) {
+            Some(rect) => apply_text_box(doc, r, rect, meta, true),
+            None => draw_appearance(doc, r),
+        };
+        if let Err(error) = result {
+            doc.set(r, Object::Dict(before));
+            return Err(error);
         }
     }
     Ok(())
@@ -179,8 +191,13 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
         let longest = text.lines().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
         (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0)
     };
-    let lines = appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len().max(1) as f64;
-    Some([x0, top - lines * size * 1.2 - 2.0 * pad - 2.0, x0 + w, top])
+    let width = (w - 2.0 * pad).max(1.0);
+    let text_height = if pdfcraft_fonts::appearance_text::has_shaped_text(text) && pdfcraft_fonts::appearance_text::can_shape(text) {
+        pdfcraft_fonts::appearance_text::height(&pdfcraft_fonts::appearance_text::wrap(text, size, width).ok()?, size)
+    } else {
+        appearance::wrap(text, size, width).len().max(1) as f64 * size * 1.2
+    };
+    Some([x0, top - text_height - 2.0 * pad - 2.0, x0 + w, top])
 }
 
 /// Reply to a comment; returns the reply's index in the page's `/Annots`.

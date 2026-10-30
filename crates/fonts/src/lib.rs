@@ -7,6 +7,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod appearance_text;
 #[cfg(test)]
 mod cjk_scripts;
 mod craft;
@@ -28,9 +29,10 @@ pub use script::{
     GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, japanese_glyph, japanese_glyph_from, script_missing, script_outline,
 };
 pub use shaping::{
-    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, hebrew_has, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, thai_has,
+    ShapedCluster, ShapedScript, arabic_bold_available, arabic_glyph, arabic_has, hebrew_has, shape_arabic, shape_arabic_bold, shape_hebrew,
+    shape_thai, shaped_bounds, shaped_glyph, thai_has,
 };
-pub use std14::Std14;
+pub use std14::{Match as Std14Match, Std14};
 
 /// Advance of `s` in Helvetica at `size` points, using the exact standard-14 metrics.
 ///

@@ -69,6 +69,9 @@ pub(crate) fn editor_fill(text: Color32) -> Color32 {
 /// One TextEdit lays out all source runs; its caret and selection span the whole region.
 pub(crate) fn install_source_fonts(ctx: &egui::Context, doc: &pdfcraft_engine::Document, page: usize) -> BTreeMap<String, String> {
     let programs = doc.text_editor_fonts(page);
+    // The `pdf-source-N` names are about to stand for this page's programs: answers remembered
+    // for the programs they named before no longer hold.
+    ctx.data_mut(|d| d.remove::<std::collections::HashMap<u64, bool>>(shaping_cache()));
     let mut definitions = ctx.fonts(|f| f.definitions().clone());
     // Only the current editor's document fonts live in the atlas. Never accumulate the
     // programs of previously opened files or add them to the interface's default families.
@@ -105,6 +108,36 @@ pub(crate) fn install_source_fonts(ctx: &egui::Context, doc: &pdfcraft_engine::D
     families
 }
 
+/// Where [`shapes_with`] remembers its answers, cleared by [`install_source_fonts`].
+pub(super) fn shaping_cache() -> egui::Id {
+    egui::Id::unique("pdfcraft-source-shaping")
+}
+
+/// Whether the installed document face `name` shapes `span`, joined forms included. The answer
+/// is remembered per face and span (at most 512 of them), so laying the editor out on every
+/// frame does not reshape unchanged text.
+fn shapes_with(ui: &egui::Ui, name: &str, span: &str) -> bool {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (name, span).hash(&mut hasher);
+    let key = hasher.finish();
+    let id = shaping_cache();
+    if let Some(known) = ui.data_mut(|d| d.get_temp_mut_or_default::<std::collections::HashMap<u64, bool>>(id).get(&key).copied()) {
+        return known;
+    }
+    let shapes = ui.fonts(|fonts| {
+        fonts.definitions().font_data.get(name).is_some_and(|data| pdfcraft_fonts::source_shaping::shape((*data.font).as_ref(), span).is_ok())
+    });
+    ui.data_mut(|d| {
+        let known = d.get_temp_mut_or_default::<std::collections::HashMap<u64, bool>>(id);
+        if known.len() >= 512 {
+            known.clear();
+        }
+        known.insert(key, shapes);
+    });
+    shapes
+}
+
 pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     // An unchanged PDF row already has an authoritative line break. Do not rewrap it
@@ -128,6 +161,8 @@ pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32,
         }
         for (range, index) in block.edited_spans(text) {
             let Some(line) = lines.get(index) else { continue };
+            let span = text.get(range).unwrap_or_default();
+            let complex = pdfcraft_fonts::source_shaping::required(span) || pdfcraft_fonts::source_shaping::required(&line.text);
             let mut look = source_look(&line.base_font, line.size, line.color, line.bold, line.italic);
             look.size = line.size;
             if ed.look.family != ed.look0.family || ed.family_chosen {
@@ -148,15 +183,22 @@ pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32,
             let mut font = editor_font(&look, (look.size as f32 * scale).clamp(1.0, 300.0));
             let original_face =
                 ed.look.family == ed.look0.family && !ed.family_chosen && ed.look.bold == ed.look0.bold && ed.look.italic == ed.look0.italic;
-            let embedded = original_face && ed.fonts.contains_key(&line.font);
+            // A PDF subset can hold isolated letters while lacking the OpenType tables or the
+            // joined forms needed to join them. Use the document face only when it can shape the
+            // actual draft (`source_shaping::shape` checks both).
+            let embedded = original_face && ed.fonts.get(&line.font).is_some_and(|name| !complex || shapes_with(ui, name, span));
             if embedded && let Some(name) = ed.fonts.get(&line.font) {
                 font.family = FontFamily::Name(name.clone().into());
             }
             let native_width = ui.fonts_mut(|f| f.layout_no_wrap(line.text.clone(), font.clone(), Color32::BLACK).size().x);
             let target_width = ((line.rect[2] - line.rect[0]) * look.size / line.size.max(0.01)) as f32 * scale;
-            let spacing = if original_face { (target_width - native_width) / line.text.chars().count().saturating_sub(1).max(1) as f32 } else { 0.0 };
+            let spacing = if original_face && !complex {
+                (target_width - native_width) / line.text.chars().count().saturating_sub(1).max(1) as f32
+            } else {
+                0.0
+            };
             job.append(
-                text.get(range).unwrap_or_default(),
+                span,
                 0.0,
                 egui::TextFormat {
                     font_id: font,
@@ -225,8 +267,13 @@ pub(super) fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f
         sources.windows(2).map(|r| (r[0].0 - r[1].0).abs()).rfind(|v| *v > 0.0).unwrap_or(fallback)
     };
     let g = Arc::make_mut(&mut galley);
+    // An odd UAX #9 level is a right-to-left glyph.
+    let bidirectional = g.rows.iter().any(|row| row.rtl_paragraph || row.glyphs.iter().any(|glyph| glyph.bidi_level % 2 == 1));
+    let changed_draft = ed.has_changes();
     let mut bounds = Rect::NOTHING;
     let mut meshes = Rect::NOTHING;
+    let mut previous_ink_bottom = f32::NEG_INFINITY;
+    let mut previous_baseline = f32::NEG_INFINITY;
     for (index, placed) in g.rows.iter_mut().enumerate() {
         let (last_baseline, last_rect) = sources.last().copied().unwrap_or((first_baseline, first_rect));
         let (baseline, source_rect) = sources
@@ -237,10 +284,16 @@ pub(super) fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f
         let ratio = if changed_size { ed.look.size / ed.look0.size.max(0.01) } else { 1.0 };
         let ascent = (source_rect[3] - sources.get(index).map_or(last_baseline, |s| s.0)) as f32 * scale * ratio as f32;
         let descent = (sources.get(index).map_or(last_baseline, |s| s.0) - source_rect[1]) as f32 * scale * ratio as f32;
-        let base_y = (block.rect[3] - baseline) as f32 * scale;
+        let mut base_y = (block.rect[3] - baseline) as f32 * scale;
         let row = Arc::make_mut(&mut placed.row);
         placed.pos.y = base_y - ascent;
-        placed.pos.x = if centered { (width - row.size.x) / 2.0 } else { (source_rect[0] - block.rect[0]) as f32 * scale };
+        placed.pos.x = if centered {
+            (width - row.size.x) / 2.0
+        } else if row.rtl_paragraph {
+            (source_rect[2] - block.rect[0]) as f32 * scale - row.size.x
+        } else {
+            (source_rect[0] - block.rect[0]) as f32 * scale
+        };
         for glyph in &mut row.glyphs {
             let dy = ascent - glyph.pos.y;
             glyph.pos.y = ascent;
@@ -255,12 +308,61 @@ pub(super) fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f
         }
         row.size.y = (ascent + descent).max(1.0);
         row.visuals.mesh_bounds = row.visuals.mesh.vertices.iter().fold(Rect::NOTHING, |r, v| r.union(Rect::from_min_max(v.pos, v.pos)));
+        // The first source baseline stays fixed. A changed Arabic draft needs room
+        // for its actual marks, rather than the Latin source face's shorter leading.
+        // An unchanged source paragraph retains every original baseline.
+        if bidirectional && index > 0 && (changed_draft || index >= sources.len()) {
+            base_y = base_y.max(previous_baseline + leading as f32 * scale * ratio as f32);
+            if row.visuals.mesh_bounds.is_finite() {
+                let ink_ascent = ascent - row.visuals.mesh_bounds.top();
+                base_y = base_y.max(previous_ink_bottom + ink_ascent + ed.size * 0.15);
+            }
+            placed.pos.y = base_y - ascent;
+        }
+        previous_baseline = base_y;
+        if row.visuals.mesh_bounds.is_finite() {
+            previous_ink_bottom = row.visuals.mesh_bounds.bottom() + placed.pos.y;
+        }
         bounds = bounds.union(Rect::from_min_size(placed.pos, row.size));
         meshes = meshes.union(row.visuals.mesh_bounds.translate(placed.pos.to_vec2()));
     }
     g.rect = Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(bounds.right().max(0.0), bounds.bottom().max(0.0)));
+    if bidirectional {
+        // A right-anchored draft can grow left of its source, and Arabic marks can
+        // rise above a Latin source ascent. Both extents belong to the editable area.
+        g.rect = g.rect.union(bounds).union(meshes);
+    }
     g.mesh_bounds = meshes;
     galley
+}
+
+/// TextEdit allocates from a zero origin. Move every row with the galley, keeping
+/// glyph meshes local to their row so painting, selection and hit testing agree.
+pub(super) fn normalized_editor_galley(mut galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
+    let offset = -galley.rect.min.to_vec2();
+    let g = Arc::make_mut(&mut galley);
+    for row in &mut g.rows {
+        row.pos += offset;
+    }
+    g.rect = g.rect.translate(offset);
+    g.mesh_bounds = g.mesh_bounds.translate(offset);
+    galley
+}
+
+pub(super) fn editor_width(ui: &egui::Ui, ed: &LineEditor, scale: f32, page: Rect) -> f32 {
+    let single_run = ed.source.as_ref().is_some_and(|(block, _)| block.rows.len() == 1 || block.invisible);
+    if !ed.multiline && single_run && !ed.text.contains('\n') && ed.has_changes() {
+        let job = editor_job(ui, ed, &ed.text, scale, f32::INFINITY);
+        let natural = ui.fonts_mut(|f| f.layout_job(job)).size().x;
+        let available = if pdfcraft_fonts::appearance_text::paragraph_rtl(&ed.text) {
+            ed.rect.right() - page.left() - 36.0 * scale
+        } else {
+            page.right() - ed.rect.left() - 36.0 * scale
+        };
+        natural.max(ed.size * 0.4).min(available.max(ed.rect.width()))
+    } else {
+        ed.rect.width().max(1.0)
+    }
 }
 
 /// Caret colour that stays visible on a field filled with `fill`: black on light fills, white on dark ones.

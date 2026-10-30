@@ -1,4 +1,4 @@
-use super::draw::draw_appearance;
+use super::draw::{apply_appearance, build_appearance, shaped_text_error};
 use super::lookup::{annot_dict, annot_ref, annots, fill_sign_shape, page_ref, set_annots};
 use super::modify::{n, rich_text};
 use super::types::{
@@ -374,7 +374,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             let size = if font_size.is_finite() && *font_size > 0.0 { font_size.clamp(1.0, 400.0) } else { 12.0 };
             let [r, g, b] = style.color.map(|x| x.clamp(0.0, 1.0));
             d.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg /Helv {} Tf", n(r), n(g), n(b), n(size)).into_bytes()));
-            d.set(b"Q".to_vec(), Object::Int(0));
+            d.set(b"Q".to_vec(), Object::Int(if pdfcraft_fonts::appearance_text::paragraph_rtl(&new.contents) { 2 } else { 0 }));
             if let Some(f) = style.fill {
                 d.set(b"C".to_vec(), rgb(f));
             }
@@ -402,8 +402,11 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
     {
         return Err(AnnotError::Undrawable(pdfcraft_fonts::undrawable_message(what, c)));
     }
+    // Build first: unsupported shaping or oversized text must not add a partial annotation.
+    let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+    let stream = build_appearance(doc, &d).ok_or_else(|| shaped_text_error(&d).unwrap_or(AnnotError::Unsupported(subtype)))?;
     let r = doc.add(Object::Dict(d.clone()));
-    draw_appearance(doc, r)?;
+    apply_appearance(doc, r, &d, stream)?;
     let mut list = annots(doc, page);
     let index = list.len();
     list.push(Object::Ref(r));

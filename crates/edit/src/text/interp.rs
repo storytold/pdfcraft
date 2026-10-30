@@ -325,7 +325,7 @@ impl Shown {
 pub(super) struct Pen {
     pub(super) bt: usize,
     dir: (f64, f64),
-    across: f64,
+    pub(super) across: f64,
     end: f64,
     pub(super) size: f64,
     vertical: bool,
@@ -337,15 +337,16 @@ impl Pen {
         Pen { bt: s.bt, dir, across, end, size: s.size.max(1.0), vertical: s.state.vertical.is_some() }
     }
 
-    /// Whether `s` could continue the same line on geometry alone: on the same baseline, starting
-    /// at most a word gap (`reach` sizes) after it. Also the gap along the baseline.
-    pub(super) fn continues(&self, s: &Shown, reach: f64) -> (bool, f64) {
+    /// Whether `s` could continue the same line on geometry alone: on the same baseline (within
+    /// `drift` sizes), starting at most a word gap (`reach` sizes) after it. Also the gap along
+    /// the baseline.
+    pub(super) fn continues(&self, s: &Shown, reach: f64, drift: f64) -> (bool, f64) {
         let (dir, start, _, across) = s.span();
         let gap = start - self.end;
         let same_dir = (dir.0 - self.dir.0).abs() < 1e-3 && (dir.1 - self.dir.1).abs() < 1e-3;
         // A column continues a column (along which the pen moves), a baseline a baseline.
         let same_dir = same_dir && self.vertical == s.state.vertical.is_some();
-        (same_dir && (across - self.across).abs() < self.size * 0.3 && gap > -self.size && gap < self.size * reach, gap)
+        (same_dir && (across - self.across).abs() < self.size * drift && gap > -self.size && gap < self.size * reach, gap)
     }
 }
 
@@ -396,7 +397,7 @@ fn positioned_tracking(shown: &mut [Shown]) {
                 || (prev.size - next.size).abs() > 0.01
                 || prev.state.char_spacing != next.state.char_spacing
                 || prev.state.scale != next.state.scale
-                || !Pen::after(prev).continues(next, 1.5).0
+                || !Pen::after(prev).continues(next, 1.5, 0.3).0
             {
                 break;
             }
@@ -407,7 +408,7 @@ fn positioned_tracking(shown: &mut [Shown]) {
                 .windows(2)
                 .filter_map(|pair| {
                     let [prev, next] = pair else { return None };
-                    (!prev.text.trim().is_empty() && !next.text.trim().is_empty()).then(|| Pen::after(prev).continues(next, 0.0).1)
+                    (!prev.text.trim().is_empty() && !next.text.trim().is_empty()).then(|| Pen::after(prev).continues(next, 0.0, 0.3).1)
                 })
                 .collect();
             let limit = run.first().map_or(0.0, |s| s.size * s.state.scale.abs() * 0.5);

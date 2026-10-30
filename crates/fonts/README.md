@@ -76,6 +76,14 @@ committed here (`AGENTS.md` §1.4; team members: [craftrules `standards/fonts.md
 
 The full font subsystem (parsing, shaping, subsetting and embedding) arrives with M2.2/M7.
 
+`appearance_text` lays out Arabic/Hebrew/Thai mixed with WinAnsi text for annotation appearances.
+It returns document-independent Type 3 font templates (outlines and ToUnicode) and per-line
+ActualText. `materialize_fonts` promotes their glyph and CMap streams to indirect objects when
+the annotation installs an appearance, so cached templates also work in fresh display copies.
+`wrap_logical` preserves whitespace and extended graphemes, using exponential/binary probing
+to bound repeated measurement of long words. Joining controls reach shaping with their letters;
+font coverage does not require cmap glyphs for Unicode default ignorables.
+
 
 Document font inputs use `embedding`: bounded static TrueType/OpenType-CFF validation,
 exact program preservation, Unicode/CID/GID mapping and full-face subset completion.

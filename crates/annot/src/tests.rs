@@ -1456,6 +1456,215 @@ fn comment_text_the_standard_fonts_cannot_draw_is_kept_and_marked() {
     assert_eq!(text(&list(&doc, 0)[t], b"Contents"), "签名");
 }
 
+#[test]
+fn arabic_text_boxes_callouts_and_typewriter_embed_searchable_appearances_after_reopen() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let rect = [100.0, 500.0, 400.0, 650.0];
+    let shapes = [
+        Shape::TextBox { rect, font_size: 14.0 },
+        Shape::Typewriter { rect, font_size: 14.0 },
+        Shape::Callout { rect, knee: [80.0, 560.0], point: [50.0, 540.0], font_size: 14.0, ending: LineEnding::OpenArrow },
+    ];
+    let logical = "سَلَام 123 (PDF) ب\u{200c}ب ب\u{200d}ب";
+    for (i, shape) in shapes.into_iter().enumerate() {
+        let mut annotation = new(0, shape);
+        annotation.contents = logical.into();
+        let index = add_annotation(&mut doc, &annotation, &meta(&format!("arabic-{i}"))).unwrap();
+        assert_eq!(pdfcraft_fonts::undrawn_mark(&list(&doc, 0)[index]), None);
+        set_style(&mut doc, 0, index, StyleChange::new(Some([0.1, 0.2, 0.3]), Some(0.8), None, None), &meta("")).unwrap();
+        set_rect(&mut doc, 0, index, [110.0, 490.0, 410.0, 640.0], &meta("")).unwrap();
+        let annotation = list(&doc, 0)[index].clone();
+        assert!(text(&annotation, b"RC").contains("dir=\"rtl\""));
+        let content = ap_content(&doc, &annotation);
+        let hex: String = logical.encode_utf16().map(|u| format!("{u:04X}")).collect();
+        assert!(content.contains(&format!("/ActualText <FEFF{hex}>")), "{content}");
+        assert!(!content.contains("(?) Tj"));
+        assert_eq!(text(&annotation, b"Contents"), logical);
+        doc = reopen(&doc);
+        let annotation = list(&doc, 0)[index].clone();
+        assert_eq!(ap_content(&doc, &annotation), content);
+        let normal = annotation.get(b"AP").map(|o| doc.resolve(o)).unwrap();
+        let stream = normal.as_dict().and_then(|d| d.get(b"N")).map(|o| doc.resolve(o)).unwrap();
+        let Object::Stream(stream) = stream.as_ref() else { panic!() };
+        let resources = stream.dict.get(b"Resources").unwrap().as_dict().unwrap();
+        let fonts = resources.get(b"Font").unwrap().as_dict().unwrap();
+        for (_, font) in fonts.iter().filter(|(name, _)| name.starts_with(b"PCShaped")) {
+            let font = font.as_dict().unwrap();
+            assert!(font.get(b"ToUnicode").unwrap().as_ref().is_some(), "CMap must be indirect");
+            for (_, glyph) in font.get(b"CharProcs").unwrap().as_dict().unwrap().iter() {
+                assert!(glyph.as_ref().is_some(), "a glyph stream must be indirect");
+                assert!(matches!(doc.resolve(glyph).as_ref(), Object::Stream(_)));
+            }
+        }
+        set_contents(&mut doc, 0, index, "تعديل عربي جديد 456", &meta("")).unwrap();
+        doc = reopen(&doc);
+        assert_eq!(text(&list(&doc, 0)[index], b"Contents"), "تعديل عربي جديد 456");
+        assert_eq!(pdfcraft_fonts::undrawn_mark(&list(&doc, 0)[index]), None);
+    }
+}
+
+/// Hebrew takes the same shaped path as Arabic in text boxes, typewriter (Fill & Sign) text and
+/// callouts: points stay on their letters, digits and Latin keep their place, the appearance
+/// carries the typed text for copy and search, and it survives a restyle, a reopen and a retype.
+#[test]
+fn hebrew_text_boxes_callouts_and_typewriter_embed_searchable_appearances_after_reopen() {
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let rect = [100.0, 500.0, 400.0, 650.0];
+    let shapes = [
+        Shape::TextBox { rect, font_size: 14.0 },
+        Shape::Typewriter { rect, font_size: 14.0 },
+        Shape::Callout { rect, knee: [80.0, 560.0], point: [50.0, 540.0], font_size: 14.0, ending: LineEnding::OpenArrow },
+    ];
+    let logical = "שָׁלוֹם 123 (PDF) עברית";
+    for (i, shape) in shapes.into_iter().enumerate() {
+        let mut annotation = new(0, shape);
+        annotation.contents = logical.into();
+        let index = add_annotation(&mut doc, &annotation, &meta(&format!("hebrew-{i}"))).unwrap();
+        assert_eq!(pdfcraft_fonts::undrawn_mark(&list(&doc, 0)[index]), None, "every Hebrew letter and point is drawn");
+        set_style(&mut doc, 0, index, StyleChange::new(Some([0.1, 0.2, 0.3]), Some(0.8), None, None), &meta("")).unwrap();
+        set_rect(&mut doc, 0, index, [110.0, 490.0, 410.0, 640.0], &meta("")).unwrap();
+        let annotation = list(&doc, 0)[index].clone();
+        assert!(text(&annotation, b"RC").contains("dir=\"rtl\""));
+        let content = ap_content(&doc, &annotation);
+        let hex: String = logical.encode_utf16().map(|u| format!("{u:04X}")).collect();
+        assert!(content.contains(&format!("/ActualText <FEFF{hex}>")), "{content}");
+        assert!(!content.contains("(?) Tj"), "{content}");
+        assert_eq!(text(&annotation, b"Contents"), logical);
+        doc = reopen(&doc);
+        let annotation = list(&doc, 0)[index].clone();
+        assert_eq!(ap_content(&doc, &annotation), content);
+        set_contents(&mut doc, 0, index, "טקסט עברי חדש 456", &meta("")).unwrap();
+        doc = reopen(&doc);
+        assert_eq!(text(&list(&doc, 0)[index], b"Contents"), "טקסט עברי חדש 456");
+        assert_eq!(pdfcraft_fonts::undrawn_mark(&list(&doc, 0)[index]), None);
+    }
+}
+
+#[test]
+fn cached_arabic_appearance_templates_allocate_valid_fonts_in_each_display_copy() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let mut annotation = new(0, Shape::TextBox { rect: [100.0, 500.0, 400.0, 650.0], font_size: 14.0 });
+    annotation.contents = "ملاحظة عربية".into();
+    let index = add_annotation(&mut doc, &annotation, &meta("cache-arabic")).unwrap();
+    let (_, reference) = annot_ref(&mut doc, 0, index).unwrap();
+    doc.update_dict(reference, |d| {
+        d.remove(b"AP");
+    })
+    .unwrap();
+    let mut cache = AppearanceCache::default();
+    let first = with_missing_appearances_cached(&doc, &mut cache).unwrap();
+    // The fixture's own stamp without an appearance is drawn and cached too.
+    let built = cache.builds();
+    assert!(built >= 1);
+    let second = with_missing_appearances_cached(&doc, &mut cache).unwrap();
+    assert_eq!(cache.builds(), built, "the second display copy builds nothing");
+    assert_eq!(cache.hits(), built);
+    assert_eq!(ap_content(&first, &list(&first, 0)[index]), ap_content(&second, &list(&second, 0)[index]));
+    let _ = reopen(&first);
+    let _ = reopen(&second);
+    assert!(!list(&doc, 0)[index].contains(b"AP"));
+}
+
+#[test]
+fn arabic_alphabet_marks_digits_and_western_accents_draw_and_keep_logical_text_after_reopen() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let logical = "أ إ آ ء ؤ ئ ا ب ت ث ج ح خ د ذ ر ز س ش ص ض ط ظ ع غ ف ق ك ل م ن ه و ي لا لأ لإ لآ\n\
+                   بَ بِ بُ بً بٍ بٌ بْ بّ بٰ العربية ٠١٢٣٤٥٦٧٨٩ 0123456789 (PDF)\n\
+                   English office 123; Français été, cœur, æ; Deutsch Grüße, Straße, schön";
+    for (width, size) in [(220.0, 12.0), (220.0, 24.0), (540.0, 12.0), (540.0, 24.0)] {
+        let mut doc = fixture();
+        let mut annotation = new(0, Shape::TextBox { rect: [20.0, 20.0, 20.0 + width, 760.0], font_size: size });
+        annotation.contents = logical.into();
+        let index = add_annotation(&mut doc, &annotation, &meta("arabic-font-matrix")).unwrap();
+        doc = reopen(&doc);
+        let dictionary = &list(&doc, 0)[index];
+        assert_eq!(text(dictionary, b"Contents"), logical);
+        assert_eq!(pdfcraft_fonts::undrawn_mark(dictionary), None);
+        let content = ap_content(&doc, dictionary);
+        assert!(content.contains("/PCShaped"), "the supported Arabic face must actually be drawn");
+        // Code 0x3f is a valid Type3 glyph when the alphabet creates many clusters.
+        assert!(!content.lines().any(|line| line.starts_with("/Helv ") && line.contains("(?) Tj")));
+        let restored = content
+            .split("/ActualText <FEFF")
+            .skip(1)
+            .map(|span| {
+                let hex = span.split('>').next().unwrap();
+                let units = hex.as_bytes().as_chunks::<4>().0.iter().map(|unit| u16::from_str_radix(std::str::from_utf8(unit).unwrap(), 16).unwrap());
+                String::from_utf16(&units.collect::<Vec<_>>()).unwrap()
+            })
+            .collect::<String>();
+        assert_eq!(restored, logical.replace('\n', ""), "wrapped logical text must keep letters, accents, marks and every space");
+    }
+}
+
+#[test]
+fn oversized_arabic_text_refuses_atomically_instead_of_saving_a_stale_appearance() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let mut annotation = new(0, Shape::TextBox { rect: [100.0, 500.0, 400.0, 650.0], font_size: 14.0 });
+    annotation.contents = "نص عربي".into();
+    let index = add_annotation(&mut doc, &annotation, &meta("arabic-bounds")).unwrap();
+    let before = list(&doc, 0)[index].clone();
+    let oversized = "ب".repeat(131_073);
+    // The refusal says what to change, not that text boxes can't be restyled.
+    let error = set_contents(&mut doc, 0, index, &oversized, &meta("")).unwrap_err();
+    assert!(error.to_string().contains("shorten it"), "{error}");
+    assert_eq!(list(&doc, 0)[index], before);
+    let object_count = doc.object_numbers().len();
+    annotation.contents = oversized;
+    let error = add_annotation(&mut doc, &annotation, &meta("oversized")).unwrap_err();
+    assert!(error.to_string().contains("shorten it"), "{error}");
+    assert_eq!(doc.object_numbers().len(), object_count);
+}
+
+#[test]
+fn unsupported_emoji_does_not_replace_supported_arabic_with_question_marks() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let mut annotation = new(0, Shape::TextBox { rect: [100.0, 500.0, 400.0, 650.0], font_size: 14.0 });
+    annotation.contents = "نص عربي 😊".into();
+    let index = add_annotation(&mut doc, &annotation, &meta("mixed-unsupported")).unwrap();
+    doc = reopen(&doc);
+    let annotation = list(&doc, 0)[index].clone();
+    assert_eq!(pdfcraft_fonts::undrawn_mark(&annotation), Some('😊'));
+    assert!(ap_content(&doc, &annotation).contains("/PCShaped"));
+    assert_eq!(text(&annotation, b"Contents"), "نص عربي 😊");
+}
+
+#[test]
+fn new_arabic_text_boxes_default_to_right_alignment_and_keep_an_explicit_override() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let mut annotation = new(0, Shape::TextBox { rect: [100.0, 500.0, 400.0, 650.0], font_size: 14.0 });
+    annotation.contents = "ملاحظة عربية".into();
+    let index = add_annotation(&mut doc, &annotation, &meta("rtl-default")).unwrap();
+    assert_eq!(list(&doc, 0)[index].int(b"Q"), Some(2));
+    let (_, reference) = annot_ref(&mut doc, 0, index).unwrap();
+    doc.update_dict(reference, |d| {
+        d.set(b"Q".to_vec(), Object::Int(0));
+    })
+    .unwrap();
+    set_contents(&mut doc, 0, index, "تعديل عربي", &meta("")).unwrap();
+    assert_eq!(list(&doc, 0)[index].int(b"Q"), Some(0));
+}
+
 /// Content edits rebuild the display copy on every commit but leave annotations alone: the
 /// cached appearance is drawn once and reused after that, byte-identical.
 #[test]

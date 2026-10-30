@@ -14,7 +14,7 @@ use hayro::hayro_interpret::{
     BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask, interpret_page,
 };
 use kurbo::{Affine, BezPath, Rect, Shape};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Semantic exclusions for statistics. Untagged text is retained; no layout guess is made.
 #[derive(Clone, Debug, Default)]
@@ -36,6 +36,9 @@ impl TextFilter {
     }
 }
 
+mod actual_text_map;
+#[cfg(test)]
+mod actual_text_tests;
 mod search;
 
 /// Whether `(x, y)` lies in or on the convex quadrilateral `quad`, whichever way it winds. A
@@ -225,7 +228,9 @@ impl PageText {
     /// gaps, blank glyphs and line ends.
     pub fn word_at(&self, i: usize) -> Option<(usize, usize)> {
         self.glyphs.get(i)?;
-        let blank = |k: usize| self.glyphs.get(k).is_none_or(|g| g.text.trim().is_empty());
+        let blank = |k: usize| {
+            self.glyphs.get(k).is_none_or(|g| g.text.trim().is_empty() || g.text.chars().all(pdfcraft_fonts::appearance_text::is_bidi_control))
+        };
         // Glyph `k` (≥ 1) follows glyph `k - 1` with no word gap or line break between them.
         let joined = |k: usize| !self.space_before.get(k).copied().unwrap_or(true) && self.line_of.get(k - 1) == self.line_of.get(k);
         let mut first = i;
@@ -256,7 +261,9 @@ impl PageText {
         Some((first, last))
     }
 
-    /// Merge the boxes of `range` into one rectangle per line (for highlighting).
+    /// Merge `range` into continuous painted pieces on each line. A logical bidi range may
+    /// have several pieces: joining across an unselected visual run would over-highlight it
+    /// and could redact text outside the requested range.
     pub fn line_rects(&self, range: std::ops::Range<usize>) -> Vec<[f32; 4]> {
         self.merged_rects(range)
     }
@@ -269,18 +276,80 @@ impl PageText {
     }
 
     fn merged_rects(&self, glyphs: impl IntoIterator<Item = usize>) -> Vec<[f32; 4]> {
-        let mut out: Vec<(u32, usize, [f32; 4])> = Vec::new();
+        let mut lines: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
         for i in glyphs {
-            let (Some(g), Some(&line)) = (self.glyphs.get(i), self.line_of.get(i)) else { break };
-            match out.last_mut() {
-                Some((l, last, r)) if *l == line && last.checked_add(1) == Some(i) => {
-                    *last = i;
-                    union(r, &g.rect);
-                }
-                _ => out.push((line, i, g.rect)),
-            }
+            let (Some(_), Some(&line)) = (self.glyphs.get(i), self.line_of.get(i)) else { break };
+            lines.entry(line).or_default().push(i);
         }
-        out.into_iter().map(|(_, _, r)| r).collect()
+        let mut out = Vec::new();
+        // Search may ask for thousands of matches on one hostile line. Only touched short
+        // lines are scanned; beyond the budget gaps stay separate conservatively.
+        let mut budget = 65_536usize;
+        for (line, mut selected) in lines {
+            let Some(first) = selected.first().and_then(|&i| self.glyphs.get(i)) else { continue };
+            let u = first.direction;
+            let project = |g: &TextGlyph| {
+                g.quad.iter().fold([f32::INFINITY, f32::NEG_INFINITY], |r, p| {
+                    let x = p[0] * u[0] + p[1] * u[1];
+                    [r[0].min(x), r[1].max(x)]
+                })
+            };
+            selected.sort_unstable();
+            selected.dedup();
+            let members: HashSet<_> = selected.iter().copied().collect();
+            selected.sort_by(|&a, &b| project(&self.glyphs[a])[0].total_cmp(&project(&self.glyphs[b])[0]).then(a.cmp(&b)));
+            let mut edge = f32::NEG_INFINITY;
+            let has_gap = selected.iter().any(|&i| {
+                let [a, b] = project(&self.glyphs[i]);
+                let gap = a > edge + 0.01 && edge.is_finite();
+                edge = edge.max(b);
+                gap
+            });
+            let mut blockers = None;
+            if has_gap {
+                // line_of is monotone in reading order. Invalid public input keeps the safe
+                // separated-piece fallback instead of indexing outside the supplied arrays.
+                let start = self.line_of.partition_point(|&l| l < line);
+                let end = self.line_of.partition_point(|&l| l <= line).min(self.glyphs.len());
+                let count = end.saturating_sub(start);
+                if count <= 4096 && count <= budget && selected.iter().all(|&i| i >= start && i < end) {
+                    budget -= count;
+                    let mut intervals: Vec<_> = (start..end).filter(|i| !members.contains(i)).map(|i| project(&self.glyphs[i])).collect();
+                    intervals.sort_by(|a, b| a[0].total_cmp(&b[0]));
+                    let mut high = f32::NEG_INFINITY;
+                    let prefix: Vec<_> = intervals
+                        .iter()
+                        .map(|r| {
+                            high = high.max(r[1]);
+                            high
+                        })
+                        .collect();
+                    blockers = Some((intervals, prefix));
+                }
+            }
+            let blocked = |a: f32, b: f32| {
+                blockers.as_ref().is_none_or(|(intervals, prefix)| {
+                    let end = intervals.partition_point(|r| r[0] < b - 0.01);
+                    end.checked_sub(1).and_then(|i| prefix.get(i)).is_some_and(|&high| high > a + 0.01)
+                })
+            };
+            let mut pieces: Vec<(usize, [f32; 4], f32)> = Vec::new();
+            for i in selected {
+                let g = &self.glyphs[i];
+                let [a, b] = project(g);
+                match pieces.last_mut() {
+                    Some((first, rect, edge)) if a <= *edge + 0.01 || !blocked(*edge, a) => {
+                        *first = (*first).min(i);
+                        union(rect, &g.rect);
+                        *edge = (*edge).max(b);
+                    }
+                    _ => pieces.push((i, g.rect, b)),
+                }
+            }
+            pieces.sort_by_key(|p| p.0);
+            out.extend(pieces.into_iter().map(|(_, r, _)| r));
+        }
+        out
     }
 
     /// The glyphs whose centre lies inside `rect` (view space, corners in either order), in

@@ -53,6 +53,11 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   that have them. Not in a document that declares PDF/A, which forbids that flag (`declares_pdfa`).
   `undrawn_fields` lists the marked fields; the engine reports each edit that draws one, and
   flattening refuses to make that `?` permanent.
+  Arabic/Hebrew/Thai text and choice labels use the optional craft-fonts shaped fallback with
+  embedded Type 3 outlines, ToUnicode and ActualText. The same measured layout drives multiline
+  wrapping and auto-size; comb fields keep combining marks in their letter's cell and place
+  mixed RTL/LTR runs in visual cell order. Password values are masked before any shaping or
+  ActualText is generated. Widget rotation, quadding, frame and selection colours remain in use.
 - Displaying a form that leaves its appearances to the viewer (`/NeedAppearances`, or a text or
   choice widget with no `/AP /N`): `with_field_appearances` returns a copy with those widgets
   drawn from their values, as typing them would draw them; the engine shows and prints that copy

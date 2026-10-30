@@ -4,7 +4,7 @@
 //! Delete to remove it. Each change is one undoable engine edit.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
-use pdfcraft_engine::{Added, AddedContent, AddedText, Edit};
+use pdfcraft_engine::{Added, AddedContent, AddedText, Edit, TextAlign};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
@@ -530,6 +530,17 @@ pub(crate) fn after_refresh(view: &mut DocView, added: &[Added]) {
     }
 }
 
+fn draft_text_rect(text: &AddedText, measured_width: f64, page_width: f64) -> [f64; 4] {
+    let source = text.rect;
+    if text.align == TextAlign::Right && unicode_bidi::BidiInfo::new(&text.text, None).has_rtl() {
+        let width = measured_width.max(source[2] - source[0]).min(source[2].max(1.0));
+        return [source[2] - width, source[1], source[2], source[3]];
+    }
+    let available = page_width - source[0];
+    let width = measured_width.max(source[2] - source[0]).min(available.max(1.0));
+    [source[0], source[1], source[0] + width, source[3]]
+}
+
 /// The in-place text editor, with Done and Discard beside it. Returns the edit once the text is
 /// committed (a click away, or Done), and whether Done finished adding text. Discard or Escape
 /// throws the draft away.
@@ -554,9 +565,7 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
         } else {
             let natural = ctx.fonts_mut(|f| f.layout_no_wrap(draft.text.clone(), font.clone(), Color32::BLACK).size().x) as f64 / zoom as f64;
             let width = natural.max(pdfcraft_engine::added_text_width(&text)) + 2.0;
-            let available = page_width - source[0];
-            let width = width.max(source[2] - source[0]).min(available.max(1.0));
-            draft.rect = [source[0], source[1], source[0] + width, source[3]];
+            draft.rect = draft_text_rect(&text, width, page_width);
             draft.rect = pdfcraft_engine::added_text_rect(&AddedText { rect: draft.rect, ..text.clone() });
         }
         view.content.layout = Some((text, zoom, page_width, draft.rect));
@@ -1009,6 +1018,33 @@ mod tests {
     use egui_kittest::kittest::Queryable;
 
     use super::*;
+
+    #[test]
+    fn right_aligned_arabic_drafts_keep_the_source_right_edge_as_they_grow() {
+        let source = [250.0, 50.0, 550.0, 90.0];
+        for value in ["مرحبا بالنص العربي English", "PDF 123 عربي (اختبار)"] {
+            let text = AddedText { text: value.into(), rect: source, align: TextAlign::Right, ..Default::default() };
+            assert_eq!(draft_text_rect(&text, 450.0, 600.0), [100.0, 50.0, 550.0, 90.0], "{value:?}");
+            assert_eq!(draft_text_rect(&text, 700.0, 600.0), [0.0, 50.0, 550.0, 90.0], "growth stops at the page's left edge: {value:?}");
+            assert_eq!(draft_text_rect(&text, 120.0, 600.0), source, "a short draft keeps the original width: {value:?}");
+        }
+    }
+
+    #[test]
+    fn draft_growth_preserves_english_and_explicit_left_or_center_alignment() {
+        for (value, align) in [
+            ("English text", TextAlign::Right),
+            ("English text", TextAlign::Left),
+            ("English text", TextAlign::Center),
+            ("English text", TextAlign::Justify),
+            ("مرحبا بالنص العربي", TextAlign::Left),
+            ("مرحبا بالنص العربي", TextAlign::Center),
+            ("مرحبا بالنص العربي", TextAlign::Justify),
+        ] {
+            let text = AddedText { text: value.into(), rect: [250.0, 50.0, 550.0, 90.0], align, ..Default::default() };
+            assert_eq!(draft_text_rect(&text, 450.0, 600.0), [250.0, 50.0, 600.0, 90.0], "{value:?}, {align:?}");
+        }
+    }
 
     /// The image a flip button leaves behind, as the panel returns it.
     fn flipped(tooltip: &str) -> pdfcraft_engine::AddedImage {

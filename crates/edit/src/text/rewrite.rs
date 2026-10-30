@@ -5,6 +5,7 @@ use super::fallback::{
 };
 use super::interp::{Carry, Origin, TextState, interpret};
 use super::lines::{content_streams, page_dict, rewritten_contents, splice, text_lines};
+use super::shaped;
 use super::{
     Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, PdfString, Pieces, TextLine, TextSession, group_blocks, is_centred, parse,
     rewrite_styled_block,
@@ -13,7 +14,7 @@ use super::{
 /// What replacing a line did.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LineEdit {
-    /// `Some(font)` when the line's font couldn't show the new text and Helvetica was used.
+    /// `Some(font)` when the source face could not draw the new text and a fallback was used.
     pub substituted: Option<String>,
 }
 
@@ -736,7 +737,47 @@ fn source_font(doc: &Document, fonts_res: &Dict, font_name: &str, first: &TextLi
 }
 
 /// [`rewrite_block_with_limit`] with the page's [`text_lines`], read from `doc` as it is now.
+///
+/// Arabic in a paragraph whose runs differ in size, colour, weight or font (a heading over its
+/// subtitle, a label beside its value) is first written with the source fonts, run by run. When
+/// they cannot draw it (a subset without the new letters or without contextual forms), the
+/// paragraph takes the shaped Arabic fallback, every run keeping its own look, rather than a
+/// face that has no Arabic at all.
 pub(crate) fn rewrite_block_from(
+    doc: &mut Document,
+    page: usize,
+    lines: Vec<TextLine>,
+    block: usize,
+    text: Option<&str>,
+    style: &BlockStyle,
+    max_glyphs: usize,
+) -> Result<LineEdit, EditError> {
+    let blocks = group_blocks(&lines);
+    let fallback = blocks.get(block).filter(|b| {
+        let members: Vec<&TextLine> = b.lines.iter().filter_map(|i| lines.get(*i)).collect();
+        shaped::eligible(&members, text.unwrap_or(&b.editor_text), style)
+    });
+    let Some(b) = fallback.cloned() else {
+        return rewrite_block_source(doc, page, lines, block, text, style, max_glyphs);
+    };
+    // The source path may write fonts before it finds a run it cannot draw.
+    let before = doc.clone();
+    match rewrite_block_source(doc, page, lines.clone(), block, text, style, max_glyphs) {
+        Err(source) => {
+            *doc = before;
+            shaped::rewrite(doc, page, &b, &lines, text.unwrap_or(&b.editor_text), style).map_err(|fallback| match fallback {
+                // The fallback's own refusal names what it cannot keep; otherwise say why the source fonts failed.
+                EditError::Invalid(_) => fallback,
+                _ => source,
+            })
+        }
+        done => done,
+    }
+}
+
+/// [`rewrite_block_from`] with the source fonts (or the up-front Arabic fallback for a uniform
+/// paragraph no complete source face can draw).
+fn rewrite_block_source(
     doc: &mut Document,
     page: usize,
     lines: Vec<TextLine>,
@@ -758,6 +799,10 @@ pub(crate) fn rewrite_block_from(
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let dispatch = choose_rewrite_path(doc, &fonts_res, &b, &members, first, text, style)?;
+    let draft = text.unwrap_or(&b.editor_text);
+    if shaped::needs_fallback(doc, &fonts_res, &members, draft, style) {
+        return shaped::rewrite(doc, page, &b, &lines, draft, style);
+    }
     if dispatch.use_styled_path {
         return rewrite_styled_block(doc, page, &b, &lines, text, style, max_glyphs);
     }

@@ -220,7 +220,13 @@ pub fn swatch_grid(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Rgb> {
     let open_id = base.with("other-colour");
     let value_id = open_id.with("value");
     let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
-    egui::Grid::new(base.with("swatches")).spacing(vec2(6.0, 6.0)).show(ui, |ui| {
+    // Five swatches and "Other colour" a row, each 22 points: spaced as far as 24 points apart,
+    // and closer (to 6) rather than wider than the parent. egui's 40 point minimum column made
+    // the grid wider than the Edit text panel, which then laid out everything below it against
+    // an edge it clips.
+    let room = ui.available_width() - 6.0 * 22.0;
+    let gap = if room.is_finite() { (room / 5.0).clamp(6.0, 24.0) } else { 24.0 };
+    egui::Grid::new(base.with("swatches")).spacing(vec2(gap, 6.0)).min_col_width(22.0).show(ui, |ui| {
         for (i, (name, c)) in SWATCHES.iter().enumerate() {
             if swatch(ui, *c, on(c), tl!(name)).clicked() {
                 picked = Some(*c);

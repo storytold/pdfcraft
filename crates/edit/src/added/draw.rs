@@ -1,10 +1,11 @@
 use super::layout::{
-    Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_thai, latin_width, lines, norm, shaped_layout, text_rect, thai_error, wrapped,
+    Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_thai, latin_width, line_extents, lines, norm, shaped_layout_bidi, text_rect,
+    thai_error, wrapped,
 };
 use super::types::{AddedText, Align, Family};
 use super::{
-    Content, Dict, Document, EditError, GlyphError, GlyphOutline, HashMap, HashSet, ObjRef, Object, PdfString, ShapedCluster, ShapedScript, Stream,
-    literal, matrix_number, n, shaped_glyph, win_ansi,
+    Content, Dict, Document, EditError, GlyphError, GlyphOutline, HashMap, HashSet, Level, ObjRef, Object, ParagraphBidiInfo, PdfString,
+    ShapedCluster, ShapedScript, Stream, literal, matrix_number, n, shaped_glyph, win_ansi,
 };
 
 fn font_name(base: &str) -> String {
@@ -19,14 +20,46 @@ pub(super) const GLYPHS_PER_FONT: usize = 240;
 /// its pieces in drawing order and its width at the item's size.
 pub(super) type LaidLine = (String, bool, Vec<Piece>, f64);
 
+pub(super) fn laid_lines(t: &AddedText) -> Result<Vec<LaidLine>, EditError> {
+    let mut fragments = wrapped(t).into_iter();
+    let mut laid = Vec::new();
+    for paragraph in t.text.split('\n') {
+        let rtl =
+            paragraph.chars().any(|c| is_arabic(c) || is_hebrew(c)) && unicode_bidi::get_base_direction(paragraph) == unicode_bidi::Direction::Rtl;
+        let bidi = ParagraphBidiInfo::new(paragraph, Some(if rtl { Level::rtl() } else { Level::ltr() }));
+        let mut start = 0usize;
+        loop {
+            let Some((line, rtl)) = fragments.next() else { return Err(EditError::Invalid("text line is missing".into())) };
+            let end = start.saturating_add(line.len());
+            if paragraph.get(start..end) != Some(line.as_str()) {
+                return Err(EditError::Invalid("text line is outside its paragraph".into()));
+            }
+            let rect = norm(t.rect);
+            let width = (rect[2] - rect[0]).max(t.size);
+            let display = pdfcraft_fonts::appearance_text::fit_display_line(&line, end < paragraph.len(), width, |display| {
+                pdfcraft_fonts::appearance_text::line_bidi(&bidi, start..end, display)
+                    .ok()
+                    .and_then(|info| shaped_layout_bidi(t, display, &info).ok())
+                    .map_or(f64::INFINITY, |(_, width)| width)
+            });
+            let info = pdfcraft_fonts::appearance_text::line_bidi(&bidi, start..end, &display)
+                .map_err(|_| EditError::Invalid("text line has no paragraph direction".into()))?;
+            let (pieces, width) = shaped_layout_bidi(t, &display, &info)?;
+            laid.push((line, rtl, pieces, width));
+            start = end;
+            if end >= paragraph.len() {
+                break;
+            }
+        }
+    }
+    Ok(laid)
+}
+
 /// Draw a text item that has Arabic, Hebrew or Thai in it. Each line is laid out in display order; their glyphs
 /// come from Type 3 fonts drawn from the craft-fonts face's outlines (no font file is embedded),
 /// with a ToUnicode map for copy and search. Other text uses the item's standard font.
-fn draw_shaped(doc: &mut Document, t: &AddedText, taken: &Dict, fonts: &mut Dict, out: &mut Vec<u8>) -> Result<(), EditError> {
-    let laid = wrapped(t)
-        .into_iter()
-        .map(|(line, rtl)| shaped_layout(t, &line, rtl).map(|(pieces, w)| (line, rtl, pieces, w)))
-        .collect::<Result<Vec<_>, _>>()?;
+pub(super) fn draw_shaped(doc: &mut Document, t: &AddedText, taken: &Dict, fonts: &mut Dict, out: &mut Vec<u8>) -> Result<(), EditError> {
+    let laid = laid_lines(t)?;
     draw_laid_shaped(doc, t, &laid, taken, fonts, out, shaped_glyph)
 }
 
@@ -41,7 +74,7 @@ pub(super) fn draw_laid_shaped(
     out: &mut Vec<u8>,
     outline: impl Fn(ShapedScript, u32) -> Result<GlyphOutline, GlyphError>,
 ) -> Result<(), EditError> {
-    let r = text_rect(t);
+    let r = norm(t.rect);
     let latin = font_name(t.family.base_font(t.bold, t.italic));
     // Every distinct cluster (a letter with its dots and the text it stands for) is one glyph of
     // one of the fonts, so copy and search get each character exactly once.
@@ -63,7 +96,7 @@ pub(super) fn draw_laid_shaped(
         for (id, _) in &c.glyphs {
             if let std::collections::hash_map::Entry::Vacant(entry) = outlines.entry((c.script, *id)) {
                 entry.insert(outline(c.script, *id).map_err(|e| match c.script {
-                    ShapedScript::Arabic => arabic_error(e, &c.text),
+                    ShapedScript::Arabic | ShapedScript::ArabicBold => arabic_error(e, &c.text),
                     ShapedScript::Hebrew => hebrew_error(e, &c.text),
                     ShapedScript::Thai => thai_error(e, &c.text),
                 })?);
@@ -92,6 +125,7 @@ pub(super) fn draw_laid_shaped(
     if t.char_spacing != 0.0 {
         out.extend(format!("{} Tc\n", n(t.char_spacing)).bytes());
     }
+    let mut top = r[3];
     for (i, (line, rtl, pieces, w)) in laid.iter().enumerate() {
         // Shaped glyphs are painted in visual order. Keep the original line's typing order
         // explicitly, including marks, ligatures, digits and mixed-script punctuation.
@@ -107,7 +141,21 @@ pub(super) fn draw_laid_shaped(
             Align::Center => r[0] + ((r[2] - r[0]) - w) / 2.0,
             Align::Right => r[2] - w,
         };
-        let y = r[3] - (i as f64 * 1.2 + 0.95) * t.size;
+        let extents = line_extents(pieces, |cluster| {
+            let mut bounds = [0.0f64; 4];
+            for (id, [dx, dy]) in &cluster.glyphs {
+                let glyph = outlines.get(&(cluster.script, *id))?;
+                bounds = [
+                    bounds[0].min(glyph.bbox[0] + dx),
+                    bounds[1].min(glyph.bbox[1] + dy),
+                    bounds[2].max(glyph.bbox[2] + dx),
+                    bounds[3].max(glyph.bbox[3] + dy),
+                ];
+            }
+            Some(bounds)
+        });
+        let y = top - extents[0] * t.size;
+        top = y - extents[1] * t.size;
         let mut pen = x;
         let mut current: Option<&str> = None;
         for piece in pieces {
@@ -206,7 +254,7 @@ fn type3_shaped(doc: &mut Document, clusters: &[&ShapedCluster], outlines: &Hash
     let family = match clusters.first().map(|c| c.script).filter(|s| clusters.iter().all(|c| c.script == *s)) {
         Some(script) => script.font().map_or(
             match script {
-                ShapedScript::Arabic => "Arabic",
+                ShapedScript::Arabic | ShapedScript::ArabicBold => "Arabic",
                 ShapedScript::Hebrew => "Hebrew",
                 ShapedScript::Thai => "Thai",
             },
@@ -274,6 +322,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
             if t.text.chars().any(is_thai)
                 || face_or_new(is_arabic, pdfcraft_fonts::document_arabic_font().is_some())
                 || face_or_new(is_hebrew, pdfcraft_fonts::document_hebrew_font(false).is_some())
+                || t.text.chars().any(pdfcraft_fonts::embedding::default_ignorable)
             {
                 draw_shaped(doc, t, taken, &mut fonts, &mut out)?;
                 res.set(b"Font".to_vec(), Object::Dict(fonts));
@@ -288,8 +337,23 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
                 out.extend(format!("{} Tc\n", n(t.char_spacing)).bytes());
             }
             let all = lines(t);
+            let mut offset = 0usize;
             for (i, line) in all.iter().enumerate() {
-                let w = latin_width(t, line);
+                offset = offset.saturating_add(line.len());
+                let next = t.text.as_bytes().get(offset).copied();
+                let display =
+                    pdfcraft_fonts::appearance_text::fit_display_line(line, next.is_some_and(|c| c != b'\n'), (r[2] - r[0]).max(t.size), |s| {
+                        latin_width(t, s)
+                    });
+                if next == Some(b'\n') {
+                    offset = offset.saturating_add(1);
+                }
+                let hanging = display != line.as_str();
+                if hanging {
+                    let logical: String = line.encode_utf16().map(|u| format!("{u:04X}")).collect();
+                    out.extend(format!("/Span <</ActualText <FEFF{logical}>>> BDC\n").bytes());
+                }
+                let w = latin_width(t, &display);
                 let x = match t.align {
                     Align::Left | Align::Justify => r[0],
                     Align::Center => r[0] + ((r[2] - r[0]) - w) / 2.0,
@@ -298,12 +362,15 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
                 // Baseline: 0.8 em below the line top.
                 let y = r[3] - (i as f64 * 1.2 + 0.95) * t.size;
                 // Justified: word spacing makes every line but the last fill the box.
-                let spaces = line.matches(' ').count();
+                let spaces = display.matches(' ').count();
                 let tw =
                     if t.align == Align::Justify && i + 1 < all.len() && spaces > 0 { ((r[2] - r[0]) - w).max(0.0) / spaces as f64 } else { 0.0 };
                 out.extend(format!("1 0 0 1 {} {} Tm {} Tw ", n(x), n(y), n(tw)).bytes());
-                out.extend(literal(&win_ansi(line)));
+                out.extend(literal(&win_ansi(&display)));
                 out.extend_from_slice(b" Tj\n");
+                if hanging {
+                    out.extend_from_slice(b"EMC\n");
+                }
             }
             out.extend_from_slice(b"ET\n");
         }

@@ -93,6 +93,19 @@ fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
 }
 
+/// Where a tool item's label starts, after its icon.
+pub(super) const LABEL_INSET: f32 = 34.0;
+/// How far left of the chip the centre of a menu item's caret is; the caret is 7 points wide.
+pub(super) const CARET_GAP: f32 = 10.0;
+
+/// The width a tool item's label may take: up to 8 points before its chip, or before the caret
+/// of an item that opens a menu. Right-to-left labels end at that edge, so it must clear the
+/// caret, which otherwise covered the first letter of an Arabic label.
+pub(super) fn item_label_width(body: Rect, chip: Rect, menu: bool) -> f32 {
+    let end = if menu { chip.left() - CARET_GAP - 3.5 } else { chip.left() };
+    end - 8.0 - body.left() - LABEL_INSET
+}
+
 /// Draw a one-line row label without painting into the status chip or beyond the sidebar.
 /// Accessibility retains the complete name through the row's WidgetInfo.
 pub(super) fn row_label(ui: &mut egui::Ui, text: &str, font: egui::FontId, color: Color32, left_center: egui::Pos2, max_width: f32) -> bool {
@@ -235,7 +248,8 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
                 let chip_label = tl!(chip).to_string();
                 let w = crate::widgets::text_width(ui, &chip_label, &font);
                 let r = Rect::from_center_size(body.right_center() - vec2(w / 2.0 + 10.0, 0.0), vec2(w + 10.0, 16.0));
-                row_label(ui, tl!(item.label), theme::regular(13.0), fg, body.left_center() + vec2(34.0, 0.0), r.left() - body.left() - 42.0);
+                let (at, width) = (body.left_center() + vec2(LABEL_INSET, 0.0), item_label_width(body, r, !item.actions.is_empty()));
+                row_label(ui, tl!(item.label), theme::regular(13.0), fg, at, width);
                 ui.painter().rect_filled(r, CornerRadius::same(4), fill);
                 ui.painter().text(r.center(), Align2::CENTER_CENTER, chip_label, font, cfg);
                 let resp = theme::hand(resp).on_hover_text(format!("{} — {}", tl!(item.label), item.command));
@@ -244,7 +258,7 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
                     if resp.clicked() {
                         run = Some(item.command);
                     }
-                } else if let Some(cmd) = actions_menu(app, ui, &resp, item, r.left_center() - vec2(10.0, 0.0), fg) {
+                } else if let Some(cmd) = actions_menu(app, ui, &resp, item, r.left_center() - vec2(CARET_GAP, 0.0), fg) {
                     run = Some(cmd);
                 }
             }
