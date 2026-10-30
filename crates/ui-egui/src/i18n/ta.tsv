@@ -115,7 +115,7 @@
 	Add Open Files	திறந்த கோப்புகளைச் சேர்
 	Sort By Name	பெயரால் வரிசைப்படுத்து
 	Attempt to Automatically Align Source Images	மூலப் படங்களைத் தானாக சீரமைக்க முயற்சி
-	Create Smart Object after Loading Layers	அடுக்குகளை ஏற்றிய பின் ஸ்மார்ட் பொருளை உருவாக்கு
+	Create Smart Object after Loading Layers	அடுக்குகளை ஏற்றிய பின் நுண்ணறிவு பொருளை உருவாக்கு
 	Reveal in Finder	Finder-இல் காட்டு
 	Show in Explorer	Explorer-இல் காட்டு
 	Show in Folder	கோப்புறையில் காட்டு
@@ -200,7 +200,7 @@
 	File Handling…	கோப்பு கையாளுதல்…
 	Export…	ஏற்றுமதி…
 	Performance…	செயல்திறன்…
-	Scratch Disks…	ஸ்கிராட்ச் வட்டுகள்…
+	Scratch Disks…	நினைவக வட்டுகள்…
 	Cursors…	சுட்டிகள்…
 	Transparency & Gamut…	ஒளிஊடுருவல் & நிற வரம்பு…
 	Units & Rulers…	அலகுகள் & அளவுகோல்கள்…
@@ -208,7 +208,7 @@
 	Plug-ins…	செருகுநிரல்கள்…
 	Type…	உரை…
 	Enhanced Controls…	மேம்படுத்தப்பட்ட கட்டுப்பாடுகள்…
-	Camera Raw…	Camera Raw…
+	Camera Raw…	கேமரா Raw…
 	Raw Defaults…	Raw இயல்புநிலைகள்…
 	Integrations…	ஒருங்கிணைப்புகள்…
 	AI Integrations…	AI ஒருங்கிணைப்புகள்…
@@ -305,7 +305,7 @@
 	New Fill Layer	புதிய நிரப்பு அடுக்கு
 	New Adjustment Layer	புதிய சரிசெய்தல் அடுக்கு
 	New Layer Based Slice	புதிய அடுக்கு அடிப்படையிலான துண்டு
-	New Smart Object via Copy	நகல் வழியாகப் புதிய ஸ்மார்ட் பொருள்
+	New Smart Object via Copy	நகல் வழியாகப் புதிய நுண்ணறிவு பொருள்
 	New Blank Video Layer	புதிய வெற்று வீடியோ அடுக்கு
 	New Video Layer from File…	கோப்பிலிருந்து புதிய வீடியோ அடுக்கு…
 	Duplicate Layer…	அடுக்கை நகலெடு…
@@ -332,10 +332,10 @@
 	Global Light…	பொது ஒளி…
 	Hide All Effects	அனைத்து விளைவுகளையும் மறை
 	Scale Effects…	விளைவுகளை அளவு மாற்று…
-	Smart Filter	ஸ்மார்ட் வடிகட்டி
-	Convert for Smart Filters	ஸ்மார்ட் வடிகட்டிகளுக்கு மாற்று
-	Clear Smart Filters	ஸ்மார்ட் வடிகட்டிகளை அழி
-	Disable Smart Filters	ஸ்மார்ட் வடிகட்டிகளை முடக்கு
+	Smart Filter	நுண்ணறிவு வடிகட்டி
+	Convert for Smart Filters	நுண்ணறிவு வடிகட்டிகளுக்கு மாற்று
+	Clear Smart Filters	நுண்ணறிவு வடிகட்டிகளை அழி
+	Disable Smart Filters	நுண்ணறிவு வடிகட்டிகளை முடக்கு
 	Delete Filter Mask	வடிகட்டி மாஸ்க்கை நீக்கு
 	Disable Filter Mask	வடிகட்டி மாஸ்க்கை முடக்கு
 	Solid Color…	திட நிறம்…
@@ -358,9 +358,9 @@
 	Vector Mask from Current Path	தற்போதைய பாதையிலிருந்து வெக்டர் மாஸ்க்
 	Create Clipping Mask	கிளிப்பிங் மாஸ்க் உருவாக்கு
 	Release Clipping Mask	கிளிப்பிங் மாஸ்க்கை விடுவி
-	Smart Objects	ஸ்மார்ட் பொருட்கள்
-	Smart Object	ஸ்மார்ட் பொருள்
-	Convert to Smart Object	ஸ்மார்ட் பொருளாக மாற்று
+	Smart Objects	நுண்ணறிவு பொருட்கள்
+	Smart Object	நுண்ணறிவு பொருள்
+	Convert to Smart Object	நுண்ணறிவு பொருளாக மாற்று
 	Convert to Embedded	உட்பொதிந்ததாக மாற்று
 	Convert to Layers	அடுக்குகளாக மாற்று
 	Convert to Linked…	இணைக்கப்பட்டதாக மாற்று…
@@ -516,7 +516,7 @@
 	Color Range…	நிற வரம்பு…
 	Focus Area…	கவனப் பகுதி…
 	Select and Mask…	தேர்ந்தெடுத்து மாஸ்க் செய்…
-	Smart Radius	ஸ்மார்ட் ஆரம்
+	Smart Radius	நுண்ணறிவு ஆரம்
 	Shift Edge	விளிம்பை நகர்த்து
 	Decontaminate	தூய்மையாக்கு
 	Output	வெளியீடு
@@ -536,7 +536,7 @@
 	Last Filter	கடைசி வடிகட்டி
 	Filter Gallery…	வடிகட்டி காட்சியகம்…
 	Adaptive Wide Angle…	Adaptive Wide Angle…
-	Camera Raw Filter…	Camera Raw வடிகட்டி…
+	Camera Raw Filter…	கேமரா Raw வடிகட்டி…
 	Liquify…	திரவமாக்கு…
 	Vanishing Point…	மறையும் புள்ளி…
 	Blur	மங்கலாக்கு
@@ -559,7 +559,7 @@
 	Motion Blur…	இயக்க மங்கல்…
 	Radial Blur…	ஆரை மங்கல்…
 	Shape Blur…	வடிவ மங்கல்…
-	Smart Blur…	ஸ்மார்ட் மங்கல்…
+	Smart Blur…	நுண்ணறிவு மங்கல்…
 	Surface Blur…	மேற்பரப்பு மங்கல்…
 	Average	சராசரி
 	Displace…	இடம்பெயர்…
@@ -598,7 +598,7 @@
 	Sharpen	கூர்மையாக்கு
 	Sharpen Edges	விளிம்புகளைக் கூர்மையாக்கு
 	Sharpen More	மேலும் கூர்மையாக்கு
-	Smart Sharpen…	ஸ்மார்ட் கூர்மையாக்கல்…
+	Smart Sharpen…	நுண்ணறிவு கூர்மையாக்கல்…
 	Unsharp Mask…	அன்ஷார்ப் மாஸ்க்…
 	High Pass…	உயர் அனுமதி…
 	Stylize	பாணியாக்கு
@@ -678,7 +678,7 @@
 	Canvas Guides	கேன்வாஸ் வழிகாட்டிகள்
 	Artboard Guides	ஆர்ட்போர்டு வழிகாட்டிகள்
 	Count	எண்ணிக்கை
-	Smart Guides	ஸ்மார்ட் வழிகாட்டிகள்
+	Smart Guides	நுண்ணறிவு வழிகாட்டிகள்
 	Slices	துண்டுகள்
 	Notes	குறிப்புகள்
 	Pixel Grid	பிக்சல் கட்டம்
@@ -779,11 +779,11 @@
 	Timeline	காலவரிசை
 	Tool Presets	கருவி முன்னமைவுகள்
 	Tools	கருவிகள்
-	About PhotoCraft	PhotoCraft பற்றி
-	PhotoCraft Website	PhotoCraft இணையதளம்
-	PhotoCraft on GitHub	GitHub-இல் PhotoCraft
-	ArtCraft Website	ArtCraft இணையதளம்
-	Join the ArtCraft Discord…	ArtCraft Discord-இல் சேர்…
+	About PhotoCraft	போட்டோகிராப்ட் பற்றி
+	PhotoCraft Website	போட்டோகிராப்ட் இணையதளம்
+	PhotoCraft on GitHub	கிட்ஹப்பில் போட்டோகிராப்ட்
+	ArtCraft Website	ஆர்ட்கிராப்ட் இணையதளம்
+	Join the ArtCraft Discord…	ஆர்ட்கிராப்ட் டிஸ்கார்டில் சேர்…
 	Report an Issue…	சிக்கலைப் புகாரளி…
 	WIA Support…	WIA ஆதரவு…
 	Apply	பயன்படுத்து
@@ -835,7 +835,7 @@
 	All Caps	அனைத்தும் பெரிய எழுத்து
 	All Slices	அனைத்து துண்டுகள்
 	All User Slices	அனைத்து பயனர் துண்டுகள்
-	All shortcuts reset to PhotoCraft defaults.	அனைத்து குறுக்குவழிகளும் PhotoCraft இயல்புநிலைகளுக்கு மீட்டமைக்கப்பட்டன.
+	All shortcuts reset to PhotoCraft defaults.	அனைத்து குறுக்குவழிகளும் போட்டோகிராப்ட் இயல்புநிலைகளுக்கு மீட்டமைக்கப்பட்டன.
 	Alt	Alt
 	Always use pressure for opacity	ஒளிபுகாமைக்கு எப்போதும் அழுத்தத்தைப் பயன்படுத்து
 	Always use pressure for size	அளவுக்கு எப்போதும் அழுத்தத்தைப் பயன்படுத்து
@@ -875,10 +875,10 @@
 	Before (Y)	முன் (Y)
 	Save Settings…	அமைப்புகளைச் சேமி…
 	Load Settings…	அமைப்புகளை ஏற்று…
-	Save these settings as a Camera Raw .xmp file	இந்த அமைப்புகளை Camera Raw .xmp கோப்பாகச் சேமி
-	Load settings from a Camera Raw .xmp file	Camera Raw .xmp கோப்பிலிருந்து அமைப்புகளை ஏற்று
-	Loaded Camera Raw settings from {file}	{file} இலிருந்து Camera Raw அமைப்புகள் ஏற்றப்பட்டன
-	Loaded Camera Raw settings from {file} ({n} not supported)	{file} இலிருந்து Camera Raw அமைப்புகள் ஏற்றப்பட்டன ({n} ஆதரிக்கப்படவில்லை)
+	Save these settings as a Camera Raw .xmp file	இந்த அமைப்புகளை கேமரா Raw .xmp கோப்பாகச் சேமி
+	Load settings from a Camera Raw .xmp file	கேமரா Raw .xmp கோப்பிலிருந்து அமைப்புகளை ஏற்று
+	Loaded Camera Raw settings from {file}	{file} இலிருந்து கேமரா Raw அமைப்புகள் ஏற்றப்பட்டன
+	Loaded Camera Raw settings from {file} ({n} not supported)	{file} இலிருந்து கேமரா Raw அமைப்புகள் ஏற்றப்பட்டன ({n} ஆதரிக்கப்படவில்லை)
 	Begin recording	பதிவைத் தொடங்கு
 	Bend:	வளைவு:
 	Bicubic	பைகியூபிக்
@@ -906,7 +906,7 @@
 	Brush Reconstruct Options	தூரிகை மறுகட்டமைப்பு விருப்பங்கள்
 	Brush Tool Options	தூரிகைக் கருவி விருப்பங்கள்
 	Cache Level:	தற்காலிக சேமிப்பு நிலை:
-	Camera Raw isn't open	Camera Raw திறக்கப்படவில்லை
+	Camera Raw isn't open	கேமரா Raw திறக்கப்படவில்லை
 	Cancel	ரத்துசெய்
 	Cancel (Esc)	ரத்துசெய் (Esc)
 	Manage submitted jobs in the system print queue	சமர்ப்பித்த வேலைகளைக் கணினி அச்சு வரிசையில் நிர்வகி
@@ -1083,8 +1083,8 @@
 	Drop an image or PSD anywhere to open it.	படத்தையோ PSD-யையோ எங்கு வேண்டுமானாலும் இட்டு திறக்கவும்.
 	Native file drag-and-drop is unavailable	சொந்த கோப்பு இழுத்துவிடுதல் கிடைக்கவில்லை
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Wayland-இல் சொந்த கோப்பு இழுத்துவிடுதல் இன்னும் ஆதரிக்கப்படவில்லை. கோப்பு › திற என்பதைப் பயன்படுத்தவும், அல்லது கோப்பு மேலாளரில் படத்தை நகலெடுத்து {paste} மூலம் ஒட்டவும்.
-	To drop files, start PhotoCraft under XWayland: `{command}`	கோப்புகளை இட, PhotoCraft ஐ XWayland-இல் தொடங்கவும்: `{command}`
-	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	அல்லது விருப்பத்தேர்வுகள் › செயல்திறன் › Linux காட்சி சேவையகத்தை X11 ஆக அமைக்கவும்: அப்போது PhotoCraft எப்போதும் XWayland-இல் தொடங்கும்.
+	To drop files, start PhotoCraft under XWayland: `{command}`	கோப்புகளை இட, போட்டோகிராப்டை XWayland-இல் தொடங்கவும்: `{command}`
+	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	அல்லது விருப்பத்தேர்வுகள் › செயல்திறன் › லினக்ஸ் காட்சி சேவையகத்தை X11 ஆக அமைக்கவும்: அப்போது போட்டோகிராப்ட் எப்போதும் XWayland-இல் தொடங்கும்.
 	Edit › Paste	திருத்து › ஒட்டு
 	Duplicate Layers…	அடுக்குகளை நகலெடு…
 	Duplicate style	பாணியை நகலெடு
@@ -1117,7 +1117,7 @@
 	Filter for adjustment layers	சரிசெய்தல் அடுக்குகளுக்கான வடிகட்டி
 	Filter for pixel layers	பிக்சல் அடுக்குகளுக்கான வடிகட்டி
 	Filter for shape layers	வடிவ அடுக்குகளுக்கான வடிகட்டி
-	Filter for smart objects	ஸ்மார்ட் பொருட்களுக்கான வடிகட்டி
+	Filter for smart objects	நுண்ணறிவு பொருட்களுக்கான வடிகட்டி
 	Filter for type layers	உரை அடுக்குகளுக்கான வடிகட்டி
 	Filter:	வடிகட்டி:
 	Finger Painting	விரல் ஓவியம்
@@ -1334,9 +1334,9 @@
 	Perspective Warp is not active	பார்வைக்கோண வார்ப் செயலில் இல்லை
 	Perspective Warp: draw planes along the image's perspective, then switch to Warp	பார்வைக்கோண வார்ப்: படத்தின் பார்வைக்கோணத்தில் தளங்களை வரைந்து, பின்னர் வார்ப்புக்கு மாறவும்
 	Photo Filter	புகைப்பட வடிகட்டி
-	PhotoCraft	PhotoCraft
-	PhotoCraft Manages Colors	PhotoCraft நிறங்களை நிர்வகிக்கிறது
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — Rust இல் எழுதப்பட்ட திறந்த மூல, சொந்த பட எடிட்டர்.
+	PhotoCraft	போட்டோகிராப்ட்
+	PhotoCraft Manages Colors	போட்டோகிராப்ட் நிறங்களை நிர்வகிக்கிறது
+	PhotoCraft — an open-source, native image editor written in Rust.	போட்டோகிராப்ட் — ரஸ்டில் எழுதப்பட்ட திறந்த மூல, சொந்த பட எடிட்டர்.
 	Pin Depth:	பின் ஆழம்:
 	Pixel Length:	பிக்சல் நீளம்:
 	Pixels/Centimeter	பிக்சல்/சென்டிமீட்டர்
@@ -1412,11 +1412,11 @@
 	Import Shortcuts…	குறுக்குவழிகளை இறக்குமதி செய்…
 	Load a keyboard shortcut set saved as .kys	.kys ஆகச் சேமித்த விசைப்பலகை குறுக்குவழித் தொகுப்பை ஏற்று
 	Imported {n} shortcuts from {file}. Click OK to keep them.	{file} இலிருந்து {n} குறுக்குவழிகள் இறக்குமதி செய்யப்பட்டன. அவற்றை வைத்திருக்க சரி என்பதைக் கிளிக் செய்யவும்.
-	{n} commands are not in PhotoCraft.	{n} கட்டளைகள் PhotoCraft இல் இல்லை.
+	{n} commands are not in PhotoCraft.	{n} கட்டளைகள் போட்டோகிராப்டில் இல்லை.
 	Keyboard shortcuts imported	விசைப்பலகை குறுக்குவழிகள் இறக்குமதி செய்யப்பட்டன
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	உங்கள் விசைப்பலகை குறுக்குவழித் தொகுப்பு {set} இங்கு பயன்பாட்டில் உள்ளது: {n} குறுக்குவழிகள் இயல்புநிலையிலிருந்து வேறுபடுகின்றன. திருத்து › விசைப்பலகை குறுக்குவழிகள் அவற்றைக் காட்டும்; அனைத்தையும் இயல்புநிலைக்கு மீட்டமை இதைச் செயல்தவிர்க்கும்.
 	Import keyboard shortcuts?	விசைப்பலகை குறுக்குவழிகளை இறக்குமதி செய்யவா?
-	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	இந்தக் கணினியில் மற்றொரு பட எடிட்டரிலிருந்து உங்கள் விசைப்பலகை குறுக்குவழித் தொகுப்பு {set} ஐ PhotoCraft கண்டறிந்தது: அதன் {n} குறுக்குவழிகள் PhotoCraft இன் குறுக்குவழிகளிலிருந்து வேறுபடுகின்றன. இறக்குமதி செய்யவா?
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	இந்தக் கணினியில் மற்றொரு பட எடிட்டரிலிருந்து உங்கள் விசைப்பலகை குறுக்குவழித் தொகுப்பு {set} ஐ போட்டோகிராப்ட் கண்டறிந்தது: அதன் {n} குறுக்குவழிகள் போட்டோகிராப்டின் குறுக்குவழிகளிலிருந்து வேறுபடுகின்றன. இறக்குமதி செய்யவா?
 	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	திருத்து › விசைப்பலகை குறுக்குவழிகள் › அனைத்தையும் இயல்புநிலைக்கு மீட்டமை என்பது இறக்குமதியைச் செயல்தவிர்க்கும்.
 	Don't Import	இறக்குமதி செய்யாதே
 	The keyboard shortcut set was not imported: {error}	விசைப்பலகை குறுக்குவழித் தொகுப்பு இறக்குமதி செய்யப்படவில்லை: {error}
@@ -1450,7 +1450,7 @@
 	Save…	சேமி…
 	Scale to Fit Media	ஊடகத்துக்குப் பொருத்த அளவு மாற்று
 	Scatter	சிதறல்
-	Scratch disks	ஸ்கிராட்ச் வட்டுகள்
+	Scratch disks	நினைவக வட்டுகள்
 	Search	தேடு
 	Search commands	கட்டளைகளைத் தேடு
 	Search commands, tools and panels…	கட்டளைகள், கருவிகள், பலகங்களைத் தேடு…
@@ -1605,7 +1605,7 @@
 	Apple Watch 45mm	Apple Watch 45mm
 	Aqua	அக்வா
 	Art & Illustration	கலை & விளக்கப்படம்
-	ArtCraft	ArtCraft
+	ArtCraft	ஆர்ட்கிராப்ட்
 	Background Eraser Tool	பின்னணி அழிப்பான் கருவி
 	Bevel & Emboss	சரிவு & புடைப்பு
 	Blend Mode	கலப்பு முறை
@@ -1642,7 +1642,7 @@
 	Current Tool	தற்போதைய கருவி
 	Custom Shape Tool	தனிப்பயன் வடிவக் கருவி
 	Cyans	சியான்கள்
-	Default PhotoCraft Size	இயல்புநிலை PhotoCraft அளவு
+	Default PhotoCraft Size	இயல்புநிலை போட்டோகிராப்ட் அளவு
 	Delete Workspace	பணியிடத்தை நீக்கு
 	Diamond	வைரம்
 	Dimensions:	பரிமாணங்கள்:
@@ -1753,7 +1753,7 @@
 	Pen Tool	பேனா கருவி
 	Convert Point Tool	புள்ளி மாற்றும் கருவி
 	Photo	புகைப்படம்
-	PhotoCraft website	PhotoCraft இணையதளம்
+	PhotoCraft website	போட்டோகிராப்ட் இணையதளம்
 	Picas	பிகாக்கள்
 	Pillow Emboss	தலையணைப் புடைப்பு
 	Pixel Replacement	பிக்சல் மாற்றீடு
@@ -1788,7 +1788,7 @@
 	Satin	சாடின்
 	Save Pixel Aspect Ratio	பிக்சல் விகிதத்தைச் சேமி
 	Scattering	சிதறல்
-	Scratch Sizes	ஸ்கிராட்ச் அளவுகள்
+	Scratch Sizes	நினைவக அளவுகள்
 	Select Data Points	தரவுப் புள்ளிகளைத் தேர்ந்தெடு
 	Selection	தேர்வு
 	SemiBold	அரைத் தடித்த
@@ -1798,7 +1798,7 @@
 	Show Extras Options	கூடுதல் விருப்பங்களைக் காட்டு
 	Slice Select Tool	துண்டுத் தேர்வுக் கருவி
 	Slice Tool	துண்டுக் கருவி
-	Smart Filters	ஸ்மார்ட் வடிகட்டிகள்
+	Smart Filters	நுண்ணறிவு வடிகட்டிகள்
 	Smudge Tool	தேய்க்கும் கருவி
 	Soft	மென்மை
 	Soften	மென்மையாக்கு
@@ -1835,7 +1835,7 @@
 	Do you want to save the changes you made to “{name}” before quitting?	வெளியேறும் முன் “{name}” இல் செய்த மாற்றங்களைச் சேமிக்க விரும்புகிறீர்களா?
 	Do you want to save the changes you made to “{name}” before closing?	மூடும் முன் “{name}” இல் செய்த மாற்றங்களைச் சேமிக்க விரும்புகிறீர்களா?
 	Doc: {flat}/{layered}	ஆவணம்: {flat}/{layered}
-	Scratch: {size}	ஸ்கிராட்ச்: {size}
+	Scratch: {size}	நினைவக: {அளவு}
 	Untagged {mode}	குறிச்சொல்லிடப்படாத {mode}
 	Invalid {mode} profile	தவறான {mode} சுயவிவரம்
 	Unnamed {mode} profile	பெயரிடப்படாத {mode} சுயவிவரம்
@@ -1857,7 +1857,7 @@
 	Allow agent control	முகவர் கட்டுப்பாட்டை அனுமதி
 	Allow scripts to connect	ஸ்கிரிப்டுகள் இணைய அனுமதி
 	Always	எப்போதும்
-	Always create smart objects when placing	வைக்கும்போது எப்போதும் ஸ்மார்ட் பொருட்களை உருவாக்கு
+	Always create smart objects when placing	வைக்கும்போது எப்போதும் நுண்ணறிவு பொருட்களை உருவாக்கு
 	Animated zoom	அனிமேஷன் பெரிதாக்கல்
 	Apply auto tone	தானியங்கி தொனியைப் பயன்படுத்து
 	Ask	கேள்
@@ -1875,18 +1875,18 @@
 	Brush preview color	தூரிகை முன்னோட்ட நிறம்
 	Cache levels	தற்காலிக சேமிப்பு நிலைகள்
 	Cache tile size	தற்காலிக சேமிப்பு ஓடு அளவு
-	Camera Raw Defaults	Camera Raw இயல்புநிலைகள்
-	Canvas border	கேன்வாஸ் எல்லை
-	Show canvas dots	கேன்வாஸ் புள்ளிகளைக் காட்டு
+	Camera Raw Defaults	கேமரா Raw இயல்புநிலைகள்
+	Canvas border	படச்சட்ட விளிம்பு
+	Show canvas dots	படச்சட்ட புள்ளிகளைக் காட்டு
 	Clip thumbnails to layer bounds	சிறுபடங்களை அடுக்கு எல்லைக்கு வெட்டு
 	Clip Thumbnails to Layer Bounds	சிறுபடங்களை அடுக்கு எல்லைக்கு வெட்டு
 	Canvas color	கேன்வாஸ் நிறம்
-	Canvas custom color	கேன்வாஸ் தனிப்பயன் நிறம்
+	Canvas custom color	விருப்பமான படச்சட்ட நிறம்
 	Color picker	நிறத் தேர்வி
 	Color space	நிற வெளி
 	Column width	நெடுவரிசை அகலம்
 	Concise	சுருக்கமான
-	Control port	கட்டுப்பாட்டுப் போர்ட்
+	Control port	கட்டுப்பாட்டு முனையம்
 	Convert to srgb	sRGB ஆக மாற்று
 	Cursors	சுட்டிகள்
 	Custom dark	தனிப்பயன் கருமை
@@ -1956,8 +1956,8 @@
 	Nearest neighbor	அருகிலுள்ள அண்டை
 	Never	ஒருபோதும் இல்லை
 	Normal tip	இயல்பான முனை
-	Open as smart object	ஸ்மார்ட் பொருளாகத் திற
-	Open in camera raw	Camera Raw இல் திற
+	Open as smart object	நுண்ணறிவு பொருளாகத் திற
+	Open in camera raw	கேமரா Raw இல் திற
 	Open documents as tabs	ஆவணங்களைத் தாவல்களாகத் திற
 	Overscroll	மிகைஉருட்டல்
 	Performance	செயல்திறன்
@@ -1983,7 +1983,7 @@
 	Rotate view with trackpad	டிராக்பேடால் காட்சியைச் சுழற்று
 	Same folder	அதே கோப்புறை
 	Save in background	பின்னணியில் சேமி
-	Scratch Disks	ஸ்கிராட்ச் வட்டுகள்
+	Scratch Disks	நினைவக வட்டுகள்
 	Screen	திரை
 	Screen resolution	திரைத் தெளிவுத்திறன்
 	Scrubby slider acceleration	ஸ்க்ரப்பி நழுவி முடுக்கம்
@@ -2003,8 +2003,8 @@
 	System title bar	கணினி தலைப்புப் பட்டை
 	Show transformation values	உருமாற்ற மதிப்புகளைக் காட்டு
 	Slice color	துண்டு நிறம்
-	Smart guide color	ஸ்மார்ட் வழிகாட்டி நிறம்
-	Smart quotes	ஸ்மார்ட் மேற்கோள்கள்
+	Smart guide color	நுண்ணறிவு வழிகாட்டி நிறம்
+	Smart quotes	நுண்ணறிவு மேற்கோள்கள்
 	Snap vector tools and transforms to pixel grid	வெக்டர் கருவிகளையும் உருமாற்றங்களையும் பிக்சல் கட்டத்துடன் ஒட்டு
 	Srgb	sRGB
 	Standard	நிலையான
@@ -2085,7 +2085,7 @@
 	System Info	கணினித் தகவல்
 	More panels	மேலும் பலகங்கள்
 	More documents	மேலும் ஆவணங்கள்
-	These settings aren't available in PhotoCraft yet.	இந்த அமைப்புகள் PhotoCraft இல் இன்னும் கிடைக்கவில்லை.
+	These settings aren't available in PhotoCraft yet.	இந்த அமைப்புகள் போட்டோகிராப்டில் இன்னும் கிடைக்கவில்லை.
 	Graphics	வரைகலை
 	Reset GPU Backend	GPU பின்புலத்தை மீட்டமை
 	Applies at next launch.	அடுத்த தொடக்கத்தில் பொருந்தும்.
@@ -2099,9 +2099,9 @@
 	Shape Layer	வடிவ அடுக்கு
 	Group Layer	குழு அடுக்கு
 	Fill Layer	நிரப்பு அடுக்கு
-	Smart Object Layer	ஸ்மார்ட் பொருள் அடுக்கு
+	Smart Object Layer	நுண்ணறிவு பொருள் அடுக்கு
 	Create Warped Text	வார்ப் செய்த உரையை உருவாக்கு
-	Rasterize Smart Object	ஸ்மார்ட் பொருளை ராஸ்டராக்கு
+	Rasterize Smart Object	நுண்ணறிவு பொருளை ராஸ்டராக்கு
 	Rasterize Fill Content	நிரப்பு உள்ளடக்கத்தை ராஸ்டராக்கு
 	Rasterize Layer Style	அடுக்கு பாணியை ராஸ்டராக்கு
 	Unlock: picking a preset replaces these settings	பூட்டைத் திற: முன்னமைவைத் தேர்ந்தெடுத்தால் இந்த அமைப்புகள் மாற்றப்படும்
@@ -2294,7 +2294,7 @@
 	Automatic uses GPU acceleration when available and falls back to CPU rendering on errors.	தானியங்கி முறை கிடைக்கும்போது GPU முடுக்கத்தைப் பயன்படுத்தும்; பிழைகளின்போது CPU ரெண்டரிங்குக்கு மாறும்.
 	Switched to CPU rendering	CPU ரெண்டரிங்குக்கு மாறியது
 	GPU acceleration could not continue. Your documents are unchanged.	GPU முடுக்கம் தொடர முடியவில்லை. உங்கள் ஆவணங்கள் மாறவில்லை.
-	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft CPU பட இணைப்பியைப் பயன்படுத்துகிறது. சாளரம் இன்னும் உங்கள் வரைகலை அடாப்டரைப் பயன்படுத்தலாம்.
+	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	போட்டோகிராப்ட் CPU பட இணைப்பியைப் பயன்படுத்துகிறது. சாளரம் இன்னும் உங்கள் வரைகலை அடாப்டரைப் பயன்படுத்தலாம்.
 	Retry GPU requires a restart. Save your work first.	GPU ஐ மீண்டும் முயல மறுதொடக்கம் தேவை. முதலில் உங்கள் பணியைச் சேமிக்கவும்.
 	Retry GPU tries the graphics processor again now.	GPU ஐ மீண்டும் முயல் இப்போது வரைகலைச் செயலியை மீண்டும் முயற்சிக்கும்.
 	GPU acceleration resumed.	GPU முடுக்கம் மீண்டும் தொடங்கியது.
@@ -2314,8 +2314,8 @@
 	Tone Histogram	தொனி ஹிஸ்டோகிராம்
 	Show Selected Region	தேர்ந்தெடுத்த பகுதியைக் காட்டு
 cameraRaw	Light	ஒளி
-	Camera Raw Filter ({layer})	Camera Raw வடிகட்டி ({layer})
-	Camera Raw ({name})	Camera Raw ({name})
+	Camera Raw Filter ({layer})	கேமரா Raw வடிகட்டி ({layer})
+	Camera Raw ({name})	கேமரா Raw ({name})
 cameraRaw	Lights	ஒளிகள்
 cameraRaw	Darks	கருமைகள்
 cameraRaw	Red	சிவப்பு
@@ -2513,7 +2513,7 @@ fontWeight	Italic	சாய்வு
 	Color to Alpha…	நிறத்தை ஆல்பாவாக…
 	Transparency Threshold	ஒளிஊடுருவல் வாசல்
 	Opacity Threshold	ஒளிபுகாமை வாசல்
-	PhotoCraft — Screen Color Picker	PhotoCraft — திரை நிறத் தேர்வி
+	PhotoCraft — Screen Color Picker	போட்டோகிராப்ட் — திரை நிறத் தேர்வி
 	Rasterize svg groups deeper than	இதைவிட ஆழமான svg குழுக்களை ராஸ்டராக்கு
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 இந்த வாசலை அணைக்கும்; 100 நிலைகளுக்கு மேல் ஆழமாக உள்ள SVG குழுக்கள் எப்போதும் ராஸ்டராக்கப்படும்.
 	Rule of Thirds	மூன்றில் ஒரு பங்கு விதி
@@ -2701,10 +2701,10 @@ cameraData	Lens	லென்ஸ்
 	Preview on canvas when reordering layers	அடுக்குகளை மறுவரிசைப்படுத்தும்போது கேன்வாஸில் முன்னோட்டம் காட்டு
 	Show layer mask badges	அடுக்கு மாஸ்க் அடையாளங்களைக் காட்டு
 	Blending Options ({filter})	கலப்பு விருப்பங்கள் ({filter})
-	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	அடுக்கின் விளைவுகளையும் ஸ்மார்ட் வடிகட்டிகளையும் மறை ({key}-கிளிக்: அனைத்து அடுக்குகள்)
-	Show the layer's effects and Smart Filters  ({key}-click: all layers)	அடுக்கின் விளைவுகளையும் ஸ்மார்ட் வடிகட்டிகளையும் காட்டு ({key}-கிளிக்: அனைத்து அடுக்குகள்)
+	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	அடுக்கின் விளைவுகளையும் நுண்ணறிவு வடிகட்டிகளையும் மறை ({key}-கிளிக்: அனைத்து அடுக்குகள்)
+	Show the layer's effects and Smart Filters  ({key}-click: all layers)	அடுக்கின் விளைவுகளையும் நுண்ணறிவு வடிகட்டிகளையும் காட்டு ({key}-கிளிக்: அனைத்து அடுக்குகள்)
 	Wait for the current job to finish.	தற்போதைய வேலை முடியும் வரை காத்திருக்கவும்.
-	The document or Smart Filter changed. Reopen its dialog.	ஆவணம் அல்லது ஸ்மார்ட் வடிகட்டி மாறிவிட்டது. அதன் உரையாடலை மீண்டும் திறக்கவும்.
+	The document or Smart Filter changed. Reopen its dialog.	ஆவணம் அல்லது நுண்ணறிவு வடிகட்டி மாறிவிட்டது. அதன் உரையாடலை மீண்டும் திறக்கவும்.
 	Opacity must be between 0% and 100%.	ஒளிபுகாமை 0% முதல் 100% வரை இருக்க வேண்டும்.
 	Dissolve is approximated: it blends without Photoshop's dither.	கரைவு தோராயமாக்கப்பட்டுள்ளது: இது Photoshop இன் டித்தர் இல்லாமல் கலக்கிறது.
 	Loading fonts…	எழுத்துருக்களை ஏற்றுகிறது…
@@ -2767,7 +2767,7 @@ curves	Smooth	மென்மையாக்கு
 @plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	{group} இலிருந்து {n} தூரிகை இறக்குமதி செய்யப்பட்டது|{group} இலிருந்து {n} தூரிகைகள் இறக்குமதி செய்யப்பட்டன
 @plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	{file} இலிருந்து {n} நிற மாதிரி இறக்குமதி செய்யப்பட்டது|{file} இலிருந்து {n} நிற மாதிரிகள் இறக்குமதி செய்யப்பட்டன
 @plural	Played {n} step|Played {n} steps	{n} படி இயக்கப்பட்டது|{n} படிகள் இயக்கப்பட்டன
-@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	வட்டில் மாறிய {n} இணைக்கப்பட்ட ஸ்மார்ட் பொருள் புதுப்பிக்கப்பட்டது|வட்டில் மாறிய {n} இணைக்கப்பட்ட ஸ்மார்ட் பொருட்கள் புதுப்பிக்கப்பட்டன
+@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	வட்டில் மாறிய {n} இணைக்கப்பட்ட நுண்ணறிவு பொருள் புதுப்பிக்கப்பட்டது|வட்டில் மாறிய {n} இணைக்கப்பட்ட நுண்ணறிவு பொருட்கள் புதுப்பிக்கப்பட்டன
 @plural	Saved for Web: {n} file|Saved for Web: {n} files	வலைக்காகச் சேமித்தது: {n} கோப்பு|வலைக்காகச் சேமித்தது: {n} கோப்புகள்
 @plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	இந்த அமைப்பில் பதிவான {n} அடுக்கு நீக்கப்பட்டது. அமைப்பைப் புதுப்பிக்கவும், அல்லது எச்சரிக்கையை அழிக்கவும்.|இந்த அமைப்பில் பதிவான {n} அடுக்குகள் நீக்கப்பட்டன. அமைப்பைப் புதுப்பிக்கவும், அல்லது எச்சரிக்கையை அழிக்கவும்.
 @plural	{n} plane|{n} planes	{n} தளம்|{n} தளங்கள்
@@ -2794,8 +2794,8 @@ curves	Smooth	மென்மையாக்கு
 	Loaded contours from {file}	{file} இலிருந்து வெளிக்கோடுகள் ஏற்றப்பட்டன
 	Saved contours to {file}	{file} க்கு வெளிக்கோடுகள் சேமிக்கப்பட்டன
 @id	select.all	அனைத்தையும் தேர்ந்தெடு
-	Delete Smart Filters	ஸ்மார்ட் வடிகட்டிகளை நீக்கு
-	Enable Smart Filters	ஸ்மார்ட் வடிகட்டிகளை இயக்கு
+	Delete Smart Filters	நுண்ணறிவு வடிகட்டிகளை நீக்கு
+	Enable Smart Filters	நுண்ணறிவு வடிகட்டிகளை இயக்கு
 	Delete Layer…	அடுக்கை நீக்கு…
 	Select Similar Colors	ஒத்த நிறங்களைத் தேர்ந்தெடு
 	Canvas rotation	கேன்வாஸ் சுழற்சி
@@ -3298,7 +3298,7 @@ layerLabel	No Color	நிறம் இல்லை
 	Restart Required	மறுதொடக்கம் தேவை
 	Restart	மறுதொடக்கம்
 	Quit	வெளியேறு
-	Quit PhotoCraft	PhotoCraft இலிருந்து வெளியேறு
+	Quit PhotoCraft	போட்டோகிராப்டிலிருந்து வெளியேறு
 	Close Window	சாளரத்தை மூடு
 	New Window	புதிய சாளரம்
 	Open Image	படத்தைத் திற
@@ -3791,7 +3791,7 @@ layerLabel	No Color	நிறம் இல்லை
 	Mezzotint	மெசோடின்ட்
 	Mosaic	மொசைக்
 	Motion Blur	இயக்க மங்கல்
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Wayland-இல் சொந்த கோப்பு இழுத்துவிடுதல் இன்னும் ஆதரிக்கப்படவில்லை. கோப்பு › திற என்பதைப் பயன்படுத்தவும், அல்லது `WAYLAND_DISPLAY= photocraft` உடன் PhotoCraft ஐ XWayland-இல் இயக்கவும்.
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Wayland-இல் சொந்த கோப்பு இழுத்துவிடுதல் இன்னும் ஆதரிக்கப்படவில்லை. கோப்பு › திற என்பதைப் பயன்படுத்தவும், அல்லது `WAYLAND_DISPLAY= போட்டோகிராப்ட்` உடன் போட்டோகிராப்டை XWayland-இல் இயக்கவும்.
 	Neon Glow	நியான் பிரகாசம்
 	New Guide Layout	புதிய வழிகாட்டி அமைப்பு
 	New Video Layer from File	கோப்பிலிருந்து புதிய வீடியோ அடுக்கு
@@ -3837,8 +3837,8 @@ layerLabel	No Color	நிறம் இல்லை
 	Shadows/Highlights	நிழல்கள்/ஒளிர்வுகள்
 	Shape Blur	வடிவ மங்கல்
 	Shear	ஷியர்
-	Smart Blur	ஸ்மார்ட் மங்கல்
-	Smart Sharpen	ஸ்மார்ட் கூர்மையாக்கல்
+	Smart Blur	நுண்ணறிவு மங்கல்
+	Smart Sharpen	நுண்ணறிவு கூர்மையாக்கல்
 	Smudge Stick	தேய்ப்புக் குச்சி
 	Solid Color	திட நிறம்
 	Spherize	கோளமாக்கு
@@ -3964,9 +3964,9 @@ layerLabel	No Color	நிறம் இல்லை
 	Saved {path}; image assets: {n} in {dir}	{path} சேமிக்கப்பட்டது; பட சொத்துகள்: {dir} இல் {n}
 	{message} (notes: {n}; {warning})	{message} (குறிப்புகள்: {n}; {warning})
 	Preferences can't be saved	விருப்பத்தேர்வுகளைச் சேமிக்க முடியவில்லை
-	PhotoCraft keeps retrying; until a save succeeds, preference changes are lost when it closes.	PhotoCraft தொடர்ந்து முயல்கிறது; சேமிப்பு வெற்றிபெறும் வரை, மூடும்போது விருப்பத்தேர்வு மாற்றங்கள் இழக்கப்படும்.
+	PhotoCraft keeps retrying; until a save succeeds, preference changes are lost when it closes.	போட்டோகிராப்ட் தொடர்ந்து முயல்கிறது; சேமிப்பு வெற்றிபெறும் வரை, மூடும்போது விருப்பத்தேர்வு மாற்றங்கள் இழக்கப்படும்.
 	GPU retry scheduled	GPU மறுமுயற்சி திட்டமிடப்பட்டது
-	Save your work and restart PhotoCraft to retry GPU acceleration. CPU rendering remains active for this session.	GPU முடுக்கத்தை மீண்டும் முயல உங்கள் பணியைச் சேமித்து PhotoCraft ஐ மறுதொடக்கம் செய்யவும். இந்த அமர்வில் CPU ரெண்டரிங் தொடர்ந்து செயலில் இருக்கும்.
+	Save your work and restart PhotoCraft to retry GPU acceleration. CPU rendering remains active for this session.	GPU முடுக்கத்தை மீண்டும் முயல உங்கள் பணியைச் சேமித்து போட்டோகிராப்டை மறுதொடக்கம் செய்யவும். இந்த அமர்வில் CPU ரெண்டரிங் தொடர்ந்து செயலில் இருக்கும்.
 	GPU device was lost; using the CPU renderer.	GPU சாதனம் இழக்கப்பட்டது; CPU ரெண்டரரைப் பயன்படுத்துகிறது.
 	GPU error; using the CPU renderer.	GPU பிழை; CPU ரெண்டரரைப் பயன்படுத்துகிறது.
 	Couldn't open {name}: {error}	{name} ஐத் திறக்க முடியவில்லை: {error}
@@ -3983,7 +3983,7 @@ layerLabel	No Color	நிறம் இல்லை
 	Scroll menu down	பட்டியைக் கீழே உருட்டு
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	தொடர்வதற்கு முன் இந்த உரை அடுக்கு ராஸ்டராக்கப்பட வேண்டும். அதன் உரையை இனி திருத்த முடியாது. உரையை ராஸ்டராக்கவா?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	தொடர்வதற்கு முன் இந்த வடிவ அடுக்கு ராஸ்டராக்கப்பட வேண்டும். இதை இனி வடிவமாகத் திருத்த முடியாது. வடிவத்தை ராஸ்டராக்கவா?
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	தொடர்வதற்கு முன் இந்த ஸ்மார்ட் பொருள் ராஸ்டராக்கப்பட வேண்டும். அதன் உள்ளடக்கத்தை இனி திருத்த முடியாது. ஸ்மார்ட் பொருளை ராஸ்டராக்கவா?
+	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	தொடர்வதற்கு முன் இந்த நுண்ணறிவு பொருள் ராஸ்டராக்கப்பட வேண்டும். அதன் உள்ளடக்கத்தை இனி திருத்த முடியாது. நுண்ணறிவு பொருளை ராஸ்டராக்கவா?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	தொடர்வதற்கு முன் இந்த நிரப்பு அடுக்கு ராஸ்டராக்கப்பட வேண்டும். அதன் நிரப்பு உள்ளடக்கத்தை இனி திருத்த முடியாது. அடுக்கை ராஸ்டராக்கவா?
 	This layer must be rasterized before proceeding.	தொடர்வதற்கு முன் இந்த அடுக்கு ராஸ்டராக்கப்பட வேண்டும்.
 	Color Picker (Background Color)	நிறத் தேர்வி (பின்னணி நிறம்)
@@ -4078,7 +4078,7 @@ navigator	Zoom	பெரிதாக்கல்
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})
 @plural	Loaded {n} action from {file}|Loaded {n} actions from {file}	{file} இலிருந்து {n} செயல் ஏற்றப்பட்டது|{file} இலிருந்து {n} செயல்கள் ஏற்றப்பட்டன
-@plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} படிக்கு இன்னும் PhotoCraft சமமானது இல்லை|{n} படிகளுக்கு இன்னும் PhotoCraft சமமானது இல்லை
+@plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} படிக்கு இன்னும் போட்டோகிராப்ட் சமமானது இல்லை|{n} படிகளுக்கு இன்னும் போட்டோகிராப்ட் சமமானது இல்லை
 @plural	Saved {n} action to {file}|Saved {n} actions to {file}	{file} க்கு {n} செயல் சேமிக்கப்பட்டது|{file} க்கு {n} செயல்கள் சேமிக்கப்பட்டன
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	Photoshop சமமானது இல்லாத {n} படி விடப்பட்டது|Photoshop சமமானது இல்லாத {n} படிகள் விடப்பட்டன
 	Starting serial	தொடர் எண் தொடக்கம்
@@ -4127,12 +4127,12 @@ navigator	Zoom	பெரிதாக்கல்
 	Bicubic Smoother	பைகியூபிக் மென்மை
 	Bicubic Sharper	பைகியூபிக் கூர்மை
 	Pasting from other apps is unavailable	மற்ற பயன்பாடுகளிலிருந்து ஒட்டுவது கிடைக்கவில்லை
-	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	இந்த அமர்வில் PhotoCraft ஆல் கணினி கிளிப்போர்டை அணுக முடியவில்லை. Wayland-இல், Flatpak சாண்ட்பாக்ஸ் மற்ற பயன்பாடுகளிலிருந்து படங்களைப் படிக்கும் நெறிமுறையை மறைக்கிறது.
-	To paste from other apps, start PhotoCraft under XWayland: `{command}`	மற்ற பயன்பாடுகளிலிருந்து ஒட்ட, PhotoCraft ஐ XWayland-இல் தொடங்கவும்: `{command}`
-	Nothing to paste: PhotoCraft can't read the system clipboard here	ஒட்ட எதுவும் இல்லை: இங்கு PhotoCraft ஆல் கணினி கிளிப்போர்டைப் படிக்க முடியவில்லை
+	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	இந்த அமர்வில் போட்டோகிராப்டால் கணினி கிளிப்போர்டை அணுக முடியவில்லை. Wayland-இல், Flatpak சாண்ட்பாக்ஸ் மற்ற பயன்பாடுகளிலிருந்து படங்களைப் படிக்கும் நெறிமுறையை மறைக்கிறது.
+	To paste from other apps, start PhotoCraft under XWayland: `{command}`	மற்ற பயன்பாடுகளிலிருந்து ஒட்ட, போட்டோகிராப்டை XWayland-இல் தொடங்கவும்: `{command}`
+	Nothing to paste: PhotoCraft can't read the system clipboard here	ஒட்ட எதுவும் இல்லை: இங்கு போட்டோகிராப்டால் கணினி கிளிப்போர்டைப் படிக்க முடியவில்லை
 	Delete this set	இந்தத் தொகுப்பை நீக்கு
 	New Set…	புதிய தொகுப்பு…
-	PhotoCraft Defaults	PhotoCraft இயல்புநிலைகள்
+	PhotoCraft Defaults	போட்டோகிராப்ட் இயல்புநிலைகள்
 	Save a list of these shortcuts as a web page	இந்தக் குறுக்குவழிகளின் பட்டியலை வலைப்பக்கமாகச் சேமி
 	Save the changes to this set	இந்தத் தொகுப்பின் மாற்றங்களைச் சேமி
 	Save these shortcuts as a .kys file	இந்தக் குறுக்குவழிகளை .kys கோப்பாகச் சேமி
