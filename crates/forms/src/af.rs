@@ -20,7 +20,10 @@ mod script;
 #[cfg(test)]
 use calc::{Notation, eval_notation, notation_name, notation_tokens, unique};
 pub use calc::{calculate, calculation_reads, notation_js, reads_built_names, rename_in_calculation};
-pub use format::{DATE_PRESETS, DateTime, TIME_PRESETS, format_date, format_value, js_number, keystroke, make_number, parse_date, validate};
+pub use format::{
+    DATE_PRESETS, DateNames, DateTime, ENGLISH_DATE_NAMES, TIME_PRESETS, date_names, format_date, format_date_in, format_value, format_value_in,
+    js_number, keystroke, make_number, parse_date, set_date_names, validate,
+};
 use script::{Arg, call};
 pub use script::{NOTATION_NOT_STORABLE, calculate_js, format_js, notation_storable, parse_calculate, parse_format, parse_validate, validate_js};
 
