@@ -344,7 +344,7 @@ const FRAME_REACH: f32 = 6.0;
 /// The arrow keys move the selected image or objects a point, Shift and an arrow ten points,
 /// as in Acrobat. They are taken before the view turns the page with them.
 pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document) {
-    if ctx.egui_wants_keyboard_input() || view.pending_edit.is_some() {
+    if ctx.text_edit_focused() || view.pending_edit.is_some() {
         return;
     }
     let image = view.image_selection.as_ref().filter(|s| !s.dragging()).map(|s| (s.page, s.index));
@@ -395,7 +395,7 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document
 /// frame, or everything an area selection took, goes at once instead of one typed character at a
 /// time.
 pub(crate) fn delete_keys(ctx: &egui::Context, view: &mut DocView) {
-    if ctx.egui_wants_keyboard_input() || view.pending_edit.is_some() || view.objects.gesture.is_some() {
+    if ctx.text_edit_focused() || view.pending_edit.is_some() || view.objects.gesture.is_some() {
         return;
     }
     let Some(page) = view.objects.page.filter(|_| !view.objects.selected.is_empty()) else { return };

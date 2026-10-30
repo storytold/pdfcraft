@@ -385,3 +385,26 @@ fn modifier_selection_picks_foreground_text_and_added_items_over_background_artw
         assert!(new.rect.iter().enumerate().all(|(i, value)| (value - old.rect[i] - shift[i % 2]).abs() < 0.01), "{old:?} -> {new:?}");
     }
 }
+
+/// #4915: Pressing Delete removes selected objects in Edit PDF mode.
+#[test]
+fn delete_key_removes_selected_objects_in_edit_pdf() {
+    for key in [Key::Delete, Key::Backspace] {
+        let mut h = harness();
+        let total_objects = objects(&h).len();
+        marquee(&mut h);
+        h.get_by_label("3 objects selected");
+        h.key_press(key);
+        h.run_steps(4);
+        assert!(
+            h.query_all_by_label_contains("object selected").next().is_none() && h.query_all_by_label_contains("objects selected").next().is_none(),
+            "selected objects deleted with {key:?}"
+        );
+        let app = h.state();
+        assert_eq!(app.session.get(app.views[0].id).unwrap().can_undo(), Some("Delete content"));
+        assert!(app.session.get(app.views[0].id).unwrap().dirty);
+        assert!(h.state_mut().execute("edit.undo"));
+        h.run_steps(4);
+        assert_eq!(objects(&h).len(), total_objects);
+    }
+}

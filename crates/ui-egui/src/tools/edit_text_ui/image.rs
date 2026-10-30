@@ -184,7 +184,7 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, b: Rect) -> bool {
         view.cursor.claim(Layer::Editor, icon);
     }
     let clicked = |r: Rect| allow_interaction && resp.clicked() && hover_pos.is_some_and(|p| r.contains(p));
-    let keys = |key: egui::Key| allow_interaction && ui.input(|inp| inp.key_pressed(key)) && !ui.ctx().egui_wants_keyboard_input();
+    let keys = |key: egui::Key| allow_interaction && ui.input(|inp| inp.key_pressed(key)) && !ui.ctx().text_edit_focused();
     if clicked(done) || keys(egui::Key::Enter) {
         let keep = mode.keep;
         if let Some(s) = view.image_selection.as_mut() {
@@ -553,7 +553,7 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
         }
         if allow_interaction
             && ui.input(|inp| inp.key_pressed(egui::Key::Delete) || inp.key_pressed(egui::Key::Backspace))
-            && !ui.ctx().egui_wants_keyboard_input()
+            && !ui.ctx().text_edit_focused()
         {
             view.image_selection = None;
             view.pending_edit = Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::Delete });
