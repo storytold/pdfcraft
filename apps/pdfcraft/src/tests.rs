@@ -217,6 +217,22 @@ fn surface_limits_preserve_other_requirements_and_never_overrequest() {
 }
 
 #[test]
+fn the_device_asks_for_far_fewer_bindings_than_wgpu_offers() {
+    // Issue #5355: Direct3D 12 allocates a descriptor for every binding the device may hold,
+    // and the adapter (like wgpu's default request) offers a million.
+    let required = eframe::wgpu::Limits::default();
+    let supported = eframe::wgpu::Limits { max_texture_dimension_2d: 16384, ..required.clone() };
+    assert!(supported.max_non_sampler_bindings > super::MAX_NON_SAMPLER_BINDINGS);
+    let enabled = super::binding_limits(super::surface_texture_limits(required.clone(), &supported));
+    assert!(enabled.check_limits(&supported), "unsupported device limits: {enabled:?}");
+    let expected = eframe::wgpu::Limits { max_texture_dimension_2d: 16384, max_non_sampler_bindings: super::MAX_NON_SAMPLER_BINDINGS, ..required };
+    assert_eq!(enabled, expected, "only the bindings and the texture extent change");
+    // An adapter that offers fewer keeps its own number.
+    let few = eframe::wgpu::Limits { max_non_sampler_bindings: 4096, ..eframe::wgpu::Limits::default() };
+    assert_eq!(super::binding_limits(few.clone()), few);
+}
+
+#[test]
 fn surface_limits_fit_v3d_shader_variable_limit() {
     // Issue #2383: V3D supports 15 variables, below the default request of 16.
     let required = eframe::wgpu::Limits::default();
