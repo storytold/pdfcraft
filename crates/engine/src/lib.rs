@@ -316,7 +316,9 @@ pub mod sign {
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub struct Time;
     impl Time {
-        pub fn from_unix(_secs: i64) -> Self { Self }
+        pub fn from_unix(_secs: i64) -> Self {
+            Self
+        }
     }
     impl std::fmt::Display for Time {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -332,19 +334,25 @@ pub mod sign {
         pub country: Option<String>,
     }
     impl Name {
-        pub fn display(&self) -> String { String::new() }
-        pub fn email(&self) -> Option<String> { None }
-        pub fn organization(&self) -> Option<&str> { self.organization.as_deref() }
-        pub fn unit(&self) -> Option<&str> { self.organizational_unit.as_deref() }
-        pub fn country(&self) -> Option<&str> { self.country.as_deref() }
-        pub fn common_name(&self) -> Option<&str> { self.common_name.as_deref() }
-        pub fn build(
-            _cn: &str,
-            _ou: &str,
-            _org: &str,
-            _email: &str,
-            _country: &str,
-        ) -> Self {
+        pub fn display(&self) -> String {
+            String::new()
+        }
+        pub fn email(&self) -> Option<String> {
+            None
+        }
+        pub fn organization(&self) -> Option<&str> {
+            self.organization.as_deref()
+        }
+        pub fn unit(&self) -> Option<&str> {
+            self.organizational_unit.as_deref()
+        }
+        pub fn country(&self) -> Option<&str> {
+            self.country.as_deref()
+        }
+        pub fn common_name(&self) -> Option<&str> {
+            self.common_name.as_deref()
+        }
+        pub fn build(_cn: &str, _ou: &str, _org: &str, _email: &str, _country: &str) -> Self {
             Self::default()
         }
     }
@@ -352,7 +360,9 @@ pub mod sign {
     #[derive(Clone, Debug, Default, PartialEq, Eq)]
     pub struct PublicKey;
     impl PublicKey {
-        pub fn describe(&self) -> String { String::new() }
+        pub fn describe(&self) -> String {
+            String::new()
+        }
     }
 
     #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -366,17 +376,19 @@ pub mod sign {
         pub public_key: PublicKey,
     }
     impl Certificate {
-        pub fn display_name(&self) -> String { String::new() }
-        pub fn serial_hex(&self) -> String { String::new() }
-        pub fn is_self_signed(&self) -> bool { false }
-        pub fn fingerprint(&self) -> String { String::new() }
-        pub fn self_signed(
-            _dn: &Name,
-            _key: &PrivateKey,
-            _time: Time,
-            _years: u32,
-            _serial: &[u8],
-        ) -> Result<Self, SignError> {
+        pub fn display_name(&self) -> String {
+            String::new()
+        }
+        pub fn serial_hex(&self) -> String {
+            String::new()
+        }
+        pub fn is_self_signed(&self) -> bool {
+            false
+        }
+        pub fn fingerprint(&self) -> String {
+            String::new()
+        }
+        pub fn self_signed(_dn: &Name, _key: &PrivateKey, _time: Time, _years: u32, _serial: &[u8]) -> Result<Self, SignError> {
             Ok(Self::default())
         }
     }
@@ -417,7 +429,9 @@ pub mod sign {
             Sha512,
         }
         impl DigestAlg {
-            pub fn digest(&self, _data: &[&[u8]]) -> Vec<u8> { Vec::new() }
+            pub fn digest(&self, _data: &[&[u8]]) -> Vec<u8> {
+                Vec::new()
+            }
         }
     }
 
@@ -468,7 +482,9 @@ pub mod sign {
     }
 
     impl SignatureInfo {
-        pub fn summary(&self) -> String { String::new() }
+        pub fn summary(&self) -> String {
+            String::new()
+        }
     }
 
     #[derive(Clone, Debug, Default)]

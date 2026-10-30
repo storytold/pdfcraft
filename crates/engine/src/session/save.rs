@@ -205,16 +205,15 @@ impl Session {
                     }
                     false
                 };
-                let bytes =
-                    match d.editor.as_ref().filter(|e| has_password_values(&e.cos)) {
-                        Some(e) => match writable(&e.cos)
-                            .and_then(|c| write_incremental(&c, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string())))
-                        {
-                            Ok(b) => Arc::new(b),
-                            Err(_) => continue,
-                        },
-                        None => d.bytes.clone(),
-                    };
+                let bytes = match d.editor.as_ref().filter(|e| has_password_values(&e.cos)) {
+                    Some(e) => match writable(&e.cos)
+                        .and_then(|c| write_incremental(&c, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string())))
+                    {
+                        Ok(b) => Arc::new(b),
+                        Err(_) => continue,
+                    },
+                    None => d.bytes.clone(),
+                };
                 d.snapshot_generation = d.generation;
                 out.push(RecoverySnapshot {
                     doc: d.id,
@@ -354,12 +353,7 @@ impl Session {
     }
 
     #[cfg(not(feature = "sign"))]
-    pub fn sign(
-        &mut self,
-        _id: DocId,
-        _digital_id: &crate::sign::DigitalId,
-        _options: crate::sign::SignOptions,
-    ) -> Result<Arc<Vec<u8>>, EditError> {
+    pub fn sign(&mut self, _id: DocId, _digital_id: &crate::sign::DigitalId, _options: crate::sign::SignOptions) -> Result<Arc<Vec<u8>>, EditError> {
         Err(EditError::Invalid("Signatures disabled in this build".into()))
     }
 

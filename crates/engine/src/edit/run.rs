@@ -454,7 +454,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 #[cfg(feature = "xfa")]
                 {
                     let Some(content_type) = image_content_type(image) else {
-                        return Err(EditError::Invalid(format!("{name}: an XFA form keeps a PNG, JPEG, GIF, BMP or TIFF picture; choose one of those")));
+                        return Err(EditError::Invalid(format!(
+                            "{name}: an XFA form keeps a PNG, JPEG, GIF, BMP or TIFF picture; choose one of those"
+                        )));
                     };
                     pdfcraft_forms::set_button_icon(doc, name, img, px)?;
                     let som = pdfcraft_xfa::fields_by_som(doc).into_iter().find(|(_, n)| n == name).map(|(s, _)| s).unwrap_or_else(|| name.clone());
@@ -462,8 +464,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                         Some(tpl) => pdfcraft_xfa::data_path(tpl, &som),
                         None => pdfcraft_xfa::som_to_path(&som),
                     };
-                    let r =
-                        pdfcraft_xfa::write_data_image(doc, &path, content_type, image, cx.xfa_datasets).map_err(|e| EditError::Write(e.to_string()))?;
+                    let r = pdfcraft_xfa::write_data_image(doc, &path, content_type, image, cx.xfa_datasets)
+                        .map_err(|e| EditError::Write(e.to_string()))?;
                     if !r.written && r.warnings.is_empty() {
                         return Err(EditError::Write(format!("{name}: the picture could not be written into the form's data")));
                     }

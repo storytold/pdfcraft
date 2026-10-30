@@ -103,12 +103,7 @@ pub fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
 
 /// Validate the signature fields of `cos` (written as `bytes`).
 #[cfg(feature = "sign")]
-pub(crate) fn signatures_of(
-    cos: &pdfcraft_cos::Document,
-    bytes: &[u8],
-    trust: &TrustStore,
-    cache: &crate::sign::DigestCache,
-) -> Vec<SignatureInfo> {
+pub(crate) fn signatures_of(cos: &pdfcraft_cos::Document, bytes: &[u8], trust: &TrustStore, cache: &crate::sign::DigestCache) -> Vec<SignatureInfo> {
     pdfcraft_sign::pdf::list_cached(cos, bytes, trust, cache)
 }
 
