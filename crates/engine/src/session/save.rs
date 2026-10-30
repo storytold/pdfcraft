@@ -166,10 +166,13 @@ impl Session {
         // How the document is shown is the reader's, not the file's: reading colours and hidden
         // comments stay as they were (#3443). `open` built the renderer with the defaults.
         if let Some(old) = self.docs.get(old)
-            && (doc.config.reading_colors != old.config.reading_colors || doc.config.hide_comments != old.config.hide_comments)
+            && (doc.config.reading_colors != old.config.reading_colors
+                || doc.config.hide_comments != old.config.hide_comments
+                || doc.config.hidden_comment_types != old.config.hidden_comment_types)
         {
             doc.config.reading_colors = old.config.reading_colors;
             doc.config.hide_comments = old.config.hide_comments;
+            doc.config.hidden_comment_types = old.config.hidden_comment_types.clone();
             doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         }
         // Caches keyed by the edit generation (edit lines, images, measurements) must see a new

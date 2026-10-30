@@ -384,6 +384,11 @@ impl Document {
         self.editor.as_ref().is_some_and(|e| pdfcraft_annot::deletable(&e.cos, page, index).is_ok())
     }
 
+    /// Comment types hidden on the page (the Comments panel's names, sorted).
+    pub fn hidden_comment_types(&self) -> &[String] {
+        &self.config.hidden_comment_types
+    }
+
     pub fn can_undo(&self) -> Option<&str> {
         self.undo_label().map(Label::as_str)
     }
