@@ -86,7 +86,11 @@ impl RenderConfig {
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),
             hide_comments: self.hide_comments,
-            font_resolver: Arc::new(move |query| japanese_fallback(query).or_else(|| standard(query))),
+            font_resolver: Arc::new(move |query| {
+                japanese_fallback(query)
+                    .or_else(|| system_cjk_fallback(query))
+                    .or_else(|| standard(query))
+            }),
             ..InterpreterSettings::default()
         }
     }
@@ -117,6 +121,35 @@ fn japanese_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
         }
     }?;
     Some((Arc::new(face.bytes), 0))
+}
+
+/// A Simplified Chinese face already installed on this machine, for a composite (CID) font the
+/// document does not embed (`STSong-Light` and friends, the `Adobe-GB1` collection). Such text
+/// drew nothing at all before: `pdfcraft-fonts`' substitution chain has no licensed `Hans` face to
+/// offer, and hayro's own substitutes are the Latin standard 14, which hold no Han glyph.
+///
+/// Only a composite font qualifies — a character collection is what marks one — because a simple
+/// Latin font is better served by hayro's standard-14 pick, whose advance widths are published
+/// rather than approximate. The substitute changes the shapes, not the layout: a CID font's
+/// advances come from the document's own `/W` table or default width.
+///
+/// Off Windows there is nothing installed worth reading, and this answers `None`.
+fn system_cjk_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
+    let FontQuery::Fallback(f) = query else { return None };
+    if f.character_collection.as_ref()?.family != CidFamily::AdobeGB1 {
+        return None;
+    }
+    let (bytes, index) = pdfcraft_fonts::installed_cjk_face(f.is_serif)?;
+    // Once per process: the renderer asks again for every page that uses the font.
+    static TOLD: std::sync::Once = std::sync::Once::new();
+    TOLD.call_once(|| {
+        log::warn!(
+            "this document does not embed {}; its text is drawn with an installed Simplified Chinese face",
+            f.post_script_name.as_deref().unwrap_or("a CID font")
+        )
+    });
+    let data: FontData = bytes;
+    Some((data, index))
 }
 
 #[derive(Debug, PartialEq)]
