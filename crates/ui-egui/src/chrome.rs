@@ -41,11 +41,14 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .frame(egui::Frame::NONE.fill(t.titlebar).inner_margin(egui::Margin { left, right: 10, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
-            let drag = ui.interact(full, ui.scope_id().with("titledrag"), Sense::click_and_drag());
-            if drag.drag_started() {
+            // The desktop handles movement from the press, without egui's drag threshold.
+            // Sense only clicks: sensing drags too makes the background a potential drag
+            // target even when a child button owns the click. Clicks retain double-clicks.
+            let title = ui.interact(full, ui.scope_id().with("titledrag"), Sense::click());
+            if title.is_pointer_button_down_on() && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) {
                 window_controls::desktop_grab(ui.ctx(), egui::ViewportCommand::StartDrag);
             }
-            if drag.double_clicked() {
+            if title.double_clicked() {
                 let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
             }

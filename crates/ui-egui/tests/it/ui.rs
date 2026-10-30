@@ -1270,6 +1270,88 @@ fn use_system_title_bar_swaps_the_header_bar_for_the_window_frame() {
     assert_eq!(decorations(&h), None);
 }
 
+fn window_command(h: &Harness<'static, PdfCraftApp>, command: &egui::ViewportCommand) -> bool {
+    h.output().viewport_output.values().any(|v| v.commands.contains(command))
+}
+
+#[test]
+fn title_bar_starts_window_drag_on_the_primary_press() {
+    let mut h = harness(|app| app.window_controls = Some(Default::default()));
+    let pos = egui::pos2(700.0, 18.0);
+    h.event(egui::Event::PointerMoved(pos));
+    h.step();
+    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.step();
+    assert!(!window_command(&h, &egui::ViewportCommand::StartDrag));
+    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.step();
+    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.step();
+    assert!(window_command(&h, &egui::ViewportCommand::StartDrag), "the desktop must receive the grab before the first mouse movement");
+    h.event(egui::Event::PointerMoved(pos + egui::vec2(10.0, 5.0)));
+    h.step();
+    assert!(!window_command(&h, &egui::ViewportCommand::StartDrag), "one native grab per press");
+}
+
+#[test]
+fn title_bar_double_click_still_maximizes() {
+    // kittest does not call eframe's raw_input_hook. Include the release repair used by
+    // the desktop host, since starting a native grab must not swallow the second click.
+    let send = |h: &mut Harness<'static, PdfCraftApp>, event| {
+        // The shared harness advances 250 ms per frame; use actual double-click timing here.
+        let time = h.ctx.input(|i| i.time) + 0.05;
+        h.input_mut().time = Some(time);
+        h.input_mut().events.push(event);
+        let ctx = h.ctx.clone();
+        pdfcraft_ui_egui::window_controls::release_after_desktop_grab(&ctx, h.input_mut());
+        h.step();
+    };
+    for desktop_kept_first_release in [false, true] {
+        let mut h = harness(|app| app.window_controls = Some(Default::default()));
+        let pos = egui::pos2(700.0, 18.0);
+        h.event(egui::Event::PointerMoved(pos));
+        h.step();
+        for click in 0..2 {
+            send(&mut h, egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+            if click == 0 && desktop_kept_first_release {
+                // The compositor kept the release. Let the host supply it on the next frame.
+                let time = h.ctx.input(|i| i.time) + 0.05;
+                h.input_mut().time = Some(time);
+                let ctx = h.ctx.clone();
+                pdfcraft_ui_egui::window_controls::release_after_desktop_grab(&ctx, h.input_mut());
+                h.step();
+            } else {
+                send(
+                    &mut h,
+                    egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+                );
+            }
+        }
+        assert!(window_command(&h, &egui::ViewportCommand::Maximized(true)), "desktop kept first release: {desktop_kept_first_release}");
+    }
+}
+
+#[test]
+fn title_bar_children_do_not_start_window_drags() {
+    let mut h = three_tab_harness();
+    h.state_mut().window_controls = Some(Default::default());
+    h.run_steps(3);
+    for label in ["first.pdf", "Maximize"] {
+        let pos = h.get_by_label(label).rect().center();
+        h.event(egui::Event::PointerMoved(pos));
+        h.step();
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.step();
+        assert!(!window_command(&h, &egui::ViewportCommand::StartDrag), "press on {label}");
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.step();
+        assert!(!window_command(&h, &egui::ViewportCommand::StartDrag), "release on {label}");
+        if label == "Maximize" {
+            assert!(window_command(&h, &egui::ViewportCommand::Maximized(true)));
+        }
+    }
+}
+
 /// Preferences ▸ Animation effects: the system's animation setting until the user chooses On or
 /// Off. The choice is saved, and settings holding anything else leave it alone.
 #[test]
