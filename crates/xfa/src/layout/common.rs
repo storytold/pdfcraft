@@ -1,4 +1,4 @@
-use super::items::{Action, BorderShape, Item, Rounded};
+use super::items::{Action, BorderShape, Item, Rounded, Widget};
 use super::{HashMap, Layout, MAX_DEPTH, Node, Rect, Script, date_letters, iso_to_pattern};
 
 pub(super) fn collect_values(nodes: &[Node], out: &mut HashMap<String, String>, depth: usize) {
@@ -108,13 +108,19 @@ pub(super) fn divide(item: Item, cut: f64) -> (Option<Item>, Option<Item>) {
     }
 }
 
+/// How much of a widget a page break must leave above it for the field to split there: a line of
+/// its text.
+pub(super) fn split_line(w: &Widget) -> f64 {
+    (w.face.size * 1.2).max(1.0)
+}
+
 /// An empty field's widget cut at `cut`: the widget down to the cut, and below it the rest of
 /// its box (its fill, and its border closed on every side, a border's default `break="close"`,
 /// XFA 3.3 pp. 629–630) to go on in the next content area. A widget the cut doesn't cross stays
 /// whole on its side, as does one with no room above the cut for a line of its text.
 pub(super) fn split_widget(item: Item, cut: f64) -> (Option<Item>, Vec<Item>) {
     let Item::Widget(mut w) = item else { return (Some(item), Vec::new()) };
-    let line = (w.face.size * 1.2).max(1.0);
+    let line = split_line(&w);
     if w.rect.bottom() <= cut + 0.01 {
         return (Some(Item::Widget(w)), Vec::new());
     }

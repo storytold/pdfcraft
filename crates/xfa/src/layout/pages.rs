@@ -220,7 +220,7 @@ impl Layouter<'_> {
 
     /// Draw border `b` round `rect` on page `page` (an index), under what that page got from item
     /// `at` on.
-    fn insert_border(&mut self, b: &Border, rect: Rect, page: usize, at: usize) -> Result<(), XfaError> {
+    pub(super) fn insert_border(&mut self, b: &Border, rect: Rect, page: usize, at: usize) -> Result<(), XfaError> {
         let before = self.pages.last().map_or(0, |p| p.items.len());
         self.draw_border(b, rect)?;
         let drawn: Vec<Item> = match self.pages.last_mut() {

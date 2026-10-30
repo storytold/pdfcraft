@@ -127,6 +127,15 @@ struct Cursor {
     placed: bool,
 }
 
+/// An empty field a page break is splitting ([`Layouter::splitting`]): its widget's SOM path, its
+/// box where it was drawn, and its pieces so far (page index, the page's first item of the piece,
+/// the piece's box).
+struct Splitting {
+    som: String,
+    rect: Rect,
+    pieces: Vec<(usize, usize, Rect)>,
+}
+
 struct Layouter<'t> {
     tpl: &'t Template,
     data: Option<&'t DataNode>,
@@ -152,9 +161,10 @@ struct Layouter<'t> {
     /// The fields and draws of the block being placed: (first item, one past the last, top,
     /// bottom) on the last page. A page break keeps each whole (see `split_block`).
     leaves: Vec<(usize, usize, f64, f64)>,
-    /// The SOM path of the empty field the block being placed is, when a page break may split it
-    /// (see `split_block`).
-    splitting: Option<String>,
+    /// The empty field a page break is splitting (see `flow_block` and `split_block`).
+    splitting: Option<Splitting>,
+    /// The items `draw_field` drew for the border of the field drawn last: (first, one past the last).
+    field_border: Option<(usize, usize)>,
     /// The flowed subforms being laid out, outermost first: a break between their children
     /// closes their parts on one content area and opens new ones on the next.
     frames: Vec<Frame>,
@@ -204,6 +214,7 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         measures: Cell::new(0),
         leaves: Vec::new(),
         splitting: None,
+        field_border: None,
         frames: Vec::new(),
     };
     let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new() };

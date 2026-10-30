@@ -4573,3 +4573,49 @@ fn an_empty_growing_field_is_split_by_a_page_break() {
         assert!((moved.y - 72.0).abs() < 0.5, "{why}: whole, under its caption at the top: {moved:?}");
     }
 }
+
+/// A field split by a page break has its own border drawn round each piece (a border's default
+/// `break="close"`, XFA 3.3 pp. 629–630): an edge at the bottom of the first page and one at the
+/// top of the next. One whose widget would have no room above the break for a line of its text
+/// moves to the next page whole, its caption and border with it.
+#[test]
+fn a_split_field_closes_its_border_on_each_piece_and_a_sliver_moves_whole() {
+    let form = |filler: &str| {
+        let body = format!(
+            r#"<draw name="filler" w="7.5in" h="{filler}"><value><text>above</text></value></draw>
+<field name="notes" w="7.5in" minH="3in">
+ <border><edge/></border>
+ <ui><textEdit multiLine="1"><border><edge presence="hidden"/></border></textEdit></ui>
+ <caption reserve="0.5in" placement="top"><value><text>Notes</text></value></caption>
+</field>"#
+        );
+        layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap()
+    };
+    // Level lines across the field (its border's top and bottom) on `page`, top to bottom.
+    let levels = |page: &Page| -> Vec<f64> {
+        let mut ys: Vec<f64> = page
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Line { from, to, .. } if (from.1 - to.1).abs() < 0.01 && (to.0 - from.0).abs() > 500.0 => Some(from.1),
+                _ => None,
+            })
+            .collect();
+        ys.sort_by(f64::total_cmp);
+        ys
+    };
+    // The field starts at 612, with 144 left in the area (down to 756).
+    let split = form("8in");
+    assert_eq!(split.pages.len(), 2);
+    let (first, next) = (levels(&split.pages[0]), levels(&split.pages[1]));
+    let near = |got: &[f64], want: &[f64]| got.len() == want.len() && got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1.0);
+    assert!(near(&first, &[612.0, 756.0]), "first piece closed, once: {first:?}");
+    assert!(near(&next, &[36.0, 108.0]), "next piece closed, once: {next:?}");
+    // 9.9in of filler leaves 0.1in above the break, under the widget's 0.5in caption: no room.
+    let sliver = form("9.9in");
+    assert_eq!(sliver.pages.len(), 2);
+    assert!(levels(&sliver.pages[0]).is_empty(), "nothing of the field left on the first page: {:?}", levels(&sliver.pages[0]));
+    assert!(!texts(&sliver.pages[0]).iter().any(|t| t == "Notes"), "its caption moves with it");
+    let whole = levels(&sliver.pages[1]);
+    assert!(whole.iter().any(|y| (y - 36.0).abs() < 1.0) && whole.iter().any(|y| (y - 252.0).abs() < 1.0), "whole on the next page: {whole:?}");
+}
