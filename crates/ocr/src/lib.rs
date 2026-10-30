@@ -15,8 +15,9 @@
 //! photos and speckles; [`align`](mod@align) matches those glyphs to the OCR boxes and either keeps
 //! touching letters as one ligature or cuts them apart on the character boundaries; and
 //! [`cluster`](mod@cluster) groups the resolved glyphs into clusters of the same shape and averages their
-//! centroid-aligned greyscale into pristine master prototypes.
-//! See the [`preprocess`](mod@preprocess), [`annotations`](mod@annotations), [`components`](mod@components), [`align`](mod@align) and [`cluster`](mod@cluster) modules.
+//! centroid-aligned greyscale into pristine master prototypes, and [`vectorize`](mod@vectorize) traces
+//! each master bitmap into a hole-aware Bézier outline.
+//! See the [`preprocess`](mod@preprocess), [`annotations`](mod@annotations), [`components`](mod@components), [`align`](mod@align), [`cluster`](mod@cluster) and [`vectorize`](mod@vectorize) modules.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -28,6 +29,7 @@ pub mod components;
 pub mod deskew;
 pub mod grey;
 pub mod preprocess;
+pub mod vectorize;
 
 use std::path::{Path, PathBuf};
 
@@ -36,6 +38,7 @@ pub use annotations::{AnnotatedLine, AnnotatedWord, CharBox};
 pub use cluster::{ClusterParams, Clusters, GlyphCluster, Prototype, SkipReason, cluster, cluster_pages};
 pub use components::{AnalyzeOptions, Component, ComponentKind, ComponentSet, Connectivity, FilterParams, analyze, analyze_page};
 pub use preprocess::{PreprocessedOptions, PreprocessedPage};
+pub use vectorize::{ContourKind, GlyphOutline, VectorContour, VectorizeParams, vectorize};
 
 pub use pdfcraft_fonts::helvetica_width;
 
