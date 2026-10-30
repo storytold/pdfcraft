@@ -2457,7 +2457,7 @@ fn arrow_keys_follow_the_scroll_speed_preference() {
     assert!(fast * 3 < normal * 2 && normal * 3 < slow * 2, "presses to page 2: slow {slow}, normal {normal}, fast {fast}");
 }
 
-/// #1399: coalesced wheel events keep the pointer position they arrived at, in both orders.
+/// #1399: event positions gate conversion; a mixed batch keeps its original modifiers.
 #[test]
 fn the_hand_tool_wheel_classifies_each_notch_at_its_event_position() {
     use egui::{Event, Modifiers};
@@ -2493,8 +2493,23 @@ fn the_hand_tool_wheel_classifies_each_notch_at_its_event_position() {
         source: egui::MouseWheelSource::Unknown,
     };
     let (mut actual, mut expected) = (Vec::new(), Vec::new());
+    actual.push(classify(&mut h, vec![Event::PointerMoved(document), wheel(), wheel()]));
+    expected.push(vec![Modifiers::COMMAND, Modifiers::COMMAND]);
+    actual.push(classify(&mut h, vec![Event::PointerMoved(panel), wheel(), wheel()]));
+    expected.push(vec![Modifiers::NONE, Modifiers::NONE]);
+    // Point deltas never convert, including non-finite input. Compare eligibility by modifiers,
+    // since a cloned NaN delta does not compare equal to itself.
+    for delta in [egui::vec2(0.0, 1.0), egui::vec2(0.0, f32::NAN)] {
+        let mut point = wheel();
+        if let Event::MouseWheel { unit, delta: amount, .. } = &mut point {
+            *unit = egui::MouseWheelUnit::Point;
+            *amount = delta;
+        }
+        actual.push(classify(&mut h, vec![Event::PointerMoved(document), point, wheel()]));
+        expected.push(vec![Modifiers::NONE, Modifiers::NONE]);
+    }
     for (first, second, modifiers) in
-        [(document, panel, vec![Modifiers::COMMAND, Modifiers::NONE]), (panel, document, vec![Modifiers::NONE, Modifiers::COMMAND])]
+        [(document, panel, vec![Modifiers::NONE, Modifiers::NONE]), (panel, document, vec![Modifiers::NONE, Modifiers::NONE])]
     {
         for first_move in [true, false] {
             // Also cover a wheel before the first move: it uses the previous frame's pointer.
@@ -2524,13 +2539,86 @@ fn the_hand_tool_wheel_classifies_each_notch_at_its_event_position() {
     assert!(viewport.contains(menu), "the popup overlaps the document viewport");
     assert!(h.ctx.layer_id_at(menu).is_some_and(|layer| layer.order != egui::Order::Background));
     for (first, second, modifiers) in
-        [(document, menu, vec![Modifiers::COMMAND, Modifiers::NONE]), (menu, document, vec![Modifiers::NONE, Modifiers::COMMAND])]
+        [(document, menu, vec![Modifiers::NONE, Modifiers::NONE]), (menu, document, vec![Modifiers::NONE, Modifiers::NONE])]
     {
         actual.push(classify(&mut h, vec![Event::PointerMoved(first), wheel(), Event::PointerMoved(second), wheel()]));
         expected.push(modifiers);
     }
     // Assert after collecting every case so a reverted run exercises both event orders.
-    assert_eq!(actual, expected, "each wheel keeps its event-time document/panel/popup target");
+    assert_eq!(actual, expected, "only batches whose wheels all qualify convert to zoom");
+}
+
+/// Mixed document/panel batches must keep scrolling, since egui aggregates their deltas.
+#[test]
+fn mixed_hand_wheel_targets_keep_the_normal_zoom_and_scroll_results() {
+    fn run(pref: bool, document_last: bool) -> (f32, f32, f32, f32) {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("mixed.pdf", None, fixture(10)).unwrap();
+            app.set_option("zoom", "100").unwrap();
+            app.set_option("mode", "edit").unwrap();
+            app.set_option("left", "open").unwrap();
+            app.set_option("panel", "none").unwrap();
+            app.set_option("hand-wheel-zoom", if pref { "true" } else { "false" }).unwrap();
+            app.animation_effects = pdfcraft_ui_egui::motion::AnimationEffects::Off;
+            app.quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
+            app
+        });
+        let step = |h: &mut Harness<'static, PdfCraftApp>| {
+            let ctx = h.ctx.clone();
+            let mut raw = std::mem::take(h.input_mut());
+            h.state_mut().prepare_raw_input(&ctx, &mut raw);
+            *h.input_mut() = raw;
+            h.step();
+        };
+        for _ in 0..8 {
+            step(&mut h);
+        }
+        let viewport = h.state().views[0].viewport_rect();
+        let document = viewport.max - egui::vec2(40.0, 40.0);
+        let panel = egui::pos2(viewport.left() - 10.0, document.y);
+        assert!(viewport.contains(document) && !viewport.contains(panel) && panel.x >= 0.0);
+        let (first, second) = if document_last { (panel, document) } else { (document, panel) };
+        h.hover_at(first);
+        step(&mut h);
+        let before = h.state().views[0].page_screen_rect(0).unwrap();
+        let samples = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let observed = samples.clone();
+        h.ctx.on_begin_pass(
+            "mixed wheel results",
+            std::sync::Arc::new(move |ctx| {
+                observed.lock().unwrap().push(ctx.input(|i| (i.zoom_delta(), i.smooth_scroll_delta.y)));
+            }),
+        );
+        let wheel = || egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        };
+        h.input_mut().events.extend([egui::Event::PointerMoved(first), wheel(), egui::Event::PointerMoved(second), wheel()]);
+        for _ in 0..30 {
+            step(&mut h);
+        }
+        let after = h.state().views[0].page_screen_rect(0).unwrap();
+        let samples = samples.lock().unwrap();
+        (samples.iter().map(|s| s.0).product(), samples.iter().map(|s| s.1).sum(), after.width() / before.width(), after.top() - before.top())
+    }
+    let results: Vec<_> = [false, true].into_iter().map(|last| (last, run(false, last), run(true, last))).collect();
+    let mut equivalent = true;
+    for (document_last, normal, hand) in &results {
+        assert!(normal.1.abs() > 1.0, "the control really scrolls: {normal:?}");
+        if *document_last {
+            assert!(normal.3.abs() > 1.0, "the document control moves: {normal:?}");
+        }
+        equivalent &= (hand.0 - 1.0).abs() < 0.001;
+        equivalent &= (hand.2 - 1.0).abs() < 0.001;
+        equivalent &= (hand.1 - normal.1).abs() < 0.1;
+        equivalent &= (hand.3 - normal.3).abs() < 0.5;
+    }
+    assert!(equivalent, "(document_last, normal, hand) zoom/scroll results: {results:?}");
 }
 
 /// #2665: next to a very wide page the normal pages sit far to its right, outside the window.
