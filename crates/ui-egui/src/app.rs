@@ -100,6 +100,8 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             pending_opens: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
+            pending_destinations: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             next_open_token: 0,
             #[cfg(all(test, not(target_arch = "wasm32")))]
             open_prepare_gate: None,
@@ -365,6 +367,7 @@ impl eframe::App for PdfCraftApp {
                 worker.set_context(ctx);
             }
             self.poll_pending_opens();
+            self.poll_pending_destinations();
         }
         // Chinese wants its own faces before the Japanese ones (one baseline per line).
         let cjk = theme::CjkPreference::for_language(lang.code());
