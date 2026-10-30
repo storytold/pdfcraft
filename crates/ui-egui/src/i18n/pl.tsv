@@ -1287,6 +1287,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	Zastosowano oznaczenia do utajnienia w liczbie {n}. Zapisz, aby usunąć zawartość z pliku.
 	JavaScript Console	Konsola JavaScript
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript jest wyłączony (Preferencje ▸ JavaScript).
+	JavaScript is turned off by your administrator.	JavaScript został wyłączony przez administratora.
+	Turned off by your administrator.	Wyłączone przez administratora.
+	Turned off because your administrator's policy couldn't be read.	Wyłączone, ponieważ nie można odczytać zasad administratora.
 	Output appears here.	Tutaj pojawią się wyniki.
 	Script Name:	Nazwa skryptu:
 	This document has no document-level scripts.	Ten dokument nie zawiera skryptów na poziomie dokumentu.

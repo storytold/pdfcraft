@@ -1300,6 +1300,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	Applicati {n} segni di oscuramento. Salva per rimuovere il contenuto dal file.
 	JavaScript Console	Console JavaScript
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript è disattivato (Preferenze > JavaScript).
+	JavaScript is turned off by your administrator.	JavaScript è stato disattivato dall'amministratore.
+	Turned off by your administrator.	Disattivato dall'amministratore.
+	Turned off because your administrator's policy couldn't be read.	Disattivato perché non è stato possibile leggere i criteri dell'amministratore.
 	Output appears here.	L'output compare qui.
 	Script Name:	Nome script:
 	This document has no document-level scripts.	Questo documento non ha script a livello di documento.

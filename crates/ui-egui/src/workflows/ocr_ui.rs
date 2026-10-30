@@ -330,15 +330,17 @@ impl PdfCraftApp {
         }
         let progress = Arc::new(Mutex::new(BatchProgress { total: files.len(), ..Default::default() }));
         let p = progress.clone();
+        // Each file opens in a session of its own: it takes this session's JavaScript setting.
+        let scripting = self.session.scripting();
         // The summary is written on the worker thread: draw it in the UI's language.
         let lang = crate::i18n::current();
         let work = move || {
             crate::i18n::set_current(lang);
             // A panic in the recognizer still ends the batch with a summary (#3919).
             #[cfg(not(target_arch = "wasm32"))]
-            let summary = pdfcraft_engine::guard(|| recognize_files(files, &settings, &p, &dir));
+            let summary = pdfcraft_engine::guard(|| recognize_files(files, &settings, &scripting, &p, &dir));
             #[cfg(target_arch = "wasm32")]
-            let summary = pdfcraft_engine::guard(|| recognize_files(files, &settings, &p));
+            let summary = pdfcraft_engine::guard(|| recognize_files(files, &settings, &scripting, &p));
             let summary = summary.unwrap_or_else(|panic| failed(&panic));
             if let Ok(mut s) = p.lock() {
                 s.done = s.total;
@@ -362,6 +364,7 @@ impl PdfCraftApp {
 fn recognize_files(
     files: Vec<(String, Vec<u8>)>,
     settings: &OcrSettings,
+    scripting: &pdfcraft_engine::js::Scripting,
     p: &Mutex<BatchProgress>,
     #[cfg(not(target_arch = "wasm32"))] dir: &std::path::Path,
 ) -> String {
@@ -373,7 +376,7 @@ fn recognize_files(
                 if let Ok(mut s) = p.lock() {
                     s.done = i;
                 }
-                let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), &ocr, |_, _| true);
+                let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), &ocr, scripting, |_, _| true);
                 let saved = r.and_then(|r| {
                     #[cfg(not(target_arch = "wasm32"))]
                     crate::editing::write_atomically(&dir.join(&name).to_string_lossy(), &r.bytes).map_err(|e| e.to_string())?;

@@ -203,9 +203,18 @@ fn apply_step(s: &mut Session, id: DocId, step: &Step, log: &mut Vec<String>) ->
     Ok(None)
 }
 
-/// Run `action` on one file. `progress(step, steps)` is called before each step.
-pub fn run_on(action: &Action, name: &str, bytes: Arc<Vec<u8>>, mut progress: impl FnMut(usize, usize)) -> Result<FileResult, String> {
+/// Run `action` on one file. `progress(step, steps)` is called before each step. `scripting` is
+/// the caller's JavaScript setting ([`Session::scripting`]): the file's scripts, and a "Run a
+/// JavaScript" step, run only where the caller's would.
+pub fn run_on(
+    action: &Action,
+    name: &str,
+    bytes: Arc<Vec<u8>>,
+    scripting: &crate::js::Scripting,
+    mut progress: impl FnMut(usize, usize),
+) -> Result<FileResult, String> {
     let mut s = Session::new();
+    s.set_scripting(scripting);
     let mut id = s.open(name, None, bytes, None).map_err(|e| e.to_string())?;
     if let Some(why) = s.get(id).and_then(|d| d.read_only_reason.clone()) {
         return Err(why);

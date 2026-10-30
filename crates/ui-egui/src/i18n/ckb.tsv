@@ -1265,6 +1265,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	{n} نیشانەی شاردنەوە جێبەجێکرا. بۆ لابردنی ناوەڕۆکەکە لە فایلەکە پاشەکەوتی بکە.
 	JavaScript Console	کۆنسۆڵی JavaScript
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript کوژاوەتەوە (هەڵبژاردەکان ▸ JavaScript).
+	JavaScript is turned off by your administrator.	JavaScript لەلایەن بەڕێوەبەرەکەتەوە کوژاوەتەوە.
+	Turned off by your administrator.	لەلایەن بەڕێوەبەرەکەتەوە کوژاوەتەوە.
+	Turned off because your administrator's policy couldn't be read.	کوژاوەتەوە چونکە سیاسەتی بەڕێوەبەرەکەت نەخوێنرایەوە.
 	Output appears here.	دەرهاویشتەکە لێرە دەردەکەوێت.
 	Script Name:	ناوی سکریپت:
 	This document has no document-level scripts.	ئەم بەڵگەنامەیە هیچ سکریپتێکی لە ئاستی بەڵگەنامەدا نییە.

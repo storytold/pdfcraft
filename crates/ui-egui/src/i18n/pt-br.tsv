@@ -919,6 +919,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	{n} marcas de ocultação aplicadas. Salve para remover o conteúdo do arquivo.
 	JavaScript Console	Console JavaScript
 	JavaScript is turned off (Preferences ▸ JavaScript).	O JavaScript está desativado (Preferências > JavaScript).
+	JavaScript is turned off by your administrator.	O JavaScript foi desativado pelo seu administrador.
+	Turned off by your administrator.	Desativado pelo seu administrador.
+	Turned off because your administrator's policy couldn't be read.	Desativado porque não foi possível ler a política do seu administrador.
 	Output appears here.	A saída aparece aqui.
 	Document JavaScripts	JavaScripts do documento
 	Script Name:	Nome do script:

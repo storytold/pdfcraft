@@ -663,6 +663,9 @@
 	Its security settings don't allow copying pages	Setările sale de securitate nu permit copierea paginilor
 	JavaScript Console	Consolă JavaScript
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript este dezactivat (Preferințe > JavaScript).
+	JavaScript is turned off by your administrator.	JavaScript a fost dezactivat de administratorul dvs.
+	Turned off by your administrator.	Dezactivat de administratorul dvs.
+	Turned off because your administrator's policy couldn't be read.	Dezactivat, deoarece politica administratorului dvs. nu a putut fi citită.
 	JavaScript, e.g. getField("total").value	JavaScript, de ex. getField("total").value
 	Join our Discord	Intrați pe Discord-ul nostru
 	Join the ArtCraft community	Alăturați-vă comunității ArtCraft

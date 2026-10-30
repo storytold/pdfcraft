@@ -1230,6 +1230,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	제거 대상 표시 {n}개가 적용되었습니다. 파일에서 콘텐츠를 제거하려면 저장하세요.
 	JavaScript Console	JavaScript 콘솔
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript가 꺼져 있습니다(기본 설정 ▸ JavaScript).
+	JavaScript is turned off by your administrator.	관리자가 JavaScript를 껐습니다.
+	Turned off by your administrator.	관리자가 껐습니다.
+	Turned off because your administrator's policy couldn't be read.	관리자 정책을 읽을 수 없어 꺼져 있습니다.
 	Output appears here.	출력이 여기에 표시됩니다.
 	Script Name:	스크립트 이름:
 	This document has no document-level scripts.	이 문서에는 문서 수준 스크립트가 없습니다.

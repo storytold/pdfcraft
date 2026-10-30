@@ -1247,6 +1247,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	Käytettiin {n} peittomerkintää. Poista sisältö tiedostosta tallentamalla.
 	JavaScript Console	JavaScript-konsoli
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript on poistettu käytöstä (Asetukset > JavaScript).
+	JavaScript is turned off by your administrator.	Järjestelmänvalvoja on poistanut JavaScriptin käytöstä.
+	Turned off by your administrator.	Järjestelmänvalvoja on poistanut käytöstä.
+	Turned off because your administrator's policy couldn't be read.	Poistettu käytöstä, koska järjestelmänvalvojan käytäntöä ei voitu lukea.
 	Output appears here.	Tuloste näkyy tässä.
 	Script Name:	Komentosarjan nimi:
 	This document has no document-level scripts.	Tässä asiakirjassa ei ole asiakirjatason komentosarjoja.

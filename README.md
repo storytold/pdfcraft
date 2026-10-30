@@ -497,6 +497,9 @@ and command-line tool are signed with the Developer ID `Learning Machines LLC (D
 notarized. The MSI's manufacturer, shown as the publisher in Installed apps, is
 `Learning Machines LLC`.
 
+To turn JavaScript in documents off across a fleet (Group Policy, Intune, an RMM, an MDM profile
+on macOS or `/etc` on Linux), see [Policies for administrators](docs/administrators.md).
+
 ### macOS
 
 | Build | File | Notes |

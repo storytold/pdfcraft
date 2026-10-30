@@ -4,7 +4,8 @@
 //! printing, navigation, links) is kept for the front end in [`JsOutput`].
 //!
 //! Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript is [`Session::set_javascript`]; with it
-//! off, scripts don't run and AF calls keep working natively.
+//! off, scripts don't run and AF calls keep working natively. An administrator's policy
+//! ([`Session::set_javascript_lock`]) keeps it off whatever the preference says.
 
 use pdfcraft_forms::{Field, FieldChange, FieldEvent, FieldKind, FieldProps, ScriptResult, Scripts};
 pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Panel, Request};
@@ -248,14 +249,72 @@ impl crate::Document {
     }
 }
 
+/// An administrator's policy that keeps JavaScript off (the front end reads it from the
+/// operating system; see `pdfcraft_platform::policy`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JavaScriptLock {
+    /// Where the policy was found, e.g. `HKLM\SOFTWARE\Policies\PdfCraft\DisableJavaScript`.
+    pub source: String,
+    /// Set when a policy is there but could not be read: JavaScript stays off until an
+    /// administrator fixes it, and this says what was wrong.
+    pub unreadable: Option<String>,
+}
+
+/// Whether scripts may run, as a value: the person's preference and any administrator's lock.
+/// Helpers that open files in a session of their own (the Action Wizard's [`crate::actions::run_on`],
+/// multi-file OCR's [`crate::ocr::recognize_file`], batch runs) take it from the caller's session
+/// with [`Session::scripting`], so a file processed there runs scripts exactly when the caller's
+/// would. A fresh `Session::new()` has JavaScript on and no lock.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Scripting {
+    off: bool,
+    lock: Option<JavaScriptLock>,
+}
+
+impl Scripting {
+    /// Whether scripts run under this setting.
+    pub fn javascript(&self) -> bool {
+        !self.off && self.lock.is_none()
+    }
+}
+
 impl Session {
-    /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript (on by default).
+    /// This session's JavaScript setting, for a helper's own session ([`Scripting`]).
+    pub fn scripting(&self) -> Scripting {
+        Scripting { off: self.js_off, lock: self.js_lock.clone() }
+    }
+
+    /// Take another session's JavaScript setting, preference and lock alike. Meant for a
+    /// helper's fresh session: it replaces any lock this session had.
+    pub fn set_scripting(&mut self, scripting: &Scripting) {
+        self.js_off = scripting.off;
+        self.js_lock = scripting.lock.clone();
+    }
+
+    /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript (on by default). While an
+    /// administrator's policy keeps JavaScript off ([`Session::set_javascript_lock`]) the choice
+    /// is still remembered, and applies again once the policy is gone.
     pub fn set_javascript(&mut self, on: bool) {
         self.js_off = !on;
     }
 
+    /// Whether scripts run: the user's choice, unless a policy keeps JavaScript off.
     pub fn javascript(&self) -> bool {
+        !self.js_off && self.js_lock.is_none()
+    }
+
+    /// The user's own choice, whatever a policy says (what Preferences saves).
+    pub fn javascript_preference(&self) -> bool {
         !self.js_off
+    }
+
+    /// An administrator's policy keeps JavaScript off (`Some`), or doesn't (`None`).
+    pub fn set_javascript_lock(&mut self, lock: Option<JavaScriptLock>) {
+        self.js_lock = lock;
+    }
+
+    pub fn javascript_lock(&self) -> Option<&JavaScriptLock> {
+        self.js_lock.as_ref()
     }
 
     /// What scripts printed or asked for since the last call (alerts, console, print, …).
@@ -267,6 +326,9 @@ impl Session {
     /// the console (no target). Field changes and `resetForm` are applied as one undoable step;
     /// everything else the script asked for is returned.
     pub fn run_javascript(&mut self, id: DocId, script: &str, target: Option<&str>) -> Result<Outcome, EditError> {
+        if self.js_lock.is_some() {
+            return Err(EditError::Invalid("JavaScript is turned off by your administrator's policy".into()));
+        }
         if self.js_off {
             return Err(EditError::Invalid("JavaScript is turned off (Preferences ▸ JavaScript)".into()));
         }

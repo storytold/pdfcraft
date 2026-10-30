@@ -1375,6 +1375,9 @@ key	Space	Mezerník
 	Applied {n} redaction marks. Save to remove the content from the file.	Použito značek začernění: {n}. Uložením odstraníte obsah ze souboru.
 	JavaScript Console	Konzole JavaScriptu
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript je vypnutý („Předvolby > JavaScript“).
+	JavaScript is turned off by your administrator.	JavaScript vypnul váš správce.
+	Turned off by your administrator.	Vypnuto vaším správcem.
+	Turned off because your administrator's policy couldn't be read.	Vypnuto, protože zásadu vašeho správce nelze přečíst.
 	Output appears here.	Zde se zobrazí výstup.
 	Script Name:	Název skriptu:
 	This document has no document-level scripts.	Tento dokument nemá žádné skripty na úrovni dokumentu.

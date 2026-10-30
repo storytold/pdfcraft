@@ -1289,6 +1289,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	{n} Schwärzungsmarkierungen angewendet. Speichere, um den Inhalt aus der Datei zu entfernen.
 	JavaScript Console	JavaScript-Konsole
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript ist ausgeschaltet (Einstellungen > JavaScript).
+	JavaScript is turned off by your administrator.	JavaScript wurde von Ihrem Administrator ausgeschaltet.
+	Turned off by your administrator.	Von Ihrem Administrator ausgeschaltet.
+	Turned off because your administrator's policy couldn't be read.	Ausgeschaltet, weil die Richtlinie Ihres Administrators nicht gelesen werden konnte.
 	Output appears here.	Die Ausgabe erscheint hier.
 	Script Name:	Skriptname:
 	This document has no document-level scripts.	Dieses Dokument hat keine Skripte auf Dokumentebene.

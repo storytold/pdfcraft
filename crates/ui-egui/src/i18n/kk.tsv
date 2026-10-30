@@ -1248,6 +1248,9 @@
 	Applied {n} redaction marks. Save to remove the content from the file.	{n} жасыру белгісі қолданылды. Мазмұнды файлдан алып тастау үшін сақтаңыз.
 	JavaScript Console	JavaScript консолі
 	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript өшірулі (Параметрлер > JavaScript).
+	JavaScript is turned off by your administrator.	JavaScript-ті әкімшіңіз өшірген.
+	Turned off by your administrator.	Әкімшіңіз өшірген.
+	Turned off because your administrator's policy couldn't be read.	Әкімшіңіздің саясатын оқу мүмкін болмағандықтан өшірілген.
 	Output appears here.	Шығыс осында пайда болады.
 	Script Name:	Сценарийдің атауы:
 	This document has no document-level scripts.	Бұл құжатта құжат деңгейіндегі сценарийлер жоқ.

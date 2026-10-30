@@ -130,6 +130,8 @@ impl Automation {
             Action { name: "Custom".into(), description: String::new(), steps, builtin: false }
         };
         let folder = self.resolve(a.str("folder")?, true)?;
+        // Each file runs in a session of its own: it takes this session's JavaScript setting.
+        let scripting = self.session.scripting();
         std::fs::create_dir_all(&folder).map_err(|e| failed(e.to_string()))?;
         let mut out = Vec::new();
         for p in a.strs("paths")? {
@@ -138,7 +140,7 @@ impl Automation {
                 .resolve(p, false)
                 .map_err(|e| e.to_string())
                 .and_then(|src| crate::read_input_bytes(&src).map_err(|e| e.to_string()))
-                .and_then(|bytes| run_on(&action, &name, std::sync::Arc::new(bytes), |_, _| {}));
+                .and_then(|bytes| run_on(&action, &name, std::sync::Arc::new(bytes), &scripting, |_, _| {}));
             out.push(match result {
                 Ok(r) => {
                     let target = child(&folder, &name);

@@ -7160,6 +7160,20 @@ fn javascript_through_tools() {
 }
 
 #[test]
+fn an_administrators_policy_keeps_javascript_off() {
+    let lock = pdfcraft_engine::js::JavaScriptLock { source: "/etc/pdfcraft/policy.json (DisableJavaScript)".into(), unreadable: None };
+    let mut a = Automation::new().with_javascript_lock(Some(lock));
+    let r = ok(&mut a, "js_enabled", json!({}));
+    assert_eq!(r["enabled"], false);
+    assert_eq!(r["policy"]["source"], "/etc/pdfcraft/policy.json (DisableJavaScript)");
+    assert!(r["policy"]["unreadable"].is_null());
+    let err = a.call("js_enabled", &json!({ "enabled": true })).unwrap_err().to_string();
+    assert!(err.contains("administrator's policy") && err.contains("/etc/pdfcraft/policy.json"), "{err}");
+    // Turning it off is still the person's choice to make.
+    assert_eq!(ok(&mut a, "js_enabled", json!({ "enabled": false }))["enabled"], false);
+}
+
+#[test]
 fn merging_form_data_into_a_spreadsheet() {
     let dir = workdir("merge-data");
     let mut a = auto(&dir);
@@ -7345,6 +7359,28 @@ fn actions_through_tools() {
     let r = ok(&mut a, "action_run", json!({ "steps": [{ "step": "set_title", "arg": "Hello" }], "paths": ["a.pdf"], "folder": "out2" }));
     assert_eq!(r["files"][0]["log"][0], "Set document title");
     assert!(a.call("action_run", &json!({ "steps": [{ "step": "fly" }], "paths": ["a.pdf"], "folder": "x" })).is_err());
+}
+
+/// `action_run` processes each file in a session of its own, which takes this session's
+/// JavaScript setting: a "Run a JavaScript" step runs only where this session's scripts would.
+#[test]
+fn action_run_follows_the_sessions_javascript_setting() {
+    let dir = workdir("action-javascript");
+    let args = |out: &str| json!({ "steps": [{ "step": "run_javascript", "arg": "1 + 1" }], "paths": ["a.pdf"], "folder": out });
+    let mut a = auto(&dir);
+    let r = ok(&mut a, "action_run", args("on"));
+    assert_eq!(r["files"][0]["log"][0], "Run a JavaScript", "{r}");
+
+    let lock = pdfcraft_engine::js::JavaScriptLock { source: "policy".into(), unreadable: None };
+    let mut a = auto(&dir).with_javascript_lock(Some(lock));
+    let r = ok(&mut a, "action_run", args("locked"));
+    assert!(r["files"][0]["error"].as_str().is_some_and(|e| e.contains("administrator's policy")), "{r}");
+    assert!(!dir.join("locked/a.pdf").exists());
+
+    let mut a = auto(&dir);
+    ok(&mut a, "js_enabled", json!({ "enabled": false }));
+    let r = ok(&mut a, "action_run", args("off"));
+    assert!(r["files"][0]["error"].as_str().is_some_and(|e| e.contains("Preferences")), "{r}");
 }
 
 #[test]

@@ -235,16 +235,20 @@ impl FileResult {
 }
 
 /// Recognize text in multiple files: one PDF's bytes in, the searchable PDF out. `progress`
-/// works as for [`OcrJob::run`].
+/// works as for [`OcrJob::run`]. `scripting` is the caller's JavaScript setting
+/// ([`Session::scripting`]), so opening an XFA form here runs its scripts only where the
+/// caller's session would.
 pub fn recognize_file(
     name: &str,
     bytes: Arc<Vec<u8>>,
     password: Option<&str>,
     settings: OcrSettings,
     ocr: &Ocr,
+    scripting: &crate::js::Scripting,
     progress: impl FnMut(usize, usize) -> bool,
 ) -> Result<FileResult, String> {
     let mut s = Session::new();
+    s.set_scripting(scripting);
     let id = s.open(name, None, bytes.clone(), password).map_err(|e| e.to_string())?;
     if let Some(why) = s.get(id).and_then(|d| d.read_only_reason.clone()) {
         return Err(why);

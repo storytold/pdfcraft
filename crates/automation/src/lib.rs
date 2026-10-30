@@ -90,6 +90,12 @@ pub struct Automation {
     evicted: HashSet<DocId>,
 }
 
+/// The machine's administrator policy for JavaScript (`pdfcraft_platform::policy`), for
+/// [`Automation::with_javascript_lock`] and the CLI's own sessions.
+pub fn admin_javascript_lock() -> Option<pdfcraft_engine::js::JavaScriptLock> {
+    pdfcraft_platform::policy::Policy::load().javascript_lock().map(|(source, unreadable)| pdfcraft_engine::js::JavaScriptLock { source, unreadable })
+}
+
 impl Default for Automation {
     fn default() -> Self {
         Self::new()
@@ -130,6 +136,12 @@ impl Automation {
     /// Use a fixed clock for saves (deterministic output in tests).
     pub fn with_clock(mut self, clock: fn() -> i64) -> Self {
         self.session = std::mem::take(&mut self.session).with_clock(clock);
+        self
+    }
+
+    /// Keep JavaScript off as an administrator's policy (`None`: no policy).
+    pub fn with_javascript_lock(mut self, lock: Option<pdfcraft_engine::js::JavaScriptLock>) -> Self {
+        self.session.set_javascript_lock(lock);
         self
     }
 

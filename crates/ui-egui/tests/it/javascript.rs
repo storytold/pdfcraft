@@ -2,7 +2,7 @@
 //! script and Preferences ▸ JavaScript.
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 /// A form with a text field and a push button whose Mouse Up script fills it in.
@@ -180,6 +180,54 @@ fn document_scripts_and_preferences() {
     fresh.set_option("language", "en").unwrap();
     fresh.restore(&saved);
     assert!(!fresh.session.javascript(), "the preference is remembered");
+}
+
+#[test]
+fn an_administrators_policy_locks_the_preference_off() {
+    let mut h = harness();
+    let source = r"HKLM\SOFTWARE\Policies\PdfCraft\DisableJavaScript";
+    h.state_mut().session.set_javascript_lock(Some(pdfcraft_engine::js::JavaScriptLock { source: source.into(), unreadable: None }));
+    h.state_mut().dialog = Some(Dialog::Preferences);
+    h.run_steps(2);
+    let checkbox = h.get_by_label("Enable Acrobat JavaScript");
+    assert!(checkbox.accesskit_node().is_disabled(), "locked");
+    assert_eq!(checkbox.accesskit_node().toggled(), Some(egui::accesskit::Toggled::False), "shown off");
+    h.get_by_label("Turned off by your administrator.");
+    h.get_by_label(source);
+    // Clicking the locked box changes nothing, and the button script doesn't run.
+    h.get_by_label("Enable Acrobat JavaScript").click();
+    h.run_steps(2);
+    assert!(!h.state().session.javascript());
+    let id = h.state().active_ids().unwrap().1;
+    h.state_mut().run_button_script(id, "hello", "getField('greeting').value = 'ran';");
+    h.run_steps(2);
+    assert_ne!(value(&h, "greeting"), ["ran"]);
+    // The console says why.
+    h.state_mut().dialog = None;
+    assert!(h.state_mut().execute("tools.js_console"));
+    h.run_steps(2);
+    h.get_by_label("JavaScript is turned off by your administrator.");
+
+    // What's saved is the person's own choice (on), so it comes back once the policy is gone.
+    let saved = h.state().persist();
+    let mut fresh = PdfCraftApp::new();
+    fresh.restore(&saved);
+    assert!(fresh.session.javascript(), "the policy isn't saved as the preference");
+}
+
+#[test]
+fn an_unreadable_policy_says_so() {
+    let mut h = harness();
+    let lock = pdfcraft_engine::js::JavaScriptLock {
+        source: "/etc/pdfcraft/policy.json (DisableJavaScript)".into(),
+        unreadable: Some("it isn't valid JSON".into()),
+    };
+    h.state_mut().session.set_javascript_lock(Some(lock));
+    h.state_mut().dialog = Some(Dialog::Preferences);
+    h.run_steps(2);
+    assert!(h.get_by_label("Enable Acrobat JavaScript").accesskit_node().is_disabled());
+    h.get_by_label("Turned off because your administrator's policy couldn't be read.");
+    h.get_by_label("/etc/pdfcraft/policy.json (DisableJavaScript): it isn't valid JSON");
 }
 
 #[test]

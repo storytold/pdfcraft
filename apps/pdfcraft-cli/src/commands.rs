@@ -4,6 +4,14 @@ use super::options::{
 };
 use super::{Arc, CliError, ImageFormat, PageRenderer, Path, PathBuf, RenderConfig, RenderRequest, RequestKind, Write, inspect, stdout_line};
 
+/// A session that honours the machine's administrator policy for JavaScript: opening an XFA
+/// form or applying an edit runs no document scripts where an administrator turned them off.
+fn session() -> pdfcraft_engine::Session {
+    let mut s = pdfcraft_engine::Session::new();
+    s.set_javascript_lock(pdfcraft_automation::admin_javascript_lock());
+    s
+}
+
 pub(crate) fn read(path: &str) -> Result<Arc<Vec<u8>>, String> {
     std::fs::read(path).map(Arc::new).map_err(|e| format!("{path}: {e}"))
 }
@@ -21,7 +29,7 @@ pub(crate) fn info(args: &[String]) -> Result<(), CliError> {
     // Dynamic XFA forms: say what laying the template out gives (what the app shows).
     let xfa_layout = (info.xfa == Some(pdfcraft_render::Xfa::Dynamic))
         .then(|| {
-            let mut s = pdfcraft_engine::Session::new();
+            let mut s = session();
             let id = s.open("info.pdf", None, bytes.clone(), password).ok()?;
             let d = s.get(id)?;
             d.xfa.as_ref().map(|x| {
@@ -87,7 +95,7 @@ pub(crate) fn text(args: &[String]) -> Result<(), CliError> {
     let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
     // Printing the text is copying it, so ask what `text_extract` asks (#1645): without the
     // permissions password, a document that doesn't allow copying gives no text.
-    let mut session = pdfcraft_engine::Session::new();
+    let mut session = session();
     if let Some(doc) = session.open(path, None, bytes.clone(), password).ok().and_then(|id| session.get(id)) {
         // The engine's hint is about editing in the app; on the command line the way in is
         // `--password`.
@@ -166,7 +174,7 @@ const EDIT_OPTIONS: &str = "--out, --password, --full, --rotate, --delete, --mov
 /// (a typo like `--rotat`) is an error, not something to skip — skipping it would write an
 /// unchanged copy and exit 0, which looks like a successful edit (#133).
 pub(crate) fn edit(args: &[String]) -> Result<(), CliError> {
-    use pdfcraft_engine::{Edit, Session};
+    use pdfcraft_engine::Edit;
     let mut path: Option<&str> = None;
     let mut out: Option<&str> = None;
     let mut password: Option<&str> = None;
@@ -237,7 +245,7 @@ pub(crate) fn edit(args: &[String]) -> Result<(), CliError> {
     }
     let path = path.ok_or("edit: missing file")?;
     let out = out.ok_or("edit: missing --out")?;
-    let mut session = Session::new();
+    let mut session = session();
     let id = session.open(path, Some(path.to_string()), read(path)?, password).map_err(|e| e.to_string())?;
     for e in edits {
         // A destination past the end must fail like `page_move` / `page_insert_blank` do, not
@@ -289,7 +297,7 @@ pub(crate) fn combine(args: &[String]) -> Result<(), CliError> {
         return Err("combine: give at least two input files".into());
     }
     let sources = inputs.iter().map(|p| Ok((file_stem(p), read(p)?))).collect::<Result<Vec<_>, String>>()?;
-    let bytes = pdfcraft_engine::Session::new().combine(&sources).map_err(|e| e.to_string())?;
+    let bytes = session().combine(&sources).map_err(|e| e.to_string())?;
     write_pdf(Path::new(out), &bytes)
 }
 
@@ -298,7 +306,7 @@ pub(crate) fn extract(args: &[String]) -> Result<(), CliError> {
     let path = *positional(args, EXTRACT_OPTIONS).first().ok_or("extract: missing file")?;
     let out = flag(args, "--out").ok_or("extract: missing --out")?;
     let pages = page_list(flag(args, "--pages").ok_or("extract: missing --pages")?)?;
-    let mut session = pdfcraft_engine::Session::new();
+    let mut session = session();
     let id = session.open(path, None, read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
     let bytes = session.extract(id, &pages).map_err(|e| e.to_string())?;
     write_pdf(Path::new(out), &bytes)
@@ -323,7 +331,7 @@ pub(crate) fn split(args: &[String]) -> Result<(), CliError> {
         _ => return Err("split: give either --every N or --before PAGES".into()),
     };
     let dir = PathBuf::from(flag(args, "--out-dir").unwrap_or("."));
-    let mut session = pdfcraft_engine::Session::new();
+    let mut session = session();
     let id = session.open(path, None, read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
     let stem = file_stem(path);
     let parts = session.split(id, &by).map_err(|e| e.to_string())?;
@@ -374,7 +382,7 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
     // copy take either.
     let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
     let display = if inspect(bytes.clone(), render_password.as_deref()).is_ok_and(|info| info.xfa == Some(pdfcraft_render::Xfa::Dynamic)) {
-        let mut session = pdfcraft_engine::Session::new();
+        let mut session = session();
         let id = session.open(path, None, bytes, password).map_err(|e| e.to_string())?;
         session.get(id).ok_or("render: the document could not be opened")?.display.clone()
     } else {

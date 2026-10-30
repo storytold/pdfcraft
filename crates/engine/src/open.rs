@@ -54,7 +54,8 @@ impl OpenContext {
 impl Session {
     /// Snapshot the session state that affects open-time scripts, dates and signature trust.
     pub fn open_context(&self) -> OpenContext {
-        OpenContext { now: self.now(), js_off: self.js_off, trust: self.trust.clone(), xfa_time_scale: self.xfa_time_scale.unwrap_or(1) }
+        // The effective setting: an administrator's policy holds on the background open path too.
+        OpenContext { now: self.now(), js_off: !self.javascript(), trust: self.trust.clone(), xfa_time_scale: self.xfa_time_scale.unwrap_or(1) }
     }
 
     /// Prepare a document without adding it to this session.
