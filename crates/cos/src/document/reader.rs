@@ -852,19 +852,24 @@ pub(super) fn find_startxref(data: &[u8]) -> Result<usize, CosError> {
     Ok(sx)
 }
 
-/// Whether a whole footer starts at `sx`: the `startxref` keyword, an offset and `%%EOF`, with
-/// whitespace between them.
+/// Whether a whole footer starts at `sx`: the `startxref` keyword, an offset and `%%EOF`. Whitespace
+/// and comments may stand between them, as they may for `Lexer::skip_ws`, which reads the offset.
+/// It can't find the end of the gap here because it would skip `%%EOF` as a comment too.
 fn is_footer(data: &[u8], sx: usize) -> bool {
-    let skip = |mut i: usize, keep: fn(u8) -> bool| {
-        while data.get(i).is_some_and(|&b| keep(b)) {
+    let gap = |mut i: usize| loop {
+        while data.get(i).is_some_and(|&b| is_whitespace(b)) {
             i = i.saturating_add(1);
         }
-        i
+        let rest = data.get(i..).unwrap_or(&[]);
+        if rest.first() != Some(&b'%') || rest.starts_with(b"%%EOF") {
+            return i;
+        }
+        i = i.saturating_add(rest.iter().position(|&b| b == b'\n' || b == b'\r').unwrap_or(rest.len()));
     };
-    let digits = skip(sx.saturating_add(b"startxref".len()), is_whitespace);
-    let end = skip(digits, |b| b.is_ascii_digit());
-    let eof = skip(end, is_whitespace);
-    end > digits && data.get(eof..).is_some_and(|rest| rest.starts_with(b"%%EOF"))
+    let digits = gap(sx.saturating_add(b"startxref".len()));
+    let count = data.get(digits..).unwrap_or(&[]).iter().take_while(|b| b.is_ascii_digit()).count();
+    let eof = gap(digits.saturating_add(count));
+    count > 0 && data.get(eof..).is_some_and(|rest| rest.starts_with(b"%%EOF"))
 }
 
 pub(super) fn rfind(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {

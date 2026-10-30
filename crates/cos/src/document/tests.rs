@@ -1377,3 +1377,34 @@ fn a_startxref_in_trailing_text_without_its_eof_does_not_read_an_older_table() {
     assert!(doc.repair_log().iter().any(|l| l.contains("object headers")), "{:?}", doc.repair_log());
     assert!(matches!(doc.get(ObjRef::new(1, 0)).as_dict().and_then(|d| d.get(b"Lang")), Some(Object::String(_))), "the newer revision is kept");
 }
+
+/// Comments may stand between the parts of a footer, and the readers skip them when they read
+/// the offset. A footer before the tail that has some is still a footer, and is read as written.
+#[test]
+fn a_footer_with_comments_before_the_tail_is_still_read() {
+    let base = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    let sx = base.windows(9).rposition(|w| w == b"startxref").unwrap();
+    let offset = std::str::from_utf8(&base[sx + 9..]).unwrap().split_whitespace().next().unwrap().to_string();
+    let mut bytes = base[..sx].to_vec();
+    bytes.extend_from_slice(format!("startxref % where the table is\n{offset} % of the last section\n% written last\n%%EOF\n").as_bytes());
+    bytes.extend(std::iter::repeat_n(b' ', 5000));
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert!(doc.repair_log().is_empty(), "{:?}", doc.repair_log());
+    assert_eq!(doc.revisions().len(), 1);
+    assert_compact_matches_materialized(&doc);
+}
+
+/// `%%EOF` inside a comment line, or standing where the offset belongs, ends no footer.
+#[test]
+fn a_comment_that_only_mentions_eof_is_no_footer() {
+    let base = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    let sx = base.windows(9).rposition(|w| w == b"startxref").unwrap();
+    let offset = std::str::from_utf8(&base[sx + 9..]).unwrap().split_whitespace().next().unwrap().to_string();
+    for footer in [format!("startxref\n{offset}\n% not the end %%EOF\n"), format!("startxref\n%%EOF\n{offset}\n%%EOF\n")] {
+        let mut bytes = base[..sx].to_vec();
+        bytes.extend_from_slice(footer.as_bytes());
+        bytes.extend(std::iter::repeat_n(b' ', 5000));
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        assert!(doc.repair_log().iter().any(|l| l.contains("object headers")), "{footer:?}: {:?}", doc.repair_log());
+    }
+}
