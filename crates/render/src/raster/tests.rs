@@ -1903,6 +1903,38 @@ trailer << /Root 1 0 R >>
     }
 }
 
+/// #3572: an annotation whose own /OC references an OFF optional-content group is hidden
+/// regardless of its /F flags (ISO 32000-2 §12.5.2).
+#[test]
+fn annotation_oc_hides_the_annotation() {
+    let pdf = |off: bool| {
+        let ocprops = if off { "<< /OCGs [6 0 R] /D << /OFF [6 0 R] >> >>" } else { "<< /OCGs [6 0 R] /D << >> >>" };
+        format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties {ocprops} >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Square /Rect [10 10 40 40] /OC 6 0 R /AP << /N 5 0 R >> >> endobj
+5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 30 30] /Length 24 >> stream
+1 0 0 rg 0 0 30 30 re f
+endstream endobj
+6 0 obj << /Type /OCG /Name (Layer) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        )
+        .into_bytes()
+    };
+    let render = |off: bool| {
+        let mut r = PageRenderer::new(Arc::new(pdf(off)), RenderConfig::default());
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(p.error.is_none(), "{:?}", p.error);
+        let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+        px(25, 75)
+    };
+    assert_eq!(render(true), vec![255, 255, 255, 255], "a group in /OFF hides the annotation");
+    assert_eq!(render(false), vec![255, 0, 0, 255], "the same group left on shows it");
+}
+
 /// #2583, #1869: a sticky note carries the NoRotate flag (`/F` bit 5), so on a page with
 /// `/Rotate` its icon stays upright as displayed, turned about the upper-left corner of its
 /// `/Rect`, which stays where it is on the page (ISO 32000-2 §12.5.3). It was drawn turned with

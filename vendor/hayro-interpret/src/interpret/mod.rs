@@ -199,6 +199,16 @@ pub fn interpret_page<'a>(
             {
                 continue;
             }
+            // PdfCraft patch: the annotation's own /OC ties the whole annotation to an optional
+            // content group or membership dictionary, which the /F flags never reflect: a group
+            // the document's layer configuration turns OFF hides the annotation, as MuPDF does.
+            if let Some(oc_ref) = annot.get_ref(OC)
+                && !context
+                    .ocg_state
+                    .oc_is_visible(&annot.get::<Dict<'_>>(OC).unwrap_or_default(), oc_ref.into())
+            {
+                continue;
+            }
             // PdfCraft patch: "Hide all comments" keeps widgets and links.
             if context.settings.hide_comments
                 && !matches!(annot.get::<hayro_syntax::object::Name<'_>>(SUBTYPE).as_deref(), Some(b"Widget" | b"Link"))
