@@ -4810,8 +4810,8 @@ fn draw_minified_image(
 /// making scans, screenshots and rasterized text look soft.
 #[test]
 fn non_interpolated_images_are_not_smoothed_when_minified() {
-    // Top band K W R G, bottom band B Y M C. Nearest 8×4 → 4×2 sampling picks each block's
-    // pixel, so every device pixel is one palette colour; Catmull-Rom blends across blocks.
+    // Top band K W R G, bottom band B Y M C. Shrinking 8×4 → 4×2 averages each 2×2 block,
+    // so every device pixel is one palette colour; Catmull-Rom blends across blocks.
     let palette: [[u8; 3]; 8] = [[0, 0, 0], [255, 255, 255], [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0], [255, 0, 255], [0, 255, 255]];
     let rgb: Vec<u8> = block_source(palette).concat();
     let exact: Vec<[u8; 4]> = palette.iter().map(|c| [c[0], c[1], c[2], 255]).collect();
@@ -4829,38 +4829,76 @@ fn non_interpolated_images_are_not_smoothed_when_minified() {
     assert!(pixels(&enabled).iter().any(|px| px[..3].iter().any(|&c| (32..=223).contains(&c))), "/Interpolate true made no mid-tone");
 }
 
-/// A shrunk, interpolated image whose edges fall between device pixels is snapped to whole
-/// pixels (shrunk once to that size, drawn 1:1). Before, the shrunk raster was sampled a second
-/// time at the fractional offset, so every edge of a scan was a blended, soft pixel.
+/// A shrunk image whose edges fall between device pixels is snapped to whole pixels (shrunk
+/// once to that size, drawn 1:1), interpolated or not. Before, the shrunk raster was sampled a
+/// second time at the fractional offset, so every edge of a scan was a blended, soft pixel.
 #[test]
-fn interpolated_minified_image_edges_snap_to_whole_pixels() {
-    let black = vec![0u8; 40 * 40];
-    let content = "q 10 0 0 10 0.4 0.4 cm /Im0 Do Q";
-    let image = hex(&black);
-    let pdf = format!(
-        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+fn minified_image_edges_snap_to_whole_pixels() {
+    for interpolate in ["/Interpolate true ", ""] {
+        let black = vec![0u8; 40 * 40];
+        let content = "q 10 0 0 10 0.4 0.4 cm /Im0 Do Q";
+        let image = hex(&black);
+        let pdf = format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
              2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
              3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 11 11] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
              4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
-             5 0 obj << /Type /XObject /Subtype /Image /Width 40 /Height 40 /ColorSpace /DeviceGray /BitsPerComponent 8 /Interpolate true /Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+             5 0 obj << /Type /XObject /Subtype /Image /Width 40 /Height 40 /ColorSpace /DeviceGray /BitsPerComponent 8 {interpolate}/Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
              trailer << /Root 1 0 R >>\n%%EOF\n",
-        content.len(),
-        image.len() + 1
-    );
-    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
-    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
-    assert!(page.error.is_none(), "{:?}", page.error);
-    assert_eq!((page.width, page.height), (11, 11));
-    let gray = |x: usize, y: usize| page.rgba[(y * 11 + x) * 4];
-    // Device box 0.4..10.4 × 0.6..10.6 snaps to columns 0..10 and rows 1..11.
-    for y in 1..11 {
-        for x in 0..10 {
-            assert_eq!(gray(x, y), 0, "pixel ({x}, {y}) inside the snapped image");
+            content.len(),
+            image.len() + 1
+        );
+        let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (11, 11));
+        let gray = |x: usize, y: usize| page.rgba[(y * 11 + x) * 4];
+        // Device box 0.4..10.4 × 0.6..10.6 snaps to columns 0..10 and rows 1..11.
+        for y in 1..11 {
+            for x in 0..10 {
+                assert_eq!(gray(x, y), 0, "{interpolate:?}: pixel ({x}, {y}) inside the snapped image");
+            }
+            assert_eq!(gray(10, y), 255, "{interpolate:?}: column 10 is outside the snapped image (row {y})");
         }
-        assert_eq!(gray(10, y), 255, "column 10 is outside the snapped image (row {y})");
+        for x in 0..11 {
+            assert_eq!(gray(x, 0), 255, "{interpolate:?}: row 0 is outside the snapped image (column {x})");
+        }
     }
-    for x in 0..11 {
-        assert_eq!(gray(x, 0), 255, "row 0 is outside the snapped image (column {x})");
+}
+
+/// A tile draws exactly the pixels of the whole page under it, also where a shrunk image's
+/// edge falls on a half pixel. The edges were snapped by rounding halves away from zero, so
+/// the tile at x = 5, which moves the left edge from 2.5 to -2.5, snapped it one pixel left of
+/// where the whole page did and shifted every column of the image.
+#[test]
+fn a_tile_snaps_half_pixel_image_edges_as_the_whole_page_does() {
+    for interpolate in ["/Interpolate true ", ""] {
+        let ramp: Vec<u8> = (0..40 * 40).map(|i| (i % 40 * 6) as u8).collect();
+        let content = "q 10 0 0 10 2.5 2.5 cm /Im0 Do Q";
+        let image = hex(&ramp);
+        let pdf = format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 20 20] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             5 0 obj << /Type /XObject /Subtype /Image /Width 40 /Height 40 /ColorSpace /DeviceGray /BitsPerComponent 8 {interpolate}/Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF\n",
+            content.len(),
+            image.len() + 1
+        );
+        let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let req = RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() };
+        let full = renderer.render(req);
+        let tile = Tile { x: 5, y: 5, w: 10, h: 10 };
+        let part = renderer.render(RenderRequest { tile: Some(tile), ..req });
+        assert!(full.error.is_none() && part.error.is_none(), "{:?} {:?}", full.error, part.error);
+        assert_eq!((full.width, part.width, part.height), (20, 10, 10));
+        for y in 0..10usize {
+            for x in 0..10usize {
+                let whole = full.rgba[((y + 5) * 20 + x + 5) * 4];
+                assert_eq!(part.rgba[(y * 10 + x) * 4], whole, "{interpolate:?}: pixel ({x}, {y}) of the tile");
+            }
+        }
     }
 }
 
@@ -4873,26 +4911,157 @@ fn non_interpolated_gray_images_are_not_smoothed_when_minified() {
 }
 
 #[test]
-fn non_integer_minification_samples_the_same_columns() {
-    // Ten columns drawn six pixels wide: centre sampling reads columns 0, 2, 4, 5, 7 and 9.
+fn non_integer_minification_averages_the_columns_each_pixel_covers() {
+    // Ten columns drawn six pixels wide: each pixel covers 10/6 columns. Pixel 0 is 60% of
+    // column 0 and 40% of column 1 (0.6 × 10 + 0.4 × 20 = 14), pixel 1 is 20% of column 1,
+    // all of column 2's 60% and 20% of column 3 (30), and so on. Nearest-neighbour read whole
+    // columns 0, 2, 4, 5, 7 and 9 instead, dropping the four others.
     let ramp = [10u8, 20, 30, 40, 50, 60, 70, 80, 90, 100];
     let page = draw_minified_image("DeviceGray", (10, 1), None, &ramp, None, (6, 1));
     let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
-    assert_eq!(grays, [10, 30, 50, 60, 80, 100]);
+    assert_eq!(grays, [14, 30, 46, 64, 80, 96]);
 }
 
 #[test]
-fn non_integer_minification_samples_colour_and_mask_from_the_same_columns() {
-    // Ten gray columns with a soft mask, drawn six pixels wide: columns 0, 2, 4, 5, 7 and 9 are
-    // sampled, so the mask must pick the same columns as the colours.
+fn non_integer_minification_averages_colour_and_mask_together() {
+    // Ten gray columns with a soft mask, drawn six pixels wide. Colours are averaged
+    // premultiplied, over the same columns as the mask, and composited over the white page.
+    // Pixel 0: 60% of column 0 (gray 10, opaque) and 40% of column 1 (transparent) is
+    // premultiplied gray 6 at alpha 153, so 6 + 255 × (1 − 153/255) = 108. Pixels 1 and 4
+    // cover only transparent columns and show the page.
     let ramp = [10u8, 20, 30, 40, 50, 60, 70, 80, 90, 100];
     let mask = [255u8, 0, 0, 0, 255, 255, 0, 0, 0, 255];
     let page = draw_minified_image("DeviceGray", (10, 1), None, &ramp, Some(&mask), (6, 1));
-    // Opaque columns keep their gray; transparent columns show the white page.
     assert_eq!(
         page.rgba.as_chunks::<4>().0.to_vec(),
-        vec![[10, 10, 10, 255], [255, 255, 255, 255], [50, 50, 50, 255], [60, 60, 60, 255], [255, 255, 255, 255], [100, 100, 100, 255]]
+        vec![[108, 108, 108, 255], [255, 255, 255, 255], [132, 132, 132, 255], [138, 138, 138, 255], [255, 255, 255, 255], [162, 162, 162, 255]]
     );
+}
+
+/// A scan shown at screen size: a stroke one sample wide in an image drawn at a third of its
+/// resolution. Nearest-neighbour read columns 1, 4 and 7 and lost the stroke in column 3, which
+/// is how the text of 300 dpi scans broke up at 100% zoom. Area averaging keeps it as the
+/// third of pixel 1 it covers.
+#[test]
+fn non_interpolated_minification_keeps_thin_strokes() {
+    let mut stroke = [255u8; 9];
+    stroke[3] = 0;
+    let page = draw_minified_image("DeviceGray", (9, 1), None, &stroke, None, (3, 1));
+    let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+    assert_eq!(grays, [255, 170, 255]);
+}
+
+/// A zoomed scan: an image of page-scan size drawn three times its resolution without
+/// `/Interpolate`. Nearest-neighbour turned each sample into a 3 × 3 block, so the edges of
+/// scanned text were staircases; it is smoothed (bilinearly) instead, as browsers draw it.
+#[test]
+fn large_non_interpolated_images_are_smoothed_when_enlarged() {
+    let side = 512usize;
+    let half: Vec<u8> = (0..side * side).map(|i| if i % side < side / 2 { 0 } else { 255 }).collect();
+    let page = draw_minified_image("DeviceGray", (512, 512), None, &half, None, (1536, 1536));
+    let row = 768 * 1536;
+    let edge: Vec<u8> = (760..776).map(|x| page.rgba[(row + x) * 4]).collect();
+    assert!(edge.iter().any(|v| (32..=223).contains(v)), "a hard edge, not a smoothed one: {edge:?}");
+    assert_eq!((page.rgba[(row + 700) * 4], page.rgba[(row + 836) * 4]), (0, 255), "away from the edge");
+}
+
+/// Small images (icons, QR codes, pixel art) keep their hard pixels when enlarged.
+#[test]
+fn small_non_interpolated_images_keep_hard_pixels_when_enlarged() {
+    let checker: Vec<u8> = (0..64).map(|i| if (i / 8 + i % 8) % 2 == 0 { 0 } else { 255 }).collect();
+    let page = draw_minified_image("DeviceGray", (8, 8), None, &checker, None, (80, 80));
+    assert!(page.rgba.as_chunks::<4>().0.iter().all(|px| px[0] == 0 || px[0] == 255), "a small image was smoothed");
+}
+
+/// A screenshot of a terminal (305 × 230 samples) is small too, but its antialiased text has
+/// many shades. Drawn nearest-neighbour when zoomed, the edges of its letters were staircases;
+/// it is smoothed as a scan is.
+#[test]
+fn small_images_with_many_colours_are_smoothed_when_enlarged() {
+    // Left half black, right half a ramp of 32 light grays: a hard edge in a 33-colour image.
+    let source: Vec<u8> = (0..64 * 64).map(|i| if i % 64 < 32 { 0 } else { 192 + (i % 64) as u8 }).collect();
+    let page = draw_minified_image("DeviceGray", (64, 64), None, &source, None, (192, 192));
+    let row = 96 * 192;
+    let edge: Vec<u8> = (90..102).map(|x| page.rgba[(row + x) * 4]).collect();
+    assert!(edge.iter().any(|v| (32..=191).contains(v)), "a hard edge, not a smoothed one: {edge:?}");
+    assert_eq!(page.rgba[(row + 40) * 4], 0, "away from the edge");
+}
+
+/// A small colour image with a palette of a few colours (a logo, pixel art) keeps its hard
+/// pixels when enlarged, as a bilevel one does.
+#[test]
+fn small_rgb_images_with_few_colours_keep_hard_pixels_when_enlarged() {
+    let palette = [[255u8, 0, 0], [0, 128, 255], [255, 255, 255], [20, 20, 20]];
+    let source: Vec<u8> = (0..16 * 16).flat_map(|i| palette[(i / 16 / 4 + i % 16 / 4) % 4]).collect();
+    let page = draw_minified_image("DeviceRGB", (16, 16), None, &source, None, (96, 96));
+    let mut colours: Vec<[u8; 3]> = page.rgba.as_chunks::<4>().0.iter().map(|px| [px[0], px[1], px[2]]).collect();
+    colours.sort_unstable();
+    colours.dedup();
+    assert_eq!(colours.len(), palette.len(), "a few-colour image was smoothed: {colours:?}");
+}
+
+/// A scan shrunk across and stretched down (a fax shown at screen size, zoomed in): the shrunk
+/// side is still averaged, and the stretched side is smoothed as a scan enlarged both ways
+/// is. Shrinking one side kept the nearest sampler for the other, so its edges were staircases.
+#[test]
+fn a_scan_shrunk_one_way_is_smoothed_the_way_it_is_stretched() {
+    // Top half black; bottom half columns alternating black and white, which averages to gray.
+    let side = 512usize;
+    let source: Vec<u8> = (0..side * side).map(|i| if i / side < side / 2 || i % 2 == 0 { 0 } else { 255 }).collect();
+    let page = draw_minified_image("DeviceGray", (512, 512), None, &source, None, (256, 1536));
+    let gray = |x: usize, y: usize| page.rgba[(y * 256 + x) * 4];
+    let edge: Vec<u8> = (760..776).map(|y| gray(128, y)).collect();
+    assert!(edge.iter().any(|v| (16..=112).contains(v)), "a hard edge down the stretched side: {edge:?}");
+    assert_eq!(gray(128, 700), 0, "above the edge");
+    assert!((0..256).all(|x| gray(x, 836).abs_diff(128) <= 1), "the shrunk side is averaged at 1:1");
+}
+
+/// An image shrunk across and stretched down (a 204 × 98 dpi fax shown at screen size): the
+/// shrunk side is still averaged. The area shrink was asked to enlarge the other side too,
+/// refused, and the image fell back to its source resolution and the nearest sampler, which
+/// read single columns.
+#[test]
+fn an_image_shrunk_one_way_and_stretched_the_other_is_still_averaged() {
+    let ramp: Vec<u8> = [10u8, 20, 30, 40, 50, 60, 70, 80].repeat(2);
+    let page = draw_minified_image("DeviceGray", (8, 2), None, &ramp, None, (4, 4));
+    let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+    assert_eq!(grays, [15, 35, 55, 75].repeat(4), "each pixel is the mean of the two columns it covers");
+}
+
+/// Averaging straight colours would tint an opaque sample with the colour of a transparent
+/// neighbour: white beside transparent black, shrunk to one pixel, came out gray over the white
+/// page. Premultiplied, the transparent sample adds nothing but its transparency.
+#[test]
+fn non_interpolated_minification_does_not_bleed_transparent_colour() {
+    let page = draw_minified_image("DeviceGray", (2, 1), None, &[255, 0], Some(&[255, 0]), (1, 1));
+    assert_eq!(page.rgba.as_chunks::<4>().0.to_vec(), vec![[255, 255, 255, 255]]);
+}
+
+/// The same with a soft mask smaller than its image: red, red, blue, blue under a mask that is
+/// opaque, then transparent, shrunk to one pixel, is half-covered red over the white page.
+/// Colour and mask were averaged apart and multiplied, so the transparent blue came through
+/// as purple (191, 127, 191).
+#[test]
+fn a_smaller_soft_mask_does_not_bleed_transparent_colour_when_minified() {
+    let content = "q 1 0 0 1 0 0 cm /Im0 Do Q";
+    let (image, mask) = ("FF0000FF00000000FF0000FF", "FF00");
+    let pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 1 1] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /XObject /Subtype /Image /Width 4 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /SMask 6 0 R /Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+         6 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length {} >> stream\n{mask}>\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len(),
+        image.len() + 1,
+        mask.len() + 1
+    );
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    let [r, g, b, _] = page.rgba.as_chunks::<4>().0.first().copied().unwrap_or_default();
+    assert!(r >= 254 && g.abs_diff(128) <= 1 && b == g, "half-covered red over white, got ({r}, {g}, {b})");
 }
 
 #[test]
@@ -6019,7 +6188,7 @@ fn stitched_render_partitions_match_a_whole_render() {
 /// and square caps, a sharp miter, a rotated and a stretched matrix, a hairline, dashes, a
 /// curve, text, and a page shown rotated.
 ///
-/// Images are skipped the same way (vendored patch (10)): an image on a tile, one crossing
+/// Images are skipped the same way (vendored patch (11)): an image on a tile, one crossing
 /// tile lines, and one fully off the page.
 #[test]
 fn skipping_paths_off_the_canvas_changes_no_pixel() {
@@ -6328,7 +6497,8 @@ fn images_converted_through_a_table_keep_every_samples_colour() {
         assert!(got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= 1), "pixel {at:?}: got {got:?}, want {want:?}");
     };
     // DeviceN of two inks at 4 bits (256 possible pixels) shown as RGB (a, b, 0), the first
-    // ink's range reversed. 32 × 16 pixels, each drawn 4 pt square.
+    // ink's range reversed. 32 × 16 pixels, drawn 1:1: an image of this many colours is
+    // smoothed when enlarged, which would blend neighbouring samples into the ones read here.
     let mut data = Vec::new();
     for y in 0..16 {
         for x in 0..32 {
@@ -6341,7 +6511,7 @@ fn images_converted_through_a_table_keep_every_samples_colour() {
         data.len()
     );
     let pdf = image_cache_pdf(
-        "q 128 0 0 64 0 0 cm /A Do Q",
+        "q 32 0 0 16 0 0 cm /A Do Q",
         "<< /XObject << /A 5 0 R >> >>",
         &[(&image, &data), ("<< /FunctionType 4 /Domain [0 1 0 1] /Range [0 1 0 1 0 1] /Length 5 >>", b"{ 0 }")],
     );
@@ -6350,8 +6520,8 @@ fn images_converted_through_a_table_keep_every_samples_colour() {
     for y in 0..16 {
         for x in 0..32 {
             let (a, b) = (x % 16, (x / 16 + 2 * y) % 16);
-            // The 64 pt image sits at the bottom of the 70 pt page.
-            close(rgb_at(&out.rgba, w, 4 * x + 2, 6 + 4 * y + 2), [(255 - 17 * a) as u8, (17 * b) as u8, 0], (x, y));
+            // The 16 pt image sits at the bottom of the 70 pt page.
+            close(rgb_at(&out.rgba, w, x, 54 + y), [(255 - 17 * a) as u8, (17 * b) as u8, 0], (x, y));
         }
     }
 
@@ -6380,7 +6550,8 @@ fn images_converted_through_a_table_keep_every_samples_colour() {
     }
 
     // DeviceGray at 8 bits through the range [0.2 0.8] (so not drawn from the raw bytes):
-    // 31 × 12 declared, data for 8 rows and the first 12 pixels of the 9th.
+    // 31 × 12 declared, data for 8 rows and the first 12 pixels of the 9th. Drawn 1:1, as the
+    // DeviceN image is: an image of this many colours is smoothed when enlarged.
     let sample = |x: usize, y: usize| (x * 7 + y * 3) % 256;
     let mut data = Vec::new();
     for y in 0..9 {
@@ -6391,15 +6562,15 @@ fn images_converted_through_a_table_keep_every_samples_colour() {
         "<< /Type /XObject /Subtype /Image /Width 31 /Height 12 /ColorSpace /DeviceGray /BitsPerComponent 8 /Decode [0.2 0.8] /Length {} >>",
         data.len()
     );
-    let pdf = image_cache_pdf("q 124 0 0 60 0 0 cm /A Do Q", "<< /XObject << /A 5 0 R >> >>", &[(&image, &data)]);
+    let pdf = image_cache_pdf("q 31 0 0 12 0 0 cm /A Do Q", "<< /XObject << /A 5 0 R >> >>", &[(&image, &data)]);
     let out = render_first_page(pdf);
     let w = out.width as usize;
     for y in 0..9 {
         for x in 0..31 {
             // The rest of the 9th row is decoded zero (black), not sample 0 (0.2 under this range).
             let gray = if y < 8 || x < 12 { (51.0 + 0.6 * sample(x, y) as f64).round() as u8 } else { 0 };
-            // The rows present keep the declared rows' height: 60 pt / 12.
-            close(rgb_at(&out.rgba, w, 4 * x + 2, 10 + 5 * y + 2), [gray; 3], (x, y));
+            // The rows present keep the declared rows' height: the 12 pt image's rows are 1 pt.
+            close(rgb_at(&out.rgba, w, x, 58 + y), [gray; 3], (x, y));
         }
     }
 }
