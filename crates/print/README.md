@@ -51,6 +51,10 @@ CUPS jobs stream through stdin with `fit-to-page=false`. Windows renders sheets 
 orientation, zero added margins and hardware-edge clipping. Long-edge and short-edge duplex
 use the corresponding Windows binding edges. Random, exclusively created Windows job files
 are removed on success and failure. Other targets offer the print-ready PDF instead.
+The experimental Windows 7 build (`docs/windows7.md`) has no `Windows.Data.Pdf`: there
+`spool/windows7.rs` lists printers through craft-print's Win32 `rgb` module and hands the
+print-ready PDF to the installed PDF viewer's Print / PrintTo verb, which prints with its own
+settings (copies, duplex and scaling don't reach it).
 
 The shared dependency requires Rust 1.95. Transport and native Windows regression tests
 live in craft-libs; local tests retain composition, facade, engine, automation and UI coverage.

@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-pdfcraft-ui-egui = { workspace = true }
+pdfcraft-ui-egui = { workspace = true, features = ["wgpu", "accessibility"] }
 eframe = { workspace = true, features = ["default_fonts", "glow", "persistence", "accesskit"] }
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 

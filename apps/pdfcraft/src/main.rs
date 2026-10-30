@@ -25,6 +25,15 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+// The experimental Windows 7 build (docs/windows7.md) is OpenGL only, on the win7 Rust target:
+// the ordinary Windows target's standard library itself needs Windows 10.
+#[cfg(all(feature = "windows7", any(feature = "wgpu", feature = "accessibility")))]
+compile_error!("windows7 requires --no-default-features (wgpu and accessibility must be disabled)");
+#[cfg(all(windows, feature = "windows7", not(target_vendor = "win7")))]
+compile_error!("windows7 requires --target x86_64-win7-windows-msvc; the ordinary Windows target still imports newer APIs");
+#[cfg(all(target_vendor = "win7", not(feature = "windows7")))]
+compile_error!("the win7 target requires --no-default-features --features windows7");
+
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -32,10 +41,11 @@ use pdfcraft_ui_egui::PdfCraftApp;
 
 #[cfg(target_os = "macos")]
 mod apple_events;
+#[cfg(feature = "wgpu")]
 mod compositor_gpu;
 mod decorations;
 mod logging;
-#[cfg(target_os = "windows")]
+#[cfg(all(windows, not(target_vendor = "win7")))]
 mod motion;
 mod reopen;
 mod settings;
@@ -269,6 +279,7 @@ fn main() -> eframe::Result {
         single_instance::Claim::Primary(server) => Some(server),
         single_instance::Claim::Alone => None,
     };
+    #[cfg(feature = "wgpu")]
     let choice = renderer_choice(std::env::var("PDFCRAFT_RENDERER").ok().as_deref());
     let launch = Launch { files, options, control_file, create_images, integrated, window_controls };
     // Finder, Open With and the Dock deliver files as Apple events, not arguments; catch the one
@@ -277,7 +288,11 @@ fn main() -> eframe::Result {
     let apple_events = apple_events::AppleEvents::install();
     // Set once the app is created, which is after the renderer has started.
     let started = Rc::new(Cell::new(false));
+    #[cfg(feature = "wgpu")]
     let first = if choice == RendererChoice::Gl { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
+    // Built without wgpu (the Windows 7 build): OpenGL is the only renderer.
+    #[cfg(not(feature = "wgpu"))]
+    let first = eframe::Renderer::Glow;
     let result = eframe::run_native(
         "PdfCraft",
         native_options(launch.integrated, launch.window_controls.is_some(), first),
@@ -292,6 +307,7 @@ fn main() -> eframe::Result {
     match result {
         // Only a renderer that couldn't start: without a window or display at all, OpenGL can't
         // help either, and winit's own error says more.
+        #[cfg(feature = "wgpu")]
         Err(e @ eframe::Error::Wgpu(_)) if retry_with_gl(choice, started.get()) => {
             // Old or unusual GPUs and drivers (#461, #435, #392) can't give wgpu a device; OpenGL
             // usually still works there, so that's better than quitting.
@@ -313,6 +329,7 @@ fn main() -> eframe::Result {
 }
 
 /// Which renderer to start with, from `PDFCRAFT_RENDERER`.
+#[cfg(feature = "wgpu")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RendererChoice {
     /// wgpu, then OpenGL if wgpu can't start (unset, or anything unrecognised).
@@ -323,6 +340,7 @@ enum RendererChoice {
     Gl,
 }
 
+#[cfg(feature = "wgpu")]
 fn renderer_choice(value: Option<&str>) -> RendererChoice {
     match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
         Some("wgpu") => RendererChoice::Wgpu,
@@ -333,6 +351,7 @@ fn renderer_choice(value: Option<&str>) -> RendererChoice {
 
 /// Whether a failed run should be retried with OpenGL: only when wgpu was tried first by choice of
 /// nobody, and it failed before the app was created (so while starting the renderer, not later).
+#[cfg(feature = "wgpu")]
 fn retry_with_gl(choice: RendererChoice, app_started: bool) -> bool {
     choice == RendererChoice::Auto && !app_started
 }
@@ -364,6 +383,7 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
     // PdfCraft installs its own last-resort system face (`PDFCRAFT_SYSTEM_FONTS`); eframe's
     // provider would read every installed face, including proprietary ones, into every UI pass.
     native.system_font_fallback = false;
+    #[cfg(feature = "wgpu")]
     if renderer == eframe::Renderer::Wgpu {
         configure_gpu(&mut native);
     }
@@ -419,7 +439,8 @@ fn app_creator<'a>(
         app.system_text_scale = text_scale::system();
         // Windows' Animation effects setting, which Preferences ▸ Animation effects follows unless
         // it is set to On or Off.
-        #[cfg(target_os = "windows")]
+        // Windows 7 has no WinRT to ask (docs/windows7.md): there the preference alone decides.
+        #[cfg(all(windows, not(target_vendor = "win7")))]
         {
             app.motion.source = Some(motion::source());
         }
@@ -447,6 +468,7 @@ fn app_creator<'a>(
         if let Some(dir) = pdfcraft_ui_egui::RecoveryStore::default_dir() {
             app.enable_recovery(pdfcraft_ui_egui::RecoveryStore::new(dir));
         }
+        #[cfg(feature = "wgpu")]
         if let Some(state) = &cc.wgpu_render_state {
             let adapter = state.adapter.get_info();
             let max_texture_dimension_2d = state.device.limits().max_texture_dimension_2d;
@@ -460,6 +482,8 @@ fn app_creator<'a>(
         } else {
             log::info!("renderer: OpenGL (glow)");
         }
+        #[cfg(not(feature = "wgpu"))]
+        log::info!("renderer: OpenGL (glow)");
         // A portable marker whose data folder can't be written (#157): say where settings went.
         if let Some(w) = &pdfcraft_ui_egui::portable::current().unwritable {
             app.notify_fmt(
@@ -492,6 +516,7 @@ fn app_creator<'a>(
 /// a GPU, which makes everything slower. egui-wgpu only logs it, so the reporter of #519 had to find
 /// it in pdfcraft.log. The OpenGL fallback isn't covered: glow only reports its renderer through
 /// `unsafe` calls.
+#[cfg(feature = "wgpu")]
 fn notify_software_renderer(app: &mut PdfCraftApp, device_type: eframe::wgpu::DeviceType) {
     if device_type == eframe::wgpu::DeviceType::Cpu {
         app.notify_tr("PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.");
@@ -596,6 +621,7 @@ fn write_control_file(path: &str, port: u16, token: &str) -> std::io::Result<()>
 ///   is being resized, Windows stretched the window's swap chain, still at the old size, to the
 ///   new one, so the text shimmered and the left panel's width bounced for as long as the drag
 ///   lasted (issue #2738). A visual's last frame is shown at its own size instead.
+#[cfg(feature = "wgpu")]
 fn configure_gpu(native: &mut eframe::NativeOptions) {
     let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut native.wgpu_options.wgpu_setup else { return };
     // Nothing draws or dispatches indirectly, so wgpu's check of indirect arguments only costs a
@@ -650,12 +676,14 @@ fn configure_gpu(native: &mut eframe::NativeOptions) {
 
 /// How Direct3D 12 presents on Windows: through a DirectComposition visual (issue #2738), unless
 /// `WGPU_DX12_PRESENTATION_SYSTEM` asked for something else (`asked`).
+#[cfg(feature = "wgpu")]
 fn dx12_presentation(asked: Option<eframe::wgpu::Dx12SwapchainKind>) -> eframe::wgpu::Dx12SwapchainKind {
     asked.unwrap_or(eframe::wgpu::Dx12SwapchainKind::DxgiFromVisual)
 }
 
 /// Surface textures must fit the device's enabled limits, not just the physical GPU's limits.
 /// Clamp egui-wgpu's backend-specific requirements before enabling the adapter's full 2D extent.
+#[cfg(feature = "wgpu")]
 fn surface_texture_limits(mut required: eframe::wgpu::Limits, supported: &eframe::wgpu::Limits) -> eframe::wgpu::Limits {
     required = required.or_worse_values_from(supported);
     required.max_texture_dimension_2d = supported.max_texture_dimension_2d;
@@ -663,6 +691,7 @@ fn surface_texture_limits(mut required: eframe::wgpu::Limits, supported: &eframe
 }
 
 /// A GPU with a connected monitor.
+#[cfg(feature = "wgpu")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DisplayGpu {
     /// PCI `(vendor, device)` ids.
@@ -674,6 +703,7 @@ struct DisplayGpu {
 
 /// The GPUs with a connected monitor, as far as the system says: Linux reads the DRM connectors
 /// in sysfs, Windows asks for the display devices attached to the desktop. Empty elsewhere.
+#[cfg(feature = "wgpu")]
 fn display_gpus() -> Vec<DisplayGpu> {
     #[cfg(target_os = "linux")]
     {
@@ -690,6 +720,7 @@ fn display_gpus() -> Vec<DisplayGpu> {
 }
 
 /// Records one display of GPU `pci`; a GPU driving several displays is one entry.
+#[cfg(feature = "wgpu")]
 #[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
 fn add_display_gpu(gpus: &mut Vec<DisplayGpu>, pci: (u32, u32), primary: bool) {
     match gpus.iter_mut().find(|g| g.pci == pci) {
@@ -703,6 +734,7 @@ fn add_display_gpu(gpus: &mut Vec<DisplayGpu>, pci: (u32, u32), primary: bool) {
 /// adapter's PCI ids in its device id (`PCI\VEN_10DE&DEV_2204&SUBSYS_40421458&REV_A1`); a GPU with
 /// no monitor lists its devices as not attached. Issue #378: a Ryzen desktop with the monitors on
 /// an NVIDIA card, where the integrated GPU would otherwise be chosen.
+#[cfg(feature = "wgpu")]
 #[cfg(target_os = "windows")]
 fn windows_display_gpus() -> Vec<DisplayGpu> {
     use winsafe::co::DISPLAY_DEVICE as Flags;
@@ -728,6 +760,7 @@ fn windows_display_gpus() -> Vec<DisplayGpu> {
 
 /// The PCI `(vendor, device)` ids in a Windows device id such as
 /// `PCI\VEN_10DE&DEV_2204&SUBSYS_40421458&REV_A1`; `None` for any other kind of device.
+#[cfg(feature = "wgpu")]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn pci_ids(device_id: &str) -> Option<(u32, u32)> {
     let field = |key: &str| {
@@ -740,6 +773,7 @@ fn pci_ids(device_id: &str) -> Option<(u32, u32)> {
 }
 
 /// Whether a DRM connector name (`eDP-1`, `LVDS-1`, `DSI-1`) is a laptop's built-in panel.
+#[cfg(feature = "wgpu")]
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn is_internal_panel(connector: &str) -> bool {
     ["eDP", "LVDS", "DSI"].iter().any(|kind| connector.starts_with(kind))
@@ -747,6 +781,7 @@ fn is_internal_panel(connector: &str) -> bool {
 
 /// The GPUs with a connected monitor, read from the DRM connectors under `drm` (`card1-DP-3/status`
 /// is `connected`, `card1/device/{vendor,device}` hold `0x10de`).
+#[cfg(feature = "wgpu")]
 #[cfg(target_os = "linux")]
 fn linux_display_gpus(drm: &std::path::Path) -> Vec<DisplayGpu> {
     let read_hex = |p: std::path::PathBuf| -> Option<u32> {
@@ -775,6 +810,7 @@ fn linux_display_gpus(drm: &std::path::Path) -> Vec<DisplayGpu> {
 /// primary display (a hybrid laptop's panel, #8; the primary display on Windows, #378), or else,
 /// with no primary display known (a Linux desktop with a monitor on each GPU, #445), the discrete
 /// one. Otherwise the most frugal kind: integrated, discrete, other, virtual, software.
+#[cfg(feature = "wgpu")]
 fn pick_adapter(adapters: &[(u32, u32, eframe::wgpu::DeviceType)], displays: &[DisplayGpu], compositor: Option<(u32, u32)>) -> Option<usize> {
     use eframe::wgpu::DeviceType;
     let display = |pci: (u32, u32)| displays.iter().find(|g| g.pci == pci);

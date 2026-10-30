@@ -45,8 +45,10 @@ fn endpoint() -> std::io::Result<Endpoint> {
 /// the first device was still being set up when the second test began its own. The UI
 /// tests take turns the same way (`crates/ui-egui/tests/it/main.rs`). Hold it for the whole
 /// test (declared before the instance, so it's released after the device is dropped).
+#[cfg(feature = "wgpu")]
 static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[cfg(feature = "wgpu")]
 fn gpu() -> std::sync::MutexGuard<'static, ()> {
     // A test that panicked while holding it leaves nothing to clean up.
     GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -110,6 +112,7 @@ fn path_from_arg_leaves_plain_paths_and_other_schemes_alone() {
     assert_eq!(super::path_from_arg("file://".to_string()), "file://");
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn opengl_is_the_fallback_unless_a_renderer_was_chosen() {
     use super::{RendererChoice, native_options, renderer_choice, retry_with_gl};
@@ -137,6 +140,7 @@ fn the_desktop_frame_is_turned_off_only_when_the_app_draws_one() {
     assert_eq!(native_options(false, true, eframe::Renderer::Glow).viewport.decorations, Some(false));
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn a_software_renderer_is_shown_to_the_user() {
     use eframe::wgpu::DeviceType;
@@ -152,6 +156,7 @@ fn a_software_renderer_is_shown_to_the_user() {
     }
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn gpu_setup_avoids_vulkan_and_stretched_resizes_on_windows_and_prefers_low_power() {
     let mut native = eframe::NativeOptions::default();
@@ -183,6 +188,7 @@ fn gpu_setup_avoids_vulkan_and_stretched_resizes_on_windows_and_prefers_low_powe
     }
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn restored_hidpi_window_fits_the_adapters_surface_limit() {
     // The Outlook launch crash: 3440 x 1369 saved points at 250% DPI requested this surface.
@@ -195,6 +201,7 @@ fn restored_hidpi_window_fits_the_adapters_surface_limit() {
     assert!(height <= enabled.max_texture_dimension_2d);
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn surface_limits_preserve_other_requirements_and_never_overrequest() {
     for required in [eframe::wgpu::Limits::default(), eframe::wgpu::Limits::downlevel_webgl2_defaults()] {
@@ -216,6 +223,7 @@ fn surface_limits_preserve_other_requirements_and_never_overrequest() {
     }
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn surface_limits_fit_v3d_shader_variable_limit() {
     // Issue #2383: V3D supports 15 variables, below the default request of 16.
@@ -227,6 +235,7 @@ fn surface_limits_fit_v3d_shader_variable_limit() {
     assert_eq!(enabled, expected);
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn surface_limits_fit_downlevel_maxima_and_minimum_alignments() {
     let required = eframe::wgpu::Limits::downlevel_webgl2_defaults();
@@ -244,6 +253,7 @@ fn surface_limits_fit_downlevel_maxima_and_minimum_alignments() {
     assert_eq!(enabled, supported);
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn a_window_larger_than_the_gpu_limit_gets_a_surface_within_it() {
     use eframe::egui_wgpu::winit::surface_fit;
@@ -262,6 +272,7 @@ fn a_window_larger_than_the_gpu_limit_gets_a_surface_within_it() {
     assert_eq!(surface_fit(600, 8193, 8192).1, 8192);
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn surface_fit_never_empties_or_overflows_a_surface() {
     use eframe::egui_wgpu::winit::surface_fit;
@@ -305,6 +316,7 @@ fn vendor_provenance_egui_wgpu_surface_fit_identity() {
     assert!(root.join("vendor/egui-wgpu/src/winit.rs").exists(), "the vendor copy and its provenance stay until the fork revision is pinned");
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn a_gpu_error_while_a_window_is_set_up_is_returned_not_a_panic() {
     // Issue #519: on a 2015 Intel GPU, wgpu's GL backend couldn't configure the window's
@@ -372,6 +384,7 @@ fn vendor_provenance_egui_wgpu_catch_errors_identity() {
     assert!(root.join("vendor/egui-wgpu/src/winit.rs").exists(), "the vendor copy and its provenance stay until the fork revision is pinned");
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn pipeline_creation_error_is_returned_and_device_remains_usable() {
     use eframe::{egui_wgpu, wgpu};
@@ -432,25 +445,33 @@ fn winit_carries_the_windows_11_monitor_scale_fix() {
     assert!(provenance.contains("e9809ef54b18499bb4f2cac945719ecc2a61061b"), "vendor/winit keeps its upstream base provenance");
 }
 
+#[cfg(feature = "wgpu")]
 const NVIDIA: (u32, u32) = (0x10de, 0x2684);
+#[cfg(feature = "wgpu")]
 const NVIDIA_3090: (u32, u32) = (0x10de, 0x2204);
+#[cfg(feature = "wgpu")]
 const AMD_IGPU: (u32, u32) = (0x1002, 0x164e);
 
+#[cfg(feature = "wgpu")]
 fn adapters() -> Vec<(u32, u32, eframe::wgpu::DeviceType)> {
     use eframe::wgpu::DeviceType;
     vec![(NVIDIA.0, NVIDIA.1, DeviceType::DiscreteGpu), (AMD_IGPU.0, AMD_IGPU.1, DeviceType::IntegratedGpu), (0, 0, DeviceType::Cpu)]
 }
 
+#[cfg(feature = "wgpu")]
 const INTEL_IGPU: (u32, u32) = (0x8086, 0xa780);
 
+#[cfg(feature = "wgpu")]
 fn monitor(pci: (u32, u32)) -> super::DisplayGpu {
     super::DisplayGpu { pci, primary: false }
 }
 
+#[cfg(feature = "wgpu")]
 fn panel(pci: (u32, u32)) -> super::DisplayGpu {
     super::DisplayGpu { pci, primary: true }
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn pick_adapter_prefers_the_gpu_driving_the_monitors() {
     // A desktop whose monitors are all on the discrete GPU: the integrated one shows black.
@@ -460,6 +481,7 @@ fn pick_adapter_prefers_the_gpu_driving_the_monitors() {
     assert_eq!(super::pick_adapter(&adapters(), &[panel(NVIDIA)], None), Some(0));
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn pick_adapter_prefers_the_gpu_driving_the_primary_display() {
     // A Windows desktop with a monitor on each GPU: the window opens on the primary display.
@@ -467,6 +489,7 @@ fn pick_adapter_prefers_the_gpu_driving_the_primary_display() {
     assert_eq!(super::pick_adapter(&adapters(), &[panel(AMD_IGPU), monitor(NVIDIA)], None), Some(1));
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn pci_ids_come_from_windows_device_ids() {
     assert_eq!(super::pci_ids("PCI\\VEN_10DE&DEV_2204&SUBSYS_40421458&REV_A1"), Some(NVIDIA_3090));
@@ -480,6 +503,7 @@ fn pci_ids_come_from_windows_device_ids() {
     assert_eq!(super::pci_ids(""), None);
 }
 
+#[cfg(feature = "wgpu")]
 #[cfg(target_os = "windows")]
 #[test]
 fn windows_display_gpus_lists_pci_gpus_with_a_monitor() {
@@ -493,6 +517,7 @@ fn windows_display_gpus_lists_pci_gpus_with_a_monitor() {
     }
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn pick_adapter_keeps_the_integrated_gpu_on_hybrid_laptops() {
     // Issue #8: the panel is on the integrated GPU, an external monitor on the discrete one.
@@ -502,6 +527,7 @@ fn pick_adapter_keeps_the_integrated_gpu_on_hybrid_laptops() {
     assert_eq!(super::pick_adapter(&adapters(), &[monitor(AMD_IGPU)], None), Some(1));
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn pick_adapter_prefers_the_discrete_gpu_on_desktops_with_a_monitor_on_each() {
     // Issue #445: one monitor on the Intel iGPU, one on the NVIDIA card, no built-in panel.
@@ -513,6 +539,7 @@ fn pick_adapter_prefers_the_discrete_gpu_on_desktops_with_a_monitor_on_each() {
     assert_eq!(super::pick_adapter(&adapters(), &[monitor(AMD_IGPU), monitor(INTEL_IGPU)], None), Some(1));
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn pick_adapter_prefers_the_gpu_the_compositor_draws_with() {
     // A hybrid laptop whose Wayland compositor runs on the discrete GPU (Hyprland with
@@ -528,6 +555,7 @@ fn pick_adapter_prefers_the_gpu_the_compositor_draws_with() {
     assert_eq!(super::pick_adapter(&adapters(), &[panel(AMD_IGPU)], Some((0x1af4, 0x1050))), Some(1));
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn pick_adapter_falls_back_to_low_power_without_a_match() {
     assert_eq!(super::pick_adapter(&adapters(), &[monitor((0x8086, 0x1234))], None), Some(1));
@@ -535,6 +563,7 @@ fn pick_adapter_falls_back_to_low_power_without_a_match() {
     assert_eq!(super::pick_adapter(&[], &[monitor(NVIDIA)], None), None);
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn internal_panels_are_edp_lvds_and_dsi_connectors() {
     for name in ["eDP-1", "LVDS-1", "DSI-1"] {
@@ -545,6 +574,7 @@ fn internal_panels_are_edp_lvds_and_dsi_connectors() {
     }
 }
 
+#[cfg(feature = "wgpu")]
 #[cfg(target_os = "linux")]
 #[test]
 fn linux_display_gpus_reads_connected_connectors() -> std::io::Result<()> {

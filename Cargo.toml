@@ -57,7 +57,9 @@ pdfcraft-xfa = { path = "crates/xfa", version = "0.15.0" }
 pdfcraft-render = { path = "crates/render", version = "0.15.0" }
 pdfcraft-engine = { path = "crates/engine", version = "0.15.0" }
 pdfcraft-platform = { path = "crates/platform", version = "0.15.0" }
-pdfcraft-ui-egui = { path = "crates/ui-egui", version = "0.15.0" }
+# Without default features: each app chooses wgpu and the AccessKit adapter (the Windows 7 build
+# leaves both out, docs/windows7.md).
+pdfcraft-ui-egui = { path = "crates/ui-egui", version = "0.15.0", default-features = false }
 pdfcraft-automation = { path = "crates/automation", version = "0.15.0", default-features = false }
 
 # pdf

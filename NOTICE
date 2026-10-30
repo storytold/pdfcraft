@@ -59,6 +59,11 @@ Vendored (vendor/, patched; see vendor/README.md):
 - hayro 0.7.1 — Apache-2.0 OR MIT, Copyright the hayro authors (licence files kept in vendor/hayro).
 - hayro-interpret 0.7.0 — Apache-2.0 OR MIT, Copyright the hayro authors (LICENSE-APACHE, LICENSE-MIT kept in vendor/hayro-interpret).
 
+The experimental Windows 7 build (packaging/windows/windows7.ps1) compiles a modified copy of the
+windows-link crate 0.2.1 (vendor/windows-link; Microsoft, MIT OR Apache-2.0) that binds CoTaskMemFree
+through ole32.dll. Its license texts are in vendor/windows-link and ship in that build's ZIP; every
+other build uses the unmodified crate from crates.io.
+
 Bundled egui font icons
 
 The pinned egui dependency includes egui-icons.ttf, a small subset of John Slegers'

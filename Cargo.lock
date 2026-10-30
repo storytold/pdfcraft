@@ -4644,6 +4644,7 @@ dependencies = [
  "block2 0.6.2",
  "bytemuck",
  "chrono",
+ "clipboard-win",
  "craft-keymap",
  "craft-menu",
  "craft-quit",

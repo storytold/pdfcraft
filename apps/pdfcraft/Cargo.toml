@@ -8,15 +8,24 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["wgpu", "accessibility"]
+wgpu = ["eframe/wgpu", "pdfcraft-ui-egui/wgpu"]
+accessibility = ["eframe/accesskit", "pdfcraft-ui-egui/accessibility"]
+# The experimental, unsupported Windows 7 build (docs/windows7.md): OpenGL only, no AccessKit
+# adapter. Build with --no-default-features --features windows7 and the win7 Rust target
+# (packaging/windows/windows7.ps1).
+windows7 = []
+
 [dependencies]
 # Help ▸ Check for updates (issue #28): one HTTPS request to GitHub, over rustls with the OS's
 # trusted roots. No bundled root list (webpki-roots and webpki-root-certs are CDLA-licensed).
 pdfcraft-ui-egui = { workspace = true }
 # `build_info`: the version and compile-time build label for `--version` and the log.
 pdfcraft-engine = { workspace = true }
-# wgpu draws; OpenGL (glow) is the fallback when wgpu can't start on an old or unusual GPU or
-# driver (#461, #435, #392), and can be chosen with PDFCRAFT_RENDERER=gl.
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11", "persistence", "links", "clipboard"] }
+# wgpu draws (the `wgpu` feature); OpenGL (glow) is the fallback when wgpu can't start on an old or
+# unusual GPU or driver (#461, #435, #392), and can be chosen with PDFCRAFT_RENDERER=gl.
+eframe = { workspace = true, features = ["default_fonts", "glow", "wayland", "x11", "persistence", "links", "clipboard"] }
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 serde_json = { workspace = true }
 # Records from every crate go to standard error and the log file (src/logging.rs).
@@ -54,14 +63,17 @@ winit = { version = "0.30", default-features = false, features = ["wayland"] }
 # shows it (issue #378). Safe wrappers over Win32; only the `user` feature (which brings `kernel` with it),
 # and `advapi` for the session id that names the single-instance socket (#3338).
 winsafe = { version = "0.0.29", default-features = false, features = ["user", "advapi"] }
-# Settings ▸ Accessibility ▸ Visual effects ▸ Animation effects (src/motion.rs), through WinRT's
-# `UISettings`, whose bindings are safe to call (winsafe's `SystemParametersInfo` is an unsafe
-# fn). Already in the tree through wgpu's DX12 backend; this adds one small namespace to it.
-windows = { version = "0.62", default-features = false, features = ["std", "UI_ViewManagement"] }
 # Single instance (#282): later launches hand their files to the running app over a Unix domain
 # socket. `std` has no Unix sockets on Windows, and calling Winsock directly needs unsafe, which
 # our workspace forbids. Already in the lockfile through zbus; pinned exactly, review before bumping.
 uds_windows = "=1.2.1"
+
+# Settings ▸ Accessibility ▸ Visual effects ▸ Animation effects (src/motion.rs), through WinRT's
+# `UISettings`, whose bindings are safe to call (winsafe's `SystemParametersInfo` is an unsafe
+# fn). Already in the tree through wgpu's DX12 backend; this adds one small namespace to it.
+# Windows 7 has no WinRT: the win7 target leaves it out (docs/windows7.md).
+[target.'cfg(all(windows, not(target_vendor = "win7")))'.dependencies]
+windows = { version = "0.62", default-features = false, features = ["std", "UI_ViewManagement"] }
 
 [build-dependencies]
 # Icon + VERSIONINFO for pdfcraft.exe; build.rs only uses it when targeting Windows.

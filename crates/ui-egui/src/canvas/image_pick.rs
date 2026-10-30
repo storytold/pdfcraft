@@ -213,7 +213,18 @@ impl PdfCraftApp {
         }
         let dir = clipboard_dir().ok_or("there is no folder for the copied file")?;
         let path = write_clipboard_file(&dir, name, bytes)?;
-        arboard::Clipboard::new().and_then(|mut c| c.set().file_list(&[path])).map_err(|e| e.to_string())
+        #[cfg(not(target_vendor = "win7"))]
+        {
+            arboard::Clipboard::new().and_then(|mut c| c.set().file_list(&[path])).map_err(|e| e.to_string())
+        }
+        // arboard's file list needs Windows 8 (PathCchStripPrefix); the Windows 7 build
+        // (docs/windows7.md) writes the same CF_HDROP list through clipboard-win.
+        #[cfg(target_vendor = "win7")]
+        {
+            let path = path.to_str().ok_or("the copied file's path isn't valid Unicode")?;
+            let _open = clipboard_win::Clipboard::new_attempts(10).map_err(|e| e.to_string())?;
+            clipboard_win::raw::set_file_list_with(&[path], clipboard_win::options::DoClear).map_err(|e| e.to_string())
+        }
     }
 
     #[cfg(target_arch = "wasm32")]

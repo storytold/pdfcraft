@@ -22,6 +22,14 @@ including its `surface_fit` tests exercised by PdfCraft's behavioral tests.
 Keep both copies while their provenance tests remain in use. Renderer and security
 vendors below retain their independent path patches and licenses.
 
+## windows-link (the Windows 7 build only)
+
+`vendor/windows-link` is windows-link 0.2.1 with one `PdfCraft patch:`: on the win7 target its
+`link!` macro imports `CoTaskMemFree` from `ole32.dll` instead of `combase.dll`, which Windows 7
+lacks. It is not in the root `[patch.crates-io]`: only `packaging/windows/windows7.ps1` applies it,
+with `--config`, so every other build uses the checksum-verified crates.io crate. See
+`vendor/windows-link/PDFCRAFT-PATCH.md` and `docs/windows7.md`.
+
 Permissively licensed crates we carry small patches for. Each directory keeps the upstream
 licence files unchanged. Every patch is marked `PdfCraft patch:` in the source, is covered by a
 PdfCraft test, and should be proposed upstream. Remove the vendored copy once upstream releases

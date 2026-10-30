@@ -455,6 +455,8 @@ The summary is in **[ROADMAP.md](ROADMAP.md)**; the full assessment by dimension
 
 Installers and executables are code-signed.
 
+For the experimental, unsupported 64-bit Windows 7 build, see [Windows 7 instructions](docs/windows7.md).
+
 The portable zip runs from any folder, a USB stick included. Its `portable.txt` keeps the settings,
 logs and crash recovery in a `PdfCraftData` folder next to `pdfcraft.exe`, so nothing is written to
 `%APPDATA%`; delete that file to use the normal per-user folders.
