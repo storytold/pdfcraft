@@ -66,6 +66,7 @@ impl OpenPrompt {
 pub(crate) fn show_open(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(mut prompt) = app.certificate_prompt.take() else { return };
     let mut cancel = false;
+    let mut cancel_pressed = false;
     let modal = widgets::show_modal(ctx, "certificate_open", |ui| {
         ui.set_width(480.0);
         ui.heading(tl!("Open with a smartcard"));
@@ -94,11 +95,19 @@ pub(crate) fn show_open(app: &mut PdfCraftApp, ctx: &egui::Context) {
             ui.colored_label(egui::Color32::RED, e);
         }
         let response = ui.button(tl!("Cancel"));
-        cancel = response.clicked() || response.is_pointer_button_down_on();
+        cancel = response.clicked();
+        cancel_pressed = response.is_pointer_button_down_on();
     });
     if cancel || modal.should_close() {
         // Dropping the receiver makes a late worker result unable to admit a document.
         app.cancel_certificate_open(prompt.pending);
+        return;
+    }
+    // Keep a ready result pending while Cancel is held. Release decides whether the
+    // click completes or is abandoned by dragging away; Escape still takes priority.
+    if cancel_pressed {
+        app.certificate_prompt = Some(prompt);
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
         return;
     }
     let result = prompt.receiver.as_ref().and_then(|rx| match rx.try_recv() {
@@ -132,13 +141,13 @@ mod tests {
 
     #[test]
     fn ready_open_result_respects_cancel_and_escape() {
-        for action in ["cancel", "escape", "accept"] {
+        for action in ["cancel", "abort_press", "escape", "accept"] {
             let mut app = PdfCraftApp::new();
             let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
             app.open_bytes("keep.pdf", None, bytes.to_vec()).unwrap();
             let original = app.views[0].id;
             app.session.apply(original, pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Unsaved".into() }).unwrap();
-            let prepared = app.session.prepare_open("new.pdf", None, bytes.clone(), None).unwrap();
+            let mut prepared = Some(app.session.prepare_open("new.pdf", None, bytes.clone(), None).unwrap());
             let pending = PasswordPrompt {
                 name: "new.pdf".into(),
                 path: None,
@@ -158,17 +167,28 @@ mod tests {
             app.certificate_prompt = Some(prompt);
             let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_| app);
             h.run_steps(4);
-            if action == "cancel" {
+            if matches!(action, "cancel" | "abort_press") {
                 let pos = h.get_by_label("Cancel").rect().center();
                 h.input_mut().events.push(egui::Event::PointerMoved(pos));
-                for pressed in [true, false] {
-                    h.input_mut().events.push(egui::Event::PointerButton {
-                        pos,
-                        button: egui::PointerButton::Primary,
-                        pressed,
-                        modifiers: Default::default(),
-                    });
-                }
+                h.run_steps(1);
+                h.input_mut().events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                });
+                sender.send(Ok(prepared.take().unwrap())).unwrap();
+                h.run_steps(1);
+                assert!(h.state().certificate_prompt.is_some(), "holding Cancel must neither cancel nor admit a ready result");
+                assert_eq!(h.state().views.len(), 1);
+                let release = if action == "abort_press" { pos - egui::vec2(100.0, 0.0) } else { pos };
+                h.input_mut().events.push(egui::Event::PointerMoved(release));
+                h.input_mut().events.push(egui::Event::PointerButton {
+                    pos: release,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                });
             } else if action == "escape" {
                 h.input_mut().events.push(egui::Event::Key {
                     key: egui::Key::Escape,
@@ -178,10 +198,12 @@ mod tests {
                     modifiers: Default::default(),
                 });
             }
-            sender.send(Ok(prepared)).unwrap();
+            if !matches!(action, "cancel" | "abort_press") {
+                sender.send(Ok(prepared.take().unwrap())).unwrap();
+            }
             h.run_steps(2);
             assert!(h.state().certificate_prompt.is_none());
-            assert_eq!(h.state().views.len(), if action == "accept" { 2 } else { 1 }, "{action}");
+            assert_eq!(h.state().views.len(), if matches!(action, "accept" | "abort_press") { 2 } else { 1 }, "{action}");
             assert_eq!(h.state().session.get(original).unwrap().info_value("Title").as_deref(), Some("Unsaved"));
             assert!(h.state().session.get(original).unwrap().dirty);
         }
