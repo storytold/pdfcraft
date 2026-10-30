@@ -632,7 +632,14 @@ mod tests {
         let word = || pdfcraft_engine::ocr::PlacedWord { text: "scanned".into(), origin: [72.0, 700.0], across: [60.0, 0.0], up: [0.0, 12.0] };
         let finished = |app: &PdfCraftApp, automatic: bool| {
             let generation = app.session.get(app.active_ids().unwrap().1).unwrap().edit_generation();
-            let page = pdfcraft_engine::ocr::OcrPage { page: 0, words: vec![word()], already_on_page: 0, skipped: None };
+            let page = pdfcraft_engine::ocr::OcrPage {
+                page: 0,
+                words: vec![word()],
+                line_lengths: vec![1],
+                paragraph_lengths: vec![1],
+                already_on_page: 0,
+                skipped: None,
+            };
             let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
             OcrRun { doc: app.active_ids().unwrap().1, progress, automatic: automatic.then_some(AutoOcr { page: 0, generation }) }
         };
@@ -670,6 +677,8 @@ mod tests {
         let page = pdfcraft_engine::ocr::OcrPage {
             page: 0,
             words: vec![pdfcraft_engine::ocr::PlacedWord { text: "scanned".into(), origin: [72.0, 700.0], across: [60.0, 0.0], up: [0.0, 12.0] }],
+            line_lengths: vec![1],
+            paragraph_lengths: vec![1],
             already_on_page: 0,
             skipped: None,
         };

@@ -6517,6 +6517,7 @@ fn ocr_tools_make_a_scan_searchable() {
     let mut a = auto(&dir);
     let status = ok(&mut a, "ocr_status", json!({}));
     assert_eq!(status["languages"][0]["code"], "en");
+    assert!(status["layout"].is_boolean(), "{status}");
     if status["available"] != true {
         eprintln!("skipped: OCR models not installed");
         return;

@@ -65,6 +65,11 @@ impl Default for OcrSettings {
 pub struct OcrPage {
     pub page: usize,
     pub words: Vec<PlacedWord>,
+    /// How many of `words` each recognised line holds, in reading order.
+    pub line_lengths: Vec<usize>,
+    /// How many of `line_lengths` each paragraph holds, in reading order. Without the layout
+    /// model the page is one paragraph.
+    pub paragraph_lengths: Vec<usize>,
     /// Words recognised but left out because the page's own text already has them there.
     pub already_on_page: usize,
     /// Why the page was not read, if it was skipped.
@@ -72,8 +77,35 @@ pub struct OcrPage {
 }
 
 impl OcrPage {
+    /// The words, a line of text per recognised line and a blank line between paragraphs. Words
+    /// beyond `line_lengths` make one more line, and lines beyond `paragraph_lengths` one more
+    /// paragraph.
     pub fn text(&self) -> String {
-        self.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ")
+        let mut words = self.words.iter().map(|w| w.text.as_str());
+        let mut lines: Vec<String> = Vec::new();
+        for &n in &self.line_lengths {
+            let line: Vec<&str> = words.by_ref().take(n).collect();
+            if !line.is_empty() {
+                lines.push(line.join(" "));
+            }
+        }
+        let rest: Vec<&str> = words.collect();
+        if !rest.is_empty() {
+            lines.push(rest.join(" "));
+        }
+        let mut lines = lines.into_iter();
+        let mut paragraphs: Vec<String> = Vec::new();
+        for &n in &self.paragraph_lengths {
+            let paragraph: Vec<String> = lines.by_ref().take(n).collect();
+            if !paragraph.is_empty() {
+                paragraphs.push(paragraph.join("\n"));
+            }
+        }
+        let rest: Vec<String> = lines.collect();
+        if !rest.is_empty() {
+            paragraphs.push(rest.join("\n"));
+        }
+        paragraphs.join("\n\n")
     }
 }
 
@@ -92,6 +124,12 @@ pub fn engine() -> Result<Arc<Ocr>, String> {
 /// Whether the recognition models are installed.
 pub fn available() -> bool {
     Models::find().is_some()
+}
+
+/// Whether the layout model is installed too: recognised lines are then read region by region and
+/// broken into paragraphs.
+pub fn layout_available() -> bool {
+    Models::find_layout().is_some()
 }
 
 /// Everything recognition needs from a document, detached from the session.
@@ -120,7 +158,14 @@ impl OcrJob {
                 break;
             }
             let Some(info) = self.infos.get(page) else { continue };
-            let skip = |why: &str| OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(why.into()) };
+            let skip = |why: &str| OcrPage {
+                page,
+                words: Vec::new(),
+                line_lengths: Vec::new(),
+                paragraph_lengths: Vec::new(),
+                already_on_page: 0,
+                skipped: Some(why.into()),
+            };
             // The boxes of the page's own text (an earlier OCR layer's included), in view space.
             let existing: Vec<[f32; 4]> = r
                 .render(RenderRequest { page, kind: RequestKind::Text, scale: 1.0, ..Default::default() })
@@ -136,7 +181,7 @@ impl OcrJob {
                 out.push(skip(&e));
                 continue;
             }
-            let lines = match ocr.recognize(&shot.rgba, shot.width, shot.height) {
+            let paragraphs = match ocr.recognize(&shot.rgba, shot.width, shot.height) {
                 Ok(l) => l,
                 Err(e) => {
                     out.push(skip(&e.to_string()));
@@ -149,10 +194,28 @@ impl OcrJob {
                 [u as f64, v as f64]
             };
             // Words the page's own text already has are not added a second time.
-            let (fresh, already): (Vec<_>, Vec<_>) =
-                lines.iter().flat_map(|l| &l.words).partition(|w| covered(w.rect.map(|v| v / scale), &existing) < ALREADY_ON_PAGE);
-            let words = fresh.into_iter().map(|w| PlacedWord::place(w, to_user)).collect();
-            out.push(OcrPage { page, words, already_on_page: already.len(), skipped: None });
+            // A line left with no words is dropped, and a paragraph left with no lines.
+            let (mut words, mut line_lengths, mut paragraph_lengths, mut already) = (Vec::new(), Vec::new(), Vec::new(), 0);
+            for paragraph in &paragraphs {
+                let lines_before = line_lengths.len();
+                for line in &paragraph.lines {
+                    let before = words.len();
+                    for w in &line.words {
+                        if covered(w.rect.map(|v| v / scale), &existing) < ALREADY_ON_PAGE {
+                            words.push(PlacedWord::place(w, to_user));
+                        } else {
+                            already += 1;
+                        }
+                    }
+                    if words.len() > before {
+                        line_lengths.push(words.len() - before);
+                    }
+                }
+                if line_lengths.len() > lines_before {
+                    paragraph_lengths.push(line_lengths.len() - lines_before);
+                }
+            }
+            out.push(OcrPage { page, words, line_lengths, paragraph_lengths, already_on_page: already, skipped: None });
         }
         progress(total, total);
         out
@@ -264,6 +327,41 @@ pub fn recognize_file(
 mod tests {
     use super::*;
     use crate::export;
+
+    #[test]
+    fn page_text_breaks_between_lines() {
+        let word = |t: &str| PlacedWord { text: t.into(), origin: [0.0, 0.0], across: [1.0, 0.0], up: [0.0, 1.0] };
+        let page = |words: &[&str], line_lengths: Vec<usize>| OcrPage {
+            page: 0,
+            words: words.iter().map(|t| word(t)).collect(),
+            line_lengths,
+            paragraph_lengths: Vec::new(),
+            already_on_page: 0,
+            skipped: None,
+        };
+        assert_eq!(page(&["a", "b", "c"], vec![2, 1]).text(), "a b\nc");
+        // Lengths that do not add up lose no word and make no empty line.
+        assert_eq!(page(&["a", "b", "c"], vec![0, 1, 9]).text(), "a\nb c");
+        assert_eq!(page(&["a", "b"], Vec::new()).text(), "a b");
+    }
+
+    /// Paragraphs are set apart by a blank line, their lines by a line break.
+    #[test]
+    fn page_text_sets_paragraphs_apart() {
+        let word = |t: &str| PlacedWord { text: t.into(), origin: [0.0, 0.0], across: [1.0, 0.0], up: [0.0, 1.0] };
+        let page = |line_lengths: Vec<usize>, paragraph_lengths: Vec<usize>| OcrPage {
+            page: 0,
+            words: ["a", "b", "c", "d", "e"].iter().map(|t| word(t)).collect(),
+            line_lengths,
+            paragraph_lengths,
+            already_on_page: 0,
+            skipped: None,
+        };
+        assert_eq!(page(vec![1, 2, 1, 1], vec![1, 2, 1]).text(), "a\n\nb c\nd\n\ne");
+        // Lengths that do not add up lose no line and make no empty paragraph.
+        assert_eq!(page(vec![1, 1, 1, 1, 1], vec![0, 2, 0, 9]).text(), "a\nb\n\nc\nd\ne");
+        assert_eq!(page(vec![1, 1, 1, 1, 1], vec![2]).text(), "a\nb\n\nc\nd\ne");
+    }
 
     /// #1028: a recognised word over the page's own text is that text again; one in an empty
     /// part of the page (a picture) is new.
