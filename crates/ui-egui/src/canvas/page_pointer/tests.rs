@@ -263,13 +263,11 @@ fn uses(line: &str, name: &str) -> bool {
     line.match_indices(name).any(|(at, _)| name.starts_with('.') || !line[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_'))
 }
 
-/// Each use of one of `names` in the page modules' code (their tests left out) outside the
-/// functions `allowed` to, as "src/file:line: `name` why"; then each allowed function that uses
-/// none of them any more, as "src/file: fn function unused".
-fn misuses(names: &[&str], allowed: &[(&str, &str, &str)], why: &str, unused: &str) -> Vec<String> {
+/// Each use of one of `names` in the page modules' code (their tests left out), as (file, the
+/// top-level function or `impl` method it is in, line, name).
+fn page_module_uses<'a>(names: &[&'a str]) -> Vec<(&'static str, Option<String>, usize, &'a str)> {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut problems = Vec::new();
-    let mut needed = vec![false; allowed.len()];
+    let mut found = Vec::new();
     for file in PAGE_MODULES {
         let source = std::fs::read_to_string(src.join(file)).expect("page module").replace("\r\n", "\n");
         // Tests drive egui's input and read its output themselves.
@@ -288,11 +286,23 @@ fn misuses(names: &[&str], allowed: &[(&str, &str, &str)], why: &str, unused: &s
                 continue;
             }
             for name in names.iter().filter(|name| uses(line, name)) {
-                match allowed.iter().position(|(f, function_name, _)| *f == file && function == Some(*function_name)) {
-                    Some(k) => needed[k] = true,
-                    None => problems.push(format!("src/{file}:{}: `{name}` {why}", n + 1)),
-                }
+                found.push((file, function.map(str::to_owned), n + 1, *name));
             }
+        }
+    }
+    found
+}
+
+/// Each use of one of `names` in the page modules' code (their tests left out) outside the
+/// functions `allowed` to, as "src/file:line: `name` why"; then each allowed function that uses
+/// none of them any more, as "src/file: fn function unused".
+fn misuses(names: &[&str], allowed: &[(&str, &str, &str)], why: &str, unused: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut needed = vec![false; allowed.len()];
+    for (file, function, n, name) in page_module_uses(names) {
+        match allowed.iter().position(|(f, function_name, _)| *f == file && function.as_deref() == Some(*function_name)) {
+            Some(k) => needed[k] = true,
+            None => problems.push(format!("src/{file}:{n}: `{name}` {why}")),
         }
     }
     for ((file, name, _), needed) in allowed.iter().zip(needed) {
@@ -359,5 +369,63 @@ fn page_modules_claim_the_cursor_and_never_set_it() {
          NOT_PAGE_CURSOR in src/canvas/page_pointer/tests.rs, with why.",
         "sets no cursor any more: remove it from NOT_PAGE_CURSOR.",
     );
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// What decides, keeps or drops the press the pages hold.
+const ROUTER_WRITES: [&str; 3] = ["router.press(", "router.settle(", "router.cancel("];
+
+/// The functions that decide, keep or drop the press the pages hold: (file, function, why).
+const ROUTER_WRITERS: [(&str, &str, &str); 3] = [
+    ("canvas.rs", "page_tool_input", "the hits at the press point decide its owner, once per press"),
+    ("canvas.rs", "draw_pages", "the press is over once the button is up and its release seen, and a new one drops the last owner"),
+    ("canvas.rs", "cancel_pointer_gestures", "every pointer gesture's cancel: Escape, a dialog, automation's cancel"),
+];
+
+/// Ways to make a `Hit`.
+const HIT_BUILDS: [&str; 2] = ["Hit::new(", "Hit {"];
+
+/// What ignores the press the pages hold until the button is up.
+const PRESS_IGNORES: [&str; 1] = ["press_cancelled = true"];
+
+/// The one function that ignores a press until the button is up: (file, function, why).
+const PRESS_IGNORERS: [(&str, &str, &str); 1] = [("canvas.rs", "cancel_on_escape", "Escape abandons the gesture the press drives, whichever tool's")];
+
+/// Page modules act on a press only when the router says it is theirs. The hits at the press
+/// point decide its owner once, in one place, and a `Hit` comes only from a module's hit test,
+/// so what the cursor promised is what the press does. Where each module tested the press
+/// point again, or asked another whether it wanted the press, the answers disagreed: a press on
+/// one check box released over the next ticked the second, and a drag could be taken over
+/// halfway. Escape is the one way to drop a press and ignore it until the button is up.
+#[test]
+fn page_modules_act_on_a_press_only_through_the_router() {
+    let mut problems = misuses(
+        &ROUTER_WRITES,
+        &ROUTER_WRITERS,
+        "decides, keeps or drops the press the pages hold. Only the hits at the press point decide its owner, once \
+         (src/canvas/page_router.rs): a page module reads `view.router.owner(page)`. Drop a press with \
+         `DocView::cancel_pointer_gestures`. A new place that must? Add the function to ROUTER_WRITERS in \
+         src/canvas/page_pointer/tests.rs, with why.",
+        "no longer decides, keeps or drops the press: remove it from ROUTER_WRITERS.",
+    );
+    problems.extend(misuses(
+        &PRESS_IGNORES,
+        &PRESS_IGNORERS,
+        "ignores the press the pages hold. Escape cancels a press, in `cancel_on_escape`: drop a gesture with \
+         `DocView::cancel_pointer_gestures` instead.",
+        "no longer ignores a press: remove it from PRESS_IGNORERS.",
+    ));
+    // A hit test is a function named `hit` or `…_hit`: one answer to "what of mine is here?",
+    // which gives the module's cursor, its tip and its press.
+    let builds = page_module_uses(&HIT_BUILDS);
+    assert!(!builds.is_empty(), "no page module makes a `Hit` any more: update HIT_BUILDS");
+    problems.extend(builds.into_iter().filter(|(_, function, _, _)| !function.as_deref().is_some_and(|f| f == "hit" || f.ends_with("_hit"))).map(
+        |(file, _, n, name)| {
+            format!(
+                "src/{file}:{n}: `{name}` makes a hit outside a hit test. A page module answers \"what of mine is \
+                     here?\" in one function, named `hit` or `…_hit`, so its cursor, its tip and its press agree."
+            )
+        },
+    ));
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
