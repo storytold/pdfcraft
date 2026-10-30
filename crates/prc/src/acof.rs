@@ -2,12 +2,12 @@
 //!
 //! The table has 2077 rows: 29 frequent doubles and one row per IEEE binary64 exponent
 //! (0..=2047). Each row is a code of 1 to 22 bits and the value it decodes to.
-//!
-//! The rows are not in this crate yet: until they are, [`lookup`] finds no code, so every
-//! `Double` read fails with `UnknownDoubleCode` and nothing else changes.
+//! The rows come from prc-rs under its MIT licence (see [`table`]).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
+
+mod table;
 
 /// Rows a complete table has.
 const ROWS: usize = 2077;
@@ -17,7 +17,6 @@ pub(crate) const MAX_CODE_BITS: u32 = 22;
 
 /// What a code decodes to.
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(not(test), expect(dead_code, reason = "built only by the table's rows, which are not in the crate yet"))]
 pub(crate) enum Entry {
     /// A frequent value, returned with the sign bit applied.
     Double(f64),
@@ -28,9 +27,6 @@ pub(crate) enum Entry {
 
 /// One row: code length, code, and what it decodes to.
 type Row = (u32, u32, Entry);
-
-/// The table's rows.
-const TABLE: &[Row] = &[];
 
 fn key(nbits: u32, code: u32) -> u32 {
     (nbits << 24) | code
@@ -54,7 +50,7 @@ fn build(rows: &[Row]) -> Option<HashMap<u32, Entry>> {
 
 fn table() -> Option<&'static HashMap<u32, Entry>> {
     static MAP: OnceLock<Option<HashMap<u32, Entry>>> = OnceLock::new();
-    MAP.get_or_init(|| build(TABLE)).as_ref()
+    MAP.get_or_init(|| build(table::TABLE)).as_ref()
 }
 
 /// The entry for an `nbits`-long code, if one exists.
@@ -65,7 +61,7 @@ pub(crate) fn lookup(nbits: u32, code: u32) -> Option<Entry> {
 /// The `(nbits, code)` of IEEE exponent `e`'s row, the test writer's half of [`lookup`].
 #[cfg(test)]
 pub(crate) fn exponent_code(e: u32) -> Option<(u32, u32)> {
-    table()?.iter().find(|(_, v)| **v == Entry::Exponent(e << 20)).map(|(&k, _)| (k >> 24, k & 0xff_ffff))
+    table()?.iter().find(|(_, v)| matches!(v, Entry::Exponent(hi) if (hi >> 20) & 0x7ff == e)).map(|(&k, _)| (k >> 24, k & 0xff_ffff))
 }
 
 #[cfg(test)]
@@ -87,7 +83,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "the Double table is not in the crate yet"]
     fn the_table_is_complete() {
         let t = table().unwrap();
         assert_eq!(t.len(), ROWS);

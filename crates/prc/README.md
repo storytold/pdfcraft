@@ -20,4 +20,5 @@ BitReader: bit, bits, character, unsigned_integer, integer, integer_vbn, double_
 - `MAX_INFLATED_BYTES` (512 MiB) bounds every section together; `TooLarge` reports the limit hit.
 - Schema programs (how a newer producer describes fields it added) run under a step ceiling (2^22) and a nesting ceiling (64).
 - `Unsupported` names constructs the reader cannot step over (schema pointer fields, `Value_CurveIs3D`).
-- Not yet in the crate: the `Double` code table, so `BitReader::double` returns `UnknownDoubleCode`; the product tree and tessellation readers.
+- Not yet in the crate: the product tree and tessellation readers.
+- The `Double` code table's rows come from [prc-rs](https://github.com/ralovich/prc-rs) (MIT); its notice is in `src/acof/table.rs`.

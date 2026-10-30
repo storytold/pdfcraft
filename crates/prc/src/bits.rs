@@ -281,7 +281,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "the Double table is not in the crate yet"]
     fn zero_is_the_two_bit_code_with_no_sign() {
         let mut w = W::default();
         w.put(0b01, 2).put(0b1111_1111, 8);
@@ -292,7 +291,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "the Double table is not in the crate yet"]
     fn exponent_with_literal_mantissa() {
         let v = -1234.5678f64;
         let le = v.to_bits().to_le_bytes();
@@ -307,7 +305,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "the Double table is not in the crate yet"]
     fn exponent_without_mantissa_is_a_power_of_two() {
         let (n, c) = exponent_code(1023 + 3);
         let mut w = W::default();
@@ -316,7 +313,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "the Double table is not in the crate yet"]
     fn fill_back_reference_and_literal_low_byte() {
         // Mantissa bytes 6..0 = 0x05, 0xAA, 0xAA (offset 1), 0xAA (offset 2), fill 0xAA to byte 1, byte 0 = 0x11.
         let (n, c) = exponent_code(1023);
@@ -336,7 +332,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "the Double table is not in the crate yet"]
     fn a_back_reference_past_the_value_is_refused() {
         let (n, c) = exponent_code(1023);
         let mut w = W::default();
@@ -346,10 +341,10 @@ mod tests {
     }
 
     #[test]
-    fn without_the_table_a_double_is_an_error_not_a_panic() {
-        let mut r = BitReader::new(&[0x40, 0, 0]);
-        assert_eq!(r.double(), Err(PrcError::UnknownDoubleCode));
-        assert!(matches!(BitReader::new(&[0x40]).double(), Err(PrcError::Truncated(_))));
+    fn a_truncated_double_is_an_error_not_a_panic() {
+        // No code is 8 bits or shorter and a prefix of 0x17, so one byte ends inside a code.
+        assert!(matches!(BitReader::new(&[0x17]).double(), Err(PrcError::Truncated(_))));
+        assert!(matches!(BitReader::new(&[]).double(), Err(PrcError::Truncated(_))));
     }
 
     #[test]

@@ -361,7 +361,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "the Double table is not in the crate yet"]
     fn data_tokens_consume_their_fields() {
         let mut d = W::default();
         d.bit(true).double(1.5).uint(300).int(-7).string(Some("ab")).double(2.0).double(3.0);
@@ -373,7 +372,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "the Double table is not in the crate yet"]
     fn vector_extent_and_box_tokens_read_their_doubles() {
         // Vec3, Extent1D, Extent2D, BBox: 3 + 2 + 4 + 6 Doubles.
         let mut d = W::default();
