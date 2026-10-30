@@ -258,9 +258,9 @@ pub(super) fn find_with_pin(reference_or_name: &str, pin: Option<&str>, serial: 
         }
     }
     if matches.len() != 1 {
-        return Err(SignError::Crypto("the selected signing identity is absent or ambiguous; refresh identities".into()));
+        return Err(SignError::TokenChanged);
     }
-    matches.pop().ok_or_else(|| SignError::Crypto("the signing identity is absent".into()))
+    matches.pop().ok_or(SignError::TokenChanged)
 }
 
 /// Signs in on the session, mapping the PIN errors a UI can act on.
@@ -296,15 +296,21 @@ impl ExternalKey for Pkcs11Key {
 
 impl Pkcs11Key {
     fn sign_once(&self, alg: DigestAlg, msg: &[u8]) -> Result<Vec<u8>, SignError> {
-        let Ok(token) = self.module.get_token_info(self.slot) else { return Err(SignError::Crypto("the token is not present".into())) };
+        let Ok(token) = self.module.get_token_info(self.slot) else { return Err(SignError::TokenChanged) };
         if token.serial_number() != self.serial {
-            return Err(SignError::Crypto("the selected signing card was replaced".into()));
+            return Err(SignError::TokenChanged);
         }
         // Some modules (SoftHSM among them) only take a login on a read-write session.
         let session = open_session(&self.module, self.slot)?;
         // Recheck the certificate before sending a PIN to a potentially replaced card.
         if !token_certificates(&session).iter().any(|(cert, id)| cert.raw == self.certificate.raw && *id == self.ckaid) {
-            return Err(SignError::Crypto("the selected card certificate is no longer present".into()));
+            return Err(SignError::TokenChanged);
+        }
+        // Opening a session can cross a hotplug transition. Recheck after the certificate
+        // lookup, before obtaining a PIN or using any authentication policy flags.
+        let token = self.module.get_token_info(self.slot).map_err(|_| SignError::TokenChanged)?;
+        if token.serial_number() != self.serial {
+            return Err(SignError::TokenChanged);
         }
         let pin = self.pin.lock().map_err(|_| SignError::Crypto("the token PIN state is unavailable".into()))?.take();
         let protected = token.protected_authentication_path();
@@ -406,6 +412,11 @@ impl RsaDecryptionIdentity {
         if !token_certificates(&session).iter().any(|(cert, id)| cert.raw == self.certificate.raw && *id == self.ckaid) {
             return Err(SignError::Crypto("the selected encryption certificate is no longer present".into()));
         }
+        // Recheck the post-open device before sending a PIN to its session.
+        let token = self.module.get_token_info(self.slot).map_err(|_| SignError::TokenChanged)?;
+        if token.serial_number() != self.serial {
+            return Err(SignError::TokenChanged);
+        }
         let protected = token.protected_authentication_path();
         if token.login_required() {
             if protected {
@@ -444,31 +455,51 @@ impl RsaDecryptionIdentity {
 /// Enumerate RSA key-management certificates without logging into any card. Private keys
 /// hidden until login are checked when `decrypt_key` executes, never assumed absent.
 pub fn decryption_identities() -> Result<Vec<RsaDecryptionIdentity>, SignError> {
-    let clients = modules();
+    discover_available(
+        modules(),
+        |module| module.get_slots_with_token().map_err(|e| SignError::Crypto(format!("list token slots: {e}"))),
+        |module, slot| {
+            let token = module.get_token_info(slot).map_err(|e| SignError::Crypto(format!("read token information: {e}")))?;
+            if !token.token_initialized() {
+                return Ok(Vec::new());
+            }
+            let session = open_session(module, slot)?;
+            Ok(token_certificates(&session)
+                .into_iter()
+                .filter_map(|(certificate, ckaid)| {
+                    if ckaid.is_empty() || crate::envelope::recipient_problem(&certificate).is_some() {
+                        return None;
+                    }
+                    Some(RsaDecryptionIdentity {
+                        module: module.clone(),
+                        slot,
+                        serial: token.serial_number().to_owned(),
+                        ckaid,
+                        certificate,
+                        token_label: trimmed_label(token.label()),
+                    })
+                })
+                .collect())
+        },
+    )
+}
+
+// Discovery never authenticates. One provider or reader going away must not hide
+// identities on the remaining readers. Keep the no-provider diagnostic distinct.
+fn discover_available<C, S, I>(
+    clients: Vec<C>,
+    mut slots: impl FnMut(&C) -> Result<Vec<S>, SignError>,
+    mut identities: impl FnMut(&C, S) -> Result<Vec<I>, SignError>,
+) -> Result<Vec<I>, SignError> {
     if clients.is_empty() {
         return Err(SignError::Crypto("no PKCS #11 module was found; install OpenSC or configure PDFCRAFT_PKCS11_MODULE".into()));
     }
     let mut result = Vec::new();
-    for module in clients {
-        let slots = module.get_slots_with_token().map_err(|e| SignError::Crypto(format!("list token slots: {e}")))?;
-        for slot in slots {
-            let token = module.get_token_info(slot).map_err(|e| SignError::Crypto(format!("read token information: {e}")))?;
-            if !token.token_initialized() {
-                continue;
-            }
-            let session = open_session(&module, slot)?;
-            for (certificate, ckaid) in token_certificates(&session) {
-                if ckaid.is_empty() || crate::envelope::recipient_problem(&certificate).is_some() {
-                    continue;
-                }
-                result.push(RsaDecryptionIdentity {
-                    module: module.clone(),
-                    slot,
-                    serial: token.serial_number().to_owned(),
-                    ckaid,
-                    certificate,
-                    token_label: trimmed_label(token.label()),
-                });
+    for client in clients {
+        let Ok(available) = slots(&client) else { continue };
+        for slot in available {
+            if let Ok(found) = identities(&client, slot) {
+                result.extend(found);
             }
         }
     }
@@ -478,6 +509,29 @@ pub fn decryption_identities() -> Result<Vec<RsaDecryptionIdentity>, SignError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn decryption_discovery_keeps_healthy_cards_after_reader_and_provider_failures() {
+        use std::cell::RefCell;
+        let visited = RefCell::new(Vec::new());
+        let ids = discover_available(
+            vec![0, 1, 2],
+            |module| if *module == 0 { Err(SignError::Crypto("provider unavailable".into())) } else { Ok(vec![0, 1, 2]) },
+            |module, slot| {
+                visited.borrow_mut().push((*module, slot));
+                match slot {
+                    0 => Err(SignError::Crypto("token information unavailable".into())),
+                    1 => Err(SignError::Crypto("session refused".into())),
+                    _ => Ok(vec![format!("healthy-{module}")]),
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(ids, ["healthy-1", "healthy-2"]);
+        assert_eq!(*visited.borrow(), [(1, 0), (1, 1), (1, 2), (2, 0), (2, 1), (2, 2)]);
+        assert!(discover_available::<(), (), ()>(vec![], |_| Ok(vec![]), |_, _| Ok(vec![])).unwrap_err().to_string().contains("no PKCS #11 module"));
+        assert!(discover_available::<(), (), ()>(vec![()], |_| Ok(vec![]), |_, _| Ok(vec![])).unwrap().is_empty());
+    }
+
     #[test]
     fn module_path_aliases_do_not_duplicate_a_card() {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

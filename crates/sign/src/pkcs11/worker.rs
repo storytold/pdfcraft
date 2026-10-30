@@ -8,7 +8,7 @@ use zeroize::Zeroizing;
 pub(super) const ARGUMENT: &str = "--pdfcraft-pkcs11-worker-v1";
 pub(super) const LIMIT: usize = 1024 * 1024;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Identity {
     pub certificate: Vec<u8>,
@@ -73,6 +73,7 @@ fn run() -> Result<(), SignError> {
     let result = execute(request, (!pin.is_empty()).then_some(pin));
     let (status, bytes) = match result {
         Ok(bytes) => (0, bytes),
+        Err(SignError::TokenChanged) => (2, Zeroizing::new(Vec::new())),
         Err(error) => (1, Zeroizing::new(error.to_string().into_bytes())),
     };
     if bytes.len() > LIMIT {
@@ -116,7 +117,7 @@ fn execute(request: Request, pin: Option<&str>) -> Result<Zeroizing<Vec<u8>>, Si
             let reference = backend::reference(&Certificate::parse(&identity.certificate)?);
             let id = backend::find_with_pin(&reference, pin, &identity.serial)?;
             if id.certificate.raw != identity.certificate {
-                return Err(SignError::Crypto("the signing certificate changed".into()));
+                return Err(SignError::TokenChanged);
             }
             id.key.sign(alg, &message).map(Zeroizing::new)
         }

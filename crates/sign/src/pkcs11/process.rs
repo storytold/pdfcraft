@@ -149,8 +149,11 @@ fn exchange(mut command: Command, input: &[u8], timeout: Duration, cancellation:
     }
     let status = response.first().copied();
     let length = response.get(1..5).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_be_bytes).map(|n| n as usize);
-    if length != Some(response.len().saturating_sub(5)) || !matches!(status, Some(0 | 1)) {
+    if length != Some(response.len().saturating_sub(5)) || !matches!(status, Some(0..=2)) {
         return Err(SignError::Crypto("invalid smartcard worker response".into()));
+    }
+    if status == Some(2) {
+        return Err(SignError::TokenChanged);
     }
     let body = Zeroizing::new(response.get(5..).unwrap_or_default().to_vec());
     if status == Some(1) {
@@ -177,6 +180,10 @@ mod tests {
         assert!(invoke("printf '\\000\\000\\000\\000\\005x'").unwrap_err().to_string().contains("invalid"));
         assert!(invoke("printf '\\000\\000\\000\\000\\000extra'").unwrap_err().to_string().contains("invalid"));
         assert_eq!(&**invoke("printf '\\000\\000\\000\\000\\002ok'").unwrap(), b"ok");
+    }
+    #[test]
+    fn stale_selection_status_is_preserved_as_a_typed_error() {
+        assert!(matches!(invoke("printf '\\002\\000\\000\\000\\000'"), Err(SignError::TokenChanged)));
     }
     #[test]
     fn worker_deadline_is_enforced_even_when_the_driver_eventually_returns() {

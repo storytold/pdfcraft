@@ -53,6 +53,8 @@ pub fn init_crypto() {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SignError {
+    #[error("The selected card changed or is no longer uniquely available. Refresh cards and select it again.")]
+    TokenChanged,
     #[error("malformed data: {0}")]
     Malformed(String),
     #[error("not supported: {0}")]

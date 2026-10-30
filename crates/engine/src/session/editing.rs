@@ -213,7 +213,7 @@ impl Session {
                     "a batch that deletes a page with a redaction mark and adds pages can't be verified; the document was not changed".into(),
                 ));
             }
-            guard(|| shown_under_redactions(&next, &cx.redaction_marks, &cx.redaction_overlays, doc.password.as_deref()))
+            guard(|| shown_under_redactions(&next, &cx.redaction_marks, &cx.redaction_overlays, &doc.config))
                 .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))
                 .inspect_err(|_| discard_edit_callbacks(&cx))?;
         }

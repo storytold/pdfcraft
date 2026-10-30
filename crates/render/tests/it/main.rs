@@ -5,6 +5,7 @@ mod cid_fallback_query;
 mod euro_width;
 mod fill_stroke_knockout;
 mod indexed_lookup;
+mod explicit_crypt;
 mod inline_image_ei;
 mod jbig2_invariants;
 mod knockout_backdrop;

@@ -1009,7 +1009,7 @@ pub(crate) fn shown_under_redactions(
     after: &pdfcraft_cos::Document,
     marks: &[(pdfcraft_cos::ObjRef, pdfcraft_redact::Mark)],
     overlays: &[pdfcraft_cos::ObjRef],
-    password: Option<&str>,
+    credentials: &RenderConfig,
 ) -> Result<(), EditError> {
     use pdfcraft_cos::Object;
     use pdfcraft_redact::RedactError;
@@ -1046,14 +1046,15 @@ pub(crate) fn shown_under_redactions(
     let bytes = Arc::new(write_incremental(&shown, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?);
     // Page geometry comes from the document as it is now written: a page moved earlier in the batch
     // brings its own size and rotation with it.
-    let pages = pdfcraft_render::inspect(bytes.clone(), password).map_err(|e| EditError::Write(e.to_string()))?.pages;
+    let pages = pdfcraft_render::inspect_with_credentials(bytes.clone(), credentials.password.as_deref(), credentials.authenticated.as_ref()).map_err(|e| EditError::Write(e.to_string()))?.pages;
     // The model counts one entry per `/Kids` entry; the renderer one per page it draws. If they
     // disagree, a mark's index could land on another page's text, and the check cannot confirm
     // the redaction.
     if pages.len() != model.len() {
         return Err(RedactError::AmbiguousPages.into());
     }
-    let config = RenderConfig { password: password.map(Arc::from), ..Default::default() };
+    // Viewer layer and comment visibility must not hide residue.
+    let config = RenderConfig { password: credentials.password.clone(), authenticated: credentials.authenticated.clone(), ..Default::default() };
     let mut renderer = pdfcraft_render::PageRenderer::new(bytes, config);
     let mut residue = 0;
     for &pi in &marked {
