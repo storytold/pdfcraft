@@ -188,3 +188,74 @@ fn a_right_click_on_a_row_button_opens_the_row_menu() {
 fn row_name(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Pos2 {
     h.get_all_by_label(label).map(|n| n.rect()).max_by(|a, b| a.top().total_cmp(&b.top())).expect("the attachment is listed").center()
 }
+
+/// A synthetic blank page whose only diagram is an opaque embedded SWF asset. Nothing executes.
+fn legacy_flash_pdf() -> Vec<u8> {
+    pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R] >>")
+        .obj("<< /Type /Annot /Subtype /RichMedia /Rect [0 0 200 200] /RichMediaContent 5 0 R >>")
+        .obj("<< /Type /RichMediaContent /Assets 6 0 R /Configurations [<< /Subtype /Flash >>] >>")
+        .obj("<< /Kids [7 0 R] >>")
+        .obj("<< /Names [(diagram.swf) 8 0 R] >>")
+        .obj("<< /Type /Filespec /F (diagram.swf) /UF (diagram.swf) /EF << /F 9 0 R >> >>")
+        .stream("/Type /EmbeddedFile /Subtype /application#2Fx-shockwave-flash", b"FWS\x09\x10\0\0\0\x08\0\0\x0c\x01\0\0\0")
+        .build()
+}
+
+#[test]
+fn a_legacy_flash_diagram_is_explained_and_saved_from_the_attachments_panel() {
+    let dir = Dir::new("legacy-flash");
+    let target = dir.0.join("diagram.swf");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("manual.pdf", None, legacy_flash_pdf()).unwrap();
+        app.set_option("panel", "attachments").unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label_contains("Flash/SWF");
+    h.get_by_label("diagram.swf");
+    h.state_mut().pick_override = Some(vec![target.to_string_lossy().into_owned()]);
+    h.get_by_label("Save attachment…").click();
+    h.run_steps(4);
+    assert_eq!(std::fs::read(target).unwrap(), b"FWS\x09\x10\0\0\0\x08\0\0\x0c\x01\0\0\0");
+    assert_eq!(h.state().views.len(), 1, "saving the asset never opens or executes it");
+    let state = h.state();
+    let doc = state.session.get(state.views[0].id).unwrap();
+    assert!(!doc.dirty);
+    assert_eq!(*doc.bytes, legacy_flash_pdf());
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
+        page: 0,
+        rect: [10.0, 10.0, 90.0, 30.0],
+        kind: pdfcraft_engine::NewField::Date,
+        name: Some("due".into()),
+    });
+    h.run_steps(4);
+    h.get_by_label_contains("interactive form fields");
+    h.get_by_label_contains("Flash/SWF");
+}
+
+#[test]
+fn a_signed_legacy_flash_document_keeps_the_warning_and_signature_panel_action() {
+    let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
+    let digital_id = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap();
+    let mut session = pdfcraft_engine::Session::new();
+    let id = session.open("manual.pdf", None, std::sync::Arc::new(legacy_flash_pdf()), None).unwrap();
+    let signed = session.sign(id, &digital_id, pdfcraft_engine::SignOptions { page: 0, ..Default::default() }).unwrap().to_vec();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("signed-manual.pdf", None, signed).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label("Signature panel");
+    h.get_by_label_contains("At least one signature has problems.");
+    h.get_by_label_contains("Flash/SWF");
+    h.get_by_label("Signature panel").click();
+    h.run_steps(4);
+    assert_eq!(h.state().right, Some(pdfcraft_ui_egui::RightPanel::Signatures));
+}

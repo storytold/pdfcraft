@@ -694,6 +694,17 @@ impl Automation {
                 let key = document_attachment_keys(self.doc(&a)?).into_iter().find(|n| !before.contains(n)).unwrap_or_default();
                 json!({ "name": key, "document": out })
             }
+            "attachment_save" => {
+                let path = self.resolve(a.str("path")?, true)?;
+                let index = a
+                    .int("index")?
+                    .checked_sub(1)
+                    .and_then(|i| usize::try_from(i).ok())
+                    .ok_or_else(|| ToolError::InvalidArgs("index must be a positive 1-based attachment position".into()))?;
+                let bytes = self.doc(&a)?.attachment_bytes(index).map_err(failed)?;
+                write_atomic(&path, &bytes)?;
+                json!({"path":path.to_string_lossy(), "bytes":bytes.len()})
+            }
             "attachment_delete" => {
                 let edit = Edit::DeleteAttachment { key: a.str("name")?.into() };
                 self.apply(&a, edit)?

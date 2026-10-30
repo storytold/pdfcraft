@@ -286,12 +286,18 @@ fn short_name(path: &str) -> String {
 /// Offer bytes as a browser download.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
+    download_as(name, bytes, "application/pdf")
+}
+
+/// Download opaque attachments without treating them as a PDF or activating their content.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn download_as(name: &str, bytes: &[u8], mime: &str) -> Result<(), String> {
     use wasm_bindgen::JsCast;
     let err = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let array = js_sys::Uint8Array::from(bytes);
     let parts = js_sys::Array::of1(&array);
     let opts = web_sys::BlobPropertyBag::new();
-    opts.set_type("application/pdf");
+    opts.set_type(mime);
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts).map_err(err)?;
     let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(err)?;
     let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;

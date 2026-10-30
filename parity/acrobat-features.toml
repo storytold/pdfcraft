@@ -1321,7 +1321,7 @@ tier = "P0"
 milestone = "M3"
 status = "shipped"
 commands = []
-tools = ["doc_info"]
+tools = ["doc_info", "attachment_save"]
 evidence = ["crates/render/src/inspect/tests.rs::attachments_of_both_kinds_are_listed_and_extracted", "crates/ui-egui/tests/it/attachment_row.rs::the_right_click_menu_opens_saves_and_deletes", "crates/ui-egui/tests/it/attachment_row.rs::double_clicking_a_pdf_attachment_opens_it_in_a_new_tab"]
 notes = "Each row has Save, Open in a new tab (PDFs) and Delete (the document's own attachments) buttons, the same items on a right-click, and a double-click that opens a PDF in a new tab or saves any other file (#3466). Not yet: Acrobat's Search attachments, and opening a non-PDF attachment in another program (it is saved instead)."
 
@@ -9869,7 +9869,19 @@ status = "na"
 commands = []
 tools = []
 evidence = []
-notes = "Flash is end-of-life; content is preserved but not played"
+notes = "Flash is end-of-life; content is preserved but not played. RichMedia detection and safe asset extraction are tracked separately by misc.legacy-flash-fallback (#1276)."
+
+[[feature]]
+id = "misc.legacy-flash-fallback"
+title = "Explain blank legacy Flash diagrams and save embedded RichMedia assets"
+area = "N"
+tier = "P2"
+milestone = "M12"
+status = "partial"
+commands = []
+tools = ["doc_info", "attachment_save"]
+evidence = ["crates/render/src/inspect/tests.rs::rich_media_assets_are_detected_by_configuration_name_or_mime_and_never_follow_external_files", "crates/render/src/inspect/tests.rs::rich_media_inventory_caps_assets_and_work_and_reports_truncation", "crates/automation/tests/it/automation.rs::legacy_flash_is_explained_and_its_asset_can_be_saved_without_changing_the_pdf", "crates/ui-egui/tests/it/attachment_row.rs::a_legacy_flash_diagram_is_explained_and_saved_from_the_attachments_panel", "crates/render/src/inspect/tests.rs::duplicate_rich_media_display_keys_do_not_hide_flash_indicators", "crates/automation/tests/it/automation.rs::attachment_save_tracks_annotation_deletion_and_undo_redo", "crates/automation/tests/it/automation.rs::attachment_save_uses_raw_document_keys_after_budget_omissions"]
+notes = "Recognises RichMedia Flash configurations, SWF asset names and shockwave-flash MIME streams; explains blank diagrams even alongside form/security notices. Checks Flash indicators even in duplicate display keys. Lists RichMedia assets in Attachments and saves without executing them, including password-protected files; document and RichMedia extraction retain raw key identity, and annotation deletion refreshes attachment positions, including undo/redo; attachment_save checks the write root and writes atomically. Inventory is bounded to 1024 assets, 8192 work visits and name-tree depth 32, with truncation warnings. No Flash playback, static conversion, external-file fetching or detection of other legacy multimedia containers; see docs/legacy-flash.md."
 
 [[feature]]
 id = "misc.preferences-dialog"

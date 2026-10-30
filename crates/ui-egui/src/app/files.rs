@@ -373,7 +373,7 @@ impl PdfCraftApp {
     pub fn attachment_action(&mut self, doc: DocId, index: usize, open: bool) {
         let Some(d) = self.session.get(doc) else { return };
         let Some(att) = d.info.attachments.get(index).cloned() else { return };
-        let data = pdfcraft_render::attachment_data(&d.bytes, d.password.as_deref(), &att);
+        let data = d.attachment_bytes(index);
         match (data, open) {
             (Err(e), _) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]),
             (Ok(bytes), true) => {
@@ -393,7 +393,10 @@ impl PdfCraftApp {
                     },
                 );
                 #[cfg(target_arch = "wasm32")]
-                self.notify_fmt("Downloading attachments on the web arrives with M3.10 ({n} bytes ready)", &[("n", &bytes.len().to_string())]);
+                match crate::editing::download_as(&crate::files::attachment_file_name(&att.name), &bytes, "application/octet-stream") {
+                    Ok(()) => self.notify_fmt("Saved {name}", &[("name", &att.name)]),
+                    Err(e) => self.notify_fmt("Couldn't save: {e}", &[("e", &e)]),
+                }
             }
         }
     }

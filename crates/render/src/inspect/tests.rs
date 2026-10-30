@@ -962,11 +962,20 @@ fn embedded_file_keys_sharing_a_long_string_keep_it_within_a_budget() {
     let mut info = DocInfo::default();
     Inspector::new(&doc).fill(&mut info);
     let kept: usize =
-        info.attachments.iter().map(|a| a.name.len() + if let AttachmentSource::Document { key } = &a.source { key.len() } else { 0 }).sum();
+        info.attachments.iter().map(|a| a.name.len() + if let AttachmentSource::Document { key, .. } = &a.source { key.len() } else { 0 }).sum();
     assert!(!info.attachments.is_empty());
     // Past the budget an attachment still has the generic name.
     let generic = info.attachments.len() * "attachment".len();
     assert!(kept <= MAX_LINK_ATTACHMENT_TEXT_BYTES + generic, "{kept} bytes kept");
+    let identities: usize = info
+        .attachments
+        .iter()
+        .map(|a| match &a.source {
+            AttachmentSource::Document { raw_key: Some(raw_key), .. } => raw_key.len(),
+            _ => 0,
+        })
+        .sum();
+    assert!(identities <= MAX_LINK_ATTACHMENT_TEXT_BYTES, "raw identities are bounded by the same admission budget");
 }
 
 /// An embedded file the listing keeps is extracted, though earlier keys the listing could not
@@ -1869,4 +1878,100 @@ trailer << /Root 1 0 R >>
     let p = &info.pages[0];
     assert!((p.width - 3874.96).abs() < 0.1, "width expected ~3874.96, got {}", p.width);
     assert!((p.height - 5493.54).abs() < 0.1, "height expected ~5493.54, got {}", p.height);
+}
+
+/// A RichMedia name tree, including malformed/cyclic cases, with two distinguishable files.
+fn rich_media_pdf(config: &str, names: &str, kids: &str, filename: &str, mime: &str, embedded: bool) -> Vec<u8> {
+    let ef = if embedded { "/EF << /F 7 0 R >>" } else { "" };
+    pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R] >>")
+        .obj(format!("<< /Subtype /RichMedia /Rect [0 0 200 200] /RichMediaContent << /Configurations [{config}] /Assets 5 0 R >> >>"))
+        .obj(format!("<< /Names [{names}] /Kids [{kids}] >>"))
+        .obj(format!("<< /Type /Filespec /UF ({filename}) {ef} >>"))
+        .stream(&format!("/Type /EmbeddedFile /Subtype /{mime}"), b"first")
+        .obj("<< /Type /Filespec /F (other.bin) /EF << /F 9 0 R >> >>")
+        .stream("/Type /EmbeddedFile", b"second")
+        .build()
+}
+
+#[test]
+fn rich_media_assets_are_detected_by_configuration_name_or_mime_and_never_follow_external_files() {
+    for (config, key, filename, mime, flash) in [
+        ("<< /Subtype /Flash >>", "opaque", "opaque", "application#2Foctet-stream", true),
+        ("", "diagram.SWF", "opaque", "application#2Foctet-stream", true),
+        ("", "opaque", "diagram.swf", "application#2Foctet-stream", true),
+        ("", "opaque", "opaque", "application#2Fx-shockwave-flash", true),
+        ("<< /Subtype /Video >>", "clip.mp4", "clip.mp4", "video#2Fmp4", false),
+    ] {
+        let bytes = rich_media_pdf(config, &format!("({key}) 6 0 R ({key}) 8 0 R"), "5 0 R", filename, mime, true);
+        let info = inspect(Arc::new(bytes.clone()), None).unwrap();
+        assert_eq!(info.attachments.len(), 1, "a duplicate key lists only its first file; a cycle terminates");
+        assert_eq!(info.has_legacy_flash, flash, "{config}, {key}, {filename}, {mime}");
+        assert_eq!(info.warnings.iter().filter(|w| w.contains("Flash/SWF")).count(), usize::from(flash));
+        assert_eq!(attachment_data(&bytes, None, &info.attachments[0]).unwrap(), b"first", "the file listed is the file extracted");
+    }
+    let bytes = rich_media_pdf("<< /Subtype /Flash >>", "(diagram.swf) 6 0 R", "", "../../external.swf", "", false);
+    let info = inspect(Arc::new(bytes.clone()), None).unwrap();
+    assert!(info.has_legacy_flash);
+    assert!(attachment_data(&bytes, None, &info.attachments[0]).unwrap_err().contains("external reference"));
+    let bytes = rich_media_pdf("<< /Subtype /Flash >>", "", "", "", "", false);
+    let info = inspect(Arc::new(bytes), None).unwrap();
+    assert!(info.has_legacy_flash, "an unsupported diagram is explained even with no extractable asset");
+    assert!(info.attachments.is_empty());
+}
+
+#[test]
+fn rich_media_inventory_caps_assets_and_work_and_reports_truncation() {
+    let names = (0..1100).map(|i| format!("(asset-{i}.swf) 6 0 R ")).collect::<String>();
+    let bytes = rich_media_pdf("", &names, "5 0 R", "diagram.swf", "", true);
+    let info = inspect(Arc::new(bytes), None).unwrap();
+    assert_eq!(info.attachments.len(), 1024);
+    assert!(info.warnings.iter().any(|w| w.contains("inventory limit")));
+    // Large malformed configuration arrays consume work without allocating an asset per entry.
+    let configs = "null ".repeat(9000);
+    let bytes = rich_media_pdf(&configs, "(diagram.swf) 6 0 R", "", "diagram.swf", "", true);
+    let info = inspect(Arc::new(bytes), None).unwrap();
+    assert!(info.attachments.is_empty());
+    assert!(info.warnings.iter().any(|w| w.contains("inventory limit")));
+}
+
+#[test]
+fn rich_media_extraction_uses_the_listed_raw_key_when_a_decoded_alias_exceeds_the_budget() {
+    // UTF-16BE and PDFDocEncoding encode the same text with different raw lengths.
+    assert_eq!(super::navigation::text_string(&[0xfe, 0xff, 0, 0xff]), super::navigation::text_string(&[0xff]));
+    let bytes = rich_media_pdf("<< /Subtype /Flash >>", "<FEFF00FF> 6 0 R <FF> 8 0 R", "5 0 R", "first.swf", "", true);
+    let doc = Document::load_mem(&bytes).unwrap();
+    let inspector = Inspector::new(&doc);
+    let annot = doc.get_dictionary((4, 0)).unwrap();
+    for (mut text_budget, expected) in [(2, b"second".as_slice()), (128, b"first".as_slice())] {
+        let mut info = DocInfo::default();
+        inspector.rich_media(&mut info, 0, 0, annot, &mut text_budget, &mut super::rich_media::MediaBudget::default());
+        assert!(info.has_legacy_flash);
+        assert_eq!(info.attachments.len(), 1, "only the first listed decoded key is kept; cyclic Kids terminate");
+        let attachment = &info.attachments[0];
+        assert_eq!(attachment.size, Some(expected.len()), "inventory identifies the expected file");
+        assert_eq!(attachment_data(&bytes, None, attachment).unwrap(), expected, "extraction must return the listed file's bytes");
+    }
+}
+
+#[test]
+fn duplicate_rich_media_display_keys_do_not_hide_flash_indicators() {
+    for by_mime in [false, true] {
+        let bytes = rich_media_pdf("", "<FEFF00FF> 6 0 R <FF> 8 0 R", "5 0 R", "plain.bin", "application#2Foctet-stream", true);
+        let mut doc = Document::load_mem(&bytes).unwrap();
+        doc.get_object_mut((8, 0)).unwrap().as_dict_mut().unwrap().set("F", Object::string_literal(if by_mime { "other.bin" } else { "other.swf" }));
+        if by_mime {
+            doc.get_object_mut((9, 0)).unwrap().as_stream_mut().unwrap().dict.set("Subtype", Object::Name(b"application/x-shockwave-flash".to_vec()));
+        }
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        let info = inspect(Arc::new(bytes.clone()), None).unwrap();
+        assert!(info.has_legacy_flash, "a duplicate display key must not hide the second asset's Flash indicator (MIME: {by_mime})");
+        assert!(info.warnings.iter().any(|warning| warning == LEGACY_FLASH_WARNING));
+        assert_eq!(info.attachments.len(), 1, "listing still keeps only the first display key");
+        assert_eq!(info.attachments[0].name, "plain.bin");
+        assert_eq!(attachment_data(&bytes, None, &info.attachments[0]).unwrap(), b"first");
+    }
 }

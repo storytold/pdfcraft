@@ -51,10 +51,12 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         Edit::AddAttachment { .. } | Edit::DeleteAttachment { .. } => Scope::Full,
         // A file attachment also changes the Attachments list.
         Edit::AddAnnotation(a) if matches!(a.shape, Shape::Attachment { .. }) => Scope::Full,
+        // A deletion can also remove pop-ups/replies and shift the annotation indexes stored
+        // by FileAttachment and RichMedia sources. Rebuild their inventory and warnings.
+        Edit::DeleteAnnotation { .. } => Scope::Full,
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
         | Edit::AddCustomStamp { .. }
-        | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
         | Edit::ReplyToAnnotation { .. }
         | Edit::SetAnnotationStatus { .. }

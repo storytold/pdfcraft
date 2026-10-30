@@ -28,6 +28,7 @@ mod core;
 mod model;
 mod navigation;
 mod resources;
+mod rich_media;
 
 #[cfg(test)]
 use annotations::{MAX_ANNOTATION_BYTES, MAX_LINK_ATTACHMENT_TEXT_BYTES, MAX_REMOTE_FILE_SPEC_BYTES, retained};
@@ -44,6 +45,7 @@ use navigation::{OUTLINE_DEPTH, OUTLINE_WINDOW};
 pub use resources::attachment_data;
 #[cfg(test)]
 use resources::{xfa_config_dynamic_render, xfa_packet_text};
+pub use rich_media::LEGACY_FLASH_WARNING;
 
 #[derive(Clone, Debug, Default)]
 pub struct DocInfo {
@@ -61,6 +63,8 @@ pub struct DocInfo {
     pub encrypted: bool,
     pub tagged: bool,
     pub has_javascript: bool,
+    /// A legacy Flash configuration or SWF asset was found in a RichMedia annotation.
+    pub has_legacy_flash: bool,
     /// The form is (also) an XFA form, which isn't read yet (`form.xfa-*` in the parity list).
     pub xfa: Option<Xfa>,
     pub pages: Vec<PageInfo>,

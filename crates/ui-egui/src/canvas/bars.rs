@@ -124,7 +124,12 @@ pub(super) fn notices(
     }
     if let Some((icon, color, template, arg)) = signed {
         let mut open = false;
-        notice_bar(ui, t, icon, color, crate::i18n::fmt(tl!(template), &[("by", &arg)]), |ui| {
+        let mut text = crate::i18n::fmt(tl!(template), &[("by", &arg)]);
+        if info.has_legacy_flash {
+            text.push(' ');
+            text.push_str(tl!(pdfcraft_render::LEGACY_FLASH_WARNING));
+        }
+        notice_bar(ui, t, icon, color, text, |ui| {
             if crate::widgets::pill_button(ui, tl!("Signature panel"), false).clicked() {
                 open = true;
             }
@@ -201,7 +206,17 @@ pub(super) fn notices(
     } else {
         None
     };
-    let (icon, text, fields) = msg?;
+    let (icon, mut text, fields) = msg?;
+    // A form/security/repair notice must not hide the reason a Flash diagram stays blank.
+    if info.has_legacy_flash {
+        let flash = tl!(pdfcraft_render::LEGACY_FLASH_WARNING);
+        if text == pdfcraft_render::LEGACY_FLASH_WARNING {
+            text = flash.to_string();
+        } else {
+            text.push(' ');
+            text.push_str(flash);
+        }
+    }
     notice_bar(ui, t, icon, t.accent_text, text, |ui| {
         if icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked() {
             view.notice_dismissed = true;

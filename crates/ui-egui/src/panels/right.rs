@@ -289,7 +289,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             let is_pdf = a.name.to_lowercase().ends_with(".pdf");
                             // Only an attachment of the document itself can be deleted here.
                             let deletable = match &a.source {
-                                pdfcraft_render::AttachmentSource::Document { key } if attachable => Some(key),
+                                pdfcraft_render::AttachmentSource::Document { key, .. } if attachable => Some(key),
                                 _ => None,
                             };
                             // The whole row answers a double-click and a right-click (#3466), below

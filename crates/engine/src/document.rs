@@ -198,6 +198,13 @@ impl Document {
         pdfcraft_create::image_file(&editor.cos, img.object.ok_or("the image has no object")?)
     }
 
+    /// Decode one embedded attachment, in `info.attachments` order (0-based), without opening
+    /// or executing it. Uses the document's working bytes/password and the decoder's size cap.
+    pub fn attachment_bytes(&self, index: usize) -> Result<Vec<u8>, String> {
+        let att = self.info.attachments.get(index).ok_or_else(|| format!("attachment {} does not exist", index.saturating_add(1)))?;
+        pdfcraft_render::attachment_data(&self.bytes, self.password.as_deref(), att)
+    }
+
     /// Edit a PDF ▸ Edit text: the paragraphs on `page` (0-based).
     pub fn text_blocks(&self, page: usize) -> Vec<pdfcraft_edit::TextBlock> {
         self.editor.as_ref().and_then(|e| e.text_blocks(page).ok()).map(|b| b.as_ref().clone()).unwrap_or_default()
