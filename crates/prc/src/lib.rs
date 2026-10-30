@@ -13,10 +13,13 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod acof;
+mod arrays;
 mod bits;
 mod container;
+mod entity;
 mod error;
 mod schema;
+mod tess;
 #[cfg(test)]
 mod testw;
 
@@ -24,3 +27,4 @@ pub use bits::BitReader;
 pub use container::{FileStructure, MAX_FILE_STRUCTURES, MAX_INFLATED_BYTES, PRC_READER_VERSION, PrcFile, PrcHeader, SectionKind, UniqueId};
 pub use error::PrcError;
 pub use schema::Schema;
+pub use tess::{Tessellation, TriangleMesh, TriangleStyle};

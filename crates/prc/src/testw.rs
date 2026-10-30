@@ -94,8 +94,73 @@ impl W {
         self
     }
 
+    /// A Huffman container [WD 12.2]: `leaves` are `(symbol, stored code, length)`, each value
+    /// is emitted as its leaf's code.
+    pub(crate) fn huffman(&mut self, nbits: u32, len_width: u32, leaves: &[(u32, u32, u32)], values: &[i32]) -> &mut Self {
+        let mask = (1u32 << nbits) - 1;
+        let codes: Vec<(u32, u32)> = values
+            .iter()
+            .map(|&v| {
+                let l = leaves.iter().find(|l| l.0 & mask == v.cast_unsigned() & mask).expect("a leaf per value");
+                (l.1, l.2)
+            })
+            .collect();
+        self.huffman_raw(nbits, len_width, leaves, &codes)
+    }
+
+    /// As [`Self::huffman`] with each element's `(code, length)` given.
+    pub(crate) fn huffman_raw(&mut self, nbits: u32, len_width: u32, leaves: &[(u32, u32, u32)], codes: &[(u32, u32)]) -> &mut Self {
+        let mut blob = Self::huffman_head(nbits, len_width, leaves);
+        lsb(&mut blob, u32::try_from(codes.len()).expect("a short test array"), 32);
+        for &(c, l) in codes {
+            for i in (0..l).rev() {
+                blob.push((c >> i) & 1 == 1);
+            }
+        }
+        self.huffman_words(blob)
+    }
+
+    /// A Huffman container whose element count is `count` with no elements written.
+    pub(crate) fn huffman_count(&mut self, nbits: u32, len_width: u32, leaves: &[(u32, u32, u32)], count: u32) -> &mut Self {
+        let mut blob = Self::huffman_head(nbits, len_width, leaves);
+        lsb(&mut blob, count, 32);
+        self.huffman_words(blob)
+    }
+
+    fn huffman_head(nbits: u32, len_width: u32, leaves: &[(u32, u32, u32)]) -> Vec<bool> {
+        let mut blob = Vec::new();
+        lsb(&mut blob, u32::try_from(leaves.len()).expect("a short test table"), nbits + 1);
+        lsb(&mut blob, len_width, 8);
+        for &(s, c, l) in leaves {
+            lsb(&mut blob, s, nbits);
+            lsb(&mut blob, l, len_width);
+            lsb(&mut blob, c, l);
+        }
+        blob
+    }
+
+    /// The payload as whole 32-bit words of LSB-first bytes, then the last word's used bits.
+    fn huffman_words(&mut self, mut blob: Vec<bool>) -> &mut Self {
+        let bits = blob.len();
+        let words = bits.div_ceil(32);
+        blob.resize(words * 32, false);
+        self.uint(u32::try_from(words).expect("a short test payload"));
+        for byte in blob.chunks(8) {
+            let b = byte.iter().enumerate().fold(0u64, |a, (i, &x)| a | (u64::from(x) << i));
+            self.put(b, 8);
+        }
+        self.uint(u32::try_from(bits - (words - 1) * 32).expect("at most 32"))
+    }
+
     /// The bits packed MSB-first, the last byte zero-padded.
     pub(crate) fn bytes(&self) -> Vec<u8> {
         self.bits.chunks(8).map(|c| c.iter().enumerate().fold(0u8, |a, (i, &b)| a | (u8::from(b) << (7 - i)))).collect()
+    }
+}
+
+/// The low `n` bits of `v`, least significant first.
+fn lsb(blob: &mut Vec<bool>, v: u32, n: u32) {
+    for i in 0..n {
+        blob.push((v >> i) & 1 == 1);
     }
 }
