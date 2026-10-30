@@ -250,6 +250,9 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, view: &mut DocView) -> bool {
     result
 }
 
+/// Pointer handling for the group selection on `page`: a marquee selects the objects it touches,
+/// and dragging the selection moves it, kept on its page. Returns `true` while the selection owns
+/// the pointer.
 fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -> bool {
     let PageToolContext { ui, resp, xf, ptr, page, doc, .. } = cx;
     let pointer = ptr.pos;
@@ -491,6 +494,8 @@ fn delete_edit(page: usize, mut targets: Vec<ObjectTarget>) -> Option<Edit> {
     }
 }
 
+/// Draws the selected objects on `page` (moved along with a drag in progress), a box around a
+/// group, and the marquee while one is being drawn.
 pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, selection: &ObjectSelection) {
     if selection.page != Some(page) {
         return;
