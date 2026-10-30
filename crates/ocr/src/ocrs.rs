@@ -210,8 +210,9 @@ impl Ocr {
     }
 
     /// The words in a page, `rgb` (1 or 3 bytes per pixel) prepared as `page`. A page at least
-    /// twice the detector's input along an axis is detected in overlapping tiles ([`crate::tiles`]),
-    /// each word kept by the tile whose core holds its centre and moved back to page pixels.
+    /// twice the detector's input along an axis whose text is small once shrunk to that input
+    /// ([`crate::pitch`]) is detected in overlapping tiles ([`crate::tiles`]), each word kept by the
+    /// tile whose core holds its centre and moved back to page pixels.
     fn detect_words(&self, rgb: &[u8], width: u32, height: u32, page: &ocrs::OcrInput) -> Result<Vec<RotatedRect>, OcrError> {
         let err = |e: &dyn std::fmt::Display| OcrError::Recognize(e.to_string());
         let tiles = self.detector_input.map(|input| crate::tiles::tiles(width, height, input)).unwrap_or_default();
@@ -220,6 +221,10 @@ impl Ocr {
         let (Some(channels), Some(input), true) = (channels, self.detector_input, tiles.len() > 1) else {
             return self.engine.detect_words(page).map_err(|e| err(&e));
         };
+        // Large print reads as well whole, at a quarter of the detection time.
+        if !crate::pitch::lines(rgb, width, height, channels, input).wants_tiles() {
+            return self.engine.detect_words(page).map_err(|e| err(&e));
+        }
         let mut words = Vec::new();
         for tile in &tiles {
             let pixels = crate::tiles::crop(rgb, width, channels, tile.crop)

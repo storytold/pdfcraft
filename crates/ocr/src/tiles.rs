@@ -6,7 +6,8 @@
 //! (2 × 2 tiles for a full page at 300 dpi), each tile reaching a little into its neighbours so
 //! that a word on a cut is whole in one of them. Words are detected tile by tile; a word is kept
 //! only by the tile whose core cell holds its centre, so a word seen twice in an overlap counts
-//! once. Lines are then formed and recognised on the whole page, as without tiles.
+//! once. Lines are then formed and recognised on the whole page, as without tiles. Only a page
+//! whose text is small once shrunk is tiled; [`crate::pitch`] decides.
 
 /// How far a tile reaches past its core cell into each neighbour, as a fraction of the page along
 /// that axis. MDPBench (de/es/fr) was measured with 4 %.
