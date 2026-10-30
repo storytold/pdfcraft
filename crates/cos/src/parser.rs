@@ -904,6 +904,102 @@ mod tests {
         assert!(entries.iter().map(|e| e.bytes.len()).sum::<usize>() <= SHARED_BYTES);
     }
 
+    /// `<< /K tag >>` padded with spaces to exactly `len` bytes: large in bytes, few nodes.
+    fn padded(len: usize, tag: usize) -> String {
+        let pad = len.checked_sub(format!("<< /K {tag} >>").len()).expect("room for the padding");
+        format!("<< /K {tag} {}>>", " ".repeat(pad))
+    }
+
+    fn kept(dicts: &SharedDicts) -> Vec<Vec<u8>> {
+        dicts.entries.lock().unwrap().iter().map(|e| e.bytes.to_vec()).collect()
+    }
+
+    #[test]
+    fn a_dictionary_of_exactly_the_sharing_size_is_kept_and_one_byte_less_is_not() {
+        let (at_size, below) = (padded(SHARE_FROM, 1), padded(SHARE_FROM - 1, 2));
+        assert_eq!((at_size.len(), below.len()), (SHARE_FROM, SHARE_FROM - 1));
+        let dicts = SharedDicts::default();
+        let read = |d: &str| shared_obj(&format!("<< /S {d} >>"), &dicts);
+        let (first, second) = (read(&below), read(&below));
+        assert!(kept(&dicts).is_empty());
+        assert!(!at(&second, &[b"S"]).shares(at(&first, &[b"S"])));
+        let (first, second) = (read(&at_size), read(&at_size));
+        assert_eq!(kept(&dicts), [at_size.as_bytes()]);
+        assert!(at(&second, &[b"S"]).shares(at(&first, &[b"S"])));
+        assert_eq!(second, obj(&format!("<< /S {at_size} >>")));
+    }
+
+    #[test]
+    fn the_kept_dictionaries_stay_within_their_byte_budget() {
+        // Few entries but many bytes each, so the byte budget is reached before the entry count.
+        let half = SHARED_BYTES / 2 + 1;
+        let (a, b, c) = (padded(half, 1), padded(half, 2), padded(half, 3));
+        let dicts = SharedDicts::default();
+        let read = |d: &str, dicts: &SharedDicts| shared_obj(&format!("<< /S {d} >>"), dicts);
+        // Two halves don't fit together: the second replaces the first, which no copy reused.
+        read(&a, &dicts);
+        read(&b, &dicts);
+        assert_eq!(kept(&dicts), [b.as_bytes()]);
+        // A kept dictionary that a copy reused stays; the one that does not fit beside it is not kept.
+        let again = read(&b, &dicts);
+        read(&c, &dicts);
+        assert_eq!(kept(&dicts), [b.as_bytes()]);
+        assert_eq!(again, obj(&format!("<< /S {b} >>")));
+        // A dictionary of exactly the budget is kept; one byte more never is.
+        let fresh = SharedDicts::default();
+        read(&padded(SHARED_BYTES + 1, 4), &fresh);
+        assert!(kept(&fresh).is_empty());
+        let whole = padded(SHARED_BYTES, 5);
+        read(&whole, &fresh);
+        assert_eq!(kept(&fresh), [whole.as_bytes()]);
+    }
+
+    #[test]
+    fn a_repeated_key_reads_through_a_kept_dictionary_as_it_reads_afresh() {
+        // The same name twice in one large dictionary: the copy taken from the table keeps
+        // whichever entry a fresh parse keeps.
+        let text = format!("<< /S {} >>", shadings(1000).replacen(">>", "/Sh5 777 0 R >>", 1));
+        let dicts = SharedDicts::default();
+        let (first, second) = (shared_obj(&text, &dicts), shared_obj(&text, &dicts));
+        assert!(at(&second, &[b"S"]).shares(at(&first, &[b"S"])));
+        let fresh = obj(&text);
+        assert_eq!(at(&second, &[b"S"]).get(b"Sh5"), at(&fresh, &[b"S"]).get(b"Sh5"));
+        assert_eq!(at(&second, &[b"S"]).len(), at(&fresh, &[b"S"]).len());
+        assert_eq!(second, fresh);
+    }
+
+    #[test]
+    fn a_damaged_large_dictionary_reads_through_sharing_as_it_reads_without() {
+        let big = shadings(1000);
+        let damaged = [
+            big.replacen("/Sh500 500 0 R", "/Sh500 500 0 R ) ]", 1),       // stray tokens among the entries
+            big.replacen(">>", "/Last >>", 1),                             // a key without a value
+            big.replacen("/Sh500 500 0 R", "(key) 500 /Sh500 500 0 R", 1), // a string where a key belongs
+            big.replacen(">>", "", 1),                                     // no end of its own
+        ];
+        for (n, d) in damaged.iter().enumerate() {
+            for text in [format!("<< /S {d} >>"), format!("[{d}]"), format!("[{d}")] {
+                let fresh = Lexer::new(text.as_bytes(), 0).object().ok();
+                let dicts = SharedDicts::default();
+                // The second read can take what the first one kept; both read as a fresh parse.
+                for read in 0..2 {
+                    assert_eq!(Lexer::new(text.as_bytes(), 0).sharing(&dicts).object().ok(), fresh, "case {n}, read {read}: {}", &text[..40]);
+                }
+                // Whatever was kept reads, from its own bytes, as the dictionary kept for them.
+                for e in dicts.entries.lock().unwrap().iter() {
+                    let alone = obj(&format!("<< /S {} >>", String::from_utf8_lossy(&e.bytes)));
+                    assert_eq!(at(&alone, &[b"S"]), &e.dict, "case {n}");
+                }
+            }
+        }
+        // A copy cut short by the end of the data is not taken for the kept dictionary.
+        let dicts = SharedDicts::default();
+        shared_obj(&format!("<< /S {big} >>"), &dicts);
+        let cut = format!("<< /S {}", &big[..big.len() - 1]);
+        assert!(Lexer::new(cut.as_bytes(), 0).object().is_err());
+        assert!(Lexer::new(cut.as_bytes(), 0).sharing(&dicts).object().is_err());
+    }
+
     #[test]
     fn one_object_has_a_node_budget() {
         // A wide array (from a tiny compressed object stream) must not grow without bound.
