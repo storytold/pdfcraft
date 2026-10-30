@@ -888,12 +888,16 @@ mod tests {
     #[test]
     fn text_applying_would_refuse_is_caught_in_the_dialog() {
         let mut d = MarksDraft::default();
-        d.hf.text[5] = "Страница <<1>> из <<n>> / Page <<1>> of <<n>>".into();
-        assert_eq!(undrawable(MarkKind::HeaderFooter, &d), Some('С'), "#2013: refused before OK, not after");
+        // Inter draws Cyrillic and Greek, so the dialog accepts them now.
+        d.hf.text[5] = "Страница <<1>> из <<n>> / Page <<1>> of <<n>> — Ελληνικά".into();
+        assert_eq!(undrawable(MarkKind::HeaderFooter, &d), None);
+        // Han is in neither the standard fonts nor Inter: still refused before OK.
+        d.hf.text[5] = "你好 <<1>> of <<n>>".into();
+        assert_eq!(undrawable(MarkKind::HeaderFooter, &d), Some('你'), "#2013: refused before OK, not after");
         d.hf.text[5] = "Page <<1>> of <<n>> — café".into();
         assert_eq!(undrawable(MarkKind::HeaderFooter, &d), None);
-        d.wm.text = "ΑΠΟΡΡΗΤΟ".into();
-        assert_eq!(undrawable(MarkKind::Watermark, &d), Some('Α'));
+        d.wm.text = "你好".into();
+        assert_eq!(undrawable(MarkKind::Watermark, &d), Some('你'));
         d.use_file = true;
         assert_eq!(undrawable(MarkKind::Watermark, &d), None, "a picture watermark draws no text");
         assert_eq!(undrawable(MarkKind::Background, &d), None);
