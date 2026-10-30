@@ -3,6 +3,7 @@
 //! Files are picked asynchronously and used on a later frame: desktop builds through `pickers`
 //! (a blocking picker crashes the app on macOS), browsers through `requests`.
 
+use crate::file_filter::AddFilterAnyCase as _;
 use std::sync::Arc;
 
 use pdfcraft_engine::{DocId, Edit, SplitBy};
@@ -61,16 +62,16 @@ pub(crate) fn installed_font_files(ctx: &egui::Context) -> Option<Vec<pdfcraft_e
 fn files_picker(purpose: FilePurpose) -> rfd::AsyncFileDialog {
     let dialog = rfd::AsyncFileDialog::new();
     if matches!(purpose, FilePurpose::TextFont { .. }) {
-        return dialog.add_filter("TrueType / OpenType font", &["ttf", "otf"]);
+        return dialog.add_filter_any_case("TrueType / OpenType font", &["ttf", "otf"]);
     }
     if purpose == FilePurpose::RedactWords {
-        return dialog.add_filter(tl!("Text"), &["txt"]);
+        return dialog.add_filter_any_case(tl!("Text"), &["txt"]);
     }
     if !matches!(purpose, FilePurpose::CreateMultiple | FilePurpose::CreateMultipleSeparate | FilePurpose::InsertPages | FilePurpose::Combine) {
-        return dialog.add_filter("PDF", &["pdf"]);
+        return dialog.add_filter_any_case("PDF", &["pdf"]);
     }
     let all: Vec<&str> = std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE).collect();
-    dialog.add_filter(tl!("PDF, images and text"), &all).add_filter("PDF", &["pdf"])
+    dialog.add_filter_any_case(tl!("PDF, images and text"), &all).add_filter_any_case("PDF", &["pdf"])
 }
 
 /// The Replace Pages dialog: the chosen file and the ranges (1-based, inclusive).
@@ -898,7 +899,7 @@ impl PdfCraftApp {
                 Some(_) => {}
                 None => {
                     let dialog = rfd::AsyncFileDialog::new()
-                        .add_filter(tl!("Comment and form data").to_string(), &extensions)
+                        .add_filter_any_case(tl!("Comment and form data").to_string(), &extensions)
                         .set_title(tl!("Import data").to_string());
                     let target = self.active_ids().map(|(_, id)| id);
                     self.ask_one(crate::pickers::Ask::File(dialog), target, import);
@@ -939,7 +940,7 @@ impl PdfCraftApp {
                 None => {
                     let dialog = rfd::AsyncFileDialog::new()
                         .set_title(tl!("Export").to_string())
-                        .add_filter(ext.to_uppercase(), &[ext])
+                        .add_filter_any_case(ext.to_uppercase(), &[ext])
                         .set_file_name(format!("{stem}.{ext}"));
                     let dialog = crate::editing::in_document_folder(dialog, folder.as_deref());
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, write);
@@ -959,7 +960,7 @@ impl PdfCraftApp {
         {
             let dialog = rfd::AsyncFileDialog::new()
                 .set_title(tl!("Select data files to merge").to_string())
-                .add_filter(tl!("Form data and PDF forms").to_string(), &["fdf", "xfdf", "pdf"]);
+                .add_filter_any_case(tl!("Form data and PDF forms").to_string(), &["fdf", "xfdf", "pdf"]);
             self.ask(crate::pickers::Ask::Files(dialog), None, |app, paths| {
                 let mut files = Vec::new();
                 for p in paths {
@@ -1004,7 +1005,7 @@ impl PdfCraftApp {
                 None => {
                     let dialog = rfd::AsyncFileDialog::new()
                         .set_title(tl!("Save the spreadsheet").to_string())
-                        .add_filter("CSV", &["csv"])
+                        .add_filter_any_case("CSV", &["csv"])
                         .set_file_name("report.csv");
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, write);
                 }
@@ -1047,22 +1048,22 @@ impl PdfCraftApp {
                     let title = if comments { tl!("Export comments") } else { tl!("Export form data") };
                     let d = rfd::AsyncFileDialog::new().set_title(title).set_file_name(format!("{stem}.xfdf"));
                     let d = if comments {
-                        d.add_filter("XFDF", &["xfdf"]).add_filter("FDF", &["fdf"])
+                        d.add_filter_any_case("XFDF", &["xfdf"]).add_filter_any_case("FDF", &["fdf"])
                     } else if xfa {
                         // An XFA form's data, as Acrobat exports it, first.
                         d.set_file_name(format!("{stem}.xml"))
-                            .add_filter("XML", &["xml"])
-                            .add_filter("XDP", &["xdp"])
-                            .add_filter("XFDF", &["xfdf"])
-                            .add_filter("FDF", &["fdf"])
-                            .add_filter("CSV", &["csv"])
-                            .add_filter(tl!("Text").to_string(), &["txt"])
+                            .add_filter_any_case("XML", &["xml"])
+                            .add_filter_any_case("XDP", &["xdp"])
+                            .add_filter_any_case("XFDF", &["xfdf"])
+                            .add_filter_any_case("FDF", &["fdf"])
+                            .add_filter_any_case("CSV", &["csv"])
+                            .add_filter_any_case(tl!("Text").to_string(), &["txt"])
                     } else {
-                        d.add_filter("XFDF", &["xfdf"])
-                            .add_filter("FDF", &["fdf"])
-                            .add_filter("XML", &["xml"])
-                            .add_filter("CSV", &["csv"])
-                            .add_filter(tl!("Text").to_string(), &["txt"])
+                        d.add_filter_any_case("XFDF", &["xfdf"])
+                            .add_filter_any_case("FDF", &["fdf"])
+                            .add_filter_any_case("XML", &["xml"])
+                            .add_filter_any_case("CSV", &["csv"])
+                            .add_filter_any_case(tl!("Text").to_string(), &["txt"])
                     };
                     let d = crate::editing::in_document_folder(d, folder.as_deref());
                     self.ask_one(crate::pickers::Ask::Save(d), None, write);
