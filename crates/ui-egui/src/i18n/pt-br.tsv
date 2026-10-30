@@ -2842,3 +2842,11 @@ theme	Appearance	Aparência
 	Rotate the selected pages clockwise	Girar as páginas selecionadas no sentido horário
 	Extract the selected pages…	Extrair as páginas selecionadas…
 	Delete the selected pages	Excluir as páginas selecionadas
+
+	Text box width	Largura do quadro de texto
+	Extend to page margin	Ampliar até a margem
+	Fit text on one line	Ajustar em uma linha
+	Joins line breaks and reduces the font size only if needed to fit the box.	Une as linhas e reduz a fonte apenas se necessário para caber no quadro.
+	The height follows the text. Widen the box or use one line to reduce it.	A altura acompanha o texto. Amplie o quadro ou use uma linha para reduzi-la.
+
+	Text box width in millimetres	Largura do quadro em milímetros

@@ -128,3 +128,25 @@ them, a page of an affected document is refused until it is listed again, instea
 numbers as positions. Without a listing, a number is a position in the page's current
 paragraphs, as before. The inline editor holds the paragraph a switching click asked for the
 same way. What is still missing is an identity that survives save and reopen (design: #2508).
+
+## Text box width and one-line fit
+
+While a paragraph is open, the Format text panel offers **Text box width** in
+millimetres, **Extend to page margin**, and **Fit text on one line**. The last action
+joins explicit row breaks and reduces the font size only when needed to fit the
+current width. Apply the margin button first to use the remaining page width.
+Height follows the resulting text rows; this does not move the PDF's drawn table borders.
+The chosen wrap width stays active for the current editor session. Saved content
+retains its layout and font size, while reopening an editor starts from its ink bounds.
+Each applied adjustment is undoable. No document is uploaded.
+
+For automation, `text_fit_one_line {doc,page,paragraph,width,text?,size?}` prepares
+`{text,width,size}` without changing the document. Pass those values to `text_edit`
+to apply them. Width uses PDF user-space points; font size never falls below 1 pt.
+Files that disallow copying cannot use the preparation tool, which returns text.
+The fitting helper currently supports horizontal paragraphs, at most 65,536 UTF-8
+bytes, and whole-paragraph formatting. It verifies the replacement's baselines
+before returning success; an extreme draft that wraps even at the measurement
+width returns an error. Mixed baseline styles may also be refused.
+Empty or whitespace-only replacements are refused too: success requires a visible
+row. A refusal keeps the draft, document and undo history unchanged.

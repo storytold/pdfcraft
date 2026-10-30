@@ -3219,6 +3219,55 @@ fn accessibility_review_sidecar_tracks_human_decisions_for_exact_pdf_revision() 
 }
 
 #[test]
+fn text_fit_one_line_prepares_and_saves_one_real_row() {
+    let dir = workdir("fit-one-line");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
+    let fitted =
+        ok(&mut a, "text_fit_one_line", json!({"doc":doc,"page":1,"paragraph":1,"text":"EXAMPLE BUILDING\n100 TEST STREET ROOM 02","width":110}));
+    assert_eq!(fitted["text"], "EXAMPLE BUILDING 100 TEST STREET ROOM 02");
+    assert!(fitted["size"].as_f64().unwrap() < 24.0);
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1})), before);
+    // The maximum-width measurement may itself wrap: never report that as one row.
+    let wrap_error =
+        a.call("text_fit_one_line", &json!({"doc":doc,"page":1,"paragraph":1,"text":"word ".repeat(2000),"width":14400})).unwrap_err().to_string();
+    assert!(wrap_error.contains("several rows"), "{wrap_error}");
+    let budget_error =
+        a.call("text_fit_one_line", &json!({"doc":doc,"page":1,"paragraph":1,"text":"a".repeat(65537),"width":14400})).unwrap_err().to_string();
+    assert!(budget_error.contains("65536"), "{budget_error}");
+    ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"text":fitted["text"],"width":fitted["width"],"size":fitted["size"]}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"out/fitted.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"out/fitted.pdf"}))["doc"].as_u64().unwrap();
+    let saved = ok(&mut a, "text_paragraphs", json!({"doc":reopened,"page":1}));
+    assert_eq!(saved["paragraphs"][0]["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(saved["paragraphs"][0]["text"], fitted["text"]);
+    assert!(a.call("text_fit_one_line", &json!({"doc":doc,"page":1,"paragraph":1,"width":0})).is_err());
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1})), before);
+}
+
+#[test]
+fn text_fit_one_line_refuses_blank_without_changes() {
+    let dir = workdir("fit-one-line-blank");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
+    let info = ok(&mut a, "doc_info", json!({"doc":doc}));
+    for text in ["", " \n ", "\t\r\n", "\u{2003}\n\u{00a0}"] {
+        let error = a.call("text_fit_one_line", &json!({"doc":doc,"page":1,"paragraph":1,"text":text,"width":110})).unwrap_err();
+        assert!(error.to_string().contains("no visible row"), "{error}");
+        assert_eq!(ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1})), before);
+        assert_eq!(ok(&mut a, "doc_info", json!({"doc":doc})), info, "refusal keeps document state and history");
+    }
+    let paragraph = &before["paragraphs"][0];
+    assert_eq!(paragraph["rows"].as_array().unwrap().len(), 1);
+    let fitted = ok(&mut a, "text_fit_one_line", json!({"doc":doc,"page":1,"paragraph":1,"width":14400}));
+    assert_eq!(fitted["text"], paragraph["text"], "an unchanged visible row still fits");
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc":doc})), info);
+}
+
+#[test]
 fn editing_existing_text_through_tools() {
     let dir = workdir("edit-text");
     let mut a = auto(&dir);

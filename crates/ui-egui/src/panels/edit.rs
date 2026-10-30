@@ -269,6 +269,54 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let shown = ed.font_shown(&sources);
         let out = crate::format_text_ui::panel(ui, t, &mut ed.look, Some(&mut ed.extras), Fonts { sources: Some(&sources), shown });
         let mut changed = out.changed;
+        if let Some(doc) = app.session.get(app.views[i].id) {
+            widgets::section_title(ui, tl!("Text box width"));
+            let unit = doc.info.pages.get(ed.page).map_or(1.0, |p| {
+                let physical = if p.rotation % 180 == 0 { p.width } else { p.height };
+                let ratio = f64::from(physical) / f64::from(p.crop[2] - p.crop[0]);
+                if ratio.is_finite() && ratio > 0.0 { ratio } else { 1.0 }
+            });
+            let mm_per_unit = unit * 25.4 / 72.0;
+            let mut mm = ed.box_width() * mm_per_unit;
+            ui.horizontal(|ui| {
+                ui.label(tl!("Width"));
+                let response = ui.add(
+                    egui::DragValue::new(&mut mm)
+                        .range(mm_per_unit..=(14_400.0 * mm_per_unit))
+                        .clamp_existing_to_range(false)
+                        .speed(0.5)
+                        .suffix(" mm")
+                        .update_while_editing(false),
+                );
+                response.clone().accessible_name(tl!("Text box width in millimetres"));
+                if response.changed() {
+                    ed.set_box_width(mm / mm_per_unit);
+                    changed = true;
+                }
+            });
+            // Widths are PDF user-space distances, not display points: /UserUnit and CropBox
+            // must not change the amount of available paper. Keep a 6 pt right inset.
+            if let Some(p) = doc.info.pages.get(ed.page) {
+                if ui.button(tl!("Extend to page margin")).clicked() {
+                    let left = doc.text_blocks(ed.page).get(ed.block).map_or(f64::from(p.crop[0]), |b| b.rect[0]);
+                    ed.set_box_width((f64::from(p.crop[2]) - left - 6.0 / unit).clamp(1.0, 14_400.0));
+                    changed = true;
+                }
+                if ui
+                    .button(tl!("Fit text on one line"))
+                    .on_hover_text(tl!("Joins line breaks and reduces the font size only if needed to fit the box."))
+                    .clicked()
+                {
+                    let width = ed.box_width();
+                    match ed.fit_one_line(doc, width) {
+                        Ok(()) => changed = true,
+                        Err(error) => app.notify_error(error),
+                    }
+                }
+            }
+            ui.label(egui::RichText::new(tl!("The height follows the text. Widen the box or use one line to reduce it.")).small());
+            ui.separator();
+        }
         match out.font {
             Some(FontChoice::KeepSource) => {
                 ed.keep_source_font();

@@ -503,6 +503,22 @@ impl Automation {
                 let page = self.page(&a)?;
                 json!({"fonts": self.doc(&a)?.text_editor_fonts(page).into_iter().map(|f| json!({"resource":f.resource,"font":f.face,"full_face":f.resource.starts_with("PCFull"),"preview_only":f.resource.starts_with("PCApproved")})).collect::<Vec<_>>()})
             }
+            "text_fit_one_line" => {
+                let page = self.page(&a)?;
+                let doc = self.doc(&a)?;
+                if !doc.allows_copying() {
+                    return Err(ToolError::Failed("The document does not allow copying text.".into()));
+                }
+                let k = a.int("paragraph")?;
+                let blocks = doc.text_blocks(page);
+                let index = self.paragraph_index(doc.id, page, k, &blocks)?;
+                let source = blocks.get(index).ok_or_else(|| ToolError::InvalidArgs("paragraph is out of range".into()))?;
+                let text = a.opt_str("text")?.unwrap_or(&source.editor_text);
+                let width = a.opt_num("width")?.ok_or_else(|| ToolError::InvalidArgs("width is required".into()))?;
+                let style = pdfcraft_engine::BlockStyle { size: a.opt_num("size")?, ..Default::default() };
+                let (text, style) = doc.fit_text_one_line(page, index, text, &style, width).map_err(failed)?;
+                json!({"text":text,"width":width,"size":style.size.unwrap_or(source.size)})
+            }
             "text_edit_layout" => {
                 let page = self.page(&a)?;
                 let doc = self.doc(&a)?;

@@ -56,6 +56,9 @@ pub struct LineEditor {
     /// The original PDF rectangle, in user space. It is converted again each frame so the editor
     /// stays attached while the page is zoomed, scrolled, or rotated.
     source_rect: [f32; 4],
+    /// Explicit wrap width, retained while this editor stays open, even when the ink is narrower.
+    width: Option<f64>,
+    width0: Option<f64>,
     multiline: bool,
     source: Option<(pdfcraft_engine::TextBlock, Vec<pdfcraft_engine::TextLine>)>,
     pub(crate) fonts: BTreeMap<String, String>,
@@ -137,7 +140,34 @@ impl LineEditor {
 
     /// Whether the paragraph with `text` in it differs from what was opened.
     fn changes_with(&self, text: &str) -> bool {
-        text != self.original || self.look != self.look0 || self.extras != self.extras0 || self.family_chosen
+        text != self.original || self.look != self.look0 || self.extras != self.extras0 || self.family_chosen || self.width != self.width0
+    }
+
+    /// The explicit wrap width, or the source ink width before one is chosen.
+    pub(crate) fn box_width(&self) -> f64 {
+        self.width.unwrap_or(f64::from(self.source_rect[2] - self.source_rect[0])).max(1.0)
+    }
+
+    /// Keep a finite PDF user-space width within the rewrite engine's supported range.
+    pub(crate) fn set_box_width(&mut self, width: f64) {
+        if width.is_finite() {
+            self.width = Some(width.clamp(1.0, 14_400.0));
+        }
+    }
+
+    /// Join explicit rows and use the PDF engine's metrics to fit the result. Work on a clone:
+    /// unsupported source fonts or a refused layout leave the user's draft intact.
+    pub(crate) fn fit_one_line(&mut self, doc: &pdfcraft_engine::Document, width: f64) -> Result<(), String> {
+        let mut draft = self.clone();
+        draft.selection = None;
+        let (text, style) = doc.fit_text_one_line(draft.page, draft.block, &draft.text, &draft.style(), width)?;
+        draft.text = text;
+        draft.set_box_width(width);
+        if let Some(size) = style.size {
+            draft.look.size = size;
+        }
+        *self = draft;
+        Ok(())
     }
 
     /// Extra width permitted by the editor. Source containers now remain fixed.
@@ -186,6 +216,9 @@ impl LineEditor {
                 scale: style.scale.take(),
             });
         }
+        if self.width != self.width0 || self.text != self.original || style != pdfcraft_engine::BlockStyle::default() {
+            style.width = self.width;
+        }
         style
     }
 
@@ -196,6 +229,7 @@ impl LineEditor {
         self.family_chosen = false;
         self.look0 = self.look.clone();
         self.extras0 = self.extras;
+        self.width0 = self.width;
         self.original = self.text.clone();
         self.focus = true;
     }
@@ -203,6 +237,9 @@ impl LineEditor {
     /// Adopt the rewritten paragraph's current geometry before the next overlay frame.
     pub(crate) fn refresh_source(&mut self, block: &pdfcraft_engine::TextBlock, lines: Vec<pdfcraft_engine::TextLine>) {
         self.source_rect = block.rect.map(|v| v as f32);
+        if let Some(width) = self.width {
+            self.source_rect[2] = self.source_rect[0] + width as f32;
+        }
         self.multiline = block.rows.len() > 1;
         self.source = Some((block.clone(), lines));
         self.text = block.editor_text.clone();
@@ -315,6 +352,8 @@ fn open_editor(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], bo
         original: text,
         rect: *b,
         source_rect: l.rect.map(|v| v as f32),
+        width: None,
+        width0: None,
         multiline: l.rows.len() > 1,
         source: Some((l.clone(), source_lines)),
         fonts: install_source_fonts(ui.ctx(), doc, page),
@@ -540,7 +579,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             // source width, and the visible frame grows/shrinks vertically with their rows.
             // An OCR phrase (several stretched words on one scanned line) also grows rightwards.
             let single_run = ed.source.as_ref().is_some_and(|(block, _)| block.rows.len() == 1 || block.invisible);
-            let width = if !ed.multiline && single_run && !ed.text.contains('\n') && ed.has_changes() {
+            let width = if ed.width.is_none() && !ed.multiline && single_run && !ed.text.contains('\n') && ed.has_changes() {
                 let job = editor_job(ui, ed, &ed.text, scale, f32::INFINITY);
                 let natural = ui.fonts_mut(|f| f.layout_job(job)).size().x;
                 natural.max(ed.size * 0.4).min((xf.rect.right() - ed.rect.left() - 36.0 * scale).max(ed.rect.width()))
@@ -554,6 +593,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             // Unsupported source programs use an interface fallback whose glyph advances
             // can differ from the PDF's. Keep every visible row inside the growing frame.
             let live = draft_rect.map_or(visible, |bounds| bounds.union(visible));
+            let live = if ed.width.is_some() { live.union(ed.rect) } else { live };
             ui.painter().rect_stroke(live.expand(2.0), CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
             // On the frame, a press takes hold of the box (a click selects it, a drag moves it):
             // the pointer says so there, and reads as text inside.
@@ -716,6 +756,8 @@ mod tests {
             original: block.text.clone(),
             rect: Rect::NOTHING,
             source_rect: block.rect.map(|v| v as f32),
+            width: None,
+            width0: None,
             multiline: block.rows.len() > 1,
             source: None,
             fonts: BTreeMap::new(),
@@ -731,6 +773,110 @@ mod tests {
             extras0: Extras::default(),
         };
         (app, ed)
+    }
+
+    #[test]
+    fn explicit_box_width_survives_formatting_and_retyping() {
+        let (mut app, mut ed) = preview_app();
+        ed.set_box_width(180.0);
+        assert!(ed.has_changes());
+        assert_eq!(ed.style().width, Some(180.0));
+        app.apply_line_format(0, ed, None);
+        let ed = app.views[0].line_editor.as_mut().unwrap();
+        assert!(!ed.has_changes());
+        assert_eq!(ed.box_width(), 180.0, "the wrap box is wider than the visible ink");
+        assert_eq!(ed.style(), pdfcraft_engine::BlockStyle::default(), "no phantom edit after Apply");
+        ed.text.push_str(" and more text");
+        assert_eq!(ed.style().width, Some(180.0), "typing reuses the selected width");
+        ed.set_box_width(f64::NAN);
+        assert_eq!(ed.box_width(), 180.0);
+    }
+
+    #[test]
+    fn fit_one_line_joins_rows_and_survives_save_reopen_and_undo() {
+        let (mut app, mut ed) = preview_app();
+        let text = "EXAMPLE BUILDING (WEST WING)\n100 TEST STREET ROOM 02";
+        ed.text = text.into();
+        ed.selection = Some(0..2);
+        let size = ed.look.size;
+        let id = app.views[0].id;
+        ed.fit_one_line(app.session.get(id).unwrap(), 120.0).unwrap();
+        assert!(!ed.text.contains('\n'));
+        assert!(ed.look.size < size, "long text is reduced to fit");
+        assert!(ed.selection.is_none(), "fit applies to the complete box");
+        app.apply_line_format(0, ed, None);
+        let doc = app.session.get(id).unwrap();
+        let blocks = doc.text_blocks(0);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].rows.len(), 1, "all text is on one actual PDF row");
+        assert!(blocks[0].rect[2] - blocks[0].rect[0] <= 120.5);
+        let bytes = app.session.save_bytes(id).unwrap();
+        let mut reopened = pdfcraft_engine::Session::new();
+        let other = reopened.open("one-line.pdf", None, bytes, None).unwrap();
+        let saved = reopened.get(other).unwrap().text_blocks(0);
+        assert_eq!(saved[0].rows.len(), 1);
+        assert_eq!(saved[0].text, text.replace('\n', " "));
+        app.session.undo(id).unwrap();
+        assert_eq!(app.session.get(id).unwrap().text_blocks(0)[0].text, "Preview text");
+    }
+
+    #[test]
+    fn fitting_errors_preserve_the_draft() {
+        let (app, mut ed) = preview_app();
+        let before = ed.clone();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        assert!(ed.fit_one_line(doc, f64::INFINITY).is_err());
+        assert_eq!(ed, before);
+        assert!(ed.fit_one_line(doc, 1.0).is_err());
+        assert_eq!(ed, before);
+        for text in ["", " \n ", "\u{2003}\t"] {
+            ed.text = text.into();
+            ed.selection = Some(0..text.len());
+            let before = ed.clone();
+            let error = ed.fit_one_line(doc, 120.0).unwrap_err();
+            assert!(error.contains("no visible row"), "{error}");
+            assert_eq!(ed, before, "a refused blank fit keeps the complete draft");
+        }
+    }
+
+    #[test]
+    fn text_box_controls_are_reachable_while_typing() {
+        use egui_kittest::kittest::Queryable;
+        let (mut app, mut ed) = preview_app();
+        ed.text = "First row\nSecond row".into();
+        app.set_option("language", "en").unwrap();
+        app.select_tool("edit");
+        app.views[0].line_editor = Some(ed);
+        // The existing spacing preset combos have no accessible names. This regression
+        // exercises the text-box actions rather than the unrelated panel accessibility audit.
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(1440.0, 1000.0)).build_eframe(move |_| app);
+        h.run_steps(4);
+        let original_width = h.state().views[0].line_editor.as_ref().unwrap().box_width();
+        h.get_by_label("Text box width in millimetres").click();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Text box width in millimetres").type_text("120");
+        h.run_steps(2);
+        assert_eq!(
+            h.state().views[0].line_editor.as_ref().unwrap().box_width(),
+            original_width,
+            "typing does not reflow the paragraph after each digit"
+        );
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert!((h.state().views[0].line_editor.as_ref().unwrap().box_width() - 120.0 * 72.0 / 25.4).abs() < 0.01);
+        assert!(!h.state().views[0].line_editor.as_ref().unwrap().text.ends_with('\n'), "confirming the width must not type a newline into the PDF");
+        h.get_by_label("Extend to page margin").click();
+        h.run_steps(3);
+        assert!(h.state().views[0].line_editor.as_ref().unwrap().box_width() > 400.0);
+        h.get_by_label("Fit text on one line").click();
+        h.run_steps(3);
+        assert_eq!(h.state().views[0].line_editor.as_ref().unwrap().text, "First row Second row");
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        assert_eq!(doc.text_blocks(0)[0].rows.len(), 1);
+        if let Ok(path) = std::env::var("PDFCRAFT_BOX_SHOT") {
+            h.render().unwrap().save(path).unwrap();
+        }
     }
 
     #[test]

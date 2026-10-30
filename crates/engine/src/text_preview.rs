@@ -91,6 +91,99 @@ fn render_one(bytes: &Arc<Vec<u8>>, config: &RenderConfig, page: usize, scale: f
 }
 
 impl Document {
+    /// Prepare a single-row replacement, using the same metrics as Save. Read-only: the caller
+    /// applies the returned text/style with EditTextBlock as one undoable operation.
+    pub fn fit_text_one_line(
+        &self,
+        page: usize,
+        block: usize,
+        text: &str,
+        style: &crate::BlockStyle,
+        width: f64,
+    ) -> Result<(String, crate::BlockStyle), String> {
+        guard(|| {
+            if !width.is_finite() || !(1.0..=14_400.0).contains(&width) {
+                return Err("The text box width must be between 1 and 14400 points.".into());
+            }
+            if !style.ranges.is_empty() {
+                return Err("Fit one line applies to the whole paragraph, without selected ranges.".into());
+            }
+            if text.len() > 65_536 {
+                return Err("Fit one line supports at most 65536 UTF-8 bytes.".into());
+            }
+            let source = self.text_blocks(page).get(block).cloned().ok_or("The paragraph is no longer available.")?;
+            if !source.rotation.is_finite() || source.rotation.abs() > 0.001 {
+                return Err("Fit one line currently supports horizontal paragraphs only.".into());
+            }
+            let text = text.lines().map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
+            let mut style = style.clone();
+            style.width = Some(14_400.0);
+            let mut size = style.size.unwrap_or(source.size);
+            if !size.is_finite() || size < 1.0 {
+                return Err("The font size must be at least 1 point.".into());
+            }
+            for _ in 0..8 {
+                let layout = self.text_edit_layout(page, block, &text, &style)?;
+                let natural = layout.draft_rect.map_or(0.0, |r| r[2] - r[0]);
+                if !natural.is_finite() {
+                    return Err("The text width could not be measured.".into());
+                }
+                if natural <= width {
+                    style.width = Some(width);
+                    self.verify_single_text_row(page, block, &source, &text, &style)?;
+                    return Ok((text, style));
+                }
+                let next = (size * width / natural * 0.98).max(1.0);
+                if next >= size {
+                    break;
+                }
+                size = next;
+                style.size = Some(size);
+            }
+            Err("The text is too long for one line. Increase the box width.".into())
+        })?
+    }
+
+    /// A maximum-width draft can itself wrap. Verify that a replacement has a visible row
+    /// and a single baseline before promising success from its bounding width.
+    fn verify_single_text_row(
+        &self,
+        page: usize,
+        block: usize,
+        source: &crate::TextBlock,
+        text: &str,
+        style: &crate::BlockStyle,
+    ) -> Result<(), String> {
+        let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+        let key = |line: &pdfcraft_edit::text::TextLine| (line.text.clone(), line.font.clone(), line.rect.map(f64::to_bits), line.size.to_bits());
+        let mut untouched = std::collections::BTreeMap::new();
+        for (index, line) in pdfcraft_edit::text::text_lines(&editor.cos, page).map_err(|e| e.to_string())?.iter().enumerate() {
+            if !source.lines.contains(&index) {
+                *untouched.entry(key(line)).or_insert(0_usize) += 1;
+            }
+        }
+        let mut draft = editor.cos.clone();
+        pdfcraft_edit::text::rewrite_block(&mut draft, page, block, Some(text), style).map_err(|e| e.to_string())?;
+        let mut baseline: Option<f64> = None;
+        for line in pdfcraft_edit::text::text_lines(&draft, page).map_err(|e| e.to_string())? {
+            if let Some(count) = untouched.get_mut(&key(&line))
+                && *count > 0
+            {
+                *count -= 1;
+                continue;
+            }
+            let y = line.origin_baseline();
+            if !y.is_finite() || baseline.is_some_and(|first| (first - y).abs() > 0.01) {
+                return Err("The text still needs several rows. Shorten it or increase the box width.".into());
+            }
+            baseline = Some(y);
+        }
+        if baseline.is_none() {
+            return Err("The replacement has no visible row.".into());
+        }
+        Ok(())
+    }
+
     /// Background for retyping an added text item, without changing its saved content.
     pub fn added_text_preview(&self, page: usize, index: usize) -> Result<TextEditPreview, String> {
         guard(|| {

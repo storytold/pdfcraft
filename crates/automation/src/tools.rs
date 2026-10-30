@@ -1402,6 +1402,9 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("edit.edit_text")
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 } }), &["doc", "page"])),
+        t("text_fit_one_line", "Fit text on one line", "Prepare one line of text, joining explicit row breaks and reducing font size only if needed. Read-only: apply the returned text, size and width through text_edit. Width is in PDF user-space points; minimum font size is 1 point.")
+            .ro().cmd("edit.edit_text")
+            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"paragraph":{"type":"integer","minimum":1},"text":{"type":"string"},"size":{"type":"number","minimum":1},"width":{"type":"number","minimum":1,"maximum":14400}}), &["doc","page","paragraph","width"])),
         t("text_edit_layout", "Measure text draft", "Measure a paragraph draft using the same PDF rewrite as Apply, without changing the document. Returns source_rect, draft_rect (top-left-origin points), overflow, and the embedded sfnt source faces available to the inline editor. Text defaults to the unchanged paragraph. Optional size, width, font_resource and disjoint UTF-8 ranges preview formatting changes.")
             .ro()
             .cmd("edit.edit_text")
