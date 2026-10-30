@@ -71,9 +71,11 @@ impl Automation {
         Ok(json!({ "path": target.to_string_lossy(), "rows": files.len(), "columns": columns }))
     }
 
+    /// Report proposals in displayed-page coordinates, matching the widgets that detection adds.
     pub(crate) fn form_detect_fields(&mut self, a: &Args) -> Result<Value> {
         let pages = if a.opt_ints("pages")?.is_some() { self.pages(a, "pages")? } else { Vec::new() };
-        let id = self.doc(a)?.id;
+        let doc = self.doc(a)?;
+        let id = doc.id;
         let found = self.session.detect_fields(id, &pages);
         let list: Vec<Value> = found
             .iter()
@@ -83,7 +85,8 @@ impl Automation {
                     pdfcraft_engine::detect::Kind::CheckBox => ("checkbox", None),
                     pdfcraft_engine::detect::Kind::Comb { cells } => ("text", Some(cells)),
                 };
-                let mut v = json!({ "page": p + 1, "kind": kind, "name": c.name, "rect": c.rect.map(|v| (v * 100.0).round() / 100.0) });
+                let rect = crate::view_rect(&doc.info, *p, c.rect.map(|v| v as f32));
+                let mut v = json!({ "page": p + 1, "kind": kind, "name": c.name, "rect": rect });
                 if let Some(cells) = comb {
                     v["comb"] = json!(cells);
                 }

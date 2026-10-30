@@ -6750,6 +6750,7 @@ fn field_actions_through_tools() {
     assert!(a.call("form_set_actions", &json!({ "doc": doc, "field": "Go", "actions": [{ "trigger": "wave" }] })).is_err());
 }
 
+/// Proposals, created widgets and saved/reopened fields share displayed-page geometry.
 #[test]
 fn detecting_form_fields_through_tools() {
     let dir = workdir("detect-fields");
@@ -6761,12 +6762,70 @@ fn detecting_form_fields_through_tools() {
     assert_eq!(r["fields"].as_array().unwrap().len(), 2, "{r}");
     assert_eq!(r["fields"][1]["name"], "City");
     assert_eq!(ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"].as_array().unwrap().len(), 0);
-    ok(&mut a, "form_detect_fields", json!({ "doc": doc }));
+    assert_eq!(ok(&mut a, "form_detect_fields", json!({ "doc": doc }))["fields"], r["fields"]);
     ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "City": "Lisbon" } }));
     let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
     assert_eq!(f["fields"][1]["value"], "Lisbon", "{f}");
+    for (proposed, added) in r["fields"].as_array().unwrap().iter().zip(f["fields"].as_array().unwrap()) {
+        assert_eq!(proposed["rect"], added["rect"], "proposals and fields use the same top-left coordinates");
+    }
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "detected.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "detected.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "form_fields", json!({ "doc": reopened }))["fields"], f["fields"]);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Detection proposals follow displayed coordinates on every rotation, cropped origin and scale.
+#[test]
+fn detecting_form_fields_reports_displayed_rectangles() {
+    use pdfcraft_cos::{Document, Object, Stream};
+    use std::sync::Arc;
+
+    let dir = workdir("detect-view-rectangles");
+    let mut source = Document::open(Arc::new(fixture(8))).unwrap();
+    for (i, page) in pdfcraft_model::pages(&source).into_iter().enumerate() {
+        let contents = source.add(Object::Stream(Stream::flate(Default::default(), b"40 170 100 24 re S")));
+        source
+            .update_dict(page.obj, |d| {
+                d.set(b"Contents".to_vec(), Object::Ref(contents));
+                d.set(b"MediaBox".to_vec(), Object::Array(vec![(-30).into(), (-40).into(), 210.into(), 320.into()]));
+                d.set(b"CropBox".to_vec(), Object::Array(vec![(-10).into(), (-20).into(), 190.into(), 280.into()]));
+                d.set(b"Rotate".to_vec(), Object::Int((i % 4 * 90) as i64));
+                d.set(b"UserUnit".to_vec(), Object::Int(if i < 4 { 1 } else { 2 }));
+            })
+            .unwrap();
+    }
+    std::fs::write(dir.join("rotated.pdf"), pdfcraft_cos::write_full(&source, &Default::default()).unwrap()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "rotated.pdf" }))["doc"].as_u64().unwrap();
+    let pages = json!([8, 3, 1, 6, 2, 7, 4, 5]);
+    let proposed = ok(&mut a, "form_detect_fields", json!({ "doc": doc, "pages": pages, "add": false }));
+    assert_eq!(proposed["fields"].as_array().unwrap().len(), 8);
+    let reported_pages: Vec<_> = proposed["fields"].as_array().unwrap().iter().map(|f| f["page"].as_u64().unwrap()).collect();
+    assert_eq!(reported_pages, vec![8, 3, 1, 6, 2, 7, 4, 5]);
+    assert_eq!(ok(&mut a, "form_fields", json!({ "doc": doc }))["count"], 0);
+    assert_eq!(ok(&mut a, "form_detect_fields", json!({ "doc": doc, "pages": pages })), proposed);
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    for candidate in proposed["fields"].as_array().unwrap() {
+        let page = candidate["page"].as_u64().unwrap() as usize - 1;
+        let scale = if page < 4 { 1.0 } else { 2.0 };
+        // These are the inset box's four corners after each clockwise rotation, relative to CropBox.
+        let expected = [[51.0, 87.0, 149.0, 109.0], [191.0, 51.0, 213.0, 149.0], [51.0, 191.0, 149.0, 213.0], [87.0, 51.0, 109.0, 149.0]][page % 4];
+        for (value, expected) in candidate["rect"].as_array().unwrap().iter().zip(expected) {
+            assert!((value.as_f64().unwrap() - expected * scale).abs() < 0.011, "page={page}: {candidate}");
+        }
+        let added = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == candidate["name"]).unwrap();
+        assert_eq!(candidate["rect"], added["rect"]);
+        assert_eq!(candidate["page"], added["page"]);
+    }
+    assert_eq!(ok(&mut a, "form_detect_fields", json!({ "doc": doc, "add": false }))["fields"], json!([]));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "detected-geometry.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "detected-geometry.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "form_fields", json!({ "doc": reopened })), fields);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Detection respects stream-spanning comments and reports visible boxes in displayed coordinates.
 #[test]
 fn detecting_form_fields_preserves_content_piece_comments() {
     for visible in [false, true] {
@@ -6788,7 +6847,7 @@ fn detecting_form_fields_preserves_content_piece_comments() {
         std::fs::write(dir.join("pieces.pdf"), pdfcraft_cos::write_full(&source, &Default::default()).unwrap()).unwrap();
         let mut a = auto(&dir);
         let doc = ok(&mut a, "doc_open", json!({"path": "pieces.pdf"}))["doc"].as_u64().unwrap();
-        let candidates = if visible { json!([{"page": 1, "kind": "text", "name": "Text1", "rect": [41.0, 121.0, 339.0, 149.0]}]) } else { json!([]) };
+        let candidates = if visible { json!([{"page": 1, "kind": "text", "name": "Text1", "rect": [41.0, 151.0, 339.0, 179.0]}]) } else { json!([]) };
         let inventory = if visible {
             json!([{"name": "Text1", "type": "text", "value": null, "page": 1, "rect": [41.0, 151.0, 339.0, 179.0], "rotation": 0, "read_only": false, "required": false, "multiline": false}])
         } else {
@@ -6826,6 +6885,7 @@ fn detecting_form_fields_preserves_content_piece_comments() {
     }
 }
 
+/// A row of comb cells becomes one field with a proposal in displayed-page coordinates.
 #[test]
 fn detecting_comb_boxes_through_tools() {
     let mut body = String::from("BT /F1 10 Tf 40 105 Td (Postcode) Tj ET\n");
@@ -6856,7 +6916,7 @@ fn detecting_comb_boxes_through_tools() {
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "comb.pdf" }))["doc"].as_u64().unwrap();
     let r = ok(&mut a, "form_detect_fields", json!({ "doc": doc }));
-    assert_eq!(r["fields"], json!([{ "page": 1, "kind": "text", "comb": 5, "name": "Postcode", "rect": [120.0, 100.0, 200.0, 120.0] }]), "{r}");
+    assert_eq!(r["fields"], json!([{ "page": 1, "kind": "text", "comb": 5, "name": "Postcode", "rect": [120.0, 180.0, 200.0, 200.0] }]), "{r}");
     ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "Postcode": "75001" } }));
     assert_eq!(ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"][0]["value"], "75001");
 }
