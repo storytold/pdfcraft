@@ -52,6 +52,11 @@ impl PageXform {
         across / self.pw.max(1.0)
     }
 
+    /// How far `page` is turned on screen, clockwise: its `/Rotate` and the view's rotation.
+    pub(crate) fn turn(&self, info: &DocInfo, page: usize) -> u16 {
+        (info.pages.get(page).map_or(0, |p| p.rotation) + self.rot) % 360
+    }
+
     /// Draw an image in the PDF user-space `rect` as a custom stamp's appearance draws it: turned
     /// back by `turn` (the page /Rotate it was placed for), so with the page's own rotation it
     /// reads upright as displayed.

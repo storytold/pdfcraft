@@ -54,7 +54,7 @@ impl TextLine {
     }
 
     /// Its box in the same frame, `[along0, across0, along1, across1]` (for upright text, `rect`).
-    pub(crate) fn frame_rect(&self) -> [f64; 4] {
+    pub fn frame_rect(&self) -> [f64; 4] {
         self.frame
     }
 }

@@ -28,7 +28,7 @@ use image::{rotate_knob, turn_degrees};
 #[cfg(test)]
 use layout::{DARK_EDITOR_FILL, contrast};
 pub(crate) use layout::{caret_color_on, editor_fill, editor_font, install_source_fonts};
-use layout::{color32, editor_galley, editor_job, look_of, luminance, unseen};
+use layout::{color32, editor_galley, editor_job, look_of, luminance, reading_rect, unseen};
 
 const ACCENT: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
@@ -57,6 +57,8 @@ pub struct LineEditor {
     /// The original PDF rectangle, in user space. It is converted again each frame so the editor
     /// stays attached while the page is zoomed, scrolled, or rotated.
     source_rect: [f32; 4],
+    /// How far the page is turned on screen, clockwise (its `/Rotate` and the view's). Updated with `rect`.
+    turn: u16,
     multiline: bool,
     source: Option<(pdfcraft_engine::TextBlock, Vec<pdfcraft_engine::TextLine>)>,
     pub(crate) fonts: BTreeMap<String, String>,
@@ -475,7 +477,9 @@ fn open_editor(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], bo
     let source_lines = doc.text_lines(page);
     let text = l.editor_text.clone();
     // Screen pixels per point, from the box's width.
-    let scale = (b.width() - 4.0) / ((l.rect[2] - l.rect[0]).max(1.0) as f32);
+    let turn = xf.turn(&doc.info, page);
+    let shown = reading_rect(turn, l.rect);
+    let scale = (b.width() - 4.0) / ((shown[2] - shown[0]).max(1.0) as f32);
     // How far the editor box may grow: a single-line paragraph's rewrite grows to the
     // page's right edge, a multi-line paragraph rewraps to its own width.
     let right = xf.rect.right().min(view.viewport_rect().right()) - 6.0;
@@ -489,6 +493,7 @@ fn open_editor(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], bo
         original: text,
         rect: *b,
         source_rect: l.rect.map(|v| v as f32),
+        turn,
         multiline: l.rows.len() > 1,
         source: Some((l.clone(), source_lines)),
         fonts: install_source_fonts(ui.ctx(), doc, page),
@@ -692,8 +697,10 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
         return None;
     }
     ed.rect = xf.user_rect(info, ed.page, ed.source_rect);
+    ed.turn = xf.turn(info, ed.page);
     ed.max_width = ed.rect.width();
-    let scale = (ed.rect.width() / (ed.source_rect[2] - ed.source_rect[0]).abs().max(0.01)).max(0.01);
+    let shown = reading_rect(ed.turn, ed.source_rect.map(f64::from));
+    let scale = (ed.rect.width() / ((shown[2] - shown[0]) as f32).max(0.01)).max(0.01);
     ed.size = (ed.look.size as f32 * scale).clamp(1.0, 300.0);
     // egui draws the caret at least one row of this font tall. Each row already has its source
     // row's height, so the font stays below every row (half the region's smallest size): on a
@@ -1019,6 +1026,7 @@ C", &picked
             original: block.text.clone(),
             rect: Rect::NOTHING,
             source_rect: block.rect.map(|v| v as f32),
+            turn: 0,
             multiline: block.rows.len() > 1,
             source: None,
             fonts: BTreeMap::new(),
