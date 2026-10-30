@@ -1757,7 +1757,20 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     if frame.env.text_links {
         view.refresh_text_links(i);
     }
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark, keys };
+    let hidden_types = view.comments.hidden_types.clone();
+    let pcx = comments::PageCx {
+        page: i,
+        xf: &xf,
+        ptr,
+        info,
+        tool,
+        prefs,
+        allowed,
+        hidden: comments_hidden,
+        hidden_types: &hidden_types,
+        redact_mark,
+        keys,
+    };
     // A cancelled press takes nothing until the button is up, though the page's menu still opens
     // where a right-click is. A page full screen doesn't show yet takes nothing at all. (A press
     // there gives nothing on the page an owner, so its release, once the page is in, takes nothing

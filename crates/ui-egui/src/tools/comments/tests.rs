@@ -105,6 +105,7 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
             prefs: &prefs,
             allowed: true,
             hidden: false,
+            hidden_types: &[],
             redact_mark: ([0.0; 3], 1.0),
             keys: Default::default(),
         };
@@ -178,6 +179,52 @@ fn a_kept_comment_is_found_where_a_delete_moved_it() {
     view.editor_focus = Some(EditorFocus::Take);
     view.annotation_deleted(&before, &DocInfo { annotations: after.clone(), ..Default::default() }, gone);
     assert_eq!((view.editing, view.editor_focus), (None, None), "the editor closes with the reply it was open on");
+}
+
+/// A type the filter hid is not a comment the page can hover or select.
+#[test]
+fn a_hidden_comment_type_is_not_selectable() {
+    let mark = |subtype: &str, index: usize| Annotation {
+        page: 0,
+        subtype: subtype.into(),
+        author: None,
+        contents: None,
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent: None,
+        grouped: false,
+        rect: [10.0, 10.0, 40.0, 40.0],
+        color: None,
+        index,
+        state: None,
+        quads: Vec::new(),
+        locked: false,
+        intent: None,
+        fill_sign: false,
+        no_rotate: false,
+        points: Vec::new(),
+    };
+    let page = PageInfo { width: 200.0, height: 100.0, label: String::new(), crop: [0.0, 0.0, 200.0, 100.0], rotation: 0 };
+    let info = DocInfo { pages: vec![page], annotations: vec![mark("Square", 0), mark("Circle", 1)], ..Default::default() };
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 100.0)), rot: 0, pw: 200.0, ph: 100.0 };
+    let prefs = CommentPrefs::default();
+    let hidden = ["Oval".to_string()];
+    let cx = PageCx {
+        page: 0,
+        xf: &xf,
+        ptr: &PagePointer::default(),
+        info: &info,
+        tool: QuickTool::Select,
+        prefs: &prefs,
+        allowed: true,
+        hidden: false,
+        hidden_types: &hidden,
+        redact_mark: ([0.0; 3], 1.0),
+        keys: Default::default(),
+    };
+    let left: Vec<_> = cx.comments().map(|a| a.subtype.as_str()).collect();
+    assert_eq!(left, ["Square"]);
 }
 
 use pdfcraft_render::TextGlyph;
@@ -850,6 +897,7 @@ fn the_hover_outline_goes_round_what_a_press_would_take() {
         prefs: &prefs,
         allowed: true,
         hidden: false,
+        hidden_types: &[],
         redact_mark: ([0.0; 3], 1.0),
         keys: Default::default(),
     };
