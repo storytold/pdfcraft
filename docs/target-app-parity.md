@@ -1,5 +1,6 @@
 # PdfCraft parity with Adobe Acrobat Pro
 
+> **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M7, #4967 partial: moving ActualText-wrapped text retains glyphs and logical metadata; vertical/clipping text remains unsupported and the reporter document unavailable; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (localization current state: Arabic logical catalog, explicit RTL direction and mirrored stock chrome; native/browser RTL workflows unqualified. Native release Hans face via LXGW WenKai Lite. Scores and estimates unchanged)
 
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (localization ≈59% → ≈68%; weighted readiness 49.25 → 49.7 ≈ 50%) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -291,6 +292,11 @@ catalog; smart cards and PKCS #11 tokens, scanners and Windows printers to test 
 licensed OCR or AI model.
 
 ## Revision history
+
+**2026-10-27 | minor:** M7, #4967 partial: moving ActualText-wrapped text retains logical text, named properties and marked-content boundaries.
+Synthetic regressions cover nested spans, quote operators, neighboring text, atomic clipping refusal, undo and save/reopen.
+The reporter document is unavailable; vertical/clipping text remains unsupported.
+Scores and estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|

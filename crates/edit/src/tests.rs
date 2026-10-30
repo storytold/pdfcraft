@@ -7557,3 +7557,106 @@ fn q_inside_a_text_object_restores_the_text_matrices() {
         assert_eq!((lines[0].text.as_str(), lines[0].baseline()), ("Edited", baseline), "{content} after editing");
     }
 }
+
+/// Moving preserves the glyph bytes and their tagged logical replacement instead of rewriting it.
+#[test]
+fn moving_actualtext_spans_preserves_tags_and_unselected_text() {
+    let markers = |doc: &Document| {
+        pdfcraft_content::parse(&page_content_bytes(doc, 0))
+            .ops
+            .into_iter()
+            .filter(|op| matches!(op.op.as_slice(), b"BMC" | b"BDC" | b"EMC"))
+            .map(|op| (op.op, op.operands))
+            .collect::<Vec<_>>()
+    };
+    let glyph_shows = |doc: &Document| {
+        pdfcraft_content::parse(&page_content_bytes(doc, 0))
+            .ops
+            .into_iter()
+            .filter(|op| {
+                op.is("Tj")
+                    || (op.is("TJ") && op.operands.iter().any(|o| o.as_array().is_some_and(|a| a.iter().any(|v| matches!(v, Object::String(_))))))
+            })
+            .map(|op| (op.op, op.operands))
+            .collect::<Vec<_>>()
+    };
+    for named in [false, true] {
+        for inside_text in [false, true] {
+            for nested in [false, true] {
+                let open = if named { "/Span /Logical BDC" } else { "/Span << /ActualText (Logical caption) /MCID 7 /Lang (en-US) >> BDC" };
+                let second =
+                    if nested { "/Span << /ActualText (Inner) /MCID 8 >> BDC /F4 12 Tf ( caption) Tj EMC" } else { "/F4 12 Tf ( caption) Tj" };
+                let shows = format!("[(Vis) -40 (ible)] TJ {second}");
+                let content = if inside_text {
+                    format!("BT /F1 12 Tf 100 600 Td {open} {shows} EMC /F1 12 Tf 0 -120 Td (Neighbor) Tj ET")
+                } else {
+                    format!("{open} BT /F1 12 Tf 100 600 Td {shows} ET EMC BT /F1 12 Tf 100 480 Td (Neighbor) Tj ET")
+                };
+                let mut doc = text_page(&content);
+                let page = pdfcraft_model::pages(&doc)[0].obj;
+                if named {
+                    let mut logical = Dict::new();
+                    logical.set(b"ActualText".to_vec(), Object::String(pdfcraft_cos::PdfString::text("Logical caption")));
+                    logical.set(b"MCID".to_vec(), Object::Int(7));
+                    logical.set(b"Lang".to_vec(), Object::String(pdfcraft_cos::PdfString::text("en-US")));
+                    let logical = doc.add(logical);
+                    let mut properties = Dict::new();
+                    properties.set(b"Logical".to_vec(), Object::Ref(logical));
+                    let mut resources = doc.get(page).as_dict().unwrap().get(b"Resources").unwrap().as_dict().unwrap().clone();
+                    resources.set(b"Properties".to_vec(), Object::Ref(doc.add(properties)));
+                    doc.update_dict(page, |d| d.set(b"Resources".to_vec(), Object::Dict(resources))).unwrap();
+                }
+                let inventory = editable_objects(&doc, 0).unwrap();
+                let target = inventory.iter().find(|o| o.text.as_deref() == Some("Logical caption")).unwrap().target;
+                let original_markers = markers(&doc);
+                let original_shows = glyph_shows(&doc);
+                let glyphs = glyph_text_lines(&doc, &pdfcraft_model::pages(&doc)[0]).unwrap();
+                move_objects(&mut doc, 0, &[target], [23.0, -17.0]).unwrap();
+                for moved in [doc.clone(), reopen(&doc), Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap()] {
+                    assert_eq!(markers(&moved), original_markers, "named={named}, inside={inside_text}, nested={nested}");
+                    assert_eq!(glyph_shows(&moved), original_shows, "original glyph strings and kerning survive");
+                    let inventory = editable_objects(&moved, 0).unwrap();
+                    assert!(inventory.iter().any(|o| o.text.as_deref() == Some("Logical caption")));
+                    let after = glyph_text_lines(&moved, &pdfcraft_model::pages(&moved)[0]).unwrap();
+                    assert_eq!(after.len(), glyphs.len());
+                    for (before, after) in glyphs.iter().zip(&after) {
+                        assert_eq!(after.text, before.text);
+                        let delta = if before.text == "Neighbor" { [0.0, 0.0] } else { [23.0, -17.0] };
+                        for (axis, (&a, &b)) in before.rect.iter().zip(&after.rect).enumerate() {
+                            assert!((b - a - delta[axis % 2]).abs() < 1e-6, "{}: {:?} -> {:?}", before.text, before.rect, after.rect);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn moving_actualtext_with_a_later_clipping_show_is_atomic() {
+    let mut doc = text_page("/Span << /ActualText (Logical caption) /MCID 7 >> BDC BT /F1 12 Tf 100 600 Td (Visible) Tj 4 Tr (Clipping) Tj ET EMC");
+    let targets: Vec<_> = editable_objects(&doc, 0).unwrap().iter().map(|o| o.target).collect();
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(move_objects(&mut doc, 0, &targets, [23.0, -17.0]).unwrap_err().to_string().contains("clipping"));
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
+}
+
+#[test]
+fn moving_actualtext_with_quote_operators_preserves_neighbor_advances() {
+    let mut doc = text_page(
+        "/Span << /ActualText (Logical caption) /MCID 7 >> BDC BT /F1 12 Tf 16 TL 100 600 Td (First) Tj (Second) ' 2 1 (Third) \" ET EMC BT /F1 12 Tf 100 450 Td (Neighbor) Tj ET",
+    );
+    let before = glyph_text_lines(&doc, &pdfcraft_model::pages(&doc)[0]).unwrap();
+    let target = editable_objects(&doc, 0).unwrap().into_iter().find(|o| o.text.as_deref() == Some("Logical caption")).unwrap().target;
+    move_objects(&mut doc, 0, &[target], [21.0, -13.0]).unwrap();
+    let doc = reopen(&doc);
+    let after = glyph_text_lines(&doc, &pdfcraft_model::pages(&doc)[0]).unwrap();
+    assert_eq!(after.len(), before.len());
+    for (a, b) in before.iter().zip(&after) {
+        assert_eq!(a.text, b.text);
+        let delta = if a.text == "Neighbor" { [0.0, 0.0] } else { [21.0, -13.0] };
+        for (axis, (&a, &b)) in a.rect.iter().zip(&b.rect).enumerate() {
+            assert!((b - a - delta[axis % 2]).abs() < 1e-6);
+        }
+    }
+}

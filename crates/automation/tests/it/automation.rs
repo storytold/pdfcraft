@@ -9457,3 +9457,38 @@ fn clearing_a_kids_default_through_tools_does_not_bring_back_its_parents() {
     let city = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "address.city").unwrap().clone();
     assert!(city["value"].is_null() || city["value"] == "", "reset clears it rather than restoring the parent's Main St: {}", city["value"]);
 }
+
+#[test]
+fn actualtext_object_move_keeps_logical_text_through_undo_and_save() {
+    use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_full};
+    let dir = workdir("actualtext-object-move");
+    let mut source = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&source)[0].obj;
+    let content = source
+        .add(Stream::flate(Dict::new(), b"/Span << /ActualText (Logical caption) /MCID 7 >> BDC BT /F1 24 Tf 20 150 Td (Visible caption) Tj ET EMC"));
+    source.update_dict(page, |d| d.set(b"Contents".to_vec(), Object::Ref(content))).unwrap();
+    std::fs::write(dir.join("a.pdf"), write_full(&source, &SaveOptions::default()).unwrap()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    assert_eq!(before["count"], 1);
+    assert_eq!(before["objects"][0]["text"], "Logical caption");
+    let target = json!([{"kind":before["objects"][0]["kind"],"index":before["objects"][0]["index"]}]);
+    let moved = ok(&mut a, "object_move", json!({"doc":doc,"page":1,"generation":before["generation"],"objects":target,"offset":[18,27]}));
+    assert_eq!(moved["moved"], 1);
+    let after = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    assert_eq!(after["objects"][0]["text"], "Logical caption");
+    for axis in 0..4 {
+        let delta = if axis % 2 == 0 { 18.0 } else { 27.0 };
+        assert!((after["objects"][0]["rect"][axis].as_f64().unwrap() - before["objects"][0]["rect"][axis].as_f64().unwrap() - delta).abs() < 0.02);
+    }
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["objects"], before["objects"]);
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"actualtext-moved.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"actualtext-moved.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":reopened,"page":1}))["objects"], after["objects"]);
+    assert!(page_text(&mut a, reopened)[0].contains("Logical caption"));
+    let found = ok(&mut a, "text_find", json!({"doc":reopened,"query":"Logical caption"}));
+    assert_eq!(found["matches"].as_array().unwrap().len(), 1);
+}

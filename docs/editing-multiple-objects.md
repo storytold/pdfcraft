@@ -35,6 +35,10 @@ performs the original glyph advances, so following unselected text keeps its pos
 indices can change when detection groups lines differently after a move. The UI remaps its own
 selection only when the new geometry matches uniquely; other document edits clear stale selection.
 
+Existing text enclosed in `/ActualText` moves its original glyph shows while retaining the logical text, named properties, MCIDs and marked-content boundaries.
+This includes nested spans and text shown with quote operators.
+Vertical or clipping text remains unsupported, including a later clipping show inside a logical span; a refusal leaves the document unchanged.
+
 ## Engine
 
 `Document::editable_objects(page)` returns a mixed inventory with zero-based `ObjectTarget`

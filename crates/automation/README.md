@@ -139,6 +139,9 @@ moves 1–1000 references atomically in displayed points (right/down), preservin
 and fonts. A refusal changes nothing; success is one undo step. See
 [the selection and movement guide](../../docs/editing-multiple-objects.md) for limits and examples.
 
+Existing `/ActualText` paragraphs retain their logical text, tagged boundaries and named properties while their original glyph shows move.
+Nested spans and quote operators are supported; vertical or clipping text is refused atomically, including later shows inside a logical span.
+
 ## Accessibility review record
 
 Open the original and edited PDFs as separate documents, then call

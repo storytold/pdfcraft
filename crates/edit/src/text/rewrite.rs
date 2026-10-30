@@ -1044,6 +1044,24 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
     let fonts = res.get(b"Font").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
+    // Logical lines include their ActualText boundaries so replacements can remove stale
+    // metadata. A move keeps that metadata and translates only the original glyph shows.
+    let cannot_move = || EditError::Invalid("a selected text operation cannot be moved".into());
+    let mut show_ops = std::collections::BTreeSet::new();
+    for index in selected {
+        let op = ops.get(index).ok_or_else(cannot_move)?;
+        match op.op.as_slice() {
+            b"Tj" | b"TJ" | b"'" | b"\"" => {
+                show_ops.insert(index);
+            }
+            b"BDC" | b"EMC" => {}
+            _ => return Err(cannot_move()),
+        }
+    }
+    let selected = show_ops;
+    if selected.is_empty() {
+        return Err(cannot_move());
+    }
     let shown = interpret(doc, &ops, &res, &mut HashMap::new(), &mut Carry::new(), None, None)?;
     let mut patches = HashMap::new();
     // Keep full precision: a tiny rounded text-space change can be magnified by a CTM,
@@ -1110,7 +1128,7 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
         patches.insert(s.op, replacement);
     }
     if patches.len() != selected.len() {
-        return Err(EditError::Invalid("a selected text operation cannot be moved".into()));
+        return Err(cannot_move());
     }
     let data = splice(&pieces, &ops, |i| patches.remove(&i).map_or((Vec::new(), true), |v| (v, false)));
     let contents = rewritten_contents(doc, &streams, data);
