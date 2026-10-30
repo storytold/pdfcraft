@@ -70,6 +70,8 @@ pub struct XfaDoc {
     /// The current page, 0-based.
     pub page: usize,
     pub page_count: usize,
+    /// Whether the viewer highlights form fields (`app.runtimeHighlight`).
+    pub highlight: bool,
 }
 
 /// Something a script changed or asked for.
@@ -110,6 +112,8 @@ pub enum XfaEffect {
     Recalculate,
     /// `xfa.form.remerge()`, `xfa.layout.relayout()`.
     Relayout,
+    /// `app.runtimeHighlight = on`.
+    Highlight(bool),
 }
 
 /// What running a script did.
@@ -213,7 +217,13 @@ pub(super) fn payload(e: &XfaEffect) -> usize {
         XfaEffect::MessageBox(m) => m.bytes(),
         XfaEffect::LaunchUrl(s) | XfaEffect::SetFocus(s) => s.len(),
         XfaEffect::ResetData(names) => names.iter().fold(0usize, |n, s| n.saturating_add(s.len()).saturating_add(std::mem::size_of::<String>())),
-        XfaEffect::Print | XfaEffect::SaveAs | XfaEffect::Beep | XfaEffect::Recalculate | XfaEffect::Relayout | XfaEffect::ShowPanel(_) => 0,
+        XfaEffect::Print
+        | XfaEffect::SaveAs
+        | XfaEffect::Beep
+        | XfaEffect::Recalculate
+        | XfaEffect::Relayout
+        | XfaEffect::Highlight(_)
+        | XfaEffect::ShowPanel(_) => 0,
     }
 }
 
