@@ -925,9 +925,14 @@ impl PdfCraftApp {
         }
         let Some(doc) = self.session.get(id) else { return };
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
-        let ext = format.extension();
         let folder = doc.path.clone();
         let bytes = doc.export_office(format);
+        self.save_export_file(&stem, format.extension(), folder, bytes);
+    }
+
+    /// Ask where to save an exported file named after the document (`save_override` in tests),
+    /// starting in the document's folder (`folder`, its path), then write it; on the web, download it.
+    pub(crate) fn save_export_file(&mut self, stem: &str, ext: &'static str, folder: Option<String>, bytes: Vec<u8>) {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let write = move |app: &mut Self, path: std::path::PathBuf| match crate::editing::write_atomically(&path.to_string_lossy(), &bytes) {

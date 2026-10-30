@@ -2792,6 +2792,14 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	A table that runs across pages stays together; the pages follow one another down the sheet.	Tabel yang membentang di beberapa halaman tetap menyatu; halaman-halamannya berurutan ke bawah pada lembar.
+	Each page on its own sheet, named Page 1, Page 2…	Setiap halaman pada lembarnya sendiri, bernama Halaman 1, Halaman 2…
+	Export to Excel	Ekspor ke Excel
+	Export to Excel…	Ekspor ke Excel…
+	One sheet for the whole document	Satu lembar untuk seluruh dokumen
+	One sheet per page	Satu lembar per halaman
+	Sheets	Lembar
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Tabel menjadi sel; angka, jumlah, persentase, dan tanggal menjadi nilai yang dapat dihitung Excel, ditampilkan seperti di halaman.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini

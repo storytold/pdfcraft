@@ -2521,6 +2521,14 @@ animation effects	Off	Aus
 	Make properties default	Eigenschaften als Standard festlegen
 	Pages selected	Ausgewählte Seiten
 	Page properties	Seiteneigenschaften
+	Export to Excel…	Nach Excel exportieren…
+	Export to Excel	Nach Excel exportieren
+	Sheets	Tabellenblätter
+	One sheet for the whole document	Ein Blatt für das ganze Dokument
+	A table that runs across pages stays together; the pages follow one another down the sheet.	Eine Tabelle über mehrere Seiten bleibt zusammen; die Seiten folgen auf dem Blatt untereinander.
+	One sheet per page	Ein Blatt pro Seite
+	Each page on its own sheet, named Page 1, Page 2…	Jede Seite auf einem eigenen Blatt, benannt Page 1, Page 2…
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Tabellen werden zu Zellen; Zahlen, Beträge, Prozente und Datumsangaben werden zu Werten, mit denen Excel rechnen kann, so angezeigt wie auf der Seite.
 	Create & Edit	Erstellen & Bearbeiten
 	Review & Compare	Prüfen & Vergleichen
 	Forms & Signatures	Formulare & Signaturen

@@ -2496,6 +2496,14 @@ animation effects	Off	Wyłączone
 	Make properties default	Ustaw właściwości jako domyślne
 	Pages selected	Zaznaczone strony
 	Page properties	Właściwości strony
+	Export to Excel…	Eksportuj do Excela…
+	Export to Excel	Eksportuj do Excela
+	Sheets	Arkusze
+	One sheet for the whole document	Jeden arkusz dla całego dokumentu
+	A table that runs across pages stays together; the pages follow one another down the sheet.	Tabela biegnąca przez kilka stron pozostaje w całości; strony następują po sobie w dół arkusza.
+	One sheet per page	Jeden arkusz na stronę
+	Each page on its own sheet, named Page 1, Page 2…	Każda strona w osobnym arkuszu o nazwie Page 1, Page 2…
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Tabele stają się komórkami; liczby, kwoty, procenty i daty stają się wartościami, na których Excel może liczyć, wyświetlanymi tak jak na stronie.
 	Create & Edit	Tworzenie i edycja
 	Review & Compare	Recenzja i porównanie
 	Forms & Signatures	Formularze i podpisy

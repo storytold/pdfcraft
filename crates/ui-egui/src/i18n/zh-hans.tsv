@@ -2484,6 +2484,14 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+	Export to Excel…	导出为 Excel…
+	Export to Excel	导出为 Excel
+	Sheets	工作表
+	One sheet for the whole document	整个文档一个工作表
+	A table that runs across pages stays together; the pages follow one another down the sheet.	跨页的表格保持完整；各页在工作表中依次向下排列。
+	One sheet per page	每页一个工作表
+	Each page on its own sheet, named Page 1, Page 2…	每页单独一个工作表，名为 Page 1、Page 2…
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	表格变为单元格；数字、金额、百分比和日期变为 Excel 可以计算的值，显示与页面相同。
 	Create & Edit	创建和编辑
 	Review & Compare	审阅和比较
 	Forms & Signatures	表单和签名

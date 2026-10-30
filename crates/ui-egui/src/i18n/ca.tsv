@@ -2820,6 +2820,14 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	A table that runs across pages stays together; the pages follow one another down the sheet.	Una taula que ocupa diverses pàgines es manté unida; les pàgines se succeeixen al llarg del full.
+	Each page on its own sheet, named Page 1, Page 2…	Cada pàgina en un full propi, amb el nom Pàgina 1, Pàgina 2…
+	Export to Excel	Exporta a Excel
+	Export to Excel…	Exporta a Excel…
+	One sheet for the whole document	Un full per a tot el document
+	One sheet per page	Un full per pàgina
+	Sheets	Fulls
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Les taules es converteixen en cel·les; els números, imports, percentatges i dates es converteixen en valors amb què Excel pot calcular, mostrats com a la pàgina.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui

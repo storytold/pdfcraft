@@ -2433,6 +2433,14 @@ animation effects	Off	Выкл
 	Make properties default	Сделать свойства стандартными
 	Pages selected	Выделенные страницы
 	Page properties	Свойства страницы
+	Export to Excel…	Экспортировать в Excel…
+	Export to Excel	Экспортировать в Excel
+	Sheets	Листы
+	One sheet for the whole document	Один лист на весь документ
+	A table that runs across pages stays together; the pages follow one another down the sheet.	Таблица, идущая через несколько страниц, остаётся целой; страницы следуют одна за другой вниз по листу.
+	One sheet per page	По листу на страницу
+	Each page on its own sheet, named Page 1, Page 2…	Каждая страница на своём листе с именем Page 1, Page 2…
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Таблицы становятся ячейками; числа, суммы, проценты и даты становятся значениями, с которыми Excel может считать, и выглядят как на странице.
 	Create & Edit	Создание и редактирование
 	Review & Compare	Рецензирование и сравнение
 	Forms & Signatures	Формы и подписи

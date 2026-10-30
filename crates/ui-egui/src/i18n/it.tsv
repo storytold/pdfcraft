@@ -2732,6 +2732,14 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+	Export to Excel…	Esporta in Excel…
+	Export to Excel	Esporta in Excel
+	Sheets	Fogli
+	One sheet for the whole document	Un foglio per l'intero documento
+	A table that runs across pages stays together; the pages follow one another down the sheet.	Una tabella che continua su più pagine resta unita; le pagine si susseguono lungo il foglio.
+	One sheet per page	Un foglio per pagina
+	Each page on its own sheet, named Page 1, Page 2…	Ogni pagina nel proprio foglio, chiamato Page 1, Page 2…
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Le tabelle diventano celle; numeri, importi, percentuali e date diventano valori con cui Excel può calcolare, mostrati come nella pagina.
 	Create & Edit	Crea e modifica
 	Review & Compare	Revisione e confronto
 	Forms & Signatures	Moduli e firme

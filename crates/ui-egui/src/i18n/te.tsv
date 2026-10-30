@@ -2429,6 +2429,14 @@ animation effects	Off	ఆఫ్
 	Make properties default	లక్షణాలను డిఫాల్ట్‌గా చేయి
 	Pages selected	ఎంచుకున్న పేజీలు
 	Page properties	పేజీ లక్షణాలు
+	Export to Excel…	Excelగా ఎగుమతి చేయి…
+	Export to Excel	Excelగా ఎగుమతి
+	Sheets	షీట్‌లు
+	One sheet for the whole document	మొత్తం పత్రానికి ఒకే షీట్
+	A table that runs across pages stays together; the pages follow one another down the sheet.	పేజీల మీదుగా సాగే పట్టిక కలిసే ఉంటుంది; పేజీలు షీట్‌లో ఒకదాని తర్వాత ఒకటి కిందికి వస్తాయి.
+	One sheet per page	ప్రతి పేజీకి ఒక షీట్
+	Each page on its own sheet, named Page 1, Page 2…	ప్రతి పేజీ దాని స్వంత షీట్‌లో, పేర్లు: Page 1, Page 2…
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	పట్టికలు గడులుగా మారుతాయి; సంఖ్యలు, మొత్తాలు, శాతాలు, తేదీలు Excel లెక్కించగల విలువలుగా మారి, పేజీలో ఉన్నట్లే కనిపిస్తాయి.
 	Create & Edit	సృష్టించు & సవరించు
 	Review & Compare	సమీక్షించు & పోల్చు
 	Forms & Signatures	ఫారమ్‌లు & సంతకాలు

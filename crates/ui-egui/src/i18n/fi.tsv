@@ -2829,6 +2829,14 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+	A table that runs across pages stays together; the pages follow one another down the sheet.	Taulukko, joka jatkuu usealle sivulle, pysyy yhtenä; sivut seuraavat toisiaan alaspäin arkilla.
+	Each page on its own sheet, named Page 1, Page 2…	Jokainen sivu omalle arkilleen, nimeltään Sivu 1, Sivu 2…
+	Export to Excel	Vie Exceliin
+	Export to Excel…	Vie Exceliin…
+	One sheet for the whole document	Yksi arkki koko asiakirjalle
+	One sheet per page	Yksi arkki sivua kohden
+	Sheets	Arkit
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Taulukot muuttuvat soluiksi; luvut, summat, prosentit ja päivämäärät muuttuvat arvoiksi, joilla Excel voi laskea ja jotka näytetään kuten sivulla.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään

@@ -2791,6 +2791,14 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	A table that runs across pages stays together; the pages follow one another down the sheet.	सभी पृष्ठों में फैली तालिका एक साथ रहती है; पृष्ठ शीट पर एक के बाद एक नीचे आते हैं।
+	Each page on its own sheet, named Page 1, Page 2…	हर पृष्ठ अपनी अलग शीट पर, नाम पृष्ठ 1, पृष्ठ 2…
+	Export to Excel	Excel में निर्यात करें
+	Export to Excel…	Excel में निर्यात करें…
+	One sheet for the whole document	पूरे दस्तावेज़ के लिए एक शीट
+	One sheet per page	हर पृष्ठ के लिए एक शीट
+	Sheets	शीट
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	तालिकाएँ सेल बन जाती हैं; संख्याएँ, राशियाँ, प्रतिशत और तिथियाँ ऐसे मान बन जाते हैं जिनसे Excel गणना कर सकता है, जैसे पृष्ठ पर दिखते हैं।
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज

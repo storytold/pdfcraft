@@ -2526,6 +2526,14 @@ animation effects	Off	Ανενεργά
 	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
 	Pages selected	Επιλεγμένες σελίδες
 	Page properties	Ιδιότητες σελίδας
+	Export to Excel…	Εξαγωγή σε Excel…
+	Export to Excel	Εξαγωγή σε Excel
+	Sheets	Φύλλα
+	One sheet for the whole document	Ένα φύλλο για όλο το έγγραφο
+	A table that runs across pages stays together; the pages follow one another down the sheet.	Ένας πίνακας που συνεχίζεται σε πολλές σελίδες μένει ενωμένος· οι σελίδες ακολουθούν η μία μετά την άλλη στο φύλλο.
+	One sheet per page	Ένα φύλλο ανά σελίδα
+	Each page on its own sheet, named Page 1, Page 2…	Κάθε σελίδα στο δικό της φύλλο, με όνομα Page 1, Page 2…
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Οι πίνακες γίνονται κελιά· οι αριθμοί, τα ποσά, τα ποσοστά και οι ημερομηνίες γίνονται τιμές με τις οποίες το Excel μπορεί να υπολογίζει, όπως φαίνονται στη σελίδα.
 	Create & Edit	Δημιουργία και επεξεργασία
 	Review & Compare	Αναθεώρηση και σύγκριση
 	Forms & Signatures	Φόρμες και υπογραφές

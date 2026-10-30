@@ -2594,6 +2594,14 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+	Export to Excel…	Exportovat do formátu Excel…
+	Export to Excel	Exportovat do formátu Excel
+	Sheets	Listy
+	One sheet for the whole document	Jeden list pro celý dokument
+	A table that runs across pages stays together; the pages follow one another down the sheet.	Tabulka, která pokračuje přes více stránek, zůstane pohromadě; stránky následují jedna za druhou dolů po listu.
+	One sheet per page	Jeden list na stránku
+	Each page on its own sheet, named Page 1, Page 2…	Každá stránka na vlastním listu s názvem Page 1, Page 2…
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Z tabulek se stanou buňky; čísla, částky, procenta a data se stanou hodnotami, se kterými Excel umí počítat, zobrazenými jako na stránce.
 	Create & Edit	Vytváření a úpravy
 	Review & Compare	Revize a porovnání
 	Forms & Signatures	Formuláře a podpisy

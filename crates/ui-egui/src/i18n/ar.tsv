@@ -2797,6 +2797,14 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+	Export to Excel…	تصدير إلى Excel…
+	Export to Excel	تصدير إلى Excel
+	Sheets	الأوراق
+	One sheet for the whole document	ورقة واحدة للمستند كله
+	A table that runs across pages stays together; the pages follow one another down the sheet.	يبقى الجدول الممتد عبر الصفحات متصلًا؛ تتوالى الصفحات واحدة تلو الأخرى في الورقة.
+	One sheet per page	ورقة لكل صفحة
+	Each page on its own sheet, named Page 1, Page 2…	كل صفحة في ورقة خاصة بها، باسم Page 1 وPage 2…
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	تصبح الجداول خلايا؛ وتصبح الأرقام والمبالغ والنسب المئوية والتواريخ قيمًا يمكن لـ Excel الحساب بها، وتظهر كما في الصفحة.
 	Create & Edit	الإنشاء والتحرير
 	Review & Compare	المراجعة والمقارنة
 	Forms & Signatures	النماذج والتوقيعات

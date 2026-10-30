@@ -84,7 +84,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
             title: "Export to",
             items: &[
                 item("Microsoft Word (.docx)", "file-text", "export.docx", Ready),
-                item("Spreadsheet (.xlsx)", "grid-3x3", "export.xlsx", Planned("M10")),
+                item("Spreadsheet (.xlsx)", "grid-3x3", "export.xlsx", Ready),
                 item("Presentation (.pptx)", "presentation", "export.pptx", Ready),
                 item("Image (PNG)", "image", "export.image", Ready),
                 item("Export all images", "image", "export.all_images", Ready),

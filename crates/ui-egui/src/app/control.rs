@@ -99,6 +99,7 @@ impl PdfCraftApp {
                     "word-count" => Some(Dialog::WordCount),
                     "export-text" => Some(Dialog::Export(export_ui::ExportKind::Text)),
                     "export-all-images" => Some(Dialog::Export(export_ui::ExportKind::AllImages)),
+                    "export-excel" => Some(Dialog::Export(export_ui::ExportKind::Excel)),
                     "accessibility-options" => Some(Dialog::AccessibilityOptions),
                     "recognize-text" => Some(Dialog::RecognizeText),
                     "js-console" => Some(Dialog::JsConsole),

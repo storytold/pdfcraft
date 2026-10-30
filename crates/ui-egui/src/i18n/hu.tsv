@@ -2519,6 +2519,14 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+	Export to Excel…	Exportálás Excelbe…
+	Export to Excel	Exportálás Excelbe
+	Sheets	Munkalapok
+	One sheet for the whole document	Egy munkalap a teljes dokumentumhoz
+	A table that runs across pages stays together; the pages follow one another down the sheet.	A több oldalon átnyúló táblázat egyben marad; az oldalak egymás alatt következnek a munkalapon.
+	One sheet per page	Oldalanként egy munkalap
+	Each page on its own sheet, named Page 1, Page 2…	Minden oldal külön munkalapon, ezek neve: Page 1, Page 2…
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	A táblázatokból cellák lesznek; a számok, összegek, százalékok és dátumok olyan értékek lesznek, amelyekkel az Excel számolni tud, és úgy jelennek meg, mint az oldalon.
 	Create & Edit	Létrehozás és szerkesztés
 	Review & Compare	Áttekintés és összehasonlítás
 	Forms & Signatures	Űrlapok és aláírások

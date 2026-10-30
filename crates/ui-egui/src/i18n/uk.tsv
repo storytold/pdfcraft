@@ -2542,6 +2542,14 @@ animation effects	Off	Вимкнено
 	Make properties default	Зробити властивості типовими
 	Pages selected	Вибрані сторінки
 	Page properties	Властивості сторінки
+	Export to Excel…	Експортувати в Excel…
+	Export to Excel	Експортувати в Excel
+	Sheets	Аркуші
+	One sheet for the whole document	Один аркуш на весь документ
+	A table that runs across pages stays together; the pages follow one another down the sheet.	Таблиця, що йде через кілька сторінок, лишається цілою; сторінки йдуть одна за одною вниз аркушем.
+	One sheet per page	Аркуш на кожну сторінку
+	Each page on its own sheet, named Page 1, Page 2…	Кожна сторінка на власному аркуші з назвою Page 1, Page 2…
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Таблиці стають клітинками; числа, суми, відсотки й дати стають значеннями, з якими Excel може рахувати, і виглядають як на сторінці.
 	Create & Edit	Створення й редагування
 	Review & Compare	Рецензування й порівняння
 	Forms & Signatures	Форми й підписи

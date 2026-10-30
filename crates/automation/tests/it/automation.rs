@@ -7423,7 +7423,7 @@ fn exporting_to_word_html_and_rtf() {
     let dir = workdir("office");
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
-    for ext in ["docx", "pptx", "html", "rtf", "md"] {
+    for ext in ["docx", "xlsx", "pptx", "html", "rtf", "md"] {
         let r = ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": format!("a.{ext}") }));
         assert_eq!(r["format"], ext);
     }
@@ -7437,6 +7437,17 @@ fn exporting_to_word_html_and_rtf() {
     assert!(md.contains("Page 1") && md.contains("Page 3") && md.matches("\n---\n").count() == 2, "{md}");
     assert_eq!(ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "b.markdown" }))["format"], "md");
     assert!(a.call("doc_export_office", &json!({ "doc": doc, "path": "a.xyz" })).is_err());
+    // Excel: one sheet for the whole document by default, a sheet per page when asked.
+    let has = |file: &str, name: &str| std::fs::read(dir.join(file)).unwrap().windows(name.len()).any(|w| w == name.as_bytes());
+    assert!(has("a.xlsx", "xl/worksheets/sheet1.xml") && !has("a.xlsx", "xl/worksheets/sheet2.xml"));
+    ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "pages.xlsx", "sheets": "page" }));
+    assert!(has("pages.xlsx", "xl/worksheets/sheet3.xml"));
+    for (path, sheets) in [("a.xlsx", "rows"), ("a.docx", "page")] {
+        match a.call("doc_export_office", &json!({ "doc": doc, "path": path, "sheets": sheets })) {
+            Err(ToolError::InvalidArgs(m)) => assert!(m.contains("sheets"), "{m}"),
+            other => panic!("{path} {sheets}: {other:?}"),
+        }
+    }
 }
 
 /// #3120: a PDF whose pages draw "Head", then a chain of `depths[page]` nested forms whose

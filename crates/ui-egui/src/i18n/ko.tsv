@@ -2791,6 +2791,14 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	A table that runs across pages stays together; the pages follow one another down the sheet.	여러 페이지에 걸친 표는 하나로 유지되며, 페이지가 시트 아래로 이어집니다.
+	Each page on its own sheet, named Page 1, Page 2…	각 페이지를 별도 시트에 담고, 이름은 페이지 1, 페이지 2…
+	Export to Excel	Excel로 내보내기
+	Export to Excel…	Excel로 내보내기…
+	One sheet for the whole document	전체 문서를 한 시트에
+	One sheet per page	페이지당 한 시트
+	Sheets	시트
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	표는 셀이 되고, 숫자·금액·백분율·날짜는 페이지에 표시된 그대로 Excel에서 계산할 수 있는 값이 됩니다.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	오늘

@@ -2518,6 +2518,14 @@ animation effects	Off	Өшірулі
 	Make properties default	Қасиеттерді әдепкі ету
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
+	Export to Excel…	Excel-ге экспорттау…
+	Export to Excel	Excel-ге экспорттау
+	Sheets	Парақтар
+	One sheet for the whole document	Бүкіл құжатқа бір парақ
+	A table that runs across pages stays together; the pages follow one another down the sheet.	Бірнеше бетке созылған кесте біртұтас қалады; беттер парақта бірінен соң бірі төмен қарай жалғасады.
+	One sheet per page	Әр бетке бір парақ
+	Each page on its own sheet, named Page 1, Page 2…	Әр бет өз парағында, атауы Page 1, Page 2…
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Кестелер ұяшықтарға айналады; сандар, сомалар, пайыздар мен күндер Excel есептей алатын мәндерге айналады және бетте көрінгендей көрсетіледі.
 	Create & Edit	Жасау және өңдеу
 	Review & Compare	Шолу және салыстыру
 	Forms & Signatures	Пішіндер және қолтаңбалар
