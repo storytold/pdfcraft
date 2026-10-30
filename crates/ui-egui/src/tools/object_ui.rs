@@ -153,10 +153,17 @@ fn screen(xf: &PageXform, info: &DocInfo, page: usize, object: &EditableObject) 
 
 /// The part of a drag by `delta` that keeps `rect` on its page. A move can't take content to
 /// another page (#5264): past the edge it would be clipped away. An axis where `rect` is
-/// already larger than the page moves freely.
+/// already larger than the page moves freely, and one already past an edge may still move back
+/// (a drag that doesn't move it along that axis leaves it where it is).
 pub(crate) fn keep_on_page(rect: Rect, page: Rect, delta: egui::Vec2) -> egui::Vec2 {
     let axis = |lo: f32, hi: f32, page_lo: f32, page_hi: f32, d: f32| {
-        if hi - lo > page_hi - page_lo { d } else { d.max(page_lo - lo).min(page_hi - hi) }
+        if hi - lo > page_hi - page_lo {
+            d
+        } else if d > 0.0 {
+            d.min((page_hi - hi).max(0.0))
+        } else {
+            d.max((page_lo - lo).min(0.0))
+        }
     };
     egui::vec2(
         axis(rect.left(), rect.right(), page.left(), page.right(), delta.x),
@@ -286,11 +293,15 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
                     s.clear();
                 }
             } else if gesture.start.distance(gesture.now) > 3.0 && view.pending_edit.is_none() {
-                let end = gesture.start + selection_drag(xf, info, page, &s.selected, gesture.start, gesture.now);
-                let (a, b) = (xf.screen_to_view(gesture.start), xf.screen_to_view(end));
-                match doc.object_move_offset(page, [f64::from(b.0 - a.0), f64::from(b.1 - a.1)]) {
-                    Ok(offset) => view.pending_edit = Some(s.move_by(page, offset)),
-                    Err(_) => s.notice = Some(tl!("These objects could not be moved. Select them again and try a smaller move.").into()),
+                // Dragged outward at the page edge, the selection doesn't move, and the engine
+                // refuses a zero move.
+                let delta = selection_drag(xf, info, page, &s.selected, gesture.start, gesture.now);
+                if delta != egui::Vec2::ZERO {
+                    let (a, b) = (xf.screen_to_view(gesture.start), xf.screen_to_view(gesture.start + delta));
+                    match doc.object_move_offset(page, [f64::from(b.0 - a.0), f64::from(b.1 - a.1)]) {
+                        Ok(offset) => view.pending_edit = Some(s.move_by(page, offset)),
+                        Err(_) => s.notice = Some(tl!("These objects could not be moved. Select them again and try a smaller move.").into()),
+                    }
                 }
             }
         } else {
@@ -552,6 +563,12 @@ mod tests {
         assert_eq!(keep_on_page(rect, page, egui::vec2(-500.0, -500.0)), egui::vec2(-10.0, -10.0));
         let wide = Rect::from_min_max(Pos2::new(-10.0, 10.0), Pos2::new(120.0, 20.0));
         assert_eq!(keep_on_page(wide, page, egui::vec2(500.0, 500.0)), egui::vec2(500.0, 80.0));
+        // Half past the left edge: a straight-down drag doesn't pull it sideways, and it may
+        // move back onto the page but no further off.
+        let past = Rect::from_min_max(Pos2::new(-10.0, 10.0), Pos2::new(10.0, 20.0));
+        assert_eq!(keep_on_page(past, page, egui::vec2(0.0, 5.0)), egui::vec2(0.0, 5.0));
+        assert_eq!(keep_on_page(past, page, egui::vec2(-5.0, 0.0)), egui::vec2(0.0, 0.0));
+        assert_eq!(keep_on_page(past, page, egui::vec2(5.0, 0.0)), egui::vec2(5.0, 0.0));
     }
 
     #[test]
