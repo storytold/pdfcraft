@@ -371,8 +371,16 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             (selected, picker)
         };
         let before = app.language.clone();
+        // Every language in sight where the window has room (#1842): in a list that scrolls, a
+        // row cut off at its bottom edge is easy to aim at and can't be picked there. The list is
+        // offered the window's height; the menu keeps to the room on the side it opens on and to
+        // its rows. And only a click outside closes it, so a click on a cut-off row's hidden part
+        // doesn't throw the list away; picking a language closes it.
+        let room = ui.ctx().content_rect().height();
         craft_ui::ComboBox::from_id_salt("interface-language")
             .selected_text(selected)
+            .height(room.max(ui.spacing().combo_height))
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show_ui(ui, |ui| {
                 if ui.selectable_value(&mut app.language, crate::i18n::AUTO.to_string(), tl!("Auto")).clicked() {
                     ui.close();

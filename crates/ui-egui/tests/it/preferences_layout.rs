@@ -102,3 +102,59 @@ fn a_very_tall_window_does_not_leave_a_blank_gap_above_ok() {
     assert!(on_screen(ok, 2600.0) && on_screen(last, 2600.0), "{last:?} {ok:?}");
     assert!(ok.min.y - last.max.y < 120.0, "a gap of {} pt between the last setting and OK", ok.min.y - last.max.y);
 }
+
+/// Opens the Interface language list in a window `height` tall, and gives each language row
+/// drawn below the box, by either name the list may show it by, with its rect.
+fn open_language_list(height: f32) -> (Harness<'static, PdfCraftApp>, Vec<(pdfcraft_ui_egui::i18n::Lang, Rect)>) {
+    use pdfcraft_ui_egui::i18n::Lang;
+    let mut h = harness(height);
+    let combo = h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Interface language").rect();
+    click_at(&mut h, combo.center());
+    h.run_steps(3);
+    let rows = Lang::all()
+        .filter_map(|lang| {
+            let row = [lang.name(), lang.english_name()]
+                .into_iter()
+                .find_map(|name| h.query_all_by_label(name).filter(|n| n.rect().top() > combo.bottom()).map(|n| n.rect()).next())?;
+            Some((lang, row))
+        })
+        .collect();
+    (h, rows)
+}
+
+fn click_at(h: &mut Harness<'static, PdfCraftApp>, pos: egui::Pos2) {
+    h.event(egui::Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+}
+
+/// #1842: the Interface language list is as tall as the window allows, so where every language
+/// fits, the last one is picked by clicking its row, without scrolling first. In the old
+/// 200-point list it lay outside the list, and a click there closed it with nothing picked.
+#[test]
+fn the_interface_language_list_shows_every_language_the_window_has_room_for() {
+    // 1335 points leaves the list little more than its rows below the box.
+    for height in [1600.0, 1335.0] {
+        let (mut h, rows) = open_language_list(height);
+        let (lowest, rect) = rows.iter().copied().max_by(|a, b| a.1.top().total_cmp(&b.1.top())).unwrap();
+        assert!(rect.bottom() <= height, "{} is in the window: {rect:?}", lowest.code());
+        click_at(&mut h, rect.center());
+        h.run_steps(4);
+        assert_eq!(h.state().language, lowest.code(), "picked by its row in a window {height} tall");
+    }
+}
+
+/// #1842: a click in the list that misses its rows, such as on a row cut off at the list's edge,
+/// leaves it open; only a click outside it, or a language picked, closes it.
+#[test]
+fn a_click_in_the_language_list_that_picks_nothing_keeps_it_open() {
+    let (mut h, rows) = open_language_list(900.0);
+    let first = rows.iter().map(|(_, r)| *r).min_by(|a, b| a.top().total_cmp(&b.top())).unwrap();
+    // The list's own margin, just left of its first row.
+    click_at(&mut h, egui::pos2(first.left() - 3.0, first.center().y));
+    h.run_steps(3);
+    assert_eq!(h.state().language, "en");
+    assert!(h.query_all_by_label("Lietuvių").next().is_some(), "the list is still open");
+}
