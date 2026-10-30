@@ -17,6 +17,7 @@ const MAX_INPUT: u64 = 512 * 1024 * 1024;
 struct Recipe<'a> {
     steps: Vec<&'a str>,
     images: optimize::ImageSettings,
+    mono: optimize::MonoSettings,
     ocr: ocr::OcrSettings,
 }
 
@@ -38,12 +39,17 @@ impl<'a> Recipe<'a> {
             }
         }
         let mut images = optimize::ImageSettings::REDUCE;
+        let mut mono = optimize::MonoSettings::REDUCE;
         if let Some(ppi) = args.opt_num("ppi")? {
             if !(9.0..=1600.0).contains(&ppi) {
                 return Err(Args::wrong("ppi", "9 to 1600"));
             }
             images.target_ppi = ppi;
             images.above_ppi = ppi * 1.5;
+            // Black-and-white images keep Reduce File Size's higher resolution, at which text
+            // stays legible, and are never taken below a higher `ppi` asked for.
+            mono.target_ppi = mono.target_ppi.max(ppi);
+            mono.above_ppi = mono.target_ppi * 1.5;
         }
         if let Some(q) = args.opt_int("quality")? {
             if !(1..=100).contains(&q) {
@@ -54,7 +60,7 @@ impl<'a> Recipe<'a> {
         if args.opt_num("dpi")?.is_some_and(|dpi| !(72.0..=600.0).contains(&dpi)) {
             return Err(Args::wrong("dpi", "72 to 600"));
         }
-        Ok(Self { steps, images, ocr: auto.ocr_settings(args)? })
+        Ok(Self { steps, images, mono, ocr: auto.ocr_settings(args)? })
     }
 
     fn accepts(&self, path: &Path) -> bool {
@@ -88,7 +94,7 @@ impl<'a> Recipe<'a> {
                 }
                 "optimize" => {
                     let id = session.open(name, None, bytes.clone(), None).map_err(failed)?;
-                    let settings = optimize::Settings { color: self.images, gray: self.images, ..Default::default() };
+                    let settings = optimize::Settings { color: self.images, gray: self.images, mono: self.mono, ..Default::default() };
                     let (candidate, _) = session.optimized_bytes(id, &settings, &[])?;
                     session.close(id);
                     if candidate.len() < bytes.len() {

@@ -139,6 +139,7 @@ impl PdfCraftApp {
         });
         // Set apart: one more key inside the macro above passes serde_json's recursion limit.
         v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
+        v["fill_text_color"] = serde_json::json!(self.fill_text_color);
         v["redact_prefs"] = self.redact_defaults.to_json();
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
@@ -178,6 +179,15 @@ impl PdfCraftApp {
             let r: Vec<RecentFile> = r.into_iter().filter(|f| std::path::Path::new(&f.path).exists()).collect();
             self.recent = r;
         }
+        self.restore_layout_prefs(&v);
+        self.restore_behavior_prefs(&v);
+        self.restore_view_prefs(&v);
+        self.restore_comment_prefs(&v);
+        self.restore_signature_prefs(&v);
+    }
+
+    /// The panels, combine view, zoom and recent files.
+    fn restore_layout_prefs(&mut self, v: &serde_json::Value) {
         if let Some(on) = v["reopen_last_session"].as_bool() {
             self.reopen_last_session = on;
         }
@@ -211,6 +221,10 @@ impl PdfCraftApp {
         if let Some((layout, continuous)) = v["default_layout"].as_str().and_then(canvas::parse_display_token) {
             (self.view_defaults.layout, self.view_defaults.continuous) = (layout, continuous);
         }
+    }
+
+    /// Switches for reopening, window chrome and file watching.
+    fn restore_behavior_prefs(&mut self, v: &serde_json::Value) {
         if let Some(show) = v["default_page_gaps"].as_bool() {
             self.view_defaults.show_page_gaps = show;
         }
@@ -248,10 +262,19 @@ impl PdfCraftApp {
         if let Some(size) = v["fill_text_size"].as_f64().and_then(fill_sign::valid_text_size) {
             self.fill_text_size = size;
         }
+        if let Ok(color) = serde_json::from_value::<[f64; 3]>(v["fill_text_color"].clone())
+            && let Some(color) = fill_sign::valid_text_color(color)
+        {
+            self.fill_text_color = color;
+        }
         if let Some(prefs) = RedactPrefs::from_json(&v["redact_prefs"]) {
             self.redact_prefs = prefs.clone();
             self.redact_defaults = prefs;
         }
+    }
+
+    /// Display defaults, units, language and sign-in details.
+    fn restore_view_prefs(&mut self, v: &serde_json::Value) {
         // Settings are untrusted: an unreadable value (a colour that isn't three bytes, say)
         // fails to deserialize and keeps Off.
         if let Ok(colors) = serde_json::from_value::<pdfcraft_render::ReadingColors>(v["reading_colors"].clone()) {
@@ -277,6 +300,10 @@ impl PdfCraftApp {
         if let Some(pinned) = v["comment_tool_pinned"].as_bool() {
             self.comment_prefs.pinned = pinned;
         }
+    }
+
+    /// The author and per-tool comment styles.
+    fn restore_comment_prefs(&mut self, v: &serde_json::Value) {
         // Per-tool comment styles (#340): each field goes through its clamping setter, so a
         // malformed or hostile entry is clamped or ignored rather than trusted.
         if let Some(styles) = v["comment_styles"].as_array() {
@@ -305,6 +332,10 @@ impl PdfCraftApp {
                 }
             }
         }
+    }
+
+    /// Saved signatures, stamps, actions and trusted certificates.
+    fn restore_signature_prefs(&mut self, v: &serde_json::Value) {
         if let Ok(s) = serde_json::from_value::<Vec<Vec<[f32; 2]>>>(v["signature"].clone())
             && s.iter().all(|st| st.iter().all(|p| p.iter().all(|x| x.is_finite())))
         {

@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout, RichText};
-use pdfcraft_engine::optimize::{Compatibility, Compression, ImageSettings, Preset, QUALITIES, Settings};
+use pdfcraft_engine::optimize::{Compatibility, Compression, ImageSettings, MonoCompression, MonoSettings, Preset, QUALITIES, Settings};
 use pdfcraft_engine::optimizer::{OptimizeStage, Optimized};
 use pdfcraft_engine::{DocId, EditError, Hidden, OptimizeReport};
 
@@ -143,6 +143,32 @@ fn image_row(ui: &mut egui::Ui, id: &str, title: &str, s: &mut ImageSettings) {
     ui.add_space(8.0);
 }
 
+/// Monochrome Images: how black-and-white images and image masks are resampled and stored.
+fn mono_row(ui: &mut egui::Ui, m: &mut MonoSettings) {
+    ui.label(egui::RichText::new(tl!("Monochrome Images")).font(theme::semibold(13.0)));
+    ui.horizontal(|ui| {
+        ui.add(widgets::checkbox(&mut m.downsample, tl!("Downsample to")));
+        ui.add_enabled(m.downsample, egui::DragValue::new(&mut m.target_ppi).range(9.0..=2400.0).suffix(" ppi"));
+        ui.label(tl!("for images above"));
+        ui.add_enabled(m.downsample, egui::DragValue::new(&mut m.above_ppi).range(9.0..=2400.0).suffix(" ppi"));
+    });
+    m.above_ppi = m.above_ppi.max(m.target_ppi);
+    ui.horizontal(|ui| {
+        ui.label(tl!("Compression"));
+        let label = match m.compression {
+            MonoCompression::CcittG4 => tl!("CCITT Group 4"),
+            MonoCompression::Jbig2 => tl!("JBIG2 (lossless)"),
+            MonoCompression::Retain => tl!("Retain existing"),
+        };
+        craft_ui::ComboBox::from_id_salt(("mono", "compression")).selected_text(label).show_ui(ui, |ui| {
+            ui.selectable_value(&mut m.compression, MonoCompression::CcittG4, tl!("CCITT Group 4"));
+            ui.selectable_value(&mut m.compression, MonoCompression::Jbig2, tl!("JBIG2 (lossless)"));
+            ui.selectable_value(&mut m.compression, MonoCompression::Retain, tl!("Retain existing"));
+        });
+    });
+    ui.add_space(8.0);
+}
+
 fn discard_box(ui: &mut egui::Ui, list: &mut Vec<Hidden>, h: Hidden, label: &str) {
     let mut on = list.contains(&h);
     if ui.add(widgets::checkbox(&mut on, tl!(label))).changed() {
@@ -205,6 +231,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
             ui.add(widgets::checkbox(&mut s.merge_fragments, tl!("Merge image fragments")));
             image_row(ui, "color", "Color Images", &mut s.color);
             image_row(ui, "gray", "Grayscale Images", &mut s.gray);
+            mono_row(ui, &mut s.mono);
             ui.label(
                 egui::RichText::new(tl!("Each image is measured where pages draw it; an image is replaced only if the result is smaller."))
                     .small()

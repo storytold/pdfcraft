@@ -7,8 +7,8 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
 use pdfcraft_engine::{Edit, NewAnnotation, REDACT_PATTERNS, REDACTION_CODE_SETS, RedactPattern, RedactionCodeSet, Rgb, Shape, Style, rect_quad};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{DocView, PageXform};
-use crate::page_pointer::PagePointer;
+use crate::canvas::{DocView, PageToolContext, PageXform};
+use crate::page_cursor::Layer;
 use crate::theme::Tokens;
 use crate::{PdfCraftApp, widgets};
 
@@ -235,17 +235,8 @@ fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
 /// Redact tool input on a page. Presses on text are left to text selection (the selection is
 /// marked when it ends, see [`after_text`]); presses elsewhere draw a box. Returns `true` when
 /// the gesture is a box.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn page_input(
-    ui: &egui::Ui,
-    resp: &egui::Response,
-    xf: &PageXform,
-    ptr: &PagePointer,
-    page: usize,
-    info: &DocInfo,
-    over_text: impl Fn(Pos2) -> bool,
-    view: &mut DocView,
-) -> bool {
+pub(crate) fn page_input(cx: PageToolContext<'_>, over_text: impl Fn(Pos2) -> bool, view: &mut DocView) -> bool {
+    let PageToolContext { resp, xf, ptr, page, info, .. } = cx;
     let pointer = ptr.pos;
     if let Some((dp, start)) = view.redact_drag
         && dp == page
@@ -263,9 +254,10 @@ pub(crate) fn page_input(
     }
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return false };
     if !over_text(p) {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
     }
-    if resp.drag_started() {
+    // The tool's own press, of the primary button: nothing drawn over the page here holds it.
+    if resp.drag_started_by(egui::PointerButton::Primary) && view.router.owner(page).is_none() {
         let origin = ptr.origin.unwrap_or(p);
         if !over_text(origin) {
             view.redact_drag = Some((page, origin));

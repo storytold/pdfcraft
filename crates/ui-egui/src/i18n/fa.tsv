@@ -538,6 +538,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	{names} را می‌خواند که به نوبه خود آن را می‌خوانند. هیچ ترتیبی حلقه را اصلاح نمی‌کند: یکی از فرمول‌ها را تغییر دهید.
 	Not in order	نامرتب
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	در ترتیب محاسب‌های که در PDF ذخیره شده وجود ندارد: سایر نمایشگر‌های PDF ممکن است آن را محاسبه نکنند.
+	Reads {name}, which the form doesn't have, so it gets no value there.	{name} را می‌خواند که در فرم وجود ندارد، پس از آن مقداری نمی‌گیرد.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	اسکریپت آن فیلد‌هایی را هم می‌خواند که نامشان را هنگام اجرا می‌سازد، پس این خواندن‌ها قابل بررسی نیستند.
+	Missing field	فیلد ناموجود
+	Unchecked reads	خواندن‌های بررسی‌نشده
+	{field} reads fields named as it runs	{field} فیلد‌هایی را می‌خواند که نامشان هنگام اجرا ساخته می‌شود
+	Some names are built as it runs	برخی نام‌ها هنگام اجرا ساخته می‌شوند
 	Back to Prepare a form	بازگشت به آماده‌سازی فرم
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	هنوز هیچ فیلدی در این فرم مقدارش را محاسبه نمی‌کند. به یک فیلد در برگه محاسبه از ویژگی‌هایش یک محاسبه بدهید تا اینجا نمایش داده شود.
 	{names} and {last}	{names} و {last}
@@ -594,6 +600,9 @@
 	Clean Up	پاک‌سازی
 	Color Images	تصاویر رنگی
 	Grayscale Images	تصاویر خاکستری
+	Monochrome Images	تصاویر تک‌رنگ
+	CCITT Group 4	CCITT گروه ۴
+	JBIG2 (lossless)	JBIG2 (بدون اتلاف)
 	Bicubic downsampling to	نمونه برداری کاهشی دو مکعبی به
 	for images above	برای تصاویر بالا‌تر از
 	Compression	فشرده‌سازی
@@ -2514,6 +2523,11 @@ animation effects	Off	خاموش
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} پیش از {fields} محاسبه می‌شود، در حالی که آن را می‌خواند.|{field} پیش از {fields} محاسبه می‌شود، در حالی که آن‌ها را می‌خواند.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} فیلد دیگر زود‌تر از موعد محاسبه می‌شود.|{n} فیلد دیگر زود‌تر از موعد محاسبه می‌شوند.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} در ترتیب ذخیره‌شده در PDF وجود ندارد، بنابراین سایر نمایشگر‌های PDF ممکن است آن را محاسبه نکنند.|{fields} در ترتیب ذخیره‌شده در PDF وجود ندارند، بنابراین سایر نمایشگر‌های PDF ممکن است آن‌ها را محاسبه نکنند.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} فرمول فیلدی را می‌خواند که در فرم وجود ندارد|{n} فرمول فیلد‌هایی را می‌خوانند که در فرم وجود ندارند
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} {fields} را می‌خواند که در فرم وجود ندارد.|{field} {fields} را می‌خواند که در فرم وجود ندارند.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} فرمول دیگر یک فیلد ناموجود را می‌خواند.|{n} فرمول دیگر فیلد‌های ناموجود را می‌خوانند.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} برخی نام‌های فیلد را هنگام اجرا می‌سازد، پس این خواندن‌ها بررسی نمی‌شوند.|{fields} برخی نام‌های فیلد را هنگام اجرا می‌سازند، پس این خواندن‌ها بررسی نمی‌شوند.
+@plural	{fields} is missing|{fields} are missing	{fields} وجود ندارد|{fields} وجود ندارند
 	Scan	اسکن
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	روی یک برگ کاغذ سفید امضا کنید و از آن در نور روشن و یکنواخت عکس بگیرید (از فلاش استفاده کنید). عکس را انتخاب کنید یا آن را اینجا رها کنید: PdfCraft امضا را پیدا می‌کند و کاغذ را حذف می‌کند.
 	Choose photo…	انتخاب عکس…
@@ -2804,3 +2818,6 @@ theme	Appearance	ظاهر
 	two cells would both be named {name}	دو خانه هر دو با نام {name} نام‌گذاری می‌شوند
 	a field named {name} already exists	فیلدی با نام {name} از قبل وجود دارد
 	Today	امروز
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	گزینه‌های این پاسخ

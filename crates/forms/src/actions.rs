@@ -262,17 +262,21 @@ fn write(doc: &mut Document, a: &FieldAction, pages: &[pdfcraft_cos::ObjRef]) ->
 
 /// Rewrite one trigger of a widget to `new` (`None` clears it), given the `old` value read from
 /// the widget. `aa` and `a_entry` are the widget's `/AA` dict and `/A` entry, updated in place.
-#[allow(clippy::too_many_arguments)]
+struct TriggerUpdate<'a> {
+    trigger: Trigger,
+    replacement: Option<&'a FieldAction>,
+    previous: Option<Object>,
+}
+
 fn replace_trigger(
     doc: &mut Document,
     pages: &[pdfcraft_cos::ObjRef],
     scripts: &mut pdfcraft_cos::DecodeBudget,
-    t: Trigger,
-    new: Option<&FieldAction>,
-    old: Option<Object>,
+    update: TriggerUpdate<'_>,
     aa: &mut Dict,
     a_entry: &mut Option<Object>,
 ) -> Result<(), FormError> {
+    let TriggerUpdate { trigger: t, replacement: new, previous: old } = update;
     let old_action = old.as_ref().and_then(|o| read(doc, o, pages, scripts));
     if new.is_some() && new == old_action.as_ref() {
         return Ok(());
@@ -322,7 +326,7 @@ pub fn set_field_actions(doc: &mut Document, name: &str, actions: &[(Trigger, Fi
                 None => wd.get(b"A").cloned().or_else(|| aa.get(b"U").cloned()),
                 Some(k) => aa.get(k).cloned(),
             };
-            replace_trigger(doc, &pages, &mut scripts, t, new, old, &mut aa, &mut a_entry)?;
+            replace_trigger(doc, &pages, &mut scripts, TriggerUpdate { trigger: t, replacement: new, previous: old }, &mut aa, &mut a_entry)?;
         }
         doc.update_dict(w.obj, |d| {
             match &a_entry {

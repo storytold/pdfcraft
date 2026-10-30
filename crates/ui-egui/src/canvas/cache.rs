@@ -1,5 +1,8 @@
 use super::find::Follow;
-use super::*;
+use super::{
+    Arc, Color32, DocInfo, DocView, HashSet, PRINT_TAG, PT, PageText, Range, RenderPool, RenderRequest, RequestKind, TextureHandle, TextureOptions,
+    device_pixels,
+};
 
 pub(super) const THUMB_TAG: u64 = 1 << 63;
 

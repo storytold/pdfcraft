@@ -433,14 +433,28 @@ fn wrapped_lines(ui: &egui::Ui, text: &str, font: &egui::FontId, width: f32, tru
 
 /// Transient message at the bottom centre.
 pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    // A form script message waiting its turn takes the toast once it is free.
+    if app.toast.is_none() {
+        app.toast_script = None;
+        // A left-out count whose toast was cleared before its time is said again.
+        app.script_messages_dropped = app.script_messages_dropped.saturating_add(std::mem::take(&mut app.toast_dropped));
+        app.next_script_message();
+    }
     let Some((msg, start)) = app.toast.clone() else { return };
     let now = ctx.input(|i| i.time);
     let start = if start == 0.0 { now } else { start };
     app.toast = Some((msg.clone(), start));
     if now - start > 3.5 {
         app.toast = None;
+        app.toast_script = None;
+        // Shown its time: a left-out count it said is done.
+        app.toast_dropped = 0;
+        if app.next_script_message() {
+            ctx.request_repaint();
+        }
         return;
     }
+    let script = app.toast_script.as_ref().map(|m| (m.title.clone(), crate::js_ui::message_icon(m.icon)));
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     // Above the progress notice while a job runs.
@@ -461,10 +475,26 @@ pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     // Allow natural short labels; wrap longer ones within the viewport,
                     // including the frame's 32 points and 16-point outside margins.
                     ui.set_max_width((screen.width() - 64.0).clamp(1.0, 560.0));
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(msg).color(if t.dark() { Color32::from_rgb(0x22, 0x22, 0x26) } else { Color32::WHITE }))
-                            .wrap(),
-                    );
+                    let ink = if t.dark() { Color32::from_rgb(0x22, 0x22, 0x26) } else { Color32::WHITE };
+                    let text = |ui: &mut egui::Ui| {
+                        ui.add(egui::Label::new(egui::RichText::new(msg).color(ink)).wrap());
+                    };
+                    match script {
+                        // A form script's message: its icon, then its title (when it gave one)
+                        // over its text.
+                        Some((title, icon)) => {
+                            ui.horizontal_top(|ui| {
+                                ui.add(icons::image(icon, 16.0, ink));
+                                ui.vertical(|ui| {
+                                    if let Some(title) = title {
+                                        ui.add(egui::Label::new(egui::RichText::new(title).strong().color(ink)).wrap());
+                                    }
+                                    text(ui);
+                                });
+                            });
+                        }
+                        None => text(ui),
+                    }
                 });
         });
     ctx.request_repaint_after(std::time::Duration::from_millis(100));

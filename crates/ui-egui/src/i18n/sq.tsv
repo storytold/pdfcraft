@@ -880,6 +880,9 @@
 	Grab bag	Të ndryshme
 	Gray	Gri
 	Grayscale Images	Imazhe në nuanca gri
+	Monochrome Images	Imazhe bardhezi
+	CCITT Group 4	CCITT grupi 4
+	JBIG2 (lossless)	JBIG2 (pa humbje)
 	Green	Jeshile
 	H / Space (hold)	H / Hapësira (mbaje shtypur)
 	HTML web page	Faqe interneti HTML
@@ -1479,6 +1482,14 @@
 	Replacement text	Teksti zëvendësues
 	Replacement: pages of {name}	Zëvendësimi: faqet e {name}
 	Replaces the existing one on those pages.	Zëvendëson atë ekzistues në ato faqe.
+	Checking pages…	Po kontrollohen faqet…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Faqja {pages} ka mbushjen e vet të bardhë, e cila do ta fshihte sfondin. Zëvendësoje
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Faqet {pages} kanë mbushjen e tyre të bardhë, e cila do ta fshihte sfondin. Zëvendësoje
+	Removing the background puts the page's own backdrop back.	Heqja e sfondit e rikthen mbushjen e bardhë të faqes.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Një imazh e mbulon faqen {pages} (skanim?), prandaj sfondi nuk do të duket aty.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Imazhe mbulojnë faqet {pages} (skanime?), prandaj sfondi nuk do të duket aty.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Faqja {pages} ndryshoi pasi u shtua sfondi, ndaj mbushja e saj e bardhë mbetet e fikur. Në letër të bardhë duket njësoj.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Faqet {pages} ndryshuan pasi u shtua sfondi, ndaj mbushjet e tyre të bardha mbeten të fikura. Në letër të bardhë duken njësoj.
 	Replacing images arrives on the web with image file pickers	Zëvendësimi i imazheve vjen në ueb me zgjedhësit e skedarëve të imazhit
 	Replacing images on page {p} arrives on the web with image pickers ({i})	Zëvendësimi i imazheve në faqen {p} vjen në ueb me zgjedhësit e imazhit ({i})
 	Reply	Përgjigju
@@ -2409,6 +2420,17 @@ animation effects	Off	Joaktiv
 	Mark as artifact	Mark as artifact
 	Merge image fragments	Merge image fragments
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Reads {name}, which the form doesn't have, so it gets no value there.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.
+	Missing field	Missing field
+	Unchecked reads	Unchecked reads
+	{field} reads fields named as it runs	{field} reads fields named as it runs
+	Some names are built as it runs	Some names are built as it runs
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} more formula reads a missing field.|{n} more formulas read missing fields.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.
+@plural	{fields} is missing|{fields} are missing	{fields} is missing|{fields} are missing
 	Mobile	Mobile
 	Move only what must move, so every field calculates after the fields it reads.	Move only what must move, so every field calculates after the fields it reads.
 	Moves only what must move	Moves only what must move
@@ -2544,3 +2566,6 @@ animation effects	Off	Joaktiv
 	Rotate the selected pages clockwise	Rrotullo faqet e përzgjedhura në drejtim të orës
 	Extract the selected pages…	Nxirr faqet e përzgjedhura…
 	Delete the selected pages	Fshi faqet e përzgjedhura
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Opsionet për këtë përgjigje

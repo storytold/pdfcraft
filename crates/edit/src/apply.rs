@@ -5,7 +5,7 @@ use super::place::{
     END, Isolation, add_page_resources, add_resources, begin, check, check_on_top, contents, free_font_name, isolation, page_fonts, page_list, place,
     place_inside_wrapper, stream_tag, text_op, undrawable, wrapper_role,
 };
-use super::*;
+use super::{Document, EditError, Object, added, backdrop, helvetica_width};
 
 /// Add a header and footer to `pages` (0-based). With `replace`, existing headers and footers on
 /// those pages are removed first (Acrobat's Replace Existing).
@@ -199,7 +199,9 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
     Ok(())
 }
 
-/// Add a solid-colour background behind the content of `pages`.
+/// Add a solid-colour background behind the content of `pages`. With `bg.replace_backdrop`, a
+/// white backdrop a page paints itself is replaced first, so the background shows (see
+/// [`backdrop`]); a picture backdrop (a scan) still hides it.
 pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, replace: bool) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
@@ -208,7 +210,10 @@ pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, repl
     }
     let opacity = if bg.opacity.is_finite() { bg.opacity.clamp(0.0, 1.0) } else { 1.0 };
     for &i in pages {
-        let page = page_list(doc)[i].clone();
+        let mut page = page_list(doc)[i].clone();
+        if bg.replace_backdrop && backdrop::replace(doc, &page)? {
+            page = page_list(doc)[i].clone();
+        }
         let (w, h) = page.display_size(doc);
         let mut content = begin(MarkKind::Background, "Background", page.view_matrix(doc));
         match &bg.source {
@@ -231,13 +236,18 @@ pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, repl
 
 /// Remove marks of `kind` from `pages`; returns how many were removed. Wrappers left with
 /// nothing after them go too, restoring the original content list; a wrapper that content
-/// after it still relies on (another tool's appended stream) stays.
+/// after it still relies on (another tool's appended stream) stays. Removing backgrounds also
+/// turns a backdrop [`add_background`] replaced back on where that is still safe; the pages where
+/// it isn't are [`backdrops_left_off`].
 pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Result<usize, EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
     let mut removed = 0;
     for &i in pages {
         let page = &all[i];
+        if kind == MarkKind::Background {
+            backdrop::restore(doc, page)?;
+        }
         let list = contents(doc, page)?;
         let before = list.len();
         let mut kept: Vec<Object> = list.into_iter().filter(|o| stream_tag(doc, o).as_deref() != Some(kind.tag())).collect();

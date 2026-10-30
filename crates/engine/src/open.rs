@@ -25,6 +25,17 @@ pub struct PreparedDocument {
     document: Document,
 }
 
+struct DocumentOpenData<'a> {
+    name: String,
+    path: Option<String>,
+    bytes: Arc<Vec<u8>>,
+    info: DocInfo,
+    structure: Result<Result<pdfcraft_cos::Document, pdfcraft_cos::CosError>, Box<dyn std::any::Any + Send>>,
+    render_password: Option<String>,
+    password: Option<&'a str>,
+    xfa: Option<XfaLayout>,
+}
+
 impl OpenContext {
     /// Prepare a document without mutating the session that supplied this context.
     pub fn prepare_open(
@@ -241,7 +252,8 @@ impl Session {
         };
         // XFA notes survive the document being re-read after edits.
         let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
-        let mut document = Self::build_document(&context.trust, name, path, bytes, info, cos, render_password, password, xfa);
+        let mut document =
+            Self::build_document(&context.trust, DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa });
         // A script that ran away on open turns the form's scripts off for this document.
         document.xfa_template = if ran_away { None } else { xfa_template };
         document.js_output.append(script_output);
@@ -254,18 +266,8 @@ impl Session {
     }
 
     /// The last step of opening: build the document record and register it.
-    #[allow(clippy::too_many_arguments)]
-    fn build_document(
-        trust: &Arc<TrustStore>,
-        name: String,
-        path: Option<String>,
-        bytes: Arc<Vec<u8>>,
-        mut info: DocInfo,
-        cos: Result<Result<pdfcraft_cos::Document, pdfcraft_cos::CosError>, Box<dyn std::any::Any + Send>>,
-        render_password: Option<String>,
-        password: Option<&str>,
-        xfa: Option<XfaLayout>,
-    ) -> Document {
+    fn build_document(trust: &Arc<TrustStore>, data: DocumentOpenData<'_>) -> Document {
+        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa } = data;
         let config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
         let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {

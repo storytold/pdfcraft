@@ -159,6 +159,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Lê {names}, que o leem de volta. Nenhuma ordem resolve um ciclo: altere uma das fórmulas.
 	Not in order	Fora da ordem
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Ausente da ordem de cálculo salva no PDF: outros leitores de PDF podem não calculá-lo.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Lê {name}, que não existe no formulário, então não recebe nenhum valor dali.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Seu script também lê campos cujos nomes monta durante a execução, então essas leituras não podem ser verificadas.
+	Missing field	Campo ausente
+	Unchecked reads	Leituras não verificadas
+	{field} reads fields named as it runs	{field} lê campos nomeados durante a execução
+	Some names are built as it runs	Alguns nomes são montados durante a execução
 	Back to Prepare a form	Voltar para Preparar um formulário
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Nenhum campo deste formulário calcula seu valor ainda. Dê um cálculo a um campo na aba Calcular das propriedades dele, e ele aparecerá aqui.
 	{names} and {last}	{names} e {last}
@@ -216,6 +222,9 @@
 	Clean Up	Limpar
 	Color Images	Imagens coloridas
 	Grayscale Images	Imagens em escala de cinza
+	Monochrome Images	Imagens monocromáticas
+	CCITT Group 4	CCITT grupo 4
+	JBIG2 (lossless)	JBIG2 (sem perdas)
 	Bicubic downsampling to	Redução bicúbica de amostragem para
 	for images above	para imagens acima de
 	Compression	Compactação
@@ -484,6 +493,14 @@
 	Applies to 1 page	Aplica-se a 1 página
 	Applies to {n} pages	Aplica-se a {n} páginas
 	Replaces the existing one on those pages.	Substitui o existente nessas páginas.
+	Checking pages…	Verificando páginas…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	A página {pages} tem um preenchimento branco próprio, que esconderia o plano de fundo. Substituí-lo
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	As páginas {pages} têm um preenchimento branco próprio, que esconderia o plano de fundo. Substituí-lo
+	Removing the background puts the page's own backdrop back.	Remover o plano de fundo restaura o preenchimento branco da página.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Uma imagem cobre a página {pages} (uma digitalização?), então o plano de fundo não aparecerá nela.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Imagens cobrem as páginas {pages} (digitalizações?), então o plano de fundo não aparecerá nelas.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	A página {pages} mudou depois que o plano de fundo foi adicionado, então seu preenchimento branco próprio continua desligado. Em papel branco ela parece igual.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	As páginas {pages} mudaram depois que o plano de fundo foi adicionado, então seus preenchimentos brancos próprios continuam desligados. Em papel branco elas parecem iguais.
 	PDF or image	PDF ou imagem
 	No file chosen	Nenhum arquivo escolhido
 	Page number	Número da página
@@ -2419,6 +2436,11 @@ animation effects	Off	Desativados
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} é calculado antes de {fields}, que ele lê.|{field} é calculado antes de {fields}, que ele lê.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Mais {n} campo é calculado cedo demais.|Mais {n} campos são calculados cedo demais.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} não está na ordem salva no PDF, então outros visualizadores de PDF podem não calculá-lo.|{fields} não estão na ordem salva no PDF, então outros visualizadores de PDF podem não calculá-los.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} fórmula lê um campo que não existe no formulário|{n} fórmulas leem campos que não existem no formulário
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} lê {fields}, que não existe no formulário.|{field} lê {fields}, que não existem no formulário.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Mais {n} fórmula lê um campo ausente.|Mais {n} fórmulas leem campos ausentes.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} monta alguns nomes de campo durante a execução, então essas leituras não são verificadas.|{fields} montam alguns nomes de campo durante a execução, então essas leituras não são verificadas.
+@plural	{fields} is missing|{fields} are missing	{fields} não existe|{fields} não existem
 	Scan	Digitalizar
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Assine uma folha de papel branco e tire uma foto dela com luz forte e uniforme (use o flash). Escolha a foto ou solte-a aqui: o PdfCraft encontra a assinatura e remove o papel.
 	Choose photo…	Escolher foto…
@@ -2842,3 +2864,7 @@ theme	Appearance	Aparência
 	Rotate the selected pages clockwise	Girar as páginas selecionadas no sentido horário
 	Extract the selected pages…	Extrair as páginas selecionadas…
 	Delete the selected pages	Excluir as páginas selecionadas
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Opções desta resposta
+	Export value	Valor de exportação
