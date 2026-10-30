@@ -105,9 +105,9 @@ impl PdfCraftApp {
                 }
                 let r = pdfcraft_engine::actions::run_on(&action, &name, Arc::new(bytes), |_, _| {}).and_then(|r| {
                     #[cfg(not(target_arch = "wasm32"))]
-                    write_result(&dir, &name, &r.bytes).map_err(|e| e.to_string())?;
+                    write_result(&dir, &r.name, &r.bytes).map_err(|e| e.to_string())?;
                     #[cfg(target_arch = "wasm32")]
-                    crate::editing::download(&name, &r.bytes)?;
+                    crate::editing::download(&r.name, &r.bytes)?;
                     Ok(())
                 });
                 match r {
@@ -365,7 +365,11 @@ fn edit_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         ui.label(egui::RichText::new(tl!("An action with this name already exists.")).small().color(t.text_muted));
     }
     let (mut done, mut cancel) = (false, false);
-    let ok = !name.is_empty() && !taken && !a.steps.is_empty();
+    let valid = a.validate();
+    if let Err(message) = valid {
+        ui.label(egui::RichText::new(tl!(message)).small().color(t.text_muted));
+    }
+    let ok = !name.is_empty() && !taken && !a.steps.is_empty() && valid.is_ok();
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, tl!("Save"), true)).inner.clicked() {

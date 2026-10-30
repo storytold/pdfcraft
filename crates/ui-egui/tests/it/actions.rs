@@ -3,7 +3,7 @@
 
 use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_engine::Session;
 use pdfcraft_engine::actions::Step;
 use pdfcraft_ui_egui::PdfCraftApp;
@@ -119,4 +119,55 @@ fn desktop_actions_preserve_duplicate_names_and_results_from_earlier_runs() {
     assert_eq!(std::fs::read(dir.join("first/report.PDF")).unwrap(), *three_pages);
     assert_eq!(std::fs::read(dir.join("second/report.PDF")).unwrap(), *one_page);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn the_action_wizard_exports_multiple_pdfs_to_word() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("out")).unwrap();
+    let src = Session::new().create_from_text("Draft", "Batch Word export").unwrap();
+    for name in ["first.pdf", "second.PDF"] {
+        std::fs::write(dir.path().join(name), &*src).unwrap();
+    }
+    let d = dir.path().to_path_buf();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.run_inline = true;
+        app.export_dir_override = Some(d.join("out").to_string_lossy().into_owned());
+        app.action_files_override = Some(["first.pdf", "second.PDF"].iter().map(|name| d.join(name).to_string_lossy().into_owned()).collect());
+        app
+    });
+    h.run_steps(3);
+    assert!(h.state_mut().execute("actions.wizard"));
+    h.run_steps(3);
+    h.get_by_label("New Action…").click();
+    h.run_steps(3);
+    h.state_mut().wizard.editing.as_mut().unwrap().1.name = "Word copies".into();
+    h.state_mut().wizard.add = Step::all().iter().position(|s| s.id() == "export_word").expect("Word export must be offered in the step picker");
+    h.run_steps(3);
+    h.get_by_label("Add Step").click();
+    h.run_steps(3);
+    h.state_mut().wizard.editing.as_mut().unwrap().1.steps.push(Step::SetTitle("Too late".into()));
+    h.run_steps(3);
+    h.get_by_label("Export to Word must be the last step.");
+    assert!(h.get_by_label("Save").accesskit_node().is_disabled());
+    h.state_mut().wizard.editing.as_mut().unwrap().1.steps.pop();
+    h.run_steps(3);
+    assert!(!h.get_by_label("Save").accesskit_node().is_disabled());
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    h.get_by_label("1. Export to Word");
+    let saved = h.state().persist();
+    let mut fresh = PdfCraftApp::new();
+    fresh.set_option("language", "en").unwrap();
+    fresh.restore(&saved);
+    assert_eq!(fresh.custom_actions, h.state().custom_actions);
+    h.get_by_label("Start").click();
+    h.run_steps(3);
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("Word copies: 2 files done"));
+    for name in ["first.docx", "second.docx"] {
+        assert!(std::fs::read(dir.path().join("out").join(name)).unwrap().starts_with(b"PK\x03\x04"));
+    }
+    assert_eq!(std::fs::read_dir(dir.path().join("out")).unwrap().count(), 2);
 }

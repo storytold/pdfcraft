@@ -228,7 +228,7 @@ impl Automation {
             out.push(match converted {
                 Ok((pdfcraft_engine::SourceKind::Pdf, ..)) => json!({ "path": p, "skipped": "already a PDF" }),
                 Ok((_, stem, pdf)) => {
-                    let target = unused(&dir, &stem);
+                    let target = unused(&dir, &stem, "pdf");
                     write_atomic(&target, &pdf)?;
                     json!({ "path": p, "output": target.to_string_lossy(), "bytes": pdf.len() })
                 }

@@ -229,3 +229,20 @@ behavior. Back/Forward
 returns to page tops, does not restore zoom, does not switch documents, and is not saved across
 restarts. Standalone engine/MCP sessions have no viewport, so they do not have a separate
 navigation-history tool; use the opt-in UI control channel to navigate the displayed document.
+
+## Batch Word export
+
+In Action Wizard, create an action ending with **Export to Word**, then choose several PDFs and
+an output folder. The action can edit the PDFs before exporting; Export to Word must be last.
+Saved actions remember this step. The same workflow is available through CLI scripts and MCP:
+
+```json
+{"tool":"action_run","args":{"steps":[{"step":"export_word"}],"paths":["first.pdf","second.pdf"],"folder":"word"}}
+```
+
+Each successful input produces a `.docx` with its basename. Occupied names receive numbered
+suffixes (`report (2).docx`); source PDFs and existing outputs are preserved. A failed input does
+not stop the other files. Copying restrictions and the existing passwordless Action Wizard input
+rules apply. Word conversion uses the existing Office exporter, with its layout limitations; if
+its safety limits would omit page content, the action refuses that output instead of reporting a
+partial file as successful. Other export formats are not Action Wizard steps yet.

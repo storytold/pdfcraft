@@ -6899,6 +6899,89 @@ fn actions_through_tools() {
 }
 
 #[test]
+fn action_run_exports_each_pdf_to_word_without_replacing_outputs() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("left")).unwrap();
+    std::fs::create_dir_all(dir.path().join("right")).unwrap();
+    std::fs::write(dir.path().join("left/report.pdf"), fixture(1)).unwrap();
+    std::fs::write(dir.path().join("right/report.PDF"), fixture(2)).unwrap();
+    let mut a = auto(dir.path());
+    let args = json!({
+        "steps": [{ "step": "add_header", "arg": "Processed" }, { "step": "export_word" }],
+        "paths": ["missing.pdf", "left/report.pdf", "right/report.PDF"],
+        "folder": "out"
+    });
+    let result = ok(&mut a, "action_run", args.clone());
+    assert!(result["files"][0]["error"].is_string());
+    let mut previous = Vec::new();
+    for (i, pages) in [(1, 1), (2, 2)] {
+        let output = Path::new(result["files"][i]["output"].as_str().unwrap());
+        assert_eq!(output.extension().unwrap(), "docx");
+        assert_eq!(output.file_name().unwrap(), if i == 1 { "report.docx" } else { "report (2).docx" });
+        let bytes = std::fs::read(output).unwrap();
+        // Inspect the real DOCX package, including content from each input page.
+        let mut at = 0;
+        let mut xml = String::new();
+        while bytes[at..].starts_with(b"PK\x03\x04") {
+            let size = u32::from_le_bytes(bytes[at + 18..at + 22].try_into().unwrap()) as usize;
+            let len = u16::from_le_bytes(bytes[at + 26..at + 28].try_into().unwrap()) as usize;
+            let data = at + 30 + len;
+            if &bytes[at + 30..data] == b"word/document.xml" {
+                std::io::Read::read_to_string(&mut flate2::read::DeflateDecoder::new(&bytes[data..data + size]), &mut xml).unwrap();
+                break;
+            }
+            at = data + size;
+        }
+        assert!(xml.contains("Processed"), "edits before export must survive: {xml}");
+        for page in 1..=pages {
+            assert!(xml.contains(&format!("Page {page}")), "{xml}");
+        }
+        previous.push((output.to_path_buf(), bytes));
+    }
+    let again = ok(&mut a, "action_run", args);
+    assert!(again["files"][1]["output"].as_str().unwrap().ends_with("report (3).docx"));
+    assert!(again["files"][2]["output"].as_str().unwrap().ends_with("report (4).docx"));
+    for (path, bytes) in previous {
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+    assert_eq!(std::fs::read(dir.path().join("left/report.pdf")).unwrap(), fixture(1));
+    assert_eq!(std::fs::read(dir.path().join("right/report.PDF")).unwrap(), fixture(2));
+}
+
+#[test]
+fn action_word_export_refuses_invalid_order_copy_restrictions_and_truncation() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("source.pdf"), fixture(1)).unwrap();
+    let mut a = auto(dir.path());
+    let r = ok(
+        &mut a,
+        "action_run",
+        json!({
+            "steps": [{"step":"export_word"}, {"step":"set_title", "arg":"Too late"}],
+            "paths":["source.pdf"], "folder":"bad-order"
+        }),
+    );
+    assert!(r["files"][0]["error"].as_str().unwrap().contains("must be the last step"), "{r}");
+    assert_eq!(std::fs::read_dir(dir.path().join("bad-order")).unwrap().count(), 0);
+
+    let id = ok(&mut a, "doc_open", json!({"path":"source.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_protect", json!({"doc":id, "permissions_password":"owner", "changes":"any-except-extract", "copy":false}));
+    ok(&mut a, "doc_save", json!({"doc":id, "path":"restricted.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"restricted.pdf"}));
+    let security = ok(&mut a, "doc_info", json!({"doc":reopened["doc"]}));
+    assert_eq!(security["security"]["copy"], false);
+    let r = ok(&mut a, "action_run", json!({"steps":[{"step":"export_word"}], "paths":["restricted.pdf"], "folder":"denied"}));
+    assert!(r["files"][0]["error"].as_str().unwrap().contains("copying"), "{r}");
+    assert!(!dir.path().join("denied/restricted.docx").exists());
+
+    let depth = pdfcraft_engine::compare::MAX_FORM_DEPTH + 2;
+    std::fs::write(dir.path().join("deep.pdf"), nested_forms_pdf(&[depth])).unwrap();
+    let r = ok(&mut a, "action_run", json!({"steps":[{"step":"export_word"}], "paths":["deep.pdf"], "folder":"bounded"}));
+    assert!(r["files"][0]["error"].as_str().unwrap().contains("exceed export limits"), "{r}");
+    assert!(!dir.path().join("bounded/deep.docx").exists());
+}
+
+#[test]
 fn action_run_keeps_outputs_with_duplicate_input_basenames() {
     let dir = workdir("action-duplicate-basenames");
     std::fs::create_dir_all(dir.join("left")).unwrap();
