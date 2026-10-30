@@ -1,0 +1,33 @@
+# OCR ground truth (de): an invoice, a letter from a town office and a delivery note.
+# Synthetic, written for PdfCraft (contributor-original, MIT OR Apache-2.0); names, places and numbers are invented.
+# Format: doc<TAB>source<TAB>text; one row per printed line.
+rechnung	contributor-original	Müller & Söhne GmbH · Hauptstraße 12 · 97070 Würzburg
+rechnung	contributor-original	Rechnung Nr. 2026-0417 vom 14.10.2026
+rechnung	contributor-original	Sehr geehrte Frau Schäfer,
+rechnung	contributor-original	für die Lieferung vom 7. Oktober berechnen wir Ihnen:
+rechnung	contributor-original	Pos. 1  Förderband „Größe XL“, 2,50 m   1.249,90 €
+rechnung	contributor-original	Pos. 2  Schließzylinder aus Edelstahl   3 × 18,75 €
+rechnung	contributor-original	Pos. 3  Prüfgebühr gemäß § 14 Abs. 2    95,00 €
+rechnung	contributor-original	Zwischensumme  1.401,15 €  zzgl. 19 % MwSt.  266,22 €
+rechnung	contributor-original	Gesamtbetrag  1.667,37 €  zahlbar binnen 14 Tagen.
+rechnung	contributor-original	Mit freundlichen Grüßen – Ihre Buchhaltung
+brief	contributor-original	Stadtverwaltung Oberkötzau – Bürgerbüro
+brief	contributor-original	Betreff: Änderung Ihres Wohnsitzes zum 01.11.2026
+brief	contributor-original	Sehr geehrter Herr Jürgens,
+brief	contributor-original	wir bestätigen den Eingang Ihrer Ummeldung. Bitte übersenden
+brief	contributor-original	Sie uns bis zum 15. November eine Kopie Ihres Personalausweises.
+brief	contributor-original	Die Gebühr für die Bescheinigung beträgt 12,50 €. Außerdem weisen
+brief	contributor-original	wir darauf hin, dass Übergangsfristen nach § 17 BMG gelten.
+brief	contributor-original	Öffnungszeiten: Mo–Fr 8:00–12:00 Uhr, Do zusätzlich bis 18:00 Uhr.
+brief	contributor-original	Für Rückfragen erreichen Sie uns unter 09286 / 9944-0.
+brief	contributor-original	Hochachtungsvoll, i. A. Dörte Weißenböck
+lieferschein	contributor-original	Lieferschein 88-ÄÖÜ-31  ·  Kühlhaus Süd
+lieferschein	contributor-original	Artikel              Menge   Gewicht
+lieferschein	contributor-original	Räucherlachs         12 St.  4,8 kg
+lieferschein	contributor-original	Gemüsebrühe          36 Gl.  21,6 kg
+lieferschein	contributor-original	Weißwürste           80 St.  6,4 kg
+lieferschein	contributor-original	Käsespätzle          15 Pk.  7,5 kg
+lieferschein	contributor-original	Sauerkraut           24 Ds.  19,2 kg
+lieferschein	contributor-original	Temperatur bei Übergabe: −18 °C (Soll ≤ −18 °C)
+lieferschein	contributor-original	Übernommen: S. Größler, 22.10.2026, 06:45 Uhr
+lieferschein	contributor-original	Straße, Hof und Rampe frei; Fahrzeug ohne Beanstandung.

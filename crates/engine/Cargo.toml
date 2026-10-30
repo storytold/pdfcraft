@@ -53,4 +53,8 @@ unicode-segmentation = "1.13"
 chrono = { workspace = true, features = ["clock"] }
 
 [dev-dependencies]
+# Sets the OCR ground-truth texts on synthetic scans (tests/it/support/ocr_scan.rs).
+ab_glyph = "0.2"
 pdfcraft-testkit = { workspace = true }
+# Reads MDPBench's annotations in examples/ocr_mdpbench.rs.
+serde_json = { workspace = true }

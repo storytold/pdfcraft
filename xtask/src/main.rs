@@ -9,6 +9,8 @@ mod fuzz;
 mod gates;
 mod layers;
 mod macos_integration;
+mod mdpbench;
+mod ocr_texts;
 mod parity;
 mod screenshots;
 mod version;
@@ -46,6 +48,8 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ),
     ("screenshots", "Regenerate the README screenshots in docs/images/ and their ATTRIBUTION entries", screenshots::run),
     ("models", "Fetch the OCR models (ATTRIBUTION.toml kind = \"model\") into assets/models/, verified by SHA-256", assets::models),
+    ("ocr-texts", "Fetch OCR ground-truth paragraphs from <lang>.wikipedia.org into crates/engine/tests/data/ocr/ (--docs N)", ocr_texts::run),
+    ("mdpbench", "Fetch MDPBench's public pages (Apache-2.0) into target/mdpbench/ for examples/ocr_mdpbench (--langs de,fr, --dir)", mdpbench::run),
     ("demo-pdf", "Build dist/demo/pdfcraft-showcase.pdf (needs Google Chrome or Chromium)", demo_pdf::run),
 ];
 
