@@ -204,7 +204,10 @@ pub(super) fn owned_bytes(object: &Object, data: &Arc<Vec<u8>>, depth: usize) ->
 
 /// How an encrypted document is opened: with a password, or with the file key of a document
 /// that has the same encryption (an earlier revision of the same file).
+type ResolvedSecurity = (Arc<pdfcraft_crypt::SecurityHandler>, Vec<u8>);
+
 pub(super) enum Credentials<'a> {
     Password(Option<&'a str>),
+    Resolver { resolver: &'a dyn crate::SecurityResolver, cached: std::cell::RefCell<Option<ResolvedSecurity>> },
     Handler { handler: &'a Arc<pdfcraft_crypt::SecurityHandler>, id0: Vec<u8> },
 }

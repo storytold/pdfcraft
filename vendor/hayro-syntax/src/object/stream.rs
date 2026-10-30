@@ -2,7 +2,6 @@
 
 use crate::crypto::DecryptionTarget;
 use crate::filter::Filter;
-use crate::object;
 use crate::object::Dict;
 use crate::object::Name;
 use crate::object::dict::keys::{DECODE_PARMS, DP, F, FILTER, LENGTH, TYPE};
@@ -125,19 +124,27 @@ impl<'a> Stream<'a> {
     pub fn raw_data(&self) -> Cow<'a, [u8]> {
         let ctx = self.dict.ctx();
 
-        if ctx.xref().needs_decryption(ctx)
-            && self
-                .dict
-                .get::<object::String<'_>>(TYPE)
-                .map(|t| t.as_ref() != b"XRef")
-                .unwrap_or(true)
-        {
-            Cow::Owned(
-                ctx.xref()
-                    .decrypt(self.obj_id(), self.data, DecryptionTarget::Stream)
-                    // TODO: MAybe an error would be better?
-                    .unwrap_or_default(),
-            )
+        // PdfCraft patch: authenticated object decryption, including metadata and explicit Crypt filters.
+        let ty = self.dict.get::<Name<'_>>(TYPE);
+        if ctx.xref().needs_decryption(ctx) && ty.as_deref() != Some(b"XRef".as_slice()) {
+            let parsed = self.filters_and_params();
+            let filter = parsed.filters.iter()
+                .position(|f| *f == Filter::Crypt)
+                .and_then(|i| parsed.params.get(i))
+                .map(|params| {
+                    params.get::<Name<'_>>(b"Name")
+                        .map(|n| n.as_ref().to_vec())
+                        .unwrap_or_else(|| b"Identity".to_vec())
+                });
+            Cow::Owned(ctx.xref().decrypt(
+                self.obj_id(),
+                self.data,
+                DecryptionTarget::Stream {
+                    metadata: ty.as_deref() == Some(b"Metadata".as_slice()),
+                    embedded_file: ty.as_deref() == Some(b"EmbeddedFile".as_slice()),
+                    filter,
+                },
+            ).unwrap_or_default())
         } else {
             Cow::Borrowed(self.data)
         }

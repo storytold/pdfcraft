@@ -8,7 +8,9 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod credentials;
 mod inspect;
+pub use credentials::AuthenticatedDocument;
 mod pixels;
 mod raster;
 mod reading;
@@ -18,7 +20,8 @@ pub mod transition;
 
 pub use inspect::{
     Annotation, Attachment, AttachmentSource, DestView, DocInfo, Field, FieldKind, FontInfo, Layer, LayerOp, Link, LinkTarget, OutlineItem, PageInfo,
-    PageTransition, RemoteDestination, TransitionStyle, Xfa, attachment_data, check_pages, inspect, link_replies, pretty_date, thread_tops,
+    PageTransition, RemoteDestination, TransitionStyle, Xfa, attachment_data, attachment_data_with_credentials, check_pages,
+    check_pages_with_credentials, inspect, inspect_with_credentials, link_replies, pretty_date, thread_tops,
 };
 pub use pixels::Pixels;
 pub use raster::{
@@ -35,6 +38,8 @@ pub enum OpenError {
     Invalid(String),
     #[error("the document is protected by a password")]
     NeedsPassword,
+    #[error("the document requires a certificate private key")]
+    NeedsCertificate,
     #[error("the password is incorrect")]
     WrongPassword,
     #[error("{0}")]

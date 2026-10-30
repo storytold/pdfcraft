@@ -111,3 +111,6 @@ pub mod reader;
 pub use data::PdfData;
 pub use filter::*;
 pub use pdf::*;
+
+// PdfCraft authenticated-decryption bridge.
+pub use crypto::{DecryptionTarget, ExternalDecryptor};

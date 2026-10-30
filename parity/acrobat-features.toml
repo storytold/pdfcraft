@@ -271,11 +271,11 @@ title = "Open certificate-encrypted (public-key handler) documents"
 area = "A"
 tier = "P1"
 milestone = "M8"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["file.open"]
+tools = ["doc_open_token", "encryption_token_ids"]
+evidence = ["crates/ui-egui/tests/it/certificate_security.rs::certificate_open_dialog_uses_softhsm_and_clears_pin_after_each_attempt", "crates/automation/tests/it/certificate_security.rs::certificate_tools_round_trip_through_softhsm"]
+notes = "Linux desktop card prompt and CLI/MCP opening for the single DefaultCryptFilter s5 AES-128/256 profile with RSA key transport. SoftHSM UI tests cover an explicit wrong-PIN attempt, cleared input, and a successful retry. PIN editor state is masked; replacing a card requires a fresh selection. Provider isolation, physical-card qualification and other profiles remain unfinished."
 
 [[feature]]
 id = "core.incremental-save"
@@ -5573,11 +5573,11 @@ title = "Encrypt with certificates for recipients"
 area = "G"
 tier = "P1"
 milestone = "M8"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["protect.certificate"]
+tools = ["doc_protect_certificates"]
+evidence = ["crates/ui-egui/tests/it/certificate_security.rs::certificate_dialog_adds_a_recipient_applies_and_undoes", "crates/automation/tests/it/certificate_security.rs::certificate_tools_encrypt_render_save_and_undo_without_a_token", "crates/automation/tests/it/certificate_security.rs::certificate_tools_round_trip_through_softhsm"]
+notes = "Native desktop Protect dialog and CLI/MCP: undoable encryption for 1\u201364 current RSA recipients with AES-128/256 and optional clear metadata; full rewrite on save. DER file reads are bounded; connected-card public certificates need no PIN. Desktop import/Apply/Undo and headless SoftHSM round trips pass. Provider calls use bounded worker processes. Physical-card and PIN-pad qualification remain unfinished."
 
 [[feature]]
 id = "protect.recipient-permissions"
@@ -5585,11 +5585,11 @@ title = "Per-recipient permissions for certificate security"
 area = "G"
 tier = "P1"
 milestone = "M8"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["protect.certificate"]
+tools = ["doc_protect_certificates", "doc_open_token"]
+evidence = ["crates/ui-egui/tests/it/certificate_security.rs::certificate_dialog_adds_a_recipient_applies_and_undoes", "crates/engine/src/tests/certificate_security.rs::certificate_workflow_encrypts_for_two_recipients_and_retains_their_distinct_rights"]
+notes = "Desktop recipient controls and headless permission words are sealed in CMS envelopes and applied on opening. Security control requires bit 2; at least one recipient must have it. Duplicate certificates and issuer/serial identifiers are refused. Desktop tests cover retaining a full-control recipient; engine tests verify distinct rights on reopening."
 
 [[feature]]
 id = "protect.recipient-ldap"
@@ -6025,7 +6025,7 @@ status = "shipped"
 commands = ["sign.digital", "sign.certify"]
 tools = ["sign_document"]
 evidence = ["crates/sign/tests/it/pdf.rs::encrypted_documents_are_signed_with_an_unencrypted_contents", "crates/sign/tests/it/pdf.rs::encrypted_documents_are_signed_only_as_their_permissions_allow", "crates/sign/tests/it/pdf.rs::encrypted_documents_take_a_document_timestamp", "crates/cos/tests/it/encryption.rs::signature_contents_stay_unencrypted", "crates/automation/tests/it/automation.rs::signing_an_encrypted_form_through_tools"]
-notes = "RC4-40/128, AES-128 and AES-256 Standard security; the incremental update keeps /Encrypt and /ID, encrypts the new strings and streams, and leaves the signature /Contents unencrypted (§7.6.2), which reading also honours. Opened with the user password, permissions (Table 22) apply: existing signature fields need fill-forms, new fields need annotate + modify, certifying needs modify, a document timestamp needs fill-forms; the owner may do anything. Not yet: certificate (public-key) security, which PdfCraft can't open; checked only against PdfCraft's own validator, not yet against an external one (pyHanko) or Acrobat"
+notes = "RC4-40/128, AES-128 and AES-256 Standard security; the incremental update keeps /Encrypt and /ID, encrypts the new strings and streams, and leaves the signature /Contents unencrypted (§7.6.2), which reading also honours. Opened with the user password, permissions (Table 22) apply: existing signature fields need fill-forms, new fields need annotate + modify, certifying needs modify, a document timestamp needs fill-forms; the owner may do anything. Certificate public-key security now has native/headless opening for the limited s5 AES profile, but remains partial. Signature interoperability is checked only against PdfCraft's own validator, not yet against an external signature validator (pyHanko) or Acrobat"
 
 [[feature]]
 id = "sign.pkcs11"
@@ -6033,11 +6033,11 @@ title = "Sign with PKCS#11 tokens and smart cards"
 area = "H"
 tier = "P1"
 milestone = "M9"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["sign.digital"]
+tools = ["sign_token_ids", "sign_document"]
+evidence = ["crates/sign/tests/it/pkcs11.rs::isolated_worker_signs_rsa_and_ecdsa_without_loading_the_provider_in_the_parent", "apps/pdfcraft-cli/tests/it/pkcs11_worker.rs::worker_discovery_failure_is_framed_without_normal_cli_output", "crates/ui-egui/tests/it/signing.rs::smartcard_signing_discovers_in_background_clears_pin_and_retries_explicitly", "crates/ui-egui/src/tools/sign_ui/token_jobs.rs::smartcard_progress_dialog_stays_responsive_and_cancel_discards_the_signature", "apps/pdfcraft-cli/tests/it/pkcs11_worker.rs::worker_stops_if_its_owning_process_exits"]
+notes = "Linux RSA PKCS #1 v1.5 and ECDSA P-256/P-384 use isolated provider processes. SoftHSM tests verify signatures, per-use authentication, one-use PINs, and absence of the driver in the caller. Worker faults, cancellation, reply bounds, and deadlines are tested. Linux desktop signing and identity discovery run on cancellable background jobs. Late results cannot replace changed documents or destination files. Authentication errors restore an empty PIN field for explicit retry. Physical cards and PIN pads remain unqualified."
 
 [[feature]]
 id = "sign.self-signed-id"

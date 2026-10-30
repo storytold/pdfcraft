@@ -5802,11 +5802,12 @@ fn measurement_edits_are_transactional_and_honour_annotation_permissions() {
     session.redo(id).unwrap();
     assert_eq!(session.get(id).unwrap().bytes, before);
     let p = pdfcraft_cos::Permissions { bits: 0, owner: false };
-    assert_eq!(check_permission(&Edit::AddMeasurement(m), &p), Err(EditError::NotPermitted("comments")));
+    assert_eq!(check_permission(&Edit::AddMeasurement(m), &p, false), Err(EditError::NotPermitted("comments")));
     assert_eq!(
         check_permission(
             &Edit::SetMeasurementScale { page: 0, bbox: [0.0, 0.0, 100.0, 100.0], name: "Detail".into(), scale: measure::Scale::default() },
-            &p
+            &p,
+            false
         ),
         Err(EditError::NotPermitted("comments"))
     );
@@ -9334,4 +9335,23 @@ fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes()
     black(&s, rewritten);
     s.apply(rewritten, Edit::RemoveMarks { kind: MarkKind::Background }).unwrap();
     black(&s, rewritten);
+}
+
+mod certificate_security;
+
+#[test]
+fn prepared_signature_uses_an_immutable_snapshot_and_the_session_clock() {
+    let mut session = Session::new().with_clock(|| 1_800_000_000);
+    let doc = session.open("snapshot.pdf", None, Arc::new(fixture(1)), None).unwrap();
+    session.apply(doc, Edit::SetInfo { key: "Title".into(), value: "Snapshot title".into() }).unwrap();
+    let job = session.prepare_sign(doc, SignOptions::default()).unwrap();
+    session.apply(doc, Edit::SetInfo { key: "Title".into(), value: "Later unsaved title".into() }).unwrap();
+    let identity =
+        sign::pkcs12::open(&std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap(), "test").unwrap();
+    let signed = std::thread::spawn(move || job.sign(&identity)).join().unwrap().unwrap();
+    let reopened = session.open("signed.pdf", None, signed, None).unwrap();
+    assert_eq!(session.get(reopened).unwrap().info_value("Title").as_deref(), Some("Snapshot title"));
+    assert_eq!(session.get(doc).unwrap().info_value("Title").as_deref(), Some("Later unsaved title"));
+    assert!(session.get(doc).unwrap().dirty);
+    assert_eq!(session.get(reopened).unwrap().signatures[0].date.as_deref(), Some("D:20270115080000Z"));
 }

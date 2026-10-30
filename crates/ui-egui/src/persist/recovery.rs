@@ -372,12 +372,12 @@ impl PdfCraftApp {
                 }
             };
             match self.open_bytes(&meta.name, None, bytes) {
-                Ok(()) if self.password_prompt.is_none() => self.finish_recovery(&meta),
+                Ok(()) if self.password_prompt.is_none() && self.certificate_prompt.is_none() => self.finish_recovery(&meta),
                 // Encrypted: the password prompt opens it, and finishes its recovery once it
                 // does. The association travels with the prompt, so cancelling it cannot hand
                 // this snapshot's path to the next document that is unlocked (#813).
                 Ok(()) => {
-                    if let Some(prompt) = self.password_prompt.as_mut() {
+                    if let Some(prompt) = self.opening_prompt_mut() {
                         prompt.recovered = Some(meta.clone());
                     }
                 }

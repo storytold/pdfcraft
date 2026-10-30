@@ -513,15 +513,24 @@ impl Document {
     }
 
     /// The document's security may be changed (Protect, Remove security): it is editable and,
-    /// if encrypted, was opened with the owner password.
+    /// if encrypted, has owner or recipient security-control permission.
     pub fn allows_security_change(&self) -> bool {
-        self.editable() && self.permissions().is_none_or(|p| unrestricted(&p))
+        self.editable()
+            && self.permissions().is_none_or(|p| {
+                if self.editor.as_ref().and_then(|e| e.cos.security()).is_some_and(|h| h.dict().filter == b"Adobe.PubSec") {
+                    p.owner // Public-key bit 2 explicitly grants security changes.
+                } else {
+                    unrestricted(&p)
+                }
+            })
     }
 
     /// A password restricts the document and it wasn't opened with the owner password: entering
     /// that password ([`Session::unlock`](crate::Session::unlock)) lifts the restrictions.
     pub fn can_unlock(&self) -> bool {
-        self.editable() && self.permissions().is_some_and(|p| !unrestricted(&p))
+        self.editable()
+            && self.editor.as_ref().and_then(|e| e.cos.security()).is_none_or(|h| h.dict().filter != b"Adobe.PubSec")
+            && self.permissions().is_some_and(|p| !unrestricted(&p))
     }
 
     /// A summary of the document's security for Document Properties ▸ Security, including
@@ -540,7 +549,28 @@ impl Document {
         };
         let pending = editor.cos.encryption_changed();
         let permissions = if pending { pdfcraft_cos::Permissions { bits: h.permissions().bits, owner: false } } else { h.permissions() };
-        Some(SecuritySummary { method: method.into(), owner: h.auth() == pdfcraft_cos::Auth::Owner && !pending, permissions, pending })
+        Some(SecuritySummary {
+            certificate: d.filter == b"Adobe.PubSec",
+            method: if d.filter == b"Adobe.PubSec" { format!("Certificate security, {method}") } else { method.into() },
+            owner: h.auth() == pdfcraft_cos::Auth::Owner && !pending,
+            permissions,
+            pending,
+        })
+    }
+
+    /// Rendering settings and authenticated document context, without a token or PIN.
+    pub fn render_config(&self) -> RenderConfig {
+        self.config.clone()
+    }
+
+    /// Decode an attachment with the document's authenticated credential.
+    pub fn attachment_data(&self, attachment: &pdfcraft_render::Attachment) -> Result<Vec<u8>, String> {
+        pdfcraft_render::attachment_data_with_credentials(
+            self.bytes.clone(),
+            self.password.as_deref(),
+            self.config.authenticated.as_ref(),
+            attachment,
+        )
     }
 
     /// Comment properties of the comment at `(page, index)` (Comment Properties dialog).

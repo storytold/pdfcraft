@@ -93,3 +93,14 @@ recognisable in a diff and byte-stable when re-serialized.
 - Image codecs. `pdfcraft-filters` carries the non-image filters and CCITT fax decoding
   (`Document::decoded_image`); DCT, JPX and JBIG2 are still decoded through the bootstrap renderer
   (`core.image-filters`, M2.6).
+
+Public-key security is available through the object-layer API for the single
+`DefaultCryptFilter` s5 profile with AES-128 or AES-256.
+`Document::open_with_security_resolver` asks the caller for an authenticated handler.
+`Document::set_public_key_encryption` applies a caller-built writer context on a full save.
+The reader preserves each recipient envelope and its array order. It reports
+`NeedsCertificate` when password-only opening reaches a supported public-key file.
+Recipient permissions come from the decrypted envelope. They do not trust a plaintext `/P`.
+Engine and renderer APIs reuse an authenticated context across edits and encrypted saves.
+The engine and headless tools expose certificate protection and explicit Linux token opening.
+Desktop dialogs also expose these workflows; provider isolation and physical-card qualification remain unfinished.

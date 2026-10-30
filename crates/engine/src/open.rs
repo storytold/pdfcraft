@@ -25,15 +25,36 @@ pub struct PreparedDocument {
     document: Document,
 }
 
+type StructureResult = Result<Result<pdfcraft_cos::Document, pdfcraft_cos::CosError>, Box<dyn std::any::Any + Send>>;
+
 struct DocumentOpenData<'a> {
     name: String,
     path: Option<String>,
     bytes: Arc<Vec<u8>>,
     info: DocInfo,
-    structure: Result<Result<pdfcraft_cos::Document, pdfcraft_cos::CosError>, Box<dyn std::any::Any + Send>>,
+    structure: StructureResult,
     render_password: Option<String>,
+    authenticated: Option<pdfcraft_render::AuthenticatedDocument>,
     password: Option<&'a str>,
     xfa: Option<XfaLayout>,
+}
+
+fn authenticated_context(structure: &StructureResult, with_resolver: bool) -> Result<Option<pdfcraft_render::AuthenticatedDocument>, OpenError> {
+    if matches!(structure, Ok(Err(pdfcraft_cos::CosError::NeedsCertificate))) {
+        return Err(OpenError::NeedsCertificate);
+    }
+    if with_resolver && !matches!(structure, Ok(Ok(_))) {
+        return Err(OpenError::Invalid(match structure {
+            Ok(Err(e)) => e.to_string(),
+            _ => "certificate authentication failed unexpectedly".into(),
+        }));
+    }
+    match structure {
+        Ok(Ok(source)) if source.security().is_some_and(|h| h.dict().filter == b"Adobe.PubSec") => {
+            Ok(Some(pdfcraft_render::AuthenticatedDocument::new(source.clone()).map_err(|e| OpenError::Invalid(e.to_string()))?))
+        }
+        _ => Ok(None),
+    }
 }
 
 impl OpenContext {
@@ -46,7 +67,19 @@ impl OpenContext {
         password: Option<&str>,
     ) -> Result<PreparedDocument, OpenError> {
         let name = name.into();
-        guard(|| Session::prepare_open_unguarded(self, name, path, bytes, password))
+        guard(|| Session::prepare_open_unguarded(self, name, path, bytes, password, None))
+            .unwrap_or_else(|m| Err(OpenError::Invalid(format!("reading it failed unexpectedly ({m})"))))
+    }
+    /// Prepare certificate-authenticated bytes on an opening worker. The resolver and its
+    /// private-key credential are used only during this call and are never retained.
+    pub fn prepare_open_with_security_resolver(
+        &self,
+        name: impl Into<String>,
+        path: Option<String>,
+        bytes: Arc<Vec<u8>>,
+        resolver: &dyn pdfcraft_cos::SecurityResolver,
+    ) -> Result<PreparedDocument, OpenError> {
+        guard(std::panic::AssertUnwindSafe(|| Session::prepare_open_unguarded(self, name.into(), path, bytes, None, Some(resolver))))
             .unwrap_or_else(|m| Err(OpenError::Invalid(format!("reading it failed unexpectedly ({m})"))))
     }
 }
@@ -84,17 +117,44 @@ impl Session {
         Ok(self.commit_open(prepared))
     }
 
+    /// Prepare certificate-authenticated bytes without retaining the resolver or its PIN.
+    pub fn prepare_open_with_security_resolver(
+        &self,
+        name: impl Into<String>,
+        path: Option<String>,
+        bytes: Arc<Vec<u8>>,
+        resolver: &dyn pdfcraft_cos::SecurityResolver,
+    ) -> Result<PreparedDocument, OpenError> {
+        self.open_context().prepare_open_with_security_resolver(name, path, bytes, resolver)
+    }
+
+    pub fn open_with_security_resolver(
+        &mut self,
+        name: impl Into<String>,
+        path: Option<String>,
+        bytes: Arc<Vec<u8>>,
+        resolver: &dyn pdfcraft_cos::SecurityResolver,
+    ) -> Result<DocId, OpenError> {
+        let prepared = self.prepare_open_with_security_resolver(name, path, bytes, resolver)?;
+        Ok(self.commit_open(prepared))
+    }
+
     fn prepare_open_unguarded(
         context: &OpenContext,
         name: String,
         path: Option<String>,
         bytes: Arc<Vec<u8>>,
         password: Option<&str>,
+        resolver: Option<&dyn pdfcraft_cos::SecurityResolver>,
     ) -> Result<PreparedDocument, OpenError> {
-        let cos = std::panic::catch_unwind(|| pdfcraft_cos::Document::open_with_password(bytes.clone(), password));
+        let cos = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match resolver {
+            Some(resolver) => pdfcraft_cos::Document::open_with_security_resolver(bytes.clone(), resolver),
+            None => pdfcraft_cos::Document::open_with_password(bytes.clone(), password),
+        }));
+        let authenticated = authenticated_context(&cos, resolver.is_some())?;
         // The renderer authenticates on its own. It cannot use the owner password of R2–R4
         // files, so give it the user password that owner authentication recovers.
-        let (info, render_password) = match inspect(bytes.clone(), password) {
+        let (info, render_password) = match pdfcraft_render::inspect_with_credentials(bytes.clone(), password, authenticated.as_ref()) {
             Ok(info) => (info, password.map(str::to_owned)),
             Err(OpenError::WrongPassword) => {
                 let user = match &cos {
@@ -113,8 +173,14 @@ impl Session {
         // Write `work` as one more revision and reopen it: what the document then is.
         let rebase = |work: &pdfcraft_cos::Document| -> Result<(Arc<Vec<u8>>, DocInfo, pdfcraft_cos::Document), String> {
             let new_bytes = write_incremental(work, &opts).map(Arc::new).map_err(|e| e.to_string())?;
-            let new_info = inspect(new_bytes.clone(), render_password.as_deref()).map_err(|e| e.to_string())?;
-            let new_cos = pdfcraft_cos::Document::open_with_password(new_bytes.clone(), password).map_err(|e| e.to_string())?;
+            let new_info = pdfcraft_render::inspect_with_credentials(new_bytes.clone(), render_password.as_deref(), authenticated.as_ref())
+                .map_err(|e| e.to_string())?;
+            let new_cos = if let Some(authenticated) = &authenticated {
+                authenticated.open(new_bytes.clone())
+            } else {
+                pdfcraft_cos::Document::open_with_password(new_bytes.clone(), password)
+            }
+            .map_err(|e| e.to_string())?;
             Ok((new_bytes, new_info, new_cos))
         };
         let (bytes, info, cos, xfa) = match (info.xfa, cos) {
@@ -252,8 +318,10 @@ impl Session {
         };
         // XFA notes survive the document being re-read after edits.
         let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
-        let mut document =
-            Self::build_document(&context.trust, DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa });
+        let mut document = Self::build_document(
+            &context.trust,
+            DocumentOpenData { name, path, bytes, info, structure: cos, render_password, authenticated, password, xfa },
+        );
         // A script that ran away on open turns the form's scripts off for this document.
         document.xfa_template = if ran_away { None } else { xfa_template };
         document.js_output.append(script_output);
@@ -267,11 +335,11 @@ impl Session {
 
     /// The last step of opening: build the document record and register it.
     fn build_document(trust: &Arc<TrustStore>, data: DocumentOpenData<'_>) -> Document {
-        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa } = data;
-        let config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
+        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, authenticated, password, xfa } = data;
+        let config = RenderConfig { password: render_password.as_deref().map(Arc::from), authenticated: authenticated.clone(), ..Default::default() };
         let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
-                let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned) };
+                let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned), authenticated: authenticated.clone() };
                 let saved = cos.bytes().clone();
                 (
                     Some(Editor {

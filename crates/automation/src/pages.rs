@@ -146,11 +146,15 @@ impl Automation {
         &mut self,
         id: DocId,
         pages: &[usize],
-        extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts,
+        extract: &mut impl FnMut(&Arc<Vec<u8>>, RenderConfig, &[usize]) -> PageTexts,
     ) -> Result<PageTexts> {
         let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
         let (bytes, n) = (doc.bytes.clone(), doc.info.pages.len());
-        let password: Option<Arc<str>> = doc.password.as_deref().map(Arc::from);
+        let config = RenderConfig {
+            password: doc.password.as_deref().map(Arc::from),
+            authenticated: self.session.render_config(id).and_then(|c| c.authenticated),
+            ..Default::default()
+        };
         self.texts.prepare(id, &bytes);
         let mut results = HashMap::new();
         let mut missing = Vec::new();
@@ -166,7 +170,7 @@ impl Automation {
         missing.sort_unstable();
         missing.dedup();
         if !missing.is_empty() {
-            for (p, text) in extract(&bytes, password, &missing) {
+            for (p, text) in extract(&bytes, config, &missing) {
                 if let Ok(text) = &text {
                     self.texts.insert(id, p, &bytes, text.clone());
                 }
@@ -226,11 +230,7 @@ impl Automation {
         self.text_find_with(a, &mut extract_parallel)
     }
 
-    pub(crate) fn text_find_with(
-        &mut self,
-        a: &Args,
-        extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts,
-    ) -> Result<Value> {
+    pub(crate) fn text_find_with(&mut self, a: &Args, extract: &mut impl FnMut(&Arc<Vec<u8>>, RenderConfig, &[usize]) -> PageTexts) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, n) = (doc.id, doc.info.pages.len());
         let query = a.str("query")?;
@@ -349,7 +349,7 @@ fn render_warning_text(warning: pdfcraft_render::RenderWarning) -> &'static str 
 }
 
 /// Extract the text of `pages` (0-based) with one renderer per worker thread.
-pub(crate) fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]) -> PageTexts {
+pub(crate) fn extract_parallel(bytes: &Arc<Vec<u8>>, config: RenderConfig, pages: &[usize]) -> PageTexts {
     let extract = |r: &mut PageRenderer, p: usize| {
         let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
         match out.error {
@@ -357,7 +357,6 @@ pub(crate) fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>,
             None => Ok(out.text.unwrap_or_default()),
         }
     };
-    let config = RenderConfig { password, ..Default::default() };
     let workers = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get).min(8) };
     // Small jobs aren't worth a second parse of the document.
     if workers == 1 || pages.len() < 8 {

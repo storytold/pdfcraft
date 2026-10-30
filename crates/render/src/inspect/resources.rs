@@ -233,10 +233,27 @@ impl<'a> Inspector<'a> {
 
 /// Fetch an attachment's bytes (decoded). Capped at 1 GiB to defuse decompression bombs.
 pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -> Result<Vec<u8>, String> {
+    attachment_data_with_credentials(std::sync::Arc::new(bytes.to_vec()), password, None, att)
+}
+
+pub fn attachment_data_with_credentials(
+    bytes: std::sync::Arc<Vec<u8>>,
+    password: Option<&str>,
+    authenticated: Option<&crate::AuthenticatedDocument>,
+    att: &Attachment,
+) -> Result<Vec<u8>, String> {
     let run = || -> Result<Vec<u8>, String> {
-        let options = load_options(password);
-        let doc = Document::load_mem_with_options(bytes, options).map_err(|e| e.to_string())?;
-        let insp = Inspector::new(&doc);
+        let lazy = authenticated
+            .map(|a| a.open_limited(bytes.clone(), 256 << 20).map_err(|e| e.to_string()).and_then(crate::structure::LazyStructure::from_document))
+            .transpose()?;
+        let compatibility =
+            if lazy.is_none() { Some(Document::load_mem_with_options(&bytes, load_options(password)).map_err(|e| e.to_string())?) } else { None };
+        let doc: &dyn super::Structure = match (&lazy, &compatibility) {
+            (Some(lazy), _) => lazy,
+            (_, Some(doc)) => doc,
+            _ => return Err("the attachment reader is unavailable".into()),
+        };
+        let insp = Inspector::new(doc);
         let spec: &Object = match &att.source {
             AttachmentSource::Document { key } => {
                 let names = doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| insp.dict(o)).ok_or("no /Names")?;

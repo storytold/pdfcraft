@@ -14,6 +14,16 @@ pub(crate) struct Keys {
     pub(crate) render: Option<String>,
     /// What the editor re-opens a saved file with: the strongest password known (owner if any).
     pub(crate) reopen: Option<String>,
+    pub(crate) authenticated: Option<pdfcraft_render::AuthenticatedDocument>,
+}
+
+impl Keys {
+    pub(crate) fn open(&self, bytes: Arc<Vec<u8>>) -> Result<pdfcraft_cos::Document, pdfcraft_cos::CosError> {
+        match &self.authenticated {
+            Some(authenticated) => authenticated.open(bytes),
+            None => pdfcraft_cos::Document::open_with_password(bytes, self.reopen.as_deref()),
+        }
+    }
 }
 
 /// What an edit can change, and so what the view data must be rebuilt from.
@@ -220,14 +230,35 @@ impl std::fmt::Display for Label {
     }
 }
 
-/// The passwords after `edit`, if it changes them.
-pub(crate) fn keys_after(edit: &Edit) -> Option<Keys> {
-    match edit {
-        Edit::Protect(p) => {
-            Some(Keys { render: p.open_password.clone(), reopen: p.permissions_password.clone().or_else(|| p.open_password.clone()) })
+/// The credentials after a security edit. Prepare them before committing the edit so a
+/// serialization or authentication failure cannot replace the user's current document.
+pub(crate) fn keys_after(edit: &Edit, next: &pdfcraft_cos::Document) -> Result<Option<Keys>, EditError> {
+    let keys = match edit {
+        Edit::Protect(p) => Some(Keys {
+            render: p.open_password.clone(),
+            reopen: p.permissions_password.clone().or_else(|| p.open_password.clone()),
+            authenticated: None,
+        }),
+        Edit::ProtectCertificates(_) => {
+            let handler = next.output_handler().cloned().ok_or_else(|| EditError::Protection("missing certificate writer context".into()))?;
+            let bytes = Arc::new(pdfcraft_cos::write_full(next, &pdfcraft_cos::SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?);
+            let resolver = |_: &pdfcraft_cos::EncryptDict, _: &[u8]| Ok(handler.clone());
+            let source = pdfcraft_cos::Document::open_with_security_resolver(bytes, &resolver).map_err(|e| EditError::Reopen(e.to_string()))?;
+            Some(Keys {
+                authenticated: Some(pdfcraft_render::AuthenticatedDocument::new(source).map_err(|e| EditError::Reopen(e.to_string()))?),
+                ..Keys::default()
+            })
         }
-        Edit::RemoveProtection => Some(Keys::default()),
-        Edit::Batch { edits, .. } => edits.iter().rev().find_map(keys_after),
+        Edit::RemoveProtection | Edit::ConvertPdfA { .. } => Some(Keys::default()),
+        Edit::Batch { edits, .. } => {
+            for edit in edits.iter().rev() {
+                if let Some(keys) = keys_after(edit, next)? {
+                    return Ok(Some(keys));
+                }
+            }
+            None
+        }
         _ => None,
-    }
+    };
+    Ok(keys)
 }

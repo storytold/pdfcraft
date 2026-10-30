@@ -3,6 +3,23 @@ use super::{
     render_threads, signatures_of, writable, write_full, write_incremental, xfa_sync_datasets,
 };
 
+/// An immutable signing snapshot. It retains authenticated document context, never a PIN.
+/// It may run on a worker thread while the session remains available to its caller.
+pub struct SigningJob {
+    cos: pdfcraft_cos::Document,
+    options: SignOptions,
+}
+impl SigningJob {
+    /// Produce signed bytes without writing a file or changing a session.
+    pub fn sign(self, identity: &pdfcraft_sign::DigitalId) -> Result<Arc<Vec<u8>>, EditError> {
+        guard(|| {
+            let cos = writable(&self.cos)?;
+            Ok(Arc::new(pdfcraft_sign::sign(&cos, identity, &self.options)?))
+        })
+        .map_err(EditError::Write)?
+    }
+}
+
 impl Session {
     /// The bytes to write for Save: an incremental update of the file as opened/last saved,
     /// with `/ModDate` stamped. Call `mark_saved` after writing them successfully.
@@ -29,7 +46,7 @@ impl Session {
             if on_saved || rewrite {
                 write_incremental(&cos, &opts)
             } else {
-                let mut base = pdfcraft_cos::Document::open_with_password(editor.saved.clone(), editor.saved_keys.reopen.as_deref())?;
+                let mut base = editor.saved_keys.open(editor.saved.clone())?;
                 base.overlay_changes_from(&cos)?;
                 write_incremental(&base, &opts)
             }
@@ -57,8 +74,9 @@ impl Session {
     pub fn check_save(&self, id: DocId, bytes: &Arc<Vec<u8>>) -> Result<(), EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let Some(editor) = doc.editor.as_ref() else { return Ok(()) };
-        pdfcraft_cos::Document::open_with_password(bytes.clone(), editor.keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
-        pdfcraft_render::check_pages(bytes.clone(), doc.password.as_deref(), doc.info.pages.len()).map_err(|e| EditError::Reopen(e.to_string()))
+        editor.keys.open(bytes.clone()).map_err(|e| EditError::Reopen(e.to_string()))?;
+        pdfcraft_render::check_pages_with_credentials(bytes.clone(), doc.password.as_deref(), doc.config.authenticated.as_ref(), doc.info.pages.len())
+            .map_err(|e| EditError::Reopen(e.to_string()))
     }
 
     /// Record a successful save of `bytes` (to `path`, if any): rebase editing on the saved file
@@ -71,8 +89,7 @@ impl Session {
             let keys = editor.keys.clone();
             // The saved file carries no Password-field values (#3943, #3944); the open document keeps them.
             let typed = pdfcraft_forms::password_values(&editor.cos);
-            editor.cos =
-                pdfcraft_cos::Document::open_with_password(bytes.clone(), keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
+            editor.cos = keys.open(bytes.clone()).map_err(|e| EditError::Reopen(e.to_string()))?;
             pdfcraft_forms::restore_password_values(&mut editor.cos, &typed).map_err(|e| EditError::Reopen(e.to_string()))?;
             if !typed.is_empty() && doc.info.xfa.is_some() {
                 let mut datasets = None;
@@ -101,6 +118,11 @@ impl Session {
         let editor = doc.editor.as_mut().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
         if editor.cos.permissions().is_none_or(|p| p.owner) {
             return Ok(());
+        }
+        if editor.cos.security().is_some_and(|h| h.dict().filter == b"Adobe.PubSec") {
+            return Err(EditError::Protection(
+                "certificate recipient permissions cannot be lifted with a password; reopen with an authorized recipient".into(),
+            ));
         }
         editor.cos.unlock(password).map_err(|e| match e {
             pdfcraft_cos::CosError::WrongPassword => EditError::WrongPassword,
@@ -137,7 +159,7 @@ impl Session {
         candidates.push(Keys::default());
         let (cos, keys) = candidates
             .into_iter()
-            .find_map(|k| pdfcraft_cos::Document::open_with_password(base.clone(), k.reopen.as_deref()).ok().map(|c| (c, k)))
+            .find_map(|k| k.open(base.clone()).ok().map(|c| (c, k)))
             .ok_or_else(|| EditError::Reopen("the saved file can't be opened".into()))?;
         editor.cos = cos;
         editor.keys = keys;
@@ -159,7 +181,18 @@ impl Session {
         let doc = &self.docs[old];
         let (name, path, generation) = (doc.name.clone(), doc.path.clone(), doc.generation);
         let password = doc.editor.as_ref().and_then(|e| e.keys.reopen.clone()).or_else(|| doc.password.clone());
-        let new_id = self.open(name, path, bytes, password.as_deref())?;
+        let authenticated = doc.config.authenticated.clone();
+        let new_id = if let Some(authenticated) = authenticated {
+            // Validate before opening: an unencrypted replacement never invokes a resolver.
+            let source = guard(std::panic::AssertUnwindSafe(|| authenticated.open(bytes.clone())))
+                .map_err(|m| OpenError::Invalid(format!("reading it failed unexpectedly ({m})")))?
+                .map_err(|e| OpenError::Invalid(e.to_string()))?;
+            let handler = source.security().cloned().ok_or_else(|| OpenError::Invalid("the file lost its certificate security".into()))?;
+            let resolver = |_: &pdfcraft_cos::EncryptDict, _: &[u8]| Ok(handler.clone());
+            self.open_with_security_resolver(name, path, bytes.clone(), &resolver)?
+        } else {
+            self.open(name, path, bytes, password.as_deref())?
+        };
         let at = self.docs.iter().position(|d| d.id == new_id).ok_or_else(|| OpenError::Invalid("the new version was not kept".into()))?;
         let mut doc = self.docs.remove(at);
         doc.id = id;
@@ -268,16 +301,19 @@ impl Session {
     /// Sign the document's current state with `id` (Use a certificate ▸ Digitally sign). Returns
     /// the signed file; the caller saves it and then calls [`Session::mark_signed`]. An empty
     /// `opts.date` takes the session clock.
-    pub fn sign(&self, doc: DocId, id: &pdfcraft_sign::DigitalId, mut opts: SignOptions) -> Result<Arc<Vec<u8>>, EditError> {
+    pub fn sign(&self, doc: DocId, id: &pdfcraft_sign::DigitalId, opts: SignOptions) -> Result<Arc<Vec<u8>>, EditError> {
+        self.prepare_sign(doc, opts)?.sign(id)
+    }
+
+    /// Snapshot the current document and session clock for signing on another thread.
+    /// Callers must reject a stale result before saving or replacing a changed document.
+    pub fn prepare_sign(&self, doc: DocId, mut opts: SignOptions) -> Result<SigningJob, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
-        // Encrypted documents are signed under their permissions (the signer checks them).
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         if opts.date.is_empty() {
             opts.date = self.signing_date();
         }
-        // A typed Password-field value is not signed into the file (#3926), as it isn't saved.
-        let cos = writable(&editor.cos)?;
-        Ok(Arc::new(pdfcraft_sign::sign(&cos, id, &opts)?))
+        Ok(SigningJob { cos: editor.cos.clone(), options: opts })
     }
 
     /// [`Session::sign`], embedding an RFC 3161 signature timestamp (PAdES B-T) produced by

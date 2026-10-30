@@ -44,6 +44,7 @@ ed25519-dalek = "3.0.0"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
 getrandom = "0.4"
+zeroize = "1.8"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Safe Windows certificate store and CNG signing wrappers (MIT OR Apache-2.0).
@@ -52,6 +53,15 @@ rustls-cng = { version = "0.7.1", default-features = false }
 [target.'cfg(target_os = "macos")'.dependencies]
 # Signing with Keychain identities (MIT OR Apache-2.0).
 security-framework = "3.7"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Bounded worker metadata; PIN bytes use a separate zeroizing frame.
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Safe nonblocking pipe I/O and worker core-dump control.
+rustix = { version = "1", features = ["fs", "process"] }
+# Safe PKCS #11 wrapper, pinned for its per-use authentication API.
+cryptoki = { git = "https://github.com/parallaxsecond/rust-cryptoki", rev = "2e4ff5d717f46f90785496949c08599b589b8e32" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # crypto-bigint asks for randomness; in the browser it comes from Web Crypto.

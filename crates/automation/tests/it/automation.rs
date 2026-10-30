@@ -6276,6 +6276,44 @@ fn a_dynamic_xfa_forms_signature_box_is_signed_under_its_som_path() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The PKCS #11 token path end to end, against the SoftHSM bench the `pdfcraft-sign` tests
+/// use: `PDFCRAFT_PKCS11_MODULE` names the module, whose token holds the "Test Signer RSA"
+/// identity (user PIN 1234). Linux-only (the tools return an empty listing elsewhere);
+/// skipped when the bench isn't configured (CI stays green).
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires a disposable SoftHSM token and PDFCRAFT_PKCS11_PIN=1234"]
+fn signing_with_a_pkcs11_token_through_tools() {
+    if std::env::var("PDFCRAFT_PKCS11_MODULE").map(|v| v.is_empty()).unwrap_or(true) {
+        return; // No PKCS #11 test bench.
+    }
+    let dir = workdir("sign-token");
+    let mut a = auto(&dir);
+    let listing = ok(&mut a, "sign_token_ids", json!({}));
+    let ids = listing["ids"].as_array().unwrap();
+    let reference = ids
+        .iter()
+        .find(|id| id["certificate"]["subject"].as_str().is_some_and(|s| s.contains("Test Signer RSA")))
+        .expect("the bench identity is listed")["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "sign_document", json!({ "doc": doc, "id": reference, "out": "token-signed.pdf" }));
+    assert_eq!(r["signature"]["signer"], "Test Signer RSA");
+    assert!(dir.join("token-signed.pdf").exists());
+}
+
+#[test]
+fn token_pin_literals_are_refused_before_accessing_hardware() {
+    let dir = workdir("token-pin-policy");
+    let mut a = auto(&dir);
+    assert!(matches!(
+        a.call("sign_document", &json!({"doc": 0, "id": "pkcs11:absent", "password": "do-not-log-this", "out": "signed.pdf"})),
+        Err(ToolError::InvalidArgs(message)) if message.contains("PINs must not appear") && !message.contains("do-not-log-this")
+    ));
+}
+
 #[test]
 fn digital_ids_signing_and_validation_through_tools() {
     let dir = workdir("signing");
@@ -10190,3 +10228,6 @@ fn simple_rule_scan_drawn(content: &[u8]) -> Vec<u8> {
     }
     write_full(&doc, &SaveOptions::default()).unwrap()
 }
+
+#[path = "certificate_security.rs"]
+mod certificate_security;

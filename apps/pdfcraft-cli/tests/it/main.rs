@@ -11,6 +11,7 @@ mod info_standards;
 mod mcp_compact;
 mod options;
 mod owner_password;
+mod pkcs11_worker;
 mod render;
 mod root_arguments;
 mod run_report;

@@ -12,9 +12,6 @@ use std::sync::Arc;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use hayro::hayro_syntax::DecryptionError;
-use hayro::hayro_syntax::LoadPdfError;
-use hayro::hayro_syntax::Pdf;
 use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
 use pdfcraft_cos::page_labels::{
     MAX_LABEL_BYTES, MAX_LABEL_TOTAL_BYTES, MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK, MAX_PREFIX_BYTES, MAX_PREFIX_TOTAL_BYTES, alpha, roman,
@@ -32,7 +29,7 @@ mod resources;
 #[cfg(test)]
 use annotations::{MAX_ANNOTATION_BYTES, MAX_LINK_ATTACHMENT_TEXT_BYTES, MAX_REMOTE_FILE_SPEC_BYTES, retained};
 use core::Inspector;
-pub use core::{check_pages, inspect, pretty_date};
+pub use core::{check_pages, check_pages_with_credentials, inspect, inspect_with_credentials, pretty_date};
 #[cfg(test)]
 use core::{inspect_structure, spend};
 pub use model::{
@@ -41,7 +38,7 @@ pub use model::{
 };
 #[cfg(test)]
 use navigation::{OUTLINE_DEPTH, OUTLINE_WINDOW};
-pub use resources::attachment_data;
+pub use resources::{attachment_data, attachment_data_with_credentials};
 #[cfg(test)]
 use resources::{xfa_config_dynamic_render, xfa_packet_text};
 

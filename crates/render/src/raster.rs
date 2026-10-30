@@ -64,6 +64,8 @@ impl Stopwatch {
 pub struct RenderConfig {
     /// User or owner password for encrypted documents.
     pub password: Option<Arc<str>>,
+    /// Previously authenticated certificate credential; never serialized.
+    pub authenticated: Option<crate::AuthenticatedDocument>,
     /// Layer (optional content group) visibility overrides: (object number, generation, visible).
     pub layers: Arc<Vec<(i32, i32, bool)>>,
     /// View ▸ Hide all comments: markup annotations aren't drawn (fields and links still are).
@@ -81,6 +83,14 @@ pub struct RenderConfig {
 }
 
 impl RenderConfig {
+    /// Open the original object graph using this render context's credential.
+    pub fn open_document(&self, bytes: Arc<Vec<u8>>) -> Result<pdfcraft_cos::Document, pdfcraft_cos::CosError> {
+        match &self.authenticated {
+            Some(authenticated) => authenticated.open(bytes),
+            None => pdfcraft_cos::Document::open_with_password(bytes, self.password.as_deref()),
+        }
+    }
+
     fn settings(&self) -> InterpreterSettings {
         let standard = InterpreterSettings::default().font_resolver;
         InterpreterSettings {
@@ -442,7 +452,7 @@ pub struct PageRenderer {
 
 impl PageRenderer {
     pub fn new(bytes: Arc<Vec<u8>>, config: RenderConfig) -> Self {
-        let pdf = parse(&bytes, config.password.as_deref());
+        let pdf = parse(&bytes, &config);
         let settings = config.settings();
         Self { bytes, config, pdf, settings, stats: RenderStats { parser_builds: 1, ..RenderStats::default() } }
     }
@@ -489,15 +499,17 @@ impl PageRenderer {
         let r = render_page(pdf, &cache, &settings, &self.config, req);
         let warnings = take_warnings(&warnings);
         if matches!(r, Err((_, true))) {
-            self.pdf = parse(&self.bytes, self.config.password.as_deref());
+            self.pdf = parse(&self.bytes, &self.config);
             self.stats.parser_builds += 1;
         }
         finish(req, start, r, warnings)
     }
 }
 
-fn parse(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Option<Pdf> {
-    catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes.clone(), password.unwrap_or("")).ok())).ok().flatten()
+fn parse(bytes: &Arc<Vec<u8>>, config: &RenderConfig) -> Option<Pdf> {
+    catch_unwind(AssertUnwindSafe(|| crate::credentials::parse_pdf(bytes.clone(), config.password.as_deref(), config.authenticated.as_ref()).ok()))
+        .ok()
+        .flatten()
 }
 
 pub(crate) fn panic_message(p: &Box<dyn std::any::Any + Send>) -> String {

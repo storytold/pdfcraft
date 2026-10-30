@@ -303,7 +303,11 @@ impl PdfCraftApp {
         if d.mode != SearchMode::Patterns && needles.is_empty() {
             return 0;
         }
-        let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
+        let config = pdfcraft_render::RenderConfig {
+            password: doc.password.as_deref().map(std::sync::Arc::from),
+            authenticated: doc.render_config().authenticated,
+            ..Default::default()
+        };
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
         let mut edits = Vec::new();
         let author = self.comment_prefs.author.clone();

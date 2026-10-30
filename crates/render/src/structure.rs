@@ -147,6 +147,10 @@ impl LazyStructure {
         if !source.repair_log().is_empty() {
             return Err("the structure requires compatibility repair".into());
         }
+        Self::from_document(source)
+    }
+
+    pub(crate) fn from_document(source: Document) -> std::result::Result<Self, String> {
         let trailer = convert_dict(source.trailer(), 0).map_err(|e| e.to_string())?;
         let objects = source.object_numbers().into_iter().map(|n| (n, OnceLock::new())).collect();
         Ok(Self { source, trailer, objects, failed: AtomicBool::new(false) })

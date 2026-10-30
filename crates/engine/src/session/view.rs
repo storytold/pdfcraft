@@ -103,7 +103,8 @@ impl Session {
     /// per line in user space, URI). Text that already has a link over it is skipped.
     pub fn find_urls(&self, id: DocId) -> Vec<(usize, Vec<[f64; 4]>, String)> {
         let Some(doc) = self.get(id) else { return Vec::new() };
-        let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
+        let config =
+            RenderConfig { password: doc.password.as_deref().map(Arc::from), authenticated: doc.config.authenticated.clone(), ..Default::default() };
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
         let mut out = Vec::new();
         for page in 0..doc.info.pages.len() {
@@ -272,7 +273,7 @@ impl Session {
     /// How the document's pages are drawn for viewing: its password and view settings (layer
     /// visibility, hidden comments, reading colours). `None` when no such document is open.
     pub fn render_config(&self, id: DocId) -> Option<RenderConfig> {
-        Some(self.get(id)?.config.clone())
+        Some(self.get(id)?.render_config())
     }
 
     /// Acrobat's Summarize Comments ("Comments only" layout): a new PDF listing every comment
@@ -295,7 +296,7 @@ impl Session {
     /// have changed it (Document Properties ▸ Fonts, `doc_info`). A no-op otherwise.
     pub fn refresh_fonts(&mut self, id: DocId) {
         let Some(doc) = self.docs.iter_mut().find(|d| d.id == id && d.fonts_stale) else { return };
-        if let Ok(info) = pdfcraft_render::inspect(doc.bytes.clone(), doc.password.as_deref()) {
+        if let Ok(info) = pdfcraft_render::inspect_with_credentials(doc.bytes.clone(), doc.password.as_deref(), doc.config.authenticated.as_ref()) {
             doc.info.fonts = info.fonts;
         }
         doc.fonts_stale = false;

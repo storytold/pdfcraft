@@ -15,6 +15,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod aes_cbc;
+pub mod public_key;
 mod rc4;
 
 use md5::{Digest as _, Md5};
@@ -55,8 +56,10 @@ pub enum Method {
 /// The values of an `/Encrypt` dictionary that the handler needs.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct EncryptDict {
-    /// `/Filter` (must be `Standard`).
+    /// `/Filter`: `Standard` for passwords or `Adobe.PubSec` for public keys.
     pub filter: Vec<u8>,
+    /// Parameters of the public-key handler, absent for password security.
+    pub public_key: Option<public_key::PublicKeyParameters>,
     pub v: i64,
     pub r: i64,
     /// Key length in bits (`/Length`; 40 when absent).
@@ -75,11 +78,15 @@ pub struct EncryptDict {
     pub ef_f: Vec<u8>,
 }
 
-/// Which password authenticated the document.
+/// Which credential authenticated the document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Auth {
     Owner,
     User,
+    /// Permissions recovered from this recipient's encrypted CMS payload.
+    Recipient {
+        permissions: i32,
+    },
 }
 
 /// Permission bits from `/P` (§7.6.4.2, Table 22). Owners have every permission.
@@ -132,13 +139,19 @@ pub enum StreamKind<'a> {
 }
 
 /// An authenticated security handler for one document.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SecurityHandler {
     dict: EncryptDict,
-    key: Vec<u8>,
+    key: zeroize::Zeroizing<Vec<u8>>,
     auth: Auth,
-    recovered_user: Option<Vec<u8>>,
+    recovered_user: Option<zeroize::Zeroizing<Vec<u8>>>,
     methods: Methods,
+}
+
+impl std::fmt::Debug for SecurityHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecurityHandler").field("filter", &self.dict.filter).field("auth", &self.auth).finish_non_exhaustive()
+    }
 }
 
 /// The crypt filter methods of a handler, resolved once: a document controls both the number of
@@ -180,7 +193,7 @@ impl Methods {
 impl SecurityHandler {
     fn new(dict: EncryptDict, key: Vec<u8>, auth: Auth, recovered_user: Option<Vec<u8>>) -> Self {
         let methods = Methods::new(&dict);
-        Self { dict, key, auth, recovered_user, methods }
+        Self { dict, key: zeroize::Zeroizing::new(key), auth, recovered_user: recovered_user.map(zeroize::Zeroizing::new), methods }
     }
 
     /// Authenticate with `password` (tried as owner password, then user password). `None`
@@ -242,13 +255,16 @@ impl SecurityHandler {
     /// authentication recovers (Algorithm 7). Lets components that only accept user passwords
     /// open the document too.
     pub fn recovered_user_password(&self) -> Option<Vec<u8>> {
-        self.recovered_user.clone()
+        self.recovered_user.as_ref().map(|p| p.to_vec())
     }
 
     /// For R5/R6, `/P` is stored in clear and again in `/Perms`, encrypted with the file key
     /// (Algorithm 13). Where the two differ, a permission counts only when both grant it, so an
     /// edited `/P` grants nothing extra. Without a readable `/Perms`, `/P` applies as before.
     pub fn permissions(&self) -> Permissions {
+        if let Auth::Recipient { permissions } = self.auth {
+            return Permissions { bits: permissions, owner: permissions & 2 != 0 };
+        }
         let bits = self.perms_p().map_or(self.dict.p, |p| self.dict.p & p);
         Permissions { bits, owner: self.auth == Auth::Owner }
     }
@@ -267,7 +283,7 @@ impl SecurityHandler {
         &self.dict
     }
 
-    /// The file encryption key (for tests and diagnostics).
+    /// The shared secret for authenticated decryption adapters. Never serialize or log it.
     pub fn file_key(&self) -> &[u8] {
         &self.key
     }
@@ -293,10 +309,10 @@ impl SecurityHandler {
     /// Algorithm 1 (§7.6.3.3): the key for one object. AES-256 uses the file key directly.
     fn object_key(&self, method: Method, num: u32, generation: u16) -> Vec<u8> {
         if method == Method::Aes256 {
-            return self.key.clone();
+            return self.key.to_vec();
         }
         let mut h = Md5::new();
-        h.update(&self.key);
+        h.update(self.key.as_slice());
         h.update(&num.to_le_bytes()[..3]);
         h.update(generation.to_le_bytes());
         if method == Method::Aes128 {

@@ -494,3 +494,87 @@ fn a_stream_labelled_xref_is_encrypted_when_saved() {
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(SECRET.len()).any(|w| w == SECRET.as_bytes()), "the labelled stream was written in the clear");
 }
+
+mod public_key {
+    use super::*;
+    use pdfcraft_cos::{EncryptDict, SecurityHandler};
+    use std::cell::Cell;
+
+    fn writer(algorithm: Algorithm, metadata: bool) -> SecurityHandler {
+        SecurityHandler::create_public_key(algorithm, vec![b"synthetic-recipient".to_vec()], &[7; 20], metadata).unwrap()
+    }
+    fn reader(params: &EncryptDict, _: &[u8]) -> Result<SecurityHandler, CosError> {
+        SecurityHandler::open_public_key(params.clone(), &[7; 20], 1 << 5).map_err(|e| CosError::Security(e.to_string()))
+    }
+
+    #[test]
+    fn strings_streams_metadata_and_incremental_updates_keep_certificate_security() {
+        for algorithm in [Algorithm::Aes128, Algorithm::Aes256] {
+            for metadata in [true, false] {
+                let mut doc = Document::open(Arc::new(fixture())).unwrap();
+                doc.set_public_key_encryption(writer(algorithm, metadata), [9; 16]).unwrap();
+                let bytes = Arc::new(write_full(&doc, &SaveOptions::default()).unwrap());
+                assert!(!String::from_utf8_lossy(&bytes).contains("Secret page"));
+                assert_eq!(String::from_utf8_lossy(&bytes).contains("<x:xmpmeta>meta"), !metadata);
+                assert!(matches!(Document::open(bytes.clone()), Err(CosError::NeedsCertificate)));
+                let calls = Cell::new(0);
+                let resolver = |params: &EncryptDict, id: &[u8]| {
+                    calls.set(calls.get() + 1);
+                    reader(params, id)
+                };
+                let mut opened = Document::open_with_security_resolver(bytes.clone(), &resolver).unwrap();
+                assert_eq!(calls.get(), 1);
+                assert_eq!(content(&opened), SECRET);
+                assert_eq!(opened.security().unwrap().auth(), Auth::Recipient { permissions: 1 << 5 });
+                assert!(!opened.permissions().unwrap().copy());
+                let root = opened.root().unwrap();
+                opened
+                    .update_dict(root, |d| d.set(b"Test".to_vec(), Object::String(PdfString { bytes: b"private edit".to_vec(), hex: false })))
+                    .unwrap();
+                let updated = Arc::new(write_incremental(&opened, &SaveOptions::default()).unwrap());
+                assert!(updated.starts_with(bytes.as_slice()));
+                assert!(!String::from_utf8_lossy(&updated).contains("private edit"));
+                let reopened = opened.open_with_same_credentials(updated).unwrap();
+                assert_eq!(reopened.permissions(), opened.permissions());
+                let root = reopened.get(reopened.root().unwrap());
+                assert_eq!(root.as_dict().unwrap().get(b"Test").unwrap().as_string().unwrap().bytes, b"private edit");
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_public_filter_parameters_fail_before_requesting_credentials() {
+        let mut source = Document::open(Arc::new(fixture())).unwrap();
+        source.set_public_key_encryption(writer(Algorithm::Aes256, true), [9; 16]).unwrap();
+        let encrypt = source.trailer().reference(b"Encrypt").unwrap();
+        source
+            .update_dict(encrypt, |dict| {
+                let filter = dict.get_mut(b"CF").unwrap().as_dict_mut().unwrap().get_mut(b"DefaultCryptFilter").unwrap().as_dict_mut().unwrap();
+                // Public-key Length is in bits. The password-handler value 32 is invalid here.
+                filter.set(b"Length".to_vec(), Object::Int(32));
+            })
+            .unwrap();
+        let saved = Arc::new(write_full(&source, &SaveOptions::default()).unwrap());
+        let never = |_: &EncryptDict, _: &[u8]| -> Result<SecurityHandler, CosError> { panic!("invalid filter reached credential resolver") };
+        assert!(matches!(Document::open_with_security_resolver(saved, &never), Err(CosError::Security(_))));
+    }
+
+    #[test]
+    fn recipient_order_and_metadata_changes_invalidate_context_reuse() {
+        let mut source = Document::open(Arc::new(fixture())).unwrap();
+        source.set_public_key_encryption(writer(Algorithm::Aes256, true), [9; 16]).unwrap();
+        let saved = Arc::new(write_full(&source, &SaveOptions::default()).unwrap());
+        let opened = Document::open_with_security_resolver(saved.clone(), &reader).unwrap();
+        let mut changed = opened.clone();
+        changed.set_public_key_encryption(writer(Algorithm::Aes256, false), [9; 16]).unwrap();
+        let changed = Arc::new(write_full(&changed, &SaveOptions::default()).unwrap());
+        assert!(matches!(opened.open_with_same_credentials(changed), Err(CosError::NeedsCertificate)));
+        let bad = |params: &EncryptDict, _: &[u8]| {
+            let mut params = params.clone();
+            params.public_key.as_mut().unwrap().recipients.reverse();
+            params.public_key.as_mut().unwrap().recipients.push(vec![0]);
+            reader(&params, &[])
+        };
+        assert!(matches!(Document::open_with_security_resolver(saved, &bad), Err(CosError::Security(_))));
+    }
+}

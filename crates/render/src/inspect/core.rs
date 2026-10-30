@@ -2,8 +2,8 @@ use super::annotations::MAX_LINK_ATTACHMENT_TEXT_BYTES;
 use super::model::{AttachmentSource, PageInfo, Xfa};
 use super::navigation::text_string;
 use super::{
-    Arc, AssertUnwindSafe, DecryptionError, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, LoadOptions, LoadPdfError, Object,
-    ObjectId, OnceCell, OpenError, Pdf, Structure, catch_unwind,
+    Arc, AssertUnwindSafe, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, LoadOptions, Object, ObjectId, OnceCell, OpenError,
+    Structure, catch_unwind,
 };
 
 /// lopdf decodes object and cross-reference streams while it loads, with no limit unless one is
@@ -20,19 +20,17 @@ pub(super) fn load_options(password: Option<&str>) -> LoadOptions {
 /// but must still catch an edit that produced something the viewer cannot display, so the
 /// caller can roll it back. Never panics: parser crashes are caught and reported.
 pub fn check_pages(bytes: Arc<Vec<u8>>, password: Option<&str>, expected: usize) -> Result<(), OpenError> {
-    let pdf = catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes, password.unwrap_or(""))))
-        .map_err(|p| OpenError::Invalid(format!("the parser crashed: {}", crate::raster::panic_message(&p))))?
-        .map_err(|e| match e {
-            LoadPdfError::Decryption(DecryptionError::PasswordProtected) => {
-                if password.is_some() {
-                    OpenError::WrongPassword
-                } else {
-                    OpenError::NeedsPassword
-                }
-            }
-            LoadPdfError::Decryption(other) => OpenError::Unsupported(format!("encryption not supported: {other:?}")),
-            LoadPdfError::Invalid => OpenError::Invalid("no readable page tree or cross-reference data was found".into()),
-        })?;
+    check_pages_with_credentials(bytes, password, None, expected)
+}
+
+pub fn check_pages_with_credentials(
+    bytes: Arc<Vec<u8>>,
+    password: Option<&str>,
+    authenticated: Option<&crate::AuthenticatedDocument>,
+    expected: usize,
+) -> Result<(), OpenError> {
+    let pdf = catch_unwind(AssertUnwindSafe(|| crate::credentials::parse_pdf(bytes, password, authenticated)))
+        .map_err(|p| OpenError::Invalid(format!("the parser crashed: {}", crate::raster::panic_message(&p))))??;
     let pages = catch_unwind(AssertUnwindSafe(|| pdf.pages().len()))
         .map_err(|p| OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p))))?;
     if pages != expected {
@@ -44,19 +42,16 @@ pub fn check_pages(bytes: Arc<Vec<u8>>, password: Option<&str>, expected: usize)
 /// Inspect a document. Fails only if the renderer itself cannot open the file (or needs a
 /// password). Never panics: parser crashes are caught and reported.
 pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, OpenError> {
-    let pdf = catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes.clone(), password.unwrap_or(""))))
-        .map_err(|p| OpenError::Invalid(format!("the parser crashed: {}", crate::raster::panic_message(&p))))?
-        .map_err(|e| match e {
-            LoadPdfError::Decryption(DecryptionError::PasswordProtected) => {
-                if password.is_some() {
-                    OpenError::WrongPassword
-                } else {
-                    OpenError::NeedsPassword
-                }
-            }
-            LoadPdfError::Decryption(other) => OpenError::Unsupported(format!("encryption not supported: {other:?}")),
-            LoadPdfError::Invalid => OpenError::Invalid("no readable page tree or cross-reference data was found".into()),
-        })?;
+    inspect_with_credentials(bytes, password, None)
+}
+
+pub fn inspect_with_credentials(
+    bytes: Arc<Vec<u8>>,
+    password: Option<&str>,
+    authenticated: Option<&crate::AuthenticatedDocument>,
+) -> Result<DocInfo, OpenError> {
+    let pdf = catch_unwind(AssertUnwindSafe(|| crate::credentials::parse_pdf(bytes.clone(), password, authenticated)))
+        .map_err(|p| OpenError::Invalid(format!("the parser crashed: {}", crate::raster::panic_message(&p))))??;
     let mut info = DocInfo { file_size: bytes.len(), pdf_version: version_label(&format!("{:?}", pdf.version())), ..Default::default() };
     let pages = catch_unwind(AssertUnwindSafe(|| {
         let mut out = Vec::new();
@@ -88,7 +83,11 @@ pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, O
         // The lazy reader first; lopdf's repair/tolerance path when it can't expose the same
         // page tree or an object a panel needs. No partial result is published.
         let lazy = catch_unwind(AssertUnwindSafe(|| {
-            let doc = LazyStructure::new(bytes.clone(), password).ok()?;
+            let doc = if let Some(authenticated) = authenticated {
+                LazyStructure::from_document(authenticated.open_limited(bytes.clone(), LOAD_STREAM_LIMIT).ok()?).ok()?
+            } else {
+                LazyStructure::new(bytes.clone(), password).ok()?
+            };
             let mut t = DocInfo { pages: tmp.pages.clone(), ..Default::default() };
             let inspector = Inspector::new(&doc);
             if inspector.page_index.len() != t.pages.len() {
@@ -102,6 +101,9 @@ pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, O
         if let Some(t) = lazy {
             *tmp = t;
             return Ok(());
+        }
+        if authenticated.is_some() {
+            return Err("the authenticated object reader could not inspect this document; encrypted bytes were retained".into());
         }
         let doc = Document::load_mem_with_options(&bytes, options).map_err(|e| e.to_string())?;
         Inspector::new(&doc).fill(tmp);

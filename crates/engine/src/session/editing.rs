@@ -2,7 +2,7 @@
 use super::check_refresh_panic;
 use super::{
     Arc, DocId, Document, Edit, EditCtx, EditError, Label, MAX_UNDO, ObjectKind, OnceLock, RenderPool, SaveOptions, Scope, Session,
-    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, check_permission, comment_list, display_bytes, guard, info_fields, inspect, js, keys_after, note_warnings,
+    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, check_permission, comment_list, display_bytes, guard, info_fields, js, keys_after, note_warnings,
     render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state, undrawn_notices, uses_scripts,
     write_incremental, xfa, xfa_sync_datasets,
 };
@@ -29,9 +29,10 @@ impl Session {
         cx.today = today;
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let signed = doc.is_signed();
+        let security_control = doc.allows_security_change();
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
         if let Some(p) = editor.cos.permissions() {
-            check_permission(&edit, &p)?;
+            check_permission(&edit, &p, security_control)?;
         }
         // Rewriting an OCR word (invisible text over a scan) also hides the scanned word: cover it
         // in the paper's colour and draw the new text in the ink's.
@@ -168,8 +169,8 @@ impl Session {
             return Err(EditError::SignedRewrite(edit.label().to_string()));
         }
         let notices = edit_notices(&edit, &editor.cos, &next);
+        let keys = guard(|| keys_after(&edit, &next)).map_err(EditError::Reopen)??.unwrap_or_else(|| editor.keys.clone());
         let previous = std::mem::replace(&mut editor.cos, next);
-        let keys = keys_after(&edit).unwrap_or_else(|| editor.keys.clone());
         let previous_keys = std::mem::replace(&mut editor.keys, keys);
         editor.undo.push((label, previous, previous_keys, scope));
         if editor.undo.len() > MAX_UNDO {
@@ -287,6 +288,7 @@ impl Session {
         if let Some(e) = doc.editor.as_ref() {
             doc.password = e.keys.render.clone();
             doc.config.password = e.keys.render.as_deref().map(Arc::from);
+            doc.config.authenticated = e.keys.authenticated.clone();
         }
     }
 
@@ -423,7 +425,13 @@ impl Session {
             editor.cos.bytes().clone()
         };
         // The edit must still leave a file the viewer can open; anything else rolls back above.
-        pdfcraft_render::check_pages(bytes.clone(), doc.password.as_deref(), doc.info.pages.len()).map_err(|e| EditError::Reopen(e.to_string()))?;
+        pdfcraft_render::check_pages_with_credentials(
+            bytes.clone(),
+            doc.password.as_deref(),
+            doc.config.authenticated.as_ref(),
+            doc.info.pages.len(),
+        )
+        .map_err(|e| EditError::Reopen(e.to_string()))?;
         let (touches_added, touches_marks) = Self::content_refresh_lists(edit);
         if touches_added || touches_marks {
             doc.marker_scan = OnceLock::new();
@@ -486,7 +494,8 @@ impl Session {
         } else {
             editor.cos.bytes().clone()
         };
-        let info = inspect(bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
+        let info = pdfcraft_render::inspect_with_credentials(bytes.clone(), doc.password.as_deref(), doc.config.authenticated.as_ref())
+            .map_err(|e| EditError::Reopen(e.to_string()))?;
         // Keep the user's layer choices where the layers still exist.
         let mut info = info;
         for l in &mut info.layers {

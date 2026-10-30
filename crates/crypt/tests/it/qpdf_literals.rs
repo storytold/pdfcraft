@@ -78,6 +78,7 @@ impl Case {
             stm_f: self.stm_f.as_bytes().to_vec(),
             str_f: self.str_f.as_bytes().to_vec(),
             ef_f: Vec::new(),
+            public_key: None,
         }
     }
 

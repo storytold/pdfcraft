@@ -93,3 +93,23 @@ family (`sign`, `sign_with_timestamp`, `timestamp_document`, `embed_ltv`).
 `doc.text_edit_preview(page, block)` prepares a read-only page background with the selected
 paragraph’s glyphs removed, preserving text positioning, images and colours. It shares the
 working document’s render configuration and never enters the undo history.
+
+`Session::open_with_security_resolver` and its prepare variant open certificate-encrypted
+PDFs through a caller-supplied resolver. The resolver runs during opening only. The session
+retains the document key, bound to the encryption dictionary and file identity, for rendering,
+attachments, edits, undo, reload and encrypted saves. Original encrypted bytes remain the
+source; no decrypted PDF is written. Recipient permissions govern security changes.
+`Edit::ProtectCertificates` applies undoable encryption for public certificate recipients.
+The creator retains access to the working document; reopening applies each recipient's
+own encrypted permission word. `certificate_security::authenticate` checks all envelopes
+before using a private key, and Linux `TokenResolver` borrows the selected card and PIN
+only while opening. Headless tools expose listing, token opening and certificate protection.
+Desktop dialogs and headless tools expose these workflows. Linux providers run in bounded,
+cancellable helper processes; no device handle is retained by the session. Physical-card
+and PIN-pad qualification remain unfinished.
+
+`Session::prepare_sign` captures an immutable document snapshot and the session clock.
+Its `SigningJob::sign` method runs on a worker thread and returns signed bytes.
+It writes no file and changes no session. It excludes password-field values through the
+same path as synchronous signing. Callers must reject results for a changed document
+before saving. The Linux desktop also checks the active tab and destination file.

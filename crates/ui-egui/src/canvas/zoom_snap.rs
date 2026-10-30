@@ -89,7 +89,11 @@ impl PdfCraftApp {
         let view = &self.views[index];
         let page = view.current;
         let doc = self.session.get(view.id).ok_or("no document")?;
-        let config = RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..RenderConfig::default() };
+        let config = RenderConfig {
+            password: doc.password.as_deref().map(std::sync::Arc::from),
+            authenticated: doc.render_config().authenticated,
+            ..RenderConfig::default()
+        };
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
         // About 800 px along the longer side is plenty to find the margins.
         let size = doc.info.pages.get(page).map_or(792.0, |p| p.width.max(p.height));
@@ -135,7 +139,11 @@ impl PdfCraftApp {
         if (tile.w as u64) * (tile.h as u64) > 64_000_000 {
             return Err("the area is too large at this zoom".into());
         }
-        let config = RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..RenderConfig::default() };
+        let config = RenderConfig {
+            password: doc.password.as_deref().map(std::sync::Arc::from),
+            authenticated: doc.render_config().authenticated,
+            ..RenderConfig::default()
+        };
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
         let out = r.render(RenderRequest { page, kind: RequestKind::Pixels, tile: Some(tile), scale, tag: 0, preview: false });
         if let Some(e) = out.error {

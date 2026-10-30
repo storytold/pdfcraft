@@ -44,14 +44,22 @@ impl Pdf {
         data: impl Into<PdfData>,
         password: &str,
     ) -> Result<Self, LoadPdfError> {
-        let data = data.into();
-        let password = password.as_bytes();
+        Self::new_with_credentials(data.into(), &crate::crypto::Credentials { password: password.as_bytes().to_vec(), external: None })
+    }
+
+    /// PdfCraft patch: parse original encrypted bytes with a previously authenticated decryptor.
+    #[cfg(feature = "std")]
+    pub fn new_with_external_decryptor(data: impl Into<PdfData>, decryptor: Arc<dyn crate::ExternalDecryptor>) -> Result<Self, LoadPdfError> {
+        Self::new_with_credentials(data.into(), &crate::crypto::Credentials { password: Vec::new(), external: Some(decryptor) })
+    }
+
+    fn new_with_credentials(data: PdfData, credentials: &crate::crypto::Credentials) -> Result<Self, LoadPdfError> {
         let version = find_version(data.as_ref()).unwrap_or(PdfVersion::Pdf10);
-        let xref = match root_xref(data.clone(), password) {
+        let xref = match root_xref(data.clone(), credentials) {
             Ok(x) => x,
             Err(e) => match e {
                 XRefError::Unknown => {
-                    fallback(data.clone(), password).ok_or(LoadPdfError::Invalid)?
+                    fallback(data.clone(), credentials).ok_or(LoadPdfError::Invalid)?
                 }
                 XRefError::Encryption(e) => return Err(LoadPdfError::Decryption(e)),
             },
