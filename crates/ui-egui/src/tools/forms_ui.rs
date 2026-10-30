@@ -13,7 +13,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
 use pdfcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, FormWidget, field_flags, form_appearance};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{DocView, PageToolContext, PageXform};
+use crate::canvas::{DocView, PageToolContext, PageXform, SignTab};
 use crate::page_cursor::Layer;
 use crate::page_router::{Hit, Owner};
 use crate::theme::Tokens;
@@ -152,6 +152,17 @@ fn toggle_edit(f: &FormField, w: &FormWidget) -> Option<Edit> {
     Some(Edit::SetFieldValue { name: f.name.clone(), value })
 }
 
+/// The first shown widget of `f` on `page` under the pointer at `p`, with its index.
+fn widget_at<'a>(xf: &PageXform, info: &DocInfo, page: usize, f: &'a FormField, p: egui::Pos2) -> Option<(usize, &'a FormWidget)> {
+    f.widgets.iter().enumerate().find(|(_, w)| w.page == Some(page) && !w.hidden && widget_rect(xf, info, page, w.rect).contains(p))
+}
+
+/// The field whose sign tab is under `p`, of `tabs` in the order they are painted: where tabs
+/// overlap, the one painted last is on top.
+pub(crate) fn tab_under<'a>(tabs: &[(&'a str, SignTab)], p: egui::Pos2) -> Option<&'a str> {
+    tabs.iter().rev().find(|(_, tab)| tab.rect.contains(p)).map(|(name, _)| *name)
+}
+
 /// Whether `w`, a widget of `f`, takes a press: fillable, a push button with an action, or an
 /// empty signature field (signed by clicking it, Use a certificate). A radio button of a group can
 /// be read-only on its own.
@@ -161,19 +172,22 @@ fn usable(f: &FormField, w: &FormWidget, allowed: bool) -> bool {
 }
 
 /// The form widget under `p` on `page`: the one hit test of the fields, for the cursor and the
-/// press. Over the page's text too: a check box drawn with a glyph, or set on printed text, is a
-/// button, not text to select.
-pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, form: &[FormField], allowed: bool, p: Pos2) -> Option<Hit> {
+/// press. It is the first widget under the pointer in the form's order, except on a sign tab
+/// (`tabs`, with the signature field each one signs), which is drawn over every field and so is
+/// on its own field. Over the page's text too: a check box drawn with a glyph, or set on printed
+/// text, is a button, not text to select.
+pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, form: &[FormField], tabs: &[(&str, SignTab)], allowed: bool, p: Pos2) -> Option<Hit> {
     if !xf.rect.contains(p) {
         return None;
     }
-    let (field, f, widget, w) = form.iter().enumerate().find_map(|(fi, f)| {
-        f.widgets
-            .iter()
+    let under = |only: Option<&str>| {
+        form.iter()
             .enumerate()
-            .find(|(_, w)| w.page == Some(page) && !w.hidden && widget_rect(xf, info, page, w.rect).contains(p))
-            .map(|(wi, w)| (fi, f, wi, w))
-    })?;
+            .filter(|(_, f)| only.is_none_or(|name| f.name == name && f.kind == FormFieldKind::Signature))
+            .find_map(|(fi, f)| widget_at(xf, info, page, f, p).map(|(wi, w)| (fi, f, wi, w)))
+    };
+    // A tab lies inside its field's widget, so that widget is under the pointer too.
+    let (field, f, widget, w) = tab_under(tabs, p).and_then(|name| under(Some(name))).or_else(|| under(None))?;
     let icon = match (usable(f, w, allowed), f.kind) {
         (false, _) => egui::CursorIcon::NotAllowed,
         (true, FormFieldKind::Text) => egui::CursorIcon::Text,
@@ -184,12 +198,12 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, form: &[FormField
 
 /// Presses and clicks on form widgets of one page, on the field the press was on ([`hit`]).
 /// `true` while a field holds the press.
-pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], allowed: bool, view: &mut DocView) -> bool {
+pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], tabs: &[(&str, SignTab)], allowed: bool, view: &mut DocView) -> bool {
     let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
     // The field's tooltip (`/TU`) under the pointer, as Acrobat shows it on hover (#3854). ISO
     // 32000-2 Table 226 makes it the name the user interface identifies the field by.
     if let Some(p) = ptr.within(xf.rect)
-        && let Some(Owner::Field { field, .. }) = hit(xf, info, page, form, allowed, p).map(|h| h.owner)
+        && let Some(Owner::Field { field, .. }) = hit(xf, info, page, form, tabs, allowed, p).map(|h| h.owner)
         && let Some(tip) = form.get(field).and_then(|f| f.tooltip.as_deref()).filter(|t| !t.trim().is_empty())
     {
         resp.clone().on_hover_text_at_pointer(tip);
@@ -210,7 +224,8 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], allowed: b
     }
     // A click counts released over the widget its press was on, as a button's does: one that slips
     // off it first does nothing (a check box's overlay closes on it too).
-    if !resp.clicked() || !ptr.pos.and_then(|p| hit(xf, info, page, form, allowed, p)).is_some_and(|h| h.owner == Owner::Field { field, widget: wi })
+    if !resp.clicked()
+        || !ptr.pos.and_then(|p| hit(xf, info, page, form, tabs, allowed, p)).is_some_and(|h| h.owner == Owner::Field { field, widget: wi })
     {
         return true;
     }

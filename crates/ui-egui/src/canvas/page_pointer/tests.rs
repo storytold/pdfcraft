@@ -415,7 +415,7 @@ fn page_modules_take_presses_from_the_router_without_repeating_hit_tests() {
         // widget. Neither chooses the press owner. Pin both calls to the current pointer `p`,
         // not the press origin, and reject an additional call or a changed argument.
         let body = if file == "tools/forms_ui.rs" {
-            let call = "hit(xf, info, page, form, allowed, p)";
+            let call = "hit(xf, info, page, form, tabs, allowed, p)";
             assert_eq!(body.matches(call).count(), 2, "only the existing hover and release checks are exempt");
             body.replace(call, "hover_or_release_check")
         } else {

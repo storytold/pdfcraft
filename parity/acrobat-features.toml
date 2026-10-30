@@ -6084,8 +6084,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.digital"]
 tools = ["sign_document"]
-evidence = ["crates/sign/tests/it/pdf.rs::signing_an_existing_field_and_counter_signing", "crates/ui-egui/tests/it/signing.rs::clicking_an_empty_signature_field_signs_it"]
-notes = ""
+evidence = ["crates/sign/tests/it/pdf.rs::signing_an_existing_field_and_counter_signing", "crates/ui-egui/tests/it/signing.rs::clicking_an_empty_signature_field_signs_it", "crates/ui-egui/src/canvas/sign_tab_tests.rs::empty_signature_fields_show_a_sign_tab_that_signs_them", "crates/ui-egui/src/canvas/sign_tab_tests.rs::sign_tabs_skip_fields_that_a_click_cannot_sign"]
+notes = "Clicking an empty signature field signs it (Use a certificate for that field). With the Select tool, each empty field a click would sign (filling allowed, the field not read-only, its widget shown) carries a small accent tab in its top-left corner, sized to the field (0.4 of its height on screen, from 10 to 18 pt): the signature icon and Sign from 14 pt up, the icon alone below that or when the label would take more than half the field's width, and no tab on a field too small for the 10 pt chip. The tab is screen-only chrome, never written into the file, exports or printing, and is hidden while preparing a form. Headless, the fields it marks are the ones sign_list reports unsigned and visible on a page, with their rect, that form_fields doesn't report read-only. Missing: the tab is painted only, with no accessibility node or keyboard focus of its own"
 
 [[feature]]
 id = "sign.invisible-signature"

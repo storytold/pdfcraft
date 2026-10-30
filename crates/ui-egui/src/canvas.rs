@@ -39,9 +39,11 @@ mod xform;
 mod zoom;
 pub(super) mod zoom_snap;
 
+pub(crate) use area::SignTab;
 pub(crate) use area::signature_badges;
 use area::{
-    SUPPRESS_SECS, SUPPRESS_TAIL_SECS, drawing_edge_pointer, glide_interrupted, page_scroll, presentation_click, run_button, set_layers, zoom_anchor,
+    SUPPRESS_SECS, SUPPRESS_TAIL_SECS, drawing_edge_pointer, glide_interrupted, page_scroll, paint_sign_tab, presentation_click, run_button,
+    set_layers, sign_tab_at, sign_tabs, zoom_anchor,
 };
 #[cfg(test)]
 use bars::in_size_hint_zone;
@@ -1083,6 +1085,8 @@ struct PageInput {
     consumed: bool,
     /// Redact or Highlight draws boxes off text.
     area_tool: bool,
+    /// The sign tabs on empty fields a click would sign, painted over the page.
+    sign_tabs: Vec<SignTab>,
 }
 
 /// Common geometry and pointer state for a tool acting on one page.
@@ -1142,6 +1146,19 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     };
     // While a table is being set up, nothing else is drawn or moved.
     let prepare_allowed = can_modify && table_preview.is_none() && frame.out.open_table.is_none();
+    // An empty field a click would sign carries a small tab saying so, shown only while
+    // a click on the field signs it (the Select tool, not while preparing a form). The tab
+    // is drawn over every field, so a click on it signs its field (`forms_ui::hit`).
+    let tabs: Vec<(&str, SignTab)> = if tool == QuickTool::Select && !preparing {
+        sign_tabs(&doc.signatures, form, i, can_fill)
+            .into_iter()
+            .filter_map(|(name, [x0, y0, x1, y1])| {
+                sign_tab_at(ui, xf.user_rect(info, i, [x0 as f32, y0 as f32, x1 as f32, y1 as f32]), xf.rect).map(|tab| (name, tab))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let hits = PageHits {
         page: i,
         xf: &xf,
@@ -1159,6 +1176,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         lines: &lines,
         images: &images,
         clip: ui.clip_rect(),
+        tabs: &tabs,
     };
     if let Some(o) = ptr.pressed().filter(|o| xf.rect.contains(*o)) {
         let at = hits.at(view, o);
@@ -1268,7 +1286,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         frame.out.open_table = frame.out.open_table.or(o.table);
         o.consumed || field_tool.is_some()
     } else {
-        tool == QuickTool::Select && crate::forms_ui::page_input(cx, form, can_fill, view)
+        tool == QuickTool::Select && crate::forms_ui::page_input(cx, form, &tabs, can_fill, view)
     };
     // Redact draws boxes off text; so does Highlight (an area highlight, as in Acrobat).
     let area_tool = tool == QuickTool::Redact && can_modify || tool == QuickTool::Comment(comments::CommentTool::Highlight) && allowed;
@@ -1348,7 +1366,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
             view.cursor.claim_with_tip(h.layer, h.icon, h.tip);
         }
     }
-    PageInput { consumed, area_tool }
+    PageInput { consumed, area_tool, sign_tabs: tabs.into_iter().map(|(_, tab)| tab).collect() }
 }
 
 /// Edit text's paragraphs and pictures on page `i`, kept while the document is unchanged.
@@ -1398,6 +1416,9 @@ struct PageHits<'a> {
     images: &'a [pdfcraft_engine::PageImage],
     /// The pages' visible area (the picture's rotate knob stays inside it).
     clip: Rect,
+    /// The sign tabs on empty signature fields, with the field each one signs: drawn over every
+    /// field, so the pointer on one is on its own field.
+    tabs: &'a [(&'a str, SignTab)],
 }
 
 impl PageHits<'_> {
@@ -1424,11 +1445,12 @@ impl PageHits<'_> {
             lines,
             images,
             clip,
+            tabs,
         } = *self;
         let fields = if preparing {
             crate::prepare::hit(xf, info, page, form, field_tool, prepare_allowed, &view.prepare, p)
         } else if tool == QuickTool::Select {
-            crate::forms_ui::hit(xf, info, page, form, can_fill, p)
+            crate::forms_ui::hit(xf, info, page, form, tabs, can_fill, p)
         } else {
             None
         };
@@ -1687,6 +1709,7 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
         prefs,
         preparing,
         redact_mark,
+        t,
         table_preview,
         tool,
         unobstructed,
@@ -1788,6 +1811,11 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
             view.flash = None;
         }
     }
+    // The sign tabs (above). Like the validation badges, they never enter the file,
+    // exports or printing.
+    for tab in &input.sign_tabs {
+        paint_sign_tab(ui, painter, tab, t);
+    }
     // Validation is viewer chrome over the signer's original artwork, which
     // may still say "Signature Not Verified". These badges never enter document
     // streams, image/text exports, vector printing or Print as Image.
@@ -1874,8 +1902,12 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     }
 
     let slot = PageSlot { i, r, xf };
-    // A cancelled press takes nothing until the button is up.
-    let input = if view.press_cancelled { PageInput { consumed: true, area_tool: false } } else { page_tool_input(ui, view, frame, &slot) };
+    // A cancelled press takes nothing until the button is up (and the sign tabs wait for it).
+    let input = if view.press_cancelled {
+        PageInput { consumed: true, area_tool: false, sign_tabs: Vec::new() }
+    } else {
+        page_tool_input(ui, view, frame, &slot)
+    };
     let painter = ui.painter();
     let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
     let preview_target = (matches!(tool, QuickTool::Select | QuickTool::Fill(_)) && !comments_hidden).then_some(view.comments.selected).flatten();
@@ -2988,7 +3020,8 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
 }
 
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
-/// scroll area with this frame's zoom, scrolling, tool input, overlays and render requests.
+/// scroll area with this frame's zoom, scrolling, tool input, overlays (form fields, comments,
+/// signature badges and sign tabs) and render requests.
 pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     // Keyboard scrolling applies to this frame's page view only, never later.
@@ -3492,5 +3525,7 @@ enum FieldMenu {
     Duplicate(String),
 }
 
+#[cfg(test)]
+mod sign_tab_tests;
 #[cfg(test)]
 mod tests;
