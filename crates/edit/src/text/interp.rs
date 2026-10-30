@@ -319,7 +319,11 @@ impl Shown {
     fn span(&self) -> ((f64, f64), f64, f64, f64) {
         let m = self.tm.then(&self.state.ctm);
         let dir = match self.state.vertical {
-            Some(w1) => direction(&Matrix([m.0[2] * w1.signum(), m.0[3] * w1.signum(), 0.0, 0.0, 0.0, 0.0])),
+            // A column advances by `w1` times the size (`Tz` scales only horizontal advances).
+            Some(w1) => {
+                let s = (w1 * self.state.size).signum();
+                direction(&Matrix([m.0[2] * s, m.0[3] * s, 0.0, 0.0, 0.0, 0.0]))
+            }
             // Glyphs advance along text space x times the sign of the size and `Tz`: a negative
             // `Tf` under a CTM turned half a turn still runs left to right on the page.
             None if self.state.size * self.state.scale < 0.0 => {

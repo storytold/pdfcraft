@@ -7249,6 +7249,15 @@ fn vertical_text_lines_are_columns_and_editing_one_keeps_its_neighbour() {
     }
 }
 
+/// A vertical column set in a negative `Tf` under a flipped CTM still runs down the page: two runs
+/// a small gap apart join with their word space.
+#[test]
+fn a_vertical_column_set_in_a_negative_font_size_joins_with_its_space() {
+    let doc = vertical_page("1 0 0 -1 0 800 cm BT /V1 -20 Tf 1 0 0 1 500 80 Tm <00410042> Tj 1 0 0 1 500 125 Tm <00430044> Tj ET");
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["AB CD"]);
+}
+
 /// Gives `/V1` an embedded CMap that uses itself: which way its glyphs advance can't be known.
 fn make_cmap_cyclic(doc: &mut Document) {
     let cmap = doc.add(Object::Null);
