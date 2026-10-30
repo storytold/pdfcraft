@@ -10,6 +10,10 @@ plan/
 # A craft-fonts checkout used as the optional CRAFT_FONTS_DIR build input (CI and releases put it here).
 /craft-fonts
 
+# Local notes and sample packages
+/adobescreenshots/
+*.apkm
+
 # Mobile packaging and build outputs
 /mobile/android/.gradle/
 /mobile/android/build/
