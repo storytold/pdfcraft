@@ -4502,7 +4502,9 @@ version = "0.16.1"
 dependencies = [
  "kurbo 0.13.1",
  "ocrs",
+ "pdfcraft-cos",
  "pdfcraft-fonts",
+ "pdfcraft-render",
  "rten",
  "rten-imageproc",
  "tempfile",

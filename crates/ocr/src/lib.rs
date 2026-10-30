@@ -15,9 +15,10 @@
 //! photos and speckles; [`align`](mod@align) matches those glyphs to the OCR boxes and either keeps
 //! touching letters as one ligature or cuts them apart on the character boundaries; and
 //! [`cluster`](mod@cluster) groups the resolved glyphs into clusters of the same shape and averages their
-//! centroid-aligned greyscale into pristine master prototypes, and [`vectorize`](mod@vectorize) traces
-//! each master bitmap into a hole-aware Bézier outline.
-//! See the [`preprocess`](mod@preprocess), [`annotations`](mod@annotations), [`components`](mod@components), [`align`](mod@align), [`cluster`](mod@cluster) and [`vectorize`](mod@vectorize) modules.
+//! centroid-aligned greyscale into pristine master prototypes, [`vectorize`](mod@vectorize) traces
+//! each master bitmap into a hole-aware Bézier outline, and [`type3`](mod@type3) writes that outline
+//! into a Type 3 font with a `/ToUnicode` map so the glyphs stay searchable.
+//! See the [`preprocess`](mod@preprocess), [`annotations`](mod@annotations), [`components`](mod@components), [`align`](mod@align), [`cluster`](mod@cluster), [`vectorize`](mod@vectorize) and [`type3`](mod@type3) modules.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -29,6 +30,7 @@ pub mod components;
 pub mod deskew;
 pub mod grey;
 pub mod preprocess;
+pub mod type3;
 pub mod vectorize;
 
 use std::path::{Path, PathBuf};
@@ -38,6 +40,7 @@ pub use annotations::{AnnotatedLine, AnnotatedWord, CharBox};
 pub use cluster::{ClusterParams, Clusters, GlyphCluster, Prototype, SkipReason, cluster, cluster_pages};
 pub use components::{AnalyzeOptions, Component, ComponentKind, ComponentSet, Connectivity, FilterParams, analyze, analyze_page};
 pub use preprocess::{PreprocessedOptions, PreprocessedPage};
+pub use type3::{Type3Font, Type3Glyph, Type3Metrics, baseline_in_prototype, synthesize_type3};
 pub use vectorize::{ContourKind, GlyphOutline, VectorContour, VectorizeParams, vectorize};
 
 pub use pdfcraft_fonts::helvetica_width;
@@ -70,6 +73,9 @@ pub enum OcrError {
     Components(String),
     #[error("the image is empty")]
     EmptyImage,
+    /// A Type 3 font could not be built. The message names the glyph and the limit.
+    #[error("Type 3 font: {0}")]
+    Type3(String),
 }
 
 /// Where the two model files are.

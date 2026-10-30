@@ -11,6 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+pdfcraft-cos = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 kurbo = { workspace = true }
 ocrs = { version = "0.13.1", default-features = false, features = ["rten"] }
@@ -18,5 +19,6 @@ rten = { version = "0.26.0", default-features = false, features = ["onnx_format"
 thiserror.workspace = true
 
 [dev-dependencies]
+pdfcraft-render = { workspace = true }
 tempfile = "3.27"
 rten-imageproc = { version = "0.26.0", default-features = false }
