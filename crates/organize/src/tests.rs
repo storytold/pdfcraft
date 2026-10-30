@@ -3767,3 +3767,81 @@ fn bookmark_style_and_colour_are_set_as_the_table_says() {
     let got: Vec<_> = bookmarks(&saved).into_iter().map(|b| (b.color, b.bold, b.italic)).collect();
     assert_eq!(got, [(Some([0.0, 0.0, 1.0]), true, true), (None, false, false)]);
 }
+
+/// Gives the fixture a PDF 2.0 document part tree (`/DPartRoot`, ISO 32000-2 14.12) that starts
+/// at its first page, and a structure tree root listing a structure namespace (14.7.4).
+fn with_document_parts_and_namespaces() -> Document {
+    // PDF 2.0, the version these structures belong to.
+    let mut bytes = fixture();
+    let header = bytes.get_mut(..8).expect("the fixture starts with its header");
+    assert!(header.starts_with(b"%PDF-1."));
+    header.copy_from_slice(b"%PDF-2.0");
+    let mut doc = open(bytes);
+    let first = pages(&doc).unwrap()[0].obj;
+    let mut namespace = pdfcraft_cos::Dict::new();
+    namespace.set(b"Type".to_vec(), Object::name("Namespace"));
+    namespace.set(b"NS".to_vec(), Object::String(pdfcraft_cos::PdfString { bytes: b"http://iso.org/pdf2/ssn".to_vec(), hex: false }));
+    let namespace = doc.add(Object::Dict(namespace));
+    let mut tree = pdfcraft_cos::Dict::new();
+    tree.set(b"Type".to_vec(), Object::name("StructTreeRoot"));
+    tree.set(b"Namespaces".to_vec(), Object::Array(vec![Object::Ref(namespace)]));
+    let tree = doc.add(Object::Dict(tree));
+    let mut part = pdfcraft_cos::Dict::new();
+    part.set(b"Type".to_vec(), Object::name("DPart"));
+    part.set(b"Start".to_vec(), Object::Ref(first));
+    part.set(b"End".to_vec(), Object::Ref(first));
+    let part = doc.add(Object::Dict(part));
+    let mut root = pdfcraft_cos::Dict::new();
+    root.set(b"Type".to_vec(), Object::name("DPartRoot"));
+    root.set(b"DPartRootNode".to_vec(), Object::Ref(part));
+    let root = doc.add(Object::Dict(root));
+    doc.update_dict(doc.root().unwrap(), |c| {
+        c.set(b"DPartRoot".to_vec(), Object::Ref(root));
+        c.set(b"StructTreeRoot".to_vec(), Object::Ref(tree));
+    })
+    .unwrap();
+    doc
+}
+
+fn assert_document_parts_and_namespaces_kept(doc: &Document, what: &str) {
+    let catalog = doc.get(doc.root().unwrap());
+    let catalog = catalog.as_dict().unwrap();
+    let root = doc.resolve(catalog.get(b"DPartRoot").unwrap_or_else(|| panic!("{what}: /DPartRoot dropped")));
+    let node = doc.resolve(root.as_dict().unwrap().get(b"DPartRootNode").unwrap_or_else(|| panic!("{what}: /DPartRootNode dropped")));
+    assert_eq!(node.as_dict().unwrap().name(b"Type"), Some(&b"DPart"[..]), "{what}");
+    let tree = doc.resolve(catalog.get(b"StructTreeRoot").unwrap_or_else(|| panic!("{what}: /StructTreeRoot dropped")));
+    let namespaces = doc.resolve(tree.as_dict().unwrap().get(b"Namespaces").unwrap_or_else(|| panic!("{what}: /Namespaces dropped")));
+    let namespace = doc.resolve(&namespaces.as_array().unwrap()[0]);
+    assert_eq!(namespace.as_dict().unwrap().name(b"Type"), Some(&b"Namespace"[..]), "{what}");
+    assert_eq!(namespace.as_dict().unwrap().get(b"NS").unwrap().as_string().unwrap().bytes, b"http://iso.org/pdf2/ssn", "{what}: /NS changed");
+    assert_eq!(doc.version(), "2.0", "{what}: the PDF 2.0 version is kept");
+}
+
+#[test]
+fn page_edits_keep_document_parts_and_structure_namespaces() {
+    type Edit = fn(&mut Document);
+    let edits: [(&str, Edit); 6] = [
+        ("rotate", |d| rotate_pages(d, &[0], 90).unwrap()),
+        ("move", |d| move_pages(d, &[0], 2).unwrap()),
+        ("reverse", |d| reverse_pages(d, &[0, 1, 2]).unwrap()),
+        ("duplicate", |d| duplicate_pages(d, &[0], None).unwrap()),
+        ("insert blank", |d| {
+            let _ = insert_blank_page(d, 0, 100.0, 100.0).unwrap();
+        }),
+        // The part's start page goes: the keys stay, the page reference is the part's to repair.
+        ("delete", |d| delete_pages(d, &[0]).unwrap()),
+    ];
+    for (what, edit) in edits {
+        let mut doc = with_document_parts_and_namespaces();
+        let base = write_full(&doc, &SaveOptions::default()).unwrap();
+        assert_document_parts_and_namespaces_kept(&open(base.clone()), "setup");
+        doc = open(base);
+        edit(&mut doc);
+        assert_document_parts_and_namespaces_kept(&doc, what);
+        assert_document_parts_and_namespaces_kept(
+            &open(write_incremental(&doc, &SaveOptions::default()).unwrap()),
+            &format!("{what}, incremental save"),
+        );
+        assert_document_parts_and_namespaces_kept(&open(write_full(&doc, &SaveOptions::default()).unwrap()), &format!("{what}, full save"));
+    }
+}
