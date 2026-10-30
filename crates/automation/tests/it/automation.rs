@@ -9457,3 +9457,36 @@ fn clearing_a_kids_default_through_tools_does_not_bring_back_its_parents() {
     let city = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "address.city").unwrap().clone();
     assert!(city["value"].is_null() || city["value"] == "", "reset clears it rather than restoring the parent's Main St: {}", city["value"]);
 }
+
+#[test]
+fn refused_separate_page_extract_does_not_create_output_directory() {
+    let dir = workdir("separate-extract-permission-refusal");
+    std::fs::write(dir.join("source.pdf"), fixture(2)).unwrap();
+    let mut a = auto(&dir);
+    let owner = ok(&mut a, "doc_open", json!({ "path": "source.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_protect", json!({ "doc": owner, "permissions_password": "synthetic-owner", "changes": "none", "copy": false }));
+    ok(&mut a, "doc_save", json!({ "doc": owner, "path": "restricted.pdf" }));
+    ok(&mut a, "doc_close", json!({ "doc": owner }));
+    let source_before = std::fs::read(dir.join("restricted.pdf")).unwrap();
+    let user = ok(&mut a, "doc_open", json!({ "path": "restricted.pdf" }))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "doc_info", json!({ "doc": user }));
+    assert_eq!(before["security"]["opened_as_owner"], false);
+    assert_eq!(before["security"]["assemble"], false);
+    assert_eq!(before["document"]["pages"], 2);
+    assert_eq!(before["document"]["dirty"], false);
+    let out_dir = dir.join("new-parent/separate-output");
+    assert!(!out_dir.parent().unwrap().exists());
+
+    let failure =
+        err(&mut a, "page_extract", json!({ "doc": user, "pages": [1], "separate": true, "delete": true, "out_dir": "new-parent/separate-output" }));
+    assert!(matches!(&failure, ToolError::Failed(message) if message.contains("security settings don't allow extracting pages")), "{failure:?}");
+
+    let after = ok(&mut a, "doc_info", json!({ "doc": user }));
+    for key in ["pages", "dirty", "undo", "redo"] {
+        assert_eq!(before["document"][key], after["document"][key], "{key}");
+    }
+    assert_eq!(std::fs::read(dir.join("restricted.pdf")).unwrap(), source_before);
+    assert!(!out_dir.parent().unwrap().exists(), "a refused separate extraction must not create output directories");
+    drop(a);
+    std::fs::remove_dir_all(dir).unwrap();
+}

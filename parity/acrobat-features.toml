@@ -2823,8 +2823,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.extract"]
 tools = ["page_extract"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::extract_options_and_rotate_pages_dialog", "crates/automation/tests/it/automation.rs::organizing_with_filters_bookmark_splits_and_extract_options", "crates/ui-egui/tests/it/pickers.rs::extract_pages_saves_under_the_file_name_typed_in_the_dialog"]
-notes = "The dialog has a File name field (#737), filled in with the document's name: pages are written as `<name> (page N).pdf` into the chosen folder, and one renamed page as `<name>.pdf`. Extracting into a new tab names the tab (and so Save As) after it."
+evidence = ["crates/ui-egui/tests/it/editing.rs::extract_options_and_rotate_pages_dialog", "crates/automation/tests/it/automation.rs::organizing_with_filters_bookmark_splits_and_extract_options", "crates/ui-egui/tests/it/pickers.rs::extract_pages_saves_under_the_file_name_typed_in_the_dialog", "crates/automation/tests/it/automation.rs::refused_separate_page_extract_does_not_create_output_directory"]
+notes = "The dialog has a File name field (#737), filled in with the document's name: pages are written as `<name> (page N).pdf` into the chosen folder, and one renamed page as `<name>.pdf`. Extracting into a new tab names the tab (and so Save As) after it. CLI/MCP separate extraction creates missing output folders only after the first successful extraction, so source permission refusals leave no empty folder. Later write failures retain per-file atomicity rather than rolling back prior outputs."
 
 [[feature]]
 id = "organize.extract-and-delete"

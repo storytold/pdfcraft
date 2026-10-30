@@ -246,7 +246,6 @@ impl Automation {
         let mut out = if a.opt_bool("separate")?.unwrap_or(false) {
             // Each page as its own file.
             let dir = self.resolve(a.str("out_dir").map_err(|_| ToolError::InvalidArgs("separate files need out_dir".into()))?, true)?;
-            std::fs::create_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
             let mut files = Vec::new();
             for &p in &pages {
                 let bytes = self.session.extract(id, &[p]).map_err(failed)?;
