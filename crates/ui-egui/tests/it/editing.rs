@@ -5226,6 +5226,106 @@ fn the_caret_on_a_small_row_is_as_tall_as_that_row() {
     assert!(caret > row_height * 0.8 && caret < row_height + 4.0, "caret {caret} px on a {row_height} px row");
 }
 
+/// One paragraph whose every word is its own run at its own size, in a font the editor can't load
+/// (not embedded, and not a standard font), with glyphs much wider than its stand-in face's: the
+/// shape of an OCR layer, and of a Type 1 paragraph from LaTeX. Returns the PDF and its words.
+fn stand_in_words_fixture() -> (Vec<u8>, Vec<&'static str>) {
+    let words: Vec<(&str, f64)> = vec![
+        ("In", 10.0),
+        ("poker", 10.3),
+        ("a", 15.1),
+        ("full", 11.7),
+        ("house", 10.7),
+        ("is", 9.7),
+        ("a", 15.1),
+        ("set", 9.0),
+        ("of", 10.4),
+        ("cards", 10.0),
+        ("that", 9.4),
+        ("make", 9.0),
+        ("a", 12.4),
+        ("pair", 11.7),
+    ];
+    let mut content = String::new();
+    let mut x = 20.0;
+    for (word, size) in &words {
+        content.push_str(&format!("BT /F1 {size} Tf {x:.2} 200 Td ({word}) Tj ET\n"));
+        x += word.len() as f64 * 0.7 * size + 4.0;
+    }
+    let widths = vec!["700"; 95].join(" ");
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 700 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        format!("<< /Type /Font /Subtype /Type1 /BaseFont /CMR10 /FirstChar 32 /LastChar 126 /Widths [{widths}] >>"),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    (out, words.into_iter().map(|(w, _)| w).collect())
+}
+
+/// A drag over a word of an unchanged paragraph selects that word. The editor lays the paragraph
+/// out unseen in a stand-in face, and stretching each run to its width let every word boundary
+/// drift: over an OCR layer, dragging across "kind" selected "of a", two words before it.
+#[test]
+fn dragging_over_a_word_selects_that_word_when_the_editor_uses_a_stand_in_face() {
+    let (bytes, words) = stand_in_words_fixture();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("ocr-like.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let k = page.width() / 700.0;
+    let screen = |x: f64, y: f64| egui::pos2(page.left() + x as f32 * k, page.top() + (300.0 - y) as f32 * k);
+    let lines = h.state().session.get(h.state().views[0].id).unwrap().text_lines(0);
+    assert_eq!(lines.len(), words.len(), "one run per word: {:?}", lines.iter().map(|l| &l.text).collect::<Vec<_>>());
+    let first = lines[0].rect;
+    let at = screen((first[0] + first[2]) / 2.0, (first[1] + first[3]) / 2.0);
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(4);
+    let opened = h.state().views[0].line_editor.as_ref().map(|e| e.text.clone());
+    assert_eq!(opened.as_deref(), Some(words.join(" ").as_str()), "the words open as one paragraph");
+    // Drag across each of the last words, just inside its box, as a reader aims at what the page shows.
+    for target in [words.len() - 1, words.len() - 4, 9] {
+        let r = lines[target].rect;
+        let middle = (r[1] + r[3]) / 2.0;
+        let (from, to) = (screen(r[0] + 0.5, middle), screen(r[2] - 0.5, middle));
+        h.hover_at(from);
+        h.run_steps(1);
+        h.drag_at(from);
+        h.run_steps(1);
+        for step in 1..=6 {
+            h.hover_at(from + (to - from) * (step as f32 / 6.0));
+            h.run_steps(1);
+        }
+        h.drop_at(to);
+        h.run_steps(3);
+        let ed = h.state().views[0].line_editor.as_ref().expect("the paragraph stays open");
+        let selected = ed.selection.clone().and_then(|s| ed.text.get(s)).unwrap_or_default();
+        assert_eq!(selected, words[target], "dragging over word {target} ({:?})", words[target]);
+    }
+}
+
 /// Opt-in private-document regression. This never captures images or saves the source file.
 /// Run with PDFCRAFT_TEXT_REGRESSION_PDF=/path/to/document.pdf and --ignored.
 #[test]

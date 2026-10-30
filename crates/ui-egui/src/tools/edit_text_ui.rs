@@ -582,6 +582,15 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 } else {
                     caret_color_on(fill)
                 };
+                // An unchanged paragraph's galley is unseen over the page's own text. Selecting
+                // part of it must not paint its stand-in glyphs over that text in the selection
+                // colour (a serif paragraph turned sans when highlighted), nor hide it under an
+                // opaque fill: the selection is a tint the page shows through.
+                if unchanged {
+                    let selection = &mut ui.visuals_mut().selection;
+                    selection.stroke.color = Color32::TRANSPARENT;
+                    selection.bg_fill = selection.bg_fill.gamma_multiply(0.45);
+                }
                 let rows = 1;
                 let snapshot = ed.clone();
                 let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
