@@ -110,7 +110,7 @@ impl Strip {
         F: FnMut(i32) -> bool,
     {
         windings.for_active_rows_in_range(start as usize, end as usize, |row| {
-            if should_fill(windings.coarse[row] as i32) {
+            if should_fill(windings.coarse[row]) {
                 let y_pos = row as u16 * Tile::HEIGHT;
                 strips.push(Self::new(0, y_pos, alphas.len() as u32, false));
                 alphas.extend([255_u8; Tile::HEIGHT as usize * Tile::WIDTH as usize]);
@@ -166,19 +166,26 @@ fn render_impl<S: Simd>(
         Fill::EvenOdd => winding % 2 != 0,
     };
 
+    // PdfCraft patch: even-odd coverage repeats every two windings. Preserve its parity
+    // before conversion loses integer precision; fill decisions keep the full i32 value.
+    let coverage_winding = |winding: i32| match fill_rule {
+        Fill::NonZero => winding as f32,
+        Fill::EvenOdd => (winding % 2) as f32,
+    };
+
     // Helper to handle "captive strips". When a row has tiles, but the first tile
     // is not at the left edge of the viewport (x != 0), we must emit a solid strip
     // from x=0 to that tile if the coarse winding dictates a fill.
     let emit_captive_strip =
         |y: u16, is_left_viewport: bool, strips: &mut Vec<Strip>, alphas: &mut Vec<u8>| {
-            let coarse_wd = tiles.windings.coarse[y as usize] as i32;
+            let coarse_wd = tiles.windings.coarse[y as usize];
 
             if should_fill(coarse_wd) && !is_left_viewport {
                 strips.push(Strip::new(0, y * Tile::HEIGHT, alphas.len() as u32, false));
                 alphas.extend([255_u8; Tile::HEIGHT as usize * Tile::WIDTH as usize]);
             }
 
-            let mut acc = f32x4::splat(s, coarse_wd as f32);
+            let mut acc = f32x4::splat(s, coverage_winding(coarse_wd));
             if is_left_viewport {
                 let fine_winding: f32x4<_> = tiles.windings.partial[y as usize].simd_into(s);
                 acc += fine_winding;
@@ -355,7 +362,7 @@ fn render_impl<S: Simd>(
             } else {
                 // Note: this fill is mathematically not necessary. It provides a way to reduce
                 // accumulation of float rounding errors.
-                accumulated_winding = f32x4::splat(s, winding_delta as f32);
+                accumulated_winding = f32x4::splat(s, coverage_winding(winding_delta));
             }
 
             if is_sentinel {
@@ -531,5 +538,93 @@ fn render_impl<S: Simd>(
             &tiles.windings,
             should_fill,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Strip, render};
+    use crate::flatten::{Line, Point};
+    use crate::peniko::Fill;
+    use crate::tile::Tiles;
+    use alloc::vec::Vec;
+    use fearless_simd::Level;
+
+    fn seeded_strips(
+        winding: i32,
+        upwards: bool,
+        fill: Fill,
+        positions: &[f32],
+    ) -> (Vec<Strip>, Vec<u8>) {
+        // PdfCraft patch: represent many offscreen contours without allocating their lines.
+        // The visible edges occupy separate tiles, exercising both coverage initializations.
+        let (start, end) = if upwards { (4.0, 0.0) } else { (0.0, 4.0) };
+        let lines: Vec<_> = positions
+            .iter()
+            .map(|&x| Line::new(Point::new(x, start), Point::new(x, end)))
+            .collect();
+        let level = Level::baseline();
+        let mut tiles = Tiles::new(level, 4);
+        tiles.make_tiles_analytic_aa(level, &lines, 20, 4);
+        tiles.sort_tiles();
+        tiles.windings.coarse.fill(winding);
+        tiles.windings.culled = true;
+        tiles.windings.mark_row_active(0);
+        let mut strips = Vec::new();
+        let mut alphas = Vec::new();
+        render(level, &tiles, &mut strips, &mut alphas, fill, None, &lines);
+        (strips, alphas)
+    }
+
+    fn column_alphas<const N: usize>(columns: [u8; N]) -> Vec<u8> {
+        columns.into_iter().flat_map(|alpha| [alpha; 4]).collect()
+    }
+
+    #[test]
+    fn even_odd_large_coarse_preserves_edge_coverage_across_strip_gap() {
+        // These values are below the processed-line bound but cross f32's exact-integer range.
+        for (magnitude, odd) in [(16_777_216, false), (16_777_217, true), (33_554_431, true)] {
+            for direction in [-1, 1] {
+                let winding = magnitude * direction;
+                // The third edge observes the accumulator reset after the first strip gap.
+                let (strips, alphas) =
+                    seeded_strips(winding, direction > 0, Fill::EvenOdd, &[2.5, 10.5, 18.5]);
+                let columns = if odd {
+                    [255, 255, 128, 0, 0, 0, 128, 255, 255, 255, 128, 0]
+                } else {
+                    [0, 0, 128, 255, 255, 255, 128, 0, 0, 0, 128, 255]
+                };
+                assert_eq!(alphas, column_alphas(columns), "winding={winding}");
+                let geometry: Vec<_> = strips
+                    .iter()
+                    .map(|strip| (strip.x, strip.y, strip.alpha_idx(), strip.fill_gap()))
+                    .collect();
+                assert_eq!(
+                    geometry,
+                    [
+                        (0, 0, 0, false),
+                        (8, 0, 16, !odd),
+                        (16, 0, 32, odd),
+                        (u16::MAX, 0, 48, !odd),
+                    ],
+                    "winding={winding}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nonzero_coarse_retains_signed_magnitude_and_cancellation() {
+        for winding in [2_i32, -2, 16_777_217, -16_777_217] {
+            let (strips, alphas) = seeded_strips(winding, winding < 0, Fill::NonZero, &[2.5, 10.5]);
+            let cancels = winding.unsigned_abs() == 2;
+            let columns = if cancels {
+                [255, 255, 255, 255, 255, 255, 128, 0]
+            } else {
+                [255; 8]
+            };
+            assert_eq!(alphas, column_alphas(columns), "winding={winding}");
+            assert_eq!(strips.last().map(Strip::fill_gap), Some(!cancels));
+        }
     }
 }

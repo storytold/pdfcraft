@@ -1,5 +1,7 @@
 //! The crate's integration tests, linked into one test binary.
 
+mod render_winding;
+
 mod attachment_key;
 mod automation;
 mod automation_roots;

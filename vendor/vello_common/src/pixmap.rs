@@ -239,10 +239,14 @@ impl Pixmap {
                 let mut grayscale_data = vec![0; reader.output_buffer_size().unwrap_or_default()];
                 reader.next_frame(&mut grayscale_data)?;
 
-                for (grayscale_pixel, pixmap_pixel) in
-                    grayscale_data.chunks_exact(2).zip(pixmap.data_mut())
+                // PdfCraft patch: typed whole pairs retain the previous remainder handling.
+                for (grayscale_pixel, pixmap_pixel) in grayscale_data
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .zip(pixmap.data_mut())
                 {
-                    let [gray, alpha] = grayscale_pixel.try_into().unwrap();
+                    let [gray, alpha] = *grayscale_pixel;
                     *pixmap_pixel = PremulRgba8 {
                         r: gray,
                         g: gray,

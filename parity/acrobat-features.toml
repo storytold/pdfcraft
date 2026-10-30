@@ -734,8 +734,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = ["page_render"]
-evidence = ["crates/render/src/raster/tests.rs::renders_a_blue_rectangle", "crates/automation/tests/it/automation.rs::open_inspect_render_and_find", "crates/render/src/raster/tests.rs::user_unit_scales_the_page_and_everything_on_it"]
-notes = "hayro bootstrap renderer; own DisplayList devices in M2.6. Pages with /UserUnit are shown at their size in points, as Acrobat reads the value"
+evidence = ["crates/render/src/raster/tests.rs::renders_a_blue_rectangle", "crates/automation/tests/it/automation.rs::open_inspect_render_and_find", "crates/render/src/raster/tests.rs::user_unit_scales_the_page_and_everything_on_it", "crates/render/tests/it/culled_winding.rs::offscreen_nonzero_fill_keeps_large_signed_windings", "crates/render/tests/it/culled_winding.rs::offscreen_even_odd_fill_keeps_large_winding_parity", "crates/render/tests/it/culled_winding.rs::offscreen_opposite_windings_cancel_exactly", "crates/render/tests/it/culled_winding.rs::large_culled_windings_reach_visible_edge_tiles", "crates/automation/tests/it/render_winding.rs::render_export_and_reopen_preserve_large_signed_path_windings", "vendor/vello_common/src/strip.rs::even_odd_large_coarse_preserves_edge_coverage_across_strip_gap", "vendor/vello_common/src/strip.rs::nonzero_coarse_retains_signed_magnitude_and_cancellation"]
+notes = "hayro bootstrap renderer; own DisplayList devices in M2.6. Pages with /UserUnit are shown at their size in points, as Acrobat reads the value; culled path geometry retains signed winding, fill-rule parity and cancellation, with original render/PNG-export/full-save/reopen regressions (#5035)"
 
 [[feature]]
 id = "view.render-shadings-patterns"
@@ -7128,8 +7128,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["export.image"]
 tools = ["doc_export_images", "page_render"]
-evidence = ["crates/ui-egui/tests/it/export.rs::export_dialogs_write_images_and_text", "crates/engine/src/tests.rs::export_images_and_text_follow_the_working_file", "crates/automation/tests/it/automation.rs::exporting_images_and_text_through_tools"]
-notes = "PNG at 72–600 dpi, page ranges; includes unsaved edits; background thread with progress"
+evidence = ["crates/ui-egui/tests/it/export.rs::export_dialogs_write_images_and_text", "crates/engine/src/tests.rs::export_images_and_text_follow_the_working_file", "crates/automation/tests/it/automation.rs::exporting_images_and_text_through_tools", "crates/automation/tests/it/render_winding.rs::render_export_and_reopen_preserve_large_signed_path_windings", "vendor/vello_common/src/strip.rs::even_odd_large_coarse_preserves_edge_coverage_across_strip_gap", "vendor/vello_common/src/strip.rs::nonzero_coarse_retains_signed_magnitude_and_cancellation"]
+notes = "PNG at 72–600 dpi, page ranges; includes unsaved edits; background thread with progress; culled path geometry retains signed winding, fill-rule parity and cancellation, with original render/PNG-export/full-save/reopen regressions (#5035)"
 
 [[feature]]
 id = "create.export-jpeg-tiff"

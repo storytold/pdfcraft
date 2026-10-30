@@ -137,14 +137,17 @@ impl ImageSource {
         let height = image.height.try_into().unwrap();
 
         // TODO: SIMD
+        // PdfCraft patch: typed whole pixels retain the previous remainder handling.
         #[expect(clippy::cast_possible_truncation, reason = "This cannot overflow.")]
         let pixels = image
             .data
             .data()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|pixel| {
                 let rgba: [u8; 4] = match image.format {
-                    peniko::ImageFormat::Rgba8 => pixel.try_into().unwrap(),
+                    peniko::ImageFormat::Rgba8 => *pixel,
                     peniko::ImageFormat::Bgra8 => [pixel[2], pixel[1], pixel[0], pixel[3]],
                     format => unimplemented!("Unsupported image format: {format:?}"),
                 };

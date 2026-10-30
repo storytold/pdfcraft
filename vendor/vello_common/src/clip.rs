@@ -328,13 +328,18 @@ fn intersect_impl<S: Simd>(
                             let num_blocks = overlap.width() / Tile::HEIGHT;
 
                             // Get the right alpha values for the specific position.
+                            // PdfCraft patch: typed whole chunks preserve remainder handling.
                             let s1_alphas = s_region_1.alphas
                                 [(overlap.start - s_region_1.start) as usize * 4..]
-                                .chunks_exact(16)
+                                .as_chunks::<16>()
+                                .0
+                                .iter()
                                 .take(num_blocks as usize);
                             let s2_alphas = s_region_2.alphas
                                 [(overlap.start - s_region_2.start) as usize * 4..]
-                                .chunks_exact(16)
+                                .as_chunks::<16>()
+                                .0
+                                .iter()
                                 .take(num_blocks as usize);
 
                             for (s1_alpha, s2_alpha) in s1_alphas.zip(s2_alphas) {
@@ -658,7 +663,10 @@ mod tests {
         super::ROWS_WALKED.with(|rows| rows.set(0));
         run_test(expected, path_1, path_2);
         let walked = super::ROWS_WALKED.with(core::cell::Cell::get);
-        assert_eq!(walked, 1, "the walk visited {walked} rows; it should visit only row 200");
+        assert_eq!(
+            walked, 1,
+            "the walk visited {walked} rows; it should visit only row 200"
+        );
     }
 
     #[test]

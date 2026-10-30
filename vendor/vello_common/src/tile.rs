@@ -45,10 +45,11 @@ pub const MAX_LINES_PER_PATH: u32 = 1 << (32 - INT_MASK_SHIFT);
 pub struct CulledWindings {
     /// Fractional winding coverage for each individual scanline in a row.
     pub partial: Vec<[f32; Tile::HEIGHT as usize]>,
-    // Note that this will cause issues if we have windings greater/less than i8,
-    // but this should only occur in pathological cases.
     /// Accumulated integer winding deltas for each tile row.
-    pub coarse: Vec<i8>,
+    ///
+    /// `PdfCraft` patch: match the strip stage's `i32` accumulator.
+    /// The `MAX_LINES_PER_PATH` walk bounds signed unit contributions within its range.
+    pub coarse: Vec<i32>,
     /// Bitmask tracking which rows contain active geometry or winding data.
     pub active: Vec<u32>,
     /// Flag indicating if any geometry was early-culled outside the viewport.
