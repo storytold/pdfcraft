@@ -36,7 +36,7 @@ BitReader: bit, bits, character, unsigned_integer, integer, integer_vbn, double_
   A prototype's part is coloured by its own file structure's styles. Each `ModelNode` lists its name, where the name
   came from, its visibility and the range of placements it drew.
 - Occurrence and prototype cycles are `Malformed`; the walk is capped at depth 64, 2^20 visits and `MAX_PLACEMENTS`.
-- Trees carrying markups (PMI), views, scene lights or clipping planes are `Unsupported`; textures are read past.
+- A tree's markups (PMI), views, scene lights and clipping planes are read past, not modelled; so are textures.
 - Not yet in the crate: rebuilding compressed meshes, textures.
 - The `Double` code table's rows come from [prc-rs](https://github.com/ralovich/prc-rs) (MIT); its notice is in `src/acof/table.rs`.
   A few reading choices also follow prc-rs; each is marked `// prc-rs:` in the source.

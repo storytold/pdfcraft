@@ -12,9 +12,9 @@ const RED: Rgba = Rgba { r: 1., g: 0., b: 0., a: 1. };
 const GREEN: Rgba = Rgba { r: 0., g: 1., b: 0., a: 1. };
 const BLUE: Rgba = Rgba { r: 0., g: 0., b: 1., a: 1. };
 /// Visible graphics with no style.
-const PLAIN: (u32, u16) = (0, SHOW);
+pub(super) const PLAIN: (u32, u16) = (0, SHOW);
 /// The biased style indices of [`palette`]: red, green, a blue material.
-const S_RED: u32 = 1;
+pub(super) const S_RED: u32 = 1;
 const S_GREEN: u32 = 2;
 const S_BLUE: u32 = 3;
 const RI_POLY_BREP: u32 = 237;
@@ -28,17 +28,17 @@ fn len(n: usize) -> u32 {
 }
 
 /// `ContentPRCBase` with no attributes and its own name.
-fn base(w: &mut W, name: Option<&str>) {
+pub(super) fn base(w: &mut W, name: Option<&str>) {
     w.uint(0).bit(false).string(name);
 }
 
-fn ref_base(w: &mut W, name: Option<&str>, uid: u32) {
+pub(super) fn ref_base(w: &mut W, name: Option<&str>, uid: u32) {
     base(w, name);
     w.uint(0).uint(0).uint(uid);
 }
 
 /// `PRCBaseWithGraphics` with its own `(style, behaviour)`.
-fn graphics(w: &mut W, name: Option<&str>, uid: u32, (style, bits): (u32, u16)) {
+pub(super) fn graphics(w: &mut W, name: Option<&str>, uid: u32, (style, bits): (u32, u16)) {
     ref_base(w, name, uid);
     w.bit(false).uint(0).uint(style).put(u64::from(bits & 0xff), 8).put(u64::from(bits >> 8), 8);
 }
@@ -58,7 +58,7 @@ fn file_id(w: &mut W, fs: Option<usize>) {
 }
 
 /// An `RI_PolyBrepModel` drawing biased tessellation `tess` under local system `cs`.
-fn poly_item(w: &mut W, uid: u32, cs: u32, tess: u32, g: (u32, u16)) {
+pub(super) fn poly_item(w: &mut W, uid: u32, cs: u32, tess: u32, g: (u32, u16)) {
     w.uint(RI_POLY_BREP);
     graphics(w, None, uid, g);
     w.uint(cs).uint(tess).bit(false).uint(0);
@@ -71,8 +71,17 @@ fn brep_item(w: &mut W, uid: u32, g: (u32, u16), brep: (u32, u32)) {
     w.uint(0).uint(1).bit(true).uint(brep.0).uint(brep.1).bit(false).uint(0);
 }
 
-/// A `PartDefinition` holding the `n` items `items` writes.
+/// A `PartDefinition` holding the `n` items `items` writes, and no markups or views.
 fn part(name: Option<&str>, g: (u32, u16), n: usize, items: impl FnOnce(&mut W)) -> W {
+    let mut none = W::default();
+    for _ in 0..5 {
+        none.uint(0);
+    }
+    part_with(name, g, n, items, &none)
+}
+
+/// [`part`] with `markups` (its markup data and views) written after the items.
+pub(super) fn part_with(name: Option<&str>, g: (u32, u16), n: usize, items: impl FnOnce(&mut W), markups: &W) -> W {
     let mut w = W::default();
     w.uint(311);
     graphics(&mut w, name, 0, g);
@@ -81,28 +90,28 @@ fn part(name: Option<&str>, g: (u32, u16), n: usize, items: impl FnOnce(&mut W))
     }
     w.uint(len(n));
     items(&mut w);
-    for _ in 0..6 {
-        w.uint(0); // markups, views, user data
-    }
+    w.append(markups).uint(0); // user data
     w
 }
 
 /// One poly-B-rep item (uid 7) drawing tessellation 1 in style `style`.
-fn plate(style: u32) -> W {
+pub(super) fn plate(style: u32) -> W {
     part(Some("Plate"), PLAIN, 1, |w| poly_item(w, 7, 0, 1, (style, SHOW)))
 }
 
 #[derive(Default)]
-struct Occ<'a> {
-    name: Option<&'a str>,
-    g: Option<(u32, u16)>,
-    part: u32,
-    prototype: u32,
-    prototype_fs: Option<usize>,
-    sons: Vec<u32>,
-    suppressed: bool,
-    location: Option<W>,
-    refs: Vec<W>,
+pub(super) struct Occ<'a> {
+    pub(super) name: Option<&'a str>,
+    pub(super) g: Option<(u32, u16)>,
+    pub(super) part: u32,
+    pub(super) prototype: u32,
+    pub(super) prototype_fs: Option<usize>,
+    pub(super) sons: Vec<u32>,
+    pub(super) suppressed: bool,
+    pub(super) location: Option<W>,
+    pub(super) refs: Vec<W>,
+    /// Its markup data and views; none when `None`.
+    pub(super) markups: Option<W>,
 }
 
 fn occ(w: &mut W, o: &Occ<'_>) {
@@ -126,13 +135,20 @@ fn occ(w: &mut W, o: &Occ<'_>) {
     for r in &o.refs {
         w.append(r);
     }
-    for _ in 0..5 {
-        w.uint(0); // markups, views
+    match &o.markups {
+        Some(m) => {
+            w.append(m);
+        }
+        None => {
+            for _ in 0..5 {
+                w.uint(0);
+            }
+        }
     }
     w.bit(false).uint(0).uint(0).uint(0);
 }
 
-fn tree(parts: &[W], occs: &[Occ<'_>]) -> W {
+pub(super) fn tree(parts: &[W], occs: &[Occ<'_>]) -> W {
     let mut w = W::default();
     w.uint(304);
     base(&mut w, None);
@@ -310,7 +326,7 @@ fn prc(structures: &[Fs], model: &W) -> Vec<u8> {
 }
 
 /// One file structure with [`palette`], `parts` and `occs`, whose root is occurrence 0.
-fn single(parts: &[W], occs: &[Occ<'_>]) -> PrcFile {
+pub(super) fn single(parts: &[W], occs: &[Occ<'_>]) -> PrcFile {
     PrcFile::parse(&prc(&[Fs { globals: palette(), tree: tree(parts, occs), tess: two_face_square() }], &model(&[(0, 1)]))).unwrap()
 }
 

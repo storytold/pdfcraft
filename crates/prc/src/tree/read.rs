@@ -80,7 +80,7 @@ impl Ctx<'_, '_> {
 
     /// The embedded `Transformation3D` [WD 7.4.11.1]: a behaviour byte, then each field its
     /// bits name.
-    fn transformation_3d(&mut self) -> Result<Matrix, PrcError> {
+    pub(super) fn transformation_3d(&mut self) -> Result<Matrix, PrcError> {
         let b = self.r.character()?;
         let mut m = Matrix::IDENTITY;
         let set_col = |m: &mut Matrix, col: usize, v: Vec3| {
@@ -216,15 +216,16 @@ impl Ctx<'_, '_> {
         Ok(None)
     }
 
-    /// `SceneDisplayParameters` (741) [WD 7.5.19]: read past. Lights and clipping planes are
-    /// [`PrcError::Unsupported`].
+    /// `SceneDisplayParameters` (741) [WD 7.5.19]: read past, lights and clipping planes
+    /// included.
     // prc-rs: the scene's field order, and `is_absolute` from version 8137.
-    fn scene_display_parameters(&mut self) -> Result<(), PrcError> {
+    pub(super) fn scene_display_parameters(&mut self) -> Result<(), PrcError> {
         self.expect_type(SCENE_DISPLAY_PARAMETERS)?;
         self.content_prc_ref_base()?;
         self.r.bit()?; // is_active
-        if self.r.unsigned_integer()? != 0 {
-            return Err(PrcError::Unsupported("scene lights"));
+        let n = self.count(1, "scene lights")?;
+        for _ in 0..n {
+            self.light()?;
         }
         if self.r.bit()? {
             self.camera()?;
@@ -232,8 +233,9 @@ impl Ctx<'_, '_> {
         if self.r.bit()? {
             self.vector3()?; // rotation centre
         }
-        if self.r.unsigned_integer()? != 0 {
-            return Err(PrcError::Unsupported("scene clipping planes"));
+        let n = self.count(1, "scene clipping planes")?;
+        for _ in 0..n {
+            self.plane()?;
         }
         self.r.unsigned_integer()?; // background style + 1
         self.r.unsigned_integer()?; // default style + 1
@@ -263,45 +265,44 @@ impl Ctx<'_, '_> {
         self.schema.skip_added_fields(CAMERA, &mut self.r)
     }
 
-    /// `MarkupData` [WD 7.3.10.4]: only the empty form reads past.
-    fn markup_data(&mut self) -> Result<(), PrcError> {
-        for _ in 0..4 {
-            if self.r.unsigned_integer()? != 0 {
-                return Err(PrcError::Unsupported("tree markups (PMI)"));
-            }
-        }
-        Ok(())
-    }
-
-    fn views(&mut self) -> Result<(), PrcError> {
-        if self.r.unsigned_integer()? != 0 {
-            return Err(PrcError::Unsupported("tree views"));
-        }
-        Ok(())
-    }
-
     /// `MISC_EntityReference` (203) [WD 7.4.4, 7.4.10]; `None` when it names no target.
     // prc-rs: the local coordinate system precedes the optional reference data.
     fn entity_reference(&mut self) -> Result<Option<Override>, PrcError> {
         self.expect_type(ENTITY_REFERENCE)?;
         let (hidden, graphics) = self.base_with_graphics()?;
         let local = self.r.unsigned_integer()?;
-        let mut target = None;
-        if self.r.bit()? {
-            match self.r.unsigned_integer()? {
-                REFERENCE_ON_PRC_BASE => {
-                    let kind = self.r.unsigned_integer()?;
-                    let fs = self.file_identifier()?;
-                    let uid = self.r.unsigned_integer()?;
-                    target = Some(Target::Entity { kind, fs, uid });
-                }
-                REFERENCE_ON_TOPOLOGY => target = self.reference_on_topology()?,
-                t => return Err(malformed(format!("entity type {t} as reference data"))),
-            }
-        }
+        let target = if self.r.bit()? { self.reference_data()? } else { None };
         self.schema.skip_added_fields(ENTITY_REFERENCE, &mut self.r)?;
         self.user_data()?;
         Ok(target.map(|target| Override { graphics, hidden, local, target }))
+    }
+
+    /// `ReferenceData` [WD 7.4.10.2]: a `ReferenceOnPRCBase` (205) or a
+    /// `ReferenceOnTopology` (206), type code included; `None` when it names no target.
+    pub(super) fn reference_data(&mut self) -> Result<Option<Target>, PrcError> {
+        let t = self.r.unsigned_integer()?;
+        let target = match t {
+            REFERENCE_ON_PRC_BASE => Some(self.reference_on_prc_base_body()?),
+            REFERENCE_ON_TOPOLOGY => self.reference_on_topology()?,
+            t => return Err(malformed(format!("entity type {t} as reference data"))),
+        };
+        self.schema.skip_added_fields(t, &mut self.r)?;
+        Ok(target)
+    }
+
+    /// `ReferenceOnPRCBase` (205) [WD 7.4.6] after its type code.
+    fn reference_on_prc_base_body(&mut self) -> Result<Target, PrcError> {
+        let kind = self.r.unsigned_integer()?;
+        let fs = self.file_identifier()?;
+        let uid = self.r.unsigned_integer()?;
+        Ok(Target::Entity { kind, fs, uid })
+    }
+
+    /// `ReferenceOnPRCBase` (205) [WD 7.4.6], type code included: read past.
+    pub(super) fn reference_on_prc_base(&mut self) -> Result<(), PrcError> {
+        self.expect_type(REFERENCE_ON_PRC_BASE)?;
+        self.reference_on_prc_base_body()?;
+        self.schema.skip_added_fields(REFERENCE_ON_PRC_BASE, &mut self.r)
     }
 
     /// `ReferenceOnTopology` (206) after its type code; `None` without a body.
@@ -318,7 +319,7 @@ impl Ctx<'_, '_> {
 
     /// `ASM_Filter` (320) [WD 7.3.12]: read past.
     // prc-rs: the filter's field order.
-    fn filter(&mut self) -> Result<(), PrcError> {
+    pub(super) fn filter(&mut self) -> Result<(), PrcError> {
         self.expect_type(FILTER)?;
         self.content_prc_ref_base()?;
         self.r.bit()?; // is_active

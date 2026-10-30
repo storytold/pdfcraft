@@ -2,8 +2,7 @@
 //! coordinate systems (303) and the model file (301), walked into placed tessellations
 //! [WD 7.3.3-7.3.11, 7.5, 7.6].
 //!
-//! Markups, views, scene lights and clipping planes are not read past; a tree carrying any
-//! of them is [`PrcError::Unsupported`].
+//! Markups (PMI), views, scene lights and clipping planes are read past and not modelled.
 
 // prc-rs: where the working draft leaves an entity's field order open, the order here is
 // prc-rs's format description's; each such entity's reader carries its own marker.
@@ -16,6 +15,7 @@ use crate::entity::{Ctx, malformed};
 use crate::geometry::{Matrix, Vec3};
 use crate::{PrcError, PrcFile, Schema, SectionKind, UniqueId};
 
+mod markup;
 mod node;
 mod overrides;
 mod read;
@@ -38,8 +38,10 @@ const FILE_STRUCTURE_TREE: u32 = 304;
 const PRODUCT_OCCURRENCE: u32 = 310;
 const PART_DEFINITION: u32 = 311;
 const FILTER: u32 = 320;
+const SURF_PLANE: u32 = 86;
 const CARTESIAN_TRANSFORMATION: u32 = 202;
 const ENTITY_REFERENCE: u32 = 203;
+const MARKUP_LINKED_ITEM: u32 = 204;
 const REFERENCE_ON_PRC_BASE: u32 = 205;
 const REFERENCE_ON_TOPOLOGY: u32 = 206;
 const GENERAL_TRANSFORMATION: u32 = 207;
@@ -52,6 +54,12 @@ const RI_POLY_BREP_MODEL: u32 = 237;
 const RI_POLY_WIRE: u32 = 238;
 const RI_SET: u32 = 239;
 const RI_COORDINATE_SYSTEM: u32 = 240;
+const MKP_VIEW: u32 = 501;
+const MKP_MARKUP: u32 = 502;
+const MKP_LEADER: u32 = 503;
+const ANNOTATION_ITEM: u32 = 504;
+const ANNOTATION_SET: u32 = 505;
+const ANNOTATION_REFERENCE: u32 = 506;
 const STYLE: u32 = 701;
 const MATERIAL: u32 = 702;
 const PICTURE: u32 = 703;
@@ -59,10 +67,18 @@ const TEXTURE_APPLICATION: u32 = 711;
 const TEXTURE_DEFINITION: u32 = 712;
 const TEXTURE_TRANSFORMATION: u32 = 713;
 const LINE_PATTERN: u32 = 721;
+const AMBIENT_LIGHT: u32 = 731;
+const POINT_LIGHT: u32 = 732;
+const DIRECTIONAL_LIGHT: u32 = 733;
+const SPOT_LIGHT: u32 = 734;
 const SCENE_DISPLAY_PARAMETERS: u32 = 741;
 const CAMERA: u32 = 742;
 /// prc-rs: a scene's `is_absolute` exists from this authoring version.
 const ABSOLUTE_SCENE_FROM: u32 = 8137;
+/// prc-rs: a view's flags, linked items and filters exist from this authoring version.
+const VIEW_FLAGS_FROM: u32 = 8137;
+/// prc-rs: a directional light's intensity exists from this authoring version.
+const LIGHT_INTENSITY_FROM: u32 = 8030;
 /// `TextureDefinition` mapping type "operator" and function "blend", 0-based
 /// (pdf-issues #485).
 const TEXTURE_MAPPING_OPERATOR: i32 = 3;
@@ -215,9 +231,8 @@ impl PrcFile {
     /// the file stores no tree ([`Self::stores_tree`]).
     ///
     /// # Errors
-    /// [`PrcError::Unsupported`] for a tree carrying markups (PMI), views, scene lights or
-    /// clipping planes, or, when an item is placed by a reference coordinate system, globals
-    /// carrying fonts or fill patterns; [`PrcError::Malformed`] for an index naming no entity,
+    /// [`PrcError::Unsupported`] when an item is placed by a reference coordinate system and
+    /// the globals carry fonts or fill patterns; [`PrcError::Malformed`] for an index naming no entity,
     /// a cycle of occurrences or prototypes, or a tree past [`MAX_PLACEMENTS`] or the depth
     /// ceiling; read errors as [`crate::FileStructure::tessellations`].
     pub fn placements(&self) -> Result<Vec<Placement>, PrcError> {
@@ -289,5 +304,7 @@ impl PrcFile {
     }
 }
 
+#[cfg(test)]
+mod markup_tests;
 #[cfg(test)]
 mod tests;
