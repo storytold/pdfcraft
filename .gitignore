@@ -15,6 +15,16 @@ plan/
 *.apkm
 
 # Mobile packaging and build outputs
+*.apk
+*.aar
+*.aab
+*.dex
+*.class
+captures/
+.externalNativeBuild/
+*.hprof
+*.jks
+*.keystore
 /mobile/android/.gradle/
 /mobile/android/build/
 /mobile/android/*/build/

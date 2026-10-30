@@ -1,0 +1,49 @@
+# Built application files
+*.apk
+*.aar
+*.aab
+
+# Files for the ART/Dalvik VM
+*.dex
+
+# Java class files
+*.class
+
+# Generated files
+bin/
+build/
+out/
+.gradle/
+/*/build/
+
+# Local configuration file (sdk path, etc)
+local.properties
+
+# Log Files
+*.log
+
+# Android Studio captures folder
+captures/
+
+# IntelliJ IDEA / Android Studio
+*.iml
+.idea/
+.navigation/
+
+# Keystore files
+*.jks
+*.keystore
+
+# External native build folder
+.externalNativeBuild
+.cxx
+/*/.cxx/
+
+# Profiling and dumps
+*.hprof
+
+# Generated Rust FFI bindings / native binaries
+src/main/jniLibs/
+src/main/java/uniffi/
+/*/src/main/jniLibs/
+/*/src/main/java/uniffi/
