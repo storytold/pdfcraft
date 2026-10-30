@@ -626,7 +626,7 @@ fn redact_page_content(
             pi,
         )?;
         retired_properties.extend(interp::prune_properties(doc, &mut res, &cleaned_data)?);
-        type3::prune_type3_from_resources(doc, &mut res, &cleaned_data)?;
+        type3::prune_type3_from_resources(doc, &mut res, &cleaned_data, Some(&page.dict))?;
         doc.update_dict(page.obj, |d| {
             d.set(b"Contents".to_vec(), Object::Array(new_list));
             d.set(b"Resources".to_vec(), Object::Dict(res));

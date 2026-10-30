@@ -884,7 +884,7 @@ fn xobject(
                     out.error = Some(error);
                     return None;
                 }
-                if let Err(error) = crate::type3::prune_type3_from_resources(doc, &mut cleaned_res, content) {
+                if let Err(error) = crate::type3::prune_type3_from_resources(doc, &mut cleaned_res, content, None) {
                     out.error = Some(error);
                     return None;
                 }
