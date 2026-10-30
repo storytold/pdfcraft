@@ -2563,3 +2563,14 @@ animation effects	Off	Ανενεργά
 	Rotate the selected pages clockwise	Περιστροφή των επιλεγμένων σελίδων δεξιόστροφα
 	Extract the selected pages…	Εξαγωγή των επιλεγμένων σελίδων…
 	Delete the selected pages	Διαγραφή των επιλεγμένων σελίδων
+	Output folder	Φάκελος εξόδου
+	Include subfolders	Συμπερίληψη υποφακέλων
+	Add files or folders to recognize.	Προσθέστε αρχεία ή φακέλους για αναγνώριση.
+	The output folder can't be one of the folders being read, or contain one.	Ο φάκελος εξόδου δεν μπορεί να είναι ένας από τους φακέλους που διαβάζονται ούτε να περιέχει κάποιον από αυτούς.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Τα πρωτότυπα δεν αλλάζουν. Ένα αρχείο με το ίδιο όνομα στον φάκελο εξόδου διατηρείται και το νέο παίρνει αριθμό.
+	; skipped: {n}	· παραλείφθηκαν: {n}
+	No PDF files were found.	Δεν βρέθηκαν αρχεία PDF.
+	less than a minute left	απομένει λιγότερο από ένα λεπτό
+	about {n} min left	απομένουν περίπου {n} λεπτά
+	about {h} h {m} min left	απομένουν περίπου {h} ώ. {m} λ.
+	Text recognition cancelled. {summary}	Η αναγνώριση κειμένου ακυρώθηκε. {summary}

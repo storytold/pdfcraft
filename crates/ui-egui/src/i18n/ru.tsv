@@ -2470,3 +2470,14 @@ animation effects	Off	Выкл
 	Rotate the selected pages clockwise	Повернуть выбранные страницы по часовой стрелке
 	Extract the selected pages…	Извлечь выбранные страницы…
 	Delete the selected pages	Удалить выбранные страницы
+	Output folder	Папка для результатов
+	Include subfolders	Включая вложенные папки
+	Add files or folders to recognize.	Добавьте файлы или папки для распознавания.
+	The output folder can't be one of the folders being read, or contain one.	Папка для результатов не может быть одной из читаемых папок или содержать такую папку.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Оригиналы не изменяются. Файл с тем же именем в папке для результатов сохраняется, а новый получает номер.
+	; skipped: {n}	; пропущено: {n}
+	No PDF files were found.	PDF-файлы не найдены.
+	less than a minute left	осталось меньше минуты
+	about {n} min left	осталось около {n} мин
+	about {h} h {m} min left	осталось около {h} ч {m} мин
+	Text recognition cancelled. {summary}	Распознавание текста отменено. {summary}

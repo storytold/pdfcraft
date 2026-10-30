@@ -2562,3 +2562,14 @@ animation effects	Off	Izklopljeni
 	Rotate the selected pages clockwise	Zavrti izbrane strani v smeri urnega kazalca
 	Extract the selected pages…	Izvleci izbrane strani…
 	Delete the selected pages	Izbriši izbrane strani
+	Output folder	Izhodna mapa
+	Include subfolders	Vključi podmape
+	Add files or folders to recognize.	Dodajte datoteke ali mape za prepoznavanje.
+	The output folder can't be one of the folders being read, or contain one.	Izhodna mapa ne sme biti ena od branih map in ne sme vsebovati nobene od njih.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Izvirniki se ne spremenijo. Datoteka z enakim imenom v izhodni mapi ostane, nova pa dobi številko.
+	; skipped: {n}	; preskočeno: {n}
+	No PDF files were found.	Ni bilo najdenih datotek PDF.
+	less than a minute left	preostane manj kot minuta
+	about {n} min left	preostane približno {n} min
+	about {h} h {m} min left	preostane približno {h} h {m} min
+	Text recognition cancelled. {summary}	Prepoznavanje besedila je preklicano. {summary}

@@ -1,4 +1,4 @@
-use super::{Args, Automation, Result, ToolError, Value, child, failed, json, write_atomic};
+use super::{Args, Automation, Result, ToolError, Value, child, failed, json};
 
 impl Automation {
     /// Recognition settings from the arguments: `dpi` (clamped to 72–600), `language` (refused
@@ -21,7 +21,7 @@ impl Automation {
     }
 
     /// Recognizes text in each of `paths` and writes the result under the same file name in
-    /// `folder`, reporting per file its output, word count and skipped pages, or its error. A
+    /// `folder`, or with a number when the folder already has that name (#1795), reporting per file its output, word count and skipped pages, or its error. A
     /// path outside the root refuses the whole call before any work starts.
     pub(crate) fn ocr_recognize_files(&mut self, a: &Args) -> Result<Value> {
         let settings = self.ocr_settings(a)?;
@@ -52,10 +52,10 @@ impl Automation {
                 self.resolve(p, false).map_err(|e| e.to_string()).and_then(|src| crate::read_input_bytes(&src).map_err(|e| e.to_string())).and_then(
                     |bytes| pdfcraft_engine::ocr::recognize_file(&name, std::sync::Arc::new(bytes), None, settings.clone(), &ocr, |_, _| true),
                 );
+            // Never replaces a file the folder has: not an earlier result, nor one of the inputs.
+            let result = result.and_then(|r| pdfcraft_engine::batch::publish(&child(&folder, &name), &r.bytes).map(|target| (r, target)));
             out.push(match result {
-                Ok(r) => {
-                    let target = child(&folder, &name);
-                    write_atomic(&target, &r.bytes)?;
+                Ok((r, target)) => {
                     let skipped: Vec<usize> = r.pages.iter().filter(|p| p.skipped.is_some()).map(|p| p.page + 1).collect();
                     json!({ "path": p, "output": target.to_string_lossy(), "words": r.words(), "skipped_pages": skipped })
                 }

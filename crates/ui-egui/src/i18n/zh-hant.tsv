@@ -2507,3 +2507,14 @@ animation effects	Off	關
 	Rotate the selected pages clockwise	順時針旋轉所選頁面
 	Extract the selected pages…	擷取所選頁面…
 	Delete the selected pages	刪除所選頁面
+	Output folder	輸出資料夾
+	Include subfolders	包含子資料夾
+	Add files or folders to recognize.	新增要辨識的檔案或資料夾。
+	The output folder can't be one of the folders being read, or contain one.	輸出資料夾不能是正在讀取的資料夾之一，也不能包含其中之一。
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	原始檔案不會被變更。輸出資料夾中已有的同名檔案會保留，新檔案會加上編號。
+	; skipped: {n}	；已略過：{n}
+	No PDF files were found.	找不到 PDF 檔案。
+	less than a minute left	剩餘不到 1 分鐘
+	about {n} min left	剩餘約 {n} 分鐘
+	about {h} h {m} min left	剩餘約 {h} 小時 {m} 分鐘
+	Text recognition cancelled. {summary}	已取消文字辨識。{summary}

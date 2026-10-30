@@ -2818,3 +2818,14 @@ theme	Appearance	Išvaizda
 	Rotate the selected pages clockwise	Pasukti pasirinktus puslapius pagal laikrodžio rodyklę
 	Extract the selected pages…	Išskleisti pasirinktus puslapius…
 	Delete the selected pages	Ištrinti pasirinktus puslapius
+	Output folder	Išvesties aplankas
+	Include subfolders	Įtraukti poaplankius
+	Add files or folders to recognize.	Pridėkite failų ar aplankų atpažinimui.
+	The output folder can't be one of the folders being read, or contain one.	Išvesties aplankas negali būti vienas iš skaitomų aplankų ar jo turėti.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Originalai nekeičiami. Išvesties aplanke esantis tokio pat pavadinimo failas išsaugomas, o naujas gauna numerį.
+	; skipped: {n}	; praleista: {n}
+	No PDF files were found.	PDF failų nerasta.
+	less than a minute left	liko mažiau nei minutė
+	about {n} min left	liko apie {n} min.
+	about {h} h {m} min left	liko apie {h} val. {m} min.
+	Text recognition cancelled. {summary}	Teksto atpažinimas atšauktas. {summary}

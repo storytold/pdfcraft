@@ -170,6 +170,8 @@ use workflows::create_ui;
 use workflows::export_ui;
 use workflows::files;
 use workflows::js_ui;
+#[cfg(not(target_arch = "wasm32"))]
+use workflows::ocr_batch_ui;
 use workflows::ocr_ui;
 use workflows::optimize_ui;
 use workflows::print_ui;
@@ -461,6 +463,9 @@ pub struct PdfCraftApp {
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
     pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,
+    /// Recognize text in multiple files: the files and folders, and where the results go.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub ocr_batch_draft: ocr_batch_ui::OcrBatchDraft,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
     /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the

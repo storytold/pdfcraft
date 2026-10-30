@@ -2557,3 +2557,14 @@ animation effects	Off	オフ
 	Rotate the selected pages clockwise	選択したページを時計回りに回転
 	Extract the selected pages…	選択したページを抽出…
 	Delete the selected pages	選択したページを削除
+	Output folder	出力フォルダー
+	Include subfolders	サブフォルダーを含める
+	Add files or folders to recognize.	認識するファイルまたはフォルダーを追加してください。
+	The output folder can't be one of the folders being read, or contain one.	出力フォルダーには、読み込むフォルダー自体やそれを含むフォルダーは指定できません。
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	元のファイルは変更されません。出力フォルダーに同じ名前のファイルがある場合はそのまま残り、新しいファイルには番号が付きます。
+	; skipped: {n}	、スキップ: {n}
+	No PDF files were found.	PDF ファイルが見つかりませんでした。
+	less than a minute left	残り 1 分未満
+	about {n} min left	残り約 {n} 分
+	about {h} h {m} min left	残り約 {h} 時間 {m} 分
+	Text recognition cancelled. {summary}	テキスト認識をキャンセルしました。{summary}

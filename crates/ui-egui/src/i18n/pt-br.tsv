@@ -2842,3 +2842,14 @@ theme	Appearance	Aparência
 	Rotate the selected pages clockwise	Girar as páginas selecionadas no sentido horário
 	Extract the selected pages…	Extrair as páginas selecionadas…
 	Delete the selected pages	Excluir as páginas selecionadas
+	Output folder	Pasta de saída
+	Include subfolders	Incluir subpastas
+	Add files or folders to recognize.	Adicione arquivos ou pastas para reconhecer.
+	The output folder can't be one of the folders being read, or contain one.	A pasta de saída não pode ser uma das pastas lidas nem conter uma delas.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Os originais não são alterados. Um arquivo com o mesmo nome na pasta de saída é mantido, e o novo recebe um número.
+	; skipped: {n}	; ignorados: {n}
+	No PDF files were found.	Nenhum arquivo PDF encontrado.
+	less than a minute left	falta menos de um minuto
+	about {n} min left	faltam cerca de {n} min
+	about {h} h {m} min left	faltam cerca de {h} h {m} min
+	Text recognition cancelled. {summary}	Reconhecimento de texto cancelado. {summary}

@@ -2833,3 +2833,14 @@ certificate	Version	الإصدار
 	Rotate the selected pages clockwise	تدوير الصفحات المحددة باتجاه عقارب الساعة
 	Extract the selected pages…	استخراج الصفحات المحددة…
 	Delete the selected pages	حذف الصفحات المحددة
+	Output folder	مجلد الإخراج
+	Include subfolders	تضمين المجلدات الفرعية
+	Add files or folders to recognize.	أضف ملفات أو مجلدات للتعرّف على نصها.
+	The output folder can't be one of the folders being read, or contain one.	لا يمكن أن يكون مجلد الإخراج أحد المجلدات التي تتم قراءتها أو أن يحتوي على أحدها.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	لا تتغير الملفات الأصلية. يُحتفظ بأي ملف يحمل الاسم نفسه في مجلد الإخراج، ويحصل الملف الجديد على رقم.
+	; skipped: {n}	؛ تم التخطي: {n}
+	No PDF files were found.	لم يُعثر على ملفات PDF.
+	less than a minute left	أقل من دقيقة متبقية
+	about {n} min left	حوالي {n} دقيقة متبقية
+	about {h} h {m} min left	حوالي {h} س {m} د متبقية
+	Text recognition cancelled. {summary}	تم إلغاء التعرّف على النص. {summary}

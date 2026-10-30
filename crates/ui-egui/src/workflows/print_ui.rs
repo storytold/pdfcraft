@@ -368,7 +368,8 @@ impl PdfCraftApp {
             }
             _ => (crate::i18n::fmt(tl!("Sending to {printer}…"), &[("printer", printer)]), 0.0),
         };
-        self.progress_notice = Some(crate::widgets::ProgressNotice { label, fraction, cancellable: false });
+        self.progress_notice =
+            Some(crate::widgets::ProgressNotice { label, detail: None, fraction, cancellable: false, job: crate::widgets::ProgressJob::Print });
         self.print_tasks.showing_progress = true;
         // The bar's sweep keeps moving between sheets.
         if let Some(ctx) = &self.ctx {
@@ -714,7 +715,13 @@ mod tests {
         assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Sent to Office"));
 
         // Another job's card stays; a worker that vanished is reported, not left spinning.
-        let other = crate::widgets::ProgressNotice { label: "Optimizing…".into(), fraction: 0.5, cancellable: true };
+        let other = crate::widgets::ProgressNotice {
+            label: "Optimizing…".into(),
+            detail: None,
+            fraction: 0.5,
+            cancellable: true,
+            job: crate::widgets::ProgressJob::Optimize,
+        };
         app.progress_notice = Some(other.clone());
         let (tx, rx) = std::sync::mpsc::channel();
         app.print_tasks.jobs.push(PrintJob { printer: "Office".into(), sheets: None, news: rx });

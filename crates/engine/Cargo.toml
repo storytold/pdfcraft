@@ -51,6 +51,9 @@ unicode-segmentation = "1.13"
 # Already in the graph through lopdf; used only for the local UTC offset ("today"). The workspace
 # entry is std-only; this target adds `clock` for `chrono::Local::now`.
 chrono = { workspace = true, features = ["clock"] }
+# Already in the graph through pdfcraft-automation: folder jobs publish their results without
+# replacing an existing file (batch::publish).
+tempfile = "3.27"
 
 [dev-dependencies]
 pdfcraft-testkit = { workspace = true }

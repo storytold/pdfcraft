@@ -67,7 +67,7 @@ use pages::{DEFAULT_DPI, MAX_DPI, encode_png};
 use pages::{FIND_FIRST_BATCH, FIND_MAX_WARNING_BYTES, FIND_MAX_WARNINGS, extract_parallel};
 #[cfg(test)]
 pub(crate) use paths::MAX_INPUT;
-use paths::{child, lexical, unused, write_atomic};
+use paths::{child, unused, write_atomic};
 pub(crate) use paths::{read_input, read_input_bytes};
 #[cfg(test)]
 use paths::{write_atomic_synced, write_atomic_with};

@@ -6579,9 +6579,9 @@ tier = "P1"
 milestone = "M10"
 status = "shipped"
 commands = ["ocr.recognize_batch"]
-tools = ["ocr_recognize_files"]
-evidence = ["crates/automation/tests/it/automation.rs::ocr_recognize_files_writes_searchable_copies", "crates/ui-egui/tests/it/ocr.rs::recognize_text_in_multiple_files_writes_searchable_copies"]
-notes = "Pick PDFs, then an output folder; copies are saved incrementally under the same names, in the background with progress."
+tools = ["ocr_recognize_files", "doc_batch"]
+evidence = ["crates/automation/tests/it/automation.rs::ocr_recognize_files_writes_searchable_copies", "crates/automation/tests/it/automation.rs::ocr_recognize_files_keeps_files_already_in_the_folder", "crates/ui-egui/tests/it/ocr.rs::recognize_text_in_multiple_files_writes_searchable_copies", "crates/ui-egui/tests/it/ocr.rs::recognize_text_in_files_and_folders_keeps_the_originals_and_the_folder_tree", "crates/automation/tests/it/batch.rs::batch_recurses_preserves_paths_continues_errors_and_never_replaces_outputs"]
+notes = "Desktop: one dialog takes PDFs and folders (Include subfolders), an output folder and the Recognize Text settings, and runs in the background with a progress card (file, page, time left) and Cancel, which stops before the next page and writes nothing of the file being read; the folder tree is kept under the output folder, the originals are never changed, a name the output folder already has is kept and the new file numbered, and an output folder that is or holds an input folder is refused. The same engine as doc_batch and pdfcraft-cli batch. The web build picks PDFs and downloads the copies. Missing: a per-file report beyond the summary, and watched folders (#3613); the time left is estimated from the pace so far and the average page count of the files done, not counted ahead."
 
 [[feature]]
 id = "ocr.ocr-languages"

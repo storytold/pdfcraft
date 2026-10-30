@@ -1,4 +1,5 @@
 use super::*;
+use crate::paths::lexical;
 use pdfcraft_platform::staging::STAGING_ATTEMPTS;
 
 /// `n` pages, page i showing "Page i".

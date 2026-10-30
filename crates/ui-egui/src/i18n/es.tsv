@@ -2880,3 +2880,14 @@ theme	Appearance	Aspecto
 	Rotate the selected pages clockwise	Girar las páginas seleccionadas en sentido horario
 	Extract the selected pages…	Extraer las páginas seleccionadas…
 	Delete the selected pages	Eliminar las páginas seleccionadas
+	Output folder	Carpeta de salida
+	Include subfolders	Incluir subcarpetas
+	Add files or folders to recognize.	Añade archivos o carpetas para reconocer.
+	The output folder can't be one of the folders being read, or contain one.	La carpeta de salida no puede ser una de las carpetas que se leen ni contener ninguna de ellas.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Los originales no se modifican. Si la carpeta de salida ya tiene un archivo con el mismo nombre, se conserva y el nuevo recibe un número.
+	; skipped: {n}	; omitidos: {n}
+	No PDF files were found.	No se encontraron archivos PDF.
+	less than a minute left	queda menos de un minuto
+	about {n} min left	quedan unos {n} min
+	about {h} h {m} min left	quedan unas {h} h {m} min
+	Text recognition cancelled. {summary}	Se canceló el reconocimiento de texto. {summary}

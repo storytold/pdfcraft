@@ -166,6 +166,8 @@ pub enum Dialog {
     AccessibilityOptions,
     /// Scan & OCR ▸ Recognize text.
     RecognizeText,
+    /// Recognize text in multiple files: files and folders into an output folder.
+    OcrBatch,
     /// The JavaScript console (⌘J).
     JsConsole,
     /// Document JavaScripts.

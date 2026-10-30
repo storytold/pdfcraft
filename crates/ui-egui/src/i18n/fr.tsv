@@ -2823,3 +2823,14 @@ certificate	Version	Version
 	Rotate the selected pages clockwise	Faire pivoter les pages sélectionnées dans le sens horaire
 	Extract the selected pages…	Extraire les pages sélectionnées…
 	Delete the selected pages	Supprimer les pages sélectionnées
+	Output folder	Dossier de sortie
+	Include subfolders	Inclure les sous-dossiers
+	Add files or folders to recognize.	Ajoutez des fichiers ou des dossiers à reconnaître.
+	The output folder can't be one of the folders being read, or contain one.	Le dossier de sortie ne peut pas être l'un des dossiers lus, ni en contenir un.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Les originaux ne sont pas modifiés. Un fichier du même nom déjà présent dans le dossier de sortie est conservé, et le nouveau reçoit un numéro.
+	; skipped: {n}	; ignorés : {n}
+	No PDF files were found.	Aucun fichier PDF trouvé.
+	less than a minute left	moins d'une minute restante
+	about {n} min left	environ {n} min restantes
+	about {h} h {m} min left	environ {h} h {m} min restantes
+	Text recognition cancelled. {summary}	Reconnaissance du texte annulée. {summary}

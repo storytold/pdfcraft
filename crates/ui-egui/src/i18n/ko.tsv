@@ -2794,3 +2794,14 @@ theme	Appearance	모양
 	Rotate the selected pages clockwise	선택한 페이지를 시계 방향으로 회전
 	Extract the selected pages…	선택한 페이지 추출…
 	Delete the selected pages	선택한 페이지 삭제
+	Output folder	출력 폴더
+	Include subfolders	하위 폴더 포함
+	Add files or folders to recognize.	인식할 파일이나 폴더를 추가하세요.
+	The output folder can't be one of the folders being read, or contain one.	출력 폴더는 읽는 폴더 중 하나이거나 그중 하나를 포함할 수 없습니다.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	원본은 변경되지 않습니다. 출력 폴더에 같은 이름의 파일이 있으면 그대로 두고 새 파일에 번호를 붙입니다.
+	; skipped: {n}	; 건너뜀: {n}
+	No PDF files were found.	PDF 파일을 찾지 못했습니다.
+	less than a minute left	1분 미만 남음
+	about {n} min left	약 {n}분 남음
+	about {h} h {m} min left	약 {h}시간 {m}분 남음
+	Text recognition cancelled. {summary}	텍스트 인식이 취소되었습니다. {summary}

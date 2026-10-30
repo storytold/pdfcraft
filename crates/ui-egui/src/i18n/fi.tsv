@@ -2827,3 +2827,14 @@ theme	Appearance	Teema
 	Rotate the selected pages clockwise	Kierrä valittuja sivuja myötäpäivään
 	Extract the selected pages…	Pura valitut sivut…
 	Delete the selected pages	Poista valitut sivut
+	Output folder	Tulostekansio
+	Include subfolders	Sisällytä alikansiot
+	Add files or folders to recognize.	Lisää tunnistettavat tiedostot tai kansiot.
+	The output folder can't be one of the folders being read, or contain one.	Tulostekansio ei voi olla mikään luettavista kansioista eikä sisältää niistä yhtäkään.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Alkuperäisiä ei muuteta. Samanniminen tiedosto tulostekansiossa säilyy, ja uusi saa numeron.
+	; skipped: {n}	; ohitettu: {n}
+	No PDF files were found.	PDF-tiedostoja ei löytynyt.
+	less than a minute left	alle minuutti jäljellä
+	about {n} min left	noin {n} min jäljellä
+	about {h} h {m} min left	noin {h} h {m} min jäljellä
+	Text recognition cancelled. {summary}	Tekstintunnistus peruttiin. {summary}

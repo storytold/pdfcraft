@@ -2733,3 +2733,14 @@ key	Space	Mellomrom
 	Rotate the selected pages clockwise	Roter de valgte sidene med klokken
 	Extract the selected pages…	Trekk ut de valgte sidene…
 	Delete the selected pages	Slett de valgte sidene
+	Output folder	Utdatamappe
+	Include subfolders	Ta med undermapper
+	Add files or folders to recognize.	Legg til filer eller mapper som skal gjenkjennes.
+	The output folder can't be one of the folders being read, or contain one.	Utdatamappen kan ikke være en av mappene som leses, eller inneholde en av dem.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Originalene endres ikke. En fil med samme navn i utdatamappen beholdes, og den nye får et nummer.
+	; skipped: {n}	; hoppet over: {n}
+	No PDF files were found.	Fant ingen PDF-filer.
+	less than a minute left	mindre enn ett minutt igjen
+	about {n} min left	omtrent {n} min igjen
+	about {h} h {m} min left	omtrent {h} t {m} min igjen
+	Text recognition cancelled. {summary}	Tekstgjenkjenningen ble avbrutt. {summary}

@@ -2558,3 +2558,14 @@ animation effects	Off	Aus
 	Rotate the selected pages clockwise	Ausgewählte Seiten im Uhrzeigersinn drehen
 	Extract the selected pages…	Ausgewählte Seiten extrahieren…
 	Delete the selected pages	Ausgewählte Seiten löschen
+	Output folder	Ausgabeordner
+	Include subfolders	Unterordner einbeziehen
+	Add files or folders to recognize.	Füge Dateien oder Ordner hinzu, deren Text erkannt werden soll.
+	The output folder can't be one of the folders being read, or contain one.	Der Ausgabeordner darf keiner der gelesenen Ordner sein und keinen davon enthalten.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Die Originale bleiben unverändert. Eine gleichnamige Datei im Ausgabeordner bleibt erhalten, die neue bekommt eine Nummer.
+	; skipped: {n}	; übersprungen: {n}
+	No PDF files were found.	Keine PDF-Dateien gefunden.
+	less than a minute left	noch weniger als eine Minute
+	about {n} min left	noch etwa {n} Min.
+	about {h} h {m} min left	noch etwa {h} Std. {m} Min.
+	Text recognition cancelled. {summary}	Texterkennung abgebrochen. {summary}

@@ -2653,3 +2653,14 @@ animation effects	Off	Wyłączone
 	Rotate the selected pages clockwise	Obróć zaznaczone strony w prawo
 	Extract the selected pages…	Wyodrębnij zaznaczone strony…
 	Delete the selected pages	Usuń zaznaczone strony
+	Output folder	Folder wyjściowy
+	Include subfolders	Uwzględnij podfoldery
+	Add files or folders to recognize.	Dodaj pliki lub foldery do rozpoznania.
+	The output folder can't be one of the folders being read, or contain one.	Folder wyjściowy nie może być żadnym z odczytywanych folderów ani zawierać żadnego z nich.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Oryginały nie są zmieniane. Plik o tej samej nazwie w folderze wyjściowym zostaje zachowany, a nowy otrzymuje numer.
+	; skipped: {n}	; pominięte: {n}
+	No PDF files were found.	Nie znaleziono plików PDF.
+	less than a minute left	zostało mniej niż minutę
+	about {n} min left	zostało ok. {n} min
+	about {h} h {m} min left	zostało ok. {h} godz. {m} min
+	Text recognition cancelled. {summary}	Anulowano rozpoznawanie tekstu. {summary}

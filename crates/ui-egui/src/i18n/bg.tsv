@@ -2520,3 +2520,14 @@ animation effects	Off	Изключени
 	Rotate the selected pages clockwise	Завъртане на избраните страници по часовниковата стрелка
 	Extract the selected pages…	Извличане на избраните страници…
 	Delete the selected pages	Изтриване на избраните страници
+	Output folder	Изходна папка
+	Include subfolders	Включване на подпапките
+	Add files or folders to recognize.	Добавете файлове или папки за разпознаване.
+	The output folder can't be one of the folders being read, or contain one.	Изходната папка не може да е някоя от четените папки или да съдържа такава.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Оригиналите не се променят. Файл със същото име в изходната папка се запазва, а новият получава номер.
+	; skipped: {n}	; пропуснати: {n}
+	No PDF files were found.	Не са намерени PDF файлове.
+	less than a minute left	остава по-малко от минута
+	about {n} min left	остават около {n} мин
+	about {h} h {m} min left	остават около {h} ч {m} мин
+	Text recognition cancelled. {summary}	Разпознаването на текст е отменено. {summary}

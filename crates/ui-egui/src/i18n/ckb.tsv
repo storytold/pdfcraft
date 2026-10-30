@@ -2749,3 +2749,14 @@ certificate	Version	وەشان
 	Rotate the selected pages clockwise	پەڕە هەڵبژێردراوەکان بە ئاڕاستەی میلی کاتژمێر بسوڕێنە
 	Extract the selected pages…	پەڕە هەڵبژێردراوەکان دەربهێنە…
 	Delete the selected pages	پەڕە هەڵبژێردراوەکان بسڕەوە
+	Output folder	فۆڵدەری دەرچوون
+	Include subfolders	فۆڵدەرە لاوەکییەکانیش لەخۆبگرە
+	Add files or folders to recognize.	پەڕگە یان فۆڵدەر زیاد بکە بۆ ناسینەوە.
+	The output folder can't be one of the folders being read, or contain one.	فۆڵدەری دەرچوون نابێت یەکێک بێت لەو فۆڵدەرانەی دەخوێندرێنەوە، یان یەکێکیان لەخۆ بگرێت.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	ڕەسەنەکان ناگۆڕدرێن. پەڕگەیەک بە هەمان ناو لە فۆڵدەری دەرچوون دەمێنێتەوە، و پەڕگە نوێیەکە ژمارەیەک وەردەگرێت.
+	; skipped: {n}	؛ بازدرا: {n}
+	No PDF files were found.	هیچ پەڕگەیەکی PDF نەدۆزرایەوە.
+	less than a minute left	کەمتر لە خولەکێک ماوە
+	about {n} min left	نزیکەی {n} خولەک ماوە
+	about {h} h {m} min left	نزیکەی {h} کاتژمێر و {m} خولەک ماوە
+	Text recognition cancelled. {summary}	ناسینەوەی دەق هەڵوەشێنرایەوە. {summary}

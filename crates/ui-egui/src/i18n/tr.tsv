@@ -2553,3 +2553,14 @@ animation effects	Off	Kapalı
 	Rotate the selected pages clockwise	Seçili sayfaları saat yönünde döndür
 	Extract the selected pages…	Seçili sayfaları ayıkla…
 	Delete the selected pages	Seçili sayfaları sil
+	Output folder	Çıktı klasörü
+	Include subfolders	Alt klasörleri dahil et
+	Add files or folders to recognize.	Tanınacak dosyaları veya klasörleri ekleyin.
+	The output folder can't be one of the folders being read, or contain one.	Çıktı klasörü okunan klasörlerden biri olamaz veya bunlardan birini içeremez.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Orijinaller değiştirilmez. Çıktı klasöründe aynı adlı bir dosya varsa korunur ve yeni dosya bir numara alır.
+	; skipped: {n}	; atlandı: {n}
+	No PDF files were found.	PDF dosyası bulunamadı.
+	less than a minute left	bir dakikadan az kaldı
+	about {n} min left	yaklaşık {n} dk kaldı
+	about {h} h {m} min left	yaklaşık {h} sa {m} dk kaldı
+	Text recognition cancelled. {summary}	Metin tanıma iptal edildi. {summary}

@@ -2466,3 +2466,14 @@ animation effects	Off	ఆఫ్
 	Rotate the selected pages clockwise	ఎంచుకున్న పేజీలను సవ్య దిశలో తిప్పు
 	Extract the selected pages…	ఎంచుకున్న పేజీలను సంగ్రహించు…
 	Delete the selected pages	ఎంచుకున్న పేజీలను తొలగించు
+	Output folder	అవుట్‌పుట్ ఫోల్డర్
+	Include subfolders	ఉప ఫోల్డర్‌లను చేర్చు
+	Add files or folders to recognize.	గుర్తించడానికి ఫైల్‌లు లేదా ఫోల్డర్‌లను జోడించండి.
+	The output folder can't be one of the folders being read, or contain one.	అవుట్‌పుట్ ఫోల్డర్ చదువుతున్న ఫోల్డర్‌లలో ఒకటి కాకూడదు, వాటిలో దేనినీ కలిగి ఉండకూడదు.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	అసలు ఫైల్‌లు మారవు. అవుట్‌పుట్ ఫోల్డర్‌లో అదే పేరుతో ఉన్న ఫైల్ అలాగే ఉంటుంది, కొత్త ఫైల్‌కు ఒక సంఖ్య వస్తుంది.
+	; skipped: {n}	; దాటవేసినవి: {n}
+	No PDF files were found.	PDF ఫైల్‌లు ఏవీ కనబడలేదు.
+	less than a minute left	ఒక నిమిషం కంటే తక్కువ మిగిలి ఉంది
+	about {n} min left	సుమారు {n} నిమి మిగిలి ఉంది
+	about {h} h {m} min left	సుమారు {h} గం {m} నిమి మిగిలి ఉంది
+	Text recognition cancelled. {summary}	టెక్స్ట్ గుర్తింపు రద్దు చేయబడింది. {summary}

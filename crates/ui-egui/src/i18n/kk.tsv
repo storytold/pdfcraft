@@ -2555,3 +2555,14 @@ animation effects	Off	Өшірулі
 	Rotate the selected pages clockwise	Таңдалған беттерді сағат тілімен бұру
 	Extract the selected pages…	Таңдалған беттерді шығарып алу…
 	Delete the selected pages	Таңдалған беттерді жою
+	Output folder	Шығыс қалтасы
+	Include subfolders	Ішкі қалталарды қосу
+	Add files or folders to recognize.	Танылатын файлдарды немесе қалталарды қосыңыз.
+	The output folder can't be one of the folders being read, or contain one.	Шығыс қалтасы оқылатын қалталардың бірі бола алмайды және олардың ешбірін қамти алмайды.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Түпнұсқалар өзгермейді. Шығыс қалтасындағы аттас файл сақталады, ал жаңасына нөмір беріледі.
+	; skipped: {n}	; өткізілді: {n}
+	No PDF files were found.	PDF файлдары табылмады.
+	less than a minute left	бір минуттан аз қалды
+	about {n} min left	шамамен {n} мин қалды
+	about {h} h {m} min left	шамамен {h} сағ {m} мин қалды
+	Text recognition cancelled. {summary}	Мәтінді тану тоқтатылды. {summary}

@@ -2804,3 +2804,14 @@ theme	Appearance	ظاهر
 	two cells would both be named {name}	دو خانه هر دو با نام {name} نام‌گذاری می‌شوند
 	a field named {name} already exists	فیلدی با نام {name} از قبل وجود دارد
 	Today	امروز
+	Output folder	پوشهٔ خروجی
+	Include subfolders	شامل زیرپوشه‌ها
+	Add files or folders to recognize.	فایل‌ها یا پوشه‌هایی را برای شناسایی متن اضافه کنید.
+	The output folder can't be one of the folders being read, or contain one.	پوشهٔ خروجی نمی‌تواند یکی از پوشه‌هایی باشد که خوانده می‌شوند یا یکی از آن‌ها را در بر بگیرد.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	فایل‌های اصلی تغییر نمی‌کنند. فایلی با همان نام در پوشهٔ خروجی حفظ می‌شود و فایل جدید یک شماره می‌گیرد.
+	; skipped: {n}	؛ ردشده: {n}
+	No PDF files were found.	هیچ فایل PDF پیدا نشد.
+	less than a minute left	کمتر از یک دقیقه مانده
+	about {n} min left	حدود {n} دقیقه مانده
+	about {h} h {m} min left	حدود {h} ساعت و {m} دقیقه مانده
+	Text recognition cancelled. {summary}	شناسایی متن لغو شد. {summary}

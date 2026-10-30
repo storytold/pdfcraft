@@ -2864,3 +2864,14 @@ certificate	Version	Verze
 	Rotate the selected pages clockwise	Otočit vybrané stránky po směru hodinových ručiček
 	Extract the selected pages…	Extrahovat vybrané stránky…
 	Delete the selected pages	Odstranit vybrané stránky
+	Output folder	Výstupní složka
+	Include subfolders	Zahrnout podsložky
+	Add files or folders to recognize.	Přidejte soubory nebo složky k rozpoznání.
+	The output folder can't be one of the folders being read, or contain one.	Výstupní složka nemůže být žádnou z čtených složek ani žádnou z nich obsahovat.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Originály se nemění. Soubor se stejným názvem ve výstupní složce zůstane zachován a nový dostane číslo.
+	; skipped: {n}	; přeskočeno: {n}
+	No PDF files were found.	Nebyly nalezeny žádné soubory PDF.
+	less than a minute left	zbývá méně než minuta
+	about {n} min left	zbývá asi {n} min
+	about {h} h {m} min left	zbývá asi {h} h {m} min
+	Text recognition cancelled. {summary}	Rozpoznávání textu bylo zrušeno. {summary}

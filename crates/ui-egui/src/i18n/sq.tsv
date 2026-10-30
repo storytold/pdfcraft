@@ -2544,3 +2544,14 @@ animation effects	Off	Joaktiv
 	Rotate the selected pages clockwise	Rrotullo faqet e përzgjedhura në drejtim të orës
 	Extract the selected pages…	Nxirr faqet e përzgjedhura…
 	Delete the selected pages	Fshi faqet e përzgjedhura
+	Output folder	Dosja e daljes
+	Include subfolders	Përfshi nëndosjet
+	Add files or folders to recognize.	Shtoni skedarë ose dosje për njohje.
+	The output folder can't be one of the folders being read, or contain one.	Dosja e daljes nuk mund të jetë një nga dosjet që lexohen, as të përmbajë ndonjë prej tyre.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Origjinalet nuk ndryshohen. Një skedar me të njëjtin emër në dosjen e daljes ruhet, dhe i riu merr një numër.
+	; skipped: {n}	; u anashkaluan: {n}
+	No PDF files were found.	Nuk u gjet asnjë skedar PDF.
+	less than a minute left	ka mbetur më pak se një minutë
+	about {n} min left	kanë mbetur rreth {n} min
+	about {h} h {m} min left	kanë mbetur rreth {h} orë {m} min
+	Text recognition cancelled. {summary}	Njohja e tekstit u anulua. {summary}

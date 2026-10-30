@@ -14,6 +14,9 @@
 
 pub mod actions;
 pub mod autotag;
+/// Folder jobs; the web build has no folders.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod batch;
 mod bookmarks;
 pub mod build_info;
 pub mod camera;

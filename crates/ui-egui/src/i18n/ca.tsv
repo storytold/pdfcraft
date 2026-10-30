@@ -2818,3 +2818,14 @@ theme	Appearance	Aspecte
 	Rotate the selected pages clockwise	Gira les pàgines seleccionades en sentit horari
 	Extract the selected pages…	Extreu les pàgines seleccionades…
 	Delete the selected pages	Suprimeix les pàgines seleccionades
+	Output folder	Carpeta de sortida
+	Include subfolders	Inclou les subcarpetes
+	Add files or folders to recognize.	Afegeix fitxers o carpetes per reconèixer.
+	The output folder can't be one of the folders being read, or contain one.	La carpeta de sortida no pot ser cap de les carpetes que es llegeixen ni contenir-ne cap.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Els originals no es modifiquen. Si la carpeta de sortida ja té un fitxer amb el mateix nom, es conserva i el nou rep un número.
+	; skipped: {n}	; omesos: {n}
+	No PDF files were found.	No s'ha trobat cap fitxer PDF.
+	less than a minute left	queda menys d'un minut
+	about {n} min left	queden uns {n} min
+	about {h} h {m} min left	queden unes {h} h {m} min
+	Text recognition cancelled. {summary}	S'ha cancel·lat el reconeixement de text. {summary}

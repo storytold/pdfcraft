@@ -2465,3 +2465,14 @@ animation effects	Off	ປິດ
 	Rotate the selected pages clockwise	ໝູນໜ້າທີ່ເລືອກຕາມເຂັມໂມງ
 	Extract the selected pages…	ແຍກໜ້າທີ່ເລືອກອອກ…
 	Delete the selected pages	ລຶບໜ້າທີ່ເລືອກ
+	Output folder	ໂຟນເດີຜົນອອກ
+	Include subfolders	ລວມໂຟນເດີຍ່ອຍ
+	Add files or folders to recognize.	ເພີ່ມໄຟລ໌ ຫຼື ໂຟນເດີເພື່ອຈຳແນກຂໍ້ຄວາມ.
+	The output folder can't be one of the folders being read, or contain one.	ໂຟນເດີຜົນອອກບໍ່ສາມາດເປັນໜຶ່ງໃນໂຟນເດີທີ່ກຳລັງອ່ານ ຫຼື ບັນຈຸໂຟນເດີເຫຼົ່ານັ້ນໄດ້.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	ໄຟລ໌ຕົ້ນສະບັບບໍ່ຖືກປ່ຽນແປງ. ໄຟລ໌ທີ່ມີຊື່ດຽວກັນໃນໂຟນເດີຜົນອອກຈະຖືກເກັບໄວ້ ແລະ ໄຟລ໌ໃໝ່ຈະໄດ້ຮັບໝາຍເລກ.
+	; skipped: {n}	; ຂ້າມ: {n}
+	No PDF files were found.	ບໍ່ພົບໄຟລ໌ PDF.
+	less than a minute left	ເຫຼືອບໍ່ເຖິງໜຶ່ງນາທີ
+	about {n} min left	ເຫຼືອປະມານ {n} ນາທີ
+	about {h} h {m} min left	ເຫຼືອປະມານ {h} ຊມ {m} ນາທີ
+	Text recognition cancelled. {summary}	ຍົກເລີກການຈຳແນກຂໍ້ຄວາມແລ້ວ. {summary}

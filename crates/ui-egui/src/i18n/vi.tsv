@@ -2824,3 +2824,14 @@ key	Space	Space
 	Rotate the selected pages clockwise	Xoay các trang đã chọn theo chiều kim đồng hồ
 	Extract the selected pages…	Trích xuất các trang đã chọn…
 	Delete the selected pages	Xóa các trang đã chọn
+	Output folder	Thư mục đầu ra
+	Include subfolders	Bao gồm thư mục con
+	Add files or folders to recognize.	Thêm tệp hoặc thư mục để nhận dạng.
+	The output folder can't be one of the folders being read, or contain one.	Thư mục đầu ra không được là một trong các thư mục đang đọc hoặc chứa một trong số đó.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Các tệp gốc không bị thay đổi. Tệp cùng tên trong thư mục đầu ra được giữ lại, và tệp mới được đánh số.
+	; skipped: {n}	; bỏ qua: {n}
+	No PDF files were found.	Không tìm thấy tệp PDF nào.
+	less than a minute left	còn chưa đến một phút
+	about {n} min left	còn khoảng {n} phút
+	about {h} h {m} min left	còn khoảng {h} giờ {m} phút
+	Text recognition cancelled. {summary}	Đã hủy nhận dạng văn bản. {summary}

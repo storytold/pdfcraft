@@ -505,10 +505,23 @@ pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
 pub struct ProgressNotice {
     /// What is happening ("Optimizing… image 3 of 40").
     pub label: String,
+    /// A second, quieter line ("Page 5 of 12 · about 6 min left"), when there is more to say.
+    pub detail: Option<String>,
     /// From 0 to 1.
     pub fraction: f32,
     /// Show a Cancel button.
     pub cancellable: bool,
+    /// Whose progress this is: Cancel stops that job and no other.
+    pub job: ProgressJob,
+}
+
+/// The background jobs that show a [`ProgressNotice`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProgressJob {
+    Optimize,
+    Print,
+    /// Recognize text, in a document or in files and folders.
+    Ocr,
 }
 
 /// Where the progress notice keeps its height this frame, for placing the toast above it.
@@ -546,6 +559,9 @@ pub fn progress_notice(app: &PdfCraftApp, ctx: &egui::Context) -> bool {
                         ui.label(egui::RichText::new(format!("{:.0}%", shown * 100.0)).font(theme::medium(12.0)).color(text.gamma_multiply(0.7)));
                     });
                 });
+                if let Some(detail) = &p.detail {
+                    ui.add(egui::Label::new(egui::RichText::new(detail).font(theme::regular(12.0)).color(text.gamma_multiply(0.75))).wrap());
+                }
                 ui.add_space(6.0);
                 let (track, resp) = ui.allocate_exact_size(vec2(width, 6.0), Sense::hover());
                 // The label above names the job; the bar carries the percentage.

@@ -2720,3 +2720,14 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Rotate the selected pages clockwise	หมุนหน้าที่เลือกตามเข็มนาฬิกา
 	Extract the selected pages…	แยกหน้าที่เลือกออก…
 	Delete the selected pages	ลบหน้าที่เลือก
+	Output folder	โฟลเดอร์ผลลัพธ์
+	Include subfolders	รวมโฟลเดอร์ย่อย
+	Add files or folders to recognize.	เพิ่มไฟล์หรือโฟลเดอร์ที่จะรู้จำข้อความ
+	The output folder can't be one of the folders being read, or contain one.	โฟลเดอร์ผลลัพธ์ต้องไม่ใช่โฟลเดอร์ที่กำลังอ่าน และต้องไม่มีโฟลเดอร์เหล่านั้นอยู่ข้างใน
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	ไฟล์ต้นฉบับจะไม่ถูกเปลี่ยนแปลง ไฟล์ชื่อเดียวกันในโฟลเดอร์ผลลัพธ์จะถูกเก็บไว้ และไฟล์ใหม่จะได้รับหมายเลข
+	; skipped: {n}	; ข้าม: {n}
+	No PDF files were found.	ไม่พบไฟล์ PDF
+	less than a minute left	เหลือไม่ถึงหนึ่งนาที
+	about {n} min left	เหลือประมาณ {n} นาที
+	about {h} h {m} min left	เหลือประมาณ {h} ชม. {m} นาที
+	Text recognition cancelled. {summary}	ยกเลิกการรู้จำข้อความแล้ว {summary}

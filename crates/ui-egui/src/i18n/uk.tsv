@@ -2579,3 +2579,14 @@ animation effects	Off	Вимкнено
 	Rotate the selected pages clockwise	Повернути вибрані сторінки за годинниковою стрілкою
 	Extract the selected pages…	Витягнути вибрані сторінки…
 	Delete the selected pages	Видалити вибрані сторінки
+	Output folder	Тека для результатів
+	Include subfolders	Разом із вкладеними теками
+	Add files or folders to recognize.	Додайте файли або теки для розпізнавання.
+	The output folder can't be one of the folders being read, or contain one.	Тека для результатів не може бути однією з тек, що читаються, або містити таку теку.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Оригінали не змінюються. Файл із тією самою назвою в теці для результатів зберігається, а новий отримує номер.
+	; skipped: {n}	; пропущено: {n}
+	No PDF files were found.	PDF-файлів не знайдено.
+	less than a minute left	лишилося менше хвилини
+	about {n} min left	лишилося близько {n} хв
+	about {h} h {m} min left	лишилося близько {h} год {m} хв
+	Text recognition cancelled. {summary}	Розпізнавання тексту скасовано. {summary}

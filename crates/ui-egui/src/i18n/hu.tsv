@@ -2556,3 +2556,14 @@ animation effects	Off	Ki
 	Rotate the selected pages clockwise	A kijelölt oldalak forgatása az óramutató járásával megegyezően
 	Extract the selected pages…	A kijelölt oldalak kibontása…
 	Delete the selected pages	A kijelölt oldalak törlése
+	Output folder	Kimeneti mappa
+	Include subfolders	Almappákkal együtt
+	Add files or folders to recognize.	Adjon hozzá felismerendő fájlokat vagy mappákat.
+	The output folder can't be one of the folders being read, or contain one.	A kimeneti mappa nem lehet egyik beolvasott mappa sem, és nem tartalmazhat ilyet.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Az eredeti fájlok nem változnak. A kimeneti mappában lévő azonos nevű fájl megmarad, az új pedig sorszámot kap.
+	; skipped: {n}	; kihagyva: {n}
+	No PDF files were found.	Nem található PDF-fájl.
+	less than a minute left	kevesebb mint egy perc van hátra
+	about {n} min left	kb. {n} perc van hátra
+	about {h} h {m} min left	kb. {h} óra {m} perc van hátra
+	Text recognition cancelled. {summary}	A szövegfelismerés megszakítva. {summary}

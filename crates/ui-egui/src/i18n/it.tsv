@@ -2789,3 +2789,14 @@ certificate	SHA-256 digest	Impronta SHA-256
 	Rotate the selected pages clockwise	Ruota le pagine selezionate in senso orario
 	Extract the selected pages…	Estrai le pagine selezionate…
 	Delete the selected pages	Elimina le pagine selezionate
+	Output folder	Cartella di destinazione
+	Include subfolders	Includi sottocartelle
+	Add files or folders to recognize.	Aggiungi file o cartelle da riconoscere.
+	The output folder can't be one of the folders being read, or contain one.	La cartella di destinazione non può essere una delle cartelle lette né contenerne una.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Gli originali non vengono modificati. Un file con lo stesso nome nella cartella di destinazione viene mantenuto e il nuovo riceve un numero.
+	; skipped: {n}	; saltati: {n}
+	No PDF files were found.	Nessun file PDF trovato.
+	less than a minute left	manca meno di un minuto
+	about {n} min left	mancano circa {n} min
+	about {h} h {m} min left	mancano circa {h} h {m} min
+	Text recognition cancelled. {summary}	Riconoscimento del testo annullato. {summary}

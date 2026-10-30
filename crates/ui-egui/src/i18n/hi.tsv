@@ -2794,3 +2794,14 @@ theme	Appearance	स्वरूप
 	Rotate the selected pages clockwise	चयनित पृष्ठों को दक्षिणावर्त घुमाएँ
 	Extract the selected pages…	चयनित पृष्ठ निकालें…
 	Delete the selected pages	चयनित पृष्ठ हटाएँ
+	Output folder	आउटपुट फ़ोल्डर
+	Include subfolders	सबफ़ोल्डर शामिल करें
+	Add files or folders to recognize.	पहचानने के लिए फ़ाइलें या फ़ोल्डर जोड़ें।
+	The output folder can't be one of the folders being read, or contain one.	आउटपुट फ़ोल्डर पढ़े जा रहे फ़ोल्डरों में से कोई नहीं हो सकता, और न ही उनमें से किसी को समाहित कर सकता है।
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	मूल फ़ाइलें नहीं बदलतीं। आउटपुट फ़ोल्डर में उसी नाम की फ़ाइल बनी रहती है, और नई फ़ाइल को एक संख्या मिलती है।
+	; skipped: {n}	; छोड़ी गईं: {n}
+	No PDF files were found.	कोई PDF फ़ाइल नहीं मिली।
+	less than a minute left	एक मिनट से कम बचा है
+	about {n} min left	लगभग {n} मिनट बचे हैं
+	about {h} h {m} min left	लगभग {h} घं {m} मि बचे हैं
+	Text recognition cancelled. {summary}	टेक्स्ट पहचान रद्द की गई। {summary}

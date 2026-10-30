@@ -6594,6 +6594,29 @@ fn ocr_recognize_files_writes_searchable_copies() {
     assert!(found.to_string().contains("\"page\""), "{found}");
 }
 
+/// #1795: the results never replace a file the folder already has, not even the input itself
+/// when the folder is the one it was read from; the new file gets a number instead.
+#[test]
+fn ocr_recognize_files_keeps_files_already_in_the_folder() {
+    let dir = workdir("ocr-files-keep");
+    let mut a = auto(&dir);
+    if ok(&mut a, "ocr_status", json!({}))["available"] != true {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "in/scan.pdf" }));
+    let original = std::fs::read(dir.join("in/scan.pdf")).unwrap();
+    std::fs::create_dir_all(dir.join("out")).unwrap();
+    std::fs::write(dir.join("out/scan.pdf"), b"keep me").unwrap();
+    let r = ok(&mut a, "ocr_recognize_files", json!({ "paths": ["in/scan.pdf"], "folder": "out" }));
+    assert!(r["files"][0]["output"].as_str().unwrap().ends_with("scan (2).pdf"), "{r}");
+    assert_eq!(std::fs::read(dir.join("out/scan.pdf")).unwrap(), b"keep me");
+    let r = ok(&mut a, "ocr_recognize_files", json!({ "paths": ["in/scan.pdf"], "folder": "in" }));
+    assert!(r["files"][0]["output"].as_str().unwrap().ends_with("scan (2).pdf"), "{r}");
+    assert_eq!(std::fs::read(dir.join("in/scan.pdf")).unwrap(), original, "the input is unchanged");
+}
+
 /// Two inputs that share a file name (from different folders) would both write `out/scan.pdf`:
 /// the second output replaces the first while both results report success. The batch is refused
 /// up front, naming the file, before the folder is created, anything is read or the OCR engines

@@ -2795,3 +2795,14 @@ theme	Appearance	Tampilan
 	Rotate the selected pages clockwise	Putar halaman yang dipilih searah jarum jam
 	Extract the selected pages…	Ekstrak halaman yang dipilih…
 	Delete the selected pages	Hapus halaman yang dipilih
+	Output folder	Folder keluaran
+	Include subfolders	Sertakan subfolder
+	Add files or folders to recognize.	Tambahkan berkas atau folder untuk dikenali.
+	The output folder can't be one of the folders being read, or contain one.	Folder keluaran tidak boleh salah satu folder yang dibaca, atau berisi salah satunya.
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	Berkas asli tidak diubah. Berkas bernama sama di folder keluaran tetap disimpan, dan berkas baru diberi nomor.
+	; skipped: {n}	; dilewati: {n}
+	No PDF files were found.	Tidak ditemukan berkas PDF.
+	less than a minute left	kurang dari satu menit lagi
+	about {n} min left	sekitar {n} menit lagi
+	about {h} h {m} min left	sekitar {h} jam {m} menit lagi
+	Text recognition cancelled. {summary}	Pengenalan teks dibatalkan. {summary}
