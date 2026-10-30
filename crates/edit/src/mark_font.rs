@@ -83,7 +83,10 @@ impl MarkFont {
             return Ok(None);
         }
         let face = face().ok_or_else(|| EditError::Invalid("this build has no bundled Latin, Greek and Cyrillic face".into()))?;
-        let mut fonts = page_fonts(doc, first);
+        // The embedding names a font it reuses by its key as text, so a key that isn't UTF-8
+        // couldn't be found again: such fonts are left out, and the face gets a key of its own.
+        let mut fonts: Dict =
+            page_fonts(doc, first).iter().filter(|(key, _)| std::str::from_utf8(key).is_ok()).map(|(k, v)| (k.clone(), v.clone())).collect();
         let name = pdfcraft_fonts::embedding::embed(doc, &mut fonts, face.bytes, face.family).map_err(EditError::Invalid)?;
         let font = match fonts.get(name.as_bytes()) {
             Some(Object::Ref(r)) => *r,
@@ -110,23 +113,23 @@ impl MarkFont {
         Ok((bytes, advance))
     }
 
-    /// The name `fonts` (a page's) draws the face by: the one they already give it, else the first
-    /// free `PCFull<k>`, the name the embedding gives a full face, so later embeddings on the
-    /// page recognise it. `true` when the name still has to be added.
-    pub(crate) fn name_in(&self, fonts: &Dict) -> (String, bool) {
+    /// The name `fonts` (a page's) draws the face by: the key they already give it, byte for byte,
+    /// else the first free `PCFull<k>`, the name the embedding gives a full face, so later
+    /// embeddings on the page recognise it. `true` when the name still has to be added.
+    pub(crate) fn name_in(&self, fonts: &Dict) -> (Vec<u8>, bool) {
         if let Some((key, _)) = fonts.iter().find(|(_, v)| matches!(v, Object::Ref(r) if *r == self.font)) {
-            return (String::from_utf8_lossy(key).into_owned(), false);
+            return (key.clone(), false);
         }
         // One of the first `fonts.len() + 1` names is always free.
-        let free = (0..=fonts.len()).map(|k| format!("PCFull{k}")).find(|name| !fonts.contains(name.as_bytes()));
-        (free.unwrap_or_else(|| format!("PCFull{}", fonts.len().saturating_add(1))), true)
+        let free = (0..=fonts.len()).map(|k| format!("PCFull{k}").into_bytes()).find(|name| !fonts.contains(name));
+        (free.unwrap_or_else(|| format!("PCFull{}", fonts.len().saturating_add(1)).into_bytes()), true)
     }
 
     /// Adds the face to `page`'s own resources as `name` (a shared dictionary stays untouched).
-    pub(crate) fn add_to_page(&self, doc: &mut Document, page: &pdfcraft_model::Page, name: &str) -> Result<(), EditError> {
+    pub(crate) fn add_to_page(&self, doc: &mut Document, page: &pdfcraft_model::Page, name: &[u8]) -> Result<(), EditError> {
         let mut res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
         let mut fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
-        fonts.set(name.as_bytes().to_vec(), Object::Ref(self.font));
+        fonts.set(name.to_vec(), Object::Ref(self.font));
         res.set(b"Font".to_vec(), Object::Dict(fonts));
         doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
         Ok(())
@@ -135,9 +138,14 @@ impl MarkFont {
 
 /// Shows `bytes` (from [`MarkFont::encode`]) in the face named `name` at `size`, its baseline
 /// starting at (`x`, `y`), then selects `back` again, so the lines after it keep their face.
-pub(crate) fn show(name: &str, back: &str, size: f64, x: f64, y: f64, bytes: &[u8]) -> Vec<u8> {
+/// `name` is written with the escapes a PDF name needs, so a key with a space or a byte outside
+/// ASCII still selects its font.
+pub(crate) fn show(name: &[u8], back: &str, size: f64, x: f64, y: f64, bytes: &[u8]) -> Vec<u8> {
     let hex: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
-    format!("/{name} {size} Tf\n1 0 0 1 {} {} Tm <{hex}> Tj\n/{back} {size} Tf\n", n(x), n(y), size = n(size)).into_bytes()
+    let mut out = Vec::new();
+    pdfcraft_cos::serialize(&Object::Name(name.to_vec()), &mut out);
+    out.extend(format!(" {size} Tf\n1 0 0 1 {} {} Tm <{hex}> Tj\n/{back} {size} Tf\n", n(x), n(y), size = n(size)).bytes());
+    out
 }
 
 #[cfg(test)]

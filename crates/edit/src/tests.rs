@@ -5434,6 +5434,39 @@ fn cyrillic_and_greek_headers_footers_and_watermarks_are_drawn_in_the_bundled_fa
     assert!(!doc.scan_objects().any(|(_, o)| o.as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Type0"))));
 }
 
+/// #2013: a page that already has the bundled face under an unusual key still gets its Cyrillic
+/// footer. A key with a space (`/PCFull#20Inter`) is reused and written with its escapes, so `Tf`
+/// selects it; a key that isn't UTF-8 is left alone and the face is added under a new name.
+#[test]
+fn the_bundled_face_a_page_has_under_an_unusual_key_still_draws() {
+    let face = pdfcraft_fonts::document_latin_fonts(false).into_iter().next().unwrap();
+    let footer = HeaderFooter {
+        text: [String::new(), String::new(), String::new(), String::new(), "Страница <<1>>".into(), String::new()],
+        ..HeaderFooter::default()
+    };
+    for (key, reused) in [(&b"PCFull Inter"[..], true), (&b"PCFull\xFF"[..], false)] {
+        let mut doc = fixture();
+        let page = pdfcraft_model::pages(&doc)[0].clone();
+        let mut fonts = page_fonts(&doc, &page);
+        let name = pdfcraft_fonts::embedding::embed(&mut doc, &mut fonts, face.bytes, face.family).unwrap();
+        let inter = fonts.remove(name.as_bytes()).unwrap();
+        fonts.set(key.to_vec(), inter);
+        let mut res = Dict::new();
+        res.set(b"Font".to_vec(), Object::Dict(fonts));
+        doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res))).unwrap();
+        add_header_footer(&mut doc, &[0], &footer, false, &cx()).unwrap();
+        let doc = reopen(&doc);
+        let lines = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>().join(" | ");
+        assert!(lines.contains("Страница 1"), "{key:?}: {lines:?}");
+        let type0 = doc.scan_objects().filter(|(_, o)| o.as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Type0"))).count();
+        assert_eq!(type0, if reused { 1 } else { 2 }, "{key:?}");
+        if reused {
+            let marks = streams(&doc, 0).join("\n");
+            assert!(marks.contains("/PCFull#20Inter 8 Tf\n"), "{marks}");
+        }
+    }
+}
+
 /// #125: page-content tools refuse text the standard fonts can't draw instead of writing `?`,
 /// and leave the document untouched.
 #[test]
