@@ -30,6 +30,8 @@ use std::time::{Duration, Instant};
 use pdfcraft_engine::export::ImageFormat;
 use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind, inspect};
 
+mod bench;
+
 /// The `mcp` lines of [`USAGE`]: only a build with the `mcp` feature has the command.
 #[cfg(feature = "mcp")]
 macro_rules! mcp_usage {
@@ -61,7 +63,7 @@ mod ui;
 
 use check::{audit, check, check_one};
 use commands::{combine, edit, extract, info, render, split, text};
-use options::{OptionSpec, flag, validate_options};
+use options::{OptionSpec, flag, positional, validate_options};
 #[cfg(feature = "mcp")]
 use run::mcp;
 use run::{automation, print_output, run, tools};
@@ -81,6 +83,7 @@ pdfcraft-cli combine <a.pdf> <b.pdf> … --out combined.pdf
 pdfcraft-cli extract <in.pdf> --pages 1,3,5-8 --out out.pdf    (pages and ranges, in the order given)
 pdfcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
 pdfcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
+pdfcraft-cli bench  [files…] [--tile-sizes 256,512] [--scale 2.0] [--json out.json]
 pdfcraft-cli audit  <file.pdf> [--password PW]            find faux redactions (fails when found)
 pdfcraft-cli batch <files or dirs...> --steps convert,ocr,optimize --out-dir DIR
                       [--recursive] [--root DIR] [--stop-on-error]
@@ -133,6 +136,7 @@ fn main() -> ExitCode {
         Some("split") => split(&args[1..]),
         Some("check") => check(&args[1..]),
         Some("check-one") => check_one(&args[1..]),
+        Some("bench") => bench::bench(&args[1..]),
         Some("audit") => audit(&args[1..]),
         Some("tools") => tools(),
         Some("run") => run(&args[1..]),

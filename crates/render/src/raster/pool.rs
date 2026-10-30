@@ -511,6 +511,32 @@ impl Drop for RenderPool {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+static WORKER_START_HOOK: std::sync::RwLock<Option<Box<dyn Fn() + Send + Sync>>> = std::sync::RwLock::new(None);
+
+/// Installs a hook invoked on each worker thread immediately upon starting.
+/// Allows platform embedders (such as mobile FFI) to adjust thread QoS and priority.
+pub fn set_worker_start_hook<F>(hook: F)
+where
+    F: Fn() + Send + Sync + 'static,
+{
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Ok(mut lock) = WORKER_START_HOOK.write() {
+        *lock = Some(Box::new(hook));
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = hook;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn invoke_worker_start_hook() {
+    if let Ok(lock) = WORKER_START_HOOK.read()
+        && let Some(ref hook) = *lock
+    {
+        hook();
+    }
+}
+
 /// A worker's interpreter settings: the document's, stopping once the request is cancelled.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn worker_settings(config: &RenderConfig, stop: &Arc<std::sync::atomic::AtomicBool>) -> InterpreterSettings {
@@ -527,6 +553,7 @@ pub(super) fn worker(
     out: Arc<WorkQueue>,
     stop: Arc<std::sync::atomic::AtomicBool>,
 ) {
+    invoke_worker_start_hook();
     let warnings = Arc::new(Mutex::new(Vec::new()));
     // A local cell keeps Pdf borrows used by RenderCache stable. Drop both on an
     // epoch change/panic before publishing an error or taking another request.

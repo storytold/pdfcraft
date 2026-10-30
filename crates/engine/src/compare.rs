@@ -28,13 +28,13 @@ pub fn colour(kind: Kind) -> crate::Rgb {
 
 impl crate::Document {
     /// Standards ▸ Verify PDF/A: the rules the document breaks for `level`.
-    pub fn pdfa_verify(&self, level: pdfcraft_preflight::Level) -> Vec<pdfcraft_preflight::Issue> {
-        self.editor.as_ref().map(|e| pdfcraft_preflight::verify(&e.cos, level)).unwrap_or_default()
+    pub fn pdfa_verify(&self, level: crate::pdfa::Level) -> Vec<crate::pdfa::Issue> {
+        self.editor.as_ref().map(|e| crate::pdfa::verify(&e.cos, level)).unwrap_or_default()
     }
 
     /// The standards the document declares (Standards panel).
-    pub fn standards(&self) -> pdfcraft_preflight::Declared {
-        self.editor.as_ref().map(|e| pdfcraft_preflight::declared(&e.cos)).unwrap_or_default()
+    pub fn standards(&self) -> crate::pdfa::Declared {
+        self.editor.as_ref().map(|e| crate::pdfa::declared(&e.cos)).unwrap_or_default()
     }
 
     /// Every word of the document in reading order, with page and box.

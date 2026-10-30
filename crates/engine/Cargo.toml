@@ -17,19 +17,19 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-organize = { workspace = true }
 pdfcraft-annot = { workspace = true }
 pdfcraft-forms = { workspace = true }
-pdfcraft-xfa = { workspace = true }
+pdfcraft-xfa = { workspace = true, optional = true }
 pdfcraft-edit = { workspace = true }
 pdfcraft-audit = { workspace = true }
 pdfcraft-redact = { workspace = true }
 pdfcraft-print = { workspace = true }
 pdfcraft-xfdf = { workspace = true }
-pdfcraft-sign = { workspace = true }
+pdfcraft-sign = { workspace = true, optional = true }
 pdfcraft-optimize = { workspace = true }
 pdfcraft-a11y = { workspace = true }
-pdfcraft-ocr = { workspace = true }
-pdfcraft-js = { workspace = true }
+pdfcraft-ocr = { workspace = true, optional = true }
+pdfcraft-js = { workspace = true, optional = true }
 pdfcraft-compare = { workspace = true }
-pdfcraft-preflight = { workspace = true }
+pdfcraft-preflight = { workspace = true, optional = true }
 pdfcraft-export = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-create = { workspace = true }
@@ -51,6 +51,14 @@ unicode-segmentation = "1.13"
 # Already in the graph through lopdf; used only for the local UTC offset ("today"). The workspace
 # entry is std-only; this target adds `clock` for `chrono::Local::now`.
 chrono = { workspace = true, features = ["clock"] }
+
+[features]
+default = ["ocr", "sign", "xfa", "js", "preflight"]
+ocr = ["dep:pdfcraft-ocr"]
+sign = ["dep:pdfcraft-sign"]
+xfa = ["dep:pdfcraft-xfa"]
+js = ["dep:pdfcraft-js"]
+preflight = ["dep:pdfcraft-preflight"]
 
 [dev-dependencies]
 pdfcraft-testkit = { workspace = true }

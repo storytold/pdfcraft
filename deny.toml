@@ -76,3 +76,36 @@ allow = ["OFL-1.1", "Ubuntu-font-1.0"]
 [[licenses.exceptions]]
 crate = "webpki-root-certs"
 allow = ["CDLA-Permissive-2.0"]
+
+# UniFFI bridge (D1, O2). Scoped exception for UniFFI crates only; copyleft remains forbidden everywhere else.
+[[licenses.exceptions]]
+crate = "uniffi"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "uniffi_macros"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "uniffi_bindgen"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "uniffi_build"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "uniffi_core"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "uniffi_meta"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "uniffi_udl"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "uniffi_testing"
+allow = ["MPL-2.0"]

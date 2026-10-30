@@ -2607,7 +2607,7 @@ calendar date	December	dicembre
 	The font {} isn't embedded	Il carattere {} non è incorporato
 	The metadata doesn't identify the file as {}	I metadati non identificano il file come {}
 	The password is incorrect.	La password non è corretta.
-	The password must have at least 6 characters.	La password deve contenere almeno 6 caratteri.
+	The password must have at least 8 characters.	La password deve contenere almeno 8 caratteri.
 	The passwords do not match.	Le password non corrispondono.
 	The security settings don't allow screen readers to read the text	Le impostazioni di sicurezza non consentono ai lettori di schermo di leggere il testo
 	The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.	L'algoritmo di firma e l'algoritmo di digest del SignerInfo indicano hash diversi; la firma è stata creata con quello del SignerInfo.

@@ -1,0 +1,14 @@
+# UniFFI configuration for PdfCraft (proc-macro mode)
+
+[defaults.bindings.kotlin]
+package_name = "uniffi.pdfcraft_ffi"
+android = true
+android_cleaner = true
+
+[defaults.bindings.swift]
+module_name = "PdfCraftKit"
+
+[crates.pdfcraft_ffi.bindings.kotlin]
+package_name = "uniffi.pdfcraft_ffi"
+android = true
+android_cleaner = true

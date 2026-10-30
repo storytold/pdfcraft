@@ -41,7 +41,7 @@ pub struct Document {
     /// Signature fields, validated against the session's trust store (Signatures panel).
     pub signatures: Arc<Vec<SignatureInfo>>,
     pub(crate) trust: Arc<TrustStore>,
-    pub(crate) sig_cache: Arc<pdfcraft_sign::DigestCache>,
+    pub(crate) sig_cache: Arc<crate::sign::DigestCache>,
     pub(crate) editor: Option<Editor>,
     pub(crate) config: RenderConfig,
     /// What field scripts printed or asked for (see [`Session::take_js_output`]).
@@ -50,7 +50,10 @@ pub struct Document {
     /// PdfCraft's; Adobe's viewers draw the form from the XFA packets themselves).
     pub xfa: Option<XfaLayout>,
     /// The parsed template of a laid-out XFA form, for its scripts.
+    #[cfg(feature = "xfa")]
     pub(crate) xfa_template: Option<Arc<pdfcraft_xfa::model::Template>>,
+    #[cfg(not(feature = "xfa"))]
+    pub(crate) xfa_template: Option<Arc<crate::xfa::Template>>,
     /// A script of the XFA form ran away, so its scripts are off (see [`Document::xfa_scripts_off`]).
     pub(crate) xfa_scripts_off: bool,
     /// A content-only refresh keeps `info` from before the edit; an edit may have added or

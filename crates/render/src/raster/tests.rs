@@ -7039,3 +7039,15 @@ fn test_clip_only_text_raster_preserves_clipping_without_painting() {
     assert!(pixels.contains(&[0, 0, 255, 255]), "fill shows through the 7 Tr clip");
     assert!(pixels.contains(&white), "the clip is text-shaped, not the whole page");
 }
+
+#[test]
+fn tiling_pattern_box_renders_bounded() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/fuzz-findings/oom_tiling_pattern.pdf");
+    if !path.exists() {
+        return;
+    }
+    let bytes = std::fs::read(&path).expect("corpus file readable");
+    let mut r = PageRenderer::new(Arc::new(bytes), RenderConfig { max_pattern_size: Some(256), ..Default::default() });
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+}

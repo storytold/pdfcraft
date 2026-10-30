@@ -1,0 +1,51 @@
+[package]
+name = "pdfcraft-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[features]
+default = ["full"]
+full = ["js", "ocr", "xfa", "sign", "export", "preflight"]
+js = ["pdfcraft-engine/js", "pdfcraft-automation/js"]
+ocr = ["pdfcraft-engine/ocr", "pdfcraft-automation/ocr"]
+xfa = ["pdfcraft-engine/xfa", "pdfcraft-automation/xfa"]
+sign = ["pdfcraft-engine/sign", "pdfcraft-automation/sign"]
+export = []
+preflight = ["pdfcraft-engine/preflight", "pdfcraft-automation/preflight"]
+cli = ["uniffi/cli"]
+
+[dependencies]
+pdfcraft-engine = { workspace = true, default-features = false }
+pdfcraft-render = { workspace = true }
+pdfcraft-automation = { workspace = true, default-features = false }
+pdfcraft-model = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-geom = { workspace = true }
+pdfcraft-fonts = { workspace = true }
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uniffi = { version = "0.32.2", default-features = false }
+
+[target.'cfg(any(target_vendor = "apple", target_os = "android"))'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"

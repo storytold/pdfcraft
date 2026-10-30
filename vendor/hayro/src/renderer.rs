@@ -472,6 +472,8 @@ pub(crate) struct Renderer {
     pub(crate) preview: bool,
     // TODO: Remove this once vello_cpu bug with non-transparent images is fixed
     image_transparency_stack: Vec<bool>,
+    /// PdfCraft patch: maximum tiling pattern cell dimension in pixels.
+    pub(crate) max_tiling_cell_size: f32,
     /// PdfCraft patch (27): set while this renderer draws one ink pass of a group blending
     /// in `DeviceCMYK` (see [`Renderer::draw_isolated_cmyk_group`]).
     ink: InkState,
@@ -564,6 +566,7 @@ impl Renderer {
         cache: &RenderCache<'_>,
         color_replacement: Option<ColorReplacement>,
         preview: bool,
+        max_tiling_cell_size: f32,
     ) -> Self {
         Self {
             ctx: RenderContext::new_with(width, height, settings),
@@ -581,6 +584,7 @@ impl Renderer {
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
             preview,
             image_transparency_stack: Vec::new(),
+            max_tiling_cell_size,
             ink: InkState::default(),
         }
     }
@@ -687,6 +691,7 @@ impl Renderer {
                 scaler: self.scaler,
                 preview: self.preview,
                 image_transparency_stack: Vec::new(),
+                max_tiling_cell_size: self.max_tiling_cell_size,
                 ink: InkState::default(),
             };
             let mut mask_pix = Pixmap::new(self.ctx.width(), self.ctx.height());
@@ -1180,6 +1185,7 @@ impl Renderer {
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
             preview: self.preview,
             image_transparency_stack: Vec::new(),
+            max_tiling_cell_size: self.max_tiling_cell_size,
             ink: InkState {
                 pass: Some(pass),
                 unsupported: false,
@@ -1400,15 +1406,16 @@ impl Renderer {
                         PaintType::Image(image)
                     }
                     Pattern::Tiling(t) => {
-                        const MAX_PIXMAP_SIZE: f32 = 3000.0;
+                        // PdfCraft patch: use configurable cell size bound instead of constant 3000.0.
+                        let max_pixmap_size = self.max_tiling_cell_size;
                         // TODO: Raise this limit and perform downsampling if reached
                         // (see pdftc_100k_0138.pdf).
                         const MIN_PIXMAP_SIZE: f32 = 1.0;
 
                         let bbox = t.bbox;
-                        let max_x_scale = MAX_PIXMAP_SIZE / bbox.width() as f32;
+                        let max_x_scale = max_pixmap_size / bbox.width() as f32;
                         let min_x_scale = MIN_PIXMAP_SIZE / bbox.width() as f32;
-                        let max_y_scale = MAX_PIXMAP_SIZE / bbox.height() as f32;
+                        let max_y_scale = max_pixmap_size / bbox.height() as f32;
                         let min_y_scale = MIN_PIXMAP_SIZE / bbox.height() as f32;
 
                         let (mut xs, mut ys) = {
@@ -1431,7 +1438,7 @@ impl Renderer {
                             0.0
                         };
                         if usable_cell_scale(xs, ys)
-                            && (xs * t.x_step.abs() > MAX_PIXMAP_SIZE || ys * t.y_step.abs() > MAX_PIXMAP_SIZE)
+                            && (xs * t.x_step.abs() > max_pixmap_size || ys * t.y_step.abs() > max_pixmap_size)
                             && shows_one_cell(&t.matrix, path_transform, path, reach, bbox, t.x_step, t.y_step)
                         {
                             const BORDER: f64 = 1.0;
@@ -1457,6 +1464,7 @@ impl Renderer {
                                 scaler: self.scaler,
                                 preview: self.preview,
                                 image_transparency_stack: Vec::new(),
+                                max_tiling_cell_size: self.max_tiling_cell_size,
                                 ink: InkState::default(),
                             };
                             let initial_transform = Affine::translate((BORDER, BORDER))
@@ -1483,8 +1491,8 @@ impl Renderer {
                         }
                         // PdfCraft patch: the cell pixmap is `step × scale` pixels, which only the
                         // u16 cast below bounded (a fuzzed /XStep far beyond /BBox gave 65535² cells).
-                        xs = tiling_cell_scale(xs, t.x_step, MAX_PIXMAP_SIZE);
-                        ys = tiling_cell_scale(ys, t.y_step, MAX_PIXMAP_SIZE);
+                        xs = tiling_cell_scale(xs, t.x_step, max_pixmap_size);
+                        ys = tiling_cell_scale(ys, t.y_step, max_pixmap_size);
 
                         // PdfCraft patch (25): the cell pixmap repeats every `pix_width` pixels,
                         // so one step must be exactly that many pixels. The cell is drawn at the
@@ -1493,8 +1501,8 @@ impl Renderer {
                         // any device scale. Drawing at the unrounded scale repeated the cell a
                         // fraction of a pixel too early or late, and the error grew with every
                         // step away from the pattern's origin.
-                        let (pix_width, xs) = tiling_cell_pixels(xs, t.x_step, MAX_PIXMAP_SIZE);
-                        let (pix_height, ys) = tiling_cell_pixels(ys, t.y_step, MAX_PIXMAP_SIZE);
+                        let (pix_width, xs) = tiling_cell_pixels(xs, t.x_step, max_pixmap_size);
+                        let (pix_height, ys) = tiling_cell_pixels(ys, t.y_step, max_pixmap_size);
 
                         let scaled_width = bbox.width() * xs;
                         let scaled_height = bbox.height() * ys;
@@ -1521,6 +1529,7 @@ impl Renderer {
                             scaler: self.scaler,
                             preview: self.preview,
                             image_transparency_stack: Vec::new(),
+                            max_tiling_cell_size: self.max_tiling_cell_size,
                             ink: InkState::default(),
                         };
                         let mut initial_transform = Affine::scale_non_uniform(xs, ys)
@@ -1827,6 +1836,7 @@ impl<'a> Device<'a> for Renderer {
                                         scaler: self.scaler,
                                         preview: self.preview,
                                         image_transparency_stack: Vec::new(),
+                                        max_tiling_cell_size: self.max_tiling_cell_size,
                                         ink: InkState::default(),
                                     };
                                     let mut sub_pix = Pixmap::new(width, height);
@@ -2344,6 +2354,11 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         scaler: Scaler::new(ResamplingFunction::CatmullRom),
         preview,
         image_transparency_stack: Vec::new(),
+        max_tiling_cell_size: if cfg!(any(target_os = "android", target_os = "ios")) {
+            512.0
+        } else {
+            1024.0
+        },
         ink: InkState::default(),
     };
 

@@ -157,6 +157,9 @@ pub struct RenderSettings {
     /// PdfCraft patch: when set, solid text and line-art paint colours are remapped while
     /// rendering; `None` renders exactly as without the patch.
     pub color_replacement: Option<ColorReplacement>,
+    /// PdfCraft patch: maximum width or height of a pattern cell pixmap, in device pixels.
+    /// `None` picks an engine default (512 for mobile targets, 1024 for desktop).
+    pub max_tiling_cell_size: Option<u16>,
 }
 
 impl Default for RenderSettings {
@@ -170,6 +173,7 @@ impl Default for RenderSettings {
             x_offset: 0.0,
             y_offset: 0.0,
             color_replacement: None,
+            max_tiling_cell_size: None,
         }
     }
 }
@@ -245,6 +249,14 @@ pub fn render_into<'a>(
         render_mode: RenderMode::OptimizeSpeed,
     };
 
+    let max_tiling = render_settings.max_tiling_cell_size.unwrap_or_else(|| {
+        if cfg!(any(target_os = "android", target_os = "ios")) {
+            512
+        } else {
+            1024
+        }
+    }) as f32;
+
     let mut device = Renderer::new(
         pix_width,
         pix_height,
@@ -252,6 +264,7 @@ pub fn render_into<'a>(
         cache,
         render_settings.color_replacement,
         interpreter_settings.preview,
+        max_tiling,
     );
 
     // PdfCraft patch (18): the page renders as one transparency group (the page group). Its

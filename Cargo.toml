@@ -59,6 +59,7 @@ pdfcraft-engine = { path = "crates/engine", version = "0.15.0" }
 pdfcraft-platform = { path = "crates/platform", version = "0.15.0" }
 pdfcraft-ui-egui = { path = "crates/ui-egui", version = "0.15.0" }
 pdfcraft-automation = { path = "crates/automation", version = "0.15.0", default-features = false }
+pdfcraft-ffi = { path = "crates/ffi", version = "0.15.0" }
 
 # pdf
 hayro = "0.7.1"
@@ -118,6 +119,26 @@ incremental = false
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+[profile.mobile-release]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "unwind"
+
+[profile.mobile-release.package.hayro]
+opt-level = 3
+
+[profile.mobile-release.package.hayro-interpret]
+opt-level = 3
+
+[profile.mobile-release.package.vello_cpu]
+opt-level = 3
+
+[profile.mobile-release.package.pdfcraft-render]
+opt-level = 3
 
 # Vendored, patched third-party crates (see vendor/README.md). Each patch is meant to go upstream.
 [patch.crates-io]

@@ -62,15 +62,38 @@ pub(crate) fn check_one(args: &[String]) -> Result<(), CliError> {
             (status, info.pages.len(), failed.len(), failed.join(" | "), info.warnings.len())
         }
     };
-    // `--edit` (fuzzing): also run our own object layer end to end, with no panic safety net,
-    // so a panic in cos shows up as a crash of this process.
+    // `--edit` (fuzzing): also run our own object layer and FFI entry points end to end,
+    // with no panic safety net, so any panic shows up as a crash of this process.
     if args.iter().any(|a| a == "--edit") {
-        edit_round_trip(&std::fs::read(path).map_err(|e| e.to_string())?);
+        let raw = std::fs::read(path).map_err(|e| e.to_string())?;
+        edit_round_trip(&raw);
+        ffi_round_trip(&raw);
     }
     let line = serde_json::json!({ "file": path, "status": status, "pages": pages, "failed_pages": failed, "warnings": warnings,
         "ms": start.elapsed().as_millis() as u64, "detail": detail.chars().take(400).collect::<String>() });
     stdout_line(format_args!("{line}"))?;
     Ok(())
+}
+
+/// Exercise FFI entry points end-to-end: open -> page_count -> page_geometry -> render_tile -> save_bytes -> close.
+fn ffi_round_trip(bytes: &[u8]) {
+    let engine = pdfcraft_ffi::Engine::new();
+    if let Ok(doc_id) = engine.open_bytes("fuzz.pdf".to_string(), bytes.to_vec(), None) {
+        if let Ok(count) = engine.page_count(doc_id) {
+            for p in 0..count.min(10) {
+                let _ = engine.page_geometry(doc_id, p);
+                let request = pdfcraft_ffi::FfiRenderRequest {
+                    page: p,
+                    tile: Some(pdfcraft_ffi::FfiTile { x: 0, y: 0, width: 64, height: 64 }),
+                    scale: 1.0,
+                    ..Default::default()
+                };
+                let _ = engine.render_tile(doc_id, request);
+            }
+        }
+        let _ = engine.save_bytes(doc_id);
+        let _ = engine.close(doc_id);
+    }
 }
 
 /// Open with cos, touch every object, edit the catalog, save incrementally and in full (both

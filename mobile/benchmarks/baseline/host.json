@@ -1,0 +1,30 @@
+{
+  "documents": [
+    {
+      "file_size_bytes": 3089,
+      "name": "typical-10p.pdf",
+      "open_ms": 0.511875,
+      "pages": 10,
+      "path": "/Users/ritvikpinjala/Code/pdfcraft/mobile/fixtures/typical-10p.pdf",
+      "tiles": {
+        "1024": {
+          "count": 4,
+          "p50_ms": 0.226958,
+          "p95_ms": 0.8835419999999999
+        },
+        "256": {
+          "count": 35,
+          "p50_ms": 0.12462500000000001,
+          "p95_ms": 0.249166
+        },
+        "512": {
+          "count": 12,
+          "p50_ms": 0.168834,
+          "p95_ms": 0.359292
+        }
+      }
+    }
+  ],
+  "peak_rss_mb": 15.53125,
+  "target": "aarch64"
+}

@@ -2614,7 +2614,7 @@ animation effects	Off	معطّلة
 	The font {} isn't embedded	الخط {} غير مدمج
 	The metadata doesn't identify the file as {}	البيانات الوصفية لا تحدد الملف كـ {}
 	The password is incorrect.	كلمة المرور غير صحيحة.
-	The password must have at least 6 characters.	يجب أن تحوي كلمة المرور 6 محارف على الأقل.
+	The password must have at least 8 characters.	يجب أن تحوي كلمة المرور 8 محارف على الأقل.
 	The passwords do not match.	كلمتا المرور غير متطابقتين.
 	The security settings don't allow screen readers to read the text	إعدادات الأمان لا تسمح لقارئات الشاشة بقراءة النص
 	The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.	خوارزمية التوقيع وخوارزمية الهضم في SignerInfo تسمّيان هضمين مختلفين؛ صُنع التوقيع بخوارزمية SignerInfo.

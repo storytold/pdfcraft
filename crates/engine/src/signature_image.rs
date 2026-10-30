@@ -189,10 +189,10 @@ impl SignatureImage {
     }
 
     /// This image as the graphic of a visible digital signature.
-    pub fn graphic(&self) -> pdfcraft_sign::Graphic {
+    pub fn graphic(&self) -> crate::sign::Graphic {
         // Sides are at most 4096 pixels; 0 would be refused by the signer, never drawn.
         let side = |v: usize| u32::try_from(v).unwrap_or(0);
-        pdfcraft_sign::Graphic::Image { width: side(self.size[0]), height: side(self.size[1]), rgba: self.rgba.clone() }
+        crate::sign::Graphic::Image { width: side(self.size[0]), height: side(self.size[1]), rgba: self.rgba.clone() }
     }
 
     /// Make near-white paper transparent, keeping darker ink.

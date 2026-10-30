@@ -6,8 +6,121 @@
 //! Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript is [`Session::set_javascript`]; with it
 //! off, scripts don't run and AF calls keep working natively.
 
+#[allow(unused_imports)]
 use pdfcraft_forms::{Field, FieldChange, FieldEvent, FieldKind, FieldProps, ScriptResult, Scripts};
+#[cfg(feature = "js")]
 pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Panel, Request};
+
+#[cfg(not(feature = "js"))]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Limits {
+    pub loop_iterations: usize,
+    pub recursion: usize,
+}
+
+#[cfg(not(feature = "js"))]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Message {
+    pub text: String,
+    pub title: Option<String>,
+    pub icon: MessageIcon,
+    pub buttons: MessageButtons,
+}
+
+#[cfg(not(feature = "js"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MessageIcon {
+    #[default]
+    Error,
+    Warning,
+    Question,
+    Status,
+}
+
+#[cfg(not(feature = "js"))]
+impl MessageIcon {
+    pub fn name(self) -> &'static str {
+        match self {
+            MessageIcon::Error => "error",
+            MessageIcon::Warning => "warning",
+            MessageIcon::Question => "question",
+            MessageIcon::Status => "status",
+        }
+    }
+}
+
+#[cfg(not(feature = "js"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MessageButtons {
+    #[default]
+    Ok,
+    OkCancel,
+    YesNo,
+    YesNoCancel,
+}
+
+#[cfg(not(feature = "js"))]
+impl MessageButtons {
+    pub fn name(self) -> &'static str {
+        match self {
+            MessageButtons::Ok => "ok",
+            MessageButtons::OkCancel => "ok_cancel",
+            MessageButtons::YesNo => "yes_no",
+            MessageButtons::YesNoCancel => "yes_no_cancel",
+        }
+    }
+}
+
+#[cfg(not(feature = "js"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Panel {
+    Bookmarks,
+    Pages,
+    Attachments,
+    Signatures,
+    Layers,
+}
+
+#[cfg(not(feature = "js"))]
+impl Panel {
+    pub fn id(self) -> &'static str {
+        match self {
+            Panel::Bookmarks => "bookmarks",
+            Panel::Pages => "pages",
+            Panel::Attachments => "attachments",
+            Panel::Signatures => "signatures",
+            Panel::Layers => "layers",
+        }
+    }
+}
+
+#[cfg(not(feature = "js"))]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Outcome {
+    pub rc: bool,
+    pub value: String,
+    pub change: String,
+    pub alerts: Vec<Message>,
+    pub console: Vec<String>,
+    pub requests: Vec<Request>,
+    pub error: Option<String>,
+    pub result: Option<String>,
+    pub doc_errors: Vec<String>,
+}
+
+#[cfg(not(feature = "js"))]
+#[derive(Clone, Debug, PartialEq)]
+pub enum Request {
+    Reset(Vec<String>),
+    Print,
+    GoToPage(usize),
+    LaunchUrl(String),
+    Submit(String),
+    Focus(String),
+    Beep,
+    SaveAs,
+    ShowPanel(Panel),
+}
 
 use crate::{DocId, Edit, EditError, Session};
 
@@ -35,6 +148,7 @@ impl JsOutput {
     /// Adds what a field's own script produced: its alerts, console lines, errors and requests,
     /// except a request to show a side panel or open Save As, which is noted on the console
     /// and dropped.
+    #[allow(dead_code)]
     fn absorb(&mut self, o: &Outcome) {
         self.alerts.extend(o.alerts.iter().cloned());
         self.console.extend(o.console.iter().cloned());
@@ -80,6 +194,7 @@ impl JsOutput {
     }
 }
 
+#[cfg(feature = "js")]
 fn kind(k: FieldKind) -> pdfcraft_js::FieldType {
     use pdfcraft_js::FieldType as T;
     match k {
@@ -93,6 +208,7 @@ fn kind(k: FieldKind) -> pdfcraft_js::FieldType {
     }
 }
 
+#[cfg(feature = "js")]
 /// `field.display` from the first widget's annotation flags.
 fn display(doc: &pdfcraft_cos::Document, f: &Field) -> i32 {
     let flags = f.widgets.first().and_then(|w| doc.get(w.obj).as_dict().and_then(|d| d.int(b"F"))).unwrap_or(4);
@@ -107,11 +223,13 @@ fn display(doc: &pdfcraft_cos::Document, f: &Field) -> i32 {
     }
 }
 
+#[cfg(feature = "js")]
 /// A form field as scripts see it.
 pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field) -> pdfcraft_js::FieldState {
     field_state_with_display(f, display(doc, f))
 }
 
+#[cfg(feature = "js")]
 fn field_state_with_display(f: &Field, display: i32) -> pdfcraft_js::FieldState {
     let mut s = pdfcraft_js::FieldState::new(f.name.clone(), kind(f.kind), f.value.clone());
     s.default = f.default.clone();
@@ -126,6 +244,7 @@ fn field_state_with_display(f: &Field, display: i32) -> pdfcraft_js::FieldState 
     s
 }
 
+#[cfg(feature = "js")]
 /// The changes a script made, against the fields as they were.
 fn changes(before: &[pdfcraft_js::FieldState], after: &[pdfcraft_js::FieldState]) -> Vec<FieldChange> {
     if after.is_empty() {
@@ -153,6 +272,7 @@ fn changes(before: &[pdfcraft_js::FieldState], after: &[pdfcraft_js::FieldState]
         .collect()
 }
 
+#[cfg(feature = "js")]
 /// Runs field scripts with the document's object model and keeps what they print or ask for.
 pub struct JsRunner {
     pub doc: pdfcraft_js::DocInfo,
@@ -167,6 +287,7 @@ pub struct JsRunner {
     displays: std::collections::HashMap<pdfcraft_cos::ObjRef, i32>,
 }
 
+#[cfg(feature = "js")]
 impl JsRunner {
     /// A runner for `cos`: what scripts read about the document (pages, info, whether it is
     /// an XFA form) and its document-level scripts, read once.
@@ -184,7 +305,20 @@ impl JsRunner {
     }
 }
 
+#[cfg(not(feature = "js"))]
+pub struct JsRunner {
+    pub output: JsOutput,
+}
+
+#[cfg(not(feature = "js"))]
+impl JsRunner {
+    pub fn new(_cos: &pdfcraft_cos::Document, _file_name: &str) -> JsRunner {
+        JsRunner { output: JsOutput::default() }
+    }
+}
+
 /// The Info dictionary as `this.info` keys (lower-case).
+#[cfg(feature = "js")]
 fn info(cos: &pdfcraft_cos::Document) -> Vec<(String, String)> {
     let Some(d) = cos.trailer().get(b"Info").map(|i| cos.resolve(i)).and_then(|i| i.as_dict().cloned()) else { return Vec::new() };
     d.iter()
@@ -195,6 +329,7 @@ fn info(cos: &pdfcraft_cos::Document) -> Vec<(String, String)> {
         .collect()
 }
 
+#[cfg(feature = "js")]
 impl Scripts for JsRunner {
     /// Run field `target`'s script for `event` over the form's fields, keeping what it showed and
     /// asked for; a refusal carries its last message.
@@ -223,6 +358,13 @@ impl Scripts for JsRunner {
             changes: changes(&states, &o.changed),
             message: (!o.rc).then(|| o.alerts.last().map(|m| m.text.clone())).flatten(),
         }
+    }
+}
+
+#[cfg(not(feature = "js"))]
+impl Scripts for JsRunner {
+    fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, value: &str, _fields: &[Field]) -> ScriptResult {
+        ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None }
     }
 }
 
@@ -266,6 +408,7 @@ impl Session {
     /// Run `script` in document `id`, for a button (`target`: the field, event "Mouse Up") or
     /// the console (no target). Field changes and `resetForm` are applied as one undoable step;
     /// everything else the script asked for is returned.
+    #[cfg(feature = "js")]
     pub fn run_javascript(&mut self, id: DocId, script: &str, target: Option<&str>) -> Result<Outcome, EditError> {
         if self.js_off {
             return Err(EditError::Invalid("JavaScript is turned off (Preferences ▸ JavaScript)".into()));
@@ -321,6 +464,11 @@ impl Session {
             self.apply(id, Edit::Batch { label: "Run JavaScript".into(), edits })?;
         }
         Ok(o)
+    }
+
+    #[cfg(not(feature = "js"))]
+    pub fn run_javascript(&mut self, _id: DocId, _script: &str, _target: Option<&str>) -> Result<Outcome, EditError> {
+        Err(EditError::Invalid("JavaScript is disabled in this build".into()))
     }
 }
 

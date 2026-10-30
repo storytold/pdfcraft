@@ -74,7 +74,10 @@ pub(crate) fn renderer_password(bytes: &[u8]) -> String {
 /// if this flag is set". The open document keeps them in memory.
 pub(crate) fn writable(cos: &pdfcraft_cos::Document) -> Result<std::borrow::Cow<'_, pdfcraft_cos::Document>, EditError> {
     let has_form_pw = pdfcraft_forms::has_password_values(cos);
+    #[cfg(feature = "xfa")]
     let has_xfa_pw = pdfcraft_xfa::has_password_values(cos);
+    #[cfg(not(feature = "xfa"))]
+    let has_xfa_pw = false;
     if !has_form_pw && !has_xfa_pw {
         return Ok(std::borrow::Cow::Borrowed(cos));
     }
@@ -82,6 +85,7 @@ pub(crate) fn writable(cos: &pdfcraft_cos::Document) -> Result<std::borrow::Cow<
     if has_form_pw {
         pdfcraft_forms::clear_password_values(&mut copy).map_err(|e| EditError::Write(e.to_string()))?;
     }
+    #[cfg(feature = "xfa")]
     if has_xfa_pw {
         pdfcraft_xfa::clear_password_values(&mut copy).map_err(|e| EditError::Write(e.to_string()))?;
     }
@@ -98,13 +102,19 @@ pub fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
 }
 
 /// Validate the signature fields of `cos` (written as `bytes`).
-pub(crate) fn signatures_of(
-    cos: &pdfcraft_cos::Document,
-    bytes: &[u8],
-    trust: &TrustStore,
-    cache: &pdfcraft_sign::DigestCache,
-) -> Vec<SignatureInfo> {
+#[cfg(feature = "sign")]
+pub(crate) fn signatures_of(cos: &pdfcraft_cos::Document, bytes: &[u8], trust: &TrustStore, cache: &crate::sign::DigestCache) -> Vec<SignatureInfo> {
     pdfcraft_sign::pdf::list_cached(cos, bytes, trust, cache)
+}
+
+#[cfg(not(feature = "sign"))]
+pub(crate) fn signatures_of(
+    _cos: &pdfcraft_cos::Document,
+    _bytes: &[u8],
+    _trust: &TrustStore,
+    _cache: &crate::sign::DigestCache,
+) -> Vec<SignatureInfo> {
+    Vec::new()
 }
 
 /// What Optimize PDF did.

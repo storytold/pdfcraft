@@ -9,7 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-pdfcraft-engine = { workspace = true }
+pdfcraft-engine = { workspace = true, default-features = false }
 pdfcraft-cos = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-organize = { workspace = true }
@@ -21,7 +21,19 @@ base64 = { version = "0.23", optional = true }
 
 
 [features]
-default = ["mcp"]
+default = ["mcp", "full-engine"]
+full-engine = [
+    "pdfcraft-engine/ocr",
+    "pdfcraft-engine/sign",
+    "pdfcraft-engine/xfa",
+    "pdfcraft-engine/js",
+    "pdfcraft-engine/preflight",
+]
+ocr = ["pdfcraft-engine/ocr"]
+sign = ["pdfcraft-engine/sign"]
+xfa = ["pdfcraft-engine/xfa"]
+js = ["pdfcraft-engine/js"]
+preflight = ["pdfcraft-engine/preflight"]
 # The MCP server module. Opt-in at run time either way; disable to leave it out of the build.
 mcp = ["dep:base64"]
 

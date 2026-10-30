@@ -5,13 +5,87 @@
 //! captures what it needs, [`OcrJob::run`] works anywhere (the UI runs it on a worker thread) and
 //! [`Session::apply_ocr`] applies the result as one undoable step.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(feature = "ocr")]
+use std::sync::Mutex;
 
-use pdfcraft_render::{PageInfo, PageRenderer, RenderConfig, RenderRequest, RequestKind};
+use pdfcraft_render::PageInfo;
+#[cfg(feature = "ocr")]
+use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind};
 
-pub use pdfcraft_ocr::{LANGUAGES, Models, Ocr, OcrError, PlacedWord};
+#[cfg(feature = "ocr")]
+pub use pdfcraft_ocr::{LANGUAGES, Models, Ocr, OcrError, PlacedWord, set_models_dir};
 
-use crate::{DocId, Edit, EditError, Session};
+#[cfg(not(feature = "ocr"))]
+pub mod ocr_stub {
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct PlacedWord {
+        pub text: String,
+        pub origin: [f64; 2],
+        pub across: [f64; 2],
+        pub up: [f64; 2],
+    }
+
+    pub const LANGUAGES: &[(&str, &str)] = &[];
+
+    #[derive(Clone, Debug, Default)]
+    pub struct Ocr;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("feature 'ocr' is not supported in this build")]
+    pub struct OcrError;
+
+    pub fn set_models_dir<P: AsRef<Path>>(_p: P) {}
+
+    pub struct Models;
+    impl Models {
+        pub fn search_dirs() -> Vec<PathBuf> {
+            Vec::new()
+        }
+        pub fn find() -> Option<PathBuf> {
+            None
+        }
+    }
+
+    pub fn engine() -> Result<Arc<Ocr>, String> {
+        Err("feature 'ocr' is not supported in this build".into())
+    }
+
+    pub fn available() -> bool {
+        false
+    }
+
+    pub struct RecognizedFile {
+        pub bytes: Vec<u8>,
+        pub pages: Vec<super::OcrPage>,
+    }
+
+    impl RecognizedFile {
+        pub fn words(&self) -> usize {
+            0
+        }
+    }
+
+    pub fn recognize_file(
+        _name: &str,
+        _bytes: Arc<Vec<u8>>,
+        _password: Option<&str>,
+        _settings: super::OcrSettings,
+        _ocr: &Ocr,
+        _progress: impl FnMut(usize, usize) -> bool,
+    ) -> Result<RecognizedFile, String> {
+        Err("feature 'ocr' is not supported in this build".into())
+    }
+}
+#[cfg(not(feature = "ocr"))]
+pub use ocr_stub::*;
+
+#[cfg(feature = "ocr")]
+use crate::Edit;
+use crate::{DocId, EditError, Session};
 
 /// Recognize Text settings.
 #[derive(Clone, Debug, PartialEq)]
@@ -33,15 +107,18 @@ pub struct OcrSettings {
 
 /// A recognised word whose box is at least this much covered by the page's own text is that
 /// text read again, not a word in a picture.
+#[cfg(feature = "ocr")]
 const ALREADY_ON_PAGE: f32 = 0.5;
 
 /// The long side of an A4 sheet in points (a letter page's, 792, is shorter): "Downsample to"
 /// is a resolution on paper this size or smaller.
+#[cfg(feature = "ocr")]
 const SHEET: f32 = 842.0;
 
 /// How much of `word` the `text` boxes cover, from 0 to 1. Boxes are `[x0, y0, x1, y1]` in page
 /// view space. Overlaps between the text boxes are counted twice (glyphs rarely overlap), so the
 /// sum is capped at the whole word.
+#[cfg(feature = "ocr")]
 fn covered(word: [f32; 4], text: &[[f32; 4]]) -> f32 {
     // `max(0.0)` also turns a NaN side into 0: a degenerate box covers nothing.
     let area = |[x0, y0, x1, y1]: [f32; 4]| (x1 - x0).max(0.0) * (y1 - y0).max(0.0);
@@ -78,6 +155,7 @@ impl OcrPage {
 }
 
 /// The recogniser, loaded once (it takes a moment) and shared.
+#[cfg(feature = "ocr")]
 pub fn engine() -> Result<Arc<Ocr>, String> {
     static OCR: Mutex<Option<Arc<Ocr>>> = Mutex::new(None);
     let mut slot = OCR.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -90,11 +168,13 @@ pub fn engine() -> Result<Arc<Ocr>, String> {
 }
 
 /// Whether the recognition models are installed.
+#[cfg(feature = "ocr")]
 pub fn available() -> bool {
     Models::find().is_some()
 }
 
 /// Everything recognition needs from a document, detached from the session.
+#[allow(dead_code)]
 pub struct OcrJob {
     bytes: Arc<Vec<u8>>,
     password: Option<String>,
@@ -109,6 +189,7 @@ pub struct OcrJob {
 impl OcrJob {
     /// Read the pages. `progress(done, total)` is called before each page; returning `false`
     /// stops (the pages read so far are returned).
+    #[cfg(feature = "ocr")]
     pub fn run(self, ocr: &Ocr, mut progress: impl FnMut(usize, usize) -> bool) -> Vec<OcrPage> {
         let config =
             RenderConfig { password: self.password.as_deref().map(Arc::from), hide_comments: self.settings.native_text_only, ..Default::default() };
@@ -158,6 +239,7 @@ impl OcrJob {
         out
     }
 
+    #[cfg(feature = "ocr")]
     /// The render scale (pixels per point) `page` is read at. A scan is read at its own
     /// resolution (enlarging it only blurs the letters), at most the chosen one.
     fn scale(&self, page: usize, info: &PageInfo) -> f32 {
@@ -168,6 +250,12 @@ impl OcrJob {
         // image, and no "Downsample to" choice could ask for less.
         let fit = (SHEET / info.width.max(info.height).max(1e-3)).min(1.0);
         native.clamp(fit, wanted * fit)
+    }
+
+    #[cfg(not(feature = "ocr"))]
+    pub fn run(self, _ocr: &Ocr, mut progress: impl FnMut(usize, usize) -> bool) -> Vec<OcrPage> {
+        let _ = progress(0, 0);
+        Vec::new()
     }
 }
 
@@ -197,6 +285,7 @@ impl Session {
     }
 
     /// Add the words found by [`OcrJob::run`] as one undoable step. Returns the number of words.
+    #[cfg(feature = "ocr")]
     pub fn apply_ocr(&mut self, id: DocId, found: &[OcrPage]) -> Result<usize, EditError> {
         let edits: Vec<Edit> =
             found.iter().filter(|p| !p.words.is_empty()).map(|p| Edit::AddOcrText { page: p.page, words: p.words.clone() }).collect();
@@ -205,6 +294,11 @@ impl Session {
             self.apply(id, Edit::Batch { label: "Recognize text".into(), edits })?;
         }
         Ok(words)
+    }
+
+    #[cfg(not(feature = "ocr"))]
+    pub fn apply_ocr(&mut self, _id: DocId, _found: &[OcrPage]) -> Result<usize, EditError> {
+        Err(EditError::Invalid("ocr is disabled in this build".into()))
     }
 
     /// Recognise text on `pages` and add it, in one call (the CLI and agents use this).

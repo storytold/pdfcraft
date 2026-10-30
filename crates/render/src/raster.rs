@@ -38,7 +38,7 @@ mod pool;
 use pool::lock;
 #[cfg(test)]
 use pool::{BusyPublishGate, ParseGate, ParserState, PoolParser, RenderGate, Shared, same_request, worker, worker_settings};
-pub use pool::{RenderPool, Retiring};
+pub use pool::{RenderPool, Retiring, set_worker_start_hook};
 
 /// Monotonic-ish timer that is safe on wasm32 (where `std::time::Instant` panics).
 #[derive(Clone, Copy)]
@@ -78,6 +78,8 @@ pub struct RenderConfig {
     /// The page clears to transparent instead of white (or the reading background): for a page
     /// holding only what is laid over another raster, such as a comment while it is dragged.
     pub transparent: bool,
+    /// Cap on tiling pattern cell width and height in device pixels. Defaults to hayro's default.
+    pub max_pattern_size: Option<u16>,
 }
 
 impl RenderConfig {
@@ -355,6 +357,7 @@ fn render_page<'a>(
                     y_offset: t.y as f32,
                     bg_color,
                     color_replacement,
+                    max_tiling_cell_size: config.max_pattern_size,
                 }
             }
             None => {
@@ -376,6 +379,7 @@ fn render_page<'a>(
                     height: Some(side(h)),
                     bg_color,
                     color_replacement,
+                    max_tiling_cell_size: config.max_pattern_size,
                     ..Default::default()
                 }
             }

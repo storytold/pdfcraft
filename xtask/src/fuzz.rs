@@ -281,7 +281,21 @@ fn run_one(exe: &Path, file: &Path, timeout: Duration) -> (Outcome, String) {
                 let _ = child.wait();
                 return (Outcome::Hang, format!("over {} s", timeout.as_secs()));
             }
-            Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+            Ok(None) => {
+                // macOS has no ulimit -v: watch child RSS and kill above 2 GiB (counted as a finding)
+                let pid = child.id();
+                if let Ok(out) = Command::new("ps").args(["-o", "rss=", "-p", &pid.to_string()]).output() {
+                    let txt = String::from_utf8_lossy(&out.stdout);
+                    if let Ok(rss_kb) = txt.trim().parse::<u64>()
+                        && rss_kb > 2 * 1024 * 1024
+                    {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return (Outcome::Crash, format!("killed by RSS watchdog (RSS: {rss_kb} KiB > 2 GiB)"));
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
             Err(e) => return (Outcome::Ok, e.to_string()),
         }
     }
@@ -304,7 +318,9 @@ fn minimize(exe: &Path, work: &Path, data: Vec<u8>, outcome: Outcome, what: &str
                 break;
             }
             let (o, w) = run_one(exe, &probe, timeout);
-            if o == outcome && (outcome == Outcome::Hang || w == what) {
+            let same_cause =
+                outcome == Outcome::Hang || w == what || (what.starts_with("killed by RSS watchdog") && w.starts_with("killed by RSS watchdog"));
+            if o == outcome && same_cause {
                 best = cand;
                 progressed = true;
             } else {

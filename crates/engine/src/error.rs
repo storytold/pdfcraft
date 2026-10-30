@@ -73,8 +73,8 @@ pub enum EditError {
     Invalid(String),
 }
 
-impl From<pdfcraft_sign::SignError> for EditError {
-    fn from(e: pdfcraft_sign::SignError) -> Self {
+impl From<crate::sign::SignError> for EditError {
+    fn from(e: crate::sign::SignError) -> Self {
         EditError::Sign(e.to_string())
     }
 }

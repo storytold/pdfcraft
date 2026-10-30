@@ -41,7 +41,7 @@ pub fn text_box_at(rotation: i64, at: [f64; 2], width: f64, height: f64) -> Opti
 
 /// `text` in the script font as the graphic of a visible digital signature, as Fill & Sign types
 /// it. `None` for text with no outlines.
-pub fn typed_signature_graphic(text: &str) -> Option<pdfcraft_sign::Graphic> {
+pub fn typed_signature_graphic(text: &str) -> Option<crate::sign::Graphic> {
     let o = script_outline(text);
-    o.contours.iter().any(|c| c.len() > 2).then_some(pdfcraft_sign::Graphic::Outlines(o.contours))
+    o.contours.iter().any(|c| c.len() > 2).then_some(crate::sign::Graphic::Outlines(o.contours))
 }

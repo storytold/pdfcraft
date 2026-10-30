@@ -109,6 +109,16 @@ impl Automation {
         }
     }
 
+    /// Construct an Automation runner wrapping an existing session and optional root directory.
+    pub fn from_session(session: Session, root: Option<PathBuf>) -> Self {
+        Self { session, root, roots: None, renderers: HashMap::new(), texts: TextCache::default(), listed: HashMap::new(), evicted: HashSet::new() }
+    }
+
+    /// Unwraps and returns the underlying session.
+    pub fn into_session(self) -> Session {
+        self.session
+    }
+
     /// Confine every path the tools read or write to `root` (relative paths resolve inside it).
     pub fn with_root(mut self, root: impl Into<PathBuf>) -> std::io::Result<Self> {
         let root = root.into().canonicalize()?;

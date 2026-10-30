@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 use super::{
     Arc, DocId, EditError, Keys, OpenError, RecoverySnapshot, RenderPool, SaveOptions, Session, SignOptions, TrustStore, display_bytes, guard,
     render_threads, signatures_of, writable, write_full, write_incremental, xfa_sync_datasets,
@@ -194,16 +195,25 @@ impl Session {
             if d.dirty && d.generation != d.snapshot_generation {
                 // The working bytes hold typed Password-field values (#3926, #3944): a recovery file
                 // is written from a copy without them, and none is written if that copy fails.
-                let bytes =
-                    match d.editor.as_ref().filter(|e| pdfcraft_forms::has_password_values(&e.cos) || pdfcraft_xfa::has_password_values(&e.cos)) {
-                        Some(e) => match writable(&e.cos)
-                            .and_then(|c| write_incremental(&c, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string())))
-                        {
-                            Ok(b) => Arc::new(b),
-                            Err(_) => continue,
-                        },
-                        None => d.bytes.clone(),
-                    };
+                let has_password_values = |cos: &pdfcraft_cos::Document| {
+                    if pdfcraft_forms::has_password_values(cos) {
+                        return true;
+                    }
+                    #[cfg(feature = "xfa")]
+                    if pdfcraft_xfa::has_password_values(cos) {
+                        return true;
+                    }
+                    false
+                };
+                let bytes = match d.editor.as_ref().filter(|e| has_password_values(&e.cos)) {
+                    Some(e) => match writable(&e.cos)
+                        .and_then(|c| write_incremental(&c, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string())))
+                    {
+                        Ok(b) => Arc::new(b),
+                        Err(_) => continue,
+                    },
+                    None => d.bytes.clone(),
+                };
                 d.snapshot_generation = d.generation;
                 out.push(RecoverySnapshot {
                     doc: d.id,
@@ -232,6 +242,7 @@ impl Session {
     }
 
     /// The certificates trusted for signing.
+    #[cfg(feature = "sign")]
     pub fn trusted_certificates(&self) -> &[pdfcraft_sign::Certificate] {
         &self.trust.certs
     }
@@ -239,6 +250,7 @@ impl Session {
     /// Replace the trusted certificates, revalidate every open document's signatures,
     /// and rebuild its display copy and renderer to match (working file untouched,
     /// generation/dirty unchanged: trust alone is not an edit).
+    #[cfg(feature = "sign")]
     pub fn set_trusted_certificates(&mut self, certs: Vec<pdfcraft_sign::Certificate>) {
         self.trust = Arc::new(TrustStore { certs });
         for doc in &mut self.docs {
@@ -268,6 +280,7 @@ impl Session {
     /// Sign the document's current state with `id` (Use a certificate ▸ Digitally sign). Returns
     /// the signed file; the caller saves it and then calls [`Session::mark_signed`]. An empty
     /// `opts.date` takes the session clock.
+    #[cfg(feature = "sign")]
     pub fn sign(&self, doc: DocId, id: &pdfcraft_sign::DigitalId, mut opts: SignOptions) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
         // Encrypted documents are signed under their permissions (the signer checks them).
@@ -282,6 +295,7 @@ impl Session {
 
     /// [`Session::sign`], embedding an RFC 3161 signature timestamp (PAdES B-T) produced by
     /// `tsa`. The transport lives with the caller; the engine never opens a socket.
+    #[cfg(feature = "sign")]
     pub fn sign_with_timestamp(
         &self,
         doc: DocId,
@@ -303,6 +317,7 @@ impl Session {
 
     /// Append a standalone document timestamp (RFC 3161, `/ETSI.RFC3161`) covering the file's
     /// current state. An empty `date` takes the session clock; the transport is the caller's.
+    #[cfg(feature = "sign")]
     pub fn timestamp_document(&self, doc: DocId, tsa: &dyn pdfcraft_sign::TimestampAuthority, date: String) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
@@ -315,6 +330,7 @@ impl Session {
 
     /// Embed revocation evidence into the catalog's `/DSS` with `/VRI` entries per signature
     /// (PAdES B-LT): an incremental update that never rewrites signed bytes.
+    #[cfg(feature = "sign")]
     pub fn embed_ltv(&self, doc: DocId, evidence: &pdfcraft_sign::dss::Evidence) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
@@ -335,4 +351,17 @@ impl Session {
         }
         Ok(())
     }
+
+    #[cfg(not(feature = "sign"))]
+    pub fn sign(&mut self, _id: DocId, _digital_id: &crate::sign::DigitalId, _options: crate::sign::SignOptions) -> Result<Arc<Vec<u8>>, EditError> {
+        Err(EditError::Invalid("Signatures disabled in this build".into()))
+    }
+
+    #[cfg(not(feature = "sign"))]
+    pub fn trusted_certificates(&self) -> &[crate::sign::Certificate] {
+        &[]
+    }
+
+    #[cfg(not(feature = "sign"))]
+    pub fn set_trusted_certificates(&mut self, _certs: Vec<crate::sign::Certificate>) {}
 }

@@ -1,0 +1,45 @@
+name: Mobile Rust & FFI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: mobile-rust-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  ffi-test:
+    name: ffi tests & api check (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Test pdfcraft-ffi
+        run: cargo test -p pdfcraft-ffi
+      - name: Verify public API snapshots
+        run: cargo xtask mobile-bindings --check
+
+  cross-check:
+    name: mobile cross-compile check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          targets: aarch64-linux-android, x86_64-linux-android
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Check FFI on Android arm64
+        run: cargo check -p pdfcraft-ffi --target aarch64-linux-android
+      - name: Check FFI on Android x86_64
+        run: cargo check -p pdfcraft-ffi --target x86_64-linux-android

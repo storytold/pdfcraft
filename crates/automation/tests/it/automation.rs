@@ -1106,11 +1106,15 @@ fn an_in_place_save_reports_a_required_rewrite_as_not_incremental() {
 #[test]
 fn a_recovered_page_tree_survives_a_full_save() {
     let dir = workdir("save-verify-before-write");
-    let objs: [&[u8]; 4] = [
-        b"<< /Type /Catalog /Pages 3 0 R >>",
-        b"<< /Type /Page /MediaBox [0 0 200 300] /Contents 4 0 R >>",
-        b"[ 0 ]",
-        b"<< /Length 18 >>\nstream\n0 0 m 100 100 l S\nendstream",
+    let stream = |content: &str| format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes();
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 9 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 9 0 R /MediaBox [0 0 100 100] /Contents 5 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 9 0 R /MediaBox [0 0 200 200] >>".to_vec(),
+        b"<< /Type /Page /Parent 9 0 R /MediaBox [0 0 300 300] /Contents 6 0 R /Annots [7 0 R] >>".to_vec(),
+        stream("0 0 m 10 10 l S"),
+        stream("0 0 m 20 20 l S"),
+        b"<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /Contents (hello) >>".to_vec(),
     ];
     let mut original = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
@@ -1121,16 +1125,16 @@ fn a_recovered_page_tree_survives_a_full_save() {
         original.extend_from_slice(b"\nendobj\n");
     }
     let xref = original.len();
-    original.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
+    original.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
     for o in offsets {
         original.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
-    original.extend_from_slice(format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    original.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     std::fs::write(dir.join("damaged.pdf"), &original).unwrap();
 
     let mut a = auto(&dir);
     let opened = ok(&mut a, "doc_open", json!({ "path": "damaged.pdf" }));
-    assert_eq!(opened["pages"], 1, "{opened}");
+    assert_eq!(opened["pages"], 3, "{opened}");
     let doc = opened["doc"].as_u64().unwrap();
     let (width, height, pixels) = a.render_pixels(doc, 1, 1.0).unwrap();
     assert!(pixels.as_ref().as_chunks::<4>().0.iter().any(|p| p[..3] != [255, 255, 255]), "the original page is not blank");

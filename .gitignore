@@ -9,3 +9,38 @@ plan/
 /assets/models
 # A craft-fonts checkout used as the optional CRAFT_FONTS_DIR build input (CI and releases put it here).
 /craft-fonts
+
+# Local notes and sample packages
+/adobescreenshots/
+*.apkm
+
+# Mobile packaging and build outputs
+*.apk
+*.aar
+*.aab
+*.dex
+*.class
+captures/
+.externalNativeBuild/
+*.hprof
+*.jks
+*.keystore
+/mobile/android/.gradle/
+/mobile/android/build/
+/mobile/android/*/build/
+/mobile/android/*/.cxx/
+/mobile/android/*/src/main/jniLibs/
+/mobile/android/*/src/main/java/uniffi/
+.build/
+/mobile/ios/**/.build/
+/mobile/ios/**/build/
+/mobile/ios/**/DerivedData/
+/mobile/ios/**/*.xcframework
+/mobile/ios/**/Frameworks/
+/mobile/ios/**/Generated/
+*.xcframework
+*.xcworkspace
+*.xcuserdatad
+.idea/
+*.iml
+local.properties

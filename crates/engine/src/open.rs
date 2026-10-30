@@ -117,8 +117,18 @@ impl Session {
             let new_cos = pdfcraft_cos::Document::open_with_password(new_bytes.clone(), password).map_err(|e| e.to_string())?;
             Ok((new_bytes, new_info, new_cos))
         };
+        let existing_layout = |_cos: &pdfcraft_cos::Document| -> Option<XfaLayout> {
+            #[cfg(feature = "xfa")]
+            {
+                pdfcraft_xfa::existing_layout(_cos)
+            }
+            #[cfg(not(feature = "xfa"))]
+            {
+                None
+            }
+        };
         let (bytes, info, cos, xfa) = match (info.xfa, cos) {
-            (Some(pdfcraft_render::Xfa::Dynamic), Ok(Ok(cos))) if pdfcraft_xfa::existing_layout(&cos).is_none() => {
+            (Some(pdfcraft_render::Xfa::Dynamic), Ok(Ok(cos))) if existing_layout(&cos).is_none() => {
                 let mut work = cos.clone();
                 let laid_out = guard(|| xfa_layout(&mut work))
                     .unwrap_or_else(|m| Err(format!("laying it out failed unexpectedly ({m})")))
@@ -135,7 +145,7 @@ impl Session {
             // A static XFA form, or a dynamic one laid out earlier: its datasets may hold values
             // filled in by another viewer since; give the fields those values.
             (Some(_), Ok(Ok(cos))) => {
-                let report = pdfcraft_xfa::existing_layout(&cos);
+                let report = existing_layout(&cos);
                 let mut work = cos.clone();
                 let synced =
                     guard(|| xfa_values_from_datasets(&mut work)).unwrap_or_else(|m| Err(format!("reading its data failed unexpectedly ({m})")));
@@ -232,7 +242,10 @@ impl Session {
         let (bytes, info, cos) = match cos {
             Ok(Ok(cos)) if !info.pages.is_empty() && pdfcraft_organize::page_count(&cos).unwrap_or(0) == 0 => {
                 let mut work = cos.clone();
+                #[cfg(feature = "sign")]
                 let signed = || pdfcraft_sign::pdf::list(&cos, &bytes, &context.trust).iter().any(|s| s.signed);
+                #[cfg(not(feature = "sign"))]
+                let signed = || false;
                 let rebuilt = match pdfcraft_organize::recover_page_tree(&mut work) {
                     Ok(n) if n > 0 && !signed() => rebase(&work).ok().filter(|(_, i, _)| same_pages(&i.pages, &info.pages)),
                     _ => None,
@@ -292,7 +305,7 @@ impl Session {
             Ok(Err(e)) => (None, Some(e.to_string())),
             Err(_) => (None, Some("the document structure could not be read for editing".into())),
         };
-        let sig_cache = Arc::new(pdfcraft_sign::DigestCache::default());
+        let sig_cache = Arc::new(crate::sign::DigestCache::default());
         let signatures = editor.as_ref().map(|e| signatures_of(&e.cos, &bytes, trust, &sig_cache)).unwrap_or_default();
         // The inspection reads only `/Info`; a file stating its title or author only in XMP still
         // shows them (#2373).

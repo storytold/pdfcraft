@@ -6,9 +6,9 @@
 //! profile. A screen profile such as sRGB is reported as a screen profile, not accepted as a
 //! press condition.
 
+use crate::pdfa::{Issue, Level};
 use pdfcraft_cos::Document;
 use pdfcraft_edit::PageImage;
-use pdfcraft_preflight::{Issue, Level};
 
 use crate::Document as OpenDocument;
 
@@ -155,8 +155,8 @@ impl OpenDocument {
 }
 
 fn inspect(doc: &Document) -> PrintReadiness {
-    let declared = pdfcraft_preflight::declared(doc);
-    let pdfa_issues = pdfcraft_preflight::verify(doc, Level::A2b);
+    let declared = crate::pdfa::declared(doc);
+    let pdfa_issues = crate::pdfa::verify(doc, Level::A2b);
     let fonts_not_embedded = pdfa_issues
         .iter()
         .filter(|issue| issue.pattern.contains("isn't embedded") || issue.pattern == "A font isn't embedded")
