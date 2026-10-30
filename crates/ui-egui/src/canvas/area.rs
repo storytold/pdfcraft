@@ -2,8 +2,11 @@ use super::{LayerOp, PdfCraftApp, Pos2, Rect};
 
 /// A validation badge drawn over a signature widget: the widget rectangle (user space), the verdict it shows, and its hover text.
 pub(crate) struct SignatureBadge {
+    /// Widget rectangle in PDF user-space coordinates.
     pub rect: [f64; 4],
+    /// Validation verdict represented by the badge.
     pub status: pdfcraft_engine::SignatureStatus,
+    /// Short description shown when the badge is hovered.
     pub summary: &'static str,
 }
 
@@ -32,14 +35,27 @@ pub(super) const SUPPRESS_SECS: f64 = 0.25;
 /// Short rolling extension while egui still has an unprocessed wheel tail.
 pub(super) const SUPPRESS_TAIL_SECS: f64 = 0.05;
 
-// Keep the viewer's scroll identity tied to the document instead of its parent UI.
+/// Show the page viewport with a scroll identity tied to the document rather than its parent UI.
+///
+/// Floating scrollbar handles and backgrounds retain their active opacity while the pointer
+/// drags another widget, so short drawing strokes do not make the viewer bars disappear. The
+/// style override is scoped to this viewer; other scroll areas keep their inherited style.
+/// Returns the scroll area's output, including the value returned by `draw`.
 pub(super) fn page_scroll<R>(
     ui: &mut egui::Ui,
     scroll: egui::ScrollArea,
     id: egui::Id,
     draw: impl FnOnce(&mut egui::Ui, egui::Rect) -> R,
 ) -> egui::scroll_area::ScrollAreaOutput<R> {
-    ui.scope_builder(egui::UiBuilder::new().scope_id(id), |ui| scroll.show_viewport(ui, draw)).inner
+    ui.scope_builder(egui::UiBuilder::new().scope_id(id), |ui| {
+        // egui treats floating bars as dormant while another widget is dragged.
+        // Keep the viewer bars visible across short drawing strokes (#5326).
+        let style = &mut ui.style_mut().spacing.scroll;
+        style.dormant_handle_opacity = style.active_handle_opacity;
+        style.dormant_background_opacity = style.active_background_opacity;
+        scroll.show_viewport(ui, draw)
+    })
+    .inner
 }
 
 /// Run a push button's action (the ones that need no JavaScript engine).
@@ -154,4 +170,50 @@ pub(super) fn glide_interrupted(ui: &egui::Ui) -> bool {
 /// the turn waits until the pages have had the click.
 pub(super) fn presentation_click(ui: &egui::Ui, area: Rect) -> bool {
     ui.rect_contains_pointer(area) && ui.input(|i| i.pointer.primary_clicked())
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::page_scroll;
+
+    #[test]
+    fn viewer_scrollbars_stay_visible_during_page_drag() {
+        let ctx = egui::Context::default();
+        ctx.global_style_mut(|s| {
+            s.animation_time = 0.0;
+            s.spacing.scroll = egui::style::ScrollStyle::floating();
+        });
+        let frame = |dragging: bool| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0))),
+                events: vec![egui::Event::PointerMoved(egui::pos2(100.0, 100.0))],
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |root| {
+                egui::CentralPanel::default().show(root, |ui| {
+                    if dragging {
+                        ctx.set_dragged_id(egui::Id::unique("page-stroke"));
+                    } else {
+                        ctx.stop_dragging();
+                    }
+                    let parent_scroll = ui.spacing().scroll;
+                    page_scroll(ui, egui::ScrollArea::both(), egui::Id::unique("viewer"), |ui, _| {
+                        ui.allocate_space(egui::vec2(800.0, 800.0));
+                    });
+                    assert_eq!(ui.spacing().scroll, parent_scroll, "viewer style must stay local");
+                });
+            });
+            output.textures_delta.clear();
+            output
+        };
+        // Settle scrollbar visibility and layout before comparing their painted output.
+        for _ in 0..3 {
+            frame(false);
+        }
+        let idle = frame(false);
+        let dragging = frame(true);
+        assert!(idle.shapes.len() > 1, "the scrollbars must be painted");
+        assert_eq!(idle.shapes, dragging.shapes, "a page stroke must not fade the scrollbars");
+        assert_eq!(idle.shapes, frame(false).shapes, "releasing a stroke must not flash the scrollbars");
+    }
 }
