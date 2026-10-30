@@ -301,7 +301,7 @@ impl Automation {
                     "id": c.id,
                     "label": commands::current_label(c, &self.session, active),
                     "menu": c.menu,
-                    "shortcut": c.shortcut.map(|s| s.label(cfg!(target_os = "macos"))),
+                    "shortcut": c.shortcut_for(cfg!(target_os = "macos")).map(|s| s.label(cfg!(target_os = "macos"))),
                     "enabled": commands::is_enabled(c, &self.session, active),
                     "tool": tools::tool_for_command(c.id),
                     "params": tools::tool_for_command(c.id).and_then(tools::find).map(|t| &t.input_schema),

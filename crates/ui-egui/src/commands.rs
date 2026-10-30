@@ -61,7 +61,7 @@ pub(crate) fn command_modifier_label(ctx: &egui::Context) -> &'static str {
 
 /// How a registered command's shortcut is written on this platform ("" without one).
 pub(crate) fn command_shortcut_label(ctx: &egui::Context, id: &str) -> String {
-    commands::command(id).and_then(|c| c.shortcut).map(|s| shortcut_label(ctx, s)).unwrap_or_default()
+    commands::command(id).and_then(|c| c.shortcut_for(mac_shortcuts(ctx))).map(|s| shortcut_label(ctx, s)).unwrap_or_default()
 }
 
 /// A translated tooltip with a `{key}` placeholder, filled with `s` as written on this platform:
@@ -794,10 +794,10 @@ impl PdfCraftApp {
         // Buttons also own keyboard focus for Tab/Enter activation, but they must not
         // suppress document shortcuts. Text editors retain their own undo/redo handling.
         let typing = ctx.text_edit_focused();
-        let mut specs: Vec<&CommandSpec> = COMMANDS.iter().filter(|c| c.shortcut.is_some()).collect();
-        specs.sort_by_key(|c| std::cmp::Reverse(c.shortcut.map(|s| s.modifier_count()).unwrap_or(0)));
-        for spec in specs {
-            let Some(s) = spec.shortcut else { continue };
+        let mac = mac_shortcuts(ctx);
+        let mut specs: Vec<_> = COMMANDS.iter().filter_map(|c| c.shortcut_for(mac).map(|s| (c, s))).collect();
+        specs.sort_by_key(|(_, s)| std::cmp::Reverse(s.modifier_count()));
+        for (spec, s) in specs {
             // Keep the canvas's silent no-op when there is no previous/next view to visit.
             if matches!(spec.id, "view.previous_view" | "view.next_view") && !self.command_enabled(spec) {
                 continue;

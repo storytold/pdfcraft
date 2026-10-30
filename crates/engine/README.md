@@ -81,6 +81,10 @@ family (`sign`, `sign_with_timestamp`, `timestamp_document`, `embed_ltv`).
 | `js` | The bridge to `pdfcraft-js`. `forms` never depends on `js` directly; the engine injects it, so a build without JavaScript is possible |
 | `xfa`, `ocr`, `compare`, `export` | Façades over the L3/L4 crates of the same names |
 
+Command shortcuts are resolved with `CommandSpec::shortcut_for(mac)` before displaying or
+matching them. The Comments binding is Ctrl+M on Windows/Linux; macOS leaves Command+M
+available for the system Minimize action.
+
 ## Not done here
 
 - **Rendering is still borrowed.** `pdfcraft-render` wraps `hayro` and inspects through `lopdf`
