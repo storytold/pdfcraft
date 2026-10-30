@@ -366,8 +366,13 @@ fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
 
 /// 8-bit RGBA pixels → an image (gray when every pixel is, with a soft mask when any pixel is
 /// not opaque).
-fn rgba_image(rgba: &[u8], (w, h): (u32, u32), dpi: (f64, f64)) -> Embedded {
-    let gray = rgba.as_chunks::<4>().0.iter().all(|p| p[0] == p[1] && p[1] == p[2]);
+fn rgba_image(rgba: &[u8], px: (u32, u32), dpi: (f64, f64)) -> Embedded {
+    rgba_image_in_space(rgba, px, dpi, false)
+}
+
+/// An RGB profile describes RGB samples even when all three channels happen to be equal.
+fn rgba_image_in_space(rgba: &[u8], (w, h): (u32, u32), dpi: (f64, f64), preserve_rgb: bool) -> Embedded {
+    let gray = !preserve_rgb && rgba.as_chunks::<4>().0.iter().all(|p| p[0] == p[1] && p[1] == p[2]);
     let opaque = rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 255);
     let colour: Vec<u8> = if gray {
         rgba.as_chunks::<4>().0.iter().map(|p| p[0]).collect()
@@ -390,6 +395,60 @@ fn rgba_image(rgba: &[u8], (w, h): (u32, u32), dpi: (f64, f64)) -> Embedded {
     Embedded { dict: d, data: colour, filtered: false, smask, icc: None, px: (w, h), dpi }
 }
 
+/// Read only a BMP V5's embedded RGB profile; linked profiles never cause file or network I/O.
+fn bmp_icc(bytes: &[u8], (w, h): (u32, u32)) -> Option<Vec<u8>> {
+    const MAX_BMP_ICC_BYTES: usize = 16 << 20;
+    let word = |at: usize| -> Option<u32> { Some(u32::from_le_bytes(bytes.get(at..at.checked_add(4)?)?.try_into().ok()?)) };
+    // BITMAPFILEHEADER is 14 bytes; these fields are relative to its following V5 header.
+    if !bytes.starts_with(b"BM") || word(14)? != 124 || word(70)? != 0x4D42_4544 {
+        return None;
+    }
+    let offset = usize::try_from(word(126)?).ok()?;
+    let len = usize::try_from(word(130)?).ok()?;
+    if offset < 124 || !(128..=MAX_BMP_ICC_BYTES).contains(&len) {
+        return None;
+    }
+    let start = 14usize.checked_add(offset)?;
+    let bits = usize::try_from(word(28)? & 0xffff).ok()?;
+    if !matches!(bits, 1 | 4 | 8 | 16 | 24 | 32) {
+        return None;
+    }
+    let used = usize::try_from(word(46)?).ok()?;
+    let colors = if used == 0 && bits <= 8 { 1usize << bits } else { used };
+    if bits <= 8 && colors > 1usize << bits {
+        return None;
+    }
+    let palette_end = (14usize + 124).checked_add(colors.checked_mul(4)?)?;
+    let raster_start = usize::try_from(word(10)?).ok()?;
+    // V5 masks are inside the header. Uncompressed rows are DWORD-aligned; RLE's
+    // positive SizeImage supplies the compressed span (BITMAPV5HEADER, Microsoft).
+    let raster_bytes = match (word(30)?, bits) {
+        (0 | 3, _) => {
+            let row_words = usize::try_from(w).ok()?.checked_mul(bits)?.checked_add(31)? / 32;
+            row_words.checked_mul(4)?.checked_mul(usize::try_from(h).ok()?)?
+        }
+        (1, 8) | (2, 4) => usize::try_from(word(34)?).ok()?,
+        _ => return None,
+    };
+    let raster_end = raster_start.checked_add(raster_bytes)?;
+    // In a BMP file the profile follows the bitmap bits, never the header,
+    // color table or raster. Establish the entire source range before copying.
+    if raster_bytes == 0 || raster_start < palette_end || start < raster_end {
+        return None;
+    }
+    bytes.get(raster_start..raster_end)?;
+    let data = bytes.get(start..start.checked_add(len)?)?;
+    // BMP's profile size covers the complete ICC stream, including ICC-internal padding.
+    let declared_size = usize::try_from(u32::from_be_bytes(data.get(..4)?.try_into().ok()?)).ok()?;
+    if declared_size != len {
+        return None;
+    }
+    let mut profile = Vec::new();
+    profile.try_reserve_exact(len).ok()?;
+    profile.extend_from_slice(data);
+    icc_for(profile, 3)
+}
+
 /// BMP and GIF (the first frame), through the `image` decoders. Their resolution is not read:
 /// 72 dpi, as for images without one.
 fn decoded(name: &str, bytes: &[u8], format: image::ImageFormat) -> Result<Embedded, CreateError> {
@@ -403,7 +462,10 @@ fn decoded(name: &str, bytes: &[u8], format: image::ImageFormat) -> Result<Embed
     }
     let img = image::load_from_memory_with_format(bytes, format).map_err(|e| CreateError::Image(name.into(), e.to_string()))?;
     let rgba = img.into_rgba8();
-    Ok(rgba_image(rgba.as_raw(), rgba.dimensions(), (72.0, 72.0)))
+    let icc = if format == image::ImageFormat::Bmp { bmp_icc(bytes, rgba.dimensions()) } else { None };
+    let mut embedded = rgba_image_in_space(rgba.as_raw(), rgba.dimensions(), (72.0, 72.0), icc.is_some());
+    embedded.icc = icc;
+    Ok(embedded)
 }
 
 /// Largest GIF logical screen, in pixels (4096×4096).

@@ -4,6 +4,8 @@ use pdfcraft_cos::{SaveOptions, write_full};
 
 use super::*;
 
+mod bmp_icc;
+
 fn reopen(doc: &Document) -> Document {
     let bytes = write_full(doc, &SaveOptions::default()).unwrap();
     hayro_syntax::Pdf::new(bytes.clone()).expect("parses");

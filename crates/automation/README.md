@@ -21,6 +21,10 @@ them with the image's current orientation. Full turns retain its appearance, rec
 and flips. Angles that are not multiples of 90 are refused without changing the document or
 its undo/redo history.
 
+`doc_create` from images and `page_add_image` retain compatible embedded RGB profiles from BMP V5 files through save/reopen.
+Profiled neutral samples remain RGB, and any alpha stays in a separate grayscale soft mask.
+Linked profiles are never loaded, and malformed, incompatible, overlapping or over-limit profile data keeps the existing device-color fallback.
+
 `Content` is `Json(Value)` or `Png { data, width, height }`. Errors are `UnknownTool`, `InvalidArgs` (the call didn't match the schema) or `Failed` (a readable message for the agent).
 
 ## Conventions

@@ -1,6 +1,6 @@
 # File format parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-19 · **Change:** patch (`.p7b`/`.p7c` bundles read for trust import) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-27 · **Last updated:** 2026-10-27 · **Change:** minor (BMP V5 embedded RGB ICC retention qualified) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Every format Acrobat Pro reads or writes, and PdfCraft's support for it. Acrobat's list comes from
 its bundle's `Info.plist` `CFBundleDocumentTypes` (what it opens) and its public documentation
@@ -63,7 +63,7 @@ features total).
 
 | Source | Acrobat | PdfCraft | Fidelity | Tests and evidence |
 |---|---|---|---|---|
-| JPEG, PNG, TIFF (multipage, and BigTIFF), GIF, BMP, JPEG 2000 | yes | yes (ICC profiles kept; DPI choices) | good | `create.from-images`, `create.from-multipage-tiff`, `bigtiff_images_become_pages` |
+| JPEG, PNG, TIFF (multipage, and BigTIFF), GIF, BMP, JPEG 2000 | yes | yes (compatible JPEG/PNG ICC and BMP V5 embedded RGB profiles kept; DPI choices) | good | `create.from-images`, `create.from-multipage-tiff`, `bigtiff_images_become_pages` |
 | PCX | yes | no | none | in Acrobat's document types |
 | Plain text | yes | yes | good | `create.from-text` |
 | Clipboard (image or text) | yes | yes | good | `create.from-clipboard` |
@@ -110,6 +110,7 @@ features total).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | BMP profile retention is limited to compatible embedded RGB profiles in V5 headers; linked profiles and existing resolution/color-policy limits remain. |
 | 2026-10-19 | patch | Certificates row: `.p7b`/`.p7c` bundles (DER or PEM `PKCS7`/`CMS`) are read for trust import. |
 | 2026-10-12 | minor | XDP split into data (read and write for XFA forms, already shipped under `form.xfa-data`) and opening `.xdp` as a document (none). Create PDF reads BigTIFF; malformed GIF headers are no longer detected as images. |
 | 2026-10-11 | minor | #773: inferred tables have no invented borders; rotated or overlapping invoice pages use floating shapes and page sections. Full Office layout fidelity remains partial. |

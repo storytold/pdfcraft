@@ -1,5 +1,7 @@
 //! End-to-end tests of the automation tools and the MCP server, on synthetic PDFs.
 
+mod bmp_icc;
+
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "mcp")]
