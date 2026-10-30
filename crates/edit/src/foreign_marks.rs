@@ -164,10 +164,13 @@ fn scan_page(doc: &Document, page: &pdfcraft_model::Page, pieces: &Pieces) -> Sc
     if !named && !data.contains(&b'#') && !data.windows(9).any(|w| w == b"Watermark") {
         return Scan::Clean;
     }
-    let parsed = pieces.parse();
-    if parsed.skipped != 0 || parsed.ambiguous_images != 0 || parsed.ops.len() > MAX_OPERATORS {
-        return Scan::Uncertain;
-    }
+    let mut reader = pdfcraft_content::ops(data);
+    scan_ops(doc, properties.as_ref(), &mut reader, MAX_OPERATORS)
+}
+
+/// Read one operator at a time, with one lookahead to detect overflow. Collecting short operators
+/// before this check can allocate far more memory than their decoded input occupies.
+fn scan_ops(doc: &Document, properties: Option<&Dict>, reader: &mut pdfcraft_content::Ops<'_>, limit: usize) -> Scan {
     let (mut depth, mut stack, mut spans, mut unsafe_left) = (0usize, Vec::<Scope>::new(), Vec::<Range<usize>>::new(), 0usize);
     let (mut text, mut path) = (false, false);
     // Watermark scopes on `stack`, so telling whether one closing is the outermost is one compare,
@@ -177,7 +180,10 @@ fn scan_page(doc: &Document, page: &pdfcraft_model::Page, pieces: &Pieces) -> Sc
     // affected when it was opened before the last change at its own depth: one lookup, however
     // many scopes are open.
     let mut last_change: Vec<usize> = vec![0];
-    for (index, op) in parsed.ops.iter().enumerate() {
+    for (index, op) in reader.by_ref().enumerate() {
+        if index >= limit {
+            return Scan::Uncertain;
+        }
         let count = index.saturating_add(1);
         let name = op.op.as_slice();
         match name {
@@ -204,7 +210,7 @@ fn scan_page(doc: &Document, page: &pdfcraft_model::Page, pieces: &Pieces) -> Sc
                 if stack.len() >= MAX_SCOPES {
                     return Scan::Uncertain;
                 }
-                let watermark = name == b"BDC" && opens_watermark(doc, properties.as_ref(), op);
+                let watermark = name == b"BDC" && opens_watermark(doc, properties, &op);
                 if watermark {
                     open_watermarks = open_watermarks.saturating_add(1);
                 }
@@ -241,7 +247,7 @@ fn scan_page(doc: &Document, page: &pdfcraft_model::Page, pieces: &Pieces) -> Sc
             *slot = count;
         }
     }
-    if !stack.is_empty() {
+    if reader.skipped() != 0 || reader.ambiguous_images() != 0 || !stack.is_empty() {
         return Scan::Uncertain;
     }
     if spans.is_empty() && unsafe_left == 0 { Scan::Clean } else { Scan::Found { spans, unsafe_left } }
@@ -329,4 +335,41 @@ pub fn remove_foreign_watermarks(doc: &mut Document, pages: &[usize]) -> Result<
         }
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Document, Scan, scan_ops};
+
+    const WATERMARK: &str = "/Artifact <</Subtype /Watermark>> BDC q 0.5 g Q EMC";
+
+    #[test]
+    fn foreign_watermark_scanning_stops_at_the_operator_budget() {
+        let doc = Document::new_empty();
+        // Five operators make a removable watermark. One lookahead proves the limit was
+        // exceeded; the remaining operators must never be parsed or retained by the scan.
+        let content = format!("{WATERMARK} q Q q Q");
+        let mut reader = pdfcraft_content::ops(content.as_bytes());
+        assert!(matches!(scan_ops(&doc, None, &mut reader, 5), Scan::Uncertain));
+        assert_eq!(reader.count(), 3, "only one operator beyond the budget was read");
+
+        let mut reader = pdfcraft_content::ops(WATERMARK.as_bytes());
+        assert!(matches!(scan_ops(&doc, None, &mut reader, 5), Scan::Found { spans, unsafe_left: 0 } if spans.len() == 1));
+        let mut empty = pdfcraft_content::ops(b"");
+        assert!(matches!(scan_ops(&doc, None, &mut empty, 0), Scan::Clean));
+    }
+
+    #[test]
+    fn streamed_foreign_watermark_scanning_keeps_parser_uncertainty() {
+        let doc = Document::new_empty();
+        let skipped = format!("{WATERMARK} )");
+        let mut reader = pdfcraft_content::ops(skipped.as_bytes());
+        assert!(matches!(scan_ops(&doc, None, &mut reader, 10), Scan::Uncertain));
+        assert!(reader.skipped() > 0, "the fixture really contains unreadable bytes");
+
+        let ambiguous = format!("{WATERMARK} BI /W 4 /H 1 /BPC 8 /CS /G ID abc");
+        let mut reader = pdfcraft_content::ops(ambiguous.as_bytes());
+        assert!(matches!(scan_ops(&doc, None, &mut reader, 10), Scan::Uncertain));
+        assert_eq!(reader.ambiguous_images(), 1, "the fixture really contains an uncertain inline image");
+    }
 }
