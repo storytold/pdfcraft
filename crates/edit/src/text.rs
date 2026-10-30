@@ -6,8 +6,9 @@
 //! dropped, and every positioning operator stays, so the lines after it keep their places
 //! (`Td`, `T*` and friends move from the line matrix, which showing text doesn't change).
 //!
-//! The new text uses the line's own font when every character has a code and a glyph in it;
-//! otherwise it is set in Helvetica (WinAnsi), and the result says the font was substituted.
+//! The new text uses the line's own font when every character has a code and a glyph in it.
+//! Otherwise the words the font can show keep it and only the others are set in Helvetica
+//! (WinAnsi), run by run, and the result says the font was substituted.
 //! Reflowing a paragraph to a new width is not done here (see `edit.text-reflow`).
 
 use std::collections::HashMap;
@@ -126,6 +127,9 @@ pub struct TextLine {
     /// Chinese/Japanese word split), from `/PCSoft`'s `/N`; 1 when the marker carried none
     /// (#2529). Meaningless otherwise.
     soft_gap: usize,
+    /// The `/PCEdLine` marked-content sequence a replacement mixing fonts wrote the line in
+    /// (see [`fallback::continues_font`]).
+    edited: Option<usize>,
 }
 
 impl TextLine {

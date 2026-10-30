@@ -1,7 +1,7 @@
 use super::blocks::{BlockStyle, TextBlock, paragraph_separator, wrap};
 use super::fallback::{
     Encoder, MAX_TYPE3_GLYPHS, Type3Fallback, drop_unused_fallback_fonts, needs_type3, no_japanese_font, source_encodes, source_family,
-    source_program_completes, source_show, source_space, source_width, type3_encode, type3_font,
+    source_program_completes, source_runs, source_show, source_space, source_width, type3_encode, type3_font,
 };
 use super::interp::{Carry, Origin, TextState, interpret};
 use super::lines::{content_streams, page_dict, rewritten_contents, splice, text_lines};
@@ -101,10 +101,24 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
                 replacement.push(Op::new("Tf", vec![Object::name(&target.font), pdfcraft_content::num(size)]));
                 substituted = Some(format!("{} Type3", fallback.family));
             } else {
+                // The words the line's font can show keep it; only the others are set in the
+                // substitute (#2378): a subset without `V` or `ü` no longer turns the whole line
+                // into Helvetica. Reordered text (right to left, Indic) keeps one run as before.
+                let mixed = font
+                    .as_ref()
+                    .filter(|_| !visual_indic && fallback_shown == text)
+                    .map(|m| source_runs(m, &text))
+                    .filter(|runs| runs.iter().any(|(own, _)| *own));
+                // What the substitute has to show: only the runs the line's font can't.
+                let for_substitute: String = match &mixed {
+                    Some(runs) => runs.iter().filter(|(own, _)| !*own).map(|(_, run)| run.as_str()).collect(),
+                    None => fallback_shown.clone(),
+                };
                 let win = pdfcraft_fonts::win_ansi(&fallback_shown);
                 // WinAnsi turns what it can't show into '?'; refuse rather than print the wrong thing.
-                let back: String = win.iter().map(|b| char::from_u32(u32::from(*b)).unwrap_or('?')).collect();
-                if fallback_shown.chars().zip(back.chars()).any(|(a, b)| b == '?' && a != '?') {
+                let checked = pdfcraft_fonts::win_ansi(&for_substitute);
+                let back: String = checked.iter().map(|b| char::from_u32(u32::from(*b)).unwrap_or('?')).collect();
+                if for_substitute.chars().zip(back.chars()).any(|(a, b)| b == '?' && a != '?') {
                     return Err(EditError::Invalid(format!("\"{text}\" has characters neither {} nor Helvetica can show", target.base_font)));
                 }
                 // The size in text space: the current Tf's size.
@@ -112,8 +126,36 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
                 let family = source_family(&target.base_font);
                 let base = family.base_font(target.bold, target.italic);
                 let substitute_name = format!("PCEd{}", base.replace('-', ""));
-                replacement.push(Op::new("Tf", vec![Object::name(&substitute_name), pdfcraft_content::num(size)]));
-                replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(win))]));
+                match mixed {
+                    Some(runs) => {
+                        let space = font.as_ref().map_or(0.33, |m| source_space(doc, &fonts_res, m));
+                        // Marked as one line, so it reads back as one (see `continues_font`).
+                        replacement.push(Op::new("BMC", vec![Object::name("PCEdLine")]));
+                        for (own, run) in runs {
+                            if own {
+                                replacement.push(Op::new("Tf", vec![Object::name(&target.font), pdfcraft_content::num(size)]));
+                                if let Some(m) = font.as_ref() {
+                                    replacement.extend(source_show(
+                                        m,
+                                        &run,
+                                        target.origin.state.font.as_ref().map_or(target.size, |(_, size)| *size),
+                                        space,
+                                        target.origin.state.char_spacing,
+                                        target.origin.state.word_spacing,
+                                    )?);
+                                }
+                            } else {
+                                replacement.push(Op::new("Tf", vec![Object::name(&substitute_name), pdfcraft_content::num(size)]));
+                                replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(pdfcraft_fonts::win_ansi(&run)))]));
+                            }
+                        }
+                        replacement.push(Op::new("EMC", Vec::new()));
+                    }
+                    None => {
+                        replacement.push(Op::new("Tf", vec![Object::name(&substitute_name), pdfcraft_content::num(size)]));
+                        replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(win))]));
+                    }
+                }
                 replacement.push(Op::new("Tf", vec![Object::name(&target.font), pdfcraft_content::num(size)]));
                 substituted = Some(base.to_string());
                 let mut f = Dict::new();
@@ -126,6 +168,43 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
         }
     }
     // Rebuild: the line's first operator becomes the replacement, its others go.
+    // A line an earlier replacement wrote in two fonts is in a `/PCEdLine` sequence of its own,
+    // with its fonts and the moves standing in for spaces the source font lacks: those go
+    // with the line, or each edit would nest one more (review on #2955). The line then starts in
+    // its own font, set again where the sequence was.
+    if let Some((open, close)) = target.edited.and_then(|open| Some((open, matching_emc(&ops, open)?))) {
+        // Only when the sequence holds nothing but this line: a paragraph rewrite keeps the
+        // delimiters, so other rows can be inside it (review on #2955). Then the sequence stays
+        // as it is, since it is also what reads its own two-font line back as one, and only
+        // this line's operators go.
+        let others_inside = lines.iter().any(|l| l.ops.iter().any(|o| (open..=close).contains(o) && !drops.contains(o)));
+        // Either way the replacement starts in the line's own font: inside the sequence the font
+        // in effect at the line's first operator can be the substitute's, which a replacement
+        // the line's font shows by itself would otherwise inherit (review on #2955).
+        let size = font_size_before(&ops, first).unwrap_or(target.size);
+        replacement.insert(0, Op::new("Tf", vec![Object::name(&target.font), pdfcraft_content::num(size)]));
+        if !others_inside {
+            // What goes is what the replacement stands in for: the marked-content delimiters
+            // (nested ones too, which come in pairs), the fonts and the text-showing operators
+            // (the line's runs and the moves between them). A paragraph rewrite can also write a
+            // row's positioning and text state (`Tm`, `Td`, `Tw`, ...), a `q`/`Q` or a `BT`/`ET`
+            // inside kept delimiters; those stay, or the replacement loses its place and the
+            // content its balance (review on #2955).
+            drops.extend(
+                (open..=close)
+                    .filter(|&i| ops.get(i).is_some_and(|o| [b"BMC".as_slice(), b"BDC", b"EMC", b"Tf", b"Tj", b"TJ"].contains(&o.op.as_slice()))),
+            );
+            let own_font = |i: usize| ops.get(i).is_some_and(|o| o.is("Tf") && o.name(0) == Some(target.font.as_bytes()) && o.num(1) == Some(size));
+            // The same font set just before the sequence (by the last edit) is set again here.
+            if let Some(i) = open.checked_sub(1).filter(|&i| own_font(i)) {
+                drops.insert(i);
+            }
+            // And set back after it: the replacement ends in that font too.
+            if let Some(i) = close.checked_add(1).filter(|&i| own_font(i)) {
+                drops.insert(i);
+            }
+        }
+    }
     let new_data = splice(&pieces, &ops, |i| if i == first { (std::mem::take(&mut replacement), false) } else { (Vec::new(), !drops.contains(&i)) });
     let contents = rewritten_contents(doc, &streams, new_data);
     let page_ref = p.obj;
@@ -139,6 +218,24 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
         }
     })?;
     Ok(LineEdit { substituted })
+}
+
+/// The `EMC` that closes the marked-content sequence `BMC`/`BDC` operator `open` begins.
+fn matching_emc(ops: &[Op], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, op) in ops.iter().enumerate().skip(open) {
+        match op.op.as_slice() {
+            b"BMC" | b"BDC" => depth = depth.saturating_add(1),
+            b"EMC" => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// The size of the last `Tf` before operator `at`.
