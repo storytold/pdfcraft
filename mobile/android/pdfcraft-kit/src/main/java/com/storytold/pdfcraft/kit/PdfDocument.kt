@@ -483,7 +483,7 @@ class PdfDocument(
     }
 
     /**
-     * Toggles or sets Acrobat's "Mark with checkmark" review flag on an annotation.
+     * Toggles or sets "Mark with checkmark" review flag on an annotation.
      */
     fun setCommentMarked(page: Int, index: Int, marked: Boolean, author: String) {
         engine.setCommentMarked(docId, page.toUInt(), index.toUInt(), marked, author)

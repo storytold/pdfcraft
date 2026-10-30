@@ -86,7 +86,7 @@ pub struct FfiAnnotationSummary {
     pub locked: bool,
 }
 
-/// Review state for comment threads (§12.5.6.3 / Acrobat StateModel).
+/// Review state for comment threads (§12.5.6.3 / ISO 32000-2 StateModel).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum FfiReviewState {
     None,

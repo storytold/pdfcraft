@@ -352,7 +352,7 @@ public final class PdfDocument: @unchecked Sendable {
         try engine.setCommentContents(docId: docId, page: UInt32(page), index: UInt32(index), text: text)
     }
 
-    /// Toggles or sets Acrobat's "Mark with checkmark" review flag on an annotation.
+    /// Toggles or sets "Mark with checkmark" review flag on an annotation.
     public func setCommentMarked(page: Int, index: Int, marked: Bool, author: String) throws {
         try engine.setCommentMarked(docId: docId, page: UInt32(page), index: UInt32(index), marked: marked, author: author)
     }

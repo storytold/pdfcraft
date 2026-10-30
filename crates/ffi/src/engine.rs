@@ -1081,7 +1081,7 @@ impl Engine {
         })
     }
 
-    /// Toggles or sets Acrobat's "Mark with checkmark" review flag on an annotation.
+    /// Toggles or sets "Mark with checkmark" review flag on an annotation.
     pub fn set_comment_marked(&self, doc_id: u64, page: u32, index: u32, marked: bool, author: String) -> Result<(), FfiError> {
         catch_panic(|| {
             let mut inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
@@ -2073,7 +2073,7 @@ impl Engine {
 
     // MARK: - Form JavaScript (MOB-6.5)
 
-    /// Sets whether Acrobat Form JavaScript execution is enabled.
+    /// Sets whether Form JavaScript execution is enabled.
     pub fn set_form_javascript_enabled(&self, enabled: bool) -> Result<(), FfiError> {
         #[cfg(not(feature = "js"))]
         {
@@ -2088,7 +2088,7 @@ impl Engine {
         }
     }
 
-    /// Checks if Acrobat Form JavaScript execution is enabled.
+    /// Checks if Form JavaScript execution is enabled.
     pub fn is_form_javascript_enabled(&self) -> Result<bool, FfiError> {
         #[cfg(not(feature = "js"))]
         {
@@ -2352,7 +2352,7 @@ impl Engine {
 
     // MARK: - Accessibility Checker (MOB-6.5)
 
-    /// Evaluates the document against all 32 Acrobat accessibility rules (PDF/UA & WCAG).
+    /// Evaluates the document against all 32 accessibility rules (PDF/UA & WCAG).
     pub fn check_accessibility(&self, doc_id: u64) -> Result<crate::advanced::FfiA11yReport, FfiError> {
         let inner = self.inner.lock().map_err(|e| FfiError::Internal { reason: format!("lock poisoned: {e}") })?;
         let doc = inner.session.get(pdfcraft_engine::DocId(doc_id)).ok_or_else(|| FfiError::NotFound { id: doc_id.to_string() })?;

@@ -161,6 +161,20 @@ public struct PdfToolFormView: View {
         )
     }
 
+    private func defaultPath(for toolName: String) -> String {
+        let base = (document?.name as NSString?)?.deletingPathExtension ?? "document"
+        let suffix: String
+        switch toolName {
+        case "doc_reduce": suffix = "_reduced.pdf"
+        case "doc_optimize": suffix = "_optimized.pdf"
+        case "doc_flatten": suffix = "_flattened.pdf"
+        case "export_text": suffix = ".txt"
+        default: suffix = "_\(toolName.replacingOccurrences(of: "doc_", with: "")).pdf"
+        }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(base + suffix)
+        return url.path
+    }
+
     private func loadSchema() {
         if let parsed = try? parseToolSchema(inputSchemaJson: tool.inputSchemaJson) {
             self.fields = parsed
@@ -173,6 +187,8 @@ public struct PdfToolFormView: View {
                     }
                 } else if f.fieldType == .enum, let first = f.enumOptions.first {
                     stringValues[f.name] = first
+                } else if f.name.lowercased().contains("path") {
+                    stringValues[f.name] = defaultPath(for: tool.name)
                 }
             }
         }

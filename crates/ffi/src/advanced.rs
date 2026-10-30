@@ -12,7 +12,7 @@ pub struct FfiJsResult {
     pub error: Option<String>,
 }
 
-/// Pending alerts, console entries, and errors emitted by Acrobat JavaScript in the document.
+/// Pending alerts, console entries, and errors emitted by JavaScript in the document.
 #[derive(Debug, Clone, PartialEq, Eq, Default, uniffi::Record)]
 pub struct FfiJsOutput {
     pub alerts: Vec<String>,
@@ -111,7 +111,7 @@ pub struct FfiA11yRuleResult {
     pub findings: Vec<String>,
 }
 
-/// Summary report of an Accessibility Checker run across all 32 Acrobat rules.
+/// Summary report of an Accessibility Checker run across all 32 accessibility rules.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct FfiA11yReport {
     pub passed_count: u32,

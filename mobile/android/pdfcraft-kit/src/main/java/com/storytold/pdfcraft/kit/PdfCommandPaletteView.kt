@@ -115,7 +115,7 @@ fun PdfCommandPaletteView(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = tool.title,
+                                text = sanitizeUserText(tool.title),
                                 style = MaterialTheme.typography.bodyLarge,
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -153,7 +153,7 @@ fun PdfCommandPaletteView(
                         Spacer(modifier = Modifier.height(2.dp))
 
                         Text(
-                            text = tool.description,
+                            text = sanitizeUserText(tool.description),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 2

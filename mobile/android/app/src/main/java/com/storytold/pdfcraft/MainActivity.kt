@@ -558,7 +558,7 @@ fun AppRootScreen(
             }
         )
     } else {
-        // Acrobat-Grade Material 3 Home Dashboard & Navigation Suite
+        // Professional Material 3 Home Dashboard & Navigation Suite
         Scaffold(
             topBar = {
                 TopAppBar(
