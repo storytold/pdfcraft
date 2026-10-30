@@ -323,17 +323,29 @@ pub fn font_definitions_for(prefer_hans: bool) -> FontDefinitions {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FontPolicyPlatform {
+    MacOs,
     Windows,
     Other,
 }
 
 fn current_font_policy_platform() -> FontPolicyPlatform {
-    if cfg!(target_os = "windows") { FontPolicyPlatform::Windows } else { FontPolicyPlatform::Other }
+    if cfg!(target_os = "macos") {
+        FontPolicyPlatform::MacOs
+    } else if cfg!(target_os = "windows") {
+        FontPolicyPlatform::Windows
+    } else {
+        FontPolicyPlatform::Other
+    }
 }
 
 fn primary_font_tweak(platform: FontPolicyPlatform, name: &str) -> FontTweak {
     let mut tweak = FontTweak::default();
-    if platform == FontPolicyPlatform::Windows && name == "JetBrainsMono" {
+    if platform == FontPolicyPlatform::MacOs && matches!(name, "Inter" | "Inter-Medium" | "Inter-SemiBold" | "JetBrainsMono") {
+        // At small physical sizes, TrueType fitting stretches these bundled UI glyphs
+        // vertically (#4002). Keep their outlines' proportions on macOS; advances,
+        // baseline alignment and the fallback faces retain their existing policy.
+        tweak.hinting = Some(false);
+    } else if platform == FontPolicyPlatform::Windows && name == "JetBrainsMono" {
         tweak.hinting_target = HintingTarget::Smooth(SmoothHinting { symmetric_rendering: false, ..SmoothHinting::default() });
     }
     tweak

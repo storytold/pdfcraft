@@ -126,14 +126,117 @@ fn galley(fonts: &mut Fonts, family: FontFamily, size: f32, ppp: f32, text: &str
 }
 
 fn hinting_test_fonts(platform: FontPolicyPlatform) -> Fonts {
+    hinting_test_fonts_with_definitions(font_definitions_for_platform(false, platform))
+}
+
+fn hinting_test_fonts_with_definitions(definitions: FontDefinitions) -> Fonts {
     Fonts::new(
         TextOptions {
             subpixel_binning: false,
             color_transfer_function: egui::epaint::FontColorTransferFunction::Gamma(0.75),
             ..TextOptions::default()
         },
-        font_definitions_for_platform(false, platform),
+        definitions,
     )
+}
+
+/// The actual atlas ink, excluding transparent packing padding around the glyph.
+fn glyph_ink_height(fonts: &mut Fonts, family: FontFamily, size: f32, ppp: f32, ch: char) -> usize {
+    let g = galley(fonts, family, size, ppp, &ch.to_string());
+    let glyph = &g.rows[0].glyphs[0];
+    let [x0, y0] = glyph.uv_rect.min.map(usize::from);
+    let [x1, y1] = glyph.uv_rect.max.map(usize::from);
+    let image = fonts.image();
+    let rows: Vec<_> = (y0..y1).filter(|&y| (x0..x1).any(|x| image.pixels[y * image.size[0] + x].a() >= 128)).collect();
+    rows.last().unwrap() - rows.first().unwrap() + 1
+}
+
+/// #4002: at 100%, the real shell's 13.5-point Inter E occupied 11 rows instead of
+/// the font outline's 9.82 pixels. Fractional scales and Retina Auto looked normal.
+/// Compare the raster against the bundled font's unhinted glyph bounds, allowing
+/// one pixel of raster rounding, rather than pinning a particular hinting flag.
+fn assert_primary_glyph_heights_follow_outlines(definitions: FontDefinitions) {
+    use skrifa::{
+        MetadataProvider as _,
+        instance::{LocationRef, Size},
+    };
+    let mut fonts = hinting_test_fonts_with_definitions(definitions.clone());
+    for (family, name) in primary_families() {
+        let data = &definitions.font_data[name];
+        let face = skrifa::FontRef::from_index(data.font.as_ref().as_ref(), data.index).unwrap();
+        for size in [13.5, 11.0, 12.0, 13.0, 14.0, 16.0, 17.0] {
+            for ppp in [1.0, 0.95, 1.25, 1.5, 2.0] {
+                for ch in ['E', 'H', 'x'] {
+                    let id = face.charmap().map(ch).unwrap();
+                    let bounds = face.glyph_metrics(Size::new(size * ppp), LocationRef::default()).bounds(id).unwrap();
+                    let design_height = bounds.y_max - bounds.y_min;
+                    let ink_height = glyph_ink_height(&mut fonts, family.clone(), size, ppp, ch);
+                    assert!(
+                        ink_height as f32 <= design_height.ceil(),
+                        "{name} {ch} at {size}pt/{ppp}ppp: raster {ink_height}px exceeds outline {design_height}px plus raster rounding"
+                    );
+                    assert!(ink_height as f32 + 1.0 >= design_height.floor(), "{name} {ch}: raster squashed below outline");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn macos_embedded_glyph_heights_follow_font_outlines_at_ui_scales() {
+    assert_primary_glyph_heights_follow_outlines(font_definitions_for_platform(false, FontPolicyPlatform::MacOs));
+}
+
+/// Exercise the production selector as well as the injectable policy: routing
+/// macOS to `Other` must expose the same raster defect to this test.
+#[cfg(target_os = "macos")]
+#[test]
+fn native_macos_font_definitions_keep_glyph_proportions() {
+    assert_primary_glyph_heights_follow_outlines(font_definitions_for(false));
+}
+
+#[test]
+fn macos_font_policy_keeps_other_settings_font_bytes_and_fallbacks() {
+    let baseline = font_definitions_for_platform(false, FontPolicyPlatform::Other);
+    let macos = font_definitions_for_platform(false, FontPolicyPlatform::MacOs);
+    assert_eq!(baseline.families, macos.families);
+    assert_eq!(baseline.font_data.keys().collect::<Vec<_>>(), macos.font_data.keys().collect::<Vec<_>>());
+    for (name, data) in &baseline.font_data {
+        let mac_data = &macos.font_data[name];
+        let original_bytes: &[u8] = data.font.as_ref().as_ref();
+        let mac_bytes: &[u8] = mac_data.font.as_ref().as_ref();
+        assert_eq!(original_bytes, mac_bytes, "font bytes for {name}");
+        assert_eq!(data.index, mac_data.index);
+        let mut expected = data.tweak.clone();
+        if matches!(name.as_str(), "Inter" | "Inter-Medium" | "Inter-SemiBold" | "JetBrainsMono") {
+            expected.hinting = Some(false);
+        }
+        assert_eq!(mac_data.tweak, expected, "all other settings for {name}");
+    }
+}
+
+#[test]
+fn macos_font_raster_policy_keeps_logical_layout_and_glyph_coverage() {
+    let mut baseline = hinting_test_fonts(FontPolicyPlatform::Other);
+    let mut macos = hinting_test_fonts(FontPolicyPlatform::MacOs);
+    for (family, name) in primary_families() {
+        for size in [11.0, 13.0, 13.5, 17.0] {
+            for ppp in [0.95, 1.0, 1.25, 1.5, 2.0] {
+                for text in HINTING_CORPUS {
+                    let id = FontId::new(size, family.clone());
+                    assert_eq!(baseline.has_glyphs(&id, text), macos.has_glyphs(&id, text), "{name} coverage");
+                    let original = galley(&mut baseline, family.clone(), size, ppp, text);
+                    let mac = galley(&mut macos, family.clone(), size, ppp, text);
+                    assert_eq!(layout_signature(&original), layout_signature(&mac), "{name} at {size}pt/{ppp}ppp: {text}");
+                    let paragraph = format!("{text} {text} {text}");
+                    let original = baseline.with_pixels_per_point(ppp).layout(paragraph.clone(), id.clone(), Color32::BLACK, 75.0);
+                    let mac = macos.with_pixels_per_point(ppp).layout(paragraph, id, Color32::BLACK, 75.0);
+                    assert!(original.rows.len() > 1, "the control must exercise wrapping");
+                    assert_eq!(layout_signature(&original), layout_signature(&mac), "wrapped {name} at {size}pt/{ppp}ppp: {text}");
+                }
+            }
+        }
+    }
 }
 
 /// The y position of each glyph of `text` laid out by egui at `size` points, in points from

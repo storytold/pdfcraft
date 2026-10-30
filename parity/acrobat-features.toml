@@ -1670,8 +1670,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.theme", "view.theme.light", "view.theme.dark"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/theme.rs::toolbar_and_view_menu_share_three_state_preferences", "crates/ui-egui/src/theme/tests.rs::text_is_readable_on_every_surface"]
-notes = "Toolbar and Display theme share three choices and a preference setter; manual choices exit system mode. Every text colour meets WCAG AA (4.5:1) on every surface in both themes; glyphs are pixel-aligned for sharper text at 100–150 % scaling."
+evidence = ["crates/ui-egui/tests/it/theme.rs::toolbar_and_view_menu_share_three_state_preferences", "crates/ui-egui/src/theme/tests.rs::text_is_readable_on_every_surface", "crates/ui-egui/src/theme/tests.rs::macos_embedded_glyph_heights_follow_font_outlines_at_ui_scales", "crates/ui-egui/src/theme/tests.rs::macos_font_raster_policy_keeps_logical_layout_and_glyph_coverage", "crates/ui-egui/src/theme/tests.rs::macos_font_policy_keeps_other_settings_font_bytes_and_fallbacks"]
+notes = "Toolbar and Display theme share three choices and a preference setter; manual choices exit system mode. Every text colour meets WCAG AA (4.5:1) on every surface in both themes; glyph origins are pixel-aligned for sharper text at 100–150 % scaling. Native macOS uses unhinted outlines for the four bundled primary UI faces to avoid excessive vertical fitting at small sizes (#4002), preserving logical layout, font bytes and fallback policy. Native AppKit menu typography and the reporter's exact Auto/display configuration remain unqualified."
 
 [[feature]]
 id = "view.theme-system"
