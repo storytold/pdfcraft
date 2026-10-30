@@ -24,11 +24,12 @@ mod writer;
 
 pub use budget::{DecodeBudget, MAX_PAGE_DECODED, MAX_PAGE_FORMS};
 pub use bytes::Bytes;
-pub use document::{Document, ReadState, Revision, SourceIdentity, XrefEntry};
+pub use document::{Credential, Document, ReadState, Revision, SourceIdentity, XrefEntry};
 pub use object::{Dict, MAX_DECODED, Name, ObjRef, Object, PdfString, Stream};
 pub use parser::{Lexer, is_whitespace, parse_indirect};
 pub use pdfcraft_crypt::{
-    Algorithm, Auth, Method as CryptMethod, NewEncryption, Permissions, SecurityHandler, effective_password, pdfdoc_byte, pdfdoc_char,
+    Algorithm, Auth, Method as CryptMethod, NewEncryption, PUBSEC_FILTER, Permissions, PublicKeyEncryption, SecurityHandler, effective_password,
+    pdfdoc_byte, pdfdoc_char, permission_bytes, permissions_from_envelope,
 };
 pub use writer::{SaveOptions, pdf_date, serialize, write_full, write_incremental};
 
@@ -48,6 +49,10 @@ pub enum CosError {
     NeedsPassword,
     #[error("the password is incorrect")]
     WrongPassword,
+    /// Public-key security: the document opens with a certificate's private key. The envelopes
+    /// (CMS, one per recipient) are carried so the caller can try its identities on them.
+    #[error("the document is encrypted for specific people (certificate security)")]
+    NeedsCertificate(Vec<Vec<u8>>),
     #[error("unsupported security: {0}")]
     Security(String),
     #[error("internal lock poisoned")]

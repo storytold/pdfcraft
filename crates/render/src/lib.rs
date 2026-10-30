@@ -37,6 +37,9 @@ pub enum OpenError {
     NeedsPassword,
     #[error("the password is incorrect")]
     WrongPassword,
+    /// Certificate security: none of the identities at hand opens it.
+    #[error("the document is encrypted for specific people, and none of your certificates is among them")]
+    NeedsCertificate,
     #[error("{0}")]
     Unsupported(String),
 }

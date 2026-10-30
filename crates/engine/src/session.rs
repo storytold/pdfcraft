@@ -12,10 +12,10 @@ use crate::history::{Keys, MAX_UNDO, Scope, keys_after, scope_of, uses_scripts};
 use crate::{
     BookmarkPage, BookmarkRow, CombineSource, Combined, DataFormat, DocId, Document, Edit, EditError, Hidden, ImageResolution,
     LOW_RESOLUTION_PRINT_DPI, Label, ObjectKind, OptimizeReport, RecoverySnapshot, SignOptions, SourceKind, SplitPart, SummarySort, TrustStore,
-    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, apply_layer_state, comment_list, comment_summary, decode_text, display_bytes, guard, info_fields, js,
-    local_utc_offset, note_warnings, open_source, open_source_with, optimize, outline_rows, parse_ymd, print, print_raster, render_threads,
-    scan_colours, set_default_layer_state, shown_under_redactions, signatures_of, source_kind, sync_xfa_state, undrawn_notices, use_layer_choices,
-    writable, xfa, xfa_sync_datasets,
+    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, apply_layer_state, certificate_secured, comment_list, comment_summary, decode_text, display_bytes, guard,
+    info_fields, js, local_utc_offset, note_warnings, open_source, open_source_with, optimize, outline_rows, parse_ymd, plain_copy, print,
+    print_raster, render_threads, scan_colours, set_default_layer_state, shown_under_redactions, signatures_of, source_kind, sync_xfa_state,
+    undrawn_notices, use_layer_choices, working_file, writable, xfa, xfa_sync_datasets,
 };
 
 mod editing;
@@ -45,4 +45,6 @@ pub struct Session {
     /// What the XFA scripts' time limits are multiplied by (`None`: 1); see
     /// [`Session::with_xfa_time_scale`].
     pub(crate) xfa_time_scale: Option<u32>,
+    /// The person's digital identities, tried on a certificate-protected document's envelopes.
+    pub(crate) identities: Vec<Arc<pdfcraft_sign::DigitalId>>,
 }

@@ -255,6 +255,7 @@ impl PdfCraftApp {
             pending_full_screen: None,
             pending_remote_link: None,
             protect_draft: Default::default(),
+            certificate_draft: Default::default(),
             text_style_draft: Default::default(),
             boxes_draft: Default::default(),
             marks_draft: Default::default(),

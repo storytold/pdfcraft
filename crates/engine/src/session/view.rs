@@ -91,7 +91,9 @@ impl Session {
         let ends = doc.revision_ends();
         let end = *n.checked_sub(1).and_then(|i| ends.get(i)).ok_or_else(|| format!("the document has {} revision(s)", ends.len()))?;
         let name = format!("{} (revision {n}).pdf", doc.name.trim_end_matches(".pdf"));
-        let (bytes, password) = (Arc::new(doc.bytes[..end.min(doc.bytes.len())].to_vec()), doc.password.clone());
+        // Revision ends are offsets in the file itself: a certificate-protected document's
+        // `bytes` are a decrypted rewrite of it.
+        let (bytes, password) = (doc.file_prefix(end).map_err(|e| e.to_string())?, doc.password.clone());
         self.open(name, None, bytes, password.as_deref()).map_err(|e| e.to_string())
     }
 

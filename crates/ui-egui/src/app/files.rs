@@ -205,6 +205,22 @@ impl PdfCraftApp {
                         recovered: pending.recovered,
                         then: pending.then,
                         after_open: pending.after_open,
+                        digital_id: None,
+                    });
+                }
+                Err(pdfcraft_render::OpenError::NeedsCertificate) => {
+                    self.password_prompt = Some(PasswordPrompt {
+                        name: pending.name,
+                        path: pending.path,
+                        bytes,
+                        stamp: pending.stamp,
+                        input: String::new(),
+                        error: self.certificate_error(),
+                        activate: pending.activate,
+                        recovered: pending.recovered,
+                        then: pending.then,
+                        after_open: pending.after_open,
+                        digital_id: Some(String::new()),
                     });
                 }
                 Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error.to_string())]),
@@ -239,6 +255,26 @@ impl PdfCraftApp {
                     recovered: None,
                     then: None,
                     after_open: None,
+                    digital_id: None,
+                });
+                return Ok(());
+            }
+            Err(OpenError::NeedsCertificate) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                let stamp = path.as_deref().and_then(file_watch::Stamp::at);
+                self.password_prompt = Some(PasswordPrompt {
+                    name: name.to_string(),
+                    path,
+                    bytes,
+                    #[cfg(not(target_arch = "wasm32"))]
+                    stamp,
+                    input: String::new(),
+                    error: self.certificate_error(),
+                    activate,
+                    recovered: None,
+                    then: None,
+                    after_open: None,
+                    digital_id: Some(String::new()),
                 });
                 return Ok(());
             }
@@ -418,6 +454,26 @@ impl PdfCraftApp {
             }
             return;
         };
+        // A document encrypted with certificates: the password opens the chosen digital ID,
+        // whose identity joins the session; the document itself is opened with no password.
+        let pw = match &p.digital_id {
+            Some(file) => match certificate_ui::open_digital_id(file, &pw) {
+                Ok(id) => {
+                    let cert = id.certificate.clone();
+                    self.session.add_identity(id);
+                    self.add_digital_id(file, &cert);
+                    None
+                }
+                Err(error) => {
+                    let mut prompt = p;
+                    prompt.input.clear();
+                    prompt.error = Some(error);
+                    self.password_prompt = Some(prompt);
+                    return;
+                }
+            },
+            None => Some(pw),
+        };
         #[cfg(not(target_arch = "wasm32"))]
         if self.ctx.is_some() && !self.run_inline {
             let result = self.schedule_open(OpenRequest {
@@ -425,7 +481,7 @@ impl PdfCraftApp {
                 path: p.path.clone(),
                 stamp: p.stamp,
                 input: open_worker::Input::Bytes(p.bytes.clone()),
-                password: Some(pw),
+                password: pw,
                 activate: p.activate,
                 after_open: p.after_open.clone(),
                 recovered: p.recovered.clone(),
@@ -441,7 +497,7 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         let (path_for_watch, stamp_for_watch) = (p.path.clone(), p.stamp);
         let after_open = p.after_open.clone();
-        match self.try_open(&p.name, p.path, p.bytes, Some(&pw), p.activate) {
+        match self.try_open(&p.name, p.path, p.bytes, pw.as_deref(), p.activate) {
             Err(e) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &p.name), ("e", &e.to_string())]),
             // A recovered encrypted document is open once its prompt is gone.
             Ok(()) if self.password_prompt.is_none() => {
@@ -475,6 +531,12 @@ impl PdfCraftApp {
                 }
             }
         }
+    }
+
+    /// The prompt's error for a document encrypted with certificates: none the first time;
+    /// once a digital ID has been tried, that none of them opens it.
+    fn certificate_error(&self) -> Option<String> {
+        (!self.session.identities().is_empty()).then(|| "None of your digital IDs can open this document.".to_string())
     }
 
     /// Ask for the active document's permissions password, then run `then` (if any).

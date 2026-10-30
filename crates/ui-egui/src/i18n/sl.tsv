@@ -2525,6 +2525,31 @@ animation effects	Off	Izklopljeni
 	Make properties default	Nastavi lastnosti kot privzete
 	Pages selected	Izbrane strani
 	Page properties	Lastnosti strani
+# Encrypt with certificate.
+	Couldn't encrypt: {e}	Šifriranje ni uspelo: {e}
+	Encrypt with certificate…	Šifriraj s potrdilom…
+	Encrypt with Certificate	Šifriraj s potrdilom
+	Only the recipients can open the document, each with the private key of their own certificate.	Dokument lahko odprejo samo prejemniki, vsak z zasebnim ključem svojega potrdila.
+	Recipients	Prejemniki
+	No recipients yet.	Prejemnikov še ni.
+	{name} (you)	{name} (vi)
+	Expires {date}	Poteče {date}
+	All permissions	Vsa dovoljenja
+	Add certificate file…	Dodaj datoteko potrdila…
+	Add your digital ID	Dodaj svojo digitalno identiteto
+	Certificate	Potrdilo
+	None of the recipients is one of your digital IDs: you won't be able to open the saved document.	Noben prejemnik ni ena od vaših digitalnih identitet: shranjenega dokumenta ne boste mogli odpreti.
+	The restrictions apply to recipients without “All permissions”. It's applied when you save.	Omejitve veljajo za prejemnike brez „Vsa dovoljenja“. Uporabljeno ob shranjevanju.
+	Digital ID required	Zahtevana je digitalna identiteta
+	Choose a digital ID file	Izberite datoteko digitalne identitete
+	“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it.	„{name}“ je šifriran za določene osebe. Za odpiranje izberite svojo digitalno identiteto in vnesite njeno geslo.
+	Add at least one recipient.	Dodajte vsaj enega prejemnika.
+	Only certificates with RSA keys can be recipients.	Prejemniki so lahko le potrdila s ključi RSA.
+	None of your digital IDs can open this document.	Nobena od vaših digitalnih identitet ne more odpreti tega dokumenta.
+	Certificate encryption will be applied when you save	Šifriranje s potrdilom bo uporabljeno ob shranjevanju
+	Encrypt for recipient	Šifriraj za prejemnika
+	Encrypt for recipients	Šifriraj za prejemnike
+	The password is incorrect.	Geslo je napačno.
 	Create & Edit	Ustvarjanje in urejanje
 	Review & Compare	Pregled in primerjava
 	Forms & Signatures	Obrazci in podpisi

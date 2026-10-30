@@ -1,10 +1,10 @@
 #[cfg(test)]
 use super::check_refresh_panic;
 use super::{
-    Arc, DocId, Document, Edit, EditCtx, EditError, Label, MAX_UNDO, ObjectKind, OnceLock, RenderPool, SaveOptions, Scope, Session,
-    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, check_permission, comment_list, display_bytes, guard, info_fields, inspect, js, keys_after, note_warnings,
-    render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state, undrawn_notices, uses_scripts,
-    write_incremental, xfa, xfa_sync_datasets,
+    Arc, DocId, Document, Edit, EditCtx, EditError, Label, MAX_UNDO, ObjectKind, OnceLock, RenderPool, Scope, Session, XFA_REMOVED_PREFIX,
+    XFA_SCRIPTS_OFF, certificate_secured, check_permission, comment_list, display_bytes, guard, info_fields, inspect, js, keys_after, note_warnings,
+    plain_copy, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state, undrawn_notices,
+    uses_scripts, working_file, xfa, xfa_sync_datasets,
 };
 use crate::{EditNotice, MarkKind};
 
@@ -295,7 +295,10 @@ impl Session {
     /// Comment and form edits skip the full re-inspection (seconds on very large files): the
     /// comment list and field values are re-read from the object graph instead.
     fn refresh_scoped(doc: &mut Document, scope: Scope) -> Result<(), EditError> {
-        if scope == Scope::Full || doc.info.encrypted != doc.editor.as_ref().is_some_and(|e| e.cos.output_handler().is_some()) {
+        // A certificate-protected document is inspected through a decrypted copy, so its info never
+        // says encrypted: only a change of password encryption needs the full refresh.
+        let password_encrypted = doc.editor.as_ref().is_some_and(|e| e.cos.output_handler().is_some() && !certificate_secured(&e.cos));
+        if scope == Scope::Full || doc.info.encrypted != password_encrypted {
             return Self::refresh(doc);
         }
         if scope == Scope::Content {
@@ -314,11 +317,10 @@ impl Session {
         if matches!(scope, Scope::Comments | Scope::Form) {
             editor.appearances.clear();
         }
-        let bytes = if editor.cos.is_modified() {
-            Arc::new(write_incremental(&editor.cos, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?)
-        } else {
-            editor.cos.bytes().clone()
-        };
+        let file_bytes = working_file(&editor.cos)?;
+        // A certificate-protected file is read through a decrypted copy; signatures are checked
+        // over the file's own bytes.
+        let bytes = if certificate_secured(&editor.cos) { plain_copy(&editor.cos)? } else { file_bytes.clone() };
         if scope == Scope::Metadata {
             for (field, value) in info_fields(&mut doc.info, &editor.cos) {
                 *field = value;
@@ -328,7 +330,7 @@ impl Session {
             #[cfg(test)]
             check_refresh_panic();
             if !doc.signatures.is_empty() {
-                let signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+                let signatures = signatures_of(&editor.cos, &file_bytes, &doc.trust, &doc.sig_cache);
                 doc.signatures = Arc::new(signatures);
             }
             doc.bytes = bytes;
@@ -372,7 +374,7 @@ impl Session {
         }
         doc.info.file_size = bytes.len();
         doc.form = form;
-        let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
+        let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &file_bytes, &doc.trust, &doc.sig_cache) };
         doc.display = display_bytes(Some(editor), &bytes);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
@@ -417,11 +419,10 @@ impl Session {
         Self::release_working(doc);
         sync_xfa_state(doc);
         let Some(editor) = doc.editor.as_mut() else { return Ok(()) };
-        let bytes = if editor.cos.is_modified() {
-            Arc::new(write_incremental(&editor.cos, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?)
-        } else {
-            editor.cos.bytes().clone()
-        };
+        let file_bytes = working_file(&editor.cos)?;
+        // A certificate-protected file is read through a decrypted copy; signatures are checked
+        // over the file's own bytes.
+        let bytes = if certificate_secured(&editor.cos) { plain_copy(&editor.cos)? } else { file_bytes.clone() };
         // The edit must still leave a file the viewer can open; anything else rolls back above.
         pdfcraft_render::check_pages(bytes.clone(), doc.password.as_deref(), doc.info.pages.len()).map_err(|e| EditError::Reopen(e.to_string()))?;
         let (touches_added, touches_marks) = Self::content_refresh_lists(edit);
@@ -429,7 +430,7 @@ impl Session {
             doc.marker_scan = OnceLock::new();
         }
         doc.info.file_size = bytes.len();
-        let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
+        let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &file_bytes, &doc.trust, &doc.sig_cache) };
         doc.display = display_bytes(Some(editor), &bytes);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
@@ -481,11 +482,10 @@ impl Session {
         Self::release_working(doc);
         sync_xfa_state(doc);
         let Some(editor) = doc.editor.as_mut() else { return Ok(()) };
-        let bytes = if editor.cos.is_modified() {
-            Arc::new(write_incremental(&editor.cos, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?)
-        } else {
-            editor.cos.bytes().clone()
-        };
+        let file_bytes = working_file(&editor.cos)?;
+        // A certificate-protected file is read through a decrypted copy; signatures are checked
+        // over the file's own bytes.
+        let bytes = if certificate_secured(&editor.cos) { plain_copy(&editor.cos)? } else { file_bytes.clone() };
         let info = inspect(bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
         // Keep the user's layer choices where the layers still exist.
         let mut info = info;
@@ -513,7 +513,7 @@ impl Session {
         if invalidate_links {
             doc.links = OnceLock::new();
         }
-        let signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+        let signatures = signatures_of(&editor.cos, &file_bytes, &doc.trust, &doc.sig_cache);
         doc.display = display_bytes(Some(editor), &bytes);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());

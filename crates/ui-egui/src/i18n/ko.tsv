@@ -2791,6 +2791,29 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	Add at least one recipient.	수신자를 한 명 이상 추가하세요.
+	Add certificate file…	인증서 파일 추가…
+	Add your digital ID	디지털 ID 추가
+	All permissions	모든 권한
+	Certificate	인증서
+	Certificate encryption will be applied when you save	저장할 때 인증서 암호화가 적용됩니다
+	Choose a digital ID file	디지털 ID 파일 선택
+	Couldn't encrypt: {e}	암호화할 수 없습니다: {e}
+	Digital ID required	디지털 ID 필요
+	Encrypt for recipient	수신자용으로 암호화
+	Encrypt for recipients	수신자용으로 암호화
+	Encrypt with Certificate	인증서로 암호화
+	Encrypt with certificate…	인증서로 암호화…
+	Expires {date}	만료일 {date}
+	No recipients yet.	아직 수신자가 없습니다.
+	None of the recipients is one of your digital IDs: you won't be able to open the saved document.	수신자 중 누구도 사용자의 디지털 ID가 아니므로 저장된 문서를 열 수 없습니다.
+	None of your digital IDs can open this document.	사용자의 디지털 ID 중 이 문서를 열 수 있는 것이 없습니다.
+	Only certificates with RSA keys can be recipients.	RSA 키가 있는 인증서만 수신자가 될 수 있습니다.
+	Only the recipients can open the document, each with the private key of their own certificate.	수신자만 각자 인증서의 개인 키로 문서를 열 수 있습니다.
+	Recipients	수신자
+	The restrictions apply to recipients without “All permissions”. It's applied when you save.	“모든 권한”이 없는 수신자에게는 제한이 적용됩니다. 저장할 때 적용됩니다.
+	{name} (you)	{name} (나)
+	“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it.	“{name}”은(는) 특정 사용자용으로 암호화되어 있습니다. 디지털 ID를 선택하고 비밀번호를 입력해 여세요.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	오늘

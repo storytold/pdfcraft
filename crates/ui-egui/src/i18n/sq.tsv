@@ -2546,6 +2546,30 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+	Add at least one recipient.	Shtoni të paktën një marrës.
+	Add certificate file…	Shto skedar certifikate…
+	Add your digital ID	Shtoni ID-në tuaj dixhitale
+	All permissions	Të gjitha lejet
+	Certificate	Certifikata
+	Certificate encryption will be applied when you save	Enkriptimi me certifikatë do të zbatohet kur të ruani
+	Choose a digital ID file	Zgjidhni një skedar ID-je dixhitale
+	Couldn't encrypt: {e}	Nuk u enkriptua dot: {e}
+	Digital ID required	Kërkohet ID dixhitale
+	Encrypt for recipient	Enkripto për marrësin
+	Encrypt for recipients	Enkripto për marrësit
+	Encrypt with Certificate	Enkripto me certifikatë
+	Encrypt with certificate…	Enkripto me certifikatë…
+	Expires {date}	Skadon më {date}
+	No recipients yet.	Ende nuk ka marrës.
+	None of the recipients is one of your digital IDs: you won't be able to open the saved document.	Asnjë nga marrësit nuk është një nga ID-të tuaja dixhitale: nuk do ta hapni dot dokumentin e ruajtur.
+	None of your digital IDs can open this document.	Asnjë nga ID-të tuaja dixhitale nuk e hap dot këtë dokument.
+	Only certificates with RSA keys can be recipients.	Vetëm certifikatat me çelësa RSA mund të jenë marrës.
+	Only the recipients can open the document, each with the private key of their own certificate.	Dokumentin mund ta hapin vetëm marrësit, secili me çelësin privat të certifikatës së vet.
+	Recipients	Marrësit
+	The password is incorrect.	Fjalëkalimi është i pasaktë.
+	The restrictions apply to recipients without “All permissions”. It's applied when you save.	Kufizimet zbatohen për marrësit pa “Të gjitha lejet”. Zbatohet kur ruani.
+	{name} (you)	{name} (ju)
+	“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it.	“{name}” është i enkriptuar për persona të caktuar. Zgjidhni ID-në tuaj dixhitale dhe shkruani fjalëkalimin e saj për ta hapur.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Sot

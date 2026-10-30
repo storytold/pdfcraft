@@ -78,6 +78,8 @@ impl Case {
             stm_f: self.stm_f.as_bytes().to_vec(),
             str_f: self.str_f.as_bytes().to_vec(),
             ef_f: Vec::new(),
+            sub_filter: Vec::new(),
+            recipients: Vec::new(),
         }
     }
 

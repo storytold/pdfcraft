@@ -291,6 +291,7 @@ impl Edit {
             Edit::Flatten { .. } => Label::of("Flatten"),
             Edit::FlattenFillSign => Label::of("Flatten Fill & Sign"),
             Edit::Protect(_) => Label::of("Protect with password"),
+            Edit::ProtectWithCertificates(p) => plural("Encrypt for recipient", "Encrypt for recipients", p.recipients.len()),
             Edit::RemoveProtection => Label::of("Remove security"),
             // A batch carries its own name, already worded by whoever built it.
             // A batch carries its name as text, so the wording is only the hole (see `BATCH_LABELS`).

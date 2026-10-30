@@ -82,6 +82,15 @@ impl PartialEq for SourceIdentity {
 
 impl Eq for SourceIdentity {}
 
+/// How an encrypted document is opened.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Credential<'a> {
+    /// The standard handler: the user or owner password (`None` tries the empty one).
+    Password(Option<&'a str>),
+    /// Public-key security: what one of the envelopes held for this person.
+    Certificate { seed: [u8; 20], permissions: i32 },
+}
+
 /// What a document reads as: its source ([`SourceIdentity`]), its trailer and every object changed
 /// since it was opened. A clone, or a snapshot that undo restores, has the same state, and every
 /// change makes a different one. Changed objects are compared as allocations, which the state
@@ -206,5 +215,23 @@ pub(super) fn owned_bytes(object: &Object, data: &Arc<Vec<u8>>, depth: usize) ->
 /// that has the same encryption (an earlier revision of the same file).
 pub(super) enum Credentials<'a> {
     Password(Option<&'a str>),
-    Handler { handler: &'a Arc<pdfcraft_crypt::SecurityHandler>, id0: Vec<u8> },
+    /// Public-key security, see [`Credential::Certificate`].
+    Certificate {
+        seed: [u8; 20],
+        permissions: i32,
+    },
+    Handler {
+        handler: &'a Arc<pdfcraft_crypt::SecurityHandler>,
+        id0: Vec<u8>,
+    },
+}
+
+/// `params` as the handler that opened the same encryption holds it. A public-key handler
+/// keeps the permissions its envelope gave up in place of the file's `/P`, so for public-key
+/// security those are not compared; the envelopes and every other entry are.
+pub(super) fn same_encryption(handler: &pdfcraft_crypt::SecurityHandler, mut params: pdfcraft_crypt::EncryptDict) -> pdfcraft_crypt::EncryptDict {
+    if params.filter == pdfcraft_crypt::PUBSEC_FILTER {
+        params.p = handler.dict().p;
+    }
+    params
 }

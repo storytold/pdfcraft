@@ -2521,6 +2521,31 @@ animation effects	Off	Aus
 	Make properties default	Eigenschaften als Standard festlegen
 	Pages selected	Ausgewählte Seiten
 	Page properties	Seiteneigenschaften
+# Encrypt with certificate.
+	Couldn't encrypt: {e}	Verschlüsseln fehlgeschlagen: {e}
+	Encrypt with certificate…	Mit Zertifikat verschlüsseln…
+	Encrypt with Certificate	Mit Zertifikat verschlüsseln
+	Only the recipients can open the document, each with the private key of their own certificate.	Nur die Empfänger können das Dokument öffnen, jeder mit dem privaten Schlüssel seines eigenen Zertifikats.
+	Recipients	Empfänger
+	No recipients yet.	Noch keine Empfänger.
+	{name} (you)	{name} (du)
+	Expires {date}	Läuft am {date} ab
+	All permissions	Alle Berechtigungen
+	Add certificate file…	Zertifikatsdatei hinzufügen…
+	Add your digital ID	Deine digitale ID hinzufügen
+	Certificate	Zertifikat
+	None of the recipients is one of your digital IDs: you won't be able to open the saved document.	Keiner der Empfänger ist eine deiner digitalen IDs: Du wirst das gespeicherte Dokument nicht öffnen können.
+	The restrictions apply to recipients without “All permissions”. It's applied when you save.	Die Einschränkungen gelten für Empfänger ohne „Alle Berechtigungen“. Wird beim Speichern angewendet.
+	Digital ID required	Digitale ID erforderlich
+	Choose a digital ID file	Datei mit digitaler ID auswählen
+	“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it.	„{name}“ ist für bestimmte Personen verschlüsselt. Wähle deine digitale ID und gib ihr Passwort ein, um es zu öffnen.
+	Add at least one recipient.	Füge mindestens einen Empfänger hinzu.
+	Only certificates with RSA keys can be recipients.	Nur Zertifikate mit RSA-Schlüsseln können Empfänger sein.
+	None of your digital IDs can open this document.	Keine deiner digitalen IDs kann dieses Dokument öffnen.
+	Certificate encryption will be applied when you save	Die Zertifikatsverschlüsselung wird beim Speichern angewendet
+	Encrypt for recipient	Für einen Empfänger verschlüsseln
+	Encrypt for recipients	Für Empfänger verschlüsseln
+	The password is incorrect.	Das Passwort ist falsch.
 	Create & Edit	Erstellen & Bearbeiten
 	Review & Compare	Prüfen & Vergleichen
 	Forms & Signatures	Formulare & Signaturen

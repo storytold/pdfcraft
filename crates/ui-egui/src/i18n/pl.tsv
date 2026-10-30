@@ -2496,6 +2496,31 @@ animation effects	Off	Wyłączone
 	Make properties default	Ustaw właściwości jako domyślne
 	Pages selected	Zaznaczone strony
 	Page properties	Właściwości strony
+# Encrypt with certificate.
+	Couldn't encrypt: {e}	Nie można zaszyfrować: {e}
+	Encrypt with certificate…	Szyfruj certyfikatem…
+	Encrypt with Certificate	Szyfruj certyfikatem
+	Only the recipients can open the document, each with the private key of their own certificate.	Dokument mogą otworzyć tylko odbiorcy, każdy kluczem prywatnym własnego certyfikatu.
+	Recipients	Odbiorcy
+	No recipients yet.	Nie ma jeszcze odbiorców.
+	{name} (you)	{name} (ty)
+	Expires {date}	Wygasa {date}
+	All permissions	Wszystkie uprawnienia
+	Add certificate file…	Dodaj plik certyfikatu…
+	Add your digital ID	Dodaj swój identyfikator cyfrowy
+	Certificate	Certyfikat
+	None of the recipients is one of your digital IDs: you won't be able to open the saved document.	Żaden z odbiorców nie jest Twoim identyfikatorem cyfrowym: nie otworzysz zapisanego dokumentu.
+	The restrictions apply to recipients without “All permissions”. It's applied when you save.	Ograniczenia dotyczą odbiorców bez „Wszystkie uprawnienia”. Zostanie zastosowane podczas zapisu.
+	Digital ID required	Wymagany identyfikator cyfrowy
+	Choose a digital ID file	Wybierz plik identyfikatora cyfrowego
+	“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it.	Plik „{name}” jest zaszyfrowany dla określonych osób. Wybierz swój identyfikator cyfrowy i wpisz jego hasło, aby go otworzyć.
+	Add at least one recipient.	Dodaj co najmniej jednego odbiorcę.
+	Only certificates with RSA keys can be recipients.	Odbiorcami mogą być tylko certyfikaty z kluczami RSA.
+	None of your digital IDs can open this document.	Żaden z Twoich identyfikatorów cyfrowych nie może otworzyć tego dokumentu.
+	Certificate encryption will be applied when you save	Szyfrowanie certyfikatem zostanie zastosowane podczas zapisu
+	Encrypt for recipient	Szyfruj dla odbiorcy
+	Encrypt for recipients	Szyfruj dla odbiorców
+	The password is incorrect.	Hasło jest nieprawidłowe.
 	Create & Edit	Tworzenie i edycja
 	Review & Compare	Recenzja i porównanie
 	Forms & Signatures	Formularze i podpisy

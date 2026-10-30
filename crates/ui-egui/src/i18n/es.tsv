@@ -2684,6 +2684,31 @@ animation effects	Off	Desactivados
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Estás viendo la versión firmada de «{from}» (revisión {rev}). Es una instantánea: los cambios aquí no afectarán al original.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Estás viendo la revisión {rev} de «{from}». Es una instantánea: los cambios aquí no afectarán al original.
+# Encrypt with certificate.
+	Couldn't encrypt: {e}	No se pudo cifrar: {e}
+	Encrypt with certificate…	Cifrar con certificado…
+	Encrypt with Certificate	Cifrar con certificado
+	Only the recipients can open the document, each with the private key of their own certificate.	Solo los destinatarios pueden abrir el documento, cada uno con la clave privada de su propio certificado.
+	Recipients	Destinatarios
+	No recipients yet.	Aún no hay destinatarios.
+	{name} (you)	{name} (tú)
+	Expires {date}	Caduca el {date}
+	All permissions	Todos los permisos
+	Add certificate file…	Añadir archivo de certificado…
+	Add your digital ID	Añadir tu ID digital
+	Certificate	Certificado
+	None of the recipients is one of your digital IDs: you won't be able to open the saved document.	Ninguno de los destinatarios es uno de tus ID digitales: no podrás abrir el documento guardado.
+	The restrictions apply to recipients without “All permissions”. It's applied when you save.	Las restricciones se aplican a los destinatarios sin «Todos los permisos». Se aplica al guardar.
+	Digital ID required	Se necesita un ID digital
+	Choose a digital ID file	Elige un archivo de ID digital
+	“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it.	«{name}» está cifrado para personas concretas. Elige tu ID digital e introduce su contraseña para abrirlo.
+	Add at least one recipient.	Añade al menos un destinatario.
+	Only certificates with RSA keys can be recipients.	Solo los certificados con claves RSA pueden ser destinatarios.
+	None of your digital IDs can open this document.	Ninguno de tus ID digitales puede abrir este documento.
+	Certificate encryption will be applied when you save	El cifrado con certificado se aplicará al guardar
+	Encrypt for recipient	Cifrar para un destinatario
+	Encrypt for recipients	Cifrar para destinatarios
+	The password is incorrect.	La contraseña es incorrecta.
 	Attach a file…	Adjuntar un archivo…
 	Delete attachment	Eliminar adjunto
 	Attaching files is not available on the web yet	Adjuntar archivos aún no está disponible en la web
@@ -2763,7 +2788,6 @@ certificate	SHA-256 digest	Huella SHA-256
 	There is no folder to save the digital ID in.	No hay ninguna carpeta donde guardar el ID digital.
 #
 # Passwords.
-	The password is incorrect.	La contraseña es incorrecta.
 	The password must have at least 6 characters.	La contraseña debe tener al menos 6 caracteres.
 	The password must have at least 8 characters.	La contraseña debe tener al menos 8 caracteres.
 	The passwords do not match.	Las contraseñas no coinciden.

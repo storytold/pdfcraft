@@ -133,14 +133,14 @@ use document::{display_bytes, info_fields, recovered_render_password, same_pages
 pub use edit::{BATCH_LABELS, EDIT_LABELS, Edit};
 pub use error::{EditError, SourceProblem};
 pub use fill_sign::{displayed_offset, text_box_at, typed_signature_graphic, typed_signature_shape};
-pub use history::Label;
+pub use history::{CertificateKey, Label};
 use layers::{apply_layer_state, set_default_layer_state, use_layer_choices};
 pub use open::{OpenContext, PreparedDocument};
 pub use page_filter::{PageOrientation, PageParity, filter_pages};
 pub use pictures::MarkFile;
 use pictures::{embed_image, fit_picture, mark_source};
-use protection::unrestricted;
-pub use protection::{Changes, Printing, Protection, SecuritySummary};
+pub use protection::{CertificateProtection, CertificateRecipient, Changes, Printing, Protection, SecuritySummary};
+use protection::{certificate_secured, plain_copy, unlock_with_identities, unrestricted, working_file};
 pub use session::Session;
 pub use sources::{CombineSource, Combined, combine_source_check, source_page_count};
 use sources::{open_source, open_source_with};

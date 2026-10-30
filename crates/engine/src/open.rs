@@ -7,8 +7,9 @@ use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
 
 use crate::history::{Editor, Keys, TextBlocksCache};
 use crate::{
-    AppearanceCache, DocId, Document, Session, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, guard, info_fields, js, note_warnings,
-    recovered_render_password, render_threads, same_pages, signatures_of, xfa, xfa_layout, xfa_values_from_datasets,
+    AppearanceCache, CertificateKey, DocId, Document, Session, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, guard, info_fields, js,
+    note_warnings, plain_copy, recovered_render_password, render_threads, same_pages, signatures_of, unlock_with_identities, xfa, xfa_layout,
+    xfa_values_from_datasets,
 };
 
 /// Immutable session state needed while a document is prepared away from its owning thread.
@@ -18,6 +19,8 @@ pub struct OpenContext {
     js_off: bool,
     trust: Arc<TrustStore>,
     xfa_time_scale: u32,
+    /// The session's identities, for a certificate-protected file.
+    identities: Vec<Arc<pdfcraft_sign::DigitalId>>,
 }
 
 /// A fully prepared document that has not yet been registered in a session.
@@ -33,6 +36,7 @@ struct DocumentOpenData<'a> {
     structure: Result<Result<pdfcraft_cos::Document, pdfcraft_cos::CosError>, Box<dyn std::any::Any + Send>>,
     render_password: Option<String>,
     password: Option<&'a str>,
+    certificate: Option<CertificateKey>,
     xfa: Option<XfaLayout>,
 }
 
@@ -54,7 +58,13 @@ impl OpenContext {
 impl Session {
     /// Snapshot the session state that affects open-time scripts, dates and signature trust.
     pub fn open_context(&self) -> OpenContext {
-        OpenContext { now: self.now(), js_off: self.js_off, trust: self.trust.clone(), xfa_time_scale: self.xfa_time_scale.unwrap_or(1) }
+        OpenContext {
+            now: self.now(),
+            js_off: self.js_off,
+            trust: self.trust.clone(),
+            xfa_time_scale: self.xfa_time_scale.unwrap_or(1),
+            identities: self.identities.clone(),
+        }
     }
 
     /// Prepare a document without adding it to this session.
@@ -91,7 +101,35 @@ impl Session {
         bytes: Arc<Vec<u8>>,
         password: Option<&str>,
     ) -> Result<PreparedDocument, OpenError> {
-        let cos = std::panic::catch_unwind(|| pdfcraft_cos::Document::open_with_password(bytes.clone(), password));
+        let mut cos = std::panic::catch_unwind(|| pdfcraft_cos::Document::open_with_password(bytes.clone(), password));
+        // Certificate security: one of the identities opens it; the renderer and inspector get
+        // a decrypted copy, the editor keeps the file as it is (saves stay encrypted).
+        let mut certificate = None;
+        if let Ok(Err(pdfcraft_cos::CosError::NeedsCertificate(envelopes))) = &cos {
+            let key = unlock_with_identities(&context.identities, envelopes).ok_or(OpenError::NeedsCertificate)?;
+            let opened = pdfcraft_cos::Document::open_with_credential(
+                bytes.clone(),
+                &pdfcraft_cos::Credential::Certificate { seed: key.seed, permissions: key.permissions },
+            )
+            .map_err(|e| OpenError::Invalid(e.to_string()))?;
+            let plain = plain_copy(&opened).map_err(|e| OpenError::Invalid(e.to_string()))?;
+            certificate = Some(key);
+            cos = Ok(Ok(opened));
+            return Self::prepare_from(context, name, path, plain, password, cos, certificate);
+        }
+        Self::prepare_from(context, name, path, bytes, password, cos, certificate)
+    }
+
+    /// The rest of opening, from the document as parsed (`bytes` are what the renderer reads).
+    fn prepare_from(
+        context: &OpenContext,
+        name: String,
+        path: Option<String>,
+        bytes: Arc<Vec<u8>>,
+        password: Option<&str>,
+        cos: Result<Result<pdfcraft_cos::Document, pdfcraft_cos::CosError>, Box<dyn std::any::Any + Send>>,
+        certificate: Option<CertificateKey>,
+    ) -> Result<PreparedDocument, OpenError> {
         // The renderer authenticates on its own. It cannot use the owner password of R2–R4
         // files, so give it the user password that owner authentication recovers.
         let (info, render_password) = match inspect(bytes.clone(), password) {
@@ -111,11 +149,21 @@ impl Session {
         // laid-out form is one appended revision.
         let opts = SaveOptions { mod_date: context.now.map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
         // Write `work` as one more revision and reopen it: what the document then is.
+        // A certificate-protected file is reopened with its key, and the renderer is given a
+        // decrypted copy of the result (as at open); the editor keeps the file as it is.
         let rebase = |work: &pdfcraft_cos::Document| -> Result<(Arc<Vec<u8>>, DocInfo, pdfcraft_cos::Document), String> {
             let new_bytes = write_incremental(work, &opts).map(Arc::new).map_err(|e| e.to_string())?;
-            let new_info = inspect(new_bytes.clone(), render_password.as_deref()).map_err(|e| e.to_string())?;
-            let new_cos = pdfcraft_cos::Document::open_with_password(new_bytes.clone(), password).map_err(|e| e.to_string())?;
-            Ok((new_bytes, new_info, new_cos))
+            let new_cos = match certificate {
+                Some(k) => pdfcraft_cos::Document::open_with_credential(
+                    new_bytes,
+                    &pdfcraft_cos::Credential::Certificate { seed: k.seed, permissions: k.permissions },
+                ),
+                None => pdfcraft_cos::Document::open_with_password(new_bytes, password),
+            }
+            .map_err(|e| e.to_string())?;
+            let shown = if certificate.is_some() { plain_copy(&new_cos).map_err(|e| e.to_string())? } else { new_cos.bytes().clone() };
+            let new_info = inspect(shown.clone(), render_password.as_deref()).map_err(|e| e.to_string())?;
+            Ok((shown, new_info, new_cos))
         };
         let (bytes, info, cos, xfa) = match (info.xfa, cos) {
             (Some(pdfcraft_render::Xfa::Dynamic), Ok(Ok(cos))) if pdfcraft_xfa::existing_layout(&cos).is_none() => {
@@ -232,7 +280,7 @@ impl Session {
         let (bytes, info, cos) = match cos {
             Ok(Ok(cos)) if !info.pages.is_empty() && pdfcraft_organize::page_count(&cos).unwrap_or(0) == 0 => {
                 let mut work = cos.clone();
-                let signed = || pdfcraft_sign::pdf::list(&cos, &bytes, &context.trust).iter().any(|s| s.signed);
+                let signed = || pdfcraft_sign::pdf::list(&cos, cos.bytes(), &context.trust).iter().any(|s| s.signed);
                 let rebuilt = match pdfcraft_organize::recover_page_tree(&mut work) {
                     Ok(n) if n > 0 && !signed() => rebase(&work).ok().filter(|(_, i, _)| same_pages(&i.pages, &info.pages)),
                     _ => None,
@@ -252,8 +300,10 @@ impl Session {
         };
         // XFA notes survive the document being re-read after edits.
         let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
-        let mut document =
-            Self::build_document(&context.trust, DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa });
+        let mut document = Self::build_document(
+            &context.trust,
+            DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, certificate, xfa },
+        );
         // A script that ran away on open turns the form's scripts off for this document.
         document.xfa_template = if ran_away { None } else { xfa_template };
         document.js_output.append(script_output);
@@ -267,11 +317,11 @@ impl Session {
 
     /// The last step of opening: build the document record and register it.
     fn build_document(trust: &Arc<TrustStore>, data: DocumentOpenData<'_>) -> Document {
-        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa } = data;
+        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, certificate, xfa } = data;
         let config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
         let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
-                let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned) };
+                let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned), certificate };
                 let saved = cos.bytes().clone();
                 (
                     Some(Editor {
@@ -293,7 +343,8 @@ impl Session {
             Err(_) => (None, Some("the document structure could not be read for editing".into())),
         };
         let sig_cache = Arc::new(pdfcraft_sign::DigestCache::default());
-        let signatures = editor.as_ref().map(|e| signatures_of(&e.cos, &bytes, trust, &sig_cache)).unwrap_or_default();
+        // Signatures cover the file itself (`bytes` may be a decrypted copy of it).
+        let signatures = editor.as_ref().map(|e| signatures_of(&e.cos, e.cos.bytes(), trust, &sig_cache)).unwrap_or_default();
         // The inspection reads only `/Info`; a file stating its title or author only in XMP still
         // shows them (#2373).
         if let Some(e) = &editor {

@@ -77,7 +77,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
                 Err(EditError::NotPermitted("filling in form fields"))
             }
         }
-        Edit::Protect(_) | Edit::RemoveProtection => {
+        Edit::Protect(_) | Edit::ProtectWithCertificates(_) | Edit::RemoveProtection => {
             if unrestricted(p) {
                 Ok(())
             } else {
@@ -753,6 +753,26 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 seed,
             };
             doc.set_encryption(&params).map_err(|e| EditError::Protection(e.to_string()))?;
+        }
+        Edit::ProtectWithCertificates(p) => {
+            if p.recipients.is_empty() {
+                return Err(EditError::Protection("choose at least one recipient".into()));
+            }
+            let mut envelopes = Vec::with_capacity(p.recipients.len());
+            for r in &p.recipients {
+                let cert = pdfcraft_sign::Certificate::parse(&r.certificate)
+                    .map_err(|e| EditError::Protection(format!("a recipient's certificate could not be read: {e}")))?;
+                let content = [&p.seed[..], &pdfcraft_cos::permission_bytes(r.permissions)].concat();
+                envelopes.push(pdfcraft_sign::envelope::envelope(&cert, &content).map_err(|e| EditError::Protection(e.to_string()))?);
+            }
+            let params = pdfcraft_cos::PublicKeyEncryption {
+                algorithm: p.algorithm,
+                recipients: envelopes,
+                seed: p.seed,
+                permissions: -1,
+                encrypt_metadata: p.encrypt_metadata,
+            };
+            doc.set_public_key_encryption(&params).map_err(|e| EditError::Protection(e.to_string()))?;
         }
         Edit::RemoveProtection => {
             if doc.output_handler().is_none() {

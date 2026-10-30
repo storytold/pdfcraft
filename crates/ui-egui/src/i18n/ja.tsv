@@ -2520,6 +2520,31 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
+# Encrypt with certificate.
+	Couldn't encrypt: {e}	暗号化できませんでした: {e}
+	Encrypt with certificate…	証明書で暗号化…
+	Encrypt with Certificate	証明書で暗号化
+	Only the recipients can open the document, each with the private key of their own certificate.	文書を開けるのは受信者だけで、各受信者は自分の証明書の秘密鍵を使います。
+	Recipients	受信者
+	No recipients yet.	受信者はまだいません。
+	{name} (you)	{name}（自分）
+	Expires {date}	有効期限 {date}
+	All permissions	すべての権限
+	Add certificate file…	証明書ファイルを追加…
+	Add your digital ID	自分のデジタル ID を追加
+	Certificate	証明書
+	None of the recipients is one of your digital IDs: you won't be able to open the saved document.	受信者に自分のデジタル ID が含まれていません。保存した文書を開けなくなります。
+	The restrictions apply to recipients without “All permissions”. It's applied when you save.	制限は「すべての権限」のない受信者に適用されます。保存時に適用されます。
+	Digital ID required	デジタル ID が必要です
+	Choose a digital ID file	デジタル ID ファイルを選択
+	“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it.	「{name}」は特定の人のために暗号化されています。開くには、自分のデジタル ID を選択してパスワードを入力してください。
+	Add at least one recipient.	受信者を 1 人以上追加してください。
+	Only certificates with RSA keys can be recipients.	受信者にできるのは RSA 鍵の証明書だけです。
+	None of your digital IDs can open this document.	どのデジタル ID でもこの文書を開けません。
+	Certificate encryption will be applied when you save	証明書による暗号化は保存時に適用されます
+	Encrypt for recipient	受信者用に暗号化
+	Encrypt for recipients	受信者用に暗号化
+	The password is incorrect.	パスワードが正しくありません。
 	Create & Edit	作成と編集
 	Review & Compare	レビューと比較
 	Forms & Signatures	フォームと署名

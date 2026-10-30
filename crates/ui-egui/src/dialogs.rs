@@ -9,6 +9,7 @@ use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, wid
 
 pub(super) mod appearance;
 pub mod bookmark_styles_ui;
+pub(super) mod certificate_ui;
 pub(super) mod comment_props;
 pub(super) mod credits;
 pub(super) mod marks_ui;
@@ -38,6 +39,7 @@ struct Pending {
     apply_number: bool,
     link_command: Option<&'static str>,
     protect_now: bool,
+    certificate_now: bool,
     boxes_now: bool,
     marks_now: bool,
     export_now: bool,
@@ -420,6 +422,12 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.apply = go;
             req.protect_now = req.apply;
             req.close = req.apply || cancel;
+            return false;
+        }
+        Dialog::EncryptCertificate => {
+            let (go, cancel) = crate::certificate_ui::body(ui, app, &t);
+            req.certificate_now = go;
+            req.close = go || cancel;
             return false;
         }
         Dialog::BookmarksFromTextStyles => {
@@ -1815,6 +1823,9 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     if req.protect_now && app.apply_edit(app.protect_draft.edit()) {
         app.protect_draft = Default::default();
         app.notify_tr("Password protection will be applied when you save");
+    }
+    if req.certificate_now {
+        app.apply_certificate_draft();
     }
     if req.apply_number
         && let Some(edit) = req.number_now.take()

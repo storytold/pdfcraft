@@ -2794,6 +2794,29 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+	Couldn't encrypt: {e}	Không thể mã hóa: {e}
+	Encrypt with certificate…	Mã hóa bằng chứng chỉ…
+	Encrypt with Certificate	Mã hóa bằng chứng chỉ
+	Only the recipients can open the document, each with the private key of their own certificate.	Chỉ những người nhận mới mở được tài liệu, mỗi người bằng khóa riêng tư của chứng chỉ của mình.
+	Recipients	Người nhận
+	No recipients yet.	Chưa có người nhận nào.
+	{name} (you)	{name} (bạn)
+	Expires {date}	Hết hạn {date}
+	All permissions	Mọi quyền
+	Add certificate file…	Thêm tệp chứng chỉ…
+	Add your digital ID	Thêm Digital ID của bạn
+	Certificate	Chứng chỉ
+	None of the recipients is one of your digital IDs: you won't be able to open the saved document.	Không người nhận nào là Digital ID của bạn: bạn sẽ không thể mở tài liệu đã lưu.
+	The restrictions apply to recipients without “All permissions”. It's applied when you save.	Các hạn chế áp dụng cho người nhận không có “Mọi quyền”. Thay đổi được áp dụng khi bạn lưu.
+	Digital ID required	Cần Digital ID
+	Choose a digital ID file	Chọn tệp Digital ID
+	“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it.	“{name}” được mã hóa cho những người cụ thể. Hãy chọn Digital ID của bạn và nhập mật khẩu của nó để mở.
+	Add at least one recipient.	Hãy thêm ít nhất một người nhận.
+	Only certificates with RSA keys can be recipients.	Chỉ chứng chỉ có khóa RSA mới có thể là người nhận.
+	None of your digital IDs can open this document.	Không Digital ID nào của bạn mở được tài liệu này.
+	Certificate encryption will be applied when you save	Mã hóa bằng chứng chỉ sẽ được áp dụng khi bạn lưu
+	Encrypt for recipient	Mã hóa cho người nhận
+	Encrypt for recipients	Mã hóa cho những người nhận
 	Attach a file…	Đính kèm tệp…
 	Delete attachment	Xóa tệp đính kèm
 	Attaching files is not available on the web yet	Chưa thể đính kèm tệp trên web

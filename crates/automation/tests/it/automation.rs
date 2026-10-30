@@ -9284,6 +9284,69 @@ fn a_root_less_write_output_is_atomic_too() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A file from the signing crate's test data (digital IDs and certificates).
+fn sign_test_data(name: &str) -> Vec<u8> {
+    std::fs::read(format!("{}/../sign/tests/data/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+}
+
+#[test]
+fn encrypting_with_certificates_through_the_tools() {
+    let dir = workdir("pubsec");
+    std::fs::write(dir.join("me.p12"), sign_test_data("rsa-aes.p12")).unwrap();
+    std::fs::write(dir.join("ada.p12"), sign_test_data("chain.p12")).unwrap();
+    std::fs::write(dir.join("ec.p12"), sign_test_data("ec-p256.p12")).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // Encrypt for two RSA holders; an EC certificate is refused; the session goes on as owner.
+    assert!(a.call("doc_protect_certificates", &json!({ "doc": doc, "certificates": ["ec.p12"], "password": "test" })).is_err());
+    let r = ok(
+        &mut a,
+        "doc_protect_certificates",
+        json!({ "doc": doc, "certificates": ["ada.p12"], "owners": ["me.p12"], "password": "test", "printing": "none", "copy": false }),
+    );
+    assert_eq!(r["recipients"].as_array().unwrap().len(), 2, "{r}");
+    assert!(r["security"]["method"].as_str().unwrap().contains("certificates (2 recipients)"), "{r}");
+    assert_eq!(page_text(&mut a, doc)[0], "Page 1", "the open session still reads it");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "secret.pdf" }));
+    let saved = std::fs::read(dir.join("secret.pdf")).unwrap();
+    assert!(saved.windows(12).any(|w| w == b"Adobe.PubSec"));
+    assert!(!saved.windows(6).any(|w| w == b"Page 1"), "the text is encrypted");
+    // Without an identity the file cannot be opened, and the message says why.
+    let mut b = auto(&dir);
+    let err = b.call("doc_open", &json!({ "path": "secret.pdf" })).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(err.contains("specific people"), "{err}");
+    // With Ada's identity it opens, reads, and her permissions apply; a save stays encrypted.
+    ok(&mut b, "identity_add", json!({ "path": "ada.p12", "password": "test" }));
+    let d2 = ok(&mut b, "doc_open", json!({ "path": "secret.pdf" }))["doc"].as_u64().unwrap();
+    // Her envelope gives no copying, so extracting text is refused like any restricted file.
+    let refused = b.call("text_extract", &json!({ "doc": d2 })).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(refused.contains("copying"), "{refused}");
+    let info = ok(&mut b, "doc_info", json!({ "doc": d2 }));
+    assert_eq!(info["security"]["protected"], true, "{info}");
+    assert!(info["security"]["method"].as_str().unwrap().contains("certificates (2 recipients)"), "{info}");
+    assert_eq!(
+        (info["security"]["printing"].as_str(), info["security"]["copy"].as_bool(), info["security"]["opened_as_owner"].as_bool()),
+        (Some("none"), Some(false), Some(false)),
+        "Ada's permissions: {info}"
+    );
+    // Ada may not change it: her envelope said so.
+    assert!(b.call("doc_set_info", &json!({ "doc": d2, "key": "Subject", "value": "x" })).is_err());
+    // The author's own identity opens it with everything allowed; an edit saved stays encrypted.
+    let mut c = auto(&dir);
+    ok(&mut c, "identity_add", json!({ "path": "me.p12", "password": "test" }));
+    let d3 = ok(&mut c, "doc_open", json!({ "path": "secret.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut c, "doc_info", json!({ "doc": d3 }))["security"]["opened_as_owner"], true);
+    ok(&mut c, "doc_set_info", json!({ "doc": d3, "key": "Subject", "value": "still private" }));
+    ok(&mut c, "doc_save", json!({ "doc": d3, "path": "secret2.pdf" }));
+    let again = std::fs::read(dir.join("secret2.pdf")).unwrap();
+    assert!(again.windows(12).any(|w| w == b"Adobe.PubSec") && !again.windows(13).any(|w| w == b"still private"));
+    assert_eq!(ok(&mut c, "doc_info", json!({ "doc": d3 }))["subject"], "still private", "the open session reads its own save");
+    let mut d = auto(&dir);
+    ok(&mut d, "identity_add", json!({ "path": "ada.p12", "password": "test" }));
+    let d4 = ok(&mut d, "doc_open", json!({ "path": "secret2.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut d, "doc_info", json!({ "doc": d4 }))["subject"], "still private", "Ada reads the author's save");
+}
+
 #[test]
 fn attaching_and_deleting_files_through_the_tools() {
     let dir = workdir("attach");

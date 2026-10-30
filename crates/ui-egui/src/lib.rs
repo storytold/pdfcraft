@@ -45,6 +45,7 @@ mod menus;
 pub mod marks {
     pub use crate::marks_ui::{MarksDraft, PageRange, Subset};
 }
+pub use certificate_ui::{CertificateDraft, Recipient};
 pub use create_ui::Clip;
 pub use link_ui::LinkDraft;
 pub use optimize_ui::{OptimizeDraft, OptimizeTab};
@@ -94,6 +95,7 @@ use canvas::wheel_pager;
 use canvas::zoom_snap;
 use dialogs::appearance;
 pub use dialogs::bookmark_styles_ui;
+use dialogs::certificate_ui;
 use dialogs::comment_props;
 use dialogs::credits;
 use dialogs::marks_ui;
@@ -589,6 +591,7 @@ pub struct PdfCraftApp {
     pub(crate) word_count_draft: word_count_ui::Draft,
     /// Protect Using Password dialog state.
     pub protect_draft: protect::ProtectDraft,
+    pub certificate_draft: certificate_ui::CertificateDraft,
     /// New bookmarks from text styles dialog state (#1693).
     pub text_style_draft: bookmark_styles_ui::TextStyleDraft,
     /// Set Page Boxes dialog state.

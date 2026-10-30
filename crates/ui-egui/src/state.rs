@@ -113,6 +113,8 @@ pub enum Dialog {
     PageProps,
     /// Protect Using Password.
     Protect,
+    /// Encrypt with Certificate.
+    EncryptCertificate,
     /// Bookmarks ▸ New bookmarks from text styles (#1693).
     BookmarksFromTextStyles,
     /// Set Page Boxes (crop, trim, bleed, art, media).
@@ -329,6 +331,9 @@ pub struct PasswordPrompt {
     pub(crate) then: Option<&'static str>,
     /// A link destination to apply after the linked PDF is unlocked.
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
+    /// The document is encrypted with certificates: the digital ID file chosen to open it
+    /// (empty until one is), whose password `input` is.
+    pub digital_id: Option<String>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
