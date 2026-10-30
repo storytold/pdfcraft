@@ -32,6 +32,58 @@ fn the_page_range_field_is_named_for_screen_readers() {
     h.get_by_role_and_label(Role::TextInput, "Pages");
 }
 
+/// Print and Cancel buttons remain visible and reachable on small screens (#4973).
+#[test]
+fn print_dialog_buttons_remain_accessible_on_small_screens() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 500.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, Some(Dialog::Print));
+    let cancel = h.get_by_role_and_label(Role::Button, "Cancel").rect();
+    assert!(cancel.max.y <= 500.0, "Cancel button rect {cancel:?} is off the 500pt screen");
+    let save_or_print = if h.state().print_draft.printer.is_some() {
+        h.get_by_role_and_label(Role::Button, "Print").rect()
+    } else {
+        h.get_by_role_and_label(Role::Button, "Save as PDF").rect()
+    };
+    assert!(save_or_print.max.y <= 500.0, "Action button rect {save_or_print:?} is off the 500pt screen");
+    h.get_by_role_and_label(Role::Button, "Cancel").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None, "Cancel button clicked and closed the dialog");
+}
+
+/// On very short viewports (<300pt), the dialog still fits without fixed minimum height overflow (#4973).
+#[test]
+fn print_dialog_buttons_remain_accessible_on_short_viewports() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 280.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, Some(Dialog::Print));
+    let cancel = h.get_by_role_and_label(Role::Button, "Cancel").rect();
+    assert!(cancel.max.y <= 280.0, "Cancel button rect {cancel:?} is off the 280pt screen");
+    let save_or_print = if h.state().print_draft.printer.is_some() {
+        h.get_by_role_and_label(Role::Button, "Print").rect()
+    } else {
+        h.get_by_role_and_label(Role::Button, "Save as PDF").rect()
+    };
+    assert!(save_or_print.max.y <= 280.0, "Action button rect {save_or_print:?} is off the 280pt screen");
+    h.get_by_role_and_label(Role::Button, "Cancel").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None, "Cancel button clicked and closed the dialog on short viewport");
+}
+
 #[test]
 fn current_print_page_saves_the_viewed_page_when_labels_restart() {
     // Five distinct painted pages, labelled i, ii, iii, 1, 2.
