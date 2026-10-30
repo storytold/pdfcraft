@@ -194,9 +194,20 @@ pub(crate) fn union(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
     [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]
 }
 
+/// `a` narrowed to its overlap with `b` (nested clips intersect). A pair that shares no area comes
+/// back inverted (`x0 > x1` or `y0 > y1`), which fails every later overlap test on its own --
+/// nothing more needs to notice that the clip is now empty.
+fn narrow(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+    [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])]
+}
+
 #[derive(Clone)]
 pub(super) struct Ts {
     pub(super) ctm: Matrix,
+    /// The page-space bounding box of the rectangular clip in force, if any (`re` `W`/`W*` `n`;
+    /// ISO 32000-2 §8.5.4). `q`/`Q` save and restore it along with the rest of `Ts`. A form drawn
+    /// inside it inherits it, narrowed further by the form's own `/BBox` ([`super::lines`]).
+    pub(super) clip: Option<[f64; 4]>,
     /// The operators that set the current fill colour (`g`, `rg`, `k`, or `cs` + `sc`/`scn`).
     pub(super) fill: Vec<Op>,
     pub(super) font: Option<(Vec<u8>, Rc<Metrics>)>,
@@ -445,6 +456,7 @@ impl Carry {
     pub(super) fn new() -> Self {
         let ts = Ts {
             ctm: Matrix::IDENTITY,
+            clip: None,
             fill: Vec::new(),
             font: None,
             face: None,
@@ -769,7 +781,28 @@ pub(super) fn interpret(
     let mut bt = 0usize;
     let mut marked =
         MarkedContent { regions: std::mem::take(&mut carry.marked), layers: std::mem::take(&mut carry.layers), ..MarkedContent::default() };
+    // A pending `x y w h re`, and whether a `W`/`W*` has marked it as the path that `n` turns into
+    // the new clip (ISO 32000-2 §8.5.4) -- the common "set a rectangular clip" idiom. Several
+    // `re`s before `W n` keep only the last; any other operator between `re` and `n` drops it.
+    let mut pending_clip: Option<[f64; 4]> = None;
+    let mut clip_pending = false;
     for (i, op) in ops.iter().enumerate() {
+        match op.op.as_slice() {
+            b"re" => pending_clip = op.nums::<4>().map(|[x, y, w, h]| [x.min(x + w), y.min(y + h), x.max(x + w), y.max(y + h)]),
+            b"W" | b"W*" => clip_pending = pending_clip.is_some(),
+            b"n" => {
+                if clip_pending && let Some(r) = pending_clip {
+                    let page_rect = ts.ctm.bbox(r);
+                    ts.clip = Some(ts.clip.map_or(page_rect, |c| narrow(c, page_rect)));
+                }
+                pending_clip = None;
+                clip_pending = false;
+            }
+            _ => {
+                pending_clip = None;
+                clip_pending = false;
+            }
+        }
         match op.op.as_slice() {
             // No depth cap: every `EMC` pops, so a capped push would pair it with the enclosing
             // sequence (#3573). Both stacks stay bounded by the number of operators.

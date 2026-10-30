@@ -3947,6 +3947,47 @@ fn reading_follows_form_xobjects() {
     assert!(own[0].is_form && own[0].object == Some(pdfcraft_cos::ObjRef::new(6, 0)), "{own:?}");
 }
 
+/// #3503: a form XObject's `/BBox` clips its content, so text drawn outside it is not shown and
+/// should not be read either -- matching the renderer, which already honours the clip.
+#[test]
+fn form_bbox_clips_text_from_reading() {
+    let page = stream("", "/Fm Do");
+    let fm = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 50 50] /Resources << /Font << /F1 6 0 R >> >>",
+        "BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 100 100 Td (OUTSIDE) Tj ET",
+    );
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /XObject << /Fm 5 0 R >> >> /Contents 4 0 R >>",
+        &page,
+        &fm,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]);
+    let texts: Vec<String> = text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["INSIDE"]);
+}
+
+/// #3503: a page's own `re`/`W`/`n` clip (not a form's `/BBox`) hides text outside it the same
+/// way, and `Q` lifts it again -- the clip is scoped to its `q`/`Q` like the rest of the graphics
+/// state, not a one-way switch.
+#[test]
+fn page_re_w_n_clip_hides_text_from_reading_until_q() {
+    let page = stream(
+        "",
+        "q 0 0 50 50 re W n BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 100 100 Td (HIDDEN) Tj ET Q BT /F1 12 Tf 100 100 Td (AFTER) Tj ET",
+    );
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+        &page,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]);
+    let texts: Vec<String> = text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["INSIDE", "AFTER"]);
+}
+
 /// A chain of forms, each drawing the next twenty times, twelve deep: within the depth cap but
 /// 20^11 visits without a budget. Reading stops at the page's visit budget instead of hanging.
 #[test]
@@ -4061,24 +4102,28 @@ fn forms_that_fan_out_a_hundred_ways_stop_quickly_and_say_so() {
 
 /// Forms that draw themselves or each other, have no resources, a malformed matrix, or are
 /// missing are read once (or skipped) without panicking or looping.
+///
+/// `/BBox [0 0 20 420]` is wide enough to hold every form's own text below (#3503 clips a form's
+/// content to its `/BBox`; this test is about the loop and resource handling, not clipping).
 #[test]
 fn hostile_form_xobjects_are_read_once() {
     let page = stream("", "/Loop Do /A Do /NoRes Do /Bad Do /Missing Do /F1 Do");
     let font = "/Font << /F1 5 0 R >>";
     let lp = stream(
-        &format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /Loop 6 0 R >> >>"),
+        &format!("/Subtype /Form /BBox [0 0 20 420] /Resources << {font} /XObject << /Loop 6 0 R >> >>"),
         "/Loop Do BT /F1 10 Tf 10 10 Td (once) Tj ET",
     );
     let a = stream(
-        &format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /B 8 0 R >> >>"),
+        &format!("/Subtype /Form /BBox [0 0 20 420] /Resources << {font} /XObject << /B 8 0 R >> >>"),
         "/B Do BT /F1 10 Tf 10 100 Td (from a) Tj ET",
     );
     let b = stream(
-        &format!("/Subtype /Form /BBox [0 0 9 9] /Resources << {font} /XObject << /A 7 0 R >> >>"),
+        &format!("/Subtype /Form /BBox [0 0 20 420] /Resources << {font} /XObject << /A 7 0 R >> >>"),
         "/A Do BT /F1 10 Tf 10 200 Td (from b) Tj ET",
     );
-    let nores = stream("/Subtype /Form /BBox [0 0 9 9]", "BT /F1 10 Tf 10 300 Td (inherited) Tj ET");
-    let bad = stream(&format!("/Subtype /Form /BBox [0 0 9 9] /Matrix [1 0 0] /Resources << {font} >>"), "BT /F1 10 Tf 10 400 Td (bad matrix) Tj ET");
+    let nores = stream("/Subtype /Form /BBox [0 0 20 420]", "BT /F1 10 Tf 10 300 Td (inherited) Tj ET");
+    let bad =
+        stream(&format!("/Subtype /Form /BBox [0 0 20 420] /Matrix [1 0 0] /Resources << {font} >>"), "BT /F1 10 Tf 10 400 Td (bad matrix) Tj ET");
     let doc = build(&[
         "<< /Type /Catalog /Pages 2 0 R >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
