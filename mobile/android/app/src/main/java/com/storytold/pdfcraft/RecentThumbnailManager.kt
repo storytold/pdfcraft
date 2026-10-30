@@ -74,3 +74,4 @@ object RecentThumbnailManager {
         } catch (_: Exception) {}
     }
 }
+

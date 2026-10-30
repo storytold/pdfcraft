@@ -15,17 +15,33 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.BrandingWatermark
+import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
+import androidx.compose.material.icons.automirrored.outlined.NoteAdd
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Handyman
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -123,6 +139,34 @@ object RecentDocumentsManager {
     }
 }
 
+enum class AppThemeMode {
+    SYSTEM,
+    LIGHT,
+    DARK
+}
+
+object ThemePreferences {
+    private const val PREFS_NAME = "pdfcraft_settings"
+    private const val KEY_THEME = "app_theme_mode"
+
+    fun getTheme(context: Context): AppThemeMode {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val modeStr = prefs.getString(KEY_THEME, AppThemeMode.SYSTEM.name) ?: AppThemeMode.SYSTEM.name
+        return try {
+            AppThemeMode.valueOf(modeStr)
+        } catch (_: Exception) {
+            AppThemeMode.SYSTEM
+        }
+    }
+
+    fun setTheme(context: Context, mode: AppThemeMode) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_THEME, mode.name)
+            .apply()
+    }
+}
+
 class MainActivity : ComponentActivity() {
     private var currentDocument: PdfDocument? = null
 
@@ -140,14 +184,29 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         setContent {
-            MaterialTheme {
+            var themeMode by remember { mutableStateOf(ThemePreferences.getTheme(this)) }
+            val systemDark = isSystemInDarkTheme()
+            val isDark = when (themeMode) {
+                AppThemeMode.SYSTEM -> systemDark
+                AppThemeMode.LIGHT -> false
+                AppThemeMode.DARK -> true
+            }
+
+            MaterialTheme(
+                colorScheme = if (isDark) darkColorScheme() else lightColorScheme()
+            ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
                     AppRootScreen(
                         initialIntent = intent,
-                        onDocumentChanged = { currentDocument = it }
+                        onDocumentChanged = { currentDocument = it },
+                        themeMode = themeMode,
+                        onThemeChanged = { newMode ->
+                            themeMode = newMode
+                            ThemePreferences.setTheme(this, newMode)
+                        }
                     )
                 }
             }
@@ -181,7 +240,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AppRootScreen(
     initialIntent: Intent?,
-    onDocumentChanged: (PdfDocument?) -> Unit
+    onDocumentChanged: (PdfDocument?) -> Unit,
+    themeMode: AppThemeMode = AppThemeMode.SYSTEM,
+    onThemeChanged: (AppThemeMode) -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -495,15 +556,15 @@ fun AppRootScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.primary,
+                                color = MaterialTheme.colorScheme.primaryContainer,
                                 modifier = Modifier.size(32.dp)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
-                                    Text(
-                                        text = "PDF",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onPrimary
+                                    Icon(
+                                        imageVector = Icons.Outlined.PictureAsPdf,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
                             }
@@ -534,25 +595,45 @@ fun AppRootScreen(
                     NavigationBarItem(
                         selected = selectedHomeTab == 0,
                         onClick = { selectedHomeTab = 0 },
-                        icon = { Text("🏠", style = MaterialTheme.typography.titleMedium) },
+                        icon = {
+                            Icon(
+                                imageVector = if (selectedHomeTab == 0) Icons.Filled.Home else Icons.Outlined.Home,
+                                contentDescription = "Home"
+                            )
+                        },
                         label = { Text("Home") }
                     )
                     NavigationBarItem(
                         selected = selectedHomeTab == 1,
                         onClick = { selectedHomeTab = 1 },
-                        icon = { Text("📁", style = MaterialTheme.typography.titleMedium) },
+                        icon = {
+                            Icon(
+                                imageVector = if (selectedHomeTab == 1) Icons.Filled.Folder else Icons.Outlined.Folder,
+                                contentDescription = "Files"
+                            )
+                        },
                         label = { Text("Files") }
                     )
                     NavigationBarItem(
                         selected = selectedHomeTab == 2,
                         onClick = { selectedHomeTab = 2 },
-                        icon = { Text("🛠️", style = MaterialTheme.typography.titleMedium) },
+                        icon = {
+                            Icon(
+                                imageVector = if (selectedHomeTab == 2) Icons.Filled.Handyman else Icons.Outlined.Handyman,
+                                contentDescription = "Tools"
+                            )
+                        },
                         label = { Text("Tools") }
                     )
                     NavigationBarItem(
                         selected = selectedHomeTab == 3,
                         onClick = { selectedHomeTab = 3 },
-                        icon = { Text("⚙️", style = MaterialTheme.typography.titleMedium) },
+                        icon = {
+                            Icon(
+                                imageVector = if (selectedHomeTab == 3) Icons.Filled.Settings else Icons.Outlined.Settings,
+                                contentDescription = "Settings"
+                            )
+                        },
                         label = { Text("Settings") }
                     )
                 }
@@ -577,7 +658,9 @@ fun AppRootScreen(
                                             photoPickerLauncher.launch("image/*")
                                         }
                                     ) {
-                                        Text("📷  Photos to PDF")
+                                        Icon(Icons.Outlined.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Photos to PDF")
                                     }
                                     TextButton(
                                         onClick = {
@@ -585,7 +668,9 @@ fun AppRootScreen(
                                             createBlankDocument()
                                         }
                                     ) {
-                                        Text("📄  New Blank PDF")
+                                        Icon(Icons.AutoMirrored.Outlined.NoteAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("New Blank PDF")
                                     }
                                     TextButton(
                                         onClick = {
@@ -593,7 +678,9 @@ fun AppRootScreen(
                                             launcher.launch(arrayOf("application/pdf"))
                                         }
                                     ) {
-                                        Text("📂  Open PDF File")
+                                        Icon(Icons.Outlined.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Open PDF File")
                                     }
                                 }
                             }
@@ -601,10 +688,9 @@ fun AppRootScreen(
                         ExtendedFloatingActionButton(
                             onClick = { isFabExpanded = !isFabExpanded },
                             icon = {
-                                Text(
-                                    text = if (isFabExpanded) "✕" else "+",
-                                    fontWeight = FontWeight.Bold,
-                                    style = MaterialTheme.typography.titleLarge
+                                Icon(
+                                    imageVector = if (isFabExpanded) Icons.Filled.Close else Icons.Filled.Add,
+                                    contentDescription = null
                                 )
                             },
                             text = { Text(if (isFabExpanded) "Close" else "Create") }
@@ -640,22 +726,27 @@ fun AppRootScreen(
                                         .weight(1f)
                                         .height(90.dp)
                                         .clickable { launcher.launch(arrayOf("application/pdf")) }
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .padding(10.dp),
-                                        verticalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text("📁", style = MaterialTheme.typography.titleMedium)
-                                        Text(
-                                            text = "Open File",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                                        )
-                                    }
-                                }
+                                 ) {
+                                     Column(
+                                         modifier = Modifier
+                                             .fillMaxSize()
+                                             .padding(10.dp),
+                                         verticalArrangement = Arrangement.SpaceBetween
+                                     ) {
+                                         Icon(
+                                             imageVector = Icons.Outlined.FolderOpen,
+                                             contentDescription = null,
+                                             tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                             modifier = Modifier.size(24.dp)
+                                         )
+                                         Text(
+                                             text = "Open File",
+                                             style = MaterialTheme.typography.labelMedium,
+                                             fontWeight = FontWeight.SemiBold,
+                                             color = MaterialTheme.colorScheme.onPrimaryContainer
+                                         )
+                                     }
+                                 }
 
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
@@ -664,22 +755,27 @@ fun AppRootScreen(
                                         .weight(1f)
                                         .height(90.dp)
                                         .clickable { photoPickerLauncher.launch("image/*") }
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .padding(10.dp),
-                                        verticalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text("📷", style = MaterialTheme.typography.titleMedium)
-                                        Text(
-                                            text = "Scan / Photos",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.onSecondaryContainer
-                                        )
-                                    }
-                                }
+                                 ) {
+                                     Column(
+                                         modifier = Modifier
+                                             .fillMaxSize()
+                                             .padding(10.dp),
+                                         verticalArrangement = Arrangement.SpaceBetween
+                                     ) {
+                                         Icon(
+                                             imageVector = Icons.Outlined.PhotoCamera,
+                                             contentDescription = null,
+                                             tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                             modifier = Modifier.size(24.dp)
+                                         )
+                                         Text(
+                                             text = "Scan / Photos",
+                                             style = MaterialTheme.typography.labelMedium,
+                                             fontWeight = FontWeight.SemiBold,
+                                             color = MaterialTheme.colorScheme.onSecondaryContainer
+                                         )
+                                     }
+                                 }
 
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
@@ -688,22 +784,27 @@ fun AppRootScreen(
                                         .weight(1f)
                                         .height(90.dp)
                                         .clickable { createBlankDocument() }
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .padding(10.dp),
-                                        verticalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text("📄", style = MaterialTheme.typography.titleMedium)
-                                        Text(
-                                            text = "Blank PDF",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.onTertiaryContainer
-                                        )
-                                    }
-                                }
+                                 ) {
+                                     Column(
+                                         modifier = Modifier
+                                             .fillMaxSize()
+                                             .padding(10.dp),
+                                         verticalArrangement = Arrangement.SpaceBetween
+                                     ) {
+                                         Icon(
+                                             imageVector = Icons.AutoMirrored.Outlined.NoteAdd,
+                                             contentDescription = null,
+                                             tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                             modifier = Modifier.size(24.dp)
+                                         )
+                                         Text(
+                                             text = "Blank PDF",
+                                             style = MaterialTheme.typography.labelMedium,
+                                             fontWeight = FontWeight.SemiBold,
+                                             color = MaterialTheme.colorScheme.onTertiaryContainer
+                                         )
+                                     }
+                                 }
 
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
@@ -712,22 +813,27 @@ fun AppRootScreen(
                                         .weight(1f)
                                         .height(90.dp)
                                         .clickable { loadDemoDocument() }
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .padding(10.dp),
-                                        verticalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text("✨", style = MaterialTheme.typography.titleMedium)
-                                        Text(
-                                            text = "Sample",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
+                                 ) {
+                                     Column(
+                                         modifier = Modifier
+                                             .fillMaxSize()
+                                             .padding(10.dp),
+                                         verticalArrangement = Arrangement.SpaceBetween
+                                     ) {
+                                         Icon(
+                                             imageVector = Icons.Outlined.AutoAwesome,
+                                             contentDescription = null,
+                                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                             modifier = Modifier.size(24.dp)
+                                         )
+                                         Text(
+                                             text = "Sample",
+                                             style = MaterialTheme.typography.labelMedium,
+                                             fontWeight = FontWeight.SemiBold,
+                                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                                         )
+                                     }
+                                 }
                             }
 
                             // Error Banner
@@ -906,7 +1012,12 @@ fun AppRootScreen(
                                                         refreshRecents()
                                                     }
                                                 ) {
-                                                    Text("✕", style = MaterialTheme.typography.labelSmall)
+                                                    Icon(
+                                                        imageVector = Icons.Outlined.Close,
+                                                        contentDescription = "Remove",
+                                                        modifier = Modifier.size(16.dp),
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
                                                 }
                                             }
                                         }
@@ -942,7 +1053,12 @@ fun AppRootScreen(
                                         .padding(16.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("📂", style = MaterialTheme.typography.titleLarge)
+                                    Icon(
+                                        imageVector = Icons.Outlined.Folder,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(32.dp)
+                                    )
                                     Spacer(modifier = Modifier.width(16.dp))
                                     Column {
                                         Text("Browse Device Files", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
@@ -974,7 +1090,12 @@ fun AppRootScreen(
                                         .padding(16.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("📥", style = MaterialTheme.typography.titleLarge)
+                                    Icon(
+                                        imageVector = Icons.Outlined.Download,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(32.dp)
+                                    )
                                     Spacer(modifier = Modifier.width(16.dp))
                                     Column {
                                         Text("Downloads Folder", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
@@ -997,19 +1118,19 @@ fun AppRootScreen(
                                 Text("Convert & Export", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    ToolCard(modifier = Modifier.weight(1f), icon = "📄", title = "Export Word", desc = "Export to .docx") {
+                                    ToolCard(modifier = Modifier.weight(1f), icon = Icons.Outlined.Description, title = "Export Word", desc = "Export to .docx") {
                                         launchTool("export_word")
                                     }
-                                    ToolCard(modifier = Modifier.weight(1f), icon = "📊", title = "PowerPoint", desc = "Export to .pptx") {
+                                    ToolCard(modifier = Modifier.weight(1f), icon = Icons.Outlined.Slideshow, title = "PowerPoint", desc = "Export to .pptx") {
                                         launchTool("export_pptx")
                                     }
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    ToolCard(modifier = Modifier.weight(1f), icon = "🖼️", title = "Export Images", desc = "PNG, JPEG, TIFF") {
+                                    ToolCard(modifier = Modifier.weight(1f), icon = Icons.Outlined.Image, title = "Export Images", desc = "PNG, JPEG, TIFF") {
                                         launchTool("export_images")
                                     }
-                                    ToolCard(modifier = Modifier.weight(1f), icon = "🏛️", title = "Convert PDF/A", desc = "Archival ISO 19005") {
+                                    ToolCard(modifier = Modifier.weight(1f), icon = Icons.Outlined.Verified, title = "Convert PDF/A", desc = "Archival ISO 19005") {
                                         launchTool("convert_pdfa")
                                     }
                                 }
@@ -1019,28 +1140,28 @@ fun AppRootScreen(
                                 Text("Edit & Content", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    ToolCard(modifier = Modifier.weight(1f), icon = "✏️", title = "Draw & Markup", desc = "Pen, highlight, ink") {
+                                    ToolCard(modifier = Modifier.weight(1f), icon = Icons.Outlined.Draw, title = "Draw & Markup", desc = "Pen, highlight, ink") {
                                         launchTool("draw")
                                     }
-                                    ToolCard(modifier = Modifier.weight(1f), icon = "🔤", title = "Add Text", desc = "Insert page text") {
+                                    ToolCard(modifier = Modifier.weight(1f), icon = Icons.Outlined.TextFields, title = "Add Text", desc = "Insert page text") {
                                         launchTool("add_text")
                                     }
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    ToolCard(modifier = Modifier.weight(1f), icon = "📷", title = "Insert Image", desc = "Embed pictures") {
+                                    ToolCard(modifier = Modifier.weight(1f), icon = Icons.Outlined.AddPhotoAlternate, title = "Insert Image", desc = "Embed pictures") {
                                         launchTool("insert_image")
                                     }
-                                    ToolCard(modifier = Modifier.weight(1f), icon = "⬛", title = "Redact", desc = "Permanent sanitize") {
+                                    ToolCard(modifier = Modifier.weight(1f), icon = Icons.Outlined.VisibilityOff, title = "Redact", desc = "Permanent sanitize") {
                                         launchTool("redact")
                                     }
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    ToolCard(modifier = Modifier.weight(1f), icon = "🌊", title = "Watermarks", desc = "Headers & Footers") {
+                                    ToolCard(modifier = Modifier.weight(1f), icon = Icons.AutoMirrored.Outlined.BrandingWatermark, title = "Watermarks", desc = "Headers & Footers") {
                                         launchTool("watermark")
                                     }
-                                    ToolCard(modifier = Modifier.weight(1f), icon = "📑", title = "TOC / Outline", desc = "Bookmarks & outline") {
+                                    ToolCard(modifier = Modifier.weight(1f), icon = Icons.AutoMirrored.Outlined.FormatListBulleted, title = "TOC / Outline", desc = "Bookmarks & outline") {
                                         launchTool("toc")
                                     }
                                 }
@@ -1050,10 +1171,10 @@ fun AppRootScreen(
                                 Text("Organize & Security", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    ToolCard(modifier = Modifier.weight(1f), icon = "▦", title = "Organize Pages", desc = "Rotate, reorder, delete") {
+                                    ToolCard(modifier = Modifier.weight(1f), icon = Icons.Outlined.GridView, title = "Organize Pages", desc = "Rotate, reorder, delete") {
                                         launchTool("organize")
                                     }
-                                    ToolCard(modifier = Modifier.weight(1f), icon = "🔒", title = "Protect PDF", desc = "AES-256 encryption") {
+                                    ToolCard(modifier = Modifier.weight(1f), icon = Icons.Outlined.Lock, title = "Protect PDF", desc = "AES-256 encryption") {
                                         launchTool("protect")
                                     }
                                 }
@@ -1067,7 +1188,72 @@ fun AppRootScreen(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(16.dp)
+                                .verticalScroll(rememberScrollState())
                         ) {
+                            Text("Appearance & Theme", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Text(
+                                        text = "App Theme",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = "Choose light, dark, or follow device system theme",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        listOf(
+                                            Triple(AppThemeMode.SYSTEM, "System", Icons.Outlined.BrightnessAuto),
+                                            Triple(AppThemeMode.LIGHT, "Light", Icons.Outlined.LightMode),
+                                            Triple(AppThemeMode.DARK, "Dark", Icons.Outlined.DarkMode)
+                                        ).forEach { (mode, label, icon) ->
+                                            val isSelected = themeMode == mode
+                                            OutlinedCard(
+                                                onClick = { onThemeChanged(mode) },
+                                                colors = CardDefaults.outlinedCardColors(
+                                                    containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+                                                ),
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Column(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(vertical = 12.dp, horizontal = 8.dp),
+                                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = icon,
+                                                        contentDescription = label,
+                                                        tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier.size(22.dp)
+                                                    )
+                                                    Text(
+                                                        text = label,
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(20.dp))
+
                             Text("About PdfCraft", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                             Spacer(modifier = Modifier.height(12.dp))
                             Surface(
@@ -1076,12 +1262,28 @@ fun AppRootScreen(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Column(modifier = Modifier.padding(16.dp)) {
-                                    Text("PdfCraft Mobile", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                    Text("Version 0.7.0 • Pure-Rust Clean-Room Engine", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text("High-fidelity PDF reader, editor, and multi-format conversion suite powered by Rust and Android Material 3.", style = MaterialTheme.typography.bodyMedium)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.PictureAsPdf,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Text("PdfCraft Mobile", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                            Text("Version 0.7.0 • Pure-Rust Engine", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    }
                                     Spacer(modifier = Modifier.height(12.dp))
+                                    Text(
+                                        text = "High-fidelity PDF reader, editor, and multi-format conversion suite powered by Rust and Android Material 3.",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Spacer(modifier = Modifier.height(16.dp))
                                     Button(onClick = { showAbout = true }) {
+                                        Icon(Icons.Outlined.Info, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
                                         Text("View Licenses & Attributions")
                                     }
                                 }
@@ -1138,10 +1340,11 @@ fun AppRootScreen(
 
 @Composable
 fun ToolCard(
-    icon: String,
+    icon: ImageVector,
     title: String,
     desc: String,
     modifier: Modifier = Modifier,
+    iconTint: Color = MaterialTheme.colorScheme.primary,
     onClick: () -> Unit
 ) {
     Surface(
@@ -1158,8 +1361,13 @@ fun ToolCard(
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(icon, style = MaterialTheme.typography.titleSmall)
-                Spacer(modifier = Modifier.width(6.dp))
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = iconTint
+                )
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = title,
                     style = MaterialTheme.typography.labelMedium,
