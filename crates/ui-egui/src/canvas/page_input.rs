@@ -4,7 +4,9 @@
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
 use pdfcraft_render::{DocInfo, PageText};
 
-use super::{DocView, PageEnv, PageFrame, PageSlot, PageXform, Selection, Span, cached_edit_images, click_unit, signature_badges};
+use super::{
+    DocView, FindHit, PageEnv, PageFrame, PageSlot, PageXform, Selection, Span, cached_edit_images, click_unit, signature_badges,
+};
 use crate::page_cursor::{Layer, Subject};
 use crate::page_pointer::PagePointer;
 use crate::page_router::{Owner, PagePress, top};
@@ -529,7 +531,8 @@ fn paint_text_marks(ui: &egui::Ui, view: &DocView, text: &PageText, page: usize,
     let painter = ui.painter();
     let to_screen = |g: [f32; 4]| xf.view_rect(g);
     if let Some(find) = &view.find {
-        for (index, (match_page, range)) in find.matches.iter().enumerate() {
+        for (index, hit) in find.matches.iter().enumerate() {
+            let FindHit::Text { page: match_page, range } = hit else { continue };
             if *match_page != page {
                 continue;
             }

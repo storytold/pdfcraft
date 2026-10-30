@@ -1,11 +1,16 @@
-use super::{Align2, Color32, CornerRadius, DocView, Range, Rect, Stroke, Tokens, icons, theme, vec2, widgets};
+use pdfcraft_render::DocInfo;
+
+use super::find_comments;
+pub(super) use super::find_comments::FindComment;
+pub use super::find_comments::FindHit;
+use super::{Align2, Color32, CornerRadius, DocView, Rect, Stroke, Tokens, icons, theme, vec2, widgets};
 
 /// The find bar (⌘F): query, matches across the document, current match.
 #[derive(Default)]
 pub struct Find {
     pub query: String,
-    /// (page, glyph range) in document order.
-    pub matches: Vec<(usize, Range<usize>)>,
+    /// Text and comment hits in document order: a page's text first, then its comments.
+    pub matches: Vec<FindHit>,
     pub current: Option<usize>,
     /// The page a search started from while its match is picked automatically: a text layer
     /// that arrives out of order can still supply an earlier match, and the automatic choice
@@ -21,9 +26,11 @@ pub struct Find {
     pub follow_ended: bool,
     pub focus: bool,
     pub case_query: String,
-    /// Find options (Acrobat's: case-sensitive, whole words only).
+    /// Find options (Acrobat's: case-sensitive, whole words only, include comments).
     pub case_sensitive: bool,
     pub whole_words: bool,
+    /// Also search comments. Off until the reader turns it on, as in Acrobat's Find options.
+    pub include_comments: bool,
     /// Shown in the Search panel (Advanced Search) instead of the find bar.
     pub in_panel: bool,
 }
@@ -43,7 +50,7 @@ impl Find {
     /// The first match at or after `page`, or the first match when none follows (the search
     /// wraps round the document).
     pub(super) fn first_at_or_after(&self, page: usize) -> Option<usize> {
-        self.matches.iter().position(|(p, _)| *p >= page).or_else(|| (!self.matches.is_empty()).then_some(0))
+        self.matches.iter().position(|hit| hit.page() >= page).or_else(|| (!self.matches.is_empty()).then_some(0))
     }
 
     /// How a text layer arriving now relates to the automatic choice. Once the reader has moved
@@ -103,13 +110,16 @@ impl DocView {
         pages.sort();
         for &p in &pages {
             if let Some(text) = self.texts.get(&p) {
-                f.matches.extend(text.find_opts(&f.case_query, f.case_sensitive, f.whole_words).into_iter().map(|r| (p, r)));
+                f.matches.extend(text_hits(p, text, &f.case_query, f.case_sensitive, f.whole_words));
             }
         }
-        f.matches.sort_by_key(|(p, r)| (*p, r.start));
+        if f.include_comments {
+            f.matches.extend(find_comments::comment_hits(&self.find_comments, &f.case_query, f.case_sensitive, f.whole_words));
+        }
+        f.matches.sort_by_key(FindHit::sort_key);
         // First match at or after the page the search started from.
         if let Some(i) = f.first_at_or_after(from)
-            && let Some(&(p, _)) = f.matches.get(i)
+            && let Some(p) = f.matches.get(i).map(FindHit::page)
         {
             f.current = Some(i);
             f.auto_page = Some(p);
@@ -127,15 +137,16 @@ impl DocView {
         // arrives late can still supply an earlier match. Once the reader has moved the view,
         // this arrival must not pull them back; the choice then becomes theirs to keep.
         let follow = f.follow_page(self.current);
-        f.matches.retain(|(p, _)| *p != page);
-        f.matches.extend(text.find_opts(&f.case_query, f.case_sensitive, f.whole_words).into_iter().map(|r| (page, r)));
-        f.matches.sort_by_key(|(p, r)| (*p, r.start));
+        // Comment hits do not come from the text layer, so a late or failed page keeps them.
+        f.matches.retain(|hit| !hit.text_on(page));
+        f.matches.extend(text_hits(page, text, &f.case_query, f.case_sensitive, f.whole_words));
+        f.matches.sort_by_key(FindHit::sort_key);
         if let Follow::Active(from) = follow {
             f.current = f.first_at_or_after(from);
             let selected = f.current.and_then(|i| f.matches.get(i).cloned());
             // Follow a changed automatic choice; the view is still where the last one left it.
             if selected != previous
-                && let Some((p, _)) = selected
+                && let Some(p) = selected.as_ref().map(FindHit::page)
             {
                 f.auto_page = Some(p);
                 self.flash_match(p);
@@ -154,7 +165,7 @@ impl DocView {
     /// Go to match `i` (the Search panel's results).
     pub fn go_to_match(&mut self, i: usize) {
         let Some(f) = self.find.as_mut() else { return };
-        let Some(&(p, _)) = f.matches.get(i) else { return };
+        let Some(p) = f.matches.get(i).map(FindHit::page) else { return };
         f.current = Some(i);
         f.stop_following();
         self.go_to_page(p);
@@ -173,7 +184,7 @@ impl DocView {
         let next = if forward { (c + 1) % n } else { (c + n - 1) % n };
         f.current = Some(next);
         f.stop_following();
-        let p = f.matches[next].0;
+        let Some(p) = f.matches.get(next).map(FindHit::page) else { return };
         // Only explicit search navigation joins history; background refresh uses flash_match alone.
         self.go_to_page(p);
         self.goto_point = None;
@@ -181,17 +192,55 @@ impl DocView {
     }
 
     fn flash_match(&mut self, page: usize) {
-        let frac = self
-            .find
-            .as_ref()
-            .and_then(|f| f.current.and_then(|c| f.matches.get(c)))
-            .and_then(|(p, r)| self.texts.get(p).and_then(|t| t.glyphs.get(r.start)).map(|g| g.rect[1]))
-            .zip(self.page_heights.get(page).copied())
-            .map(|(y, h)| ((y - 60.0) / h).clamp(0.0, 1.0))
-            .unwrap_or(0.0);
+        let y = self.find.as_ref().and_then(|f| f.current.and_then(|c| f.matches.get(c))).and_then(|hit| match hit {
+            FindHit::Text { page: p, range } => self.texts.get(p).and_then(|t| t.glyphs.get(range.start)).map(|g| g.rect[1]),
+            FindHit::Comment { top, .. } => Some(*top),
+        });
+        let frac = y.zip(self.page_heights.get(page).copied()).map(|(y, h)| ((y - 60.0) / h).clamp(0.0, 1.0)).unwrap_or(0.0);
         self.goto = Some((page, frac));
         self.current = page;
         self.reset_coarse_state();
+        self.show_comment_hit();
+    }
+
+    /// A comment hit selects that thread and outlines it. A text hit, while comments are included,
+    /// leaves the previous comment so the highlight on the page is the match.
+    fn show_comment_hit(&mut self) {
+        if !self.find.as_ref().is_some_and(|f| f.include_comments) {
+            return;
+        }
+        let hit = self.find.as_ref().and_then(|f| f.current.and_then(|c| f.matches.get(c))).cloned();
+        match hit {
+            Some(FindHit::Comment { page, index, rect, .. }) => {
+                self.comments.selected = Some((page, index));
+                self.comments.reveal = true;
+                self.flash = Some((page, rect, 0.0));
+            }
+            Some(FindHit::Text { .. }) => {
+                self.comments.selected = None;
+                self.flash = None;
+            }
+            None => {}
+        }
+    }
+
+    /// Replace the comment index Find searches. A real change, with Include comments on and a
+    /// query typed, searches again on the next find-bar pass.
+    pub(super) fn set_find_comments(&mut self, next: Vec<FindComment>) {
+        if self.find_comments == next {
+            return;
+        }
+        self.find_comments = next;
+        if self.find.as_ref().is_some_and(|f| f.include_comments && !f.query.trim().is_empty())
+            && let Some(f) = self.find.as_mut()
+        {
+            f.case_query.clear();
+        }
+    }
+
+    /// Rebuild the comment index from the open document.
+    pub(crate) fn sync_find_comments(&mut self, info: &DocInfo) {
+        self.set_find_comments(find_comments::comment_find_index(info));
     }
 
     /// Ends automatic search following after the reader navigated or scrolled the view. A
@@ -273,11 +322,13 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
                         if icons::button(ui, "chevron-down", 26.0, false, &tip).clicked() {
                             step = Some(true);
                         }
-                        let opts = icons::button(ui, "settings-2", 26.0, find.case_sensitive || find.whole_words, tl!("Find options"));
+                        let opts_on = find.case_sensitive || find.whole_words || find.include_comments;
+                        let opts = icons::button(ui, "settings-2", 26.0, opts_on, tl!("Find options"));
                         egui::Popup::menu(&opts).show(|ui| {
                             let a = ui.add(widgets::checkbox(&mut find.whole_words, tl!("Whole words only"))).changed();
                             let b = ui.add(widgets::checkbox(&mut find.case_sensitive, tl!("Case-sensitive"))).changed();
-                            if a || b {
+                            let c = ui.add(widgets::checkbox(&mut find.include_comments, tl!("Include comments"))).changed();
+                            if a || b || c {
                                 // Search again with the new options.
                                 find.case_query.clear();
                             }
@@ -298,4 +349,8 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
     if let Some(forward) = step {
         view.find_step(forward);
     }
+}
+
+fn text_hits(page: usize, text: &pdfcraft_render::PageText, query: &str, case_sensitive: bool, whole_words: bool) -> Vec<FindHit> {
+    text.find_opts(query, case_sensitive, whole_words).into_iter().map(|range| FindHit::text(page, range)).collect()
 }
