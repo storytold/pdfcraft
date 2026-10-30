@@ -9,6 +9,9 @@ Layer L4. Create a PDF (Acrobat's Create a PDF tool), execution plan M10.2:
   with transparency as a soft mask. An ICC profile in the file (JPEG `APP2 ICC_PROFILE`, PNG
   `iCCP`) that matches the image's colour space is kept as an `/ICCBased` colour space with
   the device space as `/Alternate`; images with the same profile share one profile object.
+  JPEGs needing EXIF rotation or mirroring keep compatible RGB or grayscale ICC profiles when re-encoded.
+  CMYK profiles are not reused for RGB samples converted during uprighting; this does not perform an ICC color transform.
+  A profile's declared size must match its complete payload in both JPEG and PNG imports.
   JPEG metadata scanning skips marker fill bytes and reads application segments after the
   frame header, stopping at the first scan or end marker. Broken or mismatched ICC profiles
   still fall back to the device colour space;

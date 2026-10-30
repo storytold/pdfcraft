@@ -86,9 +86,9 @@ struct Embedded {
     dpi: (f64, f64),
 }
 
-/// `profile` when it can tag an image of `n` colour components: an ICC header (`acsp`) whose
-/// colour space is grey, RGB or CMYK to match. Anything else is left out, and the image keeps
-/// its device colour space.
+/// `profile` when it can tag an image of `n` colour components: a size-matching ICC header
+/// (`acsp`) whose colour space is grey, RGB or CMYK to match. Anything else is left out, and
+/// the image keeps its device colour space.
 fn icc_for(profile: Vec<u8>, n: usize) -> Option<Vec<u8>> {
     let space: &[u8] = match n {
         1 => b"GRAY",
@@ -96,7 +96,12 @@ fn icc_for(profile: Vec<u8>, n: usize) -> Option<Vec<u8>> {
         4 => b"CMYK",
         _ => return None,
     };
-    (profile.len() >= 128 && profile.get(36..40) == Some(b"acsp") && profile.get(16..20) == Some(space)).then_some(profile)
+    let declared = u32::from_be_bytes(profile.get(..4)?.try_into().ok()?);
+    (profile.len() >= 128
+        && usize::try_from(declared).ok() == Some(profile.len())
+        && profile.get(36..40) == Some(b"acsp")
+        && profile.get(16..20) == Some(space))
+    .then_some(profile)
 }
 
 /// A JPEG's ICC profile from its APP2 `ICC_PROFILE` chunks: (sequence number, chunk count,

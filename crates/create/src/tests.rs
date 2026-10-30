@@ -1254,6 +1254,11 @@ pub(crate) fn phone_jpeg(orientation: u8, dpi: u16) -> Vec<u8> {
     let mut encoder = JpegEncoder::new(&mut jpeg);
     encoder.set_pixel_density(PixelDensity { density: (dpi, 72), unit: PixelDensityUnit::Inches });
     encoder.encode_image(&image::RgbImage::from_pixel(60, 20, image::Rgb([20, 20, 20]))).unwrap();
+    jpeg_with_orientation(&jpeg, orientation)
+}
+
+/// Add one EXIF Orientation field to an otherwise complete synthetic JPEG.
+fn jpeg_with_orientation(jpeg: &[u8], orientation: u8) -> Vec<u8> {
     let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0".to_vec();
     exif.extend_from_slice(&[orientation, 0, 0, 0, 0, 0, 0, 0]);
     let mut out = jpeg[..2].to_vec();
@@ -1262,6 +1267,112 @@ pub(crate) fn phone_jpeg(orientation: u8, dpi: u16) -> Vec<u8> {
     out.extend_from_slice(&exif);
     out.extend_from_slice(&jpeg[2..]);
     out
+}
+
+/// Uprighting re-encodes the pixels, but their RGB or grey profile must still tag the saved PDF
+/// and the JPEG exported from it, including mirrored orientations.
+#[test]
+fn oriented_jpegs_keep_compatible_icc_profiles() {
+    use image::ImageEncoder;
+
+    for (space, components, alternate) in [(b"RGB ", 3, &b"DeviceRGB"[..]), (b"GRAY", 1, &b"DeviceGray"[..])] {
+        let profile = icc_profile(space);
+        let mut jpeg = Vec::new();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut jpeg);
+        encoder.set_icc_profile(profile.clone()).unwrap();
+        if components == 1 {
+            encoder.encode_image(&image::GrayImage::from_pixel(60, 20, image::Luma([128]))).unwrap();
+        } else {
+            encoder.encode_image(&image::RgbImage::from_pixel(60, 20, image::Rgb([20, 40, 60]))).unwrap();
+        }
+        for orientation in 1..=8 {
+            let bytes = jpeg_with_orientation(&jpeg, orientation);
+            let doc = reopen(&from_images(&[("photo.jpg".into(), bytes)]).unwrap());
+            let img = image_of(&doc, 0);
+            let (n, alt, data, _) = icc_of(&doc, &img).expect("the oriented JPEG keeps its profile");
+            assert_eq!((n, alt.as_slice(), &data), (components, alternate, &profile), "orientation {orientation}");
+            let size = if orientation >= 5 { (Some(20), Some(60)) } else { (Some(60), Some(20)) };
+            assert_eq!((img.int(b"Width"), img.int(b"Height")), size, "orientation {orientation}");
+            let exported = extract_images(&doc, &[0], 0);
+            assert_eq!(exported.images.len(), 1, "{:?}", exported.skipped);
+            assert_eq!(super::jpeg("exported.jpg", &exported.images[0].data).unwrap().icc, Some(profile.clone()));
+        }
+    }
+}
+
+/// Both raw and re-encoded JPEGs ignore profiles with a mismatched declared byte count.
+#[test]
+fn jpeg_icc_size_must_match_the_complete_profile() {
+    use image::ImageEncoder;
+
+    for space in [b"RGB ", b"GRAY"] {
+        for declared in [0u32, 127, 128, 299, 300, 301, u32::MAX] {
+            let mut profile = icc_profile(space);
+            profile[..4].copy_from_slice(&declared.to_be_bytes());
+            let mut jpeg = Vec::new();
+            let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut jpeg);
+            encoder.set_icc_profile(profile.clone()).unwrap();
+            if space == b"GRAY" {
+                encoder.encode_image(&image::GrayImage::from_pixel(3, 2, image::Luma([128]))).unwrap();
+            } else {
+                encoder.encode_image(&image::RgbImage::from_pixel(3, 2, image::Rgb([20, 40, 60]))).unwrap();
+            }
+            for orientation in [1, 6] {
+                let bytes = jpeg_with_orientation(&jpeg, orientation);
+                let doc = reopen(&from_images(&[("profile.jpg".into(), bytes)]).unwrap());
+                let img = image_of(&doc, 0);
+                if declared == 300 {
+                    assert_eq!(icc_of(&doc, &img).expect("a matching size keeps the profile").2, profile);
+                } else {
+                    let alternate = if space == b"GRAY" { &b"DeviceGray"[..] } else { &b"DeviceRGB"[..] };
+                    assert_eq!(img.name(b"ColorSpace"), Some(alternate), "{space:?}, size {declared}, orientation {orientation}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn png_icc_size_must_match_the_complete_profile() {
+    for declared in [128u32, 300, 301] {
+        let mut profile = icc_profile(b"RGB ");
+        profile[..4].copy_from_slice(&declared.to_be_bytes());
+        let mut png = Vec::new();
+        let mut info = png::Info::with_size(2, 1);
+        info.color_type = png::ColorType::Rgb;
+        info.bit_depth = png::BitDepth::Eight;
+        info.icc_profile = Some(profile.clone().into());
+        let mut writer = png::Encoder::with_info(&mut png, info).unwrap().write_header().unwrap();
+        writer.write_image_data(&[10, 20, 30, 40, 50, 60]).unwrap();
+        writer.finish().unwrap();
+        let doc = reopen(&from_images(&[("profile.png".into(), png)]).unwrap());
+        let img = image_of(&doc, 0);
+        if declared == 300 {
+            assert_eq!(icc_of(&doc, &img).expect("a matching size keeps the profile").2, profile);
+        } else {
+            assert_eq!(img.name(b"ColorSpace"), Some(&b"DeviceRGB"[..]), "size {declared}");
+        }
+        assert_eq!(exported_rgba(&doc).1, [10, 20, 30, 255, 40, 50, 60, 255]);
+    }
+}
+
+/// The JPEG decoder converts CMYK samples to RGB when uprighting; the source CMYK profile
+/// cannot describe those re-encoded RGB samples.
+#[test]
+fn uprighting_cmyk_does_not_reuse_its_profile_for_rgb() {
+    let profile = icc_profile(b"CMYK");
+    let jpeg = flat_four_component_jpeg([128, 64, 32, 0], 0);
+    let mut tagged = jpeg[..2].to_vec();
+    tagged.extend_from_slice(&[0xff, 0xe2]);
+    tagged.extend_from_slice(&u16::try_from(16 + profile.len()).unwrap().to_be_bytes());
+    tagged.extend_from_slice(b"ICC_PROFILE\0\x01\x01");
+    tagged.extend_from_slice(&profile);
+    tagged.extend_from_slice(&jpeg[2..]);
+    let doc = reopen(&from_images(&[("cmyk.jpg".into(), jpeg_with_orientation(&tagged, 6))]).unwrap());
+    assert_eq!(image_of(&doc, 0).name(b"ColorSpace"), Some(&b"DeviceRGB"[..]));
+    let exported = extract_images(&doc, &[0], 0);
+    assert_eq!(exported.images.len(), 1, "{:?}", exported.skipped);
+    assert!(super::jpeg("exported.jpg", &exported.images[0].data).unwrap().icc.is_none());
 }
 
 #[test]

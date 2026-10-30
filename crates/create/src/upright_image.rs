@@ -7,7 +7,7 @@ use std::io::Cursor;
 
 use image::codecs::jpeg::{JpegEncoder, PixelDensity, PixelDensityUnit};
 use image::metadata::Orientation;
-use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
+use image::{DynamicImage, ImageDecoder, ImageEncoder, ImageFormat, ImageReader};
 
 /// Quality of a re-encoded JPEG (the camera's own is rarely higher).
 const QUALITY: u8 = 92;
@@ -29,6 +29,8 @@ pub(crate) fn upright(bytes: &[u8]) -> Cow<'_, [u8]> {
     }
 }
 
+/// Orient and re-encode a bounded JPEG, retaining density and compatible ICC metadata.
+/// Return `None` when no transformation is needed or the original must be retained.
 fn turned(bytes: &[u8]) -> Option<Vec<u8>> {
     if !bytes.starts_with(&[0xFF, 0xD8]) || extended_xmp_chunks(bytes) > MAX_EXTENDED_XMP_CHUNKS {
         return None;
@@ -41,11 +43,16 @@ fn turned(bytes: &[u8]) -> Option<Vec<u8>> {
     if orientation == Orientation::NoTransforms || u64::from(w) * u64::from(h) > MAX_PIXELS {
         return None;
     }
+    let profile = decoder.icc_profile().ok().flatten();
     let mut image = DynamicImage::from_decoder(decoder).ok()?;
     image.apply_orientation(orientation);
     let mut out = Vec::new();
     {
         let mut encoder = JpegEncoder::new_with_quality(&mut out, QUALITY);
+        let components = if matches!(&image, DynamicImage::ImageLuma8(_)) { 1 } else { 3 };
+        if let Some(profile) = profile.and_then(|profile| crate::icc_for(profile, components)) {
+            encoder.set_icc_profile(profile).ok()?;
+        }
         // Keep the resolution, which sets the image's natural size on the page.
         if let Some(mut density) = jfif_density(bytes) {
             if matches!(orientation, Orientation::Rotate90 | Orientation::Rotate270 | Orientation::Rotate90FlipH | Orientation::Rotate270FlipH) {
