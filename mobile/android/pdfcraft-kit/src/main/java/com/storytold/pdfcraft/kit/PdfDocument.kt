@@ -57,6 +57,24 @@ class PdfDocument(
             return PdfDocument(engine, name, id, count)
         }
 
+        /**
+         * Creates a new empty PDF document with a single standard letter-sized page.
+         */
+        fun createBlank(
+            engine: Engine = Engine(),
+            name: String = "Untitled.pdf",
+            width: Float = 612f,
+            height: Float = 792f
+        ): PdfDocument {
+            val minimalPdf = "%PDF-1.7\n" +
+                "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n" +
+                "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n" +
+                "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width.toInt()} ${height.toInt()}] >> endobj\n" +
+                "xref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n" +
+                "trailer << /Size 4 /Root 1 0 R >>\nstartxref\n193\n%%EOF\n"
+            return openBytes(engine = engine, bytes = minimalPdf.toByteArray(Charsets.UTF_8), name = name)
+        }
+
         fun createSelfSignedDigitalId(
             engine: Engine = Engine(),
             name: String,

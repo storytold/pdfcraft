@@ -13,23 +13,39 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import uniffi.pdfcraft_ffi.*
+
+enum class ViewerMode {
+    VIEW,
+    ANNOTATE,
+    EDIT
+}
+
+enum class AnnotationTool {
+    PEN,
+    HIGHLIGHTER,
+    ERASER
+}
 
 /**
  * Unified high-level Jetpack Compose viewer for PdfCraft documents.
@@ -56,6 +72,10 @@ fun PdfView(
     var isChromeVisible by remember { mutableStateOf(true) }
 
     // Drawing & Markup State
+    var viewerMode by remember { mutableStateOf(ViewerMode.VIEW) }
+    var annotationTool by remember { mutableStateOf(AnnotationTool.PEN) }
+    var activeInkColor by remember { mutableStateOf(0x339AF0u) }
+    var activeInkWidth by remember { mutableFloatStateOf(3f) }
     var isInkMode by remember { mutableStateOf(false) }
     var isEraserMode by remember { mutableStateOf(false) }
 
@@ -400,125 +420,253 @@ fun PdfView(
                 exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
             ) {
                 Surface(
-                    tonalElevation = 4.dp,
+                    tonalElevation = 6.dp,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Pan / Select mode
-                        FilterChip(
-                            selected = !isInkMode && !isEraserMode,
-                            onClick = {
-                                isInkMode = false
-                                isEraserMode = false
-                            },
-                            label = { Text("Read") }
-                        )
+                    when (viewerMode) {
+                        ViewerMode.VIEW -> {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    FilledTonalButton(
+                                        onClick = {
+                                            viewerMode = ViewerMode.ANNOTATE
+                                            annotationTool = AnnotationTool.PEN
+                                            isInkMode = true
+                                            isEraserMode = false
+                                            pdfPageViewRef?.isInkMode = true
+                                            pdfPageViewRef?.isEraserMode = false
+                                            pdfPageViewRef?.inkColorRgb = activeInkColor
+                                            pdfPageViewRef?.inkStrokeWidth = activeInkWidth
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                    ) {
+                                        Text("✏️ Draw", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                    FilledTonalButton(
+                                        onClick = {
+                                            viewerMode = ViewerMode.EDIT
+                                            isInkMode = false
+                                            isEraserMode = false
+                                            pdfPageViewRef?.isInkMode = false
+                                            pdfPageViewRef?.isEraserMode = false
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                    ) {
+                                        Text("📝 Edit", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                    FilledTonalButton(
+                                        onClick = { showPageGrid = true },
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                    ) {
+                                        Text("▦ Pages", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                }
 
-                        // Draw / Ink mode
-                        FilterChip(
-                            selected = isInkMode,
-                            onClick = {
-                                isInkMode = !isInkMode
-                                if (isInkMode) isEraserMode = false
-                            },
-                            label = { Text("Pen") }
-                        )
-
-                        // Eraser mode
-                        FilterChip(
-                            selected = isEraserMode,
-                            onClick = {
-                                isEraserMode = !isEraserMode
-                                if (isEraserMode) isInkMode = false
-                            },
-                            label = { Text("Eraser") }
-                        )
-
-                        // Highlight
-                        OutlinedButton(
-                            onClick = {
-                                pdfPageViewRef?.markupSelection(
-                                    kind = FfiTextMarkupKind.HIGHLIGHT,
-                                    colorRgb = 0xFFE066u
-                                )
-                                statusNotification = "Highlighted selection"
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text("Highlight", style = MaterialTheme.typography.labelSmall)
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = MaterialTheme.colorScheme.secondaryContainer,
+                                        modifier = Modifier.clickable { showGoToPageDialog = true }
+                                    ) {
+                                        Text(
+                                            text = "${currentPage + 1} / ${document.pageCount}",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                        )
+                                    }
+                                    IconButton(onClick = { showOutlineDialog = true }) {
+                                        Text("📑", style = MaterialTheme.typography.titleMedium)
+                                    }
+                                    IconButton(onClick = { isSearchActive = !isSearchActive }) {
+                                        Text("🔍", style = MaterialTheme.typography.titleMedium)
+                                    }
+                                }
+                            }
                         }
+                        ViewerMode.ANNOTATE -> {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        FilterChip(
+                                            selected = annotationTool == AnnotationTool.PEN,
+                                            onClick = {
+                                                annotationTool = AnnotationTool.PEN
+                                                isInkMode = true
+                                                isEraserMode = false
+                                                pdfPageViewRef?.isInkMode = true
+                                                pdfPageViewRef?.isEraserMode = false
+                                                pdfPageViewRef?.inkColorRgb = activeInkColor
+                                                pdfPageViewRef?.inkStrokeWidth = activeInkWidth
+                                            },
+                                            label = { Text("Pen") }
+                                        )
+                                        FilterChip(
+                                            selected = annotationTool == AnnotationTool.HIGHLIGHTER,
+                                            onClick = {
+                                                annotationTool = AnnotationTool.HIGHLIGHTER
+                                                isInkMode = true
+                                                isEraserMode = false
+                                                pdfPageViewRef?.isInkMode = true
+                                                pdfPageViewRef?.isEraserMode = false
+                                                pdfPageViewRef?.inkColorRgb = 0xFFE066u
+                                                pdfPageViewRef?.inkStrokeWidth = 16f
+                                            },
+                                            label = { Text("Highlighter") }
+                                        )
+                                        FilterChip(
+                                            selected = annotationTool == AnnotationTool.ERASER,
+                                            onClick = {
+                                                annotationTool = AnnotationTool.ERASER
+                                                isEraserMode = true
+                                                isInkMode = false
+                                                pdfPageViewRef?.isEraserMode = true
+                                                pdfPageViewRef?.isInkMode = false
+                                            },
+                                            label = { Text("Eraser") }
+                                        )
+                                    }
 
-                        // Underline
-                        OutlinedButton(
-                            onClick = {
-                                pdfPageViewRef?.markupSelection(
-                                    kind = FfiTextMarkupKind.UNDERLINE,
-                                    colorRgb = 0x51CF66u
-                                )
-                                statusNotification = "Underlined selection"
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text("Underline", style = MaterialTheme.typography.labelSmall)
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        IconButton(onClick = {
+                                            try {
+                                                val action = document.undo()
+                                                statusNotification = "Undone: $action"
+                                                pdfPageViewRef?.refreshPage()
+                                            } catch (_: Throwable) {}
+                                        }) {
+                                            Text("↶", fontWeight = FontWeight.Bold)
+                                        }
+                                        IconButton(onClick = {
+                                            try {
+                                                val action = document.redo()
+                                                statusNotification = "Redone: $action"
+                                                pdfPageViewRef?.refreshPage()
+                                            } catch (_: Throwable) {}
+                                        }) {
+                                            Text("↷", fontWeight = FontWeight.Bold)
+                                        }
+                                        Button(
+                                            onClick = {
+                                                viewerMode = ViewerMode.VIEW
+                                                isInkMode = false
+                                                isEraserMode = false
+                                                pdfPageViewRef?.isInkMode = false
+                                                pdfPageViewRef?.isEraserMode = false
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                                        ) {
+                                            Text("Done")
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    val colorList = listOf(
+                                        0x339AF0u to Color(0xFF339AF0), // Blue
+                                        0xFFE066u to Color(0xFFFFE066), // Yellow
+                                        0x51CF66u to Color(0xFF51CF66), // Green
+                                        0xFF6B6Bu to Color(0xFFFF6B6B), // Red
+                                        0xFFA94Du to Color(0xFFFFA94D), // Orange
+                                        0xCC5DE8u to Color(0xFFCC5DE8), // Purple
+                                        0x212529u to Color(0xFF212529)  // Dark
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        colorList.forEach { (rgb, col) ->
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(28.dp)
+                                                    .clip(CircleShape)
+                                                    .background(col)
+                                                    .border(
+                                                        width = if (activeInkColor == rgb) 3.dp else 1.dp,
+                                                        color = if (activeInkColor == rgb) MaterialTheme.colorScheme.primary else Color.Gray.copy(alpha = 0.5f),
+                                                        shape = CircleShape
+                                                    )
+                                                    .clickable {
+                                                        activeInkColor = rgb
+                                                        pdfPageViewRef?.inkColorRgb = rgb
+                                                    }
+                                            )
+                                        }
+                                    }
+
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("${activeInkWidth.toInt()}pt", style = MaterialTheme.typography.labelSmall)
+                                        Slider(
+                                            value = activeInkWidth,
+                                            onValueChange = {
+                                                activeInkWidth = it
+                                                pdfPageViewRef?.inkStrokeWidth = it
+                                            },
+                                            valueRange = 1f..24f,
+                                            modifier = Modifier.width(100.dp)
+                                        )
+                                    }
+                                }
+                            }
                         }
-
-                        // Strikeout
-                        OutlinedButton(
-                            onClick = {
-                                pdfPageViewRef?.markupSelection(
-                                    kind = FfiTextMarkupKind.STRIKE_OUT,
-                                    colorRgb = 0xFF6B6Bu
-                                )
-                                statusNotification = "Strikethrough selection"
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text("Strikeout", style = MaterialTheme.typography.labelSmall)
-                        }
-
-                        // Add Text
-                        OutlinedButton(
-                            onClick = { showAddTextDialog = true },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text("+ Text", style = MaterialTheme.typography.labelSmall)
-                        }
-
-                        // Add Image
-                        OutlinedButton(
-                            onClick = { insertImageLauncher.launch("image/*") },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text("+ Image", style = MaterialTheme.typography.labelSmall)
-                        }
-
-                        // Undo
-                        IconButton(onClick = {
-                            try {
-                                val action = document.undo()
-                                statusNotification = "Undone: $action"
-                                pdfPageViewRef?.refreshPage()
-                            } catch (_: Throwable) {}
-                        }) {
-                            Text("↶", fontWeight = FontWeight.Bold)
-                        }
-
-                        // Redo
-                        IconButton(onClick = {
-                            try {
-                                val action = document.redo()
-                                statusNotification = "Redone: $action"
-                                pdfPageViewRef?.refreshPage()
-                            } catch (_: Throwable) {}
-                        }) {
-                            Text("↷", fontWeight = FontWeight.Bold)
+                        ViewerMode.EDIT -> {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState())
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Button(onClick = { showAddTextDialog = true }) {
+                                    Text("+ Text")
+                                }
+                                Button(onClick = { insertImageLauncher.launch("image/*") }) {
+                                    Text("+ Image")
+                                }
+                                OutlinedButton(onClick = { showRedactionView = true }) {
+                                    Text("Redact")
+                                }
+                                OutlinedButton(onClick = {
+                                    try {
+                                        document.flatten(comments = true, fields = true)
+                                        statusNotification = "Document flattened"
+                                        pdfPageViewRef?.refreshPage()
+                                    } catch (e: Exception) {
+                                        statusNotification = "Flatten error: ${e.message}"
+                                    }
+                                }) {
+                                    Text("Flatten")
+                                }
+                                Spacer(modifier = Modifier.weight(1f))
+                                FilledTonalButton(onClick = { viewerMode = ViewerMode.VIEW }) {
+                                    Text("Done")
+                                }
+                            }
                         }
                     }
                 }
@@ -540,6 +688,8 @@ fun PdfView(
                         this.hideComments = hideComments
                         this.isInkMode = isInkMode
                         this.isEraserMode = isEraserMode
+                        this.inkColorRgb = activeInkColor
+                        this.inkStrokeWidth = activeInkWidth
 
                         this.onNavigateToPage = { targetPage ->
                             currentPage = targetPage
@@ -579,6 +729,8 @@ fun PdfView(
                     view.hideComments = hideComments
                     view.isInkMode = isInkMode
                     view.isEraserMode = isEraserMode
+                    view.inkColorRgb = activeInkColor
+                    view.inkStrokeWidth = activeInkWidth
                 }
             )
 
@@ -776,9 +928,8 @@ fun PdfView(
 
     // Page Grid Sheet
     if (showPageGrid) {
-        Dialog(onDismissRequest = { showPageGrid = false }) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
+        ModalBottomSheet(onDismissRequest = { showPageGrid = false }) {
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .fillMaxHeight(0.85f)
@@ -797,7 +948,7 @@ fun PdfView(
 
     // Command Palette Sheet
     if (showCommandPalette) {
-        Dialog(onDismissRequest = { showCommandPalette = false }) {
+        ModalBottomSheet(onDismissRequest = { showCommandPalette = false }) {
             PdfCommandPaletteView(
                 engine = document.engine,
                 onSelectTool = { tool ->
@@ -809,9 +960,9 @@ fun PdfView(
         }
     }
 
-    // Tool Form Dialog
+    // Tool Form Sheet
     activeTool?.let { tool ->
-        Dialog(onDismissRequest = { activeTool = null }) {
+        ModalBottomSheet(onDismissRequest = { activeTool = null }) {
             PdfToolFormView(
                 tool = tool,
                 document = document,
@@ -826,7 +977,7 @@ fun PdfView(
 
     // Redaction Sheet
     if (showRedactionView) {
-        Dialog(onDismissRequest = { showRedactionView = false }) {
+        ModalBottomSheet(onDismissRequest = { showRedactionView = false }) {
             PdfRedactionView(
                 document = document,
                 pageIndex = currentPage,
@@ -846,9 +997,9 @@ fun PdfView(
         }
     }
 
-    // Export Dialog
+    // Export Sheet
     if (showExportDialog) {
-        Dialog(onDismissRequest = { showExportDialog = false }) {
+        ModalBottomSheet(onDismissRequest = { showExportDialog = false }) {
             PdfExportDialog(
                 document = document,
                 onDismiss = { showExportDialog = false },
@@ -970,12 +1121,12 @@ fun PdfView(
         )
     }
 
-    // Metadata Dialog
+    // Metadata Sheet
     if (showMetadataDialog) {
         val info = remember {
             try { document.engine.docInfo(document.docId) } catch (_: Exception) { null }
         }
-        Dialog(onDismissRequest = { showMetadataDialog = false }) {
+        ModalBottomSheet(onDismissRequest = { showMetadataDialog = false }) {
             PdfMetadataDialog(
                 initialTitle = info?.title ?: "",
                 initialAuthor = info?.author ?: "",
@@ -995,9 +1146,9 @@ fun PdfView(
         }
     }
 
-    // Security Dialog
+    // Security Sheet
     if (showSecurityDialog) {
-        Dialog(onDismissRequest = { showSecurityDialog = false }) {
+        ModalBottomSheet(onDismissRequest = { showSecurityDialog = false }) {
             PdfSecurityDialog(
                 onDismiss = { showSecurityDialog = false },
                 onProtect = { open, perm, printing, changes, copy, a11y ->
@@ -1020,9 +1171,9 @@ fun PdfView(
         }
     }
 
-    // Watermark & Header/Footer Dialog
+    // Watermark & Header/Footer Sheet
     if (showWatermarkDialog) {
-        Dialog(onDismissRequest = { showWatermarkDialog = false }) {
+        ModalBottomSheet(onDismissRequest = { showWatermarkDialog = false }) {
             PdfWatermarkDialog(
                 onDismiss = { showWatermarkDialog = false },
                 onAddWatermark = { text, opacity, rotation ->
@@ -1047,9 +1198,9 @@ fun PdfView(
         }
     }
 
-    // Outline / TOC Dialog
+    // Outline / TOC Sheet
     if (showOutlineDialog) {
-        Dialog(onDismissRequest = { showOutlineDialog = false }) {
+        ModalBottomSheet(onDismissRequest = { showOutlineDialog = false }) {
             PdfOutlineDialog(
                 outline = try { document.outline() } catch (_: Exception) { emptyList() },
                 currentPage = currentPage,
@@ -1059,6 +1210,22 @@ fun PdfView(
                     showOutlineDialog = false
                 },
                 onDismiss = { showOutlineDialog = false }
+            )
+        }
+    }
+
+    // Go To Page Dialog
+    if (showGoToPageDialog) {
+        Dialog(onDismissRequest = { showGoToPageDialog = false }) {
+            PdfGoToPageDialog(
+                currentPage = currentPage,
+                pageCount = document.pageCount,
+                onPageSelected = { selected ->
+                    currentPage = selected
+                    pdfPageViewRef?.setDocument(document, selected)
+                    showGoToPageDialog = false
+                },
+                onDismiss = { showGoToPageDialog = false }
             )
         }
     }

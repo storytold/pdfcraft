@@ -186,6 +186,10 @@ fun AppRootScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var showAbout by remember { mutableStateOf(false) }
 
+    var selectedHomeTab by remember { mutableIntStateOf(0) }
+    var isFabExpanded by remember { mutableStateOf(false) }
+    var filterMode by remember { mutableStateOf("All") }
+
     var passwordPromptUri by remember { mutableStateOf<Uri?>(null) }
     var passwordInput by remember { mutableStateOf("") }
     var homeSearchQuery by remember { mutableStateOf("") }
@@ -289,6 +293,26 @@ fun AppRootScreen(
                 onDocumentChanged(doc)
             } catch (e: Throwable) {
                 errorMessage = e.message ?: "Failed to generate demo PDF"
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    fun createBlankDocument() {
+        isLoading = true
+        errorMessage = null
+        coroutineScope.launch {
+            try {
+                val doc = withContext(Dispatchers.Default) {
+                    PdfDocument.createBlank(name = "Untitled.pdf")
+                }
+                activeDoc?.close()
+                activeDoc = doc
+                currentUri = null
+                onDocumentChanged(doc)
+            } catch (e: Throwable) {
+                errorMessage = e.message ?: "Failed to create blank document"
             } finally {
                 isLoading = false
             }
@@ -429,7 +453,7 @@ fun AppRootScreen(
             onShare = { handleShare() }
         )
     } else {
-        // Acrobat-Style Home Dashboard
+        // Acrobat-Grade Material 3 Home Dashboard & Navigation Suite
         Scaffold(
             topBar = {
                 TopAppBar(
@@ -451,255 +475,556 @@ fun AppRootScreen(
                             }
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
-                                text = "PdfCraft",
+                                text = when (selectedHomeTab) {
+                                    0 -> "PdfCraft"
+                                    1 -> "Files"
+                                    2 -> "All Tools"
+                                    else -> "Settings"
+                                },
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold
                             )
                         }
                     },
                     actions = {
-                        TextButton(onClick = { showAbout = true }) {
-                            Text("About")
+                        if (selectedHomeTab == 0) {
+                            TextButton(onClick = { showAbout = true }) {
+                                Text("About")
+                            }
                         }
                     }
                 )
+            },
+            bottomBar = {
+                NavigationBar {
+                    NavigationBarItem(
+                        selected = selectedHomeTab == 0,
+                        onClick = { selectedHomeTab = 0 },
+                        icon = { Text("🏠", style = MaterialTheme.typography.titleMedium) },
+                        label = { Text("Home") }
+                    )
+                    NavigationBarItem(
+                        selected = selectedHomeTab == 1,
+                        onClick = { selectedHomeTab = 1 },
+                        icon = { Text("📁", style = MaterialTheme.typography.titleMedium) },
+                        label = { Text("Files") }
+                    )
+                    NavigationBarItem(
+                        selected = selectedHomeTab == 2,
+                        onClick = { selectedHomeTab = 2 },
+                        icon = { Text("🛠️", style = MaterialTheme.typography.titleMedium) },
+                        label = { Text("Tools") }
+                    )
+                    NavigationBarItem(
+                        selected = selectedHomeTab == 3,
+                        onClick = { selectedHomeTab = 3 },
+                        icon = { Text("⚙️", style = MaterialTheme.typography.titleMedium) },
+                        label = { Text("Settings") }
+                    )
+                }
+            },
+            floatingActionButton = {
+                if (selectedHomeTab == 0 || selectedHomeTab == 1) {
+                    Column(horizontalAlignment = Alignment.End) {
+                        if (isFabExpanded) {
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                tonalElevation = 6.dp,
+                                modifier = Modifier.padding(bottom = 12.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    TextButton(
+                                        onClick = {
+                                            isFabExpanded = false
+                                            photoPickerLauncher.launch("image/*")
+                                        }
+                                    ) {
+                                        Text("📷  Photos to PDF")
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            isFabExpanded = false
+                                            createBlankDocument()
+                                        }
+                                    ) {
+                                        Text("📄  New Blank PDF")
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            isFabExpanded = false
+                                            launcher.launch(arrayOf("application/pdf"))
+                                        }
+                                    ) {
+                                        Text("📂  Open PDF File")
+                                    }
+                                }
+                            }
+                        }
+                        ExtendedFloatingActionButton(
+                            onClick = { isFabExpanded = !isFabExpanded },
+                            icon = {
+                                Text(
+                                    text = if (isFabExpanded) "✕" else "+",
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.titleLarge
+                                )
+                            },
+                            text = { Text(if (isFabExpanded) "Close" else "Create") }
+                        )
+                    }
+                }
             }
         ) { paddingValues ->
-            Column(
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(paddingValues)
-                    .padding(horizontal = 16.dp)
             ) {
-                // Quick Action Cards (Acrobat-style)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    // Open File Card
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(96.dp)
-                            .clickable { launcher.launch(arrayOf("application/pdf")) }
-                    ) {
+                when (selectedHomeTab) {
+                    0 -> {
+                        // HOME TAB
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(12.dp),
-                            verticalArrangement = Arrangement.SpaceBetween
+                                .padding(horizontal = 16.dp)
                         ) {
-                            Text("📁", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                text = "Open File",
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        }
-                    }
-
-                    // Scan / Photos Card
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(96.dp)
-                            .clickable { photoPickerLauncher.launch("image/*") }
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(12.dp),
-                            verticalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("📷", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                text = "Photos to PDF",
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer
-                            )
-                        }
-                    }
-
-                    // Showcase Demo Card
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.tertiaryContainer,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(96.dp)
-                            .clickable { loadDemoDocument() }
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(12.dp),
-                            verticalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("✨", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                text = "Sample Doc",
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onTertiaryContainer
-                            )
-                        }
-                    }
-                }
-
-                // Error Notification
-                errorMessage?.let { err ->
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = err,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(12.dp),
-                            textAlign = TextAlign.Center
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-
-                if (isLoading) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(36.dp))
-                    }
-                }
-
-                // Search Bar for Recents
-                OutlinedTextField(
-                    value = homeSearchQuery,
-                    onValueChange = { homeSearchQuery = it },
-                    placeholder = { Text("Search files...") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp)
-                )
-
-                // Recent Documents Header
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 12.dp, bottom = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Recent Files",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    if (recentFiles.isNotEmpty()) {
-                        TextButton(
-                            onClick = {
-                                RecentDocumentsManager.clearRecents(context)
-                                refreshRecents()
-                            }
-                        ) {
-                            Text("Clear All")
-                        }
-                    }
-                }
-
-                val filteredRecents = if (homeSearchQuery.isBlank()) {
-                    recentFiles
-                } else {
-                    recentFiles.filter { it.name.contains(homeSearchQuery, ignoreCase = true) }
-                }
-
-                if (filteredRecents.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = if (homeSearchQuery.isBlank()) "No recent documents.\nTap 'Open File' or 'Photos to PDF' above to start reading." else "No matching files found.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center
-                        )
-                    }
-                } else {
-                    val dateFormat = SimpleDateFormat("MMM d, yyyy • HH:mm", Locale.getDefault())
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(filteredRecents) { recent ->
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            // Quick Action Cards
+                            Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { loadUri(Uri.parse(recent.uriString)) }
+                                    .padding(vertical = 12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(90.dp)
+                                        .clickable { launcher.launch(arrayOf("application/pdf")) }
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(10.dp),
+                                        verticalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text("📁", style = MaterialTheme.typography.titleMedium)
+                                        Text(
+                                            text = "Open File",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    }
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(90.dp)
+                                        .clickable { photoPickerLauncher.launch("image/*") }
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(10.dp),
+                                        verticalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text("📷", style = MaterialTheme.typography.titleMedium)
+                                        Text(
+                                            text = "Scan / Photos",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                                        )
+                                    }
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(90.dp)
+                                        .clickable { createBlankDocument() }
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(10.dp),
+                                        verticalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text("📄", style = MaterialTheme.typography.titleMedium)
+                                        Text(
+                                            text = "Blank PDF",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onTertiaryContainer
+                                        )
+                                    }
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(90.dp)
+                                        .clickable { loadDemoDocument() }
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(10.dp),
+                                        verticalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text("✨", style = MaterialTheme.typography.titleMedium)
+                                        Text(
+                                            text = "Sample",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Error Banner
+                            errorMessage?.let { err ->
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.errorContainer,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = err,
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.padding(12.dp),
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+
+                            if (isLoading) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(24.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(36.dp))
+                                }
+                            }
+
+                            // Search Bar for Recents
+                            OutlinedTextField(
+                                value = homeSearchQuery,
+                                onValueChange = { homeSearchQuery = it },
+                                placeholder = { Text("Search files...") },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                            )
+
+                            // Filter Chips Row
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 6.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                listOf("All", "Recent", "Favorites").forEach { filter ->
+                                    FilterChip(
+                                        selected = filterMode == filter,
+                                        onClick = { filterMode = filter },
+                                        label = { Text(filter) }
+                                    )
+                                }
+                            }
+
+                            // Recent Documents Header
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 8.dp, bottom = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Recent Files",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                if (recentFiles.isNotEmpty()) {
+                                    TextButton(
+                                        onClick = {
+                                            RecentDocumentsManager.clearRecents(context)
+                                            refreshRecents()
+                                        }
+                                    ) {
+                                        Text("Clear All")
+                                    }
+                                }
+                            }
+
+                            val filteredRecents = if (homeSearchQuery.isBlank()) {
+                                recentFiles
+                            } else {
+                                recentFiles.filter { it.name.contains(homeSearchQuery, ignoreCase = true) }
+                            }
+
+                            if (filteredRecents.isEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = if (homeSearchQuery.isBlank()) "No recent documents.\nTap '+ Create' or 'Open File' above to start reading." else "No matching files found.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            } else {
+                                val dateFormat = SimpleDateFormat("MMM d, yyyy • HH:mm", Locale.getDefault())
+                                LazyColumn(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    items(filteredRecents) { recent ->
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable { loadUri(Uri.parse(recent.uriString)) }
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(12.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(6.dp),
+                                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                                    modifier = Modifier.size(38.dp)
+                                                ) {
+                                                    Box(contentAlignment = Alignment.Center) {
+                                                        Text(
+                                                            text = "PDF",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                                        )
+                                                    }
+                                                }
+
+                                                Spacer(modifier = Modifier.width(12.dp))
+
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = recent.name,
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                    Text(
+                                                        text = dateFormat.format(Date(recent.timestamp)),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+
+                                                IconButton(
+                                                    onClick = {
+                                                        RecentDocumentsManager.removeRecent(context, recent.uriString)
+                                                        refreshRecents()
+                                                    }
+                                                ) {
+                                                    Text("✕", style = MaterialTheme.typography.labelSmall)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    1 -> {
+                        // FILES TAB
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(16.dp)
+                        ) {
+                            Text(
+                                text = "Storage Locations",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { launcher.launch(arrayOf("application/pdf")) }
                             ) {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(12.dp),
+                                        .padding(16.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Surface(
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = MaterialTheme.colorScheme.primaryContainer,
-                                        modifier = Modifier.size(38.dp)
-                                    ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Text(
-                                                text = "PDF",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                                            )
+                                    Text("📂", style = MaterialTheme.typography.titleLarge)
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    Column {
+                                        Text("Browse Device Files", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                                        Text("Choose from Downloads, Drive, SD Card", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        val downloadDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                                        val pdfFiles = downloadDir.listFiles { f -> f.extension.equals("pdf", ignoreCase = true) }
+                                        if (!pdfFiles.isNullOrEmpty()) {
+                                            loadUri(Uri.fromFile(pdfFiles.first()))
+                                        } else {
+                                            launcher.launch(arrayOf("application/pdf"))
                                         }
                                     }
-
-                                    Spacer(modifier = Modifier.width(12.dp))
-
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = recent.name,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = FontWeight.SemiBold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = dateFormat.format(Date(recent.timestamp)),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("📥", style = MaterialTheme.typography.titleLarge)
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    Column {
+                                        Text("Downloads Folder", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                                        Text("Quick access to exported and downloaded PDFs", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
+                                }
+                            }
+                        }
+                    }
+                    2 -> {
+                        // TOOLS TAB (Comprehensive PDF Toolkit)
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            item {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text("Convert & Export", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    ToolCard(modifier = Modifier.weight(1f), icon = "📄", title = "Export Word", desc = "Export to .docx") {
+                                        launcher.launch(arrayOf("application/pdf"))
+                                    }
+                                    ToolCard(modifier = Modifier.weight(1f), icon = "📊", title = "PowerPoint", desc = "Export to .pptx") {
+                                        launcher.launch(arrayOf("application/pdf"))
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    ToolCard(modifier = Modifier.weight(1f), icon = "🖼️", title = "Export Images", desc = "PNG, JPEG, TIFF") {
+                                        launcher.launch(arrayOf("application/pdf"))
+                                    }
+                                    ToolCard(modifier = Modifier.weight(1f), icon = "🏛️", title = "Convert PDF/A", desc = "Archival ISO 19005") {
+                                        launcher.launch(arrayOf("application/pdf"))
+                                    }
+                                }
+                            }
 
-                                    IconButton(
-                                        onClick = {
-                                            RecentDocumentsManager.removeRecent(context, recent.uriString)
-                                            refreshRecents()
-                                        }
-                                    ) {
-                                        Text("✕", style = MaterialTheme.typography.labelSmall)
+                            item {
+                                Text("Edit & Content", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    ToolCard(modifier = Modifier.weight(1f), icon = "🔤", title = "Add Text", desc = "Insert page text") {
+                                        launcher.launch(arrayOf("application/pdf"))
+                                    }
+                                    ToolCard(modifier = Modifier.weight(1f), icon = "📷", title = "Insert Image", desc = "Embed pictures") {
+                                        launcher.launch(arrayOf("application/pdf"))
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    ToolCard(modifier = Modifier.weight(1f), icon = "⬛", title = "Redact", desc = "Permanent sanitize") {
+                                        launcher.launch(arrayOf("application/pdf"))
+                                    }
+                                    ToolCard(modifier = Modifier.weight(1f), icon = "🌊", title = "Watermarks", desc = "Headers & Footers") {
+                                        launcher.launch(arrayOf("application/pdf"))
+                                    }
+                                }
+                            }
+
+                            item {
+                                Text("Organize & Security", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    ToolCard(modifier = Modifier.weight(1f), icon = "▦", title = "Organize Pages", desc = "Rotate, reorder, delete") {
+                                        launcher.launch(arrayOf("application/pdf"))
+                                    }
+                                    ToolCard(modifier = Modifier.weight(1f), icon = "🔒", title = "Protect PDF", desc = "AES-256 encryption") {
+                                        launcher.launch(arrayOf("application/pdf"))
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(16.dp))
+                            }
+                        }
+                    }
+                    3 -> {
+                        // SETTINGS TAB
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(16.dp)
+                        ) {
+                            Text("About PdfCraft", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Text("PdfCraft Mobile", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                    Text("Version 0.7.0 • Pure-Rust Clean-Room Engine", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text("High-fidelity PDF reader, editor, and multi-format conversion suite powered by Rust and Android Material 3.", style = MaterialTheme.typography.bodyMedium)
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Button(onClick = { showAbout = true }) {
+                                        Text("View Licenses & Attributions")
                                     }
                                 }
                             }
@@ -749,6 +1074,49 @@ fun AppRootScreen(
     if (showAbout) {
         androidx.compose.ui.window.Dialog(onDismissRequest = { showAbout = false }) {
             PdfAboutView(onDismiss = { showAbout = false })
+        }
+    }
+}
+
+@Composable
+fun ToolCard(
+    icon: String,
+    title: String,
+    desc: String,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        modifier = modifier
+            .height(84.dp)
+            .clickable(onClick = onClick)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(10.dp),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(icon, style = MaterialTheme.typography.titleSmall)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Text(
+                text = desc,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
