@@ -2804,3 +2804,9 @@ theme	Appearance	ظاهر
 	two cells would both be named {name}	دو خانه هر دو با نام {name} نام‌گذاری می‌شوند
 	a field named {name} already exists	فیلدی با نام {name} از قبل وجود دارد
 	Today	امروز
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	مدیریت لایه‌ها
+	Bring to front	به جلوترین
+	Bring forward	یک لایه جلوتر
+	Send backward	یک لایه عقب‌تر
+	Send to back	به پشتی

@@ -2553,3 +2553,9 @@ animation effects	Off	Kapalı
 	Rotate the selected pages clockwise	Seçili sayfaları saat yönünde döndür
 	Extract the selected pages…	Seçili sayfaları ayıkla…
 	Delete the selected pages	Seçili sayfaları sil
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Katmanları yönet
+	Bring to front	En öne
+	Bring forward	Bir katman öne
+	Send backward	Bir katman geri
+	Send to back	En arkaya

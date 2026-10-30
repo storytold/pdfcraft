@@ -2833,3 +2833,9 @@ certificate	Version	الإصدار
 	Rotate the selected pages clockwise	تدوير الصفحات المحددة باتجاه عقارب الساعة
 	Extract the selected pages…	استخراج الصفحات المحددة…
 	Delete the selected pages	حذف الصفحات المحددة
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	إدارة المستويات
+	Bring to front	إحضار إلى الأمام
+	Bring forward	تقديم مستوى واحد
+	Send backward	إرسال مستوى واحد للخلف
+	Send to back	إرسال إلى الخلف

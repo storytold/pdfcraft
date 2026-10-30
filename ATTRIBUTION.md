@@ -4,7 +4,7 @@
 
 Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with the SHA-256 of every asset but the translation catalogs, is [ATTRIBUTION.toml](ATTRIBUTION.toml). Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).
 
-## In this repository (289)
+## In this repository (291)
 
 | Asset | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
@@ -49,8 +49,10 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `assets/icons/flip-horizontal-2.svg` | Lucide icon "flip-horizontal-2" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/flip-horizontal-2.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/flip-vertical-2.svg` | Lucide icon "flip-vertical-2" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/flip-vertical-2.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/app-window.svg` | Lucide icon "app-window" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/app-window.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
+| `assets/icons/arrow-down-from-line.svg` | Lucide icon "arrow-down-from-line" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/arrow-down-from-line.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/arrow-left-right.svg` | Lucide icon "arrow-left-right" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/arrow-left-right.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/arrow-up-down.svg` | Lucide icon "arrow-up-down" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/arrow-up-down.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
+| `assets/icons/arrow-up-from-line.svg` | Lucide icon "arrow-up-from-line" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/arrow-up-from-line.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/arrow-up-right.svg` | Lucide icon "arrow-up-right" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/arrow-up-right.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/badge-check.svg` | Lucide icon "badge-check" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/badge-check.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/bandage.svg` | Lucide icon "bandage" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/bandage.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |

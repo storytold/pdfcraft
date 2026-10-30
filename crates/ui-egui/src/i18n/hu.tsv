@@ -2556,3 +2556,9 @@ animation effects	Off	Ki
 	Rotate the selected pages clockwise	A kijelölt oldalak forgatása az óramutató járásával megegyezően
 	Extract the selected pages…	A kijelölt oldalak kibontása…
 	Delete the selected pages	A kijelölt oldalak törlése
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Szintek kezelése
+	Bring to front	Legelőre
+	Bring forward	Egy szinttel előre
+	Send backward	Egy szinttel hátra
+	Send to back	Leghátra

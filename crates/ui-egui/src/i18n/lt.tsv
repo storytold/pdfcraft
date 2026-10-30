@@ -2818,3 +2818,9 @@ theme	Appearance	Išvaizda
 	Rotate the selected pages clockwise	Pasukti pasirinktus puslapius pagal laikrodžio rodyklę
 	Extract the selected pages…	Išskleisti pasirinktus puslapius…
 	Delete the selected pages	Ištrinti pasirinktus puslapius
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Tvarkyti sluoksnius
+	Bring to front	Į viršų
+	Bring forward	Vienu sluoksniu aukščiau
+	Send backward	Vienu sluoksniu žemiau
+	Send to back	Į apačią

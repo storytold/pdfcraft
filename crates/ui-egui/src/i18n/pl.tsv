@@ -2653,3 +2653,9 @@ animation effects	Off	Wyłączone
 	Rotate the selected pages clockwise	Obróć zaznaczone strony w prawo
 	Extract the selected pages…	Wyodrębnij zaznaczone strony…
 	Delete the selected pages	Usuń zaznaczone strony
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Zarządzaj poziomami
+	Bring to front	Na wierzch
+	Bring forward	O poziom w przód
+	Send backward	O poziom w tył
+	Send to back	Na spód

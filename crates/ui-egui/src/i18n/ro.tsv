@@ -2818,3 +2818,9 @@ theme	Appearance	Aspect
 	Rotate the selected pages clockwise	Rotește paginile selectate în sens orar
 	Extract the selected pages…	Extrage paginile selectate…
 	Delete the selected pages	Șterge paginile selectate
+# Edit panel: manage the paint order of any selected object or group (AI-assisted)
+	Manage levels	Gestionare niveluri
+	Bring to front	În prim-plan
+	Bring forward	Un nivel în față
+	Send backward	Un nivel în spate
+	Send to back	În plan secund
