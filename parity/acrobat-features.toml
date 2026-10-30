@@ -5975,9 +5975,9 @@ tier = "P0"
 milestone = "M9"
 status = "shipped"
 commands = ["sign.digital"]
-tools = ["sign_document"]
-evidence = ["crates/sign/tests/it/crypto.rs::opens_every_openssl_flavour_of_pkcs12", "crates/sign/tests/it/crypto.rs::opens_pkcs12_as_windows_writes_it", "crates/sign/tests/it/pdf.rs::signing_then_validating_with_and_without_trust", "crates/ui-egui/tests/it/signing.rs::certifying_without_a_visible_signature", "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools"]
-notes = "PBES2 (AES, 3DES) and legacy SHA-1 3DES/RC2 files; RSA, P-256, P-384; both the DER OpenSSL writes and the BER Windows writes (indefinite lengths, segmented AuthenticatedSafe)"
+tools = ["sign_document", "sign_batch"]
+evidence = ["crates/automation/tests/it/sign_batch.rs::signs_every_pdf_keeping_paths_and_leaving_sources_alone", "crates/sign/tests/it/crypto.rs::opens_every_openssl_flavour_of_pkcs12", "crates/sign/tests/it/crypto.rs::opens_pkcs12_as_windows_writes_it", "crates/sign/tests/it/pdf.rs::signing_then_validating_with_and_without_trust", "crates/ui-egui/tests/it/signing.rs::certifying_without_a_visible_signature", "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools"]
+notes = "PBES2 (AES, 3DES) and legacy SHA-1 3DES/RC2 files; RSA, P-256, P-384; both the DER OpenSSL writes and the BER Windows writes (indefinite lengths, segmented AuthenticatedSafe). `sign_batch` signs many PDFs (recursive folders, collision-safe outputs, per-file reports) with one ID through MCP and scripts; no desktop UI for it yet"
 
 [[feature]]
 id = "sign.macos-keychain"

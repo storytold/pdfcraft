@@ -73,6 +73,17 @@ fn labels_arg(v: &Value) -> Result<sign::AppearanceLabels> {
     Ok(labels)
 }
 
+/// A signature rectangle given in points from the top-left of the displayed `page` → PDF user space.
+pub(crate) fn user_rect(page: Option<&pdfcraft_render::PageInfo>, r: [f64; 4]) -> Result<[f64; 4]> {
+    let p = page.ok_or_else(|| bad("the document has no page to put the signature on"))?;
+    let (u0, u1) = (p.view_to_user(r[0] as f32, r[1] as f32), p.view_to_user(r[2] as f32, r[3] as f32));
+    let u = [u0[0].min(u1[0]) as f64, u0[1].min(u1[1]) as f64, u0[0].max(u1[0]) as f64, u0[1].max(u1[1]) as f64];
+    if u[2] - u[0] < 4.0 || u[3] - u[1] < 4.0 {
+        return Err(bad("the signature rectangle is too small"));
+    }
+    Ok(u)
+}
+
 pub(crate) fn cert_json(c: &Certificate) -> Value {
     json!({
         "name": c.display_name(),
@@ -174,7 +185,7 @@ impl Automation {
         Ok(json!({ "path": path.to_string_lossy(), "certificate": cert_json(&id.certificate) }))
     }
 
-    fn open_id(&self, a: &Args) -> Result<DigitalId> {
+    pub(crate) fn open_id(&self, a: &Args) -> Result<DigitalId> {
         // A macOS Keychain identity: "keychain:<fingerprint>" or "keychain:<common name>".
         if let Some(r) = a.str("id")?.strip_prefix("keychain:") {
             #[cfg(target_os = "macos")]
@@ -207,15 +218,7 @@ impl Automation {
             None => 0,
         };
         let rect = match a.nums::<4>("rect")? {
-            Some(r) => {
-                let p = doc.info.pages.get(page).ok_or_else(|| bad("the document has no page to put the signature on"))?;
-                let (u0, u1) = (p.view_to_user(r[0] as f32, r[1] as f32), p.view_to_user(r[2] as f32, r[3] as f32));
-                let u = [u0[0].min(u1[0]) as f64, u0[1].min(u1[1]) as f64, u0[0].max(u1[0]) as f64, u0[1].max(u1[1]) as f64];
-                if u[2] - u[0] < 4.0 || u[3] - u[1] < 4.0 {
-                    return Err(bad("the signature rectangle is too small"));
-                }
-                Some(u)
-            }
+            Some(r) => Some(user_rect(doc.info.pages.get(page), r)?),
             None => None,
         };
         let certify = match a.get("certify") {

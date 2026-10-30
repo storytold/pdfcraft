@@ -71,6 +71,37 @@ step. MCP marks a report with failed files as `isError: true` and retains the
 structured report. Tool names and OCR settings match the existing automation API
 (`skip_text_pages: false` corresponds to `--ocr-all-pages`).
 
+## Signing a folder
+
+`sign_batch` signs every PDF that `paths` selects with one digital ID (a `.p12`/`.pfx` A1
+certificate and its `password`, or a `keychain:` / `windows:` reference), through MCP or a
+`pdfcraft-cli run --script` step:
+
+```json
+{
+  "paths": ["contracts"],
+  "recursive": true,
+  "out_dir": "signed",
+  "id": "me.p12",
+  "password": "secret",
+  "reason": "Approved",
+  "location": "Brasília",
+  "rect": [50, 50, 250, 110],
+  "page": 1,
+  "certify": "no_changes",
+  "stop_on_error": false
+}
+```
+
+Discovery, relative paths, collision-safe numbered outputs, per-file reports, the
+`isError` flag and the limits are those of `doc_batch`. Each file is signed in its own
+session (PAdES B-B, as `sign_document`), so open documents are untouched and signatures a
+file already carries stay valid. Without `rect` the signatures are invisible; with it each
+file gets a visible signature on `page` (default 1; a shorter file takes its last page).
+Files that are not PDFs are skipped. A file the signer refuses (a broken file, an encrypted
+one whose permissions forbid signing) fails alone unless `stop_on_error` is true. A wrong
+password or an unreadable ID refuses the whole call before any file is read.
+
 ## Boundaries
 
 Discovery completes before writing. Invalid arguments, unreadable input folders
