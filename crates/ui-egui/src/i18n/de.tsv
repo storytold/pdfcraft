@@ -2558,3 +2558,22 @@ animation effects	Off	Aus
 	Rotate the selected pages clockwise	Ausgewählte Seiten im Uhrzeigersinn drehen
 	Extract the selected pages…	Ausgewählte Seiten extrahieren…
 	Delete the selected pages	Ausgewählte Seiten löschen
+	Enhance scanned file…	Gescannte Datei verbessern…
+	Enhance Scanned File	Gescannte Datei verbessern
+	Cleans up the scanned pictures in place: recognized text, comments and links on the pages stay as they are.	Bereinigt die gescannten Bilder an Ort und Stelle: erkannter Text, Kommentare und Links auf den Seiten bleiben erhalten.
+	Filters	Filter
+	Background removal	Hintergrund entfernen
+	Evens out the paper so a grey or yellowed background turns white, and darkens faint strokes. 0 is off.	Gleicht das Papier aus, sodass ein grauer oder vergilbter Hintergrund weiß wird, und dunkelt blasse Striche nach. 0 ist aus.
+	Edge shadow removal	Randschatten entfernen
+	Lightens shadows along the edges of the scan, such as a book's gutter or a copier's dark border	Hellt Schatten an den Rändern des Scans auf, etwa den Bundsteg eines Buchs oder den dunklen Rand eines Kopierers
+	Despeckle	Flecken entfernen
+	Removes isolated dark specks such as dust and scanner noise. The only filter black and white scans take.	Entfernt einzelne dunkle Flecken wie Staub und Scannerrauschen. Der einzige Filter für Schwarzweiß-Scans.
+	Enhance	Verbessern
+	No scanned pages were cleaned up.	Es wurden keine gescannten Seiten bereinigt.
+	Scanned pages are already being enhanced	Gescannte Seiten werden bereits verbessert
+	Couldn't enhance the scanned pages	Die gescannten Seiten konnten nicht verbessert werden
+	Enhancing scans… image {d} of {t}	Scans werden verbessert… Bild {d} von {t}
+	Enhancing the scanned pages was cancelled	Das Verbessern der gescannten Seiten wurde abgebrochen
+@plural	Cleaned up the scan on {n} page.|Cleaned up the scans on {n} pages.	Scan auf {n} Seite bereinigt.|Scans auf {n} Seiten bereinigt.
+@plural	{n} page is not a scan.|{n} pages are not scans.	{n} Seite ist kein Scan.|{n} Seiten sind keine Scans.
+@plural	{n} image was left as it was (page {p}: {why}).|{n} images were left as they were (page {p}: {why}, …).	{n} Bild blieb unverändert (Seite {p}: {why}).|{n} Bilder blieben unverändert (Seite {p}: {why}, …).

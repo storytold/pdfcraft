@@ -183,6 +183,8 @@ impl PdfCraftApp {
             stamp_draft: Default::default(),
             optimize_draft: OptimizeDraft::default(),
             optimize_run: None,
+            scan_clean_draft: scan_clean_ui::ScanCleanDraft::default(),
+            scan_clean_run: None,
             progress_notice: None,
             page_clipboard: None,
             grid_drop: None,
@@ -520,6 +522,7 @@ impl eframe::App for PdfCraftApp {
         self.auto_ocr_scanned_page();
         self.poll_ocr();
         self.poll_optimize();
+        self.poll_scan_clean();
         self.poll_action();
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]

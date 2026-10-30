@@ -360,6 +360,11 @@ impl PdfCraftApp {
             self.notify_tr("Optimization is already running");
             return;
         }
+        // Both jobs share the progress card and capture the same document state.
+        if self.scan_clean_run.is_some() {
+            self.notify_tr("Scanned pages are already being enhanced");
+            return;
+        }
         let job = match self.session.optimize_job(id, settings, discard) {
             Ok(job) => job,
             Err(e) => return self.save_optimized(id, kind, Err(e)),
@@ -490,5 +495,23 @@ mod tests {
         app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Reduce, progress: Arc::default() });
         app.optimize_with_draft();
         assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Optimization is already running"));
+    }
+
+    #[test]
+    fn optimize_and_enhance_scanned_file_do_not_run_at_once() {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
+        let (_, doc) = app.active_ids().unwrap();
+        app.scan_clean_run = Some(crate::scan_clean_ui::ScanCleanRun { doc, progress: Arc::default() });
+        app.optimize_with_draft();
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Scanned pages are already being enhanced"));
+        assert!(app.optimize_run.is_none());
+
+        app.scan_clean_run = None;
+        app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Reduce, progress: Arc::default() });
+        app.start_scan_clean();
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Optimization is already running"));
+        assert!(app.scan_clean_run.is_none());
     }
 }

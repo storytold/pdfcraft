@@ -386,6 +386,13 @@ pub enum Edit {
         page: usize,
         words: Vec<pdfcraft_ocr::PlacedWord>,
     },
+    /// Scan & OCR ▸ Enhance ▸ Scanned document: put the scan images
+    /// [`ScanCleanJob::run`](crate::scan_clean::ScanCleanJob::run) cleaned in place of the old
+    /// ones (each object must still be an image). Built by
+    /// [`Session::apply_scan_clean`](crate::Session::apply_scan_clean).
+    EnhanceScan {
+        images: Vec<(pdfcraft_cos::ObjRef, pdfcraft_cos::Stream)>,
+    },
     /// Edit a PDF ▸ Edit text: replace the text of line `line` (from `Document::text_lines`) on
     /// `page`, in its own font when it can show it, else in Helvetica.
     EditTextLine {

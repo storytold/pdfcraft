@@ -106,6 +106,35 @@ impl Automation {
                 out["detected"] = json!(given.is_none());
                 out
             }
+            "page_enhance_scan" => {
+                let pages = match a.opt_ints("pages")? {
+                    Some(_) => self.pages(&a, "pages")?,
+                    None => Vec::new(),
+                };
+                let level = match a.opt_int("level")? {
+                    None => pdfcraft_engine::scan_clean::ScanCleanSettings::default().level,
+                    Some(l @ 0..=100) => l as u8,
+                    Some(l) => return Err(ToolError::InvalidArgs(format!("level must be between 0 and 100, not {l}"))),
+                };
+                let mut settings = pdfcraft_engine::scan_clean::ScanCleanSettings::at(level);
+                if let Some(on) = a.opt_bool("edge_shadows")? {
+                    settings.edge_shadows = on;
+                }
+                if let Some(on) = a.opt_bool("despeckle")? {
+                    settings.despeckle = on;
+                }
+                let id = self.doc(&a)?.id;
+                let report = self.session.enhance_scanned_pages(id, &pages, settings).map_err(failed)?;
+                let numbered = |p: &[usize]| p.iter().map(|p| p + 1).collect::<Vec<_>>();
+                let skipped: Vec<Value> =
+                    report.skipped.iter().map(|k| json!({ "pages": numbered(&k.pages), "name": k.name, "reason": k.reason })).collect();
+                let mut out = summary(self.doc(&a)?);
+                out["pages_cleaned"] = json!(numbered(&report.pages));
+                out["images"] = json!(report.images);
+                out["not_scanned"] = json!(numbered(&report.not_scanned));
+                out["skipped"] = json!(skipped);
+                out
+            }
             "page_delete" => {
                 let pages = self.pages(&a, "pages")?;
                 self.apply(&a, Edit::DeletePages { pages })?

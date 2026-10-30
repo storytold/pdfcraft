@@ -113,7 +113,7 @@ pub(crate) fn added_picture(cos: &Cos, file: &[u8]) -> Option<ObjRef> {
 }
 
 /// The largest raster image Form `form` draws through its resources (nested Forms included).
-fn picture_in_form(cos: &Cos, form: ObjRef) -> Option<ObjRef> {
+pub(crate) fn picture_in_form(cos: &Cos, form: ObjRef) -> Option<ObjRef> {
     let mut seen = HashSet::from([form]);
     let mut best: Option<(u64, ObjRef)> = None;
     let res = resources(cos, form)?;

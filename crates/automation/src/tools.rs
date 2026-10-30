@@ -225,6 +225,18 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "page"],
             )),
+        t("page_enhance_scan", "Enhance scanned file", "Clean up scanned pages in place (Scan & OCR ▸ Enhance ▸ Scanned document). A page is a scan when its pictures cover at least half of it; the pictures covering at least a tenth of it are cleaned and written back into the same image objects at the same size and colour space (a JPEG stays a JPEG at quality 90, other grey/RGB images are stored losslessly, a 1-bit image stays 1-bit), so the page's invisible OCR text, comments, links and other content stay as they were, and an image drawn on several pages is cleaned once. level (0–100, default 50) is background removal: the paper's illumination is evened out so a grey, yellowed or unevenly lit background turns white, then the contrast is raised so faint strokes darken; colour ink stays colour. edge_shadows (default: on unless level is 0) lightens shadows along the scan's edges (book gutters, a copier's dark border). despeckle (default: from level 60) turns isolated dark specks white; it is the only change a 1-bit scan takes. Returns pages_cleaned (1-based), images (rewritten), not_scanned (pages that are no scan) and skipped ([{pages, name, reason}]: CMYK, indexed, JPEG 2000, JBIG2 or CCITT images, a scan drawn inside grouped Form artwork, broken data, or nothing to change). One undoable step; none when nothing changed.")
+            .cmd("ocr.enhance")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "pages": pages("to clean up (default: all)"),
+                    "level": { "type": "integer", "minimum": 0, "maximum": 100 },
+                    "edge_shadows": { "type": "boolean" },
+                    "despeckle": { "type": "boolean" },
+                }),
+                &["doc"],
+            )),
         t("page_delete", "Delete pages", "Delete pages. Undoable until saved.")
             .destructive()
             .cmd("page.delete")

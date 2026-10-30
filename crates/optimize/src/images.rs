@@ -8,7 +8,7 @@ use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 use crate::{Compression, ImageSettings, OptimizeError, Report, Settings, Stage};
 
 /// Images with more pixels than this are left alone (memory).
-const MAX_PIXELS: u64 = 80_000_000;
+pub(crate) const MAX_PIXELS: u64 = 80_000_000;
 
 /// The resources of a page, inherited from the page tree if the page has none.
 pub(crate) fn page_resources(doc: &Document, page: ObjRef) -> Option<Dict> {
@@ -203,7 +203,7 @@ pub(crate) fn components(doc: &Document, cs: &Object) -> Option<usize> {
     }
 }
 
-fn is_dct(s: &Stream) -> Option<bool> {
+pub(crate) fn is_dct(s: &Stream) -> Option<bool> {
     match s.dict.get(b"Filter") {
         None => Some(false),
         Some(Object::Name(n)) => match n.as_slice() {
@@ -288,7 +288,7 @@ pub(crate) fn pixels(doc: &Document, s: &Stream, n: usize) -> Option<Vec<u8>> {
 /// /ColorTransform contradict each other (PdfCraft's renderer lets /ColorTransform 0 win where
 /// the standard lets the marker win), either holds a value other than 0 or 1, or the parameters
 /// or the JPEG's segments can't be read.
-fn ycc_encoded(doc: &Document, s: &Stream) -> Option<bool> {
+pub(crate) fn ycc_encoded(doc: &Document, s: &Stream) -> Option<bool> {
     let entry = color_transform(doc, s)?;
     match adobe_transform(&s.raw)? {
         Some(t @ (0 | 1)) => entry.is_none_or(|c| c == i64::from(t)).then_some(t == 1),
@@ -412,7 +412,7 @@ pub(crate) fn resample(px: &[u8], n: usize, w: u32, h: u32, nw: u32, nh: u32) ->
     })
 }
 
-fn jpeg(px: &[u8], n: usize, w: u32, h: u32, quality: u8) -> Option<Vec<u8>> {
+pub(crate) fn jpeg(px: &[u8], n: usize, w: u32, h: u32, quality: u8) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality.clamp(1, 100));
     let ty = if n == 1 { image::ExtendedColorType::L8 } else { image::ExtendedColorType::Rgb8 };
@@ -435,7 +435,7 @@ pub(crate) fn decodable(doc: &Document, s: &Stream) -> Option<bool> {
 
 /// Whether `decode` is the default decode array for `n` components ([0 1] each), which changes
 /// nothing. Scanners write it on page images (#490).
-fn is_identity_decode(doc: &Document, decode: &Object, n: usize) -> bool {
+pub(crate) fn is_identity_decode(doc: &Document, decode: &Object, n: usize) -> bool {
     let decode = doc.resolve(decode);
     let Some(a) = decode.as_array() else { return false };
     a.len() == 2 * n && a.chunks(2).all(|p| matches!(p, [lo, hi] if doc.resolve(lo).as_f64() == Some(0.0) && doc.resolve(hi).as_f64() == Some(1.0)))

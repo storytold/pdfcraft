@@ -3472,6 +3472,62 @@ fn enhance_camera_image_through_tools() {
 }
 
 #[test]
+fn enhance_scanned_file_cleans_the_scan_in_place_through_tools() {
+    let dir = workdir("enhance-scan");
+    // A 300 × 400 grey scan: dull paper, a dark gutter at the left, text bars and a speck.
+    let img = image::GrayImage::from_fn(300, 400, |x, y| {
+        let light = 0.55 + 0.45 * (x as f32 / 60.0).min(1.0);
+        let ink = if ((60..360).contains(&y) && (y - 60) % 40 < 6 && (60..240).contains(&x)) || (x, y) == (150, 25) { 0.12 } else { 0.78 };
+        image::Luma([(ink * light * 255.0) as u8])
+    });
+    img.save(dir.join("scan.jpg")).unwrap();
+    let mut a = auto(&dir);
+    let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["scan.jpg"] }))["doc"].as_u64().unwrap();
+    ok(&mut a, "image_save", json!({ "doc": scan, "page": 1, "image": 1, "path": "before.jpg" }));
+
+    let r = ok(&mut a, "page_enhance_scan", json!({ "doc": scan, "level": 100 }));
+    assert_eq!(r["undo"], "Enhance scanned file");
+    assert_eq!((r["pages_cleaned"].clone(), r["images"].clone(), r["not_scanned"].clone()), (json!([1]), json!(1), json!([])));
+    assert_eq!(r["skipped"], json!([]));
+    // In place: still one picture of the same size, still a JPEG, now with white paper.
+    let images = ok(&mut a, "page_images", json!({ "doc": scan, "page": 1 }));
+    assert_eq!((images["count"].clone(), images["images"][0]["pixels"].clone()), (json!(1), json!([300, 400])));
+    let saved = ok(&mut a, "image_save", json!({ "doc": scan, "page": 1, "image": 1, "path": "after" }));
+    assert_eq!(saved["format"], "jpg");
+    let (before, after) = (image::open(dir.join("before.jpg")).unwrap().to_luma8(), image::open(dir.join("after.jpg")).unwrap().to_luma8());
+    for (x, y) in [(150, 40), (3, 40), (3, 380), (150, 25)] {
+        assert!(
+            before.get_pixel(x, y)[0] < 200 && after.get_pixel(x, y)[0] >= 230,
+            "({x}, {y}): {:?} → {:?}",
+            before.get_pixel(x, y),
+            after.get_pixel(x, y)
+        );
+    }
+    assert!(after.get_pixel(150, 62)[0] <= 60, "a stroke stays dark");
+    // Undo puts the scan back as it was.
+    ok(&mut a, "edit_undo", json!({ "doc": scan }));
+    ok(&mut a, "image_save", json!({ "doc": scan, "page": 1, "image": 1, "path": "undone.jpg" }));
+    assert_eq!(std::fs::read(dir.join("undone.jpg")).unwrap(), std::fs::read(dir.join("before.jpg")).unwrap());
+
+    // Switches: despeckle alone leaves everything but the speck.
+    let r = ok(&mut a, "page_enhance_scan", json!({ "doc": scan, "pages": [1], "level": 0, "despeckle": true, "edge_shadows": false }));
+    assert_eq!(r["images"], 1);
+    // A document of text pages has no scans: nothing changes, and it says so.
+    let text = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "page_enhance_scan", json!({ "doc": text }));
+    assert_eq!((r["images"].clone(), r["not_scanned"].clone(), r["undo"].clone()), (json!(0), json!([1, 2, 3]), Value::Null));
+    // Bad arguments are refused before anything changes.
+    for bad in [
+        json!({ "doc": scan, "level": 101 }),
+        json!({ "doc": scan, "pages": [9] }),
+        json!({ "doc": scan, "despeckle": "yes" }),
+        json!({ "doc": scan, "pages": [] }),
+    ] {
+        assert!(matches!(a.call("page_enhance_scan", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+}
+
+#[test]
 fn enhance_camera_image_finds_the_edges_by_itself() {
     let dir = workdir("enhance-camera-auto");
     // A 600 × 450 photo: a white sheet, tilted, on a dark table.
