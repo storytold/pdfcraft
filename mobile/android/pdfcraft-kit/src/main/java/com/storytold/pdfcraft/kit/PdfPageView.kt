@@ -11,12 +11,17 @@ import android.view.View
 import android.widget.OverScroller
 import kotlinx.coroutines.*
 import uniffi.pdfcraft_ffi.FfiPageGeometry
+import uniffi.pdfcraft_ffi.FfiRect
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.round
 
 /**
- * High-performance Android View for displaying a PDF page with tiled rendering
- * and native gestures: pinch-to-zoom (25% to 1600%), pan, momentum fling, and double-tap zoom.
+ * High-performance, high-DPI Android View for rendering PDF pages with crisp vector fidelity,
+ * native gestures (pinch-zoom, momentum pan, double-tap zoom), interactive AcroForm editing,
+ * link navigation, and text selection.
  */
 class PdfPageView @JvmOverloads constructor(
     context: Context,
@@ -32,12 +37,33 @@ class PdfPageView @JvmOverloads constructor(
         private set
 
     // Zoom and pan state
-    var scale: Float = 1.0f
+    var zoomLevel: Float = 1.0f
         private set
-    var minScale: Float = 0.25f
+    val scale: Float
+        get() = fitWidthScale * zoomLevel
+
+    var minScale: Float = 0.5f
     var maxScale: Float = 16.0f
     private var offsetX: Float = 0f
     private var offsetY: Float = 0f
+
+    val fitWidthScale: Float
+        get() {
+            val geom = pageGeometry ?: return 1.5f
+            return if (width > 0 && geom.width > 0f) {
+                width.toFloat() / geom.width
+            } else {
+                context.resources.displayMetrics.density * 1.5f
+            }
+        }
+
+    // Callbacks for shell integration
+    var onNavigateToPage: ((Int) -> Unit)? = null
+    var onOpenUri: ((String) -> Unit)? = null
+    var onEditTextField: ((uniffi.pdfcraft_ffi.FfiFormField) -> Unit)? = null
+    var onSelectChoiceField: ((uniffi.pdfcraft_ffi.FfiFormField) -> Unit)? = null
+    var onToggleChrome: (() -> Unit)? = null
+    var onTextSelected: ((String) -> Unit)? = null
 
     // Gestures & Physics
     private val scroller = OverScroller(context)
@@ -49,22 +75,22 @@ class PdfPageView @JvmOverloads constructor(
         set(value) {
             field = value
             tileCache.evictAll()
-            loadPreview()
+            loadBaseBitmap()
             invalidate()
         }
     var hideComments: Boolean = false
         set(value) {
             field = value
             tileCache.evictAll()
-            loadPreview()
+            loadBaseBitmap()
             invalidate()
         }
-    var searchHighlights: List<uniffi.pdfcraft_ffi.FfiRect> = emptyList()
+    var searchHighlights: List<FfiRect> = emptyList()
         set(value) {
             field = value
             invalidate()
         }
-    var selectedTextRects: List<uniffi.pdfcraft_ffi.FfiRect> = emptyList()
+    var selectedTextRects: List<FfiRect> = emptyList()
         set(value) {
             field = value
             invalidate()
@@ -75,11 +101,17 @@ class PdfPageView @JvmOverloads constructor(
         val doc = document ?: return
         selectionGlyphRange = Pair(startGlyph, endGlyph)
         selectedTextRects = doc.textSelectionRects(pageIndex, startGlyph, endGlyph)
+        val text = doc.textSelectionString(pageIndex, startGlyph, endGlyph)
+        if (text.isNotBlank()) {
+            onTextSelected?.invoke(text)
+        }
+        invalidate()
     }
 
     fun clearTextSelection() {
         selectionGlyphRange = null
         selectedTextRects = emptyList()
+        invalidate()
     }
 
     fun markupSelection(
@@ -112,7 +144,7 @@ class PdfPageView @JvmOverloads constructor(
         }
         clearTextSelection()
         tileCache.evictAll()
-        loadPreview()
+        loadBaseBitmap()
         invalidate()
     }
 
@@ -138,7 +170,7 @@ class PdfPageView @JvmOverloads constructor(
         doc.moveAnnotation(pageIndex, annot.index.toInt(), dx, dy)
         selectedAnnotation = doc.hitTestAnnotation(pageIndex, annot.rect.x + dx + annot.rect.width / 2f, annot.rect.y + dy + annot.rect.height / 2f)
         tileCache.evictAll()
-        loadPreview()
+        loadBaseBitmap()
         invalidate()
     }
 
@@ -148,25 +180,25 @@ class PdfPageView @JvmOverloads constructor(
         doc.deleteAnnotation(pageIndex, annot.index.toInt())
         clearAnnotationSelection()
         tileCache.evictAll()
-        loadPreview()
+        loadBaseBitmap()
         invalidate()
     }
 
     // Rendering & Caching
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val highlightPaint = Paint().apply {
-        color = Color.argb(100, 255, 235, 59) // Translucent amber/yellow
+        color = Color.argb(120, 255, 235, 59) // Translucent amber
         style = Paint.Style.FILL
     }
     private val selectionPaint = Paint().apply {
-        color = Color.argb(90, 33, 150, 243) // Translucent primary blue
+        color = Color.argb(90, 33, 150, 243) // Translucent blue
         style = Paint.Style.FILL
     }
     private val annotationSelectionPaint = Paint().apply {
         color = Color.rgb(33, 150, 243)
         style = Paint.Style.STROKE
         strokeWidth = 3f
-        pathEffect = DashPathEffect(floatArrayOf(12f, 6f), 0f)
+        pathEffect = DashPathEffect(floatArrayOf(10f, 10f), 0f)
     }
     private val handlePaint = Paint().apply {
         color = Color.WHITE
@@ -199,37 +231,40 @@ class PdfPageView @JvmOverloads constructor(
         style = Paint.Style.STROKE
         strokeWidth = 2f
     }
-    private var previewBitmap: Bitmap? = null
-    private val tileSize = 512
 
-    // Memory LRU cache for tiles (32 MB budget)
-    private val tileCache = object : LruCache<String, Bitmap>(32 * 1024 * 1024) {
+    private val tileSize = 512
+    private val maxCacheMemoryBytes = (Runtime.getRuntime().maxMemory() / 4).toInt().coerceAtMost(64 * 1024 * 1024)
+    private val tileCache = object : LruCache<String, Bitmap>(maxCacheMemoryBytes) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
     }
-
-    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val inFlightTiles = mutableSetOf<String>()
+
+    private var baseBitmap: Bitmap? = null
+    private var baseBitmapScale: Float = 1.0f
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     init {
         scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
-            override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
-                document?.advanceGenerationAndCancelStale()
-                return super.onScaleBegin(detector)
-            }
-
             override fun onScale(detector: ScaleGestureDetector): Boolean {
+                if (isInkMode || isEraserMode) return false
                 val factor = detector.scaleFactor
-                val newScale = (scale * factor).coerceIn(minScale, maxScale)
-                if (newScale != scale) {
+                val newZoom = (zoomLevel * factor).coerceIn(minScale, maxScale)
+                if (newZoom != zoomLevel) {
                     val focusX = detector.focusX
                     val focusY = detector.focusY
-                    offsetX = focusX - (focusX - offsetX) * (newScale / scale)
-                    offsetY = focusY - (focusY - offsetY) * (newScale / scale)
-                    scale = newScale
+                    offsetX = focusX - (focusX - offsetX) * (newZoom / zoomLevel)
+                    offsetY = focusY - (focusY - offsetY) * (newZoom / zoomLevel)
+                    zoomLevel = newZoom
                     clampOffsets()
                     invalidate()
                 }
                 return true
+            }
+
+            override fun onScaleEnd(detector: ScaleGestureDetector) {
+                super.onScaleEnd(detector)
+                // When pinch-zoom ends, refresh high-DPI tiles for the settled zoom level
+                requestVisibleTiles()
             }
         })
 
@@ -240,6 +275,7 @@ class PdfPageView @JvmOverloads constructor(
             }
 
             override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
+                if (isInkMode || isEraserMode) return false
                 offsetX -= distanceX
                 offsetY -= distanceY
                 clampOffsets()
@@ -248,6 +284,7 @@ class PdfPageView @JvmOverloads constructor(
             }
 
             override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+                if (isInkMode || isEraserMode) return false
                 document?.advanceGenerationAndCancelStale()
                 val geom = pageGeometry ?: return false
                 val contentW = (geom.width * scale).toInt()
@@ -265,47 +302,230 @@ class PdfPageView @JvmOverloads constructor(
             }
 
             override fun onDoubleTap(e: MotionEvent): Boolean {
-                if (scale > minScale * 1.5f) {
-                    zoomToFitWidth()
+                if (isInkMode || isEraserMode) return false
+                if (zoomLevel > 1.2f) {
+                    // Reset to 1.0x fit width
+                    zoomLevel = 1.0f
+                    clampOffsets()
+                    invalidate()
                 } else {
-                    val targetScale = min(2.5f, maxScale)
+                    // Zoom in 2.5x centered on double-tap focus
+                    val targetZoom = 2.5f
                     val focusX = e.x
                     val focusY = e.y
-                    offsetX = focusX - (focusX - offsetX) * (targetScale / scale)
-                    offsetY = focusY - (focusY - offsetY) * (targetScale / scale)
-                    scale = targetScale
+                    offsetX = focusX - (focusX - offsetX) * (targetZoom / zoomLevel)
+                    offsetY = focusY - (focusY - offsetY) * (targetZoom / zoomLevel)
+                    zoomLevel = targetZoom
                     clampOffsets()
+                    requestVisibleTiles()
                     invalidate()
                 }
                 return true
             }
+
+            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                if (isInkMode || isEraserMode) return false
+                val doc = document ?: return false
+                val geom = pageGeometry ?: return false
+
+                val pageX = (e.x - offsetX) / scale
+                val pageY = (e.y - offsetY) / scale
+
+                if (pageX < 0f || pageX > geom.width || pageY < 0f || pageY > geom.height) {
+                    onToggleChrome?.invoke()
+                    return true
+                }
+
+                // 1. Check Links
+                val links = try { doc.links(pageIndex) } catch (_: Exception) { emptyList() }
+                val tappedLink = links.firstOrNull { it.rect.contains(pageX, pageY) }
+                if (tappedLink != null) {
+                    tappedLink.targetPage?.let { target ->
+                        onNavigateToPage?.invoke(target.toInt())
+                        return true
+                    }
+                    tappedLink.targetUri?.let { uri ->
+                        onOpenUri?.invoke(uri)
+                        return true
+                    }
+                }
+
+                // 2. Check Interactive Form Fields
+                val fields = try { doc.formFields(pageIndex) } catch (_: Exception) { emptyList() }
+                val tappedField = fields.firstOrNull { it.rect.contains(pageX, pageY) }
+                if (tappedField != null) {
+                    when (tappedField.kind) {
+                        uniffi.pdfcraft_ffi.FfiFieldKind.CHECK_BOX,
+                        uniffi.pdfcraft_ffi.FfiFieldKind.RADIO -> {
+                            val currentVal = tappedField.value.firstOrNull() ?: "Off"
+                            val newVal = if (currentVal == "Off" || currentVal.isEmpty()) "Yes" else "Off"
+                            try {
+                                doc.setFormFieldValue(tappedField.name, newVal)
+                                tileCache.evictAll()
+                                loadBaseBitmap()
+                                invalidate()
+                            } catch (_: Exception) {}
+                            return true
+                        }
+                        uniffi.pdfcraft_ffi.FfiFieldKind.TEXT -> {
+                            onEditTextField?.invoke(tappedField)
+                            return true
+                        }
+                        uniffi.pdfcraft_ffi.FfiFieldKind.CHOICE -> {
+                            onSelectChoiceField?.invoke(tappedField)
+                            return true
+                        }
+                        else -> {}
+                    }
+                }
+
+                // 3. Check Annotations
+                val annot = selectAnnotation(pageX, pageY)
+                if (annot != null) {
+                    return true
+                }
+
+                // 4. Default: Toggle Chrome (Immersive Reading Mode)
+                onToggleChrome?.invoke()
+                return true
+            }
+
+            override fun onLongPress(e: MotionEvent) {
+                if (isInkMode || isEraserMode) return
+                val doc = document ?: return
+                val pageX = (e.x - offsetX) / scale
+                val pageY = (e.y - offsetY) / scale
+
+                // Find text at long press position
+                val pageText = try { doc.text(pageIndex) } catch (_: Exception) { "" }
+                if (pageText.isNotBlank()) {
+                    val words = pageText.split(Regex("\\s+")).filter { it.length >= 2 }
+                    for (word in words) {
+                        val matches = doc.find(pageIndex, word)
+                        val match = matches.firstOrNull { it.rect.contains(pageX, pageY) }
+                        if (match != null) {
+                            selectText(match.startGlyph.toInt(), match.endGlyph.toInt())
+                            return
+                        }
+                    }
+                }
+            }
         })
+    }
+
+    private fun FfiRect.contains(px: Float, py: Float): Boolean {
+        return px >= x && px <= (x + width) && py >= y && py <= (y + height)
     }
 
     fun setDocument(doc: PdfDocument, page: Int = 0) {
         this.document = doc
         this.pageIndex = page
         this.pageGeometry = try { doc.geometry(page) } catch (_: Exception) { null }
-        this.previewBitmap = null
+        this.zoomLevel = 1.0f
+        this.baseBitmap = null
         tileCache.evictAll()
         inFlightTiles.clear()
 
-        loadPreview()
+        loadBaseBitmap()
         requestLayout()
         invalidate()
     }
 
-    private fun loadPreview() {
+    fun refreshPage() {
+        tileCache.evictAll()
+        inFlightTiles.clear()
+        loadBaseBitmap()
+        requestVisibleTiles()
+        invalidate()
+    }
+
+    private fun loadBaseBitmap() {
         val doc = document ?: return
         val page = pageIndex
+        val geom = pageGeometry ?: return
         val rc = readingColors
         val hc = hideComments
+
+        val targetScale = (if (width > 0) width.toFloat() / geom.width else fitWidthScale)
+            .coerceIn(1.2f, 3.5f)
+
         scope.launch(Dispatchers.IO) {
-            val bmp = try { doc.renderPage(page, 0.5f, preview = true, readingColors = rc, hideComments = hc) } catch (_: Exception) { null }
+            val bmp = try {
+                doc.renderPage(page, targetScale, preview = false, readingColors = rc, hideComments = hc)
+            } catch (_: Exception) {
+                null
+            }
             withContext(Dispatchers.Main) {
                 if (pageIndex == page && bmp != null) {
-                    previewBitmap = bmp
+                    baseBitmap = bmp
+                    baseBitmapScale = targetScale
+                    clampOffsets()
                     invalidate()
+                }
+            }
+        }
+    }
+
+    private fun requestVisibleTiles() {
+        val doc = document ?: return
+        val geom = pageGeometry ?: return
+        if (zoomLevel <= 1.15f) return
+
+        val pageW = geom.width * scale
+        val pageH = geom.height * scale
+
+        val visibleLeft = max(0f, -offsetX)
+        val visibleTop = max(0f, -offsetY)
+        val visibleRight = min(pageW, width.toFloat() - offsetX)
+        val visibleBottom = min(pageH, height.toFloat() - offsetY)
+
+        val tileCols = (pageW / tileSize).toInt() + 1
+        val tileRows = (pageH / tileSize).toInt() + 1
+
+        val startCol = (visibleLeft / tileSize).toInt().coerceAtLeast(0)
+        val endCol = (visibleRight / tileSize).toInt().coerceAtMost(tileCols - 1)
+        val startRow = (visibleTop / tileSize).toInt().coerceAtLeast(0)
+        val endRow = (visibleBottom / tileSize).toInt().coerceAtMost(tileRows - 1)
+
+        val currentScale = scale
+        val qScale = (round(currentScale * 10f) / 10f)
+        val currentPage = pageIndex
+        val rc = readingColors
+        val hc = hideComments
+
+        for (row in startRow..endRow) {
+            for (col in startCol..endCol) {
+                val tileX = col * tileSize
+                val tileY = row * tileSize
+                val tileW = min(tileSize.toFloat(), pageW - tileX)
+                val tileH = min(tileSize.toFloat(), pageH - tileY)
+
+                val tileKey = "$currentPage@${qScale}_${col}_$row"
+                if (tileCache.get(tileKey) == null && !inFlightTiles.contains(tileKey)) {
+                    inFlightTiles.add(tileKey)
+                    scope.launch(Dispatchers.IO) {
+                        val rectInPoints = RectF(
+                            tileX / currentScale,
+                            tileY / currentScale,
+                            (tileX + tileW) / currentScale,
+                            (tileY + tileH) / currentScale
+                        )
+                        val ffiTile = PdfTileRenderer.computeTile(geom, rectInPoints, currentScale)
+                        val bmp = try {
+                            doc.renderTile(currentPage, ffiTile, currentScale, readingColors = rc, hideComments = hc)
+                        } catch (_: Exception) {
+                            null
+                        }
+                        withContext(Dispatchers.Main) {
+                            inFlightTiles.remove(tileKey)
+                            if (bmp != null) {
+                                tileCache.put(tileKey, bmp)
+                                if (pageIndex == currentPage) {
+                                    invalidate()
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -322,7 +542,7 @@ class PdfPageView @JvmOverloads constructor(
                     if (isEraserMode) {
                         document?.eraseInk(pageIndex, listOf(uniffi.pdfcraft_ffi.FfiPoint(vx, vy)), 20f)
                         tileCache.evictAll()
-                        loadPreview()
+                        loadBaseBitmap()
                     }
                     invalidate()
                     return true
@@ -338,7 +558,7 @@ class PdfPageView @JvmOverloads constructor(
                         val pts = liveStrokePoints.map { uniffi.pdfcraft_ffi.FfiPoint(it.x, it.y) }
                         document?.eraseInk(pageIndex, pts, 20f)
                         tileCache.evictAll()
-                        loadPreview()
+                        loadBaseBitmap()
                     }
                     invalidate()
                     return true
@@ -348,7 +568,7 @@ class PdfPageView @JvmOverloads constructor(
                         val pts = liveStrokePoints.map { uniffi.pdfcraft_ffi.FfiPoint(it.x, it.y) }
                         document?.addInkStroke(pageIndex, pts, inkColorRgb, inkStrokeWidth)
                         tileCache.evictAll()
-                        loadPreview()
+                        loadBaseBitmap()
                     }
                     liveStrokePoints.clear()
                     invalidate()
@@ -395,24 +615,24 @@ class PdfPageView @JvmOverloads constructor(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
+        if (w > 0 && oldw <= 0) {
+            loadBaseBitmap()
+        }
         clampOffsets()
     }
 
     fun zoomToFitWidth() {
-        val geom = pageGeometry ?: return
-        if (width > 0 && geom.width > 0) {
-            scale = (width / geom.width).coerceIn(minScale, maxScale)
-            clampOffsets()
-            invalidate()
-        }
+        zoomLevel = 1.0f
+        clampOffsets()
+        invalidate()
     }
 
     fun zoomToFitPage() {
         val geom = pageGeometry ?: return
         if (width > 0 && height > 0 && geom.width > 0 && geom.height > 0) {
-            val sW = width / geom.width
-            val sH = height / geom.height
-            scale = min(sW, sH).coerceIn(minScale, maxScale)
+            val fitW = width / geom.width
+            val fitH = height / geom.height
+            zoomLevel = (min(fitW, fitH) / fitWidthScale).coerceIn(minScale, maxScale)
             clampOffsets()
             invalidate()
         }
@@ -421,7 +641,6 @@ class PdfPageView @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val geom = pageGeometry ?: return
-        val doc = document ?: return
 
         canvas.save()
         canvas.translate(offsetX, offsetY)
@@ -429,116 +648,88 @@ class PdfPageView @JvmOverloads constructor(
         val pageW = geom.width * scale
         val pageH = geom.height * scale
 
-        // Draw page white background & border
+        // Draw page white background & subtle shadow/border
         canvas.drawRect(0f, 0f, pageW, pageH, backgroundPaint)
         canvas.drawRect(0f, 0f, pageW, pageH, borderPaint)
 
-        // Draw preview bitmap placeholder if available
-        val preview = previewBitmap
-        if (preview != null && !preview.isRecycled) {
-            val src = Rect(0, 0, preview.width, preview.height)
+        // 1. Draw High-DPI Base Bitmap scaled to current viewport
+        val base = baseBitmap
+        if (base != null && !base.isRecycled) {
+            val src = Rect(0, 0, base.width, base.height)
             val dst = RectF(0f, 0f, pageW, pageH)
-            canvas.drawBitmap(preview, src, dst, paint)
+            canvas.drawBitmap(base, src, dst, paint)
         }
 
-        // Tiled rendering of visible tiles
-        val visibleLeft = max(0f, -offsetX)
-        val visibleTop = max(0f, -offsetY)
-        val visibleRight = min(pageW, width.toFloat() - offsetX)
-        val visibleBottom = min(pageH, height.toFloat() - offsetY)
+        // 2. Draw High-Res Tiles if zoomed in
+        if (zoomLevel > 1.15f) {
+            val currentScale = scale
+            val qScale = (round(currentScale * 10f) / 10f)
+            val currentPage = pageIndex
 
-        val tileCols = (pageW / tileSize).toInt() + 1
-        val tileRows = (pageH / tileSize).toInt() + 1
+            val visibleLeft = max(0f, -offsetX)
+            val visibleTop = max(0f, -offsetY)
+            val visibleRight = min(pageW, width.toFloat() - offsetX)
+            val visibleBottom = min(pageH, height.toFloat() - offsetY)
 
-        val startCol = (visibleLeft / tileSize).toInt().coerceAtLeast(0)
-        val endCol = (visibleRight / tileSize).toInt().coerceAtMost(tileCols - 1)
-        val startRow = (visibleTop / tileSize).toInt().coerceAtLeast(0)
-        val endRow = (visibleBottom / tileSize).toInt().coerceAtMost(tileRows - 1)
+            val tileCols = (pageW / tileSize).toInt() + 1
+            val tileRows = (pageH / tileSize).toInt() + 1
 
-        val currentScale = scale
-        val currentPage = pageIndex
+            val startCol = (visibleLeft / tileSize).toInt().coerceAtLeast(0)
+            val endCol = (visibleRight / tileSize).toInt().coerceAtMost(tileCols - 1)
+            val startRow = (visibleTop / tileSize).toInt().coerceAtLeast(0)
+            val endRow = (visibleBottom / tileSize).toInt().coerceAtMost(tileRows - 1)
 
-        for (row in startRow..endRow) {
-            for (col in startCol..endCol) {
-                val tileX = col * tileSize
-                val tileY = row * tileSize
-                val tileW = min(tileSize.toFloat(), pageW - tileX)
-                val tileH = min(tileSize.toFloat(), pageH - tileY)
+            for (row in startRow..endRow) {
+                for (col in startCol..endCol) {
+                    val tileX = col * tileSize
+                    val tileY = row * tileSize
+                    val tileW = min(tileSize.toFloat(), pageW - tileX)
+                    val tileH = min(tileSize.toFloat(), pageH - tileY)
 
-                val tileKey = "$currentPage@${currentScale}_${col}_$row"
-                val cachedTile = tileCache.get(tileKey)
-
-                val dstRect = RectF(tileX.toFloat(), tileY.toFloat(), tileX + tileW, tileY + tileH)
-
-                if (cachedTile != null && !cachedTile.isRecycled) {
-                    canvas.drawBitmap(cachedTile, null, dstRect, paint)
-                } else if (!inFlightTiles.contains(tileKey)) {
-                    inFlightTiles.add(tileKey)
-                    val rc = readingColors
-                    val hc = hideComments
-                    // Request tile render in background
-                    scope.launch(Dispatchers.IO) {
-                        val rectInPoints = RectF(
-                            tileX / currentScale,
-                            tileY / currentScale,
-                            (tileX + tileW) / currentScale,
-                            (tileY + tileH) / currentScale
-                        )
-                        val ffiTile = PdfTileRenderer.computeTile(geom, rectInPoints, currentScale)
-                        val bmp = try {
-                            doc.renderTile(currentPage, ffiTile, currentScale, readingColors = rc, hideComments = hc)
-                        } catch (_: Exception) {
-                            null
-                        }
-
-                        withContext(Dispatchers.Main) {
-                            inFlightTiles.remove(tileKey)
-                            if (bmp != null) {
-                                tileCache.put(tileKey, bmp)
-                                if (scale == currentScale && pageIndex == currentPage) {
-                                    invalidate()
-                                }
-                            }
-                        }
+                    val tileKey = "$currentPage@${qScale}_${col}_$row"
+                    val cachedTile = tileCache.get(tileKey)
+                    if (cachedTile != null && !cachedTile.isRecycled) {
+                        val dstRect = RectF(tileX.toFloat(), tileY.toFloat(), tileX + tileW, tileY + tileH)
+                        canvas.drawBitmap(cachedTile, null, dstRect, paint)
                     }
                 }
             }
         }
 
-        // Search highlights overlay
+        // 3. Search Highlights overlay
         if (searchHighlights.isNotEmpty()) {
             for (hl in searchHighlights) {
                 val dst = RectF(
-                    hl.x * currentScale,
-                    hl.y * currentScale,
-                    (hl.x + hl.width) * currentScale,
-                    (hl.y + hl.height) * currentScale
+                    hl.x * scale,
+                    hl.y * scale,
+                    (hl.x + hl.width) * scale,
+                    (hl.y + hl.height) * scale
                 )
                 canvas.drawRect(dst, highlightPaint)
             }
         }
 
-        // Text selection overlay
+        // 4. Text Selection overlay
         if (selectedTextRects.isNotEmpty()) {
             for (sel in selectedTextRects) {
                 val dst = RectF(
-                    sel.x * currentScale,
-                    sel.y * currentScale,
-                    (sel.x + sel.width) * currentScale,
-                    (sel.y + sel.height) * currentScale
+                    sel.x * scale,
+                    sel.y * scale,
+                    (sel.x + sel.width) * scale,
+                    (sel.y + sel.height) * scale
                 )
                 canvas.drawRect(dst, selectionPaint)
             }
         }
 
-        // Selected annotation overlay (dashed border & handles)
+        // 5. Selected annotation overlay (dashed border & handles)
         val annot = selectedAnnotation
         if (annot != null) {
             val r = RectF(
-                annot.rect.x * currentScale,
-                annot.rect.y * currentScale,
-                (annot.rect.x + annot.rect.width) * currentScale,
-                (annot.rect.y + annot.rect.height) * currentScale
+                annot.rect.x * scale,
+                annot.rect.y * scale,
+                (annot.rect.x + annot.rect.width) * scale,
+                (annot.rect.y + annot.rect.height) * scale
             )
             canvas.drawRect(r, annotationSelectionPaint)
             val handleSize = 16f
@@ -556,40 +747,23 @@ class PdfPageView @JvmOverloads constructor(
             }
         }
 
-        // Live ink stroke overlay
+        // 6. Live ink stroke overlay
         if (liveStrokePoints.size >= 2) {
-            val r = ((inkColorRgb shr 16) and 0xFFu).toInt()
-            val g = ((inkColorRgb shr 8) and 0xFFu).toInt()
-            val b = (inkColorRgb and 0xFFu).toInt()
-            liveInkPaint.color = Color.rgb(r, g, b)
-            liveInkPaint.strokeWidth = inkStrokeWidth * currentScale
             liveInkPath.reset()
-            liveInkPath.moveTo(liveStrokePoints[0].x * currentScale, liveStrokePoints[0].y * currentScale)
+            liveInkPath.moveTo(liveStrokePoints[0].x * scale, liveStrokePoints[0].y * scale)
             for (i in 1 until liveStrokePoints.size) {
-                liveInkPath.lineTo(liveStrokePoints[i].x * currentScale, liveStrokePoints[i].y * currentScale)
+                val pt = liveStrokePoints[i]
+                liveInkPath.lineTo(pt.x * scale, pt.y * scale)
             }
+            liveInkPaint.strokeWidth = inkStrokeWidth * scale
+            liveInkPaint.color = Color.rgb(
+                ((inkColorRgb shr 16) and 0xFFu).toInt(),
+                ((inkColorRgb shr 8) and 0xFFu).toInt(),
+                (inkColorRgb and 0xFFu).toInt()
+            )
             canvas.drawPath(liveInkPath, liveInkPaint)
         }
 
         canvas.restore()
-    }
-
-    override fun onDetachedFromWindow() {
-        super.onDetachedFromWindow()
-        scope.cancel()
-        tileCache.evictAll()
-    }
-
-    /**
-     * Responds to OS memory pressure by stepwise trimming tile caches and cancelling speculative prefetch.
-     */
-    fun onTrimMemory(level: Int) {
-        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
-            tileCache.evictAll()
-            document?.handleMemoryPressure(uniffi.pdfcraft_ffi.FfiMemoryPressureLevel.CRITICAL)
-        } else if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
-            tileCache.trimToSize(tileCache.size() / 2)
-            document?.handleMemoryPressure(uniffi.pdfcraft_ffi.FfiMemoryPressureLevel.MODERATE)
-        }
     }
 }

@@ -17,12 +17,15 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -75,9 +78,25 @@ object RecentDocumentsManager {
     fun addRecent(context: Context, uriString: String, name: String) {
         val current = getRecents(context).filterNot { it.uriString == uriString }.toMutableList()
         current.add(0, RecentDocumentItem(uriString, name, System.currentTimeMillis()))
-        val trimmed = current.take(10)
+        val trimmed = current.take(15)
         val arr = JSONArray()
         for (item in trimmed) {
+            val obj = JSONObject()
+            obj.put("uri", item.uriString)
+            obj.put("name", item.name)
+            obj.put("timestamp", item.timestamp)
+            arr.put(obj)
+        }
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_LIST, arr.toString())
+            .apply()
+    }
+
+    fun removeRecent(context: Context, uriString: String) {
+        val current = getRecents(context).filterNot { it.uriString == uriString }
+        val arr = JSONArray()
+        for (item in current) {
             val obj = JSONObject()
             obj.put("uri", item.uriString)
             obj.put("name", item.name)
@@ -152,6 +171,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppRootScreen(
     initialIntent: Intent?,
@@ -165,13 +185,18 @@ fun AppRootScreen(
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var showAbout by remember { mutableStateOf(false) }
+
+    var passwordPromptUri by remember { mutableStateOf<Uri?>(null) }
+    var passwordInput by remember { mutableStateOf("") }
+    var homeSearchQuery by remember { mutableStateOf("") }
+
     var recentFiles by remember { mutableStateOf(RecentDocumentsManager.getRecents(context)) }
 
     fun refreshRecents() {
         recentFiles = RecentDocumentsManager.getRecents(context)
     }
 
-    fun loadUri(uri: Uri) {
+    fun loadUri(uri: Uri, password: String? = null) {
         isLoading = true
         errorMessage = null
         coroutineScope.launch {
@@ -196,7 +221,7 @@ fun AppRootScreen(
                 } ?: throw IllegalStateException("Could not read stream from URI: $uri")
 
                 val doc = withContext(Dispatchers.Default) {
-                    PdfDocument.openBytes(name = fileName, bytes = bytes)
+                    PdfDocument.openBytes(name = fileName, bytes = bytes, password = password)
                 }
                 activeDoc?.close()
                 activeDoc = doc
@@ -204,8 +229,15 @@ fun AppRootScreen(
                 RecentDocumentsManager.addRecent(context, uri.toString(), fileName)
                 refreshRecents()
                 onDocumentChanged(doc)
+                passwordPromptUri = null
+                passwordInput = ""
             } catch (e: Throwable) {
-                errorMessage = e.message ?: "Failed to open document"
+                val msg = e.message ?: ""
+                if (msg.contains("password", ignoreCase = true) || msg.contains("NeedsPassword", ignoreCase = true) || msg.contains("WrongPassword", ignoreCase = true)) {
+                    passwordPromptUri = uri
+                } else {
+                    errorMessage = e.message ?: "Failed to open document"
+                }
             } finally {
                 isLoading = false
             }
@@ -275,6 +307,40 @@ fun AppRootScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let { loadUri(it) }
+    }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            isLoading = true
+            errorMessage = null
+            coroutineScope.launch {
+                try {
+                    val images = withContext(Dispatchers.IO) {
+                        uris.mapNotNull { u ->
+                            context.contentResolver.openInputStream(u)?.use { it.readBytes() }
+                        }
+                    }
+                    if (images.isNotEmpty()) {
+                        val doc = withContext(Dispatchers.Default) {
+                            PdfDocument.createFromImages(
+                                name = "scan_${System.currentTimeMillis()}.pdf",
+                                images = images
+                            )
+                        }
+                        activeDoc?.close()
+                        activeDoc = doc
+                        currentUri = null
+                        onDocumentChanged(doc)
+                    }
+                } catch (e: Throwable) {
+                    errorMessage = e.message ?: "Failed to convert images to PDF"
+                } finally {
+                    isLoading = false
+                }
+            }
+        }
     }
 
     val saveAsLauncher = rememberLauncherForActivityResult(
@@ -363,52 +429,132 @@ fun AppRootScreen(
             onShare = { handleShare() }
         )
     } else {
-        // Welcome / Launcher Screen
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
+        // Acrobat-Style Home Dashboard
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = "PDF",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimary
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "PdfCraft",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    },
+                    actions = {
+                        TextButton(onClick = { showAbout = true }) {
+                            Text("About")
+                        }
+                    }
+                )
+            }
+        ) { paddingValues ->
             Column(
                 modifier = Modifier
-                    .fillMaxWidth(0.9f)
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+                    .fillMaxSize()
+                    .padding(paddingValues)
+                    .padding(horizontal = 16.dp)
             ) {
-                Surface(
-                    shape = RoundedCornerShape(24.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.size(80.dp)
+                // Quick Action Cards (Acrobat-style)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            text = "PDF",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
+                    // Open File Card
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(96.dp)
+                            .clickable { launcher.launch(arrayOf("application/pdf")) }
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("📁", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                text = "Open File",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+
+                    // Scan / Photos Card
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(96.dp)
+                            .clickable { photoPickerLauncher.launch("image/*") }
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("📷", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                text = "Photos to PDF",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                    }
+
+                    // Showcase Demo Card
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(96.dp)
+                            .clickable { loadDemoDocument() }
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("✨", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                text = "Sample Doc",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                        }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
-
-                Text(
-                    text = "PdfCraft Mobile",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                Text(
-                    text = "High-performance, memory-efficient PDF engine with 100% on-device privacy.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Spacer(modifier = Modifier.height(20.dp))
-
+                // Error Notification
                 errorMessage?.let { err ->
                     Surface(
                         shape = RoundedCornerShape(8.dp),
@@ -423,116 +569,181 @@ fun AppRootScreen(
                             textAlign = TextAlign.Center
                         )
                     }
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
 
                 if (isLoading) {
-                    CircularProgressIndicator(modifier = Modifier.size(36.dp))
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(36.dp))
+                    }
+                }
+
+                // Search Bar for Recents
+                OutlinedTextField(
+                    value = homeSearchQuery,
+                    onValueChange = { homeSearchQuery = it },
+                    placeholder = { Text("Search files...") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp)
+                )
+
+                // Recent Documents Header
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp, bottom = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        text = "Loading document...",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.secondary
+                        text = "Recent Files",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
                     )
-                } else {
-                    Button(
-                        onClick = { launcher.launch(arrayOf("application/pdf")) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp)
-                    ) {
-                        Text("Open PDF Document", fontWeight = FontWeight.SemiBold)
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    OutlinedButton(
-                        onClick = { loadDemoDocument() },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp)
-                    ) {
-                        Text("Load Sample Showcase Document")
-                    }
-
-                    // Recent Documents Section
                     if (recentFiles.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(20.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Recent Documents",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            TextButton(
-                                onClick = {
-                                    RecentDocumentsManager.clearRecents(context)
-                                    refreshRecents()
-                                },
-                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
-                            ) {
-                                Text("Clear", style = MaterialTheme.typography.labelSmall)
+                        TextButton(
+                            onClick = {
+                                RecentDocumentsManager.clearRecents(context)
+                                refreshRecents()
                             }
-                        }
-
-                        Spacer(modifier = Modifier.height(6.dp))
-
-                        val dateFormat = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault())
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 160.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            recentFiles.take(3).forEach { recent ->
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                            Text("Clear All")
+                        }
+                    }
+                }
+
+                val filteredRecents = if (homeSearchQuery.isBlank()) {
+                    recentFiles
+                } else {
+                    recentFiles.filter { it.name.contains(homeSearchQuery, ignoreCase = true) }
+                }
+
+                if (filteredRecents.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (homeSearchQuery.isBlank()) "No recent documents.\nTap 'Open File' or 'Photos to PDF' above to start reading." else "No matching files found.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                } else {
+                    val dateFormat = SimpleDateFormat("MMM d, yyyy • HH:mm", Locale.getDefault())
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(filteredRecents) { recent ->
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { loadUri(Uri.parse(recent.uriString)) }
+                            ) {
+                                Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clickable {
-                                            loadUri(Uri.parse(recent.uriString))
-                                        }
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                        modifier = Modifier.size(38.dp)
                                     ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Text(
+                                                text = "PDF",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.width(12.dp))
+
+                                    Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             text = recent.name,
                                             style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = FontWeight.Medium,
+                                            fontWeight = FontWeight.SemiBold,
                                             maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f)
+                                            overflow = TextOverflow.Ellipsis
                                         )
-                                        Spacer(modifier = Modifier.width(8.dp))
                                         Text(
                                             text = dateFormat.format(Date(recent.timestamp)),
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
+
+                                    IconButton(
+                                        onClick = {
+                                            RecentDocumentsManager.removeRecent(context, recent.uriString)
+                                            refreshRecents()
+                                        }
+                                    ) {
+                                        Text("✕", style = MaterialTheme.typography.labelSmall)
+                                    }
                                 }
                             }
                         }
                     }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    TextButton(onClick = { showAbout = true }) {
-                        Text("About & Open Source Credits")
-                    }
                 }
             }
         }
+    }
+
+    // Password Prompt Dialog
+    passwordPromptUri?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { passwordPromptUri = null },
+            title = { Text("Password Required") },
+            text = {
+                Column {
+                    Text(
+                        text = "This PDF document is encrypted. Enter the password to open it.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = passwordInput,
+                        onValueChange = { passwordInput = it },
+                        label = { Text("Password") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = { loadUri(uri, password = passwordInput) }) {
+                    Text("Open")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { passwordPromptUri = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     if (showAbout) {

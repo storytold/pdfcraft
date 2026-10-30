@@ -44,6 +44,19 @@ class PdfDocument(
             return PdfDocument(engine, fileName, id, count)
         }
 
+        /**
+         * Creates a new PDF document from a list of encoded images (PNG / JPEG).
+         */
+        fun createFromImages(
+            engine: Engine = Engine(),
+            name: String = "scanned.pdf",
+            images: List<ByteArray>
+        ): PdfDocument {
+            val id = engine.createFromImages(name, images)
+            val count = engine.pageCount(id).toInt()
+            return PdfDocument(engine, name, id, count)
+        }
+
         fun createSelfSignedDigitalId(
             engine: Engine = Engine(),
             name: String,
