@@ -2833,7 +2833,7 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
             });
         });
     }
-    find_bar(view, info.pages.len(), avail, tool == QuickTool::EditText && can_modify, ui, t);
+    find_bar(view, info.pages.len(), &info.annotations, avail, tool == QuickTool::EditText && can_modify, ui, t);
     page_size_hint(view, info, units, avail, unobstructed, ui, t);
     if tool == QuickTool::EnhanceCamera {
         crate::camera_ui::bar(ui.ctx(), view, avail, t, can_modify);
@@ -3186,6 +3186,16 @@ pub(crate) fn sync_active_find_comments(app: &mut PdfCraftApp) {
     if let Some(view) = app.views.get_mut(index) {
         view.set_find_comments(next);
     }
+}
+
+/// Search again, reading comment text from the open document rather than a stored copy.
+pub(crate) fn rerun_active_find(app: &mut PdfCraftApp) {
+    let Some(index) = app.active else { return };
+    let Some(id) = app.views.get(index).map(|view| view.id) else { return };
+    let PdfCraftApp { session, views, .. } = app;
+    let Some(view) = views.get_mut(index) else { return };
+    let annotations = session.get(id).map(|doc| doc.info.annotations.as_slice()).unwrap_or(&[]);
+    view.rerun_find_in(annotations);
 }
 
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
