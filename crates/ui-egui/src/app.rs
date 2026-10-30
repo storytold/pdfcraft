@@ -110,6 +110,7 @@ impl PdfCraftApp {
             script_messages_dropped: 0,
             toast_dropped: 0,
             integrated_titlebar: false,
+            titlebar_lights_right: None,
             window_controls: None,
             system_title_bar: false,
             app_frame_shown: None,

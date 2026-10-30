@@ -694,6 +694,104 @@ fn the_integrated_title_bar_is_the_traffic_light_band() {
     assert!(home.left() >= 62.0 + 4.0, "Home {home:?} clears the traffic lights");
 }
 
+/// macOS with a right-to-left system language: AppKit mirrors the traffic lights to the right end
+/// of the title bar, and the strip mirrors with them. Home sits beside the lights, the tabs read
+/// from the right after it, then Open; Discord, shortcuts and theme move to the far left end.
+#[cfg(target_os = "macos")]
+fn mirrored_title_bar(names: &[&'static str]) -> Harness<'static, PdfCraftApp> {
+    let names = names.to_vec();
+    harness(move |app| {
+        app.integrated_titlebar = true;
+        app.titlebar_lights_right = Some(true);
+        for name in names {
+            app.open_bytes(name, None, FIXTURE.to_vec()).unwrap();
+        }
+    })
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_integrated_title_bar_mirrors_with_traffic_lights_at_the_right() {
+    let (width, band, lights) = (1400.0, 28.0, 62.0);
+    let h = mirrored_title_bar(&["first.pdf", "last.pdf"]);
+    let rect = |label: &str| h.get_by_label(label).rect();
+    let theme = h.get_by_label_contains("Display theme:").rect();
+    for (label, r) in
+        [("Home", rect("Home")), ("first.pdf", rect("first.pdf")), ("Open", rect("Open")), ("Discord", rect("Discord")), ("Display theme", theme)]
+    {
+        assert!(r.top() >= 0.0 && r.bottom() <= band, "{label}: {r:?} inside the {band} pt title bar");
+        assert!(r.right() <= width - lights - 4.0, "{label}: {r:?} clears the traffic lights");
+    }
+    // Home is the first thing after the lights, as it is on the left in a left-to-right system.
+    let home = rect("Home");
+    assert!(home.right() >= width - lights - 16.0, "Home {home:?} sits beside the lights");
+    // Then the tabs, read from the right, then Open.
+    assert!(rect("first.pdf").right() <= home.left(), "the first tab follows Home");
+    assert!(rect("last.pdf").right() <= rect("first.pdf").left(), "the tabs read from the right");
+    assert!(rect("first.pdf").right() >= home.left() - 12.0, "the tabs stay beside Home");
+    assert!(rect("Open").right() <= rect("last.pdf").left(), "Open follows the tabs");
+    // The other end: theme, shortcuts and Discord, mirroring their order at the right.
+    let (help, discord) = (rect("Keyboard shortcuts"), rect("Discord"));
+    assert!(theme.left() < 20.0, "Display theme {theme:?} at the far end");
+    assert!(theme.right() <= help.left() && help.right() <= discord.left(), "theme, shortcuts, Discord");
+    assert!(discord.right() < rect("Open").left(), "Discord stays clear of Open");
+}
+
+/// Mirrored, a tab dragged to the left moves later in the order, as it reads from the right.
+#[cfg(target_os = "macos")]
+#[test]
+fn dragging_a_tab_in_the_mirrored_title_bar_follows_its_reading_order() {
+    use egui::accesskit::Role;
+    let mut h = mirrored_title_bar(&["first.pdf", "middle.pdf", "last.pdf"]);
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+    let tab = |h: &Harness<'static, PdfCraftApp>, name: &str| h.get_by_role_and_label(Role::Tab, name).rect();
+    // first.pdf past the end, which is the left.
+    let to = tab(&h, "last.pdf").left_center() - egui::vec2(20.0, 0.0);
+    drag_named_tab(&mut h, "first.pdf", to, true);
+    assert_eq!(h.state().views.iter().map(|view| view.id).collect::<Vec<_>>(), [ids[1], ids[2], ids[0]]);
+    assert!(tab(&h, "first.pdf").right() < tab(&h, "last.pdf").left(), "the strip draws the new order");
+    // last.pdf, now in the middle, to the front, which is the right.
+    let to = tab(&h, "middle.pdf").right_center() + egui::vec2(10.0, 0.0);
+    drag_named_tab(&mut h, "last.pdf", to, true);
+    assert_eq!(h.state().views.iter().map(|view| view.id).collect::<Vec<_>>(), [ids[2], ids[1], ids[0]]);
+}
+
+/// A mirrored strip that starts to scroll (here Home shows and the window narrows) shows its
+/// reading start: the first tab beside Home, as the unmirrored strip does at its left end. It goes
+/// there once, so a step the user scrolls stands.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_mirrored_strip_that_starts_to_scroll_shows_the_first_tab_beside_home() {
+    let mut h = mirrored_title_bar(&["first.pdf", "second.pdf", "third.pdf", "last.pdf"]);
+    h.state_mut().active = None;
+    h.run_steps(4);
+    assert!(h.query_by_label("Scroll tabs left").is_none(), "wide, the tabs don't scroll yet");
+    h.set_size(egui::vec2(700.0, 600.0));
+    h.run_steps(6);
+    let home = h.get_by_label("Home").rect();
+    let first = h.get_by_label("first.pdf").rect();
+    assert!(first.right() <= home.left() && first.right() >= home.left() - 50.0, "first.pdf {first:?} beside Home {home:?}");
+    h.get_by_label("Scroll tabs left").click();
+    h.run_steps(6);
+    let scrolled = h.get_by_label("first.pdf").rect();
+    assert!(scrolled.left() > first.left() + 1.0, "the step stands: {first:?} -> {scrolled:?}");
+}
+
+/// Going to the reading start never hides the active tab: a document shown while the strip starts
+/// to scroll stays in view.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_mirrored_strip_that_starts_to_scroll_keeps_the_active_tab_in_view() {
+    let mut h = mirrored_title_bar(&["first.pdf", "second.pdf", "third.pdf", "last.pdf"]);
+    h.run_steps(4);
+    assert_eq!(h.state().active, Some(3));
+    h.set_size(egui::vec2(700.0, 600.0));
+    h.run_steps(6);
+    let (home, open) = (h.get_by_label("Home").rect(), h.get_by_label("Open").rect());
+    let last = h.get_by_label("last.pdf").rect();
+    assert!(last.left() >= open.right() && last.right() <= home.left(), "last.pdf {last:?} between Open {open:?} and Home {home:?}");
+}
+
 #[test]
 fn narrow_tab_strips_accept_vertical_wheel_scrolling() {
     for width in [600.0, 900.0] {

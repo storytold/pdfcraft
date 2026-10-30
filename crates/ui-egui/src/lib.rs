@@ -383,6 +383,9 @@ pub struct PdfCraftApp {
     pub toast_dropped: u64,
     /// Whether the macOS title bar is drawn by us (traffic lights over our tab strip).
     pub integrated_titlebar: bool,
+    /// Whether AppKit put those traffic lights at the right end of the title bar, as it does when
+    /// the system language is right-to-left (`None` until a window has said).
+    pub titlebar_lights_right: Option<bool>,
     /// Set when the desktop leaves the window frame to the app (GNOME on Wayland): the tab strip
     /// carries these window buttons and the window's edges resize it.
     pub window_controls: Option<window_controls::Layout>,
