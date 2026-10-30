@@ -45,4 +45,8 @@ pub struct Session {
     /// What the XFA scripts' time limits are multiplied by (`None`: 1); see
     /// [`Session::with_xfa_time_scale`].
     pub(crate) xfa_time_scale: Option<u32>,
+    /// Who requires secure redacted copies (an administrator's policy, a host's `policy.json`),
+    /// in which case redactions are never applied in place; see
+    /// [`Session::require_secure_redaction`].
+    pub(crate) secure_redaction: Option<String>,
 }

@@ -10,6 +10,8 @@ fn main() {
 
     let options = eframe::WebOptions { renderer: eframe::Renderer::Glow, ..Default::default() };
     wasm_bindgen_futures::spawn_local(async move {
+        // The site's policy (`host_policy`), read before the app starts so nothing runs without it.
+        let secure_redaction = pdfcraft_ui_egui::host_policy::secure_redaction(&fetch_policy().await);
         let Some(canvas) = web_sys::window()
             .and_then(|w| w.document())
             .and_then(|d| d.get_element_by_id("pdfcraft"))
@@ -27,6 +29,7 @@ fn main() {
                     if let Some(json) = cc.storage.and_then(|s| s.get_string("pdfcraft").or_else(|| s.get_string("printcraft"))) {
                         app.restore(&json);
                     }
+                    app.session.require_secure_redaction(secure_redaction);
                     // `?file=<url>` opens a PDF from a URL (same-origin or CORS-enabled).
                     if let Some(url) = query_param("file") {
                         let inbox = app.startup_inbox.clone();
@@ -108,6 +111,29 @@ fn warn_before_unload(unsaved: std::sync::Arc<std::sync::atomic::AtomicBool>) {
 fn query_param(key: &str) -> Option<String> {
     let search = web_sys::window()?.location().search().ok()?;
     web_sys::UrlSearchParams::new_with_str(&search).ok()?.get(key)
+}
+
+/// Fetch the site's `policy.json` (beside the page), past any cached copy.
+#[cfg(target_arch = "wasm32")]
+async fn fetch_policy() -> pdfcraft_ui_egui::host_policy::Fetched {
+    use eframe::wasm_bindgen::JsCast;
+    use pdfcraft_ui_egui::host_policy::{FILE, Fetched};
+    let Some(window) = web_sys::window() else { return Fetched::Failed("no window".into()) };
+    let url = format!("{FILE}?t={}", js_sys::Date::now() as u64);
+    let resp = match wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(&url)).await {
+        Ok(r) => r,
+        Err(e) => return Fetched::Failed(format!("{e:?}")),
+    };
+    let Ok(resp) = resp.dyn_into::<web_sys::Response>() else { return Fetched::Failed("not a response".into()) };
+    let status = resp.status();
+    if !resp.ok() {
+        return Fetched::Response { status, body: Ok(Vec::new()) };
+    }
+    let body = match resp.array_buffer() {
+        Ok(p) => wasm_bindgen_futures::JsFuture::from(p).await.map(|b| js_sys::Uint8Array::new(&b).to_vec()).map_err(|e| format!("{e:?}")),
+        Err(e) => Err(format!("{e:?}")),
+    };
+    Fetched::Response { status, body }
 }
 
 #[cfg(target_arch = "wasm32")]

@@ -308,6 +308,72 @@ pub fn device_pixels(pt: f32, scale: f32) -> u32 {
     if px.is_finite() { px.ceil().max(1.0) as u32 } else { 1 }
 }
 
+/// The settings of a whole-page raster of a page displayed `w` × `h` points at `scale` (already
+/// within [`effective_scale`]). Shared by [`render_page`] and [`PageRenderer::page_geometry`], so
+/// the geometry reported is the one drawn.
+fn whole_page_settings(w: f32, h: f32, scale: f32) -> RenderSettings {
+    // hayro floors the size when none is given, losing the partial edge pixels. The scale keeps
+    // each side within MAX_SIDE (give or take float noise), so it fits u16.
+    let side = |pt: f32| device_pixels(pt, scale).min(MAX_SIDE as u32) as u16;
+    RenderSettings { x_scale: scale, y_scale: scale, width: Some(side(w)), height: Some(side(h)), ..Default::default() }
+}
+
+/// The numbers of a short array (a rectangle, a colour) without reading more than five entries:
+/// all of them when it has at most four and every one is a number, otherwise none.
+fn up_to_four(a: &hayro::hayro_syntax::object::Array<'_>) -> Vec<f64> {
+    if a.raw_iter().take(5).count() > 4 {
+        return Vec::new();
+    }
+    let numbers: Vec<f64> = a.iter::<f64>().take(4).collect();
+    if numbers.len() == a.raw_iter().take(5).count() { numbers } else { Vec::new() }
+}
+
+/// What [`PageRenderer::page_redactions`] found on a page.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PageRedactions {
+    pub marks: Vec<Redaction>,
+    /// Redact annotations with no readable area.
+    pub unreadable: usize,
+    /// The rectangle budget ran out before the page was read to the end.
+    pub exhausted: bool,
+}
+
+/// A Redact annotation as [`PageRenderer::page_redactions`] reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Redaction {
+    /// The marked areas in user space, one per quadrilateral (or the `/Rect`).
+    pub rects: Vec<[f64; 4]>,
+    /// The box colour (`/IC` as RGB, 0–1); `None` when it has none.
+    pub fill: Option<[f64; 3]>,
+    /// It has `/OverlayText`.
+    pub overlay: bool,
+}
+
+/// Where a whole-page raster puts a page: what [`PageRenderer::render`] draws for a request of
+/// that page and scale without a tile.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PageGeometry {
+    /// The page's object number (`None` for a page dictionary written in place in `/Kids`).
+    pub object: Option<u32>,
+    /// The scale the raster is drawn at: the request's, within the renderer's caps.
+    pub scale: f32,
+    /// The raster's size in pixels.
+    pub width: u32,
+    pub height: u32,
+    /// PDF user space to raster pixels (x right, y down), `[a b c d e f]`: x' = a·x + c·y + e,
+    /// y' = b·x + d·y + f. It accounts for the crop box, `/Rotate` and `/UserUnit` exactly as the
+    /// renderer does.
+    pub transform: [f64; 6],
+}
+
+impl PageGeometry {
+    /// A point in the page's user space, in raster pixels.
+    pub fn to_device(&self, x: f64, y: f64) -> [f64; 2] {
+        let [a, b, c, d, e, f] = self.transform;
+        [a * x + c * y + e, b * x + d * y + f]
+    }
+}
+
 /// Render one page with a caller-owned parser and cache. Panics inside the renderer are caught
 /// and reported as `Err((message, panicked))`.
 type Output = (u32, u32, Pixels, Option<Arc<crate::text::PageText>>);
@@ -366,18 +432,7 @@ fn render_page<'a>(
                         req_scale = req.scale
                     ));
                 }
-                // hayro floors the size when none is given, losing the partial edge pixels. The
-                // scale keeps each side within MAX_SIDE (give or take float noise), so it fits u16.
-                let side = |pt: f32| device_pixels(pt, scale).min(MAX_SIDE as u32) as u16;
-                RenderSettings {
-                    x_scale: scale,
-                    y_scale: scale,
-                    width: Some(side(w)),
-                    height: Some(side(h)),
-                    bg_color,
-                    color_replacement,
-                    ..Default::default()
-                }
+                RenderSettings { bg_color, color_replacement, ..whole_page_settings(w, h, scale) }
             }
         };
         // Rendered straight into a buffer of whole pixels, which the GUI takes over as is.
@@ -449,6 +504,129 @@ impl PageRenderer {
 
     pub fn page_count(&self) -> usize {
         self.pdf.as_ref().map(|p| p.pages().len()).unwrap_or(0)
+    }
+
+    /// Where a whole-page raster of `page` at `scale` puts the page ([`PageGeometry`]). `None`
+    /// for a page that doesn't exist or can't be rendered (an empty page box).
+    pub fn page_geometry(&self, page: usize, scale: f32) -> Option<PageGeometry> {
+        let pdf = self.pdf.as_ref()?;
+        catch_unwind(AssertUnwindSafe(|| {
+            let pages = pdf.pages();
+            let p = pages.get(page)?;
+            let (w, h) = p.render_dimensions();
+            if !(w.is_finite() && h.is_finite()) || w < 0.5 || h < 0.5 {
+                return None;
+            }
+            let scale = effective_scale(w, h, scale);
+            let (width, height) = render_size(p, &whole_page_settings(w, h, scale));
+            // As `hayro::render_into` draws a whole page: scaled, after the page's own transform.
+            let k = f64::from(scale);
+            let transform = p.initial_transform(true).as_coeffs().map(|v| v * k);
+            let object = p.raw().obj_id().and_then(|id| u32::try_from(id.obj_number).ok());
+            Some(PageGeometry { object, scale, width: width.into(), height: height.into(), transform })
+        }))
+        .ok()
+        .flatten()
+    }
+
+    /// The Redact annotations of `page`, read from the page dictionary this renderer draws:
+    /// every `/Annots` entry, a reference (resolved here) or written in place, with its
+    /// `/Subtype` resolved; an entry that doesn't resolve to a dictionary is not an annotation and
+    /// is passed over, and the entries after it are still read. `budget` is the number of
+    /// rectangles the caller still accepts; reading stops with [`PageRedactions::exhausted`] set
+    /// when it runs out. `None` when the page doesn't exist. A caller placing boxes over what
+    /// [`Self::render`] drew reads the marks here, so the marks and the pictures come from one
+    /// reading of the file.
+    pub fn page_redactions(&self, page: usize, budget: &mut usize) -> Option<PageRedactions> {
+        use hayro::hayro_syntax::object::{Array, Dict, MaybeRef, Name, Object, ObjectIdentifier};
+        let pdf = self.pdf.as_ref()?;
+        catch_unwind(AssertUnwindSafe(|| {
+            let pages = pdf.pages();
+            let p = pages.get(page)?;
+            let mut out = PageRedactions::default();
+            let Some(annots) = p.raw().get::<Array<'_>>(b"Annots") else { return Some(out) };
+            for entry in annots.raw_iter() {
+                let annot = match entry {
+                    MaybeRef::Ref(r) => p.xref().get::<Dict<'_>>(ObjectIdentifier::from(r)),
+                    MaybeRef::NotRef(Object::Dict(d)) => Some(d),
+                    MaybeRef::NotRef(_) => None,
+                };
+                let Some(annot) = annot else { continue };
+                if annot.get::<Name<'_>>(b"Subtype").as_deref() != Some(b"Redact".as_slice()) {
+                    continue;
+                }
+                let finite = |r: &[f64; 4]| r.iter().all(|v| v.is_finite());
+                // Every entry must be a number and the quads complete: a list read only up to a
+                // bad entry would lose the quads after it. The numbers are read eight at a time,
+                // and each rectangle is counted against the budget before it is kept.
+                let quad_array = annot.get::<Array<'_>>(b"QuadPoints");
+                let entries = quad_array.as_ref().map_or(0, |a| a.raw_iter().count());
+                if !entries.is_multiple_of(8) {
+                    out.unreadable += 1;
+                    continue;
+                }
+                let mut rects: Vec<[f64; 4]> = Vec::new();
+                let mut numbers = quad_array.as_ref().map(|a| a.iter::<f64>());
+                let mut read = 0usize;
+                while let Some(nums) = numbers.as_mut() {
+                    let mut q = [0.0f64; 8];
+                    let got = q.iter_mut().map_while(|slot| nums.next().map(|v| *slot = v)).count();
+                    read += got;
+                    if got < 8 {
+                        break;
+                    }
+                    let (xs, ys) = ([q[0], q[2], q[4], q[6]], [q[1], q[3], q[5], q[7]]);
+                    let r = [
+                        xs.iter().copied().fold(f64::MAX, f64::min),
+                        ys.iter().copied().fold(f64::MAX, f64::min),
+                        xs.iter().copied().fold(f64::MIN, f64::max),
+                        ys.iter().copied().fold(f64::MIN, f64::max),
+                    ];
+                    if !finite(&r) {
+                        continue;
+                    }
+                    let Some(left) = budget.checked_sub(1) else {
+                        out.exhausted = true;
+                        return Some(out);
+                    };
+                    *budget = left;
+                    rects.push(r);
+                }
+                if read != entries {
+                    out.unreadable += 1;
+                    continue;
+                }
+                if rects.is_empty() {
+                    let rect = annot.get::<Array<'_>>(b"Rect").map(|a| up_to_four(&a)).unwrap_or_default();
+                    if let [a, b, c, d] = rect[..] {
+                        let r = [a.min(c), b.min(d), a.max(c), b.max(d)];
+                        if finite(&r) {
+                            let Some(left) = budget.checked_sub(1) else {
+                                out.exhausted = true;
+                                return Some(out);
+                            };
+                            *budget = left;
+                            rects.push(r);
+                        }
+                    }
+                }
+                if rects.is_empty() {
+                    out.unreadable += 1;
+                    continue;
+                }
+                let ic = annot.get::<Array<'_>>(b"IC").map(|a| up_to_four(&a)).unwrap_or_default();
+                let fill = match ic[..] {
+                    [g] => Some([g; 3]),
+                    [r, g, b] => Some([r, g, b]),
+                    [c, m, y, k] => Some([(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)]),
+                    _ => None,
+                };
+                out.marks.push(Redaction { rects, fill, overlay: annot.contains_key(b"OverlayText") });
+            }
+            Some(out)
+        }))
+        .ok()
+        .flatten()
     }
 
     /// Snapshot the work counters collected by this renderer.

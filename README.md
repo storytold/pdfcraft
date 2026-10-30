@@ -531,6 +531,12 @@ Every other Linux build needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+, Fe
 |---|---|---|
 | Static site | `pdfcraft-web-<ver>.zip` | Runs in a modern browser; host it on any static server |
 
+A site that hosts the web build can set a policy in a `policy.json` beside `index.html`. The app reads it once, at start.
+`{"ForceSecureRedaction": true}` makes a secure redacted copy the only way to apply redactions: every page becomes
+a picture with the marks painted in, and nothing else from the document reaches the copy. Without the file (HTTP 404)
+nothing changes. A file that is there but can't be read (another HTTP error, damaged JSON, a wrong value) also requires
+secure copies, and the Apply redactions dialog says why.
+
 ---
 
 ## The Crafting Apps

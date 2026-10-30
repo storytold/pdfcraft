@@ -5772,6 +5772,18 @@ evidence = ["crates/ui-egui/tests/it/redact.rs::marking_applying_and_clearing", 
 notes = "confirmation; one undo step; next save is a full rewrite. Refused, with nothing changed, when the page still shows text under a mark afterwards: text in some predefined CMaps and rotated Type 3 fonts is not removed yet, so those documents cannot be redacted. Also refused on a page with an inline image the renderer reads no image for, since the operators after it can't be known. Removed images and forms are unlinked from page-tree resources (own, inherited or shared) and from surviving forms' resources, not yet from annotation appearances or patterns"
 
 [[feature]]
+id = "protect.secure-redacted-copy"
+title = "Secure redacted copy (every page flattened to pixels)"
+area = "G"
+tier = "P1"
+milestone = "M8"
+status = "shipped"
+commands = ["redact.apply"]
+tools = ["redact_secure_copy"]
+evidence = ["crates/engine/src/secure_redact/tests.rs::nothing_of_the_source_reaches_the_copy", "crates/engine/src/secure_redact/tests.rs::boxes_cover_what_the_page_draws_whatever_its_geometry", "crates/engine/src/secure_redact/tests.rs::the_check_refuses_anything_else", "crates/engine/src/secure_redact/tests.rs::a_requirement_stops_every_in_place_apply", "crates/render/src/raster/tests.rs::page_geometry_is_where_the_page_is_drawn", "crates/automation/tests/it/automation.rs::secure_redacted_copy_through_tools", "crates/ui-egui/tests/it/redact.rs::a_secure_redacted_copy_opens_as_a_new_document"]
+notes = "Not an Acrobat feature: Acrobat applies redactions in place and then sanitizes. Apply redactions ▸ Make a secure redacted copy (or redact_secure_copy) renders every page as it prints, paints the marks into the pixels through the transform the renderer drew each page with (PageGeometry: crop box, /Rotate and /UserUnit as it resolved them), so a box covers what the page drew and nothing in the source can move or hide it, builds a new document from those pictures with an invisible OCR text layer when OCR is installed, and refuses its own output unless it holds nothing else (no /Info, metadata, comments, fields, bookmarks, layers, tags, extra objects or revisions). The source and its marks are unchanged; the copy opens as a new document. Marked words OCR reads again are reported (still_found). A web host's policy.json {\"ForceSecureRedaction\": true} makes it the only way to apply redactions (Session::require_secure_redaction refuses ApplyRedactions, also inside batches). Missing: overlay text on marks (refused), a desktop administrator policy key, cancelling from the UI, choosing the resolution in the UI (300 dpi; 72-600 through the tool), keeping vector quality."
+
+[[feature]]
 id = "protect.redact-glyph-removal"
 title = "Remove redacted text glyphs from content streams"
 area = "G"

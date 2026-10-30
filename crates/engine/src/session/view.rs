@@ -8,6 +8,18 @@ impl Session {
         Self::default()
     }
 
+    /// Require secure redacted copies ([`Session::secure_redacted_copy`]): redaction marks are
+    /// never applied in place, by any caller. `by` names who requires it (where the policy was
+    /// found), for the messages; `None` lifts the requirement.
+    pub fn require_secure_redaction(&mut self, by: Option<String>) {
+        self.secure_redaction = by;
+    }
+
+    /// Who requires secure redacted copies, if anyone ([`Session::require_secure_redaction`]).
+    pub fn secure_redaction_required(&self) -> Option<&str> {
+        self.secure_redaction.as_deref()
+    }
+
     /// Use a fixed clock (tests) instead of the system time.
     pub fn with_clock(mut self, clock: fn() -> i64) -> Self {
         self.clock = Some(clock);

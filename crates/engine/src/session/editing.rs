@@ -10,6 +10,11 @@ use super::{
 impl Session {
     /// Apply an edit. On success the previous state is undoable and the view data is refreshed.
     pub fn apply(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
+        if let Some(by) = &self.secure_redaction
+            && applies_redactions(&edit)
+        {
+            return Err(EditError::SecureRedactionRequired(by.clone()));
+        }
         let now = self.now();
         let today = self.today();
         let js_off = self.js_off;
@@ -524,5 +529,14 @@ impl Session {
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
         doc.bytes = bytes;
         Ok(())
+    }
+}
+
+/// `edit` applies redaction marks in place, itself or inside a batch.
+fn applies_redactions(edit: &Edit) -> bool {
+    match edit {
+        Edit::ApplyRedactions { .. } => true,
+        Edit::Batch { edits, .. } => edits.iter().any(applies_redactions),
+        _ => false,
     }
 }

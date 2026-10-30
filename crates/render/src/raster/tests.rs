@@ -7039,3 +7039,95 @@ fn test_clip_only_text_raster_preserves_clipping_without_painting() {
     assert!(pixels.contains(&[0, 0, 255, 255]), "fill shows through the 7 Tr clip");
     assert!(pixels.contains(&white), "the clip is text-shaped, not the whole page");
 }
+
+/// `page_geometry` reports where `render` draws: a red square in user space, on pages with a
+/// crop box, `/Rotate` and `/UserUnit`, fills the pixels its corners map to, and nothing two
+/// pixels outside them; the raster size matches.
+#[test]
+fn page_geometry_is_where_the_page_is_drawn() {
+    fn page(page_extra: &str, body: &str) -> Vec<u8> {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 300] >>".to_string(),
+            format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R {page_extra} >>"),
+            format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+    for (extra, square, scale) in [
+        ("", [100.0, 100.0, 160.0, 140.0], 2.0),
+        ("/CropBox [50 20 400 280] /Rotate 90", [100.0, 100.0, 160.0, 140.0], 1.5),
+        ("/CropBox [10 10 300 200] /Rotate 270 /UserUnit 2", [40.0, 30.0, 70.0, 50.0], 1.0),
+        ("/Rotate 180", [300.0, 50.0, 420.0, 90.0], 1.0),
+        ("/MediaBox [0 0 10 8] /UserUnit 50 /Rotate 90", [3.0, 4.0, 5.0, 6.0], 1.0),
+    ] {
+        let [x0, y0, x1, y1] = square;
+        let bytes = page(extra, &format!("1 0 0 rg {x0} {y0} {} {} re f", x1 - x0, y1 - y0));
+        let mut r = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
+        let g = r.page_geometry(0, scale).expect("geometry");
+        assert_eq!(g.object, Some(3), "{extra}");
+        let shot = r.render(RenderRequest { page: 0, scale, ..Default::default() });
+        assert!(shot.error.is_none(), "{extra}: {:?}", shot.error);
+        assert_eq!((shot.width, shot.height), (g.width, g.height), "{extra}");
+        let corners = [[x0, y0], [x1, y0], [x0, y1], [x1, y1]].map(|[x, y]| g.to_device(x, y));
+        let lo = |i: usize| corners.iter().map(|c| c[i]).fold(f64::MAX, f64::min);
+        let hi = |i: usize| corners.iter().map(|c| c[i]).fold(f64::MIN, f64::max);
+        let rgba = shot.rgba.to_vec();
+        let red_at = |x: f64, y: f64| -> bool {
+            if x < 0.0 || y < 0.0 || x >= f64::from(g.width) || y >= f64::from(g.height) {
+                return false;
+            }
+            let i = ((y as usize) * (g.width as usize) + x as usize) * 4;
+            rgba[i] > 200 && rgba[i + 1] < 60
+        };
+        let (cx, cy) = ((lo(0) + hi(0)) / 2.0, (lo(1) + hi(1)) / 2.0);
+        assert!(red_at(cx, cy), "{extra}: the square's centre is not where the geometry says");
+        for (x, y) in [(lo(0) - 2.0, cy), (hi(0) + 2.0, cy), (cx, lo(1) - 2.0), (cx, hi(1) + 2.0)] {
+            assert!(!red_at(x, y), "{extra}: red at ({x}, {y}), outside where the geometry puts the square");
+        }
+        for (x, y) in [(lo(0) + 1.5, cy), (hi(0) - 1.5, cy), (cx, lo(1) + 1.5), (cx, hi(1) - 1.5)] {
+            assert!(red_at(x, y), "{extra}: no red at ({x}, {y}), inside where the geometry puts the square");
+        }
+    }
+}
+
+/// `page_redactions` stops when the rectangle budget runs out, and says so.
+#[test]
+fn page_redactions_keep_to_their_budget() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 300] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".to_string(),
+        "<< /Type /Annot /Subtype /Redact /Rect [0 0 1 1] /QuadPoints [0 20 10 20 0 10 10 10 0 40 10 40 0 30 10 30] >>".to_string(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let r = PageRenderer::new(Arc::new(out), RenderConfig::default());
+    let mut budget = 2;
+    let found = r.page_redactions(0, &mut budget).unwrap();
+    assert_eq!((found.marks.len(), found.marks[0].rects.len(), found.exhausted, budget), (1, 2, false, 0));
+    let mut budget = 1;
+    assert!(r.page_redactions(0, &mut budget).unwrap().exhausted);
+}

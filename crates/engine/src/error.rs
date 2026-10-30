@@ -71,6 +71,12 @@ pub enum EditError {
     Signed,
     #[error("{0}")]
     Invalid(String),
+    #[error(transparent)]
+    SecureCopy(crate::secure_redact::SecureError),
+    /// An administrator or host requires secure redacted copies, so redactions are not applied
+    /// in place ([`crate::Session::require_secure_redaction`]).
+    #[error("redactions can't be applied in the document here: {0} requires a secure redacted copy instead")]
+    SecureRedactionRequired(String),
 }
 
 impl From<pdfcraft_sign::SignError> for EditError {

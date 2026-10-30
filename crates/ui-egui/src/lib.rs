@@ -54,9 +54,13 @@ mod dialogs;
 pub use edit_text_ui::CropMode;
 mod editing;
 mod home;
+pub mod host_policy;
 mod panels;
 pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
-pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
+pub use redact_ui::{
+    HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode, SecureProgress,
+    SecureRun,
+};
 pub mod i18n;
 pub mod theme;
 mod widgets;
@@ -461,6 +465,10 @@ pub struct PdfCraftApp {
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
     pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,
+    /// Apply Redactions: make a secure redacted copy instead of applying in place (always, when
+    /// the session requires it), and the copy being made.
+    pub redact_secure: bool,
+    pub secure_run: Option<redact_ui::SecureRun>,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
     /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the

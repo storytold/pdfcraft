@@ -51,7 +51,7 @@ pub fn rasterize(doc: &Document, pages: &[usize], raster: &Raster, content: Cont
 }
 
 /// Premultiplied RGBA composed over white paper (opaque), in grey when asked (Rec. 601 luma).
-fn over_white(rgba: &mut [u8], grayscale: bool) {
+pub(crate) fn over_white(rgba: &mut [u8], grayscale: bool) {
     for px in rgba.as_chunks_mut::<4>().0 {
         let gap = 255 - u32::from(px[3]);
         let (r, g, b) = ((u32::from(px[0]) + gap).min(255), (u32::from(px[1]) + gap).min(255), (u32::from(px[2]) + gap).min(255));

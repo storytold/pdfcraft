@@ -573,24 +573,172 @@ pub(crate) fn props_body(ui: &mut egui::Ui, d: &mut RedactPrefs, _t: &Tokens) ->
     buttons(ui, "OK", true)
 }
 
-/// Apply redactions confirmation. Returns (apply, cancel).
-pub(crate) fn apply_body(ui: &mut egui::Ui, marks: usize, t: &Tokens) -> (bool, bool) {
+/// Apply redactions confirmation, with the choice of a secure redacted copy (`secure`), which
+/// `required_by` (who requires it, if anyone) makes the only choice. Returns (apply, cancel).
+pub(crate) fn apply_body(ui: &mut egui::Ui, marks: usize, secure: &mut bool, required_by: Option<&str>, t: &Tokens) -> (bool, bool) {
     ui.set_width(420.0);
     ui.label(egui::RichText::new(tl!("Apply redactions")).font(crate::theme::semibold(18.0)));
     ui.add_space(8.0);
-    ui.label(if marks == 1 {
+    if required_by.is_some() {
+        *secure = true;
+    }
+    ui.label(if *secure {
+        if marks == 1 {
+            tl!("You are about to apply 1 redaction mark in a new, secure copy of this document. This document stays as it is.").to_string()
+        } else {
+            crate::i18n::fmt(
+                tl!("You are about to apply {n} redaction marks in a new, secure copy of this document. This document stays as it is."),
+                &[("n", &marks.to_string())],
+            )
+        }
+    } else if marks == 1 {
         tl!("You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.").to_string()
     } else {
         crate::i18n::fmt(tl!("You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently."), &[("n", &marks.to_string())])
     });
-    ui.add_space(4.0);
-    ui.label(
-        egui::RichText::new(tl!("Save the document afterwards: saving rewrites the whole file so no trace of the removed content stays in it."))
-            .small()
-            .color(t.text_muted),
-    );
+    ui.add_space(8.0);
+    if let Some(by) = required_by {
+        ui.label(tl!("A secure redacted copy will be made: a new document in which every page is a picture, with the marks painted in. Nothing else from this document goes into it. Text is read again with OCR."));
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Required by {source}."), &[("source", by)])).small().color(t.text_muted));
+    } else {
+        widgets::radio_value(ui, secure, false, tl!("Apply in this document (keeps text and drawings)"));
+        widgets::radio_value(ui, secure, true, tl!("Make a secure redacted copy (every page becomes a picture; text is read again with OCR)"));
+        ui.add_space(4.0);
+        let note = if *secure {
+            tl!(
+                "The copy opens as a new document; this one keeps its marks. Hidden data can't reach the copy, but text nobody marked stays visible in it."
+            )
+        } else {
+            tl!("Save the document afterwards: saving rewrites the whole file so no trace of the removed content stays in it.")
+        };
+        ui.label(egui::RichText::new(note).small().color(t.text_muted));
+    }
     ui.add_space(12.0);
-    buttons(ui, "Apply", true)
+    buttons(ui, if *secure { "Make copy" } else { "Apply" }, true)
+}
+
+/// Progress of a secure redacted copy: pages done, total, the result once finished, and a
+/// cancel request.
+#[derive(Default)]
+pub struct SecureProgress {
+    pub done: usize,
+    pub total: usize,
+    pub result: Option<Result<(Vec<u8>, pdfcraft_engine::secure_redact::SecureReport), String>>,
+    pub cancel: bool,
+}
+
+/// A secure redacted copy being made in the background.
+pub struct SecureRun {
+    pub name: String,
+    pub progress: std::sync::Arc<std::sync::Mutex<SecureProgress>>,
+}
+
+impl PdfCraftApp {
+    /// Make a secure redacted copy of document `id` in the background; it opens as a new
+    /// document when done.
+    pub(crate) fn start_secure_copy(&mut self, id: pdfcraft_engine::DocId) {
+        use std::sync::{Arc, Mutex};
+        if self.secure_run.is_some() {
+            self.notify_tr("A secure redacted copy is already being made");
+            return;
+        }
+        let job = match self.session.secure_copy_job(id, pdfcraft_engine::secure_redact::SecureOptions::default()) {
+            Ok(job) => job,
+            Err(e) => {
+                self.notify_fmt("Couldn't make a secure redacted copy: {e}", &[("e", &e.to_string())]);
+                return;
+            }
+        };
+        let progress = Arc::new(Mutex::new(SecureProgress { total: job.pages(), ..Default::default() }));
+        let p = progress.clone();
+        let name = job.name.clone();
+        let work = move || {
+            let result = pdfcraft_engine::guard(|| {
+                let ocr = if job.options.ocr && pdfcraft_engine::ocr::available() { pdfcraft_engine::ocr::engine().ok() } else { None };
+                job.run(ocr.as_deref(), |done, total| {
+                    let Ok(mut s) = p.lock() else { return false };
+                    s.done = done;
+                    s.total = total;
+                    !s.cancel
+                })
+                .map(|c| (c.bytes, c.report))
+                .map_err(|e| e.to_string())
+            })
+            .unwrap_or_else(Err);
+            if let Ok(mut s) = p.lock() {
+                s.result = Some(result);
+            }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.run_inline {
+            work();
+        } else {
+            std::thread::Builder::new().name("pdfcraft-secure-redact".into()).spawn(work).ok();
+        }
+        #[cfg(target_arch = "wasm32")]
+        work();
+        self.secure_run = Some(SecureRun { name, progress });
+        self.poll_secure_copy();
+    }
+
+    /// Show a running secure copy's progress, and open the copy once it is made.
+    pub(crate) fn poll_secure_copy(&mut self) {
+        let Some(run) = self.secure_run.as_ref() else { return };
+        let progress = run.progress.clone();
+        let taken = match progress.lock() {
+            Ok(mut s) => s.result.take().ok_or((s.done, s.total)),
+            // The worker stopped while holding the lock: it will never report back.
+            Err(e) => Ok(Err(e.to_string())),
+        };
+        match taken {
+            Err((done, total)) => {
+                let m = crate::i18n::fmt(
+                    tl!("Making a secure redacted copy… page {d} of {t}"),
+                    &[("d", &(done + 1).min(total.max(1)).to_string()), ("t", &total.max(1).to_string())],
+                );
+                if self.toast.as_ref().is_none_or(|t| t.0 != m) {
+                    self.notify(m);
+                }
+                if let Some(ctx) = &self.ctx {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                }
+            }
+            Ok(result) => {
+                let name = self.secure_run.take().map(|r| r.name).unwrap_or_default();
+                match result {
+                    Ok((bytes, report)) => {
+                        self.open_created(&name, std::sync::Arc::new(bytes), "Created a secure redacted copy. Save it to keep it.");
+                        // What to check in the copy, in one message (each would replace the last).
+                        let mut checks: Vec<String> = Vec::new();
+                        let truncated: Vec<String> =
+                            report.pages.iter().enumerate().filter(|(_, p)| p.truncated).map(|(i, _)| (i + 1).to_string()).collect();
+                        if !truncated.is_empty() {
+                            checks.push(crate::i18n::fmt(
+                                tl!("Page {pages} had more content than PdfCraft draws, so some of it is missing from the copy."),
+                                &[("pages", &truncated.join(", "))],
+                            ));
+                        }
+                        if !report.still_found.is_empty() {
+                            let words: Vec<String> = report.still_found.iter().map(|f| format!("“{}”", f.text)).collect();
+                            let mut pages: Vec<usize> = report.still_found.iter().flat_map(|f| f.pages.iter().map(|p| p + 1)).collect();
+                            pages.sort_unstable();
+                            pages.dedup();
+                            let pages: Vec<String> = pages.iter().map(ToString::to_string).collect();
+                            checks.push(crate::i18n::fmt(
+                                tl!("OCR read {words} again on page {pages}. If it should go too, mark it in the original and make the copy again."),
+                                &[("words", &words.join(", ")), ("pages", &pages.join(", "))],
+                            ));
+                        }
+                        if !checks.is_empty() {
+                            self.notify(format!("{} {}", tl!("Check the copy:"), checks.join(" ")));
+                        }
+                    }
+                    Err(e) => self.notify_fmt("Couldn't make a secure redacted copy: {e}", &[("e", &e)]),
+                }
+            }
+        }
+    }
 }
 
 fn buttons(ui: &mut egui::Ui, ok: &str, primary: bool) -> (bool, bool) {

@@ -548,6 +548,19 @@ pub fn tools() -> Vec<ToolDef> {
         )
         .destructive()
         .with(schema(json!({ "doc": doc(), "pages": pages("whose marks to apply (default: all)") }), &["doc"])),
+        t(
+            "redact_secure_copy",
+            "Make a secure redacted copy",
+            "Make a secure redacted copy as a new, unsaved document (the source and its marks are unchanged): every page is rendered to a picture as it prints, the marks are painted into the pixels in their fill colour (white for none), and the copy is built from those pictures alone, with an invisible OCR text layer when OCR is installed (ocr, default true). Nothing else reaches the copy: no metadata, comments, form fields, bookmarks, layers, tags or hidden text. Returns the new doc, page_dpi per page (dpi, default 300, 72-600; very large pages render at less), searchable, and still_found: marked words OCR read again in the copy, probably the same text unmarked elsewhere. Marks with overlay text are refused. Required instead of redact_apply when a policy requires secure redaction.",
+        )
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "dpi": { "type": "number", "minimum": 72, "maximum": 600, "description": "Render resolution (default 300)." },
+                "ocr": { "type": "boolean", "description": "Add an invisible OCR text layer when OCR is installed (default true)." },
+            }),
+            &["doc"],
+        )),
         t("redact_clear", "Remove redaction marks", "Remove every redaction mark without applying it. Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc() }), &["doc"])),

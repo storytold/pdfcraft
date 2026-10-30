@@ -168,6 +168,32 @@ impl Automation {
         Ok(out)
     }
 
+    pub(crate) fn redact_secure_copy(&mut self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::secure_redact::{DEFAULT_DPI, SecureOptions};
+        let id = self.doc(a)?.id;
+        let dpi = match a.opt_num("dpi")? {
+            Some(d) if d.is_finite() && (72.0..=600.0).contains(&d) => d as f32,
+            Some(d) => return Err(ToolError::InvalidArgs(format!("dpi must be between 72 and 600, not {d}"))),
+            None => DEFAULT_DPI,
+        };
+        let ocr = a.opt_bool("ocr")?.unwrap_or(true);
+        let (new, report) = self.session.secure_redacted_copy(id, SecureOptions { dpi, ocr }).map_err(failed)?;
+        let mut out = crate::json::summary(self.session.get(new).ok_or_else(|| failed("the document vanished"))?);
+        out["marks"] = json!(report.marks);
+        out["searchable"] = json!(report.searchable);
+        out["bytes"] = json!(report.bytes);
+        out["page_dpi"] = json!(report.pages.iter().map(|p| (f64::from(p.dpi) * 10.0).round() / 10.0).collect::<Vec<_>>());
+        out["truncated_pages"] = json!(report.pages.iter().enumerate().filter(|(_, p)| p.truncated).map(|(i, _)| i + 1).collect::<Vec<_>>());
+        out["still_found"] = json!(
+            report
+                .still_found
+                .iter()
+                .map(|f| json!({ "text": f.text, "pages": f.pages.iter().map(|p| p + 1).collect::<Vec<_>>() }))
+                .collect::<Vec<_>>()
+        );
+        Ok(out)
+    }
+
     pub(crate) fn redact_clear(&mut self, a: &Args) -> Result<Value> {
         if self.doc(a)?.redaction_marks() == 0 {
             return Err(failed("there are no redaction marks"));

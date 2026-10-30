@@ -190,7 +190,8 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
         }
         Dialog::RedactApply => {
             let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
-            let (ok, cancel) = crate::redact_ui::apply_body(ui, marks, &t);
+            let required_by = app.session.secure_redaction_required().map(str::to_owned);
+            let (ok, cancel) = crate::redact_ui::apply_body(ui, marks, &mut app.redact_secure, required_by.as_deref(), &t);
             if ok {
                 req.redact_now = Some(dialog);
             }
@@ -1707,6 +1708,11 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
         }
         Some(Dialog::Sanitize) if app.apply_edit(Edit::Sanitize) => {
             app.notify_tr("Document sanitized. Save to finish: saving rewrites the whole file.");
+        }
+        Some(Dialog::RedactApply) if app.redact_secure || app.session.secure_redaction_required().is_some() => {
+            if let Some((_, id)) = app.active_ids() {
+                app.start_secure_copy(id);
+            }
         }
         Some(Dialog::RedactApply) => {
             let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());

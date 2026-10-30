@@ -4289,6 +4289,32 @@ fn redacting_through_tools() {
     assert!(matches!(a.call("redact_mark", &json!({ "doc": doc })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// A secure redacted copy opens as a new document holding nothing of the source but pixels;
+/// the source keeps its marks, and wrong arguments are refused.
+#[test]
+fn secure_redacted_copy_through_tools() {
+    let dir = workdir("redact-secure-copy");
+    std::fs::write(dir.join("memo.txt"), "Client KESTREL7 Holdings\nPublic line").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "text", "path": "memo.txt" }))["doc"].as_u64().unwrap();
+    assert!(matches!(a.call("redact_secure_copy", &json!({ "doc": doc })), Err(ToolError::Failed(_))), "no marks");
+    ok(&mut a, "redact_mark", json!({ "doc": doc, "find": "KESTREL7" }));
+    assert!(matches!(a.call("redact_secure_copy", &json!({ "doc": doc, "dpi": 20 })), Err(ToolError::InvalidArgs(_))));
+    let r = ok(&mut a, "redact_secure_copy", json!({ "doc": doc, "dpi": 100, "ocr": false }));
+    let copy = r["doc"].as_u64().unwrap();
+    assert_ne!(copy, doc);
+    assert_eq!((r["marks"].as_u64(), r["searchable"].as_bool()), (Some(1), Some(false)));
+    assert_eq!(r["page_dpi"].as_array().map(Vec::len), Some(1));
+    assert!(page_text(&mut a, copy)[0].trim().is_empty(), "without OCR the copy has no text at all");
+    assert!(page_text(&mut a, doc)[0].contains("KESTREL7"), "the source is unchanged");
+    ok(&mut a, "doc_save", json!({ "doc": copy, "path": "memo-redacted.pdf" }));
+    let bytes = std::fs::read(dir.join("memo-redacted.pdf")).unwrap();
+    assert!(!bytes.windows(8).any(|w| w == b"KESTREL7"));
+    // Saving writes its own /ModDate; nothing of the source's document information (the title
+    // "memo" doc_create gave it) is in the copy.
+    assert!(!bytes.windows(6).any(|w| w == b"/Title"), "the source's title reached the copy");
+}
+
 #[test]
 /// Mark, apply and save remove the complete international number while retaining labels and controls.
 fn redacting_italian_international_slash_numbers_through_tools() {

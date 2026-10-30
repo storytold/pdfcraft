@@ -265,3 +265,40 @@ fn removing_hidden_information_and_sanitizing() {
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Sanitize document"));
 }
+
+/// Apply redactions offers a secure redacted copy, which a required policy makes the only
+/// choice; the copy opens as a new document and the original keeps its marks.
+#[test]
+fn a_secure_redacted_copy_opens_as_a_new_document() {
+    let mut h = harness();
+    h.state_mut().run_inline = true;
+    assert!(h.state_mut().execute("redact.mark"));
+    h.run_steps(2);
+    h.state_mut().execute("redact.pages");
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(marks(&h), 1);
+    // Offered as a choice.
+    h.get_by_label("Redact all").click();
+    h.run_steps(3);
+    h.get_by_label("Make a secure redacted copy (every page becomes a picture; text is read again with OCR)");
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    // Required: the only choice, and it says who requires it.
+    h.state_mut().session.require_secure_redaction(Some("this site's policy.json".into()));
+    h.get_by_label("Redact all").click();
+    h.run_steps(3);
+    h.get_by_label("Required by this site's policy.json.");
+    assert!(h.query_by_label("Apply in this document (keeps text and drawings)").is_none());
+    h.get_by_label("Make copy").click();
+    h.run_steps(6);
+    let s = h.state();
+    assert!(s.secure_run.is_none(), "the copy is finished");
+    assert_eq!(s.views.len(), 2, "the copy opened as a new document");
+    let copy = s.session.get(s.views[1].id).unwrap();
+    assert_eq!(copy.display_name(), "form (redacted).pdf");
+    assert_eq!(copy.redaction_marks(), 0);
+    assert!(copy.form.is_empty(), "nothing but pictures: no form fields");
+    assert_eq!(s.session.get(s.views[0].id).unwrap().redaction_marks(), 1, "the original keeps its marks");
+}

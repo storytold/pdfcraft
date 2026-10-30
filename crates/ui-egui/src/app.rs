@@ -152,6 +152,8 @@ impl PdfCraftApp {
             ocr_draft: ocr_ui::OcrDraft::default(),
             ocr_run: None,
             ocr_batch: None,
+            redact_secure: false,
+            secure_run: None,
             run_inline: false,
             custom_actions: Vec::new(),
             wizard: Default::default(),
@@ -519,6 +521,7 @@ impl eframe::App for PdfCraftApp {
         self.poll_export();
         self.auto_ocr_scanned_page();
         self.poll_ocr();
+        self.poll_secure_copy();
         self.poll_optimize();
         self.poll_action();
         self.process_file_requests();
