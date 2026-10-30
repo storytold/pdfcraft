@@ -1012,6 +1012,138 @@ fn captions_and_redrawn_values_are_kept_and_marked() {
     assert!(!undrawn_fields(&doc).iter().any(|(n, _)| n == "name"));
 }
 
+/// A redraw of every field reads the whole form once, not once per field: each `redraw_field`
+/// call looks its field up by name, which reads the whole form, so a loop of `fields` ×
+/// `redraw_field` costs one form reading per field (quadratic in a laid-out dynamic XFA form,
+/// whose thousands of field appearances the engine regenerates at every open). Redrawing all
+/// fields together ([`redraw_all_fields`]) must read the form once.
+#[test]
+fn redrawing_every_field_reads_the_form_once() {
+    let mut doc = fixture();
+    let before = form_reads();
+    redraw_all_fields(&mut doc).unwrap();
+    assert_eq!(form_reads() - before, 1, "one whole-form reading for the combined redraw, not one per field");
+}
+
+/// A redraw of every field, and redrawing each field by name, draw identical appearances: the
+/// combined redraw works on the fields it enumerated, the by-name redraw enumerates again, and
+/// both see the same fields in the same order.
+#[test]
+fn redrawing_every_field_draws_each_field_like_a_redraw_by_name() {
+    let mut legacy = fixture();
+    for f in &fields(&legacy) {
+        redraw_field(&mut legacy, &f.name).unwrap();
+    }
+    let mut combined = fixture();
+    redraw_all_fields(&mut combined).unwrap();
+    assert_eq!(fields(&combined), fields(&legacy), "the combined redraw sees the same fields");
+    for (lg, cb) in std::iter::zip(fields(&legacy), fields(&combined)) {
+        for (wl, wc) in std::iter::zip(&lg.widgets, &cb.widgets) {
+            assert_eq!(full_ap(&combined, wc.obj), full_ap(&legacy, wl.obj), "field {}", lg.name);
+        }
+    }
+}
+
+/// The normal (`/N`) appearance reference of a field's (possibly inline) `/AP`.
+fn normal_ap(doc: &Document, num: u32) -> Option<ObjRef> {
+    let d = doc.get(ObjRef { num, generation: 0 }).as_dict().cloned().unwrap_or_default();
+    let ap = d.get(b"AP").and_then(Object::as_dict).cloned().unwrap_or_default();
+    ap.reference(b"N")
+}
+
+/// A widget's whole `/AP` (the appearance dictionary, state maps and refs included).
+fn full_ap(doc: &Document, o: ObjRef) -> Object {
+    doc.get(o).as_dict().and_then(|d| d.get(b"AP")).cloned().unwrap_or(Object::Null)
+}
+
+/// A signed signature field keeps the appearance its signer drew; an unsigned one is given an
+/// empty box, like `redraw_field` gives it.
+#[test]
+fn redrawing_every_field_keeps_a_signed_signature() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>".into(),
+        "<< /Subtype /Widget /FT /Sig /T (signed) /V << /Contents (by me) >> /Rect [20 250 180 270] /P 3 0 R /AP << /N 6 0 R >> >>".into(),
+        "<< /Subtype /Widget /FT /Sig /T (unsigned) /Rect [20 200 180 220] /P 3 0 R >>".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+    ];
+    let doc = &mut document(&objs);
+    let signed = normal_ap(doc, 4).expect("the signed signature has an appearance");
+    redraw_all_fields(doc).unwrap();
+    assert_eq!(normal_ap(doc, 4), Some(signed), "the signed signature keeps the signer's appearance");
+    let n = normal_ap(doc, 5).expect("the unsigned signature gets an appearance");
+    assert!(matches!(*doc.get(n), Object::Stream(_)), "the appearance is the empty box stream");
+}
+
+/// `/V` inherits, like `walk` records it: a signature whose value lives on a parent still counts
+/// as signed and keeps the signer's appearance, while an explicit `/V null` counts as unsigned
+/// and gets the empty box. Deciding on the terminal field's own dictionary alone gets both wrong.
+#[test]
+fn redrawing_every_field_reads_a_signature_value_through_its_parents() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [7 0 R 5 0 R] >>".into(),
+        "<< /T (row) /FT /Sig /V << /Contents (by me) >> /Kids [7 0 R] >>".into(),
+        "<< /Subtype /Widget /FT /Sig /T (nulled) /V null /Rect [20 200 180 220] /P 3 0 R >>".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+        "<< /Subtype /Widget /FT /Sig /T (inherited) /Parent 4 0 R /Rect [20 250 180 270] /P 3 0 R /AP << /N 6 0 R >> >>".into(),
+    ];
+    let doc = &mut document(&objs);
+    let signed = normal_ap(doc, 7).expect("the inherited signature has an appearance");
+    redraw_all_fields(doc).unwrap();
+    assert_eq!(normal_ap(doc, 7), Some(signed), "the signature inherits its /V from its parent, so the signer's appearance stays");
+    let n = normal_ap(doc, 5).expect("a /V null signature is unsigned and gets an appearance");
+    assert!(matches!(*doc.get(n), Object::Stream(_)), "the appearance is the empty box stream");
+}
+
+/// The form read descends `/Kids` and never reads `/Parent`, so a tree that hangs fields off of
+/// `/Kids` with no `/Parent` back edges is still walked whole: the skip re-derives that same
+/// chain when the `/Parent` look comes up empty, so an inherited signature still keeps the
+/// signer's appearance.
+#[test]
+fn redrawing_every_field_reads_a_signature_value_without_parent_edges() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [7 0 R 5 0 R] >>".into(),
+        "<< /T (row) /FT /Sig /V << /Contents (by me) >> /Kids [7 0 R] >>".into(),
+        "<< /Subtype /Widget /FT /Sig /T (nulled) /V null /Rect [20 200 180 220] /P 3 0 R >>".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+        "<< /Subtype /Widget /FT /Sig /T (inherited) /Rect [20 250 180 270] /P 3 0 R /AP << /N 6 0 R >> >>".into(),
+    ];
+    let doc = &mut document(&objs);
+    let signed = normal_ap(doc, 7).expect("the inherited signature has an appearance");
+    redraw_all_fields(doc).unwrap();
+    assert_eq!(normal_ap(doc, 7), Some(signed), "the signature inherits its /V through the /Kids tree, the signer's appearance stays");
+    let n = normal_ap(doc, 5).expect("a /V null signature is unsigned and gets an appearance");
+    assert!(matches!(*doc.get(n), Object::Stream(_)), "the appearance is the empty box stream");
+}
+
+/// The form read descends `/Fields` and `/Kids` and never reads `/Parent`, so what that tree says
+/// about a signature field wins before the `/Parent` edge is consulted: a signature the tree
+/// reaches as signed keeps the signer's appearance even when its `/Parent` points at a node
+/// whose `/V` is null — redrawing it would paint an empty box over the signer's picture.
+#[test]
+fn redrawing_every_field_reads_a_signature_value_from_the_field_tree_over_parent() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [7 0 R 5 0 R] >>".into(),
+        "<< /T (row) /FT /Sig /V << /Contents (by me) >> /Kids [7 0 R] >>".into(),
+        "<< /Subtype /Widget /FT /Sig /T (nulled) /V null /Rect [20 200 180 220] /P 3 0 R >>".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+        "<< /Subtype /Widget /FT /Sig /T (inherited) /Parent 5 0 R /Rect [20 250 180 270] /P 3 0 R /AP << /N 6 0 R >> >>".into(),
+    ];
+    let doc = &mut document(&objs);
+    let signed = normal_ap(doc, 7).expect("the inherited signature has an appearance");
+    redraw_all_fields(doc).unwrap();
+    assert_eq!(normal_ap(doc, 7), Some(signed), "the field tree says /V comes from the signed grandparent, so the signer's appearance stays");
+    let n = normal_ap(doc, 5).expect("a /V null signature is unsigned and gets an appearance");
+    assert!(matches!(*doc.get(n), Object::Stream(_)), "the appearance is the empty box stream");
+}
+
 #[test]
 fn check_boxes_and_radios_switch_states() {
     let mut doc = fixture();

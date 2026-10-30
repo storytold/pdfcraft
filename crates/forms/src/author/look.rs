@@ -1,4 +1,8 @@
-use super::{Dict, Document, Field, FieldKind, FormError, ObjRef, Object, Stream, Widget, appearance, fields, invalid, rgb};
+use std::sync::Arc;
+
+use super::{
+    Dict, Document, Field, FieldKind, FormError, ObjRef, Object, Stream, Widget, acroform, appearance, fields, fields_with_adopted, invalid, rgb,
+};
 
 /// The Appearance tab: borders, colours and text.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -315,6 +319,13 @@ pub fn redraw_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
 /// `FormError::NoSuchField` when no field is named `name`.
 pub(super) fn redraw_widgets(doc: &mut Document, name: &str, only: Option<usize>) -> Result<(), FormError> {
     let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    redraw_widgets_at(doc, &f, only)
+}
+
+/// `redraw_widgets`' widget redraw for a field the caller has already read: the same appearances
+/// without the whole-form reading the by-name look costs once per call. [`redraw_all_fields`]
+/// redraws all the fields it read at one whole-form reading's cost.
+fn redraw_widgets_at(doc: &mut Document, f: &Field, only: Option<usize>) -> Result<(), FormError> {
     let mut undrawn = false;
     for (index, w) in f.widgets.iter().enumerate() {
         if only.is_some_and(|only| only != index) {
@@ -323,7 +334,7 @@ pub(super) fn redraw_widgets(doc: &mut Document, name: &str, only: Option<usize>
         let mut missing = None;
         let ap = match f.kind {
             FieldKind::Text | FieldKind::Combo | FieldKind::List => {
-                let (s, m) = appearance::field_appearance_drawn(doc, &f, w, &f.value, true);
+                let (s, m) = appearance::field_appearance_drawn(doc, f, w, &f.value, true);
                 missing = m;
                 let r = doc.add(Object::Stream(s));
                 let mut d = Dict::new();
@@ -361,6 +372,116 @@ pub(super) fn redraw_widgets(doc: &mut Document, name: &str, only: Option<usize>
         crate::ask_viewers_to_redraw(doc)?;
     }
     Ok(())
+}
+
+/// `redraw_field` for every field: the form is read once ([`fields_with_adopted`]) and then each
+/// field's widgets are redrawn from what is already known. Redrawing all fields this way costs
+/// one whole-form reading, not one per field — a laid-out dynamic XFA form has thousands of
+/// fields and its appearances are regenerated at every open and after every script event.
+/// A signed signature field keeps the picture its signer's application drew. "Signed" is the
+/// effective `/V`: the field's own or the nearest ancestor's ([`signature_has_value`]), because
+/// `/V` inherits down the field tree, and an explicit `/V null` is no value.
+pub fn redraw_all_fields(doc: &mut Document) -> Result<(), FormError> {
+    for f in fields_with_adopted(doc).items {
+        if f.kind == FieldKind::Signature && signature_has_value(doc, f.obj) {
+            continue;
+        }
+        if let Err(e) = redraw_widgets_at(doc, &f, None) {
+            // Keep the failing field named: its caller shows one message, not per-widget ones.
+            return Err(FormError::Invalid(format!("{}: {e}", f.name)));
+        }
+    }
+    Ok(())
+}
+
+/// Whether a signature field has a value: the nearest `/V` on the field or its ancestors decides,
+/// as [`crate::walk`] records inherited values, and a null `/V` counts as no value. The first
+/// look descends the AcroForm `/Fields`/`/Kids` tree exactly the way `walk` reads the form —
+/// and `walk` never reads `/Parent` (see [`tree_value`]). Only a field that tree cannot reach
+/// falls back to the `/Parent` links (indirect refs or inline dicts), bounded at 64 levels;
+/// there any dead edge (no edge, odd edge, or levels exhausted) reads as no value, which is
+/// what redrawing the field keeps doing.
+fn signature_has_value(doc: &Document, field: ObjRef) -> bool {
+    if let Some(has) = tree_value(doc, field) {
+        return has;
+    }
+    // The page-only fallback: the form read never saw this field, so the `/Parent` chain decides.
+    let mut probe = Some(doc.get(field));
+    for _ in 0..64 {
+        let Some(obj) = probe else { return false };
+        let Some(d) = obj.as_dict() else { return false };
+        if let Some(v) = d.get(b"V") {
+            return !matches!(&*doc.resolve(v), Object::Null);
+        }
+        // The chain may be indirect refs or inline dicts; `resolve` follows either. A dead
+        // answer (no edge, odd edge, or levels exhausted) reads as no value.
+        match d.get(b"Parent") {
+            Some(p) => probe = Some(doc.resolve(p)),
+            None => return false,
+        }
+    }
+    false
+}
+
+/// `signature_has_value`'s first look: descend `/Fields` the way `walk` does (kids that are
+/// dictionaries with a `/T` are field children), carrying the nearest `/V` seen above this
+/// point, and hitting `field` answers with the last of them. `walk` never reads `/Parent`, so
+/// this is the reader's own verdict, and it is final for any field reached this way. It is
+/// `Some` only when a path reaches `field`: roots are tried in turn, the first path that
+/// reaches it signed wins at once, and an unsigned verdict is only kept as the fallback so one
+/// root's "no value" cannot mask another root's "signed". `None` means the tree cannot answer
+/// — no AcroForm or no `/Fields`, only dead edges, or the bounds below — and leaves the
+/// verdict to the `/Parent` chain. Only the `/Fields` phase of the walk is mirrored: a field
+/// reachable only through a page annotation has no tree answer. Bounded as `walk` is (64
+/// levels): with a seen set, cyclic or unsound `/Kids` stop as unreachable.
+fn tree_value(doc: &Document, field: ObjRef) -> Option<bool> {
+    let af = acroform(doc)?;
+    let roots = af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
+    let mut seen = std::collections::HashSet::new();
+    let mut found = None;
+    for r in roots.iter().filter_map(|o| o.as_ref()) {
+        match nearest_value_above(doc, r, field, None, &mut seen, 0) {
+            Some(true) => return Some(true),
+            Some(false) => found = Some(false),
+            None => {}
+        }
+    }
+    found
+}
+
+fn nearest_value_above(
+    doc: &Document,
+    r: ObjRef,
+    field: ObjRef,
+    v: Option<Arc<Object>>,
+    seen: &mut std::collections::HashSet<ObjRef>,
+    depth: usize,
+) -> Option<bool> {
+    if depth > 64 || !seen.insert(r) {
+        return None;
+    }
+    let obj = doc.get(r);
+    let d = obj.as_dict()?;
+    let v = d.get(b"V").map(|v| doc.resolve(v)).or(v);
+    if r == field {
+        return Some(match v {
+            Some(v) => !matches!(&*v, Object::Null),
+            None => false,
+        });
+    }
+    let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+    // Same fold as the root loop in `tree_value`: the first kid path that reaches `field`
+    // signed wins, an unsigned answer is only recorded, and a kid that does not reach the
+    // field leaves the verdict to the brothers after it.
+    let mut found = None;
+    for k in kids.iter().filter_map(|k| k.as_ref()).filter(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.contains(b"T"))) {
+        match nearest_value_above(doc, k, field, v.clone(), seen, depth + 1) {
+            Some(true) => return Some(true),
+            Some(false) => found = Some(false),
+            None => {}
+        }
+    }
+    found
 }
 
 fn frame_only(doc: &Document, w: &Widget) -> (String, crate::appearance::Placement) {

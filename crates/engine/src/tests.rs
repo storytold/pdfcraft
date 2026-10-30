@@ -2343,6 +2343,22 @@ fn form_fixture() -> Vec<u8> {
     out
 }
 
+/// An XFA-redraw delegate: every field's widgets get their appearance regenerated (a text field
+/// gets a `/N` stream, a check box gets its state map), the same as the by-name redraw of each
+/// field gives. The whole-form reading the redraw costs, once instead of once per field, is
+/// pinned in `pdfcraft-forms` (`redrawing_every_field_reads_the_form_once`).
+#[test]
+fn an_xfa_redraw_gives_every_field_an_appearance() {
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(form_fixture())).unwrap();
+    crate::xfa_redraw(&mut doc).unwrap();
+    let text = doc.get(pdfcraft_cos::ObjRef { num: 4, generation: 0 }).as_dict().cloned().unwrap();
+    let n = text.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").expect("the text field has a normal appearance stream");
+    assert!(matches!(&*doc.get(n), pdfcraft_cos::Object::Stream(_)), "the text field's appearance is drawn");
+    let ok = doc.get(pdfcraft_cos::ObjRef { num: 5, generation: 0 }).as_dict().cloned().unwrap();
+    let states = ok.get(b"AP").unwrap().as_dict().unwrap().get(b"N").unwrap().as_dict().unwrap();
+    assert!(states.contains(b"Yes"), "the check box keeps its on-state appearance");
+}
+
 /// Whether `needle` appears in `bytes`, or in any stream of the PDF they hold once decoded (so
 /// compressed object streams are searched too), as literal or hex string bytes.
 fn appears_in_pdf(bytes: &Arc<Vec<u8>>, needle: &str) -> bool {
