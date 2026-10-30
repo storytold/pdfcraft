@@ -2791,6 +2791,21 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	Add printer marks…	인쇄용 표시 추가…
+	All marks	모든 표시
+	Bleed marks	재단 여유 표시
+	Colour bars	색상 막대
+	Line weight	선 두께
+	Marks	표시
+	Page information	페이지 정보
+	Printer marks added	인쇄용 표시를 추가했습니다
+	Registration marks	등록 표시
+	Remove printer marks	인쇄용 표시 제거
+	Room on each side	각 면의 여백
+	The trim box is kept where it is, so the printed page cuts the same.	재단 상자는 그대로 유지되므로 인쇄된 페이지도 동일하게 재단됩니다.
+	Trim marks	재단 표시
+	Widen the page to make room	페이지를 넓혀 공간 확보
+	printer marks	인쇄용 표시
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	오늘

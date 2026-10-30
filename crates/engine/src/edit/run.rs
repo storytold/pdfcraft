@@ -95,6 +95,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         }
         Edit::SetInfo { .. }
         | Edit::AddHeaderFooter { .. }
+        | Edit::AddPrinterMarks { .. }
         | Edit::AddWatermark { .. }
         | Edit::AddBackground { .. }
         | Edit::RemoveMarks { .. }
@@ -572,6 +573,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::MarkTagArtifact { object } => {
             a11y::mark_tag_artifact(doc, *object).map_err(|e| EditError::Accessibility(e.to_string()))?;
+        }
+        Edit::AddPrinterMarks { pages, settings, replace } => {
+            pdfcraft_edit::add_printer_marks(doc, pages, settings, *replace)?;
         }
         Edit::AddHeaderFooter { pages, settings, replace } => {
             let date = cx.today;

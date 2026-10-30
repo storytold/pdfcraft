@@ -1038,13 +1038,27 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "pages": pages("to fill (default: all)"), "color": { "type": "string" }, "file": { "type": "string" }, "file_page": { "type": "integer", "minimum": 1 }, "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }, "opacity": { "type": "number", "minimum": 0, "maximum": 1 }, "replace": { "type": "boolean" }, "replace_backdrop": { "type": "boolean", "description": "Replace a white backdrop the page paints itself, which would hide the background. Default true." } }),
                 &["doc"],
             )),
+        t("doc_printer_marks", "Add printer marks", "Print production: trim marks, bleed marks (dashed, at the bleed box), registration targets, colour bars and a page-information line (label, page n of N, date) drawn outside the trim box as a removable page mark; the page is widened by make_room points a side when the marks would fall outside it (the trim box stays). replace (default true) replaces marks added before. Undoable; doc_remove_marks kind printer_marks takes them off.")
+            .cmd("prepress.marks")
+            .with(schema(
+                json!({
+                    "doc": doc(), "pages": pages("the pages to mark (default all)"),
+                    "trim": { "type": "boolean" }, "bleed": { "type": "boolean" }, "registration": { "type": "boolean" }, "color_bars": { "type": "boolean" }, "page_info": { "type": "boolean" },
+                    "line_weight": { "type": "number", "exclusiveMinimum": 0, "maximum": 4, "description": "Points (Acrobat offers 0.25, 0.5 and 1)." },
+                    "make_room": { "type": "number", "description": "Points to widen the page by on each side when needed (default 36); negative leaves the page as it is." },
+                    "label": { "type": "string", "description": "The page-information line's label (default: the file's name)." },
+                    "date": { "type": "string", "description": "The page-information line's date (default: today)." },
+                    "replace": { "type": "boolean" },
+                }),
+                &["doc"],
+            )),
         t("doc_backdrops", "List page backdrops", "Pages that paint their own backdrop, which hides a background added behind the content: `fill` (an opaque white fill doc_background can replace) or `image` (a page-sized picture, e.g. a scan, that still hides it). Pages are 1-based; pages without one are left out.")
             .ro()
             .cmd("edit.background")
             .with(schema(json!({ "doc": doc(), "pages": pages("to check (default: all)") }), &["doc"])),
-        t("doc_remove_marks", "Remove header & footer, watermark or background", "Remove every header and footer, watermark or background PdfCraft (or a compatible tool) added. Undoable.")
+        t("doc_remove_marks", "Remove header & footer, watermark, background or printer marks", "Remove every header and footer, watermark, background or printer marks PdfCraft (or a compatible tool) added. Undoable.")
             .destructive()
-            .with(schema(json!({ "doc": doc(), "kind": { "type": "string", "enum": ["header_footer", "watermark", "background"] } }), &["doc", "kind"])),
+            .with(schema(json!({ "doc": doc(), "kind": { "type": "string", "enum": ["header_footer", "watermark", "background", "printer_marks"] } }), &["doc", "kind"])),
         t("doc_export_images", "Export pages as images", "Write pages as PNG, JPEG or TIFF files (`<name>_page_<n>.png|jpg|tif`) into a folder, at a resolution (default 150 dpi). JPEG and TIFF are flattened onto white paper. A page too large for the renderer at that resolution is drawn at the most it allows, listed in `lower_dpi` ({page, dpi}). Includes unsaved edits.")
             .cmd("export.image")
             .with(schema(

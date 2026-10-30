@@ -2470,6 +2470,21 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+	Add printer marks…	新增印刷標記…
+	Remove printer marks	移除印刷標記
+	Marks	標記
+	All marks	所有標記
+	Trim marks	裁切標記
+	Bleed marks	出血標記
+	Registration marks	對位標記
+	Colour bars	色條
+	Page information	頁面資訊
+	Line weight	線條粗細
+	Widen the page to make room	加寬頁面以留出空間
+	Room on each side	每側空間
+	The trim box is kept where it is, so the printed page cuts the same.	裁切框保持不變，列印頁面的裁切位置相同。
+	Printer marks added	已新增印刷標記
+	printer marks	印刷標記
 	Create & Edit	建立與編輯
 	Review & Compare	審閱與比較
 	Forms & Signatures	表單與簽名

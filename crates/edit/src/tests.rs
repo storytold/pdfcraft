@@ -6828,6 +6828,51 @@ fn removing_marks_strips_wrappers_that_closed_open_state() {
     assert_eq!(streams(&doc, 0), ["q 2 0 0 2 0 0 cm"]);
 }
 
+/// Printer marks: drawn outside the trim box as a removable page mark; the page
+/// is widened to make room when asked and the trim box stays; running again replaces them.
+#[test]
+fn printer_marks_are_drawn_outside_the_trim_box_and_removable() {
+    use crate::printer_marks::PrinterMarks;
+    let mut doc = fixture();
+    let page_content_text = |doc: &Document, page: usize| String::from_utf8_lossy(&page_content_bytes(doc, page)).into_owned();
+    let page = page_list(&doc)[0].clone();
+    // A trim box inside a letter-size page, 36 pt in: room for the marks, bleed marks included
+    // (the bleed box is 9 pt out, so they reach 33 pt beyond the trim box), without widening.
+    doc.update_dict(page.obj, |d| {
+        d.set(b"MediaBox".to_vec(), Object::Array([0.0, 0.0, 612.0, 792.0].iter().map(|v| Object::Real(*v)).collect()));
+        d.set(b"TrimBox".to_vec(), Object::Array([36.0, 36.0, 576.0, 756.0].iter().map(|v| Object::Real(*v)).collect()));
+        d.set(b"BleedBox".to_vec(), Object::Array([27.0, 27.0, 585.0, 765.0].iter().map(|v| Object::Real(*v)).collect()));
+    })
+    .unwrap();
+    let marks = PrinterMarks { label: "Quote 1042.pdf".into(), date: "2026-10-13".into(), ..PrinterMarks::default() };
+    let widened = add_printer_marks(&mut doc, &[0, 1], &marks, false).unwrap();
+    assert_eq!(widened, vec![1], "page 2 has no trim box inside its media box, so it was widened");
+    assert_eq!(marks_present(&doc), vec![MarkKind::PrinterMarks]);
+    let text = page_content_text(&doc, 0);
+    assert!(text.contains("/PCMark /PrinterMarks"), "{text}");
+    // A trim mark at the lower-left corner: vertical below the box, horizontal to its left.
+    assert!(text.contains("36 30 m 36 12 l S") && text.contains("30 36 m 12 36 l S"), "{text}");
+    assert!(text.contains("1 1 1 1 K"), "registration colour");
+    assert!(text.contains("[1 1] 0 d") && text.contains("27 21 m 27 3 l S"), "dashed bleed marks: {text}");
+    assert!(text.contains("1 0 0 0 k") && text.contains("0 0 0 0.25 k"), "colour bars: {text}");
+    assert!(text.contains("(Quote 1042.pdf  1 of 3  2026-10-13) Tj"), "page information: {text}");
+    // Page 2: the media box grew by 36 pt a side around its (whole-page) trim box.
+    let p2 = page_list(&doc)[1].clone();
+    let media: Vec<f64> = p2.dict.get(b"MediaBox").and_then(|m| m.as_array()).unwrap().iter().filter_map(|v| v.as_f64()).collect();
+    assert_eq!(media, vec![-36.0, -36.0, 636.0, 836.0]);
+    // Again with replace: still one set of marks per page; without replace, two.
+    add_printer_marks(&mut doc, &[0], &marks, true).unwrap();
+    assert_eq!(page_content_text(&doc, 0).matches("/PCMark /PrinterMarks").count(), 1);
+    add_printer_marks(&mut doc, &[0], &marks, false).unwrap();
+    assert_eq!(page_content_text(&doc, 0).matches("/PCMark /PrinterMarks").count(), 2);
+    assert_eq!(remove_marks(&mut doc, &[0, 1], MarkKind::PrinterMarks).unwrap(), 3);
+    assert!(marks_present(&doc).is_empty());
+    // Nothing chosen, or a bad weight, is refused.
+    let none = PrinterMarks { trim: false, bleed: false, registration: false, color_bars: false, page_info: false, ..PrinterMarks::default() };
+    assert!(add_printer_marks(&mut doc, &[0], &none, false).is_err());
+    assert!(add_printer_marks(&mut doc, &[0], &PrinterMarks { line_weight: 0.0, ..PrinterMarks::default() }, false).is_err());
+}
+
 /// #3087: flattening comments leaves alone what isn't a comment: links, and the non-markup
 /// multimedia and print-production annotations (3D, Screen, Movie, RichMedia, PrinterMark,
 /// TrapNet, Watermark), which it used to bake into the page and delete with their data.

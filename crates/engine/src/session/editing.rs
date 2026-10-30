@@ -402,7 +402,14 @@ impl Session {
             ) || matches!(e, Edit::MoveObjects { objects, .. } if objects.iter().any(|o| o.kind == ObjectKind::Added))
         });
         let touches_marks = edit.is_none_or(|e| {
-            matches!(e, Edit::AddHeaderFooter { .. } | Edit::AddWatermark { .. } | Edit::AddBackground { .. } | Edit::RemoveMarks { .. })
+            matches!(
+                e,
+                Edit::AddHeaderFooter { .. }
+                    | Edit::AddWatermark { .. }
+                    | Edit::AddBackground { .. }
+                    | Edit::AddPrinterMarks { .. }
+                    | Edit::RemoveMarks { .. }
+            )
         });
         (touches_added, touches_marks)
     }

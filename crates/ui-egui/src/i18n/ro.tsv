@@ -2820,6 +2820,21 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	Add printer marks…	Adăugare semne de imprimare…
+	All marks	Toate semnele
+	Bleed marks	Semne de tăiere cu bleed
+	Colour bars	Bare de culoare
+	Line weight	Grosimea liniei
+	Marks	Semne
+	Page information	Informații despre pagină
+	Printer marks added	Semne de imprimare adăugate
+	Registration marks	Semne de registru
+	Remove printer marks	Eliminare semne de imprimare
+	Room on each side	Loc pe fiecare parte
+	The trim box is kept where it is, so the printed page cuts the same.	Caseta de tăiere rămâne unde este, astfel încât pagina imprimată se taie la fel.
+	Trim marks	Semne de tăiere
+	Widen the page to make room	Lărgiți pagina pentru a face loc
+	printer marks	semne de imprimare
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi

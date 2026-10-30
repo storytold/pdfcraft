@@ -2520,6 +2520,21 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
+	Add printer marks…	プリンターマークを追加…
+	Remove printer marks	プリンターマークを削除
+	Marks	マーク
+	All marks	すべてのマーク
+	Trim marks	トンボ（仕上がり）
+	Bleed marks	裁ち落としマーク
+	Registration marks	レジストレーションマーク
+	Colour bars	カラーバー
+	Page information	ページ情報
+	Line weight	線の太さ
+	Widen the page to make room	余白を作るためにページを広げる
+	Room on each side	各辺の余白
+	The trim box is kept where it is, so the printed page cuts the same.	仕上がりボックスはそのままなので、印刷したページは同じ位置で裁断されます。
+	Printer marks added	プリンターマークを追加しました
+	printer marks	プリンターマーク
 	Create & Edit	作成と編集
 	Review & Compare	レビューと比較
 	Forms & Signatures	フォームと署名

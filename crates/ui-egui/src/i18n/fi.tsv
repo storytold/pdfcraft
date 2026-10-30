@@ -2829,6 +2829,21 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+	Add printer marks…	Lisää painomerkit…
+	All marks	Kaikki merkit
+	Bleed marks	Leikkuuvaramerkit
+	Colour bars	Värikaistat
+	Line weight	Viivan paksuus
+	Marks	Merkit
+	Page information	Sivun tiedot
+	Printer marks added	Painomerkit lisätty
+	Registration marks	Rekisterimerkit
+	Remove printer marks	Poista painomerkit
+	Room on each side	Tilaa joka sivulla
+	The trim box is kept where it is, so the printed page cuts the same.	Leikkuulaatikko pidetään paikallaan, joten painettu sivu leikataan samoin.
+	Trim marks	Leikkuumerkit
+	Widen the page to make room	Levennä sivua tilan tekemiseksi
+	printer marks	painomerkit
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään

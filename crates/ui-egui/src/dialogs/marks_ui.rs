@@ -469,6 +469,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
         MarkKind::HeaderFooter => crate::i18n::fmt(tl!("{verb} Header and Footer"), &[("verb", verb)]),
         MarkKind::Watermark => crate::i18n::fmt(tl!("{verb} Watermark"), &[("verb", verb)]),
         MarkKind::Background => crate::i18n::fmt(tl!("{verb} Background"), &[("verb", verb)]),
+        // Printer marks have a dialog of their own (printer_marks_ui); this one is never opened for them.
+        MarkKind::PrinterMarks => tl!("Add printer marks").to_string(),
     };
     ui.label(egui::RichText::new(title).font(theme::semibold(18.0)));
     ui.add_space(8.0);
@@ -603,6 +605,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 });
             });
         }
+        MarkKind::PrinterMarks => {}
         MarkKind::Background => {
             ui.horizontal(|ui| {
                 widgets::radio_value(ui, &mut d.use_file, false, tl!("From colour"));
@@ -714,6 +717,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
             }
             // A colour is the page's tint.
             MarkKind::Background => {}
+            MarkKind::PrinterMarks => {}
         });
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
@@ -764,6 +768,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     }
                 }
                 MarkKind::Background => !d.use_file || d.file.is_some(),
+                MarkKind::PrinterMarks => true,
             }
             && !d.range.pages(count).is_empty();
         if ui.add_enabled_ui(ready, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
@@ -799,7 +804,7 @@ fn undrawable(kind: MarkKind, d: &MarksDraft) -> Option<char> {
     match kind {
         MarkKind::HeaderFooter => d.hf.first_undrawable(),
         MarkKind::Watermark if !d.use_file => d.wm.first_undrawable(),
-        MarkKind::Watermark | MarkKind::Background => None,
+        MarkKind::Watermark | MarkKind::Background | MarkKind::PrinterMarks => None,
     }
 }
 
@@ -878,6 +883,7 @@ pub fn edit(d: &MarksDraft, kind: MarkKind, count: usize) -> Edit {
             Edit::AddWatermark { pages, settings: wm, replace: d.replace, file: mark_file(d) }
         }
         MarkKind::Background => Edit::AddBackground { pages, settings: d.bg.clone(), replace: d.replace, file: mark_file(d) },
+        MarkKind::PrinterMarks => Edit::AddPrinterMarks { pages, settings: pdfcraft_engine::PrinterMarks::default(), replace: d.replace },
     }
 }
 

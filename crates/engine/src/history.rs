@@ -47,6 +47,7 @@ pub(crate) fn uses_scripts(edit: &Edit) -> bool {
 pub(crate) fn scope_of(edit: &Edit) -> Scope {
     match edit {
         Edit::SetInfo { .. } => Scope::Metadata,
+        Edit::AddPrinterMarks { .. } => Scope::Full,
         // The Attachments list is read from the whole document.
         Edit::AddAttachment { .. } | Edit::DeleteAttachment { .. } => Scope::Full,
         // A file attachment also changes the Attachments list.

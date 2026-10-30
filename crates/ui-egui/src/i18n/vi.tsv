@@ -2794,6 +2794,21 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+	Add printer marks…	Thêm dấu máy in…
+	Remove printer marks	Gỡ dấu máy in
+	Marks	Dấu
+	All marks	Tất cả các dấu
+	Trim marks	Dấu xén
+	Bleed marks	Dấu tràn lề
+	Registration marks	Dấu chồng màu
+	Colour bars	Thanh màu
+	Page information	Thông tin trang
+	Line weight	Độ dày nét
+	Widen the page to make room	Mở rộng trang để có chỗ
+	Room on each side	Khoảng trống mỗi bên
+	The trim box is kept where it is, so the printed page cuts the same.	Hộp xén được giữ nguyên vị trí, nên trang in được xén như cũ.
+	Printer marks added	Đã thêm dấu máy in
+	printer marks	dấu máy in
 	Attach a file…	Đính kèm tệp…
 	Delete attachment	Xóa tệp đính kèm
 	Attaching files is not available on the web yet	Chưa thể đính kèm tệp trên web
