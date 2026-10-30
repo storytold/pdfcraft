@@ -505,6 +505,8 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             widgets::radio_value(ui, &mut app.scroll_speed, speed, tl_ctx!("scroll speed", speed.label()));
         }
     });
+    // Acrobat's "Make Hand tool use mouse-wheel zooming" (#1399).
+    ui.add(widgets::checkbox(&mut app.hand_wheel_zoom, tl!("Make the Hand tool zoom with the mouse wheel")));
     // Whether anything animates, the wheel's scrolling and zooming included; left alone it
     // follows the system's animation setting.
     ui.horizontal(|ui| {

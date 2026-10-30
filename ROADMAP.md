@@ -4,6 +4,9 @@
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
+> **Last reviewed:** 2026-10-30 | **Last updated:** 2026-10-30 | **Change:** patch (M3 #1399: mixed Hand-wheel batches keep native input because egui combines frame deltas; homogeneous document batches still zoom; estimates unchanged)
+> **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** patch (M3 #1399: classify coalesced Hand-wheel notches at each event’s pointer position, including panel and popup crossings; estimates unchanged)
+> **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** patch (M3 #1399: clarify that Hand-wheel zoom covers the document viewport, including page gaps and surrounding space; behavior and estimates unchanged)
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M14 localization current state: Arabic logical catalog, explicit RTL label direction and mirrored stock chrome; native/browser RTL workflows unqualified. Native release Hans face via LXGW WenKai Lite; estimates unchanged)
@@ -204,7 +207,16 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-30 (M3, #1399 mixed wheel batches):** Keep a coalesced batch unchanged when only some wheel events qualify for Hand zoom, since egui aggregates deltas and uses a single modifier state. Kittest checks both document/panel orders against normal processed scrolling and actual page geometry, plus homogeneous batches and mixed wheel units. Estimates unchanged.
+
+- **2026-10-29 (M3, #1399 event ordering):** Hand-wheel input is classified in arrival order, so document and panel/menu notches in the same frame receive zoom/scroll modifiers at their individual event positions. Regression controls cover both orders, a wheel before the first move, pointer departure and an overlapping popup; viewport/layer geometry remains from the last drawn frame. Estimates unchanged.
+
+- **2026-10-29 (M3, #1399 wording):** Hand-wheel zoom uses the document view, including page gaps and surrounding space. The boundary is the viewport, so zooming out keeps working when the page shrinks away from the pointer. Behavior and estimates unchanged.
+
+- **2026-10-29 (M3, #1399 review):** The comparison Hand-wheel test now verifies follower zoom and vertical alignment over either pane, using pages with a real scroll range. Estimates unchanged.
+
 - **2026-10-29 (M7, #2517):** Widening a paragraph rejoins a wrap with the number of spaces that wrap consumed, including a typed run and none for a Chinese or Japanese word split. The count survives an incremental save and a full rewrite, and a width-only `text_edit` uses it. Estimates unchanged.
+- **2026-10-28 (M3, #1399):** Preferences ▸ Make the Hand tool zoom with the mouse wheel, Acrobat's "Make Hand tool use mouse-wheel zooming": with the Hand tool over the document view (its pages and the space around them), a plain wheel notch zooms as ⌘/Ctrl-wheel does. Off by default; trackpads and the wheel over panels keep scrolling. Estimates unchanged.
 - **2026-10-26 (M11, JBIG2 symbols):** Lossless JBIG2 now stores each distinct mark of a black-and-white image once, as a symbol, and places its exact copies, when that is smaller than the generic region: on six pages of rendered 300 dpi text 28% of the generic region's size and 17% of Group 4's, and the same bits back through two independent decoders (hayro-jbig2 and Poppler). Scans, whose letters are seldom identical, gain little until refinement coding; a dictionary shared between pages (`/JBIG2Globals`) is next. Estimates unchanged.
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 - **2026-10-25 (M5, comment replies):** One reply can be deleted from the Comments panel without its thread. On the selected card each reply has its own "…" menu (Edit, Copy text, Delete); Delete takes that reply with its pop-up and the replies to it, as `comment_delete` already did headlessly, and the comment and its other replies stay. The card stays selected, and the panel's editor stays open, on what they were on though the delete moved it in `/Annots`. Undo and Redo close the editor, since either can move what it was open on. A locked reply can't be deleted. Estimates unchanged.
@@ -702,6 +714,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | patch | M3 #1399: mixed Hand-wheel batches keep native input because egui combines frame deltas; homogeneous document batches still zoom; estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
 | 2026-10-23 | minor | M8, #3205 follow-up: phone-pattern redaction includes the +39 country code on labelled Italian geographic numbers with a slash; dates, protocol identifiers and whole-run guards remain. Estimates unchanged. |
 | 2026-10-23 | minor | M11: image downsampling measures physical resolution after page-local UserUnit scaling, including shared nested forms; synthetic measurement and optimization regressions. Estimates unchanged. |

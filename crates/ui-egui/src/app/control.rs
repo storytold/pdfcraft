@@ -336,6 +336,14 @@ impl PdfCraftApp {
                     _ => return Err("secured-notice must be true or false".into()),
                 };
             }
+            // `--hand-wheel-zoom true`: the wheel zooms while the Hand tool is held over the pages.
+            ("hand-wheel-zoom", _) => {
+                self.hand_wheel_zoom = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("hand-wheel-zoom must be true or false".into()),
+                };
+            }
             ("system-title-bar", _) => {
                 self.system_title_bar = match value {
                     "true" => true,

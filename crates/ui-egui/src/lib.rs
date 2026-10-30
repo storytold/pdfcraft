@@ -352,6 +352,9 @@ pub struct PdfCraftApp {
     quit_session: Option<last_session::LastSession>,
     /// Preferences: reload a document when its file changes on disk (#431).
     pub reload_changed_files: bool,
+    /// Preferences: the mouse wheel zooms while the Hand tool is held over the pages, as
+    /// Acrobat's "Make Hand tool use mouse-wheel zooming" (#1399). Off by default, as there.
+    pub hand_wheel_zoom: bool,
     /// Preferences: tell the user, above the pages, that a document is secured (its security
     /// settings restrict changes). Off only hides that notice (#4035); kept in the settings.
     pub show_secured_notice: bool,

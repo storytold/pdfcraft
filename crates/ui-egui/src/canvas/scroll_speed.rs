@@ -84,6 +84,18 @@ impl ScrollSpeed {
     }
 }
 
+/// Convert one plain wheel notch to ⌘/Ctrl-wheel for the Hand tool preference (#1399),
+/// after the caller checks its event-time pointer against the document view. Trackpad point
+/// deltas and modified wheels keep their behavior. Call before [`ScrollSpeed::apply`],
+/// which keeps the zoom rate independent of the scroll-speed choice.
+pub(crate) fn wheel_zooms(event: &mut egui::Event) {
+    if let egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page, modifiers, .. } = event
+        && modifiers.is_none()
+    {
+        *modifiers = egui::Modifiers::COMMAND;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
