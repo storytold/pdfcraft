@@ -75,10 +75,21 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             egui::Frame::NONE.inner_margin(egui::Margin { left: 36, right: 28, top: 8, bottom: 28 }).show(ui, |ui| {
                 ui.set_width(ui.available_width());
+                // Tools hidden in Preferences are left out, as in the sidebar; the menus and mode tabs still reach them.
+                if !catalog::TOOL_GROUPS.iter().any(|g| app.hidden_tools.shows(g.id)) {
+                    ui.add_space(24.0);
+                    ui.label(egui::RichText::new(tl!("No tools are shown. Choose them in Preferences.")).color(t.text_muted));
+                    return;
+                }
                 let mut any = false;
                 for category in TOOL_CATEGORIES {
-                    let found: Vec<_> =
-                        category.groups.iter().filter_map(|id| catalog::group(id)).filter_map(|g| matches(&query, g).map(|m| (g, m))).collect();
+                    let found: Vec<_> = category
+                        .groups
+                        .iter()
+                        .filter(|id| app.hidden_tools.shows(id))
+                        .filter_map(|id| catalog::group(id))
+                        .filter_map(|g| matches(&query, g).map(|m| (g, m)))
+                        .collect();
                     if found.is_empty() {
                         continue;
                     }

@@ -450,6 +450,13 @@
 	Default	Numatytasis
 	Default Value:	Numatytoji reikšmė:
 	Default workspace mode	Numatytoji darbo srities veiksena
+	Tools shown in All tools	Įrankiai, rodomi sąraše „Visi įrankiai“
+	Preset	Ruošinys
+	Read and comment	Skaitymas ir komentavimas
+	Forms and signing	Formos ir pasirašymas
+	Custom selection	Pasirinktinis rinkinys
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	Paslėpti įrankiai lieka pasiekiami per meniu, veiksenų korteles ir sparčiuosius klavišus.
+	No tools are shown. Choose them in Preferences.	Nerodomas nė vienas įrankis. Pasirinkite juos Nuostatose.
 	Default:	Numatyta:
 	Delete page {label}	Naikinti puslapį {label}
 	Delete pages (Delete)	Naikinti puslapius („Delete“)

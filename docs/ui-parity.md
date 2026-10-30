@@ -1,6 +1,6 @@
 # UI and interaction parity
 
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (Pages inspector thumbnail size slider and buttons #3808; full screen presents one page at a time #1459; the selected field nudges with the arrow keys in Prepare a form #2608) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-22 · **Change:** minor (choose the tools All tools lists) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How PdfCraft's tools, panels, shortcuts and feel compare with Acrobat Pro's current interface (the
 2023+ "new Acrobat": All tools pane on the left, quick-action toolbar, Home view). Behaviour is
@@ -26,7 +26,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 |---|---|---|---|
 | Home view (recent files, recommended tools) | yes | yes | shipped |
 | All tools pane, tool sets | yes | yes, with milestone badges | shipped |
-| Quick-action toolbar, customisable | yes | fixed | partial (`view.customize-quick-tools` planned) |
+| Quick-action toolbar, customisable | yes | toolbar fixed; Preferences chooses the tools All tools, ⌘K and Home list | partial (`view.customize-quick-tools`) |
 | Command search | "Search tools" | command palette (⌘K), matches translated and English labels | shipped |
 | Document tabs | yes | yes, with unsaved marker | shipped |
 | Multiple windows, drag a tab out | yes | no | planned |
@@ -75,12 +75,13 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Document Properties (description, security, fonts, initial view, custom, advanced) | yes | all but Custom and XMP | partial |
 | Field Properties (General, Appearance, Position, Options, Actions, Format, Validate, Calculate, Signed) | yes | all but Signed | partial |
 | Comment properties and properties bar | yes | yes | shipped |
-| Preferences | ≈ 20 pages | Interface language, Documents and view, Identity, Fill & Sign, JavaScript | partial (gap 19) |
+| Preferences | ≈ 20 pages | Interface language, Tools shown in All tools, Documents and view, Identity, Fill & Sign, JavaScript | partial (gap 19) |
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Preferences ▸ Tools shown in All tools: a preset or a checkbox per tool hides it from All tools, ⌘K and Home; menus, mode tabs and shortcuts keep it (`view.customize-quick-tools` partial) |
 | 2026-10-21 | minor | Pages inspector thumbnail sizing (#3808), separate from page and Organize zoom; view setting retained on reload and exposed through UI control. Not persisted between sessions. |
 | 2026-10-15 | minor | A selected field nudges with the arrow keys in Prepare a form: a point, Shift ten points, one undo step per press (#2608) |
 | 2026-10-14 | minor | Full screen shows one fitted page (or spread) at a time on black with click and key paging, as Acrobat's Full Screen Mode (#379, #1459, #1353) |

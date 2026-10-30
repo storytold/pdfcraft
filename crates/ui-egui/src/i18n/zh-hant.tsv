@@ -2376,6 +2376,13 @@ animation effects	Off	關
 	Change {what}	變更{what}
 	Cut and stack	裁切後疊放
 	Default workspace mode	預設工作區模式
+	Tools shown in All tools	在「所有工具」中顯示的工具
+	Preset	預設集
+	Read and comment	閱讀與註解
+	Forms and signing	表單與簽署
+	Custom selection	自訂選擇
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	隱藏的工具仍可透過選單、模式分頁和鍵盤快速鍵使用。
+	No tools are shown. Choose them in Preferences.	未顯示任何工具。請在偏好設定中選擇。
 	Default page display	預設頁面顯示
 	Default zoom	預設縮放
 	Documents and view	文件與檢視

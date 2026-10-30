@@ -59,6 +59,7 @@ pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, Printer
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
 pub mod theme;
+mod tool_visibility;
 mod widgets;
 
 use pdfcraft_engine::{DocId, Session};
@@ -328,6 +329,8 @@ pub struct PdfCraftApp {
     pub palette_open: bool,
     pub palette_query: String,
     pub all_tools_expanded: bool,
+    /// Preferences: tools All tools, the palette and Home leave out (menus and tabs keep them).
+    pub(crate) hidden_tools: tool_visibility::HiddenTools,
     /// The All tools view fills the workspace (its sidebar's expand button).
     pub all_tools_full: bool,
     pub all_tools_query: String,

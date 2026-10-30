@@ -2088,6 +2088,13 @@
 	Change {what}	Змінити: {what}
 	Cut and stack	Різання й укладання
 	Default workspace mode	Типовий режим робочої області
+	Tools shown in All tools	Інструменти в списку «Усі інструменти»
+	Preset	Набір
+	Read and comment	Читання й коментування
+	Forms and signing	Форми й підпис
+	Custom selection	Власний вибір
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	Приховані інструменти залишаються доступними з меню, вкладок режимів і сполучень клавіш.
+	No tools are shown. Choose them in Preferences.	Жодного інструмента не показано. Виберіть їх у Налаштуваннях.
 	Documents and view	Документи й перегляд
 	Open email app	Відкрити поштовий застосунок
 	Open link	Відкрити посилання

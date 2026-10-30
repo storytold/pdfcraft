@@ -74,6 +74,7 @@ mod stamps;
 mod text_select;
 mod theme;
 mod theme_button;
+mod tool_visibility;
 mod trust_signer;
 mod ui;
 mod updates;

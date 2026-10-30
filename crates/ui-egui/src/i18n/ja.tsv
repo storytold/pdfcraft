@@ -2173,6 +2173,13 @@
 	DPI sets the printed page size without resampling the image.	DPI で印刷時のページサイズが決まります。画像は再サンプリングされません。
 	Default page display	既定のページ表示
 	Default workspace mode	既定のワークスペースモード
+	Tools shown in All tools	「すべてのツール」に表示するツール
+	Preset	プリセット
+	Read and comment	閲覧とコメント
+	Forms and signing	フォームと署名
+	Custom selection	カスタム選択
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	非表示のツールも、メニュー、モードのタブ、キーボードショートカットから引き続き使用できます。
+	No tools are shown. Choose them in Preferences.	表示するツールがありません。環境設定で選択してください。
 	Default zoom	既定のズーム
 	Display name	表示名
 	Distribute fields	フィールドを均等配置

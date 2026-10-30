@@ -2001,6 +2001,13 @@
 	Change {what}	Alterar {what}
 	Cut and stack	Cortar e empilhar
 	Default workspace mode	Modo de espaço de trabalho padrão
+	Tools shown in All tools	Ferramentas exibidas em Todas as ferramentas
+	Preset	Predefinição
+	Read and comment	Ler e comentar
+	Forms and signing	Formulários e assinatura
+	Custom selection	Seleção personalizada
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	Ferramentas ocultas continuam disponíveis nos menus, nas abas de modo e nos atalhos de teclado.
+	No tools are shown. Choose them in Preferences.	Nenhuma ferramenta exibida. Escolha-as em Preferências.
 	Documents and view	Documentos e visualização
 	Open email app	Abrir aplicativo de e-mail
 	Open link	Abrir link

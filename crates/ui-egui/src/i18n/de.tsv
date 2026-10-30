@@ -2026,6 +2026,13 @@
 	Change {what}	{what} ändern
 	Cut and stack	Schneiden und stapeln
 	Default workspace mode	Standardmodus des Arbeitsbereichs
+	Tools shown in All tools	Werkzeuge in „Alle Werkzeuge“
+	Preset	Vorlage
+	Read and comment	Lesen und Kommentieren
+	Forms and signing	Formulare und Unterschrift
+	Custom selection	Eigene Auswahl
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	Ausgeblendete Werkzeuge bleiben über die Menüs, die Modus-Reiter und Tastenkürzel erreichbar.
+	No tools are shown. Choose them in Preferences.	Keine Werkzeuge eingeblendet. Sie lassen sich in den Einstellungen auswählen.
 	Documents and view	Dokumente und Ansicht
 	Open email app	E-Mail-App öffnen
 	Open link	Link öffnen

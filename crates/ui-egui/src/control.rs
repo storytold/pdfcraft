@@ -34,6 +34,9 @@
 //!   input leaves the previous selection unchanged. `ui.state.active.selected_pages` reports it.
 //!   `default-mode=all|read|edit|convert|sign` applies to future PDF opens; `mode` overrides it
 //!   for this session without changing the saved preference. `ui.state.default_mode` reports it.
+//!   `tool-preset=all|read-comment|forms-sign` and `hidden-tools=none|<id>,<id>…` choose the tools
+//!   All tools, the palette and Home list (menus, mode tabs and `tool` still reach every tool);
+//!   `ui.state.hidden_tools` and `ui.state.tool_preset` (a preset id or `custom`) report them.
 //!   `theme=light|dark|system` changes the saved theme preference; `ui.state.theme_preference`
 //!   reports the choice and `ui.state.theme` reports the resolved light/dark colours.
 //!   `comment-tool-pinned=true|false` remembers the annotation quick bar's pin across restarts;

@@ -81,6 +81,7 @@ impl PdfCraftApp {
             palette_open: false,
             palette_query: String::new(),
             all_tools_expanded: false,
+            hidden_tools: tool_visibility::HiddenTools::default(),
             all_tools_full: false,
             all_tools_query: String::new(),
             all_tools_tab: (None, false),

@@ -1517,6 +1517,13 @@
 	DPI sets the printed page size without resampling the image.	Η τιμή DPI καθορίζει το μέγεθος της εκτυπωμένης σελίδας χωρίς επαναδειγματοληψία της εικόνας.
 	Default page display	Προεπιλεγμένη εμφάνιση σελίδων
 	Default workspace mode	Προεπιλεγμένη λειτουργία χώρου εργασίας
+	Tools shown in All tools	Εργαλεία που εμφανίζονται στο «Όλα τα εργαλεία»
+	Preset	Πρότυπο
+	Read and comment	Ανάγνωση και σχολιασμός
+	Forms and signing	Φόρμες και υπογραφή
+	Custom selection	Προσαρμοσμένη επιλογή
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	Τα κρυφά εργαλεία παραμένουν διαθέσιμα από τα μενού, τις καρτέλες λειτουργίας και τις συντομεύσεις πληκτρολογίου.
+	No tools are shown. Choose them in Preferences.	Δεν εμφανίζονται εργαλεία. Επιλέξτε τα στις Προτιμήσεις.
 	Default zoom	Προεπιλεγμένη μεγέθυνση
 	Display name	Εμφανιζόμενο όνομα
 	Distribute fields	Ισοκατανομή πεδίων

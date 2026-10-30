@@ -445,6 +445,13 @@
 	Default	Standard
 	Default Value:	Standardverdi:
 	Default workspace mode	Standard arbeidsområdemodus
+	Tools shown in All tools	Verktøy som vises i «Alle verktøy»
+	Preset	Forhåndsvalg
+	Read and comment	Lese og kommentere
+	Forms and signing	Skjemaer og signering
+	Custom selection	Egendefinert utvalg
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	Skjulte verktøy er fortsatt tilgjengelige fra menyene, modusfanene og hurtigtastene.
+	No tools are shown. Choose them in Preferences.	Ingen verktøy vises. Velg dem i Innstillinger.
 	Default:	Standard:
 	Delete page {label}	Slett side {label}
 	Delete pages (Delete)	Slett sider (Delete)

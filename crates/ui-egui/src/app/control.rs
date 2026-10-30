@@ -67,6 +67,14 @@ impl PdfCraftApp {
             ("default-mode", _) => {
                 self.default_mode = Mode::parse(value).ok_or("default-mode must be all, read, edit, convert or sign")?;
             }
+            ("tool-preset", _) => {
+                let preset = pdfcraft_engine::catalog::preset(value).ok_or_else(|| {
+                    let ids: Vec<&str> = pdfcraft_engine::catalog::TOOL_PRESETS.iter().map(|p| p.id).collect();
+                    format!("tool-preset must be one of {}", ids.join(", "))
+                })?;
+                self.hidden_tools = tool_visibility::HiddenTools::of_preset(preset);
+            }
+            ("hidden-tools", _) => self.hidden_tools = tool_visibility::HiddenTools::parse(value)?,
             ("date-format", _) => self.session.set_date_format(value)?,
             ("date-language", _) => self.session.set_date_language(Some(value).filter(|v| *v != "auto"))?,
             ("tool", _) => {

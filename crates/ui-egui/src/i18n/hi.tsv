@@ -2011,6 +2011,13 @@
 	Change {what}	{what} बदलें
 	Cut and stack	काटें और ढेर लगाएँ
 	Default workspace mode	डिफ़ॉल्ट वर्कस्पेस मोड
+	Tools shown in All tools	«सभी टूल» में दिखाए गए टूल
+	Preset	प्रीसेट
+	Read and comment	पढ़ें और टिप्पणी करें
+	Forms and signing	फ़ॉर्म और हस्ताक्षर
+	Custom selection	कस्टम चयन
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	छिपे हुए टूल मेनू, मोड टैब और कीबोर्ड शॉर्टकट से उपलब्ध रहते हैं।
+	No tools are shown. Choose them in Preferences.	कोई टूल नहीं दिखाया गया है। उन्हें प्राथमिकताएँ में चुनें।
 	Documents and view	दस्तावेज़ और दृश्य
 	Open email app	ईमेल ऐप खोलें
 	Open link	लिंक खोलें

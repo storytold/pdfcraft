@@ -2012,6 +2012,13 @@
 	Change {what}	Өзгерту: {what}
 	Cut and stack	Кесу және үю
 	Default workspace mode	Әдепкі жұмыс кеңістігі режимі
+	Tools shown in All tools	«Барлық құралдар» тізімінде көрсетілетін құралдар
+	Preset	Үлгі
+	Read and comment	Оқу және түсініктеме беру
+	Forms and signing	Пішіндер және қол қою
+	Custom selection	Өзіндік таңдау
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	Жасырылған құралдар мәзірлерден, режим қойындыларынан және пернелер тіркесімдерінен қолжетімді болып қала береді.
+	No tools are shown. Choose them in Preferences.	Ешбір құрал көрсетілмеген. Оларды Параметрлерде таңдаңыз.
 	Documents and view	Құжаттар және көрініс
 	Open email app	Email қосымшасын ашу
 	Open link	Сілтемені ашу

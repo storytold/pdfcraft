@@ -2129,6 +2129,13 @@
 	Change {what}	Промени {what}
 	Cut and stack	Изрежи и подреди
 	Default workspace mode	Режим на работното пространство по подразбиране
+	Tools shown in All tools	Инструменти, показани във „Всички инструменти“
+	Preset	Шаблон
+	Read and comment	Четене и коментиране
+	Forms and signing	Формуляри и подписване
+	Custom selection	Собствен избор
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	Скритите инструменти остават достъпни от менютата, разделите за режим и клавишните комбинации.
+	No tools are shown. Choose them in Preferences.	Няма показани инструменти. Изберете ги в Настройки.
 	Default page display	Показване на страниците по подразбиране
 	Default zoom	Мащаб по подразбиране
 	Documents and view	Документи и изглед

@@ -2132,6 +2132,13 @@
 	DPI sets the printed page size without resampling the image.	DPI ກຳນົດຂະໜາດໜ້າພິມໂດຍບໍ່ມີການປັບຄວາມລະອຽດຮູບໃໝ່.
 	Default page display	ການສະແດງໜ້າເລີ່ມຕົ້ນ
 	Default workspace mode	ໂໝດພື້ນທີ່ເຮັດວຽກເລີ່ມຕົ້ນ
+	Tools shown in All tools	ເຄື່ອງມືທີ່ສະແດງໃນ «ເຄື່ອງມືທັງໝົດ»
+	Preset	ຄ່າທີ່ຕັ້ງໄວ້
+	Read and comment	ອ່ານ ແລະ ຄຳເຫັນ
+	Forms and signing	ຟອມ ແລະ ການເຊັນ
+	Custom selection	ການເລືອກແບບກຳນົດເອງ
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	ເຄື່ອງມືທີ່ເຊື່ອງໄວ້ຍັງໃຊ້ໄດ້ຈາກເມນູ, ແຖບໂໝດ ແລະ ປຸ່ມລັດແປ້ນພິມ.
+	No tools are shown. Choose them in Preferences.	ບໍ່ມີເຄື່ອງມືສະແດງ. ເລືອກພວກມັນໃນການຕັ້ງຄ່າ.
 	Default zoom	ຂະໜາດຊູມເລີ່ມຕົ້ນ
 	Display name	ຊື່ສະແດງຜົນ
 	Distribute fields	ກະຈາຍໄລຍະຫ່າງຊ່ອງຂໍ້ມູນ

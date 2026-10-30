@@ -2028,6 +2028,13 @@
 	Change {what}	Muuta: {what}
 	Cut and stack	Leikkaa ja pinoa
 	Default workspace mode	Työtilan oletustila
+	Tools shown in All tools	Kaikki työkalut -näkymässä näytettävät työkalut
+	Preset	Esiasetus
+	Read and comment	Lukeminen ja kommentointi
+	Forms and signing	Lomakkeet ja allekirjoitus
+	Custom selection	Mukautettu valinta
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	Piilotetut työkalut ovat edelleen käytettävissä valikoista, tilavälilehdiltä ja pikanäppäimillä.
+	No tools are shown. Choose them in Preferences.	Työkaluja ei näytetä. Valitse ne Asetuksista.
 	Documents and view	Asiakirjat ja näkymä
 	Open email app	Avaa sähköpostisovellus
 	Open link	Avaa linkki

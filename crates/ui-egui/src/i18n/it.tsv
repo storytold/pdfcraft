@@ -2114,6 +2114,13 @@
 	Change {what}	Cambia {what}
 	Cut and stack	Taglia e impila
 	Default workspace mode	Modalità predefinita dell'area di lavoro
+	Tools shown in All tools	Strumenti mostrati in Tutti gli strumenti
+	Preset	Preimpostazione
+	Read and comment	Lettura e commenti
+	Forms and signing	Moduli e firma
+	Custom selection	Selezione personalizzata
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	Gli strumenti nascosti restano disponibili dai menu, dalle schede delle modalità e dalle scorciatoie da tastiera.
+	No tools are shown. Choose them in Preferences.	Nessuno strumento mostrato. Sceglili nelle Preferenze.
 	Documents and view	Documenti e visualizzazione
 	Open email app	Apri l'app di posta
 	Open link	Apri collegamento
