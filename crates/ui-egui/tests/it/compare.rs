@@ -279,3 +279,36 @@ fn export_to_word_html_and_rtf() {
     }
     assert!(std::fs::read_to_string(dir.join("e.html")).unwrap().contains("Exported words"));
 }
+
+#[test]
+fn export_to_epub_from_the_export_window_in_either_layout() {
+    let doc = Session::new().create_from_text("t", "Words in a book").unwrap().to_vec();
+    let dir = std::env::temp_dir().join(format!("pdfcraft-epub-ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = dir.to_string_lossy().into_owned();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.export_dir_override = Some(out.clone());
+        app.open_bytes("book.pdf", None, doc.clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    for (layout, fixed) in [("Reflowable", false), ("Fixed layout", true)] {
+        assert!(h.state_mut().execute("export.epub"));
+        h.run_steps(2);
+        h.get_by_label("Export to EPUB");
+        assert!(h.query_by_label("Pages").is_none(), "a book is the whole document");
+        h.get_by_label(layout).click();
+        h.run_steps(1);
+        h.get_by_label("Export").click();
+        h.run_steps(4);
+        let file = std::fs::read(dir.join("book.epub")).unwrap();
+        assert!(file.starts_with(b"PK\x03\x04") && file[30..].starts_with(b"mimetypeapplication/epub+zip"), "{layout}");
+        // A fixed-layout book carries each page's picture.
+        assert_eq!(file.windows(15).any(|w| w == b"images/page-1.j"), fixed, "{layout}");
+        std::fs::remove_file(dir.join("book.epub")).unwrap();
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -7104,6 +7104,18 @@ tools = ["doc_export_office"]
 evidence = ["crates/export/src/tests.rs::markdown_has_headings_paragraphs_and_page_rules_in_order", "crates/export/src/tests.rs::markdown_escapes_markup_and_keeps_emphasis_and_tables", "crates/automation/tests/it/automation.rs::exporting_to_word_html_and_rtf"]
 notes = "Requested in #1595; not an Acrobat export. doc_export_office with a .md or .markdown path writes CommonMark with GitHub pipe tables: headings (levels 1 to 6), paragraphs with bold and italic (as HTML tags where Markdown's markers would not be read as emphasis), tables with their first row as the header, and a rule between pages; text Markdown would read as markup is escaped. Missing: a menu item, images, lists and links (the export's layout model has none of the last two), and text colour."
 [[feature]]
+id = "create.export-epub"
+title = "Export to EPUB"
+area = "J"
+tier = "P2"
+milestone = "M10"
+status = "shipped"
+commands = ["export.epub"]
+tools = ["doc_export_epub"]
+evidence = ["crates/export/src/epub.rs::a_reflowable_book_passes_the_structural_rules_and_splits_at_headings", "crates/export/src/epub.rs::tags_give_heading_levels_and_alternate_text", "crates/export/src/epub.rs::bookmarks_nest_in_the_table_of_contents", "crates/export/src/epub.rs::a_fixed_layout_book_has_a_page_per_pdf_page_with_text_over_the_picture", "crates/export/src/epub.rs::dates_and_identifiers", "crates/engine/src/epub.rs::a_document_exports_as_both_layouts_with_its_title_and_a_stable_identifier", "crates/automation/tests/it/automation.rs::exporting_to_epub_in_both_layouts", "crates/ui-egui/tests/it/compare.rs::export_to_epub_from_the_export_window_in_either_layout"]
+notes = "Not an Acrobat feature (#493, #2620, #2628). EPUB 3 with toc.ncx for EPUB 2 readers. Reflowable: the paragraphs, tables and images the HTML and Word exports use, chapters at each top-level heading (every 10 pages when there is none), the bookmarks (or a tagged PDF's headings) as the contents, a page list with the PDF's page numbers, a tagged PDF's heading levels and figure alternate text; title, author and /Lang from the document (und when unset), an identifier hashed from the file. Fixed layout: a 150 dpi JPEG per page with its text laid over it, transparent, so it can be searched and selected. Checked against EPUB's structural rules in tests (mimetype first and stored, container, manifest and spine, nav); epubcheck not yet run. Whole document only; no fonts embedded."
+
+[[feature]]
 id = "create.export-xlsx"
 title = "Export to Excel (.xlsx) with table detection"
 area = "J"

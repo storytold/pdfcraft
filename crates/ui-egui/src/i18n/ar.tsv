@@ -2797,6 +2797,16 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+# Export to EPUB (#493).
+	Export to EPUB…	تصدير إلى EPUB…
+	EPUB book (.epub)	كتاب EPUB (.epub)
+	Export to EPUB	تصدير إلى EPUB
+	Layout	التخطيط
+	Reflowable	قابل لإعادة التدفق
+	Fixed layout	تخطيط ثابت
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	يتكيّف النص مع شاشة القارئ وحجم الخط، في فصول، مع الإشارات المرجعية كجدول محتويات.
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	كل صفحة كما تبدو، مع بقاء نصها قابلًا للبحث. للمستندات التي يهم تخطيطها.
+	Exported {name}	تم تصدير {name}
 	Create & Edit	الإنشاء والتحرير
 	Review & Compare	المراجعة والمقارنة
 	Forms & Signatures	النماذج والتوقيعات

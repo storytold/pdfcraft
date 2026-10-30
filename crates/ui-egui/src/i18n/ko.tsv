@@ -2791,6 +2791,15 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	EPUB book (.epub)	EPUB 도서 (.epub)
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	각 페이지를 보이는 그대로 유지하며 텍스트는 검색할 수 있습니다. 레이아웃이 중요한 문서에 적합합니다.
+	Export to EPUB	EPUB으로 내보내기
+	Export to EPUB…	EPUB으로 내보내기…
+	Exported {name}	{name}을(를) 내보냈습니다
+	Fixed layout	고정 레이아웃
+	Layout	레이아웃
+	Reflowable	리플로우 가능
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	텍스트가 독자의 화면과 글꼴 크기에 맞게 다시 배치되며, 장으로 나뉘고 책갈피가 목차가 됩니다.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	오늘

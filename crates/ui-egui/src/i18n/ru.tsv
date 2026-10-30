@@ -2433,6 +2433,16 @@ animation effects	Off	Выкл
 	Make properties default	Сделать свойства стандартными
 	Pages selected	Выделенные страницы
 	Page properties	Свойства страницы
+# Export to EPUB (#493).
+	Export to EPUB…	Экспортировать в EPUB…
+	EPUB book (.epub)	Книга EPUB (.epub)
+	Export to EPUB	Экспорт в EPUB
+	Layout	Макет
+	Reflowable	Перетекающий
+	Fixed layout	Фиксированный макет
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	Текст подстраивается под экран и размер шрифта читателя, разбит на главы, закладки становятся оглавлением.
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	Каждая страница такой, как выглядит, а её текст остаётся доступным для поиска. Для документов, где важен макет.
+	Exported {name}	Экспортирован {name}
 	Create & Edit	Создание и редактирование
 	Review & Compare	Рецензирование и сравнение
 	Forms & Signatures	Формы и подписи

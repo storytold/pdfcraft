@@ -2820,6 +2820,15 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	EPUB book (.epub)	Carte EPUB (.epub)
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	Fiecare pagină așa cum arată, cu textul păstrat căutabil. Pentru documente la care contează aspectul.
+	Export to EPUB	Exportare în EPUB
+	Export to EPUB…	Exportare în EPUB…
+	Exported {name}	S-a exportat {name}
+	Fixed layout	Aspect fix
+	Layout	Aspect
+	Reflowable	Reflowabil
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	Textul se reașază după ecranul și dimensiunea fontului cititorului, pe capitole, iar semnele de carte devin cuprinsul.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi

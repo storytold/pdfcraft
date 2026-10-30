@@ -2496,6 +2496,16 @@ animation effects	Off	Wyłączone
 	Make properties default	Ustaw właściwości jako domyślne
 	Pages selected	Zaznaczone strony
 	Page properties	Właściwości strony
+# Export to EPUB (#493).
+	Export to EPUB…	Eksportuj do EPUB…
+	EPUB book (.epub)	Książka EPUB (.epub)
+	Export to EPUB	Eksportuj do EPUB
+	Layout	Układ
+	Reflowable	Dopasowujący się
+	Fixed layout	Stały układ
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	Tekst dopasowuje się do ekranu i rozmiaru czcionki czytelnika, w rozdziałach, z zakładkami jako spisem treści.
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	Każda strona tak, jak wygląda, a jej tekst nadal można przeszukiwać. Dla dokumentów, w których liczy się układ.
+	Exported {name}	Wyeksportowano {name}
 	Create & Edit	Tworzenie i edycja
 	Review & Compare	Recenzja i porównanie
 	Forms & Signatures	Formularze i podpisy

@@ -2786,6 +2786,16 @@ key	Space	Tarpas
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
+# Export to EPUB (#493).
+	Export to EPUB…	Eksportuoti į EPUB…
+	EPUB book (.epub)	EPUB knyga (.epub)
+	Export to EPUB	Eksportuoti į EPUB
+	Layout	Išdėstymas
+	Reflowable	Prisitaikantis
+	Fixed layout	Fiksuotas išdėstymas
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	Tekstas prisitaiko prie skaitytojo ekrano ir šrifto dydžio, suskirstytas į skyrius, o žymelės tampa turiniu.
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	Kiekvienas puslapis toks, koks atrodo, o jo tekste vis dar galima ieškoti. Dokumentams, kuriems svarbus išdėstymas.
+	Exported {name}	Eksportuota: {name}
 	Attach a file…	Pridėti failą…
 	Delete attachment	Ištrinti priedą
 	Attaching files is not available on the web yet	Failų pridėjimas žiniatinklyje dar negalimas

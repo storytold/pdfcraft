@@ -2594,6 +2594,16 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+# Export to EPUB (#493).
+	Export to EPUB…	Exportovat do formátu EPUB…
+	EPUB book (.epub)	Kniha EPUB (.epub)
+	Export to EPUB	Exportovat do formátu EPUB
+	Layout	Rozvržení
+	Reflowable	Přizpůsobivé
+	Fixed layout	Pevné rozvržení
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	Text se přizpůsobí obrazovce a velikosti písma čtenáře, je rozdělen do kapitol a záložky tvoří obsah.
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	Každá stránka tak, jak vypadá, s textem, který lze dál prohledávat. Pro dokumenty, u nichž záleží na rozvržení.
+	Exported {name}	Exportováno: {name}
 	Create & Edit	Vytváření a úpravy
 	Review & Compare	Revize a porovnání
 	Forms & Signatures	Formuláře a podpisy

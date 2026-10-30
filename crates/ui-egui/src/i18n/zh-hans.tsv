@@ -2484,6 +2484,16 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+# Export to EPUB (#493).
+	Export to EPUB…	导出为 EPUB…
+	EPUB book (.epub)	EPUB 图书 (.epub)
+	Export to EPUB	导出为 EPUB
+	Layout	版式
+	Reflowable	可重排
+	Fixed layout	固定版式
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	文本随读者的屏幕和字号重排，分为章节，书签作为目录。
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	每页保持原样，文本仍可搜索。适合版式重要的文档。
+	Exported {name}	已导出 {name}
 	Create & Edit	创建和编辑
 	Review & Compare	审阅和比较
 	Forms & Signatures	表单和签名

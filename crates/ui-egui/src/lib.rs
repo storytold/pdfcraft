@@ -168,6 +168,7 @@ use workflows::combine_grid;
 use workflows::combine_ui;
 use workflows::compare_ui;
 use workflows::create_ui;
+pub use workflows::epub_name;
 use workflows::export_ui;
 use workflows::files;
 use workflows::js_ui;

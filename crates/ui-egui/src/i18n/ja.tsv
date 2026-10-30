@@ -2520,6 +2520,16 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
+# Export to EPUB (#493).
+	Export to EPUB…	EPUB に書き出す…
+	EPUB book (.epub)	EPUB ブック (.epub)
+	Export to EPUB	EPUB に書き出す
+	Layout	レイアウト
+	Reflowable	リフロー型
+	Fixed layout	固定レイアウト
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	テキストは読者の画面とフォントサイズに合わせて流し込まれ、章に分かれ、しおりが目次になります。
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	各ページを見たとおりに保ち、テキストは検索できます。レイアウトが重要な書類向けです。
+	Exported {name}	{name} を書き出しました
 	Create & Edit	作成と編集
 	Review & Compare	レビューと比較
 	Forms & Signatures	フォームと署名

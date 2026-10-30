@@ -808,7 +808,7 @@ fn arabic_ligature_actual_text_is_one_editable_word_through_save_reopen() {
 /// annotations must not tell clients the call is read-only or harmless (#130).
 #[test]
 fn file_writing_tools_are_not_read_only() {
-    for name in ["doc_export_data", "accessibility_report", "image_save"] {
+    for name in ["doc_export_data", "accessibility_report", "image_save", "doc_export_epub"] {
         let t = tools().into_iter().find(|t| t.name == name).unwrap();
         assert!(!t.read_only, "{name} writes a file but advertises read-only");
         assert!(t.destructive, "{name} overwrites its path but advertises non-destructive");
@@ -2367,6 +2367,7 @@ fn protecting_through_tools() {
         ("doc_export_images", json!({ "doc": re, "folder": "pages" })),
         ("doc_export_all_images", json!({ "doc": re, "folder": "images" })),
         ("doc_export_office", json!({ "doc": re, "path": "out.docx" })),
+        ("doc_export_epub", json!({ "doc": re, "path": "out.epub" })),
     ] {
         match b.call(tool, &args) {
             Err(ToolError::Failed(m)) => assert!(m.contains("don't allow copying"), "{tool}: {m}"),
@@ -7437,6 +7438,41 @@ fn exporting_to_word_html_and_rtf() {
     assert!(md.contains("Page 1") && md.contains("Page 3") && md.matches("\n---\n").count() == 2, "{md}");
     assert_eq!(ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "b.markdown" }))["format"], "md");
     assert!(a.call("doc_export_office", &json!({ "doc": doc, "path": "a.xyz" })).is_err());
+}
+
+#[test]
+fn exporting_to_epub_in_both_layouts() {
+    let dir = workdir("epub");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_export_epub", json!({ "doc": doc, "path": "a.epub" }));
+    assert_eq!(r["layout"], "reflowable");
+    let r = ok(&mut a, "doc_export_epub", json!({ "doc": doc, "path": "fixed.epub", "layout": "fixed" }));
+    assert_eq!(r["layout"], "fixed");
+    for name in ["a.epub", "fixed.epub"] {
+        let file = std::fs::read(dir.join(name)).unwrap();
+        // EPUB's signature: the mimetype entry first, stored.
+        assert!(file.starts_with(b"PK\x03\x04") && file[30..].starts_with(b"mimetypeapplication/epub+zip"), "{name}");
+    }
+    assert!(a.call("doc_export_epub", &json!({ "doc": doc, "path": "b.epub", "layout": "scroll" })).is_err());
+    assert!(!dir.join("b.epub").exists());
+}
+
+/// The book goes only to a `.epub` path: naming the open PDF (or any other file) must neither
+/// replace it with EPUB bytes nor write anything.
+#[test]
+fn exporting_to_epub_refuses_a_path_that_is_not_an_epub() {
+    let dir = workdir("epub-ext");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let pdf = std::fs::read(dir.join("a.pdf")).unwrap();
+    for name in ["a.pdf", "book", "book.epub.txt"] {
+        assert!(a.call("doc_export_epub", &json!({ "doc": doc, "path": name })).is_err(), "{name}");
+    }
+    assert_eq!(std::fs::read(dir.join("a.pdf")).unwrap(), pdf, "the PDF is untouched");
+    assert!(!dir.join("book").exists() && !dir.join("book.epub.txt").exists());
+    ok(&mut a, "doc_export_epub", json!({ "doc": doc, "path": "Upper.EPUB" }));
+    assert!(dir.join("Upper.EPUB").exists());
 }
 
 /// #3120: a PDF whose pages draw "Head", then a chain of `depths[page]` nested forms whose

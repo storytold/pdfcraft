@@ -2792,6 +2792,15 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	EPUB book (.epub)	Buku EPUB (.epub)
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	Setiap halaman tampil apa adanya, teksnya tetap dapat dicari. Untuk dokumen yang tata letaknya penting.
+	Export to EPUB	Ekspor ke EPUB
+	Export to EPUB…	Ekspor ke EPUB…
+	Exported {name}	{name} diekspor
+	Fixed layout	Tata letak tetap
+	Layout	Tata letak
+	Reflowable	Dapat dialirkan ulang
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	Teks mengalir ulang menyesuaikan layar dan ukuran font pembaca, dalam bab-bab, dengan bookmark sebagai daftar isi.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini

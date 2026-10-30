@@ -2518,6 +2518,16 @@ animation effects	Off	Өшірулі
 	Make properties default	Қасиеттерді әдепкі ету
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
+# Export to EPUB (#493).
+	Export to EPUB…	EPUB форматына экспорттау…
+	EPUB book (.epub)	EPUB кітабы (.epub)
+	Export to EPUB	EPUB форматына экспорттау
+	Layout	Орналасу
+	Reflowable	Бейімделетін
+	Fixed layout	Бекітілген орналасу
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	Мәтін оқырманның экраны мен қаріп өлшеміне бейімделеді, тарауларға бөлінеді, бетбелгілер мазмұн болады.
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	Әр бет көрінісі бойынша, ал мәтіні іздеуге қолжетімді қалады. Орналасуы маңызды құжаттарға арналған.
+	Exported {name}	{name} экспортталды
 	Create & Edit	Жасау және өңдеу
 	Review & Compare	Шолу және салыстыру
 	Forms & Signatures	Пішіндер және қолтаңбалар

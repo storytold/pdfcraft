@@ -2820,6 +2820,15 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	EPUB book (.epub)	Llibre EPUB (.epub)
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	Cada pàgina tal com es veu, amb el text cercable. Per a documents on la disposició importa.
+	Export to EPUB	Exporta a EPUB
+	Export to EPUB…	Exporta a EPUB…
+	Exported {name}	S'ha exportat {name}
+	Fixed layout	Disposició fixa
+	Layout	Disposició
+	Reflowable	Reflowable
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	El text s'adapta a la pantalla i a la mida de lletra del lector, en capítols, amb els marcadors com a contingut.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui

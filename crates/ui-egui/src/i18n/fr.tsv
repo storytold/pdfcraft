@@ -2520,6 +2520,16 @@ animation effects	Off	Désactivés
 	Make properties default	Définir comme propriétés par défaut
 	Pages selected	Pages sélectionnées
 	Page properties	Propriétés de la page
+# Export to EPUB (#493).
+	Export to EPUB…	Exporter vers EPUB…
+	EPUB book (.epub)	Livre EPUB (.epub)
+	Export to EPUB	Exporter vers EPUB
+	Layout	Mise en page
+	Reflowable	Recomposable
+	Fixed layout	Mise en page fixe
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	Le texte s’adapte à l’écran et à la taille de police du lecteur, en chapitres, avec les signets comme table des matières.
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	Chaque page telle qu’elle apparaît, son texte restant consultable par recherche. Pour les documents dont la mise en page compte.
+	Exported {name}	{name} exporté
 	Create & Edit	Créer et modifier
 	Review & Compare	Réviser et comparer
 	Forms & Signatures	Formulaires et signatures

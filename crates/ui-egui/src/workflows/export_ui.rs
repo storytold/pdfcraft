@@ -1,4 +1,4 @@
-//! Export a PDF ▸ Image (PNG, JPEG, TIFF) and Text (Acrobat's Export a PDF tool, first formats).
+//! Export a PDF ▸ Image (PNG, JPEG, TIFF), Text and EPUB (Acrobat's Export a PDF tool).
 //!
 //! On the desktop the export runs on a worker thread and reports progress in the notice bar;
 //! on the web it runs in place and downloads the files.
@@ -6,6 +6,7 @@
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
+use pdfcraft_engine::epub::{EpubBook, EpubLayout};
 use pdfcraft_engine::export::{ExportSource, Exporter, ImageFormat};
 
 use crate::marks_ui::PageRange;
@@ -18,6 +19,8 @@ pub enum ExportKind {
     Text,
     /// Export all images: the images pages use, as files.
     AllImages,
+    /// The whole document as one EPUB book.
+    Epub,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -27,11 +30,13 @@ pub struct ExportDraft {
     pub format: ImageFormat,
     /// Export all images ▸ skip images with fewer pixels than this on their shorter side.
     pub min_side: u32,
+    /// EPUB ▸ how the book lays its pages out.
+    pub epub_layout: EpubLayout,
 }
 
 impl Default for ExportDraft {
     fn default() -> Self {
-        Self { dpi: 150.0, range: PageRange::default(), format: ImageFormat::Png, min_side: 0 }
+        Self { dpi: 150.0, range: PageRange::default(), format: ImageFormat::Png, min_side: 0, epub_layout: EpubLayout::Reflowable }
     }
 }
 
@@ -46,6 +51,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: E
             ExportKind::Image => tl!("Export to Image"),
             ExportKind::Text => tl!("Export to Text"),
             ExportKind::AllImages => tl!("Export All Images"),
+            ExportKind::Epub => tl!("Export to EPUB"),
         })
         .font(theme::semibold(18.0)),
     );
@@ -104,16 +110,35 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: E
                 .small()
                 .color(t.text_faint),
         );
+    } else if kind == ExportKind::Epub {
+        // The whole document: a book's contents and page list need every page.
+        ui.label(egui::RichText::new(tl!("Layout")).font(theme::semibold(12.5)));
+        widgets::radio_value(ui, &mut d.epub_layout, EpubLayout::Reflowable, tl!("Reflowable"));
+        ui.label(
+            egui::RichText::new(tl!("The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents."))
+                .small()
+                .color(t.text_faint),
+        );
+        ui.add_space(4.0);
+        widgets::radio_value(ui, &mut d.epub_layout, EpubLayout::Fixed, tl!("Fixed layout"));
+        ui.label(
+            egui::RichText::new(tl!("Each page as it looks, its text kept searchable. For documents whose layout matters."))
+                .small()
+                .color(t.text_faint),
+        );
     } else {
         ui.label(egui::RichText::new(tl!("Plain text in reading order; pages are separated by form feeds.")).small().color(t.text_faint));
     }
-    ui.add_space(6.0);
-    ui.label(egui::RichText::new(tl!("Pages")).font(theme::semibold(12.5)));
-    d.range.ui(ui, count);
+    if kind != ExportKind::Epub {
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new(tl!("Pages")).font(theme::semibold(12.5)));
+        d.range.ui(ui, count);
+    }
     ui.add_space(12.0);
     let (mut apply, mut cancel) = (false, false);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        let ok = !d.range.pages(count).is_empty();
+        // A book is the whole document; its page range is not shown, so it cannot disable Export.
+        let ok = if kind == ExportKind::Epub { count > 0 } else { !d.range.pages(count).is_empty() };
         if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, tl!("Export"), true)).inner.clicked() {
             apply = true;
         }
@@ -131,6 +156,7 @@ struct ExportTask<'a> {
     dpi: f64,
     format: ImageFormat,
     min_side: u32,
+    epub: Option<(EpubBook, EpubLayout, i64)>,
     pages: Vec<usize>,
     stem: String,
     status: &'a ExportStatus,
@@ -138,7 +164,7 @@ struct ExportTask<'a> {
 }
 
 fn run(task: ExportTask<'_>, mut sink: impl FnMut(&str, Vec<u8>) -> Result<(), String>) -> String {
-    let ExportTask { src, kind, dpi, format, min_side, pages, stem, status, lang } = task;
+    let ExportTask { src, kind, dpi, format, min_side, epub, pages, stem, status, lang } = task;
     // May run on a worker thread: messages are drawn in the UI's language.
     crate::i18n::set_current(lang);
     let total = pages.len();
@@ -176,6 +202,19 @@ fn run(task: ExportTask<'_>, mut sink: impl FnMut(&str, Vec<u8>) -> Result<(), S
     match kind {
         // Handled above.
         ExportKind::AllImages => String::new(),
+        ExportKind::Epub => {
+            let Some((book, layout, modified)) = epub else { return String::new() };
+            set(0, None);
+            let bytes = match layout {
+                EpubLayout::Reflowable => Ok(book.reflowable(modified)),
+                EpubLayout::Fixed => book.fixed(&mut ex, modified, |k| set(k, None)),
+            };
+            let name = format!("{stem}.epub");
+            match bytes.and_then(|b| sink(&name, b)) {
+                Ok(()) => crate::i18n::fmt(tl!("Exported {name}"), &[("name", &name)]),
+                Err(e) => crate::i18n::fmt(tl!("Export stopped: {e}"), &[("e", &e.to_string())]),
+            }
+        }
         ExportKind::Image => {
             set(0, None);
             // Pages are drawn several at once and handed over in order: the progress counts the
@@ -236,14 +275,24 @@ impl PdfCraftApp {
         let Some(doc) = self.session.get(id) else { return };
         let src = doc.export_source();
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
-        let pages = self.export_draft.range.pages(src.pages);
+        // EPUB is the whole document; what it is made of is read once a place is chosen (below),
+        // its pages drawn on the worker.
+        let epub_layout = self.export_draft.epub_layout;
+        let pages = if kind == ExportKind::Epub { (0..src.pages).collect() } else { self.export_draft.range.pages(src.pages) };
         let dpi = self.export_draft.dpi;
         let format = self.export_draft.format;
         let min_side = self.export_draft.min_side;
         let status: ExportStatus = Arc::new(Mutex::new(Some((0, pages.len(), None))));
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let start = move |app: &mut Self, dir: std::path::PathBuf, inline: bool| {
+            let start = move |app: &mut Self, dir: std::path::PathBuf, stem: String, inline: bool| {
+                let epub = match kind {
+                    ExportKind::Epub => match app.session.get(id) {
+                        Some(doc) => Some((doc.epub_book(), epub_layout, app.session.now_secs())),
+                        None => return,
+                    },
+                    _ => None,
+                };
                 let st = status.clone();
                 let shown = dir.display().to_string();
                 let lang = crate::i18n::current();
@@ -251,7 +300,7 @@ impl PdfCraftApp {
                     let sink = |name: &str, bytes: Vec<u8>| {
                         crate::editing::write_atomically(&dir.join(name).to_string_lossy(), &bytes).map_err(|e| format!("{name}: {e}"))
                     };
-                    let msg = run(ExportTask { src, kind, dpi, format, min_side, pages, stem, status: &st, lang }, sink);
+                    let msg = run(ExportTask { src, kind, dpi, format, min_side, epub, pages, stem, status: &st, lang }, sink);
                     if let Ok(mut s) = st.lock() {
                         let (done, total) = s.as_ref().map_or((0, 0), |(d, t, _)| (*d, *t));
                         let done_msg = crate::i18n::fmt(tl!("{msg} to {dir}"), &[("msg", &msg), ("dir", &shown)]);
@@ -266,19 +315,35 @@ impl PdfCraftApp {
                 app.export_status = Some(status);
             };
             match self.export_dir_override.clone() {
-                Some(d) => start(self, d.into(), true),
+                Some(d) => start(self, d.into(), stem, true),
+                // One file: ask for its name and place.
+                None if kind == ExportKind::Epub => {
+                    let dialog = rfd::AsyncFileDialog::new()
+                        .set_title(tl!("Export").to_string())
+                        .add_filter("EPUB", &["epub"])
+                        .set_file_name(format!("{stem}.epub"));
+                    self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, path: std::path::PathBuf| {
+                        let dir = path.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+                        let stem = crate::epub_name::epub_stem(&path, &stem);
+                        start(app, dir, stem, false);
+                    });
+                }
                 None => {
                     let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Choose a folder for the exported files").to_string());
-                    self.ask_one(crate::pickers::Ask::Folder(dialog), None, move |app, dir| start(app, dir, false));
+                    self.ask_one(crate::pickers::Ask::Folder(dialog), None, move |app, dir| start(app, dir, stem, false));
                 }
             }
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let msg =
-                run(ExportTask { src, kind, dpi, format, min_side, pages, stem, status: &status, lang: crate::i18n::current() }, |name, bytes| {
-                    crate::editing::download(name, &bytes)
-                });
+            let epub = match kind {
+                ExportKind::Epub => self.session.get(id).map(|doc| (doc.epub_book(), epub_layout, self.session.now_secs())),
+                _ => None,
+            };
+            let msg = run(
+                ExportTask { src, kind, dpi, format, min_side, epub, pages, stem, status: &status, lang: crate::i18n::current() },
+                |name, bytes| crate::editing::download(name, &bytes),
+            );
             if let Ok(mut s) = status.lock() {
                 *s = Some((0, 0, Some(msg)));
             }

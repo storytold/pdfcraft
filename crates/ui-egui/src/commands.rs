@@ -536,6 +536,7 @@ impl PdfCraftApp {
                 }
             }
             "export.all_images" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::AllImages)),
+            "export.epub" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Epub)),
             "edit.text" => {
                 self.quick_tool = crate::QuickTool::AddText;
                 self.left = crate::LeftPanel::Tool("edit");

@@ -2794,6 +2794,16 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+# Export to EPUB (#493).
+	Export to EPUB…	Xuất sang EPUB…
+	EPUB book (.epub)	Sách EPUB (.epub)
+	Export to EPUB	Xuất sang EPUB
+	Layout	Bố cục
+	Reflowable	Tự dàn trang
+	Fixed layout	Bố cục cố định
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	Văn bản tự dàn theo màn hình và cỡ chữ của người đọc, chia thành chương, với dấu trang làm mục lục.
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	Mỗi trang giữ nguyên như hiển thị, văn bản vẫn tìm kiếm được. Dành cho tài liệu cần giữ bố cục.
+	Exported {name}	Đã xuất {name}
 	Attach a file…	Đính kèm tệp…
 	Delete attachment	Xóa tệp đính kèm
 	Attaching files is not available on the web yet	Chưa thể đính kèm tệp trên web
