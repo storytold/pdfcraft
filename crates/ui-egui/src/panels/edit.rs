@@ -1,5 +1,8 @@
 use super::tools::row_label;
-use super::*;
+use super::{
+    Align2, Availability, Color32, CornerRadius, LeftPanel, PdfCraftApp, Rect, Sense, Stroke, Tokens, ToolGroup, ToolItem, catalog, icons, theme,
+    vec2, widgets,
+};
 
 /// The page operations Edit shows as a row of icon buttons, as Acrobat's Edit panel does.
 const EDIT_PAGE_BUTTONS: [&str; 4] = ["page.rotate", "page.insert", "page.delete", "page.extract"];
@@ -264,7 +267,9 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             .map(|f| (f.resource, f.face))
             .collect();
         let shown = ed.font_shown(&sources);
-        let out = crate::format_text_ui::panel(ui, t, &mut ed.look, Some(&mut ed.extras), Fonts { sources: Some(&sources), shown });
+        // A selection aligns the rows it touches; the caret alone, the whole paragraph.
+        let paragraphs = crate::format_text_ui::Paragraphs { text: &ed.text, selection: ed.selection.clone(), tidy: false };
+        let out = crate::format_text_ui::panel(ui, t, &mut ed.look, Some(&mut ed.extras), Fonts { sources: Some(&sources), shown }, Some(paragraphs));
         let mut changed = out.changed;
         match out.font {
             Some(FontChoice::KeepSource) => {
@@ -288,6 +293,21 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
         if changed {
             app.apply_line_format(i, ed, Some(ui.ctx()));
+        }
+        return;
+    }
+    // Typing added text: the box's formatting, and alignment for the lines a selection touches.
+    if let Some(i) = app.active_ids().map(|(i, _)| i)
+        && let Some(draft) = app.views[i].content.draft.clone()
+    {
+        if draft.index.is_none() && app.quick_tool == crate::QuickTool::AddText {
+            crate::content_ui::hint(ui, t);
+        }
+        let mut style = draft.style.clone();
+        let paragraphs = crate::format_text_ui::Paragraphs { text: &draft.text, selection: draft.selection.clone(), tidy: true };
+        added_text_format(ui, t, &mut style, Some(paragraphs));
+        if style != draft.style {
+            app.restyle_draft(i, style);
         }
         return;
     }
@@ -323,34 +343,68 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     match selected {
         Some((page, index, text)) => {
             let mut style = text.clone();
-            added_text_format(ui, t, &mut style);
+            added_text_format(ui, t, &mut style, None);
             if style != text {
                 // The reusable style follows the selection only when the edit took, so a refused one adds nothing odd later.
                 if app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content: pdfcraft_engine::AddedContent::Text(style.clone()) }) {
-                    app.text_style = pdfcraft_engine::AddedText { text: String::new(), rect: [0.0; 4], ..style };
+                    app.text_style = pdfcraft_engine::AddedText { text: String::new(), rect: [0.0; 4], aligns: Vec::new(), ..style };
                 }
             }
         }
         None if app.quick_tool == crate::QuickTool::AddText => {
             crate::content_ui::hint(ui, t);
             let mut style = app.text_style.clone();
-            added_text_format(ui, t, &mut style);
+            added_text_format(ui, t, &mut style, None);
             app.text_style = style;
         }
         None => {}
     }
 }
 
-/// Format text for added text: the standard families, size, colour, style and alignment.
-fn added_text_format(ui: &mut egui::Ui, t: &Tokens, style: &mut pdfcraft_engine::AddedText) {
+/// Format text for added text: the standard families, size, colour, style and alignment
+/// (of the lines `paragraphs` selects, while the text is being typed).
+fn added_text_format(ui: &mut egui::Ui, t: &Tokens, style: &mut pdfcraft_engine::AddedText, paragraphs: Option<crate::format_text_ui::Paragraphs>) {
     let shown = style.family.label().to_string();
-    let out = crate::format_text_ui::panel(ui, t, style, None, crate::format_text_ui::Fonts { sources: None, shown });
+    let out = crate::format_text_ui::panel(ui, t, style, None, crate::format_text_ui::Fonts { sources: None, shown }, paragraphs);
     if let Some(crate::format_text_ui::FontChoice::Family(family)) = out.font {
         style.family = family;
     }
 }
 
 impl PdfCraftApp {
+    /// Format text changed while added text is being typed in view `index`: the box takes the new
+    /// style at once and stays open. Text already on the page is updated with what has been typed,
+    /// as one undoable change; new text waits until it is finished. Text typed after this styling
+    /// starts from it too.
+    pub(crate) fn restyle_draft(&mut self, index: usize, style: pdfcraft_engine::AddedText) {
+        let Some(view) = self.views.get_mut(index) else { return };
+        // Text the standard fonts can't draw stays in the box, unwritten, until it is corrected (#125).
+        let blocked = view.content.blocked().is_some();
+        let Some(d) = view.content.draft.as_mut() else { return };
+        let committed = d.style.clone();
+        // `text` and `rect` stay what the page has; the rest is the new style.
+        d.style = pdfcraft_engine::AddedText { text: committed.text.clone(), rect: committed.rect, ..style };
+        d.focus = true;
+        self.text_style = pdfcraft_engine::AddedText { text: String::new(), rect: [0.0; 4], aligns: Vec::new(), ..d.style.clone() };
+        let (page, item) = (d.page, d.index);
+        let text = d.text.trim_end().to_string();
+        let Some(item) = item.filter(|_| !text.trim().is_empty() && !blocked) else { return };
+        let aligns = pdfcraft_engine::paragraph_align::remap(&d.text, &text, &d.style.aligns);
+        let updated = pdfcraft_engine::AddedText { text, rect: d.rect, aligns, ..d.style.clone() };
+        if updated == committed {
+            return;
+        }
+        if self.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index: item, content: pdfcraft_engine::AddedContent::Text(updated.clone()) })
+            && let Some(d) = self.views.get_mut(index).and_then(|v| v.content.draft.as_mut())
+        {
+            // What the page has now. The aligns stay those of the text in the box.
+            d.style = pdfcraft_engine::AddedText { aligns: std::mem::take(&mut d.style.aligns), ..updated };
+            // The page has the box's text: its typing history restarts at the next claim, even
+            // when the restyle left the text as it was, so a Redo can't put undone typing back.
+            d.typing_from = None;
+        }
+    }
+
     /// Apply the open paragraph's formatting as one change; the paragraph stays open.
     pub(crate) fn apply_line_format(&mut self, index: usize, mut ed: crate::edit_text_ui::LineEditor, ctx: Option<&egui::Context>) {
         let edit = pdfcraft_engine::Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() };

@@ -2,7 +2,7 @@ use super::options::{
     COMBINE_OPTIONS, EXTRACT_OPTIONS, INFO_OPTIONS, RENDER_OPTIONS, SPLIT_OPTIONS, TEXT_OPTIONS, can_be_path_value, flag, needs_value, positional,
     validate_options,
 };
-use super::*;
+use super::{Arc, CliError, ImageFormat, PageRenderer, Path, PathBuf, RenderConfig, RenderRequest, RequestKind, Write, inspect, stdout_line};
 
 /// A session that honours the machine's administrator policy for JavaScript: opening an XFA
 /// form or applying an edit runs no document scripts where an administrator turned them off.

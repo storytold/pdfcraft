@@ -1062,3 +1062,85 @@ fn a_booklet_prints_both_sides_on_the_short_edge() {
     assert_eq!(booklet_duplex(BookletSubset::FrontOnly), spool::Duplex::Off);
     assert_eq!(booklet_duplex(BookletSubset::BackOnly), spool::Duplex::Off);
 }
+
+/// #3502: `/Contents` array pieces are joined with a space, matching the renderer, so a `%`
+/// comment at the end of a piece without a line break continues through the first line of the
+/// next piece in both `impose` and `text_reads_up`.
+#[test]
+fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
+    let build_doc = |first_piece: &[u8]| {
+        let mut doc = Document::new_empty();
+        let font = doc.add(
+            [
+                (b"Type".to_vec(), Object::name("Font")),
+                (b"Subtype".to_vec(), Object::name("Type1")),
+                (b"BaseFont".to_vec(), Object::name("Helvetica")),
+            ]
+            .into_iter()
+            .collect::<Dict>(),
+        );
+        let s1 = doc.add(Stream::from_raw(Dict::new(), first_piece.to_vec()));
+        // Line 1 of s2 draws sideways ("HIDDEN") and 4 characters reading up; line 2 draws upright ("SHOWN").
+        let s2 = doc.add(Stream::from_raw(
+            Dict::new(),
+            b"BT /F1 18 Tf 0 1 -1 0 50 50 Tm (HIDDEN) Tj ET\nBT /F1 18 Tf 1 0 0 1 20 100 Tm (SHOWN) Tj ET".to_vec(),
+        ));
+        let fonts: Dict = [(b"F1".to_vec(), Object::Ref(font))].into_iter().collect();
+        let res: Dict = [(b"Font".to_vec(), Object::Dict(fonts))].into_iter().collect();
+        let pages_root = doc.add(Object::Null);
+        let page = doc.add(
+            [
+                (b"Type".to_vec(), Object::name("Page")),
+                (b"Parent".to_vec(), Object::Ref(pages_root)),
+                (b"MediaBox".to_vec(), Object::Array([0.0, 0.0, 200.0, 300.0].into_iter().map(Object::Real).collect())),
+                (b"Resources".to_vec(), Object::Dict(res)),
+                (b"Contents".to_vec(), Object::Array(vec![Object::Ref(s1), Object::Ref(s2)])),
+            ]
+            .into_iter()
+            .collect::<Dict>(),
+        );
+        doc.set(
+            pages_root,
+            Object::Dict(
+                [
+                    (b"Type".to_vec(), Object::name("Pages")),
+                    (b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)])),
+                    (b"Count".to_vec(), Object::Int(1)),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        );
+        let cat = doc.add([(b"Type".to_vec(), Object::name("Catalog")), (b"Pages".to_vec(), Object::Ref(pages_root))].into_iter().collect::<Dict>());
+        doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(cat));
+        doc
+    };
+
+    let form_strings = |imposed: Vec<u8>| -> Vec<Vec<u8>> {
+        let out = Document::open(Arc::new(imposed)).unwrap();
+        let page = &pdfcraft_model::pages(&out)[0];
+        let res = out.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = out.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        let form_obj = out.resolve(xo.get(b"P0").unwrap());
+        let Object::Stream(form) = &*form_obj else { panic!("form stream") };
+        let body = form.decoded().unwrap();
+        pdfcraft_content::parse(&body)
+            .ops
+            .into_iter()
+            .filter(|op| op.op == b"Tj")
+            .filter_map(|op| op.operands.first().and_then(Object::as_string).map(|s| s.bytes.to_vec()))
+            .collect()
+    };
+
+    // Without a newline at the end of s1, `% comment` swallows line 1 of s2 (`(HIDDEN) Tj`).
+    let commented = build_doc(b"q Q % trailing comment");
+    assert!(!text_reads_up(&commented, 0), "commented-out vertical text on piece 2's first line is not counted");
+    let printed = impose(&commented, &settings(vec![0], Layout::Size(SizeMode::Actual))).unwrap();
+    assert_eq!(form_strings(printed), [b"SHOWN".to_vec()], "impose does not un-comment piece 2's first line");
+
+    // Control: when s1 terminates the comment with a newline, line 1 of s2 is drawn and counted.
+    let with_newline = build_doc(b"q Q % trailing comment\n");
+    assert!(text_reads_up(&with_newline, 0), "6 vertical vs 5 horizontal chars when line 1 is not commented out");
+    let printed_ctrl = impose(&with_newline, &settings(vec![0], Layout::Size(SizeMode::Actual))).unwrap();
+    assert_eq!(form_strings(printed_ctrl), [b"HIDDEN".to_vec(), b"SHOWN".to_vec()]);
+}

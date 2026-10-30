@@ -1,4 +1,4 @@
-use super::*;
+use super::{Dict, Document, HashSet, ObjRef, Object, Op, Scope};
 
 impl<'a> Scope<'a> {
     /// Is this optional-content reference (an OCG or OCMD) hidden?

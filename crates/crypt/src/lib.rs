@@ -634,10 +634,18 @@ fn expand(seed: &[u8; 32], label: &[u8], n: usize) -> Vec<u8> {
         h.update(label);
         h.update(counter.to_le_bytes());
         out.extend_from_slice(&h.finalize());
-        counter += 1;
+        counter = counter.saturating_add(1);
     }
     out.truncate(n);
     out
+}
+
+/// Sixteen bytes of file identifier from `seed` (SHA-256 in counter mode, label `id`).
+///
+/// `/ID` is written in the clear. Deriving it the same way as the file key keeps that public
+/// value from being an unkeyed hash of the seed.
+pub fn file_id(seed: &[u8; 32]) -> Vec<u8> {
+    expand(seed, b"id", 16)
 }
 
 /// Build the `/Encrypt` values and an authenticated (owner) handler for a new encryption.

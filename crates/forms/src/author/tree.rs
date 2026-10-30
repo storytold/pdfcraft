@@ -1,4 +1,4 @@
-use super::*;
+use super::{Dict, Document, Field, FormError, ObjRef, Object, PdfString, invalid};
 
 /// The AcroForm dictionary's reference, creating the form (with `/Helv` in `/DR`) if needed.
 pub(crate) fn ensure_form(doc: &mut Document) -> Result<ObjRef, FormError> {
@@ -187,7 +187,7 @@ pub(super) fn clash(name: &str, other: &str) -> Option<String> {
 }
 
 /// The array `key` of `holder` (`/Fields` of the form, `/Kids` of a field).
-fn list_of(doc: &Document, holder: ObjRef, key: &[u8]) -> Vec<Object> {
+pub(super) fn list_of(doc: &Document, holder: ObjRef, key: &[u8]) -> Vec<Object> {
     let d = doc.get(holder).as_dict().cloned().unwrap_or_default();
     d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default()
 }
@@ -315,6 +315,24 @@ pub(super) fn inherited(doc: &Document, field: ObjRef) -> Dict {
         parent = d.reference(b"Parent");
     }
     add
+}
+
+/// Whether an ancestor of `field` sets the inheritable `key`, which `field` would take on without
+/// its own entry.
+pub(crate) fn ancestor_sets(doc: &Document, field: ObjRef, key: &[u8]) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    let mut parent = doc.get(field).as_dict().and_then(|d| d.reference(b"Parent"));
+    while let Some(p) = parent {
+        if seen.len() > 64 || !seen.insert(p) {
+            return false;
+        }
+        let Some(d) = doc.get(p).as_dict().cloned() else { return false };
+        if d.contains(key) {
+            return true;
+        }
+        parent = d.reference(b"Parent");
+    }
+    false
 }
 
 /// Copy onto `field` what it inherits (`add`, from [`inherited`]), so it keeps it when it moves.

@@ -1,4 +1,6 @@
-use super::*;
+use super::{BTreeSet, Ordering, SystemTime};
+#[cfg(not(target_arch = "wasm32"))]
+use super::{MAX_FOLDER_DEPTH, MAX_FOLDER_FILES};
 
 /// The PDFs, images and text files in `dir` (and, if `recursive`, the folders inside it, not
 /// following links), in natural order, at most [`MAX_FOLDER_FILES`]; and whether there were more.

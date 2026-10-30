@@ -187,6 +187,12 @@ fn the_pdf_optimizer_dialog_saves_an_optimized_copy() {
     h.run_steps(2);
     h.get_by_label("PDF Optimizer");
     h.get_by_label("Color Images");
+    h.get_by_label("Monochrome Images");
+    assert_eq!(h.state().optimize_draft.settings.mono, pdfcraft_engine::optimize::MonoSettings::REDUCE);
+    // Monochrome Images ▸ Downsample to can be turned off.
+    h.get_by_label("Downsample to").click();
+    h.run_steps(2);
+    assert!(!h.state().optimize_draft.settings.mono.downsample);
     h.get_by_label("Discard Objects").click();
     h.run_steps(2);
     h.get_by_label("Discard document tags").click();

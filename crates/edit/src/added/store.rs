@@ -1,7 +1,7 @@
 use super::draw::{draw, params};
 use super::layout::{first_undrawable, is_thai, nums, shaped_arabic, thai_error};
-use super::types::{Added, AddedImage, AddedText, Align, CHAR_SPACING_LIMIT, Family, MarkerScan, TAG};
-use super::*;
+use super::types::{Added, AddedImage, AddedText, CHAR_SPACING_LIMIT, Family, MarkerScan, TAG};
+use super::{Content, Dict, Document, EditError, GlyphError, MarkKind, ObjRef, Object, Stream, align_from, check, contents, page_list, place_tagged};
 
 fn parse(doc: &Document, d: &Dict) -> Option<Content> {
     let r = nums(doc, d.get(b"Rect"));
@@ -10,20 +10,27 @@ fn parse(doc: &Document, d: &Dict) -> Option<Content> {
         b"Text" => {
             let (family, bold, italic) = Family::from_base(d.name(b"Font").unwrap_or(b"Helvetica"));
             let c = nums(doc, d.get(b"Color"));
+            let text = d.get(b"Text").and_then(|t| doc.resolve(t).as_string().map(|s| s.to_text())).unwrap_or_default();
+            let align = align_from(d.int(b"Align"));
+            // At most one entry per paragraph, whatever the file says.
+            let aligns = d
+                .get(b"Aligns")
+                .and_then(|a| {
+                    doc.resolve(a)
+                        .as_array()
+                        .map(|a| a.iter().take(crate::paragraph_align::count(&text)).map(|v| v.as_int().map(|c| align_from(Some(c)))).collect())
+                })
+                .unwrap_or_default();
             Some(Content::Text(AddedText {
                 rect,
-                text: d.get(b"Text").and_then(|t| doc.resolve(t).as_string().map(|s| s.to_text())).unwrap_or_default(),
+                text,
                 family,
                 bold,
                 italic,
                 size: d.get(b"Size").and_then(Object::as_f64).unwrap_or(12.0),
                 color: if c.len() == 3 { [c[0], c[1], c[2]] } else { [0.0; 3] },
-                align: match d.int(b"Align") {
-                    Some(1) => Align::Center,
-                    Some(2) => Align::Right,
-                    Some(3) => Align::Justify,
-                    _ => Align::Left,
-                },
+                align,
+                aligns: crate::paragraph_align::tidy(aligns, align),
                 // Items written before character spacing have none.
                 char_spacing: d.get(b"CharSpacing").and_then(Object::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0),
             }))

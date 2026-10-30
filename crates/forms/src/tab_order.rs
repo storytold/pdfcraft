@@ -1,12 +1,14 @@
 use super::read::{fields, page_refs};
-use super::*;
+use super::{Document, Field, FormError, ObjRef, Object, invalid};
 
 /// A page's tab order (`/Tabs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabOrder {
-    /// Rows, top to bottom, left to right within a row (`/R`).
+    /// Rows, top to bottom, left to right within a row (`/R`; right to left in a document bound
+    /// on the right).
     Row,
-    /// Columns, left to right, top to bottom within a column (`/C`).
+    /// Columns, left to right, top to bottom within a column (`/C`; columns right to left in a
+    /// document bound on the right).
     Column,
     /// The document structure (`/S`; annotation order when the file has none).
     Structure,
@@ -23,6 +25,12 @@ impl TabOrder {
             _ => TabOrder::Annotations,
         }
     }
+
+    /// The tab order of the page at `r`, with an indirect `/Tabs` resolved.
+    fn of_page(doc: &Document, r: ObjRef) -> TabOrder {
+        let tabs = doc.get(r).as_dict().and_then(|d| d.get(b"Tabs")).map(|o| doc.resolve(o));
+        TabOrder::of(tabs.as_deref().and_then(Object::as_name))
+    }
 }
 
 /// A widget on a page for tab ordering: (page, field, widget, rect, annotation index).
@@ -38,13 +46,20 @@ pub(crate) fn rank_tabs(doc: &Document, pages: &[ObjRef], annot_index: &std::col
             }
         }
     }
+    // Rows and columns run right to left in a document bound on the right: rank the mirrored
+    // rectangles there.
+    if right_to_left(doc) {
+        for i in &mut items {
+            i.3 = [-i.3[2], i.3[1], -i.3[0], i.3[3]];
+        }
+    }
     let mut ordered: Vec<(usize, usize)> = Vec::with_capacity(items.len());
     for (pi, p) in pages.iter().enumerate() {
         let mut on: Vec<_> = items.iter().filter(|i| i.0 == pi).collect();
         if on.is_empty() {
             continue;
         }
-        let tabs = TabOrder::of(doc.get(*p).as_dict().and_then(|d| d.name(b"Tabs")));
+        let tabs = TabOrder::of_page(doc, *p);
         match tabs {
             TabOrder::Row | TabOrder::Column => {
                 let row = tabs == TabOrder::Row;
@@ -87,6 +102,13 @@ pub(crate) fn rank_tabs(doc: &Document, pages: &[ObjRef], annot_index: &std::col
     }
 }
 
+/// Whether the document is bound on the right (`/ViewerPreferences /Direction /R2L`).
+fn right_to_left(doc: &Document) -> bool {
+    let Some(root) = doc.root() else { return false };
+    let Some(prefs) = doc.get(root).as_dict().and_then(|c| c.get(b"ViewerPreferences")).map(|o| doc.resolve(o)) else { return false };
+    prefs.as_dict().and_then(|p| p.get(b"Direction")).map(|o| doc.resolve(o)).is_some_and(|d| d.as_name() == Some(b"R2L"))
+}
+
 /// Set the tab order of pages (0-based).
 pub fn set_tab_order(doc: &mut Document, pages: &[usize], order: TabOrder) -> Result<(), FormError> {
     let refs = page_refs(doc);
@@ -102,6 +124,11 @@ pub fn set_tab_order(doc: &mut Document, pages: &[usize], order: TabOrder) -> Re
         })?;
     }
     Ok(())
+}
+
+/// The tab order of each page, in page order (`/Tabs`; a page without one is unspecified).
+pub fn tab_orders(doc: &Document) -> Vec<TabOrder> {
+    page_refs(doc).into_iter().map(|r| TabOrder::of_page(doc, r)).collect()
 }
 
 /// Order tabs manually (Acrobat: Fields ▸ Tab Order ▸ Order Tabs Manually, then drag a field):

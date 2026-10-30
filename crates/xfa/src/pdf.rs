@@ -163,38 +163,8 @@ impl Emitter<'_> {
         format!("/{} {} Tf {} rg", face.resource_name(), n(face.size), rgb(face.color)).into_bytes()
     }
 
-    /// Write laid-out widget `w` on `page` as an AcroForm widget annotation (and its field), with
-    /// its border, background and kind, and return the annotation's object.
-    fn widget(&mut self, w: &Widget, page: &Page, page_ref: ObjRef) -> Result<Option<ObjRef>, XfaError> {
+    fn populate_widget_kind(&mut self, w: &Widget, d: &mut Dict, mk: &mut Dict) -> (i64, bool, Option<String>) {
         let r = w.rect;
-        let (x0, y0, x1, y1) = (r.x, page.height - r.bottom(), r.right(), page.height - r.y);
-        let mut d = Dict::new();
-        d.set(b"Type".to_vec(), Object::name("Annot"));
-        d.set(b"Subtype".to_vec(), Object::name("Widget"));
-        d.set(b"F".to_vec(), Object::Int(4));
-        d.set(b"P".to_vec(), Object::Ref(page_ref));
-        d.set(b"Rect".to_vec(), Object::Array([x0, y0, x1, y1].iter().map(|v| Object::Real(*v)).collect()));
-        d.set(b"DA".to_vec(), Object::String(PdfString::literal(Self::da(&w.face))));
-        if let Some(t) = &w.tooltip {
-            d.set(b"TU".to_vec(), Object::String(PdfString::text(t)));
-        }
-        d.set(SOM_KEY.to_vec(), Object::String(PdfString::text(&w.som)));
-        let mut mk = Dict::new();
-        if let Some(c) = w.border.color
-            && w.border.shape != BorderShape::None
-        {
-            mk.set(b"BC".to_vec(), rgb_array(c));
-        }
-        if let Some(c) = w.border.fill {
-            mk.set(b"BG".to_vec(), rgb_array(c));
-        }
-        let mut bs = Dict::new();
-        bs.set(b"W".to_vec(), Object::Real(if w.border.shape == BorderShape::None { 0.0 } else { w.border.width.clamp(0.1, 12.0) }));
-        bs.set(b"S".to_vec(), Object::name(if w.border.shape == BorderShape::Underline { "U" } else { "S" }));
-        d.set(b"BS".to_vec(), Object::Dict(bs));
-        if matches!(w.kind, WidgetKind::CheckBox { round: true, .. } | WidgetKind::Radio { round: true, .. }) {
-            d.set(ROUND_KEY.to_vec(), Object::Bool(true));
-        }
         let mut ff: i64 = 0;
         if w.read_only {
             ff |= 1;
@@ -383,34 +353,45 @@ impl Emitter<'_> {
                 d.set(b"FT".to_vec(), Object::name("Btn"));
                 ff |= 1 << 16;
                 mk.set(b"CA".to_vec(), Object::String(PdfString::text(caption)));
-                if let Some(Action::Script(_)) = &w.action {
-                    // An XFA click script is no Acrobat JavaScript: no PDF action, which other
-                    // viewers would run; PdfCraft finds the script by the field's SOM path.
-                    d.set(CLICK_KEY.to_vec(), Object::Bool(true));
-                } else if let Some(a) = &w.action {
-                    let mut ad = Dict::new();
-                    match a {
-                        Action::Reset => {
-                            ad.set(b"S".to_vec(), Object::name("ResetForm"));
-                        }
-                        Action::Print => {
-                            ad.set(b"S".to_vec(), Object::name("Named"));
-                            ad.set(b"N".to_vec(), Object::name("Print"));
-                        }
-                        Action::SaveAs => {
-                            ad.set(b"S".to_vec(), Object::name("Named"));
-                            ad.set(b"N".to_vec(), Object::name("SaveAs"));
-                        }
-                        Action::Url(u) => {
-                            ad.set(b"S".to_vec(), Object::name("URI"));
-                            ad.set(b"URI".to_vec(), Object::String(PdfString::literal(u.as_bytes().to_vec())));
-                        }
-                        Action::Script(_) => {}
-                    }
-                    d.set(b"A".to_vec(), Object::Dict(ad));
-                }
+                write_button_action(w.action.as_ref(), d);
             }
         }
+        (ff, top_level, under)
+    }
+
+    /// Write laid-out widget `w` on `page` as an AcroForm widget annotation (and its field), with
+    /// its border, background and kind, and return the annotation's object.
+    fn widget(&mut self, w: &Widget, page: &Page, page_ref: ObjRef) -> Result<Option<ObjRef>, XfaError> {
+        let r = w.rect;
+        let (x0, y0, x1, y1) = (r.x, page.height - r.bottom(), r.right(), page.height - r.y);
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Widget"));
+        d.set(b"F".to_vec(), Object::Int(4));
+        d.set(b"P".to_vec(), Object::Ref(page_ref));
+        d.set(b"Rect".to_vec(), Object::Array([x0, y0, x1, y1].iter().map(|v| Object::Real(*v)).collect()));
+        d.set(b"DA".to_vec(), Object::String(PdfString::literal(Self::da(&w.face))));
+        if let Some(t) = &w.tooltip {
+            d.set(b"TU".to_vec(), Object::String(PdfString::text(t)));
+        }
+        d.set(SOM_KEY.to_vec(), Object::String(PdfString::text(&w.som)));
+        let mut mk = Dict::new();
+        if let Some(c) = w.border.color
+            && w.border.shape != BorderShape::None
+        {
+            mk.set(b"BC".to_vec(), rgb_array(c));
+        }
+        if let Some(c) = w.border.fill {
+            mk.set(b"BG".to_vec(), rgb_array(c));
+        }
+        let mut bs = Dict::new();
+        bs.set(b"W".to_vec(), Object::Real(if w.border.shape == BorderShape::None { 0.0 } else { w.border.width.clamp(0.1, 12.0) }));
+        bs.set(b"S".to_vec(), Object::name(if w.border.shape == BorderShape::Underline { "U" } else { "S" }));
+        d.set(b"BS".to_vec(), Object::Dict(bs));
+        if matches!(w.kind, WidgetKind::CheckBox { round: true, .. } | WidgetKind::Radio { round: true, .. }) {
+            d.set(ROUND_KEY.to_vec(), Object::Bool(true));
+        }
+        let (ff, top_level, under) = self.populate_widget_kind(w, &mut d, &mut mk);
         if !mk.is_empty() {
             d.set(b"MK".to_vec(), Object::Dict(mk));
         }
@@ -748,6 +729,39 @@ impl Emitter<'_> {
         // The text's ascent and descent, as the layout measures a span's extent.
         let rect = pdf_rect(Rect::new(x, s.baseline - s.face.size * 0.8, w, s.face.size), page_height);
         (rect.iter().all(|v| v.is_finite()) && w > 0.0).then(|| (target.to_string(), rect))
+    }
+}
+
+fn write_button_action(action: Option<&Action>, d: &mut Dict) {
+    match action {
+        Some(Action::Script(_)) => {
+            // An XFA click script is no Acrobat JavaScript: no PDF action, which other
+            // viewers would run; PdfCraft finds the script by the field's SOM path.
+            d.set(CLICK_KEY.to_vec(), Object::Bool(true));
+        }
+        Some(action) => {
+            let mut ad = Dict::new();
+            match action {
+                Action::Reset => {
+                    ad.set(b"S".to_vec(), Object::name("ResetForm"));
+                }
+                Action::Print => {
+                    ad.set(b"S".to_vec(), Object::name("Named"));
+                    ad.set(b"N".to_vec(), Object::name("Print"));
+                }
+                Action::SaveAs => {
+                    ad.set(b"S".to_vec(), Object::name("Named"));
+                    ad.set(b"N".to_vec(), Object::name("SaveAs"));
+                }
+                Action::Url(url) => {
+                    ad.set(b"S".to_vec(), Object::name("URI"));
+                    ad.set(b"URI".to_vec(), Object::String(PdfString::literal(url.as_bytes().to_vec())));
+                }
+                Action::Script(_) => {}
+            }
+            d.set(b"A".to_vec(), Object::Dict(ad));
+        }
+        None => {}
     }
 }
 

@@ -1,4 +1,4 @@
-use super::*;
+use super::{LayerOp, PdfCraftApp, Pos2, Rect};
 
 /// A validation badge drawn over a signature widget: the widget rectangle (user space), the verdict it shows, and its hover text.
 pub(crate) struct SignatureBadge {
@@ -22,17 +22,6 @@ pub(crate) fn signature_badges(signatures: &[pdfcraft_engine::SignatureInfo], pa
             })
         })
         .collect()
-}
-
-/// The hover popup for an annotation. Replies and Fill & Sign marks (typed text, checks, signatures)
-/// show none: they are page content being edited, not comments.
-pub(super) fn annotation_hover_text(a: &pdfcraft_render::Annotation) -> Option<String> {
-    if a.is_reply() || a.fill_sign {
-        return None;
-    }
-    let who = a.author.clone().unwrap_or_else(|| a.subtype.clone());
-    let body = a.contents.clone().unwrap_or_default();
-    Some(if body.is_empty() { who } else { format!("{who}\n{body}") })
 }
 
 /// Suppression window for egui's eased copy of point input.

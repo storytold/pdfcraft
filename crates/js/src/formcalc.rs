@@ -12,11 +12,11 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::Limits;
 use crate::xfa::{
     HNode, XHost, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, child_named, clip, clip_result, descendants_named, instances,
     reset_names, resolve_som, run_within,
 };
+use crate::{Limits, Message, MessageButtons, MessageIcon};
 
 mod access;
 mod ast;

@@ -33,15 +33,17 @@ pub use info::{Props, Summary, is_comment_subtype, props, set_info, summaries};
 #[cfg(test)]
 use lookup::{ANNOTS_ENTRIES_COPIED, PageWalk, annot_dict, annot_ref};
 use lookup::{annots, page_ref};
-pub use lookup::{has_visible_fill_sign, is_fill_sign, isolate_annotation, page_refs, picture_rotation, set_annots, signature_image};
+pub use lookup::{
+    has_visible_fill_sign, is_fill_sign, isolate_annotation, isolate_annotations, page_refs, picture_rotation, set_annots, signature_image,
+};
 pub(crate) use modify::n;
 pub use modify::{
-    add_reply, add_text_replacement, delete_annotation, erase_ink, fillable, goes_with, move_annotation, set_contents, set_fill, set_font_size,
-    set_locked, set_marked, set_points, set_rect, set_review_state, set_style, with_replies_and_popups,
+    add_reply, add_text_replacement, deletable, delete_annotation, erase_ink, fillable, goes_with, lift_annotation, move_annotation, set_contents,
+    set_fill, set_font_size, set_locked, set_marked, set_points, set_rect, set_review_state, set_style, with_replies_and_popups,
 };
 pub use types::{
     AttachIcon, FillMark, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont, OverlayLook, ReviewState, Rgb, Shape,
-    StampGroup, StampKind, Style, rect_quad,
+    StampGroup, StampKind, Style, StyleChange, TextReplacement, rect_quad,
 };
 
 pub mod appearance;

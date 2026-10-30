@@ -1,5 +1,8 @@
 use super::edit::{actions_menu, edit_panel, stamp_palette};
-use super::*;
+use super::{
+    Align2, Availability, Color32, CornerRadius, LeftPanel, PdfCraftApp, Rect, Sense, Stroke, TOOL_GROUPS, Tokens, ToolGroup, catalog, icons, theme,
+    vec2, widgets,
+};
 
 const COLLAPSED_TOOLS: usize = 14;
 
@@ -55,6 +58,9 @@ pub(crate) fn panel_header(ui: &mut egui::Ui, t: &Tokens, title: &str, lead: Opt
     (go_back, close)
 }
 
+/// Width kept free at the right of the tool list for the floating scrollbar.
+const SCROLLBAR_GUTTER: f32 = 18.0;
+
 /// The All tools sidebar: Expand (the full view) and Close, then the tool list, the first few
 /// tools until View more shows them all.
 fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
@@ -67,6 +73,8 @@ fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         app.left_open = false;
     }
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        // The scrollbar floats over the right edge: keep the rows (and their rounded hover wash) clear of it.
+        ui.set_max_width((ui.available_width() - SCROLLBAR_GUTTER).max(0.0));
         ui.add_space(2.0);
         let shown = if app.all_tools_expanded { TOOL_GROUPS.len() } else { COLLAPSED_TOOLS.min(TOOL_GROUPS.len()) };
         for g in &TOOL_GROUPS[..shown] {

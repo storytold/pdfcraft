@@ -156,6 +156,57 @@ fn a_regex_after_a_condition_is_not_read_as_code() {
     assert_eq!(renamed(divides), Some(divides.replace("\"a\"", "\"qty\"")));
 }
 
+/// A `getField` whose argument is more than one string, or an `AFSimple_Calculate` list that
+/// isn't written out, reads a field whose name isn't known until the script runs.
+#[test]
+fn names_built_at_run_time_are_noticed() {
+    for js in [
+        "event.value = getField(\"row\" + i).value;",
+        "event.value = this.getField(name).value;",
+        "AFSimple_Calculate(\"SUM\", list);",
+        "AFSimple_Calculate(\"SUM\", new Array(\"a\", b));",
+        "AFSimple_Calculate(\"SUM\", [\"a\", prefix + \"b\"]);",
+        "AFSimple_Calculate(\"SUM\", new Array(\"a\", \"b\" + c));",
+        "AFSimple_Calculate(op, new Array(\"a\"));",
+        "AFSimple_Calculate(\"SUM\", \"row\" + suffix);",
+        "AFSimple_Calculate(\"SUM\", [\"a\"].concat(more));",
+        "AFSimple_Calculate(\"SUM\", [\"row\" + i]);",
+    ] {
+        assert!(reads_built_names(js), "{js}");
+    }
+    // A string that is only the start of a name or a list isn't read, or renamed, as one.
+    for (js, reads) in [
+        ("AFSimple_Calculate(\"SUM\", \"row\" + suffix);", vec![]),
+        ("AFSimple_Calculate(\"SUM\", [\"row\" + i]);", vec![]),
+        ("AFSimple_Calculate(\"SUM\", [\"a\", \"row\" + i]);", vec!["a"]),
+        ("AFSimple_Calculate(\"SUM\", [\"a\", \"b\"].concat(more));", vec!["a", "b"]),
+    ] {
+        assert_eq!(parse_calculate(js), None, "{js} is a script");
+        assert_eq!(calculation_reads(js), reads, "{js}");
+        assert_eq!(rename_in_calculation(js, "row", "line"), None, "{js}");
+    }
+    for js in [
+        "event.value = getField(\"a\").value + getField('b').value;",
+        "AFSimple_Calculate(\"SUM\", new Array(\"a\", \"b\"));",
+        "AFSimple_Calculate(\"SUM\", [\"a\", \"b\",]);",
+        "AFSimple_Calculate(\"SUM\", \"a, b\");",
+        "// getField(\"row\" + i)\nvar s = 'getField(name)'; event.value = 1;",
+        "/** BVCALC a + b EVCALC **/ event.value = getField(\"a\").value + getField(\"b\").value;",
+    ] {
+        assert!(!reads_built_names(js), "{js}");
+    }
+    // The names it does know are still read and renamed.
+    let js = "event.value = getField(\"a\").value + getField(\"row\" + i).value + AFSimple_Calculate(\"SUM\", new Array(\"a\", b));";
+    assert_eq!(calculation_reads(js), ["a"]);
+    assert_eq!(rename_in_calculation(js, "a", "qty"), Some(js.replace("\"a\"", "\"qty\"")));
+    // So are a list's, string or array, with another argument after it.
+    for js in ["AFSimple_Calculate(\"SUM\", \"a, b\", x);", "AFSimple_Calculate(\"SUM\", [\"a\", \"b\"], x);"] {
+        assert!(reads_built_names(js), "{js}");
+        assert_eq!(calculation_reads(js), ["a", "b"], "{js}");
+        assert_eq!(rename_in_calculation(js, "a", "qty"), Some(js.replace("\"a", "\"qty")), "{js}");
+    }
+}
+
 /// Scripts are read in one pass: a line of unfinished regular expressions, or calls nested in
 /// one another's field lists, don't make a rename read the rest of the script again for each.
 #[test]
@@ -164,6 +215,21 @@ fn hostile_scripts_are_read_in_one_pass() {
     assert!(rename_in_calculation(&regexes, "a", "b").is_some_and(|js| js.ends_with("getField(\"b\")")));
     let nested = format!("{}\"a\"", "AFSimple_Calculate(\"SUM\", new Array(".repeat(100_000));
     assert_eq!(rename_in_calculation(&nested, "a", "b"), Some(format!("{}\"b\"", "AFSimple_Calculate(\"SUM\", new Array(".repeat(100_000))));
+}
+
+/// A notation is stored only when it reads back from the script's comment as itself.
+#[test]
+fn a_notation_is_stored_only_when_it_reads_back() {
+    assert!(notation_storable("Price * Qty"));
+    assert!(notation_storable("  a + b  "), "the spaces around it are left out when it is read");
+    // A last name that ends in a space keeps it, escaped, when the notation is read back.
+    let total = "Qty * Total\\ ";
+    assert!(notation_storable(total));
+    let read = parse_calculate(&calculate_js(&Calculate::Notation(total.into())).unwrap());
+    assert_eq!(read.as_ref().map(Calculate::reads), Some(vec!["Qty".to_owned(), "Total ".to_owned()]));
+    for expr in ["", "  ", "a EVCALC b", "a */ x /*", "a */ b", "a\\"] {
+        assert!(!notation_storable(expr), "{expr:?}");
+    }
 }
 
 /// Notation is read through one lexer: field names with escapes, numbers and operators.
@@ -211,6 +277,16 @@ proptest::proptest! {
         proptest::prop_assert!(renamed.is_some(), "{js}");
         let back = renamed.as_deref().and_then(|r| rename_in_calculation(r, &new, &old));
         proptest::prop_assert_eq!(back, Some(js));
+    }
+
+    /// A notation of any names, written into a script, reads back from it as written.
+    #[test]
+    fn a_notation_reads_back_as_written(names in proptest::collection::vec("\\PC{1,8}", 1..5)) {
+        proptest::prop_assume!(!names.iter().any(|n| n.contains("VCALC")));
+        let expr = names.iter().map(|n| notation_name(n)).collect::<Vec<_>>().join(" + ");
+        let js = calculate_js(&Calculate::Notation(expr.clone())).unwrap();
+        proptest::prop_assert_eq!(parse_calculate(&js), Some(Calculate::Notation(expr.clone())));
+        proptest::prop_assert!(notation_storable(&expr), "{expr:?}");
     }
 
     /// What a formula reads is the same whether it is read from the tab's settings or from

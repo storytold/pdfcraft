@@ -1,5 +1,5 @@
 use super::zoom::GRID_ZOOM_STEP;
-use super::*;
+use super::{DestView, DocInfo, DocView, Fit, PT, PageLayout, SIDE, ViewAction, pos2, vec2};
 
 impl DocView {
     /// Where a bookmark made now should go: the page and the `/XYZ` position `[left, top]` in user
@@ -299,6 +299,43 @@ impl DocView {
     }
 }
 
+/// ⌘+ / ⌘− / ⌘0 / ⌘1 / ⌘2: zoom the page, or size the pages in the page grid.
+fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) -> bool) {
+    use egui::{Key, KeyboardShortcut, Modifiers};
+    let cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND, k);
+    // In the page grid ⌘+ / ⌘− / ⌘0 size its pages instead (looking is always allowed).
+    let (zoom_in, zoom_out, zoom_reset) = (pressed(cmd(Key::Plus)) || pressed(cmd(Key::Equals)), pressed(cmd(Key::Minus)), pressed(cmd(Key::Num0)));
+    if view.organize {
+        if zoom_in {
+            view.grid_zoom_request = Some(view.grid_zoom * GRID_ZOOM_STEP);
+        }
+        if zoom_out {
+            view.grid_zoom_request = Some(view.grid_zoom / GRID_ZOOM_STEP);
+        }
+        if zoom_reset {
+            view.grid_zoom_request = Some(1.0);
+        }
+    } else {
+        if zoom_in {
+            view.zoom_step(true);
+        }
+        if zoom_out {
+            view.zoom_step(false);
+        }
+        if zoom_reset {
+            view.fit = Fit::Page;
+            view.goto = Some((view.current, 0.0));
+        }
+    }
+    if pressed(cmd(Key::Num1)) {
+        view.set_zoom(1.0);
+    }
+    if pressed(cmd(Key::Num2)) {
+        view.fit = Fit::Width;
+        view.goto = Some((view.current, 0.0));
+    }
+}
+
 pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_speed::ScrollSpeed) {
     use egui::{Key, KeyboardShortcut, Modifiers};
     if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::F))) {
@@ -331,41 +368,15 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Minus)) {
         view.rotate_view(false);
     }
-    // In the page grid ⌘+ / ⌘− / ⌘0 size its pages instead (looking is always allowed).
-    let (zoom_in, zoom_out, zoom_reset) = (pressed(cmd(Key::Plus)) || pressed(cmd(Key::Equals)), pressed(cmd(Key::Minus)), pressed(cmd(Key::Num0)));
-    if view.organize {
-        if zoom_in {
-            view.grid_zoom_request = Some(view.grid_zoom * GRID_ZOOM_STEP);
-        }
-        if zoom_out {
-            view.grid_zoom_request = Some(view.grid_zoom / GRID_ZOOM_STEP);
-        }
-        if zoom_reset {
-            view.grid_zoom_request = Some(1.0);
-        }
-    } else {
-        if zoom_in {
-            view.zoom_step(true);
-        }
-        if zoom_out {
-            view.zoom_step(false);
-        }
-        if zoom_reset {
-            view.fit = Fit::Page;
-            view.goto = Some((view.current, 0.0));
-        }
-    }
-    if pressed(cmd(Key::Num1)) {
-        view.set_zoom(1.0);
-    }
-    if pressed(cmd(Key::Num2)) {
-        view.fit = Fit::Width;
-        view.goto = Some((view.current, 0.0));
-    }
-    if pressed(cmd(Key::OpenBracket)) {
+    zoom_shortcuts(view, &pressed);
+    // Alt+← / Alt+→ (⌥ on macOS) too, as in Acrobat and browsers, back to where a link was
+    // followed from (#3632). Consumed here, before ← / → turn the page. egui matches the pattern
+    // logically, so an extra Shift is ignored and Shift+Alt+← goes back as well (harmless).
+    let alt = |k| KeyboardShortcut::new(Modifiers::ALT, k);
+    if pressed(cmd(Key::OpenBracket)) || pressed(alt(Key::ArrowLeft)) {
         view.view_history(false);
     }
-    if pressed(cmd(Key::CloseBracket)) {
+    if pressed(cmd(Key::CloseBracket)) || pressed(alt(Key::ArrowRight)) {
         view.view_history(true);
     }
     let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && ctx.input(|i| i.key_pressed(k));
