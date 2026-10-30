@@ -41,6 +41,7 @@ struct Pending {
     boxes_now: bool,
     marks_now: bool,
     export_now: bool,
+    data_export_now: bool,
     props_now: bool,
     field_props_now: bool,
     bulk_field_props_now: bool,
@@ -398,6 +399,12 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.apply = go;
             req.export_now = req.apply;
             req.close = req.apply || cancel;
+            return false;
+        }
+        Dialog::ExportData(kind) => {
+            let (go, cancel) = crate::data_export_ui::body(ui, app, &t, kind);
+            req.data_export_now = go;
+            req.close = go || cancel;
             return false;
         }
         Dialog::Marks(kind) => {
@@ -1784,6 +1791,13 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
         && let Dialog::Export(kind) = dialog
     {
         app.start_export(kind);
+    }
+    if req.data_export_now
+        && let Dialog::ExportData(kind) = dialog
+        && let Some(format) = crate::data_export_ui::chosen(app, kind)
+    {
+        app.data_format = Some(format);
+        app.export_data_as(kind, format);
     }
     if req.marks_now
         && let (Dialog::Marks(kind), Some((_, id))) = (dialog, app.active_ids())

@@ -549,7 +549,7 @@ impl PdfCraftApp {
                 self.left = crate::LeftPanel::Tool("stamp");
                 self.reveal_tools();
             }
-            "comment.export" => self.export_data_dialog(true, false),
+            "comment.export" => self.export_data_dialog(crate::data_export_ui::DataKind::Comments),
             "comment.summarize" => self.dialog = Some(Dialog::SummarizeComments),
             "edit.column_select" => self.quick_tool = crate::QuickTool::ColumnSelect,
             "edit.snapshot" => {
@@ -645,7 +645,7 @@ impl PdfCraftApp {
                 self.choose_right_panel(Some(RightPanel::Signatures));
             }
             "sign.panel" => self.choose_right_panel(Some(RightPanel::Signatures)),
-            "form.export_data" => self.export_data_dialog(false, true),
+            "form.export_data" => self.export_data_dialog(crate::data_export_ui::DataKind::FormData),
             "form.merge_data" => self.merge_data_dialog(),
             "form.prepare" => {
                 self.left = crate::LeftPanel::Tool("form");
