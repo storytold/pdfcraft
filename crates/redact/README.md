@@ -22,7 +22,9 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   re-encode (DCT, JPX, JBIG2, CCITT) are removed whole (fail-closed); inline images under an
   area are removed. Images with separate `/SMask` or `/Mask` data, and images whose data decodes
   to more than twice their declared raster (plus a byte per row and 4 KiB), are removed whole;
-  cleared copies drop `/Alternates` so alternate pixels cannot survive;
+  cleared copies drop `/Alternates` so alternate pixels cannot survive. An image is measured by
+  the part the clip in force shows: a cropped image (placed larger than its crop, as office
+  suites export them) is left alone when only its hidden part reaches an area;
 - **vectors**: covered paths are removed; partly covered paths and shadings are clipped so
   nothing paints inside the areas;
 - **form XObjects**: rewritten recursively into new objects (pages sharing the original keep it);
