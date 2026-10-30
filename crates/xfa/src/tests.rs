@@ -780,6 +780,83 @@ fn dates_convert_between_iso_and_acrobat_patterns() {
     assert_eq!(pattern_to_iso("hello", "mm/dd/yyyy"), None);
 }
 
+/// A picture must describe a real Gregorian date, including the century leap-year rules.
+#[test]
+fn date_patterns_reject_impossible_calendar_dates() {
+    for text in ["1900-02-29", "2100-02-29", "2025-02-29", "2024-02-30", "2026-04-31", "2026-00-01", "2026-01-00"] {
+        assert_eq!(pattern_to_iso(text, "yyyy-mm-dd"), None, "{text}");
+    }
+    assert_eq!(pattern_to_iso("February 30, 2024", "mmmm dd, yyyy"), None);
+    assert_eq!(pattern_to_iso("02/29/01", "mm/dd/yy"), None);
+    for iso in ["1900-02-28", "2000-02-29", "2024-02-29", "2400-02-29", "2026-04-30"] {
+        let shown = iso_to_pattern(iso, "mm/dd/yyyy");
+        assert_eq!(pattern_to_iso(&shown, "mm/dd/yyyy").as_deref(), Some(iso), "{iso}");
+    }
+    assert_eq!(iso_to_pattern("2000-02-29", "dddd, mmmm dd, yyyy"), "Tuesday, February 29, 2000");
+    assert_eq!(pattern_to_iso("Tuesday, February 29, 2000", "dddd, mmmm dd, yyyy").as_deref(), Some("2000-02-29"));
+    assert_eq!(pattern_to_iso("Monday, February 29, 2000", "dddd, mmmm dd, yyyy"), None);
+}
+
+/// Invalid stored dates stay visible as written, without inventing a formatted date or weekday.
+#[test]
+fn impossible_iso_dates_are_not_formatted() {
+    for iso in ["1900-02-29", "2024-02-30", "2026-04-31", "2026-13-01", "2026-01-00", "4294967295-01-01"] {
+        for pattern in ["mm/dd/yyyy", "mmmm d, yyyy", "dddd, mmmm dd, yyyy"] {
+            assert_eq!(iso_to_pattern(iso, pattern), iso, "{iso}: {pattern}");
+        }
+        assert_eq!(crate::formatted_value("date{MM/DD/YYYY}", iso), None, "{iso}");
+    }
+}
+
+/// Layout and the live script tree preserve impossible data-picture values instead of turning
+/// them into apparently valid display/ISO dates. Valid leap days still take both conversions.
+#[test]
+fn date_data_pictures_preserve_impossible_dates() {
+    for (stored, raw, shown) in [("20230229", "20230229", "20230229"), ("20240229", "2024-02-29", "02/29/2024")] {
+        let xml = bound_date_template(&format!("<form><page><due>{stored}</due></page></form>"));
+        let (tpl, _) = parse(&xml).unwrap();
+        let data = parse_datasets(&xml).unwrap();
+        let form = layout_xml(&xml).unwrap();
+        let due = form.pages.iter().flat_map(widgets).find(|w| w.name == "due").unwrap();
+        assert_eq!(due.value.as_deref(), Some(shown));
+        let live = form_tree(&tpl, Some(&data), &Overrides::default()).root;
+        assert_eq!(node_at(&live, "form[0].page[0].due[0]").unwrap().value, raw);
+    }
+}
+
+/// An unrelated field edit must not normalize an impossible stored date. Exercise the actual
+/// PDF fields, datasets writer and incremental save/reopen, with a valid leap-day control.
+#[test]
+fn date_data_pictures_preserve_calendar_values_through_save() {
+    for (stored, shown) in [("2001-02-30", "2001-02-30"), ("19000229", "19000229"), ("20260431", "20260431"), ("20000229", "02/29/2000")] {
+        let xml = bound_date_template(&format!(
+            "<form><page><due>{stored}</due><when>2026-10-18</when><unbound keep=\"yes\">untouched</unbound></page></form>"
+        ));
+        let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
+        render_into(&mut doc).unwrap();
+        let mut fields = field_data(&doc);
+        assert!(fields.iter().any(|f| f.name == "due" && f.data == FieldData::Text(shown.into())), "{stored}: {fields:?}");
+        let before = read_packets(&doc).unwrap().unwrap().xdp;
+        assert_eq!(write_datasets(&mut doc, &fields).unwrap(), DatasetsWrite::default());
+        assert_eq!(read_packets(&doc).unwrap().unwrap().xdp, before, "no-op synchronization preserves the packet");
+        let when = fields.iter_mut().find(|f| f.name == "when").unwrap();
+        when.data = FieldData::Text("10/20/2026".into());
+        let written = write_datasets(&mut doc, &fields).unwrap();
+        assert!(written.written && written.warnings.is_empty(), "{written:?}");
+        let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        let reopened = Document::open(Arc::new(saved)).unwrap();
+        let packet = read_packets(&reopened).unwrap().unwrap();
+        let data = parse_datasets(&packet.xdp).unwrap();
+        assert_eq!(data.text_at(&som_to_path("form[0].page[0].due[0]")), Some(stored));
+        assert_eq!(data.text_at(&som_to_path("form[0].page[0].when[0]")), Some("2026-10-20"));
+        assert!(packet.xdp.contains("<unbound keep=\"yes\">untouched</unbound>"));
+        // A fresh layout uses the saved data, rather than trusting cached PDF field values.
+        let form = layout_xml(&packet.xdp).unwrap();
+        let due = form.pages.iter().flat_map(widgets).find(|w| w.name == "due").unwrap();
+        assert_eq!(due.value.as_deref(), Some(shown));
+    }
+}
+
 /// What scripts read as `formattedValue`: a date display picture shows the ISO value in its
 /// pattern (the first of several alternatives); other kinds of picture, and values that aren't
 /// ISO dates, leave the raw value.

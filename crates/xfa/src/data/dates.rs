@@ -1,3 +1,5 @@
+use chrono::{Datelike, NaiveDate};
+
 use super::path::template_field;
 use super::{Field, Template};
 
@@ -57,14 +59,6 @@ const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "Jun
 
 const WEEKDAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-/// The weekday (0 = Sunday) of a proleptic Gregorian date.
-fn weekday(y: u32, m: u32, d: u32) -> usize {
-    const T: [i64; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
-    let y = i64::from(y) - i64::from(m < 3);
-    let t = T.get((m as usize).wrapping_sub(1)).copied().unwrap_or(0);
-    ((y + y / 4 - y / 100 + y / 400 + t + i64::from(d)).rem_euclid(7)) as usize
-}
-
 /// The index and length of the name in `names` that `text` starts with (ignoring case),
 /// cut to `abbr` letters when that is set.
 fn name_at(text: &str, names: &[&str], abbr: bool) -> Option<(usize, usize)> {
@@ -103,11 +97,12 @@ pub(crate) fn date_tokens(pattern: &str) -> Vec<String> {
 }
 
 /// `2001-02-03` shown in `pattern` (`mm/dd/yyyy` → `02/03/2001`, `mmm d, yyyy` →
-/// `Feb 3, 2001`). Patterns with a token this doesn't know and non-dates come back as they are.
+/// `Feb 3, 2001`). Unknown patterns and invalid or out-of-range Gregorian dates stay as written.
 pub fn iso_to_pattern(iso: &str, pattern: &str) -> String {
     let parts: Vec<&str> = iso.trim().splitn(3, '-').collect();
     let [y, m, d] = parts[..] else { return iso.to_string() };
     let (Ok(y), Ok(m), Ok(d)) = (y.parse::<u32>(), m.parse::<u32>(), d.parse::<u32>()) else { return iso.to_string() };
+    let Some(date) = i32::try_from(y).ok().and_then(|y| NaiveDate::from_ymd_opt(y, m, d)) else { return iso.to_string() };
     let mut out = String::new();
     for t in date_tokens(pattern) {
         match t.as_str() {
@@ -125,7 +120,7 @@ pub fn iso_to_pattern(iso: &str, pattern: &str) -> String {
                 }
             }
             "ddd" | "dddd" => {
-                let name = WEEKDAYS.get(weekday(y, m, d)).copied().unwrap_or_default();
+                let name = WEEKDAYS.get(date.weekday().num_days_from_sunday() as usize).copied().unwrap_or_default();
                 match t.len() {
                     3 => out.push_str(name.get(..3).unwrap_or(name)),
                     _ => out.push_str(name),
@@ -138,7 +133,7 @@ pub fn iso_to_pattern(iso: &str, pattern: &str) -> String {
     out
 }
 
-/// A date typed as `pattern` back to `yyyy-mm-dd`. `None` when it doesn't match.
+/// A date typed as `pattern` back to `yyyy-mm-dd`; invalid or out-of-range Gregorian dates do not convert.
 pub fn pattern_to_iso(text: &str, pattern: &str) -> Option<String> {
     let text = text.trim();
     let (mut y, mut m, mut d) = (None, None, None);
@@ -186,8 +181,9 @@ pub fn pattern_to_iso(text: &str, pattern: &str) -> Option<String> {
         return None;
     }
     let (y, m, d) = (y?, m?, d?);
-    if day_name.is_some_and(|w| w != weekday(y, m, d)) {
+    let date = NaiveDate::from_ymd_opt(i32::try_from(y).ok()?, m, d)?;
+    if day_name.is_some_and(|w| w != date.weekday().num_days_from_sunday() as usize) {
         return None;
     }
-    (1..=12).contains(&m).then(|| format!("{y:04}-{m:02}-{d:02}")).filter(|_| (1..=31).contains(&d))
+    Some(format!("{y:04}-{m:02}-{d:02}"))
 }
