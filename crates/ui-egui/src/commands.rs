@@ -453,6 +453,9 @@ impl PdfCraftApp {
                 let Some(tool) = crate::comments::CommentTool::from_command(tool) else { return Some(false) };
                 self.comment_prefs.group_tool[tool.group()] = tool;
                 self.quick_tool = crate::QuickTool::Comment(tool);
+                // Chosen on purpose, from the bar, a menu or a key: a held E no longer owns the
+                // tool, so letting it go does not take the choice back (#3900).
+                self.eraser_key = None;
                 // Acrobat opens the Comments panel with the commenting tools, unless the user closed it.
                 if self.right.is_none() && !self.comments_panel_closed {
                     self.choose_right_panel(Some(RightPanel::Comments));

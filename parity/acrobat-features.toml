@@ -3751,8 +3751,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.eraser"]
 tools = []
-evidence = ["crates/annot/src/tests.rs::the_eraser_cuts_strokes_and_removes_empty_drawings", "crates/ui-egui/tests/it/comments.rs::erasing_part_of_a_drawing", "crates/ui-egui/tests/it/comments.rs::the_eraser_rubs_as_wide_as_its_thickness_setting"]
-notes = "cuts strokes where the eraser passes; an emptied drawing is deleted; one undo step. Its thickness setting sizes it on screen (3 to 72 pixels across; the default 2 pt is 12), preview included (#3747)"
+evidence = ["crates/annot/src/tests.rs::the_eraser_cuts_strokes_and_removes_empty_drawings", "crates/ui-egui/tests/it/comments.rs::erasing_part_of_a_drawing", "crates/ui-egui/tests/it/comments.rs::the_eraser_rubs_as_wide_as_its_thickness_setting", "crates/ui-egui/tests/it/comments.rs::the_e_key_toggles_the_eraser_when_tapped_and_borrows_it_when_held"]
+notes = "cuts strokes where the eraser passes; an emptied drawing is deleted; one undo step. Its thickness setting sizes it on screen (3 to 72 pixels across; the default 2 pt is 12), preview included (#3747). E and B swap the Draw tool and the Eraser (#3900): a tap of E (under 0.35 s) switches to the Eraser and stays, a second tap of E or a tap of B goes back to Draw, and holding E is the Eraser only until it is let go. The keys act only from the Draw tool or the Eraser, and not while a text field, a form field, a dialog or the palette has the keyboard; the shortcut is not yet in the shortcuts list and cannot be rebound"
 
 [[feature]]
 id = "comment.line"

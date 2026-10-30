@@ -3,6 +3,7 @@ use super::*;
 impl PdfCraftApp {
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
         use egui::Key;
+        self.eraser_key_frame(ctx);
         let pasted = self.paste_key_released(ctx);
         // "Save changes?" is modal: its keys are its own (⌘D is Don't save there, not Document
         // properties; Escape cancels it rather than clearing a selection), and nothing may run
@@ -81,7 +82,48 @@ impl PdfCraftApp {
     }
 }
 
+use crate::comments::CommentTool;
+
+/// How long E must be held for the Eraser to be only temporary (#3900).
+const ERASER_HOLD_SECS: f64 = 0.35;
+const DRAW: QuickTool = QuickTool::Comment(CommentTool::Ink);
+const ERASER: QuickTool = QuickTool::Comment(CommentTool::Eraser);
+
 impl PdfCraftApp {
+    /// Make `tool` the active one and the one its quick-bar group shows, as choosing it from the
+    /// bar or its command does.
+    fn set_drawing_tool(&mut self, tool: CommentTool) {
+        self.comment_prefs.group_tool[tool.group()] = tool;
+        self.quick_tool = QuickTool::Comment(tool);
+    }
+
+    /// The end of a held E (#3900), settled every frame, even under a dialog, so that the
+    /// moment the key comes up is the moment it is read. A hold of [`ERASER_HOLD_SECS`] or more
+    /// gives the Draw tool back; a tap leaves the Eraser. The hold is over, with nothing given
+    /// back, once the user has chosen another tool. Space's temporary Hand may sit on top of the
+    /// Eraser meanwhile: it then returns to Draw when Space is let go.
+    pub(super) fn eraser_key_frame(&mut self, ctx: &egui::Context) {
+        let Some(since) = self.eraser_key else { return };
+        let on_top = self.quick_tool == QuickTool::Hand && self.space_hand == Some(ERASER);
+        if self.quick_tool != ERASER && !on_top {
+            self.eraser_key = None;
+            return;
+        }
+        if ctx.input(|input| input.key_down(egui::Key::E)) {
+            return;
+        }
+        self.eraser_key = None;
+        if ctx.input(|input| input.time) - since >= ERASER_HOLD_SECS {
+            if on_top {
+                // The Hand gives Draw back when Space is let go, and the bar shows it already.
+                self.space_hand = Some(DRAW);
+                self.comment_prefs.group_tool[CommentTool::Ink.group()] = CommentTool::Ink;
+            } else {
+                self.set_drawing_tool(CommentTool::Ink);
+            }
+        }
+    }
+
     /// The quick tools' keys, as in Acrobat: V selects, H pans, and holding Space pans until it
     /// is released. Plain letters, so not while a text field, a form field, a dialog or the
     /// palette has the keyboard.
@@ -99,6 +141,38 @@ impl PdfCraftApp {
         }
         if !free || !plain {
             return;
+        }
+        // E and B swap the Draw tool and the Eraser (#3900): a tap of E switches to the Eraser and
+        // stays, another tap of E or a tap of B goes back; holding E is the Eraser only while held.
+        // Only from one of the two, so E means nothing to any other tool. The press itself must be
+        // plain too: a Shift+E let go within the frame leaves the frame's modifiers empty. Presses
+        // are taken in the order they came, as a frame can hold more than one.
+        let presses: Vec<Key> = ctx.input(|input| {
+            input
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Key { key: key @ (Key::E | Key::B), pressed: true, repeat: false, modifiers, .. } if modifiers.is_none() => {
+                        Some(*key)
+                    }
+                    _ => None,
+                })
+                .collect()
+        });
+        for key in presses {
+            match (key, self.quick_tool) {
+                (Key::E, DRAW) => {
+                    self.set_drawing_tool(CommentTool::Eraser);
+                    // A hold is timed only while E is still down: a tap whose release came in the
+                    // same frame is over, and the next frame may come much later.
+                    self.eraser_key = ctx.input(|input| input.key_down(Key::E)).then(|| ctx.input(|input| input.time));
+                }
+                (Key::E | Key::B, ERASER) => {
+                    self.set_drawing_tool(CommentTool::Ink);
+                    self.eraser_key = None;
+                }
+                _ => {}
+            }
         }
         if ctx.input(|input| input.key_pressed(Key::V)) {
             self.quick_tool = QuickTool::Select;

@@ -308,6 +308,8 @@ impl PdfCraftApp {
                         QuickTool::Comment(t)
                     }
                 };
+                // A tool chosen on purpose: a held E no longer owns it, as with the command (#3900).
+                self.eraser_key = None;
             }
             ("author", _) => self.comment_prefs.author = value.to_string(),
             ("comment-tool-pinned", _) => {

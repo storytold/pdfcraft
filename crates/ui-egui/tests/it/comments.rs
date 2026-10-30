@@ -644,6 +644,245 @@ fn pen_strokes_stay_unselected_so_writing_continues() {
     assert_eq!(h.state().views[0].comments.selected, Some((0, 2)));
 }
 
+/// The Draw and Eraser tools for the E-key tests, and what the quick bar's group shows for them.
+mod eraser_key {
+    pub use pdfcraft_ui_egui::QuickTool;
+    pub use pdfcraft_ui_egui::comments::CommentTool;
+
+    pub const DRAW: QuickTool = QuickTool::Comment(CommentTool::Ink);
+    pub const ERASER: QuickTool = QuickTool::Comment(CommentTool::Eraser);
+}
+
+/// The active tool, and the tool the quick bar's group shows for it, which must agree.
+fn tool_and_bar(h: &Harness<'static, PdfCraftApp>) -> (QuickTool, pdfcraft_ui_egui::comments::CommentTool) {
+    let s = h.state();
+    (s.quick_tool, s.comment_prefs.group_tool[eraser_key::CommentTool::Ink.group()])
+}
+
+fn eraser_harness() -> Harness<'static, PdfCraftApp> {
+    let mut h = harness(|app| app.set_option("quick", "ink").unwrap());
+    h.state_mut().set_option("panel", "none").unwrap();
+    h.run_steps(2);
+    h
+}
+
+/// #3900: E and B swap the Draw tool and the Eraser. A tap of E stays on the Eraser until E or B
+/// is tapped again; holding E is the Eraser only while it is held. The quick bar follows.
+#[test]
+fn the_e_key_toggles_the_eraser_when_tapped_and_borrows_it_when_held() {
+    use eraser_key::*;
+    let mut h = eraser_harness();
+    assert_eq!(tool_and_bar(&h), (DRAW, CommentTool::Ink));
+
+    // A tap goes to the Eraser and stays; the next tap of E goes back.
+    h.key_press(egui::Key::E);
+    h.run_steps(4);
+    assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser), "a tap of E stays on the Eraser, and the bar shows it");
+    h.key_press(egui::Key::E);
+    h.run_steps(4);
+    assert_eq!(tool_and_bar(&h), (DRAW, CommentTool::Ink), "tapping E again goes back to Draw");
+
+    // B also goes back.
+    h.key_press(egui::Key::E);
+    h.run_steps(4);
+    assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser));
+    h.key_press(egui::Key::B);
+    h.run_steps(4);
+    assert_eq!(tool_and_bar(&h), (DRAW, CommentTool::Ink), "B goes back to Draw");
+
+    // Held: the Eraser while the key is down, Draw again the moment it is let go.
+    h.key_down(egui::Key::E);
+    h.run_steps(2);
+    assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser), "held E is the Eraser");
+    h.run_steps(6);
+    assert_eq!(h.state().quick_tool, ERASER, "and stays while it is held");
+    h.key_up(egui::Key::E);
+    h.run_steps(3);
+    assert_eq!(tool_and_bar(&h), (DRAW, CommentTool::Ink), "letting go gives the Draw tool back");
+
+    // No other tool reads E.
+    h.state_mut().set_option("quick", "square").unwrap();
+    h.run_steps(2);
+    h.key_press(egui::Key::E);
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::Comment(CommentTool::Rectangle), "E leaves other tools alone");
+}
+
+/// #3900: a modified E or B is not the tool key, even when the modifier is let go within the
+/// frame, so that the frame's own modifiers are empty and only the key event carries them.
+#[test]
+fn a_modified_e_or_b_leaves_the_draw_tool_and_the_eraser_alone() {
+    use eraser_key::*;
+    // Pressed and released with Shift, in events only: the frame's modifiers stay empty.
+    let modified = |h: &mut Harness<'static, PdfCraftApp>, key| {
+        for pressed in [true, false] {
+            h.event(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::SHIFT });
+        }
+    };
+    let mut h = eraser_harness();
+    modified(&mut h, egui::Key::E);
+    h.run_steps(4);
+    assert_eq!(tool_and_bar(&h), (DRAW, CommentTool::Ink), "Shift+E keeps the Draw tool");
+
+    h.key_press(egui::Key::E);
+    h.run_steps(4);
+    assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser));
+    for key in [egui::Key::E, egui::Key::B] {
+        modified(&mut h, key);
+        h.run_steps(4);
+        assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser), "Shift+{key:?} keeps the Eraser");
+    }
+}
+
+/// Key events all in one frame, at `time`: kittest's own key calls give each event a frame.
+fn keys_in_one_frame(h: &mut Harness<'static, PdfCraftApp>, time: f64, keys: &[(egui::Key, bool)]) {
+    h.input_mut().time = Some(time);
+    for &(key, pressed) in keys {
+        h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE });
+    }
+    h.step();
+}
+
+/// #3900: a tap of E whose release comes in the same frame is a tap, however long it is until
+/// the next frame (egui draws again only when something happens).
+#[test]
+fn a_tap_of_e_within_one_frame_stays_on_the_eraser_after_a_pause() {
+    use eraser_key::*;
+    let mut h = eraser_harness();
+    keys_in_one_frame(&mut h, 100.0, &[(egui::Key::E, true), (egui::Key::E, false)]);
+    assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser));
+    h.input_mut().time = Some(105.0);
+    h.run_steps(3);
+    assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser), "the tap stays on the Eraser");
+}
+
+/// #3900: B and E in one frame are taken in the order they came: B goes back to Draw, then E
+/// goes to the Eraser.
+#[test]
+fn e_and_b_in_one_frame_are_taken_in_order() {
+    use eraser_key::*;
+    let mut h = eraser_harness();
+    h.key_press(egui::Key::E);
+    h.run_steps(4);
+    assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser));
+    let t = h.ctx.input(|i| i.time) + 1.0;
+    keys_in_one_frame(&mut h, t, &[(egui::Key::B, true), (egui::Key::E, true), (egui::Key::B, false), (egui::Key::E, false)]);
+    h.run_steps(3);
+    assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser), "B then E ends on the Eraser");
+}
+
+/// #3900: the Eraser chosen through the control channel while E is held is a choice, so letting
+/// E go after a hold does not take it back, as with the command.
+#[test]
+fn the_eraser_chosen_through_the_control_channel_outlasts_a_held_e() {
+    use eraser_key::*;
+    let mut h = eraser_harness();
+    h.key_down(egui::Key::E);
+    h.run_steps(8);
+    assert_eq!(h.state().quick_tool, ERASER, "held E is the Eraser");
+    h.state_mut().set_option("quick", "eraser").unwrap();
+    h.key_up(egui::Key::E);
+    h.run_steps(3);
+    assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser), "the control channel's choice stands");
+}
+
+/// #3900: E let go while a dialog is open is read when it comes up, not when the dialog closes: a
+/// tap stays on the Eraser however long the dialog stays, a hold gives Draw back under it.
+#[test]
+fn the_e_key_is_settled_when_it_comes_up_even_under_a_dialog() {
+    use eraser_key::*;
+    // A tap whose key comes up under a dialog that then stays open a long time.
+    let mut h = eraser_harness();
+    h.key_down(egui::Key::E);
+    h.run_steps(1);
+    assert_eq!(h.state().quick_tool, ERASER);
+    h.state_mut().set_option("dialog", "about").unwrap();
+    h.key_up(egui::Key::E);
+    h.run_steps(1);
+    h.run_steps(8);
+    h.state_mut().dialog = None;
+    h.run_steps(4);
+    assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser), "a tap is still a tap after the dialog");
+
+    // A hold that comes up under a dialog gives Draw back at once.
+    let mut h = eraser_harness();
+    h.key_down(egui::Key::E);
+    h.run_steps(1);
+    h.state_mut().set_option("dialog", "about").unwrap();
+    h.run_steps(4);
+    h.key_up(egui::Key::E);
+    h.run_steps(1);
+    assert_eq!(tool_and_bar(&h), (DRAW, CommentTool::Ink), "a long hold ends with the key, dialog or not");
+
+    // With a dialog open already, E starts nothing.
+    let mut h = eraser_harness();
+    h.state_mut().set_option("dialog", "about").unwrap();
+    h.run_steps(3);
+    h.key_press(egui::Key::E);
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, DRAW, "a dialog has the keyboard");
+}
+
+/// #3900: choosing a tool while E is held ends the hold, even choosing the Eraser itself.
+#[test]
+fn choosing_a_tool_while_e_is_held_ends_the_hold() {
+    use eraser_key::*;
+    let mut h = eraser_harness();
+    h.key_down(egui::Key::E);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, ERASER);
+    h.state_mut().set_option("quick", "square").unwrap();
+    h.run_steps(2);
+    h.state_mut().execute("comment.eraser");
+    h.run_steps(6);
+    assert_eq!(h.state().quick_tool, ERASER, "the Eraser was chosen on purpose");
+    h.key_up(egui::Key::E);
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, ERASER, "and a late release does not take it away");
+
+    // Choosing the Eraser itself, with nothing between: it was the Eraser already, but the
+    // choice still ends the hold, whether the bar, a menu or a command made it.
+    let mut h = eraser_harness();
+    h.key_down(egui::Key::E);
+    h.run_steps(6);
+    assert!(h.state_mut().execute("comment.eraser"));
+    h.run_steps(1);
+    h.key_up(egui::Key::E);
+    h.run_steps(3);
+    assert_eq!(tool_and_bar(&h), (ERASER, CommentTool::Eraser), "choosing the Eraser while E is held keeps it");
+}
+
+/// #3900: Space's temporary Hand on top of a held E returns to Draw, whichever key comes up first.
+#[test]
+fn a_held_e_and_a_held_space_unwind_in_either_order() {
+    use eraser_key::*;
+    // E up first, while Space still holds the Hand.
+    let mut h = eraser_harness();
+    h.key_down(egui::Key::E);
+    h.run_steps(6);
+    h.key_down(egui::Key::Space);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand, "Space is the Hand");
+    h.key_up(egui::Key::E);
+    h.run_steps(2);
+    h.key_up(egui::Key::Space);
+    h.run_steps(3);
+    assert_eq!(tool_and_bar(&h), (DRAW, CommentTool::Ink), "E ended first: Draw comes back with the Hand");
+
+    // Space up first: the Eraser is back under the still-held E, then E gives Draw back.
+    let mut h = eraser_harness();
+    h.key_down(egui::Key::E);
+    h.run_steps(6);
+    h.key_down(egui::Key::Space);
+    h.run_steps(2);
+    h.key_up(egui::Key::Space);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, ERASER, "Space up gives the Eraser back");
+    h.key_up(egui::Key::E);
+    h.run_steps(3);
+    assert_eq!(tool_and_bar(&h), (DRAW, CommentTool::Ink), "and E up gives Draw");
+}
+
 #[test]
 fn sticky_note_composer_posts_and_returns_to_select() {
     let mut h = harness(|app| app.set_option("quick", "note").unwrap());
