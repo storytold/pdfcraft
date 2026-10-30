@@ -183,3 +183,6 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.DerKarussellbremser]
+real_name = "Robin Peltner"
