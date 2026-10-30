@@ -534,6 +534,12 @@ pub(crate) fn selectable_images(
         .collect())
 }
 
+/// Whether an XObject drawn at or after operator `from` of the page's joined operators shows
+/// inside `rect` (user space).
+pub(crate) fn painted_over(doc: &Document, page: usize, rect: [f64; 4], from: usize) -> Result<bool, EditError> {
+    Ok(page_images(doc, page)?.iter().any(|i| i.op >= from && i.visible_rect.and_then(|v| intersection(v, rect)).is_some()))
+}
+
 /// Find the saved graphics-state scope containing just this image and its crop. Applying
 /// the transform before that scope moves the actual clipping path as well as the pixels.
 /// A shared clip must never be moved along with unrelated artwork or text.

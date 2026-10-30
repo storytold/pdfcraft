@@ -25,6 +25,26 @@ pub(super) struct TextState {
 }
 
 impl TextState {
+    /// The state a page's content starts in (ISO 32000-2 §8.4.1, §9.3.1): what is in force on
+    /// top of the page, after its content wrapped in `q`/`Q`.
+    pub(crate) fn initial() -> Self {
+        TextState {
+            font: None,
+            char_spacing: 0.0,
+            word_spacing: 0.0,
+            scale: 1.0,
+            leading: 0.0,
+            rise: 0.0,
+            fill: Vec::new(),
+            render_mode: 0,
+            stroke: Vec::new(),
+            line_width: None,
+            ext_gstate: Vec::new(),
+            dash: (Vec::new(), 0.0),
+            line_cap: 0,
+        }
+    }
+
     pub(super) fn of(ts: &Ts) -> Self {
         TextState {
             font: ts.font.as_ref().map(|(n, _)| (String::from_utf8_lossy(n).into_owned(), ts.size)),
