@@ -12,6 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
+use rten_imageproc::{RectF, RotatedRect};
+
 pub use pdfcraft_fonts::helvetica_width;
 
 /// The model files, as named in ATTRIBUTION.toml.
@@ -106,6 +108,46 @@ impl Line {
     }
 }
 
+/// How far each found line is widened before its image is cut out for recognition, as fractions
+/// of the line's median word height: above and below every word, and before its first and after
+/// its last word. ocrs grows each word box by a fixed 3 pixels, a sliver of a letter on a page
+/// scanned at 300 dpi or more: the line images clipped the first and last letters ("The" read as
+/// "he", "and" as "an", closing full stops lost), and the more so the higher the resolution.
+/// Chosen on synthetic pages at 150 to 400 dpi, clean and noisy, and on MDPBench's pages. More
+/// padding above and below costs small, noisy text (the recogniser scales each line image to a
+/// fixed height, so the margin leaves less height for the letters): at 0.15 the 8 pt "Telefon"
+/// label of a noisy form scanned at 150 dpi read "Teleton".
+const LINE_PAD_ACROSS: f32 = 0.12;
+const LINE_PAD_ALONG: f32 = 0.1;
+
+/// Widen `line` (its word boxes, in reading order) as [`LINE_PAD_ACROSS`] and
+/// [`LINE_PAD_ALONG`] say, after the lines were found, so finding them is unchanged. Returns the
+/// box the words covered before, which the recognised words are clipped to: the text layer sizes
+/// its text from them.
+fn pad_line(line: &mut [RotatedRect]) -> Option<RectF> {
+    let before = rten_imageproc::bounding_rect(line.iter())?;
+    // A box's height runs along its up axis and its width along the line, whichever way the
+    // line lies on the page.
+    let mut heights: Vec<f32> = line.iter().map(RotatedRect::height).filter(|h| h.is_finite() && *h > 0.0).collect();
+    heights.sort_by(f32::total_cmp);
+    let height = heights.get(heights.len() / 2).copied().unwrap_or(0.0);
+    let last = line.len().saturating_sub(1);
+    for (i, r) in line.iter_mut().enumerate() {
+        let along = if i == 0 || i == last { 2.0 * LINE_PAD_ALONG * height } else { 0.0 };
+        let across = 2.0 * LINE_PAD_ACROSS * height;
+        r.resize(r.width() + along, r.height() + across);
+    }
+    Some(before)
+}
+
+/// `rect` ([left, top, right, bottom]) clipped to `to`; unchanged if that leaves nothing.
+fn clip(rect: [f32; 4], to: Option<RectF>) -> [f32; 4] {
+    let Some(to) = to else { return rect };
+    let [l, t, r, b] = rect;
+    let clipped = [l.max(to.left()), t.max(to.top()), r.min(to.right()), b.min(to.bottom())];
+    if clipped[0] < clipped[2] && clipped[1] < clipped[3] { clipped } else { rect }
+}
+
 /// A loaded recogniser. Loading takes a moment; keep one and reuse it.
 pub struct Ocr {
     engine: ocrs::OcrEngine,
@@ -144,18 +186,20 @@ impl Ocr {
         let source = ocrs::ImageSource::from_bytes(&rgb, (width, height)).map_err(|e| err(&e))?;
         let input = self.engine.prepare_input(source).map_err(|e| err(&e))?;
         let found = self.engine.detect_words(&input).map_err(|e| err(&e))?;
-        let lines = self.engine.find_text_lines(&input, &found);
+        let mut lines = self.engine.find_text_lines(&input, &found);
+        let before: Vec<Option<RectF>> = lines.iter_mut().map(|l| pad_line(l)).collect();
         let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
         use ocrs::TextItem;
         Ok(read
             .into_iter()
-            .flatten()
-            .map(|line| Line {
+            .zip(before)
+            .filter_map(|(line, before)| line.map(|l| (l, before)))
+            .map(|(line, before)| Line {
                 words: line
                     .words()
                     .map(|w| {
                         let r = w.bounding_rect();
-                        Word { text: w.to_string(), rect: [r.left() as f32, r.top() as f32, r.right() as f32, r.bottom() as f32] }
+                        Word { text: w.to_string(), rect: clip([r.left() as f32, r.top() as f32, r.right() as f32, r.bottom() as f32], before) }
                     })
                     .filter(|w| !w.text.trim().is_empty())
                     .collect(),
@@ -248,6 +292,36 @@ pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rten_imageproc::{PointF, Vec2};
+
+    /// A found line is widened by fractions of its word height: every word above and below, the
+    /// first and the last word along the line; the box returned is the line's before.
+    #[test]
+    fn a_line_is_padded_by_its_word_height() {
+        let word = |l: f32, r: f32| RotatedRect::from_rect(RectF::from_tlbr(100.0, l, 140.0, r));
+        let mut line = vec![word(10.0, 90.0), word(100.0, 200.0), word(210.0, 260.0)];
+        let before = pad_line(&mut line).unwrap();
+        assert_eq!([before.left(), before.top(), before.right(), before.bottom()], [10.0, 100.0, 260.0, 140.0]);
+        let (across, along) = (2.0 * 0.12 * 40.0, 2.0 * 0.1 * 40.0);
+        assert!(line.iter().all(|r| (r.height() - (40.0 + across)).abs() < 1e-3));
+        assert!((line[0].width() - (80.0 + along)).abs() < 1e-3 && (line[2].width() - (50.0 + along)).abs() < 1e-3);
+        assert!((line[1].width() - 100.0).abs() < 1e-3, "a word inside the line keeps its width");
+        // A box on its side (up axis horizontal) keeps its height across the line and its width
+        // along it.
+        let mut side = vec![RotatedRect::new(PointF::from_yx(0.0, 0.0), Vec2::from_yx(0.0, 1.0), 40.0, 80.0)];
+        pad_line(&mut side).unwrap();
+        assert!((side[0].height() - (80.0 + 2.0 * 0.12 * 80.0)).abs() < 1e-3 && (side[0].width() - (40.0 + 2.0 * 0.1 * 80.0)).abs() < 1e-3);
+        assert!(pad_line(&mut []).is_none());
+    }
+
+    #[test]
+    fn recognised_words_are_clipped_to_the_line_found() {
+        let line = Some(RectF::from_tlbr(100.0, 10.0, 140.0, 260.0));
+        assert_eq!(clip([4.0, 94.0, 60.0, 146.0], line), [10.0, 100.0, 60.0, 140.0]);
+        // A word wholly in the padding keeps its own box rather than none.
+        assert_eq!(clip([262.0, 94.0, 270.0, 146.0], line), [262.0, 94.0, 270.0, 146.0]);
+        assert_eq!(clip([1.0, 2.0, 3.0, 4.0], None), [1.0, 2.0, 3.0, 4.0]);
+    }
 
     #[test]
     fn places_words_through_the_mapping() {
