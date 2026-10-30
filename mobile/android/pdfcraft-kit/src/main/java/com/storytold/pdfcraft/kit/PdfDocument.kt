@@ -810,4 +810,121 @@ class PdfDocument(
     fun compare(other: PdfDocument): List<uniffi.pdfcraft_ffi.FfiDocumentChange> {
         return engine.compareDocuments(docId, other.docId)
     }
+
+    // MARK: - PDF Conversion, Security & Editing Workflows
+
+    /**
+     * Exports the reading-order text of pages to a .txt file.
+     */
+    fun exportText(outPath: String, pages: List<Int>? = null) {
+        val pagesJson = if (pages != null) {
+            "\"pages\": [" + pages.joinToString(",") { (it + 1).toString() } + "], "
+        } else ""
+        invokeTool("doc_export_text", """{"doc": $docId, ${pagesJson}"path": "$outPath"}""")
+    }
+
+    /**
+     * Exports pages as image files (PNG, JPEG or TIFF) into an output directory.
+     */
+    fun exportImages(outDir: String, format: String = "png", dpi: Float = 150f) {
+        invokeTool("doc_export_images", """{"doc": $docId, "folder": "$outDir", "format": "$format", "dpi": $dpi}""")
+    }
+
+    /**
+     * Flattens interactive annotations, comments, and form fields into page content.
+     */
+    fun flatten(comments: Boolean = true, fields: Boolean = true) {
+        invokeTool("doc_flatten", """{"doc": $docId, "comments": $comments, "fields": $fields}""")
+        geometryCache.clear()
+    }
+
+    /**
+     * Updates document metadata entries (Title, Author, Subject, Keywords).
+     */
+    fun setMetadata(
+        title: String? = null,
+        author: String? = null,
+        subject: String? = null,
+        keywords: String? = null
+    ) {
+        title?.let { invokeTool("doc_set_info", """{"doc": $docId, "key": "Title", "value": "$it"}""") }
+        author?.let { invokeTool("doc_set_info", """{"doc": $docId, "key": "Author", "value": "$it"}""") }
+        subject?.let { invokeTool("doc_set_info", """{"doc": $docId, "key": "Subject", "value": "$it"}""") }
+        keywords?.let { invokeTool("doc_set_info", """{"doc": $docId, "key": "Keywords", "value": "$it"}""") }
+    }
+
+    /**
+     * Protects the document with open and/or permissions password and restricts capabilities.
+     */
+    fun protect(
+        openPassword: String? = null,
+        permissionsPassword: String? = null,
+        printing: String = "full",
+        changes: String = "any-except-extract",
+        copy: Boolean = true,
+        accessibility: Boolean = true
+    ) {
+        val openArg = if (openPassword != null) "\"open_password\": \"$openPassword\", " else ""
+        val permArg = if (permissionsPassword != null) {
+            "\"permissions_password\": \"$permissionsPassword\", \"printing\": \"$printing\", \"changes\": \"$changes\", \"copy\": $copy, \"accessibility\": $accessibility, "
+        } else ""
+        invokeTool("doc_protect", """{"doc": $docId, $openArg$permArg"compatibility": "aes-256"}""")
+    }
+
+    /**
+     * Removes password protection from the document.
+     */
+    fun unprotect() {
+        invokeTool("doc_unprotect", """{"doc": $docId}""")
+    }
+
+    /**
+     * Adds a text watermark across pages.
+     */
+    fun addWatermark(
+        text: String,
+        opacity: Float = 0.5f,
+        rotation: Double = 45.0,
+        fontSize: Float? = null,
+        replace: Boolean = true
+    ) {
+        val fontArg = if (fontSize != null) "\"font_size\": $fontSize, " else ""
+        invokeTool("doc_watermark", """{"doc": $docId, "text": "$text", "opacity": $opacity, "rotation": $rotation, ${fontArg}"replace": $replace}""")
+        geometryCache.clear()
+    }
+
+    /**
+     * Adds headers and/or footers with optional text in left, center, and right blocks.
+     */
+    fun addHeaderFooter(
+        headerLeft: String? = null,
+        headerCenter: String? = null,
+        headerRight: String? = null,
+        footerLeft: String? = null,
+        footerCenter: String? = null,
+        footerRight: String? = null,
+        shrink: Boolean = false,
+        replace: Boolean = true
+    ) {
+        val parts = mutableListOf<String>()
+        headerLeft?.let { parts.add("\"header_left\": \"$it\"") }
+        headerCenter?.let { parts.add("\"header_center\": \"$it\"") }
+        headerRight?.let { parts.add("\"header_right\": \"$it\"") }
+        footerLeft?.let { parts.add("\"footer_left\": \"$it\"") }
+        footerCenter?.let { parts.add("\"footer_center\": \"$it\"") }
+        footerRight?.let { parts.add("\"footer_right\": \"$it\"") }
+        parts.add("\"shrink\": $shrink")
+        parts.add("\"replace\": $replace")
+        val args = parts.joinToString(", ")
+        invokeTool("doc_header_footer", """{"doc": $docId, $args}""")
+        geometryCache.clear()
+    }
+
+    /**
+     * Extracts pages into a new PDF document.
+     */
+    fun extractPages(pages: List<Int>, outPath: String) {
+        val pagesStr = "[" + pages.joinToString(",") { (it + 1).toString() } + "]"
+        invokeTool("page_extract", """{"doc": $docId, "pages": $pagesStr, "out": "$outPath"}""")
+    }
 }

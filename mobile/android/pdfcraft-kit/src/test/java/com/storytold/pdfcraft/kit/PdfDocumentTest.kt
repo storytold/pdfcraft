@@ -339,4 +339,100 @@ class PdfDocumentTest {
         otherDoc.close()
         doc.close()
     }
+
+    @Test
+    fun testConversionFeaturesExportTextImagesAndPdfA() {
+        val bytes = SAMPLE_PDF_WITH_TEXT.toByteArray(StandardCharsets.UTF_8)
+        val doc = PdfDocument.openBytes(bytes = bytes, name = "conv_test.pdf")
+
+        // 1. Export text to temporary file
+        val tempTxt = File.createTempFile("export_test", ".txt")
+        tempTxt.deleteOnExit()
+        doc.exportText(tempTxt.absolutePath)
+        val textContent = tempTxt.readText(StandardCharsets.UTF_8)
+        assertTrue(textContent.contains("CONFIDENTIAL"))
+
+        // 2. Export images to temporary directory
+        val tempDir = java.nio.file.Files.createTempDirectory("export_images").toFile()
+        doc.exportImages(tempDir.absolutePath, format = "png", dpi = 72f)
+        val exportedImages = tempDir.listFiles { _, name -> name.endsWith(".png") }
+        assertNotNull(exportedImages)
+        assertTrue(exportedImages!!.isNotEmpty())
+
+        // 3. Extract pages to a new PDF
+        val tempExtracted = File.createTempFile("extracted", ".pdf")
+        tempExtracted.deleteOnExit()
+        doc.extractPages(listOf(0), tempExtracted.absolutePath)
+        assertTrue(tempExtracted.exists() && tempExtracted.length() > 0)
+
+        // 4. Convert to PDF/A
+        val fixed = doc.convertToPdfA("pdfa2b")
+        assertTrue(fixed >= 0u)
+
+        tempDir.deleteRecursively()
+        doc.close()
+    }
+
+    @Test
+    fun testEditingFeaturesMetadataWatermarkHeaderFooterAndFlatten() {
+        val bytes = SAMPLE_PDF_WITH_TEXT.toByteArray(StandardCharsets.UTF_8)
+        val doc = PdfDocument.openBytes(bytes = bytes, name = "edit_test.pdf")
+
+        // 1. Set metadata
+        doc.setMetadata(
+            title = "Mobile Editing Test",
+            author = "PdfCraft Test Suite",
+            subject = "Automated Unit Test",
+            keywords = "mobile, test, pdfcraft"
+        )
+        val info = doc.engine.docInfo(doc.docId)
+        assertEquals("Mobile Editing Test", info.title)
+        assertEquals("PdfCraft Test Suite", info.author)
+        assertEquals("Automated Unit Test", info.subject)
+        assertEquals("mobile, test, pdfcraft", info.keywords)
+
+        // 2. Add Watermark
+        doc.addWatermark(text = "TEST WATERMARK", opacity = 0.3f, rotation = 45.0)
+
+        // 3. Add Header & Footer
+        doc.addHeaderFooter(
+            headerLeft = "Internal Draft",
+            footerCenter = "Page 1 of 1"
+        )
+
+        // 4. Flatten document
+        doc.flatten(comments = true, fields = true)
+
+        doc.close()
+    }
+
+    @Test
+    fun testSecurityPasswordProtectAndUnprotect() {
+        val bytes = SAMPLE_PDF_WITH_TEXT.toByteArray(StandardCharsets.UTF_8)
+        val doc = PdfDocument.openBytes(bytes = bytes, name = "security_test.pdf")
+
+        // Protect with open password
+        doc.protect(
+            openPassword = "UserPass123!",
+            permissionsPassword = "OwnerPass456!",
+            printing = "low-resolution",
+            changes = "none",
+            copy = false,
+            accessibility = true
+        )
+
+        // Save bytes of protected document
+        val protectedBytes = doc.saveBytes()
+        assertTrue(protectedBytes.isNotEmpty())
+
+        // Verify opening without password fails or opening with password succeeds
+        val opened = PdfDocument.openBytes(bytes = protectedBytes, name = "opened_sec.pdf", password = "UserPass123!")
+        assertEquals(1, opened.pageCount)
+        opened.close()
+
+        // Unprotect
+        doc.unprotect()
+
+        doc.close()
+    }
 }

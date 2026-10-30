@@ -39,6 +39,10 @@ fun PdfView(
     var showCommandPalette by remember { mutableStateOf(false) }
     var showRedactionView by remember { mutableStateOf(false) }
     var showAboutView by remember { mutableStateOf(false) }
+    var showExportDialog by remember { mutableStateOf(false) }
+    var showMetadataDialog by remember { mutableStateOf(false) }
+    var showSecurityDialog by remember { mutableStateOf(false) }
+    var showWatermarkDialog by remember { mutableStateOf(false) }
     var activeTool by remember { mutableStateOf<FfiToolInfo?>(null) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var statusNotification by remember { mutableStateOf<String?>(null) }
@@ -171,6 +175,34 @@ fun PdfView(
                                     onClick = {
                                         showMoreMenu = false
                                         showRedactionView = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Export & Convert...") },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        showExportDialog = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Document Properties...") },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        showMetadataDialog = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Password & Security...") },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        showSecurityDialog = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Watermark & Headers...") },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        showWatermarkDialog = true
                                     }
                                 )
                                 DropdownMenuItem(
@@ -419,6 +451,128 @@ fun PdfView(
     if (showAboutView) {
         Dialog(onDismissRequest = { showAboutView = false }) {
             PdfAboutView(onDismiss = { showAboutView = false })
+        }
+    }
+
+    // Export & Convert Dialog
+    if (showExportDialog) {
+        Dialog(onDismissRequest = { showExportDialog = false }) {
+            PdfExportDialog(
+                document = document,
+                onDismiss = { showExportDialog = false },
+                onExportText = { path ->
+                    try {
+                        document.exportText(path)
+                        statusNotification = "Text exported to $path"
+                    } catch (e: Exception) {
+                        statusNotification = "Export text error: ${e.message}"
+                    }
+                    showExportDialog = false
+                },
+                onExportImages = { outDir, format, dpi ->
+                    try {
+                        document.exportImages(outDir, format, dpi)
+                        statusNotification = "Images exported to $outDir"
+                    } catch (e: Exception) {
+                        statusNotification = "Export images error: ${e.message}"
+                    }
+                    showExportDialog = false
+                },
+                onConvertToPdfA = { level ->
+                    try {
+                        val count = document.convertToPdfA(level)
+                        statusNotification = "Converted to $level ($count issues fixed)"
+                        pdfPageViewRef?.setDocument(document, currentPage)
+                    } catch (e: Exception) {
+                        statusNotification = "Convert to PDF/A error: ${e.message}"
+                    }
+                    showExportDialog = false
+                },
+                onFlatten = { comments, fields ->
+                    try {
+                        document.flatten(comments, fields)
+                        statusNotification = "Document flattened"
+                        pdfPageViewRef?.setDocument(document, currentPage)
+                    } catch (e: Exception) {
+                        statusNotification = "Flatten error: ${e.message}"
+                    }
+                    showExportDialog = false
+                }
+            )
+        }
+    }
+
+    // Document Properties & Metadata Dialog
+    if (showMetadataDialog) {
+        Dialog(onDismissRequest = { showMetadataDialog = false }) {
+            val info = try { document.engine.docInfo(document.docId) } catch (_: Exception) { null }
+            PdfMetadataDialog(
+                initialTitle = info?.title ?: "",
+                initialAuthor = info?.author ?: "",
+                initialSubject = info?.subject ?: "",
+                initialKeywords = info?.keywords ?: "",
+                onDismiss = { showMetadataDialog = false },
+                onSave = { title, author, subject, keywords ->
+                    try {
+                        document.setMetadata(title, author, subject, keywords)
+                        statusNotification = "Metadata updated"
+                    } catch (e: Exception) {
+                        statusNotification = "Metadata error: ${e.message}"
+                    }
+                }
+            )
+        }
+    }
+
+    // Security & Password Protection Dialog
+    if (showSecurityDialog) {
+        Dialog(onDismissRequest = { showSecurityDialog = false }) {
+            PdfSecurityDialog(
+                onDismiss = { showSecurityDialog = false },
+                onProtect = { open, perm, printing, changes, copy, a11y ->
+                    try {
+                        document.protect(open, perm, printing, changes, copy, a11y)
+                        statusNotification = "Document encrypted & protected"
+                    } catch (e: Exception) {
+                        statusNotification = "Protection error: ${e.message}"
+                    }
+                },
+                onUnprotect = {
+                    try {
+                        document.unprotect()
+                        statusNotification = "Password security removed"
+                    } catch (e: Exception) {
+                        statusNotification = "Remove security error: ${e.message}"
+                    }
+                }
+            )
+        }
+    }
+
+    // Watermark & Header/Footer Dialog
+    if (showWatermarkDialog) {
+        Dialog(onDismissRequest = { showWatermarkDialog = false }) {
+            PdfWatermarkDialog(
+                onDismiss = { showWatermarkDialog = false },
+                onAddWatermark = { text, opacity, rotation ->
+                    try {
+                        document.addWatermark(text, opacity, rotation)
+                        statusNotification = "Watermark added"
+                        pdfPageViewRef?.setDocument(document, currentPage)
+                    } catch (e: Exception) {
+                        statusNotification = "Watermark error: ${e.message}"
+                    }
+                },
+                onAddHeaderFooter = { hl, hc, hr, fl, fc, fr, shrink ->
+                    try {
+                        document.addHeaderFooter(hl, hc, hr, fl, fc, fr, shrink)
+                        statusNotification = "Header & Footer added"
+                        pdfPageViewRef?.setDocument(document, currentPage)
+                    } catch (e: Exception) {
+                        statusNotification = "Header/Footer error: ${e.message}"
+                    }
+                }
+            )
         }
     }
 }
