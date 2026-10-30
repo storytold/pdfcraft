@@ -2715,6 +2715,55 @@ key	Home	Home
 key	End	End
 key	Space	Mellomrom
 
+# Remove Signature (sign.remove)
+	Remove signature…	Fjern signatur…
+	Remove signature	Fjern signatur
+	Remove Signature	Fjern signatur
+	Remove the signature {name}	Fjern signaturen {name}
+	Certification signature (level {p})	Sertifiseringssignatur (nivå {p})
+	Document timestamp	Dokumenttidsstempel
+	Visual signature (Fill & Sign, not digital)	Visuell signatur (Fyll ut og signer, ikke digital)
+	Visual initials (Fill & Sign, not digital)	Visuelle initialer (Fyll ut og signer, ikke digital)
+	{name}_unsigned.pdf	{name}_usignert.pdf
+	this signature can't be removed on its own	denne signaturen kan ikke fjernes alene
+	it was still in the document afterwards, so the change was undone	den var fortsatt i dokumentet etterpå, så endringen ble angret
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	Velg en annen fil: originalen beholdes som den er, og versjonen uten signaturen lagres ved siden av.
+	The signature was not removed: {e}	Signaturen ble ikke fjernet: {e}
+	Removed the visual signature on page {p}	Fjernet den visuelle signaturen på side {p}
+	Removed the signature {field} and kept its empty field	Fjernet signaturen {field} og beholdt det tomme feltet
+	Removed the signature {field} with its field	Fjernet signaturen {field} sammen med feltet
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	Andre signaturer gjenstår, så den fjernede finnes fortsatt i filens tidligere revisjon; kontroller de gjenværende signaturene på nytt.
+	The new file has no signature left and no earlier revision holding it.	Den nye filen har ingen signatur igjen og ingen tidligere revisjon som inneholder den.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. Lagret {file}, kontrollert at den åpnes igjen med alle sider. {history}
+	This document has no signature that can be removed.	Dette dokumentet har ingen signatur som kan fjernes.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	En signatur som er en del av sideinnholdet, for eksempel på en skannet side, er verken et felt eller en merknad, så den kan ikke fjernes alene, og PdfCraft sletter ikke deler av en side for å skjule den. For å fjerne den kan du sladde området (Sladd), eller slette bildet med Rediger en PDF når signaturen er et eget bilde.
+	Choose the signature to remove:	Velg signaturen som skal fjernes:
+	unknown signer	ukjent signatar
+	Field: {field}	Felt: {field}
+	Page {p}	Side {p}
+	validated: valid	validert: gyldig
+	validated: validity unknown	validert: gyldighet ukjent
+	validated: invalid	validert: ugyldig
+	None of these signatures can be removed.	Ingen av disse signaturene kan fjernes.
+	Keep an empty signature field to sign again	Behold et tomt signaturfelt for å signere på nytt
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	Å fjerne denne signaturen endrer dokumentet og gjør denne signaturen ugyldig i versjonen som blir resultatet. Det kan påvirke de andre signaturene og sertifiseringene. Originalfilen beholdes som den er.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	Å fjerne denne signaturen endrer dokumentet og gjør denne signaturen ugyldig i versjonen som blir resultatet. Originalfilen beholdes som den er.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	Dette er et bilde av en signatur, ikke en digital signatur: bare merket på siden fjernes. Originalfilen beholdes som den er.
+	Unsaved changes to this document are saved in the new file too.	Ulagrede endringer i dette dokumentet lagres også i den nye filen.
+	You choose where the new version is saved. Continue?	Du velger hvor den nye versjonen lagres. Fortsette?
+	Remove and Save As…	Fjern og lagre som…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	De andre signaturene ({names}) vil melde at dokumentet ble endret etter at de signerte. Kontroller dem på nytt: ingenting sier at de forblir gyldige.
+	Signed after this signature, so what they signed includes it: {names}.	Signert etter denne signaturen, så det de signerte inkluderer den: {names}.
+	The document will no longer be certified.	Dokumentet vil ikke lenger være sertifisert.
+	The fields this signature locked ({names}) can be changed again.	Feltene denne signaturen låste ({names}) kan endres igjen.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	Andre signaturer gjenstår, så kopien lagres som en oppdatering av den signerte filen: den fjernede signaturen blir værende i den tidligere revisjonen, der den kan gjenopprettes.
+	{names} certifies this document without allowing comments, and will report this change.	{names} sertifiserer dette dokumentet uten å tillate kommentarer, og vil melde denne endringen.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	Et dokumenttidsstempel dekker hele filen og er ingens signatur, så det kan ikke fjernes alene.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} sertifiserer dette dokumentet, og å fjerne en signatur er ikke en endring sertifiseringen tillater.
+	The signature {names} locks this field.	Signaturen {names} låser dette feltet.
+	This document can't be changed: {names}	Dette dokumentet kan ikke endres: {names}
+	Choose a signature that can be removed.	Velg en signatur som kan fjernes.
+
 # Page gaps (AI-assisted, not separately native-reviewed)
 	Show gaps between pages	Vis mellomrom mellom sidene
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skjul mellomrommene slik at sidekantene møtes. Margene inne i PDF-en endres ikke.

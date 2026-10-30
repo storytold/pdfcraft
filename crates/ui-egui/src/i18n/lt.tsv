@@ -2807,6 +2807,55 @@ theme	Appearance	Išvaizda
 	the first row number can be at most {max}	pirmosios eilutės numeris gali būti ne didesnis nei {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	sritis, tarpai ir stulpelių pločiai turi būti skaičiai, tarpai – 0 arba daugiau, o kiekvienas plotis – daugiau nei 0
 
+# Remove Signature (sign.remove)
+	Remove signature…	Pašalinti parašą…
+	Remove signature	Pašalinti parašą
+	Remove Signature	Parašo šalinimas
+	Remove the signature {name}	Pašalinti parašą {name}
+	Certification signature (level {p})	Tvirtinamasis parašas ({p} lygis)
+	Document timestamp	Dokumento laiko žyma
+	Visual signature (Fill & Sign, not digital)	Vaizdinis parašas (Pildyti ir pasirašyti, ne skaitmeninis)
+	Visual initials (Fill & Sign, not digital)	Vaizdiniai inicialai (Pildyti ir pasirašyti, ne skaitmeniniai)
+	{name}_unsigned.pdf	{name}_be_paraso.pdf
+	this signature can't be removed on its own	šio parašo negalima pašalinti atskirai
+	it was still in the document afterwards, so the change was undone	pašalinus jis vis dar buvo dokumente, todėl pakeitimas atšauktas
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	Pasirinkite kitą failą: originalas lieka nepakeistas, o versija be parašo įrašoma šalia jo.
+	The signature was not removed: {e}	Parašas nepašalintas: {e}
+	Removed the visual signature on page {p}	Pašalintas vaizdinis parašas {p} puslapyje
+	Removed the signature {field} and kept its empty field	Pašalintas parašas {field}, tuščias laukas paliktas
+	Removed the signature {field} with its field	Pašalintas parašas {field} kartu su lauku
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	Lieka kitų parašų, todėl pašalintas parašas vis dar yra ankstesnėje failo redakcijoje; iš naujo patikrinkite likusius parašus.
+	The new file has no signature left and no earlier revision holding it.	Naujame faile nebeliko nė vieno parašo ir nėra ankstesnės redakcijos, kurioje jis būtų.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. Failas {file} įrašytas ir patikrintas: jis vėl atsidaro su visais puslapiais. {history}
+	This document has no signature that can be removed.	Šiame dokumente nėra parašo, kurį būtų galima pašalinti.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	Parašas, kuris yra puslapio turinio dalis (pvz., nuskaitytame puslapyje), nėra nei laukas, nei anotacija, todėl jo negalima pašalinti atskirai, o PdfCraft netrina puslapio dalių, kad jį paslėptų. Norėdami jį pašalinti, pašalinkite konfidencialią tos srities informaciją (Pašalinti konfidencialią informaciją) arba, jei parašas yra atskiras paveikslėlis, ištrinkite jį su „Redaguoti PDF“.
+	Choose the signature to remove:	Pasirinkite, kurį parašą pašalinti:
+	unknown signer	nežinomas pasirašiusysis
+	Field: {field}	Laukas: {field}
+	Page {p}	{p} puslapis
+	validated: valid	patikra: galioja
+	validated: validity unknown	patikra: galiojimas nežinomas
+	validated: invalid	patikra: negalioja
+	None of these signatures can be removed.	Nė vieno iš šių parašų negalima pašalinti.
+	Keep an empty signature field to sign again	Palikti tuščią parašo lauką, kad būtų galima pasirašyti iš naujo
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	Pašalinus šį parašą, dokumentas pakeičiamas, o šis parašas gautoje versijoje nebegalioja. Tai gali paveikti kitus parašus ir patvirtinimus. Originalus failas lieka nepakeistas.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	Pašalinus šį parašą, dokumentas pakeičiamas, o šis parašas gautoje versijoje nebegalioja. Originalus failas lieka nepakeistas.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	Tai parašo vaizdas, o ne skaitmeninis parašas: pašalinama tik žymė puslapyje. Originalus failas lieka nepakeistas.
+	Unsaved changes to this document are saved in the new file too.	Neįrašyti šio dokumento pakeitimai taip pat bus įrašyti į naują failą.
+	You choose where the new version is saved. Continue?	Jūs pasirenkate, kur įrašyti naują versiją. Tęsti?
+	Remove and Save As…	Pašalinti ir įrašyti kaip…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	Kiti parašai ({names}) praneš, kad dokumentas pasikeitė po pasirašymo. Patikrinkite juos iš naujo: niekas negarantuoja, kad jie liks galiojantys.
+	Signed after this signature, so what they signed includes it: {names}.	Po šio parašo pridėti parašai, kurių pasirašytas turinys jį apima: {names}.
+	The document will no longer be certified.	Dokumentas nebebus patvirtintas.
+	The fields this signature locked ({names}) can be changed again.	Laukus, kuriuos užrakino šis parašas ({names}), vėl bus galima keisti.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	Lieka kitų parašų, todėl kopija įrašoma kaip pasirašyto failo atnaujinimas: pašalintas parašas lieka ankstesnėje redakcijoje, iš kurios jį galima atkurti.
+	{names} certifies this document without allowing comments, and will report this change.	{names} patvirtina šį dokumentą neleisdamas komentarų ir praneš apie šį pakeitimą.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	Dokumento laiko žyma apima visą failą ir nėra niekieno parašas, todėl jos negalima pašalinti atskirai.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} patvirtina šį dokumentą, o parašo šalinimas nėra pakeitimas, kurį leidžia šis patvirtinimas.
+	The signature {names} locks this field.	Parašas {names} užrakina šį lauką.
+	This document can't be changed: {names}	Šio dokumento keisti negalima: {names}
+	Choose a signature that can be removed.	Pasirinkite parašą, kurį galima pašalinti.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Šiandien
 @plural	{n} reply|{n} replies	{n} atsakymas|{n} atsakymai|{n} atsakymų

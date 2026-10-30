@@ -2799,6 +2799,55 @@ theme	Appearance	Aspecte
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
 
+# Remove Signature (sign.remove) (AI-assisted, not separately native-reviewed)
+	Remove signature…	Elimina la signatura…
+	Remove signature	Elimina la signatura
+	Remove Signature	Elimina la signatura
+	Remove the signature {name}	Elimina la signatura {name}
+	Certification signature (level {p})	Signatura de certificació (nivell {p})
+	Document timestamp	Marca de temps del document
+	Visual signature (Fill & Sign, not digital)	Signatura visual (Omple i signa, no digital)
+	Visual initials (Fill & Sign, not digital)	Inicials visuals (Omple i signa, no digitals)
+	{name}_unsigned.pdf	{name}_sense_signatura.pdf
+	this signature can't be removed on its own	aquesta signatura no es pot eliminar tota sola
+	it was still in the document afterwards, so the change was undone	encara era al document després, de manera que s'ha desfet el canvi
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	Trieu un altre fitxer: l'original es manté tal com és, i la versió sense la signatura es desa al costat.
+	The signature was not removed: {e}	No s'ha eliminat la signatura: {e}
+	Removed the visual signature on page {p}	S'ha eliminat la signatura visual de la pàgina {p}
+	Removed the signature {field} and kept its empty field	S'ha eliminat la signatura {field} i s'ha mantingut el camp buit
+	Removed the signature {field} with its field	S'ha eliminat la signatura {field} amb el seu camp
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	Queden altres signatures, de manera que l'eliminada encara és a la revisió anterior del fitxer; torneu a comprovar les signatures que queden.
+	The new file has no signature left and no earlier revision holding it.	El fitxer nou no té cap signatura ni cap revisió anterior que la contingui.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. S'ha desat {file} i s'ha comprovat que es torna a obrir amb totes les pàgines. {history}
+	This document has no signature that can be removed.	Aquest document no té cap signatura que es pugui eliminar.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	Una signatura que forma part del contingut d'una pàgina, com en una pàgina escanejada, no és un camp ni una anotació, de manera que no es pot eliminar tota sola, i el PdfCraft no esborra parts d'una pàgina per amagar-la. Per treure-la, censureu aquesta àrea (Censura) o, si la signatura és una imatge independent, suprimiu la imatge amb Edita un PDF.
+	Choose the signature to remove:	Trieu la signatura que voleu eliminar:
+	unknown signer	signant desconegut
+	Field: {field}	Camp: {field}
+	Page {p}	Pàgina {p}
+	validated: valid	validació: vàlida
+	validated: validity unknown	validació: validesa desconeguda
+	validated: invalid	validació: no vàlida
+	None of these signatures can be removed.	Cap d'aquestes signatures no es pot eliminar.
+	Keep an empty signature field to sign again	Mantén un camp de signatura buit per tornar a signar
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	Eliminar aquesta signatura canvia el document i la invalida a la versió resultant. Pot afectar les altres signatures i certificacions. El fitxer original es manté tal com és.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	Eliminar aquesta signatura canvia el document i la invalida a la versió resultant. El fitxer original es manté tal com és.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	Això és la imatge d'una signatura, no una signatura digital: només s'elimina la marca de la pàgina. El fitxer original es manté tal com és.
+	Unsaved changes to this document are saved in the new file too.	Els canvis no desats d'aquest document també es desen al fitxer nou.
+	You choose where the new version is saved. Continue?	Vós trieu on es desa la versió nova. Voleu continuar?
+	Remove and Save As…	Elimina i desa com a…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	Les altres signatures ({names}) indicaran que el document ha canviat després de signar-lo. Torneu-les a comprovar: res no garanteix que continuïn sent vàlides.
+	Signed after this signature, so what they signed includes it: {names}.	Signades després d'aquesta signatura, de manera que el que van signar la inclou: {names}.
+	The document will no longer be certified.	El document deixarà d'estar certificat.
+	The fields this signature locked ({names}) can be changed again.	Els camps que bloquejava aquesta signatura ({names}) es podran tornar a modificar.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	Queden altres signatures, de manera que la còpia es desa com a actualització del fitxer signat: la signatura eliminada es queda a la revisió anterior, d'on es pot recuperar.
+	{names} certifies this document without allowing comments, and will report this change.	{names} certifica aquest document sense permetre comentaris i indicarà aquest canvi.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	Una marca de temps del document cobreix tot el fitxer i no és la signatura de ningú, de manera que no es pot eliminar tota sola.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} certifica aquest document, i eliminar una signatura no és un canvi que la certificació permeti.
+	The signature {names} locks this field.	La signatura {names} bloqueja aquest camp.
+	This document can't be changed: {names}	Aquest document no es pot modificar: {names}
+	Choose a signature that can be removed.	Trieu una signatura que es pugui eliminar.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui
 

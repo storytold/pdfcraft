@@ -2510,6 +2510,55 @@ animation effects	Off	关
 	two cells would both be named {name}	两个单元格的名称都会是 {name}
 	a field named {name} already exists	已存在名为 {name} 的字段
 
+# Remove Signature (sign.remove)
+	Remove signature…	移除签名…
+	Remove signature	移除签名
+	Remove Signature	移除签名
+	Remove the signature {name}	移除签名 {name}
+	Certification signature (level {p})	认证签名（级别 {p}）
+	Document timestamp	文档时间戳
+	Visual signature (Fill & Sign, not digital)	可视签名（填写与签名，非数字签名）
+	Visual initials (Fill & Sign, not digital)	可视缩写签名（填写与签名，非数字签名）
+	{name}_unsigned.pdf	{name}_无签名.pdf
+	this signature can't be removed on its own	此签名无法单独移除
+	it was still in the document afterwards, so the change was undone	移除后它仍在文档中，因此已撤销此更改
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	请选择其他文件：原始文件保持不变，不含该签名的版本会保存在它旁边。
+	The signature was not removed: {e}	未移除签名：{e}
+	Removed the visual signature on page {p}	已移除第 {p} 页上的可视签名
+	Removed the signature {field} and kept its empty field	已移除签名 {field}，并保留其空白字段
+	Removed the signature {field} with its field	已移除签名 {field} 及其字段
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	仍有其他签名，因此已移除的签名仍保留在文件的早期修订中；请重新验证其余签名。
+	The new file has no signature left and no earlier revision holding it.	新文件中已没有任何签名，也没有保存它的早期修订。
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}。已保存 {file}，并确认它能带着所有页面重新打开。{history}
+	This document has no signature that can be removed.	此文档中没有可移除的签名。
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	属于页面内容一部分的签名（例如扫描页面上的签名）既不是字段也不是注释，因此无法单独移除，PdfCraft 也不会为隐藏它而擦除页面的某些部分。要去掉它，请对该区域进行密文处理（密文），如果签名是一张独立的图像，也可以用“编辑 PDF”删除该图像。
+	Choose the signature to remove:	选择要移除的签名：
+	unknown signer	未知签名人
+	Field: {field}	字段：{field}
+	Page {p}	第 {p} 页
+	validated: valid	验证结果：有效
+	validated: validity unknown	验证结果：有效性未知
+	validated: invalid	验证结果：无效
+	None of these signatures can be removed.	这些签名都无法移除。
+	Keep an empty signature field to sign again	保留一个空白签名字段以便重新签名
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	移除此签名会更改文档，并使此签名在生成的版本中失效。这可能会影响其他签名和认证。原始文件保持不变。
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	移除此签名会更改文档，并使此签名在生成的版本中失效。原始文件保持不变。
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	这是签名的图像，不是数字签名：只会移除页面上的标记。原始文件保持不变。
+	Unsaved changes to this document are saved in the new file too.	此文档中未保存的更改也会保存到新文件中。
+	You choose where the new version is saved. Continue?	由你选择新版本的保存位置。要继续吗？
+	Remove and Save As…	移除并另存为…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	其他签名（{names}）将报告文档在签名后已被更改。请重新验证它们：无法保证它们仍然有效。
+	Signed after this signature, so what they signed includes it: {names}.	在此签名之后添加、且签名内容包含此签名的签名：{names}。
+	The document will no longer be certified.	文档将不再处于认证状态。
+	The fields this signature locked ({names}) can be changed again.	此签名锁定的字段（{names}）将可以再次更改。
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	仍有其他签名，因此副本会作为已签名文件的增量更新保存：已移除的签名保留在早期修订中，可以从那里恢复。
+	{names} certifies this document without allowing comments, and will report this change.	{names} 认证此文档且不允许注释，会报告此更改。
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	文档时间戳覆盖整个文件，不属于任何人的签名，因此无法单独移除。
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} 认证此文档，而移除签名不是该认证允许的更改。
+	The signature {names} locks this field.	签名 {names} 锁定了此字段。
+	This document can't be changed: {names}	无法更改此文档：{names}
+	Choose a signature that can be removed.	请选择一个可以移除的签名。
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今天
 @plural	{n} reply|{n} replies	{n} 条回复

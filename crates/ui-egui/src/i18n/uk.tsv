@@ -2568,6 +2568,55 @@ animation effects	Off	Вимкнено
 	two cells would both be named {name}	дві клітинки мали б однакове ім'я {name}
 	a field named {name} already exists	поле з іменем {name} уже існує
 
+# Remove Signature (sign.remove)
+	Remove signature…	Вилучити підпис…
+	Remove signature	Вилучити підпис
+	Remove Signature	Вилучити підпис
+	Remove the signature {name}	Вилучити підпис {name}
+	Certification signature (level {p})	Засвідчувальний підпис (рівень {p})
+	Document timestamp	Позначка часу документа
+	Visual signature (Fill & Sign, not digital)	Візуальний підпис (Заповнення й підпис, не цифровий)
+	Visual initials (Fill & Sign, not digital)	Візуальні ініціали (Заповнення й підпис, не цифрові)
+	{name}_unsigned.pdf	{name}_без_підпису.pdf
+	this signature can't be removed on its own	цей підпис не можна вилучити окремо
+	it was still in the document afterwards, so the change was undone	після вилучення він залишився в документі, тому зміну скасовано
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	Виберіть інший файл: оригінал залишиться без змін, а версію без підпису буде збережено поруч.
+	The signature was not removed: {e}	Підпис не вилучено: {e}
+	Removed the visual signature on page {p}	Вилучено візуальний підпис на сторінці {p}
+	Removed the signature {field} and kept its empty field	Вилучено підпис {field}, порожнє поле збережено
+	Removed the signature {field} with its field	Вилучено підпис {field} разом із полем
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	Залишилися інші підписи, тому вилучений підпис і далі є в попередній редакції файлу; повторно перевірте решту підписів.
+	The new file has no signature left and no earlier revision holding it.	У новому файлі не залишилося жодного підпису й немає попередньої редакції, яка б його зберігала.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. Файл {file} збережено й перевірено: він знову відкривається з усіма сторінками. {history}
+	This document has no signature that can be removed.	У цьому документі немає підпису, який можна вилучити.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	Підпис, що є частиною вмісту сторінки (наприклад, на сканованій сторінці), не є ні полем, ні приміткою, тому його не можна вилучити окремо, а PdfCraft не стирає частини сторінки, щоб його приховати. Щоб прибрати його, вилучіть вміст цієї ділянки («Вилучити вміст») або, якщо підпис — окреме зображення, видаліть його за допомогою «Редагувати PDF».
+	Choose the signature to remove:	Виберіть підпис для вилучення:
+	unknown signer	невідомий підписувач
+	Field: {field}	Поле: {field}
+	Page {p}	Сторінка {p}
+	validated: valid	перевірка: дійсний
+	validated: validity unknown	перевірка: дійсність невідома
+	validated: invalid	перевірка: недійсний
+	None of these signatures can be removed.	Жоден із цих підписів не можна вилучити.
+	Keep an empty signature field to sign again	Залишити порожнє поле підпису, щоб підписати знову
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	Вилучення цього підпису змінює документ і робить цей підпис недійсним в отриманій версії. Це може вплинути на інші підписи та засвідчення. Оригінальний файл залишається без змін.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	Вилучення цього підпису змінює документ і робить цей підпис недійсним в отриманій версії. Оригінальний файл залишається без змін.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	Це зображення підпису, а не цифровий підпис: вилучається лише позначка на сторінці. Оригінальний файл залишається без змін.
+	Unsaved changes to this document are saved in the new file too.	Незбережені зміни цього документа також буде збережено в новому файлі.
+	You choose where the new version is saved. Continue?	Ви вибираєте, де зберегти нову версію. Продовжити?
+	Remove and Save As…	Вилучити й зберегти як…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	Інші підписи ({names}) повідомлятимуть, що документ змінився після підписання. Перевірте їх повторно: ніщо не гарантує, що вони залишаться дійсними.
+	Signed after this signature, so what they signed includes it: {names}.	Підписи, додані після цього, чий підписаний вміст його охоплює: {names}.
+	The document will no longer be certified.	Документ більше не буде засвідчено.
+	The fields this signature locked ({names}) can be changed again.	Поля, які блокував цей підпис ({names}), знову можна буде змінювати.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	Залишилися інші підписи, тому копію збережено як оновлення підписаного файлу: вилучений підпис залишається в попередній редакції, звідки його можна відновити.
+	{names} certifies this document without allowing comments, and will report this change.	{names} засвідчує цей документ без дозволу на коментарі й повідомить про цю зміну.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	Позначка часу документа охоплює весь файл і не є нічиїм підписом, тому її не можна вилучити окремо.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} засвідчує цей документ, а вилучення підпису не належить до змін, які дозволяє це засвідчення.
+	The signature {names} locks this field.	Підпис {names} блокує це поле.
+	This document can't be changed: {names}	Цей документ не можна змінити: {names}
+	Choose a signature that can be removed.	Виберіть підпис, який можна вилучити.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Сьогодні
 @plural	{n} reply|{n} replies	{n} відповідь|{n} відповіді|{n} відповідей

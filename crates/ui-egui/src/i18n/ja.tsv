@@ -2546,6 +2546,55 @@ animation effects	Off	オフ
 	two cells would both be named {name}	2 つのセルが同じ名前 {name} になります
 	a field named {name} already exists	{name} という名前のフィールドは既にあります
 
+# Remove Signature (sign.remove)
+	Remove signature…	署名を削除…
+	Remove signature	署名を削除
+	Remove Signature	署名を削除
+	Remove the signature {name}	署名 {name} を削除
+	Certification signature (level {p})	証明用署名（レベル {p}）
+	Document timestamp	文書タイムスタンプ
+	Visual signature (Fill & Sign, not digital)	見た目だけの署名（入力と署名、デジタルではありません）
+	Visual initials (Fill & Sign, not digital)	見た目だけのイニシャル（入力と署名、デジタルではありません）
+	{name}_unsigned.pdf	{name}_署名なし.pdf
+	this signature can't be removed on its own	この署名だけを削除することはできません
+	it was still in the document afterwards, so the change was undone	削除後も文書に残っていたため、変更を取り消しました
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	別のファイルを選んでください。元のファイルはそのまま残し、署名を削除した版はその隣に保存します。
+	The signature was not removed: {e}	署名を削除できませんでした: {e}
+	Removed the visual signature on page {p}	ページ {p} の見た目だけの署名を削除しました
+	Removed the signature {field} and kept its empty field	署名 {field} を削除し、空のフィールドを残しました
+	Removed the signature {field} with its field	署名 {field} をフィールドごと削除しました
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	ほかの署名が残っているため、削除した署名はファイルの以前のリビジョンにまだ含まれています。残りの署名を検証し直してください。
+	The new file has no signature left and no earlier revision holding it.	新しいファイルには署名が残っておらず、それを含む以前のリビジョンもありません。
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}。{file} を保存し、すべてのページで開き直せることを確認しました。{history}
+	This document has no signature that can be removed.	この文書には削除できる署名がありません。
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	スキャンしたページのようにページの内容の一部になっている署名は、フィールドでも注釈でもないため、それだけを削除することはできません。また PdfCraft は署名を隠すためにページの一部を消すことはしません。取り除くには、その範囲を墨消し（墨消し）するか、署名が独立した画像の場合は「PDF を編集」で画像を削除してください。
+	Choose the signature to remove:	削除する署名を選んでください:
+	unknown signer	署名者不明
+	Field: {field}	フィールド: {field}
+	Page {p}	ページ {p}
+	validated: valid	検証結果: 有効
+	validated: validity unknown	検証結果: 有効性不明
+	validated: invalid	検証結果: 無効
+	None of these signatures can be removed.	これらの署名はどれも削除できません。
+	Keep an empty signature field to sign again	空の署名フィールドを残して署名し直せるようにする
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	この署名を削除すると文書が変更され、できあがる版ではこの署名が無効になります。ほかの署名や証明に影響することがあります。元のファイルはそのまま残ります。
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	この署名を削除すると文書が変更され、できあがる版ではこの署名が無効になります。元のファイルはそのまま残ります。
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	これは署名の画像で、デジタル署名ではありません。ページ上の印だけを削除します。元のファイルはそのまま残ります。
+	Unsaved changes to this document are saved in the new file too.	この文書の未保存の変更も新しいファイルに保存されます。
+	You choose where the new version is saved. Continue?	新しい版の保存先はあなたが選びます。続行しますか？
+	Remove and Save As…	削除して別名で保存…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	ほかの署名（{names}）は、署名後に文書が変更されたと報告します。検証し直してください。有効なままである保証はありません。
+	Signed after this signature, so what they signed includes it: {names}.	この署名より後に追加され、署名した内容にこの署名を含む署名: {names}。
+	The document will no longer be certified.	文書は証明済みではなくなります。
+	The fields this signature locked ({names}) can be changed again.	この署名がロックしていたフィールド（{names}）を再び変更できるようになります。
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	ほかの署名が残っているため、コピーは署名済みファイルへの追加更新として保存されます。削除した署名は以前のリビジョンに残り、そこから復元できます。
+	{names} certifies this document without allowing comments, and will report this change.	{names} は注釈を許可せずにこの文書を証明しており、この変更を報告します。
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	文書タイムスタンプはファイル全体を対象とし、誰かの署名ではないため、それだけを削除することはできません。
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} がこの文書を証明しており、署名の削除はその証明で許可された変更ではありません。
+	The signature {names} locks this field.	署名 {names} がこのフィールドをロックしています。
+	This document can't be changed: {names}	この文書は変更できません: {names}
+	Choose a signature that can be removed.	削除できる署名を選んでください。
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今日
 @plural	{n} reply|{n} replies	{n} 件の返信

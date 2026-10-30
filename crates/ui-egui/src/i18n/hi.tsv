@@ -2775,6 +2775,55 @@ theme	Appearance	स्वरूप
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
 
+# Remove Signature (sign.remove) (AI-assisted, not separately native-reviewed)
+	Remove signature…	हस्ताक्षर हटाएँ…
+	Remove signature	हस्ताक्षर हटाएँ
+	Remove Signature	हस्ताक्षर हटाएँ
+	Remove the signature {name}	हस्ताक्षर {name} हटाएँ
+	Certification signature (level {p})	प्रमाणन हस्ताक्षर (स्तर {p})
+	Document timestamp	दस्तावेज़ टाइमस्टैम्प
+	Visual signature (Fill & Sign, not digital)	दृश्य हस्ताक्षर (भरें व हस्ताक्षर करें, डिजिटल नहीं)
+	Visual initials (Fill & Sign, not digital)	दृश्य आद्याक्षर (भरें व हस्ताक्षर करें, डिजिटल नहीं)
+	{name}_unsigned.pdf	{name}_बिना_हस्ताक्षर.pdf
+	this signature can't be removed on its own	इस हस्ताक्षर को अकेले नहीं हटाया जा सकता
+	it was still in the document afterwards, so the change was undone	यह बाद में भी दस्तावेज़ में था, इसलिए बदलाव पूर्ववत कर दिया गया
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	कोई दूसरी फ़ाइल चुनें: मूल फ़ाइल जैसी है वैसी रहती है, और बिना हस्ताक्षर वाला संस्करण उसके पास सहेजा जाता है।
+	The signature was not removed: {e}	हस्ताक्षर नहीं हटाया गया: {e}
+	Removed the visual signature on page {p}	पृष्ठ {p} पर दृश्य हस्ताक्षर हटाया गया
+	Removed the signature {field} and kept its empty field	हस्ताक्षर {field} हटाया गया और उसका खाली फ़ील्ड रखा गया
+	Removed the signature {field} with its field	हस्ताक्षर {field} उसके फ़ील्ड सहित हटाया गया
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	अन्य हस्ताक्षर बचे हैं, इसलिए हटाया गया हस्ताक्षर फ़ाइल के पिछले संशोधन में अब भी है; बचे हुए हस्ताक्षरों को फिर से जाँचें।
+	The new file has no signature left and no earlier revision holding it.	नई फ़ाइल में कोई हस्ताक्षर नहीं बचा है और न ही उसे रखने वाला कोई पिछला संशोधन।
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}। {file} सहेजी गई, और जाँचा गया कि यह सभी पृष्ठों के साथ फिर से खुलती है। {history}
+	This document has no signature that can be removed.	इस दस्तावेज़ में ऐसा कोई हस्ताक्षर नहीं है जिसे हटाया जा सके।
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	पृष्ठ की सामग्री का हिस्सा बना हस्ताक्षर, जैसे स्कैन किए गए पृष्ठ पर, न फ़ील्ड है न एनोटेशन, इसलिए उसे अकेले नहीं हटाया जा सकता, और PdfCraft उसे छिपाने के लिए पृष्ठ के हिस्से नहीं मिटाता। उसे हटाने के लिए उस क्षेत्र को रेडैक्ट करें (रेडैक्ट करें), या अगर हस्ताक्षर एक अलग छवि है तो पीडीएफ़ संपादित करें से छवि हटाएँ।
+	Choose the signature to remove:	हटाने के लिए हस्ताक्षर चुनें:
+	unknown signer	अज्ञात हस्ताक्षरकर्ता
+	Field: {field}	फ़ील्ड: {field}
+	Page {p}	पृष्ठ {p}
+	validated: valid	सत्यापन: मान्य
+	validated: validity unknown	सत्यापन: वैधता अज्ञात
+	validated: invalid	सत्यापन: अमान्य
+	None of these signatures can be removed.	इनमें से कोई भी हस्ताक्षर नहीं हटाया जा सकता।
+	Keep an empty signature field to sign again	फिर से हस्ताक्षर करने के लिए खाली हस्ताक्षर फ़ील्ड रखें
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	यह हस्ताक्षर हटाने से दस्तावेज़ बदलता है और बनने वाले संस्करण में यह हस्ताक्षर अमान्य हो जाता है। इससे अन्य हस्ताक्षर और प्रमाणन प्रभावित हो सकते हैं। मूल फ़ाइल जैसी है वैसी रहती है।
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	यह हस्ताक्षर हटाने से दस्तावेज़ बदलता है और बनने वाले संस्करण में यह हस्ताक्षर अमान्य हो जाता है। मूल फ़ाइल जैसी है वैसी रहती है।
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	यह हस्ताक्षर की एक छवि है, डिजिटल हस्ताक्षर नहीं: केवल पृष्ठ पर बना निशान हटता है। मूल फ़ाइल जैसी है वैसी रहती है।
+	Unsaved changes to this document are saved in the new file too.	इस दस्तावेज़ के बिना सहेजे गए बदलाव भी नई फ़ाइल में सहेजे जाते हैं।
+	You choose where the new version is saved. Continue?	नया संस्करण कहाँ सहेजा जाए, यह आप चुनते हैं। जारी रखें?
+	Remove and Save As…	हटाएँ और इस रूप में सहेजें…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	अन्य हस्ताक्षर ({names}) बताएँगे कि उनके हस्ताक्षर के बाद दस्तावेज़ बदला गया। उन्हें फिर से जाँचें: इसकी कोई गारंटी नहीं कि वे मान्य बने रहेंगे।
+	Signed after this signature, so what they signed includes it: {names}.	इस हस्ताक्षर के बाद हस्ताक्षरित, इसलिए उन्होंने जिस पर हस्ताक्षर किए उसमें यह शामिल है: {names}।
+	The document will no longer be certified.	दस्तावेज़ अब प्रमाणित नहीं रहेगा।
+	The fields this signature locked ({names}) can be changed again.	इस हस्ताक्षर द्वारा लॉक किए गए फ़ील्ड ({names}) फिर से बदले जा सकेंगे।
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	अन्य हस्ताक्षर बचे हैं, इसलिए प्रति हस्ताक्षरित फ़ाइल के अपडेट के रूप में सहेजी जाती है: हटाया गया हस्ताक्षर पिछले संशोधन में रहता है, जहाँ से उसे वापस पाया जा सकता है।
+	{names} certifies this document without allowing comments, and will report this change.	{names} टिप्पणियों की अनुमति दिए बिना इस दस्तावेज़ को प्रमाणित करता है, और इस बदलाव की सूचना देगा।
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	दस्तावेज़ टाइमस्टैम्प पूरी फ़ाइल को कवर करता है और किसी का हस्ताक्षर नहीं है, इसलिए उसे अकेले नहीं हटाया जा सकता।
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} इस दस्तावेज़ को प्रमाणित करता है, और हस्ताक्षर हटाना ऐसा बदलाव नहीं है जिसकी उसका प्रमाणन अनुमति देता हो।
+	The signature {names} locks this field.	हस्ताक्षर {names} इस फ़ील्ड को लॉक करता है।
+	This document can't be changed: {names}	यह दस्तावेज़ बदला नहीं जा सकता: {names}
+	Choose a signature that can be removed.	ऐसा हस्ताक्षर चुनें जिसे हटाया जा सके।
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज
 

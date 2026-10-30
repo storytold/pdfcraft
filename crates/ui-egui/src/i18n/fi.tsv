@@ -2808,6 +2808,55 @@ theme	Appearance	Teema
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
 
+# Remove Signature (sign.remove) (AI-assisted, not separately native-reviewed)
+	Remove signature…	Poista allekirjoitus…
+	Remove signature	Poista allekirjoitus
+	Remove Signature	Poista allekirjoitus
+	Remove the signature {name}	Poista allekirjoitus {name}
+	Certification signature (level {p})	Sertifiointiallekirjoitus (taso {p})
+	Document timestamp	Asiakirjan aikaleima
+	Visual signature (Fill & Sign, not digital)	Visuaalinen allekirjoitus (Täytä ja allekirjoita, ei digitaalinen)
+	Visual initials (Fill & Sign, not digital)	Visuaaliset nimikirjaimet (Täytä ja allekirjoita, ei digitaaliset)
+	{name}_unsigned.pdf	{name}_allekirjoittamaton.pdf
+	this signature can't be removed on its own	tätä allekirjoitusta ei voi poistaa yksinään
+	it was still in the document afterwards, so the change was undone	se oli yhä asiakirjassa jälkeenpäin, joten muutos kumottiin
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	Valitse toinen tiedosto: alkuperäinen säilyy ennallaan, ja versio ilman allekirjoitusta tallennetaan sen viereen.
+	The signature was not removed: {e}	Allekirjoitusta ei poistettu: {e}
+	Removed the visual signature on page {p}	Poistettiin visuaalinen allekirjoitus sivulta {p}
+	Removed the signature {field} and kept its empty field	Poistettiin allekirjoitus {field}, ja sen tyhjä kenttä säilytettiin
+	Removed the signature {field} with its field	Poistettiin allekirjoitus {field} kenttineen
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	Muita allekirjoituksia on jäljellä, joten poistettu allekirjoitus on yhä tiedoston aiemmassa versiossa; tarkista jäljellä olevat allekirjoitukset uudelleen.
+	The new file has no signature left and no earlier revision holding it.	Uudessa tiedostossa ei ole enää allekirjoitusta eikä aiempaa versiota, jossa se olisi.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. Tallennettiin {file}, ja tarkistettiin, että se avautuu uudelleen kaikkine sivuineen. {history}
+	This document has no signature that can be removed.	Tässä asiakirjassa ei ole allekirjoitusta, jonka voisi poistaa.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	Sivun sisältöön kuuluva allekirjoitus, kuten skannatulla sivulla, ei ole kenttä eikä merkintä, joten sitä ei voi poistaa yksinään, eikä PdfCraft pyyhi sivun osia sen piilottamiseksi. Poista se peittämällä alue (Peitä) tai, jos allekirjoitus on erillinen kuva, poistamalla kuva toiminnolla Muokkaa PDF:ää.
+	Choose the signature to remove:	Valitse poistettava allekirjoitus:
+	unknown signer	tuntematon allekirjoittaja
+	Field: {field}	Kenttä: {field}
+	Page {p}	Sivu {p}
+	validated: valid	tarkistettu: kelvollinen
+	validated: validity unknown	tarkistettu: kelpoisuus tuntematon
+	validated: invalid	tarkistettu: virheellinen
+	None of these signatures can be removed.	Mitään näistä allekirjoituksista ei voi poistaa.
+	Keep an empty signature field to sign again	Säilytä tyhjä allekirjoituskenttä uudelleen allekirjoittamista varten
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	Tämän allekirjoituksen poistaminen muuttaa asiakirjaa ja mitätöi tämän allekirjoituksen syntyvässä versiossa. Se voi vaikuttaa muihin allekirjoituksiin ja sertifiointeihin. Alkuperäinen tiedosto säilyy ennallaan.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	Tämän allekirjoituksen poistaminen muuttaa asiakirjaa ja mitätöi tämän allekirjoituksen syntyvässä versiossa. Alkuperäinen tiedosto säilyy ennallaan.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	Tämä on kuva allekirjoituksesta, ei digitaalinen allekirjoitus: vain sivulla oleva merkki poistuu. Alkuperäinen tiedosto säilyy ennallaan.
+	Unsaved changes to this document are saved in the new file too.	Tämän asiakirjan tallentamattomat muutokset tallennetaan myös uuteen tiedostoon.
+	You choose where the new version is saved. Continue?	Valitset itse, mihin uusi versio tallennetaan. Jatketaanko?
+	Remove and Save As…	Poista ja tallenna nimellä…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	Muut allekirjoitukset ({names}) ilmoittavat, että asiakirjaa on muutettu niiden jälkeen. Tarkista ne uudelleen: mikään ei takaa, että ne pysyvät kelvollisina.
+	Signed after this signature, so what they signed includes it: {names}.	Allekirjoitettu tämän allekirjoituksen jälkeen, joten allekirjoitettu sisältö sisältää sen: {names}.
+	The document will no longer be certified.	Asiakirja ei ole enää sertifioitu.
+	The fields this signature locked ({names}) can be changed again.	Kenttiä, jotka tämä allekirjoitus lukitsi ({names}), voi taas muuttaa.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	Muita allekirjoituksia on jäljellä, joten kopio tallennetaan allekirjoitetun tiedoston päivityksenä: poistettu allekirjoitus jää aiempaan versioon, josta sen voi palauttaa.
+	{names} certifies this document without allowing comments, and will report this change.	{names} sertifioi tämän asiakirjan sallimatta kommentteja ja ilmoittaa tästä muutoksesta.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	Asiakirjan aikaleima kattaa koko tiedoston eikä ole kenenkään allekirjoitus, joten sitä ei voi poistaa yksinään.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} sertifioi tämän asiakirjan, eikä allekirjoituksen poistaminen ole sertifioinnin sallima muutos.
+	The signature {names} locks this field.	Allekirjoitus {names} lukitsee tämän kentän.
+	This document can't be changed: {names}	Tätä asiakirjaa ei voi muuttaa: {names}
+	Choose a signature that can be removed.	Valitse allekirjoitus, jonka voi poistaa.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään
 

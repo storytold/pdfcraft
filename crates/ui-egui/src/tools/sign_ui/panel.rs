@@ -65,6 +65,8 @@ pub enum PanelAction {
     ExportCertificate(Box<Certificate>),
     /// Certificate Viewer for the signer's chain (signer first).
     ViewCertificate(Vec<Certificate>),
+    /// Remove Signature, with this field chosen.
+    Remove(String),
 }
 
 /// The Signatures panel body.
@@ -206,6 +208,9 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expan
                     && ui.button(tl!("Export certificate…")).clicked()
                 {
                     action = Some(PanelAction::ExportCertificate(Box::new(c.clone())));
+                }
+                if !s.doc_timestamp && ui.button(tl!("Remove signature…")).clicked() {
+                    action = Some(PanelAction::Remove(s.field.clone()));
                 }
             });
         });

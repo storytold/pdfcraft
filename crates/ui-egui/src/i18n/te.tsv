@@ -2455,6 +2455,55 @@ animation effects	Off	ఆఫ్
 	two cells would both be named {name}	రెండు గడులకూ {name} అనే పేరు వస్తుంది
 	a field named {name} already exists	{name} అనే ఫీల్డ్ ఇప్పటికే ఉంది
 
+# Remove Signature (sign.remove)
+	Remove signature…	సంతకాన్ని తొలగించు…
+	Remove signature	సంతకాన్ని తొలగించు
+	Remove Signature	సంతకాన్ని తొలగించు
+	Remove the signature {name}	సంతకం {name}ను తొలగించు
+	Certification signature (level {p})	సర్టిఫికేషన్ సంతకం (స్థాయి {p})
+	Document timestamp	పత్రం టైమ్‌స్టాంప్
+	Visual signature (Fill & Sign, not digital)	దృశ్య సంతకం (నింపడం & సంతకం, డిజిటల్ కాదు)
+	Visual initials (Fill & Sign, not digital)	దృశ్య ఇనీషియల్స్ (నింపడం & సంతకం, డిజిటల్ కాదు)
+	{name}_unsigned.pdf	{name}_santakam_leni.pdf
+	this signature can't be removed on its own	ఈ సంతకాన్ని ఒక్కదాన్నే తొలగించలేము
+	it was still in the document afterwards, so the change was undone	తొలగించిన తర్వాత కూడా అది పత్రంలోనే ఉంది, కాబట్టి మార్పును రద్దు చేశాం
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	వేరే ఫైల్‌ను ఎంచుకోండి: అసలు ఫైల్ అలాగే ఉంటుంది, సంతకం లేని వెర్షన్ దాని పక్కనే సేవ్ అవుతుంది.
+	The signature was not removed: {e}	సంతకం తొలగించబడలేదు: {e}
+	Removed the visual signature on page {p}	{p}వ పేజీలోని దృశ్య సంతకం తొలగించబడింది
+	Removed the signature {field} and kept its empty field	సంతకం {field} తొలగించబడింది, ఖాళీ ఫీల్డ్ ఉంచబడింది
+	Removed the signature {field} with its field	సంతకం {field} దాని ఫీల్డ్‌తో సహా తొలగించబడింది
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	ఇతర సంతకాలు మిగిలి ఉన్నందున, తొలగించిన సంతకం ఇంకా ఫైల్ యొక్క మునుపటి రివిజన్‌లో ఉంది; మిగిలిన సంతకాలను మళ్లీ ధృవీకరించండి.
+	The new file has no signature left and no earlier revision holding it.	కొత్త ఫైల్‌లో ఏ సంతకమూ మిగలలేదు, దాన్ని ఉంచుకునే మునుపటి రివిజన్ కూడా లేదు.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. {file} సేవ్ చేయబడింది, అన్ని పేజీలతో మళ్లీ తెరుచుకుంటుందని తనిఖీ చేయబడింది. {history}
+	This document has no signature that can be removed.	ఈ పత్రంలో తొలగించగల సంతకం ఏదీ లేదు.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	స్కాన్ చేసిన పేజీలోలాగా పేజీ కంటెంట్‌లో భాగమైన సంతకం ఫీల్డ్ గానీ వ్యాఖ్యానం గానీ కాదు, కాబట్టి దాన్ని ఒక్కదాన్నే తొలగించలేము, దాన్ని దాచడానికి PdfCraft పేజీలోని భాగాలను చెరిపివేయదు. దాన్ని తీసివేయడానికి ఆ ప్రాంతాన్ని రెడాక్ట్ చేయండి (రెడాక్ట్ చేయి), లేదా సంతకం ఒక ప్రత్యేక చిత్రమైతే PDFను సవరించు ద్వారా ఆ చిత్రాన్ని తొలగించండి.
+	Choose the signature to remove:	తొలగించాల్సిన సంతకాన్ని ఎంచుకోండి:
+	unknown signer	తెలియని సంతకందారు
+	Field: {field}	ఫీల్డ్: {field}
+	Page {p}	పేజీ {p}
+	validated: valid	ధృవీకరణ: చెల్లుతుంది
+	validated: validity unknown	ధృవీకరణ: చెల్లుబాటు తెలియదు
+	validated: invalid	ధృవీకరణ: చెల్లదు
+	None of these signatures can be removed.	ఈ సంతకాల్లో దేన్నీ తొలగించలేము.
+	Keep an empty signature field to sign again	మళ్లీ సంతకం చేయడానికి ఖాళీ సంతకం ఫీల్డ్‌ను ఉంచు
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	ఈ సంతకాన్ని తొలగిస్తే పత్రం మారుతుంది, ఫలితంగా వచ్చే వెర్షన్‌లో ఈ సంతకం చెల్లకుండా పోతుంది. ఇది ఇతర సంతకాలు, సర్టిఫికేషన్‌లపై ప్రభావం చూపవచ్చు. అసలు ఫైల్ అలాగే ఉంటుంది.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	ఈ సంతకాన్ని తొలగిస్తే పత్రం మారుతుంది, ఫలితంగా వచ్చే వెర్షన్‌లో ఈ సంతకం చెల్లకుండా పోతుంది. అసలు ఫైల్ అలాగే ఉంటుంది.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	ఇది సంతకం యొక్క చిత్రం, డిజిటల్ సంతకం కాదు: పేజీపై ఉన్న గుర్తు మాత్రమే తొలగించబడుతుంది. అసలు ఫైల్ అలాగే ఉంటుంది.
+	Unsaved changes to this document are saved in the new file too.	ఈ పత్రంలో సేవ్ చేయని మార్పులు కూడా కొత్త ఫైల్‌లో సేవ్ అవుతాయి.
+	You choose where the new version is saved. Continue?	కొత్త వెర్షన్ ఎక్కడ సేవ్ కావాలో మీరే ఎంచుకుంటారు. కొనసాగించాలా?
+	Remove and Save As…	తొలగించి వేరే పేరుతో సేవ్ చేయి…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	ఇతర సంతకాలు ({names}) సంతకం చేసిన తర్వాత పత్రం మారిందని నివేదిస్తాయి. వాటిని మళ్లీ ధృవీకరించండి: అవి చెల్లుబాటులో ఉంటాయనే హామీ లేదు.
+	Signed after this signature, so what they signed includes it: {names}.	ఈ సంతకం తర్వాత జోడించబడి, సంతకం చేసిన కంటెంట్‌లో దీన్ని కలిగి ఉన్న సంతకాలు: {names}.
+	The document will no longer be certified.	పత్రం ఇకపై సర్టిఫై చేయబడి ఉండదు.
+	The fields this signature locked ({names}) can be changed again.	ఈ సంతకం లాక్ చేసిన ఫీల్డ్‌లను ({names}) మళ్లీ మార్చవచ్చు.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	ఇతర సంతకాలు మిగిలి ఉన్నందున, కాపీ సంతకం చేసిన ఫైల్‌కు అప్‌డేట్‌గా సేవ్ అవుతుంది: తొలగించిన సంతకం మునుపటి రివిజన్‌లోనే ఉంటుంది, అక్కడి నుండి దాన్ని తిరిగి పొందవచ్చు.
+	{names} certifies this document without allowing comments, and will report this change.	{names} వ్యాఖ్యలను అనుమతించకుండా ఈ పత్రాన్ని సర్టిఫై చేస్తుంది, ఈ మార్పును నివేదిస్తుంది.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	పత్రం టైమ్‌స్టాంప్ మొత్తం ఫైల్‌ను కవర్ చేస్తుంది, అది ఎవరి సంతకమూ కాదు, కాబట్టి దాన్ని ఒక్కదాన్నే తొలగించలేము.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} ఈ పత్రాన్ని సర్టిఫై చేస్తుంది, సంతకాన్ని తొలగించడం ఆ సర్టిఫికేషన్ అనుమతించే మార్పు కాదు.
+	The signature {names} locks this field.	సంతకం {names} ఈ ఫీల్డ్‌ను లాక్ చేస్తుంది.
+	This document can't be changed: {names}	ఈ పత్రాన్ని మార్చలేము: {names}
+	Choose a signature that can be removed.	తొలగించగల సంతకాన్ని ఎంచుకోండి.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ఈరోజు
 @plural	{n} reply|{n} replies	{n} ప్రత్యుత్తరం|{n} ప్రత్యుత్తరాలు

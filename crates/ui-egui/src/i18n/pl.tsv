@@ -2642,6 +2642,55 @@ animation effects	Off	Wyłączone
 	two cells would both be named {name}	dwie komórki miałyby nazwę {name}
 	a field named {name} already exists	pole o nazwie {name} już istnieje
 
+# Remove Signature (sign.remove)
+	Remove signature…	Usuń podpis…
+	Remove signature	Usuń podpis
+	Remove Signature	Usuń podpis
+	Remove the signature {name}	Usuń podpis {name}
+	Certification signature (level {p})	Podpis certyfikujący (poziom {p})
+	Document timestamp	Znacznik czasu dokumentu
+	Visual signature (Fill & Sign, not digital)	Podpis wizualny (Wypełnij i podpisz, nie cyfrowy)
+	Visual initials (Fill & Sign, not digital)	Inicjały wizualne (Wypełnij i podpisz, nie cyfrowe)
+	{name}_unsigned.pdf	{name}_bez_podpisu.pdf
+	this signature can't be removed on its own	tego podpisu nie można usunąć osobno
+	it was still in the document afterwards, so the change was undone	po usunięciu nadal był w dokumencie, więc zmiana została cofnięta
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	Wybierz inny plik: oryginał pozostaje bez zmian, a wersja bez podpisu zostanie zapisana obok niego.
+	The signature was not removed: {e}	Podpis nie został usunięty: {e}
+	Removed the visual signature on page {p}	Usunięto podpis wizualny ze strony {p}
+	Removed the signature {field} and kept its empty field	Usunięto podpis {field}, pole pozostało puste
+	Removed the signature {field} with its field	Usunięto podpis {field} razem z polem
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	Pozostały inne podpisy, więc usunięty podpis nadal jest we wcześniejszej wersji pliku; sprawdź ponownie pozostałe podpisy.
+	The new file has no signature left and no earlier revision holding it.	Nowy plik nie zawiera już żadnego podpisu ani wcześniejszej wersji, która by go zawierała.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. Zapisano {file} i sprawdzono, że otwiera się ponownie ze wszystkimi stronami. {history}
+	This document has no signature that can be removed.	Ten dokument nie ma podpisu, który można usunąć.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	Podpis, który jest częścią treści strony, na przykład na zeskanowanej stronie, nie jest polem ani adnotacją, więc nie można go usunąć osobno, a PdfCraft nie wymazuje części strony, aby go ukryć. Aby go usunąć, utajnij ten obszar (Utajnij) albo, jeśli podpis jest osobnym obrazem, usuń obraz narzędziem Edytuj PDF.
+	Choose the signature to remove:	Wybierz podpis do usunięcia:
+	unknown signer	nieznany podpisujący
+	Field: {field}	Pole: {field}
+	Page {p}	Strona {p}
+	validated: valid	weryfikacja: prawidłowy
+	validated: validity unknown	weryfikacja: ważność nieznana
+	validated: invalid	weryfikacja: nieprawidłowy
+	None of these signatures can be removed.	Żadnego z tych podpisów nie można usunąć.
+	Keep an empty signature field to sign again	Zachowaj puste pole podpisu, aby podpisać ponownie
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	Usunięcie tego podpisu zmienia dokument i unieważnia ten podpis w powstałej wersji. Może to wpłynąć na pozostałe podpisy i certyfikaty. Oryginalny plik pozostaje bez zmian.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	Usunięcie tego podpisu zmienia dokument i unieważnia ten podpis w powstałej wersji. Oryginalny plik pozostaje bez zmian.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	To obraz podpisu, a nie podpis cyfrowy: usuwany jest tylko znak na stronie. Oryginalny plik pozostaje bez zmian.
+	Unsaved changes to this document are saved in the new file too.	Niezapisane zmiany w tym dokumencie również zostaną zapisane w nowym pliku.
+	You choose where the new version is saved. Continue?	Ty wybierasz, gdzie zostanie zapisana nowa wersja. Kontynuować?
+	Remove and Save As…	Usuń i zapisz jako…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	Pozostałe podpisy ({names}) zgłoszą, że dokument zmienił się po ich złożeniu. Sprawdź je ponownie: nic nie gwarantuje, że pozostaną prawidłowe.
+	Signed after this signature, so what they signed includes it: {names}.	Podpisy dodane po tym podpisie, których podpisana treść go obejmuje: {names}.
+	The document will no longer be certified.	Dokument przestanie być certyfikowany.
+	The fields this signature locked ({names}) can be changed again.	Pola zablokowane przez ten podpis ({names}) będzie można znowu zmieniać.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	Pozostały inne podpisy, więc kopia jest zapisywana jako aktualizacja podpisanego pliku: usunięty podpis zostaje we wcześniejszej wersji, z której można go odzyskać.
+	{names} certifies this document without allowing comments, and will report this change.	{names} certyfikuje ten dokument bez zezwolenia na komentarze i zgłosi tę zmianę.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	Znacznik czasu dokumentu obejmuje cały plik i nie jest niczyim podpisem, więc nie można go usunąć osobno.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} certyfikuje ten dokument, a usunięcie podpisu nie jest zmianą dozwoloną przez ten certyfikat.
+	The signature {names} locks this field.	Podpis {names} blokuje to pole.
+	This document can't be changed: {names}	Tego dokumentu nie można zmienić: {names}
+	Choose a signature that can be removed.	Wybierz podpis, który można usunąć.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Dzisiaj
 @plural	{n} reply|{n} replies	{n} odpowiedź|{n} odpowiedzi|{n} odpowiedzi

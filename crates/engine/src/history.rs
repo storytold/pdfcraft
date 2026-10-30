@@ -114,6 +114,8 @@ pub(crate) struct Editor {
     pub(crate) unsaved_file: bool,
     pub(crate) undo: Vec<Snapshot>,
     pub(crate) redo: Vec<Snapshot>,
+    /// See [`Document::edit_position`].
+    pub(crate) position: u64,
     pub(crate) keys: Keys,
     /// Display appearances built for annotations without any, reused while no annotation edit
     /// runs (content edits leave every annotation dictionary alone). Cleared on any refresh

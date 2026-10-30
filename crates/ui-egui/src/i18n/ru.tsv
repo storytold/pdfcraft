@@ -2459,6 +2459,55 @@ animation effects	Off	Выкл
 	two cells would both be named {name}	две ячейки получили бы одно имя {name}
 	a field named {name} already exists	поле с именем {name} уже существует
 
+# Remove Signature (sign.remove)
+	Remove signature…	Удалить подпись…
+	Remove signature	Удалить подпись
+	Remove Signature	Удалить подпись
+	Remove the signature {name}	Удалить подпись {name}
+	Certification signature (level {p})	Подпись сертификации (уровень {p})
+	Document timestamp	Метка времени документа
+	Visual signature (Fill & Sign, not digital)	Визуальная подпись (Заполнить и подписать, не цифровая)
+	Visual initials (Fill & Sign, not digital)	Визуальные инициалы (Заполнить и подписать, не цифровые)
+	{name}_unsigned.pdf	{name}_без_подписи.pdf
+	this signature can't be removed on its own	эту подпись нельзя удалить отдельно
+	it was still in the document afterwards, so the change was undone	после удаления она осталась в документе, поэтому изменение отменено
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	Выберите другой файл: оригинал остаётся без изменений, а версия без подписи сохраняется рядом с ним.
+	The signature was not removed: {e}	Подпись не удалена: {e}
+	Removed the visual signature on page {p}	Удалена визуальная подпись на стр. {p}
+	Removed the signature {field} and kept its empty field	Удалена подпись {field}, пустое поле сохранено
+	Removed the signature {field} with its field	Удалена подпись {field} вместе с полем
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	Остались другие подписи, поэтому удалённая подпись по-прежнему есть в предыдущей редакции файла; заново проверьте оставшиеся подписи.
+	The new file has no signature left and no earlier revision holding it.	В новом файле не осталось ни одной подписи и нет предыдущей редакции, где она хранится.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. Файл {file} сохранён и проверен: он снова открывается со всеми страницами. {history}
+	This document has no signature that can be removed.	В этом документе нет подписей, которые можно удалить.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	Подпись, которая является частью содержимого страницы (например, на отсканированной странице), не является ни полем, ни примечанием, поэтому её нельзя удалить отдельно, а PdfCraft не стирает части страницы, чтобы её скрыть. Чтобы убрать её, скройте эту область (Скрыть) или, если подпись — отдельное изображение, удалите его с помощью «Редактировать PDF».
+	Choose the signature to remove:	Выберите подпись для удаления:
+	unknown signer	неизвестный подписант
+	Field: {field}	Поле: {field}
+	Page {p}	Стр. {p}
+	validated: valid	проверка: действительна
+	validated: validity unknown	проверка: действительность неизвестна
+	validated: invalid	проверка: недействительна
+	None of these signatures can be removed.	Ни одну из этих подписей нельзя удалить.
+	Keep an empty signature field to sign again	Оставить пустое поле подписи, чтобы подписать заново
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	Удаление этой подписи изменяет документ и делает эту подпись недействительной в получившейся версии. Это может затронуть другие подписи и сертификацию. Исходный файл остаётся без изменений.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	Удаление этой подписи изменяет документ и делает эту подпись недействительной в получившейся версии. Исходный файл остаётся без изменений.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	Это изображение подписи, а не цифровая подпись: удаляется только отметка на странице. Исходный файл остаётся без изменений.
+	Unsaved changes to this document are saved in the new file too.	Несохранённые изменения этого документа тоже будут сохранены в новом файле.
+	You choose where the new version is saved. Continue?	Вы выбираете, куда сохранить новую версию. Продолжить?
+	Remove and Save As…	Удалить и сохранить как…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	Другие подписи ({names}) будут сообщать, что документ изменился после подписания. Проверьте их заново: ничто не гарантирует, что они останутся действительными.
+	Signed after this signature, so what they signed includes it: {names}.	Подписи, добавленные после этой и включающие её в подписанное содержимое: {names}.
+	The document will no longer be certified.	Документ перестанет быть сертифицированным.
+	The fields this signature locked ({names}) can be changed again.	Поля, которые блокировала эта подпись ({names}), снова можно будет изменять.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	Остались другие подписи, поэтому копия сохраняется как обновление подписанного файла: удалённая подпись остаётся в предыдущей редакции, откуда её можно восстановить.
+	{names} certifies this document without allowing comments, and will report this change.	{names} сертифицирует этот документ без разрешения комментариев и сообщит об этом изменении.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	Метка времени документа охватывает весь файл и не является чьей-либо подписью, поэтому её нельзя удалить отдельно.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} сертифицирует этот документ, а удаление подписи не входит в изменения, разрешённые этой сертификацией.
+	The signature {names} locks this field.	Подпись {names} блокирует это поле.
+	This document can't be changed: {names}	Этот документ нельзя изменить: {names}
+	Choose a signature that can be removed.	Выберите подпись, которую можно удалить.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Сегодня
 @plural	{n} reply|{n} replies	{n} ответ|{n} ответа|{n} ответов

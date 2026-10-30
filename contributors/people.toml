@@ -174,6 +174,10 @@ sync_github_name = true
 [people.amoisttowe1]
 real_name = "Nick Nyssen"
 
+[people.Nero1Dev]
+real_name = "Nairon Dalmaso"
+sync_github_name = true
+
 [people.agent-reed]
 sync_github_name = true
 

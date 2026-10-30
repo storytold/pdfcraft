@@ -2525,6 +2525,55 @@ animation effects	Off	Joaktiv
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
 
+# Remove Signature (sign.remove) (AI-assisted, not separately native-reviewed)
+	Remove signature…	Hiq nënshkrimin…
+	Remove signature	Hiq nënshkrimin
+	Remove Signature	Hiq nënshkrimin
+	Remove the signature {name}	Hiq nënshkrimin {name}
+	Certification signature (level {p})	Nënshkrim certifikimi (niveli {p})
+	Document timestamp	Vulë kohore e dokumentit
+	Visual signature (Fill & Sign, not digital)	Nënshkrim vizual (Plotëso dhe nënshkruaj, jo dixhital)
+	Visual initials (Fill & Sign, not digital)	Iniciale vizuale (Plotëso dhe nënshkruaj, jo dixhitale)
+	{name}_unsigned.pdf	{name}_pa_nenshkrim.pdf
+	this signature can't be removed on its own	ky nënshkrim nuk mund të hiqet më vete
+	it was still in the document afterwards, so the change was undone	ishte ende në dokument më pas, prandaj ndryshimi u zhbë
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	Zgjidhni një skedar tjetër: origjinali mbetet siç është, dhe versioni pa nënshkrimin ruhet pranë tij.
+	The signature was not removed: {e}	Nënshkrimi nuk u hoq: {e}
+	Removed the visual signature on page {p}	U hoq nënshkrimi vizual në faqen {p}
+	Removed the signature {field} and kept its empty field	U hoq nënshkrimi {field} dhe u mbajt fusha e tij bosh
+	Removed the signature {field} with its field	U hoq nënshkrimi {field} bashkë me fushën e tij
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	Mbeten nënshkrime të tjera, prandaj ai i hequri është ende në rishikimin e mëparshëm të skedarit; kontrolloni sërish nënshkrimet që mbetën.
+	The new file has no signature left and no earlier revision holding it.	Skedari i ri nuk ka më asnjë nënshkrim dhe asnjë rishikim të mëparshëm që ta përmbajë.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. U ruajt {file} dhe u kontrollua që rihapet me të gjitha faqet. {history}
+	This document has no signature that can be removed.	Ky dokument nuk ka asnjë nënshkrim që mund të hiqet.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	Një nënshkrim që është pjesë e përmbajtjes së faqes, si në një faqe të skanuar, nuk është fushë apo shënim, prandaj nuk mund të hiqet më vete, dhe PdfCraft nuk fshin pjesë të faqes për ta fshehur. Për ta hequr, redaktoni atë zonë (Redakto) ose, kur nënshkrimi është imazh më vete, fshini imazhin me Redakto një PDF.
+	Choose the signature to remove:	Zgjidhni nënshkrimin që do të hiqet:
+	unknown signer	nënshkrues i panjohur
+	Field: {field}	Fusha: {field}
+	Page {p}	Faqja {p}
+	validated: valid	vlerësimi: i vlefshëm
+	validated: validity unknown	vlerësimi: vlefshmëri e panjohur
+	validated: invalid	vlerësimi: i pavlefshëm
+	None of these signatures can be removed.	Asnjë nga këto nënshkrime nuk mund të hiqet.
+	Keep an empty signature field to sign again	Mbaj një fushë nënshkrimi bosh për ta nënshkruar sërish
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	Heqja e këtij nënshkrimi e ndryshon dokumentin dhe e bën të pavlefshëm këtë nënshkrim në versionin që del. Mund të ndikojë te nënshkrimet dhe certifikimet e tjera. Skedari origjinal mbetet siç është.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	Heqja e këtij nënshkrimi e ndryshon dokumentin dhe e bën të pavlefshëm këtë nënshkrim në versionin që del. Skedari origjinal mbetet siç është.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	Ky është imazhi i një nënshkrimi, jo nënshkrim dixhital: hiqet vetëm shenja në faqe. Skedari origjinal mbetet siç është.
+	Unsaved changes to this document are saved in the new file too.	Ndryshimet e paruajtura të këtij dokumenti ruhen edhe në skedarin e ri.
+	You choose where the new version is saved. Continue?	Ju zgjidhni ku ruhet versioni i ri. Të vazhdohet?
+	Remove and Save As…	Hiq dhe ruaj si…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	Nënshkrimet e tjera ({names}) do të raportojnë se dokumenti ndryshoi pasi ato u nënshkruan. Kontrollojini sërish: asgjë nuk garanton se mbeten të vlefshme.
+	Signed after this signature, so what they signed includes it: {names}.	Të nënshkruara pas këtij nënshkrimi, prandaj ajo që nënshkruan e përfshin atë: {names}.
+	The document will no longer be certified.	Dokumenti nuk do të jetë më i certifikuar.
+	The fields this signature locked ({names}) can be changed again.	Fushat që kyçte ky nënshkrim ({names}) mund të ndryshohen sërish.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	Mbeten nënshkrime të tjera, prandaj kopja ruhet si përditësim i skedarit të nënshkruar: nënshkrimi i hequr mbetet në rishikimin e mëparshëm, prej nga mund të rikuperohet.
+	{names} certifies this document without allowing comments, and will report this change.	{names} e certifikon këtë dokument pa lejuar komente dhe do ta raportojë këtë ndryshim.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	Një vulë kohore e dokumentit mbulon gjithë skedarin dhe nuk është nënshkrimi i askujt, prandaj nuk mund të hiqet më vete.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} e certifikon këtë dokument, dhe heqja e një nënshkrimi nuk është ndryshim që e lejon certifikimi.
+	The signature {names} locks this field.	Nënshkrimi {names} e kyç këtë fushë.
+	This document can't be changed: {names}	Ky dokument nuk mund të ndryshohet: {names}
+	Choose a signature that can be removed.	Zgjidhni një nënshkrim që mund të hiqet.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Sot
 

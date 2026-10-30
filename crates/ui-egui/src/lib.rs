@@ -451,6 +451,8 @@ pub struct PdfCraftApp {
     pub summary_sort: pdfcraft_engine::SummarySort,
     /// The signing dialogs' state.
     pub sign_draft: Option<SignDraft>,
+    /// Remove Signature: what it lists and what is chosen.
+    pub remove_sig: Option<crate::sign_ui::RemoveSigDraft>,
     /// Digital ID files the user has created or added.
     pub digital_ids: Vec<DigitalIdEntry>,
     /// Signatures panel: expanded entries (field names).

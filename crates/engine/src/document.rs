@@ -338,6 +338,13 @@ impl Document {
         self.editor.as_ref().and_then(|e| e.redo.last()).map(|(l, ..)| l)
     }
 
+    /// How many edits are applied, net of undo and redo: an edit or a redo raises it by one, an
+    /// undo lowers it by one. Unlike the undo history it has no cap, so an interface can note it
+    /// and later undo back to exactly that point.
+    pub fn edit_position(&self) -> Option<u64> {
+        self.editor.as_ref().map(|e| e.position)
+    }
+
     pub fn editable(&self) -> bool {
         self.editor.is_some()
     }

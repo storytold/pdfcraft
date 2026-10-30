@@ -17,6 +17,7 @@ use crate::{PdfCraftApp, icons, widgets};
 
 mod dialog;
 mod panel;
+mod remove;
 
 #[cfg(test)]
 use dialog::detail_lines;
@@ -24,6 +25,8 @@ use dialog::graphic_of;
 pub(crate) use dialog::{appearance_labels, dialog};
 pub(crate) use panel::{CertAction, banner, cert_viewer, panel, signature_status_style};
 pub use panel::{CertTab, CertViewer, PanelAction, certificate_pem};
+pub use remove::RemoveSigDraft;
+pub(crate) use remove::remove_dialog;
 
 /// A digital ID the app knows about (Acrobat: Digital ID files). The file stays where it is;
 /// its password is asked for at each signing.

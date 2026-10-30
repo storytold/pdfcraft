@@ -1,6 +1,6 @@
 use super::{
-    Arc, DocId, EditError, Keys, OpenError, RecoverySnapshot, RenderPool, SaveOptions, Session, SignOptions, TrustStore, display_bytes, guard,
-    render_threads, signatures_of, writable, write_full, write_incremental, xfa_sync_datasets,
+    Arc, DocId, EditError, Keys, OpenError, RecoverySnapshot, RenderPool, SaveOptions, Session, SignOptions, TrustStore, clear_signature,
+    display_bytes, guard, render_threads, signatures_of, writable, write_full, write_incremental, xfa_sync_datasets,
 };
 
 impl Session {
@@ -251,6 +251,29 @@ impl Session {
             doc.signatures = Arc::new(signatures);
             doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
         }
+    }
+
+    /// The signatures of document `id` that Remove Signature lists, with what removing each would
+    /// do and why some can't be removed ([`clear_signature::removable`]).
+    pub fn removable_signatures(&self, id: DocId) -> Result<Vec<clear_signature::Removable>, EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
+        let mut list = guard(|| clear_signature::removable(&editor.cos, &doc.signatures)).map_err(EditError::Sign)?;
+        for r in list.iter_mut().filter(|r| r.blocked.is_none()) {
+            // What applying the edit would check (`check_permission`): a visual signature is a
+            // comment, a digital one changes the document.
+            let why = match (&doc.read_only_reason, &r.target) {
+                (Some(reason), _) => Some(reason.clone()),
+                (None, clear_signature::Target::Annotation { .. }) if !doc.allows_annotation() => {
+                    Some("its security doesn't allow changing comments".into())
+                }
+                (None, clear_signature::Target::Annotation { .. }) => None,
+                (None, _) if !doc.allows_modification() => Some("its security doesn't allow changing it".into()),
+                (None, _) => None,
+            };
+            r.blocked = why.map(clear_signature::Blocker::ReadOnly);
+        }
+        Ok(list)
     }
 
     /// The signing time as a PDF date in local time with its offset (`D:…+02'00'`).

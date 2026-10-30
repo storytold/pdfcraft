@@ -262,6 +262,12 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             }
             return false;
         }
+        Dialog::RemoveSignature => {
+            if crate::sign_ui::remove_dialog(ui, app, &t) {
+                req.close = true;
+            }
+            return false;
+        }
         Dialog::Sign => {
             if crate::sign_ui::dialog(ui, app, &t) {
                 app.sign_draft = None;

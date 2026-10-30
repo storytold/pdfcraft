@@ -747,4 +747,6 @@ Newest first: the date, what moved, and the new overall estimate.
 
 - **2026-10-18 (renderer, hayro patches 19/35):** A mesh shading (types 4–7) is sampled over its own triangles instead of the whole path: a BricsCAD plan with 310 one-triangle `sh` fills took 2 s per 1024 px tile at every zoom (and hit the 20 s watchdog on a busy machine); now about 70 ms, so zooming into dense topology drawings stays fluid. Estimates unchanged.
 
+- **2026-10-20 (M9, `sign.clear-signature` partial):** Remove signature… (Use a certificate and the Signatures panel; `sign_removable`/`sign_clear`) removes one digital, certification or Fill & Sign signature into a new file, refuses what a remaining certification or field lock forbids, says which signatures will report the change and whether the removed one stays recoverable in an earlier revision; see `docs/removing-signatures.md`. Estimates unchanged.
+
 - **2026-10-22 (PR #3227 integration):** M11: integrate upstream `80b7d215`; retain partial target-version compatibility and upstream content-boundary and image-size regression coverage. Scope and estimates unchanged.

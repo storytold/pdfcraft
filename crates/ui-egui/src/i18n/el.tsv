@@ -2552,6 +2552,55 @@ animation effects	Off	Ανενεργά
 	two cells would both be named {name}	δύο κελιά θα είχαν το ίδιο όνομα {name}
 	a field named {name} already exists	υπάρχει ήδη πεδίο με όνομα {name}
 
+# Remove Signature (sign.remove)
+	Remove signature…	Αφαίρεση υπογραφής…
+	Remove signature	Αφαίρεση υπογραφής
+	Remove Signature	Αφαίρεση υπογραφής
+	Remove the signature {name}	Αφαίρεση της υπογραφής {name}
+	Certification signature (level {p})	Υπογραφή πιστοποίησης (επίπεδο {p})
+	Document timestamp	Χρονοσήμανση εγγράφου
+	Visual signature (Fill & Sign, not digital)	Οπτική υπογραφή (Συμπλήρωση και υπογραφή, όχι ψηφιακή)
+	Visual initials (Fill & Sign, not digital)	Οπτικά αρχικά (Συμπλήρωση και υπογραφή, όχι ψηφιακά)
+	{name}_unsigned.pdf	{name}_xoris_ypografi.pdf
+	this signature can't be removed on its own	αυτή η υπογραφή δεν μπορεί να αφαιρεθεί μόνη της
+	it was still in the document afterwards, so the change was undone	παρέμενε στο έγγραφο μετά την αφαίρεση, οπότε η αλλαγή αναιρέθηκε
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	Επιλέξτε άλλο αρχείο: το πρωτότυπο μένει ως έχει και η έκδοση χωρίς την υπογραφή αποθηκεύεται δίπλα του.
+	The signature was not removed: {e}	Η υπογραφή δεν αφαιρέθηκε: {e}
+	Removed the visual signature on page {p}	Αφαιρέθηκε η οπτική υπογραφή στη σελίδα {p}
+	Removed the signature {field} and kept its empty field	Αφαιρέθηκε η υπογραφή {field} και το πεδίο της έμεινε κενό
+	Removed the signature {field} with its field	Αφαιρέθηκε η υπογραφή {field} μαζί με το πεδίο της
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	Παραμένουν άλλες υπογραφές, οπότε η υπογραφή που αφαιρέθηκε υπάρχει ακόμη στην προηγούμενη αναθεώρηση του αρχείου· ελέγξτε ξανά τις υπογραφές που απομένουν.
+	The new file has no signature left and no earlier revision holding it.	Το νέο αρχείο δεν έχει πλέον καμία υπογραφή ούτε προηγούμενη αναθεώρηση που να τη διατηρεί.
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}. Το {file} αποθηκεύτηκε και ελέγχθηκε: ανοίγει ξανά με όλες τις σελίδες. {history}
+	This document has no signature that can be removed.	Αυτό το έγγραφο δεν έχει υπογραφή που μπορεί να αφαιρεθεί.
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and PdfCraft doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	Μια υπογραφή που είναι μέρος του περιεχομένου μιας σελίδας, όπως σε σαρωμένη σελίδα, δεν είναι πεδίο ούτε σχολιασμός, οπότε δεν μπορεί να αφαιρεθεί μόνη της, και το PdfCraft δεν σβήνει τμήματα της σελίδας για να την κρύψει. Για να την αφαιρέσετε, αποκρύψτε αυτή την περιοχή (Απόκρυψη ευαίσθητου περιεχομένου) ή, αν η υπογραφή είναι ξεχωριστή εικόνα, διαγράψτε την εικόνα με την Επεξεργασία PDF.
+	Choose the signature to remove:	Επιλέξτε την υπογραφή που θα αφαιρεθεί:
+	unknown signer	άγνωστος υπογράφων
+	Field: {field}	Πεδίο: {field}
+	Page {p}	Σελίδα {p}
+	validated: valid	επικύρωση: έγκυρη
+	validated: validity unknown	επικύρωση: άγνωστη εγκυρότητα
+	validated: invalid	επικύρωση: μη έγκυρη
+	None of these signatures can be removed.	Καμία από αυτές τις υπογραφές δεν μπορεί να αφαιρεθεί.
+	Keep an empty signature field to sign again	Διατήρηση κενού πεδίου υπογραφής για νέα υπογραφή
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	Η αφαίρεση αυτής της υπογραφής αλλάζει το έγγραφο και ακυρώνει αυτή την υπογραφή στην έκδοση που προκύπτει. Μπορεί να επηρεάσει τις άλλες υπογραφές και πιστοποιήσεις. Το πρωτότυπο αρχείο μένει ως έχει.
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	Η αφαίρεση αυτής της υπογραφής αλλάζει το έγγραφο και ακυρώνει αυτή την υπογραφή στην έκδοση που προκύπτει. Το πρωτότυπο αρχείο μένει ως έχει.
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	Αυτή είναι εικόνα υπογραφής, όχι ψηφιακή υπογραφή: αφαιρείται μόνο το σημάδι στη σελίδα. Το πρωτότυπο αρχείο μένει ως έχει.
+	Unsaved changes to this document are saved in the new file too.	Οι μη αποθηκευμένες αλλαγές αυτού του εγγράφου αποθηκεύονται και στο νέο αρχείο.
+	You choose where the new version is saved. Continue?	Εσείς επιλέγετε πού θα αποθηκευτεί η νέα έκδοση. Συνέχεια;
+	Remove and Save As…	Αφαίρεση και αποθήκευση ως…
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	Οι άλλες υπογραφές ({names}) θα αναφέρουν ότι το έγγραφο άλλαξε μετά την υπογραφή τους. Ελέγξτε τις ξανά: τίποτα δεν εγγυάται ότι θα παραμείνουν έγκυρες.
+	Signed after this signature, so what they signed includes it: {names}.	Υπογραφές που προστέθηκαν μετά από αυτή και το υπογεγραμμένο περιεχόμενό τους την περιλαμβάνει: {names}.
+	The document will no longer be certified.	Το έγγραφο δεν θα είναι πλέον πιστοποιημένο.
+	The fields this signature locked ({names}) can be changed again.	Τα πεδία που κλείδωνε αυτή η υπογραφή ({names}) θα μπορούν να αλλάξουν ξανά.
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	Παραμένουν άλλες υπογραφές, οπότε το αντίγραφο αποθηκεύεται ως ενημέρωση του υπογεγραμμένου αρχείου: η υπογραφή που αφαιρέθηκε μένει στην προηγούμενη αναθεώρηση, από όπου μπορεί να ανακτηθεί.
+	{names} certifies this document without allowing comments, and will report this change.	Η υπογραφή {names} πιστοποιεί αυτό το έγγραφο χωρίς να επιτρέπει σχόλια και θα αναφέρει αυτή την αλλαγή.
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	Μια χρονοσήμανση εγγράφου καλύπτει όλο το αρχείο και δεν είναι υπογραφή κανενός, οπότε δεν μπορεί να αφαιρεθεί μόνη της.
+	{names} certifies this document, and removing a signature is not a change its certification permits.	Η υπογραφή {names} πιστοποιεί αυτό το έγγραφο, και η αφαίρεση υπογραφής δεν είναι αλλαγή που επιτρέπει η πιστοποίηση.
+	The signature {names} locks this field.	Η υπογραφή {names} κλειδώνει αυτό το πεδίο.
+	This document can't be changed: {names}	Αυτό το έγγραφο δεν μπορεί να αλλάξει: {names}
+	Choose a signature that can be removed.	Επιλέξτε μια υπογραφή που μπορεί να αφαιρεθεί.
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Σήμερα
 @plural	{n} reply|{n} replies	{n} απάντηση|{n} απαντήσεις
