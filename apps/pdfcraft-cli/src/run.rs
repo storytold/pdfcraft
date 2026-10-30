@@ -2,7 +2,7 @@
 use super::options::MCP_OPTIONS;
 use super::options::{RUN_OPTIONS, flag, positional, validate_options};
 #[cfg(feature = "mcp")]
-use super::{Arc, Path, Write, automation_args};
+use super::{Arc, Duration, Path, Write, automation_args};
 use super::{CliError, stdout_line};
 
 // ---- automation --------------------------------------------------------------------------------
@@ -178,9 +178,20 @@ pub(crate) fn mcp(args: &[String]) -> Result<(), CliError> {
         auto = auto.with_automation_roots(Some(roots));
     }
     let mut server = pdfcraft_automation::mcp::McpServer::new(auto).with_compact(compact);
+    let mut connected = String::new();
+    if let Some(file) = flag(args, "--connect") {
+        // Allow headroom beyond the control server's 30 s frame wait.
+        let window = super::control::Connection::new(file, Duration::from_secs(90));
+        // A bad control file is refused now; a missing one may come when the app starts.
+        if !window.check().map_err(|e| format!("--connect {e}"))? {
+            let _ = writeln!(std::io::stderr().lock(), "pdfcraft-cli: {file} doesn't exist yet; start the app with `pdfcraft --control {file}`");
+        }
+        connected = format!(", connected to the window of {file}");
+        server = server.with_window(Box::new(window));
+    }
     let _ = writeln!(
         std::io::stderr().lock(),
-        "pdfcraft-cli: MCP server on stdio (protocol {}{}); close stdin to stop",
+        "pdfcraft-cli: MCP server on stdio (protocol {}{}{connected}); close stdin to stop",
         pdfcraft_automation::mcp::PROTOCOL_VERSIONS[0],
         if compact { ", compact tool list" } else { "" }
     );

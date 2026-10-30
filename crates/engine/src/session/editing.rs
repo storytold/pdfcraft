@@ -217,6 +217,20 @@ impl Session {
         Ok(())
     }
 
+    /// Collapse the last `count` undo steps on document `id` into one undo step.
+    pub fn group_undo(&mut self, id: DocId, count: usize, label: Label) -> Result<(), EditError> {
+        let doc = self.doc_mut(id)?;
+        let editor = doc.editor.as_mut().ok_or(EditError::NothingToUndo)?;
+        if count == 0 || editor.undo.len() < count {
+            return Err(EditError::NothingToUndo);
+        }
+        let start = editor.undo.len() - count;
+        let (_, prev, keys, _) = editor.undo.remove(start);
+        editor.undo.truncate(start);
+        editor.undo.push((label, prev, keys, Scope::Full));
+        Ok(())
+    }
+
     pub fn undo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToUndo)?;

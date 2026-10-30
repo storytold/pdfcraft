@@ -2722,6 +2722,12 @@ key	Space	Tarpas
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Jūs peržiūrite pasirašytą „{from}“ versiją ({rev} versija). Tai momentinė kopija: čia atlikti pakeitimai originalo nepaveiks.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Jūs peržiūrite „{from}“ {rev} versiją. Tai momentinė kopija: čia atlikti pakeitimai originalo nepaveiks.
+
+# Ask Agent
+	Ask Agent	Klausti agento
+	Instruction	Nurodymas
+	Send	Siųsti
+	Keep	Išlaikyti
 	Turn upside down (180°)	Apversti aukštyn kojomis (180°)
 	4 x 6 in label (101.6 x 152.4 mm)	4 × 6 col. etiketė (101,6 × 152,4 mm)
 	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Apkerpa kiekvieną puslapį iki spausdinamos srities, pasuka tiesiai ir pritaiko lapui neiškraipydama. Viena etiketė lape.

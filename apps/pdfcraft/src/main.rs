@@ -440,6 +440,8 @@ fn app_creator<'a>(
             app.os_events = Some(server.connect(&cc.egui_ctx, native_wayland(cc)));
         }
         if let Some(file) = &control_file {
+            // `tool.call`: the automation tools, on the window's own documents.
+            app.tool_runner = Some(Box::new(|session, name, args, root| pdfcraft_automation::window::call_for_window(session, root, name, args)));
             let client = app.attach_control(&cc.egui_ctx);
             open_control_channel(file, pdfcraft_ui_egui::control::serve(client))?;
         }

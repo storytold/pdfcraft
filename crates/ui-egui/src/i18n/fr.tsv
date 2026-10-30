@@ -2472,6 +2472,12 @@ animation effects	Off	Désactivés
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Vous consultez la version signée de «{from}» (révision {rev}). Il s'agit d'un instantané : les modifications effectuées ici n'affecteront pas l'original.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Vous consultez la révision {rev} de «{from}». Il s'agit d'un instantané : les modifications effectuées ici n'affecteront pas l'original.
+
+# Ask Agent
+	Ask Agent	Demander à l’agent
+	Instruction	Instruction
+	Send	Envoyer
+	Keep	Garder
 	Turn upside down (180°)	Retourner (180°)
 	4 x 6 in label (101.6 x 152.4 mm)	Étiquette 4 × 6 po (101,6 × 152,4 mm)
 	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Rogne chaque page à sa zone imprimée, la redresse et l’ajuste à la feuille sans la déformer. Une étiquette par feuille.

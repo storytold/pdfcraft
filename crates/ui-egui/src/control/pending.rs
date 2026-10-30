@@ -159,9 +159,18 @@ impl Control {
             expired,
             reserved_total: self.reserved_bytes(),
         };
+        let private = host.private_dialog() || finisher.passes < self.private_until_pass;
         let mut keep = Vec::new();
         for pending in std::mem::take(&mut self.pending) {
             let kept = match pending {
+                Pending::Screenshot { slot, reply, reserved, .. } if private => {
+                    slot.cancel();
+                    finisher.release_reservation(reserved);
+                    let _ = reply.send(Err(
+                        "ui.screenshot: a private signing or password dialog is open; close it yourself before inspecting the window".into(),
+                    ));
+                    None
+                }
                 Pending::Frames { until_pass, batches, since, reply, value } => finisher.resolve_frames(until_pass, batches, since, reply, value),
                 Pending::Screenshot { slot, callback, region, reply, since, geometry, reserved, attempts } => {
                     finisher.finish_capture(ctx, PendingCapture { slot, callback, region, reply, since, geometry, reserved, attempts })

@@ -53,7 +53,7 @@ fn mcp_rejects_unknown_options_before_starting_the_server() {
 fn compact_flag_shortens_the_tool_list() {
     let full = listed_tools(&[]);
     let compact = listed_tools(&["--compact"]);
-    assert_eq!(compact.len(), 17, "{compact:?}");
+    assert_eq!(compact.len(), 19, "{compact:?}");
     assert!(compact.iter().any(|n| n == "tool_search") && compact.iter().any(|n| n == "tool_call"));
     assert!(compact.iter().all(|n| full.contains(n) || n == "tool_search" || n == "tool_call"));
     assert!(full.len() > 100 && !full.iter().any(|n| n == "tool_search"), "{} tools", full.len());

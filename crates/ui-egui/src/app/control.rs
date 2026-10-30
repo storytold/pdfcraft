@@ -6,6 +6,7 @@ impl PdfCraftApp {
     /// sends requests to this app; [`control::serve`] exposes it on loopback.
     pub fn attach_control(&mut self, ctx: &egui::Context) -> control::ControlClient {
         let (control, client) = control::attach(ctx);
+        self.ask_agent.hub = client.agent_hub();
         self.control = Some(control);
         client
     }

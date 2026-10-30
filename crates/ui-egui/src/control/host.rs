@@ -55,6 +55,10 @@ impl Host for crate::PdfCraftApp {
         self.request_quit(ctx)
     }
 
+    fn ask_agent(&mut self, p: &Value) -> Reply {
+        self.ask_agent_command(p)
+    }
+
     fn state(&self) -> Value {
         let active = self.active.and_then(|i| self.views.get(i));
         let docs: Vec<Value> = self
@@ -72,6 +76,7 @@ impl Host for crate::PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         let pending_opens: Vec<Value> = Vec::new();
         json!({
+            "askAgent": self.ask_agent_inspect(),
             "side_panels": crate::side_panels::state(self),
             "documents": docs,
             "pending_opens": pending_opens,
@@ -184,5 +189,71 @@ impl Host for crate::PdfCraftApp {
     #[cfg(target_arch = "wasm32")]
     fn open(&mut self, _path: &str) -> Reply {
         Err("ui.open needs a file system; on the web, drop the file on the page".into())
+    }
+
+    fn private_dialog(&self) -> bool {
+        self.password_prompt.is_some()
+            || matches!(
+                self.dialog,
+                Some(
+                    crate::Dialog::Sign
+                        | crate::Dialog::Signature
+                        | crate::Dialog::Protect
+                        | crate::Dialog::Preferences
+                        | crate::Dialog::CertificateViewer
+                )
+            )
+            || matches!(
+                self.quick_tool,
+                crate::QuickTool::Fill(crate::fill_sign::FillTool::Signature | crate::fill_sign::FillTool::Initials)
+                    | crate::QuickTool::SignArea { .. }
+            )
+            || ((self.signature.is_some() || self.initials.is_some())
+                && (self.mode == crate::Mode::Sign
+                    || (self.left_open && self.left == crate::LeftPanel::Tool("fill_sign"))
+                    || self.ctx.as_ref().is_some_and(egui::Popup::is_any_open)))
+    }
+
+    fn tool(&mut self, name: &str, args: &Value, root: Option<&str>) -> Reply {
+        if super::tool::agent_signing_call(name, args, 0) {
+            return Err("HUMAN_SIGNATURE_REQUIRED: signing is refused; only the person may sign in the native UI".into());
+        }
+        if !super::tool::agent_read_only_tool(name) {
+            self.ask_agent.hub.may_edit(0, None).map_err(|e| format!("{}: {}", e.code, e.message))?;
+        }
+        self.run_tool(name, args, root)
+    }
+
+    fn agent_tool(&mut self, owner: u64, request: Option<u64>, name: &str, args: &Value, root: Option<&str>) -> Reply {
+        if super::tool::agent_signing_call(name, args, 0) {
+            return Err("HUMAN_SIGNATURE_REQUIRED: signing is person-only".into());
+        }
+        let read = super::tool::agent_read_only_tool(name);
+        if !read {
+            self.ask_agent.hub.may_edit(owner, request).map_err(|e| format!("{}: {}", e.code, e.message))?;
+        }
+        // The agent's comments carry its name, like its other edits.
+        let mut args = args.clone();
+        if let (Some(id), Some(o)) = (request, args.as_object_mut())
+            && name.starts_with("comment_")
+            && !o.contains_key("author")
+            && let Some(author) = self.ask_agent.author(id)
+        {
+            o.insert("author".into(), json!(author));
+        }
+        // A batch applies one edit per step, so count the Undo steps the call really adds: Keep
+        // groups them all, and Undo knows how many to take back.
+        let doc = request.and_then(|id| self.ask_agent.open_doc(id));
+        let before = doc.and_then(|d| self.session.get(d)).map(|d| d.undo_depth());
+        let r = self.run_tool(name, &args, root);
+        if let (Some(id), false, Ok(_)) = (request, read, &r) {
+            let after = doc.and_then(|d| self.session.get(d)).map(|d| d.undo_depth());
+            let created = match (before, after) {
+                (Some(before), Some(after)) if after > before => after - before,
+                _ => 1,
+            };
+            self.ask_agent.record_edits(id, created);
+        }
+        r
     }
 }
