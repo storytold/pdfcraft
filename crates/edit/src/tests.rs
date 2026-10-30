@@ -2572,6 +2572,37 @@ fn words_set_in_a_negative_font_size_under_a_flipped_ctm_join_into_a_paragraph()
     assert!((reading[0].size - 10.0).abs() < 0.01, "{}", reading[0].size);
 }
 
+/// A negative `Tf` under a CTM turned half a turn (with a positive `Tz`) also reads upright, its
+/// glyphs advancing right on the page though text space runs left: the words join with their
+/// spaces. A run set in the opposite sign on the same baseline is drawn upside down, and stays a
+/// line of its own.
+#[test]
+fn a_negative_font_size_under_a_half_turned_ctm_joins_words_and_keeps_opposite_signs_apart() {
+    let doc = text_page(
+        "-1 0 0 -1 600 800 cm BT /F1 -10 Tf \
+         1 0 0 1 528 700 Tm (The) Tj 1 0 0 1 506 700 Tm (assembler) Tj 1 0 0 1 456.5 700 Tm (creates) Tj ET",
+    );
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["The assembler creates"]);
+    let doc = text_page(
+        "1 0 0 1 0 792 cm 1 0 0 -1 0 0 cm BT /F1 -10 Tf -100 Tz 1 0 0 1 72 100 Tm (Upright) Tj \
+         /F1 10 Tf 100 Tz 1 0 0 1 112 100 Tm (Over) Tj ET",
+    );
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Upright", "Over"]);
+}
+
+/// An underline added to such a paragraph has a positive line width.
+#[test]
+fn underlining_text_set_in_a_negative_font_size_writes_a_positive_line_width() {
+    let mut doc = text_page("1 0 0 1 0 792 cm 1 0 0 -1 0 0 cm BT /F1 -10 Tf -100 Tz 1 0 0 1 72 100 Tm (Underlined words) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { underline: Some(true), ..Default::default() }).unwrap();
+    let content = page_content(&doc);
+    let widths: Vec<f64> =
+        content.split_whitespace().collect::<Vec<_>>().windows(2).filter(|w| w[1] == "w").filter_map(|w| w[0].parse().ok()).collect();
+    assert!(!widths.is_empty() && widths.iter().all(|w| *w > 0.0), "{widths:?}\n{content}");
+}
+
 /// Rewriting such a paragraph keeps the source's negative `Tf`, whether the paragraph is one style
 /// or mixed (here a word in red) and whether or not a new size is asked for: a positive one under
 /// the flipped CTM would draw the text mirrored, running left from where it started.

@@ -320,6 +320,12 @@ impl Shown {
         let m = self.tm.then(&self.state.ctm);
         let dir = match self.state.vertical {
             Some(w1) => direction(&Matrix([m.0[2] * w1.signum(), m.0[3] * w1.signum(), 0.0, 0.0, 0.0, 0.0])),
+            // Glyphs advance along text space x times the sign of the size and `Tz`: a negative
+            // `Tf` under a CTM turned half a turn still runs left to right on the page.
+            None if self.state.size * self.state.scale < 0.0 => {
+                let (x, y) = direction(&m);
+                (-x, -y)
+            }
             None => direction(&m),
         };
         let (start, across) = to_frame(dir, (self.start_x, self.baseline));

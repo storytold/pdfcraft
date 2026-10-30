@@ -489,7 +489,9 @@ fn underline_ops(fill: &[Op], tm: &[f64; 6], size: f64, underlines: &[(f64, f64,
     let n = pdfcraft_content::num;
     let mut ops = vec![Op::new("q", vec![]), Op::new("cm", tm.iter().map(|v| n(*v)).collect())];
     ops.extend(fill.iter().map(stroke_twin));
-    ops.push(Op::new("w", vec![n(size * 0.06)]));
+    // The offset below the baseline keeps `size`'s sign (a negative `Tf` turns the glyphs over in
+    // this space); a line width is a length.
+    ops.push(Op::new("w", vec![n(size.abs() * 0.06)]));
     for (x0, x1, y) in underlines {
         ops.push(Op::new("m", vec![n(*x0), n(*y)]));
         ops.push(Op::new("l", vec![n(*x1), n(*y)]));
