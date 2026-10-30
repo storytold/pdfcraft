@@ -1,8 +1,9 @@
 # Tamil (ta) catalog. Columns, separated by a TAB:  context <TAB> source <TAB> translation
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Tamil computing vocabulary. No proprietary localisation resource, string table or product UI
 # (Acrobat's included) was consulted or copied; add entries the same way.
-# Clean-room: every entry was written from the plain meaning of the English label using ordinary
-# letters; the trailing "…" of dialog commands is kept.
+# Product and technology names (PDF, Acrobat JavaScript ...) stay in Latin letters;
+# The trailing "…" of dialog commands is kept.
 
 	Mask Options…	மாஸ்க் விருப்பங்கள்…
 	Layer Mask Display Options…  அடுக்கு மாஸ்க் காட்சி விருப்பங்கள்…
