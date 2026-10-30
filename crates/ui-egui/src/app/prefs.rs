@@ -16,6 +16,54 @@ pub(crate) fn date_text_for_pdf(session: &Session) -> Result<String, String> {
 /// The longest author name kept (Preferences ▸ Identity, restored settings).
 pub(crate) const MAX_AUTHOR_CHARS: usize = 200;
 
+/// The format Add text gives new text, without the text or its box (#4864).
+fn text_style_json(s: &pdfcraft_engine::AddedText) -> serde_json::Value {
+    use pdfcraft_engine::{FontFamily, TextAlign};
+    serde_json::json!({
+        "family": match s.family { FontFamily::Helvetica => "helvetica", FontFamily::Times => "times", FontFamily::Courier => "courier" },
+        "bold": s.bold,
+        "italic": s.italic,
+        "size": s.size,
+        "color": s.color,
+        "align": match s.align { TextAlign::Left => "left", TextAlign::Center => "center", TextAlign::Right => "right", TextAlign::Justify => "justify" },
+        "char_spacing": s.char_spacing,
+    })
+}
+
+/// Read [`text_style_json`] back. Settings are untrusted: each field is taken on its own, and one
+/// that is missing, unknown or out of range keeps the current value.
+fn restore_text_style(style: &mut pdfcraft_engine::AddedText, v: &serde_json::Value) {
+    use pdfcraft_engine::{FontFamily, TextAlign};
+    match v["family"].as_str() {
+        Some("helvetica") => style.family = FontFamily::Helvetica,
+        Some("times") => style.family = FontFamily::Times,
+        Some("courier") => style.family = FontFamily::Courier,
+        _ => {}
+    }
+    match v["align"].as_str() {
+        Some("left") => style.align = TextAlign::Left,
+        Some("center") => style.align = TextAlign::Center,
+        Some("right") => style.align = TextAlign::Right,
+        Some("justify") => style.align = TextAlign::Justify,
+        _ => {}
+    }
+    if let Some(on) = v["bold"].as_bool() {
+        style.bold = on;
+    }
+    if let Some(on) = v["italic"].as_bool() {
+        style.italic = on;
+    }
+    if let Some(size) = v["size"].as_f64().filter(|s| pdfcraft_engine::ADDED_FONT_SIZE_RANGE.contains(s)) {
+        style.size = size;
+    }
+    if let Some(color) = rgb_triple(&v["color"]) {
+        style.color = color;
+    }
+    if let Some(gap) = v["char_spacing"].as_f64().filter(|g| g.abs() <= pdfcraft_engine::ADDED_CHAR_SPACING_LIMIT) {
+        style.char_spacing = gap;
+    }
+}
+
 /// A restored colour: an `[r, g, b]` array of finite numbers, each clamped to 0–1 (restored
 /// settings are untrusted). Anything else (a string, a wrong length, a null or a non-finite
 /// number) is refused whole, so the caller keeps its default.
@@ -102,6 +150,7 @@ impl PdfCraftApp {
             "ui_scale": self.ui_scale,
             "flatten_fill_sign": self.flatten_fill_sign_on_save,
             "fill_text_size": self.fill_text_size,
+            "text_style": text_style_json(&self.text_style),
             "date_format": self.session.date_format(),
             // Null follows the interface language.
             "date_language": self.session.date_language(),
@@ -261,6 +310,7 @@ impl PdfCraftApp {
         if let Some(size) = v["fill_text_size"].as_f64().and_then(fill_sign::valid_text_size) {
             self.fill_text_size = size;
         }
+        restore_text_style(&mut self.text_style, &v["text_style"]);
         if let Some(prefs) = RedactPrefs::from_json(&v["redact_prefs"]) {
             self.redact_prefs = prefs.clone();
             self.redact_defaults = prefs;

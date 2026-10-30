@@ -1765,3 +1765,51 @@ fn mode_tabs_keep_the_hand_over_a_type_box_scrolled_under_them() {
     h.run_steps(3);
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Convert, "the tab takes the click, not the text box");
 }
+
+/// #4864: the format Add text gives new text survives a restart; a damaged value keeps the
+/// current one, field by field.
+#[test]
+fn add_text_format_survives_settings_restore() {
+    use pdfcraft_engine::{AddedText, FontFamily, TextAlign};
+    let mut app = PdfCraftApp::new();
+    app.text_style = AddedText {
+        family: FontFamily::Courier,
+        bold: true,
+        italic: true,
+        size: 24.0,
+        color: [1.0, 0.0, 0.5],
+        align: TextAlign::Justify,
+        char_spacing: 2.0,
+        ..AddedText::default()
+    };
+    let settings = app.persist();
+
+    let mut restored = PdfCraftApp::new();
+    assert_ne!(restored.text_style, app.text_style);
+    restored.restore(&settings);
+    assert_eq!(restored.text_style, app.text_style);
+
+    // Every size the edit accepts (1 to 500 pt) comes back, including those outside Fill & Sign's.
+    for size in [1.0, 3.5, 400.0, 500.0] {
+        let mut app = PdfCraftApp::new();
+        app.text_style.size = size;
+        let mut back = PdfCraftApp::new();
+        back.restore(&app.persist());
+        assert_eq!(back.text_style.size, size);
+    }
+    for size in [0.5, 500.5] {
+        let mut app = PdfCraftApp::new();
+        app.text_style.size = size;
+        let mut back = PdfCraftApp::new();
+        back.restore(&app.persist());
+        assert_eq!(back.text_style.size, 12.0, "{size} pt is refused");
+    }
+
+    // Each field is judged alone: the bad ones keep what was there, the good one applies.
+    restored.restore(r#"{"text_style":{"family":"comic","bold":"yes","size":1e9,"color":[2,0],"align":7,"char_spacing":1e9,"italic":false}}"#);
+    let want = AddedText { italic: false, ..app.text_style.clone() };
+    assert_eq!(restored.text_style, want);
+    restored.restore(r#"{"text_style":"junk"}"#);
+    restored.restore(r#"{"text_style":{"size":null,"color":[0,0,0]}}"#);
+    assert_eq!(restored.text_style, AddedText { color: [0.0; 3], ..want });
+}

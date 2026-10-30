@@ -1,6 +1,6 @@
 use super::draw::{draw, params};
 use super::layout::{first_undrawable, is_thai, nums, shaped_arabic, thai_error};
-use super::types::{Added, AddedImage, AddedText, Align, CHAR_SPACING_LIMIT, Family, MarkerScan, TAG};
+use super::types::{Added, AddedImage, AddedText, Align, CHAR_SPACING_LIMIT, FONT_SIZE_RANGE, Family, MarkerScan, TAG};
 use super::{Content, Dict, Document, EditError, GlyphError, MarkKind, ObjRef, Object, Stream, check, contents, page_list, place_tagged};
 
 fn parse(doc: &Document, d: &Dict) -> Option<Content> {
@@ -123,7 +123,7 @@ fn validate(c: &Content) -> Result<(), EditError> {
             if t.text.trim().is_empty() {
                 return Err(EditError::Invalid("type some text first".into()));
             }
-            if !(t.size.is_finite() && (1.0..=500.0).contains(&t.size)) {
+            if !(t.size.is_finite() && FONT_SIZE_RANGE.contains(&t.size)) {
                 return Err(EditError::Invalid("the font size must be between 1 and 500 points".into()));
             }
             if !(t.char_spacing.is_finite() && (-CHAR_SPACING_LIMIT..=CHAR_SPACING_LIMIT).contains(&t.char_spacing)) {

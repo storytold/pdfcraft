@@ -6,6 +6,9 @@ pub(super) const TAG: &str = "Added";
 /// The most character spacing an added text takes either way, in points: as far as the font size goes.
 pub const CHAR_SPACING_LIMIT: f64 = 500.0;
 
+/// The font sizes an added text takes, in points.
+pub const FONT_SIZE_RANGE: std::ops::RangeInclusive<f64> = 1.0..=500.0;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Family {
     #[default]
