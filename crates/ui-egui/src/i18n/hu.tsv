@@ -2519,6 +2519,8 @@ animation effects	Off	Ki
 	Make properties default	Tulajdonságok beállítása alapértelmezettként
 	Pages selected	Kijelölt oldalak
 	Page properties	Oldaltulajdonságok
+# Combine files from Finder (macOS).
+	From Finder: select files, then right-click > Quick Actions > Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions > Customize.	A Finderben: jelölje ki a fájlokat, majd jobb klikk > Gyorsműveletek > “Combine files in PdfCraft”. Nem látszik? Egyszer kapcsolja be: Gyorsműveletek > Testreszabás.
 	Create & Edit	Létrehozás és szerkesztés
 	Review & Compare	Áttekintés és összehasonlítás
 	Forms & Signatures	Űrlapok és aláírások

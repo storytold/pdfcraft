@@ -274,6 +274,22 @@ pub(crate) struct Incoming {
     pub open_doc: Option<pdfcraft_engine::DocId>,
 }
 
+/// One notice for every file `combine_paths` could not read, from `(name, error)` pairs: the
+/// names joined, and the errors (each once) joined. `None` when nothing failed.
+pub(super) fn unreadable_notice(failed: &[(String, String)]) -> Option<(String, String)> {
+    if failed.is_empty() {
+        return None;
+    }
+    let names = failed.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ");
+    let mut errors: Vec<&str> = Vec::new();
+    for (_, e) in failed {
+        if !errors.contains(&e.as_str()) {
+            errors.push(e);
+        }
+    }
+    Some((names, errors.join("; ")))
+}
+
 /// A new value for [`CombineFile::auth`]: counted for the whole run, outside the undo history.
 fn next_auth() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);

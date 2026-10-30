@@ -2794,6 +2794,8 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+# Combine files from Finder (macOS).
+	From Finder: select files, then right-click > Quick Actions > Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions > Customize.	Từ Finder: chọn tệp, rồi bấm chuột phải > Tác vụ nhanh > “Combine files in PdfCraft”. Không thấy? Bật một lần trong Tác vụ nhanh > Tùy chỉnh.
 	Attach a file…	Đính kèm tệp…
 	Delete attachment	Xóa tệp đính kèm
 	Attaching files is not available on the web yet	Chưa thể đính kèm tệp trên web

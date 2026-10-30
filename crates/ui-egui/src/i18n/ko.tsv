@@ -2791,6 +2791,7 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	From Finder: select files, then right-click > Quick Actions > Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions > Customize.	Finder에서 파일을 선택한 후 마우스 오른쪽 버튼 > 빠른 동작 > PdfCraft로 파일 결합을 선택하세요. 목록에 없으면 빠른 동작 > 사용자 설정에서 한 번 켜세요.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	오늘

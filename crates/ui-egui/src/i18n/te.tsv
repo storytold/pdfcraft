@@ -2429,6 +2429,8 @@ animation effects	Off	ఆఫ్
 	Make properties default	లక్షణాలను డిఫాల్ట్‌గా చేయి
 	Pages selected	ఎంచుకున్న పేజీలు
 	Page properties	పేజీ లక్షణాలు
+# Combine files from Finder (macOS).
+	From Finder: select files, then right-click > Quick Actions > Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions > Customize.	Finder నుండి: ఫైల్‌లను ఎంచుకుని, కుడి-క్లిక్ > Quick Actions > “Combine files in PdfCraft”. జాబితాలో లేదా? Quick Actions > Customize‌లో ఒకసారి ఆన్ చేయండి.
 	Create & Edit	సృష్టించు & సవరించు
 	Review & Compare	సమీక్షించు & పోల్చు
 	Forms & Signatures	ఫారమ్‌లు & సంతకాలు

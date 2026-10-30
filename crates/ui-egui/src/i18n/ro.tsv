@@ -2820,6 +2820,7 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	From Finder: select files, then right-click > Quick Actions > Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions > Customize.	Din Finder: selectați fișierele, apoi clic dreapta > Acțiuni rapide > Combine files in PdfCraft. Nu apare? Activați-o o dată la Acțiuni rapide > Personalizare.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi

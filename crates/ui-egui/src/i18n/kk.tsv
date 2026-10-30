@@ -2518,6 +2518,8 @@ animation effects	Off	Өшірулі
 	Make properties default	Қасиеттерді әдепкі ету
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
+# Combine files from Finder (macOS).
+	From Finder: select files, then right-click > Quick Actions > Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions > Customize.	Finder-ден: файлдарды таңдап, тінтуірдің оң жағын басыңыз > Жылдам әрекеттер > “Combine files in PdfCraft”. Тізімде жоқ па? Жылдам әрекеттер > Баптау бөлімінде бір рет қосыңыз.
 	Create & Edit	Жасау және өңдеу
 	Review & Compare	Шолу және салыстыру
 	Forms & Signatures	Пішіндер және қолтаңбалар

@@ -2542,6 +2542,8 @@ animation effects	Off	Вимкнено
 	Make properties default	Зробити властивості типовими
 	Pages selected	Вибрані сторінки
 	Page properties	Властивості сторінки
+# Combine files from Finder (macOS).
+	From Finder: select files, then right-click > Quick Actions > Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions > Customize.	У Finder: виберіть файли, потім правий клік > Швидкі дії > “Combine files in PdfCraft”. Немає в списку? Увімкніть один раз у Швидкі дії > Налаштувати.
 	Create & Edit	Створення й редагування
 	Review & Compare	Рецензування й порівняння
 	Forms & Signatures	Форми й підписи

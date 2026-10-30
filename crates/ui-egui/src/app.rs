@@ -493,6 +493,7 @@ impl eframe::App for PdfCraftApp {
                 }
                 #[cfg(target_arch = "wasm32")]
                 OsEvent::Open(_) => {}
+                OsEvent::Combine(paths) => self.combine_paths(&paths),
                 // Like closing the window: `guard_quit` asks about unsaved changes.
                 OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }

@@ -2792,6 +2792,7 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	From Finder: select files, then right-click > Quick Actions > Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions > Customize.	Dari Finder: pilih file, lalu klik kanan > Aksi Cepat > Gabungkan file di PdfCraft. Tidak ada di daftar? Aktifkan sekali di Aksi Cepat > Sesuaikan.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini

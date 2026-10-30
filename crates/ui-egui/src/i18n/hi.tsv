@@ -2791,6 +2791,7 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	From Finder: select files, then right-click > Quick Actions > Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions > Customize.	Finder से: फ़ाइलें चुनें, फिर राइट-क्लिक करें > क्विक एक्शन > PdfCraft में फ़ाइलें संयोजित करें। सूची में नहीं है? क्विक एक्शन > कस्टमाइज़ करें में एक बार चालू करें।
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज

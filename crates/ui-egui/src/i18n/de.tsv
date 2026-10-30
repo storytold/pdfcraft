@@ -2521,6 +2521,8 @@ animation effects	Off	Aus
 	Make properties default	Eigenschaften als Standard festlegen
 	Pages selected	Ausgewählte Seiten
 	Page properties	Seiteneigenschaften
+# Combine files from Finder (macOS).
+	From Finder: select files, then right-click > Quick Actions > Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions > Customize.	Im Finder: Dateien auswählen, dann Rechtsklick > Schnellaktionen > “Combine files in PdfCraft”. Nicht da? Einmal unter Schnellaktionen > Anpassen einschalten.
 	Create & Edit	Erstellen & Bearbeiten
 	Review & Compare	Prüfen & Vergleichen
 	Forms & Signatures	Formulare & Signaturen

@@ -2732,6 +2732,8 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+# Combine files from Finder (macOS).
+	From Finder: select files, then right-click > Quick Actions > Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions > Customize.	Dal Finder: seleziona i file, poi clic destro > Azioni rapide > “Combine files in PdfCraft”. Non c'è? Attivala una volta in Azioni rapide > Personalizza.
 	Create & Edit	Crea e modifica
 	Review & Compare	Revisione e confronto
 	Forms & Signatures	Moduli e firme
