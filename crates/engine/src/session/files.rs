@@ -272,6 +272,65 @@ impl Session {
         Ok(Combined { bytes, renamed_fields: out.renamed_fields })
     }
 
+    /// Most pages a shuffle writes (the sum over its files), so a hostile page count can't ask
+    /// for an unbounded list of parts.
+    pub const MAX_SHUFFLE_PAGES: usize = 100_000;
+
+    /// Interleave the pages of two or more files, as `pdftk A.pdf B.pdf shuffle` does (#4922):
+    /// page 1 of each file in turn, then page 2 of each, and so on. A file that runs out drops
+    /// out and the longer ones carry on, so `A1 A2 A3` and `B1` give `A1 B1 A2 A3`. Each file
+    /// is its pages in the order of its range (`None` or empty: all of them, in order), keeps one
+    /// bookmark, at its first page, and is opened with its own password (by position; missing or
+    /// `None`: none). Colliding form field names are renamed, as in Combine, and reported. The
+    /// result is not encrypted.
+    pub fn shuffle(&self, files: &[CombineSource], passwords: &[Option<&str>]) -> Result<Combined, EditError> {
+        if files.len() < 2 {
+            return Err(EditError::Invalid("a shuffle needs at least two files".into()));
+        }
+        // How many pages each file contributes, by its range.
+        let mut counts = Vec::with_capacity(files.len());
+        for (i, (name, bytes, range)) in files.iter().enumerate() {
+            let doc = open_source_with(name, bytes, passwords.get(i).copied().flatten())?;
+            let n = pdfcraft_organize::page_count(&doc)?;
+            counts.push(match range.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+                Some(r) => pdfcraft_print::select_pages(n, Some(r), &[], pdfcraft_print::Subset::All, false)
+                    .map_err(|e| EditError::Print(format!("{name}: {e}")))?
+                    .len(),
+                None => n,
+            });
+        }
+        let total = counts.iter().try_fold(0usize, |sum, n| sum.checked_add(*n)).filter(|n| *n <= Self::MAX_SHUFFLE_PAGES);
+        let Some(total) = total else {
+            return Err(EditError::Invalid(format!("a shuffle writes at most {} pages", Self::MAX_SHUFFLE_PAGES)));
+        };
+        // The files' pages one file after the other, then moved once into their shuffled places.
+        let joined = self.combine_unlocked_reporting(files, passwords, pdfcraft_organize::FieldConflicts::Rename)?;
+        // Where each file's first page is in the joined document.
+        let starts: Vec<usize> = counts
+            .iter()
+            .scan(0usize, |next, count| {
+                let start = *next;
+                *next = next.saturating_add(*count);
+                Some(start)
+            })
+            .collect();
+        // Each round takes one page from every file that has one left, in file order; a file that
+        // has run out leaves the list, so the work follows the pages, not the files times the longest.
+        let mut active: Vec<usize> = (0..counts.len()).filter(|f| counts.get(*f).is_some_and(|c| *c > 0)).collect();
+        let mut order = Vec::with_capacity(total);
+        let mut round = 0usize;
+        while !active.is_empty() {
+            for &file in &active {
+                order.push(starts.get(file).copied().unwrap_or(0).saturating_add(round));
+            }
+            round = round.saturating_add(1);
+            active.retain(|f| counts.get(*f).is_some_and(|c| *c > round));
+        }
+        let mut doc = open_source("Shuffled", &joined.bytes)?;
+        pdfcraft_organize::reorder_pages(&mut doc, &order)?;
+        Ok(Combined { bytes: self.write_new(&doc)?, renamed_fields: joined.renamed_fields })
+    }
+
     /// [`Self::combine_unlocked`] where sources with the same `groups` key (by position) are one
     /// file split into several runs placed apart: each file is opened and copied once, so it keeps
     /// one bookmark, its links between its own pages, its fields and its attachments whole (see

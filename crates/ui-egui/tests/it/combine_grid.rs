@@ -528,6 +528,85 @@ fn combine_follows_the_order_shown_in_the_grid() {
     assert_eq!(doc.info.outline.iter().map(|o| o.title.as_str()).collect::<Vec<_>>(), ["three", "one", "two"]);
 }
 
+/// #4922: Interleave pages alternates the pages of the listed files, in the order shown, and the
+/// result opens as one new document with a bookmark per file.
+#[test]
+fn interleave_pages_alternates_the_pages_of_the_files_in_the_order_shown() {
+    let mut h = grid_of_pages(&[("front.pdf", 3), ("back.pdf", 2)]);
+    h.get_by_label("Interleave pages").click();
+    h.run_steps(3);
+    let app = h.state();
+    assert_eq!(app.views.len(), 1, "the result opens, in place of the Combine tab");
+    // Page 1 of each file, then page 2, then the rest of the longer one. (Both files' pages say
+    // "Page n", so the order is the pages' numbers.)
+    assert_eq!(texts_of(app, 0), ["Page 1", "Page 1", "Page 2", "Page 2", "Page 3"]);
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert_eq!(doc.info.outline.iter().map(|o| o.title.as_str()).collect::<Vec<_>>(), ["front", "back"]);
+}
+
+/// #4922: the Pages chosen for a file are the pages that are interleaved, not the whole file, and a
+/// file split into parts is its parts one after the other.
+#[test]
+fn interleave_pages_takes_the_pages_the_list_gives_each_file() {
+    let mut h = grid_of_pages(&[("front.pdf", 3), ("back.pdf", 3)]);
+    // Only page 2 of the front, pages 3 then 1 of the back.
+    h.state_mut().combine_draft[0].range = "2".into();
+    h.state_mut().combine_draft[1].range = "3, 1".into();
+    h.run_steps(2);
+    h.get_by_label("Interleave pages").click();
+    h.run_steps(3);
+    // Round one: front 2, back 3; then the back's page 1, which the front has no page for.
+    assert_eq!(texts_of(h.state(), 0), ["Page 2", "Page 3", "Page 1"]);
+
+    // A file split in two parts (both parts' ranges, in the order shown) is one file of both.
+    let mut h = grid_of_pages(&[("front.pdf", 4), ("back.pdf", 2)]);
+    h.state_mut().combine_draft[0].range = "1".into();
+    let mut part = h.state().combine_draft[0].clone();
+    part.id += 1000;
+    part.range = "4".into();
+    h.state_mut().combine_draft.push(part);
+    h.run_steps(2);
+    h.get_by_label("Interleave pages").click();
+    h.run_steps(3);
+    // front's pages 1 then 4; back's 1 then 2: Page 1, Page 1, Page 4, Page 2.
+    assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 1", "Page 4", "Page 2"]);
+
+    // A part whose Pages is cleared is the whole file at that place, and the other parts stay:
+    // front is 4, then 1 2 3 4 (the second part cleared); back is 1 2.
+    let mut h = grid_of_pages(&[("front.pdf", 4), ("back.pdf", 2)]);
+    h.state_mut().combine_draft[0].range = "4".into();
+    let mut whole = h.state().combine_draft[0].clone();
+    whole.id += 1000;
+    whole.range = String::new();
+    h.state_mut().combine_draft.push(whole);
+    h.run_steps(2);
+    h.get_by_label("Interleave pages").click();
+    h.run_steps(3);
+    // Round one: front 4, back 1; round two: front 1, back 2; then front 2, 3, 4.
+    assert_eq!(texts_of(h.state(), 0), ["Page 4", "Page 1", "Page 1", "Page 2", "Page 2", "Page 3", "Page 4"]);
+
+    // Two parts, both cleared: the whole file twice, as Combine places them.
+    let mut h = grid_of_pages(&[("front.pdf", 3), ("back.pdf", 1)]);
+    let mut again = h.state().combine_draft[0].clone();
+    again.id += 1000;
+    h.state_mut().combine_draft.push(again);
+    h.run_steps(2);
+    h.get_by_label("Interleave pages").click();
+    h.run_steps(3);
+    // Round one: front 1, back 1; then the rest of front's six pages: 2, 3, 1, 2, 3.
+    assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 1", "Page 2", "Page 3", "Page 1", "Page 2", "Page 3"]);
+}
+
+/// #4922: Interleave pages waits for two readable files, like Combine.
+#[test]
+fn interleave_pages_needs_two_files() {
+    use egui_kittest::kittest::NodeT;
+    let h = grid_of_pages(&[("only.pdf", 3)]);
+    assert!(h.get_by_label("Interleave pages").accesskit_node().is_disabled(), "one file has nothing to interleave with");
+    let h = grid_of_pages(&[("one.pdf", 1), ("two.pdf", 1)]);
+    assert!(!h.get_by_label("Interleave pages").accesskit_node().is_disabled());
+}
+
 #[test]
 fn long_and_unusual_names_are_shortened_on_the_card_but_kept_whole() {
     if crate::support::skip_without_glyphs("long_and_unusual_names_are_shortened_on_the_card_but_kept_whole", "en", "日本語のファイル名.pdf")

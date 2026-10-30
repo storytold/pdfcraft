@@ -265,6 +265,21 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["paths"],
             )),
+        t(
+            "doc_shuffle",
+            "Shuffle (interleave) files",
+            "Interleave the pages of two or more files, as pdftk's shuffle does: page 1 of each file in turn, then page 2 of each, and so on. A file that runs out drops out and the longer ones carry on, so a front.pdf of five pages and a back.pdf of five give front 1, back 1, front 2, back 2 ...; for a double-sided scan made in two passes. Images (PNG, JPEG, TIFF, GIF, BMP, JPEG 2000) and .txt files are made into PDFs first. passwords, in step with paths, opens encrypted files (null for none; never echoed back). pages optionally chooses each file's pages, in step with paths (a range such as \"1-3, 6\" or null for all); the shuffle takes those pages in that order. Each file keeps one bookmark at its first page. When two files' forms name the same field the later one is renamed, as in doc_combine, and the result lists renamed_fields as [[old, new], …]. At most 100000 pages in all. The result is not encrypted.",
+        )
+        .with(schema(
+            json!({
+                "paths": { "type": "array", "items": { "type": "string" }, "minItems": 2 },
+                "pages": { "type": "array", "items": { "type": ["string", "null"] } },
+                "passwords": { "type": "array", "items": { "type": ["string", "null"] } },
+                "out": save_out.clone(),
+                "open": open.clone(),
+            }),
+            &["paths"],
+        )),
         t("doc_create_multiple", "Create PDF from multiple files", "Convert several files (PDFs, PNG/JPEG/JPEG 2000/TIFF/GIF/BMP images, .txt files) to PDF in one run. mode \"combine\" (default) joins them, in order, into one PDF with a bookmark per file; pages optionally chooses each file's pages, in step with paths (a range such as \"1-3, 6\" or null). mode \"separate\" writes one PDF per file into out_dir (files that are already PDFs are skipped; existing files are never overwritten) and reports each file's result.")
             .cmd("create.multiple")
             .with(schema(

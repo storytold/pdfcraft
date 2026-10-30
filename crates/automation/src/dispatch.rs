@@ -126,6 +126,7 @@ impl Automation {
             "page_insert_file" => self.insert_file(&a)?,
             "page_extract" => self.page_extract(&a)?,
             "doc_combine" => self.doc_combine(&a)?,
+            "doc_shuffle" => self.doc_shuffle(&a)?,
             "doc_create_multiple" => self.doc_create_multiple(&a)?,
             "doc_split" => self.doc_split(&a)?,
             "edit_undo" => {

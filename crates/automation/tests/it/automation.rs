@@ -1194,6 +1194,72 @@ fn combine_takes_images_and_text_files() {
     }
 }
 
+/// #4922: doc_shuffle interleaves the pages of its files, takes images and text files, writes
+/// to `out` inside the root, and refuses what it can't shuffle.
+#[test]
+fn shuffle_interleaves_files_through_the_tool() {
+    let dir = workdir("shuffle");
+    let mut png = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png, 4, 2);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header().unwrap().write_image_data(&[90; 24]).unwrap();
+    }
+    std::fs::write(dir.join("scan.png"), png).unwrap();
+    std::fs::write(dir.join("notes.txt"), "Some notes").unwrap();
+    let mut a = auto(&dir);
+
+    // a.pdf is "Page 1".."Page 3"; the text file is one page; the rest of the longer file follows.
+    let two = ok(&mut a, "doc_shuffle", json!({ "paths": ["a.pdf", "notes.txt"], "open": true }));
+    let doc = two["document"]["doc"].as_u64().unwrap();
+    assert_eq!(two["document"]["pages"], 4);
+    assert_eq!(page_text(&mut a, doc), ["Page 1", "Some notes", "Page 2", "Page 3"]);
+    // Three files (an image page has no text), and the file's own bookmark at its first page.
+    let three = ok(&mut a, "doc_shuffle", json!({ "paths": ["a.pdf", "scan.png", "notes.txt"], "open": true }));
+    let doc = three["document"]["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, doc), ["Page 1", "", "Some notes", "Page 2", "Page 3"]);
+    let marks = ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"].clone();
+    let titles: Vec<&str> = marks.as_array().unwrap().iter().map(|b| b["title"].as_str().unwrap()).collect();
+    assert_eq!(titles, ["a", "scan", "notes"]);
+    // Colliding form field names are renamed and reported, as doc_combine does.
+    std::fs::write(dir.join("form-a.pdf"), form_pdf("Text1")).unwrap();
+    std::fs::write(dir.join("form-b.pdf"), form_pdf("Text1")).unwrap();
+    let forms = ok(&mut a, "doc_shuffle", json!({ "paths": ["form-a.pdf", "form-b.pdf"], "open": true }));
+    assert_eq!(forms["renamed_fields"], json!([["Text1", "Text1-1"]]), "{forms}");
+    assert!(two.get("renamed_fields").is_none(), "no fields, nothing renamed: {two}");
+    // pages chooses each file's pages, in the range's order.
+    let chosen = ok(&mut a, "doc_shuffle", json!({ "paths": ["a.pdf", "a.pdf"], "pages": ["3, 1", "2"], "open": true }));
+    let doc = chosen["document"]["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, doc), ["Page 3", "Page 2", "Page 1"]);
+    for bad in [json!({ "pages": ["1"] }), json!({ "pages": [1, 2] }), json!({ "pages": ["9", null] })] {
+        let mut args = json!({ "paths": ["a.pdf", "b.pdf"] });
+        args["pages"] = bad["pages"].clone();
+        assert!(a.call("doc_shuffle", &args).is_err(), "{args}");
+    }
+    // Written to a file inside the root, without opening it.
+    let written = ok(&mut a, "doc_shuffle", json!({ "paths": ["a.pdf", "b.pdf"], "out": "shuffled.pdf", "open": false }));
+    assert!(written.get("document").is_none());
+    assert!(dir.join("shuffled.pdf").is_file());
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "shuffled.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, reopened).len(), 5);
+
+    // Refused: one file, a missing file, a file it can't make a PDF of, a wrong passwords list, and
+    // an `out` outside the root. Nothing is written for any of them.
+    for args in [
+        json!({ "paths": ["a.pdf"] }),
+        json!({ "paths": ["a.pdf", "missing.pdf"] }),
+        json!({ "paths": ["a.pdf", "b.pdf"], "passwords": ["only one"] }),
+        json!({ "paths": ["a.pdf", "b.pdf"], "out": "../escaped.pdf" }),
+    ] {
+        assert!(a.call("doc_shuffle", &args).is_err(), "{args}");
+    }
+    assert!(!dir.parent().unwrap().join("escaped.pdf").exists());
+    std::fs::write(dir.join("broken.png"), b"\x89PNG\r\n\x1a\nbroken").unwrap();
+    let refused = a.call("doc_shuffle", &json!({ "paths": ["a.pdf", "broken.png"] }));
+    assert!(matches!(&refused, Err(ToolError::Failed(e)) if e.contains("broken.png")), "{refused:?}");
+}
+
 #[test]
 fn combine_extract_and_split() {
     let dir = workdir("organize");

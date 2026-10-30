@@ -3007,6 +3007,18 @@ evidence = ["crates/organize/src/tests.rs::combine_concatenates_with_a_bookmark_
 notes = "Combine files is its own tab: a table of the files (name, pages, size, modified, warnings) with column sorting, resizing and moving; files, folders (with subfolders) and open documents can be added, or dropped on the tab. Images (PNG, JPEG, TIFF, GIF, BMP, JPEG 2000) and .txt files become PDFs as they are added (#569; also in doc_combine). A file that can't be read stays in the list with why, and Combine asks before leaving it out; Office documents, HTML and other formats are not converted yet. Problems show before Combine (password, security settings that withhold page assembly, bad page ranges, duplicates); protected files are unlocked with their open or permissions password (also doc_combine passwords). The result is never encrypted, and is not yet offered for protection in the same step. A PDF/X result (output intent, GTS_PDFXVersion, Trapped, XMP pdfxid) only when every source declares the same version and output intent (#263). When they differ the result claims none, and nothing reports that yet; Acrobat behaviour not observed."
 
 [[feature]]
+id = "organize.interleave-files"
+title = "Interleave the pages of two or more files (shuffle)"
+area = "D"
+tier = "P2"
+milestone = "M4"
+status = "shipped"
+commands = []
+tools = ["doc_shuffle"]
+evidence = ["crates/engine/src/tests.rs::shuffle_interleaves_the_pages_of_files", "crates/engine/src/tests.rs::shuffle_refuses_more_pages_than_its_cap", "crates/organize/src/tests.rs::reorder_pages_puts_every_page_where_the_order_says", "crates/organize/src/tests.rs::reorder_pages_refuses_anything_but_a_permutation_and_changes_nothing", "crates/automation/tests/it/automation.rs::shuffle_interleaves_files_through_the_tool", "crates/ui-egui/tests/it/combine_grid.rs::interleave_pages_alternates_the_pages_of_the_files_in_the_order_shown", "crates/ui-egui/tests/it/combine_grid.rs::interleave_pages_needs_two_files"]
+notes = "Page 1 of each file in turn, then page 2 of each, and so on, as `pdftk A B shuffle` does (#4922); a file that runs out drops out and the longer ones carry on, so five fronts and five backs of a two-pass duplex scan come out in reading order. The Combine files tab has an Interleave pages button (the list's order; a file is the pages its Pages field and its parts give it, in the order shown; one that can't be read blocks it); `doc_shuffle` takes two or more paths (images and text files are made into PDFs first, `pages` chooses each file's pages, passwords by position, `out`/`open` as Combine, and colliding form field names are renamed and reported as `renamed_fields`). The files are combined whole, then the pages are moved once into their new places (linear: two 10,000-page files take half a second). Each file keeps one bookmark at its first page; at most 100,000 pages in all. Not a general page-order editor. A back side scanned last page first is interleaved by giving its Pages field a descending range (5-1 lists the pages 5, 4, 3, 2, 1); there is no separate reverse option."
+
+[[feature]]
 id = "organize.combine-bookmarks"
 title = "Combine adds a bookmark per file with its own bookmarks nested"
 area = "D"

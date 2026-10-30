@@ -3735,6 +3735,128 @@ fn added_text_and_images_render_and_stay_editable() {
     assert_eq!(s.get(id).unwrap().added().len(), 2);
 }
 
+/// `Session::shuffle` over whole files, giving the bytes.
+fn shuffled(s: &Session, files: &[(String, Arc<Vec<u8>>)]) -> Result<Arc<Vec<u8>>, EditError> {
+    let sources: Vec<CombineSource> = files.iter().map(|(n, b)| (n.clone(), b.clone(), None)).collect();
+    s.shuffle(&sources, &[]).map(|c| c.bytes)
+}
+
+/// Shuffle (#4922): the pages of the files alternate, the longer files carry on when a shorter
+/// one runs out, and a file with one page, one file or none is handled.
+#[test]
+fn shuffle_interleaves_the_pages_of_files() {
+    let mut s = Session::new();
+    // Page `p` of file `f` is `f * 100 + p` points wide, so the result shows where each page came
+    // from, and in what order within its file.
+    let file = |s: &Session, f: u32, pages: u32| -> Arc<Vec<u8>> {
+        let one_page_each: Vec<(String, Arc<Vec<u8>>)> =
+            (1..=pages).map(|p| (format!("p{p}"), s.create_blank(f64::from(f * 100 + p), 100.0, 1).unwrap())).collect();
+        s.combine(&one_page_each).unwrap()
+    };
+    let widths = |s: &mut Session, bytes: Arc<Vec<u8>>| -> Vec<u32> {
+        let id = s.open_new("shuffled.pdf", bytes).unwrap();
+        s.get(id).unwrap().info.pages.iter().map(|p| p.width as u32).collect()
+    };
+    let name = |n: &str| n.to_string();
+    let (a, b, c) = (file(&s, 1, 5), file(&s, 2, 5), file(&s, 3, 1));
+    let short = file(&s, 2, 3);
+    assert_eq!(widths(&mut s, a.clone()), [101, 102, 103, 104, 105], "the fixture is in page order");
+
+    // The issue's example: fronts and backs.
+    let both = shuffled(&s, &[(name("front"), a.clone()), (name("back"), b)]).unwrap();
+    assert_eq!(widths(&mut s, both), [101, 201, 102, 202, 103, 203, 104, 204, 105, 205]);
+
+    // Different lengths: the rest of the longer file follows, in its own order.
+    let uneven = shuffled(&s, &[(name("a"), a.clone()), (name("b"), short.clone())]).unwrap();
+    assert_eq!(widths(&mut s, uneven), [101, 201, 102, 202, 103, 203, 104, 105]);
+    let reversed = shuffled(&s, &[(name("b"), short.clone()), (name("a"), a.clone())]).unwrap();
+    assert_eq!(widths(&mut s, reversed), [201, 101, 202, 102, 203, 103, 104, 105]);
+
+    // Three files, one of one page.
+    let three = shuffled(&s, &[(name("a"), a.clone()), (name("b"), short), (name("c"), c)]).unwrap();
+    assert_eq!(widths(&mut s, three), [101, 201, 301, 102, 202, 103, 203, 104, 105]);
+
+    // The same file twice interleaves with itself.
+    let twice = shuffled(&s, &[(name("a"), a.clone()), (name("a"), a.clone())]).unwrap();
+    assert_eq!(widths(&mut s, twice), [101, 101, 102, 102, 103, 103, 104, 104, 105, 105]);
+
+    // Fewer than two files is refused, and so is a file that is not a PDF.
+    assert!(matches!(shuffled(&s, &[]), Err(EditError::Invalid(_))));
+    assert!(matches!(shuffled(&s, &[(name("a"), a.clone())]), Err(EditError::Invalid(_))));
+    assert!(shuffled(&s, &[(name("a"), a), (name("junk"), Arc::new(b"not a pdf".to_vec()))]).is_err());
+}
+
+/// Shuffle takes each file's pages by its range, in the range's order, so what was chosen in the
+/// Combine tab is what is interleaved; a range that is not there is refused.
+#[test]
+fn shuffle_takes_the_pages_a_range_chooses() {
+    let mut s = Session::new();
+    let file = |s: &Session, f: u32, pages: u32| -> Arc<Vec<u8>> {
+        let one_page_each: Vec<(String, Arc<Vec<u8>>)> =
+            (1..=pages).map(|p| (format!("p{p}"), s.create_blank(f64::from(f * 100 + p), 100.0, 1).unwrap())).collect();
+        s.combine(&one_page_each).unwrap()
+    };
+    let (a, b) = (file(&s, 1, 5), file(&s, 2, 5));
+    let range = |r: &str| Some(r.to_string());
+    let pick = |s: &Session, ra: Option<String>, rb: Option<String>| s.shuffle(&[("a".into(), a.clone(), ra), ("b".into(), b.clone(), rb)], &[]);
+    let widths = |s: &mut Session, bytes: Arc<Vec<u8>>| -> Vec<u32> {
+        let id = s.open_new("shuffled.pdf", bytes).unwrap();
+        s.get(id).unwrap().info.pages.iter().map(|p| p.width as u32).collect()
+    };
+    // Pages 2-3 of one, pages 5 then 1 of the other (the range's order).
+    let out = pick(&s, range("2-3"), range("5, 1")).unwrap().bytes;
+    assert_eq!(widths(&mut s, out), [102, 205, 103, 201]);
+    // A range on one file only, and the file's other pages follow when it is the longer.
+    let out = pick(&s, None, range("4")).unwrap().bytes;
+    assert_eq!(widths(&mut s, out), [101, 204, 102, 103, 104, 105]);
+    // A descending range lists its pages backwards: a back side scanned last page first.
+    let out = pick(&s, None, range("5-1")).unwrap().bytes;
+    assert_eq!(widths(&mut s, out), [101, 205, 102, 204, 103, 203, 104, 202, 105, 201]);
+    // An empty range is all the pages.
+    let out = pick(&s, range(" "), range("1-2")).unwrap().bytes;
+    assert_eq!(widths(&mut s, out), [101, 201, 102, 202, 103, 104, 105]);
+    // A page that isn't there is refused, naming the file.
+    let err = pick(&s, range("9"), None).unwrap_err().to_string();
+    assert!(err.contains('a'), "{err}");
+    assert!(pick(&s, range("junk"), None).is_err());
+}
+
+/// One long file among very many one-page files: the work follows the pages written, not the
+/// files times the longest file, so it finishes at once and gets the order right.
+#[test]
+fn shuffle_with_one_long_file_and_very_many_short_ones_is_in_order_and_quick() {
+    let mut s = Session::new();
+    let mut files: Vec<(String, Arc<Vec<u8>>)> = vec![("long".into(), s.create_blank(10.0, 10.0, 5_000).unwrap())];
+    // Each short file is a page of its own width, 11, 12, ... points.
+    for i in 0..400u32 {
+        files.push((format!("s{i}"), s.create_blank(f64::from(11 + i), 10.0, 1).unwrap()));
+    }
+    let started = std::time::Instant::now();
+    let out = shuffled(&s, &files).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "{:?}", started.elapsed());
+    let id = s.open_new("shuffled.pdf", out).unwrap();
+    let widths: Vec<u32> = s.get(id).unwrap().info.pages.iter().map(|p| p.width as u32).collect();
+    assert_eq!(widths.len(), 5_400);
+    // Round one: the long file's first page, then each short file's page, in file order.
+    assert_eq!(&widths[..4], [10, 11, 12, 13]);
+    assert_eq!(widths.get(400).copied(), Some(410));
+    // Then only the long file is left.
+    assert!(widths[401..].iter().all(|w| *w == 10));
+}
+
+/// The pages a shuffle writes are capped, whatever the files say.
+#[test]
+fn shuffle_refuses_more_pages_than_its_cap() {
+    let s = Session::new();
+    // Ten thousand pages is the most a blank document has, so eleven of them are over the cap.
+    let big = s.create_blank(10.0, 10.0, 10_000).unwrap();
+    let files: Vec<(String, Arc<Vec<u8>>)> = (0..11).map(|i| (format!("f{i}"), big.clone())).collect();
+    let err = shuffled(&s, &files).unwrap_err();
+    assert!(matches!(err, EditError::Invalid(_)), "{err:?}");
+    // Ten are exactly at it and are accepted.
+    assert!(shuffled(&s, &files[..10]).is_ok());
+}
+
 /// Edit ▸ Copy and Paste of added content (#2636): a text box comes back with all its style, an
 /// image with its picture and transforms, in the same document and in another.
 #[test]
