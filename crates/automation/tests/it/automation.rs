@@ -4943,6 +4943,53 @@ fn form_formats_and_calculations_through_tools() {
     ));
 }
 
+/// A listed format can be given back without silently changing the field's visible value.
+/// Number separators, negative style and currency position, and percent separators survive.
+#[test]
+fn form_formats_can_be_read_and_given_back_without_changing_display() {
+    let dir = workdir("form-format-readback");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    let formats = [
+        (
+            "amount",
+            20,
+            json!({"type": "number", "decimals": 2, "separator": 2, "negative": 2, "currency": " EUR", "currency_after": true}),
+            "-1234.5",
+            "(1.234,50 EUR)",
+        ),
+        ("percent", 60, json!({"type": "percent", "decimals": 2, "separator": 2}), "12.345", "1.234,50%"),
+    ];
+    for (name, y, format, value, _) in &formats {
+        ok(&mut a, "form_add_field", json!({"doc": doc, "page": 1, "type": "text", "rect": [10, y, 195, y + 22], "name": name}));
+        ok(&mut a, "form_set_props", json!({"doc": doc, "field": name, "format": format}));
+        ok(&mut a, "form_fill", json!({"doc": doc, "values": {name.to_string(): value}}));
+    }
+    let listed = ok(&mut a, "form_fields", json!({"doc": doc}))["fields"].as_array().unwrap().clone();
+    for (field, (_, _, _, value, display)) in listed.iter().zip(&formats) {
+        assert_eq!(field["value"], *value);
+        assert_eq!(field["display"], *display);
+    }
+    let before_text = page_text(&mut a, doc);
+    ok(&mut a, "doc_save", json!({"doc": doc, "path": "formatted.pdf"}));
+    let mut reopened = auto(&dir);
+    let saved = ok(&mut reopened, "doc_open", json!({"path": "formatted.pdf"}))["doc"].as_u64().unwrap();
+    for field in &listed {
+        ok(&mut reopened, "form_set_props", json!({"doc": saved, "field": field["name"], "format": field["format"]}));
+    }
+    let round_trip = ok(&mut reopened, "form_fields", json!({"doc": saved}))["fields"].as_array().unwrap().clone();
+    for (before, after) in listed.iter().zip(&round_trip) {
+        assert_eq!(after["display"], before["display"], "giving back {}'s format keeps its display", before["name"]);
+        assert_eq!(after["value"], before["value"]);
+        assert_eq!(after["format"], before["format"]);
+    }
+    assert_eq!(page_text(&mut reopened, saved), before_text, "the saved appearance keeps the same text");
+    for (field, (_, _, format, _, _)) in round_trip.iter().zip(&formats) {
+        assert_eq!(field["format"], *format, "the returned object includes every supported setting");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Renaming a field renames it in the formulas that read it: a sum dropped the field, notation
 /// read it as 0 and a script kept a stale value.
 #[test]

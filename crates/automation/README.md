@@ -68,6 +68,17 @@ both. The existing `query`, `count`, `matches` and rectangle semantics are uncha
 `text_extract`, comment placement and redaction keep strict all-requested-pages-must-succeed
 semantics; they never silently act on partial text.
 
+## Reading and reusing numeric field formats
+
+`form_fields` returns number formats with `type`, `decimals`, `separator`, `negative`, `currency` and `currency_after`.
+Percentage formats include `type`, `decimals` and `separator`.
+For supported styles (`separator` 0-4 and `negative` 0-3), these objects can be given back unchanged to `form_set_props.format` without changing the field's numeric display.
+For example, a number formatted as `(1.234,50 EUR)` keeps its separator style, parentheses and trailing currency when its listed format is reapplied after save/reopen.
+The exact round-trip guarantee covers the accepted separator and negative-style ranges above.
+Legacy scripts with out-of-range styles still use the existing parser and input clamping behavior.
+An imported red negative-number appearance can be redrawn using the field's default text color.
+Input defaults, validation and custom-script handling retain their existing behavior.
+
 ## Shared field properties
 
 For an individual push button, `form_set_props` also edits its visible normal label:

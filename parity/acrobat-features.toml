@@ -4582,9 +4582,9 @@ tier = "P0"
 milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
-tools = ["form_set_props", "form_fill"]
-evidence = ["crates/forms/src/af/tests.rs::numbers_format_like_acrobat", "crates/forms/src/tests.rs::formats_validation_and_calculations_run_like_acrobat", "crates/automation/tests/it/automation.rs::form_formats_and_calculations_through_tools"]
-notes = "AFNumber_Format/Keystroke run natively: decimals, 5 separator styles, currency before/after, negative styles (red shown as minus/parentheses)"
+tools = ["form_set_props", "form_fill", "form_fields"]
+evidence = ["crates/forms/src/af/tests.rs::numbers_format_like_acrobat", "crates/forms/src/tests.rs::formats_validation_and_calculations_run_like_acrobat", "crates/automation/tests/it/automation.rs::form_formats_and_calculations_through_tools", "crates/automation/src/forms.rs::form_formats_round_trip_every_number_and_percent_style", "crates/automation/tests/it/automation.rs::form_formats_can_be_read_and_given_back_without_changing_display"]
+notes = "AFNumber_Format/Keystroke run natively: decimals, 5 separator styles, currency before/after, negative styles (red shown as minus/parentheses). form_fields returns the built-in numeric settings accepted by form_set_props, including separators, negative style and currency position. Reapplication preserves display through save/reopen for separator 0-4 and negative 0-3; existing legacy clamping, input defaults/validation and custom-script limits remain"
 
 [[feature]]
 id = "form.af-percent"
@@ -4594,9 +4594,9 @@ tier = "P0"
 milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
-tools = ["form_set_props", "form_fill"]
-evidence = ["crates/forms/src/af/tests.rs::numbers_format_like_acrobat"]
-notes = "AFPercent_Format/Keystroke"
+tools = ["form_set_props", "form_fill", "form_fields"]
+evidence = ["crates/forms/src/af/tests.rs::numbers_format_like_acrobat", "crates/automation/src/forms.rs::form_formats_round_trip_every_number_and_percent_style", "crates/automation/tests/it/automation.rs::form_formats_can_be_read_and_given_back_without_changing_display"]
+notes = "AFPercent_Format/Keystroke. form_fields returns the built-in numeric settings accepted by form_set_props, including separators, negative style and currency position. Reapplication preserves display through save/reopen for separator 0-4 and negative 0-3; existing legacy clamping, input defaults/validation and custom-script limits remain"
 
 [[feature]]
 id = "form.af-date-time"
@@ -5026,9 +5026,9 @@ tier = "P0"
 milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
-tools = ["form_set_props", "form_fill"]
-evidence = ["crates/ui-egui/tests/it/prepare.rs::format_validate_and_calculate_tabs", "crates/automation/tests/it/automation.rs::form_formats_and_calculations_through_tools"]
-notes = "None/Number/Percentage/Date/Time/Special with a live example; writes Acrobat's AF scripts"
+tools = ["form_set_props", "form_fill", "form_fields"]
+evidence = ["crates/ui-egui/tests/it/prepare.rs::format_validate_and_calculate_tabs", "crates/automation/tests/it/automation.rs::form_formats_and_calculations_through_tools", "crates/automation/src/forms.rs::form_formats_round_trip_every_number_and_percent_style", "crates/automation/tests/it/automation.rs::form_formats_can_be_read_and_given_back_without_changing_display"]
+notes = "None/Number/Percentage/Date/Time/Special with a live example; writes Acrobat's AF scripts. form_fields returns the built-in numeric settings accepted by form_set_props, including separators, negative style and currency position. Reapplication preserves display through save/reopen for separator 0-4 and negative 0-3; existing legacy clamping, input defaults/validation and custom-script limits remain"
 
 [[feature]]
 id = "form.props-validate"

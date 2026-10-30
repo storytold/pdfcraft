@@ -132,11 +132,14 @@ fn calculate_arg(v: &Value) -> Result<Calculate> {
     Ok(Calculate::Simple { op, fields })
 }
 
+/// Emit the numeric settings accepted by `format_arg`, including currency placement.
 fn format_json(f: &Format) -> Value {
     match f {
         Format::None => Value::Null,
-        Format::Number { decimals, currency, .. } => json!({ "type": "number", "decimals": decimals, "currency": currency }),
-        Format::Percent { decimals, .. } => json!({ "type": "percent", "decimals": decimals }),
+        Format::Number { decimals, sep, neg, currency, prepend } => {
+            json!({ "type": "number", "decimals": decimals, "separator": sep, "negative": neg, "currency": currency, "currency_after": !prepend })
+        }
+        Format::Percent { decimals, sep } => json!({ "type": "percent", "decimals": decimals, "separator": sep }),
         Format::Date(p) => json!({ "type": "date", "pattern": p }),
         Format::Time(p) => json!({ "type": "time", "pattern": p }),
         Format::Special(n) => {
@@ -738,5 +741,29 @@ impl Automation {
         out["comments"] = json!(doc.info.annotations.len() as i64 - before.0 as i64);
         out["filled_fields"] = json!(doc.form.iter().filter(|f| !f.value.is_empty()).count());
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Format, format_arg, format_json};
+
+    /// Every supported numeric format setting survives the listing/input JSON boundary.
+    #[test]
+    fn form_formats_round_trip_every_number_and_percent_style() {
+        for decimals in [0, 2, 15] {
+            for sep in 0..=4 {
+                for neg in 0..=3 {
+                    for prepend in [false, true] {
+                        for currency in ["", " EUR", "$"] {
+                            let format = Format::Number { decimals, sep, neg, currency: currency.into(), prepend };
+                            assert_eq!(format_arg(&format_json(&format)).unwrap(), format);
+                        }
+                    }
+                }
+                let format = Format::Percent { decimals, sep };
+                assert_eq!(format_arg(&format_json(&format)).unwrap(), format);
+            }
+        }
     }
 }
