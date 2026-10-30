@@ -356,6 +356,181 @@ fn form_text_the_standard_fonts_cannot_draw_is_reported() {
     assert!(!render_into(&mut doc).unwrap().warnings.iter().any(|w| w.contains("standard fonts")));
 }
 
+/// Original fixed-text fixture with one scaled symbol span and one ordinary span.
+fn symbol_template() -> &'static str {
+    r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb"><draw w="200pt" h="24pt"><value><text>► Start</text></value><font typeface="Arial" size="12pt" fontHorizontalScale="80%"/></draw>
+<draw w="200pt" h="24pt"><value><text>Ordinary text</text></value><font typeface="Arial"/></draw></subform></template></xdp:xdp>"#
+}
+
+/// Resolve the flat page list emitted by the XFA writer.
+fn symbol_pages(doc: &Document) -> Vec<Dict> {
+    let catalog = doc.get(doc.root().unwrap());
+    let pages = doc.dict(catalog.as_dict().unwrap().get(b"Pages").unwrap()).unwrap();
+    doc.resolve(pages.get(b"Kids").unwrap()).as_array().unwrap().iter().map(|p| doc.dict(p).unwrap()).collect()
+}
+
+/// Fixed template text uses a real Unicode font when the standard encoding loses a symbol.
+#[test]
+fn template_symbols_use_an_embedded_unicode_fallback() {
+    let mut doc = Document::open(Arc::new(shell(symbol_template()))).unwrap();
+    let report = render_into(&mut doc).unwrap();
+    assert!(!report.warnings.iter().any(|w| w.contains("standard fonts can't draw")), "{:?}", report.warnings);
+    let page = symbol_pages(&doc).remove(0);
+    let resources = doc.dict(page.get(b"Resources").unwrap()).unwrap();
+    let fonts = doc.dict(resources.get(b"Font").unwrap()).unwrap();
+    let font = doc.dict(fonts.get(b"PCFullXfaFallback").expect("Unicode fallback resource")).unwrap();
+    let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, &font);
+    let encoded = metrics.encode("► Start").unwrap();
+    assert_eq!(metrics.decode(&encoded), "► Start");
+    assert_eq!(pdfcraft_fonts::pdf::embedded_sfnt(&doc, &font).unwrap(), pdfcraft_fonts::INTER_REGULAR);
+    let object = doc.resolve(page.get(b"Contents").unwrap());
+    let Object::Stream(stream) = object.as_ref() else { panic!("page content stream") };
+    let content = stream.decoded().unwrap();
+    let literal = pdfcraft_fonts::literal(&encoded);
+    assert!(content.windows(literal.len()).any(|w| w == literal), "the actual page paints the Unicode codes");
+    assert!(fonts.contains(b"Helv"), "ordinary text keeps its standard face");
+}
+
+/// Fitting fallback text to its already measured advance preserves wrapping and alignment.
+#[test]
+fn template_symbol_fallback_keeps_the_measured_advance() {
+    let form = layout_xml(symbol_template()).unwrap();
+    let span = form.pages[0]
+        .items
+        .iter()
+        .find_map(|i| match i {
+            Item::Text(s) if s.text.contains('►') => Some(s),
+            _ => None,
+        })
+        .unwrap();
+    let mut doc = Document::open(Arc::new(shell(symbol_template()))).unwrap();
+    crate::pdf::write_form(&mut doc, &form).unwrap();
+    let page = symbol_pages(&doc).remove(0);
+    let object = doc.resolve(page.get(b"Contents").unwrap());
+    let Object::Stream(stream) = object.as_ref() else { panic!("page content stream") };
+    let content = stream.decoded().unwrap();
+    let content = String::from_utf8_lossy(&content);
+    let line = content.lines().find(|l| l.contains("/PCFullXfaFallback")).expect("fallback text operator");
+    let tokens: Vec<_> = line.split_whitespace().collect();
+    let index = tokens.iter().position(|t| *t == "Tz").unwrap();
+    let scale: f64 = tokens[index - 1].parse().unwrap();
+    let actual = pdfcraft_fonts::inter_width(&span.text, span.face.size) * scale / 100.0;
+    assert!((actual - span.face.width(&span.text)).abs() < 0.001, "{actual} versus {}", span.face.width(&span.text));
+}
+
+/// Repeated pages and relayouts reuse the validated embedding, including after save/reopen.
+#[test]
+fn template_symbol_font_is_reused_across_pages_and_relayouts() {
+    let mut form = layout_xml(symbol_template()).unwrap();
+    form.pages.push(form.pages[0].clone());
+    let mut doc = Document::open(Arc::new(shell(symbol_template()))).unwrap();
+    crate::pdf::write_form(&mut doc, &form).unwrap();
+    let resource = |doc: &Document| {
+        symbol_pages(doc)
+            .iter()
+            .map(|page| {
+                let resources = doc.dict(page.get(b"Resources").unwrap()).unwrap();
+                doc.dict(resources.get(b"Font").unwrap()).unwrap().get(b"PCFullXfaFallback").unwrap().clone()
+            })
+            .collect::<Vec<_>>()
+    };
+    let first = resource(&doc);
+    assert_eq!(first[0], first[1]);
+    let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut reopened = Document::open(Arc::new(bytes)).unwrap();
+    crate::pdf::write_form(&mut reopened, &form).unwrap();
+    assert_eq!(resource(&reopened), first);
+}
+
+/// Rejected zero-advance text must not allocate an unreachable font on each relayout.
+#[test]
+fn template_zero_advance_text_does_not_allocate_fallback_fonts() {
+    let xml = symbol_template().replace("► Start", "\u{0301}");
+    let form = layout_xml(&xml).unwrap();
+    let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
+    for _ in 0..3 {
+        let report = crate::pdf::write_form(&mut doc, &form).unwrap();
+        assert!(report.warnings.iter().any(|w| w.contains("standard fonts can't draw")));
+        let type0 =
+            doc.scan_objects().filter(|(_, o)| o.as_dict().and_then(|d| d.get(b"Subtype")).and_then(Object::as_name) == Some(b"Type0")).count();
+        assert_eq!(type0, 0, "a rejected span must not leave an embedded fallback font");
+    }
+}
+
+/// First-page fallback resource from the original symbol fixture.
+fn symbol_font(doc: &Document) -> Object {
+    let page = symbol_pages(doc).remove(0);
+    let resources = doc.dict(page.get(b"Resources").unwrap()).unwrap();
+    doc.dict(resources.get(b"Font").unwrap()).unwrap().get(b"PCFullXfaFallback").unwrap().clone()
+}
+
+/// A changed encoding must survive on the source font but never reach regenerated text.
+fn rejects_symbol_encoding(encoding: Option<Object>) {
+    for indirect in [false, true] {
+        let mut doc = Document::open(Arc::new(shell(symbol_template()))).unwrap();
+        let form = layout_xml(symbol_template()).unwrap();
+        crate::pdf::write_form(&mut doc, &form).unwrap();
+        let original = symbol_font(&doc);
+        let original_ref = original.as_ref().unwrap();
+        let encoding = encoding.clone().map(|o| if indirect || matches!(o, Object::Stream(_)) { Object::Ref(doc.add(o)) } else { o });
+        doc.update_dict(original_ref, |d| {
+            d.remove(b"Encoding");
+            if let Some(encoding) = &encoding {
+                d.set(b"Encoding".to_vec(), encoding.clone());
+            }
+        })
+        .unwrap();
+        let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        let mut reopened = Document::open(Arc::new(bytes)).unwrap();
+        let report = crate::pdf::write_form(&mut reopened, &form).unwrap();
+        assert!(!report.warnings.iter().any(|w| w.contains("standard fonts can't draw")));
+        let replacement = symbol_font(&reopened);
+        assert_ne!(replacement, original, "a changed encoding must not be reused");
+        let font = reopened.dict(&replacement).unwrap();
+        assert_eq!(font.get(b"Encoding").map(|e| reopened.resolve(e)).and_then(|e| e.as_name().map(Vec::from)), Some(b"Identity-H".to_vec()));
+        let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(&reopened, &font);
+        assert_eq!(metrics.decode(&metrics.encode("► Start").unwrap()), "► Start");
+        assert_eq!(reopened.dict(&original).unwrap().get(b"Encoding"), encoding.as_ref(), "the source font stays unchanged");
+        crate::pdf::write_form(&mut reopened, &form).unwrap();
+        assert_eq!(symbol_font(&reopened), replacement, "the repaired embedding is reusable");
+    }
+}
+
+/// Vertical encoding cannot replace the horizontal encoding this fallback emits.
+#[test]
+fn template_symbol_fallback_rejects_vertical_encoding() {
+    rejects_symbol_encoding(Some(Object::name("Identity-V")));
+}
+
+/// Even matching programs and glyph maps cannot authorize a different character-to-CID map.
+#[test]
+fn template_symbol_fallback_rejects_remapped_encoding() {
+    let cmap = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Changed def /CMapType 1 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 begincidrange <0000> <FFFE> 1 endcidrange endcmap CMapName currentdict /CMap defineresource pop end end";
+    rejects_symbol_encoding(Some(Object::Stream(pdfcraft_cos::Stream::from_raw(Dict::new(), cmap.to_vec()))));
+}
+
+/// A malformed candidate without Encoding cannot be reused either.
+#[test]
+fn template_symbol_fallback_rejects_missing_encoding() {
+    rejects_symbol_encoding(None);
+}
+
+/// A valid indirect horizontal encoding is still reused after save/reopen.
+#[test]
+fn template_symbol_fallback_reuses_indirect_horizontal_encoding() {
+    let mut doc = Document::open(Arc::new(shell(symbol_template()))).unwrap();
+    let form = layout_xml(symbol_template()).unwrap();
+    crate::pdf::write_form(&mut doc, &form).unwrap();
+    let original = symbol_font(&doc);
+    let encoding = doc.add(Object::name("Identity-H"));
+    doc.update_dict(original.as_ref().unwrap(), |d| d.set(b"Encoding".to_vec(), Object::Ref(encoding))).unwrap();
+    let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut reopened = Document::open(Arc::new(bytes)).unwrap();
+    crate::pdf::write_form(&mut reopened, &form).unwrap();
+    assert_eq!(symbol_font(&reopened), original);
+}
+
 /// A field whose ui doesn't scroll in the direction its text runs out (`hScrollPolicy="off"` for
 /// one line, `vScrollPolicy="off"` for several) is written with DoNotScroll (`/Ff` bit 24), so it
 /// takes no more text than it shows; the other direction's policy, or the default, doesn't.

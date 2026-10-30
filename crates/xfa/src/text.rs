@@ -1,6 +1,6 @@
 //! Text measurement and line breaking with the standard 14 fonts that stand in for the
-//! template's typefaces (no font programs are embedded in dynamic XFA forms, and none are
-//! bundled here).
+//! template's typefaces. The PDF writer may embed Inter for unsupported page-text spans,
+//! fitted to these measured advances; field appearances belong to the forms layer.
 
 use crate::model::{Font, HAlign, Para, Rect, RichText, Run};
 use pdfcraft_fonts::Std14;
