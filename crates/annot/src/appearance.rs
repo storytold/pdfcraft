@@ -323,7 +323,7 @@ fn stamp_turn(d: &Dict) -> i64 {
 
 /// The page `/Rotate` a text box's or Fill & Sign text's lines are turned back by
 /// (`/PCTextRotate`, written when it is added to a turned page).
-fn text_turn(d: &Dict) -> i64 {
+pub(crate) fn text_turn(d: &Dict) -> i64 {
     d.get(b"PCTextRotate").and_then(Object::as_int).unwrap_or(0).rem_euclid(360) / 90 * 90
 }
 

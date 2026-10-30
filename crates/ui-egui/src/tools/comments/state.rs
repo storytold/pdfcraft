@@ -113,14 +113,14 @@ impl InlineText {
     }
 }
 
-/// Whether `a` is typed into on the page (an upright text box or typewriter text on a page
-/// shown unturned) rather than in the composer card: a callout's box sits inside its rectangle,
-/// and turned text runs another way than the editor.
+/// Whether `a` is typed into on the page (a text box or typewriter text whose lines read upright
+/// on screen) rather than in the composer card: a callout's box sits inside its rectangle, and
+/// turned text runs another way than the editor. The page's `/Rotate` and the view's turn add
+/// up; text PdfCraft wrote on a turned page is laid out for that turn ([`Annotation::text_turn`]).
 pub(crate) fn edits_in_place(a: &Annotation, info: &DocInfo, view_rotation: u16) -> bool {
     a.subtype == "FreeText"
         && a.intent.as_deref() != Some("FreeTextCallout")
-        && view_rotation.is_multiple_of(360)
-        && info.pages.get(a.page).is_some_and(|p| p.rotation.is_multiple_of(360))
+        && info.pages.get(a.page).is_some_and(|p| (u32::from(p.rotation) + u32::from(view_rotation)) % 360 == u32::from(a.text_turn) % 360)
 }
 
 /// Edit the text of comment `a`: on the page for a text box (see [`edits_in_place`]), else in

@@ -1,3 +1,4 @@
+use super::state::edits_in_place;
 use super::*;
 
 #[test]
@@ -58,6 +59,7 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
         intent: None,
         fill_sign: false,
         no_rotate,
+        text_turn: 0,
         points: Vec::new(),
     };
     let page = PageInfo { width: 140.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 140.0], rotation: 90 };
@@ -192,6 +194,7 @@ fn annotation(subtype: &str, contents: Option<&str>, fill_sign: bool) -> Annotat
         intent: None,
         fill_sign,
         no_rotate: false,
+        text_turn: 0,
         points: Vec::new(),
     }
 }
@@ -398,6 +401,7 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
             fill_sign: false,
             points: Vec::new(),
             no_rotate: false,
+            text_turn: 0,
         }],
         ..Default::default()
     };
@@ -434,6 +438,36 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
 
 /// What counts as a change to text typed on the page is what keeping it does: trailing spaces
 /// don't, nor a new box with nothing but spaces in it (no "Save changes?" for nothing).
+/// A text box is typed into on the page where its lines read upright on screen: the page's
+/// `/Rotate` and the view's turn add up to the turn its text is laid out for (`/PCTextRotate`,
+/// which PdfCraft writes when it adds text to a turned page). Elsewhere, and for a callout, the
+/// composer card edits it.
+#[test]
+fn text_boxes_are_typed_into_on_the_page_where_they_read_upright() {
+    let info = |rotation| DocInfo {
+        pages: vec![PageInfo { width: 200.0, height: 300.0, label: String::new(), crop: [0.0, 0.0, 300.0, 200.0], rotation }],
+        ..Default::default()
+    };
+    let text = |text_turn| Annotation { text_turn, ..annotation("FreeText", Some("30.10.2026"), true) };
+    // (page /Rotate, view turn, text turn) → typed on the page.
+    for (page, view, turn, in_place) in [
+        (0, 0, 0, true),
+        (90, 0, 90, true),
+        (270, 0, 270, true),
+        (90, 270, 0, true),
+        (0, 90, 90, true),
+        (90, 0, 0, false),
+        (90, 90, 90, false),
+        (0, 90, 0, false),
+        (180, 0, 90, false),
+    ] {
+        assert_eq!(edits_in_place(&text(turn), &info(page), view), in_place, "page {page}°, view {view}°, text {turn}°");
+    }
+    let callout = Annotation { intent: Some("FreeTextCallout".into()), ..text(90) };
+    assert!(!edits_in_place(&callout, &info(90), 0), "a callout's box sits inside its rectangle");
+    assert!(!edits_in_place(&Annotation { text_turn: 90, ..annotation("Text", Some("Note"), false) }, &info(90), 0), "a note");
+}
+
 #[test]
 fn inline_text_changes_are_what_keeping_it_changes() {
     let info = DocInfo {
@@ -459,6 +493,7 @@ fn inline_text_changes_are_what_keeping_it_changes() {
             fill_sign: false,
             points: Vec::new(),
             no_rotate: false,
+            text_turn: 0,
         }],
         ..Default::default()
     };
@@ -509,6 +544,7 @@ fn an_inline_draft_keeps_to_its_comment() {
         fill_sign: false,
         points: Vec::new(),
         no_rotate: false,
+        text_turn: 0,
     };
     let page = PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
     let draft = |name: Option<&str>| InlineText {
@@ -562,6 +598,7 @@ fn edit_text_from_the_menu_follows_the_view_rotation_without_a_drawn_page() {
             fill_sign: false,
             points: Vec::new(),
             no_rotate: false,
+            text_turn: 0,
         }],
         ..Default::default()
     };

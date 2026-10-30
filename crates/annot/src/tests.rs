@@ -2331,6 +2331,37 @@ fn a_text_box_sized_to_its_text_is_padded_alike_on_every_side() {
 /// A text box that fits its text keeps fitting it: shorter text narrows it and longer text widens
 /// it (up to 300 pt, past which lines wrap), and a smaller font size shrinks it in both
 /// directions. A box sized by hand keeps its width (and, for a smaller font, its height).
+/// Text added to a turned page reads upright as the page is displayed (`/PCTextRotate`): on a
+/// quarter turn its lines run along `/Rect`'s height. New text refits the box as it reads, from
+/// the corner where its first line starts. It used to keep `/Rect`'s top edge, which on a page
+/// turned 90° is the box's right side as displayed, so longer text grew back over its start.
+#[test]
+fn a_text_box_on_a_turned_page_refits_as_it_reads() {
+    let pad = 2.0 + 2.0; // the style's 2 pt border
+    let (first, longer) = ("Abnahme ok", "Abnahme ok, Restpunkte siehe Liste");
+    let (w0, w1) = (appearance::text_box_width(first, 12.0, pad), appearance::text_box_width(longer, 12.0, pad));
+    let h = appearance::text_box_height(1, 12.0, pad);
+    // `/Rect` of a one-line box `w` wide as it reads, its first line starting at (200, 300):
+    // `/Rect`'s lower left on a page turned 90°, its lower right at 180°, its upper right at 270°.
+    let placed = |turn: i64, w: f64| match turn {
+        90 => vec![200.0, 300.0, 200.0 + h, 300.0 + w],
+        180 => vec![200.0 - w, 300.0, 200.0, 300.0 + h],
+        _ => vec![200.0 - h, 300.0 - w, 200.0, 300.0],
+    };
+    for turn in [90, 180, 270] {
+        let mut doc = fixture();
+        let p = page_refs(&doc).unwrap()[0];
+        doc.update_dict(p, |d| d.set(b"Rotate".to_vec(), Object::Int(turn))).unwrap();
+        let p = placed(turn, w0);
+        let shape = Shape::TextBox { rect: [p[0], p[1], p[2], p[3]], font_size: 12.0 };
+        let t = add_annotation(&mut doc, &NewAnnotation { contents: first.into(), ..new(0, shape) }, &meta("t")).unwrap();
+        assert_eq!(appearance::text_turn(&list(&doc, 0)[t]), turn, "laid out for the turned page");
+        assert_eq!(rect(&list(&doc, 0)[t]), placed(turn, w0), "{turn}°: as placed");
+        set_contents(&mut doc, 0, t, longer, &meta("")).unwrap();
+        assert_eq!(rect(&list(&doc, 0)[t]), placed(turn, w1), "{turn}°: longer as it reads, from the same start");
+    }
+}
+
 #[test]
 fn a_text_box_that_fits_its_text_keeps_fitting_it() {
     let mut doc = fixture();

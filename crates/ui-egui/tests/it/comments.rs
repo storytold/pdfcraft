@@ -1030,6 +1030,48 @@ fn text_boxes_are_typed_into_on_the_page() {
     assert_eq!(comments(&h)[0].contents.as_deref(), Some("Abnahme ok, Restpunkte siehe Liste"));
 }
 
+/// Typewriter text added to a turned page is laid out for the page as displayed
+/// (`/PCTextRotate`), so it reads upright, as on a plan plotted landscape: a double-click edits
+/// it on the page there too, not in the composer card, and ⌘/Ctrl+Enter keeps the text.
+#[test]
+fn typewriter_text_on_a_turned_page_is_typed_into_on_the_page() {
+    let mut h = harness_with_step_dt(1.0 / 60.0, |app| {
+        app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+        let shape = pdfcraft_engine::Shape::Typewriter { rect: [100.0, 40.0, 116.0, 120.0], font_size: 12.0 };
+        let style = pdfcraft_engine::Style::default_for(&shape);
+        let text = pdfcraft_engine::NewAnnotation { page: 0, shape, style, contents: "30.10.2026".into(), author: "Tester".into() };
+        app.apply_edit(pdfcraft_engine::Edit::AddAnnotation(text));
+    });
+    crate::support::settle(&mut h);
+    let c = comments(&h);
+    assert_eq!((c.len(), c[0].text_turn), (1, 90), "laid out for the turned page: {c:?}");
+    // The page (300 × 200 pt) shows turned to 200 × 300: screen x is user y, screen y user x.
+    let page = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+    let r = c[0].rect;
+    let centre = pos2(page.left() + (r[1] + r[3]) / 2.0 / 200.0 * page.width(), page.top() + (r[0] + r[2]) / 2.0 / 300.0 * page.height());
+    double_click(&mut h, centre);
+    {
+        let cv = &h.state().views[0].comments;
+        assert!(cv.composer.is_none(), "no composer card");
+        assert_eq!(cv.inline.as_ref().map(|t| (t.index, t.text.as_str())), Some((Some(c[0].index), "30.10.2026")));
+    }
+    h.key_press(egui::Key::End);
+    h.run_steps(1);
+    h.event(egui::Event::Text(" geprüft".into()));
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+    h.run_steps(3);
+    let c = comments(&h);
+    assert_eq!((c[0].contents.as_deref(), c[0].text_turn), (Some("30.10.2026 geprüft"), 90));
+    // Refitted as it reads, from where the date began (`/Rect`'s lower left, on screen its upper
+    // left), not grown back over it.
+    let after = c[0].rect;
+    assert!(after[0] == r[0] && after[1] == r[1] && (after[2] > r[2] || after[3] > r[3]), "{after:?} from {r:?}");
+    assert!(h.state().views[0].comments.inline.is_none());
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Edit comment"));
+}
+
 /// The empty editor of a new text box is as wide as its hint, which reads on one line.
 #[test]
 fn a_new_text_boxs_hint_reads_on_one_line() {

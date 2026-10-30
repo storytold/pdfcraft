@@ -338,6 +338,10 @@ pub struct Annotation {
     /// appearance stays upright, turned about the upper-left corner of `rect`
     /// ([`Self::shown_rect`]).
     pub no_rotate: bool,
+    /// The quarter turn a text box's or typewriter text's lines are laid out for (`/PCTextRotate`:
+    /// 0, 90, 180 or 270): PdfCraft writes the page's `/Rotate` there when it adds one to a turned
+    /// page, so on that page shown unturned by the view the text reads upright.
+    pub text_turn: u16,
     /// The points that shape a line (its two ends, `/L`) or connected lines, a polygon or a
     /// cloud (their corners, `/Vertices`), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,

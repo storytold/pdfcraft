@@ -218,9 +218,13 @@ fn fits_its_text(d: &Dict) -> bool {
 
 /// The rectangle a FreeText annotation's text box needs for `text`: the top edge stays and the
 /// height fits the wrapped lines, as at creation. The width stays too, unless the box fit `was`
-/// (its text and font size before the change) and is upright: then it fits `text` as a new box
-/// would, and the second value says so. `None` keeps the old rectangle (the box can't be
-/// measured, so only the appearance is redrawn).
+/// (its text and font size before the change): then it fits `text` as a new box would, and the
+/// second value says so. `None` keeps the old rectangle (the box can't be measured, so only the
+/// appearance is redrawn).
+///
+/// Text added to a turned page is laid out for the page as displayed (`/PCTextRotate`), so its box
+/// is fitted as it reads there: its lines run along `/Rect`'s height on a quarter turn, and the
+/// corner where the first line starts stays (on a page turned 90°, `/Rect`'s lower left).
 fn fitted_box(doc: &Document, r: ObjRef, text: &str, was: Option<(&str, f64)>) -> Option<([f64; 4], bool)> {
     let d = annot_dict(doc, r);
     let nums = |key: &[u8]| -> Option<Vec<f64>> { d.get(key)?.as_array()?.iter().map(|o| o.as_f64()).collect() };
@@ -235,16 +239,15 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str, was: Option<(&str, f64)>) -
     } else {
         rect
     };
-    let (x0, top) = (tb[0].min(tb[2]), tb[1].max(tb[3]));
-    let w = tb[2] - tb[0];
-    // Text on a turned page runs along the box's height: its width isn't the line's.
-    let upright = d.get(b"PCTextRotate").and_then(Object::as_int).unwrap_or(0).rem_euclid(360) == 0;
+    let turn = if d.contains(b"CL") { 0 } else { appearance::text_turn(&d) };
+    let (x0, y0, x1, y1) = (tb[0].min(tb[2]), tb[1].min(tb[3]), tb[0].max(tb[2]), tb[1].max(tb[3]));
+    // The box as it reads: its lines' width and its height.
+    let (w, h) = if matches!(turn, 90 | 270) { (y1 - y0, x1 - x0) } else { (x1 - x0, y1 - y0) };
     // A box made taller or shorter by hand doesn't fit its text either, whatever its width.
-    let hug = upright
-        && was.is_some_and(|(t, s)| {
-            let lines = appearance::wrap(t, s, (w - 2.0 * pad).max(1.0)).len();
-            w.is_finite() && fits_text(w, t, s, pad) && ((tb[3] - tb[1]).abs() - appearance::text_box_height(lines, s, pad)).abs() <= 1.5
-        });
+    let hug = was.is_some_and(|(t, s)| {
+        let lines = appearance::wrap(t, s, (w - 2.0 * pad).max(1.0)).len();
+        w.is_finite() && fits_text(w, t, s, pad) && (h - appearance::text_box_height(lines, s, pad)).abs() <= 1.5
+    });
     let w = if w.is_finite() && w >= 1.0 && !hug {
         w
     } else {
@@ -252,7 +255,15 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str, was: Option<(&str, f64)>) -
         appearance::text_box_width(text, size, pad)
     };
     let lines = appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len();
-    Some(([x0, top - appearance::text_box_height(lines, size, pad), x0 + w, top], hug))
+    let h = appearance::text_box_height(lines, size, pad);
+    // From the corner where the first line starts, as the page is displayed.
+    let rect = match turn {
+        90 => [x0, y0, x0 + h, y0 + w],
+        180 => [x1 - w, y0, x1, y0 + h],
+        270 => [x1 - h, y1 - w, x1, y1],
+        _ => [x0, y1 - h, x0 + w, y1],
+    };
+    Some((rect, hug))
 }
 
 /// Reply to a comment; returns the reply's index in the page's `/Annots`.
