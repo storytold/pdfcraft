@@ -5749,6 +5749,24 @@ BT /F1 11 Tf 0 g 72 650 Td (Black body text that is long enough to be the body s
     assert!(blocks.iter().any(|b| b.text == "Annual Report" && b.color == [0.05, 0.23, 0.18]), "{blocks:?}");
 }
 
+/// A regular face whose letters the text matrix leans, a word processor's italic for a face
+/// without one, exports as italic.
+#[test]
+fn exporting_office_files_keeps_letters_the_matrix_leans_italic() {
+    let pdf = one_line_page(
+        "/Font << /F1 4 0 R >>",
+        "BT /F1 12 Tf 72 200 Td (Upright words) Tj ET BT /F1 12 Tf 1 0 0.2679 1 72 150 Tm (Leaning words) Tj ET",
+    );
+    let mut s = Session::new();
+    let id = s.open("slanted.pdf", None, Arc::new(pdf), None).unwrap();
+    let d = s.get(id).unwrap();
+    let pages = d.export_pages();
+    let italic = |text: &str| pages[0].blocks.iter().find(|b| b.text == text).map(|b| b.italic);
+    assert_eq!((italic("Upright words"), italic("Leaning words")), (Some(false), Some(true)), "{:?}", pages[0].blocks);
+    let html = String::from_utf8(d.export_office(compare::OfficeFormat::Html)).unwrap();
+    assert!(html.contains("<em>Leaning words</em>") && !html.contains("<em>Upright"), "{html}");
+}
+
 #[test]
 fn office_export_positions_follow_the_displayed_crop_rotation_and_units() {
     use pdfcraft_cos::{Document as CosDocument, ObjRef, Object, SaveOptions, write_full};

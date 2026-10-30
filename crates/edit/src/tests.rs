@@ -4527,6 +4527,46 @@ fn stream(dict: &str, data: &str) -> String {
     format!("<< {dict} /Length {} >>\nstream\n{data}\nendstream", data.len())
 }
 
+/// Word processors draw italic in a face that has none by leaning the letters through the text
+/// matrix (`1 0 0.2679 1 x y Tm`, 15 degrees) or the CTM, and the font's name says nothing of it.
+/// Reading for export takes such text as italic, whichever way its baseline turns. Text leaning
+/// left or barely, or sheared past 45 degrees, stays upright, and editing reads the face as it is.
+#[test]
+fn reading_takes_letters_the_matrix_leans_as_italic() {
+    let content = [
+        "BT /F1 10 Tf 72 700 Td (Upright) Tj ET",
+        "BT /F1 10 Tf 1 0 0.2679 1 72 640 Tm (Leaning) Tj ET",
+        "q 1 0 0.2126 1 0 0 cm BT /F1 10 Tf 72 580 Td (Sheared) Tj ET Q",
+        "BT /F1 10 Tf 0 1 -1 0.2679 300 300 Tm (Turned) Tj ET",
+        "BT /F1 10 Tf 0 1 -1 0 400 300 Tm (Standing) Tj ET",
+        "BT /F1 10 Tf 1 0 -0.2679 1 72 520 Tm (Back) Tj ET",
+        "BT /F1 10 Tf 1 0 0.05 1 72 460 Tm (Barely) Tj ET",
+        "BT /F1 10 Tf 1 0 1.5 1 72 400 Tm (Flat) Tj ET",
+    ]
+    .join("\n");
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+        &stream("", &content),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]);
+    let read: Vec<(String, bool)> = text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| (b.text, b.italic)).collect();
+    for (word, italic) in [
+        ("Upright", false),
+        ("Leaning", true),
+        ("Sheared", true),
+        ("Turned", true),
+        ("Standing", false),
+        ("Back", false),
+        ("Barely", false),
+        ("Flat", false),
+    ] {
+        assert!(read.contains(&(word.to_string(), italic)), "{word} should read italic: {italic}; {read:?}");
+    }
+    assert!(text::text_blocks(&doc, 0).unwrap().iter().all(|b| !b.italic), "editing reads the upright face it draws with");
+}
+
 /// #314: text and images drawn by (nested) form XObjects are read for export, placed through
 /// every form matrix and set in each form's own fonts; editing still sees only the page's text.
 #[test]

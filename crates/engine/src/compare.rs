@@ -231,7 +231,8 @@ impl crate::Document {
                             rect: visible_rect(b.rect),
                             size: b.size * unit,
                             bold: f.contains("bold") || f.contains("black") || f.contains("heavy"),
-                            italic: f.contains("italic") || f.contains("oblique"),
+                            // Or as reading tells it: by the font's flags, or letters its matrix leans.
+                            italic: b.italic || f.contains("italic") || f.contains("oblique"),
                             color: b.color,
                             rotation: b.rotation - f64::from(info.rotation),
                         }
