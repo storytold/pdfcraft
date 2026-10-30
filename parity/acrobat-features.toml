@@ -6884,8 +6884,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["create.images"]
 tools = ["doc_create"]
-evidence = ["crates/create/src/tests.rs::jpeg_2000_images_are_embedded_as_is", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::embedded_icc_profiles_tag_the_image_colour_space"]
-notes = "PNG, JPEG, TIFF (multi-page), GIF (first frame), BMP, and JPEG 2000 (JP2 or codestream, embedded as JPXDecode with its capture resolution). JPEG and PNG ICC profiles are kept as /ICCBased; TIFF profiles are not read yet"
+evidence = ["crates/create/src/tests.rs::jpeg_2000_images_are_embedded_as_is", "crates/create/src/tests.rs::images_export_as_jpeg_unchanged_and_others_as_png", "crates/create/src/tests.rs::embedded_icc_profiles_tag_the_image_colour_space", "crates/create/src/tests.rs::tiff_alpha_import_unassociates_colour_before_sample_reduction", "crates/create/src/tests.rs::tiff_alpha_import_keeps_straight_and_unlabelled_samples", "crates/create/src/tests.rs::tiff_alpha_import_refuses_other_multiband_layouts", "crates/create/src/tests.rs::tiff_alpha_import_refuses_planar_sample_layouts", "crates/create/src/tests.rs::tiff_alpha_import_refuses_multiple_extra_samples"]
+notes = "PNG, JPEG, TIFF (multi-page), GIF (first frame), BMP, and JPEG 2000 (JP2 or codestream, embedded as JPXDecode with its capture resolution). JPEG and PNG ICC profiles are kept as /ICCBased; TIFF profiles are not read yet. TIFF RGBA and explicit BlackIsZero gray-alpha use associated/straight alpha at 8/16 bits, unassociating before high-byte reduction; separate alpha planes, multiple extras, WhiteIsZero gray-alpha and other bands remain unsupported"
 
 [[feature]]
 id = "create.from-multipage-tiff"

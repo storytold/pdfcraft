@@ -364,6 +364,18 @@ fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     Ok(Embedded { dict: d, data: colour, filtered: false, smask, icc, px: (w, h), dpi })
 }
 
+/// An 8-bit alpha plane as an image soft mask.
+fn alpha_mask(alpha: Vec<u8>, (w, h): (u32, u32)) -> (Dict, Vec<u8>) {
+    let mut m = Dict::new();
+    m.set(b"Type".to_vec(), Object::name("XObject"));
+    m.set(b"Subtype".to_vec(), Object::name("Image"));
+    m.set(b"Width".to_vec(), Object::Int(w as i64));
+    m.set(b"Height".to_vec(), Object::Int(h as i64));
+    m.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    m.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    (m, alpha)
+}
+
 /// 8-bit RGBA pixels → an image (gray when every pixel is, with a soft mask when any pixel is
 /// not opaque).
 fn rgba_image(rgba: &[u8], (w, h): (u32, u32), dpi: (f64, f64)) -> Embedded {
@@ -377,16 +389,7 @@ fn rgba_image(rgba: &[u8], (w, h): (u32, u32), dpi: (f64, f64)) -> Embedded {
     let mut d = Dict::new();
     d.set(b"ColorSpace".to_vec(), Object::name(if gray { "DeviceGray" } else { "DeviceRGB" }));
     d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
-    let smask = (!opaque).then(|| {
-        let mut m = Dict::new();
-        m.set(b"Type".to_vec(), Object::name("XObject"));
-        m.set(b"Subtype".to_vec(), Object::name("Image"));
-        m.set(b"Width".to_vec(), Object::Int(w as i64));
-        m.set(b"Height".to_vec(), Object::Int(h as i64));
-        m.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
-        m.set(b"BitsPerComponent".to_vec(), Object::Int(8));
-        (m, rgba.as_chunks::<4>().0.iter().map(|p| p[3]).collect())
-    });
+    let smask = (!opaque).then(|| alpha_mask(rgba.as_chunks::<4>().0.iter().map(|p| p[3]).collect(), (w, h)));
     Embedded { dict: d, data: colour, filtered: false, smask, icc: None, px: (w, h), dpi }
 }
 
@@ -418,6 +421,95 @@ const MAX_DECODED_BYTES: usize = 2 << 30;
 /// whole address space on 32-bit targets (wasm32), where 4 GiB doesn't fit in `usize`.
 const MAX_DECODED_TOTAL: usize = MAX_DECODED_BYTES.saturating_mul(2);
 
+/// One associated TIFF colour sample made straight, at its original 8- or 16-bit depth.
+fn unassociated_tiff_sample(sample: u16, alpha: u16, max: u16) -> u16 {
+    if alpha == 0 {
+        return 0;
+    }
+    // Widen before multiplication and round division; clamping bounds the cast by `max: u16`.
+    ((u64::from(sample) * u64::from(max) + u64::from(alpha) / 2) / u64::from(alpha)).min(u64::from(max)) as u16
+}
+
+/// Qualify the interleaved alpha layouts supported by the importer before decoding pixels.
+fn tiff_alpha_layout(dec: &mut tiff::decoder::Decoder<std::io::Cursor<&[u8]>>, ct: tiff::ColorType) -> Result<(tiff::ColorType, bool), String> {
+    use tiff::ColorType as C;
+    use tiff::tags::{ExtraSamples, PhotometricInterpretation, PlanarConfiguration, Tag};
+    let samples = dec.get_tag_unsigned::<u16>(Tag::SamplesPerPixel).ok();
+    // The decoder classifies RGB plus several extras as RGB/RGBA and drops later bands.
+    // Qualify the encoded layout, not only its reduced ColorType, before reading pixels.
+    let supported = match ct {
+        C::RGB(_) => matches!(samples, Some(3 | 4)),
+        C::RGBA(_) => samples == Some(4),
+        _ => true,
+    };
+    if !supported {
+        return Err("this RGB TIFF sample layout isn't supported: only three colors and one optional extra sample are supported".into());
+    }
+    let extra = dec.get_tag_unsigned::<u16>(Tag::ExtraSamples).ok().and_then(ExtraSamples::from_u16);
+    let chunky =
+        dec.find_tag_unsigned::<u16>(Tag::PlanarConfiguration).is_ok_and(|value| value.is_none_or(|v| v == PlanarConfiguration::Chunky.to_u16()));
+    // read_image reads only the first sample plane for planar TIFFs, which cannot be
+    // passed to an interleaved alpha embedding path.
+    if !chunky && matches!(ct, C::RGBA(_) | C::GrayA(_) | C::Multiband { .. }) {
+        return Err("TIFF alpha images with separate sample planes aren't supported yet".into());
+    }
+    // tiff 0.11 reports grey plus alpha as Multiband. Normalize only this interleaved,
+    // explicitly tagged BlackIsZero layout; other bands and WhiteIsZero remain unsupported.
+    let ct = match ct {
+        C::Multiband { bit_depth: bits @ (8 | 16), num_samples: 2 }
+            if chunky
+                && matches!(extra, Some(ExtraSamples::AssociatedAlpha | ExtraSamples::UnassociatedAlpha))
+                && dec.get_tag_unsigned::<u16>(Tag::PhotometricInterpretation).ok() == Some(PhotometricInterpretation::BlackIsZero.to_u16()) =>
+        {
+            C::GrayA(bits)
+        }
+        other => other,
+    };
+    Ok((ct, extra == Some(ExtraSamples::AssociatedAlpha)))
+}
+
+/// Turn supported associated samples straight before reducing 16-bit values to their high byte.
+fn tiff_sample_bytes(samples: tiff::decoder::DecodingResult, ct: &tiff::ColorType, associated: bool) -> Result<Vec<u8>, String> {
+    use tiff::ColorType as C;
+    use tiff::decoder::DecodingResult;
+    let channels = if associated {
+        match ct {
+            C::RGBA(8 | 16) => 4,
+            C::GrayA(8 | 16) => 2,
+            _ => 0,
+        }
+    } else {
+        0
+    };
+    // A nonzero stride makes chunks_exact_mut total even for a future unsupported layout.
+    let channels = std::num::NonZeroUsize::new(channels);
+    match samples {
+        DecodingResult::U8(mut data) => {
+            if let Some(channels) = channels {
+                for pixel in data.chunks_exact_mut(channels.get()) {
+                    let Some((alpha, colour)) = pixel.split_last_mut() else { continue };
+                    for sample in colour {
+                        *sample = unassociated_tiff_sample(u16::from(*sample), u16::from(*alpha), 255) as u8;
+                    }
+                }
+            }
+            Ok(data)
+        }
+        DecodingResult::U16(mut data) => {
+            if let Some(channels) = channels {
+                for pixel in data.chunks_exact_mut(channels.get()) {
+                    let Some((alpha, colour)) = pixel.split_last_mut() else { continue };
+                    for sample in colour {
+                        *sample = unassociated_tiff_sample(*sample, *alpha, u16::MAX);
+                    }
+                }
+            }
+            Ok(data.iter().map(|x| (x >> 8) as u8).collect())
+        }
+        _ => Err("this TIFF sample format isn't supported".into()),
+    }
+}
+
 /// The first `wanted` pages of a TIFF (multi-page scans become multi-page PDFs).
 fn tiff_pages(name: &str, bytes: &[u8], wanted: usize) -> Result<Vec<Embedded>, CreateError> {
     tiff_pages_within(name, bytes, wanted, MAX_DECODED_TOTAL)
@@ -426,7 +518,7 @@ fn tiff_pages(name: &str, bytes: &[u8], wanted: usize) -> Result<Vec<Embedded>, 
 /// [`tiff_pages`], refused once the pages kept take more than `budget` bytes.
 fn tiff_pages_within(name: &str, bytes: &[u8], wanted: usize, budget: usize) -> Result<Vec<Embedded>, CreateError> {
     use tiff::ColorType as C;
-    use tiff::decoder::{Decoder, DecodingResult, Limits};
+    use tiff::decoder::{Decoder, Limits};
     use tiff::tags::Tag;
     let bad = |m: String| CreateError::Image(name.into(), m);
     // The tiff crate stops at 256 MiB of decoded pixels, below an ordinary poster scan (#665):
@@ -440,6 +532,7 @@ fn tiff_pages_within(name: &str, bytes: &[u8], wanted: usize, budget: usize) -> 
     loop {
         let (w, h) = dec.dimensions().map_err(|e| bad(e.to_string()))?;
         let ct = dec.colortype().map_err(|e| bad(e.to_string()))?;
+        let (ct, associated) = tiff_alpha_layout(&mut dec, ct).map_err(bad)?;
         let unit = dec.get_tag_u32(Tag::ResolutionUnit).unwrap_or(2);
         let res = |t: Tag, dec: &mut Decoder<std::io::Cursor<&[u8]>>| -> f64 {
             // Resolutions are rationals.
@@ -452,12 +545,8 @@ fn tiff_pages_within(name: &str, bytes: &[u8], wanted: usize, budget: usize) -> 
             if v.is_finite() && v >= 1.0 { v } else { 72.0 }
         };
         let dpi = (res(Tag::XResolution, &mut dec), res(Tag::YResolution, &mut dec));
-        let data = match dec.read_image().map_err(|e| bad(e.to_string()))? {
-            DecodingResult::U8(v) => v,
-            // 16-bit samples: keep the high byte.
-            DecodingResult::U16(v) => v.iter().map(|x| (x >> 8) as u8).collect(),
-            _ => return Err(bad("this TIFF sample format isn't supported".into())),
-        };
+        let decoded = dec.read_image().map_err(|e| bad(e.to_string()))?;
+        let data = tiff_sample_bytes(decoded, &ct, associated).map_err(bad)?;
         let page = match ct {
             C::Gray(1) => {
                 // Bilevel scans stay 1 bit per pixel (0 = black after the decoder's inversion).
@@ -486,8 +575,15 @@ fn tiff_pages_within(name: &str, bytes: &[u8], wanted: usize, budget: usize) -> 
             }
             C::RGBA(8 | 16) => rgba_image(&data, (w, h), dpi),
             C::GrayA(8 | 16) => {
-                let rgba: Vec<u8> = data.as_chunks::<2>().0.iter().flat_map(|p| [p[0], p[0], p[0], p[1]]).collect();
-                rgba_image(&rgba, (w, h), dpi)
+                // Split directly: expanding a decoder-sized GrayA buffer to RGBA could exceed
+                // the maximum Vec allocation on wasm32 even though each output plane fits.
+                let pixels = data.as_chunks::<2>().0;
+                let opaque = pixels.iter().all(|p| p[1] == 255);
+                let mut d = Dict::new();
+                d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+                d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+                let smask = (!opaque).then(|| alpha_mask(pixels.iter().map(|p| p[1]).collect(), (w, h)));
+                Embedded { dict: d, data: pixels.iter().map(|p| p[0]).collect(), filtered: false, smask, icc: None, px: (w, h), dpi }
             }
             other => return Err(bad(format!("{other:?} TIFF images aren't supported yet"))),
         };

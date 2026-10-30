@@ -464,6 +464,186 @@ fn bigtiff_images_become_pages() {
     assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 2.0, 1.0], "4×2 px at 144 dpi");
 }
 
+/// An original uncompressed TIFF, with one row of RGBA or grey/alpha samples and optional
+/// ExtraSamples metadata. Omitting the tag retains the decoder's unlabeled-channel fallback.
+fn alpha_tiff(gray: bool, bits: u16, extra: Option<u16>, samples: &[u16]) -> Vec<u8> {
+    alpha_tiff_layout(if gray { 2 } else { 4 }, if gray { 1 } else { 2 }, bits, &extra.into_iter().collect::<Vec<_>>(), samples, false)
+}
+
+/// The same small fixture with explicit layout metadata for unsupported-layout controls.
+fn alpha_tiff_layout(components: u16, photometric: u16, bits: u16, extra: &[u16], samples: &[u16], planar: bool) -> Vec<u8> {
+    assert!(extra.len() <= 2);
+    assert!(components > 0 && samples.len().is_multiple_of(usize::from(components)));
+    let width = u32::try_from(samples.len() / usize::from(components)).unwrap();
+    let count = 9 + u16::from(!extra.is_empty()) + u16::from(planar);
+    let after_ifd = 8 + 2 + 12 * u32::from(count) + 4;
+    let after_bits = after_ifd + if components <= 2 { 0 } else { u32::from(components) * 2 };
+    let planes = u32::from(components);
+    let pixels_at = after_bits + if planar { planes * 8 } else { 0 };
+    let byte_count = u32::try_from(samples.len()).unwrap() * u32::from(bits / 8);
+    let mut fields = vec![
+        (256u16, 4u16, 1u32, width),
+        (257, 4, 1, 1),
+        (258, 3, u32::from(components), if components <= 2 { u32::from(bits) | u32::from(bits) << 16 } else { after_ifd }),
+        (259, 3, 1, 1),
+        (262, 3, 1, u32::from(photometric)),
+        (273, 4, if planar { planes } else { 1 }, if planar { after_bits } else { pixels_at }),
+        (277, 3, 1, u32::from(components)),
+        (278, 4, 1, 1),
+        (279, 4, if planar { planes } else { 1 }, if planar { after_bits + planes * 4 } else { byte_count }),
+    ];
+    if planar {
+        fields.push((284, 3, 1, 2));
+    }
+    if !extra.is_empty() {
+        let value = extra.iter().enumerate().fold(0, |value, (i, &sample)| value | u32::from(sample) << (i * 16));
+        fields.push((338, 3, extra.len() as u32, value));
+    }
+    let mut out = b"II*\0\x08\0\0\0".to_vec();
+    out.extend_from_slice(&count.to_le_bytes());
+    for (tag, kind, count, value) in fields {
+        out.extend_from_slice(&tag.to_le_bytes());
+        out.extend_from_slice(&kind.to_le_bytes());
+        out.extend_from_slice(&count.to_le_bytes());
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    out.extend_from_slice(&0u32.to_le_bytes());
+    if components > 2 {
+        for _ in 0..components {
+            out.extend_from_slice(&bits.to_le_bytes());
+        }
+    }
+    if planar {
+        for plane in 0..planes {
+            out.extend_from_slice(&(pixels_at + plane * (byte_count / planes)).to_le_bytes());
+        }
+        for _ in 0..planes {
+            out.extend_from_slice(&(byte_count / planes).to_le_bytes());
+        }
+    }
+    for &sample in samples {
+        if bits == 8 {
+            out.push(u8::try_from(sample).unwrap());
+        } else if bits == 16 {
+            out.extend_from_slice(&sample.to_le_bytes());
+        } else {
+            out.extend_from_slice(&u32::from(sample).to_le_bytes());
+        }
+    }
+    out
+}
+
+/// Associated-alpha colour is made straight before PDF SMask embedding, at its original sample
+/// depth. The 16-bit partial values distinguish this from unassociating after high-byte reduction.
+#[test]
+fn tiff_alpha_import_unassociates_colour_before_sample_reduction() {
+    for (gray, bits, samples, expected) in [
+        (
+            false,
+            8,
+            vec![37, 19, 1, 0, 32, 64, 96, 128, 12, 34, 56, 255, 200, 150, 100, 64],
+            vec![0, 0, 0, 0, 64, 128, 191, 128, 12, 34, 56, 255, 255, 255, 255, 64],
+        ),
+        (true, 8, vec![37, 0, 32, 128, 123, 255, 100, 64], vec![0, 0, 0, 0, 64, 64, 64, 128, 123, 123, 123, 255, 255, 255, 255, 64]),
+        (
+            false,
+            16,
+            vec![1234, 1, 0, 0, 4000, 8000, 12000, 16000, 16384, 32768, 49152, 65535, 40000, 20000, 10000, 16000],
+            vec![0, 0, 0, 0, 64, 128, 191, 62, 64, 128, 192, 255, 255, 255, 159, 62],
+        ),
+        (true, 16, vec![1234, 0, 4000, 16000, 32768, 65535, 40000, 16000], vec![0, 0, 0, 0, 64, 64, 64, 62, 128, 128, 128, 255, 255, 255, 255, 62]),
+    ] {
+        let source = alpha_tiff(gray, bits, Some(1), &samples);
+        let doc = reopen(&from_images(&[("alpha.tif".into(), source)]).unwrap());
+        assert_eq!(exported_rgba(&doc).1, expected, "gray={gray}, bits={bits}");
+    }
+}
+
+/// Unassociated samples stay straight; RGB keeps its prior unlabeled-alpha and explicitly
+/// unspecified/opaque fallbacks. Gray alpha requires explicit supported metadata.
+#[test]
+fn tiff_alpha_import_keeps_straight_and_unlabelled_samples() {
+    for gray in [false, true] {
+        for bits in [8, 16] {
+            let samples = if gray { vec![37, 0, 32, 128, 123, 255] } else { vec![37, 19, 1, 0, 32, 64, 96, 128, 12, 34, 56, 255] };
+            let expected = if gray { vec![37, 37, 37, 0, 32, 32, 32, 128, 123, 123, 123, 255] } else { samples.iter().map(|&v| v as u8).collect() };
+            let samples = if bits == 16 { samples.iter().map(|&v| v << 8).collect() } else { samples };
+            for extra in [Some(2), Some(0), None, Some(65000)] {
+                let mut expected = expected.clone();
+                if matches!(extra, Some(0 | 65000)) {
+                    for pixel in expected.as_chunks_mut::<4>().0 {
+                        pixel[3] = 255;
+                    }
+                }
+                let source = alpha_tiff(gray, bits, extra, &samples);
+                if gray && extra != Some(2) {
+                    assert!(from_images(&[("alpha.tif".into(), source)]).is_err(), "gray alpha needs an explicit alpha tag");
+                    continue;
+                }
+                let doc = reopen(&from_images(&[("alpha.tif".into(), source)]).unwrap());
+                assert_eq!(exported_rgba(&doc).1, expected, "gray={gray}, bits={bits}, extra={extra:?}");
+            }
+        }
+    }
+}
+
+/// Only BlackIsZero, one explicit alpha extra, two samples and 8/16-bit depth qualify as GrayA.
+#[test]
+fn tiff_alpha_import_refuses_other_multiband_layouts() {
+    for (components, photometric, bits, extra, samples) in [
+        (2, 0, 8, vec![1], vec![32, 128]),
+        (2, 1, 32, vec![1], vec![32, 128]),
+        (3, 1, 8, vec![1, 0], vec![32, 128, 7]),
+        (2, 1, 8, vec![1, 2], vec![32, 128]),
+        (4, 1, 8, vec![1], vec![32, 64, 96, 128]),
+    ] {
+        let source = alpha_tiff_layout(components, photometric, bits, &extra, &samples, false);
+        assert!(
+            from_images(&[("alpha.tif".into(), source)]).is_err(),
+            "components={components}, photometric={photometric}, bits={bits}, extra={extra:?}"
+        );
+    }
+    let source = alpha_tiff_layout(2, 1, 8, &[1], &[32, 128], true);
+    assert!(from_images(&[("planar.tif".into(), source)]).is_err(), "separate sample planes are not interleaved GrayA");
+}
+
+/// The decoder's legacy read_image API reads only the first plane; it cannot supply an
+/// interleaved image with an alpha plane to the embedding path.
+#[test]
+fn tiff_alpha_import_refuses_planar_sample_layouts() {
+    for (components, photometric, samples) in [(4, 2, vec![32, 64, 64, 32, 96, 48, 128, 255]), (2, 1, vec![32, 64, 128, 255])] {
+        for bits in [8, 16] {
+            let samples = if bits == 16 { samples.iter().map(|v| v << 8).collect::<Vec<u16>>() } else { samples.clone() };
+            for extra in [1, 2] {
+                let source = alpha_tiff_layout(components, photometric, bits, &[extra], &samples, true);
+                let result = from_images(&[("planar.tif".into(), source)]);
+                assert!(
+                    result.is_err(),
+                    "separate planes must not be embedded as interleaved samples: components={components}, bits={bits}, extra={extra}"
+                );
+                let CreateError::Image(_, message) = result.unwrap_err() else { panic!("expected an image-layout error") };
+                assert!(message.contains("planar") || message.contains("plane"), "{message}");
+            }
+        }
+    }
+}
+
+/// The decoder can classify five encoded samples as RGBA and compact away an extra band.
+/// A multi-value ExtraSamples tag must not lose its alpha meaning in the scalar tag reader.
+#[test]
+fn tiff_alpha_import_refuses_multiple_extra_samples() {
+    for bits in [8, 16] {
+        let samples = if bits == 16 { vec![32 << 8, 64 << 8, 96 << 8, 128 << 8, 200 << 8] } else { vec![32, 64, 96, 128, 200] };
+        for extra in [[1, 2], [1, 0], [0, 1], [2, 0]] {
+            let source = alpha_tiff_layout(5, 2, bits, &extra, &samples, false);
+            let result = from_images(&[("extra-bands.tif".into(), source)]);
+            assert!(result.is_err(), "multiple extra samples must not be discarded: bits={bits}, extra={extra:?}");
+            let Err(CreateError::Image(_, message)) = result else { panic!("expected an image-layout error") };
+            assert!(message.contains("sample") || message.contains("extra"), "{message}");
+        }
+    }
+}
+
 /// A synthetic ICC profile: a 128-byte header (size, device class, colour space, `acsp`) and
 /// some payload. Only the header is read.
 fn icc_profile(space: &[u8; 4]) -> Vec<u8> {

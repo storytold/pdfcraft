@@ -12,6 +12,11 @@ Layer L4. Create a PDF (Acrobat's Create a PDF tool), execution plan M10.2:
   JPEG metadata scanning skips marker fill bytes and reads application segments after the
   frame header, stopping at the first scan or end marker. Broken or mismatched ICC profiles
   still fall back to the device colour space;
+  TIFF RGBA and explicitly tagged BlackIsZero gray-alpha images support associated or straight alpha at 8 or 16 bits.
+  Associated color samples are made straight before a PDF soft mask is written, at source precision before the existing 16-bit high-byte reduction.
+  Zero alpha clears associated colors, and malformed associated samples greater than alpha are clamped.
+  Planar alpha, multiple extra samples, WhiteIsZero gray-alpha and other multiband layouts are refused.
+  Unlabelled fourth RGB samples retain the existing decoder fallback; an explicitly unspecified extra remains opaque.
 - `from_images_with_resolution(images, ImageResolution::Dpi(dpi))`: override the page
   resolution (1–1200 dpi), without resampling or recompressing image pixels. Use 72 dpi
   for one point per pixel, or `ImageResolution::Embedded` for the same behavior as
