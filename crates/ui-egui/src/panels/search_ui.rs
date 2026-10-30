@@ -4,7 +4,7 @@
 use egui::text::LayoutJob;
 use egui::{Color32, FontId, TextFormat};
 
-use crate::canvas::DocView;
+use crate::canvas::{DocView, FindHit};
 use crate::theme::{self, Tokens};
 use crate::widgets;
 
@@ -26,14 +26,20 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
         r.request_focus();
         find.focus = false;
     }
-    ui.horizontal(|ui| {
+    ui.vertical(|ui| {
         // Outlined boxes (the panel and the check-box fill are alike), as in dialogs.
         let w = &mut ui.visuals_mut().widgets;
         w.inactive.bg_stroke = egui::Stroke::new(1.0, t.border);
         w.inactive.bg_fill = t.hover;
-        let a = ui.add(widgets::checkbox(&mut find.whole_words, tl!("Whole words only"))).changed();
-        let b = ui.add(widgets::checkbox(&mut find.case_sensitive, tl!("Case-sensitive"))).changed();
-        if a || b {
+        let (a, b) = ui
+            .horizontal(|ui| {
+                let a = ui.add(widgets::checkbox(&mut find.whole_words, tl!("Whole words only"))).changed();
+                let b = ui.add(widgets::checkbox(&mut find.case_sensitive, tl!("Case-sensitive"))).changed();
+                (a, b)
+            })
+            .inner;
+        let c = ui.add(widgets::checkbox(&mut find.include_comments, tl!("Include comments"))).changed();
+        if a || b || c {
             find.case_query.clear();
         }
     });
@@ -61,33 +67,14 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
     ui.add_space(4.0);
     let mut go = None;
     let mut last_page = None;
-    for (i, (p, range)) in find.matches.iter().enumerate().take(2000) {
-        if last_page != Some(*p) {
+    for (i, hit) in find.matches.iter().enumerate().take(2000) {
+        let page = hit.page();
+        if last_page != Some(page) {
             ui.add_space(4.0);
-            ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Page {label}"), &[("label", &(p + 1).to_string())])).small().color(t.text_faint));
-            last_page = Some(*p);
+            ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Page {label}"), &[("label", &(page + 1).to_string())])).small().color(t.text_faint));
+            last_page = Some(page);
         }
-        let Some(text) = view.texts.get(p) else { continue };
-        let n = text.glyphs.len();
-        let before = text.text_of(range.start.saturating_sub(CONTEXT)..range.start.min(n));
-        let hit = text.text_of(range.start.min(n)..range.end.min(n));
-        let after = text.text_of(range.end.min(n)..(range.end + CONTEXT).min(n));
-        let flat = |s: String| s.split_whitespace().collect::<Vec<_>>().join(" ");
-        let mut job = LayoutJob::default();
-        let font = FontId::new(12.5, egui::FontFamily::Proportional);
-        let plain = TextFormat { font_id: font.clone(), color: t.text_muted, ..Default::default() };
-        job.append(&format!("…{} ", flat(before)), 0.0, plain.clone());
-        job.append(
-            &flat(hit),
-            0.0,
-            TextFormat {
-                font_id: theme::semibold(12.5),
-                color: t.text,
-                background: Color32::from_rgba_unmultiplied(255, 214, 0, 90),
-                ..Default::default()
-            },
-        );
-        job.append(&format!(" {}…", flat(after)), 0.0, plain);
+        let Some(mut job) = result_job(view, hit, t) else { continue };
         job.wrap.max_width = ui.available_width();
         let selected = find.current == Some(i);
         let resp = ui.add(egui::Button::selectable(selected, job).wrap()).on_hover_text(tl!("Go to this result"));
@@ -98,4 +85,35 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
     if let Some(i) = go {
         view.go_to_match(i);
     }
+}
+
+/// The result row: page text with context, or a comment's kind and the field that matched.
+fn result_job(view: &DocView, hit: &FindHit, t: &Tokens) -> Option<LayoutJob> {
+    let font = FontId::new(12.5, egui::FontFamily::Proportional);
+    let plain = TextFormat { font_id: font.clone(), color: t.text_muted, ..Default::default() };
+    let marked = TextFormat {
+        font_id: theme::semibold(12.5),
+        color: t.text,
+        background: Color32::from_rgba_unmultiplied(255, 214, 0, 90),
+        ..Default::default()
+    };
+    let mut job = LayoutJob::default();
+    match hit {
+        FindHit::Text { page, range } => {
+            let text = view.texts.get(page)?;
+            let n = text.glyphs.len();
+            let before = text.text_of(range.start.saturating_sub(CONTEXT)..range.start.min(n));
+            let found = text.text_of(range.start.min(n)..range.end.min(n));
+            let after = text.text_of(range.end.min(n)..(range.end.saturating_add(CONTEXT)).min(n));
+            let flat = |s: String| s.split_whitespace().collect::<Vec<_>>().join(" ");
+            job.append(&format!("…{} ", flat(before)), 0.0, plain.clone());
+            job.append(&flat(found), 0.0, marked);
+            job.append(&format!(" {}…", flat(after)), 0.0, plain);
+        }
+        FindHit::Comment { kind, excerpt, .. } => {
+            job.append(&format!("{}: ", crate::i18n::t(kind)), 0.0, plain);
+            job.append(excerpt, 0.0, marked);
+        }
+    }
+    Some(job)
 }

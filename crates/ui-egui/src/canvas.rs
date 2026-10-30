@@ -24,6 +24,7 @@ pub(crate) mod bars;
 mod cache;
 pub(super) mod crop;
 mod find;
+mod find_comments;
 pub(super) mod fling;
 pub(super) mod image_pick;
 mod navigation;
@@ -58,8 +59,8 @@ use cache::{
     rgba_bytes,
 };
 use cache::{OLD_TILES, PageTex, STALE_TAG, TEXT_TAG, TILE_BYTES, scale_tag, tag_scale, texture_bytes, tile_side};
-pub use find::Find;
 use find::find_bar;
+pub use find::{Find, FindHit};
 pub(crate) use navigation::shortcuts;
 pub(crate) use organize::drop_gap;
 #[cfg(test)]
@@ -591,6 +592,9 @@ pub struct DocView {
     text_links: HashMap<usize, (Arc<PageText>, Arc<[TextLink]>)>,
     pub(crate) text_failed: HashSet<usize>,
     pub find: Option<Find>,
+    /// Comments the Find bar searches when Include comments is on. Rebuilt from the document
+    /// while a search is open.
+    find_comments: Vec<find::FindComment>,
     selection: Option<Selection>,
     /// Select All while scrolling continuously (#2639): the text of every page of the document,
     /// highlighted on each page as its text arrives and copied whole ([`DocView::whole_text`]).
@@ -1077,6 +1081,7 @@ impl DocView {
             text_links: HashMap::new(),
             text_failed: HashSet::new(),
             find: None,
+            find_comments: Vec::new(),
             selection: None,
             all_text: false,
             actions_dismissed: None,
@@ -3170,6 +3175,19 @@ fn fits_height(r: Rect, view_height: f32, pixels_per_point: f32) -> bool {
     r.height() <= view_height + slack
 }
 
+/// Load the open document's comments into the active view before a find command searches.
+pub(crate) fn sync_active_find_comments(app: &mut PdfCraftApp) {
+    let Some(index) = app.active else { return };
+    let Some(id) = app.views.get(index).map(|view| view.id) else { return };
+    let next = {
+        let Some(doc) = app.session.get(id) else { return };
+        find_comments::comment_find_index(&doc.info)
+    };
+    if let Some(view) = app.views.get_mut(index) {
+        view.set_find_comments(next);
+    }
+}
+
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
 /// scroll area with this frame's zoom, scrolling, tool input, overlays (form fields, comments,
 /// signature badges and sign tabs) and render requests.
@@ -3249,6 +3267,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let organize_zoom = app.organize_zoom;
     let invert_middle = app.invert_middle_drag;
     let view = &mut app.views[index];
+    if view.find.is_some() {
+        view.sync_find_comments(info);
+    }
     if view.organize {
         // One remembered grid size for every document, kept in the settings.
         view.set_grid_zoom(organize_zoom);

@@ -6,7 +6,7 @@ use pdfcraft_render::{DocInfo, LinkTarget, PageText};
 
 use super::area::{SignTab, paint_sign_tab, sign_tab_at, sign_tabs};
 use super::{
-    DocView, MARK_ICON_SHARE, PageEnv, PageFrame, PageSlot, PageXform, Selection, Span, cached_edit_images, click_unit, mark_anchor,
+    DocView, FindHit, MARK_ICON_SHARE, PageEnv, PageFrame, PageSlot, PageXform, Selection, Span, cached_edit_images, click_unit, mark_anchor,
     signature_badges, verdict_mark_rect,
 };
 use crate::page_cursor::{Layer, Subject};
@@ -689,7 +689,8 @@ fn paint_text_marks(ui: &egui::Ui, view: &DocView, text: &PageText, page: usize,
     let painter = ui.painter();
     let to_screen = |g: [f32; 4]| xf.view_rect(g);
     if let Some(find) = &view.find {
-        for (index, (match_page, range)) in find.matches.iter().enumerate() {
+        for (index, hit) in find.matches.iter().enumerate() {
+            let FindHit::Text { page: match_page, range } = hit else { continue };
             if *match_page != page {
                 continue;
             }
