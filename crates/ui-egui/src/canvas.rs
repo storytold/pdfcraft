@@ -1303,6 +1303,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
                 tool == QuickTool::AddText && !over_source,
                 matches!(tool, QuickTool::AddText | QuickTool::EditText),
                 text_style,
+                &lines,
                 view,
             )
             || tool == QuickTool::AddText && !over_source

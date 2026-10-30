@@ -1,10 +1,11 @@
-//! Edit a PDF ▸ Add content: the Text tool (click on the page and type), Image (pick a file;
-//! it lands in the middle of the page), and editing what was added: select, move, resize
-//! (images keep their proportions), double-click text to retype it, format it from the panel,
-//! Delete to remove it. Each change is one undoable engine edit.
+//! Edit a PDF ▸ Add content: the Text tool (click on the page and type; a new box takes the look
+//! of the text nearest to it), Image (pick a file; it lands in the middle of the page), and
+//! editing what was added: select, move, resize (images keep their proportions), double-click
+//! text to retype it, format it from the panel, Delete to remove it. Each change is one undoable
+//! engine edit.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
-use pdfcraft_engine::{Added, AddedContent, AddedText, Edit};
+use pdfcraft_engine::{Added, AddedContent, AddedText, Edit, TextBlock};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
@@ -298,6 +299,28 @@ pub fn default_style() -> AddedText {
     AddedText { size: 12.0, ..AddedText::default() }
 }
 
+/// The style a new text box starts with. A style set in the Format panel (anything but
+/// [`default_style`]) is used as it is. Otherwise the box takes the look Edit text shows for the
+/// paragraph nearest to it by `distance`: family, bold, italic, size and colour, so text added
+/// to a page looks like the text already there. Invisible text (an OCR layer over a scan) and
+/// empty paragraphs don't count, and a page without other text keeps the default.
+pub(crate) fn new_text_style(style: &AddedText, paragraphs: &[TextBlock], distance: impl Fn(&TextBlock) -> f32) -> AddedText {
+    if *style != default_style() {
+        return style.clone();
+    }
+    let nearest = paragraphs
+        .iter()
+        .filter(|b| !b.invisible && !b.text.trim().is_empty() && b.size.is_finite() && b.color.iter().all(|c| c.is_finite()))
+        .map(|b| (distance(b), b))
+        .filter(|(d, _)| d.is_finite())
+        .min_by(|a, b| a.0.total_cmp(&b.0));
+    let Some((_, paragraph)) = nearest else { return style.clone() };
+    let look = crate::edit_text_ui::look_of(paragraph);
+    // Kept to what Edit::AddText accepts (1 to 500 pt), so text set at 0.5 pt in the document
+    // still gives a box that can be added; a malformed colour operand can be out of range too.
+    AddedText { size: look.size.clamp(1.0, 500.0), color: look.color.map(|c| c.clamp(0.0, 1.0)), ..look }
+}
+
 /// Display-space rect → screen.
 fn screen_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
     let ph = info.pages[page].height as f64;
@@ -367,14 +390,16 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, added: &[Added], 
     Some(Hit::new(Owner::Added { index: *index, corner: None }, Layer::Placed, egui::CursorIcon::Move))
 }
 
-/// Pointer input on one page in Edit mode (`adding_text` with the Text tool). `true` when it
-/// used the input.
+/// Pointer input on one page in Edit mode (`adding_text` with the Text tool). `paragraphs` are
+/// the page's text, whose look a new box can take ([`new_text_style`]). `true` when it used the
+/// input.
 pub(crate) fn page_input(
     cx: PageToolContext<'_>,
     added: &[Added],
     adding_text: bool,
     edit_on_click: bool,
     style: &AddedText,
+    paragraphs: &[TextBlock],
     view: &mut DocView,
 ) -> bool {
     let PageToolContext { resp, xf, ptr, page, info, .. } = cx;
@@ -431,7 +456,7 @@ pub(crate) fn page_input(
             // The Format panel styles the new text, not the box just kept.
             (cv.selected, cv.select_added) = (None, None);
             let at = to_display(xf, info, page, p);
-            let mut style = style.clone();
+            let mut style = new_text_style(style, paragraphs, |b| xf.user_rect(info, page, b.rect.map(|v| v as f32)).distance_to_pos(p));
             style.text.clear();
             let page_width = info.pages.get(page).map_or(f64::INFINITY, |p| p.width as f64);
             let rect = [at[0], at[1] - style.size * 1.2, (at[0] + 200.0).min(page_width), at[1]];
@@ -1138,6 +1163,7 @@ fn spaced_job(text: &str, font: &egui::FontId, color: Color32, letter_spacing: f
 #[cfg(test)]
 mod tests {
     use egui_kittest::kittest::Queryable;
+    use pdfcraft_engine::FontFamily;
 
     use super::*;
 
@@ -1251,5 +1277,75 @@ mod tests {
         // Page width = width + 10 (spacing after the last character) > width + 5: the page wraps.
         assert_eq!(rows(width + 5.0), 2, "the saved text wraps here, so the editor must too");
         assert_eq!(rows(width + 10.0), 1, "and keeps the line when the spacing fits");
+    }
+
+    /// A paragraph of `text` in `base_font`, for [`new_text_style`].
+    fn paragraph(text: &str, base_font: &str, size: f64, color: [f64; 3]) -> TextBlock {
+        TextBlock {
+            text: text.into(),
+            rect: [0.0; 4],
+            base_font: base_font.into(),
+            size,
+            bold: false,
+            italic: false,
+            color,
+            rotation: 0.0,
+            lines: vec![0],
+            rows: vec![vec![0]],
+            editor_text: text.into(),
+            reflow_text: text.into(),
+            spans: vec![(0..text.len(), 0)],
+            invisible: false,
+        }
+    }
+
+    /// The style `new_text_style` gives with the default style, each paragraph (told apart by its
+    /// text) at the distance paired with it.
+    fn nearest(paragraphs: &[(TextBlock, f32)]) -> AddedText {
+        let blocks: Vec<TextBlock> = paragraphs.iter().map(|(b, _)| b.clone()).collect();
+        new_text_style(&default_style(), &blocks, |b| paragraphs.iter().find(|(p, _)| p.text == b.text).map_or(f32::NAN, |(_, d)| *d))
+    }
+
+    #[test]
+    fn a_new_text_box_takes_the_look_of_the_nearest_visible_paragraph() {
+        let heading = paragraph("Итоги года", "ABCDEF+Times-BoldItalic", 18.04, [0.6, 0.0, 0.0]);
+        let note = paragraph("Reference", "Courier", 9.0, [0.0, 0.0, 0.5]);
+        let mut ocr = paragraph("scanned words", "GlyphLessFont", 14.0, [0.0; 3]);
+        ocr.invisible = true;
+        let blank = paragraph("  ", "Helvetica", 30.0, [0.0; 3]);
+        let t = nearest(&[(note, 40.0), (heading, 12.0), (ocr, 1.0), (blank, 0.0)]);
+        assert_eq!((t.family, t.bold, t.italic, t.size, t.color), (FontFamily::Times, true, true, 18.0, [0.6, 0.0, 0.0]));
+        assert_eq!((t.text.as_str(), t.rect, t.align, t.char_spacing), ("", [0.0; 4], pdfcraft_engine::TextAlign::Left, 0.0));
+    }
+
+    #[test]
+    fn a_style_from_the_format_panel_or_a_page_without_visible_text_keeps_its_style() {
+        let chosen = AddedText { size: 30.0, color: [0.0, 0.0, 1.0], ..default_style() };
+        let blocks = [paragraph("Итоги года", "Times-Bold", 18.0, [0.6, 0.0, 0.0])];
+        assert_eq!(new_text_style(&chosen, &blocks, |_| 1.0), chosen, "the Format panel's style wins");
+        let mut ocr = paragraph("scanned words", "GlyphLessFont", 14.0, [0.0; 3]);
+        ocr.invisible = true;
+        assert_eq!(nearest(&[(ocr, 1.0)]), default_style(), "only invisible text");
+        assert_eq!(nearest(&[]), default_style(), "no text");
+    }
+
+    #[test]
+    fn a_new_text_style_stays_in_the_range_added_text_takes() {
+        // Edit::AddText refuses sizes outside 1 to 500 pt; a paragraph's look must not give one.
+        let tiny = nearest(&[(paragraph("fine print", "Helvetica", 0.2, [0.0; 3]), 1.0)]);
+        assert_eq!(tiny.size, 1.0);
+        let huge = nearest(&[(paragraph("poster", "Helvetica", 900.0, [0.0; 3]), 1.0)]);
+        assert_eq!(huge.size, 500.0);
+        let bright = nearest(&[(paragraph("odd colour", "Helvetica", 12.0, [2.0, -1.0, 0.5]), 1.0)]);
+        assert_eq!(bright.color, [1.0, 0.0, 0.5]);
+        // Sizes, colours and distances that aren't numbers are passed over, never used.
+        let nan_size = paragraph("a", "Courier", f64::NAN, [0.0; 3]);
+        let nan_colour = paragraph("b", "Courier", 12.0, [f64::NAN, 0.0, 0.0]);
+        let far = paragraph("c", "Times-Roman", 11.0, [0.0; 3]);
+        let unmeasured = paragraph("d", "Courier", 12.0, [0.0; 3]);
+        let t = nearest(&[(nan_size, 0.0), (nan_colour, 0.0), (unmeasured, f32::NAN), (far, 500.0)]);
+        assert_eq!((t.family, t.size), (FontFamily::Times, 11.0));
+        let t = nearest(&[(paragraph("e", "Courier", f64::INFINITY, [0.0; 3]), 1.0)]);
+        assert_eq!(t, default_style(), "an infinite size is not a size");
     }
 }

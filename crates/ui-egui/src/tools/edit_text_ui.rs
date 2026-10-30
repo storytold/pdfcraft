@@ -27,8 +27,8 @@ pub(crate) use image::{ImageAction, ImageCx, body_hit as picture_hit, handle_hit
 use image::{rotate_knob, turn_degrees};
 #[cfg(test)]
 use layout::{DARK_EDITOR_FILL, contrast};
-pub(crate) use layout::{caret_color_on, editor_fill, editor_font, install_source_fonts};
-use layout::{color32, editor_galley, editor_job, look_of, luminance, unseen};
+pub(crate) use layout::{caret_color_on, editor_fill, editor_font, install_source_fonts, look_of};
+use layout::{color32, editor_galley, editor_job, luminance, unseen};
 
 const ACCENT: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
