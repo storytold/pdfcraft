@@ -160,20 +160,22 @@ fn unreadable(source_of: impl Fn(&str) -> String, reason: &str) -> Policy {
     Policy { disable_javascript: Managed::Unreadable { source: source_of(DISABLE_JAVASCRIPT), reason: reason.to_string() } }
 }
 
-/// The policies in the file at `path`; nothing at `path` (not even a link) means no policies.
+/// The policies in the file at `path`. Nothing there means no policies; a link that can't be
+/// followed, at `path` or at the nearest folder above it that exists, is a policy that can't be
+/// read (see `missing_but_present`).
 pub fn from_file(path: &std::path::Path) -> Policy {
     use std::io::Read;
     let source = path.display().to_string();
     let source_of = |key: &str| format!("{source} ({key})");
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
-        // Only a path with nothing there is "no policy". A link whose target is missing is
-        // something an administrator put there, so it counts as a policy that can't be read.
+        // Only a path with nothing there is "no policy". A link whose target is missing, at the
+        // path or at a folder on the way to it, is something an administrator put there, so it
+        // counts as a policy that can't be read.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return match std::fs::symlink_metadata(path) {
-                Err(m) if m.kind() == std::io::ErrorKind::NotFound => Policy::default(),
-                Ok(_) => unreadable(source_of, &format!("it couldn't be opened ({e})")),
-                Err(m) => unreadable(source_of, &format!("it couldn't be checked ({m})")),
+            return match missing_but_present(path, &e) {
+                None => Policy::default(),
+                Some(why) => unreadable(source_of, &why),
             };
         }
         Err(e) => return unreadable(source_of, &format!("it couldn't be opened ({e})")),
@@ -187,6 +189,28 @@ pub fn from_file(path: &std::path::Path) -> Policy {
         Ok(_) => from_json(&text, &source),
         Err(e) => unreadable(source_of, &format!("it couldn't be read ({e})")),
     }
+}
+
+/// Why a policy path that opening reports as missing still counts as a policy, or `None` when
+/// nothing is there. Something at the path itself (a link whose target is missing) counts, and
+/// so does a link that can't be followed at the nearest folder above it that exists (say
+/// `/etc/pdfcraft` pointing at a folder that's gone). A folder that is simply missing doesn't.
+fn missing_but_present(path: &std::path::Path, open_error: &std::io::Error) -> Option<String> {
+    for (i, p) in path.ancestors().enumerate() {
+        if p.as_os_str().is_empty() {
+            break;
+        }
+        match std::fs::symlink_metadata(p) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Some(format!("it couldn't be checked ({e})")),
+            Ok(_) if i == 0 => return Some(format!("it couldn't be opened ({open_error})")),
+            Ok(m) if m.file_type().is_symlink() && std::fs::metadata(p).is_err() => {
+                return Some(format!("{} is a link that can't be followed", p.display()));
+            }
+            Ok(_) => return None,
+        }
+    }
+    None
 }
 
 #[cfg(windows)]
@@ -375,6 +399,16 @@ mod tests {
         // Nothing at the path, or no folder for it: no policy.
         assert_eq!(from_file(&dir.join("absent.json")), Policy::default());
         assert_eq!(from_file(&dir.join("no-folder/policy.json")), Policy::default());
+
+        // The policy's folder is a link to a folder that's gone (`/etc/pdfcraft -> nowhere`).
+        let folder_link = dir.join("pdfcraft");
+        std::os::unix::fs::symlink(dir.join("gone"), &folder_link).unwrap();
+        let (_, why) = from_file(&folder_link.join("policy.json")).javascript_lock().expect("a broken folder link keeps JavaScript off");
+        assert!(why.is_some_and(|w| w.contains("pdfcraft is a link that can't be followed")));
+        // A folder link that works, with no policy file behind it: no policy.
+        std::fs::create_dir_all(dir.join("real")).unwrap();
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("working")).unwrap();
+        assert_eq!(from_file(&dir.join("working/policy.json")), Policy::default());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
