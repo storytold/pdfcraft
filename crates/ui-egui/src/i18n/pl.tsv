@@ -805,6 +805,7 @@
 	The image has been copied ({w} × {h} pixels)	Obraz został skopiowany ({w} × {h} pikseli)
 	Couldn't copy the image: {e}	Nie można skopiować obrazu: {e}
 	Copy Image in Original Format	Kopiuj obraz w oryginalnym formacie
+	Paste Image	Wklej obraz
 	The image has been copied as a {ext} file	Obraz został skopiowany jako plik {ext}
 	The page has changed; select the image again	Strona się zmieniła; zaznacz obraz ponownie
 	Check for updates	Sprawdź aktualizacje

@@ -786,6 +786,7 @@
 	The image has been copied ({w} × {h} pixels)	L'image a été copiée ({w} × {h} pixels)
 	Couldn't copy the image: {e}	Impossible de copier l'image : {e}
 	Copy Image in Original Format	Copier l'image au format d'origine
+	Paste Image	Coller l'image
 	The image has been copied as a {ext} file	L'image a été copiée en tant que fichier {ext}
 	The page has changed; select the image again	La page a changé ; sélectionnez de nouveau l'image
 	Check for updates	Rechercher des mises à jour

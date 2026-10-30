@@ -806,6 +806,7 @@
 	The image has been copied ({w} × {h} pixels)	Se ha copiado la imagen ({w} × {h} píxeles)
 	Couldn't copy the image: {e}	No se pudo copiar la imagen: {e}
 	Copy Image in Original Format	Copiar imagen en formato original
+	Paste Image	Pegar imagen
 	The image has been copied as a {ext} file	Se ha copiado la imagen como archivo {ext}
 	The page has changed; select the image again	La página ha cambiado; vuelva a seleccionar la imagen
 	Check for updates	Buscar actualizaciones

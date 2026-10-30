@@ -830,6 +830,8 @@ struct PageEnv<'a> {
     can_crop: bool,
     can_fill: bool,
     can_modify: bool,
+    /// A picture copied with Copy Image is there for Paste Image.
+    can_paste_image: bool,
     comments_hidden: bool,
     content_h: f32,
     content_w: f32,
@@ -1770,6 +1772,7 @@ fn draw_pages(
         calc_order,
         can_copy,
         can_modify,
+        can_paste_image,
         content_h,
         content_w,
         doc,
@@ -2039,6 +2042,17 @@ fn draw_pages(
                 }
                 ui.separator();
             }
+        }
+        // A picture copied here or in another document: pasted onto the page right-clicked.
+        if can_paste_image
+            && view.comments.selected.is_none()
+            && let Some((page, _)) = view.comments.context_at
+        {
+            if ui.add_enabled(can_modify, egui::Button::new(tl!("Paste Image"))).clicked() {
+                copy_image = Some(comments::CanvasAction::PasteImage(page));
+                ui.close();
+            }
+            ui.separator();
         }
         canvas_action = comments::context_menu(ui, view, info, prefs, allowed, can_modify).or(copy_image);
     });
@@ -2956,6 +2970,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         QuickTool::CustomStamp(i) => app.custom_stamps.get(i).cloned(),
         _ => None,
     };
+    let can_paste_image = app.copied_image.is_some();
     let mut open_props: Option<(usize, usize)> = None;
     // The table being set up in its window, shown on its own document's page.
     let table_preview = app.field_table_draft.as_mut().filter(|d| d.doc == view.id).and_then(|d| Some(d.preview(info.pages.get(d.page)?, &form)));
@@ -2991,6 +3006,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         can_crop,
         can_fill,
         can_modify,
+        can_paste_image,
         comments_hidden,
         content_h,
         content_w,
@@ -3123,6 +3139,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(comments::CanvasAction::Properties(p, i)) => open_props = Some((p, i)),
         Some(comments::CanvasAction::CopyImage(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::Copy(p, i)),
         Some(comments::CanvasAction::CopyImageFile(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::CopyFile(p, i)),
+        Some(comments::CanvasAction::PasteImage(p)) => image_action = Some(crate::edit_text_ui::ImageAction::Paste(p)),
         None => {}
     }
     schedule_presentation_turn(ui, view, present, clicked_link.is_some());
@@ -3247,6 +3264,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         Some(crate::edit_text_ui::ImageAction::Redact(page, index)) => app.redact_page_image(page, index),
         Some(crate::edit_text_ui::ImageAction::Link(page, index)) => app.link_page_image(page, index),
         Some(crate::edit_text_ui::ImageAction::Recognize(page)) => app.recognize_text_on_page(page),
+        Some(crate::edit_text_ui::ImageAction::Paste(page)) => app.paste_image(page),
         None => {}
     }
     if let Some(why) = refused {

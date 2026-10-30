@@ -787,6 +787,7 @@ comment menu	Edit	సవరించు
 	The image has been copied ({w} × {h} pixels)	చిత్రం కాపీ చేయబడింది ({w} × {h} పిక్సెల్‌లు)
 	Couldn't copy the image: {e}	చిత్రాన్ని కాపీ చేయడం సాధ్యం కాలేదు: {e}
 	Copy Image in Original Format	చిత్రాన్ని అసలు ఫార్మాట్‌లో కాపీ చేయి
+	Paste Image	చిత్రాన్ని అతికించు
 	The image has been copied as a {ext} file	చిత్రం {ext} ఫైల్‌గా కాపీ చేయబడింది
 	The page has changed; select the image again	పేజీ మారింది; చిత్రాన్ని మళ్లీ ఎంచుకోండి
 	Check for updates	అప్‌డేట్‌ల కోసం తనిఖీ చేయి

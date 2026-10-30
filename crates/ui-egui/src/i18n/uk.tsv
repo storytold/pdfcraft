@@ -810,6 +810,7 @@
 	The image has been copied ({w} × {h} pixels)	Зображення скопійовано ({w} × {h} пікселів)
 	Couldn't copy the image: {e}	Не вдалося скопіювати зображення: {e}
 	Copy Image in Original Format	Копіювати зображення в оригінальному форматі
+	Paste Image	Вставити зображення
 	The image has been copied as a {ext} file	Зображення скопійовано як файл {ext}
 	The page has changed; select the image again	Сторінка змінилася; виберіть зображення ще раз
 	Check for updates	Перевірити оновлення

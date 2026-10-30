@@ -77,6 +77,7 @@ impl PdfCraftApp {
             self.copy_key(i, ctx);
             self.paste_image_key(i, ctx, pasted);
             self.image_pick_keys(i, ctx);
+            self.image_edit_keys(i, ctx);
         }
     }
 }

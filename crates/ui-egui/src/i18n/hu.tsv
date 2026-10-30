@@ -783,6 +783,7 @@
 	The image has been copied ({w} × {h} pixels)	A kép a vágólapra került ({w} × {h} képpont)
 	Couldn't copy the image: {e}	A képet nem sikerült másolni: {e}
 	Copy Image in Original Format	Kép másolása eredeti formátumban
+	Paste Image	Kép beillesztése
 	The image has been copied as a {ext} file	A kép {ext}-fájlként a vágólapra került
 	The page has changed; select the image again	Az oldal megváltozott; jelölje ki újra a képet
 	Check for updates	Frissítések keresése

@@ -1033,6 +1033,7 @@ theme	Appearance	Giao diện
 	The image has been copied ({w} × {h} pixels)	Đã sao chép hình ảnh ({w} × {h} điểm ảnh)
 	Couldn't copy the image: {e}	Không thể sao chép hình ảnh: {e}
 	Copy Image in Original Format	Sao chép hình ảnh ở định dạng gốc
+	Paste Image	Dán hình ảnh
 	The image has been copied as a {ext} file	Đã sao chép hình ảnh dưới dạng tệp {ext}
 	The page has changed; select the image again	Trang đã thay đổi; hãy chọn lại hình ảnh
 	Save as PDF	Lưu dưới dạng PDF

@@ -434,6 +434,7 @@
 	The image has been copied ({w} × {h} pixels)	圖片已複製（{w} × {h} 畫素）
 	Couldn't copy the image: {e}	無法複製圖片：{e}
 	Copy Image in Original Format	以原始格式複製圖片
+	Paste Image	貼上圖片
 	The image has been copied as a {ext} file	圖片已複製為 {ext} 檔案
 	The page has changed; select the image again	頁面已變更；請重新選取圖片
 	Check for updates	檢驗更新

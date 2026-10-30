@@ -769,6 +769,7 @@
 	The image has been copied ({w} × {h} pixels)	Сурет көшірілді ({w} × {h} пиксель)
 	Couldn't copy the image: {e}	Суретті көшіру мүмкін болмады: {e}
 	Copy Image in Original Format	Суретті бастапқы пішімде көшіру
+	Paste Image	Суретті қою
 	The image has been copied as a {ext} file	Сурет {ext} файлы ретінде көшірілді
 	The page has changed; select the image again	Бет өзгерді; суретті қайта таңдаңыз
 	Check for updates	Жаңартуларды тексеру

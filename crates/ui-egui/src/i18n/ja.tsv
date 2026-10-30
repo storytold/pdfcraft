@@ -813,6 +813,7 @@
 	The image has been copied ({w} × {h} pixels)	画像をコピーしました（{w} × {h} ピクセル）
 	Couldn't copy the image: {e}	画像をコピーできませんでした: {e}
 	Copy Image in Original Format	画像を元の形式でコピー
+	Paste Image	画像を貼り付け
 	The image has been copied as a {ext} file	画像を {ext} ファイルとしてコピーしました
 	The page has changed; select the image again	ページが変更されました。画像をもう一度選択してください
 	Check for updates	アップデートを確認

@@ -1043,6 +1043,7 @@
 	The image has been copied ({w} × {h} pixels)	Paveikslėlis nukopijuotas ({w} × {h} pikselių)
 	Couldn't copy the image: {e}	Nepavyko nukopijuoti paveikslėlio: {e}
 	Copy Image in Original Format	Kopijuoti paveikslėlį originaliu formatu
+	Paste Image	Įdėti paveikslėlį
 	The image has been copied as a {ext} file	Paveikslėlis nukopijuotas kaip {ext} failas
 	The page has changed; select the image again	Puslapis pasikeitė; pažymėkite paveikslėlį iš naujo
 	Save as PDF	Įrašyti kaip PDF

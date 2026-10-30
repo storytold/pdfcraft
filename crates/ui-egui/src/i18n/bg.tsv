@@ -475,6 +475,7 @@
 	The image has been copied ({w} × {h} pixels)	Изображението е копирано ({w} × {h} пиксела)
 	Couldn't copy the image: {e}	Изображението не можа да бъде копирано: {e}
 	Copy Image in Original Format	Копирай изображението в оригиналния формат
+	Paste Image	Постави изображението
 	The image has been copied as a {ext} file	Изображението е копирано като файл {ext}
 	The page has changed; select the image again	Страницата е променена; изберете изображението отново
 	Check for updates	Провери за актуализации

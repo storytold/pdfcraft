@@ -1597,6 +1597,7 @@
 	The image has been copied ({w} × {h} pixels)	Slika je kopirana ({w} × {h} slikovnih pik)
 	Couldn't copy the image: {e}	Slike ni bilo mogoče kopirati: {e}
 	Copy Image in Original Format	Kopiraj sliko v izvirni obliki
+	Paste Image	Prilepi sliko
 	The image has been copied as a {ext} file	Slika je kopirana kot datoteka {ext}
 	The page has changed; select the image again	Stran se je spremenila; znova izberite sliko
 	Save as PDF	Shrani kot PDF

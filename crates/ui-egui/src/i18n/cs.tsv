@@ -891,6 +891,7 @@ key	Space	Mezerník
 	The image has been copied ({w} × {h} pixels)	Obrázek byl zkopírován ({w} × {h} pixelů)
 	Couldn't copy the image: {e}	Obrázek nelze zkopírovat: {e}
 	Copy Image in Original Format	Kopírovat obrázek v původním formátu
+	Paste Image	Vložit obrázek
 	The image has been copied as a {ext} file	Obrázek byl zkopírován jako soubor {ext}
 	The page has changed; select the image again	Stránka se změnila; vyberte obrázek znovu
 	Check for updates	Zkontrolovat aktualizace

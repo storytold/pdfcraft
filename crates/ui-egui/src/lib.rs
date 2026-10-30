@@ -522,9 +522,17 @@ pub struct PdfCraftApp {
     /// The last image copied in its original format (file name, bytes), also put on the
     /// system clipboard as a file when `system_clipboard` is on.
     pub last_copied_file: Option<(String, Vec<u8>)>,
+    /// The picture the last Copy Image (of either kind) took, as a file (name, bytes): Paste
+    /// Image places it, in this document or another, as an image of its own.
+    pub copied_image: Option<(String, std::sync::Arc<Vec<u8>>)>,
     pub system_clipboard: bool,
     /// What ⌘V reads instead of the system clipboard (tests).
     pub clipboard_override: Option<create_ui::Clip>,
+    /// The files ⌘V finds on the clipboard instead of the system clipboard's (tests).
+    pub clipboard_files_override: Option<Vec<std::path::PathBuf>>,
+    /// Where ⌘V looks for the file Copy Image in Original Format wrote, instead of the clipboard
+    /// folder (tests).
+    pub clipboard_folder_override: Option<std::path::PathBuf>,
     /// V is down as a plain key press (see [`Self::paste_key_released`]).
     v_pressed: bool,
     /// Attach file: the file to attach instead of asking (tests, automation).

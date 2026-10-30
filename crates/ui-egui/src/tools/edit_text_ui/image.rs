@@ -259,6 +259,8 @@ pub(crate) enum ImageAction {
     Link(usize, usize),
     /// Open Recognize Text for the picture's page.
     Recognize(usize),
+    /// Paste Image onto a page (from the page menu).
+    Paste(usize),
 }
 
 /// Where the rotate knob sits, and the edge point its stem starts from: above the middle of the
@@ -595,6 +597,9 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
     }
     if resp.clicked() || resp.secondary_clicked() {
         view.image_selection = Some(ImageSelection { page, index: hit, drag: None, crop: None, turning: false, settled: None });
+        // Text selected before switching tools would be copied too by ⌘C, and the copied text
+        // replaces the picture on the system clipboard.
+        view.clear_selection();
     }
     if resp.secondary_clicked() {
         ui.ctx().data_mut(|d| d.insert_temp(menu_key, true));

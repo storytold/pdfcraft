@@ -481,6 +481,7 @@
 	The image has been copied ({w} × {h} pixels)	图像已复制（{w} × {h} 像素）
 	Couldn't copy the image: {e}	无法复制图像：{e}
 	Copy Image in Original Format	以原始格式复制图像
+	Paste Image	粘贴图像
 	The image has been copied as a {ext} file	图像已复制为 {ext} 文件
 	The page has changed; select the image again	页面已更改；请重新选择图像
 	Check for updates	检查更新

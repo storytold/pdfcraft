@@ -806,6 +806,7 @@
 	The image has been copied ({w} × {h} pixels)	Изображение скопировано ({w} × {h} пикселей)
 	Couldn't copy the image: {e}	Не удалось скопировать изображение: {e}
 	Copy Image in Original Format	Копировать изображение в исходном формате
+	Paste Image	Вставить изображение
 	The image has been copied as a {ext} file	Изображение скопировано как файл {ext}
 	The page has changed; select the image again	Страница изменилась; выберите изображение снова
 	Check for updates	Проверить обновления

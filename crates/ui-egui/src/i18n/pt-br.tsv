@@ -430,6 +430,7 @@
 	The image has been copied ({w} × {h} pixels)	A imagem foi copiada ({w} × {h} pixels)
 	Couldn't copy the image: {e}	Não foi possível copiar a imagem: {e}
 	Copy Image in Original Format	Copiar imagem no formato original
+	Paste Image	Colar imagem
 	The image has been copied as a {ext} file	A imagem foi copiada como arquivo {ext}
 	The page has changed; select the image again	A página mudou; selecione a imagem novamente
 	Check for updates	Verificar atualizações

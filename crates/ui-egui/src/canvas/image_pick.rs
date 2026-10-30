@@ -113,6 +113,23 @@ fn is_copied_image_name(name: &str) -> bool {
     !stem.is_empty() && digits(index) && digits(page)
 }
 
+/// Whether `files` (the clipboard's file list) is the one file `name` Copy Image in Original
+/// Format wrote into `dir` with `bytes`, and not files copied since in another application or in
+/// another PdfCraft window (whose copy replaces ours in the same folder, under the same name when
+/// it is the same picture position of a document with the same name). Read once per ⌘V.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_own_copy(files: &[std::path::PathBuf], dir: &std::path::Path, name: &str, bytes: &[u8]) -> bool {
+    let [file] = files else { return false };
+    // arboard puts the resolved path on the clipboard (links, and on Windows junctions and case),
+    // so the folders are compared resolved, or as they are when either can't be resolved.
+    let same_dir = match (file.parent().and_then(|p| p.canonicalize().ok()), dir.canonicalize().ok()) {
+        (Some(a), Some(b)) => a == b,
+        _ => file.parent() == Some(dir),
+    };
+    let same_content = || std::fs::metadata(file).is_ok_and(|m| m.len() == bytes.len() as u64) && std::fs::read(file).is_ok_and(|b| b == bytes);
+    is_copied_image_name(name) && same_dir && file.file_name().and_then(|n| n.to_str()) == Some(name) && same_content()
+}
+
 /// Makes `dir` (a real folder, not a link, owned by us and private to us on Unix), removes the
 /// earlier copies PdfCraft wrote there, and writes `bytes` as a new file `name`. Links are never
 /// followed and nothing else in the folder is touched.
@@ -180,6 +197,19 @@ impl PdfCraftApp {
         }
     }
 
+    /// Edit text & images: ⌘C / Ctrl+C copies the selected image in its original format. ⌘V
+    /// pastes it through [`Self::paste_image_key`], the one paste shortcut on the page.
+    pub(crate) fn image_edit_keys(&mut self, i: usize, ctx: &egui::Context) {
+        let Some(view) = self.views.get(i) else { return };
+        if self.quick_tool != crate::QuickTool::EditText || view.organize || self.modal_open() || ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let copy = ctx.input(|inp| inp.events.iter().any(|e| matches!(e, egui::Event::Copy)));
+        if copy && let Some((page, index)) = view.image_selection.as_ref().map(|s| (s.page, s.index)) {
+            self.copy_page_image_file(page, index);
+        }
+    }
+
     /// Copy Image in Original Format: image `index` on `page` as a file on the clipboard (JPEG
     /// as stored in the PDF, otherwise PNG).
     pub(crate) fn copy_page_image_file(&mut self, page: usize, index: usize) {
@@ -195,6 +225,7 @@ impl PdfCraftApp {
         let copied = file.and_then(|(ext, bytes)| {
             let name = format!("{stem} p{} img{}.{ext}", page.saturating_add(1), index.saturating_add(1));
             self.put_file_on_clipboard(&name, &bytes)?;
+            self.copied_image = Some((name.clone(), std::sync::Arc::new(bytes.clone())));
             self.last_copied_file = Some((name, bytes));
             Ok(ext)
         });
@@ -216,6 +247,34 @@ impl PdfCraftApp {
         arboard::Clipboard::new().and_then(|mut c| c.set().file_list(&[path])).map_err(|e| e.to_string())
     }
 
+    /// Whether the system clipboard still holds the file the last Copy Image in Original Format
+    /// put there, so ⌘V may paste PdfCraft's own copy. Without the system clipboard (tests) that
+    /// copy is the clipboard's.
+    pub(crate) fn clipboard_holds_copied_image(&self) -> bool {
+        let files = match self.clipboard_files_override.clone() {
+            Some(files) => files,
+            None if !self.system_clipboard => return true,
+            #[cfg(not(target_arch = "wasm32"))]
+            None => match arboard::Clipboard::new().and_then(|mut c| c.get().file_list()) {
+                Ok(files) => files,
+                Err(_) => return false,
+            },
+            #[cfg(target_arch = "wasm32")]
+            None => return false,
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let own = match (&self.copied_image, self.clipboard_folder_override.clone().or_else(clipboard_dir)) {
+            (Some((name, bytes)), Some(dir)) => is_own_copy(&files, &dir, name, bytes),
+            _ => false,
+        };
+        #[cfg(target_arch = "wasm32")]
+        let own = {
+            let _ = files;
+            false
+        };
+        own
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn put_file_on_clipboard(&self, _name: &str, _bytes: &[u8]) -> Result<(), String> {
         if self.system_clipboard {
@@ -229,7 +288,7 @@ impl PdfCraftApp {
 mod tests {
     use super::safe_name;
     #[cfg(not(target_arch = "wasm32"))]
-    use super::{is_copied_image_name, write_clipboard_file};
+    use super::{is_copied_image_name, is_own_copy, write_clipboard_file};
 
     #[test]
     fn file_names_are_safe() {
@@ -247,6 +306,51 @@ mod tests {
         assert!(!is_copied_image_name("Report p1 img2.pdf"));
         assert!(!is_copied_image_name(" p1 img2.png"));
         assert!(!is_copied_image_name("Report px img2.png"));
+    }
+
+    /// arboard puts the resolved path on the clipboard, so a clipboard folder reached through a
+    /// link (a home folder behind one, `/tmp` on macOS) still matches its copy.
+    #[test]
+    #[cfg(unix)]
+    fn the_copy_is_recognised_through_a_linked_clipboard_folder() {
+        let root = std::env::temp_dir().join(format!("pdfcraft-clipboard-link-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let real = root.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let name = "Report p1 img2.jpg";
+        std::fs::write(real.join(name), b"x").unwrap();
+        let on_clipboard = real.canonicalize().unwrap().join(name);
+        assert!(is_own_copy(&[on_clipboard], &link, name, b"x"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn only_the_file_copy_image_wrote_counts_as_its_copy() {
+        let root = std::env::temp_dir().join(format!("pdfcraft-clipboard-own-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (dir, elsewhere) = (root.join("Clipboard"), root.join("elsewhere"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let (name, bytes) = ("Report p1 img2.jpg", b"ours".as_slice());
+        for (path, content) in
+            [(dir.join(name), bytes), (elsewhere.join(name), bytes), (dir.join("Other p1 img1.png"), bytes), (dir.join("notes.txt"), bytes)]
+        {
+            std::fs::write(path, content).unwrap();
+        }
+        assert!(is_own_copy(&[dir.join(name)], &dir, name, bytes));
+        assert!(!is_own_copy(&[], &dir, name, bytes), "nothing on the clipboard");
+        assert!(!is_own_copy(&[elsewhere.join(name)], &dir, name, bytes), "another folder");
+        assert!(!is_own_copy(&[dir.join("Other p1 img1.png")], &dir, name, bytes), "another window's copy");
+        assert!(!is_own_copy(&[dir.join("notes.txt")], &dir, "notes.txt", bytes), "not a name Copy Image writes");
+        assert!(!is_own_copy(&[dir.join(name), dir.join("Report p1 img3.jpg")], &dir, name, bytes), "more than one file");
+        // Another window copied the same picture position of a document with the same name.
+        assert!(!is_own_copy(&[dir.join(name)], &dir, name, b"them"), "same name, another picture");
+        assert!(!is_own_copy(&[dir.join(name)], &dir, name, b"ours, longer"), "same name, another length");
+        assert!(!is_own_copy(&[dir.join("Gone p1 img1.png")], &dir, "Gone p1 img1.png", bytes), "a file that can't be read");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
