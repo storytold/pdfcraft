@@ -964,6 +964,7 @@ fn preferences_turn_on_always_use_my_default_zoom_and_page_layout() {
     use egui_kittest::kittest::Queryable;
     let mut h = harness(&[]);
     assert!(h.state_mut().execute("app.preferences"));
+    h.state_mut().preferences_page = pdfcraft_ui_egui::PrefsPage::PageDisplay;
     h.run_steps(3);
     h.get_by_label("Always use my default zoom and page layout").scroll_to_me();
     h.run_steps(4);
@@ -977,6 +978,7 @@ fn preferences_set_the_default_zoom() {
     use egui_kittest::kittest::Queryable;
     let mut h = harness(&[]);
     assert!(h.state_mut().execute("app.preferences"));
+    h.state_mut().preferences_page = pdfcraft_ui_egui::PrefsPage::PageDisplay;
     h.run_steps(3);
     h.get_by_label("Zoom to page level").scroll_to_me();
     h.run_steps(4);

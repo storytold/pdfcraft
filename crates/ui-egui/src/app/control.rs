@@ -104,6 +104,15 @@ impl PdfCraftApp {
                     "js-console" => Some(Dialog::JsConsole),
                     "document-js" => Some(Dialog::DocumentJs),
                     "preferences" => Some(Dialog::Preferences),
+                    // A category of Preferences: `preferences:page-display`.
+                    category if category.starts_with("preferences:") => {
+                        let slug = category.strip_prefix("preferences:").unwrap_or_default();
+                        self.preferences_page = PrefsPage::parse(slug).ok_or_else(|| {
+                            let known: Vec<_> = PrefsPage::ALL.iter().map(|p| p.slug()).collect();
+                            format!("unknown Preferences category {slug:?} (expected one of: {})", known.join(", "))
+                        })?;
+                        Some(Dialog::Preferences)
+                    }
                     "compare-files" => Some(Dialog::CompareFiles),
                     "action-wizard" => Some(Dialog::ActionWizard),
                     "pdfa" => Some(Dialog::PdfA),

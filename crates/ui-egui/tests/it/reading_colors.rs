@@ -106,7 +106,7 @@ fn reading_colours_preference_round_trips() {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, pdf()).expect("opens");
-        app.set_option("dialog", "preferences").unwrap();
+        app.set_option("dialog", "preferences:appearance").unwrap();
         app
     });
     h.run_steps(4);
@@ -143,7 +143,7 @@ fn reading_presets_follow_appearance_and_do_not_change_the_interface_theme() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.set_option("dialog", "preferences").unwrap();
+        app.set_option("dialog", "preferences:appearance").unwrap();
         app
     });
     h.run_steps(6);
@@ -151,8 +151,8 @@ fn reading_presets_follow_appearance_and_do_not_change_the_interface_theme() {
     let theme = h.state().theme_preference;
     let appearance = h.get_by_label("Light theme").rect();
     let preset = h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("White on black")).rect();
-    let documents = h.get_by_label("Documents and view").rect();
-    assert!(appearance.bottom() < preset.top() && preset.bottom() < documents.top());
+    // Reading colours are in Appearance, below the interface theme (#2627).
+    assert!(appearance.bottom() < preset.top());
     for (label, expected) in [
         ("White on black", ReadingColors::WHITE_ON_BLACK),
         ("Yellow on black", ReadingColors::YELLOW_ON_BLACK),
