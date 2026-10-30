@@ -7099,10 +7099,10 @@ area = "J"
 tier = "P3"
 milestone = "M10"
 status = "partial"
-commands = []
+commands = ["export.markdown"]
 tools = ["doc_export_office"]
-evidence = ["crates/export/src/tests.rs::markdown_has_headings_paragraphs_and_page_rules_in_order", "crates/export/src/tests.rs::markdown_escapes_markup_and_keeps_emphasis_and_tables", "crates/automation/tests/it/automation.rs::exporting_to_word_html_and_rtf"]
-notes = "Requested in #1595; not an Acrobat export. doc_export_office with a .md or .markdown path writes CommonMark with GitHub pipe tables: headings (levels 1 to 6), paragraphs with bold and italic (as HTML tags where Markdown's markers would not be read as emphasis), tables with their first row as the header, and a rule between pages; text Markdown would read as markup is escaped. Missing: a menu item, images, lists and links (the export's layout model has none of the last two), and text colour."
+evidence = ["crates/export/src/tests.rs::markdown_has_headings_paragraphs_and_page_rules_in_order", "crates/export/src/tests.rs::markdown_escapes_markup_and_keeps_emphasis_and_tables", "crates/automation/tests/it/automation.rs::exporting_to_word_html_and_rtf", "crates/ui-egui/tests/it/compare.rs::export_to_markdown_writes_markdown"]
+notes = "Requested in #1595; not an Acrobat export. File ▸ Export ▸ Markdown… (export.markdown) saves a .md file, and doc_export_office with a .md or .markdown path writes CommonMark with GitHub pipe tables: headings (levels 1 to 6), paragraphs with bold and italic (as HTML tags where Markdown's markers would not be read as emphasis), tables with their first row as the header, and a rule between pages; text Markdown would read as markup is escaped. Missing: images, lists and links (the export's layout model has none of the last two), and text colour."
 [[feature]]
 id = "create.export-xlsx"
 title = "Export to Excel (.xlsx) with table detection"
