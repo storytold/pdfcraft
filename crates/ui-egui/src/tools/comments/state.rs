@@ -170,6 +170,8 @@ pub struct CommentView {
     pub tool_done: bool,
     /// What the inline editor (`editing`) does with the keyboard the next time it is drawn.
     pub(crate) editor_focus: Option<EditorFocus>,
+    /// In-process text clipboard fallback for comment boxes.
+    pub clipboard: String,
 }
 
 /// A one-off change to the keyboard focus of the Comments panel's inline editor. The editor

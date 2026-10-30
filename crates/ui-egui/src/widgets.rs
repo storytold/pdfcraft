@@ -75,6 +75,139 @@ pub fn block(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::multiline(text).margin(egui::Margin::symmetric(10, 6))
 }
 
+/// Key stored in [`egui::Context`] data when a test overrides the system text clipboard with the
+/// in-process buffer.
+const IGNORE_SYSTEM_CLIPBOARD_ID: &str = "pdfcraft-ignore-system-text-clipboard";
+
+/// Disables reading the host OS text clipboard in [`text_edit_context_menu`] for the given
+/// [`egui::Context`], so headless tests rely solely on the in-process clipboard buffer.
+pub fn ignore_system_text_clipboard(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(IGNORE_SYSTEM_CLIPBOARD_ID), true));
+}
+
+/// Converts a character offset in `s` to its UTF-8 byte offset, clamping to `s.len()` when
+/// `char_idx` reaches or exceeds the character count.
+fn char_to_byte(s: &str, char_idx: usize) -> usize {
+    s.char_indices().nth(char_idx).map_or(s.len(), |(idx, _)| idx)
+}
+
+/// Reads the current text from the system clipboard when available, returning an empty string on
+/// failure, on platforms without system clipboard access, or when disabled for `ctx`.
+fn system_clipboard_text(ctx: &egui::Context) -> String {
+    if ctx.data(|d| d.get_temp::<bool>(egui::Id::unique(IGNORE_SYSTEM_CLIPBOARD_ID)).unwrap_or(false)) {
+        return String::new();
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        arboard::Clipboard::new().and_then(|mut c| c.get_text()).unwrap_or_default()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        String::new()
+    }
+}
+
+/// Attaches a standard text-editing context menu (Cut, Copy, Paste, Select All) to a
+/// `TextEdit` response, using `clipboard` as the in-process fallback alongside the system
+/// clipboard. When `single_line` is true, pasted line breaks are replaced with spaces.
+pub(crate) fn text_edit_context_menu(resp: &Response, text: &mut String, clipboard: &mut String, single_line: bool) {
+    resp.context_menu(|ui| {
+        let has_text = !text.is_empty();
+        let total_chars = text.chars().count();
+        let state = egui::text_edit::TextEditState::load(ui.ctx(), resp.id);
+        let selection = state
+            .as_ref()
+            .and_then(|s| s.cursor.char_range())
+            .map(|r| {
+                let [min, max] = r.sorted_cursors();
+                (usize::from(min.index).min(total_chars), usize::from(max.index).min(total_chars))
+            })
+            .filter(|(min, max)| min < max);
+
+        if ui.add_enabled(has_text, egui::Button::new(tl!("Cut"))).clicked() {
+            let (copied, next_caret) = if let Some((start_char, end_char)) = selection {
+                let start_byte = char_to_byte(text, start_char);
+                let end_byte = char_to_byte(text, end_char);
+                let piece = text.get(start_byte..end_byte).unwrap_or_default().to_owned();
+                if let (Some(before), Some(after)) = (text.get(..start_byte), text.get(end_byte..)) {
+                    let mut next = String::with_capacity(before.len().saturating_add(after.len()));
+                    next.push_str(before);
+                    next.push_str(after);
+                    *text = next;
+                }
+                (piece, start_char.min(text.chars().count()))
+            } else {
+                (std::mem::take(text), 0)
+            };
+            if !copied.is_empty() {
+                clipboard.clone_from(&copied);
+                ui.ctx().copy_text(copied);
+            }
+            let mut st = state.clone().unwrap_or_default();
+            st.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(next_caret))));
+            st.store(ui.ctx(), resp.id);
+            resp.request_focus();
+            ui.close();
+        }
+
+        if ui.add_enabled(has_text, egui::Button::new(tl!("Copy"))).clicked() {
+            let copied = if let Some((start_char, end_char)) = selection {
+                let start_byte = char_to_byte(text, start_char);
+                let end_byte = char_to_byte(text, end_char);
+                text.get(start_byte..end_byte).unwrap_or_default().to_owned()
+            } else {
+                text.clone()
+            };
+            if !copied.is_empty() {
+                clipboard.clone_from(&copied);
+                ui.ctx().copy_text(copied);
+            }
+            resp.request_focus();
+            ui.close();
+        }
+
+        if ui.button(tl!("Paste")).clicked() {
+            let system = system_clipboard_text(ui.ctx());
+            let raw = if system.is_empty() { clipboard.clone() } else { system };
+            let pasted =
+                if single_line { raw.replace("\r\n", " ").replace(['\r', '\n'], " ") } else { raw.replace("\r\n", "\n").replace('\r', "\n") };
+            if !pasted.is_empty() {
+                let (start_char, end_char) = state
+                    .as_ref()
+                    .and_then(|s| s.cursor.char_range())
+                    .map(|r| {
+                        let [min, max] = r.sorted_cursors();
+                        (usize::from(min.index).min(total_chars), usize::from(max.index).min(total_chars))
+                    })
+                    .unwrap_or((total_chars, total_chars));
+                let start_byte = char_to_byte(text, start_char);
+                let end_byte = char_to_byte(text, end_char);
+                if let (Some(before), Some(after)) = (text.get(..start_byte), text.get(end_byte..)) {
+                    let mut next = String::with_capacity(before.len().saturating_add(pasted.len()).saturating_add(after.len()));
+                    next.push_str(before);
+                    next.push_str(&pasted);
+                    next.push_str(after);
+                    *text = next;
+                }
+                let next_caret = start_char.saturating_add(pasted.chars().count());
+                let mut st = state.clone().unwrap_or_default();
+                st.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(next_caret))));
+                st.store(ui.ctx(), resp.id);
+            }
+            resp.request_focus();
+            ui.close();
+        }
+
+        if ui.add_enabled(has_text, egui::Button::new(tl!("Select All"))).clicked() {
+            let mut st = state.unwrap_or_default();
+            st.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(total_chars))));
+            st.store(ui.ctx(), resp.id);
+            resp.request_focus();
+            ui.close();
+        }
+    });
+}
+
 /// One line that stays within `max_width`, cut on a character boundary with an ellipsis.
 /// Only the first 160 characters are measured, so a huge name cannot lay out thousands of candidates.
 pub(crate) fn fit_line(text: &str, max_width: f32, mut width_of: impl FnMut(&str) -> f32) -> String {
@@ -966,5 +1099,18 @@ mod tests {
         assert!(long.starts_with(fitted.trim_end_matches('\u{2026}')));
         assert_eq!(fit_line(long, 0.0, width), "");
         assert_eq!(fit_line("ééé", 2.0, width), "é\u{2026}");
+    }
+
+    /// Verifies that character-to-byte conversion preserves multi-byte UTF-8 boundaries and clamps
+    /// out-of-range indices to the string length.
+    #[test]
+    fn char_to_byte_respects_multibyte_boundaries_and_clamps_out_of_bounds() {
+        let s = "Ağaç 🌳";
+        assert_eq!(char_to_byte(s, 0), 0);
+        assert_eq!(char_to_byte(s, 1), 1);
+        assert_eq!(char_to_byte(s, 2), 3);
+        assert_eq!(char_to_byte(s, 5), 7);
+        assert_eq!(char_to_byte(s, 6), s.len());
+        assert_eq!(char_to_byte(s, 99), s.len());
     }
 }

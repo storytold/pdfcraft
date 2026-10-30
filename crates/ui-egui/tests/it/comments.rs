@@ -85,9 +85,14 @@ fn click_pt(h: &mut Harness<'static, PdfCraftApp>, p: (f32, f32)) {
     click(h, p);
 }
 
-/// A text field by its placeholder ("Add a comment", "Add a reply").
+/// A text field by its placeholder or accessible label ("Add a comment", "Add a reply").
 fn field<'a>(h: &'a Harness<'static, PdfCraftApp>, placeholder: &'a str) -> egui_kittest::Node<'a> {
-    h.query_all_by(|n| n.placeholder() == Some(placeholder)).next().unwrap_or_else(|| panic!("no field {placeholder:?}"))
+    h.query_all_by(|n| {
+        n.placeholder() == Some(placeholder)
+            || (matches!(n.role(), Role::TextInput | Role::MultilineTextInput) && n.label().as_deref() == Some(placeholder))
+    })
+    .next()
+    .unwrap_or_else(|| panic!("no field {placeholder:?}"))
 }
 
 fn comments(h: &Harness<'static, PdfCraftApp>) -> Vec<Annotation> {
@@ -2656,4 +2661,78 @@ fn text_comments_can_save_a_zero_width_default() {
     restored.restore(&h.state().persist());
     assert_eq!(restored.comment_prefs.style(CommentTool::TextBox).width, 0.0);
     assert_eq!(restored.comment_prefs.style(CommentTool::Callout).width, 0.0);
+}
+
+/// #4771: right-clicking comment input fields offers Cut, Copy, Paste and Select All.
+#[test]
+fn comment_boxes_offer_cut_copy_paste_and_select_all_context_menu() {
+    let mut h = harness(|app| app.set_option("panel", "comments").unwrap());
+    pdfcraft_ui_egui::ignore_system_text_clipboard(&h.ctx);
+    h.state_mut().views[0].comments.clipboard = "Pasted note".into();
+
+    // Right-click "Add a comment" in the Comments panel and paste.
+    field(&h, "Add a comment").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Paste").click();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.add_box, "Pasted note");
+
+    // Select All via context menu, then press Enter to post the sticky note.
+    field(&h, "Add a comment").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Select All").click();
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1);
+    assert_eq!(comments(&h)[0].contents.as_deref(), Some("Pasted note"));
+
+    // Right-click "Add a reply" under the selected comment card and paste.
+    field(&h, "Add a reply").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Paste").click();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.reply, "Pasted note");
+
+    // Replace the reply text, Cut it via the context menu, and verify clipboard + cleared field.
+    h.state_mut().views[0].comments.reply = "Cut from reply".into();
+    h.run_steps(2);
+    field(&h, "Add a reply").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Cut").click();
+    let mut emitted_copy = false;
+    for _ in 0..3 {
+        h.step();
+        emitted_copy |= h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "Cut from reply"));
+    }
+    assert!(emitted_copy, "Cut emits CopyText");
+    assert!(h.state().views[0].comments.reply.is_empty());
+    assert_eq!(h.state().views[0].comments.clipboard, "Cut from reply");
+
+    // Open the floating composer on the page, right-click its text box, and paste.
+    h.state_mut().set_option("quick", "freetext").unwrap();
+    h.run_steps(2);
+    click_pt(&mut h, (250.0, 180.0));
+    field(&h, "Type text").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Paste").click();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.composer.as_ref().map(|c| c.text.as_str()), Some("Cut from reply"));
+
+    // Copy from the floating composer after modifying its text and paste into "Search comments".
+    h.state_mut().views[0].comments.composer.as_mut().unwrap().text = "Copied from composer".into();
+    h.run_steps(2);
+    field(&h, "Type text").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Copy").click();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.clipboard, "Copied from composer");
+
+    h.state_mut().views[0].comments.search = Some(String::new());
+    h.run_steps(2);
+    field(&h, "Search comments").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Paste").click();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.search.as_deref(), Some("Copied from composer"));
 }

@@ -1,6 +1,6 @@
 use super::geometry::{drawn_text_box_rect, page_rotation, text_box_rect};
 use super::paint::{edited_in_view, new_comment};
-use super::state::{ComposerKind, PageCx};
+use super::state::{CommentView, ComposerKind, PageCx};
 use super::{
     Color32, CommentPrefs, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NoteIcon, PagePointer, QuickTool, Shape, Tokens, pos2,
     theme,
@@ -33,7 +33,9 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     let t = Tokens::get(ctx);
     let mut post = false;
     let mut cancel = false;
-    let c = view.comments.composer.as_mut()?;
+    let CommentView { composer: Some(c), clipboard, .. } = &mut view.comments else {
+        return None;
+    };
     let title = match c.kind {
         ComposerKind::Note => "Sticky note",
         ComposerKind::TextBox { .. } => "Text box",
@@ -74,12 +76,14 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 .add(egui::TextEdit::multiline(&mut c.text).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY).id_salt("composer-text"))
                 // 0.37 kittest rejects an unnamed text input; the hint is its logical name.
                 .accessible_name(hint);
+            let popup_was_open = egui::Popup::is_any_open(ui.ctx());
+            crate::widgets::text_edit_context_menu(&edit, &mut c.text, clipboard, false);
             if c.focus {
                 edit.request_focus();
                 c.focus = false;
             }
             let enter = submit_key(ui, &edit, false);
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) && !popup_was_open {
                 cancel = true;
             }
             ui.add_space(8.0);

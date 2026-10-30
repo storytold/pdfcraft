@@ -127,6 +127,7 @@ pub(crate) fn show(
         let r = ui
             .add(crate::widgets::line(q).hint_text(tl!("Search comments")).desired_width(f32::INFINITY).id_salt("comment-search"))
             .accessible_name(tl!("Search comments"));
+        crate::widgets::text_edit_context_menu(&r, q, &mut view.comments.clipboard, true);
         if view.comments.search_focus {
             r.request_focus();
             view.comments.search_focus = false;
@@ -143,6 +144,7 @@ pub(crate) fn show(
                     .id_salt("comment-add-box"),
             )
             .accessible_name(tl!("Add a comment"));
+        crate::widgets::text_edit_context_menu(&r, &mut view.comments.add_box, &mut view.comments.clipboard, true);
         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !view.comments.add_box.trim().is_empty() {
             let page = view.current.min(info.pages.len().saturating_sub(1));
             if let Some(p) = info.pages.get(page) {
@@ -360,6 +362,8 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                 ui.set_width(ui.available_width());
                 if editing && let Some((_, _, text)) = view.comments.editing.as_mut() {
                     let r = ui.add(crate::widgets::block(text).desired_rows(2).desired_width(f32::INFINITY).id_salt(("comment-edit", key)));
+                    let popup_was_open = egui::Popup::is_any_open(ui.ctx());
+                    crate::widgets::text_edit_context_menu(&r, text, &mut view.comments.clipboard, false);
                     match view.comments.editor_focus.take() {
                         Some(crate::comments::EditorFocus::Take) => r.request_focus(),
                         Some(crate::comments::EditorFocus::Release) => r.surrender_focus(),
@@ -375,7 +379,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                         {
                             edit = Some(Edit::SetAnnotationContents { page, index, text });
                         }
-                        if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        if ui.button(tl!("Cancel")).clicked() || (ui.input(|i| i.key_pressed(egui::Key::Escape)) && !popup_was_open) {
                             view.comments.editing = None;
                         }
                     });
@@ -432,14 +436,17 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                     // The field fills its line and Post sits right-aligned under it: a field sized
                     // around the button can't fit every language's "Post" exactly, and any overflow
                     // would widen the resizable panel again on every repaint.
-                    let r = ui.add(
-                        crate::widgets::block(&mut view.comments.reply)
-                            .desired_rows(1)
-                            .return_key(egui::KeyboardShortcut::new(egui::Modifiers::SHIFT, egui::Key::Enter))
-                            .hint_text(tl!("Add a reply"))
-                            .desired_width(f32::INFINITY)
-                            .id_salt(("comment-reply", key)),
-                    );
+                    let r = ui
+                        .add(
+                            crate::widgets::block(&mut view.comments.reply)
+                                .desired_rows(1)
+                                .return_key(egui::KeyboardShortcut::new(egui::Modifiers::SHIFT, egui::Key::Enter))
+                                .hint_text(tl!("Add a reply"))
+                                .desired_width(f32::INFINITY)
+                                .id_salt(("comment-reply", key)),
+                        )
+                        .accessible_name(tl!("Add a reply"));
+                    crate::widgets::text_edit_context_menu(&r, &mut view.comments.reply, &mut view.comments.clipboard, false);
                     let enter = crate::comments::submit_key(ui, &r, true);
                     let ok = !view.comments.reply.trim().is_empty();
                     let post =
