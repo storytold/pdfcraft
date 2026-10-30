@@ -560,7 +560,7 @@ pub(crate) fn run(
         report.images += 1;
         let Some(n) = s.dict.get(b"ColorSpace").and_then(|cs| components(doc, cs)) else { continue };
         let st = if n == 1 { &settings.gray } else { &settings.color };
-        let Some((new, smask)) = process(doc, s, ppi, st, n) else { continue };
+        let Some((mut new, smask)) = process(doc, s, ppi, st, n) else { continue };
         let resized = new.dict.int(b"Width") != s.dict.int(b"Width") || new.dict.int(b"Height") != s.dict.int(b"Height");
         report.image_bytes_before += s.raw.len();
         report.image_bytes_after += new.raw.len();
@@ -569,10 +569,12 @@ pub(crate) fn run(
         } else {
             report.images_recompressed += 1;
         }
-        doc.set(r, Object::Stream(new));
-        if let Some((mr, m)) = smask {
-            doc.set(mr, Object::Stream(m));
+        // The resized mask is a new object: other images may share the original, which must stay as it was.
+        if let Some((_, m)) = smask {
+            let mr = doc.add(Object::Stream(m));
+            new.dict.set(b"SMask".to_vec(), Object::Ref(mr));
         }
+        doc.set(r, Object::Stream(new));
     }
     if !progress(Stage::Images { done: total, total }) {
         return Err(OptimizeError::Cancelled);
