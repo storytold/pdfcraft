@@ -1312,6 +1312,17 @@ fn dialog_print(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> 
     });
     req.print_go = go;
     req.close = go || cancel;
+    if std::mem::take(&mut app.print_draft.pick_area) {
+        // The rectangle is dragged on a page, so the organize grid gives way to the page view.
+        let view = &mut app.views[i];
+        if view.organize {
+            view.organize = false;
+            let page = view.current;
+            view.go_to_page(page);
+        }
+        app.quick_tool = crate::QuickTool::PrintArea;
+        app.notify_tr("Drag a rectangle around the area to print");
+    }
     false
 }
 

@@ -8148,6 +8148,18 @@ evidence = ["crates/print/src/tests.rs::posters_tile_with_overlap", "crates/auto
 notes = "tile scale, overlap, cut marks (labels pending)"
 
 [[feature]]
+id = "print.selected-area"
+title = "Print a selected area of a page"
+area = "L"
+tier = "P2"
+milestone = "M10"
+status = "shipped"
+commands = ["print.dialog"]
+tools = ["doc_print"]
+evidence = ["crates/ui-egui/tests/it/viewer.rs::print_area_is_dragged_from_the_print_dialog", "crates/automation/tests/it/automation.rs::printing_an_area_through_tools"]
+notes = "Pages to Print ▸ Area…: the dialog steps aside, a rectangle is dragged on the page, and only that area prints, fitted to the sheet without stretching and turned to suit it (the label layout with the dragged rectangle as its crop); doc_print takes layout area with area [x0, y0, x1, y1]. Acrobat does this with the Snapshot tool and Print's Selected graphic."
+
+[[feature]]
 id = "print.orientation"
 title = "Auto portrait/landscape"
 area = "L"

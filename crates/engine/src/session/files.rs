@@ -137,6 +137,8 @@ impl Session {
             let pictures = pdfcraft_cos::Document::open(Arc::new(bytes)).map_err(|e| EditError::Print(e.to_string()))?;
             let remapped = print::Settings {
                 pages: settings.pages.iter().map(|p| distinct.iter().position(|d| d == p).unwrap_or(0)).collect(),
+                // A label's or area's crop follows its page to the picture document.
+                crops: distinct.iter().map(|&d| settings.crops.get(d).copied().flatten()).collect(),
                 content: print::Content::Document,
                 raster: None,
                 ..settings.clone()

@@ -2827,3 +2827,7 @@ theme	Appearance	Teema
 	Rotate the selected pages clockwise	Kierrä valittuja sivuja myötäpäivään
 	Extract the selected pages…	Pura valitut sivut…
 	Delete the selected pages	Poista valitut sivut
+	Drag a rectangle around the area to print	Vedä suorakulmio tulostettavan alueen ympärille
+	Selected area	Valittu alue
+	Prints only the area you dragged on the page, fitted to the sheet without stretching.	Tulostaa vain sivulta rajaamasi alueen sovitettuna arkille venyttämättä.
+	Area…	Alue…
