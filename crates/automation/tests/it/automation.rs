@@ -2835,6 +2835,68 @@ fn exporting_images_and_text_through_tools() {
 }
 
 #[test]
+fn tiff_icc_survives_create_add_save_reopen_without_changing_source() {
+    use pdfcraft_cos::{Document, Object};
+    // Contributor-original 4x2 RGB TIFF and synthetic ICC header, generated entirely here.
+    let mut profile = vec![0u8; 300];
+    profile[..4].copy_from_slice(&300u32.to_be_bytes());
+    profile[12..16].copy_from_slice(b"prtr");
+    profile[16..20].copy_from_slice(b"RGB ");
+    profile[36..40].copy_from_slice(b"acsp");
+    let tags = [
+        (256u16, 4u16, 1u32, 4u32),
+        (257, 4, 1, 2),
+        (258, 3, 3, 134),
+        (259, 3, 1, 1),
+        (262, 3, 1, 2),
+        (273, 4, 1, 440),
+        (277, 3, 1, 3),
+        (278, 4, 1, 2),
+        (279, 4, 1, 24),
+        (34675, 7, 300, 140),
+    ];
+    let mut bytes = b"II*\0".to_vec();
+    bytes.extend_from_slice(&8u32.to_le_bytes());
+    bytes.extend_from_slice(&10u16.to_le_bytes());
+    for (tag, kind, count, value) in tags {
+        bytes.extend_from_slice(&tag.to_le_bytes());
+        bytes.extend_from_slice(&kind.to_le_bytes());
+        bytes.extend_from_slice(&count.to_le_bytes());
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&[8, 0, 8, 0, 8, 0]);
+    bytes.extend_from_slice(&profile);
+    bytes.extend_from_slice(&[90, 80, 70].repeat(8));
+    let dir = workdir("tiff-icc");
+    std::fs::write(dir.join("scan.tiff"), &bytes).unwrap();
+    let mut a = auto(&dir);
+    let created = ok(&mut a, "doc_create", json!({"from":"images","paths":["scan.tiff"]}))["doc"].as_u64().unwrap();
+    let added = ok(&mut a, "doc_create", json!({"from":"blank","width":64,"height":32}))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_image", json!({"doc":added,"page":1,"path":"scan.tiff","rect":[0,0,4,2]}));
+    for (doc, path) in [(created, "created.pdf"), (added, "added.pdf")] {
+        ok(&mut a, "doc_save", json!({"doc":doc,"path":path}));
+        ok(&mut a, "doc_close", json!({"doc":doc}));
+        let reopened = ok(&mut a, "doc_open", json!({"path":path}))["doc"].as_u64().unwrap();
+        assert!(a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":72})).is_ok());
+        let saved = Document::open(std::sync::Arc::new(std::fs::read(dir.join(path)).unwrap())).unwrap();
+        let page = pdfcraft_model::pages(&saved).remove(0);
+        let res = saved.resolve(page.dict.get(b"Resources").unwrap());
+        let objects = saved.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+        let image = saved.resolve(objects.as_dict().unwrap().iter().next().unwrap().1);
+        let Object::Stream(image) = &*image else { panic!("image XObject") };
+        let color = image.dict.get(b"ColorSpace").unwrap().as_array().expect("TIFF stays ICC-tagged");
+        assert_eq!(color[0].as_name(), Some(&b"ICCBased"[..]));
+        let icc = saved.resolve(&color[1]);
+        let Object::Stream(icc) = &*icc else { panic!("ICC stream") };
+        assert_eq!(icc.dict.int(b"N"), Some(3));
+        assert_eq!(icc.decoded().unwrap(), profile);
+        assert_eq!(image.decoded().unwrap(), [90, 80, 70].repeat(8));
+    }
+    assert_eq!(std::fs::read(dir.join("scan.tiff")).unwrap(), bytes);
+}
+
+#[test]
 fn accessibility_character_encoding_accepts_identity_cjk_through_tools() {
     use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, SaveOptions, Stream, write_full};
     use std::sync::Arc;

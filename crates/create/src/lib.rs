@@ -366,8 +366,13 @@ fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
 
 /// 8-bit RGBA pixels → an image (gray when every pixel is, with a soft mask when any pixel is
 /// not opaque).
-fn rgba_image(rgba: &[u8], (w, h): (u32, u32), dpi: (f64, f64)) -> Embedded {
-    let gray = rgba.as_chunks::<4>().0.iter().all(|p| p[0] == p[1] && p[1] == p[2]);
+fn rgba_image(rgba: &[u8], px: (u32, u32), dpi: (f64, f64)) -> Embedded {
+    rgba_image_in_space(rgba, px, dpi, false)
+}
+
+/// An RGB profile describes RGB samples even when all three channels happen to be equal.
+fn rgba_image_in_space(rgba: &[u8], (w, h): (u32, u32), dpi: (f64, f64), preserve_rgb: bool) -> Embedded {
+    let gray = !preserve_rgb && rgba.as_chunks::<4>().0.iter().all(|p| p[0] == p[1] && p[1] == p[2]);
     let opaque = rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 255);
     let colour: Vec<u8> = if gray {
         rgba.as_chunks::<4>().0.iter().map(|p| p[0]).collect()
@@ -418,6 +423,33 @@ const MAX_DECODED_BYTES: usize = 2 << 30;
 /// whole address space on 32-bit targets (wasm32), where 4 GiB doesn't fit in `usize`.
 const MAX_DECODED_TOTAL: usize = MAX_DECODED_BYTES.saturating_mul(2);
 
+/// Bound optional TIFF color metadata separately from the much larger pixel budget.
+const MAX_TIFF_ICC_BYTES: usize = 16 << 20;
+
+/// Read the current directory's profile without materializing one TIFF `Value` per byte.
+fn tiff_icc(dec: &mut tiff::decoder::Decoder<std::io::Cursor<&[u8]>>, components: usize) -> Option<Vec<u8>> {
+    use tiff::tags::{Tag, Type};
+    let file_len = dec.inner().get_ref().len();
+    let mut ifd = dec.image_ifd();
+    let entry = ifd.find_entry(Tag::IccProfile)?;
+    let len = usize::try_from(entry.count()).ok()?;
+    if !matches!(entry.field_type(), Type::BYTE | Type::UNDEFINED) || !(128..=MAX_TIFF_ICC_BYTES.min(file_len)).contains(&len) {
+        return None;
+    }
+    // ICC's size includes its header and internal padding, matching the complete TIFF value.
+    let mut size = [0; 4];
+    if ifd.find_tag_bytes(Tag::IccProfile, &mut size, 0).ok()?? != size.len() || usize::try_from(u32::from_be_bytes(size)).ok()? != len {
+        return None;
+    }
+    let mut profile = Vec::new();
+    profile.try_reserve_exact(len).ok()?;
+    profile.resize(len, 0);
+    if ifd.find_tag_bytes(Tag::IccProfile, &mut profile, 0).ok()?? != len {
+        return None;
+    }
+    icc_for(profile, components)
+}
+
 /// The first `wanted` pages of a TIFF (multi-page scans become multi-page PDFs).
 fn tiff_pages(name: &str, bytes: &[u8], wanted: usize) -> Result<Vec<Embedded>, CreateError> {
     tiff_pages_within(name, bytes, wanted, MAX_DECODED_TOTAL)
@@ -452,13 +484,20 @@ fn tiff_pages_within(name: &str, bytes: &[u8], wanted: usize, budget: usize) -> 
             if v.is_finite() && v >= 1.0 { v } else { 72.0 }
         };
         let dpi = (res(Tag::XResolution, &mut dec), res(Tag::YResolution, &mut dec));
+        let components = match ct {
+            C::Gray(_) | C::GrayA(_) => 1,
+            C::RGB(_) | C::RGBA(_) => 3,
+            C::CMYK(_) => 4,
+            _ => 0,
+        };
+        let icc = tiff_icc(&mut dec, components);
         let data = match dec.read_image().map_err(|e| bad(e.to_string()))? {
             DecodingResult::U8(v) => v,
             // 16-bit samples: keep the high byte.
             DecodingResult::U16(v) => v.iter().map(|x| (x >> 8) as u8).collect(),
             _ => return Err(bad("this TIFF sample format isn't supported".into())),
         };
-        let page = match ct {
+        let mut page = match ct {
             C::Gray(1) => {
                 // Bilevel scans stay 1 bit per pixel (0 = black after the decoder's inversion).
                 let mut d = Dict::new();
@@ -484,14 +523,18 @@ fn tiff_pages_within(name: &str, bytes: &[u8], wanted: usize, budget: usize) -> 
                 d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
                 Embedded { dict: d, data, filtered: false, smask: None, icc: None, px: (w, h), dpi }
             }
-            C::RGBA(8 | 16) => rgba_image(&data, (w, h), dpi),
+            C::RGBA(8 | 16) => rgba_image_in_space(&data, (w, h), dpi, icc.is_some()),
             C::GrayA(8 | 16) => {
                 let rgba: Vec<u8> = data.as_chunks::<2>().0.iter().flat_map(|p| [p[0], p[0], p[0], p[1]]).collect();
                 rgba_image(&rgba, (w, h), dpi)
             }
             other => return Err(bad(format!("{other:?} TIFF images aren't supported yet"))),
         };
-        kept = kept.saturating_add(page.data.len()).saturating_add(page.smask.as_ref().map_or(0, |(_, alpha)| alpha.len()));
+        page.icc = icc;
+        kept = kept
+            .saturating_add(page.data.len())
+            .saturating_add(page.smask.as_ref().map_or(0, |(_, alpha)| alpha.len()))
+            .saturating_add(page.icc.as_ref().map_or(0, Vec::capacity));
         if kept > budget {
             return Err(bad(format!("the TIFF's pages take more than {} MiB together", budget >> 20)));
         }

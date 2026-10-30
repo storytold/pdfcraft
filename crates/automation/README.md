@@ -229,3 +229,8 @@ behavior. Back/Forward
 returns to page tops, does not restore zoom, does not switch documents, and is not saved across
 restarts. Standalone engine/MCP sessions have no viewport, so they do not have a separate
 navigation-history tool; use the opt-in UI control channel to navigate the displayed document.
+
+TIFF images created with `doc_create` or inserted with `page_add_image` retain compatible per-directory ICC profiles through save/reopen.
+Profiled RGB samples stay RGB even when neutral, and transparency remains a separate grayscale soft mask.
+Optional TIFF profiles over 16 MiB or with unreadable, malformed or mismatched metadata fall back to the device color space.
+The source image is unchanged; existing 16-bit precision and unsupported TIFF-format limits remain.
