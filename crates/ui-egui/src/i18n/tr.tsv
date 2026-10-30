@@ -2553,3 +2553,12 @@ animation effects	Off	Kapalı
 	Rotate the selected pages clockwise	Seçili sayfaları saat yönünde döndür
 	Extract the selected pages…	Seçili sayfaları ayıkla…
 	Delete the selected pages	Seçili sayfaları sil
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Kaydedilen imza için bu boyutu kullan
+	Use this size for saved initials	Kaydedilen paraflar için bu boyutu kullan
+	Future placements use this size. Existing signatures are unchanged.	Gelecekteki yerleştirmelerde bu boyut kullanılır. Mevcut imzalar değişmez.
+	Select a placed signature first	Önce yerleştirilmiş bir imza seç
+	Save initials first	Önce parafları kaydet
+	Save a signature first	Önce bir imza kaydet
+	The selection changed. Select the signature again.	Seçim değişti. İmzayı yeniden seç.

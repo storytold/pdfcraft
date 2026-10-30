@@ -156,6 +156,20 @@ fn every_registered_command_is_implemented() {
                 assert!(app.views[0].view_history(false));
             }
         }
+        if matches!(spec.id, "sign.fill.signature.size" | "sign.fill.initials.size") {
+            // Size commands need both an explicit saved target and a selected appearance.
+            app.signature = Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("Synthetic User".into()));
+            app.initials = Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("SU".into()));
+            let shape = pdfcraft_engine::typed_signature_shape([20.0, 100.0], "SU", 17.0, 90).unwrap();
+            assert!(app.apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+                page: 0,
+                style: pdfcraft_engine::Style::default_for(&shape),
+                shape,
+                contents: String::new(),
+                author: String::new(),
+            })));
+            app.views[0].comments.selected = Some((0, 0));
+        }
         let dir = std::env::temp_dir().join(format!("pdfcraft-cmd-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         app.save_override = Some(dir.join("out.pdf").to_string_lossy().into_owned());
@@ -179,6 +193,52 @@ fn disabled_commands_explain_themselves() {
     assert!(!app.execute("view.layout.cover"));
     assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Switch to two-page view first to show the cover page"));
     assert!(!app.execute("no.such.command"));
+}
+
+#[test]
+fn signature_size_commands_require_saved_targets_and_a_selected_appearance() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    use pdfcraft_ui_egui::fill_sign::SavedSig;
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    for (command, reason) in [("sign.fill.signature.size", "Save a signature first"), ("sign.fill.initials.size", "Save initials first")] {
+        assert!(!app.execute(command));
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some(reason));
+    }
+    app.signature = Some(SavedSig::Typed("Synthetic User".into()));
+    app.initials = Some(SavedSig::Typed("SU".into()));
+    for command in ["sign.fill.signature.size", "sign.fill.initials.size"] {
+        assert!(!app.execute(command));
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Open a document first"));
+    }
+    app.open_bytes("doc.pdf", None, fixture(1)).unwrap();
+    for command in ["sign.fill.signature.size", "sign.fill.initials.size"] {
+        assert!(!app.execute(command));
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Select a placed signature first"));
+    }
+    let shape = Shape::Rectangle { rect: [20.0, 20.0, 80.0, 40.0] };
+    assert!(app.apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        style: Style::default_for(&shape),
+        shape,
+        contents: String::new(),
+        author: String::new(),
+    })));
+    app.views[0].comments.selected = Some((0, 0));
+    let (view, id) = app.active_ids().unwrap();
+    let before_bytes = app.session.save_bytes(id).unwrap();
+    let before_dirty = app.session.get(id).unwrap().dirty;
+    let before_undo = app.session.get(id).unwrap().can_undo().map(str::to_owned);
+    for command in ["sign.fill.signature.size", "sign.fill.initials.size"] {
+        assert!(!app.execute(command), "an ordinary rectangle is not a size source");
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Select a placed signature first"));
+    }
+    let state: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
+    assert!(state["signature_size"].is_null() && state["initials_size"].is_null());
+    assert_eq!(app.views[view].comments.selected, Some((0, 0)));
+    assert_eq!(app.session.save_bytes(id).unwrap(), before_bytes);
+    assert_eq!(app.session.get(id).unwrap().dirty, before_dirty);
+    assert_eq!(app.session.get(id).unwrap().can_undo().map(str::to_owned), before_undo);
 }
 
 #[test]

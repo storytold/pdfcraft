@@ -1327,10 +1327,10 @@ fn dialog_signature(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending)
     if req.apply {
         let d = std::mem::take(&mut app.signature_draft);
         let tool = if d.initials {
-            app.initials = d.saved();
+            app.set_saved_signature_slot(true, d.saved());
             crate::fill_sign::FillTool::Initials
         } else {
-            app.signature = d.saved();
+            app.set_saved_signature_slot(false, d.saved());
             crate::fill_sign::FillTool::Signature
         };
         app.quick_tool = crate::QuickTool::Fill(tool);

@@ -2465,3 +2465,12 @@ animation effects	Off	ປິດ
 	Rotate the selected pages clockwise	ໝູນໜ້າທີ່ເລືອກຕາມເຂັມໂມງ
 	Extract the selected pages…	ແຍກໜ້າທີ່ເລືອກອອກ…
 	Delete the selected pages	ລຶບໜ້າທີ່ເລືອກ
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	ໃຊ້ຂະໜາດນີ້ສຳລັບລາຍເຊັນທີ່ບັນທຶກໄວ້
+	Use this size for saved initials	ໃຊ້ຂະໜາດນີ້ສຳລັບລາຍເຊັນຫຍໍ້ທີ່ບັນທຶກໄວ້
+	Future placements use this size. Existing signatures are unchanged.	ການວາງໃນອະນາຄົດຈະໃຊ້ຂະໜາດນີ້. ລາຍເຊັນທີ່ມີຢູ່ຈະບໍ່ປ່ຽນແປງ.
+	Select a placed signature first	ເລືອກລາຍເຊັນທີ່ວາງໄວ້ກ່ອນ
+	Save initials first	ບັນທຶກລາຍເຊັນຫຍໍ້ກ່ອນ
+	Save a signature first	ບັນທຶກລາຍເຊັນກ່ອນ
+	The selection changed. Select the signature again.	ການເລືອກປ່ຽນແປງແລ້ວ. ເລືອກລາຍເຊັນອີກຄັ້ງ.

@@ -3,6 +3,8 @@
 //! [`build`] draws a normal appearance (`/AP /N`) from the annotation dictionary alone, so the
 //! same code serves new comments and restyled ones. Drawings are in page space with
 //! `/BBox = /Rect` (identity matrix), except note icons, which are drawn in a 20 × 20 box.
+//! The edit/display path supplies a local box for drawn signatures, preserving precision
+//! when their stored user-space coordinates and stroke widths are very small.
 //! It returns `None` for anything it cannot draw faithfully (cloudy borders, unknown line
 //! endings, indirect geometry), so callers never replace an appearance with a worse one.
 //!
@@ -453,6 +455,7 @@ fn draw_body(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) -
         b"Line" => draw_line(context, drawing),
         b"Polygon" | b"PolyLine" => draw_polygon(context, drawing),
         b"Caret" => draw_caret(context, drawing),
+        b"Ink" if literal_signature_ink(context.dict) => draw_signature_ink(context, drawing),
         b"Ink" => draw_ink(context, drawing),
         _ => None,
     }
@@ -725,6 +728,146 @@ fn draw_caret(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) 
         drawing.tail.push(0xB6);
         drawing.tail.extend_from_slice(b") Tj ET\n");
         drawing.resources.set(b"Font".to_vec(), helvetica_resource());
+    }
+    Some(())
+}
+
+fn literal_signature_ink(d: &Dict) -> bool {
+    if d.name(b"Subtype") != Some(b"Ink") {
+        return false;
+    }
+    match d.get(b"Subj") {
+        Some(Object::String(s)) if s.bytes.len() <= 128 => s.to_text().trim_matches('\0').trim() == "Signature",
+        Some(Object::Name(n)) if n.len() <= 128 => String::from_utf8_lossy(n).trim_matches('\0').trim() == "Signature",
+        _ => false,
+    }
+}
+
+fn signature_number(value: f64) -> Option<String> {
+    // This also checks computed curve/dot control operands before backend f32 narrowing.
+    if !value.is_finite() || !(value as f32).is_finite() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    pdfcraft_cos::serialize(&Object::Real(value), &mut bytes);
+    // COS number serialization produces ASCII PDF syntax; no exponent or fixed-place loss.
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn signature_dash(d: &Dict) -> Option<String> {
+    // Normalized drawing supplies scaled BS/D; raw edit preflight also accepts optional D.
+    let Some(bs) = d.get(b"BS").and_then(Object::as_dict) else { return Some(String::new()) };
+    if bs.name(b"S") != Some(b"D") {
+        return Some(String::new());
+    }
+    let values = match bs.get(b"D") {
+        None | Some(Object::Null) => return Some("[3] 0 d\n".into()), // Table 168; a null dictionary value is absent.
+        Some(value) => value.as_array()?,
+    };
+    if values.len() > 64 {
+        return None;
+    }
+    if values.is_empty() {
+        return Some(String::new()); // The valid empty dash array specifies a solid line.
+    }
+    let mut numbers = Vec::with_capacity(values.len());
+    let mut positive = false;
+    for value in values {
+        let value = value.as_f64()?;
+        if !value.is_finite() || value < 0.0 {
+            return None;
+        }
+        positive |= value > 0.0;
+        numbers.push(signature_number(value)?);
+    }
+    if !positive {
+        return None;
+    }
+    Some(format!("[{}] 0 d\n", numbers.join(" ")))
+}
+
+/// Finite area, round dot: no hidden user-space segment or resize-amplified stub.
+/// Standard four-cubic disc approximation, independent of dash state.
+fn signature_dot(c: &mut String, center: (f64, f64), radius: f64) -> Option<()> {
+    let (x, y) = center;
+    if !(x.is_finite() && y.is_finite() && radius.is_finite() && radius > 0.0 && (radius as f32).is_finite() && radius as f32 > 0.0) {
+        return None;
+    }
+    let k = radius * 0.5522847498307936;
+    c.push_str(&format!("{} {} m\n", signature_number(x + radius)?, signature_number(y)?));
+    for [a, b, e] in [
+        [(x + radius, y + k), (x + k, y + radius), (x, y + radius)],
+        [(x - k, y + radius), (x - radius, y + k), (x - radius, y)],
+        [(x - radius, y - k), (x - k, y - radius), (x, y - radius)],
+        [(x + k, y - radius), (x + radius, y - k), (x + radius, y)],
+    ] {
+        c.push_str(&format!(
+            "{} {} {} {} {} {} c\n",
+            signature_number(a.0)?,
+            signature_number(a.1)?,
+            signature_number(b.0)?,
+            signature_number(b.1)?,
+            signature_number(e.0)?,
+            signature_number(e.1)?
+        ));
+    }
+    c.push_str("h f\n");
+    Some(())
+}
+
+fn draw_signature_ink(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) -> Option<()> {
+    let col = context.stroke?;
+    let width = context.width;
+    if !col.iter().all(|v| v.is_finite()) || !context.opacity.is_finite() || !(width.is_finite() && width >= 0.0 && (width as f32).is_finite()) {
+        return None;
+    }
+    let list = context.dict.get(b"InkList")?.as_array()?;
+    if list.len() > 100_000 {
+        return None;
+    }
+    let c = &mut drawing.content;
+    c.push_str(&format!("{}{}{} w 1 J 1 j\n{}", rg_stroke(col), rg(col), signature_number(width)?, signature_dash(context.dict)?));
+    let mut count = 0usize;
+    for stroke in list {
+        let values = stroke.as_array()?;
+        if values.len() % 2 != 0 {
+            return None;
+        }
+        count = count.checked_add(values.len() / 2)?;
+        if count > 100_000 {
+            return None;
+        }
+        let mut points = Vec::with_capacity(values.len() / 2);
+        for pair in values.as_chunks::<2>().0 {
+            let (x, y) = (pair[0].as_f64()?, pair[1].as_f64()?);
+            if !(x.is_finite() && y.is_finite() && (x as f32).is_finite() && (y as f32).is_finite()) {
+                return None;
+            }
+            points.push((x, y));
+        }
+        let Some(&first) = points.first() else { continue };
+        if points.iter().all(|p| *p == first) {
+            // A true zero-width isolated point has no finite disc area: refuse redraw.
+            signature_dot(c, first, width / 2.0)?;
+            continue;
+        }
+        c.push_str(&format!("{} {} m\n", signature_number(first.0)?, signature_number(first.1)?));
+        if let [_, end] = points.as_slice() {
+            c.push_str(&format!("{} {} l\n", signature_number(end.0)?, signature_number(end.1)?));
+        } else {
+            for [a, b, e] in smooth_segments(&points) {
+                c.push_str(&format!(
+                    "{} {} {} {} {} {} c\n",
+                    signature_number(a.0)?,
+                    signature_number(a.1)?,
+                    signature_number(b.0)?,
+                    signature_number(b.1)?,
+                    signature_number(e.0)?,
+                    signature_number(e.1)?
+                ));
+            }
+        }
+        c.push_str("S\n");
     }
     Some(())
 }

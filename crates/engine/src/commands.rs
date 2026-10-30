@@ -335,6 +335,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("sign.fill.date", "Fill & Sign: date", None, None, Annotate, "clock-3"),
     c("sign.fill.signature", "Fill & Sign: sign", None, None, Annotate, "signature"),
     c("sign.fill.initials", "Fill & Sign: initials", None, None, Annotate, "signature"),
+    c("sign.fill.signature.size", "Use this size for saved signature", None, None, Document, "signature"),
+    c("sign.fill.initials.size", "Use this size for saved initials", None, None, Document, "signature"),
     c("sign.fill.signature.change", "Fill & Sign: change signature", None, None, Nothing, "signature"),
     c("sign.fill.signature.remove", "Fill & Sign: remove saved signature", None, None, Nothing, "x"),
     c("sign.fill.initials.remove", "Fill & Sign: remove saved initials", None, None, Nothing, "x"),

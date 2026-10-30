@@ -2555,3 +2555,12 @@ animation effects	Off	Өшірулі
 	Rotate the selected pages clockwise	Таңдалған беттерді сағат тілімен бұру
 	Extract the selected pages…	Таңдалған беттерді шығарып алу…
 	Delete the selected pages	Таңдалған беттерді жою
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Сақталған қолтаңба үшін осы өлшемді пайдалану
+	Use this size for saved initials	Сақталған бас әріптер үшін осы өлшемді пайдалану
+	Future placements use this size. Existing signatures are unchanged.	Болашақта орналастыру кезінде осы өлшем қолданылады. Бар қолтаңбалар өзгеріссіз қалады.
+	Select a placed signature first	Алдымен орналастырылған қолтаңбаны таңдаңыз
+	Save initials first	Алдымен бас әріптерді сақтаңыз
+	Save a signature first	Алдымен қолтаңбаны сақтаңыз
+	The selection changed. Select the signature again.	Таңдау өзгерді. Қолтаңбаны қайта таңдаңыз.

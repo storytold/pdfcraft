@@ -2833,3 +2833,12 @@ certificate	Version	الإصدار
 	Rotate the selected pages clockwise	تدوير الصفحات المحددة باتجاه عقارب الساعة
 	Extract the selected pages…	استخراج الصفحات المحددة…
 	Delete the selected pages	حذف الصفحات المحددة
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	استخدم هذا الحجم للتوقيع المحفوظ
+	Use this size for saved initials	استخدم هذا الحجم للأحرف الأولى المحفوظة
+	Future placements use this size. Existing signatures are unchanged.	سيُستخدم هذا الحجم في المواضع المستقبلية. لن تتغير التوقيعات الحالية.
+	Select a placed signature first	حدّد توقيعًا موضوعًا أولًا
+	Save initials first	احفظ الأحرف الأولى أولًا
+	Save a signature first	احفظ توقيعًا أولًا
+	The selection changed. Select the signature again.	تغيّر التحديد. حدّد التوقيع مرة أخرى.

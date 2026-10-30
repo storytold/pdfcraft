@@ -5,7 +5,9 @@
 
 use egui::{Color32, CornerRadius, Pos2, Sense, Stroke, pos2, vec2};
 use pdfcraft_engine::signature_scan::{DEFAULT_SENSITIVITY, PREVIEW_MAX_SIDE, SCAN_MAX_SIDE, ScanError};
-use pdfcraft_engine::{Edit, FillMark, NewAnnotation, PhotoRect, Shape, SignatureImage, SignaturePhoto, Style, Turn};
+use pdfcraft_engine::{
+    Edit, EditError, FillMark, NewAnnotation, PhotoRect, Shape, SignatureImage, SignaturePhoto, SignaturePlacementSize, Style, Turn,
+};
 use pdfcraft_render::{DocInfo, PageInfo};
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
@@ -16,6 +18,15 @@ mod scan;
 
 pub use scan::ScanDraft;
 use scan::scan_tab;
+
+/// One explicit menu action, bound to the document and appearance selected at activation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SignatureSizeRequest {
+    pub doc: pdfcraft_engine::DocId,
+    pub page: usize,
+    pub annotation: usize,
+    pub initials: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FillTool {
@@ -39,6 +50,15 @@ pub enum SavedSig {
     Drawn(Vec<Vec<[f32; 2]>>),
     Typed(String),
     Image(#[serde(with = "image_data")] SignatureImage),
+}
+
+/// Check whether a saved target can accept a physical signature size.
+/// Typed and image targets keep their existing placement policy.
+pub(crate) fn validate_saved_size(target: &SavedSig, size: SignaturePlacementSize) -> Result<(), EditError> {
+    match target {
+        SavedSig::Drawn(strokes) => size.validate_drawing(strokes),
+        SavedSig::Typed(_) | SavedSig::Image(_) => Ok(()),
+    }
 }
 
 impl SavedSig {
@@ -435,6 +455,8 @@ pub(crate) struct PageInput<'a> {
     pub(crate) text_size: f64,
     pub(crate) signature: Option<&'a SavedSig>,
     pub(crate) initials: Option<&'a SavedSig>,
+    pub(crate) signature_size: Option<pdfcraft_engine::SignaturePlacementSize>,
+    pub(crate) initials_size: Option<pdfcraft_engine::SignaturePlacementSize>,
     pub(crate) preview: &'a mut Option<(SavedSig, egui::TextureHandle)>,
     pub(crate) author: &'a str,
     pub(crate) date_text: &'a Result<String, String>,
@@ -443,7 +465,7 @@ pub(crate) struct PageInput<'a> {
 /// Preview and clicks with a Fill & Sign tool on one page.
 pub(crate) fn page_input(cx: PageToolContext<'_>, input: PageInput<'_>, view: &mut DocView) -> Option<FillAction> {
     let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
-    let PageInput { tool, text_size, signature, initials, preview, author, date_text } = input;
+    let PageInput { tool, text_size, signature, initials, signature_size, initials_size, preview, author, date_text } = input;
     let pointer = ptr.within(xf.rect)?;
     let p = info.pages.get(page)?;
     let at = to_user(xf, info, page, pointer);
@@ -452,8 +474,17 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, input: PageInput<'_>, view: &m
         FillTool::Initials => initials,
         _ => None,
     };
+    let size = match tool {
+        FillTool::Signature => signature_size,
+        FillTool::Initials => initials_size,
+        _ => None,
+    };
     if let Some(SavedSig::Image(image)) = saved {
-        if let Some(rect) = image.rect(p, at, tool == FillTool::Initials) {
+        let rect = match size {
+            Some(size) => size.rect_at(p, at).ok(),
+            None => image.rect(p, at, tool == FillTool::Initials),
+        };
+        if let Some(rect) = rect {
             let tex = image_texture(ui, image, preview);
             xf.paint_user_image(ui.painter(), tex, p, rect, i64::from(p.rotation), Color32::WHITE);
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::None);
@@ -481,11 +512,29 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, input: PageInput<'_>, view: &m
             Err(why) => FillAction::Refused(why.clone()),
         }),
         FillTool::Signature => match signature {
-            Some(s) => place(page, p, at, s, false, author).map(|e| FillAction::Signature(Box::new(e))),
+            Some(s) => place(page, p, at, s, false, author).map(|e| {
+                let e = match size {
+                    Some(size) => pdfcraft_engine::signature_placement_with_size(e, p, at, size),
+                    None => Ok(e),
+                };
+                match e {
+                    Ok(e) => FillAction::Signature(Box::new(e)),
+                    Err(error) => FillAction::Refused(error.to_string()),
+                }
+            }),
             None => Some(FillAction::CreateSignature),
         },
         FillTool::Initials => match initials {
-            Some(s) => place(page, p, at, s, true, author).map(|e| FillAction::Signature(Box::new(e))),
+            Some(s) => place(page, p, at, s, true, author).map(|e| {
+                let e = match size {
+                    Some(size) => pdfcraft_engine::signature_placement_with_size(e, p, at, size),
+                    None => Ok(e),
+                };
+                match e {
+                    Ok(e) => FillAction::Signature(Box::new(e)),
+                    Err(error) => FillAction::Refused(error.to_string()),
+                }
+            }),
             None => Some(FillAction::CreateInitials),
         },
         mark => {

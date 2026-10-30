@@ -2733,3 +2733,12 @@ key	Space	Mellomrom
 	Rotate the selected pages clockwise	Roter de valgte sidene med klokken
 	Extract the selected pages…	Trekk ut de valgte sidene…
 	Delete the selected pages	Slett de valgte sidene
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Bruk denne størrelsen for lagret signatur
+	Use this size for saved initials	Bruk denne størrelsen for lagrede initialer
+	Future placements use this size. Existing signatures are unchanged.	Fremtidige plasseringer bruker denne størrelsen. Eksisterende signaturer endres ikke.
+	Select a placed signature first	Velg en plassert signatur først
+	Save initials first	Lagre initialene først
+	Save a signature first	Lagre en signatur først
+	The selection changed. Select the signature again.	Utvalget er endret. Velg signaturen på nytt.

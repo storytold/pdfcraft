@@ -1,6 +1,7 @@
 use super::create::{finite, num_array};
 use super::lookup::{annot_dict, annots, page_refs};
 use super::modify::refuse_foreign_text;
+use super::signature::SignatureAppearanceUse;
 use super::types::NOTE_SIZE;
 use super::{AnnotError, Dict, Document, ObjRef, Object, Stream, appearance};
 
@@ -33,14 +34,37 @@ pub(crate) fn redraw_or_restore(doc: &mut Document, r: ObjRef, before: Dict) -> 
 pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
-    let Some(stream) = build_appearance(doc, &d) else { return Err(AnnotError::Unsupported(subtype)) };
+    let Some(stream) = build_appearance(doc, &d, SignatureAppearanceUse::Edit)? else { return Err(AnnotError::Unsupported(subtype)) };
     apply_appearance(doc, r, &d, stream)
+}
+
+/// Keep raw restyle checks unchanged, resolving only a recognized signature's indirect BS/D.
+/// The temporary clone must pass both the old raw checks and the actual strict redraw parser.
+/// It is never stored, and a document-free appearance builder never guesses at a reference.
+pub(crate) fn can_restyle(doc: &Document, d: &Dict) -> bool {
+    let indirect = d.get(b"BS").and_then(Object::as_dict).filter(|bs| bs.name(b"S") == Some(b"D") && matches!(bs.get(b"D"), Some(Object::Ref(_))));
+    let Some(bs) = indirect.filter(|_| super::lookup::is_signature_ink(doc, d)) else {
+        return appearance::build(d).is_some();
+    };
+    let Some(value) = bs.get(b"D") else { return false };
+    let mut border = bs.clone();
+    border.set(b"D".to_vec(), (*doc.resolve(value)).clone());
+    let mut resolved = d.clone();
+    resolved.set(b"BS".to_vec(), Object::Dict(border));
+    appearance::build(&resolved).is_some() && build_appearance(doc, d, SignatureAppearanceUse::Edit).is_ok_and(|stream| stream.is_some())
 }
 
 /// Draw the appearance for an annotation dictionary: the expensive half of [`set_appearance`].
 /// Pure from the dictionary and the objects it points at, so [`AppearanceCache`] can reuse it.
-fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
-    let mut stream = appearance::build(d)?;
+fn build_appearance(doc: &Document, d: &Dict, usage: SignatureAppearanceUse) -> Result<Option<Stream>, AnnotError> {
+    let local;
+    let drawing = if super::lookup::is_signature_ink(doc, d) {
+        local = super::signature::normalized_appearance(doc, d, usage)?;
+        &local
+    } else {
+        d
+    };
+    let Some(mut stream) = appearance::build(drawing) else { return Ok(None) };
     // Picture-stamp restyling must retain the placement's page-axis correction.
     if d.get(b"PCPicture").is_some() {
         let matrix = d.get(b"AP").and_then(|ap| {
@@ -53,7 +77,7 @@ fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
             stream.dict.set(b"Matrix".to_vec(), matrix);
         }
     }
-    Some(stream)
+    Ok(Some(stream))
 }
 
 /// Store a built appearance on the annotation: the cheap half of [`set_appearance`].
@@ -188,7 +212,7 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
                 bare.remove(b"AP");
                 appearance::display_stamp(&bare)
             };
-            let Some(stream) = build_appearance(doc, &d).or_else(other_stamp) else { continue };
+            let Some(stream) = build_appearance(doc, &d, SignatureAppearanceUse::Display).ok().flatten().or_else(other_stamp) else { continue };
             cache.insert(r, &stream);
             // Fails only when `r` isn't a dictionary, which the build just ruled out.
             apply_appearance(copy.get_or_insert_with(|| doc.clone()), r, &d, stream).ok();

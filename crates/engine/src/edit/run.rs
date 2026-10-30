@@ -5,6 +5,36 @@ use super::{
 use crate::SourceProblem;
 use crate::sources::{comment_source, import_pdf_comments};
 
+fn add_custom_stamp(
+    doc: &mut pdfcraft_cos::Document,
+    page: usize,
+    rect: [f64; 4],
+    name: &str,
+    file: &crate::MarkFile,
+    author: &str,
+    meta: &pdfcraft_annot::Meta,
+) -> Result<usize, EditError> {
+    let src = mark_source(doc, file)?;
+    let (sw, sh) = (src.size.0.max(1.0), src.size.1.max(1.0));
+    let natural = rect[2] == rect[0] && rect[3] == rect[1];
+    let rotation = pdfcraft_organize::page_rotation(doc, page)?;
+    // The picture as displayed: a quarter turn swaps its sides in user space.
+    let (dw, dh) = if matches!(rotation, 90 | 270) { (sh, sw) } else { (sw, sh) };
+    let rect = if natural {
+        let k = (200.0 / sw.max(sh)).min(1.0);
+        let (w, h) = (dw * k, dh * k);
+        [rect[0] - w / 2.0, rect[1] - h / 2.0, rect[0] + w / 2.0, rect[1] + h / 2.0]
+    } else {
+        fit_picture(rect, dw, dh)
+    };
+    let shape = Shape::CustomStamp { rect, name: name.into(), picture: src.xobject, image: src.image, size: (sw, sh) };
+    let style = pdfcraft_annot::Style::default_for(&shape);
+    let new = NewAnnotation { page, shape, style, contents: name.into(), author: author.into() };
+    let index = pdfcraft_annot::add_annotation(doc, &new, meta)?;
+    pdfcraft_annot::orient_image_stamp(doc, page, index, rotation)?;
+    Ok(index)
+}
+
 /// Whether the opening password allows an edit (§7.6.4.2, Table 22).
 pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), EditError> {
     match edit {
@@ -47,6 +77,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         }
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
+        | Edit::AddSizedSignature(_)
         | Edit::AddCustomStamp { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
@@ -326,25 +357,30 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::AddAnnotation(a) => {
             pdfcraft_annot::add_annotation(doc, a, &cx.meta())?;
         }
-        Edit::AddCustomStamp { page, rect, name, file, author } => {
-            let src = mark_source(doc, file)?;
-            let (sw, sh) = (src.size.0.max(1.0), src.size.1.max(1.0));
-            let natural = rect[2] == rect[0] && rect[3] == rect[1];
-            let rotation = pdfcraft_organize::page_rotation(doc, *page)?;
-            // The picture as displayed: a quarter turn swaps its sides in user space.
-            let (dw, dh) = if matches!(rotation, 90 | 270) { (sh, sw) } else { (sw, sh) };
-            let rect = if natural {
-                let k = (200.0 / sw.max(sh)).min(1.0);
-                let (w, h) = (dw * k, dh * k);
-                [rect[0] - w / 2.0, rect[1] - h / 2.0, rect[0] + w / 2.0, rect[1] + h / 2.0]
-            } else {
-                fit_picture(*rect, dw, dh)
+        Edit::AddSizedSignature(placement) => {
+            use crate::fill_sign::SignaturePlacementSource;
+            let meta = cx.meta();
+            let (page, index, needs_resize) = match &placement.source {
+                SignaturePlacementSource::Annotation(a) if matches!(a.shape, pdfcraft_annot::Shape::Signature { .. }) => {
+                    (a.page, pdfcraft_annot::add_sized_signature(doc, a, placement.rect, &meta)?, false)
+                }
+                SignaturePlacementSource::Annotation(a) => (a.page, pdfcraft_annot::add_annotation(doc, a, &meta)?, true),
+                SignaturePlacementSource::Image { page, rect, name, file, author } => {
+                    (*page, add_custom_stamp(doc, *page, *rect, name, file, author, &meta)?, true)
+                }
             };
-            let shape = Shape::CustomStamp { rect, name: name.clone(), picture: src.xobject, image: src.image, size: (sw, sh) };
-            let style = pdfcraft_annot::Style::default_for(&shape);
-            let new = NewAnnotation { page: *page, shape, style, contents: name.clone(), author: author.clone() };
-            let index = pdfcraft_annot::add_annotation(doc, &new, &cx.meta())?;
-            pdfcraft_annot::orient_image_stamp(doc, *page, index, rotation)?;
+            // The builder returns the actual index. Checking the created kind also rejects
+            // a PDF stamp masquerading as an image signature. Session applies this entire
+            // operation on a COS clone, so a failure leaves no partially added annotation.
+            if pdfcraft_annot::appearance_signature_rect(doc, page, index)?.is_none() {
+                return Err(EditError::Invalid("the placement is not an appearance signature".into()));
+            }
+            if needs_resize {
+                pdfcraft_annot::set_rect(doc, page, index, placement.rect, &meta)?;
+            }
+        }
+        Edit::AddCustomStamp { page, rect, name, file, author } => {
+            add_custom_stamp(doc, *page, *rect, name, file, author, &cx.meta())?;
         }
         Edit::DeleteAnnotation { page, index } => pdfcraft_annot::delete_annotation(doc, *page, *index)?,
         Edit::SetAnnotationContents { page, index, text } => pdfcraft_annot::set_contents(doc, *page, *index, text, &cx.meta())?,

@@ -2653,3 +2653,12 @@ animation effects	Off	Wyłączone
 	Rotate the selected pages clockwise	Obróć zaznaczone strony w prawo
 	Extract the selected pages…	Wyodrębnij zaznaczone strony…
 	Delete the selected pages	Usuń zaznaczone strony
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Użyj tego rozmiaru dla zapisanego podpisu
+	Use this size for saved initials	Użyj tego rozmiaru dla zapisanych inicjałów
+	Future placements use this size. Existing signatures are unchanged.	Przyszłe umieszczenia będą używać tego rozmiaru. Istniejące podpisy pozostaną bez zmian.
+	Select a placed signature first	Najpierw wybierz umieszczony podpis
+	Save initials first	Najpierw zapisz inicjały
+	Save a signature first	Najpierw zapisz podpis
+	The selection changed. Select the signature again.	Wybór uległ zmianie. Wybierz podpis ponownie.

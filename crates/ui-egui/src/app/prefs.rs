@@ -145,6 +145,8 @@ impl PdfCraftApp {
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
+        v["signature_size"] = serde_json::json!(self.signature_placement_size.map(|s| [s.width(), s.height()]));
+        v["initials_size"] = serde_json::json!(self.initials_placement_size.map(|s| [s.width(), s.height()]));
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
         v.to_string()
@@ -330,6 +332,10 @@ impl PdfCraftApp {
 
     /// Saved signatures, stamps, actions and trusted certificates.
     fn restore_signature_prefs(&mut self, v: &serde_json::Value) {
+        self.signature = None;
+        self.initials = None;
+        self.signature_placement_size = None;
+        self.initials_placement_size = None;
         if let Ok(s) = serde_json::from_value::<Vec<Vec<[f32; 2]>>>(v["signature"].clone())
             && s.iter().all(|st| st.iter().all(|p| p.iter().all(|x| x.is_finite())))
         {
@@ -343,6 +349,12 @@ impl PdfCraftApp {
         }
         if let Ok(i) = serde_json::from_value::<fill_sign::SavedSig>(v["initials"].clone()) {
             self.initials = Some(i);
+        }
+        if self.signature.is_some() {
+            self.signature_placement_size = restored_signature_size(&v["signature_size"]);
+        }
+        if self.initials.is_some() {
+            self.initials_placement_size = restored_signature_size(&v["initials_size"]);
         }
         // An unreadable choice (a damaged image) falls back to the name.
         self.sign_graphic = serde_json::from_value(v["sign_graphic"].clone()).unwrap_or_default();
@@ -358,5 +370,28 @@ impl PdfCraftApp {
             let certs = pems.iter().filter_map(|p| pdfcraft_engine::sign::x509::load_certificates(p.as_bytes()).ok()).flatten().collect();
             self.apply_trusted_certificates(certs);
         }
+    }
+}
+
+fn restored_signature_size(value: &serde_json::Value) -> Option<pdfcraft_engine::SignaturePlacementSize> {
+    let [width, height] = value.as_array()?.as_slice() else { return None };
+    let width = width.as_f64()?;
+    let height = height.as_f64()?;
+    pdfcraft_engine::SignaturePlacementSize::new(width, height).ok()
+}
+
+impl PdfCraftApp {
+    /// Accepting an unchanged graphic retains its future-placement size.
+    /// A changed graphic or removal clears only that saved slot's size.
+    pub(crate) fn set_saved_signature_slot(&mut self, initials: bool, saved: Option<fill_sign::SavedSig>) {
+        let (slot, size) = if initials {
+            (&mut self.initials, &mut self.initials_placement_size)
+        } else {
+            (&mut self.signature, &mut self.signature_placement_size)
+        };
+        if saved.is_none() || slot.as_ref() != saved.as_ref() {
+            *size = None;
+        }
+        *slot = saved;
     }
 }

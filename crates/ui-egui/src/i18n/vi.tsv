@@ -2824,3 +2824,12 @@ key	Space	Space
 	Rotate the selected pages clockwise	Xoay các trang đã chọn theo chiều kim đồng hồ
 	Extract the selected pages…	Trích xuất các trang đã chọn…
 	Delete the selected pages	Xóa các trang đã chọn
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Dùng kích thước này cho chữ ký đã lưu
+	Use this size for saved initials	Dùng kích thước này cho chữ viết tắt đã lưu
+	Future placements use this size. Existing signatures are unchanged.	Các lần đặt sau sẽ dùng kích thước này. Chữ ký hiện có không thay đổi.
+	Select a placed signature first	Trước tiên, hãy chọn chữ ký đã đặt
+	Save initials first	Trước tiên, hãy lưu chữ viết tắt
+	Save a signature first	Trước tiên, hãy lưu chữ ký
+	The selection changed. Select the signature again.	Lựa chọn đã thay đổi. Hãy chọn lại chữ ký.

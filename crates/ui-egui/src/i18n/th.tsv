@@ -2720,3 +2720,12 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Rotate the selected pages clockwise	หมุนหน้าที่เลือกตามเข็มนาฬิกา
 	Extract the selected pages…	แยกหน้าที่เลือกออก…
 	Delete the selected pages	ลบหน้าที่เลือก
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	ใช้ขนาดนี้กับลายเซ็นที่บันทึกไว้
+	Use this size for saved initials	ใช้ขนาดนี้กับชื่อย่อที่บันทึกไว้
+	Future placements use this size. Existing signatures are unchanged.	การวางในอนาคตจะใช้ขนาดนี้ ลายเซ็นที่มีอยู่จะไม่เปลี่ยนแปลง
+	Select a placed signature first	เลือกลายเซ็นที่วางไว้ก่อน
+	Save initials first	บันทึกชื่อย่อก่อน
+	Save a signature first	บันทึกลายเซ็นก่อน
+	The selection changed. Select the signature again.	การเลือกเปลี่ยนไปแล้ว เลือกลายเซ็นอีกครั้ง

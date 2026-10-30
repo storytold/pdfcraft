@@ -2507,3 +2507,12 @@ animation effects	Off	關
 	Rotate the selected pages clockwise	順時針旋轉所選頁面
 	Extract the selected pages…	擷取所選頁面…
 	Delete the selected pages	刪除所選頁面
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	對已儲存的簽名使用此尺寸
+	Use this size for saved initials	對已儲存的姓名縮寫使用此尺寸
+	Future placements use this size. Existing signatures are unchanged.	未來放置時會使用此尺寸。現有簽名不會變更。
+	Select a placed signature first	請先選取已放置的簽名
+	Save initials first	請先儲存姓名縮寫
+	Save a signature first	請先儲存簽名
+	The selection changed. Select the signature again.	選取項目已變更。請重新選取簽名。

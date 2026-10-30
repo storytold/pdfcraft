@@ -2521,3 +2521,12 @@ animation effects	Off	关
 	Rotate the selected pages clockwise	顺时针旋转所选页面
 	Extract the selected pages…	提取所选页面…
 	Delete the selected pages	删除所选页面
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	对已保存的签名使用此尺寸
+	Use this size for saved initials	对已保存的姓名首字母使用此尺寸
+	Future placements use this size. Existing signatures are unchanged.	今后放置时将使用此尺寸。现有签名不会更改。
+	Select a placed signature first	请先选择已放置的签名
+	Save initials first	请先保存姓名首字母
+	Save a signature first	请先保存签名
+	The selection changed. Select the signature again.	选择已更改。请重新选择签名。

@@ -2579,3 +2579,12 @@ animation effects	Off	Вимкнено
 	Rotate the selected pages clockwise	Повернути вибрані сторінки за годинниковою стрілкою
 	Extract the selected pages…	Витягнути вибрані сторінки…
 	Delete the selected pages	Видалити вибрані сторінки
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Використовувати цей розмір для збереженого підпису
+	Use this size for saved initials	Використовувати цей розмір для збережених ініціалів
+	Future placements use this size. Existing signatures are unchanged.	Під час майбутнього розміщення використовуватиметься цей розмір. Наявні підписи не зміняться.
+	Select a placed signature first	Спочатку виберіть розміщений підпис
+	Save initials first	Спочатку збережіть ініціали
+	Save a signature first	Спочатку збережіть підпис
+	The selection changed. Select the signature again.	Вибір змінився. Виберіть підпис знову.

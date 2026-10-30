@@ -2864,3 +2864,12 @@ certificate	Version	Verze
 	Rotate the selected pages clockwise	Otočit vybrané stránky po směru hodinových ručiček
 	Extract the selected pages…	Extrahovat vybrané stránky…
 	Delete the selected pages	Odstranit vybrané stránky
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Použít tuto velikost pro uložený podpis
+	Use this size for saved initials	Použít tuto velikost pro uložené iniciály
+	Future placements use this size. Existing signatures are unchanged.	Při budoucím umístění se použije tato velikost. Stávající podpisy zůstanou beze změny.
+	Select a placed signature first	Nejprve vyberte umístěný podpis
+	Save initials first	Nejprve uložte iniciály
+	Save a signature first	Nejprve uložte podpis
+	The selection changed. Select the signature again.	Výběr se změnil. Vyberte podpis znovu.

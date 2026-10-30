@@ -2794,3 +2794,12 @@ theme	Appearance	स्वरूप
 	Rotate the selected pages clockwise	चयनित पृष्ठों को दक्षिणावर्त घुमाएँ
 	Extract the selected pages…	चयनित पृष्ठ निकालें…
 	Delete the selected pages	चयनित पृष्ठ हटाएँ
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	सहेजे गए हस्ताक्षर के लिए यह आकार इस्तेमाल करें
+	Use this size for saved initials	सहेजे गए आद्याक्षरों के लिए यह आकार इस्तेमाल करें
+	Future placements use this size. Existing signatures are unchanged.	आगे रखे जाने वाले हस्ताक्षरों में यह आकार इस्तेमाल होगा। मौजूदा हस्ताक्षर नहीं बदलेंगे।
+	Select a placed signature first	पहले पृष्ठ पर रखे गए हस्ताक्षर को चुनें
+	Save initials first	पहले आद्याक्षर सहेजें
+	Save a signature first	पहले हस्ताक्षर सहेजें
+	The selection changed. Select the signature again.	चयन बदल गया है। हस्ताक्षर फिर से चुनें।

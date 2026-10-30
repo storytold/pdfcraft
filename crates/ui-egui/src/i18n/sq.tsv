@@ -2544,3 +2544,12 @@ animation effects	Off	Joaktiv
 	Rotate the selected pages clockwise	Rrotullo faqet e përzgjedhura në drejtim të orës
 	Extract the selected pages…	Nxirr faqet e përzgjedhura…
 	Delete the selected pages	Fshi faqet e përzgjedhura
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Përdor këtë madhësi për nënshkrimin e ruajtur
+	Use this size for saved initials	Përdor këtë madhësi për inicialet e ruajtura
+	Future placements use this size. Existing signatures are unchanged.	Vendosjet e ardhshme do të përdorin këtë madhësi. Nënshkrimet ekzistuese nuk ndryshojnë.
+	Select a placed signature first	Së pari zgjidh një nënshkrim të vendosur
+	Save initials first	Ruaj fillimisht inicialet
+	Save a signature first	Ruaj fillimisht një nënshkrim
+	The selection changed. Select the signature again.	Përzgjedhja ndryshoi. Zgjidh përsëri nënshkrimin.

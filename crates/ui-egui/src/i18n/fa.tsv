@@ -2804,3 +2804,12 @@ theme	Appearance	ظاهر
 	two cells would both be named {name}	دو خانه هر دو با نام {name} نام‌گذاری می‌شوند
 	a field named {name} already exists	فیلدی با نام {name} از قبل وجود دارد
 	Today	امروز
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	از این اندازه برای امضای ذخیره‌شده استفاده کن
+	Use this size for saved initials	از این اندازه برای حروف اول ذخیره‌شده استفاده کن
+	Future placements use this size. Existing signatures are unchanged.	برای جای‌گذاری‌های بعدی از این اندازه استفاده می‌شود. امضاهای موجود بدون تغییر می‌مانند.
+	Select a placed signature first	ابتدا یک امضای درج‌شده را انتخاب کن
+	Save initials first	ابتدا حروف اول را ذخیره کن
+	Save a signature first	ابتدا یک امضا را ذخیره کن
+	The selection changed. Select the signature again.	انتخاب تغییر کرد. امضا را دوباره انتخاب کن.

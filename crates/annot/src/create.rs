@@ -203,10 +203,23 @@ pub fn callout_attach(rect: [f64; 4], knee: [f64; 2]) -> [f64; 2] {
 
 /// Add a comment; returns its index in the page's `/Annots`.
 pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> Result<usize, AnnotError> {
+    add_annotation_with_rect(doc, new, meta, None)
+}
+
+/// Only the validated drawn-signature planner supplies a final appearance rectangle.
+pub(crate) fn add_annotation_with_rect(
+    doc: &mut Document,
+    new: &NewAnnotation,
+    meta: &Meta,
+    rect_override: Option<[f64; 4]>,
+) -> Result<usize, AnnotError> {
     let page = page_ref(doc, new.page)?;
     let style = &new.style;
     validate_style(style)?;
-    let rect = rect_for(&new.shape, style)?;
+    let rect = match rect_override {
+        Some(rect) => rect,
+        None => rect_for(&new.shape, style)?,
+    };
     let mut d = base_dict(new.shape.subtype(), rect, page, &new.contents, &new.author, meta);
     d.set(b"Subj".to_vec(), PdfString::text(subject(&new.shape)));
     let opacity = style.opacity.clamp(0.0, 1.0);

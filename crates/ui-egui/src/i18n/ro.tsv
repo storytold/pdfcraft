@@ -2818,3 +2818,12 @@ theme	Appearance	Aspect
 	Rotate the selected pages clockwise	Rotește paginile selectate în sens orar
 	Extract the selected pages…	Extrage paginile selectate…
 	Delete the selected pages	Șterge paginile selectate
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Folosește această dimensiune pentru semnătura salvată
+	Use this size for saved initials	Folosește această dimensiune pentru inițialele salvate
+	Future placements use this size. Existing signatures are unchanged.	Amplasările viitoare vor folosi această dimensiune. Semnăturile existente rămân neschimbate.
+	Select a placed signature first	Selectează mai întâi o semnătură plasată
+	Save initials first	Salvează mai întâi inițialele
+	Save a signature first	Salvează mai întâi o semnătură
+	The selection changed. Select the signature again.	Selecția s-a schimbat. Selectează din nou semnătura.

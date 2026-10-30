@@ -113,13 +113,16 @@ fn any_contains<'a>(fields: impl IntoIterator<Item = &'a str>, q: &str) -> bool 
 /// Draw the panel body. Returns an edit to apply (posting, replying, deleting…).
 pub(crate) fn show(
     ui: &mut egui::Ui,
-    t: &Tokens,
-    info: &DocInfo,
+    doc: &pdfcraft_engine::Document,
     view: &mut DocView,
     prefs: &CommentPrefs,
-    allowed: bool,
+    signature: Option<&crate::fill_sign::SavedSig>,
+    initials: Option<&crate::fill_sign::SavedSig>,
     nav: &mut Option<Nav>,
 ) -> Option<Edit> {
+    let t = &Tokens::get(ui.ctx());
+    let info = &doc.info;
+    let allowed = doc.allows_annotation();
     crate::widgets::begin_dialog(ui);
     let mut edit = None;
     // Search (the header's magnifier toggles it).
@@ -285,7 +288,9 @@ pub(crate) fn show(
         }
         let thread = replies_of(a);
         let rotation = info.pages.get(a.page).map_or(0, |p| p.rotation);
-        if let Some(e) = card(ui, view, CardContext { theme: t, annotation: a, rotation, thread, info, prefs, allowed, nav }) {
+        if let Some(e) =
+            card(ui, view, CardContext { theme: t, annotation: a, rotation, thread, info, doc, prefs, allowed, signature, initials, nav })
+        {
             edit = Some(e);
         }
     }
@@ -301,13 +306,16 @@ struct CardContext<'a> {
     rotation: u16,
     thread: &'a [&'a Annotation],
     info: &'a DocInfo,
+    doc: &'a pdfcraft_engine::Document,
     prefs: &'a CommentPrefs,
     allowed: bool,
+    signature: Option<&'a crate::fill_sign::SavedSig>,
+    initials: Option<&'a crate::fill_sign::SavedSig>,
     nav: &'a mut Option<Nav>,
 }
 
 fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Option<Edit> {
-    let CardContext { theme: t, annotation: a, rotation, thread, info, prefs, allowed, nav } = context;
+    let CardContext { theme: t, annotation: a, rotation, thread, info, doc, prefs, allowed, signature, initials: saved_initials, nav } = context;
     let mut edit = None;
     let key = (a.page, a.index);
     let selected = view.comments.selected == Some(key);
@@ -493,6 +501,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
         .show(|ui| {
             ui.set_min_width(160.0);
             crate::comments::attachment_items(ui, view, info, a);
+            crate::comments::signature_size_items(ui, view, doc, signature, saved_initials);
             if ui.button(tl_ctx!("comment menu", "Edit")).clicked() {
                 view.comments.open_editor(a.page, a.index, a.contents.clone().unwrap_or_default());
                 ui.close();

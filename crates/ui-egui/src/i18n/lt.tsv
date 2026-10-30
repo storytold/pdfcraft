@@ -2818,3 +2818,12 @@ theme	Appearance	Išvaizda
 	Rotate the selected pages clockwise	Pasukti pasirinktus puslapius pagal laikrodžio rodyklę
 	Extract the selected pages…	Išskleisti pasirinktus puslapius…
 	Delete the selected pages	Ištrinti pasirinktus puslapius
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Šį dydį naudoti išsaugotam parašui
+	Use this size for saved initials	Šį dydį naudoti išsaugotiems inicialams
+	Future placements use this size. Existing signatures are unchanged.	Ateityje dedant parašus bus naudojamas šis dydis. Esami parašai nepasikeis.
+	Select a placed signature first	Pirmiausia pasirinkite įterptą parašą
+	Save initials first	Pirmiausia išsaugokite inicialus
+	Save a signature first	Pirmiausia išsaugokite parašą
+	The selection changed. Select the signature again.	Pasirinkimas pasikeitė. Pasirinkite parašą dar kartą.

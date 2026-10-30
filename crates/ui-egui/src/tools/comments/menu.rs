@@ -5,6 +5,84 @@ use super::{
     icons, theme, tool_for, vec2,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SignatureSizeMenuKey {
+    doc: pdfcraft_engine::DocId,
+    page: usize,
+    annotation: usize,
+    generation: u64,
+}
+
+impl SignatureSizeMenuKey {
+    fn new(doc: &pdfcraft_engine::Document, page: usize, annotation: usize) -> Self {
+        Self { doc: doc.id, page, annotation, generation: doc.edit_generation() }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SignatureSizeMenuCache {
+    key: SignatureSizeMenuKey,
+    source_size: Option<pdfcraft_engine::SignaturePlacementSize>,
+}
+
+fn signature_size_menu_source(
+    ctx: &egui::Context,
+    key: SignatureSizeMenuKey,
+    has_target: bool,
+    query: impl FnOnce() -> Option<pdfcraft_engine::SignaturePlacementSize>,
+) -> Option<pdfcraft_engine::SignaturePlacementSize> {
+    if !has_target {
+        return None;
+    }
+    // Replace one entry, rather than retaining a new egui data ID for every document,
+    // selection and edit generation. Both comment menu surfaces share this slot.
+    let id = egui::Id::unique("signature-size-menu-eligibility");
+    if let Some(cached) = ctx.data(|data| data.get_temp::<SignatureSizeMenuCache>(id)).filter(|cached| cached.key == key) {
+        return cached.source_size;
+    }
+    let source_size = query();
+    ctx.data_mut(|data| data.insert_temp(id, SignatureSizeMenuCache { key, source_size }));
+    source_size
+}
+
+/// Offer explicit size-copy actions only for an appearance the engine recognizes as a
+/// Fill & Sign signature. Each action is checked against its actual saved destination.
+pub(crate) fn signature_size_items(
+    ui: &mut egui::Ui,
+    view: &mut DocView,
+    doc: &pdfcraft_engine::Document,
+    signature: Option<&crate::fill_sign::SavedSig>,
+    initials: Option<&crate::fill_sign::SavedSig>,
+) {
+    let Some((page, index)) = view.comments.selected else { return };
+    let key = SignatureSizeMenuKey::new(doc, page, index);
+    let Some(source_size) = signature_size_menu_source(ui.ctx(), key, signature.is_some() || initials.is_some(), || {
+        doc.signature_placement_size(page, index).ok().flatten()
+    }) else {
+        return;
+    };
+    let mut offered = false;
+    for (target, is_initials, label) in
+        [(signature, false, "Use this size for saved signature"), (initials, true, "Use this size for saved initials")]
+    {
+        let Some(target) = target else { continue };
+        let compatibility = crate::fill_sign::validate_saved_size(target, source_size);
+        let response = ui
+            .add_enabled(compatibility.is_ok(), egui::Button::new(tl!(label)))
+            .on_hover_text(tl!("Future placements use this size. Existing signatures are unchanged."));
+        let response = if let Err(error) = compatibility { response.on_disabled_hover_text(error.to_string()) } else { response };
+        if response.clicked() {
+            view.comments.signature_size_request =
+                Some(crate::fill_sign::SignatureSizeRequest { doc: view.id, page, annotation: index, initials: is_initials });
+            ui.close();
+        }
+        offered = true;
+    }
+    if offered {
+        ui.separator();
+    }
+}
+
 /// Save attachment… and, for a PDF, Open in a new tab, first in a file attachment comment's
 /// menus as in the Attachments panel: the comment is where the reader finds its file. Reading
 /// the file changes nothing, so a read-only document offers them too.
@@ -370,3 +448,6 @@ pub fn status_badge(state: &str) -> Option<(&'static str, &'static str, Color32)
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod signature_size_menu_cache;

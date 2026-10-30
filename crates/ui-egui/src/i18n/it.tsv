@@ -2789,3 +2789,12 @@ certificate	SHA-256 digest	Impronta SHA-256
 	Rotate the selected pages clockwise	Ruota le pagine selezionate in senso orario
 	Extract the selected pages…	Estrai le pagine selezionate…
 	Delete the selected pages	Elimina le pagine selezionate
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Usa questa dimensione per la firma salvata
+	Use this size for saved initials	Usa questa dimensione per le iniziali salvate
+	Future placements use this size. Existing signatures are unchanged.	Per i posizionamenti futuri verrà usata questa dimensione. Le firme esistenti non cambiano.
+	Select a placed signature first	Seleziona prima una firma posizionata
+	Save initials first	Salva prima le iniziali
+	Save a signature first	Salva prima una firma
+	The selection changed. Select the signature again.	La selezione è cambiata. Seleziona di nuovo la firma.

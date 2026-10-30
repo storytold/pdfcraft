@@ -79,6 +79,9 @@ impl PdfCraftApp {
     /// Whether a registered command can run now. The engine judges the document (security,
     /// contents, undo history); view state it can't see is checked here.
     pub(crate) fn command_enabled(&self, spec: &CommandSpec) -> bool {
+        if matches!(spec.id, "sign.fill.signature.size" | "sign.fill.initials.size") {
+            return self.signature_size_source(spec.id).is_ok();
+        }
         // Undo and Redo act on the Combine files list while its tab shows.
         if self.combine_showing() && matches!(spec.needs, commands::Needs::Undo | commands::Needs::Redo) {
             return self.combine_can_undo(spec.needs == commands::Needs::Undo);
@@ -114,6 +117,9 @@ impl PdfCraftApp {
 
     /// Why the command can't run right now, for the user.
     fn disabled_reason(&self, spec: &CommandSpec) -> String {
+        if matches!(spec.id, "sign.fill.signature.size" | "sign.fill.initials.size") {
+            return self.signature_size_source(spec.id).err().unwrap_or_else(|| tl!("Select a placed signature first").to_string());
+        }
         match spec.needs {
             commands::Needs::Undo => tl!("Nothing to undo").to_string(),
             commands::Needs::Redo => tl!("Nothing to redo").to_string(),
@@ -250,6 +256,19 @@ impl PdfCraftApp {
 
     fn run_view_command(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
+            "sign.fill.signature.size" | "sign.fill.initials.size" => {
+                let initials = id == "sign.fill.initials.size";
+                let size = match self.signature_size_source(id) {
+                    Ok(size) => size,
+                    Err(error) => {
+                        self.pending_signature_size_request = None;
+                        self.notify(error);
+                        return Some(true);
+                    }
+                };
+                self.pending_signature_size_request = None;
+                if initials { self.initials_placement_size = Some(size) } else { self.signature_placement_size = Some(size) }
+            }
             "ui.dock.reset" => {
                 if let Err(error) = crate::side_panels::command(self, true, &serde_json::Value::Null) {
                     self.notify(error);
@@ -341,6 +360,41 @@ impl PdfCraftApp {
             _ => return None,
         }
         Some(true)
+    }
+
+    /// Dispatch a menu request through the same fresh validation as a direct command.
+    /// Clear the transient identity even when command enablement refuses execution.
+    pub(crate) fn dispatch_signature_size_request(&mut self, request: crate::fill_sign::SignatureSizeRequest) -> bool {
+        self.pending_signature_size_request = Some(request);
+        let executed = self.execute(if request.initials { "sign.fill.initials.size" } else { "sign.fill.signature.size" });
+        self.pending_signature_size_request = None;
+        executed
+    }
+
+    /// Validate the selected appearance and saved target for the explicit size-copy command.
+    /// The same checks drive enablement, refusal text, and execution.
+    fn signature_size_source(&self, id: &str) -> Result<pdfcraft_engine::SignaturePlacementSize, String> {
+        let initials = id == "sign.fill.initials.size";
+        let target = if initials { self.initials.as_ref() } else { self.signature.as_ref() }
+            .ok_or_else(|| tl!(if initials { "Save initials first" } else { "Save a signature first" }).to_string())?;
+        let Some((view_index, doc_id)) = self.active_ids() else { return Err(tl!("Open a document first").to_string()) };
+        let Some(view) = self.views.get(view_index) else { return Err(tl!("Open a document first").to_string()) };
+        let Some((page, annotation)) = view.comments.selected else { return Err(tl!("Select a placed signature first").to_string()) };
+        if self
+            .pending_signature_size_request
+            .is_some_and(|request| request != crate::fill_sign::SignatureSizeRequest { doc: doc_id, page, annotation, initials })
+        {
+            return Err(tl!("The selection changed. Select the signature again.").to_string());
+        }
+        let doc = self.session.get(doc_id).ok_or_else(|| tl!("Open a document first").to_string())?;
+        match doc.signature_placement_size(page, annotation) {
+            Ok(Some(size)) => {
+                crate::fill_sign::validate_saved_size(target, size).map_err(|error| error.to_string())?;
+                Ok(size)
+            }
+            Ok(None) => Err(tl!("Select a placed signature first").to_string()),
+            Err(error) => Err(error.to_string()),
+        }
     }
 
     fn run_page_command(&mut self, id: &str, active: Option<usize>, targets: Vec<usize>) -> Option<bool> {
@@ -677,8 +731,8 @@ impl PdfCraftApp {
                     &[("tool", &crate::i18n::in_sentence(tl!(tool.label())))],
                 );
             }
-            "sign.fill.signature.remove" => self.signature = None,
-            "sign.fill.initials.remove" => self.initials = None,
+            "sign.fill.signature.remove" => self.set_saved_signature_slot(false, None),
+            "sign.fill.initials.remove" => self.set_saved_signature_slot(true, None),
             "sign.fill.signature.change" | "sign.fill.initials.change" => {
                 let initials = id == "sign.fill.initials.change";
                 let saved = if initials { self.initials.as_ref() } else { self.signature.as_ref() };
@@ -836,6 +890,9 @@ impl PdfCraftApp {
         }
     }
 }
+
+#[cfg(test)]
+mod signature_size_request_tests;
 
 /// The tab after `current` of `count` (before it when `forward` is false), wrapping around. From
 /// no tab, forward is the first and back the last. `None` when there are no tabs.

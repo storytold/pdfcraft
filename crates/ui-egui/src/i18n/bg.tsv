@@ -2520,3 +2520,12 @@ animation effects	Off	Изключени
 	Rotate the selected pages clockwise	Завъртане на избраните страници по часовниковата стрелка
 	Extract the selected pages…	Извличане на избраните страници…
 	Delete the selected pages	Изтриване на избраните страници
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Използвай този размер за запазения подпис
+	Use this size for saved initials	Използвай този размер за запазените инициали
+	Future placements use this size. Existing signatures are unchanged.	При бъдещи поставяния ще се използва този размер. Съществуващите подписи остават непроменени.
+	Select a placed signature first	Първо избери поставен подпис
+	Save initials first	Първо запази инициалите
+	Save a signature first	Първо запази подпис
+	The selection changed. Select the signature again.	Изборът се промени. Избери подписа отново.

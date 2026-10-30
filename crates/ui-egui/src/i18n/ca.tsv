@@ -2818,3 +2818,12 @@ theme	Appearance	Aspecte
 	Rotate the selected pages clockwise	Gira les pàgines seleccionades en sentit horari
 	Extract the selected pages…	Extreu les pàgines seleccionades…
 	Delete the selected pages	Suprimeix les pàgines seleccionades
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Fes servir aquesta mida per a la signatura desada
+	Use this size for saved initials	Fes servir aquesta mida per a les inicials desades
+	Future placements use this size. Existing signatures are unchanged.	Les col·locacions futures faran servir aquesta mida. Les signatures existents no canviaran.
+	Select a placed signature first	Selecciona primer una signatura col·locada
+	Save initials first	Desa primer les inicials
+	Save a signature first	Desa primer una signatura
+	The selection changed. Select the signature again.	La selecció ha canviat. Torna a seleccionar la signatura.

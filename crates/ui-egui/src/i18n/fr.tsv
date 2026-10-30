@@ -2823,3 +2823,12 @@ certificate	Version	Version
 	Rotate the selected pages clockwise	Faire pivoter les pages sélectionnées dans le sens horaire
 	Extract the selected pages…	Extraire les pages sélectionnées…
 	Delete the selected pages	Supprimer les pages sélectionnées
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Utiliser cette taille pour la signature enregistrée
+	Use this size for saved initials	Utiliser cette taille pour les initiales enregistrées
+	Future placements use this size. Existing signatures are unchanged.	Les prochains placements utiliseront cette taille. Les signatures existantes restent inchangées.
+	Select a placed signature first	Sélectionner d’abord une signature placée
+	Save initials first	Enregistrer d’abord les initiales
+	Save a signature first	Enregistrer d’abord une signature
+	The selection changed. Select the signature again.	La sélection a changé. Sélectionner à nouveau la signature.

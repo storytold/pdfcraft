@@ -2749,3 +2749,12 @@ certificate	Version	وەشان
 	Rotate the selected pages clockwise	پەڕە هەڵبژێردراوەکان بە ئاڕاستەی میلی کاتژمێر بسوڕێنە
 	Extract the selected pages…	پەڕە هەڵبژێردراوەکان دەربهێنە…
 	Delete the selected pages	پەڕە هەڵبژێردراوەکان بسڕەوە
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	ئەم قەبارەیە بۆ واژووی پاشەکەوتکراو بەکاربهێنە
+	Use this size for saved initials	ئەم قەبارەیە بۆ سەرەتاییەکانی ناوی پاشەکەوتکراو بەکاربهێنە
+	Future placements use this size. Existing signatures are unchanged.	شوێندانانی داهاتوو ئەم قەبارەیە بەکاردەهێنن. واژووەکانی ئێستا ناگۆڕدرێن.
+	Select a placed signature first	سەرەتا واژوویەکی دانراو هەڵبژێرە
+	Save initials first	سەرەتاییەکانی ناو سەرەتا پاشەکەوت بکە
+	Save a signature first	سەرەتا واژووێک پاشەکەوت بکە
+	The selection changed. Select the signature again.	هەڵبژاردەکە گۆڕا. دووبارە واژووەکە هەڵبژێرە.

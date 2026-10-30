@@ -239,7 +239,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         width,
         icon: (subtype == "Text").then(|| d.name(b"Name").and_then(|n| NoteIcon::from_name(&String::from_utf8_lossy(n))).unwrap_or(NoteIcon::Note)),
         modified: text_value(doc, d, b"M"),
-        restylable: appearance::build(d).is_some(),
+        restylable: super::draw::can_restyle(doc, d),
         locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
         fillable: fillable(&subtype),
         fill: fill_of(d),

@@ -2827,3 +2827,12 @@ theme	Appearance	Teema
 	Rotate the selected pages clockwise	Kierrä valittuja sivuja myötäpäivään
 	Extract the selected pages…	Pura valitut sivut…
 	Delete the selected pages	Poista valitut sivut
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Käytä tätä kokoa tallennetulle allekirjoitukselle
+	Use this size for saved initials	Käytä tätä kokoa tallennetuille nimikirjaimille
+	Future placements use this size. Existing signatures are unchanged.	Tulevissa sijoituksissa käytetään tätä kokoa. Olemassa olevat allekirjoitukset eivät muutu.
+	Select a placed signature first	Valitse ensin sivulle sijoitettu allekirjoitus
+	Save initials first	Tallenna nimikirjaimet ensin
+	Save a signature first	Tallenna allekirjoitus ensin
+	The selection changed. Select the signature again.	Valinta muuttui. Valitse allekirjoitus uudelleen.

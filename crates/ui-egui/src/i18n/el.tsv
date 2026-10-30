@@ -2563,3 +2563,12 @@ animation effects	Off	Ανενεργά
 	Rotate the selected pages clockwise	Περιστροφή των επιλεγμένων σελίδων δεξιόστροφα
 	Extract the selected pages…	Εξαγωγή των επιλεγμένων σελίδων…
 	Delete the selected pages	Διαγραφή των επιλεγμένων σελίδων
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Χρήση αυτού του μεγέθους για την αποθηκευμένη υπογραφή
+	Use this size for saved initials	Χρήση αυτού του μεγέθους για τα αποθηκευμένα αρχικά
+	Future placements use this size. Existing signatures are unchanged.	Οι μελλοντικές τοποθετήσεις θα χρησιμοποιούν αυτό το μέγεθος. Οι υπάρχουσες υπογραφές παραμένουν αμετάβλητες.
+	Select a placed signature first	Επιλέξτε πρώτα μια τοποθετημένη υπογραφή
+	Save initials first	Αποθηκεύστε πρώτα τα αρχικά
+	Save a signature first	Αποθηκεύστε πρώτα μια υπογραφή
+	The selection changed. Select the signature again.	Η επιλογή άλλαξε. Επιλέξτε ξανά την υπογραφή.

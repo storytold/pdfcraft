@@ -101,6 +101,9 @@ impl Args<'_> {
         let Some(v) = self.get(key) else { return Ok(None) };
         let wrong = || Self::wrong(key, &format!("an array of {N} numbers"));
         let arr = v.as_array().ok_or_else(wrong)?;
+        if arr.len() != N {
+            return Err(wrong());
+        }
         let nums: Vec<f64> = arr.iter().map(|x| x.as_f64().filter(|f| f.is_finite())).collect::<Option<_>>().ok_or_else(wrong)?;
         <[f64; N]>::try_from(nums).map(Some).map_err(|_| wrong())
     }
@@ -510,6 +513,17 @@ impl Automation {
         if !(4.0..=300.0).contains(&size) {
             return Err(ToolError::InvalidArgs("font_size must be 4–300 pt".into()));
         }
+        let placement_size = a
+            .nums::<2>("size")?
+            .map(|[w, h]| pdfcraft_engine::SignaturePlacementSize::new(w, h).map_err(|e| ToolError::InvalidArgs(e.to_string())))
+            .transpose()?;
+        if placement_size.is_some() && !matches!(kind, "signature" | "initials") {
+            return Err(ToolError::InvalidArgs("size is only for a signature or initials".into()));
+        }
+        let sized = |edit| match placement_size {
+            Some(size) => pdfcraft_engine::signature_placement_with_size(edit, &info, at, size).map_err(|e| ToolError::InvalidArgs(e.to_string())),
+            None => Ok(edit),
+        };
         if let Some(path) = a.opt_str("path")? {
             if !matches!(kind, "signature" | "initials") || a.opt_str("text")?.is_some() {
                 return Err(ToolError::InvalidArgs("path is only for an image signature or initials; pass either path or text".into()));
@@ -531,7 +545,7 @@ impl Automation {
                 pdfcraft_engine::SignatureImage::read(file).map_err(|e| ToolError::InvalidArgs(e.to_string()))?
             };
             let edit = image.edit(page, &info, at, kind == "initials", &author).ok_or_else(|| ToolError::InvalidArgs("at must be finite".into()))?;
-            return self.apply(a, edit);
+            return self.apply(a, sized(edit)?);
         }
         let text_at = |t: &str| {
             let w = (pdfcraft_engine::annot_text::text_width(t, size) + 8.0).clamp(20.0, 600.0);
@@ -580,7 +594,7 @@ impl Automation {
             }
         };
         let style = Style::default_for(&shape);
-        self.apply(a, Edit::AddAnnotation(NewAnnotation { page, shape, style, contents, author }))
+        self.apply(a, sized(Edit::AddAnnotation(NewAnnotation { page, shape, style, contents, author }))?)
     }
 
     pub(crate) fn comment_reply(&mut self, a: &Args) -> Result<Value> {

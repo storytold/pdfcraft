@@ -2562,3 +2562,12 @@ animation effects	Off	Izklopljeni
 	Rotate the selected pages clockwise	Zavrti izbrane strani v smeri urnega kazalca
 	Extract the selected pages…	Izvleci izbrane strani…
 	Delete the selected pages	Izbriši izbrane strani
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Uporabi to velikost za shranjen podpis
+	Use this size for saved initials	Uporabi to velikost za shranjene začetnice
+	Future placements use this size. Existing signatures are unchanged.	Pri prihodnjih umestitvah bo uporabljena ta velikost. Obstoječi podpisi se ne spremenijo.
+	Select a placed signature first	Najprej izberi postavljen podpis
+	Save initials first	Najprej shrani začetnice
+	Save a signature first	Najprej shrani podpis
+	The selection changed. Select the signature again.	Izbor se je spremenil. Znova izberi podpis.

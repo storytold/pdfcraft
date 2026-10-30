@@ -146,6 +146,8 @@ pub enum Edit {
     },
     /// Add a comment (sticky note, highlight, shape, drawing, text box…).
     AddAnnotation(NewAnnotation),
+    /// Place a validated appearance signature at an explicit physical size, as one undo step.
+    AddSizedSignature(crate::SizedSignaturePlacement),
     /// A custom stamp from a picture file (a PDF page or an image) on `page`. A zero-size
     /// `rect` is a point: the stamp is centred there at its natural size (at most 200 pt).
     /// Any other `rect` is a box: the picture is scaled to fit inside it, keeping its shape,

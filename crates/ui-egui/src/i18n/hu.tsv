@@ -2556,3 +2556,12 @@ animation effects	Off	Ki
 	Rotate the selected pages clockwise	A kijelölt oldalak forgatása az óramutató járásával megegyezően
 	Extract the selected pages…	A kijelölt oldalak kibontása…
 	Delete the selected pages	A kijelölt oldalak törlése
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Ezt a méretet használja a mentett aláíráshoz
+	Use this size for saved initials	Ezt a méretet használja a mentett monogramhoz
+	Future placements use this size. Existing signatures are unchanged.	A jövőbeli elhelyezések ezt a méretet használják. A meglévő aláírások változatlanok maradnak.
+	Select a placed signature first	Először válasszon ki egy elhelyezett aláírást
+	Save initials first	Először mentse a monogramot
+	Save a signature first	Először mentsen egy aláírást
+	The selection changed. Select the signature again.	A kijelölés megváltozott. Válassza ki újra az aláírást.

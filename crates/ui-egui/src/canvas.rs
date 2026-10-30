@@ -845,6 +845,7 @@ struct PageEnv<'a> {
     hand: bool,
     info: &'a DocInfo,
     initials: &'a Option<crate::fill_sign::SavedSig>,
+    initials_size: Option<pdfcraft_engine::SignaturePlacementSize>,
     key_scroll: f32,
     middle_gesture: bool,
     modal: bool,
@@ -860,6 +861,7 @@ struct PageEnv<'a> {
     selection_wheel: bool,
     selects_text: bool,
     signature: &'a Option<crate::fill_sign::SavedSig>,
+    signature_size: Option<pdfcraft_engine::SignaturePlacementSize>,
     single_paging: bool,
     t: &'a Tokens,
     table_preview: &'a Option<crate::field_table_ui::Preview>,
@@ -1105,10 +1107,12 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         form,
         info,
         initials,
+        initials_size,
         prefs,
         preparing,
         redact_mark,
         signature,
+        signature_size,
         table_preview,
         text_style,
         tool,
@@ -1182,6 +1186,8 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
                 text_size: fill_text_size,
                 signature: signature.as_ref(),
                 initials: initials.as_ref(),
+                signature_size,
+                initials_size,
                 preview: frame.signature_preview,
                 author,
                 date_text,
@@ -2040,6 +2046,7 @@ fn draw_pages(
                 ui.separator();
             }
         }
+        comments::signature_size_items(ui, view, doc, env.signature.as_ref(), env.initials.as_ref());
         canvas_action = comments::context_menu(ui, view, info, prefs, allowed, can_modify).or(copy_image);
     });
     *out = PageOut {
@@ -2947,6 +2954,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let can_crop = doc.allows_assembly();
     let signature = app.signature.clone();
     let initials = app.initials.clone();
+    let signature_size = app.signature_placement_size;
+    let initials_size = app.initials_placement_size;
     let author = app.comment_prefs.author.clone();
     let today = app.session.today();
     // In Preferences ▸ Date format, or why it can't be stamped into the PDF.
@@ -3006,6 +3015,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         hand,
         info,
         initials: &initials,
+        initials_size,
         key_scroll,
         middle_gesture,
         modal,
@@ -3021,6 +3031,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         selection_wheel,
         selects_text,
         signature: &signature,
+        signature_size,
         single_paging,
         t: &t,
         table_preview: &table_preview,
@@ -3198,6 +3209,9 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     }
     if let Some((p, i)) = app.views[index].comments.default_request.take() {
         app.make_comment_default(p, i);
+    }
+    if let Some(request) = app.views[index].comments.signature_size_request.take() {
+        app.dispatch_signature_size_request(request);
     }
     if let Some((p, i, open)) = app.views[index].comments.attachment_request.take() {
         let doc = app.views[index].id;

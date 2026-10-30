@@ -129,7 +129,10 @@ pub use document::{Document, TextNotice, display_bytes_for, render_password_for}
 use document::{display_bytes, info_fields, recovered_render_password, same_pages, shown_under_redactions, undrawn_notices};
 pub use edit::{BATCH_LABELS, EDIT_LABELS, Edit};
 pub use error::{EditError, SourceProblem};
-pub use fill_sign::{displayed_offset, text_box_at, typed_signature_graphic, typed_signature_shape};
+pub use fill_sign::{
+    SignaturePlacementSize, SizedSignaturePlacement, displayed_offset, signature_placement_with_size, text_box_at, typed_signature_graphic,
+    typed_signature_shape,
+};
 pub use history::Label;
 use layers::{apply_layer_state, set_default_layer_state, use_layer_choices};
 pub use open::{OpenContext, PreparedDocument};

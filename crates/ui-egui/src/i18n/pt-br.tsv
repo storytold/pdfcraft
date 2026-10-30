@@ -2842,3 +2842,12 @@ theme	Appearance	Aparência
 	Rotate the selected pages clockwise	Girar as páginas selecionadas no sentido horário
 	Extract the selected pages…	Extrair as páginas selecionadas…
 	Delete the selected pages	Excluir as páginas selecionadas
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Use este tamanho para a assinatura salva
+	Use this size for saved initials	Use este tamanho para as iniciais salvas
+	Future placements use this size. Existing signatures are unchanged.	Os próximos posicionamentos usarão este tamanho. As assinaturas existentes não serão alteradas.
+	Select a placed signature first	Selecione primeiro uma assinatura posicionada
+	Save initials first	Salve primeiro as iniciais
+	Save a signature first	Salve primeiro uma assinatura
+	The selection changed. Select the signature again.	A seleção mudou. Selecione a assinatura novamente.

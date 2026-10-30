@@ -2794,3 +2794,12 @@ theme	Appearance	모양
 	Rotate the selected pages clockwise	선택한 페이지를 시계 방향으로 회전
 	Extract the selected pages…	선택한 페이지 추출…
 	Delete the selected pages	선택한 페이지 삭제
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	저장된 서명에 이 크기 사용
+	Use this size for saved initials	저장된 이니셜에 이 크기 사용
+	Future placements use this size. Existing signatures are unchanged.	앞으로 배치할 때 이 크기를 사용합니다. 기존 서명은 변경되지 않습니다.
+	Select a placed signature first	먼저 배치된 서명을 선택하세요
+	Save initials first	먼저 이니셜을 저장하세요
+	Save a signature first	먼저 서명을 저장하세요
+	The selection changed. Select the signature again.	선택 항목이 변경되었습니다. 서명을 다시 선택하세요.

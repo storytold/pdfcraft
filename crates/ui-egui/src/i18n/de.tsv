@@ -2558,3 +2558,12 @@ animation effects	Off	Aus
 	Rotate the selected pages clockwise	Ausgewählte Seiten im Uhrzeigersinn drehen
 	Extract the selected pages…	Ausgewählte Seiten extrahieren…
 	Delete the selected pages	Ausgewählte Seiten löschen
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Diese Größe für die gespeicherte Unterschrift verwenden
+	Use this size for saved initials	Diese Größe für die gespeicherten Initialen verwenden
+	Future placements use this size. Existing signatures are unchanged.	Für zukünftige Platzierungen wird diese Größe verwendet. Bestehende Unterschriften bleiben unverändert.
+	Select a placed signature first	Zuerst eine platzierte Unterschrift auswählen
+	Save initials first	Zuerst die Initialen speichern
+	Save a signature first	Zuerst eine Unterschrift speichern
+	The selection changed. Select the signature again.	Die Auswahl hat sich geändert. Wähle die Unterschrift erneut aus.

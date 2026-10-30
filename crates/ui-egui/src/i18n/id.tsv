@@ -2795,3 +2795,12 @@ theme	Appearance	Tampilan
 	Rotate the selected pages clockwise	Putar halaman yang dipilih searah jarum jam
 	Extract the selected pages…	Ekstrak halaman yang dipilih…
 	Delete the selected pages	Hapus halaman yang dipilih
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	Gunakan ukuran ini untuk tanda tangan yang disimpan
+	Use this size for saved initials	Gunakan ukuran ini untuk inisial yang disimpan
+	Future placements use this size. Existing signatures are unchanged.	Penempatan berikutnya akan menggunakan ukuran ini. Tanda tangan yang ada tidak berubah.
+	Select a placed signature first	Pilih tanda tangan yang sudah ditempatkan terlebih dahulu
+	Save initials first	Simpan inisial terlebih dahulu
+	Save a signature first	Simpan tanda tangan terlebih dahulu
+	The selection changed. Select the signature again.	Pilihan berubah. Pilih tanda tangan lagi.

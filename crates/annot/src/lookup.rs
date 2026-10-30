@@ -154,6 +154,57 @@ pub fn is_fill_sign(doc: &Document, d: &Dict) -> bool {
     subtype == b"Ink" && text_value(doc, d, b"Subj").as_deref() == Some("Signature")
 }
 
+/// The rectangle of a typed, drawn or image appearance signature. This identifies a
+/// suitable source of geometry, not the local saved graphic that created it.
+pub fn appearance_signature_rect(doc: &Document, page: usize, index: usize) -> Result<Option<[f64; 4]>, AnnotError> {
+    let p = page_ref(doc, page)?;
+    let list = annots(doc, p);
+    let entry = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    let obj = doc.resolve(entry);
+    let Some(d) = obj.as_dict() else { return Ok(None) };
+    let suitable = match d.name(b"Subtype") {
+        Some(b"Stamp") => match d.name(b"Name") {
+            Some(b"PCTypedSignature") => d.get(b"PCOutline").is_some_and(|o| doc.resolve(o).as_array().is_some()),
+            Some(b"PCCustomSignature" | b"PCCustomInitials") => {
+                matches!(d.get(b"PCPictureImage").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true))) && d.reference(b"PCPicture").is_some()
+            }
+            _ => false,
+        },
+        Some(b"Ink") => short_signature_subject(doc, d) && d.get(b"InkList").is_some_and(|o| doc.resolve(o).as_array().is_some()),
+        _ => false,
+    };
+    if !suitable {
+        return Ok(None);
+    }
+    let rect = d.get(b"Rect").map(|o| doc.resolve(o));
+    let Some(values) = rect.as_deref().and_then(Object::as_array).filter(|v| v.len() == 4) else {
+        return Err(AnnotError::Invalid("the signature has an invalid rectangle".into()));
+    };
+    let mut rect = [0.0; 4];
+    for (out, value) in rect.iter_mut().zip(values) {
+        *out = doc.resolve(value).as_f64().ok_or_else(|| AnnotError::Invalid("the signature has an invalid rectangle".into()))?;
+    }
+    if !super::create::finite(&rect) || rect[2] <= rect[0] || rect[3] <= rect[1] {
+        return Err(AnnotError::Invalid("the signature has an invalid rectangle".into()));
+    }
+    Ok(Some(rect))
+}
+
+pub(crate) fn is_signature_ink(doc: &Document, d: &Dict) -> bool {
+    d.name(b"Subtype") == Some(b"Ink") && short_signature_subject(doc, d)
+}
+
+fn short_signature_subject(doc: &Document, d: &Dict) -> bool {
+    let Some(subject) = d.get(b"Subj").map(|o| doc.resolve(o)) else { return false };
+    // This query only needs a short kind label. Bound raw bytes before PDF-text decoding
+    // or lossy UTF-8 expansion, including whitespace a foreign file could pad it with.
+    match &*subject {
+        Object::String(s) if s.bytes.len() <= 128 => s.to_text().trim_matches('\0').trim() == "Signature",
+        Object::Name(n) if n.len() <= 128 => String::from_utf8_lossy(n).trim_matches('\0').trim() == "Signature",
+        _ => false,
+    }
+}
+
 pub(crate) fn annotation_flags(doc: &Document, d: &Dict) -> i64 {
     d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0)
 }

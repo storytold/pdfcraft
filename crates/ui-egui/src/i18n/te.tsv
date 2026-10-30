@@ -2466,3 +2466,12 @@ animation effects	Off	ఆఫ్
 	Rotate the selected pages clockwise	ఎంచుకున్న పేజీలను సవ్య దిశలో తిప్పు
 	Extract the selected pages…	ఎంచుకున్న పేజీలను సంగ్రహించు…
 	Delete the selected pages	ఎంచుకున్న పేజీలను తొలగించు
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	సేవ్ చేసిన సంతకం కోసం ఈ పరిమాణాన్ని ఉపయోగించండి
+	Use this size for saved initials	సేవ్ చేసిన పొడి అక్షరాల కోసం ఈ పరిమాణాన్ని ఉపయోగించండి
+	Future placements use this size. Existing signatures are unchanged.	భవిష్యత్తులో సంతకాలు ఉంచినప్పుడు ఈ పరిమాణం వర్తిస్తుంది. ఇప్పటికే ఉన్న సంతకాలు మారవు.
+	Select a placed signature first	ముందుగా ఉంచిన సంతకాన్ని ఎంచుకోండి
+	Save initials first	ముందుగా పొడి అక్షరాలను సేవ్ చేయండి
+	Save a signature first	ముందుగా సంతకాన్ని సేవ్ చేయండి
+	The selection changed. Select the signature again.	ఎంపిక మారింది. సంతకాన్ని మళ్లీ ఎంచుకోండి.

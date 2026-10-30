@@ -2557,3 +2557,12 @@ animation effects	Off	オフ
 	Rotate the selected pages clockwise	選択したページを時計回りに回転
 	Extract the selected pages…	選択したページを抽出…
 	Delete the selected pages	選択したページを削除
+
+# Fill & Sign: saved signature size controls (AI-assisted, not separately native-reviewed)
+	Use this size for saved signature	保存した署名にこのサイズを使用
+	Use this size for saved initials	保存したイニシャルにこのサイズを使用
+	Future placements use this size. Existing signatures are unchanged.	今後の配置にはこのサイズが使われます。既存の署名は変更されません。
+	Select a placed signature first	まず配置済みの署名を選択
+	Save initials first	先にイニシャルを保存
+	Save a signature first	先に署名を保存
+	The selection changed. Select the signature again.	選択内容が変更されました。署名をもう一度選択してください。
