@@ -23,6 +23,8 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
 - **Images:** the effective resolution of each image is measured where pages draw it (the CTM
   through form XObjects, up to 12 deep; the smallest over all uses).
   Page-local `/UserUnit` scaling is included, so large-format pages are measured in physical inches.
+  Annotation appearances also count, including every normal, rollover and pressed state, so a large stamp or widget keeps a shared image sharp.
+  Appearance placement includes `/Rect`, `/BBox` and `/Matrix`; malformed geometry or exhausted traversal/decode limits disable downsampling conservatively.
   If a use can't be
   measured (forms nested deeper, or drawn too many times), no image is resampled. Colour and grayscale images above a
   threshold are resampled with a bicubic (Catmull-Rom) filter to a target resolution and

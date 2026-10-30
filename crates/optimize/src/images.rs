@@ -36,6 +36,58 @@ const MAX_FORM_DEPTH: usize = 12;
 /// Each form's first walk is free: their number is bounded by the file's object count.
 const MAX_REWALKS: usize = 100_000;
 
+/// Bound annotation and appearance-state entries examined across the document.
+const MAX_APPEARANCE_WORK: usize = 100_000;
+
+/// Fixed-size, finite geometry with indirect arrays and numeric entries resolved.
+fn geometry<const N: usize>(doc: &Document, value: &Object) -> Option<[f64; N]> {
+    let value = doc.resolve(value);
+    let values = value.as_array()?;
+    if values.len() != N {
+        return None;
+    }
+    let mut out = [0.0; N];
+    for (number, value) in out.iter_mut().zip(values) {
+        *number = doc.resolve(value).as_f64()?;
+        if !number.is_finite() {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+fn form_matrix(doc: &Document, dict: &Dict) -> Option<Matrix> {
+    match dict.get(b"Matrix") {
+        None | Some(Object::Null) => Some(Matrix::IDENTITY),
+        Some(value) => geometry(doc, value).map(Matrix),
+    }
+}
+
+/// ISO 32000-2, 12.5.5: fit the transformed appearance BBox to the annotation Rect.
+/// The form walker applies /Matrix itself, so return only the placement transform.
+fn appearance_placement(doc: &Document, form: &Dict, rect: [f64; 4]) -> Option<Matrix> {
+    let bbox = geometry(doc, form.get(b"BBox")?)?;
+    let matrix = form_matrix(doc, form)?;
+    // Check corners before bbox(): min/max can otherwise hide NaNs from overflow.
+    let [x0, y0, x1, y1] = bbox;
+    if [matrix.apply(x0, y0), matrix.apply(x1, y0), matrix.apply(x0, y1), matrix.apply(x1, y1)].iter().any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return None;
+    }
+    let bbox = matrix.bbox(bbox);
+    if !bbox.iter().all(|value| value.is_finite()) {
+        return None;
+    }
+    let [x0, y0, x1, y1] = rect;
+    let (width, height) = (bbox[2] - bbox[0], bbox[3] - bbox[1]);
+    if !(width > 0.0 && height > 0.0 && width.is_finite() && height.is_finite()) {
+        return None;
+    }
+    let (sx, sy) = ((x1.max(x0) - x0.min(x1)) / width, (y1.max(y0) - y0.min(y1)) / height);
+    let placement = Matrix([sx, 0.0, 0.0, sy, x0.min(x1) - bbox[0] * sx, y0.min(y1) - bbox[1] * sy]);
+    (sx > 0.0 && sy > 0.0 && placement.0.iter().all(|value| value.is_finite())).then_some(placement)
+}
+
 /// State of one [`effective_resolutions`] pass.
 struct Walk<'a> {
     doc: &'a Document,
@@ -52,6 +104,7 @@ struct Walk<'a> {
     /// False once a use may have been missed (depth or work limit).
     complete: bool,
     out: HashMap<ObjRef, f64>,
+    appearance_work: usize,
 }
 
 impl Walk<'_> {
@@ -100,6 +153,95 @@ impl Walk<'_> {
         }
     }
 
+    fn appearance_step(&mut self) -> bool {
+        match self.appearance_work.checked_sub(1) {
+            Some(left) => {
+                self.appearance_work = left;
+                true
+            }
+            None => {
+                self.complete = false;
+                false
+            }
+        }
+    }
+
+    /// Every appearance may be used later, including inactive states and rollover/down forms.
+    fn annotations(&mut self, page: &Dict, resources: &Dict, ctm: Matrix) {
+        let doc = self.doc;
+        let Some(annots) = page.get(b"Annots") else { return };
+        let annots = doc.resolve(annots);
+        if matches!(annots.as_ref(), Object::Null) {
+            return;
+        }
+        let Some(annots) = annots.as_array() else {
+            self.complete = false;
+            return;
+        };
+        for annot in annots {
+            if !self.appearance_step() {
+                return;
+            }
+            let annot = doc.resolve(annot);
+            let Some(annot) = annot.as_dict() else { continue };
+            let Some(ap) = annot.get(b"AP") else { continue };
+            let ap = doc.resolve(ap);
+            if matches!(ap.as_ref(), Object::Null) {
+                continue;
+            }
+            let Some(ap) = ap.as_dict() else {
+                self.complete = false;
+                continue;
+            };
+            for kind in [b"N", b"R", b"D"] {
+                let Some(value) = ap.get(kind) else { continue };
+                if !self.appearance_step() {
+                    return;
+                }
+                let object = doc.resolve(value);
+                match object.as_ref() {
+                    Object::Null => {}
+                    Object::Stream(_) => self.appearance(value, annot, resources, ctm),
+                    Object::Dict(states) => {
+                        for (_, value) in states.iter() {
+                            if !self.appearance_step() {
+                                return;
+                            }
+                            self.appearance(value, annot, resources, ctm);
+                        }
+                    }
+                    _ => self.complete = false,
+                }
+            }
+        }
+    }
+
+    fn appearance(&mut self, value: &Object, annot: &Dict, resources: &Dict, ctm: Matrix) {
+        let doc = self.doc;
+        let object = doc.resolve(value);
+        if matches!(object.as_ref(), Object::Null) {
+            return;
+        }
+        let (Some(reference), Object::Stream(form)) = (value.as_ref(), object.as_ref()) else {
+            self.complete = false;
+            return;
+        };
+        let Some(rect) = annot.get(b"Rect").and_then(|rect| geometry(doc, rect)) else {
+            self.complete = false;
+            return;
+        };
+        // Invisible signature widgets commonly have a zero-area rectangle and BBox.
+        // They cannot draw an image at a larger size, so they do not make the walk incomplete.
+        if rect[0] == rect[2] || rect[1] == rect[3] {
+            return;
+        }
+        let Some(placement) = appearance_placement(doc, &form.dict, rect) else {
+            self.complete = false;
+            return;
+        };
+        self.form(reference, form, resources, placement.then(&ctm));
+    }
+
     /// Descend into form `r` drawn with `ctm` from a stream whose resources are `resources`.
     fn form(&mut self, r: ObjRef, s: &Stream, resources: &Dict, ctm: Matrix) {
         if self.path.contains(&r) {
@@ -110,8 +252,15 @@ impl Walk<'_> {
             return;
         }
         let doc = self.doc;
-        let m = s.dict.get(b"Matrix").map(|m| doc.resolve(m)).and_then(|m| m.as_array().map(|a| Matrix::from_operands(a))).flatten();
-        let inner = m.unwrap_or(Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])).then(&ctm);
+        let Some(matrix) = form_matrix(doc, &s.dict) else {
+            self.complete = false;
+            return;
+        };
+        let inner = matrix.then(&ctm);
+        if !inner.0.iter().all(|value| value.is_finite()) {
+            self.complete = false;
+            return;
+        }
         let own = s.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned());
         // A form without resources uses its caller's, so the same form can draw other images.
         if own.is_some() {
@@ -156,20 +305,23 @@ pub fn effective_resolutions(doc: &Document, pages: &[ObjRef]) -> HashMap<ObjRef
         budget: DecodeBudget::page(),
         complete: true,
         out: HashMap::new(),
+        appearance_work: MAX_APPEARANCE_WORK,
     };
     for p in pages {
         let Some(dict) = doc.get(*p).as_dict().cloned() else { continue };
         let page = pdfcraft_model::Page { obj: *p, dict };
-        let Some(contents) = page.dict.get(b"Contents") else { continue };
         let res = page_resources(doc, *p).unwrap_or_default();
         walk.budget = DecodeBudget::page();
+        // Content and appearances share the page's physical scale and decode budget.
+        let unit = page.user_unit(doc);
+        let ctm = Matrix([unit, 0.0, 0.0, unit, 0.0, 0.0]);
+        walk.annotations(&page.dict, &res, ctm);
+        let Some(contents) = page.dict.get(b"Contents") else { continue };
         let Some(data) = content_bytes(doc, contents, &mut walk.budget) else {
             walk.complete = false;
             continue;
         };
-        // Content coordinates are in page units; image resolution is in physical inches.
-        let unit = page.user_unit(doc);
-        walk.content(&data, &res, Matrix([unit, 0.0, 0.0, unit, 0.0, 0.0]));
+        walk.content(&data, &res, ctm);
     }
     if !walk.complete {
         walk.out.values_mut().for_each(|v| *v = f64::INFINITY);
