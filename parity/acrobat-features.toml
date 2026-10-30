@@ -8168,8 +8168,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::imposed_pdf_has_the_sheets_and_honours_comments_and_forms", "crates/print/src/tests/appearances.rs::annotation_appearances_do_not_replace_page_xobjects"]
-notes = "Print flag honoured; appearance resource names preserve existing page XObjects and distinct annotations, including inherited resources"
+evidence = ["crates/print/src/tests.rs::imposed_pdf_has_the_sheets_and_honours_comments_and_forms", "crates/print/src/tests/appearances.rs::annotation_appearances_do_not_replace_page_xobjects", "crates/print/src/tests/appearances.rs::annotation_placement_preserves_small_transform_coefficients"]
+notes = "Print flag honoured; appearance resource names preserve existing page XObjects and distinct annotations, including inherited resources. Placement retains small transform coefficients for large appearance bounding boxes and matrices. Missing or unusable appearance streams remain outside this path."
 
 [[feature]]
 id = "print.print-with-comment-summary"

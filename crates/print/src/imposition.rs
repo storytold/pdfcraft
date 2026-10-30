@@ -3,7 +3,7 @@ use super::settings::{Content, Settings};
 use super::sheets::{Sheet, layout};
 use super::{DecodeBudget, Dict, Document, Matrix, ObjRef, Object, SaveOptions, Stream, write_full};
 
-// Model-derived transforms and clipping bounds need their full PDF decimal precision.
+// Transforms and clipping bounds need their full PDF decimal precision.
 fn geometry_number(value: f64) -> String {
     let mut bytes = Vec::new();
     pdfcraft_cos::serialize(&Object::Real(value), &mut bytes);
@@ -215,7 +215,18 @@ pub(crate) fn page_form(
             }
         };
         let [a0, b0, c0, d0, e0, f0] = m.0;
-        body.extend(format!("q {} {} {} {} {} {} cm /{name} Do Q\n", n(a0), n(b0), n(c0), n(d0), n(e0), n(f0)).bytes());
+        body.extend(
+            format!(
+                "q {} {} {} {} {} {} cm /{name} Do Q\n",
+                geometry_number(a0),
+                geometry_number(b0),
+                geometry_number(c0),
+                geometry_number(d0),
+                geometry_number(e0),
+                geometry_number(f0)
+            )
+            .bytes(),
+        );
         xobjects.set(name.into_bytes(), Object::Ref(ap));
     }
     if !xobjects.is_empty() {
