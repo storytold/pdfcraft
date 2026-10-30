@@ -1962,7 +1962,7 @@ dependencies = [
  "emath",
  "epaint_default_fonts",
  "font-types 0.12.5",
- "harfrust",
+ "harfrust 0.12.0",
  "log",
  "nohash-hasher",
  "parking_lot",
@@ -2642,6 +2642,19 @@ dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
  "read-fonts 0.41.0",
+ "smallvec",
+]
+
+[[package]]
+name = "harfrust"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "948d0741125ba89cd3e1c23e5642415b6ade7e1d29d67ba25fb925b533e989d6"
+dependencies = [
+ "bitflags 2.13.2",
+ "bytemuck",
+ "once_cell",
+ "read-fonts 0.43.3",
  "smallvec",
 ]
 
@@ -4444,9 +4457,9 @@ dependencies = [
 name = "pdfcraft-fonts"
 version = "0.15.0"
 dependencies = [
- "harfrust",
+ "harfrust 0.13.3",
  "pdfcraft-cos",
- "skrifa 0.44.0",
+ "skrifa 0.46.2",
  "unicode-bidi",
 ]
 
@@ -4602,7 +4615,7 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-fonts",
  "serde",
- "skrifa 0.44.0",
+ "skrifa 0.46.2",
  "thiserror 2.0.21",
 ]
 
@@ -4686,7 +4699,7 @@ dependencies = [
  "rustix 1.1.5",
  "serde",
  "serde_json",
- "skrifa 0.44.0",
+ "skrifa 0.46.2",
  "sys-locale",
  "toml",
  "unicode-bidi",
@@ -5410,6 +5423,17 @@ name = "read-fonts"
 version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "046a7d674daf459825b32f5062056d6882db0d2f5a479fbd76ccfc870ac18709"
+dependencies = [
+ "bytemuck",
+ "font-types 0.12.5",
+ "once_cell",
+]
+
+[[package]]
+name = "read-fonts"
+version = "0.43.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "005c8acf251756c478b0bf402885bfd88a1476020c4c7e6060edc1aa68da38ea"
 dependencies = [
  "bytemuck",
  "font-types 0.12.5",
@@ -6419,6 +6443,16 @@ checksum = "819ab7d62b1d3e72d9d9dea5650bac30424f9111364bb94928dbf5ecad1baa68"
 dependencies = [
  "bytemuck",
  "read-fonts 0.41.0",
+]
+
+[[package]]
+name = "skrifa"
+version = "0.46.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4febebda507fb889c545a37a135517769d1391941013561292897961d1887d6"
+dependencies = [
+ "bytemuck",
+ "read-fonts 0.43.3",
 ]
 
 [[package]]

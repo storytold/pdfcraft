@@ -11,6 +11,12 @@ updates:
       timezone: "America/New_York"
     # Consolidate updates into a single PR rather than one PR per crate
     groups:
+      # harfrust and skrifa must share one read-fonts version (their FontRef
+      # types are only the same type then), so they move in one PR.
+      font-shaping:
+        patterns:
+          - "skrifa"
+          - "harfrust"
       cargo-dependencies:
         patterns:
           - "*"
