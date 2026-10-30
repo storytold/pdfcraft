@@ -279,3 +279,23 @@ fn export_to_word_html_and_rtf() {
     }
     assert!(std::fs::read_to_string(dir.join("e.html")).unwrap().contains("Exported words"));
 }
+
+/// #1595: File ▸ Export ▸ Markdown… writes the document as Markdown. The file is named without an
+/// extension, so only the command can make it Markdown: the asterisks are escaped, not emphasis,
+/// and no other format's markup is there.
+#[test]
+fn export_to_markdown_writes_markdown() {
+    let doc = Session::new().create_from_text("t", "Exported *words*").unwrap().to_vec();
+    let dir = std::env::temp_dir().join(format!("pdfcraft-markdown-ui-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = dir.join("exported");
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.open_bytes("e.pdf", None, doc).unwrap();
+    app.save_override = Some(out.to_string_lossy().into_owned());
+    assert!(app.execute("export.markdown"));
+    let md = std::fs::read_to_string(&out).unwrap();
+    assert!(md.contains(r"Exported \*words\*"), "{md:?}");
+    assert!(!md.contains('<') && !md.starts_with("{\\rtf"), "{md:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
