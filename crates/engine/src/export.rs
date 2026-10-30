@@ -87,12 +87,14 @@ pub fn extract_images(src: &ExportSource, pages: &[usize], min_side: u32) -> Res
     Ok(pdfcraft_create::extract_images(&doc, pages, min_side))
 }
 
-/// The file name for the `index`-th (1-based) exported image: `<stem>_Page_<n>_Image_<index>.<ext>`.
-/// The page number has leading zeros for as many digits as the document's `page_count` has, so the
-/// files sort in page order (#2208): page 7 of 120 is `Page_007`.
-pub fn image_file_name(stem: &str, image: &pdfcraft_create::ExtractedImage, index: usize, page_count: usize) -> String {
-    let width = page_count.max(1).to_string().len();
-    format!("{stem}_Page_{:0width$}_Image_{index:04}.{}", image.page + 1, image.extension)
+/// The file name for the `index`-th (1-based) of `image_count` exported images:
+/// `<stem>_Page_<n>_Image_<index>.<ext>`. Each number has leading zeros for as many digits as its
+/// count has, the page's the document's `page_count` and the image's `image_count`, so the files
+/// sort in order (#2208): page 7 of 120 is `Page_007`, image 7 of 500 `Image_007`.
+pub fn image_file_name(stem: &str, image: &pdfcraft_create::ExtractedImage, index: usize, page_count: usize, image_count: usize) -> String {
+    let pages = page_count.max(1).to_string().len();
+    let images = image_count.max(1).to_string().len();
+    format!("{stem}_Page_{:0pages$}_Image_{index:0images$}.{}", image.page + 1, image.extension)
 }
 
 impl Exporter {
@@ -467,12 +469,24 @@ mod image_name_tests {
 
     #[test]
     fn page_number_is_padded_to_the_page_count() {
-        assert_eq!(image_file_name("doc", &image(0), 1, 1), "doc_Page_1_Image_0001.png");
-        assert_eq!(image_file_name("doc", &image(0), 1, 9), "doc_Page_1_Image_0001.png");
-        assert_eq!(image_file_name("doc", &image(6), 2, 20), "doc_Page_07_Image_0002.png");
-        assert_eq!(image_file_name("doc", &image(6), 3, 120), "doc_Page_007_Image_0003.png");
-        assert_eq!(image_file_name("doc", &image(119), 4, 120), "doc_Page_120_Image_0004.png");
-        assert_eq!(image_file_name("doc", &image(0), 1, 0), "doc_Page_1_Image_0001.png");
+        assert_eq!(image_file_name("doc", &image(0), 1, 1, 1), "doc_Page_1_Image_1.png");
+        assert_eq!(image_file_name("doc", &image(0), 1, 9, 1), "doc_Page_1_Image_1.png");
+        assert_eq!(image_file_name("doc", &image(6), 2, 20, 9), "doc_Page_07_Image_2.png");
+        assert_eq!(image_file_name("doc", &image(6), 3, 120, 9), "doc_Page_007_Image_3.png");
+        assert_eq!(image_file_name("doc", &image(119), 4, 120, 9), "doc_Page_120_Image_4.png");
+        assert_eq!(image_file_name("doc", &image(0), 1, 0, 1), "doc_Page_1_Image_1.png");
+    }
+
+    /// #2208: the image number has leading zeros for as many digits as the number of images
+    /// exported, so the files sort in order whatever their count.
+    #[test]
+    fn image_number_is_padded_to_the_image_count() {
+        assert_eq!(image_file_name("doc", &image(0), 7, 1, 20), "doc_Page_1_Image_07.png");
+        assert_eq!(image_file_name("doc", &image(0), 7, 1, 500), "doc_Page_1_Image_007.png");
+        assert_eq!(image_file_name("doc", &image(0), 500, 1, 500), "doc_Page_1_Image_500.png");
+        assert_eq!(image_file_name("doc", &image(0), 7, 1, 12_000), "doc_Page_1_Image_00007.png", "past 9999 too");
+        // Widths are at least, so a count that is off never cuts a number short.
+        assert_eq!(image_file_name("doc", &image(0), 12, 1, 0), "doc_Page_1_Image_12.png");
     }
 }
 

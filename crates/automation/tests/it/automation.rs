@@ -3574,11 +3574,60 @@ fn exporting_all_images_through_tools() {
     let r = ok(&mut a, "doc_export_all_images", json!({ "doc": made, "folder": "imgs" }));
     assert_eq!(r["count"], 2, "{r}");
     let files: Vec<&str> = r["files"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap()).collect();
-    assert!(files[0].ends_with("_Page_1_Image_0001.png") && files[1].ends_with("_Page_2_Image_0002.jpg"), "{files:?}");
+    assert!(files[0].ends_with("_Page_1_Image_1.png") && files[1].ends_with("_Page_2_Image_2.jpg"), "{files:?}");
     assert_eq!(std::fs::read(files[1]).unwrap(), std::fs::read(dir.join("src/a_page_2.jpg")).unwrap(), "JPEG unchanged");
     assert!(std::fs::read(files[0]).unwrap().starts_with(b"\x89PNG"));
     assert_eq!(ok(&mut a, "doc_export_all_images", json!({ "doc": made, "folder": "imgs2", "pages": [2] }))["count"], 1);
     assert_eq!(ok(&mut a, "doc_export_all_images", json!({ "doc": made, "folder": "imgs3", "min_size": 10000 }))["count"], 0);
+    // #2208: ten images on one page are numbered to the image count's two digits, not the page
+    // count's one.
+    std::fs::write(dir.join("ten.pdf"), one_page_with_images(10)).unwrap();
+    let ten = ok(&mut a, "doc_open", json!({ "path": "ten.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_export_all_images", json!({ "doc": ten, "folder": "ten" }));
+    let files: Vec<&str> = r["files"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap()).collect();
+    assert_eq!(files.len(), 10, "{r}");
+    assert!(files[0].ends_with("ten_Page_1_Image_01.png") && files[9].ends_with("ten_Page_1_Image_10.png"), "{files:?}");
+}
+
+/// A one-page PDF drawing `n` distinct 1×1 gray images side by side, for exports whose names
+/// pad the image number to the image count.
+fn one_page_with_images(n: usize) -> Vec<u8> {
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} 20] /Contents 4 0 R /Resources << /XObject << {} >> >> >>",
+            20 * n,
+            (0..n).map(|k| format!("/Im{k} {} 0 R", 5 + k)).collect::<String>()
+        ),
+    ];
+    let content: String = (0..n).map(|k| format!("q 10 0 0 10 {} 5 cm /Im{k} Do Q ", 20 * k + 5)).collect();
+    objects.push(format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()));
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend(format!("{} 0 obj\n{body}\nendobj\n", i + 1).bytes());
+    }
+    for k in 0..n {
+        offsets.push(out.len());
+        out.extend(
+            format!(
+                "{} 0 obj\n<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n",
+                5 + k
+            )
+            .bytes(),
+        );
+        out.push((k * 20) as u8);
+        out.extend(b"\nendstream\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).bytes());
+    for o in &offsets {
+        out.extend(format!("{o:010} 00000 n \n").bytes());
+    }
+    out.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len() + 1).bytes());
+    out
 }
 
 #[test]

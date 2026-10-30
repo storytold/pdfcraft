@@ -501,6 +501,8 @@ impl Automation {
         self.apply(a, edit)
     }
 
+    /// The export tools (`doc_export_text`, `doc_export_all_images`, `doc_export_images`): write
+    /// the document's text, its images, or page renders under the root.
     pub(crate) fn export(&mut self, tool: &str, a: &Args) -> Result<Value> {
         let doc = self.doc_to_copy(a)?;
         let pages = match a.opt_ints("pages")? {
@@ -522,7 +524,7 @@ impl Automation {
             let out = pdfcraft_engine::export::extract_images(&doc.export_source(), &pages, min).map_err(failed)?;
             let mut files = Vec::new();
             for (k, img) in out.images.iter().enumerate() {
-                let path = child(&folder, &pdfcraft_engine::export::image_file_name(&stem, img, k + 1, doc.info.pages.len()));
+                let path = child(&folder, &pdfcraft_engine::export::image_file_name(&stem, img, k + 1, doc.info.pages.len(), out.images.len()));
                 write_atomic(&path, &img.data)?;
                 files.push(json!({ "path": path.to_string_lossy(), "page": img.page + 1, "width": img.width, "height": img.height }));
             }
