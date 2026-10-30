@@ -438,7 +438,7 @@ impl Automation {
                     .enumerate()
                     .map(|(i, b)| {
                         let (u, v) = (info.user_to_view(b.rect[0] as f32, b.rect[1] as f32), info.user_to_view(b.rect[2] as f32, b.rect[3] as f32));
-                        json!({
+                        let mut p = json!({
                             "paragraph": i + 1,
                             "text": b.text,
                             "editor_text": b.editor_text,
@@ -447,7 +447,12 @@ impl Automation {
                             "rect": [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))],
                             "font": b.base_font,
                             "size": (b.size * 100.0).round() / 100.0,
-                        })
+                        });
+                        // Text drawn as a clipping path: text_edit and moves refuse it (#4786).
+                        if b.clips {
+                            p["clipping"] = json!(true);
+                        }
+                        p
                     })
                     .collect();
                 self.record_listing(id, page, &current);

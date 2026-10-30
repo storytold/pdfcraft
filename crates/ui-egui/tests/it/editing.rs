@@ -14,13 +14,18 @@ use crate::gpu;
 
 /// An `n`-page document with a proper xref table; page `i` shows "Page i+1".
 fn fixture(n: usize) -> Vec<u8> {
+    fixture_with(n, |i| format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1))
+}
+
+/// An `n`-page document whose page `i` draws `body(i)` with Helvetica as `/F1`.
+fn fixture_with(n: usize, body: impl Fn(usize) -> String) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
     let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
     objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")));
     objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into());
     for i in 0..n {
         objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + 2 * i));
-        let body = format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1);
+        let body = body(i);
         objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
     }
     let mut out = b"%PDF-1.7\n".to_vec();
@@ -4059,6 +4064,40 @@ fn check_existing_artwork(name: &'static str, bytes: Vec<u8>) {
 }
 
 #[test]
+fn edit_text_does_not_offer_text_drawn_as_a_clipping_path() {
+    // A Photoshop export draws its text as a mask (`7 Tr`) with artwork painted through it. The
+    // paragraph can't be rewritten (#3447), so a click on it opens nothing and says nothing
+    // (#4786); ordinary text on the same page still opens.
+    let bytes =
+        fixture_with(1, |_| "BT /F1 24 Tf 20 150 Td (Ink) Tj ET q BT /F1 24 Tf 7 Tr 20 220 Td (Mask) Tj ET 1 0 0 rg 0 0 200 300 re f Q".into());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("clip.pdf", None, bytes).expect("fixture opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let click = |h: &mut Harness<'static, PdfCraftApp>, x: f32, y: f32| {
+        let at = egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
+        h.hover_at(at);
+        h.run_steps(1);
+        h.drag_at(at);
+        h.run_steps(1);
+        h.drop_at(at);
+        h.run_steps(3);
+    };
+    click(&mut h, 30.0, 228.0);
+    assert!(h.state().views[0].line_editor.is_none(), "the mask paragraph is not opened");
+    let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(!toast.contains("clipping"), "and no refusal is shown after the fact: {toast}");
+    click(&mut h, 30.0, 158.0);
+    assert!(h.state().views[0].line_editor.is_some(), "ordinary text still opens");
+}
+
+#[test]
 fn the_format_panel_restyles_the_paragraph_being_edited() {
     let mut h = harness(1, |_| {});
     assert!(h.state_mut().execute("edit.edit_text"));
@@ -4691,7 +4730,9 @@ fn an_ordinary_paragraph_drag_refusal_never_rewrites_the_text() {
     assert!(doc.can_undo().is_none());
     assert!(!doc.dirty);
     assert_dragged_paragraphs(&dragged_paragraphs(&h), &before);
-    assert!(h.state().toast.as_ref().unwrap().0.contains("Text used as a clipping path cannot be moved with this selection."));
+    // A clipping-path paragraph has no box to grab (#4786), so nothing is refused after the fact.
+    let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(!toast.contains("clipping path"), "{toast}");
 }
 
 /// A delete the engine refuses (text used as a clipping path) leaves the document as it was and

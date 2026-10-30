@@ -279,6 +279,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 lines: Vec::new(),
                 rows: Vec::new(),
                 invisible: true,
+                clips: false,
             });
         }
         let Some(block) = blocks.last_mut() else { continue };
@@ -302,6 +303,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
             block.spans.push((start..block.editor_text.len(), index));
             row_text.push_str(&line.text);
             block.invisible &= line.origin.state.render_mode == 3;
+            block.clips |= line.clips;
             block.lines.push(index);
         }
         if !block.text.is_empty() {

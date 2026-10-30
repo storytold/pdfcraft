@@ -4476,6 +4476,19 @@ fn helvetica_page(body: &str) -> Vec<u8> {
 }
 
 #[test]
+fn text_paragraphs_marks_text_drawn_as_a_clipping_path() {
+    // #4786: a caller sees up front which paragraphs text_edit refuses (#3447).
+    let dir = workdir("clipping-paragraphs");
+    std::fs::write(dir.join("clip.pdf"), helvetica_page("BT /F1 24 Tf 100 700 Td (Ink) Tj ET\nBT /F1 24 Tf 7 Tr 100 400 Td (Mask) Tj ET")).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "clip.pdf" }))["doc"].as_u64().unwrap();
+    let paras = ok(&mut a, "text_paragraphs", json!({ "doc": doc, "page": 1 }));
+    let listed: Vec<_> = paras["paragraphs"].as_array().unwrap().iter().map(|p| (p["text"].as_str(), p.get("clipping").cloned())).collect();
+    assert_eq!(listed, [(Some("Ink"), None), (Some("Mask"), Some(json!(true)))], "{paras}");
+    assert!(a.call("text_edit", &json!({ "doc": doc, "page": 1, "paragraph": 2, "text": "x" })).is_err());
+}
+
+#[test]
 fn auditing_faux_redactions_through_tools() {
     let dir = workdir("faux-redaction-audit");
     std::fs::write(dir.join("redacted.pdf"), faux_redacted_fixture()).unwrap();

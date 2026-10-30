@@ -1260,7 +1260,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     let over_source = tool == QuickTool::AddText
         && pointer.is_some_and(|p| {
             !crate::content_ui::hits_added(&xf, info, i, added, p)
-                && lines.iter().any(|line| xf.user_rect(info, i, line.rect.map(|v| v as f32)).expand(2.0).contains(p))
+                && lines.iter().any(|line| !line.clips && xf.user_rect(info, i, line.rect.map(|v| v as f32)).expand(2.0).contains(p))
         });
     let source_blocked = over_source && view.content.hold_blocked();
     if over_source && resp.clicked() && !source_blocked {

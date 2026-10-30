@@ -2454,6 +2454,20 @@ fn editor_background_refuses_clipping_text_without_mutation() {
 }
 
 #[test]
+fn paragraphs_drawn_as_a_clipping_path_are_flagged() {
+    // #4786: the editor reads this instead of offering a paragraph every edit refuses (#3447).
+    // One clipping run is enough, as for the refusal: a line can start as ink and end as a mask.
+    let doc = text_page(
+        "BT /F1 12 Tf 72 700 Td (Ink) Tj ET \
+         BT /F1 12 Tf 7 Tr 72 500 Td (Mask) Tj ET \
+         BT /F1 12 Tf 0 Tr 72 300 Td (Half) Tj 4 Tr (way) Tj ET",
+    );
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let flags: Vec<_> = blocks.iter().map(|b| (b.text.as_str(), b.clips)).collect();
+    assert_eq!(flags, [("Ink", false), ("Mask", true), ("Halfway", true)]);
+}
+
+#[test]
 fn explicit_colour_spaces_expose_the_text_colour() {
     let doc = text_page("/DeviceRGB cs 0 0.23 0.45 sc BT /F1 12 Tf 72 700 Td (Blue) Tj ET");
     assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].color, [0.0, 0.23, 0.45]);

@@ -296,7 +296,8 @@ fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
 fn open_editor(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], boxes: &[Rect], block: usize, view: &mut DocView) {
     let PageToolContext { ui, xf, doc, page, .. } = cx;
     view.pending_text_open = None;
-    let (Some(l), Some(b)) = (lines.get(block), boxes.get(block)) else { return };
+    // No box: a clipping-path paragraph, which isn't offered for editing (#4786).
+    let (Some(l), Some(b)) = (lines.get(block), boxes.get(block).filter(|b| b.is_positive())) else { return };
     view.image_selection = None;
     let source_lines = doc.text_lines(page);
     let text = l.editor_text.clone();
@@ -340,12 +341,14 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
         view.block_drag = None;
         return true;
     }
-    let boxes: Vec<Rect> = lines.iter().map(|l| paragraph_box(xf, info, page, l.rect)).collect();
+    // A paragraph drawn as a clipping path can't be rewritten or moved (#3447): it gets no box,
+    // so it is neither outlined nor opened, rather than refused after the click (#4786).
+    let boxes: Vec<Rect> = lines.iter().map(|l| if l.clips { Rect::NOTHING } else { paragraph_box(xf, info, page, l.rect) }).collect();
     // Outlines stay on their page, like its text (#3061).
     let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(xf.rect.expand(1.0)));
     let active = view.line_editor.as_ref().filter(|e| e.page == page).map(|e| e.block);
     for (i, b) in boxes.iter().enumerate() {
-        if active != Some(i) {
+        if active != Some(i) && b.is_positive() {
             painter.rect_stroke(*b, CornerRadius::same(2), Stroke::new(0.75, ACCENT.gamma_multiply(0.35)), egui::StrokeKind::Outside);
         }
     }
