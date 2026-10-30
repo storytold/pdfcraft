@@ -37,6 +37,9 @@ pub struct Document {
     /// Interactive form fields of the current state (empty without a form).
     pub form: Arc<Vec<pdfcraft_forms::Field>>,
     pub(crate) marker_scan: OnceLock<pdfcraft_edit::MarkerScan>,
+    /// Whether a watermark another editor wrote is there (`None`: could not tell), looked for the
+    /// first time it is asked, and again after the content changes.
+    pub(crate) foreign_watermark_scan: OnceLock<Option<bool>>,
     pub(crate) links: OnceLock<Vec<pdfcraft_annot::links::LinkItem>>,
     /// Signature fields, validated against the session's trust store (Signatures panel).
     pub signatures: Arc<Vec<SignatureInfo>>,
@@ -372,6 +375,14 @@ impl Document {
     /// Redaction marks waiting to be applied.
     pub fn redaction_marks(&self) -> usize {
         self.info.annotations.iter().filter(|a| a.subtype == "Redact").count()
+    }
+
+    /// Whether the document may have a watermark another editor wrote as an artifact: it has one,
+    /// or it could not be checked (a very large document, an unreadable page).
+    pub fn may_have_foreign_watermark(&self) -> bool {
+        self.foreign_watermark_scan
+            .get_or_init(|| self.editor.as_ref().and_then(|e| pdfcraft_edit::foreign_watermarks_present(&e.cos)))
+            .unwrap_or(true)
     }
 
     /// Page marks present (headers and footers, watermarks, backgrounds), for Update/Remove.

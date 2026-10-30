@@ -38,6 +38,8 @@ pub enum Needs {
     HasRedactions,
     /// The document has page marks of this kind and allows changes.
     Marks(crate::MarkKind),
+    /// Remove watermark: PdfCraft's own, or one another editor wrote as an artifact (#4957).
+    WatermarkRemoval,
     /// The document's security may be changed (owner, or nothing restricted), or would be
     /// once its permissions password is entered.
     Security,
@@ -367,7 +369,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("edit.header_footer.remove", "Remove header & footer", None, None, Marks(crate::MarkKind::HeaderFooter), "heading"),
     c("edit.watermark", "Add watermark…", None, None, Modification, "stamp"),
     c("edit.watermark.update", "Update watermark…", None, None, Marks(crate::MarkKind::Watermark), "stamp"),
-    c("edit.watermark.remove", "Remove watermark", None, None, Marks(crate::MarkKind::Watermark), "stamp"),
+    c("edit.watermark.remove", "Remove watermark", None, None, WatermarkRemoval, "stamp"),
     c("edit.background", "Add background…", None, None, Modification, "palette"),
     c("edit.background.update", "Update background…", None, None, Marks(crate::MarkKind::Background), "palette"),
     c("edit.background.remove", "Remove background", None, None, Marks(crate::MarkKind::Background), "palette"),
@@ -426,6 +428,9 @@ pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) 
         Printing => doc.is_some_and(|d| d.allows_printing()),
         FillForms => doc.is_some_and(|d| d.allows_form_filling() && !d.form.is_empty()),
         Marks(k) => doc.is_some_and(|d| d.allows_modification() && d.marks().contains(&k)),
+        WatermarkRemoval => {
+            doc.is_some_and(|d| d.allows_modification() && (d.marks().contains(&crate::MarkKind::Watermark) || d.may_have_foreign_watermark()))
+        }
         HasComments => doc.is_some_and(|d| d.allows_modification() && !d.info.annotations.is_empty()),
         HasFields => doc.is_some_and(|d| d.allows_modification() && !d.form.is_empty()),
         HasRedactions => doc.is_some_and(|d| d.allows_modification() && d.redaction_marks() > 0),

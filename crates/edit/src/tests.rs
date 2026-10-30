@@ -7557,3 +7557,296 @@ fn q_inside_a_text_object_restores_the_text_matrices() {
         assert_eq!((lines[0].text.as_str(), lines[0].baseline()), ("Edited", baseline), "{content} after editing");
     }
 }
+
+/// A one-page document whose page content is `streams` (each its own stream, in order), with
+/// `/Properties` `props` in its resources.
+fn page_of_streams(streams: &[&str], props: &str) -> Document {
+    page_of_streams_with(streams, props, &[])
+}
+
+/// The same, with `extra` objects numbered after the streams (the first is object `4 + streams`).
+fn page_of_streams_with(streams: &[&str], props: &str, extra: &[&str]) -> Document {
+    let mut objs: Vec<String> =
+        vec!["<< /Type /Catalog /Pages 2 0 R >>".into(), "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into()];
+    let refs: Vec<String> = (0..streams.len()).map(|i| format!("{} 0 R", 4 + i)).collect();
+    objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents [{}] /Resources << /Properties << {props} >> >> >>", refs.join(" ")));
+    for body in streams {
+        objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
+    }
+    objs.extend(extra.iter().map(|o| o.to_string()));
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+/// #4957: a watermark another editor marked as an artifact (inline or through `/Properties`) is
+/// cut out of the content byte for byte, and the rest of the page is left exactly as it was.
+#[test]
+fn foreign_watermark_artifacts_are_cut_out_and_nothing_else_changes() {
+    let wm = "/Artifact <</Subtype /Watermark /Type /Pagination>> BDC q 0.5 g /Fm0 Do Q EMC";
+    let content = format!("BT (Before) Tj ET\n{wm}\nBT (After) Tj ET");
+    let mut doc = page_of_streams(&[&content], "");
+    assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap().removed, 1);
+    assert_eq!(streams(&doc, 0), ["BT (Before) Tj ET\n\nBT (After) Tj ET"], "only the artifact's bytes are gone");
+    let doc = reopen(&doc);
+    assert_eq!(streams(&doc, 0), ["BT (Before) Tj ET\n\nBT (After) Tj ET"], "and it is saved that way");
+
+    // Named properties, as Acrobat writes them.
+    let named = "BT (A) Tj ET /Artifact /MC0 BDC q /Fm0 Do Q EMC BT (B) Tj ET";
+    let mut doc = page_of_streams(&[named], "/MC0 << /Subtype /Watermark /Type /Pagination >>");
+    assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap().removed, 1);
+    assert_eq!(streams(&doc, 0), ["BT (A) Tj ET  BT (B) Tj ET"]);
+
+    // Several, and one with marked content of its own inside.
+    let many = format!("{wm} BT (x) Tj ET /Artifact <</Subtype /Watermark>> BDC /Span BMC q Q EMC EMC");
+    let mut doc = page_of_streams(&[&many], "");
+    assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap().removed, 2);
+    assert_eq!(streams(&doc, 0), [" BT (x) Tj ET "]);
+}
+
+/// #4957: only what is marked as a watermark goes, and only when cutting it out can't change what
+/// follows it.
+#[test]
+fn foreign_watermark_removal_leaves_everything_it_should() {
+    // Other artifacts and other marked content stay; a watermark inside other marked content goes
+    // alone, and the content around it stays.
+    let kept = "/Artifact <</Type /Pagination /Subtype /Header>> BDC (h) Tj EMC /Artifact BMC (b) Tj EMC /OC /MC0 BDC (o) Tj EMC /Artifact /MC1 BDC (n) Tj EMC";
+    let mut doc = page_of_streams(&[kept], "/MC0 << /Subtype /Watermark >> /MC1 << /Subtype /Footer >>");
+    assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap(), ForeignWatermarks::default());
+    assert_eq!(streams(&doc, 0), [kept], "no watermark: the content is untouched");
+    let inside = "/Span BMC /Artifact <</Subtype /Watermark>> BDC (w) Tj EMC (keep) Tj EMC";
+    let mut doc = page_of_streams(&[inside], "");
+    assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap().removed, 1);
+    assert_eq!(streams(&doc, 0), ["/Span BMC  (keep) Tj EMC"]);
+
+    // A watermark whose q and Q don't balance inside it stays: cutting it would change the state.
+    for unbalanced in ["/Artifact <</Subtype /Watermark>> BDC q 1 0 0 1 5 5 cm EMC (x) Tj Q", "q /Artifact <</Subtype /Watermark>> BDC Q q EMC Q"] {
+        let mut doc = page_of_streams(&[unbalanced], "");
+        assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap().removed, 0, "{unbalanced}");
+        assert_eq!(streams(&doc, 0), [unbalanced]);
+    }
+
+    // Content that can't be read with certainty is left alone: an unclosed scope, a stray EMC.
+    for bad in [
+        "/Artifact <</Subtype /Watermark>> BDC q Q (x) Tj",
+        "(x) Tj EMC /Artifact <</Subtype /Watermark>> BDC EMC",
+        // A whole watermark, then a scope that is never closed: not read with certainty, so left.
+        "/Artifact <</Subtype /Watermark>> BDC q Q EMC /Span BMC (x) Tj",
+    ] {
+        let mut doc = page_of_streams(&[bad], "");
+        assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap().removed, 0, "{bad}");
+        assert_eq!(streams(&doc, 0), [bad]);
+    }
+    // A page that isn't there is refused.
+    let mut doc = page_of_streams(&["(x) Tj"], "");
+    assert!(remove_foreign_watermarks(&mut doc, &[1]).is_err());
+    assert!(remove_foreign_watermarks(&mut doc, &[usize::MAX]).is_err());
+}
+
+/// #4957: a watermark whose operators are split across content streams is cut out of both.
+#[test]
+fn a_foreign_watermark_across_content_streams_is_cut_out_of_each() {
+    let mut doc = page_of_streams(&["(a) Tj /Artifact <</Subtype /Watermark>> BDC q 0.5 g", "/Fm0 Do Q EMC (b) Tj"], "");
+    assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap().removed, 1);
+    assert_eq!(streams(&doc, 0), ["(a) Tj ", " (b) Tj"]);
+}
+
+/// #4957: marked content does not save and restore the graphics state, so a watermark that
+/// changes state the rest of the page inherits is reported, not cut out (cutting it would repaint
+/// what follows in another colour, place or clip). One that keeps its changes inside its own
+/// `q … Q` is cut out whole.
+#[test]
+fn a_foreign_watermark_that_changes_state_for_what_follows_is_reported_not_removed() {
+    use crate::{Blocked, ForeignWatermarks};
+    let leaking = [
+        // The colour: the square after it is red before removal, black after.
+        "0 g /Artifact <</Subtype /Watermark>> BDC 1 0 0 rg 0 0 10 10 re f EMC 20 20 10 10 re f",
+        // The matrix, the clip, the font and the line width.
+        "/Artifact <</Subtype /Watermark>> BDC 1 0 0 1 50 50 cm EMC 0 0 5 5 re f",
+        "/Artifact <</Subtype /Watermark>> BDC 0 0 50 50 re W n EMC 0 0 100 100 re f",
+        "/Artifact <</Subtype /Watermark>> BDC BT /F1 40 Tf (x) Tj ET EMC BT (y) Tj ET",
+        "/Artifact <</Subtype /Watermark>> BDC 8 w EMC 0 0 m 9 9 l S",
+        // Operators that set state as a side effect: `"` sets the word and character spacing, `TD`
+        // the leading, and both outlast the text object they are in.
+        "BT /F1 12 Tf ET /Artifact <</Subtype /Watermark>> BDC BT 4 2 (WM) \" ET EMC BT 20 100 Td (A B) Tj ET",
+        "BT /F1 12 Tf ET /Artifact <</Subtype /Watermark>> BDC BT 0 -14 TD (WM) Tj ET EMC BT (a) ' ET",
+        // A text object or a path that begins or ends inside it.
+        "BT /Artifact <</Subtype /Watermark>> BDC (x) Tj ET EMC",
+        "0 0 m /Artifact <</Subtype /Watermark>> BDC 5 5 l S EMC",
+    ];
+    for content in leaking {
+        let mut doc = page_of_streams(&[content], "");
+        let result = remove_foreign_watermarks(&mut doc, &[0]).unwrap();
+        assert_eq!(result, ForeignWatermarks { removed: 0, blocked: vec![(0, Blocked::Unsafe)] }, "{content}");
+        assert_eq!(streams(&doc, 0), [content], "left exactly as it was: {content}");
+    }
+    // The same drawing with its changes inside its own q … Q goes, and what follows is untouched.
+    let scoped = [
+        "0 g /Artifact <</Subtype /Watermark>> BDC q 1 0 0 rg 1 0 0 1 5 5 cm 0 0 10 10 re f Q EMC 20 20 10 10 re f",
+        "/Artifact <</Subtype /Watermark>> BDC q BT /F1 40 Tf 0.7 g (x) Tj ET Q EMC BT (y) Tj ET",
+        "/Artifact <</Subtype /Watermark>> BDC q 0 0 50 50 re W n q 8 w 0 0 m 9 9 l S Q Q EMC",
+        "BT /F1 12 Tf ET /Artifact <</Subtype /Watermark>> BDC q BT 4 2 (WM) \" 0 -14 TD (x) Tj ET Q EMC BT 20 100 Td (A B) Tj ET",
+    ];
+    for content in scoped {
+        let mut doc = page_of_streams(&[content], "");
+        let result = remove_foreign_watermarks(&mut doc, &[0]).unwrap();
+        assert_eq!(result, ForeignWatermarks { removed: 1, blocked: vec![] }, "{content}");
+        assert!(!streams(&doc, 0)[0].contains("Watermark"), "{content}");
+    }
+    let mut doc = page_of_streams(&[scoped[0]], "");
+    remove_foreign_watermarks(&mut doc, &[0]).unwrap();
+    assert_eq!(streams(&doc, 0), ["0 g  20 20 10 10 re f"], "what is left is the body, byte for byte");
+}
+
+/// #4957: the watermark's subtype and its properties may be indirect objects.
+#[test]
+fn a_foreign_watermark_named_through_indirect_objects_is_found() {
+    use crate::ForeignWatermarks;
+    // Object 5 is the name Watermark; object 6 is a properties dictionary whose Subtype is object 5.
+    let content = "BT (A) Tj ET /Artifact /MC0 BDC q /Fm0 Do Q EMC BT (B) Tj ET";
+    let mut doc = page_of_streams_with(&[content], "/MC0 6 0 R", &["/Watermark", "<< /Subtype 5 0 R /Type /Pagination >>"]);
+    assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap().removed, 1);
+    assert_eq!(streams(&doc, 0), ["BT (A) Tj ET  BT (B) Tj ET"]);
+    // A Subtype that is something else through a reference is not a watermark.
+    let mut doc = page_of_streams_with(&[content], "/MC0 6 0 R", &["/Header", "<< /Subtype 5 0 R /Type /Pagination >>"]);
+    assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap(), ForeignWatermarks::default());
+}
+
+/// #4957: a page that could not be checked or cleaned is reported with the reason, the others are
+/// still cleaned, and a document with none says so.
+#[test]
+fn pages_a_foreign_watermark_could_not_be_removed_from_are_reported() {
+    use crate::{Blocked, ForeignWatermarks, foreign_watermarks_present};
+    let wm = "/Artifact <</Subtype /Watermark>> BDC q 0.5 g /Fm0 Do Q EMC";
+    // Three pages: a watermark that goes, content that is not there, and a watermark in content that
+    // can't be read with certainty.
+    let uncertain = format!("{wm} /Span BMC (x) Tj");
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 99 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 8 0 R >>".into(),
+    ];
+    objs.push(format!("<< /Length {} >>\nstream\n{wm}\nendstream", wm.len()));
+    // Object 7 is not used: page 2's content is a reference to an object that is not there.
+    objs.push("<< >>".into());
+    objs.push(format!("<< /Length {} >>\nstream\n{uncertain}\nendstream", uncertain.len()));
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut doc = Document::open(Arc::new(out)).unwrap();
+    // Detection: there is one, so Remove watermark is offered.
+    assert_eq!(foreign_watermarks_present(&doc), Some(true));
+    let result = remove_foreign_watermarks(&mut doc, &[0, 1, 2]).unwrap();
+    assert_eq!(result, ForeignWatermarks { removed: 1, blocked: vec![(1, Blocked::Unreadable), (2, Blocked::Uncertain)] });
+    assert!(!streams(&doc, 0)[0].contains("Watermark"), "the readable page was cleaned");
+    assert_eq!(
+        result.blocked.iter().map(|(_, why)| why.to_string()).collect::<Vec<_>>(),
+        ["its content can't be read", "its content can't be read with certainty"]
+    );
+
+    // No watermark anywhere: nothing removed, nothing blocked, and detection says no.
+    let mut plain = page_of_streams(&["BT (x) Tj ET", "q Q"], "");
+    assert_eq!(foreign_watermarks_present(&plain), Some(false));
+    assert_eq!(remove_foreign_watermarks(&mut plain, &[0]).unwrap(), ForeignWatermarks::default());
+    // Detection by a property alone, and an unreadable page makes it "maybe".
+    let named = page_of_streams(&["/Artifact /MC0 BDC EMC"], "/MC0 << /Subtype /Watermark >>");
+    assert_eq!(foreign_watermarks_present(&named), Some(true));
+}
+
+/// #4957: conservatively refuse a watermark inside a text object or path owned by surrounding
+/// content: cutting it could change text placement or that path. `q … Q` restores text matrices
+/// inside a text object (errata 368), but not the current path; the scan does not rely on that
+/// restoration. The watermark is reported whether or not the object is still open at its end.
+#[test]
+fn a_foreign_watermark_inside_an_open_text_object_or_path_is_not_cut_out() {
+    use crate::{Blocked, ForeignWatermarks};
+    for content in [
+        // The text matrix: the deleted Tj advanced it, so "Body" would shift left.
+        "BT /F1 12 Tf 20 200 Td /Artifact <</Subtype /Watermark>> BDC (WM) Tj EMC (Body) Tj ET",
+        "BT /F1 12 Tf /Artifact <</Subtype /Watermark>> BDC 30 0 Td EMC (Body) Tj ET",
+        // The current path: cutting the segment changes the shape that is stroked.
+        "0 0 m /Artifact <</Subtype /Watermark>> BDC 10 0 l EMC 10 10 l S",
+        "0 0 m /Artifact <</Subtype /Watermark>> BDC q Q EMC 10 10 l S",
+    ] {
+        let mut doc = page_of_streams(&[content], "");
+        let result = remove_foreign_watermarks(&mut doc, &[0]).unwrap();
+        assert_eq!(result, ForeignWatermarks { removed: 0, blocked: vec![(0, Blocked::Unsafe)] }, "{content}");
+        assert_eq!(streams(&doc, 0), [content], "{content}");
+    }
+}
+
+/// #4957: a name may be spelled with `#` escapes, so a document whose only watermark is spelled
+/// that way is still found, offered and cleaned.
+#[test]
+fn a_foreign_watermark_with_an_escaped_name_is_found() {
+    use crate::foreign_watermarks_present;
+    for content in [
+        "(x) Tj /Artifact <</Subtype /Water#6Dark /Type /Pagination>> BDC q Q EMC (y) Tj",
+        "(x) Tj /Arti#66act <</Subtype /Watermark>> BDC q Q EMC (y) Tj",
+        "(x) Tj /Artifact <</Sub#74ype /Watermark>> BDC q Q EMC (y) Tj",
+    ] {
+        let mut doc = page_of_streams(&[content], "");
+        assert_eq!(foreign_watermarks_present(&doc), Some(true), "{content}");
+        assert_eq!(remove_foreign_watermarks(&mut doc, &[0]).unwrap().removed, 1, "{content}");
+        assert_eq!(streams(&doc, 0), ["(x) Tj  (y) Tj"], "{content}");
+    }
+    // A `#` that is not a watermark: read in full, and nothing is found.
+    let hash = "(a #1 b) Tj /Artifact <</Subtype /Header>> BDC q Q EMC";
+    let doc = page_of_streams(&[hash], "");
+    assert_eq!(foreign_watermarks_present(&doc), Some(false));
+}
+
+/// #4957: the scan costs the same however deeply marked content is nested: a watermark scope with
+/// a thousand marked-content scopes inside it and a million state changes (some 4 MB) is read in
+/// moments, not in a billion steps.
+#[test]
+fn reading_deeply_nested_marked_content_with_many_state_changes_is_quick() {
+    use crate::{Blocked, ForeignWatermarks};
+    let depth = 1000;
+    let content =
+        format!("/Artifact <</Subtype /Watermark>> BDC {}{}{}EMC", "/Span BMC ".repeat(depth), "0 g ".repeat(1_000_000), "EMC ".repeat(depth));
+    let mut doc = page_of_streams(&[&content], "");
+    let started = std::time::Instant::now();
+    let result = remove_foreign_watermarks(&mut doc, &[0]).unwrap();
+    let took = started.elapsed();
+    // The state changes outlast the scope: reported, not cut.
+    assert_eq!(result, ForeignWatermarks { removed: 0, blocked: vec![(0, Blocked::Unsafe)] });
+    assert!(took < std::time::Duration::from_secs(5), "{took:?}");
+    eprintln!("deep nesting scan took {took:?}");
+}
+
+/// #4957: only the outermost watermark scope is cut, however many watermark scopes nest inside it,
+/// and once it closes the next watermark is outermost again, inside other marked content or not.
+#[test]
+fn nested_and_repeated_foreign_watermarks_are_cut_at_the_outermost_scope() {
+    use crate::ForeignWatermarks;
+    let wm = "/Artifact <</Subtype /Watermark>> BDC";
+    let content = format!(
+        "(a) Tj {wm} q {wm} {wm} /Span BMC {wm} EMC EMC EMC EMC Q EMC (b) Tj /Span BMC {wm} {wm} EMC EMC (c) Tj EMC /Span BMC /Span BMC {wm} EMC EMC EMC (d) Tj"
+    );
+    let mut doc = page_of_streams(&[&content], "");
+    let result = remove_foreign_watermarks(&mut doc, &[0]).unwrap();
+    assert_eq!(result, ForeignWatermarks { removed: 3, blocked: vec![] });
+    assert_eq!(streams(&doc, 0), ["(a) Tj  (b) Tj /Span BMC  (c) Tj EMC /Span BMC /Span BMC  EMC EMC (d) Tj"]);
+}

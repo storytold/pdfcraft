@@ -339,6 +339,7 @@ impl Session {
             read_only_reason,
             form: Arc::new(form),
             marker_scan: OnceLock::new(),
+            foreign_watermark_scan: OnceLock::new(),
             links: OnceLock::new(),
             signatures: Arc::new(signatures),
             trust: trust.clone(),

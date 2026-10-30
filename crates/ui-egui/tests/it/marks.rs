@@ -490,3 +490,50 @@ fn page_range_from_one_to_one_selects_only_the_first_page() {
     assert_eq!(corner(&mut r, 0), vec![255, 255, 217, 255], "page 1 has the background");
     assert_eq!(corner(&mut r, 1), vec![255, 255, 255, 255], "page 2 does not");
 }
+
+/// A one-page PDF with a watermark another editor marked as an artifact (and some body text).
+fn foreign_watermark_pdf() -> Vec<u8> {
+    let content = "BT /F1 18 Tf 20 250 Td (Body text) Tj ET\n/Artifact <</Subtype /Watermark /Type /Pagination>> BDC q BT /F1 40 Tf 20 100 Td (DRAFT) Tj ET Q EMC";
+    format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >>
+stream
+{content}
+endstream
+endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len()
+    )
+    .into_bytes()
+}
+
+/// #4957: Remove watermark is offered for a document whose only watermark was made by another
+/// editor, removes it, and is no longer offered; undo brings both back. A document without one
+/// still has it disabled.
+#[test]
+fn remove_watermark_is_offered_for_a_watermark_another_editor_made() {
+    let may = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().may_have_foreign_watermark()
+    };
+    let mut plain = harness();
+    assert!(!may(&plain));
+    assert!(!plain.state_mut().execute("edit.watermark.remove"), "nothing to remove in a document without one");
+
+    let mut h = harness_with(foreign_watermark_pdf());
+    assert!(marks(&h).is_empty(), "it is not one of PdfCraft's own marks");
+    assert!(may(&h));
+    assert!(h.state_mut().execute("edit.watermark.remove"), "Remove watermark is offered and runs");
+    h.run_steps(3);
+    assert!(!may(&h), "and it is gone");
+    assert!(!h.state_mut().execute("edit.watermark.remove"), "so it is offered no more");
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert!(may(&h), "undo brings the watermark back, and the command with it");
+    assert!(h.state_mut().execute("edit.watermark.remove"));
+}

@@ -1194,6 +1194,83 @@ fn combine_takes_images_and_text_files() {
     }
 }
 
+/// A PDF with one page per entry of `contents`, the standard font as /F1 on each.
+fn pages_with_content(contents: &[&str]) -> Vec<u8> {
+    let n = contents.len();
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 3 + i)).collect();
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 300 300] >>", kids.join(" ")),
+    ];
+    for i in 0..n {
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 {} 0 R >> >> >>", 3 + n + i, 3 + 2 * n));
+    }
+    for content in contents {
+        objs.push(format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()));
+    }
+    objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string());
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// A one-page PDF whose content is `content`, with the standard font as /F1.
+fn page_with_content(content: &str) -> Vec<u8> {
+    pages_with_content(&[content])
+}
+
+/// #4957: Remove watermark takes out a watermark another editor marked as an artifact, leaves the
+/// page's own text, and says so when there is none.
+#[test]
+fn remove_marks_takes_out_watermarks_other_editors_marked_as_artifacts() {
+    let dir = workdir("foreign-watermark");
+    let content = "BT /F1 18 Tf 20 250 Td (Body text) Tj ET\n/Artifact <</Subtype /Watermark /Type /Pagination>> BDC q BT /F1 40 Tf 20 100 Td (CONFIDENTIAL) Tj ET Q EMC\nBT /F1 12 Tf 20 20 Td (Footer) Tj ET";
+    std::fs::write(dir.join("marked.pdf"), page_with_content(content)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "marked.pdf" }))["doc"].as_u64().unwrap();
+    assert!(page_text(&mut a, doc)[0].contains("CONFIDENTIAL"));
+    ok(&mut a, "doc_remove_marks", json!({ "doc": doc, "kind": "watermark" }));
+    let text = page_text(&mut a, doc)[0].clone();
+    assert!(!text.contains("CONFIDENTIAL") && text.contains("Body text") && text.contains("Footer"), "{text}");
+    // Undo brings it back; a second removal after redo has nothing to take out.
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert!(page_text(&mut a, doc)[0].contains("CONFIDENTIAL"), "undo restores the watermark");
+    ok(&mut a, "edit_redo", json!({ "doc": doc }));
+    assert!(
+        matches!(a.call("doc_remove_marks", &json!({ "doc": doc, "kind": "watermark" })), Err(ToolError::Failed(e)) if e.contains("nothing to remove"))
+    );
+    // Other kinds are not touched by it: an artifact that is not a watermark stays.
+    let header = "/Artifact <</Subtype /Header /Type /Pagination>> BDC BT /F1 10 Tf 20 280 Td (Running header) Tj ET EMC";
+    std::fs::write(dir.join("header.pdf"), page_with_content(header)).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "header.pdf" }))["doc"].as_u64().unwrap();
+    assert!(matches!(a.call("doc_remove_marks", &json!({ "doc": doc, "kind": "watermark" })), Err(ToolError::Failed(_))));
+    assert!(page_text(&mut a, doc)[0].contains("Running header"));
+
+    // A watermark that can't be cut out cleanly on one page stops the whole removal, naming the
+    // page and why, and changes nothing: the page that could have been cleaned is left as it was.
+    let clean = "BT /F1 12 Tf 20 20 Td (Page one body) Tj ET /Artifact <</Subtype /Watermark>> BDC q BT /F1 40 Tf 20 100 Td (STAMP) Tj ET Q EMC";
+    let leaking = "0 g /Artifact <</Subtype /Watermark>> BDC 1 0 0 rg BT /F1 40 Tf 20 100 Td (LEAKY) Tj ET EMC BT /F1 12 Tf (Body two) Tj ET";
+    std::fs::write(dir.join("mixed.pdf"), pages_with_content(&[clean, leaking])).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "mixed.pdf" }))["doc"].as_u64().unwrap();
+    let refused = a.call("doc_remove_marks", &json!({ "doc": doc, "kind": "watermark" }));
+    assert!(
+        matches!(&refused, Err(ToolError::Failed(e)) if e.contains("page 2") && e.contains("nothing was changed") && !e.contains("page 1")),
+        "{refused:?}"
+    );
+    let text = page_text(&mut a, doc);
+    assert!(text[0].contains("STAMP") && text[1].contains("LEAKY"), "nothing changed: {text:?}");
+}
+
 #[test]
 fn combine_extract_and_split() {
     let dir = workdir("organize");

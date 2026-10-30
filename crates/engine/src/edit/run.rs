@@ -1,6 +1,6 @@
 use super::{
-    AddedContent, Arc, Edit, EditError, FieldValue, ImageEdit, NewAnnotation, Shape, a11y, copy_image, decode_data_file, embed_image, fit_picture,
-    image_content_type, is_xfa_data_file, js, mark_source, measure, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
+    AddedContent, Arc, Edit, EditError, FieldValue, ImageEdit, MarkKind, NewAnnotation, Shape, a11y, copy_image, decode_data_file, embed_image,
+    fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
 };
 use crate::SourceProblem;
 use crate::sources::{comment_source, import_pdf_comments};
@@ -594,7 +594,19 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::RemoveMarks { kind } => {
             let n = pdfcraft_model::pages(doc).len();
-            if pdfcraft_edit::remove_marks(doc, &(0..n).collect::<Vec<_>>(), *kind)? == 0 {
+            let pages: Vec<usize> = (0..n).collect();
+            let mut removed = pdfcraft_edit::remove_marks(doc, &pages, *kind)?;
+            // Watermarks another editor marked as artifacts go with PdfCraft's own (#4957). A page
+            // one could not be removed from, or checked on, stops the edit with the reason (nothing
+            // changes): removing some and saying nothing about the rest would be wrong.
+            if *kind == MarkKind::Watermark {
+                let foreign = pdfcraft_edit::remove_foreign_watermarks(doc, &pages)?;
+                if !foreign.blocked.is_empty() {
+                    return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(blocked_watermarks(&foreign.blocked))));
+                }
+                removed += foreign.removed;
+            }
+            if removed == 0 {
                 return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("there is nothing to remove".into())));
             }
         }
@@ -765,4 +777,14 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
     }
     Ok(())
+}
+
+/// "Remove watermark" refused: the pages a watermark could not be removed from, and why.
+fn blocked_watermarks(blocked: &[(usize, pdfcraft_edit::Blocked)]) -> String {
+    const SHOWN: usize = 5;
+    let mut parts: Vec<String> = blocked.iter().take(SHOWN).map(|(page, why)| format!("page {}: {why}", page.saturating_add(1))).collect();
+    if blocked.len() > SHOWN {
+        parts.push(format!("and {} more pages", blocked.len() - SHOWN));
+    }
+    format!("a watermark another editor made could not be removed from every page ({}); nothing was changed", parts.join("; "))
 }

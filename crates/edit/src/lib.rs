@@ -57,10 +57,12 @@ pub use added::{
 };
 
 mod apply;
+mod foreign_marks;
 mod marks;
 mod place;
 
 pub use apply::{add_background, add_header_footer, add_watermark, marks_present, remove_marks};
+pub use foreign_marks::{Blocked, ForeignWatermarks, foreign_watermarks_present, remove_foreign_watermarks};
 #[cfg(test)]
 use marks::bates_start;
 pub use marks::{Background, Context, HeaderFooter, MarkKind, MarkSource, Watermark, expand};
