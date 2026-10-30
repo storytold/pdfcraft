@@ -6580,8 +6580,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["ocr.recognize_batch"]
 tools = ["ocr_recognize_files"]
-evidence = ["crates/automation/tests/it/automation.rs::ocr_recognize_files_writes_searchable_copies", "crates/ui-egui/tests/it/ocr.rs::recognize_text_in_multiple_files_writes_searchable_copies"]
-notes = "Pick PDFs, then an output folder; copies are saved incrementally under the same names, in the background with progress."
+evidence = ["crates/automation/tests/it/automation.rs::ocr_recognize_files_writes_searchable_copies", "crates/automation/tests/it/automation.rs::ocr_recognize_files_keeps_an_existing_file_in_the_output_folder", "crates/automation/tests/it/automation.rs::ocr_recognize_files_refuses_inputs_that_share_a_file_name", "crates/ui-egui/tests/it/ocr.rs::recognize_text_in_multiple_files_writes_searchable_copies"]
+notes = "Pick PDFs, then an output folder; copies are saved incrementally under the same names, in the background with progress. A name already on disk gets a number such as (2), so an existing file is never replaced; two inputs that would write the same output file are refused up front instead, before anything is read or written."
 
 [[feature]]
 id = "ocr.ocr-languages"
@@ -6592,8 +6592,8 @@ milestone = "M10"
 status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
-notes = "Language choice exists, but the models read only the Latin alphabet without accents (English)."
+evidence = ["crates/engine/src/tests.rs::chinese_ocr_makes_mixed_scans_searchable", "crates/engine/src/tests.rs::latin_ocr_keeps_german_accents_searchable", "crates/engine/src/tests.rs::german_document_language_keeps_umlauts_and_eszett", "crates/engine/src/tests.rs::latin_ocr_keeps_french_cedilla_and_grave", "crates/engine/src/tests.rs::latin_ocr_keeps_spanish_names_and_amounts", "crates/engine/src/tests.rs::latin_ocr_keeps_portuguese_accents", "crates/engine/src/tests.rs::latin_ocr_keeps_italian_accents", "crates/engine/src/tests.rs::latin_ocr_keeps_dutch_diaereses_and_stress_marks", "crates/engine/src/tests.rs::latin_ocr_keeps_danish_and_norwegian_letters", "crates/engine/src/tests.rs::latin_ocr_keeps_swedish_and_finnish_letters", "crates/engine/src/tests.rs::latin_ocr_keeps_icelandic_letters", "crates/engine/src/tests.rs::latin_ocr_keeps_czech_diacritics", "crates/engine/src/tests.rs::latin_ocr_keeps_polish_diacritics", "crates/ocr/src/lib.rs::named_european_languages_use_the_latin_model", "crates/ocr/src/lib.rs::every_named_language_prefers_exactly_its_own_alphabet", "crates/ocr/src/lib.rs::a_long_line_is_read_in_pieces_at_word_gaps", "crates/ocr/src/ppocr.rs::an_overlong_crop_is_squeezed_not_refused", "crates/engine/tests/it/ocr_long_line.rs::latin_ocr_reads_a_line_wider_than_the_recogniser", "crates/automation/tests/it/automation.rs::ocr_recognize_reads_a_line_wider_than_the_recogniser", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::chinese_ocr_language_runs_from_the_dialog", "crates/ui-egui/tests/it/ocr.rs::latin_ocr_language_runs_from_the_dialog", "crates/ui-egui/tests/it/ocr.rs::german_is_a_document_language", "crates/ui-egui/tests/it/ocr.rs::recognition_that_cannot_start_a_thread_reports_an_error_and_can_retry", "crates/ui-egui/src/ocr_ui.rs::result_is_refused_when_the_document_changed_meanwhile", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_reads_a_line_wider_than_the_recogniser"]
+notes = "English uses the ocrs model. Simplified Chinese and accented Latin use PP-OCR models on RTen. A line wider than the recogniser's input is read in pieces split at word gaps, and a single word that is still wider is squeezed into the widest input, so that line no longer skips the page. French, German, Spanish, Portuguese, Italian, Dutch, Danish, Norwegian, Swedish, Icelandic, Finnish, Czech and Polish share the Latin model and prefer that language's letters when two readings are close (preferred_letters is checked letter by letter against each language's own orthography, including German's 2017-reform capital ẞ and Dutch's stress mark on every vowel, not only a/e/o). Chinese and Latin require their model and dictionary from cargo xtask models. Other scripts remain unsupported. The dialog still starts on English. A worker that cannot start is reported, and a result is discarded when the document changed while recognition ran. Hungarian ő/ű are in the Latin dictionary, but on the sample pangram the model read ű as ü, so Hungarian is not offered as its own language. On real sentences in each named language, every vowel and most of its other special letters come back correctly, but Danish/Norwegian/Swedish/Finnish lowercase å, Icelandic þ, Czech's ď/ť/ň/ů and Polish's ą/ź/ł/ż are reliably misread or dropped by this same model (docs/ocr.md), the way ű already is for Hungarian."
 
 [[feature]]
 id = "ocr.searchable-image"
@@ -6605,7 +6605,7 @@ status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
 evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable"]
-notes = "Invisible text (Tr 3) fitted to each word box; the image is not deskewed or downsampled (exact mode only)."
+notes = "Invisible text (Tr 3). English is fitted to word boxes; Chinese and Latin are whole lines. Unicode ToUnicode maps preserve copy and search for text outside WinAnsi, without embedding a display font. The image is not deskewed or downsampled (exact mode only)."
 
 [[feature]]
 id = "ocr.searchable-image-exact"

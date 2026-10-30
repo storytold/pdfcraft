@@ -256,9 +256,13 @@ fn english(labeled: Labeled<'_>) -> Option<String> {
 }
 
 fn translate(english: &'static str) -> String {
-    // The bundled UI fonts do not all cover the menu's mathematical ellipsis.
-    if english == "\u{22ef}" {
-        return "...".to_owned();
+    // craft_menu's bar writes "⋯" (U+22EF, MIDLINE HORIZONTAL ELLIPSIS) itself, for the menu of
+    // titles that don't fit: a sentinel to translate, not an English phrase, and the only one of
+    // its four reserved labels no font this app ships or falls back to has a glyph for.
+    // MissingGlyphPolicy::Panic (egui 0.37) crashes on it; the ordinary ellipsis every other
+    // truncated label in this app already uses is available and reads the same.
+    if english == "⋯" {
+        return "…".to_owned();
     }
     tl!(english).to_owned()
 }
@@ -795,5 +799,20 @@ mod tests {
         app.native_menu_clicks(&ctx);
         app.native_menu_clicks(&ctx);
         assert_eq!(app.session.get(doc).unwrap().info.pages[0].rotation, (before + 90) % 360, "rotated once");
+    }
+
+    /// The bar's own overflow-menu sentinel is not rendered as typed: no font this app ships or
+    /// falls back to has U+22EF, and egui 0.37's `MissingGlyphPolicy::Panic` crashes on it when
+    /// the menu bar is narrow enough to need it. The other three reserved labels are plain ASCII,
+    /// so untranslated is safe for them.
+    #[test]
+    fn the_overflow_menu_sentinel_is_not_passed_through_untranslated() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let translated = translate("⋯");
+        assert_ne!(translated, "⋯", "no installed font has this glyph");
+        assert_eq!(translated, "…", "the ordinary ellipsis the rest of the app already uses");
+        for label in ["Menu", "Scroll menu up", "Scroll menu down"] {
+            assert_eq!(translate(label), label, "plain ASCII reserved labels need no substitution");
+        }
     }
 }

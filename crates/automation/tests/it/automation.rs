@@ -6517,6 +6517,10 @@ fn ocr_tools_make_a_scan_searchable() {
     let mut a = auto(&dir);
     let status = ok(&mut a, "ocr_status", json!({}));
     assert_eq!(status["languages"][0]["code"], "en");
+    assert_eq!(status["languages"][1]["code"], "zh");
+    assert_eq!(status["languages"][1]["available"], pdfcraft_engine::ocr::available_for("zh"));
+    assert_eq!(status["languages"][2]["code"], "la");
+    assert_eq!(status["languages"][2]["available"], pdfcraft_engine::ocr::available_for("la"));
     if status["available"] != true {
         eprintln!("skipped: OCR models not installed");
         return;
@@ -6531,6 +6535,102 @@ fn ocr_tools_make_a_scan_searchable() {
     let again = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "pages": [1] }));
     assert!(again["pages"][0]["skipped"].is_string(), "{again}");
     assert!(matches!(a.call("ocr_recognize", &json!({ "doc": scan, "language": "xx" })), Err(ToolError::InvalidArgs(_))));
+    if pdfcraft_engine::ocr::available_for("zh") {
+        ok(&mut a, "edit_undo", json!({ "doc": scan }));
+        let mixed = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "language": "zh" }));
+        assert!(mixed["pages"][0]["text"].as_str().unwrap().to_lowercase().contains("searchable"), "{mixed}");
+        assert!(page_text(&mut a, scan)[0].to_lowercase().contains("searchable"));
+    }
+    if pdfcraft_engine::ocr::available_for("la") {
+        ok(&mut a, "edit_undo", json!({ "doc": scan }));
+        let latin = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "language": "la" }));
+        assert!(latin["pages"][0]["text"].as_str().unwrap().to_lowercase().contains("searchable"), "{latin}");
+    }
+}
+
+/// A line wider than the PP-OCR recogniser's input used to fail the whole page
+/// ("text line exceeds the recogniser's maximum aspect ratio"). The tool reads both ends.
+#[test]
+fn ocr_recognize_reads_a_line_wider_than_the_recogniser() {
+    let dir = workdir("ocr-long-line");
+    let mut a = auto(&dir);
+    if !pdfcraft_engine::ocr::available_for("la") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    std::fs::write(dir.join("paper.png"), wide_line_png(&newspaper_line())).unwrap();
+    let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["paper.png"] }))["doc"].as_u64().unwrap();
+    let recognized = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "language": "la", "dpi": 600 }));
+    assert!(recognized["pages"][0]["skipped"].is_null(), "{recognized}");
+    let text = recognized["pages"][0]["text"].as_str().unwrap().to_lowercase();
+    assert!(text.contains("aaron"), "missing the start of the line in {recognized}");
+    assert!(text.contains("zurich"), "missing the end of the line in {recognized}");
+    assert!(recognized["pages"][0]["words"].as_u64().unwrap() >= 2, "a long line is more than one piece: {recognized}");
+    let found = ok(&mut a, "text_find", json!({ "doc": scan, "query": "Zurich" }));
+    assert!(found["count"].as_u64().unwrap() >= 1, "{found}");
+    ok(&mut a, "edit_undo", json!({ "doc": scan }));
+    let gone = ok(&mut a, "text_find", json!({ "doc": scan, "query": "Zurich" }));
+    assert_eq!(gone["count"].as_u64().unwrap(), 0, "{gone}");
+}
+
+fn newspaper_line() -> String {
+    let pool = ["north", "south", "east", "west", "river", "field", "stone", "cloud"];
+    let mut words = Vec::with_capacity(66);
+    words.push("Aaron");
+    for _ in 0..8 {
+        words.extend(pool);
+    }
+    words.push("Zurich");
+    words.join(" ")
+}
+
+/// One tight line, only a little taller than the glyphs, so a box around the whole image is past
+/// the recogniser's limit (4096 px at its 48 px input, about 85 heights).
+fn wide_line_png(text: &str) -> Vec<u8> {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+    let font = FontRef::try_from_slice(include_bytes!("../../../../assets/fonts/Inter-Regular.ttf")).unwrap();
+    let size = 36.0;
+    let scaled = font.as_scaled(PxScale::from(size));
+    let mut advance = 24.0_f32;
+    for ch in text.chars() {
+        let id = scaled.glyph_id(ch);
+        assert_ne!(id.0, 0, "fixture font must cover {ch}");
+        advance += scaled.h_advance(id);
+    }
+    advance += 24.0;
+    let width = advance.ceil() as u32;
+    let height = 52u32;
+    assert!(width as f32 / height as f32 > 100.0, "fixture {width}x{height} would not have been refused");
+    let mut rgba = vec![255u8; width as usize * height as usize * 4];
+    let mut x = 24.0_f32;
+    for ch in text.chars() {
+        let id = scaled.glyph_id(ch);
+        let glyph = id.with_scale_and_position(size, point(x, 40.0));
+        if let Some(outline) = font.outline_glyph(glyph) {
+            let bounds = outline.px_bounds();
+            outline.draw(|gx, gy, coverage| {
+                let px = bounds.min.x as i32 + gx as i32;
+                let py = bounds.min.y as i32 + gy as i32;
+                if px < 0 || py < 0 {
+                    return;
+                }
+                let (px, py) = (px as u32, py as u32);
+                if px >= width || py >= height {
+                    return;
+                }
+                let v = (255.0 * (1.0 - coverage)) as u8;
+                let i = (py as usize * width as usize + px as usize) * 4;
+                if let Some(pixel) = rgba.get_mut(i..i + 4) {
+                    pixel[0] = v;
+                    pixel[1] = v;
+                    pixel[2] = v;
+                    pixel[3] = 255;
+                }
+            });
+        }
+        x += scaled.h_advance(id);
+    }
+    pdfcraft_engine::export::encode_png(width, height, &rgba).unwrap()
 }
 
 /// #1028: `skip_text_pages: false` reads a picture on a page that has its own text, and the
@@ -6646,6 +6746,40 @@ fn ocr_recognize_files_with_distinct_names_runs_as_before() {
         let r = a.call("ocr_recognize_files", &json!({ "paths": ["one/scan.pdf", "two/other.pdf"], "folder": "out" }));
         assert!(matches!(&r, Err(ToolError::Failed(m)) if m.contains("not installed")), "{r:?}");
     }
+}
+
+/// #1795: recognizing a file into a folder that already has a file under its output name (the
+/// source itself, run in place, or an unrelated leftover from an earlier batch) never replaces it:
+/// the result gets the next free " (n)" name instead, like the batch export tools. One input is
+/// enough to show this; two inputs sharing a name are refused outright (the test above), a
+/// different scenario from a name only colliding with what is already on disk.
+#[test]
+fn ocr_recognize_files_keeps_an_existing_file_in_the_output_folder() {
+    let dir = workdir("ocr-files-clobber");
+    let mut a = auto(&dir);
+    let language = if pdfcraft_engine::ocr::available_for("la") {
+        "la"
+    } else if ok(&mut a, "ocr_status", json!({}))["available"] == true {
+        "en"
+    } else {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    };
+    let text = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Batch recognition works" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": text, "folder": "scan", "dpi": 150, "pages": [1] }));
+    let png = std::fs::read_dir(dir.join("scan")).unwrap().next().unwrap().unwrap().path();
+    let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": [png.to_string_lossy()] }))["doc"].as_u64().unwrap();
+    // Recognized in place: the output folder is the source's own folder, so `report.pdf` is
+    // already there (the source itself) before the run starts, and `report (2).pdf` is an
+    // unrelated leftover from an earlier run.
+    ok(&mut a, "doc_save", json!({ "doc": scan, "path": "in/report.pdf" }));
+    let original = std::fs::read(dir.join("in/report.pdf")).unwrap();
+    std::fs::write(dir.join("in/report (2).pdf"), b"keep me").unwrap();
+    let r = ok(&mut a, "ocr_recognize_files", json!({ "paths": ["in/report.pdf"], "folder": "in", "language": language }));
+    let output = r["files"][0]["output"].as_str().unwrap();
+    assert_eq!(std::path::Path::new(output).file_name().unwrap(), "report (3).pdf", "{r}");
+    assert_eq!(std::fs::read(dir.join("in/report.pdf")).unwrap(), original, "the source stays as it was");
+    assert_eq!(std::fs::read(dir.join("in/report (2).pdf")).unwrap(), b"keep me");
 }
 
 /// Field scripts set through the tools validate, calculate and format, and `js_run` reports console

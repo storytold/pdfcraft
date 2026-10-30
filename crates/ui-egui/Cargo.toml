@@ -93,6 +93,7 @@ egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
 # Tests draw PdfCraft text without a system provider: the bundled and monochrome emoji faces must
 # be enabled on the test graph itself (a dependency's dev-features do not propagate).
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
+ab_glyph = "0.2"
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Glyph-coverage test of the interface fonts; the same skrifa pdfcraft-fonts already uses.
 skrifa = "0.44"

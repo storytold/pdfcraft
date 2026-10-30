@@ -153,6 +153,7 @@ impl PdfCraftApp {
             ocr_run: None,
             ocr_batch: None,
             run_inline: false,
+            fail_spawn: false,
             custom_actions: Vec::new(),
             wizard: Default::default(),
             action_run: None,

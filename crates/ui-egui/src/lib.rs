@@ -454,6 +454,8 @@ pub struct PdfCraftApp {
     pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
+    /// Tests: make starting a background recognition thread fail.
+    pub fail_spawn: bool,
     /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the
     /// files to use instead of a picker.
     pub custom_actions: Vec<pdfcraft_engine::actions::Action>,

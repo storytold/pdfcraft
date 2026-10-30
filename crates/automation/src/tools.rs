@@ -1253,19 +1253,19 @@ pub fn tools() -> Vec<ToolDef> {
                     "doc": doc(),
                     "pages": pages("to recognise (default: all)"),
                     "dpi": { "type": "number", "minimum": 72, "maximum": 600, "description": "Resolution pages are read at (default 300; a scanned page is read at most at its own resolution)." },
-                    "language": { "type": "string", "enum": ["en"], "description": "Document language (default en)." },
+                    "language": { "type": "string", "enum": ["en", "zh", "la", "fr", "de", "es", "pt", "it", "nl", "da", "no", "sv", "is", "fi", "cs", "pl"], "description": "Document language (default en). zh reads Simplified Chinese and mixed English. la uses the accented Latin dictionary; a letter in that dictionary can still be read as another letter. fr, de, es, pt, it, nl, da, no, sv, is, fi, cs and pl use that Latin model and prefer that language's letters when two readings are close." },
                     "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true). false also reads pictures on such pages, without adding their text again." },
                 }),
                 &["doc"],
             )),
-        t("ocr_recognize_files", "Recognize text in multiple files", "Scan & OCR ▸ Recognize text ▸ In multiple files: read every page of each PDF in paths and write the searchable result into folder under the same name (pages that already have text are left alone unless skip_text_pages is false, as in ocr_recognize). Two inputs that would write the same output file are refused before anything is read or written. Returns, per file, the output path, word count and skipped pages, or the error.")
+        t("ocr_recognize_files", "Recognize text in multiple files", "Scan & OCR ▸ Recognize text ▸ In multiple files: read every page of each PDF in paths and write the searchable result into folder under the same name; a name already on disk gets a number such as (2), so an existing file is never replaced (pages that already have text are left alone unless skip_text_pages is false, as in ocr_recognize). Two inputs that would write the same output file are refused before anything is read or written. Returns, per file, the output path, word count and skipped pages, or the error.")
             .cmd("ocr.recognize_batch")
             .with(schema(
                 json!({
                     "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
                     "folder": { "type": "string" },
                     "dpi": { "type": "number", "minimum": 72, "maximum": 600 },
-                    "language": { "type": "string", "enum": ["en"] },
+                    "language": { "type": "string", "enum": ["en", "zh", "la", "fr", "de", "es", "pt", "it", "nl", "da", "no", "sv", "is", "fi", "cs", "pl"] },
                     "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true); see ocr_recognize." },
                 }),
                 &["paths", "folder"],
@@ -1507,4 +1507,19 @@ pub(crate) fn check_args(def: &ToolDef, args: &Value) -> Result<(), ToolError> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `la` covers the Latin dictionary. It does not promise that every listed letter is read correctly.
+    #[test]
+    fn latin_language_help_does_not_promise_every_accented_letter() {
+        let tool = find("ocr_recognize").expect("ocr_recognize");
+        let description = tool.input_schema["properties"]["language"]["description"].as_str().expect("language description");
+        assert!(!description.contains("every accented"), "{description}");
+        assert!(description.contains("dictionary"), "{description}");
+        assert!(description.contains("can still be read as another letter"), "{description}");
+    }
 }

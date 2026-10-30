@@ -73,26 +73,27 @@ struct ScanToRead {
 
 pub struct OcrRun {
     pub doc: DocId,
+    /// The document's edit generation when the pages were captured. The result only fits that
+    /// state: after an edit, undo or reload, page numbers and positions may no longer match, so a
+    /// stale result is dropped rather than applied to whatever now has that index (see `poll_ocr`).
+    pub generation: u64,
     pub progress: Arc<Mutex<OcrProgress>>,
     /// Set for a run Edit started on a scanned page, not asked for: it shows no progress, says nothing
     /// when it found no words (a page with text of its own is skipped, and Edit must not make noise),
-    /// and its result waits for Read mode and dialogs and is dropped if the document changed.
+    /// and its result waits for Read mode and dialogs.
     pub automatic: Option<AutoOcr>,
 }
 
-/// What an Edit-started run needs to know to refuse a result that no longer fits its document.
+/// What an Edit-started run needs beyond `OcrRun::generation` to let the page it read be judged
+/// again once a stale result is dropped.
 #[derive(Clone, Copy, Debug)]
 pub struct AutoOcr {
     /// The page it reads (0-based), when it was started.
     pub page: usize,
-    /// The document's edit generation when it was started: a result is for those bytes only, and
-    /// any later change (a page deleted or moved, say) may put a different page at that index.
-    pub generation: u64,
 }
 
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     let pages = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len().max(1));
-    let available = pdfcraft_engine::ocr::available();
     let d = &mut app.ocr_draft;
     d.to = d.to.clamp(1, pages);
     d.from = d.from.clamp(1, d.to);
@@ -146,6 +147,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.add(crate::widgets::checkbox(&mut d.text_pages, tl!("Also recognize pages that already have text")))
             .on_hover_text(tl!("Pictures on those pages are recognized too; words already in the page's text are not added again"));
     });
+    let available = pdfcraft_engine::ocr::available_for(&d.language);
     if !available {
         ui.label(
             egui::RichText::new(tl!("Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them."))
@@ -261,12 +263,11 @@ impl PdfCraftApp {
 
     /// Recognize `pages` (0-based; empty = all) of document `id` in the background.
     fn start_ocr_pages(&mut self, id: DocId, pages: &[usize], settings: OcrSettings, automatic: bool) {
-        // What an automatic run's result must still fit when it arrives (see `AutoOcr`).
-        let auto = if automatic {
-            pages.first().map(|&page| AutoOcr { page, generation: self.session.get(id).map_or(0, |d| d.edit_generation()) })
-        } else {
-            None
-        };
+        // The document's state now: the result only fits pages captured at this generation,
+        // whether the run was asked for or Edit started it (see the generation check in `poll_ocr`).
+        let generation = self.session.get(id).map_or(0, |d| d.edit_generation());
+        // Automatic runs always target exactly one page (see `auto_ocr_scanned_page`).
+        let auto = automatic.then(|| pages.first().map(|&page| AutoOcr { page })).flatten();
         let Some(job) = self.session.ocr_job(id, pages, settings) else { return };
         let progress = Arc::new(Mutex::new(OcrProgress { total: job.pages.len(), ..Default::default() }));
         let p = progress.clone();
@@ -275,7 +276,7 @@ impl PdfCraftApp {
         let work = move || {
             crate::i18n::set_current(lang);
             let result = recognize_guarded(|| {
-                pdfcraft_engine::ocr::engine().map(|ocr| {
+                pdfcraft_engine::ocr::engine_for(&job.settings.language).map(|ocr| {
                     job.run(&ocr, |done, total| {
                         let Ok(mut s) = p.lock() else { return false };
                         s.done = done;
@@ -291,13 +292,24 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         if self.run_inline {
             work();
-        } else {
-            std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work).ok();
+        } else if let Err(e) = self.spawn_ocr_worker("pdfcraft-ocr", work) {
+            // No worker: report the failure instead of waiting for a result that never comes.
+            self.notify_error(e);
+            return;
         }
         #[cfg(target_arch = "wasm32")]
         work();
-        self.ocr_run = Some(OcrRun { doc: id, progress, automatic: auto });
+        self.ocr_run = Some(OcrRun { doc: id, generation, progress, automatic: auto });
         self.poll_ocr();
+    }
+
+    /// Start a recognition worker thread. `fail_spawn` (tests) makes it fail as under resource pressure.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn spawn_ocr_worker(&self, name: &str, work: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
+        if self.fail_spawn {
+            return Err(std::io::Error::other("could not start a background thread"));
+        }
+        std::thread::Builder::new().name(name.into()).spawn(work).map(drop)
     }
 
     /// Recognize text in each file, writing the searchable copies into a folder the user picks
@@ -348,8 +360,10 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         if self.run_inline {
             work();
-        } else {
-            std::thread::Builder::new().name("pdfcraft-ocr-files".into()).spawn(work).ok();
+        } else if let Err(e) = self.spawn_ocr_worker("pdfcraft-ocr-files", work) {
+            // No worker: report the failure instead of waiting for a result that never comes.
+            self.notify_error(e);
+            return;
         }
         #[cfg(target_arch = "wasm32")]
         work();
@@ -366,7 +380,7 @@ fn recognize_files(
     #[cfg(not(target_arch = "wasm32"))] dir: &std::path::Path,
 ) -> String {
     let (mut ok, mut words, mut failed) = (0, 0, Vec::new());
-    match pdfcraft_engine::ocr::engine() {
+    match pdfcraft_engine::ocr::engine_for(&settings.language) {
         Err(e) => failed.push(e),
         Ok(ocr) => {
             for (i, (name, bytes)) in files.into_iter().enumerate() {
@@ -375,8 +389,10 @@ fn recognize_files(
                 }
                 let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), &ocr, |_, _| true);
                 let saved = r.and_then(|r| {
+                    // Never replaces a file: a taken name (the source itself, run in place, or an
+                    // earlier run's output) gets a number such as " (2)" instead (#572).
                     #[cfg(not(target_arch = "wasm32"))]
-                    crate::editing::write_atomically(&dir.join(&name).to_string_lossy(), &r.bytes).map_err(|e| e.to_string())?;
+                    pdfcraft_platform::staging::publish(&dir.join(&name), &r.bytes).map_err(|e| e.to_string())?;
                     #[cfg(target_arch = "wasm32")]
                     crate::editing::download(&name, &r.bytes)?;
                     Ok(r.words())
@@ -442,7 +458,7 @@ impl PdfCraftApp {
             }
         }
         let Some(run) = self.ocr_run.as_ref() else { return };
-        let (doc, progress, auto) = (run.doc, run.progress.clone(), run.automatic);
+        let (doc, generation, progress, auto) = (run.doc, run.generation, run.progress.clone(), run.automatic);
         let automatic = auto.is_some();
         let mut s = match progress.lock() {
             Ok(s) => s,
@@ -480,14 +496,17 @@ impl PdfCraftApp {
         };
         drop(s);
         self.ocr_run = None;
-        // The result is for the bytes the run started from. If the document has changed since (a
-        // page deleted or moved, say) its page index may now name another page: drop it, and let
-        // the page in view be judged again.
-        if let Some(a) = auto
-            && self.session.get(doc).map(|d| d.edit_generation()) != Some(a.generation)
-        {
-            if let Some(view) = self.views.iter_mut().find(|v| v.id == doc) {
-                view.auto_ocr_tried.remove(&a.page);
+        // The pages were captured at `generation`. After an edit, undo or reload, those page
+        // numbers and positions no longer match, so the words would land on the wrong pages: the
+        // result is dropped, not applied to whatever now has that index. A run Edit started says
+        // nothing and lets the page in view be judged again; one the user asked for says so.
+        if self.session.get(doc).is_some_and(|d| d.edit_generation() != generation) {
+            if let Some(a) = auto {
+                if let Some(view) = self.views.iter_mut().find(|v| v.id == doc) {
+                    view.auto_ocr_tried.remove(&a.page);
+                }
+            } else {
+                self.notify_tr("The document changed while text was being recognized, so the result was discarded. Run Recognize text again.");
             }
             return;
         }
@@ -634,7 +653,7 @@ mod tests {
             let generation = app.session.get(app.active_ids().unwrap().1).unwrap().edit_generation();
             let page = pdfcraft_engine::ocr::OcrPage { page: 0, words: vec![word()], already_on_page: 0, skipped: None };
             let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
-            OcrRun { doc: app.active_ids().unwrap().1, progress, automatic: automatic.then_some(AutoOcr { page: 0, generation }) }
+            OcrRun { doc: app.active_ids().unwrap().1, generation, progress, automatic: automatic.then_some(AutoOcr { page: 0 }) }
         };
         let label = |app: &PdfCraftApp| app.session.get(app.active_ids().unwrap().1).unwrap().can_undo().map(String::from);
 
@@ -674,7 +693,7 @@ mod tests {
             skipped: None,
         };
         let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
-        app.ocr_run = Some(OcrRun { doc: id, progress, automatic: Some(AutoOcr { page: 0, generation }) });
+        app.ocr_run = Some(OcrRun { doc: id, generation, progress, automatic: Some(AutoOcr { page: 0 }) });
         app.views[0].auto_ocr_tried.insert(0);
         // The document changes while the run is out.
         let mut png = std::io::Cursor::new(Vec::new());
@@ -714,7 +733,7 @@ mod tests {
         app.set_option("language", "en").unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 3, ..Default::default() }));
         poison(&progress);
-        app.ocr_run = Some(OcrRun { doc: DocId(1), progress, automatic: None });
+        app.ocr_run = Some(OcrRun { doc: DocId(1), generation: 0, progress, automatic: None });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the next run isn't refused as already running");
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
@@ -727,5 +746,42 @@ mod tests {
         assert!(app.ocr_batch.is_none());
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
         assert!(toast.starts_with("Recognize text failed"), "{toast}");
+    }
+
+    /// An app with a one-page document and a finished recognition run captured at that state, not
+    /// started by Edit.
+    fn app_with_finished_run() -> Option<(PdfCraftApp, DocId)> {
+        let mut app = app_with(Session::new().create_from_text("t", "Some text").ok()?.to_vec());
+        let id = app.active_ids()?.1;
+        let generation = app.session.get(id)?.edit_generation();
+        let word = pdfcraft_engine::ocr::PlacedWord { text: "scanned".into(), origin: [50.0, 700.0], across: [40.0, 0.0], up: [0.0, 12.0] };
+        let page = pdfcraft_engine::ocr::OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None };
+        let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
+        app.ocr_run = Some(OcrRun { doc: id, generation, progress, automatic: None });
+        Some((app, id))
+    }
+
+    /// #1801: an unchanged document takes the result as one "Recognize text" edit.
+    #[test]
+    fn result_is_applied_when_the_document_is_unchanged() {
+        let (mut app, id) = app_with_finished_run().expect("app with a run");
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none());
+        assert_eq!(app.session.get(id).and_then(|d| d.can_undo()), Some("Recognize text"));
+    }
+
+    /// #1801: an edit made while recognition ran changes the pages; the old result is refused, and
+    /// (unlike a run Edit started silently retrying) the user is told why nothing was added.
+    #[test]
+    fn result_is_refused_when_the_document_changed_meanwhile() {
+        let (mut app, id) = app_with_finished_run().expect("app with a run");
+        let note = pdfcraft_engine::AddedText { rect: [50.0, 600.0, 300.0, 640.0], text: "Added meanwhile".into(), size: 12.0, ..Default::default() };
+        app.session.apply(id, Edit::AddText { page: 0, text: note }).expect("edit");
+        let before = app.session.get(id).and_then(|d| d.can_undo().map(str::to_owned));
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none());
+        assert_eq!(app.session.get(id).and_then(|d| d.can_undo().map(str::to_owned)), before, "nothing was added");
+        let toast = app.toast.clone().expect("toast").0;
+        assert!(toast.contains("changed while text was being recognized"), "{toast}");
     }
 }

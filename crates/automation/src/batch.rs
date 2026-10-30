@@ -1,7 +1,7 @@
 //! One-shot folder jobs shared by CLI and MCP. Discovery finishes before any output is made.
 
 use std::collections::{BTreeMap, HashSet};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -78,7 +78,7 @@ impl<'a> Recipe<'a> {
             match *step {
                 "convert" => bytes = session.convert_to_pdf(name, &bytes)?.1,
                 "ocr" => {
-                    let engine = ocr::engine().map_err(failed)?;
+                    let engine = ocr::engine_for(&self.ocr.language).map_err(failed)?;
                     let result = ocr::recognize_file(name, bytes, None, self.ocr.clone(), &engine, |_, _| true).map_err(failed)?;
                     log.push(
                         json!({"step":"ocr","words":result.words(),"skipped_pages":result.pages.iter().filter(|p| p.skipped.is_some()).count()}),
@@ -244,22 +244,9 @@ impl Automation {
 }
 
 /// Publish atomically without replacing any existing name, even if another writer wins a race.
-fn publish(target: &Path, bytes: &[u8]) -> Result<PathBuf> {
-    let dir = target.parent().ok_or_else(|| failed("output has no parent"))?;
-    std::fs::create_dir_all(dir).map_err(failed)?;
-    let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(failed)?;
-    temp.write_all(bytes).map_err(failed)?;
-    temp.as_file().sync_all().map_err(failed)?;
-    let stem = target.file_stem().ok_or_else(|| failed("output has no stem"))?.to_string_lossy();
-    for n in 1..=10_000 {
-        let candidate = if n == 1 { target.to_path_buf() } else { dir.join(format!("{stem} ({n}).pdf")) };
-        match temp.persist_noclobber(&candidate) {
-            Ok(_) => return Ok(candidate),
-            Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists || candidate.symlink_metadata().is_ok() => temp = e.file,
-            Err(e) => return Err(failed(e.error)),
-        }
-    }
-    Err(failed("all 10000 output names are occupied"))
+/// Shared with the desktop app's own batch file writers ([`pdfcraft_platform::staging::publish`]).
+pub(crate) fn publish(target: &Path, bytes: &[u8]) -> Result<PathBuf> {
+    pdfcraft_platform::staging::publish(target, bytes).map_err(failed)
 }
 
 #[cfg(test)]

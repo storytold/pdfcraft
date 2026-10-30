@@ -9,6 +9,9 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+# `publish`: an atomic, no-clobber rename across platforms (`persist_noclobber`), shared by the
+# automation batch tools and the desktop app's own batch file writers.
+tempfile = "3.27"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # `write_atomically`: a volume that refuses F_FULLFSYNC gets a plain fsync.

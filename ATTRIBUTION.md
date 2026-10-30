@@ -309,7 +309,7 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `epaint_default_fonts` 0.37.0 | `fonts/egui-icons.ttf` | egui icons (monochrome emoji-icon-font subset) | John Slegers | MIT | https://github.com/jslegers/emoji-icon-font | Small special-icon subset embedded by egui default_fonts; retained in FontDefinitions::default(). Provenance: https://github.com/storytold/egui/blob/6d518fc799681571963842f95b55a6b68431b15a/crates/epaint_default_fonts/fonts/egui-icons.txt; complete MIT copyright and permission text in NOTICE. |
 | `hayro-interpret` 0.7.0 | `src/font/generated/metrics.rs` | Standard-14 font metrics and encodings (as Rust tables) (non-visual data, AGENTS.md §1.1) | Adobe (Core 14 AFM metrics, PDF specification encodings); tables by The Hayro Authors | MIT OR Apache-2.0 | ISO 32000-2 Annex D; Adobe Core14 AFM files (via vendored hayro-interpret) | Glyph widths and encodings for non-embedded standard fonts. Non-visual data, allowed by AGENTS.md §1.1 |
 
-## Downloaded at build time (22)
+## Downloaded at build time (26)
 
 Fonts are fetched by `cargo xtask demo-pdf` into `target/demo-fonts/`, OCR models by `cargo xtask models` into `assets/models/`; each is verified by SHA-256 and never committed.
 
@@ -337,6 +337,10 @@ Fonts are fetched by `cargo xtask demo-pdf` into `target/demo-fonts/`, OCR model
 | `Inter-Italic[opsz,wght].ttf` | Inter Italic (variable) | The Inter Project Authors (Rasmus Andersson) | OFL-1.1 | https://github.com/google/fonts/tree/9710da1eacb3be272583c3224dcb70f9da6eadbb/ofl/inter | Showcase PDF (cargo xtask demo-pdf) |
 | `text-detection.onnx` | Ocrs text detection model | Robert Knight (ocrs-models; trained on HierText, CC-BY-SA-4.0) | CC-BY-SA-4.0 | https://github.com/robertknight/ocrs/blob/0c826441362a701c55560fefc17bf356b6d1037e/ocrs/examples/download-models.sh (author-published ONNX models; model card: https://huggingface.co/robertknight/ocrs/blob/df0edd170279ab971b53e094c627255a87e1a503/README.md, cc-by-sa-4.0) | Scan & OCR: finds words on page images (cargo xtask models) |
 | `text-recognition.onnx` | Ocrs text recognition model | Robert Knight (ocrs-models; trained on HierText, CC-BY-SA-4.0) | CC-BY-SA-4.0 | https://github.com/robertknight/ocrs/blob/0c826441362a701c55560fefc17bf356b6d1037e/ocrs/examples/download-models.sh (author-published ONNX models; model card: https://huggingface.co/robertknight/ocrs/blob/df0edd170279ab971b53e094c627255a87e1a503/README.md, cc-by-sa-4.0) | Scan & OCR: reads the words it finds (cargo xtask models) |
+| `chinese-recognition.onnx` | PP-OCRv4 mobile Chinese/English recognition model (ONNX) | PaddlePaddle Authors; RapidAI contributors (ONNX conversion) | Apache-2.0 | https://github.com/RapidAI/RapidOCR/tree/v3.9.2; PaddleOCR PP-OCRv4 recognition model, converted to ONNX by RapidAI | Offline Chinese and mixed English Scan & OCR (cargo xtask models) |
+| `chinese-keys.txt` | PaddleOCR Chinese character dictionary | PaddlePaddle Authors | Apache-2.0 | https://github.com/PaddlePaddle/PaddleOCR/blob/v2.7.3/ppocr/utils/ppocr_keys_v1.txt | Offline Chinese and mixed English Scan & OCR (cargo xtask models) |
+| `latin-recognition.onnx` | PP-OCRv5 mobile Latin recognition model (ONNX) | PaddlePaddle Authors; RapidAI contributors (ONNX conversion) | Apache-2.0 | https://github.com/RapidAI/RapidOCR/tree/v3.9.2; PaddleOCR PP-OCRv5 Latin recognition model, converted to ONNX by RapidAI | Scan & OCR: accented European languages, German French Czech Polish Nordic (cargo xtask models) |
+| `latin-keys.txt` | PaddleOCR PP-OCRv5 Latin character dictionary | PaddlePaddle Authors | Apache-2.0 | https://github.com/PaddlePaddle/PaddleOCR/blob/v3.1.1/ppocr/utils/dict/ppocrv5_latin_dict.txt | Scan & OCR: character classes for the Latin recogniser (cargo xtask models) |
 
 ## Optional build inputs (1)
 
