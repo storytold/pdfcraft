@@ -1,5 +1,8 @@
 //! End-to-end tests of the automation tools and the MCP server, on synthetic PDFs.
 
+#[path = "comment_clear.rs"]
+mod comment_clear;
+
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "mcp")]

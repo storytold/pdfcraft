@@ -154,6 +154,8 @@ pub enum Dialog {
     Recovery,
     /// Comments ▸ Summarize comments (options).
     SummarizeComments,
+    /// Comments ▸ Delete comments (scope captured when the confirmation opened).
+    ClearComments,
     /// Sign with a Digital ID ▸ Configure ▸ Sign as.
     Sign,
     /// Optimize PDF ▸ Advanced optimization.

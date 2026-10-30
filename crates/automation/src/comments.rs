@@ -690,6 +690,36 @@ impl Automation {
         let (page, index) = self.comment_target(a)?;
         self.apply(a, Edit::DeleteAnnotation { page, index })
     }
+
+    pub(crate) fn comment_clear(&mut self, a: &Args) -> Result<Value> {
+        let page = match a.str("scope")? {
+            "page" => {
+                let page = usize::try_from(a.int("page")?)
+                    .ok()
+                    .and_then(|n| n.checked_sub(1))
+                    .ok_or_else(|| ToolError::InvalidArgs("page must be a positive one-based existing page".into()))?;
+                if page >= self.doc(a)?.info.pages.len() {
+                    return Err(ToolError::InvalidArgs("page must be a positive one-based existing page".into()));
+                }
+                Some(page)
+            }
+            "all" => {
+                if a.0.get("page").is_some() {
+                    return Err(ToolError::InvalidArgs("scope all forbids page; use scope page for one page".into()));
+                }
+                None
+            }
+            _ => return Err(ToolError::InvalidArgs("scope must be page or all".into())),
+        };
+        let generation = self.doc(a)?.edit_generation();
+        let mut out = self.apply(a, Edit::ClearComments { page })?;
+        out["changed"] = json!(self.doc(a)?.edit_generation() != generation);
+        out["scope"] = json!(a.str("scope")?);
+        if let Some(page) = page {
+            out["page"] = json!(page + 1);
+        }
+        Ok(out)
+    }
 }
 
 impl Automation {

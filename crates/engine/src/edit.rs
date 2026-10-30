@@ -162,6 +162,12 @@ pub enum Edit {
         page: usize,
         index: usize,
     },
+    /// Remove all comment memberships and their associated pop-ups on one zero-based page,
+    /// or throughout the document (`None`). Links, widgets and other non-comments stay.
+    /// The whole scope is preflighted before removal, and an empty scope is a no-op.
+    ClearComments {
+        page: Option<usize>,
+    },
     SetAnnotationContents {
         page: usize,
         index: usize,

@@ -551,6 +551,12 @@ impl PdfCraftApp {
             }
             "comment.export" => self.export_data_dialog(true, false),
             "comment.summarize" => self.dialog = Some(Dialog::SummarizeComments),
+            "comment.clear" => {
+                if let Some(i) = active {
+                    let scope = self.views[i].comments.clear_request.take().unwrap_or(Some(self.views[i].current));
+                    crate::comments_panel::begin_clear_confirmation(self, scope);
+                }
+            }
             "edit.column_select" => self.quick_tool = crate::QuickTool::ColumnSelect,
             "edit.snapshot" => {
                 self.quick_tool = crate::QuickTool::Snapshot;

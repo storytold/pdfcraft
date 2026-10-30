@@ -1305,6 +1305,7 @@
 	Pictures on those pages are recognized too; words already in the page's text are not added again	それらのページ上の画像も認識します。ページのテキストに既にある単語は再度追加されません
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	テキスト認識がインストールされていません。モデルファイルがありません。PdfCraft を再インストールするか、PDFCRAFT_MODELS にモデルファイルのあるフォルダーを設定してください。
 	Settings	設定
+	Settings…	設定…
 	Optional	任意
 	Planned · {m}	予定 · {m}
 	Planned for milestone {m} — open to see what it will include	マイルストーン {m} で対応予定 — 開くと予定内容を確認できます

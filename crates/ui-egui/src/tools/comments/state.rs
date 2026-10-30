@@ -159,6 +159,12 @@ pub struct CommentView {
     /// A file attachment comment's file was asked for: (page, index, open it in a new tab
     /// rather than save it).
     pub attachment_request: Option<(usize, usize, bool)>,
+    /// The Comments panel asked the command handler to clear comments on one page (`Some`) or
+    /// across the document (`None`). The outer option distinguishes no request from all pages.
+    pub clear_request: Option<Option<usize>>,
+    /// Scope captured when the destructive confirmation opened, tied to the document and edit
+    /// generation that were active then.
+    pub(crate) clear_confirmation: Option<ClearCommentsConfirmation>,
     /// Replace Text: the struck-out text's quads while the replacement is typed.
     pub replace: Option<Vec<[f64; 8]>>,
     /// Attach file: where the icon goes (page, top-left in user space), for the app to pick a file.
@@ -170,6 +176,13 @@ pub struct CommentView {
     pub tool_done: bool,
     /// What the inline editor (`editing`) does with the keyboard the next time it is drawn.
     pub(crate) editor_focus: Option<EditorFocus>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ClearCommentsConfirmation {
+    pub doc: pdfcraft_engine::DocId,
+    pub generation: u64,
+    pub page: Option<usize>,
 }
 
 /// A one-off change to the keyboard focus of the Comments panel's inline editor. The editor

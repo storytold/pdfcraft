@@ -49,6 +49,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddAnnotation(_)
         | Edit::AddCustomStamp { .. }
         | Edit::DeleteAnnotation { .. }
+        | Edit::ClearComments { .. }
         | Edit::SetAnnotationContents { .. }
         | Edit::ReplyToAnnotation { .. }
         | Edit::SetAnnotationStatus { .. }
@@ -252,7 +253,10 @@ impl EditCtx {
 }
 
 /// Perform an edit on a working copy (the caller discards it on error).
-pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
+/// Comment clears report actual changes; legacy edits conservatively report a change.
+/// A batch changes only if at least one of its children does.
+pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<bool, EditError> {
+    let mut changed = true;
     match edit {
         Edit::RotatePages { pages, degrees } => pdfcraft_organize::rotate_pages(doc, pages, *degrees)?,
         Edit::DeletePages { pages } => pdfcraft_organize::delete_pages(doc, pages)?,
@@ -347,6 +351,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_annot::orient_image_stamp(doc, *page, index, rotation)?;
         }
         Edit::DeleteAnnotation { page, index } => pdfcraft_annot::delete_annotation(doc, *page, *index)?,
+        Edit::ClearComments { page } => changed = pdfcraft_annot::clear_comments(doc, *page)?.changed(),
         Edit::SetAnnotationContents { page, index, text } => pdfcraft_annot::set_contents(doc, *page, *index, text, &cx.meta())?,
         Edit::ReplyToAnnotation { page, index, text, author } => {
             pdfcraft_annot::add_reply(doc, *page, *index, text, author, &cx.meta())?;
@@ -759,10 +764,11 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             doc.remove_encryption();
         }
         Edit::Batch { edits, .. } => {
+            changed = false;
             for e in edits {
-                run_edit(doc, e, cx)?;
+                changed |= run_edit(doc, e, cx)?;
             }
         }
     }
-    Ok(())
+    Ok(changed)
 }

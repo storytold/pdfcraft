@@ -32,12 +32,17 @@ set_review_state(&mut doc, page, index, ReviewState::Accepted, "Ada", &meta)?;
 move_annotation(&mut doc, page, index, dx, dy, &meta)?;
 set_style(&mut doc, page, index, StyleChange::new(Some(rgb), Some(0.5), Some(2.0), None), &meta)?;
 delete_annotation(&mut doc, page, index)?;
+let report = clear_comments(&mut doc, Some(page))?; // None clears every page.
 signature_image(&doc, page, index)?; // embedded image XObject of Fill & Sign signature/initials
 ```
 
 A comment is addressed by `(page, index in /Annots)`, the same pair
 `pdfcraft_render::Annotation` reports. `Meta` carries the date and the `/NM` id so edits stay
 deterministic; the engine supplies them.
+
+`clear_comments` preflights the complete scope and removes comment memberships in one atomic operation, including hidden entries and replies.
+It preserves non-comment annotations and payload objects; it does not securely erase removed content.
+See [comment-clearing behavior and limits](../../docs/comment-clearing.md) for scope, malformed-input refusal and traversal budgets.
 
 ## Fidelity rules
 

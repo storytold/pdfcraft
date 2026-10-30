@@ -9090,3 +9090,5 @@ fn need_appearances_buttons_are_displayed_from_their_captions() {
         assert!(ink(&shown, inside(x, 100)) > 700, "the file's square at {x}");
     }
 }
+
+mod apply_safety;

@@ -48,7 +48,9 @@ let mut s = Session::new();
 let id = s.open("report.pdf", Some(path), bytes, None)?;   // -> DocId
 
 s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 })?;
-let label = s.undo(id)?;                                    // "Rotate pages"
+// All comments on zero-based page 0, including hidden/reply entries; None clears every page.
+s.apply(id, Edit::ClearComments { page: Some(0) })?;
+let label = s.undo(id)?;                                    // label of the last effective edit
 s.redo(id)?;
 
 let doc = s.get(id).ok_or("gone")?;                         // &Document: queries, never edits
@@ -60,10 +62,8 @@ let bytes = s.save_full_bytes(id)?;   // full rewrite, garbage-collected
 s.mark_saved(id, bytes.clone(), path)?;
 ```
 
-`Edit` is one enum of 75 variants — every undoable change in the product, from
-`RotatePages` to `AddAnnotation`, `SetFieldValue`, `ApplyRedactions` and `AddWatermark`. Adding a
-feature means adding a variant and handling it in `apply`, which is what keeps undo, the dirty
-flag, autosave and the automation tools consistent for free.
+`Edit` represents every undoable change in the product, from `RotatePages` to `AddAnnotation`, `ClearComments`, `SetFieldValue`, `ApplyRedactions` and `AddWatermark`.
+Adding a feature means adding a variant and handling it in `apply`, which keeps undo, the dirty flag, autosave and the automation tools consistent.
 
 `Session` also owns the operations that produce a *new* document rather than editing one:
 `create_blank`, `create_from_images`, `create_from_text`, `combine`, `extract`, `split`,

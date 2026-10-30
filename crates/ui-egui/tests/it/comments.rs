@@ -30,6 +30,59 @@ fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, P
     harness_with_bytes(TEXT_FIXTURE.to_vec(), setup)
 }
 
+/// The shell tests for destructive comment actions need a valid xref so repair UI does not cover
+/// the popup or confirmation dialog.
+fn valid_text_fixture() -> Vec<u8> {
+    let doc = pdfcraft_cos::Document::open(std::sync::Arc::new(TEXT_FIXTURE.to_vec())).expect("fixture parses");
+    pdfcraft_cos::write_full(&doc, &Default::default()).expect("writes a valid xref")
+}
+
+/// A valid-xref fixture whose second page uses a custom prefixed Roman label.
+fn custom_roman_page_label_fixture() -> Vec<u8> {
+    use pdfcraft_cos::{Dict, Object};
+
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(valid_text_fixture())).expect("fixture parses");
+    let mut range = Dict::new();
+    range.set(b"S".to_vec(), Object::name("r"));
+    range.set(b"P".to_vec(), Object::String(pdfcraft_cos::PdfString::text("Section-")));
+    range.set(b"St".to_vec(), Object::Int(7));
+    let mut labels = Dict::new();
+    labels.set(b"Nums".to_vec(), Object::Array(vec![1.into(), Object::Dict(range)]));
+    doc.update_dict(doc.root().expect("catalog"), |catalog| catalog.set(b"PageLabels".to_vec(), Object::Dict(labels)))
+        .expect("adds page labels to the original catalog");
+    pdfcraft_cos::write_full(&doc, &Default::default()).expect("writes a valid xref with page labels")
+}
+
+/// A valid-xref contributor-original fixture with only an orphan review-status annotation in
+/// the page's /Annots list. Its target is deliberately not listed on a page.
+fn orphan_status_fixture() -> Vec<u8> {
+    use pdfcraft_cos::{Dict, Object};
+
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(TEXT_FIXTURE.to_vec())).expect("fixture parses");
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    let orphan = doc.add({
+        let mut dict = Dict::new();
+        dict.set(b"Type".to_vec(), Object::name("Annot"));
+        dict.set(b"Subtype".to_vec(), Object::name("Text"));
+        dict.set(b"Rect".to_vec(), Object::Array(vec![20.into(), 100.into(), 40.into(), 120.into()]));
+        dict.set(b"Contents".to_vec(), Object::String(pdfcraft_cos::PdfString::text("Unlisted target")));
+        dict
+    });
+    let status = doc.add({
+        let mut dict = Dict::new();
+        dict.set(b"Type".to_vec(), Object::name("Annot"));
+        dict.set(b"Subtype".to_vec(), Object::name("Text"));
+        dict.set(b"Rect".to_vec(), Object::Array(vec![20.into(), 100.into(), 40.into(), 120.into()]));
+        dict.set(b"IRT".to_vec(), Object::Ref(orphan));
+        dict.set(b"StateModel".to_vec(), Object::String(pdfcraft_cos::PdfString::text("Review")));
+        dict.set(b"State".to_vec(), Object::String(pdfcraft_cos::PdfString::text("Accepted")));
+        dict.set(b"Contents".to_vec(), Object::String(pdfcraft_cos::PdfString::text("Orphan status")));
+        dict
+    });
+    doc.update_dict(page, |dict| dict.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(status)]))).expect("sets orphan status");
+    pdfcraft_cos::write_full(&doc, &Default::default()).expect("writes a valid xref")
+}
+
 fn harness_with_bytes(bytes: Vec<u8>, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
@@ -93,6 +146,787 @@ fn field<'a>(h: &'a Harness<'static, PdfCraftApp>, placeholder: &'a str) -> egui
 fn comments(h: &Harness<'static, PdfCraftApp>) -> Vec<Annotation> {
     let s = h.state();
     s.session.get(s.views[0].id).unwrap().info.annotations.clone()
+}
+
+/// #5119: bulk removal must be reachable from the real Comments panel.
+#[test]
+fn bulk_comment_clear_actions_are_reachable() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(valid_text_fixture(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        for (page, text) in [(0, "First clear note"), (0, "Another clear note"), (1, "Second page clear note")] {
+            let shape = pdfcraft_engine::Shape::Note { at: [60.0, 70.0], icon: pdfcraft_engine::NoteIcon::Comment };
+            assert!(app.apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+                page,
+                style: pdfcraft_engine::Style::default_for(&shape),
+                shape,
+                contents: text.into(),
+                author: "Tester".into(),
+            })));
+        }
+        app.views[0].comments.selected = None;
+        app.set_option("page", "1").unwrap();
+    });
+    assert_eq!(comments(&h).len(), 3);
+    h.get_by_label("More options").click();
+    h.run_steps(2);
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        support::settle(&mut h);
+        h.render().unwrap().save(format!("{dir}/comment-clear-menu.png")).unwrap();
+    }
+    h.get_by_label("Delete comments on this page…");
+    h.get_by_label("Delete all comments…");
+}
+
+fn add_clear_test_comments(app: &mut PdfCraftApp) {
+    app.set_option("panel", "comments").unwrap();
+    for (page, text) in [(0, "First clear note"), (0, "Another clear note"), (1, "Second page clear note")] {
+        let shape = pdfcraft_engine::Shape::Note { at: [60.0, 70.0], icon: pdfcraft_engine::NoteIcon::Comment };
+        assert!(app.apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            page,
+            style: pdfcraft_engine::Style::default_for(&shape),
+            shape,
+            contents: text.into(),
+            author: "Tester".into(),
+        })));
+    }
+    app.views[0].comments.selected = Some((1, 0));
+    app.views[0].comments.add_box = "keep this draft".into();
+}
+
+fn open_comment_clear_menu(h: &mut Harness<'static, PdfCraftApp>) {
+    h.get_by_label("More options").click();
+    h.run_steps(2);
+}
+
+#[test]
+fn comment_clear_all_confirms_and_undoes_as_one_edit() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(valid_text_fixture(), add_clear_test_comments);
+    h.state_mut().views[0].comments.hidden_types.push("Note".into());
+    h.run_steps(2);
+    assert_eq!(h.query_all_by_label("First clear note").count(), 0, "the type filter hides the target cards before clearing");
+    assert_eq!(h.query_all_by_label("Second page clear note").count(), 0);
+    open_comment_clear_menu(&mut h);
+    h.get_by_label("Delete all comments…").click();
+    h.run_steps(2);
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        support::settle(&mut h);
+        h.render().unwrap().save(format!("{dir}/comment-clear-confirmation.png")).unwrap();
+    }
+    assert_eq!(comments(&h).len(), 3, "opening the confirmation does not edit the document");
+    assert_eq!(h.state().views[0].comments.selected, Some((1, 0)));
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert_eq!(comments(&h).len(), 3, "cancel leaves annotations intact");
+    assert_eq!(h.state().views[0].comments.add_box, "keep this draft");
+
+    open_comment_clear_menu(&mut h);
+    h.get_by_label("Delete all comments…").click();
+    h.run_steps(2);
+    h.get_by_label("Delete comments").click();
+    h.run_steps(3);
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        support::settle(&mut h);
+        h.render().unwrap().save(format!("{dir}/comment-clear-after.png")).unwrap();
+    }
+    assert!(comments(&h).is_empty());
+    assert_eq!(h.state().views[0].comments.selected, None);
+    h.state_mut().undo();
+    assert_eq!(comments(&h).len(), 3, "undo restores the entire cleared set");
+    h.state_mut().redo();
+    assert!(comments(&h).is_empty(), "redo clears the entire set");
+}
+
+#[test]
+fn comment_clear_page_uses_current_page_and_preserves_other_page_draft() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(valid_text_fixture(), |app| {
+        add_clear_test_comments(app);
+        app.set_option("page", "2").unwrap();
+        app.views[0].comments.composer = Some(pdfcraft_ui_egui::comments::Composer {
+            page: 0,
+            at: [40.0, 40.0],
+            kind: pdfcraft_ui_egui::comments::ComposerKind::Note,
+            text: "unrelated draft".into(),
+            focus: false,
+        });
+    });
+    h.state_mut().views[0].comments.hidden_authors.push("Tester".into());
+    h.run_steps(2);
+    assert_eq!(h.query_all_by_label("Second page clear note").count(), 0, "the author filter hides the current-page target before clearing");
+    open_comment_clear_menu(&mut h);
+    h.get_by_label("Delete comments on this page…").click();
+    h.run_steps(2);
+    h.get_by_label("Delete comments").click();
+    h.run_steps(3);
+    let remaining = comments(&h);
+    assert_eq!(remaining.len(), 2, "hidden comments on current page are still in scope");
+    assert!(remaining.iter().all(|comment| comment.page == 0));
+    assert_eq!(h.state().views[0].comments.composer.as_ref().map(|c| c.text.as_str()), Some("unrelated draft"));
+}
+
+#[test]
+fn comment_clear_confirmation_uses_the_current_page_pdf_label() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(custom_roman_page_label_fixture(), |app| {
+        add_clear_test_comments(app);
+        app.set_option("page", "2").unwrap();
+    });
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().views[0].current, 1);
+    assert_eq!(h.state().session.get(id).unwrap().info.pages[1].label, "Section-vii", "the loaded original PageLabels tree is honored");
+    assert_eq!(comments(&h).len(), 3);
+
+    open_comment_clear_menu(&mut h);
+    h.get_by_label("Delete comments on this page…").click();
+    h.run_steps(2);
+    h.state_mut().views[0].go_to_page(0);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].current, 0, "later navigation must not retarget the captured confirmation");
+    h.get_by_label_contains("Delete every comment on page Section-vii (2 of 2)?");
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        support::settle(&mut h);
+        h.render().unwrap().save(format!("{dir}/comment-clear-page-label-confirmation.png")).unwrap();
+    }
+
+    h.get_by_label("Delete comments").click();
+    h.run_steps(3);
+    let remaining = comments(&h);
+    assert_eq!(remaining.len(), 2);
+    assert!(remaining.iter().all(|comment| comment.page == 0), "only the captured physical page is cleared");
+    assert_eq!(h.query_all_by_label("Second page clear note").count(), 0);
+}
+
+#[test]
+fn comment_clear_refuses_after_the_document_generation_changes() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(valid_text_fixture(), add_clear_test_comments);
+    open_comment_clear_menu(&mut h);
+    h.get_by_label("Delete all comments…").click();
+    h.run_steps(2);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Changed".into() }));
+    h.get_by_label("Delete comments").click();
+    h.run_steps(2);
+    assert_eq!(comments(&h).len(), 3, "stale confirmation does not clear comments from a changed document");
+    assert_eq!(h.state().views[0].comments.selected, Some((1, 0)));
+    assert_eq!(h.state().views[0].comments.add_box, "keep this draft");
+}
+
+#[test]
+fn comment_clear_refuses_after_the_active_tab_changes() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(valid_text_fixture(), add_clear_test_comments);
+    open_comment_clear_menu(&mut h);
+    h.get_by_label("Delete all comments…").click();
+    h.run_steps(2);
+    let second = valid_text_fixture();
+    h.state_mut().open_bytes("second.pdf", None, second).expect("opens second document");
+    h.run_steps(2);
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(h.state().views[1].id));
+    h.get_by_label("Delete comments").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().info.annotations.len(), 3);
+}
+
+#[test]
+fn comment_clear_noop_preserves_generation_and_comment_drafts() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(valid_text_fixture(), |app| app.set_option("panel", "comments").unwrap());
+    let id = h.state().views[0].id;
+    let generation = h.state().session.get(id).unwrap().edit_generation();
+    h.state_mut().views[0].comments.selected = Some((0, 7));
+    h.state_mut().views[0].comments.add_box = "draft survives".into();
+    h.state_mut().views[0].comments.gesture =
+        Some(pdfcraft_ui_egui::comments::Gesture::Draw { page: 0, tool: pdfcraft_ui_egui::comments::CommentTool::Ink, points: vec![[10.0, 10.0]] });
+    open_comment_clear_menu(&mut h);
+    h.get_by_label("Delete all comments…").click();
+    h.run_steps(2);
+    h.get_by_label("Delete comments").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 7)));
+    assert_eq!(h.state().views[0].comments.add_box, "draft survives");
+    assert!(matches!(h.state().views[0].comments.gesture, Some(pdfcraft_ui_egui::comments::Gesture::Draw { .. })));
+}
+
+#[test]
+fn comment_clear_refusal_preserves_document_and_view_state() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(valid_text_fixture(), |app| {
+        add_clear_test_comments(app);
+        assert!(app.apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 0, locked: true }));
+        let comments = &mut app.views[0].comments;
+        comments.selected = Some((0, 1));
+        comments.reply = "reply draft survives refusal".into();
+        comments.add_box = "new comment draft survives refusal".into();
+        comments.gesture = Some(pdfcraft_ui_egui::comments::Gesture::Draw {
+            page: 0,
+            tool: pdfcraft_ui_egui::comments::CommentTool::Ink,
+            points: vec![[12.0, 15.0], [24.0, 30.0]],
+        });
+    });
+    let id = h.state().views[0].id;
+    let generation = h.state().session.get(id).unwrap().edit_generation();
+    let before = h.state().session.save_bytes(id).unwrap();
+    assert_eq!(comments(&h).len(), 3);
+    assert!(comments(&h)[0].locked);
+    open_comment_clear_menu(&mut h);
+    h.get_by_label("Delete all comments…").click();
+    h.run_steps(2);
+    h.get_by_label("Delete comments").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation);
+    assert_eq!(h.state().session.save_bytes(id).unwrap().as_ref(), before.as_ref());
+    assert_eq!(comments(&h).len(), 3);
+    let state = &h.state().views[0].comments;
+    assert_eq!(state.selected, Some((0, 1)));
+    assert_eq!(state.reply, "reply draft survives refusal");
+    assert_eq!(state.add_box, "new comment draft survives refusal");
+    assert!(matches!(state.gesture, Some(pdfcraft_ui_egui::comments::Gesture::Draw { page: 0, .. })));
+}
+
+#[test]
+fn comment_clear_includes_orphan_status_missing_from_visible_list() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(orphan_status_fixture(), |app| app.set_option("panel", "comments").unwrap());
+    assert!(
+        comments(&h).iter().any(|annotation| annotation.state.as_deref() == Some("Accepted")),
+        "the source inventory includes the orphan status entry"
+    );
+    assert!(comments(&h).iter().all(|annotation| !annotation.is_comment()), "the orphan status entry is not a comment root");
+    assert_eq!(h.query_all_by_label("Orphan status").count(), 0, "the orphan status has no visible card");
+    let id = h.state().views[0].id;
+    let generation = h.state().session.get(id).unwrap().edit_generation();
+    let before = h.state().session.save_bytes(id).unwrap();
+    let before_doc = pdfcraft_cos::Document::open(before.clone()).expect("working PDF opens");
+    let before_page = pdfcraft_model::pages(&before_doc)[0].obj;
+    let before_annots = before_doc.get(before_page).as_dict().unwrap().get(b"Annots").unwrap().clone();
+    assert_eq!(before_doc.resolve(&before_annots).as_array().unwrap().len(), 1, "one orphan status is stored in /Annots");
+
+    open_comment_clear_menu(&mut h);
+    h.get_by_label("Delete all comments…").click();
+    h.run_steps(2);
+    h.get_by_label("Delete comments").click();
+    h.run_steps(3);
+
+    assert!(comments(&h).is_empty());
+    assert!(h.state().session.get(id).unwrap().edit_generation() > generation);
+    let after = h.state().session.save_bytes(id).unwrap();
+    let after_doc = pdfcraft_cos::Document::open(after).expect("cleared PDF opens");
+    let after_page = pdfcraft_model::pages(&after_doc)[0].obj;
+    let after_page_obj = after_doc.get(after_page);
+    let annots = after_page_obj.as_dict().unwrap().get(b"Annots");
+    assert!(
+        annots.is_none_or(|value| after_doc.resolve(value).as_array().is_some_and(|items| items.is_empty())),
+        "the hidden orphan status was removed from /Annots"
+    );
+}
+
+#[test]
+fn comment_clear_confirmation_owns_escape_and_delete_input() {
+    let _gpu = crate::gpu();
+    let mut escape = harness_with_bytes(valid_text_fixture(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        let shape = pdfcraft_engine::Shape::Note { at: [60.0, 70.0], icon: pdfcraft_engine::NoteIcon::Comment };
+        assert!(app.apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            page: 0,
+            style: pdfcraft_engine::Style::default_for(&shape),
+            shape,
+            contents: "Keep this comment".into(),
+            author: "Tester".into(),
+        })));
+        app.views[0].comments.composer = Some(pdfcraft_ui_egui::comments::Composer {
+            page: 0,
+            at: [40.0, 40.0],
+            kind: pdfcraft_ui_egui::comments::ComposerKind::Note,
+            text: "Unsaved comment draft".into(),
+            focus: false,
+        });
+    });
+    let id = escape.state().views[0].id;
+    let generation = escape.state().session.get(id).unwrap().edit_generation();
+    open_comment_clear_menu(&mut escape);
+    escape.get_by_label("Delete all comments…").click();
+    escape.run_steps(2);
+    assert_eq!(comments(&escape).len(), 1);
+    assert_eq!(escape.state().session.get(id).unwrap().edit_generation(), generation);
+    assert_eq!(escape.state().views[0].comments.composer.as_ref().map(|c| c.text.as_str()), Some("Unsaved comment draft"));
+    escape.key_press(egui::Key::Escape);
+    escape.run_steps(2);
+    assert_eq!(comments(&escape).len(), 1, "Escape must not delete a selected comment behind the modal");
+    assert_eq!(escape.state().session.get(id).unwrap().edit_generation(), generation);
+    assert_eq!(escape.state().views[0].comments.composer.as_ref().map(|c| c.text.as_str()), Some("Unsaved comment draft"));
+}
+
+#[test]
+fn comment_clear_confirmation_owns_delete_for_selected_comment() {
+    let _gpu = crate::gpu();
+    let mut delete = harness_with_bytes(valid_text_fixture(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        let shape = pdfcraft_engine::Shape::Note { at: [60.0, 70.0], icon: pdfcraft_engine::NoteIcon::Comment };
+        assert!(app.apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            page: 0,
+            style: pdfcraft_engine::Style::default_for(&shape),
+            shape,
+            contents: "Keep this comment".into(),
+            author: "Tester".into(),
+        })));
+        app.views[0].comments.selected = Some((0, 0));
+    });
+    let id = delete.state().views[0].id;
+    let generation = delete.state().session.get(id).unwrap().edit_generation();
+    open_comment_clear_menu(&mut delete);
+    delete.get_by_label("Delete all comments…").click();
+    delete.run_steps(2);
+    assert_eq!(comments(&delete).len(), 1);
+    assert_eq!(delete.state().session.get(id).unwrap().edit_generation(), generation);
+    assert_eq!(delete.state().views[0].comments.selected, Some((0, 0)));
+    delete.key_press(egui::Key::Delete);
+    delete.run_steps(2);
+    assert_eq!(comments(&delete).len(), 1, "Delete must not run the selected-comment action behind the modal");
+    assert_eq!(delete.state().session.get(id).unwrap().edit_generation(), generation);
+    assert_eq!(delete.state().views[0].comments.selected, Some((0, 0)));
+}
+
+#[test]
+fn comment_clear_confirmation_owns_escape_for_a_comment_gesture() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(valid_text_fixture(), |app| {
+        add_clear_test_comments(app);
+        app.views[0].comments.gesture = Some(pdfcraft_ui_egui::comments::Gesture::Draw {
+            page: 1,
+            tool: pdfcraft_ui_egui::comments::CommentTool::Ink,
+            points: vec![[20.0, 20.0]],
+        });
+    });
+    let id = h.state().views[0].id;
+    let generation = h.state().session.get(id).unwrap().edit_generation();
+    open_comment_clear_menu(&mut h);
+    h.get_by_label("Delete all comments…").click();
+    h.run_steps(2);
+    assert!(matches!(h.state().views[0].comments.gesture, Some(pdfcraft_ui_egui::comments::Gesture::Draw { page: 1, .. })));
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation);
+    assert!(matches!(h.state().views[0].comments.gesture, Some(pdfcraft_ui_egui::comments::Gesture::Draw { page: 1, .. })));
+}
+
+#[test]
+fn comment_clear_page_scope_preserves_unaffected_replace_quads() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(valid_text_fixture(), |app| {
+        add_clear_test_comments(app);
+        app.set_option("page", "2").unwrap();
+        let comments = &mut app.views[0].comments;
+        comments.replace = Some(vec![[1.0; 8]]);
+        comments.composer = Some(pdfcraft_ui_egui::comments::Composer {
+            page: 0,
+            at: [40.0, 40.0],
+            kind: pdfcraft_ui_egui::comments::ComposerKind::Replace,
+            text: "Replacement on page one".into(),
+            focus: false,
+        });
+        comments.gesture = Some(pdfcraft_ui_egui::comments::Gesture::Draw {
+            page: 1,
+            tool: pdfcraft_ui_egui::comments::CommentTool::Ink,
+            points: vec![[20.0, 20.0]],
+        });
+    });
+    open_comment_clear_menu(&mut h);
+    h.get_by_label("Delete comments on this page…").click();
+    h.run_steps(2);
+    h.get_by_label("Delete comments").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.composer.as_ref().map(|c| c.text.as_str()), Some("Replacement on page one"));
+    assert_eq!(h.state().views[0].comments.replace, Some(vec![[1.0; 8]]));
+}
+
+#[test]
+fn comment_clear_page_scope_drops_reply_for_removed_selection() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(valid_text_fixture(), |app| {
+        add_clear_test_comments(app);
+        app.set_option("page", "2").unwrap();
+        app.views[0].comments.reply = "Reply draft for selected page-two comment".into();
+    });
+    open_comment_clear_menu(&mut h);
+    h.get_by_label("Delete comments on this page…").click();
+    h.run_steps(2);
+    h.get_by_label("Delete comments").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.selected, None);
+    assert!(h.state().views[0].comments.reply.is_empty(), "reply text must not attach to a future comment");
+}
+
+fn confirm_comment_clear_scope(h: &mut Harness<'static, PdfCraftApp>, all_scope: bool) {
+    open_comment_clear_menu(h);
+    h.get_by_label(if all_scope { "Delete all comments…" } else { "Delete comments on this page…" }).click();
+    h.run_steps(2);
+    h.get_by_label("Delete comments").click();
+    h.run_steps(3);
+}
+
+#[test]
+fn comment_clear_preserves_uncommitted_note_composer_in_page_and_all_scope() {
+    let _gpu = crate::gpu();
+    for all_scope in [false, true] {
+        let mut h = harness_with_bytes(valid_text_fixture(), |app| {
+            add_clear_test_comments(app);
+            app.views[0].comments.composer = Some(pdfcraft_ui_egui::comments::Composer {
+                page: 0,
+                at: [42.0, 51.0],
+                kind: pdfcraft_ui_egui::comments::ComposerKind::Note,
+                text: "Unposted same-page note".into(),
+                focus: false,
+            });
+        });
+        let id = h.state().views[0].id;
+        let generation = h.state().session.get(id).unwrap().edit_generation();
+        assert_eq!(comments(&h).len(), 3, "scope={all_scope}: three source comments exist before clear");
+        assert_eq!(h.state().views[0].comments.composer.as_ref().map(|c| c.text.as_str()), Some("Unposted same-page note"));
+        confirm_comment_clear_scope(&mut h, all_scope);
+        assert!(h.state().session.get(id).unwrap().edit_generation() > generation);
+        assert_eq!(comments(&h).len(), if all_scope { 0 } else { 1 }, "scope={all_scope}: expected source comments were cleared");
+        assert_eq!(h.state().views[0].comments.composer.as_ref().map(|c| c.text.as_str()), Some("Unposted same-page note"));
+    }
+}
+
+#[test]
+fn comment_clear_preserves_uncommitted_replace_text_and_quads_in_page_and_all_scope() {
+    let _gpu = crate::gpu();
+    for all_scope in [false, true] {
+        let mut h = harness_with_bytes(valid_text_fixture(), |app| {
+            add_clear_test_comments(app);
+            let comments = &mut app.views[0].comments;
+            comments.replace = Some(vec![[12.0, 14.0, 48.0, 14.0, 12.0, 28.0, 48.0, 28.0]]);
+            comments.composer = Some(pdfcraft_ui_egui::comments::Composer {
+                page: 0,
+                at: [12.0, 14.0],
+                kind: pdfcraft_ui_egui::comments::ComposerKind::Replace,
+                text: "Unposted replacement".into(),
+                focus: false,
+            });
+        });
+        let id = h.state().views[0].id;
+        let generation = h.state().session.get(id).unwrap().edit_generation();
+        assert_eq!(comments(&h).len(), 3, "scope={all_scope}: three source comments exist before clear");
+        let before = &h.state().views[0].comments;
+        assert_eq!(before.composer.as_ref().map(|c| c.text.as_str()), Some("Unposted replacement"));
+        assert_eq!(before.replace, Some(vec![[12.0, 14.0, 48.0, 14.0, 12.0, 28.0, 48.0, 28.0]]));
+        confirm_comment_clear_scope(&mut h, all_scope);
+        assert!(h.state().session.get(id).unwrap().edit_generation() > generation);
+        assert_eq!(comments(&h).len(), if all_scope { 0 } else { 1 }, "scope={all_scope}: expected source comments were cleared");
+        let after = &h.state().views[0].comments;
+        assert_eq!(after.composer.as_ref().map(|c| c.text.as_str()), Some("Unposted replacement"));
+        assert_eq!(after.replace, Some(vec![[12.0, 14.0, 48.0, 14.0, 12.0, 28.0, 48.0, 28.0]]));
+    }
+}
+
+#[test]
+fn comment_clear_preserves_uncommitted_polygon_vertices_in_page_and_all_scope() {
+    let _gpu = crate::gpu();
+    let expected_points = vec![[20.0, 30.0], [80.0, 40.0], [70.0, 90.0]];
+    for all_scope in [false, true] {
+        let draft_points = expected_points.clone();
+        let mut h = harness_with_bytes(valid_text_fixture(), move |app| {
+            add_clear_test_comments(app);
+            app.views[0].comments.gesture = Some(pdfcraft_ui_egui::comments::Gesture::Draw {
+                page: 0,
+                tool: pdfcraft_ui_egui::comments::CommentTool::Polygon,
+                points: draft_points.clone(),
+            });
+        });
+        let id = h.state().views[0].id;
+        let generation = h.state().session.get(id).unwrap().edit_generation();
+        assert_eq!(comments(&h).len(), 3, "scope={all_scope}: three source comments exist before clear");
+        assert!(
+            matches!(h.state().views[0].comments.gesture, Some(pdfcraft_ui_egui::comments::Gesture::Draw { tool: pdfcraft_ui_egui::comments::CommentTool::Polygon, points: ref actual, .. }) if actual == &expected_points)
+        );
+        confirm_comment_clear_scope(&mut h, all_scope);
+        assert!(h.state().session.get(id).unwrap().edit_generation() > generation);
+        assert_eq!(comments(&h).len(), if all_scope { 0 } else { 1 }, "scope={all_scope}: expected source comments were cleared");
+        assert!(
+            matches!(h.state().views[0].comments.gesture, Some(pdfcraft_ui_egui::comments::Gesture::Draw { page: 0, tool: pdfcraft_ui_egui::comments::CommentTool::Polygon, points: ref actual }) if actual == &expected_points)
+        );
+    }
+}
+
+#[test]
+fn comment_clear_invalidates_edit_and_move_state_bound_to_removed_comment() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(valid_text_fixture(), |app| {
+        add_clear_test_comments(app);
+        let comments = &mut app.views[0].comments;
+        comments.composer = Some(pdfcraft_ui_egui::comments::Composer {
+            page: 0,
+            at: [60.0, 70.0],
+            kind: pdfcraft_ui_egui::comments::ComposerKind::Edit(0),
+            text: "Bound edit draft".into(),
+            focus: false,
+        });
+        comments.gesture = Some(pdfcraft_ui_egui::comments::Gesture::Move { page: 0, index: 0, from: pos2(250.0, 250.0) });
+    });
+    let id = h.state().views[0].id;
+    let generation = h.state().session.get(id).unwrap().edit_generation();
+    assert_eq!(comments(&h).len(), 3);
+    assert!(matches!(h.state().views[0].comments.composer.as_ref().map(|c| c.kind), Some(pdfcraft_ui_egui::comments::ComposerKind::Edit(0))));
+    assert!(matches!(h.state().views[0].comments.gesture, Some(pdfcraft_ui_egui::comments::Gesture::Move { page: 0, index: 0, .. })));
+    confirm_comment_clear_scope(&mut h, false);
+    assert!(h.state().session.get(id).unwrap().edit_generation() > generation);
+    assert_eq!(comments(&h).len(), 1);
+    assert!(h.state().views[0].comments.composer.is_none(), "the edit draft referenced a removed annotation");
+    assert!(h.state().views[0].comments.gesture.is_none(), "the move gesture referenced a removed annotation");
+}
+
+fn comment_clear_link_fixture(comment_page: Option<usize>) -> Vec<u8> {
+    use pdfcraft_cos::{Dict, Object, PdfString};
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(valid_text_fixture())).expect("valid fixture parses");
+    let pages = pdfcraft_model::pages(&doc);
+    let mut make_link = |url: &str, rect: [i64; 4]| {
+        let mut action = Dict::new();
+        action.set(b"S".to_vec(), Object::name("URI"));
+        action.set(b"URI".to_vec(), Object::String(PdfString::text(url)));
+        let mut link = Dict::new();
+        link.set(b"Type".to_vec(), Object::name("Annot"));
+        link.set(b"Subtype".to_vec(), Object::name("Link"));
+        link.set(b"Rect".to_vec(), Object::Array(rect.into_iter().map(Object::Int).collect()));
+        link.set(b"Border".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into()]));
+        link.set(b"A".to_vec(), Object::Dict(action));
+        doc.add(link)
+    };
+    let link_a = make_link("https://example.org/a", [20, 130, 80, 150]);
+    let link_b = make_link("https://example.org/b", [100, 130, 160, 150]);
+    let mut page_zero = vec![Object::Ref(link_a), Object::Ref(link_b)];
+    if comment_page == Some(0) {
+        let mut comment = Dict::new();
+        comment.set(b"Type".to_vec(), Object::name("Annot"));
+        comment.set(b"Subtype".to_vec(), Object::name("Text"));
+        comment.set(b"Rect".to_vec(), Object::Array(vec![20.into(), 80.into(), 40.into(), 100.into()]));
+        comment.set(b"NM".to_vec(), Object::String(PdfString::text("clear-target")));
+        comment.set(b"T".to_vec(), Object::String(PdfString::text("Tester")));
+        comment.set(b"Contents".to_vec(), Object::String(PdfString::text("Clear this comment")));
+        page_zero.insert(0, Object::Ref(doc.add(comment)));
+    }
+    doc.update_dict(pages[0].obj, |dict| dict.set(b"Annots".to_vec(), Object::Array(page_zero))).expect("sets page-zero annotations");
+    if comment_page == Some(1) {
+        let mut comment = Dict::new();
+        comment.set(b"Type".to_vec(), Object::name("Annot"));
+        comment.set(b"Subtype".to_vec(), Object::name("Text"));
+        comment.set(b"Rect".to_vec(), Object::Array(vec![20.into(), 80.into(), 40.into(), 100.into()]));
+        comment.set(b"NM".to_vec(), Object::String(PdfString::text("clear-target")));
+        comment.set(b"T".to_vec(), Object::String(PdfString::text("Tester")));
+        comment.set(b"Contents".to_vec(), Object::String(PdfString::text("Clear this comment")));
+        let reference = doc.add(comment);
+        doc.update_dict(pages[1].obj, |dict| dict.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(reference)])))
+            .expect("sets page-one comment");
+    }
+    pdfcraft_cos::write_full(&doc, &Default::default()).expect("writes valid xref")
+}
+
+fn clear_test_link_entries(h: &Harness<'static, PdfCraftApp>) -> Vec<(usize, pdfcraft_engine::LinkAction)> {
+    let state = h.state();
+    state.session.get(state.views[0].id).unwrap().links().iter().map(|link| (link.index, link.action.clone())).collect()
+}
+
+#[test]
+fn comment_clear_drops_link_index_handles_after_annotation_indices_shift() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(comment_clear_link_fixture(Some(0)), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.quick_tool = QuickTool::Link;
+        app.views[0].links.selected = Some((0, 1)); // Link A follows the comment in /Annots.
+        app.views[0].links.context = Some((0, 1));
+    });
+    let id = h.state().views[0].id;
+    assert_eq!(
+        clear_test_link_entries(&h),
+        vec![
+            (1, pdfcraft_engine::LinkAction::Uri("https://example.org/a".into())),
+            (2, pdfcraft_engine::LinkAction::Uri("https://example.org/b".into()))
+        ]
+    );
+    assert_eq!(comments(&h).len(), 1);
+    open_comment_clear_menu(&mut h);
+    h.get_by_label("Delete all comments…").click();
+    h.run_steps(2);
+    h.get_by_label("Delete comments").click();
+    h.run_steps(3);
+    assert_eq!(
+        clear_test_link_entries(&h),
+        vec![
+            (0, pdfcraft_engine::LinkAction::Uri("https://example.org/a".into())),
+            (1, pdfcraft_engine::LinkAction::Uri("https://example.org/b".into()))
+        ]
+    );
+    let links = &h.state().views[0].links;
+    assert!(
+        links.selected.is_none() || links.selected == Some((0, 0)),
+        "selection must be dropped or still target Link A, never shifted onto Link B"
+    );
+    assert!(links.context.is_none() || links.context == Some((0, 0)), "context index must be dropped or still target Link A");
+    assert!(links.open_existing.is_none(), "no index-bound properties request may survive the clear");
+    assert!(h.state().session.get(id).unwrap().links().iter().all(|link| link.page == 0));
+}
+
+#[test]
+fn comment_clear_confirmation_owns_delete_from_link_tool() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(comment_clear_link_fixture(Some(0)), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.quick_tool = QuickTool::Link;
+        app.views[0].links.selected = Some((0, 1));
+    });
+    let id = h.state().views[0].id;
+    let generation = h.state().session.get(id).unwrap().edit_generation();
+    let links = clear_test_link_entries(&h);
+    open_comment_clear_menu(&mut h);
+    h.get_by_label("Delete all comments…").click();
+    h.run_steps(2);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation);
+    assert_eq!(clear_test_link_entries(&h), links, "Delete behind the modal must not remove the selected link");
+    assert_eq!(h.state().views[0].links.selected, Some((0, 1)));
+}
+
+#[test]
+fn comment_clear_confirmation_owns_escape_from_link_tool() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(comment_clear_link_fixture(Some(0)), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.quick_tool = QuickTool::Link;
+        app.views[0].links.selected = Some((0, 1));
+    });
+    let id = h.state().views[0].id;
+    let generation = h.state().session.get(id).unwrap().edit_generation();
+    let links = clear_test_link_entries(&h);
+    open_comment_clear_menu(&mut h);
+    h.get_by_label("Delete all comments…").click();
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation);
+    assert_eq!(clear_test_link_entries(&h), links);
+    assert_eq!(h.state().views[0].links.selected, Some((0, 1)), "Escape belongs to the modal, not the Link tool");
+}
+
+#[test]
+fn comment_clear_confirmation_owns_escape_from_inline_comment_edit() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(valid_text_fixture(), |app| {
+        add_clear_test_comments(app);
+        app.views[0].comments.selected = Some((0, 0));
+    });
+    let id = h.state().views[0].id;
+    let generation = h.state().session.get(id).unwrap().edit_generation();
+    h.get_by_label("More").click();
+    h.run_steps(2);
+    h.query_all_by_label("Edit").last().expect("comment menu edit, after the toolbar tab").click();
+    h.run_steps(2);
+    assert!(h.state().views[0].comments.editing.as_ref().is_some_and(|(page, index, _)| (*page, *index) == (0, 0)));
+    assert!(h.query_by_label("Save").is_some(), "the real inline Comments card editor is displayed");
+    h.state_mut().views[0].comments.editing.as_mut().unwrap().2 = "Uncommitted inline comment edit".into();
+    h.run_steps(1);
+    assert_eq!(h.state().views[0].comments.editing.as_ref().map(|(_, _, text)| text.as_str()), Some("Uncommitted inline comment edit"));
+    open_comment_clear_menu(&mut h);
+    h.get_by_label("Delete all comments…").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Save").is_some(), "the inline editor remains displayed under the confirmation");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation);
+    assert_eq!(comments(&h).len(), 3);
+    assert_eq!(h.state().views[0].comments.editing.as_ref().map(|(_, _, text)| text.as_str()), Some("Uncommitted inline comment edit"));
+}
+
+#[test]
+fn comment_clear_confirmation_owns_delete_from_selected_added_content() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(valid_text_fixture(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        assert!(app.apply_edit(pdfcraft_engine::Edit::AddText {
+            page: 0,
+            text: pdfcraft_engine::AddedText { rect: [40.0, 150.0, 140.0, 170.0], text: "Keep this added text".into(), ..Default::default() },
+        }));
+        app.quick_tool = QuickTool::AddText;
+        app.views[0].content.selected = Some((0, 0));
+    });
+    let id = h.state().views[0].id;
+    let generation = h.state().session.get(id).unwrap().edit_generation();
+    let before = h.state().session.get(id).unwrap().added().to_vec();
+    assert_eq!(before.len(), 1);
+    open_comment_clear_menu(&mut h);
+    h.get_by_label("Delete all comments…").click();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)));
+    h.key_press(egui::Key::Delete);
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation);
+    assert_eq!(h.state().session.get(id).unwrap().added(), before.as_slice(), "Delete must not remove added content behind the modal");
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)));
+}
+
+#[test]
+fn comment_clear_noop_and_locked_refusal_preserve_link_index_handles() {
+    let _gpu = crate::gpu();
+    let mut noop = harness_with_bytes(comment_clear_link_fixture(None), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.quick_tool = QuickTool::Link;
+        app.views[0].links.selected = Some((0, 0));
+        app.views[0].links.context = Some((0, 1));
+    });
+    let id = noop.state().views[0].id;
+    let generation = noop.state().session.get(id).unwrap().edit_generation();
+    let links = clear_test_link_entries(&noop);
+    open_comment_clear_menu(&mut noop);
+    noop.get_by_label("Delete all comments…").click();
+    noop.run_steps(2);
+    noop.get_by_label("Delete comments").click();
+    noop.run_steps(2);
+    assert_eq!(noop.state().session.get(id).unwrap().edit_generation(), generation);
+    assert_eq!(clear_test_link_entries(&noop), links);
+    assert_eq!(noop.state().views[0].links.selected, Some((0, 0)));
+    assert_eq!(noop.state().views[0].links.context, Some((0, 1)));
+
+    let mut locked = harness_with_bytes(comment_clear_link_fixture(Some(0)), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.quick_tool = QuickTool::Link;
+        assert!(app.apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 0, locked: true }));
+        app.views[0].links.selected = Some((0, 1));
+    });
+    let id = locked.state().views[0].id;
+    let generation = locked.state().session.get(id).unwrap().edit_generation();
+    let links = clear_test_link_entries(&locked);
+    open_comment_clear_menu(&mut locked);
+    locked.get_by_label("Delete all comments…").click();
+    locked.run_steps(2);
+    locked.get_by_label("Delete comments").click();
+    locked.run_steps(2);
+    assert_eq!(locked.state().session.get(id).unwrap().edit_generation(), generation);
+    assert_eq!(clear_test_link_entries(&locked), links);
+    assert_eq!(locked.state().views[0].links.selected, Some((0, 1)));
+}
+
+#[test]
+fn comment_clear_page_scope_keeps_other_page_link_indices_and_selection() {
+    let _gpu = crate::gpu();
+    let mut h = harness_with_bytes(comment_clear_link_fixture(Some(1)), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.set_option("page", "2").unwrap();
+        app.quick_tool = QuickTool::Link;
+        app.views[0].links.selected = Some((0, 0));
+    });
+    assert_eq!(comments(&h).len(), 1);
+    let links = clear_test_link_entries(&h);
+    open_comment_clear_menu(&mut h);
+    h.get_by_label("Delete comments on this page…").click();
+    h.run_steps(2);
+    h.get_by_label("Delete comments").click();
+    h.run_steps(3);
+    assert!(comments(&h).is_empty());
+    assert_eq!(clear_test_link_entries(&h), links);
+    assert_eq!(h.state().views[0].links.selected, Some((0, 0)));
 }
 
 /// #3418: choosing a sidebar comment must reveal the annotation, not just its page's top.

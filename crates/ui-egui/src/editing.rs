@@ -105,6 +105,7 @@ impl PdfCraftApp {
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
         let label = edit.label();
+        let generation_before = self.session.get(id).map(|d| d.edit_generation());
         let (form_before, page_count_before, had_xfa) = if let Some(d) = self.session.get(id) {
             (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some())
         } else {
@@ -113,6 +114,11 @@ impl PdfCraftApp {
         match self.session.apply(id, edit.clone()) {
             Ok(()) => {
                 let Some(doc) = self.session.get(id) else { return true };
+                // Bulk clear can legitimately find no comments, including hidden/orphan entries
+                // that the UI cannot enumerate. Preserve every view handle on that true no-op.
+                if matches!(edit, Edit::ClearComments { .. }) && Some(doc.edit_generation()) == generation_before {
+                    return true;
+                }
                 let info = &doc.info;
                 let view = &mut self.views[i];
                 view.applied_editor = None;
@@ -125,7 +131,7 @@ impl PdfCraftApp {
                 if matches!(edit, Edit::AddAnnotation(_)) {
                     // A released drawing's raster can come now: it will have the annotation.
                     view.comments.drawings_committed();
-                } else {
+                } else if !matches!(edit, Edit::ClearComments { .. }) {
                     // Only a new drawing waits on its raster; any other edit may remove or move it.
                     view.comments.settling.clear();
                 }
@@ -169,7 +175,9 @@ impl PdfCraftApp {
             Err(e) => {
                 if let Some(view) = self.views.get_mut(i) {
                     // A drawing whose annotation wasn't added must not stay painted.
-                    view.comments.drawings_refused();
+                    if !matches!(edit, Edit::ClearComments { .. }) {
+                        view.comments.drawings_refused();
+                    }
                     // A paragraph that couldn't be applied opens again with its typing, instead of
                     // the box the click moved to.
                     if let Edit::EditTextBlock { page, block, .. } = &edit
@@ -644,6 +652,7 @@ fn content_page(edit: &Edit) -> Option<usize> {
 
 fn comment_page(edit: &Edit) -> Option<usize> {
     match edit {
+        Edit::ClearComments { page: Some(page) } => Some(*page),
         Edit::AddAnnotation(a) => Some(a.page),
         Edit::DeleteAnnotation { page, .. }
         | Edit::SetAnnotationContents { page, .. }

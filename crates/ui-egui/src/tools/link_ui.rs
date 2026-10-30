@@ -30,6 +30,26 @@ pub struct LinkView {
     last_click: Option<(f64, usize, usize)>,
 }
 
+impl LinkView {
+    /// Drop handles into `/Annots` on pages a successful comment clear compacted.
+    /// New-link geometry is independent of annotation indices and remains available.
+    pub(crate) fn comments_cleared(&mut self, page: Option<usize>) {
+        let affected = |p| page.is_none_or(|target| p == target);
+        if self.selected.is_some_and(|(p, _)| affected(p)) {
+            self.selected = None;
+        }
+        if self.context.is_some_and(|(p, _)| affected(p)) {
+            self.context = None;
+        }
+        if self.open_existing.is_some_and(|(p, _)| affected(p)) {
+            self.open_existing = None;
+        }
+        if self.last_click.is_some_and(|(_, p, _)| affected(p)) {
+            self.last_click = None;
+        }
+    }
+}
+
 /// Link Properties' working copy.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LinkDraft {
@@ -44,6 +64,12 @@ pub struct LinkDraft {
     /// 1-based target page.
     pub target: usize,
     pub style: LinkStyle,
+}
+
+impl LinkDraft {
+    pub(crate) fn is_existing_on_cleared_page(&self, page: Option<usize>) -> bool {
+        self.index.is_some() && page.is_none_or(|target| self.page == target)
+    }
 }
 
 pub(crate) fn screen_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
@@ -337,7 +363,7 @@ pub(crate) fn edit_for(d: &LinkDraft) -> Edit {
 
 #[cfg(test)]
 mod tests {
-    use super::{LinkDraft, edit_for};
+    use super::{LinkDraft, LinkView, edit_for};
     use pdfcraft_engine::{Edit, LinkStyle};
 
     #[test]
@@ -345,5 +371,58 @@ mod tests {
         let style = LinkStyle::default();
         let draft = LinkDraft { page: 0, rect: [0.0; 4], index: Some(3), preserve_action: true, web: false, url: String::new(), target: 1, style };
         assert_eq!(edit_for(&draft), Edit::SetLink { page: 0, index: 3, rect: None, action: None, style: Some(style) });
+    }
+
+    #[test]
+    fn comment_clear_drops_only_affected_link_index_handles() {
+        let mut view = LinkView {
+            drag: Some((0, egui::pos2(20.0, 30.0))),
+            selected: Some((0, 2)),
+            context: Some((0, 2)),
+            open_new: Some((0, [10.0, 20.0, 30.0, 40.0])),
+            open_existing: Some((0, 2)),
+            last_click: Some((1.0, 0, 2)),
+        };
+
+        view.comments_cleared(Some(0));
+
+        assert_eq!(view.selected, None);
+        assert_eq!(view.context, None);
+        assert_eq!(view.open_existing, None);
+        assert_eq!(view.last_click, None);
+        assert_eq!(view.drag, Some((0, egui::pos2(20.0, 30.0))));
+        assert_eq!(view.open_new, Some((0, [10.0, 20.0, 30.0, 40.0])));
+    }
+
+    #[test]
+    fn page_comment_clear_preserves_other_page_link_handles() {
+        let mut view = LinkView {
+            selected: Some((1, 2)),
+            context: Some((1, 1)),
+            open_new: Some((1, [10.0, 20.0, 30.0, 40.0])),
+            open_existing: Some((1, 2)),
+            last_click: Some((1.0, 1, 2)),
+            ..Default::default()
+        };
+
+        view.comments_cleared(Some(0));
+
+        assert_eq!(view.selected, Some((1, 2)));
+        assert_eq!(view.context, Some((1, 1)));
+        assert_eq!(view.open_existing, Some((1, 2)));
+        assert_eq!(view.last_click, Some((1.0, 1, 2)));
+        assert_eq!(view.open_new, Some((1, [10.0, 20.0, 30.0, 40.0])));
+    }
+
+    #[test]
+    fn link_draft_clear_invalidation_distinguishes_existing_from_new() {
+        let style = LinkStyle::default();
+        let mut draft =
+            LinkDraft { page: 0, rect: [0.0; 4], index: Some(2), preserve_action: true, web: false, url: String::new(), target: 1, style };
+        assert!(draft.is_existing_on_cleared_page(Some(0)));
+        assert!(draft.is_existing_on_cleared_page(None));
+        assert!(!draft.is_existing_on_cleared_page(Some(1)));
+        draft.index = None;
+        assert!(!draft.is_existing_on_cleared_page(None));
     }
 }

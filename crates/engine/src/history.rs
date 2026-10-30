@@ -49,6 +49,9 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         Edit::SetInfo { .. } => Scope::Metadata,
         // The Attachments list is read from the whole document.
         Edit::AddAttachment { .. } | Edit::DeleteAttachment { .. } => Scope::Full,
+        // Bulk removal can include file-attachment comments, so refresh the attachment list
+        // as well as comments, link indices and rendering.
+        Edit::ClearComments { .. } => Scope::Full,
         // A file attachment also changes the Attachments list.
         Edit::AddAnnotation(a) if matches!(a.shape, Shape::Attachment { .. }) => Scope::Full,
         Edit::AddMeasurement(_)

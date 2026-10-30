@@ -55,7 +55,12 @@ pub(crate) fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String>
 /// multimedia and print-production annotations (ISO 32000-2 §12.5.6: Screen, Movie, RichMedia,
 /// 3D, PrinterMark, TrapNet, Watermark) are not.
 pub fn is_comment_subtype(subtype: &str) -> bool {
-    !matches!(subtype, "Link" | "Widget" | "Popup" | "Screen" | "Movie" | "RichMedia" | "3D" | "PrinterMark" | "TrapNet" | "Watermark")
+    is_comment_name(subtype.as_bytes())
+}
+
+/// The same taxonomy for raw PDF names, without decoding or allocating a Unicode string.
+pub(crate) fn is_comment_name(subtype: &[u8]) -> bool {
+    !matches!(subtype, b"Link" | b"Widget" | b"Popup" | b"Screen" | b"Movie" | b"RichMedia" | b"3D" | b"PrinterMark" | b"TrapNet" | b"Watermark")
 }
 
 /// Where a reference to a reference (`5 0 obj 6 0 R endobj`) ends, as `pdfcraft_render::inspect`

@@ -17,6 +17,98 @@ use crate::panels::Nav;
 use crate::theme::{self, Tokens};
 use crate::{icons, widgets};
 
+/// Capture the document and generation before presenting the destructive action.
+pub(crate) fn begin_clear_confirmation(app: &mut crate::PdfCraftApp, page: Option<usize>) {
+    let Some((index, doc)) = app.active_ids() else { return };
+    let Some(document) = app.session.get(doc) else { return };
+    if page.is_some_and(|p| p >= document.info.pages.len()) {
+        app.notify_tr("The selected page is no longer available.");
+        return;
+    }
+    let confirmation = crate::comments::ClearCommentsConfirmation { doc, generation: document.edit_generation(), page };
+    for view in &mut app.views {
+        view.comments.clear_confirmation = None;
+    }
+    app.views[index].comments.clear_confirmation = Some(confirmation);
+    app.dialog = Some(crate::Dialog::ClearComments);
+}
+
+/// Apply only to the still-active document at the exact generation captured by the dialog.
+pub(crate) fn confirm_clear_comments(app: &mut crate::PdfCraftApp) {
+    let Some((index, active_doc)) = app.active_ids() else {
+        app.notify_tr("The active document changed. Reopen the confirmation to continue.");
+        return;
+    };
+    let Some(confirmation) = app.views.iter().find_map(|view| view.comments.clear_confirmation) else { return };
+    if active_doc != confirmation.doc {
+        app.notify_tr("The active document changed. Reopen the confirmation to continue.");
+        return;
+    }
+    let Some(document) = app.session.get(confirmation.doc) else {
+        app.notify_tr("The document is no longer available.");
+        return;
+    };
+    if document.edit_generation() != confirmation.generation {
+        app.notify_tr("The document changed. Reopen the confirmation to continue.");
+        return;
+    }
+    if confirmation.page.is_some_and(|page| page >= document.info.pages.len()) {
+        app.notify_tr("The selected page is no longer available.");
+        return;
+    }
+    let before = document.edit_generation();
+    if app.apply_edit(Edit::ClearComments { page: confirmation.page })
+        && let Some(view) = app.views.get_mut(index)
+        && app.session.get(active_doc).is_some_and(|doc| doc.edit_generation() != before)
+    {
+        let affected = |page: usize| confirmation.page.is_none_or(|target| page == target);
+        view.links.comments_cleared(confirmation.page);
+        let comments = &mut view.comments;
+        let cleared_selection = comments.selected.is_some_and(|(page, _)| affected(page));
+        if cleared_selection {
+            comments.selected = None;
+            comments.reply.clear();
+        }
+        if comments.editing.as_ref().is_some_and(|(page, _, _)| affected(*page)) {
+            comments.editing = None;
+            comments.editor_focus = None;
+        }
+        let cleared_edit_composer = comments
+            .composer
+            .as_ref()
+            .is_some_and(|composer| affected(composer.page) && matches!(composer.kind, crate::comments::ComposerKind::Edit(_)));
+        if cleared_edit_composer {
+            comments.composer = None;
+        }
+        let cleared_bound_gesture = comments.gesture.as_ref().is_some_and(|gesture| match gesture {
+            crate::comments::Gesture::Move { page, .. }
+            | crate::comments::Gesture::Resize { page, .. }
+            | crate::comments::Gesture::Reshape { page, .. } => affected(*page),
+            crate::comments::Gesture::Draw { .. } => false,
+        });
+        if cleared_bound_gesture {
+            comments.gesture = None;
+        }
+        comments.settling.retain(|drawing| !affected(drawing.page));
+        if comments.attachment_request.is_some_and(|(page, _, _)| affected(page)) {
+            comments.attachment_request = None;
+        }
+        if comments.props_request.is_some_and(|(page, _)| affected(page)) {
+            comments.props_request = None;
+        }
+        if comments.default_request.is_some_and(|(page, _)| affected(page)) {
+            comments.default_request = None;
+        }
+        comments.clear_confirmation = None;
+        if app.link_draft.as_ref().is_some_and(|draft| draft.is_existing_on_cleared_page(confirmation.page)) {
+            app.link_draft = None;
+        }
+        if app.comment_props.as_ref().is_some_and(|draft| affected(draft.page)) {
+            app.comment_props = None;
+        }
+    }
+}
+
 /// Accent bar of the selected card (11-visual-spec §3: `#0165DD`).
 const CARD_ACCENT: Color32 = Color32::from_rgb(0x01, 0x65, 0xDD);
 
@@ -120,6 +212,7 @@ pub(crate) fn show(
     allowed: bool,
     nav: &mut Option<Nav>,
 ) -> Option<Edit> {
+    let input_enabled = ui.is_enabled();
     crate::widgets::begin_dialog(ui);
     let mut edit = None;
     // Search (the header's magnifier toggles it).
@@ -127,7 +220,7 @@ pub(crate) fn show(
         let r = ui
             .add(crate::widgets::line(q).hint_text(tl!("Search comments")).desired_width(f32::INFINITY).id_salt("comment-search"))
             .accessible_name(tl!("Search comments"));
-        if view.comments.search_focus {
+        if input_enabled && view.comments.search_focus {
             r.request_focus();
             view.comments.search_focus = false;
         }
@@ -143,7 +236,7 @@ pub(crate) fn show(
                     .id_salt("comment-add-box"),
             )
             .accessible_name(tl!("Add a comment"));
-        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !view.comments.add_box.trim().is_empty() {
+        if input_enabled && r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !view.comments.add_box.trim().is_empty() {
             let page = view.current.min(info.pages.len().saturating_sub(1));
             if let Some(p) = info.pages.get(page) {
                 let at = p.view_to_user(p.width - 44.0, 24.0);
@@ -285,7 +378,7 @@ pub(crate) fn show(
         }
         let thread = replies_of(a);
         let rotation = info.pages.get(a.page).map_or(0, |p| p.rotation);
-        if let Some(e) = card(ui, view, CardContext { theme: t, annotation: a, rotation, thread, info, prefs, allowed, nav }) {
+        if let Some(e) = card(ui, view, CardContext { theme: t, annotation: a, rotation, thread, info, prefs, allowed, input_enabled, nav }) {
             edit = Some(e);
         }
     }
@@ -303,11 +396,12 @@ struct CardContext<'a> {
     info: &'a DocInfo,
     prefs: &'a CommentPrefs,
     allowed: bool,
+    input_enabled: bool,
     nav: &'a mut Option<Nav>,
 }
 
 fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Option<Edit> {
-    let CardContext { theme: t, annotation: a, rotation, thread, info, prefs, allowed, nav } = context;
+    let CardContext { theme: t, annotation: a, rotation, thread, info, prefs, allowed, input_enabled, nav } = context;
     let mut edit = None;
     let key = (a.page, a.index);
     let selected = view.comments.selected == Some(key);
@@ -360,12 +454,14 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                 ui.set_width(ui.available_width());
                 if editing && let Some((_, _, text)) = view.comments.editing.as_mut() {
                     let r = ui.add(crate::widgets::block(text).desired_rows(2).desired_width(f32::INFINITY).id_salt(("comment-edit", key)));
-                    match view.comments.editor_focus.take() {
-                        Some(crate::comments::EditorFocus::Take) => r.request_focus(),
-                        Some(crate::comments::EditorFocus::Release) => r.surrender_focus(),
-                        None => {}
+                    if input_enabled {
+                        match view.comments.editor_focus.take() {
+                            Some(crate::comments::EditorFocus::Take) => r.request_focus(),
+                            Some(crate::comments::EditorFocus::Release) => r.surrender_focus(),
+                            None => {}
+                        }
                     }
-                    let submit = crate::comments::submit_key(ui, &r, false);
+                    let submit = input_enabled && crate::comments::submit_key(ui, &r, false);
                     ui.horizontal(|ui| {
                         if (ui
                             .add(egui::Button::new(egui::RichText::new(tl!("Save")).color(Color32::WHITE)).fill(t.accent).corner_radius(12))
@@ -375,7 +471,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                         {
                             edit = Some(Edit::SetAnnotationContents { page, index, text });
                         }
-                        if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        if ui.button(tl!("Cancel")).clicked() || input_enabled && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                             view.comments.editing = None;
                         }
                     });
@@ -440,7 +536,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                             .desired_width(f32::INFINITY)
                             .id_salt(("comment-reply", key)),
                     );
-                    let enter = crate::comments::submit_key(ui, &r, true);
+                    let enter = input_enabled && crate::comments::submit_key(ui, &r, true);
                     let ok = !view.comments.reply.trim().is_empty();
                     let post =
                         ui.with_layout(Layout::right_to_left(Align::Min), |ui| ui.add_enabled(ok, egui::Button::new(tl!("Post")).corner_radius(12)));
@@ -614,6 +710,13 @@ pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocV
         ] {
             if ui.button(tl!(label)).clicked() {
                 command = Some(id);
+                ui.close();
+            }
+        }
+        for (page, label) in [(Some(view.current), tl!("Delete comments on this page…")), (None, tl!("Delete all comments…"))] {
+            if ui.button(label).clicked() {
+                cv.clear_request = Some(page);
+                command = Some("comment.clear");
                 ui.close();
             }
         }

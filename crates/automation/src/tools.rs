@@ -920,6 +920,17 @@ pub fn tools() -> Vec<ToolDef> {
         t("comment_image_preview", "Preview image signature layers", "Return a PNG of the page without the selected image signature/initials (layer=background, default), or its embedded image with alpha (layer=image). Includes the displayed rectangle, document rotation, image_rotation (how far clockwise the image is shown turned) and annotation opacity. Cache these layers for live placement/resizing; commit once with comment_edit. Does not change the document or undo history.")
             .ro().with(schema(comment_ref(json!({ "layer": { "type": "string", "enum": ["background", "image"], "default": "background" }, "dpi": { "type": "number", "minimum": 1, "maximum": 600, "default": 96 } })), &["doc"])),
         t("comment_delete", "Delete a comment", "Delete a comment with its pop-up and replies. Undoable.").destructive().with(schema(comment_ref(json!({})), &["doc"])),
+        t("comment_clear", "Delete comments", "Remove all comment annotations and associated pop-ups on one page or throughout the document, including hidden comments, replies and status entries. Uses the Comments subtype taxonomy, including unknown named comment types. Links, form widgets and other non-comment annotations remain. Any locked target refuses the entire scope. One undo step; an empty scope changes neither the document nor history. This removes memberships, not underlying objects, and is not secure redaction.")
+            .cmd("comment.clear")
+            .destructive()
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "scope": { "type": "string", "enum": ["page", "all"], "description": "Explicit removal scope. page requires page; all forbids page." },
+                    "page": { "type": "integer", "minimum": 1, "description": "One-based existing page, required only with scope page." },
+                }),
+                &["doc", "scope"],
+            )),
         t(
             "doc_protect",
             "Protect with passwords",

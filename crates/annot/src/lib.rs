@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
+mod clear;
 mod create;
 mod draw;
 mod info;
@@ -25,6 +26,7 @@ mod lookup;
 mod modify;
 mod types;
 
+pub use clear::{ClearCommentsReport, clear_comments};
 #[cfg(test)]
 use create::num_array;
 pub use create::{add_annotation, callout_attach, orient_image_stamp};

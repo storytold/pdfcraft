@@ -51,6 +51,7 @@ struct Pending {
     overwrite_now: bool,
     overwrite_elsewhere: bool,
     summarize_now: bool,
+    clear_comments_now: bool,
     optimize_now: bool,
     duplicate_now: Option<Edit>,
     page_props_now: Option<(pdfcraft_engine::DocId, u64, Edit)>,
@@ -271,6 +272,11 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
         }
         Dialog::SummarizeComments => {
             if !dialog_summarize_comments(ui, app, req) {
+                return false;
+            }
+        }
+        Dialog::ClearComments => {
+            if !dialog_clear_comments(ui, app, req) {
                 return false;
             }
         }
@@ -1652,6 +1658,9 @@ fn finish_requests(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, re
 
 /// Runs the document actions the dialog asked for.
 fn finish_actions(app: &mut PdfCraftApp, req: &mut Pending) {
+    if req.clear_comments_now {
+        crate::comments_panel::confirm_clear_comments(app);
+    }
     if req.summarize_now {
         app.summarize_comments();
     }
@@ -1684,6 +1693,47 @@ fn finish_actions(app: &mut PdfCraftApp, req: &mut Pending) {
     if req.import_words {
         app.pick_files(crate::files::FilePurpose::RedactWords, false);
     }
+}
+
+/// Confirmation for clearing comments; the target is revalidated after the user confirms.
+fn dialog_clear_comments(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
+    let confirmation = app.views.iter().find_map(|view| view.comments.clear_confirmation);
+    ui.label(egui::RichText::new(tl!("Delete comments?")).font(theme::semibold(18.0)));
+    ui.add_space(8.0);
+    match confirmation.and_then(|c| c.page.map(|page| (c.doc, page))) {
+        Some((doc, page)) => {
+            let position = page.saturating_add(1).to_string();
+            let caption = app
+                .session
+                .get(doc)
+                .and_then(|document| {
+                    let info = document.info.pages.get(page)?;
+                    (!info.label.is_empty() && info.label != position).then(|| {
+                        crate::i18n::fmt(
+                            tl!("{label} ({position} of {total})"),
+                            &[("label", &info.label), ("position", &position), ("total", &document.info.pages.len().to_string())],
+                        )
+                    })
+                })
+                .unwrap_or(position);
+            ui.label(crate::i18n::fmt(
+                tl!("Delete every comment on page {page}? Comments hidden by filters or collapsed groups are included."),
+                &[("page", &caption)],
+            ))
+        }
+        None => ui.label(tl!("Delete every comment in this document? Comments hidden by filters or collapsed groups are included.")),
+    };
+    ui.add_space(12.0);
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        if widgets::pill_button(ui, tl!("Delete comments"), true).clicked() {
+            req.clear_comments_now = true;
+            req.close = true;
+        }
+        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+            req.close = true;
+        }
+    });
+    false
 }
 
 /// Redaction, hidden-data and field-properties requests.
@@ -1824,6 +1874,11 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     // Protect / Remove security replace the Properties dialog.
     let replaces = req.link_command.is_some_and(|c| c.starts_with("protect.")) || req.open_revision.is_some();
     if modal_closed || req.close || replaces {
+        if dialog == Dialog::ClearComments {
+            for view in &mut app.views {
+                view.comments.clear_confirmation = None;
+            }
+        }
         app.dialog = None;
         app.props_draft = None;
         app.view_draft = None;

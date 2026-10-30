@@ -38,6 +38,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         let comment_allowed = doc.allows_annotation();
         // A dialog or the palette owns the keyboard: the panel leaves Escape to it.
         let modal = app.dialog.is_some() || app.palette_open;
+        let comments_input_enabled = app.dialog != Some(crate::Dialog::ClearComments);
         egui::Frame::NONE
             .fill(t.panel)
             .inner_margin(egui::Margin { left: 14, right: 12, top: 12, bottom: 8 })
@@ -87,10 +88,11 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             panel_command = Some(c);
                         }
                         // Right to left: close, "…", filter, search (Acrobat's order left to right).
-                        if panel == RightPanel::Comments {
+                        if panel == RightPanel::Comments && comments_input_enabled {
                             panel_command = crate::comments_panel::header_controls(ui, info, view, doc.comments_hidden());
                         }
                         if panel == RightPanel::Comments
+                            && comments_input_enabled
                             && icons::button(ui, "search", 26.0, view.comments.search.is_some(), tl!("Search comments")).clicked()
                         {
                             view.comments.search = match view.comments.search {
@@ -182,9 +184,11 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match panel {
                     RightPanel::Comments => {
-                        if let Some(e) = crate::comments_panel::show(ui, &t, info, view, prefs, comment_allowed, &mut nav) {
-                            panel_edit = Some(e);
-                        }
+                        ui.add_enabled_ui(comments_input_enabled, |ui| {
+                            if let Some(e) = crate::comments_panel::show(ui, &t, info, view, prefs, comment_allowed, &mut nav) {
+                                panel_edit = Some(e);
+                            }
+                        });
                     }
                     RightPanel::Bookmarks => {
                         if info.outline.is_empty() {
@@ -384,6 +388,12 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     if let Some(c) = panel_command {
         app.run_command(c);
+        if c == "comment.clear"
+            && let Some(view) = app.views.get_mut(index)
+        {
+            // A disabled command must not leave the panel's one-shot scope for a later palette run.
+            view.comments.clear_request = None;
+        }
     }
     if let Some(a) = a11y_action {
         app.a11y_action(index, a);
@@ -409,14 +419,16 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         }
         None => {}
     }
-    if let Some((p, i)) = app.views.get_mut(index).and_then(|v| v.comments.default_request.take()) {
-        app.make_comment_default(p, i);
-    }
-    if let Some((p, i, open)) = app.views.get_mut(index).and_then(|v| v.comments.attachment_request.take()) {
-        app.comment_attachment_action(id, p, i, open);
-    }
-    if let Some((p, i)) = app.views.get_mut(index).and_then(|v| v.comments.props_request.take()) {
-        app.open_comment_props(p, i);
+    if app.dialog != Some(crate::Dialog::ClearComments) {
+        if let Some((p, i)) = app.views.get_mut(index).and_then(|v| v.comments.default_request.take()) {
+            app.make_comment_default(p, i);
+        }
+        if let Some((p, i, open)) = app.views.get_mut(index).and_then(|v| v.comments.attachment_request.take()) {
+            app.comment_attachment_action(id, p, i, open);
+        }
+        if let Some((p, i)) = app.views.get_mut(index).and_then(|v| v.comments.props_request.take()) {
+            app.open_comment_props(p, i);
+        }
     }
     app.bookmark_rename = bm_rename;
     if let Some(a) = bm_action {

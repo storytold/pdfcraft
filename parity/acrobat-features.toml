@@ -4013,10 +4013,10 @@ area = "E"
 tier = "P0"
 milestone = "M5"
 status = "shipped"
-commands = ["comment.list"]
-tools = ["comment_delete"]
-evidence = ["crates/ui-egui/tests/it/comments.rs::comments_are_selected_moved_and_deleted_with_the_select_tool", "crates/annot/src/tests.rs::delete_takes_popup_and_reply_chain"]
-notes = "deletes the pop-up and the reply thread"
+commands = ["comment.list", "comment.clear"]
+tools = ["comment_delete", "comment_clear"]
+evidence = ["crates/ui-egui/tests/it/comments.rs::comments_are_selected_moved_and_deleted_with_the_select_tool", "crates/annot/src/tests.rs::delete_takes_popup_and_reply_chain", "crates/automation/tests/it/comment_clear.rs::comment_clear_page_and_all_preserve_other_annotations_and_round_trip", "crates/ui-egui/tests/it/comments.rs::comment_clear_all_confirms_and_undoes_as_one_edit", "crates/ui-egui/tests/it/comments.rs::comment_clear_page_uses_current_page_and_preserves_other_page_draft", "crates/engine/src/tests/apply_safety.rs::clear_comments_noop_preserves_clean_and_dirty_state_including_redo_and_notices"]
+notes = "Single deletion removes the pop-up and reply thread. #5119 adds confirmed current-page/all-page clearing and comment_clear with explicit scope, one Undo, locked/permission refusal, true no-op history preservation and filter-independent selection, including hidden/status/orphan entries. Links/widgets and shared payloads remain; unknown nonempty named subtypes follow the Comments taxonomy. Bounded membership removal, not secure redaction or arbitrary multiselection. See docs/comment-clearing.md."
 
 [[feature]]
 id = "comment.keyboard-nudge"

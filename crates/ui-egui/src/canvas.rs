@@ -848,6 +848,7 @@ struct PageEnv<'a> {
     key_scroll: f32,
     middle_gesture: bool,
     modal: bool,
+    clear_comments_dialog: bool,
     navigation_enabled: bool,
     paper: Color32,
     ppp: f32,
@@ -1088,6 +1089,9 @@ pub(crate) struct PageToolContext<'a> {
 /// clicks first with the Select tool (as Acrobat fills fields in every viewing mode); then
 /// comments; then text selection.
 fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, slot: &PageSlot) -> PageInput {
+    if frame.env.clear_comments_dialog {
+        return PageInput { consumed: true, area_tool: false };
+    }
     let PageEnv {
         added,
         allowed,
@@ -1559,9 +1563,11 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
     }
     crate::image_pick::drop_stale(doc, view);
     crate::image_pick::paint(painter, &xf, i, info, view);
-    comments::page_after_text(resp, &pcx, view);
-    if tool == QuickTool::Redact && can_modify {
-        crate::redact_ui::after_text(resp, i, info, view);
+    if !frame.env.clear_comments_dialog {
+        comments::page_after_text(resp, &pcx, view);
+        if tool == QuickTool::Redact && can_modify {
+            crate::redact_ui::after_text(resp, i, info, view);
+        }
     }
     if input.area_tool {
         crate::redact_ui::paint(painter, i, view, pointer);
@@ -2518,7 +2524,7 @@ fn track_scroll<T>(ui: &egui::Ui, view: &mut DocView, out: &egui::containers::sc
 /// The hover tip, find bar, size hint and the in-place editors drawn over the pages. Whether the
 /// text editor was finished.
 fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, primary_down: bool, hover_text: Option<(Pos2, String)>) -> bool {
-    let PageEnv { added, author, avail, can_modify, doc, form, info, prefs, t, today, tool, units, unobstructed, .. } = *env;
+    let PageEnv { added, author, avail, can_modify, clear_comments_dialog, doc, form, info, prefs, t, today, tool, units, unobstructed, .. } = *env;
     if let Some((pos, text)) = hover_text {
         // Click-through, as a tooltip is: the pages lose the pointer under anything that isn't.
         let tip = egui::Area::new(egui::Id::unique("canvas-hover")).order(egui::Order::Tooltip).interactable(false);
@@ -2529,8 +2535,11 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
             });
         });
     }
-    find_bar(view, info.pages.len(), avail, ui, t);
     page_size_hint(view, info, units, avail, unobstructed, ui, t);
+    if clear_comments_dialog {
+        return false;
+    }
+    find_bar(view, info.pages.len(), avail, ui, t);
     if tool == QuickTool::EnhanceCamera {
         crate::camera_ui::bar(ui.ctx(), view, avail, t, can_modify);
     }
@@ -2552,6 +2561,26 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
         view.pending_edit = typed;
     }
     text_done
+}
+
+/// Route tool keys together so a comment-clear confirmation owns the whole input phase.
+fn frame_tool_keys(ctx: &egui::Context, view: &mut DocView, env: &PageEnv<'_>, mut tool: QuickTool) -> QuickTool {
+    if env.clear_comments_dialog {
+        return tool;
+    }
+    comments::keys(ctx, view, &mut tool, env.allowed);
+    if env.preparing {
+        crate::prepare::keys(ctx, view);
+    }
+    if env.editing_content {
+        crate::content_ui::keys(ctx, view);
+    }
+    if tool == QuickTool::Link {
+        crate::link_ui::keys(ctx, view);
+    } else {
+        view.links.selected = None;
+    }
+    tool
 }
 
 /// Full screen: the click turns the page unless it did something else first. It waits out the
@@ -2850,6 +2879,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let info = &doc.info;
     // No dialog, close prompt or palette over the page: only then does page input count.
     let modal = app.modal_open();
+    let clear_comments_dialog = app.dialog == Some(crate::Dialog::ClearComments);
     let unobstructed = !modal && !app.palette_open;
     let organize_zoom = app.organize_zoom;
     let view = &mut app.views[index];
@@ -2965,7 +2995,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     } else {
         view.prepare.selected = None;
     }
-    view.objects.prepare(doc, tool == QuickTool::EditText && can_modify, ui.ctx());
+    if !clear_comments_dialog {
+        view.objects.prepare(doc, tool == QuickTool::EditText && can_modify, ui.ctx());
+    }
     view.text_background.prepare(ui.ctx(), doc, view.line_editor.as_ref(), view.content.draft.as_ref(), scale);
     let added = if editing_content { doc.added().to_vec() } else { Vec::new() };
     let doc_links = if tool == QuickTool::Link { doc.links().to_vec() } else { Vec::new() };
@@ -3009,6 +3041,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         key_scroll,
         middle_gesture,
         modal,
+        clear_comments_dialog,
         navigation_enabled,
         paper,
         ppp,
@@ -3085,19 +3118,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let form_notice = view.forms.notice.take();
     // One crop, then back to selecting (as Acrobat does).
     let cropped = view.pending_edit.as_ref().is_some_and(|e| matches!(e, pdfcraft_engine::Edit::SetPageBox { .. }));
-    let mut tool = app.quick_tool;
-    comments::keys(ui.ctx(), view, &mut tool, allowed);
-    if preparing {
-        crate::prepare::keys(ui.ctx(), view);
-    }
-    if editing_content {
-        crate::content_ui::keys(ui.ctx(), view);
-    }
-    if tool == QuickTool::Link {
-        crate::link_ui::keys(ui.ctx(), view);
-    } else {
-        view.links.selected = None;
-    }
+    let mut tool = frame_tool_keys(ui.ctx(), view, &env, app.quick_tool);
     if stamp_placed {
         tool = QuickTool::Select;
     }
@@ -3130,7 +3151,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if tool == QuickTool::Crop && cropped {
         tool = QuickTool::Select;
     }
-    let tool = finish_sign_requests(app, index, tool);
+    let tool = if app.dialog == Some(crate::Dialog::ClearComments) { tool } else { finish_sign_requests(app, index, tool) };
     app.quick_tool = tool;
     let requests = FrameRequests {
         open_props,
@@ -3173,6 +3194,9 @@ struct FrameRequests {
 
 /// Opens the dialogs and runs the app commands the frame asked for.
 fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, requests: FrameRequests) {
+    if app.dialog == Some(crate::Dialog::ClearComments) {
+        return;
+    }
     let FrameRequests {
         open_props,
         field_props,

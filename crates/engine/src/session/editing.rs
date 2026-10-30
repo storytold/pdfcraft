@@ -7,6 +7,24 @@ use super::{
     write_incremental, xfa, xfa_sync_datasets,
 };
 
+/// A clear-only request must contain a clear and must not include another kind of edit.
+fn only_clears_comments(edit: &Edit) -> bool {
+    // Walk iteratively so this additional classification adds no recursive input traversal.
+    let mut pending = vec![std::slice::from_ref(edit).iter()];
+    let mut saw_clear = false;
+    while let Some(edits) = pending.last_mut() {
+        match edits.next() {
+            Some(Edit::ClearComments { .. }) => saw_clear = true,
+            Some(Edit::Batch { edits, .. }) => pending.push(edits.iter()),
+            Some(_) => return false,
+            None => {
+                pending.pop();
+            }
+        }
+    }
+    saw_clear
+}
+
 impl Session {
     /// Apply an edit. On success the previous state is undoable and the view data is refreshed.
     pub fn apply(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
@@ -14,8 +32,13 @@ impl Session {
         let today = self.today();
         let js_off = self.js_off;
         let xfa_time_scale = self.xfa_time_scale.unwrap_or(1);
+        let clear_only = only_clears_comments(&edit);
         let doc = self.doc_mut(id)?;
-        doc.edit_notices.clear();
+        // Legacy notices describe the current edit attempt. A refused or empty comment clear
+        // preserves the previous notices along with its unchanged document and history.
+        if !clear_only {
+            doc.edit_notices.clear();
+        }
         let name = doc.name.clone();
         let is_xfa = doc.info.xfa.is_some();
         let mut scope = scope_of(&edit);
@@ -60,8 +83,13 @@ impl Session {
         cx.renamed_fields.clear();
         cx.redaction_overlays.clear();
         // `next` is a copy: if the edit fails or crashes, the document is unchanged.
-        guard(|| run_edit(&mut next, &edit, &mut cx))
+        let changed = guard(|| run_edit(&mut next, &edit, &mut cx))
             .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
+        // Only the new clear-only operation has a true no-op contract. Legacy empty batches
+        // still publish their ordinary edit attempt, including history and XFA synchronization.
+        if clear_only && !changed {
+            return Ok(());
+        }
         // Redaction removed what its own interpreter places under the marks. The marks were drawn
         // over the page as the renderer shows it, so the renderer has the last word.
         if let Edit::ApplyRedactions { pages } = &edit {
@@ -98,11 +126,12 @@ impl Session {
             ),
             _ => edit.label(),
         };
+        let updates_xfa_data = is_xfa && !clear_only && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content);
         // An XFA form's scripts answer the change: exit and validate scripts of the field, then
         // every calculation (and a reset recalculates). They read the data, so it is brought up
         // to date first.
         if let Some(tpl) = cx.xfa.clone() {
-            if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
+            if updates_xfa_data {
                 let datasets = &mut cx.xfa_datasets;
                 let notes = guard(|| xfa_sync_datasets(&mut next, Some(&tpl), datasets))
                     .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
@@ -141,7 +170,7 @@ impl Session {
         }
         // XFA forms keep their values in the datasets packet too, for Adobe's viewers.
         let mut xfa_notes = Vec::new();
-        if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
+        if updates_xfa_data {
             let (tpl, datasets) = (cx.xfa.as_deref(), &mut cx.xfa_datasets);
             xfa_notes = guard(|| xfa_sync_datasets(&mut next, tpl, datasets))
                 .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
@@ -176,21 +205,16 @@ impl Session {
         let previous = std::mem::replace(&mut editor.cos, next);
         let keys = keys_after(&edit).unwrap_or_else(|| editor.keys.clone());
         let previous_keys = std::mem::replace(&mut editor.keys, keys);
-        editor.undo.push((label, previous, previous_keys, scope));
-        if editor.undo.len() > MAX_UNDO {
-            editor.undo.remove(0);
-        }
-        editor.redo.clear();
+        // Keep the previous state locally until it can be displayed. Publishing history now
+        // would discard redo and possibly evict the oldest undo even if refresh then fails.
         Self::adopt_keys(doc);
         let refreshed = guard(|| if scope == Scope::Content { Self::refresh_content(doc, Some(&edit)) } else { Self::refresh_scoped(doc, scope) })
             .unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
             // Roll back: the edit produced something we cannot display.
-            if let Some(ed) = doc.editor.as_mut()
-                && let Some((_, prev, keys, _)) = ed.undo.pop()
-            {
-                ed.cos = prev;
-                ed.keys = keys;
+            if let Some(ed) = doc.editor.as_mut() {
+                ed.cos = previous;
+                ed.keys = previous_keys;
             }
             Self::adopt_keys(doc);
             if !matches!(guard(|| Self::refresh(doc)), Ok(Ok(()))) {
@@ -198,6 +222,14 @@ impl Session {
             }
             return Err(e);
         }
+        // Refresh preserves the existing editor; still return an error instead of panicking
+        // should a future refresh implementation remove it unexpectedly.
+        let editor = doc.editor.as_mut().ok_or_else(|| EditError::Invalid("the document's editing state was lost during refresh".into()))?;
+        editor.undo.push((label, previous, previous_keys, scope));
+        if editor.undo.len() > MAX_UNDO {
+            editor.undo.remove(0);
+        }
+        editor.redo.clear();
         doc.dirty = true;
         doc.generation += 1;
         doc.edit_notices = notices;

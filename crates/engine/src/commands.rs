@@ -275,6 +275,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("form.fields", "Form fields panel", VIEW, None, Document, "list"),
     c("form.clear", "Clear form", EDIT, None, FillForms, "eraser"),
     c("comment.flatten", "Flatten comments", None, None, HasComments, "layers"),
+    c("comment.clear", "Delete comments…", None, None, Annotate, "trash-2"),
     c("comment.import", "Import comments…", None, None, Modification, "file-input"),
     c("comment.stamp", "Add a stamp", None, None, Annotate, "stamp"),
     c("comment.export", "Export all comments to data file…", None, None, HasComments, "file-output"),

@@ -1,5 +1,7 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M5 #5119: confirmed page/document comment clearing; estimates unchanged)
+
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-19 · **Change:** minor (gap 2: composite fonts with `/ToUnicode /Identity-H` read as Unicode, hayro-interpret patch 44; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -157,6 +159,8 @@ update the numbers.
   non-Identity CMaps. Unknown CMaps and foreign registries remain refused. Synthetic checker
   and read-only automation regressions cover the change; per-glyph validation and the
   separate embedded-font extraction gap remain open. No readiness or backlog re-count.
+- **Workflow addition (2026-10-28, #5119):** [Scoped comment clearing](comment-clearing.md) adds current-page/all-page membership removal with one Undo and atomic lock/permission preflight.
+  This expands the existing delete-comment feature; it does not close the broader correctness backlog or provide secure erasure.
 - **Impact:** every one is a user who lost trust. Crash reports outrank feature work
   (`AGENTS.md` §4).
 - **Estimate:** 45–80 h (≈ 0.2–0.4 h per issue). **Doc:** this file.
