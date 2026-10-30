@@ -1959,6 +1959,7 @@
 	Add bookmark	إضافة إشارة مرجعية
 	Rename bookmark	إعادة تسمية الإشارة المرجعية
 	Delete bookmark	حذف الإشارة المرجعية
+	Delete bookmarks	حذف الإشارات المرجعية
 	Move bookmark	نقل الإشارة المرجعية
 	Set bookmark destination	تعيين وجهة الإشارة المرجعية
 	Add stamp	إضافة ختم
@@ -2123,6 +2124,7 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	اختر صورة PNG أو JPEG (حتى 4 MiB). الشفافية تُحفظ.
 	Couldn't import the signature image: {e}	تعذّر استيراد صورة التوقيع: {e}
 @plural	{n} page|{n} pages	{n} صفحة|{n} صفحة|{n} صفحتان|{n} صفحات|{n} صفحة|{n} صفحة
+@plural	Delete {n} bookmark|Delete {n} bookmarks	حذف {n} إشارة مرجعية|حذف {n} إشارة مرجعية|حذف {n} إشارتين مرجعيتين|حذف {n} إشارات مرجعية|حذف {n} إشارة مرجعية|حذف {n} إشارة مرجعية
 @plural	{n} field|{n} fields	{n} حقل|{n} حقل|{n} حقلان|{n} حقول|{n} حقلًا|{n} حقل
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	يتعارض {n} من أسماء الحقول مع الملفات السابقة وسيتم تغيير أسمائها: {list}|يتعارض اسم {n} حقل مع الملفات السابقة وسيتم تغيير اسمه: {list}|يتعارض اسما {n} حقل مع الملفات السابقة وسيتم تغيير اسميهما: {list}|تتعارض أسماء {n} حقول مع الملفات السابقة وسيتم تغيير أسمائها: {list}|يتعارض {n} اسم حقل مع الملفات السابقة وسيتم تغيير أسمائها: {list}|يتعارض {n} من أسماء الحقول مع الملفات السابقة وسيتم تغيير أسمائها: {list}
 	Create PDF from multiple files…	إنشاء PDF من عدة ملفات…

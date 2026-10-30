@@ -2010,6 +2010,7 @@
 	Coming in milestone	Очаква се в етап
 	Crop page	Изрежи страницата
 	Delete bookmark	Изтрий отметката
+	Delete bookmarks	Изтрий отметките
 	Delete comment	Изтрий коментара
 	Delete content	Изтрий съдържанието
 	Delete document JavaScript	Изтрий JavaScript на документа
@@ -2169,6 +2170,7 @@
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Скриптовете на този формуляр са изключени, защото един от тях се изпълняваше твърде дълго. Отворете документа отново, за да се изпълнят пак.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA формуляр: полетата и XFA данните му се поддържат синхронизирани, така че другите програми за преглед показват попълненото от вас.
 @plural	{n} page|{n} pages	{n} страница|{n} страници
+@plural	Delete {n} bookmark|Delete {n} bookmarks	Изтрий {n} отметка|Изтрий {n} отметки
 @plural	{n} field|{n} fields	{n} поле|{n} полета
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	Име на {n} поле се разминава с по-ранните файлове и ще бъде преименувано: {list}|Имена на {n} полета се разминават с по-ранните файлове и ще бъдат преименувани: {list}
 	Created a PDF from {n} files	Създаден е PDF от {n} файла

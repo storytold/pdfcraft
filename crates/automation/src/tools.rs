@@ -317,9 +317,20 @@ pub fn tools() -> Vec<ToolDef> {
         )),
         t("bookmark_rename", "Rename a bookmark", "Change a bookmark's title. Undoable.")
             .with(schema(json!({ "doc": doc(), "path": path("The bookmark"), "title": { "type": "string", "minLength": 1 } }), &["doc", "path", "title"])),
-        t("bookmark_delete", "Delete a bookmark", "Delete a bookmark and the bookmarks under it. Undoable.")
-            .destructive()
-            .with(schema(json!({ "doc": doc(), "path": path("The bookmark") }), &["doc", "path"])),
+        t(
+            "bookmark_delete",
+            "Delete bookmarks",
+            "Delete a bookmark and the bookmarks under it (path), or several bookmarks at once (paths: a list of paths, each as for path). Give one of the two. Several are deleted in one undoable step; every path is read against the outline as it is before the deletion, so a listed parent takes its listed children with it, and if any path names no bookmark nothing is deleted. At most 10000 paths.",
+        )
+        .destructive()
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "path": path("The bookmark"),
+                "paths": { "type": "array", "items": path("A bookmark"), "minItems": 1, "maxItems": 10000, "description": "Bookmarks to delete in one step." }
+            }),
+            &["doc"],
+        )),
         t("bookmark_move", "Move a bookmark", "Move a bookmark (with its children) under another parent, or within its level. Undoable.").with(schema(
             json!({ "doc": doc(), "path": path("The bookmark to move"), "parent": path("New parent (omit for the top level)"), "position": { "type": "integer", "minimum": 1, "description": "1-based position among the new parent's children, counted after the bookmark is removed (default: last)." } }),
             &["doc", "path"],

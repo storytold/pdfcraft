@@ -1853,6 +1853,7 @@
 	Add bookmark	Yer işareti ekle
 	Rename bookmark	Yer işaretini yeniden adlandır
 	Delete bookmark	Yer işaretini sil
+	Delete bookmarks	Yer işaretlerini sil
 	Move bookmark	Yer işaretini taşı
 	Set bookmark destination	Yer işareti hedefini belirle
 	Add stamp	Damga ekle
@@ -2008,6 +2009,7 @@
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Bu formun komut dosyaları kapatıldı, çünkü biri çok uzun süre çalıştı. Yeniden çalıştırmak için belgeyi yeniden açın.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA formu: Diğer görüntüleyicilerin doldurduklarınızı göstermesi için alanları ve XFA verileri eşitlenir.
 @plural	{n} page|{n} pages	{n} sayfa
+@plural	Delete {n} bookmark|Delete {n} bookmarks	{n} yer işaretini sil
 @plural	{n} field|{n} fields	{n} alan
 	Switch to two-page view first to show the cover page	Kapak sayfasını göstermek için önce iki sayfalı görünüme geçin
 	Page display: {layout}	Sayfa görünümü: {layout}

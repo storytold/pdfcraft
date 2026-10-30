@@ -1972,6 +1972,7 @@
 	Add bookmark	しおりを追加
 	Rename bookmark	しおりの名前を変更
 	Delete bookmark	しおりを削除
+	Delete bookmarks	しおりを削除
 	Move bookmark	しおりを移動
 	Set bookmark destination	しおりの移動先を設定
 	Add stamp	スタンプを追加
@@ -2252,6 +2253,7 @@
 @plural	{n} field|{n} fields	{n} 個のフィールド
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} 個のフィールド名が前のファイルと競合するため、名前が変更されます: {list}
 @plural	{n} page|{n} pages	{n} ページ
+@plural	Delete {n} bookmark|Delete {n} bookmarks	{n} 件のしおりを削除
 signature pad	Type	入力
 	Flatten Fill & Sign when saving	保存時に入力と署名を統合する
 	Text, marks and signatures become part of the page. Other comments stay editable.	テキスト、マーク、署名がページの一部になります。その他のコメントは引き続き編集できます。

@@ -1880,6 +1880,7 @@
 	Add bookmark	Könyvjelző hozzáadása
 	Rename bookmark	Könyvjelző átnevezése
 	Delete bookmark	Könyvjelző törlése
+	Delete bookmarks	Könyvjelzők törlése
 	Move bookmark	Könyvjelző áthelyezése
 	Set bookmark destination	Könyvjelző céljának beállítása
 	Add stamp	Bélyegző hozzáadása
@@ -2035,6 +2036,7 @@
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Az űrlap szkriptjei ki vannak kapcsolva, mert az egyik túl sokáig futott. Nyisd meg újra a dokumentumot, hogy ismét fussanak.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA-űrlap: a mezői és az XFA-adatai együtt maradnak, így más megjelenítők azt mutatják, amit beírsz.
 @plural	{n} page|{n} pages	{n} oldal|{n} oldal
+@plural	Delete {n} bookmark|Delete {n} bookmarks	{n} könyvjelző törlése|{n} könyvjelző törlése
 @plural	{n} field|{n} fields	{n} mező|{n} mező
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} mezőnév ütközik a korábbi fájlokkal, és át lesz nevezve: {list}|{n} mezőnév ütközik a korábbi fájlokkal, és át lesz nevezve: {list}
 	Switch to two-page view first to show the cover page	Előbb válts kétoldalas nézetre a borító megjelenítéséhez

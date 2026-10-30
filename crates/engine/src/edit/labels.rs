@@ -34,6 +34,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Add bookmark",
     "Rename bookmark",
     "Delete bookmark",
+    "Delete bookmarks",
     "Move bookmark",
     "Set bookmark destination",
     "Colour",
@@ -181,6 +182,8 @@ impl Edit {
             Edit::AddBookmark { .. } => Label::of("Add bookmark"),
             Edit::RenameBookmark { .. } => Label::of("Rename bookmark"),
             Edit::DeleteBookmark { .. } => Label::of("Delete bookmark"),
+            Edit::DeleteBookmarks { paths } if paths.len() == 1 => Label::of("Delete bookmark"),
+            Edit::DeleteBookmarks { .. } => Label::of("Delete bookmarks"),
             Edit::MoveBookmark { .. } => Label::of("Move bookmark"),
             Edit::SetBookmarkPage { .. } => Label::of("Set bookmark destination"),
             // The bookmark Style and Colour menus' own names, already said in every language.

@@ -1965,6 +1965,7 @@
 	Add bookmark	Aggiungi segnalibro
 	Rename bookmark	Rinomina segnalibro
 	Delete bookmark	Elimina segnalibro
+	Delete bookmarks	Elimina segnalibri
 	Move bookmark	Sposta segnalibro
 	Set bookmark destination	Imposta destinazione segnalibro
 	Add stamp	Aggiungi timbro
@@ -2175,6 +2176,7 @@
 	Lines +/−	Righe +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} commit, +{added} / −{deleted} righe (Δ {delta}), +{bin_added} / −{bin_deleted} risorse binarie, {first} – {last}
 @plural	{n} page|{n} pages	{n} pagina|{n} pagine
+@plural	Delete {n} bookmark|Delete {n} bookmarks	Elimina {n} segnalibro|Elimina {n} segnalibri
 @plural	{n} field|{n} fields	{n} campo|{n} campi
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} nome di campo è in conflitto con i file precedenti e verrà rinominato: {list}|{n} nomi di campo sono in conflitto con i file precedenti e verranno rinominati: {list}
 

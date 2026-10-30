@@ -190,6 +190,27 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         if info.outline.is_empty() {
                             empty(ui, &t, "bookmark", "This document has no bookmarks.");
                         }
+                        view.bookmark_pick.keep_only_if_current(doc.edit_generation());
+                        // With the pointer over the panel, Delete (or Backspace) deletes the picked
+                        // bookmarks and Escape drops the pick, unless a text field wants the key. An
+                        // inline rename owns Escape (it cancels) whether or not it has focus yet.
+                        if !modal
+                            && bm_rename.is_none()
+                            && !view.bookmark_pick.paths.is_empty()
+                            && !ui.ctx().egui_wants_keyboard_input()
+                            && ui.rect_contains_pointer(ui.clip_rect())
+                        {
+                            if bm_editable
+                                && ui.input_mut(|i| {
+                                    i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
+                                        || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace)
+                                })
+                            {
+                                bm_action = Some(BmAction::DeleteMany(view.bookmark_pick.paths.iter().cloned().collect()));
+                            } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                                view.bookmark_pick.clear();
+                            }
+                        }
                         let mut ctx = OutlineCtx {
                             nav: &mut nav,
                             action: &mut bm_action,
@@ -199,12 +220,19 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             expand: bm_expand,
                             matches: &bookmark_matches,
                             searching: !bookmark_query.is_empty(),
+                            picked: &view.bookmark_pick.paths,
+                            visible: Vec::new(),
+                            click: None,
                         };
                         if ctx.searching && bookmark_matches.is_empty() && !info.outline.is_empty() {
                             ui.label(tl!("No matches."));
                         }
                         for (i, item) in info.outline.iter().enumerate() {
                             outline_item(ui, &t, info, item, &[i], info.outline.len(), &mut ctx);
+                        }
+                        if let Some((path, modifiers)) = ctx.click.take() {
+                            let visible = std::mem::take(&mut ctx.visible);
+                            view.bookmark_pick.click(doc.edit_generation(), &path, modifiers, &visible);
                         }
                         if info.outline_more {
                             ui.label(tl!("Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth."));

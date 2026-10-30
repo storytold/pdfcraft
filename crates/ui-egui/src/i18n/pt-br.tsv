@@ -1883,6 +1883,7 @@
 	Coming in milestone	Previsto para o marco
 	Crop page	Recortar página
 	Delete bookmark	Excluir marcador
+	Delete bookmarks	Excluir marcadores
 	Delete comment	Excluir comentário
 	Delete content	Excluir conteúdo
 	Delete document JavaScript	Excluir JavaScript do documento
@@ -2032,6 +2033,7 @@
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Os scripts deste formulário estão desativados porque um deles demorou demais para ser executado. Reabra o documento para executá-los novamente.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formulário XFA: seus campos e seus dados XFA são mantidos sincronizados, para que outros leitores exibam o que você preencher.
 @plural	{n} page|{n} pages	{n} página|{n} páginas
+@plural	Delete {n} bookmark|Delete {n} bookmarks	Excluir {n} marcador|Excluir {n} marcadores
 @plural	{n} field|{n} fields	{n} campo|{n} campos
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} nome de campo colide com arquivos anteriores e será renomeado: {list}|{n} nomes de campos colidem com arquivos anteriores e serão renomeados: {list}
 	Fit to width scrolling	Ajustar à largura com rolagem

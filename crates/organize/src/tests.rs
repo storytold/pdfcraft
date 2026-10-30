@@ -3767,3 +3767,185 @@ fn bookmark_style_and_colour_are_set_as_the_table_says() {
     let got: Vec<_> = bookmarks(&saved).into_iter().map(|b| (b.color, b.bold, b.italic)).collect();
     assert_eq!(got, [(Some([0.0, 0.0, 1.0]), true, true), (None, false, false)]);
 }
+
+/// Intro, Results[Table, Chart[Legend]], Notes, Index: the outline the multi-delete tests share.
+fn outline_for_multi_delete() -> Document {
+    let mut d = doc_a();
+    crate::add_bookmark(&mut d, &[], 9, "Intro", 0).unwrap();
+    crate::add_bookmark(&mut d, &[], 9, "Results", 1).unwrap();
+    crate::add_bookmark(&mut d, &[1], 9, "Table", 1).unwrap();
+    crate::add_bookmark(&mut d, &[1], 9, "Chart", 2).unwrap();
+    crate::add_bookmark(&mut d, &[1, 1], 9, "Legend", 2).unwrap();
+    crate::add_bookmark(&mut d, &[], 9, "Notes", 2).unwrap();
+    crate::add_bookmark(&mut d, &[], 9, "Index", 2).unwrap();
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Results[Table,Chart[Legend]]", "Notes", "Index"]);
+    d
+}
+
+#[test]
+fn delete_bookmarks_removes_separate_entries_in_one_step() {
+    let mut d = outline_for_multi_delete();
+    // Siblings, a nested one and a top-level one, in no particular order.
+    crate::delete_bookmarks(&mut d, &[vec![3], vec![1, 0], vec![0]]).unwrap();
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Results[Chart[Legend]]", "Notes"]);
+    // The survivors keep their destinations.
+    let notes = crate::bookmarks(&d).into_iter().find(|b| b.title == "Notes").unwrap();
+    assert_eq!(notes.page, Some(2));
+    // Counts are right for what is left, and the outline survives a save and reopen.
+    let root = d.get(d.root().unwrap()).as_dict().unwrap().reference(b"Outlines").unwrap();
+    assert_eq!(count_of(&d, root), Some(4));
+    let back = full_roundtrip(&d);
+    assert_eq!(titles(&crate::bookmarks(&back)), ["Results[Chart[Legend]]", "Notes"]);
+}
+
+#[test]
+fn delete_bookmarks_takes_a_selected_parent_with_its_selected_descendants() {
+    let mut d = outline_for_multi_delete();
+    // The child is listed before and after its parent; the order and the overlap change nothing.
+    crate::delete_bookmarks(&mut d, &[vec![1, 1, 0], vec![1], vec![1, 0], vec![1]]).unwrap();
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Notes", "Index"]);
+    // Only the parent selected: its children go with it.
+    let mut d = outline_for_multi_delete();
+    crate::delete_bookmarks(&mut d, &[vec![1]]).unwrap();
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Notes", "Index"]);
+}
+
+#[test]
+fn delete_bookmarks_can_empty_the_outline_and_one_child_leaves_its_parent() {
+    let mut d = outline_for_multi_delete();
+    crate::delete_bookmarks(&mut d, &[vec![1, 1, 0]]).unwrap();
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Results[Table,Chart]", "Notes", "Index"]);
+    crate::delete_bookmarks(&mut d, &[vec![0], vec![1], vec![2], vec![3]]).unwrap();
+    assert!(crate::bookmarks(&d).is_empty());
+    let back = full_roundtrip(&d);
+    assert!(crate::bookmarks(&back).is_empty());
+}
+
+#[test]
+fn delete_bookmarks_changes_nothing_when_any_path_is_wrong() {
+    let mut d = outline_for_multi_delete();
+    let before = titles(&crate::bookmarks(&d));
+    assert_eq!(crate::delete_bookmarks(&mut d, &[vec![0], vec![9]]), Err(crate::OutlineError::NoSuchBookmark(vec![9])));
+    assert_eq!(crate::delete_bookmarks(&mut d, &[vec![0], vec![]]), Err(crate::OutlineError::NoSuchBookmark(vec![])));
+    assert_eq!(crate::delete_bookmarks(&mut d, &[vec![2, 0]]), Err(crate::OutlineError::NoSuchBookmark(vec![2, 0])));
+    assert_eq!(crate::delete_bookmarks(&mut d, &[]), Err(crate::OutlineError::NoneSelected));
+    assert_eq!(titles(&crate::bookmarks(&d)), before);
+    // A document with no outline at all is an error too, not a panic.
+    let mut bare = doc_a();
+    assert_eq!(crate::delete_bookmarks(&mut bare, &[vec![0]]), Err(crate::OutlineError::NoSuchBookmark(vec![0])));
+}
+
+/// A flat outline of `n` top-level bookmarks, `Item 0` to `Item n-1`, built straight from objects
+/// (adding them one by one lists the outline each time, which is quadratic).
+fn long_flat_outline(n: usize) -> Document {
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 3 0 R >>".into(),
+        "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        format!("<< /Type /Outlines /First 5 0 R /Last {} 0 R /Count {n} >>", 4 + n),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+    ];
+    for k in 0..n {
+        let prev = if k == 0 { String::new() } else { format!(" /Prev {} 0 R", 4 + k) };
+        let next = if k + 1 == n { String::new() } else { format!(" /Next {} 0 R", 6 + k) };
+        objs.push(format!("<< /Title (Item {k}) /Parent 3 0 R{prev}{next} /Dest [4 0 R /Fit] >>"));
+    }
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+#[test]
+fn deleting_many_bookmarks_agrees_with_the_plain_rule_for_any_selection() {
+    // A tree three levels deep: 6 top-level bookmarks, each with 4 children, each with 2 of its own.
+    let build = || {
+        let mut d = doc_a();
+        for a in 0..6 {
+            crate::add_bookmark(&mut d, &[], 99, &format!("a{a}"), 0).unwrap();
+            for b in 0..4 {
+                crate::add_bookmark(&mut d, &[a], 99, &format!("a{a}.b{b}"), 1).unwrap();
+                for c in 0..2 {
+                    crate::add_bookmark(&mut d, &[a, b], 99, &format!("a{a}.b{b}.c{c}"), 2).unwrap();
+                }
+            }
+        }
+        d
+    };
+    let all: Vec<(Vec<usize>, String)> = crate::bookmarks(&build()).into_iter().map(|b| (b.path, b.title)).collect();
+    assert_eq!(all.len(), 6 + 24 + 48);
+    // Deterministic pseudo-random selections: each bookmark is picked about one time in five, a
+    // pick may be repeated, and every tenth selection also names a bookmark that does not exist.
+    let mut state = 0x2545_F491_4F6C_DD1D_u64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    for round in 0..300 {
+        let mut chosen: Vec<Vec<usize>> = Vec::new();
+        for (path, _) in &all {
+            if next() % 5 == 0 {
+                chosen.push(path.clone());
+                if next() % 4 == 0 {
+                    chosen.push(path.clone());
+                }
+            }
+        }
+        // Shuffle: the order of the paths must not matter.
+        for i in (1..chosen.len()).rev() {
+            chosen.swap(i, (next() % (i as u64 + 1)) as usize);
+        }
+        let mut d = build();
+        let before: Vec<String> = all.iter().map(|(_, t)| t.clone()).collect();
+        if round % 10 == 9 {
+            chosen.push(vec![99, 0]);
+            let nothing = crate::delete_bookmarks(&mut d, &chosen);
+            assert_eq!(nothing, Err(crate::OutlineError::NoSuchBookmark(vec![99, 0])), "round {round}");
+            assert_eq!(crate::bookmarks(&d).into_iter().map(|b| b.title).collect::<Vec<_>>(), before, "a bad path changes nothing");
+            continue;
+        }
+        if chosen.is_empty() {
+            assert_eq!(crate::delete_bookmarks(&mut d, &chosen), Err(crate::OutlineError::NoneSelected));
+            continue;
+        }
+        crate::delete_bookmarks(&mut d, &chosen).unwrap();
+        // The rule: what stays is every bookmark with no picked bookmark at or above it.
+        let expected: Vec<String> = all.iter().filter(|(path, _)| !chosen.iter().any(|c| path.starts_with(c))).map(|(_, t)| t.clone()).collect();
+        let got: Vec<String> = crate::bookmarks(&d).into_iter().map(|b| b.title).collect();
+        assert_eq!(got, expected, "round {round}: {chosen:?}");
+        // And what is left is a sound outline: it survives a save and reopen unchanged.
+        let back: Vec<String> = crate::bookmarks(&full_roundtrip(&d)).into_iter().map(|b| b.title).collect();
+        assert_eq!(back, expected, "round {round} after a save");
+    }
+}
+
+#[test]
+fn deleting_thousands_of_bookmarks_from_a_very_long_outline_walks_it_once() {
+    // 6 000 paths into 60 000 siblings: resolving each path by listing the whole chain again is
+    // some 360 million steps; listing it once is 60 000.
+    let n = 60_000;
+    let mut d = long_flat_outline(n);
+    let paths: Vec<Vec<usize>> = (0..n).step_by(10).map(|i| vec![i]).collect();
+    assert_eq!(paths.len(), 6_000);
+    let started = std::time::Instant::now();
+    crate::delete_bookmarks(&mut d, &paths).unwrap();
+    let took = started.elapsed();
+    // The bound is generous for a loaded machine (this takes well under a second), and still far
+    // below the 344 seconds that resolving every path from the start of the chain took.
+    assert!(took.as_secs() < 60, "deleting 6 000 of 60 000 bookmarks took {took:?}");
+    let left = crate::bookmarks(&d);
+    assert_eq!(left.len(), n - 6_000);
+    assert_eq!(left.first().map(|b| b.title.as_str()), Some("Item 1"));
+    assert_eq!(left.get(8).map(|b| b.title.as_str()), Some("Item 9"));
+    assert_eq!(left.get(9).map(|b| b.title.as_str()), Some("Item 11"), "Item 10 is gone");
+}

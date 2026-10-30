@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use super::{DocInfo, Nav, OutlineItem, Rect, Sense, Tokens, icons, pos2, theme, vec2};
 
 /// What the user asked to do with a bookmark (applied after the panel is drawn).
@@ -13,6 +15,8 @@ pub enum BmAction {
     /// Colour the title; black is the default.
     SetColor(Vec<usize>, [f64; 3]),
     Delete(Vec<usize>),
+    /// Every picked bookmark, with what is under it, as one undoable step.
+    DeleteMany(Vec<Vec<usize>>),
     MoveUp(Vec<usize>),
     MoveDown(Vec<usize>),
     /// Make it the last child of the bookmark above it.
@@ -60,6 +64,66 @@ pub(super) struct OutlineCtx<'a> {
     pub(super) expand: Option<usize>,
     pub(super) matches: &'a std::collections::HashSet<Vec<usize>>,
     pub(super) searching: bool,
+    /// The bookmarks picked in this outline.
+    pub(super) picked: &'a BTreeSet<Vec<usize>>,
+    /// The rows drawn this frame, top to bottom: what a ⇧-click ranges over.
+    pub(super) visible: Vec<Vec<usize>>,
+    /// A row clicked this frame, with the modifiers held, for [`BookmarkPick::click`] to act on.
+    pub(super) click: Option<(Vec<usize>, egui::Modifiers)>,
+}
+
+/// The bookmarks picked in the panel (⌘/Ctrl-click, ⇧-click), as paths into the outline they were
+/// picked in. Paths mean nothing once the outline changes (an edit, an undo, another tool), so
+/// the pick remembers the document's edit generation and is dropped when it no longer matches.
+/// What the panel shows can't tell: two bookmarks with the same title and page swap places without
+/// any visible difference.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct BookmarkPick {
+    pub(super) paths: BTreeSet<Vec<usize>>,
+    /// Where a ⇧-click ranges from.
+    anchor: Option<Vec<usize>>,
+    /// The document's `edit_generation` when the pick was made.
+    generation: u64,
+}
+
+impl BookmarkPick {
+    pub(crate) fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Forget the pick unless it was made in the document as it is now (`generation`).
+    pub(super) fn keep_only_if_current(&mut self, generation: u64) {
+        if !self.paths.is_empty() && self.generation != generation {
+            self.clear();
+        }
+    }
+
+    /// A click on `path`: ⇧ picks the rows from the anchor to it, ⌘/Ctrl toggles it, a plain click
+    /// picks only it. `visible` is the rows on screen in order, which a range runs over.
+    pub(super) fn click(&mut self, generation: u64, path: &[usize], m: egui::Modifiers, visible: &[Vec<usize>]) {
+        self.keep_only_if_current(generation);
+        self.generation = generation;
+        if m.shift {
+            let here = visible.iter().position(|p| p == path);
+            let from = self.anchor.as_ref().and_then(|a| visible.iter().position(|p| p == a));
+            match (from, here) {
+                (Some(a), Some(b)) => {
+                    self.paths = visible.get(a.min(b)..=a.max(b)).unwrap_or_default().iter().cloned().collect();
+                    return;
+                }
+                // No anchor on screen: the click starts the pick.
+                _ => self.anchor = None,
+            }
+        }
+        if m.command && !m.shift {
+            if !self.paths.remove(path) {
+                self.paths.insert(path.to_vec());
+            }
+        } else {
+            self.paths = BTreeSet::from([path.to_vec()]);
+        }
+        self.anchor = Some(path.to_vec());
+    }
 }
 
 /// The destination page label gets its own right-aligned column in a bookmark row; drawing
@@ -176,8 +240,10 @@ pub(super) fn outline_item(
         let galley = ui.fonts_mut(|f| f.layout_job(job));
         let h = (galley.size().y + 12.0).max(28.0);
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &item.title));
-        theme::Press::track(ui, &resp).wash(ui, rect, 6, false);
+        let picked = cx.picked.contains(path);
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, picked, &item.title));
+        theme::Press::track(ui, &resp).wash(ui, rect, 6, picked);
+        cx.visible.push(path.to_vec());
         let x0 = rect.left() + indent;
         if !item.children.is_empty() {
             let tri = Rect::from_min_size(pos2(x0, rect.top() + 6.0), vec2(16.0, 16.0));
@@ -194,10 +260,18 @@ pub(super) fn outline_item(
             let pos = pos2(rect.right() - 6.0 - g.size().x, rect.top() + 14.0 - g.size().y / 2.0);
             ui.painter().galley(pos, g, t.text_faint);
         }
-        if theme::hand(resp.clone()).clicked()
-            && let Some(p) = item.page
-        {
-            *cx.nav = Some(Nav::Dest(p, item.view));
+        if theme::hand(resp.clone()).clicked() {
+            // ⌘/Ctrl-click and ⇧-click pick several bookmarks without going anywhere.
+            let m = ui.input(|i| i.modifiers);
+            cx.click = Some((path.to_vec(), m));
+            if !(m.shift || m.command)
+                && let Some(p) = item.page
+            {
+                *cx.nav = Some(Nav::Dest(p, item.view));
+            }
+        } else if resp.secondary_clicked() && !picked {
+            // A bookmark outside the pick becomes the pick, as in the Pages panel.
+            cx.click = Some((path.to_vec(), egui::Modifiers::NONE));
         }
         if resp.double_clicked() && cx.editable {
             *cx.action = Some(BmAction::StartRename(path.to_vec()));
@@ -206,6 +280,8 @@ pub(super) fn outline_item(
             && let Some(&i) = path.last()
         {
             let current = cx.current;
+            // Several picked: Delete takes them all, and what works on one bookmark is off.
+            let several = picked && cx.picked.len() > 1;
             resp.context_menu(|ui| {
                 let mut pick = |ui: &mut egui::Ui, label: &str, enabled: bool, a: BmAction| {
                     if ui.add_enabled(enabled, egui::Button::new(tl!(label))).clicked() {
@@ -213,36 +289,43 @@ pub(super) fn outline_item(
                         ui.close();
                     }
                 };
-                pick(ui, tl!("Rename"), true, BmAction::StartRename(path.to_vec()));
+                pick(ui, tl!("Rename"), !several, BmAction::StartRename(path.to_vec()));
                 let set_page = crate::i18n::fmt(tl!("Set to current page ({n})"), &[("n", &(current + 1).to_string())]);
-                pick(ui, &set_page, true, BmAction::SetToCurrentPage(path.to_vec()));
+                pick(ui, &set_page, !several, BmAction::SetToCurrentPage(path.to_vec()));
                 // The title's style and colour (ISO 32000-2 §12.3.3, Tables 151 and 152).
                 let mut styled = None;
-                ui.menu_button(tl!("Style"), |ui| {
-                    let (mut bold, mut italic) = (item.bold, item.italic);
-                    if ui.add(crate::widgets::checkbox(&mut bold, tl!("Bold"))).clicked() {
-                        styled = Some(BmAction::SetStyle(path.to_vec(), Some(bold), None));
-                    }
-                    if ui.add(crate::widgets::checkbox(&mut italic, tl!("Italic"))).clicked() {
-                        styled = Some(BmAction::SetStyle(path.to_vec(), None, Some(italic)));
-                    }
-                });
-                ui.menu_button(tl!("Colour"), |ui| {
-                    let current = item.color.map_or([0.0; 3], |c| c.map(f64::from));
-                    if let Some(c) = crate::comments::swatch_grid(ui, Some(current)) {
-                        styled = Some(BmAction::SetColor(path.to_vec(), c));
-                    }
+                ui.add_enabled_ui(!several, |ui| {
+                    ui.menu_button(tl!("Style"), |ui| {
+                        let (mut bold, mut italic) = (item.bold, item.italic);
+                        if ui.add(crate::widgets::checkbox(&mut bold, tl!("Bold"))).clicked() {
+                            styled = Some(BmAction::SetStyle(path.to_vec(), Some(bold), None));
+                        }
+                        if ui.add(crate::widgets::checkbox(&mut italic, tl!("Italic"))).clicked() {
+                            styled = Some(BmAction::SetStyle(path.to_vec(), None, Some(italic)));
+                        }
+                    });
+                    ui.menu_button(tl!("Colour"), |ui| {
+                        let current = item.color.map_or([0.0; 3], |c| c.map(f64::from));
+                        if let Some(c) = crate::comments::swatch_grid(ui, Some(current)) {
+                            styled = Some(BmAction::SetColor(path.to_vec(), c));
+                        }
+                    });
                 });
                 if styled.is_some() {
                     ui.close();
                 }
                 ui.separator();
-                pick(ui, tl!("Move up"), i > 0, BmAction::MoveUp(path.to_vec()));
-                pick(ui, tl!("Move down"), i + 1 < siblings, BmAction::MoveDown(path.to_vec()));
-                pick(ui, tl!("Indent"), i > 0, BmAction::Indent(path.to_vec()));
-                pick(ui, tl!("Outdent"), depth > 0, BmAction::Outdent(path.to_vec()));
+                pick(ui, tl!("Move up"), !several && i > 0, BmAction::MoveUp(path.to_vec()));
+                pick(ui, tl!("Move down"), !several && i + 1 < siblings, BmAction::MoveDown(path.to_vec()));
+                pick(ui, tl!("Indent"), !several && i > 0, BmAction::Indent(path.to_vec()));
+                pick(ui, tl!("Outdent"), !several && depth > 0, BmAction::Outdent(path.to_vec()));
                 ui.separator();
-                pick(ui, tl!("Delete"), true, BmAction::Delete(path.to_vec()));
+                if several {
+                    let label = crate::i18n::trn(crate::i18n::current(), cx.picked.len() as u64, "Delete {n} bookmark", "Delete {n} bookmarks");
+                    pick(ui, &label, true, BmAction::DeleteMany(cx.picked.iter().cloned().collect()));
+                } else {
+                    pick(ui, tl!("Delete"), true, BmAction::Delete(path.to_vec()));
+                }
                 if let Some(a) = styled {
                     *cx.action = Some(a);
                 }

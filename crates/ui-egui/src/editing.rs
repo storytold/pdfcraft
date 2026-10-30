@@ -708,6 +708,12 @@ impl PdfCraftApp {
             A::SetStyle(path, bold, italic) => Edit::SetBookmarkStyle { path, bold, italic },
             A::SetColor(path, color) => Edit::SetBookmarkColor { path, color: Some(color) },
             A::Delete(path) => Edit::DeleteBookmark { path },
+            A::DeleteMany(paths) => {
+                if let Some(view) = self.views.get_mut(i) {
+                    view.bookmark_pick.clear();
+                }
+                Edit::DeleteBookmarks { paths }
+            }
             A::MoveUp(path) => {
                 let at = path[path.len() - 1].saturating_sub(1);
                 Edit::MoveBookmark { to_parent: parent_of(&path), from: path, index: at }

@@ -1984,6 +1984,63 @@ fn flat_outline_pdf(n: usize) -> Vec<u8> {
     out
 }
 
+/// The titles of the top-level bookmarks, with their children after them in brackets.
+fn bookmark_titles(a: &mut Automation, doc: u64) -> Vec<String> {
+    fn level(rows: &Value) -> Vec<String> {
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                let title = r["title"].as_str().unwrap();
+                match r["children"].as_array() {
+                    Some(kids) if !kids.is_empty() => format!("{title}[{}]", level(&r["children"]).join(",")),
+                    _ => title.to_string(),
+                }
+            })
+            .collect()
+    }
+    level(&ok(a, "bookmark_list", json!({ "doc": doc }))["bookmarks"])
+}
+
+#[test]
+fn bookmark_delete_takes_several_paths_in_one_undoable_step() {
+    let dir = workdir("bookmarks-many");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (title, page) in [("Intro", 1), ("Body", 2), ("Notes", 2), ("Index", 1)] {
+        ok(&mut a, "bookmark_add", json!({ "doc": doc, "title": title, "page": page }));
+    }
+    ok(&mut a, "bookmark_add", json!({ "doc": doc, "title": "Detail", "page": 2, "parent": [2] }));
+    assert_eq!(bookmark_titles(&mut a, doc), ["Intro", "Body[Detail]", "Notes", "Index"]);
+
+    // A bad path anywhere, a mix of path and paths, and malformed lists all change nothing.
+    let bad = |a: &mut Automation, args: Value| a.call("bookmark_delete", &args).unwrap_err();
+    assert!(matches!(bad(&mut a, json!({ "doc": doc, "paths": [[1], [9]] })), ToolError::Failed(_)));
+    assert!(matches!(bad(&mut a, json!({ "doc": doc, "paths": [[1], [0]] })), ToolError::InvalidArgs(_)), "positions are 1-based");
+    assert!(matches!(bad(&mut a, json!({ "doc": doc, "paths": [[1], []] })), ToolError::InvalidArgs(_)));
+    assert!(matches!(bad(&mut a, json!({ "doc": doc, "paths": [] })), ToolError::InvalidArgs(_)));
+    assert!(matches!(bad(&mut a, json!({ "doc": doc, "paths": [1] })), ToolError::InvalidArgs(_)));
+    assert!(matches!(bad(&mut a, json!({ "doc": doc, "paths": "all" })), ToolError::InvalidArgs(_)));
+    assert!(matches!(bad(&mut a, json!({ "doc": doc, "paths": [[1]], "path": [2] })), ToolError::InvalidArgs(_)));
+    assert!(matches!(bad(&mut a, json!({ "doc": doc })), ToolError::InvalidArgs(_)));
+    assert_eq!(bookmark_titles(&mut a, doc), ["Intro", "Body[Detail]", "Notes", "Index"]);
+
+    // A separate entry, a parent and its own listed child go together.
+    ok(&mut a, "bookmark_delete", json!({ "doc": doc, "paths": [[4], [2, 1], [2]] }));
+    assert_eq!(bookmark_titles(&mut a, doc), ["Intro", "Notes"]);
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(bookmark_titles(&mut a, doc), ["Intro", "Body[Detail]", "Notes", "Index"]);
+    ok(&mut a, "edit_redo", json!({ "doc": doc }));
+    assert_eq!(bookmark_titles(&mut a, doc), ["Intro", "Notes"]);
+
+    // The single-path form still works, and the result survives a save and reopen.
+    ok(&mut a, "bookmark_delete", json!({ "doc": doc, "path": [1] }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "fewer.pdf" }));
+    let mut b = auto(&dir);
+    let re = ok(&mut b, "doc_open", json!({ "path": "fewer.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(bookmark_titles(&mut b, re), ["Notes"]);
+}
+
 #[test]
 fn bookmark_list_pages_reach_bookmarks_past_the_hundred_thousandth() {
     let dir = workdir("bookmarks-large");

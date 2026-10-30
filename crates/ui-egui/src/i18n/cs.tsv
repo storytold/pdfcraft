@@ -2009,6 +2009,7 @@ key	Space	Mezerník
 	Add bookmark	Přidat záložku
 	Rename bookmark	Přejmenovat záložku
 	Delete bookmark	Odstranit záložku
+	Delete bookmarks	Odstranit záložky
 	Move bookmark	Přesunout záložku
 	Set bookmark destination	Nastavit cíl záložky
 	Add stamp	Přidat razítko
@@ -2165,6 +2166,7 @@ key	Space	Mezerník
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formulář XFA: jeho pole a data XFA se udržují ve shodě, takže ostatní prohlížeče zobrazí, co vyplníte.
 	Switch to two-page view first to show the cover page	Titulní stránku zobrazíte, až přepnete na dvoustránkové zobrazení
 @plural	{n} page|{n} pages	{n} stránka|{n} stránky|{n} stránek
+@plural	Delete {n} bookmark|Delete {n} bookmarks	Odstranit {n} záložku|Odstranit {n} záložky|Odstranit {n} záložek
 @plural	{n} field|{n} fields	{n} pole|{n} pole|{n} polí
 	Optimizing… removing user data	Optimalizace… odebírání uživatelských dat
 	Optimizing… image {d} of {t}	Optimalizace… obrázek {d} z {t}

@@ -1974,6 +1974,7 @@ action wizard	Start	Iniciar
 	Add bookmark	Añadir marcador
 	Rename bookmark	Cambiar nombre del marcador
 	Delete bookmark	Eliminar marcador
+	Delete bookmarks	Eliminar marcadores
 	Move bookmark	Mover marcador
 	Set bookmark destination	Definir destino del marcador
 	Add stamp	Añadir sello
@@ -2130,6 +2131,7 @@ action wizard	Start	Iniciar
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Los scripts de este formulario están desactivados porque uno tardó demasiado en ejecutarse. Vuelve a abrir el documento para ejecutarlos de nuevo.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formulario XFA: sus campos y sus datos XFA se mantienen sincronizados, para que otros visores muestren lo que rellenes.
 @plural	{n} page|{n} pages	{n} página|{n} páginas
+@plural	Delete {n} bookmark|Delete {n} bookmarks	Eliminar {n} marcador|Eliminar {n} marcadores
 @plural	{n} field|{n} fields	{n} campo|{n} campos
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} nombre de campo coincide con el de archivos anteriores y se renombrará: {list}|{n} nombres de campo coinciden con los de archivos anteriores y se renombrarán: {list}
 	Switch to two-page view first to show the cover page	Cambia primero a la vista de dos páginas para mostrar la portada

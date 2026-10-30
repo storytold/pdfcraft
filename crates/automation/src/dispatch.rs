@@ -183,10 +183,17 @@ impl Automation {
                 let (path, title) = (a.path("path")?, a.str("title")?.to_string());
                 self.apply(&a, Edit::RenameBookmark { path, title })?
             }
-            "bookmark_delete" => {
-                let path = a.path("path")?;
-                self.apply(&a, Edit::DeleteBookmark { path })?
-            }
+            "bookmark_delete" => match (a.get("path").is_some(), a.get("paths").is_some()) {
+                (true, true) => return Err(ToolError::InvalidArgs("give path or paths, not both".into())),
+                (false, true) => {
+                    let paths = a.bookmark_paths("paths")?;
+                    self.apply(&a, Edit::DeleteBookmarks { paths })?
+                }
+                _ => {
+                    let path = a.path("path")?;
+                    self.apply(&a, Edit::DeleteBookmark { path })?
+                }
+            },
             "bookmark_move" => {
                 let from = a.path("path")?;
                 let to_parent = a.opt_path("parent")?.unwrap_or_default();

@@ -1960,6 +1960,7 @@
 	Add bookmark	Добавить закладку
 	Rename bookmark	Переименовать закладку
 	Delete bookmark	Удалить закладку
+	Delete bookmarks	Удалить закладки
 	Move bookmark	Переместить закладку
 	Set bookmark destination	Задать место назначения закладки
 	Add stamp	Добавить штамп
@@ -2134,6 +2135,7 @@
 	Couldn't import the signature image: {e}	Не удалось импортировать изображение подписи: {e}
 
 @plural	{n} page|{n} pages	{n} страница|{n} страницы|{n} страниц
+@plural	Delete {n} bookmark|Delete {n} bookmarks	Удалить {n} закладку|Удалить {n} закладки|Удалить {n} закладок
 @plural	{n} field|{n} fields	{n} поле|{n} поля|{n} полей
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	Имя {n} поля конфликтует с предыдущими файлами и будет переименовано: {list}|Названия {n} полей конфликтуют с предыдущими файлами и будут переименованы: {list}|Названия {n} полей конфликтуют с предыдущими файлами и будут переименованы: {list}
 	Create PDF from multiple files…	Создать PDF из нескольких файлов…

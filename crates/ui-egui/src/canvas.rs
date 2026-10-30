@@ -408,6 +408,8 @@ pub struct DocView {
     pub(crate) auto_scroll: crate::autoscroll::AutoScroll,
     /// Pages selected in the organize grid or the Pages panel (0-based). Empty means "the current page".
     pub selected: BTreeSet<usize>,
+    /// Bookmarks picked in the Bookmarks panel.
+    pub(crate) bookmark_pick: crate::panels::BookmarkPick,
     pub(crate) organize_range: crate::page_selection_ui::PageSelectionInput,
     /// Anchor for ⇧-click range selection in the organize grid.
     select_anchor: Option<usize>,
@@ -671,6 +673,7 @@ impl DocView {
             wheel_boost_y: Default::default(),
             fling: Default::default(),
             auto_scroll: Default::default(),
+            bookmark_pick: Default::default(),
             selected: BTreeSet::new(),
             select_anchor: None,
             organize_range: Default::default(),

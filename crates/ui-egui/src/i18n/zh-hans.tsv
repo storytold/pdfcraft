@@ -2020,6 +2020,7 @@
 	Coming in milestone	计划推出的里程碑
 	Crop page	裁剪页面
 	Delete bookmark	删除书签
+	Delete bookmarks	删除书签
 	Delete comment	删除注释
 	Delete content	删除内容
 	Delete document JavaScript	删除文档 JavaScript
@@ -2190,6 +2191,7 @@
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	此表单的脚本已关闭，因为其中一个脚本运行时间过长。重新打开文档即可再次运行。
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA 表单：字段与 XFA 数据保持同步，以便其他阅读器显示您填写的内容。
 @plural	{n} page|{n} pages	{n} 页
+@plural	Delete {n} bookmark|Delete {n} bookmarks	删除 {n} 个书签
 @plural	{n} field|{n} fields	{n} 个字段
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} 个字段名与之前的文件冲突，将被重命名: {list}
 	Created a PDF from {n} files	已从 {n} 个文件创建 PDF

@@ -1881,6 +1881,7 @@
 	Add bookmark	Бетбелгі қосу
 	Rename bookmark	Бетбелгі атауын өзгерту
 	Delete bookmark	Бетбелгіні жою
+	Delete bookmarks	Бетбелгілерді жою
 	Move bookmark	Бетбелгіні жылжыту
 	Set bookmark destination	Бетбелгінің баратын орнын орнату
 	Add stamp	Мөр қосу
@@ -2045,6 +2046,7 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	PNG немесе JPEG суретін таңдаңыз (4 MiB-қа дейін). Мөлдірлік сақталады.
 	Couldn't import the signature image: {e}	Қолтаңба суретін импорттау мүмкін болмады: {e}
 @plural	{n} page|{n} pages	{n} бет|{n} бет
+@plural	Delete {n} bookmark|Delete {n} bookmarks	{n} бетбелгіні жою|{n} бетбелгіні жою
 @plural	{n} field|{n} fields	{n} өріс|{n} өріс
 	Create PDF from multiple files…	Бірнеше файлдан PDF жасау…
 	Create separate PDFs…	Бөлек PDF файлдарын жасау…

@@ -3303,8 +3303,8 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = ["bookmark_delete"]
-evidence = ["crates/ui-egui/tests/it/bookmarks.rs::new_rename_reorder_indent_delete_and_undo", "crates/organize/src/tests.rs::bookmarks_add_rename_move_delete", "crates/engine/src/tests.rs::bookmark_edits_show_in_the_viewer_undo_and_save"]
-notes = ""
+evidence = ["crates/ui-egui/tests/it/bookmarks.rs::new_rename_reorder_indent_delete_and_undo", "crates/ui-egui/tests/it/bookmarks.rs::ctrl_click_picks_several_bookmarks_and_delete_removes_them_in_one_undo_step", "crates/ui-egui/tests/it/bookmarks.rs::shift_click_picks_the_rows_between_and_the_menu_deletes_them", "crates/ui-egui/tests/it/bookmarks.rs::a_pick_made_before_the_outline_changed_is_dropped_not_applied_to_other_bookmarks", "crates/organize/src/tests.rs::bookmarks_add_rename_move_delete", "crates/organize/src/tests.rs::delete_bookmarks_changes_nothing_when_any_path_is_wrong", "crates/engine/src/tests.rs::bookmark_edits_show_in_the_viewer_undo_and_save", "crates/engine/src/tests.rs::deleting_several_bookmarks_is_one_undo_step_and_survives_save", "crates/automation/tests/it/automation.rs::bookmark_delete_takes_several_paths_in_one_undoable_step"]
+notes = "Delete removes a bookmark with its children. In the panel, ⌘/Ctrl-click toggles a bookmark in a pick and ⇧-click picks the rows from the last-clicked one to this one; Delete or Backspace (pointer over the panel), or Delete in the right-click menu, removes the whole pick as one undo step, and a picked parent takes its picked children with it. Escape drops the pick, and a pick is dropped when the document is edited, undone or redone (by its edit generation, since look-alike bookmarks can swap places unseen). bookmark_delete takes path or paths (up to 10,000). Missing: drag-to-pick, Select all, arrow-key movement of the pick, and acting on several bookmarks at once other than Delete (move, indent, rename, set destination, style, colour)."
 
 [[feature]]
 id = "organize.bookmark-move"

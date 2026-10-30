@@ -2032,6 +2032,7 @@ comment menu	Edit	Sửa
 	Dashed	Nét đứt
 	Dates	Ngày tháng
 	Delete bookmark	Xóa dấu trang
+	Delete bookmarks	Xóa dấu trang
 	Delete content	Xóa nội dung
 	Delete document JavaScript	Xóa JavaScript của tài liệu
 	Delete field	Xóa trường
@@ -2642,6 +2643,7 @@ certificate	SHA-256 digest	Giá trị băm SHA-256
 	“{name}” has security restrictions. Enter its permissions password to lift them.	“{name}” có các hạn chế bảo mật. Hãy nhập mật khẩu quyền hạn của nó để gỡ bỏ chúng.
 	“{name}” is protected. Enter a password to open it.	“{name}” được bảo vệ. Hãy nhập mật khẩu để mở.
 @plural	{n} page|{n} pages	{n} trang
+@plural	Delete {n} bookmark|Delete {n} bookmarks	Xóa {n} dấu trang
 @plural	{n} file|{n} files	{n} tệp
 @plural	{n} field|{n} fields	{n} trường
 @plural	{n} comment|{n} comments	{n} bình luận

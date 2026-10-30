@@ -22,6 +22,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddBookmark { .. }
         | Edit::RenameBookmark { .. }
         | Edit::DeleteBookmark { .. }
+        | Edit::DeleteBookmarks { .. }
         | Edit::MoveBookmark { .. }
         | Edit::SetBookmarkPage { .. }
         | Edit::SetBookmarkColor { .. }
@@ -285,6 +286,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::RenameBookmark { path, title } => pdfcraft_organize::rename_bookmark(doc, path, title)?,
         Edit::DeleteBookmark { path } => pdfcraft_organize::delete_bookmark(doc, path)?,
+        Edit::DeleteBookmarks { paths } => pdfcraft_organize::delete_bookmarks(doc, paths)?,
         Edit::MoveBookmark { from, to_parent, index } => {
             pdfcraft_organize::move_bookmark(doc, from, to_parent, *index)?;
         }

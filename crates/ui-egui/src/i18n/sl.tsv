@@ -18,6 +18,7 @@
 	Preferences…	Nastavitve…
 	Interface language	Jezik vmesnika
 @plural	{n} page|{n} pages	{n} stran|{n} strani|{n} strani|{n} strani
+@plural	Delete {n} bookmark|Delete {n} bookmarks	Izbriši {n} zaznamek|Izbriši {n} zaznamka|Izbriši {n} zaznamke|Izbriši {n} zaznamkov
 	  · not fixable here	  · tu ni mogoče popraviti
 	 (page {p})	 (stran {p})
 	 (searching… {s} of {p} pages)	 (iskanje… {s} od {p} strani)
@@ -552,6 +553,7 @@
 	Default:	Privzeto:
 	Delete	Izbriši
 	Delete bookmark	Izbriši zaznamek
+	Delete bookmarks	Izbriši zaznamke
 	Delete comment	Izbriši komentar
 	Delete content	Izbriši vsebino
 	Delete document JavaScript	Izbriši JavaScript dokumenta

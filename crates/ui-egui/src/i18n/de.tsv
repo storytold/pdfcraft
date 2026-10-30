@@ -1895,6 +1895,7 @@
 	Add bookmark	Lesezeichen hinzufügen
 	Rename bookmark	Lesezeichen umbenennen
 	Delete bookmark	Lesezeichen löschen
+	Delete bookmarks	Lesezeichen löschen
 	Move bookmark	Lesezeichen verschieben
 	Set bookmark destination	Lesezeichenziel festlegen
 	Add stamp	Stempel hinzufügen
@@ -2050,6 +2051,7 @@
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Die Skripte dieses Formulars sind ausgeschaltet, weil eines zu lange lief. Öffne das Dokument erneut, um sie wieder auszuführen.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA-Formular: Seine Felder und XFA-Daten werden synchron gehalten, damit andere Viewer anzeigen, was du ausfüllst.
 @plural	{n} page|{n} pages	{n} Seite|{n} Seiten
+@plural	Delete {n} bookmark|Delete {n} bookmarks	{n} Lesezeichen löschen|{n} Lesezeichen löschen
 @plural	{n} field|{n} fields	{n} Feld|{n} Felder
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} Feldname kollidiert mit früheren Dateien und wird umbenannt: {list}|{n} Feldnamen kollidieren mit früheren Dateien und werden umbenannt: {list}
 	Switch to two-page view first to show the cover page	Wechsle zuerst zur Doppelseitenansicht, um das Deckblatt anzuzeigen

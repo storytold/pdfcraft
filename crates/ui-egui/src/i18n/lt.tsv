@@ -2044,6 +2044,7 @@ comment menu	Edit	Redaguoti
 	Dashed	Brūkšninis
 	Dates	Datos
 	Delete bookmark	Naikinti žymelę
+	Delete bookmarks	Naikinti žymeles
 	Delete content	Naikinti turinį
 	Delete document JavaScript	Naikinti dokumento „JavaScript“ scenarijų
 	Delete field	Naikinti lauką
@@ -2654,6 +2655,7 @@ certificate	SHA-256 digest	SHA-256 santrauka
 	“{name}” has security restrictions. Enter its permissions password to lift them.	„{name}“ taikomi saugos apribojimai. Norėdami juos panaikinti, įveskite teisių slaptažodį.
 	“{name}” is protected. Enter a password to open it.	„{name}“ apsaugotas. Norėdami jį atverti, įveskite slaptažodį.
 @plural	{n} page|{n} pages	{n} puslapis|{n} puslapiai|{n} puslapių
+@plural	Delete {n} bookmark|Delete {n} bookmarks	Naikinti {n} žymelę|Naikinti {n} žymeles|Naikinti {n} žymelių
 @plural	{n} file|{n} files	{n} failas|{n} failai|{n} failų
 @plural	{n} field|{n} fields	{n} laukas|{n} laukai|{n} laukų
 @plural	{n} comment|{n} comments	{n} komentaras|{n} komentarai|{n} komentarų

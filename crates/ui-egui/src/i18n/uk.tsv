@@ -1957,6 +1957,7 @@
 	Add bookmark	Додати закладку
 	Rename bookmark	Перейменувати закладку
 	Delete bookmark	Видалити закладку
+	Delete bookmarks	Видалити закладки
 	Move bookmark	Перемістити закладку
 	Set bookmark destination	Задати призначення закладки
 	Add stamp	Додати штамп
@@ -2121,6 +2122,7 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Виберіть зображення PNG або JPEG (до 4 МіБ). Прозорість зберігається.
 	Couldn't import the signature image: {e}	Не вдалося імпортувати зображення підпису: {e}
 @plural	{n} page|{n} pages	{n} сторінка|{n} сторінки|{n} сторінок
+@plural	Delete {n} bookmark|Delete {n} bookmarks	Видалити {n} закладку|Видалити {n} закладки|Видалити {n} закладок
 @plural	{n} field|{n} fields	{n} поле|{n} поля|{n} полів
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	Назва {n} поля збігається з попередніми файлами та буде перейменована: {list}|Назви {n} полів збігаються з попередніми файлами та будуть перейменовані: {list}|Назви {n} полів збігаються з попередніми файлами та будуть перейменовані: {list}
 	Create PDF from multiple files…	Створити PDF із кількох файлів…
