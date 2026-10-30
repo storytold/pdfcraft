@@ -11,6 +11,11 @@ use crate::{EditNotice, MarkKind};
 impl Session {
     /// Apply an edit. On success the previous state is undoable and the view data is refreshed.
     pub fn apply(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
+        self.apply_reporting(id, edit).map(|_| ())
+    }
+
+    /// [`Self::apply`], returning what [`Edit::DownsampleImages`] in it did (`None` without one).
+    pub(crate) fn apply_reporting(&mut self, id: DocId, edit: Edit) -> Result<Option<crate::optimize::ScanImages>, EditError> {
         let now = self.now();
         let today = self.today();
         let js_off = self.js_off;
@@ -52,7 +57,7 @@ impl Session {
         };
         // Nothing to bake: leave undo history and the dirty flag alone.
         if matches!(&edit, Edit::FlattenFillSign) && !pdfcraft_annot::has_visible_fill_sign(&editor.cos) {
-            return Ok(());
+            return Ok(None);
         }
         let mut next = editor.cos.clone();
         if !js_off && uses_scripts(&edit) {
@@ -214,7 +219,7 @@ impl Session {
             doc.xfa_scripts_off = true;
             doc.js_output.errors.push(XFA_SCRIPTS_OFF.into());
         }
-        Ok(())
+        Ok(cx.scan_images)
     }
 
     pub fn undo(&mut self, id: DocId) -> Result<Label, EditError> {

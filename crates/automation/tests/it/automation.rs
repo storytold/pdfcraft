@@ -815,6 +815,17 @@ fn file_writing_tools_are_not_read_only() {
     }
 }
 
+/// Recognize text with `output: "downsampled"` throws image detail away, and the multi-file tool
+/// replaces a file of the same name in its folder (the input itself, given the input's folder),
+/// so neither may tell MCP clients it only adds.
+#[test]
+fn ocr_tools_that_can_lose_image_detail_are_destructive() {
+    for name in ["ocr_recognize", "ocr_recognize_files"] {
+        let t = tools().into_iter().find(|t| t.name == name).unwrap();
+        assert!(!t.read_only && t.destructive, "{name} can downsample images but advertises non-destructive");
+    }
+}
+
 #[test]
 fn open_inspect_render_and_find() {
     let dir = workdir("inspect");
@@ -6980,6 +6991,46 @@ fn ocr_tools_make_a_scan_searchable() {
     let again = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "pages": [1] }));
     assert!(again["pages"][0]["skipped"].is_string(), "{again}");
     assert!(matches!(a.call("ocr_recognize", &json!({ "doc": scan, "language": "xx" })), Err(ToolError::InvalidArgs(_))));
+}
+
+/// Searchable Image output: `output: "downsampled"` halves a 600 dpi scan to the 300 dpi asked
+/// for, in place and in the OCR undo step, reports it, and the saved file is smaller; the text is
+/// still found. A bad `output` is refused before anything is read.
+#[test]
+fn ocr_recognize_downsamples_the_scan_when_asked() {
+    let dir = workdir("ocr-downsample");
+    let mut a = auto(&dir);
+    let bad = json!({ "doc": 1, "output": "smaller" });
+    assert!(matches!(a.call("ocr_recognize", &bad), Err(ToolError::InvalidArgs(_))), "refused before the document is looked up");
+    if ok(&mut a, "ocr_status", json!({}))["available"] != true {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    // A 600 dpi scan: the PNG has no resolution of its own, so it is placed by the engine.
+    let mut s = pdfcraft_engine::Session::new();
+    let text = s.create_from_text("t", "Downsampled scans stay searchable").unwrap();
+    let id = s.open("t.pdf", None, text, None).unwrap();
+    let png = pdfcraft_engine::export::Exporter::new(s.get(id).unwrap()).png(0, 600.0).unwrap();
+    let scan = s.create_from_images_with_resolution(&[("scan.png".into(), png)], pdfcraft_engine::ImageResolution::Dpi(600.0)).unwrap();
+    std::fs::write(dir.join("scan.pdf"), scan.as_slice()).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "scan.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "ocr_recognize", json!({ "doc": doc, "dpi": 300, "output": "downsampled" }));
+    assert!(r["pages"][0]["text"].as_str().unwrap().to_lowercase().contains("searchable"), "{r}");
+    assert_eq!(r["images"]["downsampled"], 1, "{r}");
+    assert!(r["images"]["bytes_after"].as_u64().unwrap() < r["images"]["bytes_before"].as_u64().unwrap(), "{r}");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "small.pdf" }));
+    let (before, after) = (scan.len() as u64, std::fs::metadata(dir.join("small.pdf")).unwrap().len());
+    assert!(after * 2 < before, "{before} -> {after}");
+    let small = ok(&mut a, "doc_open", json!({ "path": "small.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "text_find", json!({ "doc": small, "query": "searchable" }))["count"], 1);
+    // Exact (the default) reports nothing about images and leaves them alone.
+    let exact = ok(&mut a, "doc_open", json!({ "path": "scan.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "ocr_recognize", json!({ "doc": exact }));
+    assert!(r.get("images").is_none(), "{r}");
+    // Recognize text in multiple files reports per file.
+    let r = ok(&mut a, "ocr_recognize_files", json!({ "paths": ["scan.pdf"], "folder": "out", "dpi": 300, "output": "downsampled" }));
+    assert_eq!(r["files"][0]["images"]["downsampled"], 1, "{r}");
+    assert!(std::fs::metadata(dir.join("out/scan.pdf")).unwrap().len() * 2 < before);
 }
 
 /// #1028: `skip_text_pages: false` reads a picture on a page that has its own text, and the

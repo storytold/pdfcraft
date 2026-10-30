@@ -8,7 +8,7 @@ use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 use crate::{Compression, ImageSettings, MonoCompression, MonoSettings, OptimizeError, Report, Settings, Stage};
 
 /// Images with more pixels than this are left alone (memory).
-const MAX_PIXELS: u64 = 80_000_000;
+pub(crate) const MAX_PIXELS: u64 = 80_000_000;
 
 /// The resources of a page, inherited from the page tree if the page has none.
 pub(crate) fn page_resources(doc: &Document, page: ObjRef) -> Option<Dict> {
@@ -405,7 +405,7 @@ pub(crate) fn components(doc: &Document, cs: &Object) -> Option<usize> {
     }
 }
 
-fn is_dct(s: &Stream) -> Option<bool> {
+pub(crate) fn is_dct(s: &Stream) -> Option<bool> {
     match s.dict.get(b"Filter") {
         None => Some(false),
         Some(Object::Name(n)) => match n.as_slice() {
@@ -625,7 +625,7 @@ pub(crate) fn resample(px: &[u8], n: usize, w: u32, h: u32, nw: u32, nh: u32) ->
     })
 }
 
-fn jpeg(px: &[u8], n: usize, w: u32, h: u32, quality: u8) -> Option<Vec<u8>> {
+pub(crate) fn jpeg(px: &[u8], n: usize, w: u32, h: u32, quality: u8) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality.clamp(1, 100));
     let ty = if n == 1 { image::ExtendedColorType::L8 } else { image::ExtendedColorType::Rgb8 };

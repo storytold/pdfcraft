@@ -386,6 +386,14 @@ pub enum Edit {
         page: usize,
         words: Vec<pdfcraft_ocr::PlacedWord>,
     },
+    /// Scan & OCR ▸ Recognize text ▸ Searchable Image: resample the images `pages` draw down to
+    /// `ppi` where they are finer, each in place (same object, colour space, compression family
+    /// and masks; see [`pdfcraft_optimize::downsample_page_images`]). Placement is unchanged, so
+    /// an OCR text layer still lines up.
+    DownsampleImages {
+        pages: Vec<usize>,
+        ppi: f64,
+    },
     /// Edit a PDF ▸ Edit text: replace the text of line `line` (from `Document::text_lines`) on
     /// `page`, in its own font when it can show it, else in Helvetica.
     EditTextLine {

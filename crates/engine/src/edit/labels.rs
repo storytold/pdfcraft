@@ -99,6 +99,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Set alternate text",
     "Mark figure as decorative",
     "Recognize text",
+    "Downsample images",
     "Run JavaScript",
     "Run form script",
     "Save as {level}",
@@ -241,6 +242,7 @@ impl Edit {
             Edit::MarkDecorative { .. } => Label::of("Mark figure as decorative"),
             Edit::MarkTagArtifact { .. } => Label::of("Mark content as artifact"),
             Edit::AddOcrText { .. } => Label::of("Recognize text"),
+            Edit::DownsampleImages { .. } => Label::of("Downsample images"),
             Edit::ApplyScriptChanges { .. } => Label::of("Run JavaScript"),
             Edit::XfaEvent { .. } => Label::of("Run form script"),
             // The level is the standard's own name ("PDF/A-2b"), so it goes in as it stands.

@@ -6617,7 +6617,7 @@ status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
 evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable"]
-notes = "Invisible text (Tr 3) fitted to each word box; the image is not deskewed or downsampled (exact mode only)."
+notes = "Invisible text (Tr 3) fitted to each word box. Output Searchable Image (Exact) leaves the image alone; Searchable Image downsamples it to the Downsample to resolution (see ocr.ocr-downsample). The image is not deskewed."
 
 [[feature]]
 id = "ocr.searchable-image-exact"
@@ -6649,11 +6649,11 @@ title = "Downsample images during OCR"
 area = "I"
 tier = "P2"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["ocr.recognize", "ocr.recognize_batch"]
+tools = ["ocr_recognize", "ocr_recognize_files", "doc_batch"]
+evidence = ["crates/engine/src/ocr.rs::searchable_image_downsamples_the_scan_under_the_text", "crates/optimize/tests/scans.rs::a_600_ppi_jpeg_is_halved_in_place_and_keeps_its_kind", "crates/optimize/tests/scans.rs::black_and_white_scans_stay_one_bit_and_lossless", "crates/optimize/tests/scans.rs::only_finer_images_on_the_pages_asked_for_change", "crates/optimize/tests/scans.rs::what_cannot_be_handled_is_left_alone_and_reported"]
+notes = "Recognize Text ▸ Output: Searchable Image (output \"downsampled\" in the tools). After recognition, image XObjects drawn on the pages that were read whose effective resolution (the smallest over every use in the document) is more than 5% above Downsample to are resampled down to it in place, in the same undo step; the save is then a full rewrite, so the file shrinks. Same object and placement (the text layer still lines up), colour space, decode array and masks kept; 8-bit grey/RGB JPEG stays JPEG (quality 85), other 8-bit becomes Flate, 1-bit and image masks stay 1-bit lossless (averaged, thresholded at half). Left alone and reported: CMYK, indexed and other colour spaces, 2/4/16-bit, JPEG 2000, JBIG2, CCITT (not decoded yet), colour-key masks, premultiplied (/Matte) soft masks, signed documents. Inline images are not touched. Not Acrobat's exact resampling or quality choices."
 
 [[feature]]
 id = "ocr.skip-renderable-text"
