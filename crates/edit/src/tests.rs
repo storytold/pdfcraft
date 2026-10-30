@@ -10350,6 +10350,10 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
 #[test]
 fn vietnamese_header_footer_and_watermark_are_drawn_as_type3_and_read_back() {
     let mut doc = fixture();
+    // Page 2 inherits the page tree's shared resource dictionary. Capture its object reference
+    // rather than assuming an object number, which changes whenever the fixture does.
+    let shared_resources =
+        page_list(&doc)[2].dict.get(b"Resources").and_then(Object::as_ref).expect("page 2 inherits the shared resource dictionary");
     let hf = HeaderFooter {
         text: ["Dự án: Cầu Mỹ Thuận".into(), String::new(), "<<Page 1 of n>>".into(), String::new(), String::new(), String::new()],
         ..HeaderFooter::default()
@@ -10368,10 +10372,37 @@ fn vietnamese_header_footer_and_watermark_are_drawn_as_type3_and_read_back() {
     // The marks' text reads back as typed.
     let read: String = text::text_lines(&doc, 0).unwrap().iter().map(|l| l.text.clone()).collect::<Vec<_>>().join("\n");
     assert!(read.contains("Dự án: Cầu Mỹ Thuận") && read.contains("BẢN VẼ HOÀN CÔNG"), "{read}");
-    // The page that shares its fonts with the others keeps them: the glyph fonts go in a copy.
-    let shared = doc.get(pdfcraft_cos::ObjRef::new(6, 0));
-    let shared_fonts = doc.resolve(shared.as_dict().unwrap().get(b"Font").unwrap());
+    // The page tree's shared fonts stay untouched: the glyph fonts go in each page's own copy.
+    let shared_fonts = doc.resolve(doc.get(shared_resources).as_dict().unwrap().get(b"Font").unwrap());
     assert!(!shared_fonts.as_dict().unwrap().contains(b"PCMk0"));
+}
+
+/// A tab is WinAnsi but Inter has no glyph for it. When any box makes the whole header use Inter,
+/// the tab must be normalized in the preview and when applying alike: before, the preview passed
+/// and applying refused the tab only because another box needed Inter.
+#[test]
+fn a_tab_beside_inter_text_is_previewed_and_drawn_as_spaces() {
+    let hf = HeaderFooter {
+        text: [String::new(), String::new(), String::new(), "Page 1\t".into(), String::new(), "Dự án".into()],
+        ..HeaderFooter::default()
+    };
+    assert_eq!(hf.first_undrawable(), None);
+    let mut doc = fixture();
+    add_header_footer(&mut doc, &[0], &hf, false, &cx()).unwrap();
+    let read: String = text::text_lines(&reopen(&doc), 0).unwrap().iter().map(|l| l.text.clone()).collect::<Vec<_>>().join("\n");
+    assert!(read.contains("Page 1    ") && read.contains("Dự án"), "{read:?}");
+
+    let wm = Watermark { text: "Page 1\t\nDự án".into(), ..Watermark::default() };
+    assert_eq!(wm.first_undrawable(), None);
+    add_watermark(&mut fixture(), &[0], &wm, false).unwrap();
+}
+
+/// The text is composed and its spacing characters normalized before either the preview or
+/// applying decides on a face. A lone `\r` keeps its old refusal.
+#[test]
+fn mark_text_is_sanitized_before_it_is_measured() {
+    assert_eq!(crate::mark_font::sanitize_text("A\tB\u{00a0}C\r\nD"), "A    B C\nD");
+    assert_eq!(crate::mark_font::sanitize_text("A\rB"), "A\rB");
 }
 
 /// Decomposed (Telex-typed) Vietnamese is composed first, so the marks never draw loose accents.

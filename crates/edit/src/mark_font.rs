@@ -14,8 +14,28 @@ use super::{Dict, Document, EditError, Object};
 use crate::text::fallback::{MAX_TYPE3_GLYPHS, Type3Glyph, type3_glyph, write_type3_glyphs};
 
 /// `text` composed to NFC.
-pub(crate) fn nfc(text: &str) -> String {
+fn nfc(text: &str) -> String {
     text.nfc().collect()
+}
+
+/// `text` as the marks draw it: composed to NFC, with Windows line endings and the spacing
+/// characters a PDF text show can't position (tab, no-break space) written as plain spaces.
+///
+/// Every mark path runs its text through this before deciding on a face or measuring it, so the
+/// preview and applying see the same characters. A lone `\r` is left alone: it is still refused
+/// (it would be drawn as `?`), as it always was.
+pub(crate) fn sanitize_text(text: &str) -> String {
+    nfc(text).replace("\r\n", "\n").replace('\t', "    ").replace('\u{00a0}', " ")
+}
+
+/// The lines of a whole mark's `texts` (every header and footer box, or the watermark), sanitized.
+pub(crate) fn sanitized_lines<'a>(texts: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut lines = Vec::new();
+    for text in texts {
+        let text = sanitize_text(text);
+        lines.extend(text.lines().map(str::to_owned));
+    }
+    lines
 }
 
 fn inter() -> Option<&'static pdfcraft_fonts::CraftFont> {
@@ -26,22 +46,39 @@ fn drawn_in_inter(c: char) -> bool {
     c != '\r' && pdfcraft_fonts::embedding::covers(pdfcraft_fonts::INTER_REGULAR, &c.to_string())
 }
 
-/// The character of `line` to name when its text is refused: the first one neither the standard
-/// fonts nor Inter can draw. `None` if the line is drawable (in either).
-pub(crate) fn refused_char(line: &str) -> Option<char> {
-    let line = nfc(line);
-    pdfcraft_fonts::first_non_win_ansi(&line)?;
-    // A lone `\r` is refused in either face, as it always was (Inter doesn't draw it).
-    line.chars().find(|c| pdfcraft_fonts::first_non_win_ansi(&c.to_string()).is_some() && !drawn_in_inter(*c))
+/// The character of a whole mark's `lines` to name when its text is refused: the first one the
+/// face that [`MarkFont`] chooses for the block can't draw. `None` if every character is drawable.
+pub(crate) fn refused_char<'a>(lines: impl IntoIterator<Item = &'a str> + Clone) -> Option<char> {
+    // The face is chosen once for the whole block, exactly as `MarkFont` does it. Checking line by
+    // line instead would miss a character the block's face can't draw when another line chose it.
+    let use_inter = needs_inter(lines.clone());
+    lines.into_iter().find_map(|line| {
+        sanitize_text(line).chars().find(|&c| {
+            if c == '\n' {
+                return false;
+            }
+            // A lone `\r` is refused in either face, as it always was (Inter doesn't draw it).
+            if c == '\r' {
+                return true;
+            }
+            if use_inter {
+                // Every character of the block is shown in Inter.
+                !drawn_in_inter(c)
+            } else {
+                // The standard fonts draw WinAnsi; anything else is only drawable in Inter, and
+                // Inter was not chosen because some character of the block is missing from it.
+                !pdfcraft_fonts::win_ansi_encodable(c) && !drawn_in_inter(c)
+            }
+        })
+    })
 }
 
 /// Whether `lines` need Inter: something WinAnsi can't encode, and all of it drawable in Inter.
 pub(crate) fn needs_inter<'a>(lines: impl IntoIterator<Item = &'a str>) -> bool {
     let mut any = false;
     for line in lines {
-        let line = nfc(line);
-        for c in line.chars() {
-            if pdfcraft_fonts::first_non_win_ansi(&c.to_string()).is_some() {
+        for c in sanitize_text(line).chars() {
+            if !pdfcraft_fonts::win_ansi_encodable(c) {
                 if !drawn_in_inter(c) {
                     return false;
                 }
@@ -69,7 +106,7 @@ impl MarkFont {
         let face = inter().ok_or_else(|| EditError::Invalid("the bundled Inter face is missing".into()))?;
         let mut chars: Vec<char> = Vec::new();
         for line in lines {
-            for c in nfc(line).chars() {
+            for c in sanitize_text(line).chars() {
                 if c != '\n' && c != '\r' && !chars.contains(&c) {
                     chars.push(c);
                 }
@@ -97,7 +134,7 @@ impl MarkFont {
 
     /// The width of `line` at `size`.
     pub(crate) fn width(&self, line: &str, size: f64) -> f64 {
-        let w: f64 = nfc(line).chars().map(|c| self.widths.get(&c).copied().unwrap_or(0.0)).sum();
+        let w: f64 = sanitize_text(line).chars().map(|c| self.widths.get(&c).copied().unwrap_or(0.0)).sum();
         if w.is_finite() { w * size } else { 0.0 }
     }
 
@@ -138,7 +175,7 @@ impl MarkFont {
                 out.extend_from_slice(b" Tj\n");
             }
         };
-        for c in nfc(line).chars() {
+        for c in sanitize_text(line).chars() {
             let Some(&(font, code)) = self.codes.get(&c) else { continue };
             match &mut run {
                 Some((f, bytes)) if *f == font => bytes.push(code),

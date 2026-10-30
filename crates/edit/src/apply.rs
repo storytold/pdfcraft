@@ -69,18 +69,23 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
     for &i in pages {
         check_on_top(doc, &all[i])?;
     }
+    // The text as it is drawn: composed, with the spacing characters a PDF can't position (tab,
+    // no-break space) spelled as plain spaces. The face choice and the drawing then share one
+    // source of truth, so a tab can't pass the preview and fail only when another box makes the
+    // whole header use Inter.
+    let texts: [String; 6] = std::array::from_fn(|i| crate::mark_font::sanitize_text(&hf.text[i]));
     // Text WinAnsi can't encode (Vietnamese, Cyrillic, Greek...) is drawn in Inter, as Type 3 glyphs
     // made once for every page. Its outlines are read before anything changes.
     let inter = if hf.needs_unicode() {
         let count = all.len();
-        let mut texts = Vec::new();
+        let mut expanded = Vec::new();
         for k in 0..pages.len() {
             let number = u32::try_from(u64::from(hf.start_number) + k as u64)
                 .map_err(|_| EditError::Invalid("the header page numbers are too large".into()))?;
             let bates = bates0.checked_add(k as u64).ok_or_else(|| EditError::Invalid("the Bates numbers are too large".into()))?;
-            texts.extend(hf.text.iter().map(|t| expand(t, number, count, bates, cx)));
+            expanded.extend(texts.iter().map(|t| expand(t, number, count, bates, cx)));
         }
-        Some(MarkFont::new(doc, texts.iter().map(String::as_str))?)
+        Some(MarkFont::new(doc, expanded.iter().map(String::as_str))?)
     } else {
         None
     };
@@ -116,7 +121,7 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
         }
         .into_bytes();
         let mut underlines = String::new();
-        for (slot, template) in hf.text.iter().enumerate() {
+        for (slot, template) in texts.iter().enumerate() {
             if template.trim().is_empty() {
                 continue;
             }
@@ -176,7 +181,8 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
 fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, replace: bool) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
-    let text = wm.text.trim();
+    let text = crate::mark_font::sanitize_text(&wm.text);
+    let text = text.trim();
     if text.is_empty() && wm.source.is_none() {
         return Err(EditError::Invalid("type the watermark text first".into()));
     }
