@@ -7392,10 +7392,9 @@ fn spaces_after_a_rows_last_word_do_not_move_its_alignment() {
     }
 }
 
-/// A justified row runs from the paragraph's left edge to the margin. Word spacing reaches only
-/// the spaces between its words: the spaces before its first word and after its last are left
-/// out of a stretched row (as before #4199), so the reopened rows stay inside the paragraph and
-/// can be edited again in place.
+/// A justified row retains its leading spaces at their natural width and ends at the margin.
+/// Word spacing stretches only the gaps between words; trailing spaces are omitted. The
+/// reopened text keeps its indent and remains one editable paragraph (#4487).
 #[test]
 fn a_justified_row_keeps_its_indent_and_ends_at_the_margin() {
     let style = text::BlockStyle {
@@ -7410,8 +7409,13 @@ fn a_justified_row_keeps_its_indent_and_ends_at_the_margin() {
         let mut doc = reopen(&doc);
         let lines = text::text_lines(&doc, 0).unwrap();
         let first = lines.iter().find(|l| l.text.contains("Pack")).unwrap();
-        assert_eq!(first.text, "Pack my box with five dozen jugs", "{typed:?}");
+        assert_eq!(first.text, "    Pack my box with five dozen jugs", "{typed:?}");
         assert!((first.rect[0] - 72.0).abs() < 0.5, "{typed:?}: {:?}", first.rect);
+        // The first word starts after four Helvetica spaces at 12 pt (4 × 0.278 × 12), and the
+        // last one ends at the margin.
+        let ink = |f: fn(&[f64; 4]) -> f64| first.ink.iter().map(f).collect::<Vec<_>>();
+        assert!(ink(|i| i[0]).first().is_some_and(|x| (x - (72.0 + 4.0 * 0.278 * 12.0)).abs() < 0.5), "indented: {typed:?}: {:?}", first.ink);
+        assert!(ink(|i| i[2]).last().is_some_and(|x| (x - 372.0).abs() < 0.5), "ends at the margin: {typed:?}: {:?}", first.ink);
         assert!(lines.iter().all(|l| l.rect[0] >= 72.0 - 0.5 && l.rect[2] <= 372.5), "{typed:?}: {lines:?}");
         let blocks = text::text_blocks(&doc, 0).unwrap();
         assert_eq!(blocks.len(), 1, "{typed:?}: {blocks:?}");
@@ -7422,8 +7426,8 @@ fn a_justified_row_keeps_its_indent_and_ends_at_the_margin() {
 }
 
 /// A justified paragraph whose first row was typed with an indent is edited again through the
-/// styled path (a draft with a line break): its rows keep their scaling and stay one paragraph
-/// inside its width.
+/// styled path (a draft with a line break): its rows keep their scaling and their indent (#4487),
+/// and stay one paragraph inside its width.
 #[test]
 fn a_justified_paragraph_with_an_indent_edits_again_at_its_own_scale() {
     let style = text::BlockStyle {
@@ -7436,7 +7440,7 @@ fn a_justified_paragraph_with_an_indent_edits_again_at_its_own_scale() {
     text::rewrite_block(&mut doc, 0, 0, Some("    aaa bbb ccc  \nddd"), &style).unwrap();
     let mut doc = reopen(&doc);
     let draft = text::text_blocks(&doc, 0).unwrap()[0].editor_text.replacen("ccc", "cc", 1);
-    assert!(draft.contains('\n'), "{draft:?}");
+    assert!(draft.contains('\n') && draft.starts_with("    aaa"), "{draft:?}");
     text::replace_block(&mut doc, 0, 0, &draft).unwrap();
     let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
     let scales: Vec<&str> = content.lines().filter(|l| l.ends_with(" Tz")).collect();
@@ -7446,6 +7450,32 @@ fn a_justified_paragraph_with_an_indent_edits_again_at_its_own_scale() {
     assert_eq!(blocks.len(), 1, "{blocks:?}");
     let lines = text::text_lines(&doc, 0).unwrap();
     assert!(lines.iter().all(|l| l.rect[0] >= 72.0 - 0.5 && l.rect[2] <= 372.5), "{lines:?}");
+    assert!(lines.first().is_some_and(|l| l.text.starts_with("    aaa")), "the indent is kept: {lines:?}");
+}
+
+/// The same with character spacing: a row with an indent is measured to its last glyph, which
+/// ends before the spacing after it, so the second edit doesn't scale it (#4487).
+#[test]
+fn a_justified_indent_with_character_spacing_edits_again_at_its_own_scale() {
+    let style = text::BlockStyle {
+        family: Some((added::Family::Helvetica, false, false)),
+        align: Some(added::Align::Justify),
+        width: Some(300.0),
+        ..Default::default()
+    };
+    let mut doc = text_page("BT /F1 12 Tf 2 Tc 72 700 Td (Hello world) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("    aaa bbb ccc  \nddd"), &style).unwrap();
+    let mut doc = reopen(&doc);
+    let written = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(written.lines().any(|l| l == "2 Tc"), "drawn with character spacing: {written}");
+    let draft = text::text_blocks(&doc, 0).unwrap()[0].editor_text.replacen("ccc", "cc", 1);
+    text::replace_block(&mut doc, 0, 0, &draft).unwrap();
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let scales: Vec<&str> = content.lines().filter(|l| l.ends_with(" Tz")).collect();
+    assert!(scales.iter().all(|l| *l == "100 Tz"), "{scales:?}: {content}");
+    let blocks = text::text_blocks(&reopen(&doc), 0).unwrap();
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    assert!(blocks[0].editor_text.starts_with("    aaa"), "{blocks:?}");
 }
 
 /// A paragraph drawn at `0 Tz` has no width to justify into: nothing is divided by it. The
@@ -7556,4 +7586,25 @@ fn q_inside_a_text_object_restores_the_text_matrices() {
         let lines = text::text_lines(&doc, 0).unwrap();
         assert_eq!((lines[0].text.as_str(), lines[0].baseline()), ("Edited", baseline), "{content} after editing");
     }
+}
+
+/// An indent another program drew with the word spacing of its words (`Tw` applies to every
+/// space in the show) keeps it when the paragraph is edited again: the first word stays where it
+/// was. Only an indent drawn without it, as the justified rows of #4487 are, is measured without.
+#[test]
+fn an_indent_drawn_with_word_spacing_keeps_it_when_edited_again() {
+    // Two colours make two runs on the row, which the styled rewrite edits run by run.
+    let mut doc = text_page("BT /F1 12 Tf 4 Tw 72 700 Td (    aaa bbb ) Tj 1 0 0 rg (ccc) Tj ET");
+    let first_ink = |doc: &pdfcraft_cos::Document| {
+        let lines = text::text_lines(doc, 0).unwrap();
+        lines[0].ink.iter().map(|i| i[0]).fold(f64::INFINITY, f64::min)
+    };
+    let before = first_ink(&doc);
+    let draft = text::text_blocks(&doc, 0).unwrap()[0].editor_text.replacen("bbb", "bb", 1);
+    assert!(draft.starts_with("    aaa"), "{draft:?}");
+    text::replace_block(&mut doc, 0, 0, &draft).unwrap();
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let doc = reopen(&doc);
+    let after = first_ink(&doc);
+    assert!((after - before).abs() < 0.5, "the first word moved: {before} -> {after}: {content}");
 }

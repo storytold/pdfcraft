@@ -1974,8 +1974,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.edit_text", "edit.text"]
 tools = ["text_edit", "content_update"]
-evidence = ["crates/edit/src/tests.rs::justify_underline_and_spacing", "crates/edit/src/tests.rs::paragraphs_take_new_formatting", "crates/edit/src/tests.rs::a_one_row_title_keeps_its_centre_when_it_grows_and_when_it_wraps", "crates/ui-egui/tests/it/editing.rs::the_format_panel_restyles_the_paragraph_being_edited"]
-notes = "left, centre, right and justify (word spacing per line, last line left) for existing paragraphs and added text. A centred paragraph is found either from its ragged rows or, for a one row title, from its centre sitting on the page's own centre away from the edge the rest of the text uses, so growing or wrapping it keeps that centre (#2581)"
+evidence = ["crates/edit/src/tests.rs::justify_underline_and_spacing", "crates/edit/src/tests.rs::paragraphs_take_new_formatting", "crates/edit/src/tests.rs::a_one_row_title_keeps_its_centre_when_it_grows_and_when_it_wraps", "crates/edit/src/tests.rs::a_justified_row_keeps_its_indent_and_ends_at_the_margin", "crates/edit/src/tests.rs::a_justified_paragraph_with_an_indent_edits_again_at_its_own_scale", "crates/edit/src/tests.rs::a_justified_indent_with_character_spacing_edits_again_at_its_own_scale", "crates/edit/src/tests.rs::an_indent_drawn_with_word_spacing_keeps_it_when_edited_again", "crates/ui-egui/tests/it/editing.rs::the_format_panel_restyles_the_paragraph_being_edited"]
+notes = "left, centre, right and justify (word spacing per line, last line left) for existing paragraphs and added text. A justified row typed with an indent keeps it, unstretched, and still ends at the margin, through a save, reopen and a second edit (#4487); a re-edited justified paragraph keeps each row's old word spacing rather than justifying again. A centred paragraph is found either from its ragged rows or, for a one row title, from its centre sitting on the page's own centre away from the edge the rest of the text uses, so growing or wrapping it keeps that centre (#2581)"
 
 [[feature]]
 id = "edit.line-paragraph-spacing"

@@ -6,8 +6,8 @@ use super::fallback::{
 use super::interp::{Carry, Origin, TextState, interpret};
 use super::lines::{content_streams, page_dict, rewritten_contents, splice, text_lines};
 use super::{
-    Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, PdfString, Pieces, TextLine, TextSession, group_blocks, is_centred, parse,
-    rewrite_styled_block,
+    Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, PdfString, Pieces, TextLine, TextSession, group_blocks, is_centred, one_show,
+    parse, rewrite_styled_block,
 };
 
 /// What replacing a line did.
@@ -551,26 +551,29 @@ struct LineCursor {
 }
 
 impl LineWriter<'_> {
-    /// Justify: each line but the last fills the width. A stretched line shows only its words, as
-    /// before #4199: word spacing would reach the spaces before its first word and after its
-    /// last, so they are left out. Nothing to stretch over, or a paragraph drawn at `0 Tz`, isn't
-    /// justified.
-    fn stretch(&self, body: &str, last: bool) -> f64 {
+    /// Justify: each line but the last fills the width. Word spacing would reach the spaces
+    /// typed before its first word and after its last too, so a stretched line shows the ones
+    /// after its last word not at all (as before #4199), and the ones before its first at their
+    /// own width, as an indent (#4487): its words fill the width less `indent`. Nothing to
+    /// stretch over, or a paragraph drawn at `0 Tz`, isn't justified.
+    fn stretch(&self, body: &str, indent: f64, last: bool) -> f64 {
         let interior = body.matches(' ').count();
         if self.justify && !last && interior > 0 && self.scale.abs() > 1e-6 {
-            Some((self.width - self.advance.of(body)).max(0.0) / self.k / self.scale / interior as f64).filter(|tw| tw.is_finite()).unwrap_or(0.0)
+            let free = self.width - indent - self.advance.of(body);
+            Some(free / self.k / self.scale / interior as f64).filter(|tw| tw.is_finite() && *tw > 0.0).unwrap_or(0.0)
         } else {
             0.0
         }
     }
 
-    /// The text to show for a line and the width it is aligned on. Other lines show every space
-    /// typed. A left-to-right one is aligned on its width up to its last word; a right-to-left
-    /// one on its whole width, since the spaces typed after its last word are drawn on its left
-    /// and the ones before its first on its right.
-    fn shown<'t>(&self, line: &'t str, body: &'t str, tw: f64) -> (&'t str, f64) {
+    /// The text to show for a line and the width it is aligned on. A stretched line shows its
+    /// indent and its words. Other lines show every space typed. A left-to-right one is aligned
+    /// on its width up to its last word; a right-to-left one on its whole width, since the spaces
+    /// typed after its last word are drawn on its left and the ones before its first on its right.
+    fn shown<'t>(&self, line: &'t str, tw: f64) -> (&'t str, f64) {
         if tw > 0.0 {
-            (body, self.advance.of(body))
+            let indented = line.trim_end_matches(' ');
+            (indented, self.advance.of(indented))
         } else if crate::bidi::rtl_base(line) {
             (line, self.advance.of(line))
         } else {
@@ -583,8 +586,10 @@ impl LineWriter<'_> {
         let n = pdfcraft_content::num;
         let body = line.trim_matches(' ');
         let interior = body.matches(' ').count();
-        let tw = self.stretch(body, last);
-        let (shown, visible) = self.shown(line, body, tw);
+        let indent = self.advance.of(line.get(..line.len().saturating_sub(line.trim_start_matches(' ').len())).unwrap_or(""));
+        let tw = self.stretch(body, indent, last);
+        let (shown, visible) = self.shown(line, tw);
+        // A stretched line fills the width from the left edge.
         let dx = if tw > 0.0 { 0.0 } else { self.alignment.offset(visible) };
         if index > 0 || dx != 0.0 {
             ops.push(Op::new("Td", vec![n(dx - cursor.x), n(if index > 0 { -self.lead } else { 0.0 })]));
@@ -601,18 +606,46 @@ impl LineWriter<'_> {
         }
         // Each wrapped line in typing order; drawn left to right (right-to-left runs reversed).
         let visual = crate::bidi::to_visual(shown);
+        // A stretched line's indent, at the start of a left-to-right line and the end of a
+        // right-to-left one, is shown as its own pieces, unstretched: word spacing on them is
+        // taken back after them, so the text keeps the spaces and the line its indent's width.
+        let words = visual.trim_matches(' ');
+        let before = visual.len().saturating_sub(visual.trim_start_matches(' ').len());
+        let after = visual.len().saturating_sub(visual.trim_end_matches(' ').len());
+        let (head, tail) = if tw + stretch > 0.0 { (" ".repeat(before), " ".repeat(after)) } else { (String::new(), String::new()) };
+        let middle = if tw + stretch > 0.0 { words } else { visual.as_str() };
+        let shows_from = ops.len();
+        self.show_edge(&head, line, tw, cursor, ops)?;
         // Stretched without word spacing: shown up to and including each space, then moved on.
-        let pieces: Vec<&str> = if stretch > 0.0 { visual.split_inclusive(' ').collect() } else { vec![visual.as_str()] };
+        let pieces: Vec<&str> = if stretch > 0.0 { middle.split_inclusive(' ').collect() } else { vec![middle] };
         for piece in pieces {
             self.show_piece(piece, line, tw, cursor, ops)?;
             if stretch > 0.0 && piece.ends_with(' ') {
                 ops.push(Op::new("TJ", vec![Object::Array(vec![n(-1000.0 * stretch / self.size)])]));
             }
         }
+        self.show_edge(&tail, line, tw, cursor, ops)?;
+        if !head.is_empty() || !tail.is_empty() {
+            one_show(ops, shows_from);
+        }
         let tw = tw + stretch;
-        // Underlined to the line's last word, over its stretched gaps.
+        // Underlined from the line's start to its last word, over its stretched gaps.
         let w = (visible + tw * interior as f64 * self.scale * self.k) / self.k;
         Ok((dx, dx + w, -(index as f64) * self.lead - self.size * 0.12))
+    }
+
+    /// Shows the spaces that indent a stretched line at their own width: the word spacing `tw`
+    /// adds to each is taken back after them.
+    fn show_edge(&self, spaces: &str, line: &str, tw: f64, cursor: &mut LineCursor, ops: &mut Vec<Op>) -> Result<(), EditError> {
+        if spaces.is_empty() {
+            return Ok(());
+        }
+        self.show_piece(spaces, line, 0.0, cursor, ops)?;
+        let back = 1000.0 * tw * spaces.len() as f64 / self.size;
+        if tw > 0.0 && back.is_finite() {
+            ops.push(Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(back)])]));
+        }
+        Ok(())
     }
 
     fn show_piece(&self, piece: &str, line: &str, tw: f64, cursor: &mut LineCursor, ops: &mut Vec<Op>) -> Result<(), EditError> {

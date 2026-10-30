@@ -599,3 +599,43 @@ pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, 
     }
     Ok(out)
 }
+
+/// Joins the `Tj` and `TJ` operators from `from` on into one `TJ` (the same marks, ISO 32000-2
+/// §9.4.3), when nothing else is among them. A stretched line's indent is shown with its words so
+/// that reading the line back finds the spaces that indent it, and the one word spacing the line
+/// is stretched with (#4487).
+pub(crate) fn one_show(ops: &mut Vec<Op>, from: usize) {
+    let Some(shows) = ops.get(from..) else { return };
+    if shows.len() < 2 || !shows.iter().all(|op| op.is("Tj") || op.is("TJ")) {
+        return;
+    }
+    let mut array = Vec::new();
+    for op in shows {
+        match op.operands.first() {
+            Some(Object::Array(items)) if op.is("TJ") => array.extend(items.iter().cloned()),
+            Some(shown) => array.push(shown.clone()),
+            None => {}
+        }
+    }
+    ops.truncate(from);
+    ops.push(Op::new("TJ", vec![Object::Array(array)]));
+}
+
+/// Shows the spaces that indent a row at their own width while `word_spacing` is in force: it is
+/// taken back after them where it reaches them, the single-byte code 32 (#4487).
+pub(crate) fn indent_show(
+    metrics: &Metrics,
+    spaces: &str,
+    size: f64,
+    space: f64,
+    char_spacing: f64,
+    word_spacing: f64,
+) -> Result<Vec<Op>, EditError> {
+    let mut out = source_show(metrics, spaces, size, space, char_spacing, 0.0)?;
+    let reached = metrics.encode(spaces).map_or(0, |bytes| metrics.codes(&bytes).iter().filter(|(c, len)| metrics.is_space(*c, *len)).count());
+    let back = 1000.0 * word_spacing * reached as f64 / size;
+    if reached > 0 && back.is_finite() && back != 0.0 {
+        out.push(Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(back)])]));
+    }
+    Ok(out)
+}

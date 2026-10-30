@@ -46,8 +46,9 @@ pub use editor::{TextEditLayout, TextEditorFont, register_text_font, text_edit_l
 #[cfg(test)]
 pub(crate) use fallback::SOURCE_SPACE_CALLS;
 use fallback::{
-    MAX_TYPE3_GLYPHS, Type3Glyph, fallback_face, needs_type3, no_fallback_font, no_glyph_for, same_base_font, same_font, source_encodes,
-    source_family, source_program, source_show, source_space, source_width, strip_subset_tag, type3_faces, type3_glyph, write_type3_glyphs,
+    MAX_TYPE3_GLYPHS, Type3Glyph, fallback_face, indent_show, needs_type3, no_fallback_font, no_glyph_for, one_show, same_base_font, same_font,
+    source_encodes, source_family, source_program, source_show, source_space, source_width, strip_subset_tag, type3_faces, type3_glyph,
+    write_type3_glyphs,
 };
 #[cfg(test)]
 use fallback::{add_type3_font, is_type3_fallback};

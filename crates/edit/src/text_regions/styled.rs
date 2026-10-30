@@ -1,9 +1,9 @@
 use super::grouping::{across, is_centred, row_rect};
 use super::{
     BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
-    RangeStyle, TextBlock, TextLine, Type3Glyph, coincident_ops, content_streams, fallback_face, japanese_glyph_from, needs_type3, no_fallback_font,
-    no_glyph_for, page_dict, reveal_ops, rewritten_contents, source_encodes, source_family, source_program, source_show, source_space, source_width,
-    splice, type3_faces, type3_glyph, write_type3_glyphs,
+    RangeStyle, TextBlock, TextLine, Type3Glyph, coincident_ops, content_streams, fallback_face, indent_show, japanese_glyph_from, needs_type3,
+    no_fallback_font, no_glyph_for, one_show, page_dict, reveal_ops, rewritten_contents, source_encodes, source_family, source_program, source_show,
+    source_space, source_width, splice, type3_faces, type3_glyph, write_type3_glyphs,
 };
 
 // The draft is capped at 4 MiB; also bound the outline data prepared across all fallback faces.
@@ -232,6 +232,52 @@ struct StyledLines<'a> {
 type StyledChar = (char, usize, String);
 type StyledRows = Vec<Vec<StyledChar>>;
 type RowRanges = Vec<std::ops::Range<usize>>;
+/// The spaces a row starts with: its indent. They are measured and drawn without word spacing,
+/// as a justified row draws them (#4487), so a stretched row's word spacing doesn't widen them.
+fn indent_len(row: &[StyledChar]) -> usize {
+    row.iter().take_while(|c| c.0 == ' ').count()
+}
+
+/// Whether characters `a` and `b` of `row`, whose first `indent` characters indent it, are drawn
+/// in one run: the same source and font, and both in the indent or both out of it.
+fn same_run(row: &[StyledChar], indent: usize, a: usize, b: usize) -> bool {
+    match (row.get(a), row.get(b)) {
+        (Some(x), Some(y)) => x.1 == y.1 && x.2 == y.2 && (a < indent) == (b < indent),
+        _ => false,
+    }
+}
+
+/// Each row's width: its indent without word spacing, the rest with it.
+fn row_widths(rows: &[Vec<StyledChar>], measure: impl Fn(&[StyledChar], bool) -> Result<f64, EditError>) -> Result<Vec<f64>, EditError> {
+    rows.iter()
+        .map(|row| {
+            let (indent, rest) = row.split_at(indent_len(row));
+            Ok(measure(indent, true)? + measure(rest, false)?)
+        })
+        .collect()
+}
+
+/// Whether the run of `row` from `pos` to `end`, its indent, is drawn with the run after it: the
+/// same source and font, and neither shaped.
+fn carries_indent(row: &[StyledChar], pos: usize, end: usize, shaped: impl Fn(usize) -> bool) -> bool {
+    !shaped(pos) && !shaped(end) && matches!((row.get(pos), row.get(end)), (Some(a), Some(b)) if a.1 == b.1 && a.2 == b.2)
+}
+
+/// Shows `string` in a run that isn't shaped, after the row's `indent` carried into it, as one
+/// text-showing operator; `spacing` is the character and word spacing in force. A `bare` indent
+/// is drawn without the word spacing ([`bare_indents`]), any other with it.
+fn plain_show(m: &Metrics, indent: Option<(&str, bool)>, string: &str, size: f64, space: f64, spacing: (f64, f64)) -> Result<Vec<Op>, EditError> {
+    let (char_spacing, word_spacing) = spacing;
+    let Some((indent, bare)) = indent else { return source_show(m, string, size, space, char_spacing, word_spacing) };
+    if !bare {
+        return source_show(m, &format!("{indent}{string}"), size, space, char_spacing, word_spacing);
+    }
+    let mut ops = indent_show(m, indent, size, space, char_spacing, word_spacing)?;
+    ops.extend(source_show(m, string, size, space, char_spacing, word_spacing)?);
+    one_show(&mut ops, 0);
+    Ok(ops)
+}
+
 type ShapedRunCache = HashMap<(usize, usize), (Vec<u8>, pdfcraft_fonts::source_shaping::ShapedRun, String)>;
 
 struct ShapedRows {
@@ -244,19 +290,20 @@ fn prepare_shaped_rows(
     fonts: &Dict,
     rows: &[Vec<StyledChar>],
     kept: &[bool],
-    advance: impl Fn(&StyledChar) -> f64,
+    advance: impl Fn(&StyledChar, bool) -> f64,
 ) -> Result<ShapedRows, EditError> {
     let mut runs = HashMap::new();
     let mut advances = HashMap::new();
     for (row_index, row) in rows.iter().enumerate().filter(|(index, _)| !kept.get(*index).copied().unwrap_or(false)) {
         let mut at = 0;
+        let indent = indent_len(row);
         while let Some(item) = row.get(at) {
             let mut end = at + 1;
-            while row.get(end).is_some_and(|next| next.1 == item.1 && next.2 == item.2) {
+            while same_run(row, indent, at, end) {
                 end += 1;
             }
             let segment = row.get(at..end).unwrap_or_default();
-            advances.insert((row_index, at), segment.iter().map(&advance).sum::<f64>());
+            advances.insert((row_index, at), segment.iter().map(|c| advance(c, at < indent)).sum::<f64>());
             let text: String = segment.iter().map(|character| character.0).collect();
             if let Some((bytes, shaped, family)) = shape_source(doc, fonts, &item.2, &text)? {
                 runs.insert((row_index, at), (bytes, shaped, family));
@@ -292,6 +339,36 @@ fn validate_contextual_rows(rows: &[Vec<StyledChar>], kept: &[bool]) -> Result<(
     Ok(())
 }
 
+/// The source lines whose indent, the spaces they start with, was drawn without their word
+/// spacing, as a justified row's is (#4487): the indent's width, from the line's start to its
+/// first ink, is nearer the spaces without `Tw` than with it. Another program's indent drawn in
+/// one show with its words takes their `Tw`, and keeps it when edited again. Lines that start
+/// with no spaces, or have no word spacing, are in the set too: either way draws them the same.
+fn bare_indents(
+    lines: &[TextLine],
+    metrics: &std::collections::BTreeMap<String, Metrics>,
+    space_of: impl Fn(&str, &Metrics) -> f64,
+) -> std::collections::HashSet<usize> {
+    let bare = |source: &TextLine| {
+        let spaces: String = source.text.chars().take_while(|c| *c == ' ').collect();
+        let word_spacing = source.origin.state.word_spacing;
+        if spaces.is_empty() || word_spacing == 0.0 {
+            return true;
+        }
+        let Some(m) = metrics.get(&source.font) else { return false };
+        let ink = source.ink.iter().map(|i| i[0]).fold(f64::INFINITY, f64::min);
+        if !ink.is_finite() {
+            return false;
+        }
+        let size = source.origin.state.font.as_ref().map_or(1.0, |(_, size)| *size);
+        let factor = source.origin.state.scale * across(source);
+        let width = |ws: f64| source_width(m, &spaces, size, space_of(&source.font, m), source.origin.state.char_spacing, ws) * factor;
+        let drawn = ink - source.rect[0];
+        (drawn - width(0.0)).abs() <= (drawn - width(word_spacing)).abs()
+    };
+    lines.iter().enumerate().filter(|(_, source)| bare(source)).map(|(index, _)| index).collect()
+}
+
 fn calibration_factors(
     lines: &[TextLine],
     metrics: &std::collections::BTreeMap<String, Metrics>,
@@ -302,18 +379,35 @@ fn calibration_factors(
     let mut calibration = HashMap::new();
     for (index, source) in lines.iter().enumerate() {
         if let Some(metrics) = metrics.get(&source.font) {
-            let nominal = source_width(
+            // A row with spaces at its edges, such as a justified row's indent (#4487), is
+            // measured over its words alone: from its first word's ink to its last's, which ends
+            // before the character spacing after the last glyph. The spaces there may be drawn
+            // without the word spacing of the rest, taken back by `TJ`.
+            let words = source.text.trim_matches(' ');
+            let inked = (words.len() != source.text.len())
+                .then(|| {
+                    let x0 = source.ink.iter().map(|i| i[0]).fold(f64::INFINITY, f64::min);
+                    let x1 = source.ink.iter().map(|i| i[2]).fold(f64::NEG_INFINITY, f64::max);
+                    (x1 - x0).is_finite().then_some(x1 - x0)
+                })
+                .flatten();
+            let (text, measured, trailing) = match inked {
+                Some(width) => (words, width, source.origin.state.char_spacing),
+                None => (source.text.as_str(), source.rect[2] - source.rect[0], 0.0),
+            };
+            let nominal = (source_width(
                 metrics,
-                &source.text,
+                text,
                 source.origin.state.font.as_ref().map_or(1.0, |(_, size)| *size),
                 space_of(&source.font, metrics),
                 source.origin.state.char_spacing,
                 source.origin.state.word_spacing,
-            ) * source.origin.state.scale
+            ) - trailing)
+                * source.origin.state.scale
                 * across(source);
             let changed_face =
                 style.resource.is_some() || overrides.get(&index).is_some_and(|range| range.family.is_some() || range.resource.is_some());
-            let factor = if nominal > 0.0 && !changed_face { ((source.rect[2] - source.rect[0]) / nominal).clamp(0.5, 2.0) } else { 1.0 };
+            let factor = if nominal > 0.0 && !changed_face { (measured / nominal).clamp(0.5, 2.0) } else { 1.0 };
             calibration.insert(index, factor);
         }
     }
@@ -404,13 +498,15 @@ fn paragraph_geometry(doc: &Document, page: &pdfcraft_model::Page, block: &TextB
 fn wrap_styled_rows(
     chars: &[StyledChar],
     width: f64,
-    measure: impl Fn(&[StyledChar]) -> Result<f64, EditError>,
+    measure: impl Fn(&[StyledChar], bool) -> Result<f64, EditError>,
 ) -> Result<(StyledRows, RowRanges), EditError> {
     let mut rows: Vec<Vec<StyledChar>> = Vec::new();
     let mut row_ranges = Vec::new();
     let mut row_start = 0;
     let mut row = Vec::new();
     let mut row_width = 0.0;
+    // Whether the row has a word yet: the spaces before its first one indent it.
+    let mut worded = false;
     let mut at = 0;
     while at < chars.len() {
         let Some(item) = chars.get(at) else { break };
@@ -422,6 +518,7 @@ fn wrap_styled_rows(
             row_ranges.push(row_start..row_start + row.len());
             rows.push(std::mem::take(&mut row));
             row_width = 0.0;
+            worded = false;
             at += 1;
             row_start = at;
             continue;
@@ -437,7 +534,8 @@ fn wrap_styled_rows(
             }
         }
         let word = chars.get(at..end).unwrap_or_default();
-        let word_width = measure(word)?;
+        // A space before the row's first word indents it.
+        let word_width = measure(word, item.0 == ' ' && !worded)?;
         if !row.is_empty() && !item.0.is_whitespace() && row_width + word_width > width + 0.5 {
             while row.last().is_some_and(|c: &StyledChar| c.0.is_whitespace()) {
                 row.pop();
@@ -449,6 +547,7 @@ fn wrap_styled_rows(
         }
         row.extend_from_slice(word);
         row_width += word_width;
+        worded |= item.0 != ' ';
         at = end;
     }
     if !row.is_empty() {
@@ -713,7 +812,10 @@ pub(crate) fn rewrite_styled_block(
         w
     };
     let calibration = calibration_factors(lines, &metrics, style, &overrides, space_of);
-    let advance = |item: &(char, usize, String)| -> f64 {
+    let bare = bare_indents(lines, &metrics, space_of);
+    // `indent`: the character is in its row's indent, drawn without word spacing where its source
+    // line drew it so.
+    let advance = |item: &(char, usize, String), indent: bool| -> f64 {
         let source = lines.get(item.1).unwrap_or(first);
         let Some(m) = metrics.get(&item.2) else { return 0.0 };
         source_width(
@@ -726,12 +828,12 @@ pub(crate) fn rewrite_styled_block(
                 .and_then(|r| r.char_spacing)
                 .or(style.char_spacing)
                 .map_or(source.origin.state.char_spacing, |c| c / source.origin.k.max(1e-6)),
-            source.origin.state.word_spacing,
+            if indent && bare.contains(&item.1) { 0.0 } else { source.origin.state.word_spacing },
         ) * overrides.get(&item.1).and_then(|r| r.scale).or(style.scale).map_or(source.origin.state.scale, |s| (s / 100.0).clamp(0.1, 10.0))
             * across(source)
             * calibration.get(&item.1).copied().unwrap_or(1.0)
     };
-    let measure = |items: &[(char, usize, String)]| -> Result<f64, EditError> {
+    let measure = |items: &[(char, usize, String)], indent: bool| -> Result<f64, EditError> {
         let mut width = 0.0;
         let mut at = 0;
         while let Some(item) = items.get(at) {
@@ -752,11 +854,11 @@ pub(crate) fn rewrite_styled_block(
                     .map_or(source.origin.state.char_spacing, |s| s / source.origin.k.max(1e-6));
                 width += (shaped.advance * size_of(source, item.1)
                     + spacing * string.chars().count() as f64
-                    + source.origin.state.word_spacing * string.matches(' ').count() as f64)
+                    + if indent && bare.contains(&item.1) { 0.0 } else { source.origin.state.word_spacing * string.matches(' ').count() as f64 })
                     * scale
                     * source.origin.k;
             } else {
-                width += segment.iter().map(&advance).sum::<f64>();
+                width += segment.iter().map(|c| advance(c, indent)).sum::<f64>();
             }
             at = end;
         }
@@ -784,7 +886,7 @@ pub(crate) fn rewrite_styled_block(
     // What is in force where the rewrite is drawn, and what the text after it expects.
     let after = if split { &o.state } else { &o.bt_state };
     validate_contextual_rows(&rows, &kept)?;
-    let measured: Vec<_> = rows.iter().map(|row| measure(row)).collect::<Result<_, _>>()?;
+    let measured = row_widths(&rows, measure)?;
     let shaped = prepare_shaped_rows(doc, &fonts, &rows, &kept, advance)?;
     let ShapedRows { runs: shaped_runs, advances: segment_advances } = shaped;
     let glyph_resources = embed_shaped_resources(doc, &mut fonts, &shaped_runs)?;
@@ -835,11 +937,14 @@ pub(crate) fn rewrite_styled_block(
                 _ => 0.0,
             };
         let mut pos = 0;
+        let indent = indent_len(row);
+        // A row's indent waiting to be drawn with the words after it.
+        let mut carried: Option<(String, f64, bool)> = None;
         while pos < row.len() {
             let Some(item) = row.get(pos) else { break };
             let source = lines.get(item.1).unwrap_or(first);
             let mut end = pos + 1;
-            while row.get(end).is_some_and(|other| other.1 == item.1 && other.2 == item.2) {
+            while same_run(row, indent, pos, end) {
                 end += 1;
             }
             let segment = row.get(pos..end).unwrap_or_default();
@@ -847,6 +952,9 @@ pub(crate) fn rewrite_styled_block(
             let m = metrics.get(&item.2).ok_or_else(|| EditError::Invalid("the paragraph font is missing".into()))?;
             let mut state = source.origin.state.clone();
             state.font = Some((item.2.clone(), size_of(source, item.1)));
+            if pos < indent && bare.contains(&item.1) {
+                state.word_spacing = 0.0;
+            }
             if let Some(c) = overrides.get(&item.1).and_then(|r| r.char_spacing).or(style.char_spacing) {
                 state.char_spacing = c / source.origin.k.max(1e-6);
             }
@@ -865,6 +973,14 @@ pub(crate) fn rewrite_styled_block(
             tm[4] += ax;
             tm[5] += ay;
             let mut segment_width = segment_advances.get(&(row_index, pos)).copied().unwrap_or(0.0);
+            // A row's indent is drawn in the text object of the words after it, at their word
+            // spacing taken back, so the row reads back as one line that starts with its indent
+            // and keeps the word spacing it is stretched with (#4487).
+            if pos < indent && carried.is_none() && carries_indent(row, pos, end, |at| shaped_runs.contains_key(&(row_index, at))) {
+                carried = Some((string, segment_width, bare.contains(&item.1)));
+                pos = end;
+                continue;
+            }
             // Each run in its own graphics state, restating what its source set inside its text
             // object (`gs`, stroke, line width, `Tr`; #3508/#3509) from the state the rewrite is
             // drawn in: a `gs` has no inverse, so one run's ExtGState would stay for the next.
@@ -935,13 +1051,17 @@ pub(crate) fn rewrite_styled_block(
                 block_ops.push(Op::new("BT", vec![]));
                 block_ops.extend(state.ops());
                 block_ops.push(Op::new("Tm", tm.iter().map(|v| n(*v)).collect()));
-                block_ops.extend(source_show(
+                let space = spaces.borrow().get(&item.2).copied().unwrap_or_else(|| source_space(doc, &fonts, m));
+                let indented = carried.take();
+                segment_width += indented.as_ref().map_or(0.0, |(_, width, _)| *width);
+                let spacing = (state.char_spacing, state.word_spacing);
+                block_ops.extend(plain_show(
                     m,
+                    indented.as_ref().map(|(indent, _, bare)| (indent.as_str(), *bare)),
                     &string,
                     size_of(source, item.1),
-                    spaces.borrow().get(&item.2).copied().unwrap_or_else(|| source_space(doc, &fonts, m)),
-                    state.char_spacing,
-                    state.word_spacing,
+                    space,
+                    spacing,
                 )?);
                 block_ops.push(Op::new("ET", vec![]));
             }
