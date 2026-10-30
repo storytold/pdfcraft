@@ -3835,8 +3835,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.cloud"]
 tools = ["comment_add"]
-evidence = ["crates/annot/src/tests.rs::polygons_clouds_connected_lines_callouts_and_carets_are_drawn", "crates/annot/src/tests.rs::cloud_paths_bulge_outwards_either_way_round", "crates/ui-egui/tests/it/comments.rs::polygons_clouds_connected_lines_callouts_and_inserted_text", "crates/automation/tests/it/automation.rs::drawing_comments_through_tools"]
-notes = "polygon with a cloudy border (/BE /S /C, /IT /PolygonCloud)"
+evidence = ["crates/annot/src/tests.rs::polygons_clouds_connected_lines_callouts_and_carets_are_drawn", "crates/annot/src/tests.rs::cloud_paths_bulge_outwards_either_way_round", "crates/ui-egui/tests/it/comments.rs::polygons_clouds_connected_lines_callouts_and_inserted_text", "crates/automation/tests/it/automation.rs::drawing_comments_through_tools", "crates/annot/src/tests.rs::cloudy_borders_are_drawn_on_squares_circles_polygons_and_text_boxes", "crates/annot/src/tests.rs::a_cloudy_square_follows_rd_left_top_right_bottom", "crates/annot/src/tests.rs::plain_squares_and_circles_are_drawn_inside_rect_less_rd"]
+notes = "polygon with a cloudy border (/BE /S /C, /IT /PolygonCloud). Cloudy borders other PDFs carry are drawn too (ISO 32000-2 Table 169): on squares, circles and text boxes as well as polygons, with the /BS width and dashes, inside /Rect less /RD (left, top, right, bottom), where plain squares and circles without an appearance are drawn too (Table 180); /I defaults to 0, which draws the border plain. Not yet: a cloudy callout keeps its own appearance only, and the bump size is PdfCraft's own (the standard leaves it open)."
 
 [[feature]]
 id = "comment.area-highlight"

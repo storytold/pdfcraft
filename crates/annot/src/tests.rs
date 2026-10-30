@@ -2194,3 +2194,230 @@ fn degenerate_and_absurd_leader_and_caption_values_do_not_panic() {
     assert!(long.contains(&format!("({}) Tj", "w".repeat(256))), "cut to 256");
     assert!(!long.contains(&"w".repeat(257)));
 }
+
+/// A comment's built appearance for the dictionary `body` (no `/AP`), as text, or `None` when
+/// PdfCraft can't draw it.
+fn built(body: &str) -> Option<String> {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 600] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        body.as_bytes(),
+    ]);
+    let d = list(&doc, 0).into_iter().next().unwrap();
+    crate::appearance::build(&d).map(|s| String::from_utf8_lossy(&s.decoded().unwrap()).into_owned())
+}
+
+/// The x and y range a drawing's path covers: its points, and each curve's middle (a curve's
+/// control points lie outside it, so they aren't counted).
+fn extent(ops: &str) -> [f64; 4] {
+    let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    let mut at = (0.0, 0.0);
+    let add = |p: (f64, f64), b: &mut [f64; 4]| *b = [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)];
+    for line in ops.lines() {
+        let t: Vec<&str> = line.split_whitespace().collect();
+        let Some((op, nums)) = t.split_last() else { continue };
+        let v: Vec<f64> = nums.iter().filter_map(|n| n.parse().ok()).collect();
+        match (*op, v.as_slice()) {
+            ("m" | "l", [x, y]) => {
+                at = (*x, *y);
+                add(at, &mut b);
+            }
+            ("c", [x1, y1, x2, y2, x3, y3]) => {
+                let mid = ((at.0 + 3.0 * x1 + 3.0 * x2 + x3) / 8.0, (at.1 + 3.0 * y1 + 3.0 * y2 + y3) / 8.0);
+                add(mid, &mut b);
+                at = (*x3, *y3);
+                add(at, &mut b);
+            }
+            _ => {}
+        }
+    }
+    b
+}
+
+/// ISO 32000-2 §12.5.4, Table 169: a cloudy border (`/BE /S /C`) applies to squares, circles,
+/// polygons and (PDF 1.6) text boxes, honours the `/BS` width and dashes, and its intensity
+/// `/I` defaults to 0. Squares, circles and text boxes without an appearance were not drawn at
+/// all, so a reviewer's marks vanished; intensity 0 (or none) drew a cloud on polygons.
+#[test]
+fn cloudy_borders_are_drawn_on_squares_circles_polygons_and_text_boxes() {
+    let base = "/Type /Annot /Rect [100 100 300 250] /C [1 0 0] /BS << /W 2 >>";
+    for kind in ["Square", "Circle"] {
+        let ops = built(&format!("<< {base} /Subtype /{kind} /BE << /S /C /I 1 >> >>")).unwrap_or_else(|| panic!("{kind} is drawn"));
+        assert!(ops.matches(" c\n").count() > 8 && !ops.contains(" re\n"), "{kind} as bumps: {ops}");
+        let e = extent(&ops);
+        assert!(e[0] >= 100.0 && e[1] >= 100.0 && e[2] <= 300.0 && e[3] <= 250.0, "{kind} stays in /Rect: {e:?}");
+    }
+    let dashed = built(&format!("<< {base} /Subtype /Square /BS << /W 2 /S /D /D [6 3] >> /BE << /S /C /I 1 >> >>")).unwrap();
+    assert!(dashed.contains("[6 3] 0 d") && dashed.contains(" c\n"), "dashes honoured: {dashed}");
+    let text = built(&format!("<< {base} /Subtype /FreeText /DA (0 0 1 rg /Helv 10 Tf) /Contents (Look here) /BE << /S /C /I 1 >> >>")).unwrap();
+    assert!(text.contains(" c\n") && text.contains("(Look here) Tj"), "a cloud around the text: {text}");
+    let dashed_text = built(
+        "<< /Type /Annot /Rect [100 100 300 250] /C [1 0 0] /BS << /W 2 /S /D /D [4 2] >> /Subtype /FreeText /DA (0 g /Helv 10 Tf) /Contents (x) /BE << /S /C /I 1 >> >>",
+    )
+    .unwrap();
+    assert!(dashed_text.contains("[4 2] 0 d"), "a text box's cloud is dashed too: {dashed_text}");
+    // Intensity 0, or none: a plain border (the default is 0).
+    for be in ["<< /S /C /I 0 >>", "<< /S /C >>", "<< /S /S /I 2 >>"] {
+        let square = built(&format!("<< {base} /Subtype /Square /BE {be} >>")).unwrap();
+        assert!(square.contains(" re\n") && !square.contains(" c\n"), "{be}: {square}");
+        let polygon =
+            built(&format!("<< /Type /Annot /Subtype /Polygon /Rect [0 0 100 100] /C [1 0 0] /Vertices [10 10 90 10 90 90 10 90] /BE {be} >>"))
+                .unwrap();
+        assert!(!polygon.contains(" c\n"), "{be}: polygon edges stay straight: {polygon}");
+    }
+    let cloudy_polygon =
+        built("<< /Type /Annot /Subtype /Polygon /Rect [0 0 100 100] /C [1 0 0] /Vertices [10 10 90 10 90 90 10 90] /BE << /S /C /I 1 >> >>")
+            .unwrap();
+    assert!(cloudy_polygon.contains(" c\n"));
+    // A cloudy callout is still left to its own appearance.
+    assert!(
+        built(&format!("<< {base} /Subtype /FreeText /DA (0 g /Helv 10 Tf) /CL [10 10 100 100] /RD [5 5 5 5] /BE << /S /C /I 1 >> >>")).is_none()
+    );
+}
+
+/// Table 180: `/RD` gives the differences between "the left, top, right, and bottom coordinates
+/// of Rect and those of the square or circle, respectively"; a cloudy square's bumps sit on that
+/// inner square.
+#[test]
+fn a_cloudy_square_follows_rd_left_top_right_bottom() {
+    let ops = built("<< /Type /Annot /Subtype /Square /Rect [100 100 300 300] /C [1 0 0] /BS << /W 1 >> /BE << /S /C /I 1 >> /RD [10 40 20 30] >>")
+        .unwrap();
+    // The corners of the inner square are path points: left 110, bottom 130, right 280, top 260.
+    for corner in ["110 130", "280 130", "280 260", "110 260"] {
+        assert!(ops.contains(corner), "corner {corner} in {ops}");
+    }
+}
+
+/// Review on #4195: without `/RD`, a small cloudy square still keeps its bumps inside `/Rect`.
+/// Its edges are short enough that each rounds to a single bump about three radii long, which
+/// bulges further than one radius. An `/RD` leaving less than that margin is widened to it, so
+/// the cloud stays inside `/Rect` too.
+#[test]
+fn a_small_cloudy_square_without_rd_stays_inside_its_rect() {
+    for side in [20.0, 24.4, 30.0, 41.0] {
+        let ops = built(&format!(
+            "<< /Type /Annot /Subtype /Square /Rect [100 100 {x} {x}] /C [1 0 0] /BS << /W 2 >> /BE << /S /C /I 1 >> >>",
+            x = 100.0 + side
+        ))
+        .unwrap_or_else(|| panic!("side {side} is drawn"));
+        let e = extent(&ops);
+        assert!(e[0] >= 99.0 && e[1] >= 99.0 && e[2] <= 101.0 + side && e[3] <= 101.0 + side, "side {side}: {e:?}");
+    }
+    let small_rd =
+        built("<< /Type /Annot /Subtype /Square /Rect [100 100 200 200] /C [1 0 0] /BS << /W 2 >> /BE << /S /C /I 1 >> /RD [1 1 1 1] >>").unwrap();
+    let e = extent(&small_rd);
+    assert!(e[0] >= 99.0 && e[1] >= 99.0 && e[2] <= 201.0 && e[3] <= 201.0, "/RD [1 1 1 1] keeps the cloud inside /Rect: {e:?}");
+}
+
+/// ISO 32000-2 Table 180: `/RD` gives the differences between `/Rect` and "the actual boundaries
+/// of the underlying square or circle", so a plain square or circle (no cloudy border) is drawn
+/// inside `/Rect` less `/RD` (left, top, right, bottom) too, its stroke centred half the width
+/// inside that box. An `/RD` that isn't four finite non-negative numbers, or leaves no box, is
+/// ignored and the shape fills `/Rect` as before.
+#[test]
+fn plain_squares_and_circles_are_drawn_inside_rect_less_rd() {
+    let square = |rd: &str| built(&format!("<< /Type /Annot /Subtype /Square /Rect [100 100 200 200] /C [1 0 0] /BS << /W 3 >> {rd} >>")).unwrap();
+    // Rect + 15 + 1.5 on every side: a 67 × 67 square from 116.5.
+    assert!(square("/RD [15 15 15 15]").contains("116.5 116.5 67 67 re"), "{}", square("/RD [15 15 15 15]"));
+    // Left 10, top 40, right 20, bottom 30: the box is 110..180 × 130..160.
+    assert!(square("/RD [10 40 20 30]").contains("111.5 131.5 67 27 re"), "{}", square("/RD [10 40 20 30]"));
+    for ignored in ["", "/RD [-1 0 0 0]", "/RD [1 2 3]", "/RD [60 0 60 0]", "/RD [0 50 0 49.5]", "/RD (x)"] {
+        assert!(square(ignored).contains("101.5 101.5 97 97 re"), "{ignored}: {}", square(ignored));
+    }
+    let circle = built("<< /Type /Annot /Subtype /Circle /Rect [100 100 200 200] /C [1 0 0] /BS << /W 3 >> /RD [15 15 15 15] >>").unwrap();
+    // The ellipse starts at its rightmost point: 200 - 15 - 1.5, at mid-height.
+    assert!(circle.starts_with("1 0 0 RG\n3 w\n183.5 150 m"), "{circle}");
+}
+
+/// The circles and rectangles PdfCraft draws write no `/RD`, so their appearance is unchanged by
+/// it: the stroke still sits half its width inside `/Rect`.
+#[test]
+fn pdfcraft_rectangles_and_ellipses_still_fill_their_rect() {
+    let mut doc = fixture();
+    let rect = [10.0, 10.0, 110.0, 60.0];
+    for shape in [Shape::Rectangle { rect }, Shape::Oval { rect }] {
+        let oval = matches!(shape, Shape::Oval { .. });
+        let i = add_annotation(&mut doc, &new(0, shape), &meta("r")).unwrap();
+        let d = list(&doc, 0).remove(i);
+        assert!(!d.contains(b"RD"));
+        let w = appearance::border_width(&d);
+        let ap = ap_content(&doc, &d);
+        let r: Vec<f64> = d.get(b"Rect").and_then(Object::as_array).unwrap().iter().filter_map(Object::as_f64).collect();
+        let expected = if oval {
+            format!("{} {} m", n(r[2] - w / 2.0), n((r[1] + r[3]) / 2.0))
+        } else {
+            format!("{} {} {} {} re", n(r[0] + w / 2.0), n(r[1] + w / 2.0), n(r[2] - r[0] - w), n(r[3] - r[1] - w))
+        };
+        assert!(ap.contains(&expected), "{expected} in {ap}");
+    }
+}
+
+/// Review on #4195: a polygon reshaped with `/BE /S /C` and no `/I` (or `/I 0`) is a plain one,
+/// as its appearance is drawn (Table 169: intensity 0 is no cloud), so its `/Rect` gets no room
+/// for bumps; with an intensity above 0 it does.
+#[test]
+fn a_reshaped_polygon_pads_its_rect_only_for_a_drawn_cloud() {
+    // `/BE << /S /C >>` with `/I` when given; no `/BE` at all for `None`.
+    let reshaped = |be: Option<Option<i64>>| {
+        let mut doc = fixture();
+        let shape = Shape::Polygon { vertices: vec![[100.0, 100.0], [200.0, 100.0], [150.0, 200.0]], cloud: false };
+        let i = add_annotation(&mut doc, &new(0, shape), &meta("p")).unwrap();
+        let (_, r) = annot_ref(&mut doc, 0, i).unwrap();
+        if let Some(intensity) = be {
+            let mut b = pdfcraft_cos::Dict::new();
+            b.set(b"S".to_vec(), Object::name("C"));
+            if let Some(i) = intensity {
+                b.set(b"I".to_vec(), Object::Int(i));
+            }
+            doc.update_dict(r, |d| d.set(b"BE".to_vec(), Object::Dict(b))).unwrap();
+        }
+        set_points(&mut doc, 0, i, &[[100.0, 100.0], [300.0, 100.0], [200.0, 250.0]], &meta("")).unwrap();
+        rect(&list(&doc, 0)[i])
+    };
+    let plain = reshaped(None);
+    for be in [None, Some(0)] {
+        assert_eq!(reshaped(Some(be)), plain, "/I {be:?}: no cloud drawn, no room for one");
+    }
+    let cloudy = reshaped(Some(Some(1)));
+    assert!(cloudy[0] < plain[0] && cloudy[2] > plain[2], "room for the bumps: {cloudy:?} around {plain:?}");
+}
+
+/// Review on #4195: a reshaped polygon whose cloud has intensity 2 gets room for its bumps at
+/// that intensity. With room only for intensity 1, the bumps on a 200 pt edge reached past
+/// `/Rect` and the appearance's `/BBox` clipped them.
+#[test]
+fn a_reshaped_intensity_two_cloud_stays_inside_its_rect() {
+    let mut doc = fixture();
+    let shape = Shape::Polygon { vertices: vec![[100.0, 100.0], [200.0, 100.0], [150.0, 200.0]], cloud: true };
+    let i = add_annotation(&mut doc, &new(0, shape), &meta("p")).unwrap();
+    let (_, r) = annot_ref(&mut doc, 0, i).unwrap();
+    let mut be = pdfcraft_cos::Dict::new();
+    be.set(b"S".to_vec(), Object::name("C"));
+    be.set(b"I".to_vec(), Object::Int(2));
+    doc.update_dict(r, |d| d.set(b"BE".to_vec(), Object::Dict(be))).unwrap();
+    set_points(&mut doc, 0, i, &[[100.0, 100.0], [300.0, 100.0], [200.0, 250.0]], &meta("")).unwrap();
+    let d = &list(&doc, 0)[i];
+    let bbox = rect(d);
+    // Every point along the drawn bumps, with half the 2 pt line, is inside `/Rect`.
+    let content = ap_content(&doc, d);
+    let (mut at, mut lowest, mut leftmost) = ((0.0, 0.0), f64::MAX, f64::MAX);
+    for line in content.lines() {
+        let v: Vec<f64> = line.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+        if line.ends_with(" m") && v.len() == 2 {
+            at = (v[0], v[1]);
+        } else if line.ends_with(" c") && v.len() == 6 {
+            for step in 0..=20 {
+                let t = f64::from(step) / 20.0;
+                let u = 1.0 - t;
+                let (a, b, c, e) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+                lowest = lowest.min(a * at.1 + b * v[1] + c * v[3] + e * v[5]);
+                leftmost = leftmost.min(a * at.0 + b * v[0] + c * v[2] + e * v[4]);
+            }
+            at = (v[4], v[5]);
+        }
+    }
+    assert!(lowest < 100.0 - 8.0, "the bumps bulge below the bottom edge: {lowest}");
+    assert!(lowest - 1.0 >= bbox[1], "the bottom bumps ({lowest}) and the line fit in /Rect {bbox:?}");
+    assert!(leftmost - 1.0 >= bbox[0], "the left bumps ({leftmost}) and the line fit in /Rect {bbox:?}");
+}

@@ -99,12 +99,8 @@ pub(crate) fn rect_for(shape: &Shape, style: &Style) -> Result<[f64; 4], AnnotEr
             });
             grow(bounds(strokes.iter().flatten().copied().chain(controls)).unwrap_or_default(), half + 1.0)
         }
-        Shape::Polygon { vertices, cloud } => {
-            let b = bounds(vertices.iter().copied())
-                .filter(|b| vertices.len() >= 3 && vertices.iter().all(|p| finite(p)) && b[2] - b[0] >= 1.0 && b[3] - b[1] >= 1.0);
-            let b = b.ok_or_else(|| bad("polygon (it needs three points)"))?;
-            grow(b, half + 1.0 + if *cloud { 1.5 * appearance::cloud_radius(style.width) } else { 0.0 })
-        }
+        // A new cloud has intensity 1 (`/BE /I 1`).
+        Shape::Polygon { vertices, cloud } => polygon_rect(vertices, style.width, cloud.then_some(1.0))?,
         Shape::PolyLine { vertices, start, end } => {
             let b = bounds(vertices.iter().copied())
                 .filter(|b| vertices.len() >= 2 && vertices.iter().all(|p| finite(p)) && (b[2] - b[0]).max(b[3] - b[1]) >= 1.0);
@@ -129,6 +125,19 @@ pub(crate) fn rect_for(shape: &Shape, style: &Style) -> Result<[f64; 4], AnnotEr
         }
     };
     Ok(r)
+}
+
+/// Validate a polygon's corners and compute its `/Rect`: room for half the line, and with a
+/// cloud of `cloud` intensity, for the farthest its bumps reach (`appearance::cloud_reach`).
+pub(crate) fn polygon_rect(vertices: &[[f64; 2]], width: f64, cloud: Option<f64>) -> Result<[f64; 4], AnnotError> {
+    let b = bounds(vertices.iter().copied())
+        .filter(|b| vertices.len() >= 3 && vertices.iter().all(|p| finite(p)) && b[2] - b[0] >= 1.0 && b[3] - b[1] >= 1.0);
+    let b = b.ok_or_else(|| AnnotError::Invalid("invalid polygon (it needs three points)".into()))?;
+    let reach = cloud.map_or(0.0, |intensity| {
+        let perimeter: f64 = vertices.iter().zip(vertices.iter().cycle().skip(1)).map(|(a, b)| (b[0] - a[0]).hypot(b[1] - a[1])).sum();
+        appearance::cloud_reach(perimeter, appearance::cloud_bump(width, intensity))
+    });
+    Ok(grow(b, width.max(0.0) / 2.0 + 1.0 + reach))
 }
 
 pub(crate) fn base_dict(subtype: &str, rect: [f64; 4], page: ObjRef, contents: &str, author: &str, meta: &Meta) -> Dict {

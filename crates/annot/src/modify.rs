@@ -1,5 +1,5 @@
 use super::create::{
-    add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, normalize, num_array, rect_for, rgb,
+    add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, normalize, num_array, polygon_rect, rect_for, rgb,
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
 use super::info::{line_endings_of, text_value};
@@ -412,18 +412,16 @@ pub fn set_points(doc: &mut Document, page: usize, index: usize, points: &[[f64;
     let ends = line_endings_of(&d).unwrap_or_default();
     let (start, end) = (ends.first().copied().unwrap_or(LineEnding::None), ends.get(1).copied().unwrap_or(LineEnding::None));
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
-    let (shape, key): (Shape, &[u8]) = match (subtype.as_str(), points) {
-        ("Line", [from, to]) => (Shape::Line { from: *from, to: *to, start, end }, b"L"),
+    // Each checks the points too: finite, and far enough apart to draw.
+    let (rect, key): ([f64; 4], &[u8]) = match (subtype.as_str(), points) {
+        ("Line", [from, to]) => (rect_for(&Shape::Line { from: *from, to: *to, start, end }, &style)?, b"L"),
         ("Line", _) => return Err(AnnotError::Invalid("a line has two ends".into())),
-        ("PolyLine", _) => (Shape::PolyLine { vertices: points.to_vec(), start, end }, b"Vertices"),
-        ("Polygon", _) => {
-            let cloud = d.get(b"BE").and_then(|b| b.as_dict()).is_some_and(|b| b.name(b"S") == Some(b"C"));
-            (Shape::Polygon { vertices: points.to_vec(), cloud }, b"Vertices")
-        }
+        ("PolyLine", _) => (rect_for(&Shape::PolyLine { vertices: points.to_vec(), start, end }, &style)?, b"Vertices"),
+        // Room for the cloud as the appearance draws it: `/BE /S /C` at its own intensity
+        // (Table 169), which may reach further than a new cloud's intensity 1.
+        ("Polygon", _) => (polygon_rect(points, style.width, appearance::cloud_intensity(&d))?, b"Vertices"),
         (other, _) => return Err(AnnotError::Invalid(format!("{other} comments have no points to move"))),
     };
-    // Checks the points too: finite, and far enough apart to draw.
-    let rect = rect_for(&shape, &style)?;
     let before = d;
     doc.update_dict(r, |d| {
         d.set(key.to_vec(), num_array(&points.concat()));
