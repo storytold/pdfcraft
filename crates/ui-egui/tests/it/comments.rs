@@ -1186,8 +1186,8 @@ fn shapes_take_a_fill_colour_from_the_quick_bar_and_properties() {
     use pdfcraft_ui_egui::comments::CommentTool;
     let mut h = harness(|app| app.set_option("quick", "square").unwrap());
     h.run_steps(2);
-    // No fill by default; the quick bar says so.
-    h.get_by_label("Fill colour: none");
+    // Rectangles start with a white fill.
+    assert_eq!(h.state().comment_prefs.style(CommentTool::Rectangle).fill, Some([1.0, 1.0, 1.0]));
     h.state_mut().comment_prefs.set_fill(CommentTool::Rectangle, Some([1.0, 0.5, 0.0]));
     // Tools without an interior keep no fill.
     h.state_mut().comment_prefs.set_fill(CommentTool::Line, Some([1.0, 0.5, 0.0]));

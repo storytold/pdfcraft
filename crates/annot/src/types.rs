@@ -600,14 +600,13 @@ impl Style {
     /// The default look of each commenting tool.
     pub fn default_for(shape: &Shape) -> Self {
         let (color, width) = match shape {
+            Shape::Rectangle { .. } => return Self { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 2.0, fill: Some([1.0, 1.0, 1.0]) },
             Shape::Note { .. } => ([1.0, 0.82, 0.0], 1.0),
             Shape::TextMarkup { kind: Markup::Highlight, .. } => ([1.0, 0.94, 0.0], 1.0),
             Shape::TextMarkup { kind: Markup::Underline, .. } => ([0.0, 0.47, 0.84], 1.0),
             Shape::TextMarkup { kind: Markup::StrikeOut, .. } => ([0.89, 0.13, 0.13], 1.0),
             Shape::TextMarkup { kind: Markup::Squiggly, .. } => ([0.18, 0.62, 0.36], 1.0),
-            Shape::Rectangle { .. } | Shape::Oval { .. } | Shape::Line { .. } | Shape::Polygon { .. } | Shape::PolyLine { .. } => {
-                ([0.89, 0.13, 0.13], 2.0)
-            }
+            Shape::Oval { .. } | Shape::Line { .. } | Shape::Polygon { .. } | Shape::PolyLine { .. } => ([0.89, 0.13, 0.13], 2.0),
             Shape::Callout { .. } => ([0.0, 0.0, 0.0], 1.0),
             Shape::Caret { .. } | Shape::Attachment { .. } => ([0.0, 0.47, 0.84], 1.0),
             Shape::Ink { .. } => ([0.0, 0.4, 0.87], 2.0),
