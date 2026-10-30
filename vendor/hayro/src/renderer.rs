@@ -302,6 +302,12 @@ fn nearest_premultiplied_rgba(
 /// icons, QR codes and pixel art are usually far smaller and keep their hard pixels.
 const SMOOTHED_IMAGE_SIDE: u32 = 512;
 
+/// PdfCraft patch: the scale above which such an image counts as enlarged. A scan drawn at its own
+/// resolution can come out a few ulps above 1 (the scale is an `f32`: a 192 dpi scan on a 2×
+/// display at 100%), and sampled bilinearly at a half-pixel offset it blurred by half a pixel.
+/// Below 1% nearest-neighbour repeats at most one sample in a hundred.
+const SMOOTHED_IMAGE_SCALE: f32 = 1.01;
+
 /// PdfCraft patch: fixed-point unit of [`area_shrink`]'s weights.
 const AREA_ONE: u64 = 1 << 16;
 
@@ -365,60 +371,132 @@ impl AreaAxis {
 /// weighted by how much of it it covers. Nothing is invented between samples, which is what
 /// `/Interpolate` governs (ISO 32000-2 §8.9.5.3, for images drawn above their resolution), and
 /// nothing is dropped: nearest-neighbour keeps one sample in N per axis, so a scan shown at screen
-/// size lost the strokes of its text. Premultiplied input stays premultiplied. Work memory is one
-/// source row of `u32` accumulators, the horizontal taps (at most `sw + 2 × tw`) and a vertically
-/// shrunk copy no larger than the source; a side over `MAX_RESAMPLING_SOURCE_SIDE` is refused, so
-/// none of it exceeds a few times one source row. `None` if nothing shrinks, the sizes don't fit
-/// or a buffer cannot be allocated.
+/// size lost the strokes of its text. Premultiplied input stays premultiplied. `None` if nothing
+/// shrinks, the sizes don't fit or a buffer cannot be allocated.
 fn area_shrink<const N: usize>(data: &[u8], source: (u32, u32), target: (u32, u32)) -> Option<Vec<u8>> {
+    if data.len() != source_byte_len(source.0, source.1, N, MAX_IMAGE_PIXELS)? {
+        return None;
+    }
+    let row_len = (source.0 as usize).checked_mul(N)?;
+    area_shrink_rows::<N>(source, target, |s, row| {
+        let start = s.checked_mul(row_len)?;
+        row.copy_from_slice(data.get(start..start.checked_add(row_len)?)?);
+        Some(())
+    })
+}
+
+/// PdfCraft patch: [`area_shrink`] of a colour image under its same-size soft mask (a stencil's
+/// ink under the stencil, or an image under a mask sampled onto its grid), premultiplied a source
+/// row at a time as it is averaged. The result equals premultiplying the expanded RGBA and
+/// shrinking that, without building it: a 10718 × 13701 stencil shown at page size peaked at
+/// 1.16 GB with the full-resolution RGBA, which is 587 MB.
+fn area_shrink_premultiplied(
+    color: &ImageData,
+    alpha: &[u8],
+    source: (u32, u32),
+    target: (u32, u32),
+) -> Option<Vec<u8>> {
+    let (samples, channels) = match color {
+        ImageData::Luma(luma) => (luma.data.as_slice(), 1),
+        ImageData::Rgb(rgb) => (rgb.data.as_slice(), 3),
+    };
+    if samples.len() != source_byte_len(source.0, source.1, channels, MAX_IMAGE_PIXELS)?
+        || alpha.len() != source_byte_len(source.0, source.1, 1, MAX_IMAGE_PIXELS)?
+    {
+        return None;
+    }
+    let width = source.0 as usize;
+    area_shrink_rows::<4>(source, target, |s, row| {
+        let start = s.checked_mul(width)?;
+        let end = start.checked_add(width)?;
+        let colors = samples.get(start.checked_mul(channels)?..end.checked_mul(channels)?)?;
+        let alphas = alpha.get(start..end)?;
+        for ((out, px), a) in row.chunks_exact_mut(4).zip(colors.chunks_exact(channels)).zip(alphas) {
+            let [r, g, b] = match px {
+                [v] => [*v; 3],
+                [r, g, b] => [*r, *g, *b],
+                _ => return None,
+            };
+            out.copy_from_slice(&AlphaColor::from_rgba8(r, g, b, *a).premultiply().to_rgba8().to_u8_array());
+        }
+        Some(())
+    })
+}
+
+/// PdfCraft patch: the area shrink behind [`area_shrink`], reading source row `s` through
+/// `read_row(s, row)` into a buffer of one row. Each target row averages the source rows it
+/// covers, and that row is shrunk across at once with taps worked out once per image, so work
+/// memory is one source row of samples, one of `u32` accumulators, one shrunk row and the
+/// horizontal taps (at most `sw + 2 × tw`): never the image. A side over
+/// `MAX_RESAMPLING_SOURCE_SIDE` is refused, so none of it exceeds a few times one source row.
+fn area_shrink_rows<const N: usize>(
+    source: (u32, u32),
+    target: (u32, u32),
+    mut read_row: impl FnMut(usize, &mut [u8]) -> Option<()>,
+) -> Option<Vec<u8>> {
     let ((sw, sh), (tw, th)) = (source, target);
     // A side over MAX_RESAMPLING_SOURCE_SIDE would make the accumulator row and the tap table
     // several times larger than the samples (a 2^27 × 2 image of zeros is a tiny file).
-    if tw == 0 || th == 0 || tw > sw || th > sh || sw > MAX_RESAMPLING_SOURCE_SIDE || sh > MAX_RESAMPLING_SOURCE_SIDE {
+    if tw == 0
+        || th == 0
+        || tw > sw
+        || th > sh
+        || (tw, th) == (sw, sh)
+        || sw > MAX_RESAMPLING_SOURCE_SIDE
+        || sh > MAX_RESAMPLING_SOURCE_SIDE
+    {
         return None;
     }
-    let (sw_us, tw_us) = (sw as usize, tw as usize);
-    if data.len() != source_byte_len(sw, sh, N, MAX_IMAGE_PIXELS)? {
-        return None;
-    }
+    let row_len = (sw as usize).checked_mul(N)?;
+    let zeroed = |len: usize| {
+        let mut v = image_buffer(len)?;
+        v.resize(len, 0);
+        Some(v)
+    };
+    let (mut source_row, mut shrunk_row) = (zeroed(row_len)?, image_buffer(row_len)?);
+    let mut acc: Vec<u32> = Vec::new();
+    acc.try_reserve_exact(row_len).ok()?;
+    acc.resize(row_len, 0);
+    // The taps depend only on the widths, so they are worked out once, not again for each row.
+    let taps = if tw == sw { None } else { Some(AreaAxis::new(sw, tw)?) };
+    let out_len = match taps {
+        None => source_byte_len(tw, th, N, MAX_IMAGE_PIXELS)?,
+        Some(_) => image_byte_len(tw, th, N, MAX_IMAGE_PIXELS)?,
+    };
+    let mut out = image_buffer(out_len)?;
     // Weights sum to AREA_ONE (2^16) and samples are at most 255, so every sum fits in a u32.
     let round = |acc: u32| ((acc + (AREA_ONE as u32) / 2) >> 16).min(255) as u8;
-    // Vertical pass first: groups of whole source rows averaged into each target row. Rows are
-    // contiguous, so this pass is cheap, and it leaves the horizontal pass, which gathers samples
-    // per target, a third as many rows when a scan shrinks threefold.
-    let tall = if th == sh {
-        None
-    } else {
-        let row_len = sw_us * N;
-        let mut rows = image_buffer(source_byte_len(sw, th, N, MAX_IMAGE_PIXELS)?)?;
-        let mut acc: Vec<u32> = Vec::new();
-        acc.try_reserve_exact(row_len).ok()?;
-        acc.resize(row_len, 0);
-        for t in 0..th {
+    // The last source row read: neighbouring target rows share the row on their boundary.
+    let mut loaded = None;
+    for t in 0..th {
+        // Vertical: the whole source rows target row `t` covers, averaged.
+        let row: &[u8] = if th == sh {
+            read_row(t as usize, &mut source_row)?;
+            &source_row
+        } else {
             acc.fill(0);
             for (s, w) in area_taps(sh, th, t) {
-                let row = data.get(s * row_len..(s + 1) * row_len)?;
+                if loaded != Some(s) {
+                    read_row(s, &mut source_row)?;
+                    loaded = Some(s);
+                }
                 // A weight is at most AREA_ONE, so it fits in a u32.
                 let w = w as u32;
-                for (a, v) in acc.iter_mut().zip(row) {
+                for (a, v) in acc.iter_mut().zip(&source_row) {
                     *a += w * u32::from(*v);
                 }
             }
-            rows.extend(acc.iter().map(|a| round(*a)));
-        }
-        Some(rows)
-    };
-    if tw == sw {
-        return tall;
-    }
-    let rows = tall.as_deref().unwrap_or(data);
-    // Horizontal pass: each of those rows shrunk to `tw` samples. The taps depend only on the
-    // widths, so they are worked out once, not again for each row.
-    let taps = AreaAxis::new(sw, tw)?;
-    let mut out = image_buffer(image_byte_len(tw, th, N, MAX_IMAGE_PIXELS)?)?;
-    for row in rows.chunks_exact(sw_us * N) {
-        for t in 0..tw_us {
-            let (first, weights) = taps.get(t)?;
+            shrunk_row.clear();
+            shrunk_row.extend(acc.iter().map(|a| round(*a)));
+            &shrunk_row
+        };
+        // Horizontal: that row shrunk to `tw` samples.
+        let Some(taps) = &taps else {
+            out.extend_from_slice(row);
+            continue;
+        };
+        for x in 0..tw as usize {
+            let (first, weights) = taps.get(x)?;
             let samples = row.get(first * N..(first + weights.len()) * N)?;
             let mut acc = [0_u32; N];
             for (w, px) in weights.iter().zip(samples.chunks_exact(N)) {
@@ -1263,7 +1341,7 @@ impl Renderer {
         // nothing, and the stretched side would otherwise be drawn nearest-neighbour.
         if !interpolate
             && !self.in_type3_glyph
-            && (x_scale > 1.0 || y_scale > 1.0)
+            && (x_scale > SMOOTHED_IMAGE_SCALE || y_scale > SMOOTHED_IMAGE_SCALE)
             && source_width.min(source_height) >= SMOOTHED_IMAGE_SIDE
         {
             quality = ImageQuality::Medium;
@@ -1295,11 +1373,20 @@ impl Renderer {
         };
         let needs_resize = (new_width, new_height) != (source_width, source_height);
 
-        // PdfCraft patch (#624): a minified Type 3 glyph image with a soft mask that is not
-        // interpolated is nearest-sampled straight into premultiplied target RGBA. That skips the
-        // full-resolution RGBA copy below and the premultiply pass after it.
+        // PdfCraft patch (#624): a minified image with a soft mask that is neither interpolated nor
+        // area-averaged (a Type 3 glyph image, or a source wider than MAX_RESAMPLING_SOURCE_SIDE)
+        // is nearest-sampled straight into premultiplied target RGBA. That skips the
+        // full-resolution RGBA copy below and the premultiply pass after it. PdfCraft patch: an
+        // area-averaged one (a stencil's ink, or an image under its mask) skips them too, and is
+        // premultiplied a source row at a time as it is averaged (`area_shrink_premultiplied`).
         let direct = match &alpha_data {
             Some(alpha) if needs_resize && !interpolate && !area => nearest_premultiplied_rgba(
+                &image_data,
+                &alpha.data,
+                (source_width, source_height),
+                (new_width, new_height),
+            ),
+            Some(alpha) if needs_resize && area => area_shrink_premultiplied(
                 &image_data,
                 &alpha.data,
                 (source_width, source_height),
@@ -2935,8 +3022,88 @@ mod snap_tests {
 #[cfg(test)]
 mod area_shrink_tests {
     use super::{
-        AREA_ONE, AreaAxis, LumaData, MAX_IMAGE_PIXELS, area_shrink, area_taps, mask_on_image_grid,
+        AREA_ONE, AreaAxis, ImageData, LumaData, MAX_IMAGE_PIXELS, RgbData, area_shrink,
+        area_shrink_premultiplied, area_taps, mask_on_image_grid, premultiply_rgba,
     };
+
+    /// Deterministic samples that vary from one to the next.
+    fn noise(len: usize, seed: u32) -> Vec<u8> {
+        let mut x = seed.wrapping_mul(2_654_435_761) | 1;
+        (0..len)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                (x >> 24) as u8
+            })
+            .collect()
+    }
+
+    /// The shrink as two whole passes, every row averaged down and then every row across, each
+    /// rounded to a byte: what `area_shrink` did before it worked a row at a time.
+    fn two_pass_shrink<const N: usize>(data: &[u8], (sw, sh): (u32, u32), (tw, th): (u32, u32)) -> Vec<u8> {
+        let round = |acc: u64| ((acc + AREA_ONE / 2) >> 16).min(255) as u8;
+        let row_len = sw as usize * N;
+        let tall: Vec<u8> = (0..th)
+            .flat_map(|t| {
+                (0..row_len).map(move |i| {
+                    round(area_taps(sh, th, t).map(|(s, w)| w * u64::from(data[s * row_len + i])).sum())
+                })
+            })
+            .collect();
+        tall.chunks_exact(row_len)
+            .flat_map(|row| {
+                (0..tw).flat_map(move |t| {
+                    (0..N).map(move |c| round(area_taps(sw, tw, t).map(|(s, w)| w * u64::from(row[s * N + c])).sum()))
+                })
+            })
+            .collect()
+    }
+
+    /// Working a row at a time gives the same bytes as two whole passes, in both directions, one
+    /// direction alone, and with source rows shared by neighbouring targets.
+    #[test]
+    fn a_row_at_a_time_shrink_equals_two_whole_passes() {
+        let sizes = [((7, 5), (3, 2)), ((10, 3), (6, 3)), ((4, 9), (4, 4)), ((13, 11), (1, 1)), ((31, 17), (12, 7))];
+        for (i, (source, target)) in sizes.into_iter().enumerate() {
+            let gray = noise((source.0 * source.1) as usize, i as u32);
+            assert_eq!(area_shrink::<1>(&gray, source, target), Some(two_pass_shrink::<1>(&gray, source, target)), "{source:?} → {target:?}");
+            let rgba = noise((source.0 * source.1 * 4) as usize, i as u32 + 99);
+            assert_eq!(area_shrink::<4>(&rgba, source, target), Some(two_pass_shrink::<4>(&rgba, source, target)), "{source:?} → {target:?}");
+        }
+    }
+
+    /// Premultiplying a row at a time as it is averaged gives the same bytes as premultiplying the
+    /// whole expanded RGBA first and shrinking that, for gray and RGB colour.
+    #[test]
+    fn premultiplying_row_by_row_equals_premultiplying_the_whole_image() {
+        let sizes = [((7, 5), (3, 2)), ((10, 3), (6, 3)), ((4, 9), (4, 4)), ((31, 17), (12, 7))];
+        for (i, (source, target)) in sizes.into_iter().enumerate() {
+            let (w, h) = source;
+            let pixels = (w * h) as usize;
+            let alpha = noise(pixels, i as u32 + 7);
+            let gray = noise(pixels, i as u32 + 11);
+            let rgb = noise(pixels * 3, i as u32 + 13);
+            let colors = [
+                ImageData::Luma(LumaData { data: gray.clone(), width: w, height: h, interpolate: false, scale_factors: (1.0, 1.0) }),
+                ImageData::Rgb(RgbData { data: rgb.clone(), width: w, height: h, interpolate: false, scale_factors: (1.0, 1.0) }),
+            ];
+            for color in &colors {
+                let mut whole: Vec<u8> = match color {
+                    ImageData::Luma(_) => gray.iter().zip(&alpha).flat_map(|(g, a)| [*g, *g, *g, *a]).collect(),
+                    ImageData::Rgb(_) => rgb.chunks_exact(3).zip(&alpha).flat_map(|(c, a)| [c[0], c[1], c[2], *a]).collect(),
+                };
+                premultiply_rgba(&mut whole);
+                assert_eq!(
+                    area_shrink_premultiplied(color, &alpha, source, target),
+                    area_shrink::<4>(&whole, source, target),
+                    "{source:?} → {target:?}"
+                );
+            }
+            let short = alpha.get(1..).unwrap_or_default();
+            assert_eq!(area_shrink_premultiplied(&colors[0], short, source, target), None, "alpha shorter than the image");
+        }
+    }
 
     fn mask(data: &[u8], width: u32, height: u32) -> LumaData {
         LumaData { data: data.to_vec(), width, height, interpolate: false, scale_factors: (1.0, 1.0) }

@@ -6814,6 +6814,59 @@ fn shrunk_soft_mask_larger_than_its_image_keeps_thin_strokes() {
     assert_eq!(grays[3], 255, "{grays:?}");
 }
 
+/// Issue #4800: scanners save the text of a page as a 1-bit `/ImageMask` stencil, painted in the
+/// fill colour, and a stencil shrunk by nearest-neighbour lost the strokes thinner than the shrink
+/// factor. Here a one-column red stroke of an 8-column stencil is drawn 4 pixels wide: nearest
+/// reads columns 1, 3, 5 and 7 and misses it, while the area average makes it a half-covered red.
+#[test]
+fn a_shrunk_stencil_mask_keeps_thin_strokes() {
+    // Sample 0 paints (the default `/Decode [0 1]`), so 0xDF is a stroke in column 2.
+    let content = "q 1 0 0 rg 4 0 0 1 0 0 cm /Im0 Do Q";
+    let pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 4 1] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 1 /ImageMask true /Filter /ASCIIHexDecode /Length 3 >> stream\nDF>\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len()
+    );
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!((page.width, page.height), (4, 1));
+    let px = page.rgba.as_chunks::<4>().0.to_vec();
+    let [r, g, b, _] = px.get(1).copied().unwrap_or_default();
+    assert!(r >= 254 && g.abs_diff(128) <= 1 && b == g, "half-covered red over white, got {px:?}");
+    assert_eq!(px.get(3), Some(&[255, 255, 255, 255]), "{px:?}");
+}
+
+/// A scan drawn at its own resolution keeps its hard pixels when its scale passes 1 only by
+/// rounding: `x_scale` is an `f32`, and a 192 dpi scan on a 2× display at 100% can come out a
+/// few ulps above 1. Smoothed bilinearly at a half-pixel offset, one-pixel stripes became gray.
+/// Here `600.0001` (an `f32` of 600.00012) draws 600 samples 2·10⁻⁷ wider than 1:1.
+#[test]
+fn a_scan_drawn_a_rounding_error_above_its_resolution_stays_sharp() {
+    let content = "q 600.0001 0 0 600 0.5 0 cm /Im0 Do Q";
+    let image: String = (0..600 * 600).map(|i| if i % 2 == 0 { "00" } else { "FF" }).collect();
+    let pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 601 600] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /XObject /Subtype /Image /Width 600 /Height 600 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len(),
+        image.len() + 1
+    );
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    let row: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().skip(300 * page.width as usize).take(page.width as usize).map(|[r, ..]| *r).collect();
+    let gray = row.iter().skip(10).take(580).filter(|v| (16..240).contains(*v)).count();
+    assert_eq!(gray, 0, "one-pixel stripes were blurred: {:?}", row.get(10..30));
+}
+
 /// Type 3 glyph images used to be sampled bicubically (`ImageQuality::High`) whatever their
 /// `/Interpolate`, which blends the nearest pre-resize back in. The glyph is 4.6 × 2.3 pixels
 /// and its image pre-resizes to 5 × 3, so the final draw samples fractionally and bicubic
