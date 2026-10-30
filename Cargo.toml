@@ -19,8 +19,9 @@ craft-quit = { git = "https://github.com/storytold/craft-libs", version = "0.1.0
 # One menu definition for the native macOS menu bar and the in-window bar elsewhere.
 craft-menu = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545" }
 craft-keymap = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545", default-features = false }
-# Shared system spooler; document composition remains in pdfcraft-print.
-craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545" }
+# Shared system spooler; document composition remains in pdfcraft-print. Pinned to
+# storytold/craft-libs#396 (Windows renders pages at the job's resolution, #4941).
+craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "cc2b13185f642c83bb7e9f1b55cdd187d4b65be9" }
 # Whether a path stored in a document may be opened (GoToR link targets).
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
