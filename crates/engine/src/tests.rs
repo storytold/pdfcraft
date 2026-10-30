@@ -7582,6 +7582,114 @@ fn enhance_camera_page_straightens_the_sheet() {
     assert_eq!((p.width, p.height), (400.0, 300.0));
 }
 
+/// A document whose one page is [`pdfcraft_testkit::photo::curled_page`] at one point per pixel.
+fn curled_photo_doc(s: &mut Session, w: u32, h: u32) -> DocId {
+    let img = image::RgbImage::from_raw(w, h, pdfcraft_testkit::photo::curled_page(w, h)).unwrap();
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let bytes = s.create_from_images_with_resolution(&[("photo.png".into(), png)], ImageResolution::Dpi(72.0)).unwrap();
+    s.open("photo.pdf", None, bytes, None).unwrap()
+}
+
+/// The page as rendered at one pixel per point, and how straight its lines of text are.
+fn rendered_sharpness(s: &Session, id: DocId) -> (u32, u32, f64) {
+    let doc = s.get(id).unwrap();
+    let shot = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone()).render(pdfcraft_render::RenderRequest {
+        page: 0,
+        scale: 1.0,
+        ..Default::default()
+    });
+    let rgb: Vec<u8> = shot.rgba.as_chunks::<4>().0.iter().flat_map(|&[r, g, b, _]| [r, g, b]).collect();
+    (shot.width, shot.height, pdfcraft_testkit::photo::line_sharpness(&rgb, shot.width, shot.height))
+}
+
+#[test]
+fn flattening_without_the_model_says_so_and_changes_nothing() {
+    if camera::flatten_available() {
+        eprintln!("skipped: the flattening model is installed");
+        return;
+    }
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = curled_photo_doc(&mut s, 120, 160);
+    let before = s.get(id).unwrap().bytes.clone();
+    for how in [camera::Straighten::Flatten(None), camera::Straighten::Flatten(Some([[0.0, 0.0], [120.0, 0.0], [120.0, 160.0], [0.0, 160.0]]))] {
+        let e = s.enhance_camera_page_with(id, 0, how, camera_clean::Look::Colour, 0).unwrap_err().to_string();
+        assert!(e.contains("flattening model is not installed") && e.contains("PDFCRAFT_MODELS"), "{e}");
+    }
+    assert_eq!(s.get(id).unwrap().bytes, before);
+    assert_eq!(s.get(id).unwrap().can_undo(), None);
+}
+
+/// A flattening model that returns a map with a coordinate that is not a number must not turn the
+/// page white: the edit fails, and the document's bytes and undo history are as they were. The
+/// map is injected, so this runs without the model; an identity map through the same path does
+/// change the page, so the error really comes from the map.
+#[test]
+fn a_non_finite_flattening_map_leaves_the_document_untouched() {
+    use pdfcraft_ocr::flatten::Grid;
+    let identity = |gw: usize, gh: usize| Grid {
+        width: gw,
+        height: gh,
+        xy: (0..gh).flat_map(|y| (0..gw).map(move |x| [x as f32 / (gw - 1) as f32 * 2.0 - 1.0, y as f32 / (gh - 1) as f32 * 2.0 - 1.0])).collect(),
+    };
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = curled_photo_doc(&mut s, 120, 160);
+    let before = s.get(id).unwrap().bytes.clone();
+    let whole = Some([[0.0, 0.0], [120.0, 0.0], [120.0, 160.0], [0.0, 160.0]]);
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let map = |_: &[u8], _: u32, _: u32| {
+            let mut g = identity(31, 45);
+            g.xy[700][1] = bad;
+            Ok::<_, pdfcraft_ocr::OcrError>(g)
+        };
+        for how in [camera::Straighten::Flatten(None), camera::Straighten::Flatten(whole)] {
+            let e = s.enhance_camera_page_through(id, 0, how, camera_clean::Look::Colour, 0, Some(&map)).unwrap_err().to_string();
+            assert!(e.contains("could not be flattened") && e.contains("not numbers"), "{bad}: {e}");
+            assert_eq!(s.get(id).unwrap().bytes, before, "{bad}: the document changed");
+            assert_eq!(s.get(id).unwrap().can_undo(), None, "{bad}: an undo step was recorded");
+        }
+    }
+    // The same path with a good map does replace the page, in one undoable step.
+    let good = |_: &[u8], _: u32, _: u32| Ok::<_, pdfcraft_ocr::OcrError>(identity(31, 45));
+    s.enhance_camera_page_through(id, 0, camera::Straighten::Flatten(None), camera_clean::Look::Colour, 0, Some(&good)).unwrap();
+    assert_ne!(s.get(id).unwrap().bytes, before);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Enhance camera image"));
+}
+
+/// End to end, when the model is installed (`cargo xtask models`): flattening a photographed,
+/// curled page leaves its lines of text level and straight, in one undoable step; the four-corner
+/// warp alone (the same page, corners on its edges) does not.
+#[test]
+fn flattening_a_curled_photo_straightens_its_lines() {
+    if !camera::flatten_available() {
+        eprintln!("skipped: the flattening model is not installed (cargo xtask models)");
+        return;
+    }
+    let (w, h) = (600, 760);
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = curled_photo_doc(&mut s, w, h);
+    let (_, _, before) = rendered_sharpness(&s, id);
+    s.enhance_camera_page_with(id, 0, camera::Straighten::Flatten(None), camera_clean::Look::Colour, 0).unwrap();
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Enhance camera image"));
+    let (fw, fh, after) = rendered_sharpness(&s, id);
+    assert_eq!((fw, fh), (w, h), "the page keeps its size");
+    assert!(after > before + 0.15 && after > 0.5, "photo {before:.3}, flattened {after:.3}");
+
+    // The four-corner warp of the whole page only crops: the lines stay bent.
+    s.undo(id).unwrap();
+    let whole = [[0.0, 0.0], [w as f64, 0.0], [w as f64, h as f64], [0.0, h as f64]];
+    s.enhance_camera_page_with(id, 0, camera::Straighten::Corners(whole), camera_clean::Look::Colour, 0).unwrap();
+    let (_, _, warped) = rendered_sharpness(&s, id);
+    assert!(warped < before + 0.05, "photo {before:.3}, warped {warped:.3}");
+
+    // Corners first, then flattening: still straight, still one step.
+    s.undo(id).unwrap();
+    s.enhance_camera_page_with(id, 0, camera::Straighten::Flatten(Some(whole)), camera_clean::Look::Greyscale, 50).unwrap();
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Enhance camera image"));
+    let (_, _, both) = rendered_sharpness(&s, id);
+    assert!(both > before + 0.15, "photo {before:.3}, warped and flattened {both:.3}");
+}
+
 #[test]
 fn detect_camera_corners_finds_the_sheet_in_user_space() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);

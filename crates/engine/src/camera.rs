@@ -1,8 +1,12 @@
 //! Scan & OCR ▸ Enhance ▸ Camera image: straighten a photographed document. Four corners on the
 //! page (PDF user space) are warped to a rectangle, and the page's content becomes that picture
 //! (one undoable step, through Replace Pages, so the page's comments, links and bookmarks stay).
+//!
+//! Or the page is flattened ([`Straighten::Flatten`]): the UVDoc model ([`pdfcraft_ocr::flatten`])
+//! straightens a sheet that was curved, folded or photographed at an angle, and crops away most of
+//! what is around it, optionally after the four-corner warp.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use pdfcraft_geom::perspective::{Homography, Point, order_quad};
 use pdfcraft_render::{RenderConfig, RenderRequest};
@@ -87,6 +91,48 @@ pub fn warp(rgba: &[u8], width: u32, height: u32, quad: [Point; 4]) -> Result<Wa
     Ok(Warped { width: ow, height: oh, rgb })
 }
 
+/// How Enhance camera image straightens a page.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Straighten {
+    /// Warp what the four corners (PDF user space, any order) enclose to a rectangle.
+    Corners([Point; 4]),
+    /// Flatten the page with the UVDoc model: curved or folded sheets, perspective, background.
+    /// With corners, what they enclose is warped to a rectangle first.
+    Flatten(Option<[Point; 4]>),
+}
+
+/// The flattening model, loaded once (a moment, 32 MB) and shared.
+pub fn flattener() -> Result<Arc<pdfcraft_ocr::flatten::Flattener>, String> {
+    static FLAT: Mutex<Option<Arc<pdfcraft_ocr::flatten::Flattener>>> = Mutex::new(None);
+    let mut slot = FLAT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(f) = slot.as_ref() {
+        return Ok(f.clone());
+    }
+    let f = Arc::new(pdfcraft_ocr::flatten::Flattener::find().map_err(|e| e.to_string())?);
+    *slot = Some(f.clone());
+    Ok(f)
+}
+
+/// Where Enhance camera image gets a photo's flattening map from: the model
+/// ([`pdfcraft_ocr::flatten::Flattener::grid`]), given the RGB8 photo and its size.
+pub(crate) type GridSource<'a> = dyn Fn(&[u8], u32, u32) -> Result<pdfcraft_ocr::flatten::Grid, pdfcraft_ocr::OcrError> + 'a;
+
+/// Whether the flattening model is installed ([`Straighten::Flatten`] needs it).
+pub fn flatten_available() -> bool {
+    pdfcraft_ocr::flatten::available()
+}
+
+/// A premultiplied RGBA raster composited over white, as RGB8.
+fn over_white(rgba: &[u8], width: u32, height: u32) -> Result<Warped, String> {
+    let n = (width as usize).checked_mul(height as usize).filter(|&n| n > 0 && n.checked_mul(4) == Some(rgba.len()));
+    let Some(n) = n else { return Err("the page could not be read as a picture".into()) };
+    let mut rgb = Vec::with_capacity(n * 3);
+    for &[r, g, b, a] in rgba.as_chunks::<4>().0 {
+        rgb.extend([r, g, b].map(|c| c.saturating_add(255 - a)));
+    }
+    Ok(Warped { width, height, rgb })
+}
+
 /// The long side, in pixels, a page is rendered at to look for the document's edges.
 const DETECT_SIDE: f32 = 1200.0;
 
@@ -129,6 +175,43 @@ impl Session {
         look: crate::camera_clean::Look,
         level: u8,
     ) -> Result<(), EditError> {
+        self.enhance_camera_page_with(id, page, Straighten::Corners(corners), look, level)
+    }
+
+    /// Enhance ▸ Camera image: replace page `page` (0-based) of document `id` with the page
+    /// straightened as `how` says ([`Straighten`]), then given a `look` at `level` (see
+    /// [`Session::enhance_camera_page_at`]). One undoable step. Flattening without the model
+    /// installed is an error that says so, and changes nothing.
+    pub fn enhance_camera_page_with(
+        &mut self,
+        id: DocId,
+        page: usize,
+        how: Straighten,
+        look: crate::camera_clean::Look,
+        level: u8,
+    ) -> Result<(), EditError> {
+        // Without the model there is nothing to do: say so before rendering anything.
+        let flat = match how {
+            Straighten::Flatten(_) => Some(flattener().map_err(EditError::Invalid)?),
+            Straighten::Corners(_) => None,
+        };
+        let grid = flat.as_ref().map(|f| move |rgb: &[u8], w: u32, h: u32| f.grid(rgb, w, h));
+        self.enhance_camera_page_through(id, page, how, look, level, grid.as_ref().map(|g| g as &GridSource<'_>))
+    }
+
+    /// [`Session::enhance_camera_page_with`], with the flattening map coming from `grid` (the
+    /// model, or a stand-in in tests). Nothing in the document changes until the new page is
+    /// ready, so every error — a map the model got wrong included — leaves the document's bytes
+    /// and its undo history as they were.
+    pub(crate) fn enhance_camera_page_through(
+        &mut self,
+        id: DocId,
+        page: usize,
+        how: Straighten,
+        look: crate::camera_clean::Look,
+        level: u8,
+        grid: Option<&GridSource<'_>>,
+    ) -> Result<(), EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         if let Some(why) = &doc.read_only_reason {
             return Err(EditError::ReadOnly(why.clone()));
@@ -156,11 +239,23 @@ impl Session {
             return Err(EditError::Invalid(format!("page {} could not be rendered: {e}", page + 1)));
         }
         let k = shot.width as f64 / (info.width as f64).max(1e-3);
-        let quad = corners.map(|[x, y]| {
-            let [vx, vy] = info.user_to_view(x as f32, y as f32);
-            [vx as f64 * k, vy as f64 * k]
-        });
-        let out = warp(&shot.rgba, shot.width, shot.height, quad).map_err(EditError::Invalid)?;
+        let to_raster = |corners: [Point; 4]| {
+            corners.map(|[x, y]| {
+                let [vx, vy] = info.user_to_view(x as f32, y as f32);
+                [vx as f64 * k, vy as f64 * k]
+            })
+        };
+        let mut out = match how {
+            Straighten::Corners(c) | Straighten::Flatten(Some(c)) => warp(&shot.rgba, shot.width, shot.height, to_raster(c)),
+            Straighten::Flatten(None) => over_white(&shot.rgba, shot.width, shot.height),
+        }
+        .map_err(EditError::Invalid)?;
+        if let Straighten::Flatten(_) = how {
+            let grid = grid.ok_or_else(|| EditError::Invalid(pdfcraft_ocr::OcrError::NoFlattenModel.to_string()))?;
+            let failed = |e: pdfcraft_ocr::OcrError| EditError::Invalid(format!("the page could not be flattened: {e}"));
+            let map = grid(&out.rgb, out.width, out.height).map_err(failed)?;
+            out.rgb = pdfcraft_ocr::flatten::unwarp(&out.rgb, out.width, out.height, &map).map_err(failed)?;
+        }
         let pixels = crate::camera_clean::apply(&out.rgb, out.width, out.height, look, level)
             .ok_or_else(|| EditError::Invalid("the straightened page could not be cleaned up".into()))?;
         // Black and white is lossless (PNG): JPEG would smear grey around every letter.
@@ -261,6 +356,16 @@ mod tests {
         let src = vec![0u8; 8 * 8 * 4];
         let out = warp(&src, 8, 8, [[0.0, 0.0], [8.0, 0.0], [8.0, 8.0], [0.0, 8.0]]).unwrap();
         assert!(out.rgb.iter().all(|&v| v == 255));
+    }
+
+    #[test]
+    fn a_page_to_flatten_is_composited_over_white() {
+        // Opaque red, half-transparent black (premultiplied: 0), fully transparent.
+        let out = over_white(&[255, 0, 0, 255, 0, 0, 0, 128, 0, 0, 0, 0], 3, 1).unwrap();
+        assert_eq!(out.rgb, vec![255, 0, 0, 127, 127, 127, 255, 255, 255]);
+        assert!(over_white(&[], 0, 0).is_err());
+        assert!(over_white(&[0; 4], 2, 1).is_err());
+        assert!(over_white(&[0; 8], u32::MAX, u32::MAX).is_err());
     }
 
     #[test]

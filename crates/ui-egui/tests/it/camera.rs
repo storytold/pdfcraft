@@ -214,3 +214,32 @@ fn the_level_leaves_the_page_alone_when_another_edit_came_in_between() {
     assert_eq!(s.session.undo(id).unwrap().as_str(), "Enhance camera image");
     assert_eq!(s.session.get(id).unwrap().can_undo(), None);
 }
+
+#[test]
+fn flatten_curved_page_is_offered_when_its_model_is_installed() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("ocr.enhance_camera"));
+    h.run_steps(3);
+    let disabled = h.query_by(|n| n.label().as_deref() == Some("Flatten curved page") && n.is_disabled()).is_some();
+    if !pdfcraft_engine::camera::flatten_available() {
+        // Without the model the option is there, but off and disabled; the corners still work.
+        assert!(disabled, "Flatten curved page is disabled without its model");
+        h.get_by_label("Flatten curved page").click();
+        h.run_steps(2);
+        assert!(!h.state().views[0].camera_flatten);
+        h.get_by_label("Enhance page").click();
+        h.run_steps(4);
+        assert_eq!(h.state().views[0].camera_done.map(|d| d.flatten), Some(false));
+        assert_eq!(undo_label(&h).as_deref(), Some("Enhance camera image"));
+        return;
+    }
+    assert!(!disabled);
+    h.get_by_label("Flatten curved page").click();
+    h.run_steps(2);
+    assert!(h.state().views[0].camera_flatten);
+    h.get_by_label("Enhance page").click();
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].camera_done.map(|d| d.flatten), Some(true));
+    assert_eq!(undo_label(&h).as_deref(), Some("Enhance camera image"));
+    assert_eq!(size(&h, 1), (300.0, 400.0), "only the page with the corners changes");
+}

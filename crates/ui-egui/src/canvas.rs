@@ -457,6 +457,8 @@ pub struct DocView {
     /// Enhance ▸ Camera image: the page just enhanced, while the bar offers rotate, crop and
     /// organize.
     pub camera_done: Option<crate::camera_ui::CameraDone>,
+    /// Enhance ▸ Camera image: Flatten curved page is on (kept while the tab is open).
+    pub camera_flatten: bool,
     /// Use a certificate: a signature rectangle being drawn, or an empty signature field clicked.
     pub sign: crate::sign_ui::SignView,
     /// Organize: the pages being dragged to a new place.
@@ -717,6 +719,7 @@ impl DocView {
             crop_drag: None,
             camera: None,
             camera_done: None,
+            camera_flatten: false,
             sign: Default::default(),
             org_drag: None,
             panel_drag: None,

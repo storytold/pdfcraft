@@ -310,7 +310,7 @@ impl PdfCraftApp {
             restore(self);
             return;
         }
-        let result = self.session.enhance_camera_page_at(id, done.page, done.corners, done.look, done.level).and_then(|()| {
+        let result = self.session.enhance_camera_page_with(id, done.page, done.straighten(), done.look, done.level).and_then(|()| {
             let turn = done.turns.rem_euclid(360);
             if turn == 0 { Ok(1) } else { self.session.apply(id, Edit::RotatePages { pages: vec![done.page], degrees: turn }).map(|()| 2) }
         });
@@ -355,14 +355,15 @@ impl PdfCraftApp {
             [u as f64, v as f64]
         });
         let (look, level) = (crate::camera_ui::Look::Colour, crate::camera_ui::DEFAULT_LEVEL);
-        match self.session.enhance_camera_page_at(id, q.page, corners, look, level) {
+        let flatten = view.camera_flatten;
+        let done = crate::camera_ui::CameraDone { page: q.page, corners, flatten, look, level, applied: (look, level), turns: 0, steps: 1 };
+        match self.session.enhance_camera_page_with(id, q.page, done.straighten(), look, level) {
             Ok(()) => {
                 // The tool stays open with the clean-up slider, rotate, crop and organize.
                 if let (Some(doc), Some(view)) = (self.session.get(id), self.views.get_mut(i)) {
                     view.document_changed(&doc.info);
                     view.camera = None;
-                    view.camera_done =
-                        Some(crate::camera_ui::CameraDone { page: q.page, corners, look, level, applied: (look, level), turns: 0, steps: 1 });
+                    view.camera_done = Some(done);
                 }
             }
             Err(e) => {

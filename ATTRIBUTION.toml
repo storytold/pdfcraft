@@ -3381,6 +3381,19 @@ kind = "model"
 usage = "Scan & OCR: reads the words it finds (cargo xtask models)"
 sha256 = "86c145c2edb96c8caed5b1ebb8f44d706408922211451c309c625157dd6061c5"
 
+[[fetched]]
+file = "uvdoc.onnx"
+url = "https://huggingface.co/PaddlePaddle/UVDoc_onnx/resolve/3bcf535371727d11e783101f79a504c68848aae3/inference.onnx"
+title = "UVDoc document unwarping model (ONNX export of PaddleOCR's UVDoc)"
+author = "PaddlePaddle Authors (PaddleOCR; UVDoc architecture by Floor Verhoeven, Tanguy Magne and Olga Sorkine-Hornung, SIGGRAPH Asia 2023)"
+source = "https://huggingface.co/PaddlePaddle/UVDoc_onnx/tree/3bcf535371727d11e783101f79a504c68848aae3 (inference.onnx, saved here as uvdoc.onnx; model card: license apache-2.0)"
+licence = "Apache-2.0"
+licence_url = "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v3.0.0/LICENSE"
+licence_sha256 = "3840c5c0c61c294264d2dd77b8777be6ddd90121ef4e0e64abcd22edea581d6e"
+kind = "model"
+usage = "Scan & OCR ▸ Enhance camera image ▸ Flatten curved page: straightens curved, folded or angled photographed pages (cargo xtask models)"
+sha256 = "54cab30dc2cf347b4f3d6971c833b1c3d84f5ef17280f1f6d15796bff20e63d6"
+
 [[build_input]]
 name = "craft-fonts"
 option = "CRAFT_FONTS_DIR"

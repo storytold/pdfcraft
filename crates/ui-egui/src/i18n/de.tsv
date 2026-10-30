@@ -2355,6 +2355,9 @@ animation effects	Off	Aus
 	Enhance camera image	Kamerafoto verbessern
 	Drag the corners onto the document's edges, then choose Enhance page.	Ziehen Sie die Ecken auf die Kanten des Dokuments und wählen Sie dann Seite verbessern.
 	Enhance page	Seite verbessern
+	Flatten curved page	Gewölbte Seite glätten
+	Straighten a page that is curved, folded or photographed at an angle, so its lines of text run straight	Begradigt eine gewölbte, gefaltete oder schräg fotografierte Seite, sodass ihre Textzeilen gerade verlaufen
+	the page flattening model is not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds it)	das Modell zum Glätten von Seiten ist nicht installiert (installieren Sie PdfCraft neu oder setzen Sie PDFCRAFT_MODELS auf den Ordner, der es enthält)
 	Done adding text	Texteingabe abschließen
 	Discard this text (Esc)	Diesen Text verwerfen (Esc)
 	Clean-up	Bereinigung

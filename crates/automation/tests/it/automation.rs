@@ -3504,6 +3504,51 @@ fn enhance_camera_image_finds_the_edges_by_itself() {
 }
 
 #[test]
+fn enhance_camera_image_flattens_a_photographed_page() {
+    let dir = workdir("enhance-camera-flatten");
+    // A sheet with lines of text, the lines bowed, on a dark table.
+    let img = image::RgbImage::from_fn(300, 400, |x, y| {
+        let (fx, fy) = (x as f64, y as f64);
+        let bow = 12.0 * (std::f64::consts::PI * (fx - 40.0) / 220.0).sin();
+        let on_sheet = (40.0..260.0).contains(&fx) && (30.0..370.0).contains(&fy);
+        let line = ((fy - 60.0 - bow).rem_euclid(24.0)) < 8.0 && (60.0..340.0).contains(&fy) && (60.0..240.0).contains(&fx);
+        if !on_sheet {
+            image::Rgb([70, 60, 50])
+        } else if line {
+            image::Rgb([20, 20, 20])
+        } else {
+            image::Rgb([240, 238, 232])
+        }
+    });
+    img.save(dir.join("photo.jpg")).unwrap();
+    let mut a = auto(&dir);
+    let photo = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["photo.jpg"] }))["doc"].as_u64().unwrap();
+    let flatten = json!({ "doc": photo, "page": 1, "flatten": true, "mode": "greyscale", "level": 40 });
+    if !pdfcraft_engine::camera::flatten_available() {
+        // Without the model: an error that says what is missing, and the page is as it was.
+        let e = a.call("page_enhance_camera", &flatten);
+        assert!(matches!(&e, Err(ToolError::Failed(m)) if m.contains("flattening model is not installed")), "{e:?}");
+        assert_eq!(ok(&mut a, "doc_info", json!({ "doc": photo }))["document"]["undo"], Value::Null);
+        eprintln!("skipped the rest: the flattening model is not installed (cargo xtask models)");
+        return;
+    }
+    // No corners needed: the whole page is flattened and no edges are looked for.
+    let r = ok(&mut a, "page_enhance_camera", flatten);
+    assert_eq!(r["flattened"], true);
+    assert_eq!(r["detected"], false);
+    assert!(r.get("corners").is_none(), "{r}");
+    assert_eq!(r["undo"], "Enhance camera image");
+    let images = ok(&mut a, "page_images", json!({ "doc": photo, "page": 1 }));
+    assert_eq!(images["images"][0]["pixels"], json!([300, 400]));
+    // With corners, what they enclose is warped first, then flattened.
+    let r = ok(&mut a, "page_enhance_camera", json!({ "doc": photo, "page": 1, "flatten": true, "corners": [40, 30, 260, 30, 260, 370, 40, 370] }));
+    assert_eq!(r["flattened"], true);
+    assert_eq!(r["corners"], json!([40.0, 30.0, 260.0, 30.0, 260.0, 370.0, 40.0, 370.0]));
+    let e = a.call("page_enhance_camera", &json!({ "doc": photo, "page": 1, "flatten": "yes" }));
+    assert!(matches!(e, Err(ToolError::InvalidArgs(_))), "{e:?}");
+}
+
+#[test]
 fn editing_form_artwork_through_tools() {
     use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_incremental};
     let dir = workdir("form-artwork");

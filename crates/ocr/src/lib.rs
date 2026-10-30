@@ -7,10 +7,15 @@
 //! searchable image (Acrobat's "Searchable Image (Exact)": the image is left untouched).
 //!
 //! The models read the Latin alphabet (English and other languages written without accents).
+//!
+//! [`flatten`] straightens photographed pages (the UVDoc model, Apache-2.0, fetched the same way)
+//! for Enhance camera image.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::path::{Path, PathBuf};
+
+pub mod flatten;
 
 pub use pdfcraft_fonts::helvetica_width;
 
@@ -38,6 +43,11 @@ pub enum OcrError {
     Recognize(String),
     #[error("the image is empty")]
     EmptyImage,
+    /// Shown to end users, like [`OcrError::NoModels`]. The UI catalogs key this exact text.
+    #[error("the page flattening model is not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds it)")]
+    NoFlattenModel,
+    #[error("flattening the page failed: {0}")]
+    Flatten(String),
 }
 
 /// Where the two model files are.

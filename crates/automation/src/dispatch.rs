@@ -77,16 +77,25 @@ impl Automation {
             "page_enhance_camera" => {
                 let page = self.page(&a)?;
                 let given = a.nums::<8>("corners")?;
+                let flatten = a.opt_bool("flatten")?.unwrap_or(false);
                 let doc = self.doc(&a)?;
                 let (id, info) = (doc.id, doc.info.pages.get(page).cloned().ok_or_else(|| failed("no such page"))?);
+                if flatten && !pdfcraft_engine::camera::flatten_available() {
+                    return Err(failed(pdfcraft_engine::ocr::OcrError::NoFlattenModel.to_string()));
+                }
+                // Flattening crops the background itself, so it needs no corners; without it they
+                // are found automatically when not given.
                 let corners = match given {
-                    Some(c) => [0, 1, 2, 3].map(|i| {
+                    Some(c) => Some([0, 1, 2, 3].map(|i| {
                         let [x, y] = info.view_to_user(c[2 * i] as f32, c[2 * i + 1] as f32);
                         [x as f64, y as f64]
-                    }),
-                    None => self.session.detect_camera_corners(id, page).ok_or_else(|| {
-                        failed("the document's edges could not be found on this page: pass `corners` [x1, y1, x2, y2, x3, y3, x4, y4]")
-                    })?,
+                    })),
+                    None if flatten => None,
+                    None => Some(self.session.detect_camera_corners(id, page).ok_or_else(|| {
+                        failed(
+                            "the document's edges could not be found on this page: pass `corners` [x1, y1, x2, y2, x3, y3, x4, y4], or flatten: true",
+                        )
+                    })?),
                 };
                 let level = match a.opt_int("level")? {
                     None => 0,
@@ -98,12 +107,20 @@ impl Automation {
                     Some(m) => pdfcraft_engine::camera_clean::Look::from_name(m)
                         .ok_or_else(|| ToolError::InvalidArgs(format!("unknown mode {m:?} (original, colour, greyscale, bw)")))?,
                 };
-                self.session.enhance_camera_page_at(id, page, corners, look, level).map_err(failed)?;
+                let how = match (flatten, corners) {
+                    (true, c) => pdfcraft_engine::camera::Straighten::Flatten(c),
+                    (false, Some(c)) => pdfcraft_engine::camera::Straighten::Corners(c),
+                    (false, None) => return Err(failed("no corners to straighten the page by")),
+                };
+                self.session.enhance_camera_page_with(id, page, how, look, level).map_err(failed)?;
                 let r = |v: f32| (v * 100.0).round() / 100.0;
-                let used: Vec<f32> = corners.iter().flat_map(|&[x, y]| info.user_to_view(x as f32, y as f32)).map(r).collect();
                 let mut out = summary(self.doc(&a)?);
-                out["corners"] = json!(used);
-                out["detected"] = json!(given.is_none());
+                if let Some(corners) = corners {
+                    let used: Vec<f32> = corners.iter().flat_map(|&[x, y]| info.user_to_view(x as f32, y as f32)).map(r).collect();
+                    out["corners"] = json!(used);
+                }
+                out["detected"] = json!(given.is_none() && !flatten);
+                out["flattened"] = json!(flatten);
                 out
             }
             "page_delete" => {

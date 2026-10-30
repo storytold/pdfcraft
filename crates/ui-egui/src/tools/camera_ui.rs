@@ -1,6 +1,7 @@
 //! Scan & OCR ▸ Enhance ▸ Camera image: four corner handles on a page, dragged onto the edges of
 //! a photographed document; Enhance page straightens what they enclose
-//! (`Session::enhance_camera_page`, one undoable step).
+//! (`Session::enhance_camera_page_with`, one undoable step). With Flatten curved page on, the
+//! UVDoc model then flattens it too: curved or folded sheets come out with straight lines.
 
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Shape, Stroke, vec2};
 
@@ -45,6 +46,8 @@ pub struct CameraDone {
     pub page: usize,
     /// The corners it was straightened from, in PDF user space.
     pub corners: [[f64; 2]; 4],
+    /// Whether it was flattened too (Flatten curved page).
+    pub flatten: bool,
     /// The look and slider level chosen, and the ones the page shows.
     pub look: Look,
     pub level: u8,
@@ -53,6 +56,17 @@ pub struct CameraDone {
     pub turns: i64,
     /// The undo steps the enhancement and the turns took.
     pub steps: usize,
+}
+
+impl CameraDone {
+    /// How the page is straightened: by the corners, then flattened when that is on.
+    pub fn straighten(&self) -> pdfcraft_engine::camera::Straighten {
+        if self.flatten {
+            pdfcraft_engine::camera::Straighten::Flatten(Some(self.corners))
+        } else {
+            pdfcraft_engine::camera::Straighten::Corners(self.corners)
+        }
+    }
 }
 
 fn screen(xf: &PageXform, c: [f32; 2]) -> Pos2 {
@@ -138,7 +152,8 @@ pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, view: 
 }
 
 /// The floating bar at the top right of the document area (where the find bar goes, clear of a
-/// centred page's corners): Enhance page and Cancel; once the page is enhanced, rotate it either
+/// centred page's corners): Flatten curved page (when its model is installed; otherwise
+/// disabled, saying why), Enhance page and Cancel; once the page is enhanced, rotate it either
 /// way, choose its look (original, colour, greyscale, black and white) and clean-up level,
 /// Crop pages, Organize pages, or Done. The instructions are a notice (`ocr.enhance_camera`).
 pub(crate) fn bar(ctx: &egui::Context, view: &mut DocView, area: Rect, t: &Tokens, allowed: bool) {
@@ -204,6 +219,23 @@ pub(crate) fn bar(ctx: &egui::Context, view: &mut DocView, area: Rect, t: &Token
                             }
                             return;
                         }
+                        // Flatten curved page: the UVDoc model, when it is installed.
+                        let can_flatten = pdfcraft_engine::camera::flatten_available();
+                        if !can_flatten {
+                            view.camera_flatten = false;
+                        }
+                        let toggle =
+                            ui.add_enabled(allowed && can_flatten, crate::widgets::checkbox(&mut view.camera_flatten, tl!("Flatten curved page")));
+                        if can_flatten {
+                            toggle.on_hover_text(tl!(
+                                "Straighten a page that is curved, folded or photographed at an angle, so its lines of text run straight"
+                            ));
+                        } else {
+                            toggle.on_disabled_hover_text(tl!(
+                                "the page flattening model is not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds it)"
+                            ));
+                        }
+                        ui.separator();
                         let ready = allowed && view.camera.is_some();
                         if ui.add_enabled_ui(ready, |ui| crate::widgets::pill_button(ui, tl!("Enhance page"), true)).inner.clicked() {
                             view.pending_action = Some(ViewAction::EnhanceCamera);
