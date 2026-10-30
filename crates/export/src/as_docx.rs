@@ -28,7 +28,19 @@ fn run_xml(text: &str, size: f64, bold: bool, italic: bool, color: [f64; 3]) -> 
     }
     let half_points = if size.is_finite() { (size * 2.0).round().clamp(2.0, 3276.0) as i64 } else { 24 };
     rpr.push_str(&format!("<w:sz w:val=\"{half_points}\"/>"));
-    format!("<w:r><w:rPr>{rpr}</w:rPr><w:t xml:space=\"preserve\">{}</w:t></w:r>", esc(text))
+    let mut content = String::new();
+    for (line, text) in crate::text_lines(text).enumerate() {
+        if line > 0 {
+            content.push_str("<w:br/>");
+        }
+        for (tab, text) in text.split('\t').enumerate() {
+            if tab > 0 {
+                content.push_str("<w:tab/>");
+            }
+            content.push_str(&format!("<w:t xml:space=\"preserve\">{}</w:t>", esc(text)));
+        }
+    }
+    format!("<w:r><w:rPr>{rpr}</w:rPr>{content}</w:r>")
 }
 
 /// One Word table: explicit absent borders (alignment alone cannot prove PDF rules), a grid sized

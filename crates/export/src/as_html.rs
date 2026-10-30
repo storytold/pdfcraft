@@ -41,6 +41,7 @@ pub fn html(pages: &[Page], title: &str) -> String {
     let mut s = format!(
         "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>body{{max-width:46em;margin:2em auto;font-family:sans-serif;line-height:1.45}}\
 img{{max-width:100%}}hr{{border:0;border-top:1px solid #ccc;margin:2em 0}}\
+p,h1,h2,h3,h4,h5,h6,td,th{{white-space:pre-wrap}}\
 table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;padding:2px 6px;vertical-align:top}}</style>\n</head>\n<body>\n",
         esc(title)
     );

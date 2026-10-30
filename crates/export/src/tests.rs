@@ -244,11 +244,11 @@ fn word_opens_text_with_control_characters_and_long_pages() {
         space_around: [false; 2],
     });
     let xml = part(&docx(&[p.clone()], "Receipt\u{1}"), "word/document.xml");
-    assert!(xml.contains(">Total 4.50\tGBP</w:t>"), "{xml}");
+    assert!(xml.contains(">Total 4.50</w:t><w:tab/><w:t xml:space=\"preserve\">GBP</w:t>"), "{xml}");
     assert!(!xml.chars().any(|c| !allowed(c)));
     assert!(xml.contains("<w:pgSz w:w=\"12240\" w:h=\"31680\"/>"), "clamped to 22 in: {xml}");
     assert!(xml.contains("<w:sz w:val=\"24\"/>"), "a non-finite size falls back to 12 pt");
-    assert!(rtf(&[p]).contains("Total 4.50\tGBP"));
+    assert!(rtf(&[p]).contains("Total 4.50\\tab GBP"));
     // A narrow page keeps room for text: margins shrink.
     let narrow = Page { width: 100.0, height: 200.0, ..page() };
     let xml = part(&docx(&[narrow], "Narrow"), "word/document.xml");
@@ -768,4 +768,190 @@ fn a_paragraph_is_a_heading_only_when_its_text_is() {
     assert_eq!(xml.matches("<w:pStyle w:val=\"Heading1\"/>").count(), 1, "{xml}");
     assert!(!xml.contains("Heading2"), "the lead-in made its paragraph a heading: {xml}");
     assert_eq!(word_paragraphs(&xml).len(), 2, "{xml}");
+}
+
+const LOGICAL_WHITESPACE: &str = "  A\tB\r\nC & D  ";
+
+fn logical_whitespace_pages() -> [Page; 2] {
+    let styled = Block { size: 11.0, bold: true, italic: true, color: [0.25, 0.5, 0.75], ..block(LOGICAL_WHITESPACE, 72.0, 600.0, 200.0, 612.0) };
+    let paragraph = Page {
+        width: 612.0,
+        height: 792.0,
+        blocks: vec![
+            styled.clone(),
+            block(
+                "The unrelated paragraph remains unchanged and provides enough ordinary body text to keep the smaller styled run in paragraph flow.",
+                72.0,
+                300.0,
+                540.0,
+                312.0,
+            ),
+        ],
+        images: Vec::new(),
+        background: None,
+    };
+    let mut table = table_page();
+    let cell = table.blocks.first_mut().unwrap();
+    *cell = Block { rect: cell.rect, ..styled };
+    [paragraph, table]
+}
+
+#[test]
+fn logical_whitespace_detected_table_keeps_cell_edges_and_line_endings() {
+    let [_, page] = logical_whitespace_pages();
+    let (tables, _) = tables(&page.blocks);
+    assert_eq!(tables.len(), 1);
+    assert_eq!(tables[0].rows[0][0].text, LOGICAL_WHITESPACE);
+}
+
+#[test]
+fn logical_whitespace_word_uses_semantic_breaks_and_tabs_with_preserved_edges() {
+    for page in logical_whitespace_pages() {
+        let xml = part(&docx(&[page], "Whitespace"), "word/document.xml");
+        assert!(
+            xml.contains(
+                "<w:t xml:space=\"preserve\">  A</w:t><w:tab/><w:t xml:space=\"preserve\">B</w:t><w:br/><w:t xml:space=\"preserve\">C &amp; D  </w:t>"
+            ),
+            "{xml}"
+        );
+        assert_eq!(xml.matches("<w:tab/>").count(), 1, "{xml}");
+        assert_eq!(xml.matches("<w:br/>").count(), 1, "a CRLF is one break: {xml}");
+        assert!(xml.contains("<w:b/><w:i/><w:color w:val=\"4080BF\"/><w:sz w:val=\"22\"/>"), "{xml}");
+        assert!(!xml.contains("A\tB") && !xml.contains("B\r\nC"), "raw control characters are not Word run controls: {xml}");
+    }
+}
+
+#[test]
+fn logical_whitespace_powerpoint_breaks_are_paragraph_children_and_keep_run_style() {
+    for page in logical_whitespace_pages() {
+        let xml = part(&pptx(&[page], "Whitespace"), "ppt/slides/slide1.xml");
+        assert!(xml.contains(">  A\tB</a:t></a:r><a:br"), "DrawingML breaks are siblings of runs: {xml}");
+        assert!(xml.contains(">C &amp; D  </a:t>"), "{xml}");
+        assert_eq!(xml.matches("<a:br").count(), 1, "a CRLF is one break: {xml}");
+        assert!(!xml.contains("<a:tab"), "a tab-stop declaration is not an inline tab character: {xml}");
+        assert!(xml.matches("sz=\"1100\" b=\"1\" i=\"1\"").count() >= 2, "both text runs keep the source style: {xml}");
+        assert!(xml.matches("<a:srgbClr val=\"4080BF\"/>").count() >= 2, "both text runs keep the source colour: {xml}");
+    }
+}
+
+#[test]
+fn logical_whitespace_rtf_uses_line_and_tab_controls_and_keeps_edges() {
+    for page in logical_whitespace_pages() {
+        let output = rtf(&[page]);
+        assert!(output.contains("  A\\tab B\\line C & D  "), "{output}");
+        assert_eq!(output.matches("\\line ").count(), 1, "a CRLF is one break: {output}");
+        assert_eq!(output.matches("\\tab ").count(), 1, "{output}");
+        assert!(output.contains("\\fs22\\b\\i\\cf1"), "{output}");
+        assert!(!output.contains("A\tB") && !output.contains("B\r\nC"), "raw newlines are ignored by RTF readers: {output}");
+    }
+}
+
+#[test]
+fn logical_whitespace_html_preserves_visible_paragraph_and_cell_whitespace() {
+    for page in logical_whitespace_pages() {
+        let output = html(&[page], "Whitespace");
+        let css = output.split("<style>").nth(1).unwrap().split("</style>").next().unwrap();
+        for tag in ["p", "td"] {
+            assert!(
+                css.split('}').any(|rule| {
+                    rule.split_once('{').is_some_and(|(selectors, declarations)| {
+                        selectors.split(',').any(|selector| selector.trim() == tag) && declarations.contains("white-space:pre-wrap")
+                    })
+                }),
+                "{tag} needs visible whitespace preservation: {output}"
+            );
+        }
+        let normalized = output.replace("\r\n", "\n");
+        assert!(normalized.contains("<strong><em>  A\tB\nC &amp; D  </em></strong>"), "{output}");
+        assert!(output.contains("style=\"color:#4080BF\""), "{output}");
+    }
+}
+
+#[test]
+fn logical_whitespace_lines_keep_unicode_and_empty_edges() {
+    for (text, lines) in
+        [("", vec![""]), ("\r\n", vec!["", ""]), ("\r\n\r\n", vec!["", "", ""]), ("\u{03bb}\r\n\r\u{7d42}\n", vec!["\u{03bb}", "", "\u{7d42}", ""])]
+    {
+        assert_eq!(text_lines(text).collect::<Vec<_>>(), lines, "{text:?}");
+    }
+}
+
+#[test]
+fn logical_whitespace_controls_do_not_break_unicode_or_metacharacter_escaping() {
+    let text = "\t\u{03bb}<&>{}\\\r\n\r\u{7d42} \n";
+    let page = Page { width: 612.0, height: 792.0, blocks: vec![block(text, 72.0, 600.0, 200.0, 612.0)], images: Vec::new(), background: None };
+    let word = part(&docx(std::slice::from_ref(&page), "Unicode"), "word/document.xml");
+    assert_eq!(word.matches("<w:br/>").count(), 3, "{word}");
+    assert_eq!(word.matches("<w:tab/>").count(), 1, "{word}");
+    assert!(word.contains(">\u{03bb}&lt;&amp;&gt;{}\\</w:t>"), "{word}");
+    assert!(word.contains(">\u{7d42} </w:t><w:br/><w:t xml:space=\"preserve\"></w:t>"), "{word}");
+    let slides = part(&pptx(std::slice::from_ref(&page), "Unicode"), "ppt/slides/slide1.xml");
+    assert_eq!(slides.matches("<a:br/>").count(), 3, "{slides}");
+    assert!(slides.contains(">\t\u{03bb}&lt;&amp;&gt;{}\\</a:t>"), "{slides}");
+    assert!(slides.contains(">\u{7d42} </a:t></a:r><a:br/>"), "{slides}");
+    let rich = rtf(std::slice::from_ref(&page));
+    assert!(rich.contains(r"\tab \u955?<&>\{\}\\\line \line \u32066? \line "), "{rich}");
+    assert_eq!(rich.matches("\\line ").count(), 3, "{rich}");
+    let web = html(&[page], "Unicode");
+    assert!(web.contains("\t\u{03bb}&lt;&amp;&gt;{}\\\r\n\r\u{7d42} \n"), "{web}");
+}
+
+fn powerpoint_explicit_lines_before_following_item(with_table: bool) {
+    let line_count = 8i64;
+    let text = std::iter::repeat_n("x", line_count as usize).collect::<Vec<_>>().join("\r\n");
+    let title = Block { size: 24.0, ..block("Heading", 90.0, 760.0, 210.0, 784.0) };
+    // Its tall source box keeps this paragraph out of the short-cell detector.
+    let lines = block(&text, 80.0, 650.0, 500.0, 740.0);
+    let mut slide = if with_table { table_page() } else { Page { width: 612.0, height: 792.0, ..Page::default() } };
+    slide.blocks.extend([title, lines]);
+    if !with_table {
+        let image = page().images.first().unwrap().clone();
+        slide.images.push(Image { rect: [72.0, 400.0, 272.0, 500.0], ..image });
+    }
+    let xml = part(&pptx(&[slide], "Explicit lines"), "ppt/slides/slide1.xml");
+    let offset_y =
+        |shape: &str| -> i64 { shape.split("<a:off ").nth(1).unwrap().split("y=\"").nth(1).unwrap().split('"').next().unwrap().parse().unwrap() };
+    let text_shape = xml.split("name=\"TextBox ").nth(1).unwrap();
+    let text_y = offset_y(text_shape);
+    let following_shape = xml.split(if with_table { "<p:graphicFrame>" } else { "<p:pic>" }).nth(1).unwrap();
+    let following_y = offset_y(following_shape);
+    let minimum_text_height = line_count * 12 * 12700;
+    assert_eq!(xml.matches("<a:br/>").count(), (line_count - 1) as usize, "{xml}");
+    assert!(
+        following_y >= text_y + minimum_text_height,
+        "the following item overlaps eight explicit 12 pt lines: text y={text_y}, next y={following_y}, minimum height={minimum_text_height}: {xml}"
+    );
+    let text_height: i64 = text_shape.split("<a:ext ").nth(1).unwrap().split("cy=\"").nth(1).unwrap().split('"').next().unwrap().parse().unwrap();
+    assert!(text_height >= minimum_text_height, "the declared text box must reserve its explicit lines: {xml}");
+}
+
+#[test]
+fn logical_whitespace_powerpoint_reserves_explicit_lines_before_image() {
+    powerpoint_explicit_lines_before_following_item(false);
+}
+
+#[test]
+fn logical_whitespace_powerpoint_reserves_explicit_lines_before_table() {
+    powerpoint_explicit_lines_before_following_item(true);
+}
+
+#[test]
+fn logical_whitespace_powerpoint_multiline_title_reserves_its_full_height() {
+    let line_count = 8i64;
+    let text = std::iter::repeat_n("Title", line_count as usize).collect::<Vec<_>>().join("\n");
+    let image = page().images.first().unwrap().clone();
+    let slide = Page {
+        width: 612.0,
+        height: 792.0,
+        blocks: vec![Block { size: 24.0, ..block(&text, 72.0, 500.0, 500.0, 740.0) }],
+        images: vec![Image { rect: [72.0, 300.0, 272.0, 400.0], ..image }],
+        background: None,
+    };
+    let xml = part(&pptx(&[slide], "Multiline title"), "ppt/slides/slide1.xml");
+    let offset_y =
+        |shape: &str| -> i64 { shape.split("<a:off ").nth(1).unwrap().split("y=\"").nth(1).unwrap().split('"').next().unwrap().parse().unwrap() };
+    let title_y = offset_y(xml.split("name=\"Title ").nth(1).unwrap());
+    let image_y = offset_y(xml.split("<p:pic>").nth(1).unwrap());
+    assert_eq!(xml.matches("<a:br/>").count(), (line_count - 1) as usize, "{xml}");
+    assert!(image_y >= title_y + line_count * 24 * 12700, "the following picture overlaps the multiline title: {xml}");
 }

@@ -172,7 +172,8 @@ pub struct OfficeExport {
     /// Pages (0-based) that draw forms nested deeper than [`MAX_FORM_DEPTH`] or more of them
     /// than [`MAX_FORM_VISITS`], or pictures past [`MAX_EXPORT_IMAGE_BYTES`]: export stops
     /// reading there to stay bounded on hostile files, so the text and images of those forms, or
-    /// those pictures, are missing from `bytes`.
+    /// those pictures, are missing from `bytes`. Also includes pages whose structure-element
+    /// replacement text could not safely be resolved; those runs retain their source text.
     pub truncated_pages: Vec<usize>,
 }
 
@@ -196,6 +197,8 @@ impl crate::Document {
         // Each image object is encoded once and shared by every place that draws it.
         let mut encoded: HashMap<ObjRef, PreparedImage> = HashMap::new();
         let mut image_bytes = image_budget;
+        // Build the bounded structure index once for the whole export, rather than once per page.
+        let reading_context = pdfcraft_edit::ReadingContext::new(cos);
         let pages = self
             .info
             .pages
@@ -212,15 +215,16 @@ impl crate::Document {
                 let crop_width = f64::from(info.crop[2] - info.crop[0]);
                 let display_width = f64::from(if info.rotation % 180 == 0 { info.width } else { info.height });
                 let unit = if crop_width > 0.0 && crop_width.is_finite() && display_width.is_finite() { display_width / crop_width } else { 1.0 };
-                let reading = pdfcraft_edit::reading_blocks_checked(cos, i).unwrap_or_default();
-                let forms_unread = reading.truncated;
+                let reading = reading_context.blocks(i).unwrap_or_else(|_| pdfcraft_edit::ReadingBlocks { truncated: true, ..Default::default() });
+                let reading_incomplete = reading.truncated;
                 let blocks = reading
                     .blocks
                     .into_iter()
-                    .filter(|b| !b.text.trim().is_empty())
+                    .filter(|b| !b.text.is_empty())
                     .map(|b| {
                         let f = b.base_font.to_ascii_lowercase();
-                        // `text` is trimmed; the editor text keeps the source's own spaces.
+                        // Ordinary reading text may be trimmed; preserve the source's spacing
+                        // hints when joining styled blocks. Logical text keeps its own edges.
                         let space_around = [b.editor_text.starts_with(char::is_whitespace), b.editor_text.ends_with(char::is_whitespace)];
                         pdfcraft_export::Block {
                             space_around,
@@ -256,7 +260,7 @@ impl crate::Document {
                         })
                     })
                     .collect();
-                if forms_unread || over_budget {
+                if reading_incomplete || over_budget {
                     truncated.push(i);
                 }
                 // The page colour (Edit a PDF ▸ Background, a producer's page fill) for formats that keep one.

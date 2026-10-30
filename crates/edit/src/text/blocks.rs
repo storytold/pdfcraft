@@ -1,13 +1,14 @@
 use super::interp::{Carry, interpret};
-use super::lines::{content_streams, page_dict, reading_lines, rewritten_contents, splice, text_lines};
+use super::lines::{content_streams, page_dict, rewritten_contents, splice, text_lines};
 use super::rewrite::{LineEdit, coincident_ops, rewrite_block};
-use super::{Document, EditError, HashMap, Object, Op, Pieces, TextLine, group_blocks, regions};
+use super::{Document, EditError, HashMap, Object, Op, Pieces, TextLine, group_blocks};
 
 /// An editable text region: adjacent runs on visual rows, followed by aligned rows.
 /// A region may contain several source fonts, sizes, colours and weights.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextBlock {
-    /// The lines' text joined with spaces (lines that ended in a hyphen are joined directly).
+    /// The lines' text joined with spaces, dehyphenating ordinary source rows.
+    /// Read-only logical replacements preserve their supplied whitespace and hyphens.
     pub text: String,
     pub rect: [f64; 4],
     pub base_font: String,
@@ -35,7 +36,7 @@ pub struct TextBlock {
 impl TextBlock {
     /// Preserve styles outside the changed ranges; inserted characters inherit the surrounding
     /// source run. The texts are aligned word by word, so words left untouched between two edits
-    /// keep their own runs (#2198); past [`MAX_CHANGED_WORDS`] the draft counts as one change.
+    /// keep their own runs (#2198); past the internal `MAX_CHANGED_WORDS` limit, the draft counts as one change.
     /// Byte ranges are always UTF-8 boundaries. Linear time, including large edits.
     pub fn edited_spans(&self, draft: &str) -> Vec<(std::ops::Range<usize>, usize)> {
         if self.editor_text.len() > 4_000_000 || draft.len() > 4_000_000 {
@@ -302,6 +303,8 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
 /// (Export to Word, HTML and RTF). Read-only: indexes into this list are not
 /// [`text_blocks`] indexes, so they can't be passed to [`replace_block`] or [`rewrite_block`].
 /// [`reading_blocks_checked`] also says whether text was left out.
+/// This convenience call builds a fresh index; for multiple pages, reuse one
+/// [`crate::ReadingContext`] and call [`blocks`](crate::ReadingContext::blocks) on it.
 pub fn reading_blocks(doc: &Document, page: usize) -> Result<Vec<TextBlock>, EditError> {
     reading_blocks_checked(doc, page).map(|r| r.blocks)
 }
@@ -311,20 +314,22 @@ pub fn reading_blocks(doc: &Document, page: usize) -> Result<Vec<TextBlock>, Edi
 pub struct ReadingBlocks {
     /// The paragraphs, as [`reading_blocks`] returns them.
     pub blocks: Vec<TextBlock>,
-    /// The page draws forms nested deeper than [`MAX_FORM_DEPTH`], more of them than
-    /// [`MAX_FORM_VISITS`], or forms that run past what the page's content left of its decode
+    /// The page draws forms nested deeper than [`crate::MAX_FORM_DEPTH`], more of them than
+    /// [`crate::MAX_FORM_VISITS`], or forms that run past what the page's content left of its decode
     /// budget. Reading leaves those forms out to stay bounded on hostile files, so their text
     /// is missing from `blocks`; [`crate::reading_images`] walks the same forms and misses
-    /// their images too.
+    /// their images too. Also true when structure-element replacement text cannot be safely
+    /// resolved or placed; those runs retain their original/marked-content text instead.
     pub truncated: bool,
 }
 
 /// [`reading_blocks`], saying whether the limits that bound reading left text out. A page
 /// whose `/Contents` alone runs past its decode budget is an [`EditError::Invalid`], not a
 /// truncated result.
+/// This convenience call builds a fresh index; for multiple pages, reuse one
+/// [`crate::ReadingContext`] and call [`blocks`](crate::ReadingContext::blocks) on it.
 pub fn reading_blocks_checked(doc: &Document, page: usize) -> Result<ReadingBlocks, EditError> {
-    let (lines, truncated) = reading_lines(doc, page)?;
-    Ok(ReadingBlocks { blocks: regions::group_reading_blocks(&lines), truncated })
+    super::reading::ReadingContext::new(doc).blocks(page)
 }
 
 // An ideographic space carries intentional Japanese spacing, including paragraph indentation.

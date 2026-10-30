@@ -32,7 +32,9 @@ mod editor;
 mod fallback;
 mod interp;
 mod lines;
+mod reading;
 mod rewrite;
+mod structure;
 
 use blocks::paragraph_separator;
 #[cfg(test)]
@@ -55,6 +57,7 @@ use interp::{Origin, Paint, union};
 use lines::page_dict;
 pub(crate) use lines::{FormBudget, content_streams, content_streams_within, form_call, rewritten_contents, splice};
 pub use lines::{MAX_FORM_DEPTH, MAX_FORM_VISITS, glyph_text_lines, text_lines};
+pub use reading::ReadingContext;
 pub use rewrite::{LineEdit, replace_line, rewrite_block};
 use rewrite::{coincident_ops, rewrite_block_from};
 #[cfg(test)]

@@ -35,5 +35,24 @@ pub use layout::{Block, Cell, Image, Page, Table};
 use layout::{LOOKUP_STEPS, MAX_COLS, body_size};
 pub(crate) use layout::{Run, paragraphs, tables};
 
+/// Logical lines without their terminators: CRLF is one break, as are lone CR and LF.
+/// Keep empty lines and borrow the text rather than allocating a normalized copy.
+pub(crate) fn text_lines(mut text: &str) -> impl Iterator<Item = &str> {
+    let mut finished = false;
+    std::iter::from_fn(move || {
+        if finished {
+            return None;
+        }
+        let Some(at) = text.find(['\r', '\n']) else {
+            finished = true;
+            return Some(text);
+        };
+        let line = text.get(..at)?;
+        let rest = text.get(at..)?;
+        text = rest.strip_prefix("\r\n").or_else(|| rest.strip_prefix('\r')).or_else(|| rest.strip_prefix('\n'))?;
+        Some(line)
+    })
+}
+
 #[cfg(test)]
 mod tests;

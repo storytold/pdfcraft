@@ -81,6 +81,20 @@ family (`sign`, `sign_with_timestamp`, `timestamp_document`, `embed_ltv`).
 | `js` | The bridge to `pdfcraft-js`. `forms` never depends on `js` directly; the engine injects it, so a build without JavaScript is possible |
 | `xfa`, `ocr`, `compare`, `export` | Façades over the L3/L4 crates of the same names |
 
+## Logical text in Office export
+
+`export_office_checked` shares one bounded read-only structure index across the export.
+Complete single-page structure-element `/ActualText` replaces exactly its owned page or Form text once, including an intentionally empty replacement.
+Unrelated content retains its order, and exported logical spaces, tabs and line breaks are preserved.
+The source document, editable glyph/operator APIs, rendering and undo history are unchanged.
+
+`OfficeExport::truncated_pages` also reports incomplete logical reading.
+Ambiguous or repeated membership, multi-page owners, unsupported content contexts, missing anchors, malformed traversed structure graphs and decoding/tokenizer repairs retain source or existing marked-content text instead of applying an unsafe structure replacement.
+Structure traversal and extra run staging have fixed work, depth, text and storage limits.
+Membership follows forward `/K` declarations and checks declared `/P` links.
+Reverse `/ParentTree` metadata is not validated, so missing or contradictory reverse maps are not diagnosed.
+This is partial support for #3660, not general tagged-document reading order or exact Office layout reconstruction.
+
 ## Not done here
 
 - **Rendering is still borrowed.** `pdfcraft-render` wraps `hayro` and inspects through `lopdf`

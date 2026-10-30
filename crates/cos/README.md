@@ -61,6 +61,9 @@ another. Edits never touch the original bytes.
   `/EncryptMetadata`. `security.rs` knows what the spec exempts — the `/Encrypt` dictionary, xref
   streams, the trailer `/ID`, and objects inside an object stream (the stream is encrypted whole).
 
+`DecodeBudget::decode_checked` returns tolerant decoded bytes together with a repair flag, using the same cumulative allowance as `decode`.
+Readers that need complete content can retain partially decoded data while reporting that logical interpretation is incomplete.
+
 ## Writing
 
 `write_incremental` appends only the edited objects, a cross-reference section **in the same

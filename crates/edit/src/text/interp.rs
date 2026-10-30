@@ -1,5 +1,7 @@
 use super::fallback::is_type3_fallback;
+use super::reading::StructureScope;
 use super::rewrite::vertical_advance;
+use super::structure::ContentKey;
 use super::{Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, Rc};
 
 /// Text and graphics state captured for rewriting.
@@ -301,9 +303,66 @@ pub(super) struct Shown {
     pub(super) paint: Paint,
     pub(super) logical_order: bool,
     pub(super) actual_text: bool,
+    /// Read-only structure ownership, assigned before any geometric grouping.
+    pub(super) structure_owner: Option<usize>,
+    pub(super) structure_ambiguous: bool,
+    /// Original pen endpoints projected along this run's writing direction. Unlike an
+    /// axis-aligned ink box, these also preserve rotated and vertical pen advancement.
+    reading_extent: (f64, f64),
 }
 
 impl Shown {
+    pub(super) fn merge_reading(&mut self, item: Self) {
+        self.structure_ambiguous |= item.structure_ambiguous || self.structure_owner != item.structure_owner || !self.coherent_reading_anchor(&item);
+        let forward = if self.reading_extent.0 != self.reading_extent.1 {
+            self.reading_extent.1 > self.reading_extent.0
+        } else {
+            item.reading_extent.1 >= item.reading_extent.0
+        };
+        self.reading_extent = if forward {
+            (self.reading_extent.0.min(item.reading_extent.0), self.reading_extent.1.max(item.reading_extent.1))
+        } else {
+            (self.reading_extent.0.max(item.reading_extent.0), self.reading_extent.1.min(item.reading_extent.1))
+        };
+        if self.structure_ambiguous {
+            self.structure_owner = None;
+        }
+        self.glyph_count = self.glyph_count.saturating_add(item.glyph_count);
+        self.extra_ops.push(item.op);
+        self.extra_ops.extend(item.extra_ops);
+        self.rect = [self.rect[0].min(item.rect[0]), self.rect[1].min(item.rect[1]), self.rect[2].max(item.rect[2]), self.rect[3].max(item.rect[3])];
+        self.frame = union(self.frame, item.frame);
+        self.ink.extend(item.ink);
+    }
+
+    pub(super) fn replace_reading_text(&mut self, logical: String) {
+        self.logical_order = logical.chars().any(crate::bidi::is_rtl);
+        self.actual_text = true;
+        self.text = logical;
+        let (dir, _, _, across) = self.span();
+        let (start, end) = self.reading_extent;
+        self.start_x = dir.0 * start - dir.1 * across;
+        self.baseline = dir.1 * start + dir.0 * across;
+        self.end_x = dir.0 * end - dir.1 * across;
+        self.end_y = dir.1 * end + dir.0 * across;
+        let matrix = self.tm.then(&self.state.ctm).0;
+        let scale = if self.state.vertical.is_some() { matrix[2].hypot(matrix[3]) } else { matrix[0].hypot(matrix[1]) };
+        self.advance = (end - start) / scale.max(1e-6);
+        if self.state.vertical.is_some() {
+            self.advance *= self.state.scale;
+        }
+    }
+
+    pub(super) fn coherent_reading_anchor(&self, other: &Self) -> bool {
+        let a = self.span().0;
+        let b = other.span().0;
+        let direction_matches = a.0 * b.0 + a.1 * b.1 > 1.0 - 1e-6;
+        let advance = self.reading_extent.1 - self.reading_extent.0;
+        let other_advance = other.reading_extent.1 - other.reading_extent.0;
+        let sign_matches = advance == 0.0 || other_advance == 0.0 || advance.signum() == other_advance.signum();
+        self.rect.iter().chain(&other.rect).all(|n| n.is_finite()) && direction_matches && sign_matches
+    }
+
     /// The unit direction of its baseline, where it starts and ends along it, and the baseline's
     /// offset across it (for upright text: the user-space x, x and y). A vertical run goes along
     /// its column instead, the way the pen moves: for upright text down, with the column's x
@@ -439,7 +498,7 @@ pub(super) struct Carry {
 /// The most glyph text one page's extraction produces, in bytes. A ToUnicode destination is
 /// copied for every glyph showing its code, so a small page can otherwise expand into gigabytes;
 /// real pages hold far less (a whole novel is about 1 MB).
-const MAX_PAGE_TEXT: usize = 16 << 20;
+pub(super) const MAX_PAGE_TEXT: usize = 16 << 20;
 
 impl Carry {
     pub(super) fn new() -> Self {
@@ -473,17 +532,42 @@ impl Carry {
 type CachedFont = (Rc<Metrics>, Option<String>, Result<Option<f64>, String>);
 
 /// A `Do` met while interpreting: its operator index, XObject name and the state there.
-type Invocation = (usize, Vec<u8>, Ts);
+pub(super) struct Invocation {
+    pub(super) op: usize,
+    pub(super) name: Vec<u8>,
+    pub(super) state: Ts,
+    pub(super) structure_owner: Option<usize>,
+}
+
+pub(super) struct LogicalText<'a> {
+    pub(super) properties: &'a Dict,
+    pub(super) structure: Option<StructureScope<'a>>,
+}
+
+impl<'a> LogicalText<'a> {
+    pub(super) fn inline(properties: &'a Dict) -> Self {
+        Self { properties, structure: None }
+    }
+}
 
 #[derive(Default)]
 struct MarkedContent {
     regions: Vec<Option<usize>>,
     layers: Vec<Option<Vec<u8>>>,
     actual_text: Vec<Option<(usize, usize, String)>>,
+    // Only the outermost active structure replacement wins; one depth is enough.
+    structure_owner: Option<(usize, usize)>,
+    // Only the first occurrence of an indexed key is tracked. Repeats already make its
+    // owner incomplete, so nested repeated IDs cannot grow another unbounded stack.
+    structure_closures: HashMap<usize, ContentKey>,
 }
 
 impl MarkedContent {
-    fn begin(&mut self, doc: &Document, op: &Op, index: usize, logical_text: Option<&Dict>, shown_count: usize) {
+    fn owner(&self, inherited: Option<usize>) -> Option<usize> {
+        inherited.or_else(|| self.structure_owner.map(|(_, owner)| owner))
+    }
+
+    fn begin(&mut self, doc: &Document, op: &Op, index: usize, logical_text: Option<&mut LogicalText<'_>>, shown_count: usize) {
         // Marked text paragraphs/headings are authoritative boundaries. Ignore artifacts and
         // inner spans, which inherit their enclosing region.
         let region = matches!(op.name(0), Some(b"P" | b"H" | b"H1" | b"H2" | b"H3" | b"H4" | b"H5" | b"H6" | b"LI" | b"TD" | b"TH"));
@@ -493,18 +577,45 @@ impl MarkedContent {
         self.layers
             .push(layer.then(|| op.operands.get(1).and_then(Object::as_name).map_or_else(|| format!("@{index}").into_bytes(), <[u8]>::to_vec)));
         // The property list is inline or named in the resources' /Properties (§14.6.2).
-        let list = logical_text.and_then(|properties| match op.operands.get(1) {
-            Some(Object::Name(name)) => properties.get(name).and_then(|object| doc.dict(object)),
-            other => other.and_then(Object::as_dict).cloned(),
+        let value = logical_text.as_ref().and_then(|logical| match op.operands.get(1) {
+            Some(Object::Name(name)) => logical.properties.get(name),
+            other => other,
         });
-        let logical = list.as_ref().and_then(|dict| dict.get(b"ActualText")).and_then(|value| match value {
+        let indirect = value.and_then(Object::as_ref).and_then(|r| doc.try_get(r.num).ok());
+        let list = indirect.as_deref().or(value).and_then(Object::as_dict);
+        let logical = list.and_then(|dict| dict.get(b"ActualText")).and_then(|value| match value {
             Object::String(value) if value.bytes.len() <= 4_000_000 => Some(value.to_text()),
             _ => None,
         });
+        let mcid = list.and_then(|dict| dict.get(b"MCID")).and_then(Object::as_int);
+        if let Some(scope) = logical_text.and_then(|logical| logical.structure.as_mut())
+            && let Some(mcid) = mcid
+            && let Some(observation) = scope.observe(mcid)
+        {
+            if observation.first {
+                self.structure_closures.insert(self.regions.len(), observation.key);
+            }
+            if self.owner(scope.inherited_owner).is_some_and(|owner| Some(owner) != observation.owner) {
+                // Lexically nested sequences can belong to sibling structure elements.
+                // Their overlapping claims must not let one replacement swallow the other.
+                scope.mark_ambiguous();
+            }
+            if self.owner(scope.inherited_owner).is_none() {
+                self.structure_owner = observation.owner.map(|owner| (self.regions.len(), owner));
+            }
+        }
         self.actual_text.push(logical.map(|text| (shown_count, index, text)));
     }
 
-    fn end(&mut self, index: usize, shown: &mut Vec<Shown>) {
+    fn end(&mut self, index: usize, shown: &mut Vec<Shown>, logical_text: Option<&mut LogicalText<'_>>) {
+        if let Some(key) = self.structure_closures.remove(&self.regions.len())
+            && let Some(scope) = logical_text.and_then(|logical| logical.structure.as_mut())
+        {
+            scope.close(&key);
+        }
+        if self.structure_owner.is_some_and(|(depth, _)| depth == self.regions.len()) {
+            self.structure_owner = None;
+        }
         self.regions.pop();
         self.layers.pop();
         if let Some(Some((start, open, logical))) = self.actual_text.pop() {
@@ -512,28 +623,12 @@ impl MarkedContent {
             let mut items = tail.into_iter();
             if let Some(mut first) = items.next() {
                 for item in items {
-                    first.glyph_count = first.glyph_count.saturating_add(item.glyph_count);
-                    first.extra_ops.push(item.op);
-                    first.extra_ops.extend(item.extra_ops);
-                    first.rect = [
-                        first.rect[0].min(item.rect[0]),
-                        first.rect[1].min(item.rect[1]),
-                        first.rect[2].max(item.rect[2]),
-                        first.rect[3].max(item.rect[3]),
-                    ];
-                    first.frame = union(first.frame, item.frame);
-                    first.ink.extend(item.ink);
+                    first.merge_reading(item);
                 }
                 first.extra_ops.extend([open, index]);
                 // Only right-to-left ActualText is already in typing order and must stay out of
                 // bidi recovery. Word and Chrome also wrap Latin ligatures mid-word.
-                first.logical_order = logical.chars().any(crate::bidi::is_rtl);
-                first.actual_text = true;
-                first.text = logical;
-                first.start_x = first.rect[0];
-                first.end_x = first.rect[2];
-                first.end_y = first.baseline;
-                first.advance = (first.end_x - first.start_x) / first.tm.then(&first.state.ctm).0[0].abs().max(1e-6);
+                first.replace_reading_text(logical);
                 shown.push(first);
             }
         }
@@ -549,6 +644,7 @@ struct TextRunState<'a> {
     marked: &'a MarkedContent,
     carry: &'a mut Carry,
     out: &'a mut Vec<Shown>,
+    inherited_owner: Option<usize>,
 }
 
 fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), EditError> {
@@ -704,7 +800,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     if !pieces.iter().any(|p| matches!(p, Object::String(s) if !s.bytes.is_empty())) {
         return Ok(());
     }
-    out.push(Shown {
+    let mut shown = Shown {
         op: i,
         extra_ops: Vec::new(),
         glyph_count,
@@ -745,7 +841,13 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
         logical_order: false,
         actual_text: false,
-    });
+        structure_owner: marked.owner(state.inherited_owner),
+        structure_ambiguous: false,
+        reading_extent: (0.0, 0.0),
+    };
+    let (_, start, end, _) = shown.span();
+    shown.reading_extent = (start, end);
+    out.push(shown);
     Ok(())
 }
 
@@ -757,7 +859,7 @@ pub(super) fn interpret(
     carry: &mut Carry,
     mut invoked: Option<&mut Vec<Invocation>>,
     // `Some(properties)`: read `/ActualText`, looking named property lists up in `properties`.
-    logical_text: Option<&Dict>,
+    mut logical_text: Option<LogicalText<'_>>,
 ) -> Result<Vec<Shown>, EditError> {
     let fonts_res = resources.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let states = resources.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
@@ -769,15 +871,16 @@ pub(super) fn interpret(
     let mut bt = 0usize;
     let mut marked =
         MarkedContent { regions: std::mem::take(&mut carry.marked), layers: std::mem::take(&mut carry.layers), ..MarkedContent::default() };
+    let inherited_owner = logical_text.as_ref().and_then(|logical| logical.structure.as_ref()).and_then(|scope| scope.inherited_owner);
     for (i, op) in ops.iter().enumerate() {
         match op.op.as_slice() {
             // No depth cap: every `EMC` pops, so a capped push would pair it with the enclosing
             // sequence (#3573). Both stacks stay bounded by the number of operators.
             b"BMC" | b"BDC" => {
-                marked.begin(doc, op, i, logical_text, out.len());
+                marked.begin(doc, op, i, logical_text.as_mut(), out.len());
             }
             b"EMC" => {
-                marked.end(i, &mut out);
+                marked.end(i, &mut out, logical_text.as_mut());
             }
             b"q" => stack.push((ts.clone(), tm, tlm)),
             b"Q" => {
@@ -855,7 +958,7 @@ pub(super) fn interpret(
             }
             b"Do" => {
                 if let (Some(list), Some(name)) = (invoked.as_deref_mut(), op.name(0)) {
-                    list.push((i, name.to_vec(), ts.clone()));
+                    list.push(Invocation { op: i, name: name.to_vec(), state: ts.clone(), structure_owner: marked.owner(inherited_owner) });
                 }
             }
             b"Td" | b"TD" => {
@@ -878,7 +981,17 @@ pub(super) fn interpret(
                 tm = tlm;
             }
             b"Tj" | b"TJ" | b"'" | b"\"" => {
-                let mut state = TextRunState { ts: &mut ts, tm: &mut tm, tlm: &mut tlm, at_bt: &at_bt, bt, marked: &marked, carry, out: &mut out };
+                let mut state = TextRunState {
+                    ts: &mut ts,
+                    tm: &mut tm,
+                    tlm: &mut tlm,
+                    at_bt: &at_bt,
+                    bt,
+                    marked: &marked,
+                    carry,
+                    out: &mut out,
+                    inherited_owner,
+                };
                 show_text(op, i, &mut state)?;
             }
             _ => {}

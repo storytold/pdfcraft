@@ -37,7 +37,125 @@ fn height_emu(pt: f64) -> i64 {
     }
 }
 
-/// A formatted DrawingML text run (`<a:r>`).
+/// Conservative flowing-text height, including explicit lines and word wrapping.
+/// Styled runs share a line; each run's line endings match its serialized breaks.
+/// An em per character avoids relying on unavailable source-font metrics; the
+/// largest run sets leading.
+fn text_height<'a>(runs: impl IntoIterator<Item = (&'a str, f64)>, width: f64, leading: f64) -> f64 {
+    let mut measure = LineMeasure { width: width.max(1.0), used: 0.0, word: 0.0, lines: 1.0 };
+    let mut size = 10.0_f64;
+    let maximum = MAX_ITEM_EMU as f64 / 12700.0;
+    for (text, run_size) in runs {
+        // Match the size bounds serialized in a:rPr.
+        let run_size = if run_size.is_finite() { run_size.clamp(1.0, 4000.0) } else { 12.0 };
+        size = size.max(run_size);
+        let mut after_cr = false;
+        for c in text.chars() {
+            if after_cr {
+                after_cr = false;
+                if c == '\n' {
+                    continue;
+                }
+            }
+            if !crate::as_html::allowed(c) {
+                continue;
+            }
+            match c {
+                '\r' | '\n' => {
+                    measure.finish_word();
+                    measure.lines += 1.0;
+                    measure.used = 0.0;
+                    after_cr = c == '\r';
+                }
+                ' ' => {
+                    measure.finish_word();
+                    if measure.used + run_size > measure.width {
+                        measure.lines += 1.0;
+                        measure.used = 0.0;
+                    }
+                    measure.used = (measure.used + run_size).min(measure.width);
+                }
+                '\t' => {
+                    measure.finish_word();
+                    let stop = run_size * 8.0;
+                    let next = (measure.used / stop).floor().mul_add(stop, stop);
+                    if next > measure.width {
+                        measure.lines += 1.0;
+                        measure.used = 0.0;
+                    } else {
+                        measure.used = next;
+                    }
+                }
+                _ => measure.word += run_size,
+            }
+            // Stop counting before a hostile string can exceed the shape-height cap.
+            if (measure.lines + measure.word / measure.width) * size * leading >= maximum {
+                return maximum;
+            }
+        }
+    }
+    measure.finish_word();
+    (measure.lines * size * leading).min(maximum)
+}
+
+struct LineMeasure {
+    width: f64,
+    used: f64,
+    word: f64,
+    lines: f64,
+}
+
+impl LineMeasure {
+    fn finish_word(&mut self) {
+        if self.word == 0.0 {
+            return;
+        }
+        if self.used > 0.0 && self.used + self.word > self.width {
+            self.lines += 1.0;
+            self.used = 0.0;
+        }
+        let wraps = (self.word / self.width).ceil().max(1.0) - 1.0;
+        self.lines += wraps;
+        self.used += self.word - wraps * self.width;
+        self.word = 0.0;
+    }
+}
+
+#[cfg(test)]
+mod height_tests {
+    use super::{MAX_ITEM_EMU, text_height};
+
+    #[test]
+    fn styled_continuations_share_a_line_and_each_runs_breaks_match_serialization() {
+        let split = text_height([("ab", 12.0), ("cd\r", 12.0), ("\nx", 12.0)], 120.0, 1.3);
+        assert_eq!(split, 3.0 * 12.0 * 1.3);
+        assert_eq!(text_height([("abcd\r\nx", 12.0)], 120.0, 1.3), 2.0 * 12.0 * 1.3);
+        assert_eq!(text_height([("abcd", 12.0)], 120.0, 1.3), text_height([("ab", 12.0), ("cd", 12.0)], 120.0, 1.3));
+        assert_eq!(text_height([("x\r\rx\n", 12.0)], 120.0, 1.3), 4.0 * 12.0 * 1.3);
+        assert_eq!(text_height([("x\r\u{0}\nx", 12.0)], 120.0, 1.3), 3.0 * 12.0 * 1.3);
+    }
+
+    #[test]
+    fn wraps_account_for_words_width_and_run_size() {
+        assert_eq!(text_height([("xxxx xxxx", 12.0)], 60.0, 1.3), 2.0 * 12.0 * 1.3);
+        assert_eq!(text_height([("xxxxxxxxxxxx", 12.0)], 60.0, 1.3), 3.0 * 12.0 * 1.3);
+        assert!(text_height([("xxxx", 24.0)], 60.0, 1.3) > text_height([("xxxx", 12.0)], 60.0, 1.3));
+        assert!(text_height([("xx\tx", 12.0)], 60.0, 1.3) > text_height([("xxx", 12.0)], 60.0, 1.3));
+    }
+
+    #[test]
+    fn hostile_heights_are_finite_and_bounded() {
+        let maximum = MAX_ITEM_EMU as f64 / 12700.0;
+        let many_lines = "x\n".repeat(20_000);
+        assert_eq!(text_height([(many_lines.as_str(), 12.0)], 120.0, 1.3), maximum);
+        for size in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::MAX, -1.0, 0.0] {
+            let height = text_height([("text", size)], 120.0, 1.3);
+            assert!(height.is_finite() && height > 0.0 && height <= maximum);
+        }
+    }
+}
+
+/// Formatted DrawingML runs, with line breaks as siblings inside their paragraph.
 fn run_drawingml(text: &str, size: f64, bold: bool, italic: bool, color: [f64; 3]) -> String {
     let mut rpr = String::new();
     let sz = if size.is_finite() { (size * 100.0).round().clamp(100.0, 400000.0) as i64 } else { 1200 };
@@ -49,7 +167,15 @@ fn run_drawingml(text: &str, size: f64, bold: bool, italic: bool, color: [f64; 3
         rpr.push_str(" i=\"1\"");
     }
     let fill = if let Some(h) = hex(color) { format!("<a:solidFill><a:srgbClr val=\"{h}\"/></a:solidFill>") } else { String::new() };
-    format!("<a:r><a:rPr{rpr}>{fill}</a:rPr><a:t>{}</a:t></a:r>", esc(text))
+    let mut content = String::new();
+    for (line, text) in crate::text_lines(text).enumerate() {
+        if line > 0 {
+            content.push_str("<a:br/>");
+        }
+        // Tabs are characters within a:t; a:tab declares a paragraph tab stop.
+        content.push_str(&format!("<a:r><a:rPr{rpr}>{fill}</a:rPr><a:t>{}</a:t></a:r>", esc(text)));
+    }
+    content
 }
 
 /// Generates a DrawingML table inside a `<p:graphicFrame>` with explicit cell borders.
@@ -157,7 +283,8 @@ pub fn pptx(pages: &[Page], title: &str) -> Vec<u8> {
         let mut slide_media_rels: Vec<(String, usize)> = Vec::new();
 
         if let Some(title_block) = title_idx.and_then(|ti| p.blocks.get(ti)) {
-            let title_h = height_emu((title_block.size * 1.5).max(36.0));
+            let title_h =
+                height_emu(text_height(std::iter::once((title_block.text.as_str(), title_block.size)), content_w as f64 / 12700.0, 1.5).max(36.0));
             let title_run = run_drawingml(&title_block.text, title_block.size, title_block.bold, title_block.italic, title_block.color);
             shapes.push_str(&format!(
                 "<p:sp><p:nvSpPr><p:cNvPr id=\"{shape_id}\" name=\"Title {shape_id}\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr>\
@@ -180,10 +307,7 @@ pub fn pptx(pages: &[Page], title: &str) -> Vec<u8> {
                             paras_xml.push_str(&run_drawingml(&r.text, r.block.size, r.block.bold, r.block.italic, r.block.color));
                         }
                         paras_xml.push_str("</a:p>");
-                        let len = runs.iter().map(|r| r.text.len()).fold(0usize, usize::saturating_add);
-                        let size = runs.iter().map(|r| r.block.size).fold(10.0, f64::max);
-                        let lines = (len as f64 / 60.0).ceil().max(1.0);
-                        est_h_pt += (size * 1.3) * lines + 6.0;
+                        est_h_pt += text_height(runs.iter().map(|r| (r.text.as_str(), r.block.size)), content_w as f64 / 12700.0, 1.3) + 6.0;
                         i += 1;
                     }
                     let box_h = height_emu(est_h_pt);

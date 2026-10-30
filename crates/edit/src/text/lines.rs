@@ -1,6 +1,10 @@
 use super::fallback::{same_font, same_paint};
-use super::interp::{Carry, Origin, Pen, Shown, TextState, Ts, direction, interpret, to_frame, union};
+use super::interp::{Carry, Invocation, LogicalText, Origin, Pen, Shown, TextState, Ts, direction, interpret, to_frame, union};
+use super::reading::{ContentContext, Coverage, ReadingAtom, StructureScope, apply_structure};
+use super::structure::StructureTextIndex;
 use super::{DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Object, Op, Pieces, Stream, TextLine, parse, serialize_ops};
+
+type ContentStreams = Vec<(Object, Vec<u8>)>;
 
 impl TextLine {
     /// The baseline's height in user space.
@@ -69,26 +73,57 @@ pub(crate) fn content_streams(doc: &Document, page: &Dict) -> Result<Vec<(Object
 /// [`content_streams`], decoded against `budget`, which a walk of the page's forms then goes on
 /// spending.
 pub(crate) fn content_streams_within(doc: &Document, page: &Dict, budget: &mut DecodeBudget) -> Result<Vec<(Object, Vec<u8>)>, EditError> {
-    let list: Vec<Object> = match page.get(b"Contents") {
-        None => Vec::new(),
-        Some(c) => match &*doc.resolve(c) {
-            Object::Array(a) => a.clone(),
-            _ => vec![c.clone()],
-        },
+    content_streams_within_checked(doc, page, budget).map(|(streams, _)| streams)
+}
+
+/// Keep decoding repairs visible to logical reading, without changing the lenient stream
+/// representation used by existing editing and rewrite callers.
+fn content_streams_within_checked(doc: &Document, page: &Dict, budget: &mut DecodeBudget) -> Result<(ContentStreams, bool), EditError> {
+    let Some(source) = page.get(b"Contents") else { return Ok((Vec::new(), false)) };
+    let indirect = source.as_ref().map(|reference| doc.try_get(reference.num));
+    let container = match &indirect {
+        Some(Ok(object)) => object.as_ref(),
+        _ => source,
     };
+    // Borrow wide arrays instead of cloning the whole container before visiting its entries.
+    let list = match container {
+        Object::Array(items) => items.as_slice(),
+        _ => std::slice::from_ref(source),
+    };
+    let mut repaired = indirect.as_ref().is_some_and(Result::is_err);
     let mut out = Vec::with_capacity(list.len());
     for o in list {
-        let data = match &*doc.resolve(&o) {
-            Object::Stream(s) => match budget.decode(s) {
-                Ok(data) => data,
-                Err(e) if budget.remaining() == 0 => return Err(EditError::Invalid(format!("the page content is too large to read: {e}"))),
-                Err(_) => Vec::new(),
-            },
-            _ => Vec::new(),
+        let loaded = o.as_ref().map(|reference| doc.try_get(reference.num));
+        let object = match &loaded {
+            Some(Ok(object)) => object.as_ref(),
+            Some(Err(_)) => {
+                repaired = true;
+                out.push((o.clone(), Vec::new()));
+                continue;
+            }
+            None => o,
         };
-        out.push((o, data));
+        let data = match object {
+            Object::Stream(s) => match budget.decode_checked(s) {
+                Ok((data, damage)) => {
+                    repaired |= damage;
+                    data
+                }
+                Err(e) if budget.remaining() == 0 => return Err(EditError::Invalid(format!("the page content is too large to read: {e}"))),
+                Err(_) => {
+                    repaired = true;
+                    Vec::new()
+                }
+            },
+            Object::Null => Vec::new(),
+            _ => {
+                repaired = true;
+                Vec::new()
+            }
+        };
+        out.push((o.clone(), data));
     }
-    Ok(out)
+    Ok((out, repaired))
 }
 
 /// Rewrite a page's content (its streams joined, see [`Pieces`]): `edit(i)` gives the operators
@@ -202,7 +237,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
     let pieces = Pieces::join(&content_streams(doc, &p.dict)?.into_iter().map(|(_, d)| d).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
     let properties = res.get(b"Properties").and_then(|o| doc.dict(o)).unwrap_or_default();
-    let shown = interpret(doc, &ops, &res, &mut cache, &mut carry, None, actual_text.then_some(&properties))?;
+    let shown = interpret(doc, &ops, &res, &mut cache, &mut carry, None, actual_text.then(|| LogicalText::inline(&properties)))?;
     let mut last: Option<(usize, Pen)> = None; // the stream piece and where its last run ended
     for mut s in shown {
         // A single RTL glyph's ActualText (e.g. lam-alef) is an inline ligature, not a
@@ -470,6 +505,7 @@ pub(crate) fn form_call(
     let o = xobjects.get(name)?;
     let obj = o.as_ref();
     if obj.is_some_and(|r| path.contains(&r)) {
+        budget.truncated = true;
         return None;
     }
     let Object::Stream(s) = &*doc.resolve(o) else { return None };
@@ -488,13 +524,19 @@ pub(crate) fn form_call(
     });
     // A form without its own resources uses the ones it was drawn with (PDF 1.1 files).
     let own = s.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned());
-    let data = match budget.decode.decode(s) {
-        Ok(data) => data,
+    let data = match budget.decode.decode_checked(s) {
+        Ok((data, repaired)) => {
+            budget.truncated |= repaired;
+            data
+        }
         Err(_) if budget.decode.remaining() == 0 => {
             budget.truncated = true;
             return None;
         }
-        Err(_) => Vec::new(),
+        Err(_) => {
+            budget.truncated = true;
+            Vec::new()
+        }
     };
     budget.visits = budget.visits.saturating_add(1);
     Some(FormCall { obj, data, resources: own.unwrap_or_else(|| resources.clone()), ctm: m.map_or(ctm, |m| Matrix(m).then(&ctm)) })
@@ -504,73 +546,156 @@ pub(crate) fn form_call(
 /// [`text_lines`] leaves out because it can only rewrite the page's own streams). Lines from a
 /// form carry a stream number past the page's streams, one per form drawn. The flag is `true`
 /// when forms past [`MAX_FORM_DEPTH`] or [`MAX_FORM_VISITS`] were left unread.
-pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine>, bool), EditError> {
+pub(super) fn reading_lines(
+    doc: &Document,
+    page: &pdfcraft_model::Page,
+    index: &StructureTextIndex,
+    atom_limit: usize,
+) -> Result<(Vec<TextLine>, bool), EditError> {
     struct Walk<'a> {
         doc: &'a Document,
+        index: &'a StructureTextIndex,
+        page: pdfcraft_cos::ObjRef,
+        atoms: Vec<ReadingAtom>,
+        coverage: Coverage,
+        barrier: usize,
+        indexed: bool,
+        fallback: bool,
+        atom_limit: usize,
         lines: Vec<TextLine>,
+        last: Option<Pen>,
+        last_stream: Option<(usize, usize)>,
         next_stream: usize,
         path: Vec<pdfcraft_cos::ObjRef>,
         budget: FormBudget,
     }
+    fn source(w: &mut Walk, atom: ReadingAtom) {
+        let position = (atom.stream, atom.barrier);
+        if w.last_stream.replace(position).is_some_and(|previous| previous != position) {
+            w.last = None;
+        }
+        add_shown(&mut w.lines, &mut w.last, atom.shown, atom.stream);
+    }
+
+    fn emit(w: &mut Walk, shown: Shown, stream: usize) {
+        if w.indexed && w.atoms.len() >= w.atom_limit {
+            // Bound the extra staging needed for exact ownership. Nothing has been replaced
+            // yet, so the whole page can safely return to its original streaming reader.
+            w.indexed = false;
+            w.fallback = true;
+            for atom in std::mem::take(&mut w.atoms) {
+                source(w, atom);
+            }
+            w.coverage = Coverage::default();
+        }
+        let atom = ReadingAtom { shown, stream, barrier: w.barrier };
+        if w.indexed {
+            w.atoms.push(atom);
+        } else {
+            source(w, atom);
+        }
+    }
     /// `stream` gives the stream number of the operator at an index of `ops`.
-    fn walk(w: &mut Walk, ops: &[Op], resources: &Dict, carry: &mut Carry, stream: &dyn Fn(usize) -> usize) -> Result<(), EditError> {
+    fn walk(
+        w: &mut Walk,
+        ops: &[Op],
+        resources: &Dict,
+        carry: &mut Carry,
+        stream: &dyn Fn(usize) -> usize,
+        context: ContentContext,
+        inherited_owner: Option<usize>,
+    ) -> Result<(), EditError> {
         let mut cache = HashMap::new();
         let mut invoked = Vec::new();
         let properties = resources.get(b"Properties").and_then(|o| w.doc.dict(o)).unwrap_or_default();
-        let shown = interpret(w.doc, ops, resources, &mut cache, carry, Some(&mut invoked), Some(&properties))?;
-        let mut last = None;
-        let mut last_stream = None;
+        let logical = LogicalText {
+            properties: &properties,
+            structure: if w.indexed {
+                Some(StructureScope { index: w.index, page: w.page, context, inherited_owner, coverage: &mut w.coverage })
+            } else {
+                None
+            },
+        };
+        let shown = interpret(w.doc, ops, resources, &mut cache, carry, Some(&mut invoked), Some(logical))?;
         let mut forms = invoked.into_iter().peekable();
         for s in shown {
-            while let Some((_, name, ts)) = forms.next_if(|f| f.0 < s.op) {
-                enter(w, resources, &name, ts, &mut carry.text_left)?;
-                // Text after a form starts a new line.
-                last = None;
+            while let Some(invocation) = forms.next_if(|f| f.op < s.op) {
+                enter(w, resources, invocation, &mut carry.text_left)?;
             }
             let si = stream(s.op);
-            // Text from another stream starts a new line, as when each stream was read alone.
-            if last_stream.replace(si).is_some_and(|prev| prev != si) {
-                last = None;
-            }
-            add_shown(&mut w.lines, &mut last, s, si);
+            emit(w, s, si);
         }
-        for (_, name, ts) in forms {
-            enter(w, resources, &name, ts, &mut carry.text_left)?;
+        for invocation in forms {
+            enter(w, resources, invocation, &mut carry.text_left)?;
         }
         Ok(())
     }
     /// `text_left`: the page's text budget, shared with the forms the page draws.
-    fn enter(w: &mut Walk, resources: &Dict, name: &[u8], ts: Ts, text_left: &mut usize) -> Result<(), EditError> {
-        let Some(form) = form_call(w.doc, resources, name, ts.ctm, &w.path, &mut w.budget) else { return Ok(()) };
-        let ops = parse(&form.data).ops;
+    fn enter(w: &mut Walk, resources: &Dict, invocation: Invocation, text_left: &mut usize) -> Result<(), EditError> {
+        // A form boundary separates lines even when the form draws no readable text.
+        w.barrier = w.barrier.saturating_add(1);
+        let Some(form) = form_call(w.doc, resources, &invocation.name, invocation.state.ctm, &w.path, &mut w.budget) else { return Ok(()) };
+        let parsed = parse(&form.data);
+        w.budget.truncated |= parsed.skipped != 0 || parsed.ambiguous_images != 0;
+        let ops = parsed.ops;
         // The form starts with the graphics state at its `Do`, its own matrix applied.
-        let mut carry = Carry { ts: Ts { ctm: form.ctm, ..ts }, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: *text_left };
+        let mut carry =
+            Carry { ts: Ts { ctm: form.ctm, ..invocation.state }, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: *text_left };
         let stream = w.next_stream;
         w.next_stream = w.next_stream.saturating_add(1);
         if let Some(r) = form.obj {
             w.path.push(r);
         }
-        walk(w, &ops, &form.resources, &mut carry, &|_| stream)?;
+        let context = form.obj.map_or(ContentContext::Unaddressable, ContentContext::Form);
+        walk(w, &ops, &form.resources, &mut carry, &|_| stream, context, invocation.structure_owner)?;
         *text_left = carry.text_left;
         if form.obj.is_some() {
             w.path.pop();
         }
+        w.barrier = w.barrier.saturating_add(1);
         Ok(())
     }
-    let p = page_dict(doc, page)?;
+    let p = page;
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut decode = DecodeBudget::page();
-    let streams = content_streams_within(doc, &p.dict, &mut decode)?;
-    let mut w = Walk { doc, lines: Vec::new(), next_stream: streams.len(), path: Vec::new(), budget: FormBudget::new(decode) };
+    let (streams, repaired) = content_streams_within_checked(doc, &p.dict, &mut decode)?;
+    let mut w = Walk {
+        doc,
+        index,
+        page: p.obj,
+        atoms: Vec::new(),
+        coverage: Coverage::default(),
+        barrier: 0,
+        indexed: index.owners_on_page(p.obj).next().is_some(),
+        fallback: false,
+        atom_limit,
+        lines: Vec::new(),
+        last: None,
+        last_stream: None,
+        next_stream: streams.len(),
+        path: Vec::new(),
+        budget: FormBudget::new(decode),
+    };
     let mut carry = Carry::new();
+    w.budget.truncated = repaired;
     // Read the page's streams as the one stream they are, in one pass, as rendering and editing
     // do: a comment, an operator's operands or a marked-content sequence (its /ActualText too)
     // can run on from one stream into the next. Text still counts as the stream its operator
     // starts in, which keeps lines from different streams apart.
     let pieces = Pieces::join(&streams.into_iter().map(|(_, data)| data).collect::<Vec<_>>());
-    let ops = pieces.parse().ops;
+    let parsed = pieces.parse();
+    w.budget.truncated |= parsed.skipped != 0 || parsed.ambiguous_images != 0;
+    let ops = parsed.ops;
     let stream_of = |i: usize| ops.get(i).map_or(0, |op| pieces.pieces_of(op).0);
-    walk(&mut w, &ops, &res, &mut carry, &stream_of)?;
+    walk(&mut w, &ops, &res, &mut carry, &stream_of, ContentContext::Page, None)?;
+    let (atoms, incomplete) = if w.indexed {
+        apply_structure(std::mem::take(&mut w.atoms), index, p.obj, &w.coverage, w.budget.truncated)
+    } else {
+        (Vec::new(), w.fallback || index.incomplete(p.obj))
+    };
+    for atom in atoms {
+        source(&mut w, atom);
+    }
     let mut lines = w.lines;
     // A visual-order Indic font draws pre-base vowel signs before their consonant.
     for l in lines.iter_mut().filter(|l| l.visual_order && !l.actual_text) {
@@ -580,6 +705,6 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             l.runs.clear();
         }
     }
-    lines.retain(|l| !l.text.trim().is_empty());
-    Ok((lines, w.budget.truncated))
+    lines.retain(|l| !l.text.is_empty() && (l.actual_text || !l.text.trim().is_empty()));
+    Ok((lines, w.budget.truncated || incomplete))
 }

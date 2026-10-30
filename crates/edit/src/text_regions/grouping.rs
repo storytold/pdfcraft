@@ -93,6 +93,7 @@ pub(crate) fn group_reading_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
             blocks.extend(group_layout(lines.get(start..offset).unwrap_or_default(), false));
             let mut line = first.clone();
             line.text = text;
+            line.actual_text = row.iter().any(|line| line.actual_text);
             line.rect = row.iter().map(|line| line.rect).reduce(union).unwrap_or(first.rect);
             blocks.extend(group_layout(std::slice::from_ref(&line), false));
             start = offset + row.len();
@@ -227,6 +228,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
         }
     }
     let mut blocks: Vec<TextBlock> = Vec::new();
+    let mut previous_row_has_actual_text = false;
     for row in rows {
         let Some(first) = row.first().and_then(|i| lines.get(*i)) else { continue };
         let (Some(rect), Some(frame)) = (row_rect(&row, lines), frame_row_rect(&row, lines)) else { continue };
@@ -265,6 +267,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 && gap < first.size.max(prev.size) * 2.5
         });
         if !joins {
+            previous_row_has_actual_text = false;
             blocks.push(TextBlock {
                 text: String::new(),
                 editor_text: String::new(),
@@ -282,6 +285,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
             });
         }
         let Some(block) = blocks.last_mut() else { continue };
+        let row_has_actual_text = !mixed && row.iter().filter_map(|index| lines.get(*index)).any(|line| line.actual_text);
         let mut row_text = String::new();
         if !block.rows.is_empty() {
             block.editor_text.push('\n');
@@ -305,13 +309,15 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
             block.lines.push(index);
         }
         if !block.text.is_empty() {
-            if block.text.ends_with('-') {
+            let authoritative = previous_row_has_actual_text || row_has_actual_text;
+            if block.text.ends_with('-') && !authoritative {
                 block.text.pop();
-            } else {
+            } else if !authoritative || (!block.text.ends_with(char::is_whitespace) && !row_text.starts_with(char::is_whitespace)) {
                 block.text.push(' ');
             }
         }
-        block.text.push_str(row_text.trim_matches(paragraph_separator));
+        block.text.push_str(if row_has_actual_text { &row_text } else { row_text.trim_matches(paragraph_separator) });
+        previous_row_has_actual_text = row_has_actual_text;
         block.rect = union(block.rect, rect);
         block.rows.push(row);
     }

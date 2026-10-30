@@ -7,6 +7,9 @@ use pdfcraft_filters::{Filter, Params};
 
 use crate::{Bytes, CosError};
 
+/// A decoder payload with the work charged on success or failure.
+type CountedDecode<T> = Result<(T, usize), (pdfcraft_filters::FilterError, usize)>;
+
 /// An indirect reference: object number and generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ObjRef {
@@ -294,10 +297,23 @@ impl Stream {
     /// stages together, and the result gives the bytes they decoded (the work done, on success
     /// and on failure).
     pub(crate) fn decoded_within_counted(&self, max: usize) -> Result<(Vec<u8>, usize), (pdfcraft_filters::FilterError, usize)> {
-        let decode = |chain: &[(Filter, Params)], data: &[u8], max| {
-            pdfcraft_filters::decode_tolerant_counted(chain, data, max).map(|(v, _, spent)| (v, spent))
-        };
-        self.decode_chain(max, decode)
+        self.decoded_checked_within_counted(max).map(|((data, _), spent)| (data, spent))
+    }
+
+    /// Preserve the tolerant decoder's repair flag without decoding or charging twice.
+    pub(crate) fn decoded_checked_within_counted(&self, max: usize) -> CountedDecode<(Vec<u8>, bool)> {
+        let max = max.min(MAX_DECODED);
+        let chain = self.readable_filters().map_err(|error| (error, 0))?;
+        if chain.is_empty() {
+            return self
+                .raw_within_typed(max)
+                .map(|data| {
+                    let spent = data.len();
+                    ((data, false), spent)
+                })
+                .map_err(|error| (error, 0));
+        }
+        pdfcraft_filters::decode_tolerant_counted(&chain, &self.raw, max).map(|(data, repaired, spent)| ((data, repaired), spent))
     }
 
     /// The stream decoded through its filters by `decode`, or copied when it has none, within

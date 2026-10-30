@@ -1360,6 +1360,76 @@ fn text_page(content: &str) -> Document {
     Document::open(Arc::new(out)).unwrap()
 }
 
+fn structure_actual_text_page_with_unmarked_neighbor() -> Document {
+    let mut doc = text_page(
+        "/P << /MCID 0 >> BDC BT /F1 12 Tf 72 700 Td (FIRST GLYPH) Tj ET EMC \
+         BT /F1 12 Tf 72 680 Td (UNCHANGED NEIGHBOR) Tj ET \
+         /P << /MCID 1 >> BDC BT /F1 12 Tf 72 660 Td (LAST GLYPH) Tj ET EMC",
+    );
+    let page = pdfcraft_cos::ObjRef::new(3, 0);
+    let mut element = Dict::new();
+    element.set("Type", Object::name("StructElem"));
+    element.set("S", Object::name("P"));
+    element.set("Pg", Object::Ref(page));
+    element.set("K", Object::Array(vec![Object::Int(0), Object::Int(1)]));
+    element.set("ActualText", Object::String(pdfcraft_cos::PdfString::text("LOGICAL REPLACEMENT")));
+    let element = doc.add(Object::Dict(element));
+
+    let mut parent_tree = Dict::new();
+    parent_tree.set("Nums", Object::Array(vec![Object::Int(0), Object::Array(vec![Object::Ref(element), Object::Ref(element)])]));
+    let parent_tree = doc.add(Object::Dict(parent_tree));
+    let mut structure_root = Dict::new();
+    structure_root.set("Type", Object::name("StructTreeRoot"));
+    structure_root.set("K", Object::Ref(element));
+    structure_root.set("ParentTree", Object::Ref(parent_tree));
+    let structure_root = doc.add(Object::Dict(structure_root));
+    doc.update_dict(element, |dict| dict.set("P", Object::Ref(structure_root))).unwrap();
+    doc.update_dict(page, |dict| dict.set("StructParents", Object::Int(0))).unwrap();
+    doc.update_dict(doc.root().unwrap(), |dict| {
+        dict.set("StructTreeRoot", Object::Ref(structure_root));
+        let mut mark_info = Dict::new();
+        mark_info.set("Marked", Object::Bool(true));
+        dict.set("MarkInfo", Object::Dict(mark_info));
+    })
+    .unwrap();
+    doc
+}
+
+fn joined_reading_text(blocks: &[TextBlock]) -> String {
+    blocks.iter().map(|block| block.text.as_str()).collect::<Vec<_>>().join(" ")
+}
+
+#[test]
+fn structure_atom_limit_falls_back_without_partially_replacing_source_text() {
+    let doc = structure_actual_text_page_with_unmarked_neighbor();
+
+    let ordinary = text::ReadingContext::new(&doc).blocks(0).unwrap();
+    let ordinary_text = joined_reading_text(&ordinary.blocks);
+    assert!(!ordinary.truncated);
+    assert_eq!(ordinary_text.matches("LOGICAL REPLACEMENT").count(), 1, "{ordinary_text}");
+    assert_eq!(ordinary_text.matches("UNCHANGED NEIGHBOR").count(), 1, "{ordinary_text}");
+    assert!(!ordinary_text.contains("FIRST GLYPH") && !ordinary_text.contains("LAST GLYPH"), "{ordinary_text}");
+
+    let limited = text::ReadingContext::with_atom_limit(&doc, 1).blocks(0).unwrap();
+    let limited_text = joined_reading_text(&limited.blocks);
+    assert!(limited.truncated, "atom staging overflow must be reported");
+    assert_eq!(limited_text.matches("LOGICAL REPLACEMENT").count(), 0, "{limited_text}");
+    assert_eq!(limited_text.matches("FIRST GLYPH").count(), 1, "{limited_text}");
+    assert_eq!(limited_text.matches("LAST GLYPH").count(), 1, "{limited_text}");
+    assert_eq!(limited_text.matches("UNCHANGED NEIGHBOR").count(), 1, "{limited_text}");
+}
+
+#[test]
+fn untagged_page_reads_source_text_without_structure_atom_staging() {
+    let doc = text_page("BT /F1 12 Tf 72 700 Td (FIRST FAST TEXT) Tj 0 -20 Td (SECOND FAST TEXT) Tj ET");
+    let read = text::ReadingContext::with_atom_limit(&doc, 0).blocks(0).unwrap();
+    let all_text = joined_reading_text(&read.blocks);
+
+    assert!(!read.truncated, "an untagged page does not need structure atoms");
+    assert_eq!(all_text.matches("FIRST FAST TEXT").count(), 1, "{all_text}");
+    assert_eq!(all_text.matches("SECOND FAST TEXT").count(), 1, "{all_text}");
+}
+
 #[test]
 fn tracked_text_keeps_words_in_paragraphs_and_objects() {
     let expected = "TRACKED SAMPLE TEXT";

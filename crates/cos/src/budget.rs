@@ -14,7 +14,7 @@ pub const MAX_PAGE_FORMS: usize = 50_000;
 
 /// A stream decode within a byte bound, with the bytes its filter stages decoded: the data or
 /// the error, each with that count.
-type Decoder = fn(&Stream, usize) -> Result<(Vec<u8>, usize), (FilterError, usize)>;
+type Decoder<T> = fn(&Stream, usize) -> Result<(T, usize), (FilterError, usize)>;
 
 /// What one operation may still decode and enter across all the streams it reads.
 ///
@@ -60,6 +60,12 @@ impl DecodeBudget {
         self.charge(stream, usize::MAX, Stream::decoded_within_counted)
     }
 
+    /// Tolerant decoding with a flag saying whether damaged encoding was repaired. The
+    /// returned bytes and every filter stage share this allowance, as with [`Self::decode`].
+    pub fn decode_checked(&mut self, stream: &Stream) -> Result<(Vec<u8>, bool), CosError> {
+        self.charge(stream, usize::MAX, Stream::decoded_checked_within_counted)
+    }
+
     /// Like [`DecodeBudget::decode`], for a stream with a tighter bound of its own: decoding
     /// past `max` bytes is an error that charges `max`, the work it took to find out.
     pub fn decode_within(&mut self, stream: &Stream, max: usize) -> Result<Vec<u8>, CosError> {
@@ -76,7 +82,7 @@ impl DecodeBudget {
     /// decoded: a stage's output counts even when a later stage shrinks it, and a corrupt stream
     /// pays for the bytes decoded before the error, so referencing a stream again and again
     /// spends the allowance by the work each decode does.
-    fn charge(&mut self, stream: &Stream, max: usize, decode: Decoder) -> Result<Vec<u8>, CosError> {
+    fn charge<T>(&mut self, stream: &Stream, max: usize, decode: Decoder<T>) -> Result<T, CosError> {
         if self.bytes == 0 && !stream.raw.is_empty() {
             return Err(CosError::Filter(FilterError::LimitExceeded(self.limit).to_string()));
         }
@@ -196,6 +202,29 @@ mod tests {
         let mut budget = DecodeBudget::new(10 << 20, 1);
         assert!(budget.decode_within(&corrupt, 1 << 30).is_ok());
         assert_eq!(budget.remaining(), (10 << 20) - partial);
+    }
+
+    #[test]
+    fn checked_decodes_preserve_repairs_and_charge_the_same_allowance() {
+        let clean = Stream::flate(crate::Dict::new(), &vec![b'x'; 1 << 16]);
+        let cut = clean.raw.len() / 2;
+        let corrupt = Stream::from_raw(clean.dict.clone(), clean.raw.get(..cut).unwrap().to_vec());
+        for (stream, repaired) in [(&clean, false), (&corrupt, true)] {
+            let mut checked = DecodeBudget::new(1 << 20, 1);
+            let mut legacy = DecodeBudget::new(1 << 20, 1);
+            let (bytes, damage) = checked.decode_checked(stream).unwrap();
+            assert_eq!(damage, repaired);
+            assert_eq!(bytes, legacy.decode(stream).unwrap());
+            assert_eq!(checked.remaining(), legacy.remaining());
+        }
+        let mut checked = DecodeBudget::new(100, 1);
+        assert!(checked.decode_checked(&clean).is_err());
+        assert_eq!(checked.remaining(), 0);
+        assert!(checked.decode_checked(&clean).is_err());
+        let raw = Stream::from_raw(crate::Dict::new(), b"plain".to_vec());
+        let mut checked = DecodeBudget::new(5, 1);
+        assert_eq!(checked.decode_checked(&raw).unwrap(), (b"plain".to_vec(), false));
+        assert_eq!(checked.remaining(), 0);
     }
 
     /// A chain whose later stage shrinks the data pays for every stage's output: a Flate stage
