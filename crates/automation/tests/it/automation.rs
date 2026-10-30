@@ -6941,6 +6941,57 @@ fn a_page_printed_in_strips_gets_small_through_tools() {
 }
 
 #[test]
+fn optimizing_to_a_target_size() {
+    let dir = workdir("optimize-target");
+    let (w, h) = (2400u32, 1600u32);
+    let px: Vec<u8> = (0..w * h)
+        .flat_map(|i| {
+            let (x, y) = (i % w, i / w);
+            [(x * 255 / w) as u8 ^ ((x * y) & 15) as u8, (y * 255 / h) as u8, ((x + y) & 255) as u8]
+        })
+        .collect();
+    let mut jpeg = Vec::new();
+    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95);
+    enc.set_pixel_density(image::codecs::jpeg::PixelDensity::dpi(600));
+    enc.encode(&px, w, h, image::ExtendedColorType::Rgb8).unwrap();
+    std::fs::write(dir.join("photo.jpg"), &jpeg).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["photo.jpg"] }))["doc"].as_u64().unwrap();
+    // Without a target nothing changes: no target fields.
+    let base = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "base.pdf" }));
+    assert!(base.get("target_reached").is_none(), "{base}");
+    let base_len = base["bytes_after"].as_u64().unwrap();
+    // A target below the default result is met by a stronger step.
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "fit.pdf", "target_bytes": base_len - 1 }));
+    assert_eq!(r["target_reached"], true, "{r}");
+    assert!(r["bytes_after"].as_u64().unwrap() < base_len, "{r}");
+    assert!(r["target_settings"]["step"].as_u64().unwrap() >= 1, "{r}");
+    assert_eq!(std::fs::metadata(dir.join("fit.pdf")).unwrap().len(), r["bytes_after"].as_u64().unwrap());
+    // A target already met by the first attempt tries nothing more.
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "easy.pdf", "target_bytes": base_len }));
+    assert_eq!((r["target_reached"].as_bool(), r["attempts"].as_u64()), (Some(true), Some(1)), "{r}");
+    // An impossible target: bounded attempts, smallest copy written, said plainly.
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "tiny.pdf", "target_bytes": 1 }));
+    assert_eq!((r["target_reached"].as_bool(), r["attempts"].as_u64()), (Some(false), Some(6)), "{r}");
+    assert!(r["bytes_after"].as_u64().unwrap() < base_len, "{r}");
+    assert!(std::fs::metadata(dir.join("tiny.pdf")).is_ok());
+    // The open document is untouched by the failed attempts, and bad targets are refused.
+    let again = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "again.pdf" }));
+    assert_eq!(again["bytes_after"].as_u64().unwrap(), base_len);
+    assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "target_bytes": 0 })), Err(ToolError::InvalidArgs(_))));
+    // A caller who asked for lossless images keeps them: retries only tighten the ppi, no JPEG quality.
+    let lossless = json!({ "compression": "zip" });
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "zip.pdf", "color": lossless, "gray": lossless, "target_bytes": 1 }));
+    assert_eq!(r["attempts"].as_u64(), Some(6), "{r}");
+    assert!(r["target_settings"]["max_ppi"].is_number() && r["target_settings"]["max_jpeg_quality"].is_null(), "{r}");
+    // A JPEG caller gets the quality step.
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "jpg.pdf", "target_bytes": 1 }));
+    assert!(r["target_settings"]["max_jpeg_quality"].is_number(), "{r}");
+    // Confinement still applies.
+    assert!(a.call("doc_optimize", &json!({ "doc": doc, "path": "../out.pdf", "target_bytes": 1000 })).is_err());
+}
+
+#[test]
 fn initial_view_through_tools() {
     let dir = workdir("initial-view");
     let mut a = auto(&dir);
