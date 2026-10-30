@@ -81,14 +81,17 @@ pub const TABLE: &[(&str, Class)] = &[
     ("ui-common", Class::Layer(7)),
     ("ui-egui", Class::Layer(7)),
     ("automation", Class::Layer(7)),
+    ("sdk", Class::Layer(7)),
+    ("rest", Class::Layer(7)),
     // test support
     ("testkit", Class::Testkit),
     ("oracle", Class::Testkit),
-    // L8 apps + tooling
+    // L8 apps + tooling + foreign language bindings
     ("pdfcraft", Class::Exempt),
     ("cli", Class::Exempt),
     ("web", Class::Exempt),
     ("xtask", Class::Exempt),
+    ("pyo3", Class::Exempt),
 ];
 
 /// Workspace crates a standalone crate may use (architecture §3 rule 3: `cos → filters, crypt, geom`).
@@ -105,6 +108,9 @@ pub const SIDEWAYS: &[(&str, &str)] = &[
     ("ui-egui", "ui-common"),
     ("ui-egui", "platform"),
     ("automation", "platform"),
+    ("sdk", "automation"),
+    ("rest", "sdk"),
+    ("rest", "automation"),
 ];
 
 /// External crates that constitute a UI toolkit / windowing dependency (prefix match with `*`).

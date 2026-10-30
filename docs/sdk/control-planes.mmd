@@ -1,0 +1,64 @@
+flowchart TB
+    %% ───────────── Layer: Consumers ─────────────
+    subgraph L1["① Consumers & Runtimes"]
+        direction LR
+        A["🤖 <b>AI Agents</b><br/><small>Claude · Antigravity · Cursor</small>"]
+        B["💻 <b>App Developers</b><br/><small>Python · TypeScript · Rust</small>"]
+        C["🌐 <b>Services & Pipelines</b><br/><small>Docker · Kubernetes · Web backends</small>"]
+    end
+
+    %% ───────────── Layer: Entry Points ─────────────
+    subgraph L2["② Entry Points"]
+        direction LR
+        MCP["<b>pdfcraft-cli mcp</b><br/><i>Agent Control Plane</i><br/><small>stdio JSON-RPC 2.0<br/>--root / --automation-*-root</small>"]
+        SDK["<b>pdfcraft-sdk</b><br/><i>In-Process Data Plane</i><br/><small>Rust · PyO3 · N-API<br/>APDFL object hierarchy</small>"]
+        REST["<b>pdfcraft-rest</b><br/><i>Microservice Plane</i><br/><small>OpenAPI 3.1 · Bearer auth<br/>RFC 7807 errors</small>"]
+    end
+
+    %% ───────────── Layer 7: Execution ─────────────
+    subgraph L3["③ Layer 7 · Execution & Isolation"]
+        direction TB
+        subgraph L3a[" "]
+            direction LR
+            SANDBOX["<b>ExecutionSandbox</b><br/><small>Ephemeral TempDir<br/>catch_unwind panic containment<br/>10 MB memory spillover</small>"]
+            QUEUE["<b>RestService · JobRepository</b><br/><small>Bounded worker semaphore<br/>Async jobs (/v1/jobs)<br/>Socket R/W timeouts</small>"]
+        end
+        AUTO["<b>pdfcraft-automation</b><br/><small>149 headless tools registry</small>"]
+    end
+
+    %% ───────────── Layer 6: Engine ─────────────
+    subgraph L4["④ Layer 6 · Engine & Domain Crates"]
+        direction TB
+        ENGINE["<b>pdfcraft-engine</b><br/><small>Document session · Command bus</small>"]
+        CRATES["<b>Feature crates</b><br/><small>cos · render · forms · sign · redact<br/>annot · optimize · ocr · a11y · export</small>"]
+    end
+
+    %% ───────────── Edges ─────────────
+    A  -->|"stdio · JSON lines"| MCP
+    B  -->|"in-process import"| SDK
+    B  -.->|"remote client"| REST
+    C  -->|"HTTP · JSON / multipart"| REST
+
+    MCP     -->|"direct tool call<br/>stateful doc_id"| AUTO
+    SDK     -->|"run operation"| SANDBOX
+    REST    -->|"enqueue"| QUEUE
+    QUEUE   -.->|"execute via SDK port"| SANDBOX
+    SANDBOX -->|"headless tool call"| AUTO
+
+    AUTO   -->|"dispatch commands"| ENGINE
+    ENGINE --> CRATES
+
+    %% ───────────── Styling ─────────────
+    classDef consumer fill:#f1f5f9,stroke:#64748b,color:#0f172a
+    classDef agent    fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+    classDef sdk      fill:#dbeafe,stroke:#2563eb,color:#172554
+    classDef rest     fill:#dcfce7,stroke:#16a34a,color:#052e16
+    classDef core     fill:#fef3c7,stroke:#d97706,color:#451a03
+
+    class A,B,C consumer
+    class MCP agent
+    class SDK,SANDBOX sdk
+    class REST,QUEUE rest
+    class AUTO,ENGINE,CRATES core
+
+    style L3a fill:none,stroke:none

@@ -155,6 +155,10 @@ arguments), including an empty `documents` array before any PDF is opened. `pdfc
 returns the command catalog (as `command_list`). Existing per-document info, text and page-image
 resources and their templates are preserved.
 
-Unknown top-level argument keys are refused with JSON-RPC `-32602` (invalid params) instead of
 being ignored, so a misspelled argument is reported rather than silently dropped. Clients that
 sent extra keys before get an error now.
+
+## Related documentation
+
+- [SDK & REST Service Guide](sdk.md) — Programmatic SDK (Rust, Python, TypeScript) and on-premise REST daemon for application developers.
+- [Control Planes Architecture (MCP vs. REST vs. SDK)](sdk/control-planes.md) — Comparison, isolation boundaries, and protocol separation between MCP, SDK, and REST.
