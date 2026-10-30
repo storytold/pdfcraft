@@ -157,6 +157,83 @@ fn an_ocr_word_opens_for_editing_and_stays_open() {
     assert_eq!(opened(&h).as_deref(), Some("Recognize"), "moving the pointer away keeps the word open");
 }
 
+/// #2522: on a page turned a quarter, by its `/Rotate` (usual for scans) or the view, the editor took
+/// the word's user-space height for its width: it drew the word several times too large, with its
+/// letters on top of each other. Typed text is as big as the word it replaces, at every turn.
+#[test]
+fn a_word_on_a_turned_page_is_edited_at_its_own_size() {
+    use pdfcraft_engine::ocr::PlacedWord;
+    let _gpu = crate::gpu();
+    for (rotation, view_rotation) in [(0, 0), (90, 0), (180, 0), (270, 0), (0, 90)] {
+        let bytes = {
+            let mut s = Session::new();
+            let id = s.open("scan.pdf", None, std::sync::Arc::new(scan()), None).unwrap();
+            if rotation != 0 {
+                s.apply(id, Edit::RotatePages { pages: vec![0], degrees: rotation }).unwrap();
+            }
+            s.save_bytes(id).unwrap().to_vec()
+        };
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("scan.pdf", None, bytes).unwrap();
+            let id = app.views[0].id;
+            let [x0, y0, x1, y1] = app.session.get(id).unwrap().info.pages[0].crop.map(f64::from);
+            // A word that reads upright with the page's turn.
+            let (origin, across, up) = match rotation + i64::from(view_rotation) {
+                90 => ([x0 + 100.0, y0 + 100.0], [0.0, 80.0], [-14.0, 0.0]),
+                180 => ([x1 - 72.0, y0 + 100.0], [-80.0, 0.0], [0.0, -14.0]),
+                270 => ([x1 - 100.0, y1 - 100.0], [0.0, -80.0], [14.0, 0.0]),
+                _ => ([x0 + 72.0, y1 - 100.0], [80.0, 0.0], [0.0, 14.0]),
+            };
+            let words = vec![PlacedWord { text: "Recognize".into(), origin, across, up }];
+            app.session.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+            app.set_option("zoom", "100").unwrap();
+            app.views[0].rotation = view_rotation;
+            assert!(app.execute("edit.edit_text"));
+            app
+        });
+        crate::support::settle(&mut h);
+        let (word, k) = {
+            let app = h.state();
+            let view = &app.views[0];
+            let doc = app.session.get(view.id).unwrap();
+            let page = &doc.info.pages[0];
+            let rect = view.page_screen_rect(0).unwrap();
+            let xf = pdfcraft_ui_egui::canvas::PageXform { rect, rot: view.rotation, pw: page.width, ph: page.height };
+            let across = if view.rotation % 180 == 90 { rect.height() } else { rect.width() };
+            (xf.user_rect(&doc.info, 0, doc.text_blocks(0)[0].rect.map(|v| v as f32)), across / page.width)
+        };
+        h.hover_at(word.center());
+        h.run_steps(2);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: word.center(), button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        }
+        h.run_steps(4);
+        h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Recognized".into();
+        crate::support::settle(&mut h);
+        let shot = h.render().unwrap();
+        if let Ok(dir) = std::env::var("PDFCRAFT_TEST_SHOTS") {
+            shot.save(format!("{dir}/turned-{rotation}-{view_rotation}.png")).unwrap();
+        }
+        // The typed text's ink, from the word's top left along its line.
+        let ppp = h.ctx.pixels_per_point();
+        let (left, top) = (((word.min.x - 6.0) * ppp) as u32, ((word.min.y - 6.0) * ppp) as u32);
+        let (right, bottom) = (((word.min.x + 300.0 * k) * ppp) as u32, ((word.min.y + 60.0 * k) * ppp) as u32);
+        let ink: Vec<(u32, u32)> = (top..bottom)
+            .flat_map(|y| (left..right).map(move |x| (x, y)))
+            .filter(|&(x, y)| shot.get_pixel_checked(x, y).is_some_and(|p| p[0] < 110 && p[1] < 110 && p[2] < 110))
+            .collect();
+        let extent = |of: fn(&(u32, u32)) -> u32| {
+            let (min, max) = (ink.iter().map(of).min().unwrap_or(0), ink.iter().map(of).max().unwrap_or(0));
+            (max - min) as f32 / ppp / k
+        };
+        let (wide, tall) = (extent(|p| p.0), extent(|p| p.1));
+        assert!(wide > 60.0 && wide < 120.0, "the word is about 80 pt wide (/Rotate {rotation}, view {view_rotation}): {wide}");
+        assert!(tall > 5.0 && tall < 25.0, "and about 14 pt tall (/Rotate {rotation}, view {view_rotation}): {tall}");
+    }
+}
+
 /// A page of real text, not a picture.
 fn text_page() -> Vec<u8> {
     let s = Session::new();
