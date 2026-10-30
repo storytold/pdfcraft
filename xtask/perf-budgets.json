@@ -1,0 +1,23 @@
+{
+  "small": {
+    "open": { "max_secs": 5.0, "max_peak_mib": 256 },
+    "scroll": { "max_secs": 5.0, "max_peak_mib": 256 },
+    "edit": { "max_secs": 5.0, "max_peak_mib": 256 },
+    "save_incremental": { "max_secs": 5.0, "max_peak_mib": 256 },
+    "save_full": { "max_secs": 5.0, "max_peak_mib": 256 }
+  },
+  "medium": {
+    "open": { "max_secs": 5.0, "max_peak_mib": 256 },
+    "scroll": { "max_secs": 10.0, "max_peak_mib": 256 },
+    "edit": { "max_secs": 5.0, "max_peak_mib": 256 },
+    "save_incremental": { "max_secs": 5.0, "max_peak_mib": 256 },
+    "save_full": { "max_secs": 5.0, "max_peak_mib": 256 }
+  },
+  "large": {
+    "open": { "max_secs": 10.0, "max_peak_mib": 600 },
+    "scroll": { "max_secs": 10.0, "max_peak_mib": 600 },
+    "edit": { "max_secs": 15.0, "max_peak_mib": 1000 },
+    "save_incremental": { "max_secs": 20.0, "max_peak_mib": 1000 },
+    "save_full": { "max_secs": 20.0, "max_peak_mib": 1000 }
+  }
+}

@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (M14, gap 13: `cargo xtask perf` measures open, scroll, edit and save time and peak memory on synthetic large PDFs against committed budgets; the budgets are set from CI runs, not yet checked on macOS or Windows; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-19 · **Change:** minor (gap 2: composite fonts with `/ToUnicode /Identity-H` read as Unicode, hayro-interpret patch 44; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -300,6 +301,7 @@ update the numbers.
   Saving still peaks at three copies (the saved file is assembled in memory beside the working
   one), and display appearances for comments without one add a copy. A 100,000-page file (28 MB)
   opens at 403 MiB in 5.5 s and each edit re-inspects it for ≈ 5 s.
+- **Budgets:** `cargo xtask perf` (see `xtask/src/perf.rs`) measures open, scroll, edit, incremental save and full save on generated files of 10, 1,000 and 10,000 pages (the last with 64 MiB of filler) and fails when a time or peak-memory budget in `xtask/perf-budgets.json` is exceeded. Budgets are generous (at least eight times the measured time and 2.5 to 4 times the measured peak on a Linux CI runner) because runners are noisy. Peak memory is read on Linux only; macOS, Windows and FreeBSD record time but do not check memory, so Tier-1 platform budgets are still open, as is a budget for GB-sized files. `.github/workflows/perf.yml` runs it nightly and on demand, not as a required check.
 - **Blocked part:** reading a GB file from disk on demand (`ByteSource`) needs every reader to
   take ranges, but the `hayro` renderer parses one contiguous buffer (`Pdf::new(PdfData)`), so it
   waits on gap 2's renderer decision. Until then the budget is one copy of the file to view and two

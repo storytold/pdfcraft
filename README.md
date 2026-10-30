@@ -387,6 +387,7 @@ git clone https://github.com/storytold/pdfcraft
 cd pdfcraft
 cargo xtask models                                # fetch the OCR models Scan & OCR needs (release builds include them)
 cargo run --release -p pdfcraft -- some.pdf     # desktop app
+cargo xtask perf                                  # time and peak memory on large synthetic PDFs, against xtask/perf-budgets.json
 cargo xtask demo-pdf                              # build the showcase PDF used in these screenshots
 cargo xtask screenshots                           # regenerate every screenshot in this README
 ```

@@ -1,0 +1,55 @@
+name: Performance
+
+# Performance budgets for large documents (`cargo xtask perf`): time and peak memory to open,
+# scroll, edit and save synthetic PDFs, against xtask/perf-budgets.json. Optional and not
+# required for merging: runner timings are noisy, so it runs nightly, on demand, and on changes
+# to the benchmark itself. The results are uploaded as an artifact.
+on:
+  schedule:
+    - cron: "43 3 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "xtask/src/perf.rs"
+      - "xtask/perf-budgets.json"
+      - ".github/workflows/perf.yml"
+
+# The token is only used to check out the code: no job writes to the repository.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: perf-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  perf:
+    name: perf (budgets)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: perf
+      - name: Measure
+        run: cargo xtask perf
+      - name: Print the results
+        if: always()
+        run: cat target/perf/results.json || true
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: perf-results
+          path: target/perf/results.json
+          if-no-files-found: ignore
