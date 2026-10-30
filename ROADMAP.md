@@ -2,6 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
+> **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M3, #623 item 4 viewer candidate: isolate main-canvas diagnostics and keep saturated visible work progressing; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M14 localization current state: Arabic logical catalog, explicit RTL label direction and mirrored stock chrome; native/browser RTL workflows unqualified. Native release Hans face via LXGW WenKai Lite; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M7, #2636 partial: pasting added text boxes and images in the engine and through `content_copy`; estimates unchanged)
@@ -200,6 +201,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-28 (M3, #623 item 4 targeted follow-up):** Preview failures remain inspectable without marking a successfully rendered main canvas as failed. Failure history can hold all current demand, then shrinks back after navigation or suspension; an oversized HiDPI window on a downlevel backend no longer starves an untried visible tile after 64 failures. Deterministic UI and scheduling regressions cover both corrections. Estimates unchanged.
+- **2026-10-28 (M3, #623 item 4 viewer candidate):** A failed render request leaves successful visible page tiles and backdrops visible with an error notice. Other pending tiles and independent thumbnail, grid and print requests can finish. Current failures stay suppressed in bounded request history; successful new zooms hide obsolete diagnostics, and a valid complete raster supersedes older main-page failures. Synthetic viewer regressions cover ordering, zoom/pan, bounded retention, preview scheduling, offscreen coverage, recovery, invalidation and stale results; watchdog budgets and renderer behavior are unchanged. Estimates unchanged.
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 - **2026-10-24 (M10, #4158 partial):** Word, HTML, RTF and PowerPoint export keep a block that continues another on its line (an italic case name, a link, a superscript) as a run in its own style inside that paragraph, with the source's word space, instead of a paragraph of its own. Style changes that wrap onto the next line still split paragraphs (the reading blocks keep style boundaries). Estimates unchanged.
 - **2026-10-24 (M3, window move on Wayland, #3970 follow-up):** After a move or resize by PdfCraft's own title bar or edges, the button release given back to egui goes before the pointer leaving the window, so hover no longer sticks at the old place until the pointer moves. Found by CodeRabbit in review of #3970; a unit test covers it. Estimates unchanged.

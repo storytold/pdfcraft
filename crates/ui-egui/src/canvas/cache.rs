@@ -47,6 +47,20 @@ const UPLOAD_BYTES_PER_FRAME: usize = 16 * 1024 * 1024;
 
 const RESULTS_PER_FRAME: usize = 8;
 
+/// Per page and consumer (main, thumbnail, grid, print). Larger current demand temporarily
+/// raises this allowance so every visible request can progress; it shrinks when demand ends.
+const RECENT_REQUEST_FAILURES: usize = 64;
+
+fn failure_domain(request: RenderRequest) -> u64 {
+    if request.tag & PRINT_TAG != 0 {
+        PRINT_TAG
+    } else if request.tag & GRID_TAG != 0 {
+        GRID_TAG
+    } else {
+        request.tag & THUMB_TAG
+    }
+}
+
 /// A defensive ceiling for unusually large viewports / n-up previews.
 pub(super) const MAX_THUMB_DEMAND: usize = 256;
 
@@ -119,11 +133,99 @@ impl DocView {
         }
     }
 
-    /// Pages that could not be rendered, with the reason (for automation; 0-based pages).
+    /// Pages with current pixel failures, including pages still showing useful content (0-based).
     pub fn page_errors(&self) -> Vec<(usize, &str)> {
-        let mut v: Vec<(usize, &str)> = self.errors.iter().map(|(p, e)| (*p, e.as_str())).collect();
+        let mut v: Vec<(usize, &str)> = self.errors.keys().filter_map(|&p| self.page_error(p).map(|e| (p, e))).collect();
         v.sort_unstable_by_key(|(p, _)| *p);
         v
+    }
+
+    pub(super) fn page_error(&self, page: usize) -> Option<&str> {
+        self.request_error(page, false)
+    }
+
+    /// The main canvas must not present another consumer's failed preview as a page failure.
+    pub(super) fn main_page_error(&self, page: usize) -> Option<&str> {
+        self.request_error(page, true)
+    }
+
+    fn request_error(&self, page: usize, main_only: bool) -> Option<&str> {
+        let errors = self.errors.get(&page)?;
+        let relevant = |r: &RenderRequest| !main_only || failure_domain(*r) == 0;
+        let Some(demand) = &self.error_demand else { return errors.iter().rev().find(|(r, _)| relevant(r)).map(|(_, e)| e.as_str()) };
+        if let Some((_, reason)) = errors.iter().rev().find(|(r, _)| relevant(r) && demand.contains(r)) {
+            return Some(reason);
+        }
+        // Keep the old reason during recovery, until the new sharp rendering really arrives.
+        // Once all current sharp requests succeed, an old zoom's failure is history alone.
+        let pending = demand.iter().any(|r| r.page == page && failure_domain(*r) == 0 && !r.preview && !self.main_request_ready(*r));
+        pending.then(|| errors.iter().rev().find(|(r, _)| failure_domain(*r) == 0).map(|(_, e)| e.as_str())).flatten()
+    }
+
+    fn main_request_ready(&self, request: RenderRequest) -> bool {
+        if let Some(tile) = request.tile {
+            let key = (request.page, request.tag, tile.x, tile.y);
+            self.tiles.contains_key(&key) && !self.stale_tiles.contains(&key)
+        } else {
+            self.pages.get(&request.page).is_some_and(|p| p.tag == request.tag)
+        }
+    }
+
+    fn request_failed(&self, request: RenderRequest) -> bool {
+        self.errors.get(&request.page).is_some_and(|errors| errors.iter().any(|(r, _)| *r == request))
+    }
+
+    fn failure_limit(&self, page: usize, domain: u64) -> usize {
+        let demand = self.error_demand.as_deref().unwrap_or(&self.last_queue);
+        RECENT_REQUEST_FAILURES
+            .max(demand.iter().filter(|r| r.page == page && r.kind == RequestKind::Pixels && failure_domain(**r) == domain).count())
+    }
+
+    /// Bound history by current demand, rather than by the largest viewport ever visited.
+    fn set_error_demand(&mut self, demand: Vec<RenderRequest>) {
+        let previous = self.error_demand.replace(demand);
+        let pages: HashSet<_> = previous.as_deref().unwrap_or(&self.last_queue).iter().map(|r| r.page).collect();
+        for page in pages {
+            if self.errors.get(&page).is_none_or(|errors| errors.len() <= RECENT_REQUEST_FAILURES) {
+                continue;
+            }
+            let limits = [0, THUMB_TAG, GRID_TAG, PRINT_TAG].map(|domain| (domain, self.failure_limit(page, domain)));
+            let wanted = self.error_demand.as_deref().unwrap_or_default();
+            if let Some(errors) = self.errors.get_mut(&page) {
+                for (domain, limit) in limits {
+                    let mut excess = errors.iter().filter(|(r, _)| failure_domain(*r) == domain).count().saturating_sub(limit);
+                    errors.retain(|(r, _)| {
+                        if excess > 0 && failure_domain(*r) == domain && !wanted.contains(r) {
+                            excess -= 1;
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    /// History can hold every current request, so failures never block unrelated wanted work.
+    fn suppress_failed_requests(&self, queue: &mut Vec<RenderRequest>) {
+        queue.retain(|r| r.kind != RequestKind::Pixels || !self.request_failed(*r));
+    }
+
+    fn record_request_failure(&mut self, request: RenderRequest, reason: String) {
+        let demand = self.error_demand.as_deref().unwrap_or(&self.last_queue);
+        let domain = failure_domain(request);
+        let limit = self.failure_limit(request.page, domain);
+        let errors = self.errors.entry(request.page).or_default();
+        errors.retain(|(r, _)| *r != request);
+        if errors.iter().filter(|(r, _)| failure_domain(*r) == domain).count() >= limit {
+            let Some(oldest) = errors.iter().position(|(r, _)| failure_domain(*r) == domain && !demand.contains(r)) else {
+                // Current demand has a slot for each request; only an obsolete/injected result can get here.
+                return;
+            };
+            errors.remove(oldest);
+        }
+        errors.push((request, reason));
     }
 
     pub fn render_pending(&self) -> bool {
@@ -158,6 +260,7 @@ impl DocView {
         self.texts.clear();
         self.text_failed.clear();
         self.errors.clear();
+        self.error_demand = None;
         self.slow_pages.clear();
         self.waiting_since.clear();
         self.last_queue.clear();
@@ -201,6 +304,9 @@ impl DocView {
         self.texts.remove(&page);
         self.text_failed.remove(&page);
         self.errors.remove(&page);
+        if let Some(demand) = &mut self.error_demand {
+            demand.retain(|r| r.page != page);
+        }
         self.last_queue.clear();
         if self.selection.is_some_and(|s| s.page == page) {
             self.selection = None;
@@ -276,6 +382,7 @@ impl DocView {
     /// state, but do not each retain a separate full application texture allowance.
     pub(crate) fn suspend_rendering(&mut self, pool: &RenderPool) {
         self.begin_render_frame();
+        self.set_error_demand(Vec::new());
         self.pages.clear();
         self.tiles.clear();
         self.thumbs.clear();
@@ -329,6 +436,10 @@ impl DocView {
     /// the allowance, so an evicted page can be requested again without a permanent done set.
     pub(super) fn prepare_render_queue(&mut self, info: &DocInfo, ppp: f32) -> Vec<RenderRequest> {
         let requests = std::mem::take(&mut self.frame_queue);
+        let thumbs = self.thumbnail_requests(info, ppp);
+        self.set_error_demand(
+            requests.iter().chain(&thumbs).filter(|r| r.kind == RequestKind::Pixels && r.page < info.pages.len()).copied().collect(),
+        );
         let mut queue = Vec::new();
         let mut pages = HashSet::new();
         let mut tiles = HashSet::new();
@@ -344,9 +455,7 @@ impl DocView {
             }
             // Print-preview rasters: a few sheets at the pane's size (the dialog bounds them).
             if req.tag & PRINT_TAG != 0 {
-                if !self.errors.contains_key(&req.page) {
-                    queue.push(*req);
-                }
+                queue.push(*req);
                 continue;
             }
             // On-screen work is always admitted (the viewport bounds it); the limits only
@@ -400,28 +509,26 @@ impl DocView {
         self.tiles.retain(|key, _| tiles.contains(key) || !tile_tags.contains(&key.1) || self.frame_visible.contains(&key.0));
         self.stale_tiles.retain(|key| self.tiles.contains_key(key));
         queue.extend(grid);
+        // Keep other pending tiles alive, but never resubmit a request that already failed.
+        // Do this after retention: a failure must not evict the page's successful surfaces.
+        self.suppress_failed_requests(&mut queue);
         // Opening (or turning to) a page queues its pixels alongside thumbnails and
         // text extraction. The workers would otherwise spend the first seconds on
         // thumbnails and search text while the visible page stays blank: hold those
-        // until no visible main-page raster is still missing. Errored pages never
-        // block: they are never re-requested.
+        // until no visible main-page raster is still missing. Failed requests were removed above.
         let visible_mains_pending = queue.iter().any(|r| {
-            r.kind == RequestKind::Pixels
-                && r.tag & (GRID_TAG | PRINT_TAG | THUMB_TAG | TEXT_TAG) == 0
-                && self.frame_visible.contains(&r.page)
-                && !self.errors.contains_key(&r.page)
+            r.kind == RequestKind::Pixels && r.tag & (GRID_TAG | PRINT_TAG | THUMB_TAG | TEXT_TAG) == 0 && self.frame_visible.contains(&r.page)
         });
         if visible_mains_pending {
             // Caches are kept; demand is re-evaluated next frame once pixels arrive.
             return queue;
         }
-        let thumbs = self.thumbnail_requests(info, ppp);
         let mut thumb_bytes = 0usize;
         let mut admitted = HashSet::new();
         for req in thumbs {
             let Some(p) = info.pages.get(req.page) else { continue };
             let bytes = rgba_bytes(device_pixels(p.width, req.scale) as usize, device_pixels(p.height, req.scale) as usize);
-            if thumb_bytes.saturating_add(bytes) > THUMB_BYTES || self.errors.contains_key(&req.page) {
+            if thumb_bytes.saturating_add(bytes) > THUMB_BYTES {
                 continue;
             }
             thumb_bytes += bytes;
@@ -435,6 +542,7 @@ impl DocView {
         self.retain_text_layers();
         // Visible main pages and thumbnails take precedence over background search work.
         queue.extend(requests.into_iter().filter(|r| r.kind == RequestKind::Text));
+        self.suppress_failed_requests(&mut queue);
         queue
     }
 
@@ -470,6 +578,7 @@ impl DocView {
             // Dialogs and edits can replace pages after the canvas collected demand. Its
             // scales and indexes belong to the old pages, not to the new renderer (#3149).
             self.begin_render_frame();
+            self.set_error_demand(Vec::new());
             self.last_queue.clear();
             pool.set_queue(Vec::new());
             ctx.request_repaint();
@@ -543,7 +652,7 @@ impl DocView {
         }
         if let Some(e) = r.error {
             log::warn!("page {}: {e}", r.request.page + 1);
-            self.errors.insert(r.request.page, e);
+            self.record_request_failure(r.request, e);
             return 0;
         }
         // Even current demand may have been sized with obsolete geometry or a different
@@ -561,6 +670,15 @@ impl DocView {
         let bytes = rgba_bytes(r.width as usize, r.height as usize);
         if bytes != r.rgba.len() || !self.admit_texture(r.request, bytes) {
             return 0;
+        }
+        // Only an admitted success can supersede a failure. A complete main-page raster also
+        // replaces failures of its older main-page tiles; a low-detail backdrop cannot do that.
+        let complete = r.request.tile.is_none() && !r.request.preview && r.request.tag & (THUMB_TAG | GRID_TAG | PRINT_TAG) == 0;
+        if let Some(errors) = self.errors.get_mut(&page) {
+            errors.retain(|(request, _)| *request != r.request && !(complete && request.tag & (THUMB_TAG | GRID_TAG | PRINT_TAG) == 0));
+            if errors.is_empty() {
+                self.errors.remove(&page);
+            }
         }
         // The length was checked above, so the renderer's buffer becomes the texture data as is.
         let img = texture_image([r.width as usize, r.height as usize], r.rgba);
@@ -662,7 +780,7 @@ impl DocView {
     pub(crate) fn queue_print_previews(&mut self, pages: &[(usize, f32)]) {
         self.print_pages.retain(|page, _| pages.iter().any(|(p, _)| p == page));
         for &(page, scale) in pages {
-            if self.errors.contains_key(&page) || !scale.is_finite() || scale <= 0.0 {
+            if !scale.is_finite() || scale <= 0.0 {
                 continue;
             }
             let tag = scale_tag(scale) | PRINT_TAG | if self.grayscale { GRAYSCALE_TAG } else { 0 };

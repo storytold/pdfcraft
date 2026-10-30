@@ -1076,6 +1076,502 @@ fn solid_result(request: RenderRequest, w: u32, h: u32) -> pdfcraft_render::Rend
     }
 }
 
+fn tile_error(request: RenderRequest) -> pdfcraft_render::RenderedPage {
+    pdfcraft_render::RenderedPage { error: Some("synthetic tile failure".into()), ..solid_result(request, 0, 0) }
+}
+
+fn tile_error_harness() -> egui_kittest::Harness<'static, PdfCraftApp> {
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1000.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        let bytes = app.session.create_blank(300.0, 400.0, 1).unwrap();
+        app.open_bytes("tile-errors.pdf", None, bytes.as_ref().clone()).unwrap();
+        app.set_option("language", "en").unwrap();
+        app.set_option("zoom", "2000").unwrap();
+        app.views[0].hold_rasters = true;
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
+/// #623 item 4: an error must not replace pixels from another successful request.
+#[test]
+fn tile_error_keeps_successful_pixels_in_both_result_orders() {
+    for failure_first in [false, true] {
+        let mut h = tile_error_harness();
+        // Both requests must cover the viewport; the former adjacent 4096px tile was offscreen.
+        h.set_size(vec2(2600.0, 1600.0));
+        h.input_mut().max_texture_side = Some(1024);
+        h.run_steps(3);
+        let ctx = h.ctx.clone();
+        let requests = h.state().views[0].last_queue.clone();
+        let good = *requests.iter().find(|r| r.tile.is_some()).unwrap();
+        let tile = good.tile.unwrap();
+        let bad = *requests.iter().find(|r| r.tile.is_some() && **r != good).unwrap_or_else(|| panic!("two visible tiles required: {requests:?}"));
+        let success = || {
+            let mut result = solid_result(good, tile.w, tile.h);
+            result.rgba = pdfcraft_render::Pixels::from(vec![u32::from_ne_bytes([210, 30, 30, 255]); (tile.w * tile.h) as usize]);
+            result
+        };
+        if failure_first {
+            h.state_mut().views[0].receive_result(&ctx, tile_error(bad));
+            h.run_steps(2);
+            assert!(h.state().views[0].last_queue.contains(&good), "another pending tile must remain wanted after a failure");
+            h.state_mut().views[0].receive_result(&ctx, success());
+        } else {
+            h.state_mut().views[0].receive_result(&ctx, success());
+            h.state_mut().views[0].receive_result(&ctx, tile_error(bad));
+        }
+        let texture = h.state().views[0].tiles.get(&(0, good.tag, tile.x, tile.y)).unwrap().id();
+        h.run_steps(3);
+        assert_eq!(h.state().views[0].tiles.get(&(0, good.tag, tile.x, tile.y)).unwrap().id(), texture, "the successful texture stays owned");
+        let painted = h.ctx.tessellate(h.output().shapes.clone(), h.ctx.pixels_per_point());
+        assert!(
+            painted.iter().any(|p| matches!(&p.primitive, egui::epaint::Primitive::Mesh(m) if m.texture_id == texture)),
+            "the retained tile must still be painted, failure_first={failure_first}"
+        );
+        let pixels = h.render().unwrap();
+        if let Ok(dir) = std::env::var("PDFCRAFT_TILE_ERROR_SHOTS") {
+            pixels.save(std::path::Path::new(&dir).join(format!("tile-error-{failure_first}.png"))).unwrap();
+        }
+        assert!(
+            pixels.pixels().filter(|p| matches!(p.0, [r, g, b, _] if r > 205 && g < 40 && b < 40)).count() > 100,
+            "successful tile remains visible, failure_first={failure_first}"
+        );
+        assert_eq!(h.state().views[0].page_errors(), vec![(0, "synthetic tile failure")]);
+        assert!(
+            h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == "Error\nsynthetic tile failure")),
+            "the error indication stays visible beside the useful pixels"
+        );
+        h.state_mut().set_option("zoom", "100").unwrap();
+        h.run_steps(3);
+        let painted = h.ctx.tessellate(h.output().shapes.clone(), h.ctx.pixels_per_point());
+        assert!(
+            painted.iter().any(|p| matches!(&p.primitive, egui::epaint::Primitive::Mesh(m) if m.texture_id == texture)),
+            "zooming below the tiling threshold still shows the retained tile while the new raster is pending"
+        );
+    }
+}
+
+#[test]
+fn tile_followup_preview_failures_do_not_mark_the_main_canvas() {
+    for main_fails in [false, true] {
+        let mut h = tile_error_harness();
+        h.state_mut().set_option("zoom", "100").unwrap();
+        h.state_mut().set_option("panel", "pages").unwrap();
+        h.run_steps(3);
+        let ctx = h.ctx.clone();
+        let main =
+            *h.state().views[0].last_queue.iter().find(|r| r.kind == RequestKind::Pixels && r.tag & (THUMB_TAG | GRID_TAG | PRINT_TAG) == 0).unwrap();
+        if main_fails {
+            h.state_mut().views[0].receive_result(&ctx, tile_error(main));
+        } else {
+            assert!(h.state_mut().views[0].receive_result(&ctx, solid_result(main, 8, 8)) > 0, "the main raster must actually be admitted");
+        }
+        h.run_steps(3);
+        let thumb = *h.state().views[0].last_queue.iter().find(|r| r.tag & THUMB_TAG != 0).unwrap();
+        if main_fails {
+            assert!(
+                h.state_mut().views[0].receive_result(&ctx, solid_result(thumb, 8, 8)) > 0,
+                "the independent thumbnail must actually be admitted"
+            );
+        } else {
+            h.state_mut().views[0]
+                .receive_result(&ctx, pdfcraft_render::RenderedPage { error: Some("synthetic thumbnail failure".into()), ..tile_error(thumb) });
+        }
+        h.run_steps(3);
+        assert_eq!(
+            h.state().views[0].page_errors(),
+            vec![(0, if main_fails { "synthetic tile failure" } else { "synthetic thumbnail failure" })],
+            "aggregate diagnostics remain inspectable"
+        );
+        let main_error_shown = h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text.contains("synthetic") && (t.galley.job.text.starts_with("Error\n") || t.galley.job.text.contains("couldn't be displayed"))));
+        assert_eq!(main_error_shown, main_fails, "only a genuine main request failure belongs on the main canvas");
+        if let Ok(dir) = std::env::var("PDFCRAFT_TILE_ERROR_SHOTS") {
+            h.render().unwrap().save(std::path::Path::new(&dir).join(format!("preview-isolation-main-fails-{main_fails}.png"))).unwrap();
+        }
+    }
+}
+
+#[test]
+fn tile_followup_saturated_visible_failures_do_not_starve_a_healthy_tile() {
+    // ui.resize supports 8192 logical points. The downlevel backend fits its surface to
+    // 2048px, but egui still lays out this 2x-DPI window in its full logical coordinates.
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(8192.0, 8192.0)).with_pixels_per_point(2.0).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        let bytes = app.session.create_blank(1000.0, 1000.0, 1).unwrap();
+        app.open_bytes("saturation.pdf", None, bytes.as_ref().clone()).unwrap();
+        app.set_option("language", "en").unwrap();
+        app.set_option("zoom", "2000").unwrap();
+        app.views[0].hold_rasters = true;
+        app
+    });
+    h.input_mut().max_texture_side = Some(2048);
+    h.state_mut().views[0].goto_point = Some((0, Some(0.1), Some(0.1), Vec2::ZERO));
+    h.run_steps(4);
+    let ctx = h.ctx.clone();
+    let wanted = h.state().views[0].error_demand.clone().unwrap();
+    let tile_count = wanted.iter().filter(|r| r.tile.is_some()).count();
+    eprintln!(
+        "saturation geometry: viewport={:?}, ppp={}, max_texture_side={}, visible_tiles={tile_count}, pixel_demand={}",
+        h.state().views[0].viewport_rect(),
+        ctx.pixels_per_point(),
+        ctx.input(|i| i.max_texture_side),
+        wanted.len()
+    );
+    assert!(tile_count > 64, "real canvas geometry must exercise saturation: {tile_count}");
+    let healthy = *wanted.iter().rev().find(|r| r.tile.is_some()).unwrap();
+    let failures: Vec<_> =
+        h.state().views[0].last_queue.iter().filter(|r| r.kind == RequestKind::Pixels && **r != healthy).take(64).copied().collect();
+    assert_eq!(failures.len(), 64);
+    for req in &failures {
+        h.state_mut().views[0].receive_result(&ctx, tile_error(*req));
+    }
+    h.run_steps(3);
+    assert!(h.state().views[0].last_queue.contains(&healthy), "64 current failures must not permanently starve an untried healthy visible tile");
+    let tile = healthy.tile.unwrap();
+    h.state_mut().views[0].receive_result(&ctx, solid_result(healthy, tile.w, tile.h));
+    let pending = h.state().views[0].last_queue.clone();
+    for req in pending.into_iter().filter(|r| *r != healthy && r.kind == RequestKind::Pixels) {
+        h.state_mut().views[0].receive_result(&ctx, tile_error(req));
+    }
+    for _ in 0..4 {
+        h.run_steps(1);
+        assert!(
+            !h.state().views[0].last_queue.iter().any(|r| r.kind == RequestKind::Pixels),
+            "all visible failures stay suppressed after saturation"
+        );
+        assert!(h.state().views[0].tiles.contains_key(&(healthy.page, healthy.tag, healthy.tile.unwrap().x, healthy.tile.unwrap().y)));
+        assert!(h.state().views[0].errors.get(&0).unwrap().len() <= wanted.len().max(64));
+    }
+    let pool = RenderPool::new_inline(Arc::new(Vec::new()), Default::default());
+    h.state_mut().views[0].suspend_rendering(&pool);
+    assert!(h.state().views[0].errors.get(&0).unwrap().len() <= 64, "oversized active history shrinks when demand ends");
+    assert_eq!(h.state_mut().views[0].receive_result(&ctx, tile_error(healthy)), 0, "suspension still rejects stale results");
+}
+
+#[test]
+fn tile_review_new_tiled_zoom_hides_history_but_keeps_current_failures() {
+    let ctx = egui::Context::default();
+    let info = thumbnail_info(1);
+    let mut view = DocView::new(DocId(1), &info, ViewDefaults::default());
+    let old = RenderRequest { scale: 8.0, tag: scale_tag(8.0), tile: Some(Tile { x: 0, y: 0, w: 8, h: 8 }), ..Default::default() };
+    view.frame_visible.insert(0);
+    view.frame_queue = vec![old];
+    view.last_queue = view.prepare_render_queue(&info, 1.0);
+    view.receive_result(&ctx, tile_error(old));
+    let a = RenderRequest { scale: 16.0, tag: scale_tag(16.0), ..old };
+    let b = RenderRequest { tile: Some(Tile { x: 8, y: 0, w: 8, h: 8 }), ..a };
+    view.frame_queue = vec![a, b];
+    view.last_queue = view.prepare_render_queue(&info, 1.0);
+    view.receive_result(&ctx, solid_result(a, 8, 8));
+    view.receive_result(&ctx, solid_result(b, 8, 8));
+    assert!(view.page_errors().is_empty(), "a fully successful tiled zoom must not report the older zoom's error");
+    assert!(view.errors.get(&0).unwrap().iter().any(|(r, _)| *r == old), "history still suppresses a return to the failed request");
+    view.frame_queue = vec![old];
+    view.last_queue = view.prepare_render_queue(&info, 1.0);
+    assert!(view.last_queue.is_empty());
+    assert!(!view.page_errors().is_empty(), "returning to the failed zoom reports its outstanding failure");
+    let c = RenderRequest { tile: Some(Tile { x: 16, y: 0, w: 8, h: 8 }), ..a };
+    view.frame_queue = vec![a, b, c];
+    view.last_queue = view.prepare_render_queue(&info, 1.0);
+    view.receive_result(&ctx, tile_error(c));
+    assert!(!view.page_errors().is_empty(), "the current zoom's actual failure stays visible");
+    view.frame_queue = vec![a, b];
+    view.last_queue = view.prepare_render_queue(&info, 1.0);
+    assert!(view.page_errors().is_empty(), "panning to successful tiles hides the offscreen failure at the same zoom");
+    view.frame_queue = vec![c];
+    view.last_queue = view.prepare_render_queue(&info, 1.0);
+    assert!(view.last_queue.is_empty() && !view.page_errors().is_empty(), "panning back reports the failure without retrying it");
+    view.page_changed(0);
+    assert!(view.page_errors().is_empty());
+    assert_eq!(view.receive_result(&ctx, tile_error(c)), 0);
+    assert!(view.page_errors().is_empty(), "invalidated demand cannot revive diagnostics");
+}
+
+#[test]
+fn tile_review_main_failure_does_not_block_organize() {
+    let mut h = tile_error_harness();
+    let ctx = h.ctx.clone();
+    let main = *h.state().views[0].last_queue.iter().find(|r| r.tile.is_some()).unwrap();
+    h.state_mut().views[0].receive_result(&ctx, tile_error(main));
+    h.state_mut().views[0].organize = true;
+    h.state_mut().set_option("grid-zoom", "200").unwrap();
+    h.run_steps(3);
+    let grid = *h.state().views[0].last_queue.iter().find(|r| r.tag & GRID_TAG != 0).expect("organize is independent of a failed main tile");
+    h.state_mut().views[0].receive_result(&ctx, tile_error(grid));
+    h.run_steps(3);
+    assert!(!h.state().views[0].last_queue.contains(&grid), "the identical failed grid request stays suppressed");
+    assert!(!h.state().views[0].page_errors().is_empty());
+    h.state_mut().set_option("grid-zoom", "300").unwrap();
+    h.run_steps(3);
+    let larger = *h.state().views[0].last_queue.iter().find(|r| r.tag & GRID_TAG != 0).expect("a different grid size can succeed");
+    assert_ne!(larger, grid);
+    h.state_mut().views[0].receive_result(&ctx, solid_result(larger, 512, 512));
+    assert_eq!(h.state().views[0].grid_pages.len(), 1);
+}
+
+#[test]
+fn tile_review_main_failure_does_not_block_thumbnail_or_print() {
+    let ctx = egui::Context::default();
+    let info = thumbnail_info(1);
+    let mut view = DocView::new(DocId(1), &info, ViewDefaults::default());
+    let main = RenderRequest { scale: 8.0, tag: scale_tag(8.0), tile: Some(Tile { x: 0, y: 0, w: 8, h: 8 }), ..Default::default() };
+    view.last_queue = vec![main];
+    view.receive_result(&ctx, tile_error(main));
+    view.begin_render_frame();
+    view.need_thumbnail(0, true);
+    view.queue_print_previews(&[(0, 0.4)]);
+    view.last_queue = view.prepare_render_queue(&info, 1.0);
+    let thumb = *view.last_queue.iter().find(|r| r.tag & THUMB_TAG != 0).expect("an unrelated thumbnail must be admitted");
+    let print = *view.last_queue.iter().find(|r| r.tag & PRINT_TAG != 0).expect("an unrelated print preview must be admitted");
+    view.receive_result(&ctx, solid_result(thumb, 8, 8));
+    view.receive_result(&ctx, solid_result(print, 8, 8));
+    assert_eq!(view.raster_memory().thumbnail_count, 1);
+    assert_eq!(view.print_pages.len(), 1);
+    // Invalidate only these preview surfaces, then fail their exact requests.
+    view.thumbs.clear();
+    view.print_pages.clear();
+    view.last_queue = vec![thumb, print];
+    view.receive_result(&ctx, tile_error(thumb));
+    view.receive_result(&ctx, tile_error(print));
+    for _ in 0..4 {
+        view.begin_render_frame();
+        view.need_thumbnail(0, true);
+        view.queue_print_previews(&[(0, 0.4)]);
+        view.last_queue = view.prepare_render_queue(&info, 1.0);
+        assert!(view.last_queue.is_empty(), "identical failed previews are not repeatedly submitted");
+        assert!(!view.page_errors().is_empty(), "preview failures remain inspectable");
+    }
+    view.begin_render_frame();
+    view.queue_print_previews(&[(0, 0.5)]);
+    view.last_queue = view.prepare_render_queue(&info, 1.0);
+    assert_eq!(view.last_queue.len(), 1, "a different print request is independent of the failures");
+    view.receive_result(&ctx, solid_result(view.last_queue[0], 8, 8));
+    assert_eq!(view.print_pages.len(), 1);
+}
+
+#[test]
+fn tile_review_failure_history_is_bounded_without_retrying_active_requests() {
+    let ctx = egui::Context::default();
+    let info = thumbnail_info(1);
+    let mut view = DocView::new(DocId(1), &info, ViewDefaults::default());
+    let anchor = RenderRequest { scale: 16.0, tag: scale_tag(16.0), tile: Some(Tile { x: 0, y: 0, w: 8, h: 8 }), ..Default::default() };
+    view.frame_visible.insert(0);
+    for x in 0..512 {
+        let request = RenderRequest { tile: Some(Tile { x: x * 8, y: 0, w: 8, h: 8 }), ..anchor };
+        view.frame_queue = vec![anchor, request];
+        view.last_queue = view.prepare_render_queue(&info, 1.0);
+        for r in view.last_queue.clone() {
+            view.receive_result(&ctx, tile_error(r));
+        }
+        assert!(view.errors.get(&0).unwrap().len() <= 64, "main failure history has an explicit count ceiling");
+        view.frame_queue = vec![anchor, request];
+        view.last_queue = view.prepare_render_queue(&info, 1.0);
+        assert!(view.last_queue.is_empty(), "neither current failure can be evicted and immediately retried");
+    }
+    assert!(view.errors.get(&0).unwrap().iter().any(|(r, _)| *r == anchor));
+    let revisit = RenderRequest { tile: Some(Tile { x: 8, y: 0, w: 8, h: 8 }), ..anchor };
+    for _ in 0..4 {
+        view.frame_queue = vec![anchor, revisit];
+        view.last_queue = view.prepare_render_queue(&info, 1.0);
+        for r in view.last_queue.clone() {
+            view.receive_result(&ctx, tile_error(r));
+        }
+        view.frame_queue = vec![anchor, revisit];
+        view.last_queue = view.prepare_render_queue(&info, 1.0);
+        assert!(view.last_queue.is_empty(), "an evicted historical request can fail once on revisit, then stays suppressed");
+    }
+    let failures: Vec<_> = view.errors.get(&0).unwrap().iter().map(|(r, _)| *r).collect();
+    let extra = RenderRequest { tile: Some(Tile { x: 5000, y: 0, w: 8, h: 8 }), ..anchor };
+    view.frame_queue = failures.iter().copied().chain([extra]).collect();
+    view.last_queue = view.prepare_render_queue(&info, 1.0);
+    assert_eq!(view.last_queue, vec![extra], "larger current demand reserves space for untried work without evicting active failures");
+    view.receive_result(&ctx, tile_error(extra));
+    view.frame_queue = failures.iter().copied().chain([extra]).collect();
+    view.last_queue = view.prepare_render_queue(&info, 1.0);
+    assert!(view.last_queue.is_empty(), "the expanded active set stays suppressed without a retry loop");
+    view.begin_render_frame();
+    view.queue_print_previews(&[(0, 0.5)]);
+    view.last_queue = view.prepare_render_queue(&info, 1.0);
+    assert_eq!(view.last_queue.len(), 1, "main-history saturation leaves a slot for independent preview work");
+    assert!(view.errors.get(&0).unwrap().len() <= 64, "obsolete expanded history shrinks to the ordinary allowance");
+    view.invalidate_content();
+    assert!(view.errors.is_empty() && view.last_queue.is_empty());
+}
+
+#[test]
+fn tile_review_offscreen_tile_does_not_hide_the_no_content_error() {
+    for rotation in [0, 90, 180, 270] {
+        let mut h = tile_error_harness();
+        h.state_mut().set_option("rotate", &rotation.to_string()).unwrap();
+        h.run_steps(3);
+        let ctx = h.ctx.clone();
+        let requests = h.state().views[0].last_queue.clone();
+        let main = *requests.iter().find(|r| r.tile.is_some()).unwrap();
+        let view = &h.state().views[0];
+        let xf = view.page_xform(0).unwrap();
+        let (u, v) = xf.screen_to_norm(view.viewport_rect().intersect(xf.rect).center());
+        let x = if u > 0.5 { 0 } else { device_pixels(300.0, main.scale).saturating_sub(8) };
+        let y = if v > 0.5 { 0 } else { device_pixels(400.0, main.scale).saturating_sub(8) };
+        let offscreen = RenderRequest { tile: Some(Tile { x, y, w: 8, h: 8 }), ..main };
+        h.state_mut().views[0].last_queue.push(offscreen);
+        h.state_mut().views[0].receive_result(&ctx, solid_result(offscreen, 8, 8));
+        for r in requests.into_iter().filter(|r| r.kind == RequestKind::Pixels) {
+            h.state_mut().views[0].receive_result(&ctx, tile_error(r));
+        }
+        h.run_steps(3);
+        assert!(!h.state().views[0].tiles.is_empty(), "offscreen pixels remain cached");
+        let pixels = h.render().unwrap();
+        if let Ok(dir) = std::env::var("PDFCRAFT_TILE_ERROR_SHOTS") {
+            pixels.save(std::path::Path::new(&dir).join(format!("offscreen-tile-error-{rotation}.png"))).unwrap();
+        }
+        assert!(
+            pixels.pixels().filter(|p| p.0 == [0xFB, 0xF4, 0xF4, 0xFF]).count() > 100,
+            "no visible pixels means the existing full-page error remains meaningful"
+        );
+    }
+}
+
+#[test]
+fn tile_error_all_failures_keep_the_full_page_error_without_retrying() {
+    let mut h = tile_error_harness();
+    let ctx = h.ctx.clone();
+    let requests = h.state().views[0].last_queue.clone();
+    for req in requests.into_iter().filter(|r| r.kind == RequestKind::Pixels) {
+        h.state_mut().views[0].receive_result(&ctx, tile_error(req));
+    }
+    for _ in 0..4 {
+        h.run_steps(1);
+        assert!(!h.state().views[0].last_queue.iter().any(|r| r.kind == RequestKind::Pixels), "failed requests stay suppressed");
+    }
+    assert!(!h.state().views[0].page_errors().is_empty());
+    assert!(h.state().views[0].pages.is_empty() && h.state().views[0].tiles.is_empty());
+    let pixels = h.render().unwrap();
+    assert!(pixels.pixels().filter(|p| p.0 == [0xFB, 0xF4, 0xF4, 0xFF]).count() > 100, "the existing error page is still painted");
+}
+
+#[test]
+fn tile_error_invalidation_rejects_obsolete_successes_and_failures() {
+    let ctx = egui::Context::default();
+    let info = thumbnail_info(2);
+    let mut view = DocView::new(DocId(1), &info, ViewDefaults::default());
+    let req = RenderRequest { scale: 1.0, tag: scale_tag(1.0), tile: Some(Tile { x: 0, y: 0, w: 8, h: 8 }), ..Default::default() };
+    let other = RenderRequest { page: 1, ..req };
+    view.last_queue = vec![req, other];
+    view.receive_result(&ctx, tile_error(req));
+    view.receive_result(&ctx, solid_result(other, 8, 8));
+    view.page_changed(0);
+    assert!(view.page_errors().is_empty());
+    assert_eq!(view.receive_result(&ctx, tile_error(req)), 0);
+    assert_eq!(view.receive_result(&ctx, solid_result(req, 8, 8)), 0);
+    assert!(view.page_errors().is_empty());
+    assert_eq!(view.tiles.len(), 1, "another page's successful pixels are untouched");
+    view.frame_queue = vec![req];
+    view.last_queue = view.prepare_render_queue(&info, 1.0);
+    assert_eq!(view.last_queue, vec![req], "the edited page can render again");
+    view.receive_result(&ctx, tile_error(req));
+    view.document_changed(&info);
+    assert!(view.page_errors().is_empty());
+    assert!(view.tiles.is_empty());
+    view.receive_result(&ctx, tile_error(req));
+    view.receive_result(&ctx, solid_result(req, 8, 8));
+    assert!(view.page_errors().is_empty() && view.tiles.is_empty(), "old results cannot repopulate an invalidated document");
+
+    view.last_queue = vec![req];
+    view.receive_result(&ctx, tile_error(req));
+    view.document_replaced(&thumbnail_info(1));
+    view.receive_result(&ctx, tile_error(req));
+    view.receive_result(&ctx, solid_result(req, 8, 8));
+    assert!(view.page_errors().is_empty() && view.tiles.is_empty() && view.last_queue.is_empty(), "replacement closes the old result gate");
+    assert_eq!(view.page_count, 1);
+
+    // A new document has its own view and pool, even when its page/scale/tile are identical.
+    let replacement = DocView::new(DocId(2), &info, ViewDefaults::default());
+    assert!(replacement.page_errors().is_empty() && replacement.tiles.is_empty());
+    view.last_queue = vec![req];
+    view.receive_result(&ctx, tile_error(req));
+    assert!(replacement.page_errors().is_empty(), "the old view's error does not belong to the replacement");
+}
+
+#[test]
+fn tile_error_a_new_complete_raster_recovers_and_old_zoom_results_stay_rejected() {
+    let ctx = egui::Context::default();
+    let info = thumbnail_info(1);
+    let mut view = DocView::new(DocId(1), &info, ViewDefaults::default());
+    let old = RenderRequest { scale: 8.0, tag: scale_tag(8.0), tile: Some(Tile { x: 0, y: 0, w: 8, h: 8 }), ..Default::default() };
+    view.last_queue = vec![old];
+    view.receive_result(&ctx, tile_error(old));
+    let new = RenderRequest { scale: 1.0, tag: scale_tag(1.0), tile: None, ..old };
+    view.frame_queue = vec![new];
+    view.last_queue = view.prepare_render_queue(&info, 1.0);
+    assert_eq!(view.last_queue, vec![new]);
+    // A malformed success is not recovery and must not hide the original error.
+    assert_eq!(view.receive_result(&ctx, solid_result(new, 0, 0)), 0);
+    assert!(!view.page_errors().is_empty());
+    assert!(view.receive_result(&ctx, solid_result(new, 8, 8)) > 0);
+    assert!(view.page_errors().is_empty(), "a complete, current page raster supersedes the older tile failure");
+    view.receive_result(&ctx, tile_error(old));
+    view.receive_result(&ctx, solid_result(old, 8, 8));
+    assert!(view.page_errors().is_empty() && view.tiles.is_empty(), "late errors and pixels from the old zoom are ignored");
+    let pool = RenderPool::new_inline(Arc::new(Vec::new()), Default::default());
+    view.suspend_rendering(&pool);
+    view.receive_result(&ctx, tile_error(new));
+    assert!(view.page_errors().is_empty() && view.pages.is_empty(), "suspending the view also closes the result gate");
+}
+
+#[test]
+fn tile_error_keeps_a_successful_backdrop_and_reports_the_failure() {
+    let mut h = tile_error_harness();
+    let ctx = h.ctx.clone();
+    let requests = h.state().views[0].last_queue.clone();
+    let backdrop = *requests.iter().find(|r| r.kind == RequestKind::Pixels && r.tile.is_none()).unwrap();
+    let bad = *requests.iter().find(|r| r.tile.is_some()).unwrap();
+    let mut result = solid_result(backdrop, 8, 8);
+    result.rgba = pdfcraft_render::Pixels::from(vec![u32::from_ne_bytes([210, 30, 30, 255]); 64]);
+    h.state_mut().views[0].receive_result(&ctx, result);
+    h.state_mut().views[0].receive_result(&ctx, tile_error(bad));
+    h.run_steps(3);
+    let pixels = h.render().unwrap();
+    assert!(pixels.pixels().filter(|p| matches!(p.0, [r, g, b, _] if r > 205 && g < 40 && b < 40)).count() > 100);
+    assert_eq!(h.state().views[0].page_errors(), vec![(0, "synthetic tile failure")]);
+    if let Ok(dir) = std::env::var("PDFCRAFT_TILE_ERROR_SHOTS") {
+        pixels.save(std::path::Path::new(&dir).join("backdrop-error.png")).unwrap();
+    }
+}
+
+#[test]
+fn tile_error_success_only_clears_the_failure_it_supersedes() {
+    let ctx = egui::Context::default();
+    let mut view = DocView::new(DocId(1), &thumbnail_info(1), ViewDefaults::default());
+    let first = RenderRequest { tile: Some(Tile { x: 0, y: 0, w: 8, h: 8 }), ..Default::default() };
+    let second = RenderRequest { tile: Some(Tile { x: 8, y: 0, w: 8, h: 8 }), ..first };
+    view.last_queue = vec![first, second];
+    view.receive_result(&ctx, tile_error(first));
+    view.receive_result(&ctx, pdfcraft_render::RenderedPage { error: Some("second failure".into()), ..solid_result(second, 0, 0) });
+    view.receive_result(&ctx, solid_result(second, 8, 8));
+    assert_eq!(view.page_errors(), vec![(0, "synthetic tile failure")], "the other failure still describes the page");
+    view.receive_result(&ctx, solid_result(first, 8, 8));
+    assert!(view.page_errors().is_empty(), "both requests eventually succeeded");
+}
+
+#[test]
+fn tile_error_notice_remains_visible_when_the_card_cannot_fit() {
+    let ctx = egui::Context::default();
+    let shown = Rect::from_min_size(pos2(20.0, 20.0), vec2(12.0, 16.0));
+    let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        paint_partial_page_error(ui, shown, 0, "synthetic tile failure", &Tokens::get(ui.ctx()));
+    });
+    assert!(
+        output
+            .shapes
+            .iter()
+            .any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.rect == shown && r.stroke.color == Color32::from_rgb(0xC8, 0x3A, 0x3A))),
+        "small visible pages still get an error outline without covering their pixels"
+    );
+    output.drop_without_applying_deltas();
+}
+
 /// #3149: the replacement dialog commits after the canvas collected this frame's demand.
 #[test]
 fn replacing_a_page_after_layout_never_uploads_an_oversized_texture() {
@@ -1355,7 +1851,8 @@ fn visible_pages_render_before_thumbnails_and_text() {
     assert!(queue.iter().any(|r| r.tag & THUMB_TAG != 0), "thumbnails admitted after pixels");
     assert!(!queue.iter().any(|r| r.kind == RequestKind::Pixels && r.tag & THUMB_TAG == 0), "no main pixels re-requested");
     // An errored visible page never holds background work back.
-    v.errors.insert(0, "gone".to_string());
+    v.last_queue = vec![main];
+    v.receive_result(&ctx, tile_error(main));
     v.begin_render_frame();
     v.frame_visible = [0].into();
     v.frame_queue = vec![main, text];

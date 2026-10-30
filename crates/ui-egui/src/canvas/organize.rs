@@ -245,7 +245,6 @@ fn drag_pages(view: &mut DocView, resp: &egui::Response, page: usize, drop: &mut
 /// A page drawn larger than its thumbnail gets a render at the size drawn, while it is in view;
 /// until that arrives the thumbnail stands in.
 fn request_sharper(
-    view: &DocView,
     page: usize,
     want: f32,
     page_width: f32,
@@ -254,7 +253,7 @@ fn request_sharper(
     sharper: &mut Vec<RenderRequest>,
 ) {
     in_view.push((page, want));
-    if !drawn_width.is_some_and(|w| sharp_enough(w, want)) && !view.errors.contains_key(&page) {
+    if !drawn_width.is_some_and(|w| sharp_enough(w, want)) {
         sharper.push(RenderRequest {
             page,
             kind: RequestKind::Pixels,
@@ -338,7 +337,7 @@ pub(super) fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, 
                 let thumb_ok = thumb.is_some_and(|t| t.size()[0] as f32 >= want * GRID_SHARP.start());
                 let sharp = view.grid_pages.get(&i).filter(|_| !thumb_ok);
                 if !thumb_ok && ui.is_rect_visible(c) {
-                    request_sharper(view, i, want, p.width, sharp.map(|(w, _)| *w), &mut in_view, &mut sharper);
+                    request_sharper(i, want, p.width, sharp.map(|(w, _)| *w), &mut in_view, &mut sharper);
                 }
                 if let Some(tex) = sharp.map(|(_, t)| t).or(thumb) {
                     ui.painter().image(tex.id(), pr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);

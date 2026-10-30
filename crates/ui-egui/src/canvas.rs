@@ -322,8 +322,10 @@ pub struct DocView {
     /// shows one page or spread at a time, fitted to the screen. `None` outside full screen.
     presentation: Option<SavedDisplay>,
     pages: HashMap<usize, PageTex>,
-    /// Pages the renderer could not draw, with the reason (never re-requested).
-    errors: HashMap<usize, String>,
+    /// Bounded retry history, grouped by page. Only current demand contributes diagnostics.
+    errors: HashMap<usize, Vec<(RenderRequest, String)>>,
+    /// Last committed pixel demand, including cached and failed requests, before queue filtering.
+    error_demand: Option<Vec<RenderRequest>>,
     /// When each still-missing page was first shown, to flag unusually slow renders.
     waiting_since: HashMap<usize, f64>,
     thumbs: HashMap<usize, PageTex>,
@@ -629,6 +631,7 @@ impl DocView {
             presentation: None,
             pages: HashMap::new(),
             errors: HashMap::new(),
+            error_demand: None,
             waiting_since: HashMap::new(),
             thumbs: HashMap::new(),
             thumb_demand: HashMap::new(),
@@ -943,7 +946,9 @@ fn paint_page_surface(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFra
         painter.add(egui::epaint::Shadow { offset: [0, 3], blur: 14, spread: 0, color: t.page_shadow }.as_shape(r, CornerRadius::ZERO));
     }
     painter.rect_filled(r, CornerRadius::ZERO, paper);
-    if let Some(err) = view.errors.get(&i) {
+    let has_error = view.main_page_error(i).is_some();
+    let has_content = has_error && has_visible_page_pixels(view, frame, slot);
+    if let Some(err) = view.main_page_error(i).filter(|_| !has_content) {
         painter.rect_filled(r, CornerRadius::ZERO, Color32::from_rgb(0xFB, 0xF4, 0xF4));
         icons::paint(
             ui,
@@ -955,8 +960,11 @@ fn paint_page_surface(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFra
         let message = crate::i18n::fmt(tl!("This page couldn't be displayed.\n{e}"), &[("e", err)]);
         let msg = ui.fonts_mut(|f| f.layout(message, theme::regular(12.5), Color32::from_rgb(0x6A, 0x2A, 0x2A), (r.width() - 40.0).max(80.0)));
         painter.galley(pos2(r.center().x - msg.size().x / 2.0, r.center().y), msg, Color32::BLACK);
-    } else {
-        let (pw_pt, ph_pt) = (info.pages[i].width.max(1.0), info.pages[i].height.max(1.0));
+    }
+    // Keep collecting demand after a failure: another in-flight tile can still succeed.
+    {
+        let Some(page) = info.pages.get(i) else { return };
+        let (pw_pt, ph_pt) = (page.width.max(1.0), page.height.max(1.0));
         // A GPU may take smaller textures than these (OpenGL drivers report as little as
         // 2048 pixels, and uploading a bigger one aborts), so both stay within its limit.
         let max_side = ui.ctx().input(|inp| inp.max_texture_side) as f32;
@@ -983,17 +991,74 @@ fn paint_page_surface(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFra
                     xf.paint_image(painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0);
                 }
             }
-            None => {
+            None if !has_error => {
                 let now = ui.input(|inp| inp.time);
                 let since = *view.waiting_since.entry(i).or_insert(now);
                 let msg = if now - since > 6.0 { "Still rendering — this page is unusually complex…" } else { "Rendering…" };
                 painter.text(r.center(), Align2::CENTER_CENTER, tl!(msg), theme::regular(12.0), t.text_faint);
             }
+            None => {}
         }
         if tiled && r.intersects(visible) {
             paint_page_tiles(ui, view, frame, slot, (pw_pt, ph_pt, max_side));
+        } else if has_content && view.pages.get(&i).is_none_or(|p| p.tag != want_tag) {
+            // A failed zoom-out may have only the older tiles to show below the tiling threshold.
+            paint_cached_tiles(view, frame, slot, painter, None);
         }
     }
+    if has_content && let Some(err) = view.main_page_error(i) {
+        paint_partial_page_error(ui, r.intersect(visible), i, err, t);
+    }
+}
+
+/// Cached pixels count only where they intersect the page's visible part, including view rotation.
+fn has_visible_page_pixels(view: &DocView, frame: &PageFrame<'_>, slot: &PageSlot) -> bool {
+    let PageSlot { i, r, xf } = *slot;
+    let shown = r.intersect(frame.visible);
+    if !shown.is_finite() || !shown.is_positive() {
+        return false;
+    }
+    if view.pages.contains_key(&i) {
+        return true;
+    }
+    let Some(page) = frame.env.info.pages.get(i) else { return false };
+    view.tiles.iter().any(|(&(p, tag, x, y), tex)| {
+        if p != i {
+            return false;
+        }
+        let scale = tag_scale(tag);
+        let (w, h) = (device_pixels(page.width.max(1.0), scale) as f32, device_pixels(page.height.max(1.0), scale) as f32);
+        let [tw, th] = tex.size();
+        let coverage = Rect::from_two_pos(
+            xf.norm_to_screen(x as f32 / w, y as f32 / h),
+            xf.norm_to_screen((x as f32 + tw as f32) / w, (y as f32 + th as f32) / h),
+        );
+        coverage.intersect(shown).is_positive()
+    })
+}
+
+/// Keep the failure visible without replacing the page's useful pixels or claiming none were drawn.
+fn paint_partial_page_error(ui: &egui::Ui, shown: Rect, page: usize, err: &str, t: &Tokens) {
+    if !shown.is_finite() || !shown.is_positive() {
+        return;
+    }
+    let available = shown.shrink(8.0);
+    if available.width() < 24.0 || available.height() < 24.0 {
+        // Even a tiny page or a sliver at the viewport edge must still indicate the failure.
+        ui.painter().rect_stroke(shown, CornerRadius::ZERO, Stroke::new(1.0, Color32::from_rgb(0xC8, 0x3A, 0x3A)), egui::StrokeKind::Inside);
+        ui.interact(shown, ui.scope_id().with(("page-render-error", page)), Sense::hover()).on_hover_text(err);
+        return;
+    }
+    let message = format!("{}\n{err}", tl!("Error"));
+    let text = ui.fonts_mut(|f| f.layout(message, theme::regular(12.0), t.text, (available.width() - 40.0).clamp(40.0, 320.0)));
+    let size = vec2((text.size().x + 40.0).min(available.width()), (text.size().y + 12.0).min(available.height()).min(160.0));
+    let note = Rect::from_min_size(available.right_bottom() - size, size);
+    let painter = ui.painter().with_clip_rect(note);
+    painter.rect_filled(note, CornerRadius::same(6), t.card);
+    painter.rect_stroke(note, CornerRadius::same(6), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    icons::paint(ui, Rect::from_min_size(note.min + vec2(6.0, 6.0), vec2(18.0, 18.0)), "triangle-alert", 16.0, Color32::from_rgb(0xC8, 0x3A, 0x3A));
+    painter.galley(note.min + vec2(30.0, 6.0), text, t.text);
+    ui.interact(note, ui.scope_id().with(("page-render-error", page)), Sense::hover()).on_hover_text(err);
 }
 
 /// Paints the tiles of a page too big to draw whole: the tiles of earlier zooms first, stretched,
@@ -1020,15 +1085,7 @@ fn paint_page_tiles(ui: &egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>
     let (vx1, vy1) = (((u1.min(1.0) * dw as f32).ceil() as u32).min(dw), ((v1.min(1.0) * dh as f32).ceil() as u32).min(dh));
     // Tiles of earlier zooms first, stretched, the nearest scale last (on top):
     // until the current tiles arrive, a zoom shows them rather than the backdrop.
-    let mut older: Vec<(f32, u32, u32, &TextureHandle)> =
-        view.tiles.iter().filter(|((p, t, _, _), _)| *p == i && *t != tag).map(|((_, t, ox, oy), tex)| (tag_scale(*t), *ox, *oy, tex)).collect();
-    older.sort_by(|a, b| (b.0 / scale).ln().abs().total_cmp(&(a.0 / scale).ln().abs()));
-    for (s, ox, oy, tex) in older {
-        let (ow, oh) = (device_pixels(pw_pt, s) as f32, device_pixels(ph_pt, s) as f32);
-        let [w, h] = tex.size();
-        let (x, y) = (ox as f32, oy as f32);
-        xf.paint_image(painter, tex.id(), x / ow, y / oh, (x + w as f32) / ow, (y + h as f32) / oh);
-    }
+    paint_cached_tiles(view, frame, slot, painter, Some(tag));
     // Visible tiles, nearest the viewport centre first: each tile costs a full
     // page interpret, so the workers sharpen what is looked at before the edges.
     let (vcx, vcy) = ((vx0 + vx1) as f32 / 2.0, (vy0 + vy1) as f32 / 2.0);
@@ -1061,6 +1118,24 @@ fn paint_page_tiles(ui: &egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>
                 (y + h) as f32 / fh,
             );
         }
+    }
+}
+
+fn paint_cached_tiles(view: &DocView, frame: &PageFrame<'_>, slot: &PageSlot, painter: &egui::Painter, skip_tag: Option<u64>) {
+    let PageSlot { i, xf, .. } = *slot;
+    let Some(page) = frame.env.info.pages.get(i) else { return };
+    let scale = frame.env.scale;
+    let mut tiles: Vec<(f32, u32, u32, &TextureHandle)> = view
+        .tiles
+        .iter()
+        .filter(|((p, t, _, _), _)| *p == i && Some(*t) != skip_tag)
+        .map(|((_, t, x, y), tex)| (tag_scale(*t), *x, *y, tex))
+        .collect();
+    tiles.sort_by(|a, b| (b.0 / scale).ln().abs().total_cmp(&(a.0 / scale).ln().abs()));
+    for (s, x, y, tex) in tiles {
+        let (w, h) = (device_pixels(page.width.max(1.0), s) as f32, device_pixels(page.height.max(1.0), s) as f32);
+        let [tw, th] = tex.size();
+        xf.paint_image(painter, tex.id(), x as f32 / w, y as f32 / h, (x as f32 + tw as f32) / w, (y as f32 + th as f32) / h);
     }
 }
 
@@ -2240,7 +2315,7 @@ fn plan_renders(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, renders: Page
         let n = if view.layout == PageLayout::Single { 1 } else { 2 };
         let max_side = ui.ctx().input(|inp| inp.max_texture_side) as f32;
         for i in (last.saturating_add(1)..=last.saturating_add(n)).chain(first.saturating_sub(n)..first) {
-            let Some(p) = info.pages.get(i).filter(|_| !view.errors.contains_key(&i)) else { continue };
+            let Some(p) = info.pages.get(i) else { continue };
             // As drawn: the whole page at this scale, or the backdrop of a tiled page.
             let side = p.width.max(p.height).max(1.0);
             wanted.push(if side * scale > TILE_THRESHOLD.min(max_side) {
