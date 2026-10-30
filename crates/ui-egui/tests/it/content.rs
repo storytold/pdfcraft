@@ -1425,3 +1425,51 @@ fn typing_in_one_tab_never_reaches_another_tabs_added_text() {
     h.run_steps(3);
     assert_eq!(h.state().views[1].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed"), "the other tab's typing stays out");
 }
+
+/// #4236: Format text underlines added text, as one undoable change, and the page draws the rule.
+#[test]
+fn format_text_underlines_added_text() {
+    let _gpu = gpu();
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    let p = at(&h, 40.0, 300.0);
+    click(&mut h, p);
+    h.event(egui::Event::Text("MMMMMMMM".into()));
+    h.run_steps(2);
+    h.get_by_label("Done adding text").click();
+    h.run_steps(3);
+    let rect = added(&h)[0].content.rect();
+    let underlined = |h: &Harness<'static, PdfCraftApp>| matches!(&added(h)[0].content, pdfcraft_engine::AddedContent::Text(t) if t.underline);
+    assert!(!underlined(&h));
+    // Dark pixels in a strip across the text's baseline, once the page shows the text.
+    let from = item_on_screen(&h, rect);
+    let strip =
+        egui::Rect::from_min_max(egui::pos2(from.left(), from.bottom() - 6.0), egui::pos2(from.left() + from.width() * 0.5, from.bottom() + 2.0));
+    let settle = |h: &mut Harness<'static, PdfCraftApp>, more: &dyn Fn(usize) -> bool| {
+        let mut n = 0;
+        for _ in 0..100 {
+            h.run_steps(2);
+            n = ink(&h.render().unwrap(), strip);
+            if more(n) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        n
+    };
+    let plain = settle(&mut h, &|n| n > 10);
+    assert!(plain > 10, "the text is on the page ({plain} dark pixels)");
+    h.get_by_label("Underline").click();
+    h.run_steps(3);
+    assert!(underlined(&h), "the new text is underlined");
+    {
+        let s = h.state();
+        assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Edit content"));
+    }
+    let ruled = settle(&mut h, &|n| n > plain + 30);
+    assert!(ruled > plain + 30, "a rule under the text ({plain} dark pixels before, {ruled} after)");
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert!(!underlined(&h), "undo takes it off");
+}
