@@ -6,16 +6,26 @@ impl Layouter<'_> {
     /// Place `node` as one block of size (`w`, `h`) at the cursor: in this content area when it fits,
     /// in the next when it fits there, and across as many as it takes when it is taller than a
     /// content area (a positioned or fixed-height subform holding more than a page).
-    fn flow_block(&mut self, node: &Node, x: f64, (w, h): (f64, f64), ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
+    fn flow_block(&mut self, node: &Node, x: f64, size: (f64, f64), ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
+        self.place_block(node, x, size, ctx, depth, sib, true)
+    }
+
+    /// [`Self::flow_block`]; `may_split` is false when a field that might have been split turned
+    /// out not to be (see below), to place it as any other block.
+    #[allow(clippy::too_many_arguments)]
+    fn place_block(&mut self, node: &Node, x: f64, (w, h): (f64, f64), ctx: &Ctx, depth: usize, sib: usize, may_split: bool) -> Result<(), XfaError> {
         let (rect, y, _) = self.cursor();
         // A field a page break may split starts here, and what doesn't fit goes on in the next
         // content area (XFA 3.3 pp. 291–292), rather than the whole field moving there.
-        let splits = matches!(node, Node::Field(f) if f.splits_at_page_break());
+        let splits = may_split && matches!(node, Node::Field(f) if f.splits_at_page_break());
         if !splits && y + h > rect.bottom() + 0.01 && h <= rect.h + 0.01 {
             self.make_room(h, 0.0)?;
         }
         let (rect, y, _) = self.cursor();
         let first = self.pages.last().map_or(0, |p| p.items.len());
+        // What drawing it changes besides the page, to undo if it then isn't split: only a field that
+        // doesn't fit here can turn out so.
+        let undo = (splits && y + h > rect.bottom() + 0.01).then(|| (self.fields, self.names.clone()));
         self.leaves.clear();
         self.field_border = None;
         self.draw_node(node, Rect::new(x, y, w, h), ctx, depth, sib)?;
@@ -38,6 +48,17 @@ impl Layouter<'_> {
             return Ok(());
         }
         let Some(som) = (if splits { self.splittable_widget_since(first, rect.bottom()) } else { None }) else {
+            if let Some((fields, names)) = undo {
+                // Not split after all (a value, or no room for a line of it here): undone, and
+                // placed as before, moving to the next content area whole.
+                if let Some(p) = self.pages.last_mut() {
+                    p.items.truncate(first);
+                }
+                self.fields = fields;
+                self.names = names;
+                self.leaves.clear();
+                return self.place_block(node, x, (w, h), ctx, depth, sib, false);
+            }
             return self.split_block(first, y, drawn);
         };
         // The field breaks into pieces, each with the field's border all round (a border's

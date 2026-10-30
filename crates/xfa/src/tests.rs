@@ -4619,3 +4619,30 @@ fn a_split_field_closes_its_border_on_each_piece_and_a_sliver_moves_whole() {
     let whole = levels(&sliver.pages[1]);
     assert!(whole.iter().any(|y| (y - 36.0).abs() < 1.0) && whole.iter().any(|y| (y - 252.0).abs() < 1.0), "whole on the next page: {whole:?}");
 }
+
+/// A field with no room above the break for a line of its widget is placed exactly as one that
+/// can't split: inside a bordered section with a top margin that goes on to the next page, it
+/// sits where a field kept intact does, under the section's margin there.
+#[test]
+fn a_sliver_field_moves_on_as_a_field_kept_intact_does() {
+    let form = |keep: &str| {
+        let body = format!(
+            r#"<subform name="sec" layout="tb" w="7.5in">
+ <margin topInset="0.25in" bottomInset="0.25in"/>
+ <border><edge/></border>
+ <draw name="filler" w="7.5in" h="9.3in"><value><text>above</text></value></draw>
+ <field name="notes" w="7.5in" minH="3in">{keep}
+  <border><edge/></border>
+  <ui><textEdit multiLine="1"/></ui>
+  <caption reserve="0.5in" placement="top"><value><text>Notes</text></value></caption>
+ </field>
+</subform>"#
+        );
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        let at = form.pages.iter().enumerate().find_map(|(i, p)| widgets(p).into_iter().find(|w| w.name == "notes").map(|w| (i, w.rect)));
+        (form.pages.len(), at)
+    };
+    let (pages, at) = form("");
+    assert_eq!((pages, at), form(r#"<keep intact="contentArea"/>"#), "the sliver field and one kept intact");
+    assert_eq!(at.map(|(page, _)| page), Some(1), "on the second page");
+}
