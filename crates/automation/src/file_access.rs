@@ -391,9 +391,9 @@ mod tests {
     /// the same function (or be one of the helpers that only ever get a resolved path).
     #[test]
     fn tools_do_not_touch_the_file_system_without_resolving_the_path() {
-        // Helpers that are only called with a resolved path. `doc_batch` (batch.rs) resolves its
-        // inputs and out_dir, walks only inside them (skipping links) and resolves every
-        // discovered file again before `process` reads it or `publish` writes it.
+        // Helpers that are only called with a resolved path. `doc_batch` and `sign_batch` (batch.rs)
+        // resolve their inputs and out_dir, walk only inside them (skipping links) and resolve every
+        // discovered file again (`resolve_discovered`) before it is read or `publish` writes it.
         const RESOLVED_BY_CALLER: &[&str] =
             &["write_atomic", "write_atomic_with", "read_input", "read_input_bytes", "read_review_sidecar", "process", "linked", "walk", "publish"];
         let mut dirs = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];

@@ -132,6 +132,21 @@ pub fn tools() -> Vec<ToolDef> {
                 "dpi": {"type":"number","minimum":72,"maximum":600},
                 "language": {"type":"string"}, "skip_text_pages": {"type":"boolean"}
             }), &["paths","out_dir","steps"])),
+        t("sign_batch", "Sign many PDFs", "Sign every PDF in the files and folders `paths` with one digital ID (a .p12/.pfx path, or a keychain:/windows: reference as sign_document takes), one file at a time, and save the signed copies under out_dir. recursive defaults to false. Paths relative to each selected folder are kept inside out_dir; duplicate inputs run once. Skip non-PDF files, links and the output subtree. Existing outputs receive numbered names and are never replaced; the sources are unchanged. Continue after per-file errors unless stop_on_error is true. Return completed/failed/skipped counts and per-file results. Discovery is bounded to 10000 entries and 64 folder levels. Without rect the signatures are invisible; with rect (points from the top-left of the displayed page, on `page`, default 1, or the last page of a shorter file) each shows the default appearance. certify makes each a certification signature. PAdES B-B, SHA-256 (SHA-384 for P-384 keys); existing signatures stay valid.")
+            .cmd("sign.digital")
+            .with(schema(json!({
+                "paths": {"type":"array","items":{"type":"string"},"minItems":1,"maxItems":1000},
+                "out_dir": {"type":"string"},
+                "id": { "type": "string", "description": "Digital ID file (.p12 / .pfx), keychain: reference on macOS, or windows: reference on Windows." },
+                "password": { "type": "string" },
+                "page": { "type": "integer", "minimum": 1 },
+                "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
+                "reason": { "type": "string" },
+                "location": { "type": "string" },
+                "contact": { "type": "string" },
+                "certify": { "type": "string", "enum": ["no_changes", "form_fill", "comments"] },
+                "recursive": {"type":"boolean"}, "stop_on_error": {"type":"boolean"}
+            }), &["paths","out_dir","id"])),
         t("attachment_add", "Attach a file", "Attach the file at path to the document (document level, the Attachments panel; not a paper-clip comment on a page). name defaults to the file's name; the attachment's key, unique in the document, is returned. Undoable.")
             .cmd("edit.attach")
             .with(schema(json!({"doc": doc(), "path": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}}), &["doc", "path"])),

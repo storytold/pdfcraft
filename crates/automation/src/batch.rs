@@ -175,10 +175,10 @@ impl Discovery {
 }
 
 impl Automation {
-    pub(crate) fn doc_batch(&self, args: &Args) -> Result<Value> {
-        let recipe = Recipe::parse(self, args)?;
+    /// The files `paths` selects (folders walked when `recursive`) and the resolved `out_dir`
+    /// they are written under. Discovery finishes before any output is made.
+    fn discover(&self, args: &Args) -> Result<(PathBuf, Discovery)> {
         let recursive = args.opt_bool("recursive")?.unwrap_or(false);
-        let stop = args.opt_bool("stop_on_error")?.unwrap_or(false);
         let paths = args.strs("paths")?;
         if paths.is_empty() || paths.len() > 1000 {
             return Err(Args::wrong("paths", "1 to 1000 files or folders"));
@@ -202,6 +202,32 @@ impl Automation {
             let relative = if root.is_dir() { PathBuf::new() } else { PathBuf::from(root.file_name().ok_or_else(|| failed("input has no name"))?) };
             discovery.walk(&root, &relative, &out, recursive, 0)?;
         }
+        Ok((out, discovery))
+    }
+
+    /// Recheck confinement and links before reading a discovered file.
+    fn resolve_discovered(&self, path: &Path) -> Result<PathBuf> {
+        let current = self.resolve(path.to_str().ok_or_else(|| failed("input path is not UTF-8"))?, false)?;
+        if linked(&path.symlink_metadata().map_err(failed)?) || absolute(&current)? != path {
+            return Err(failed("input path changed after discovery"));
+        }
+        Ok(current)
+    }
+
+    /// Where `relative` (as a PDF) goes under `out`, which it must not leave.
+    fn target(&self, out: &Path, relative: &Path) -> Result<PathBuf> {
+        let target = out.join(relative).with_extension("pdf");
+        let target = self.resolve(target.to_str().ok_or_else(|| failed("output path is not UTF-8"))?, true)?;
+        if !target.starts_with(out) {
+            return Err(failed("output path leaves out_dir"));
+        }
+        Ok(target)
+    }
+
+    pub(crate) fn doc_batch(&self, args: &Args) -> Result<Value> {
+        let recipe = Recipe::parse(self, args)?;
+        let stop = args.opt_bool("stop_on_error")?.unwrap_or(false);
+        let (out, discovery) = self.discover(args)?;
         let mut files = discovery.skipped;
         let (mut completed, mut failed_count) = (0, 0);
         let mut stopped = false;
@@ -210,19 +236,10 @@ impl Automation {
                 files.push(json!({"path":path.to_string_lossy(),"status":"skipped","reason":if stopped {"stopped after error"} else {"unsupported input extension"}}));
                 continue;
             }
-            // Recheck confinement and links before reading a discovered file.
             let result: Result<_> = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let current = self.resolve(path.to_str().ok_or_else(|| failed("input path is not UTF-8"))?, false)?;
-                if linked(&path.symlink_metadata().map_err(failed)?) || absolute(&current)? != path {
-                    return Err(failed("input path changed after discovery"));
-                }
+                let current = self.resolve_discovered(&path)?;
                 let (bytes, log) = recipe.process(&current)?;
-                let target = out.join(relative).with_extension("pdf");
-                let target = self.resolve(target.to_str().ok_or_else(|| failed("output path is not UTF-8"))?, true)?;
-                if !target.starts_with(&out) {
-                    return Err(failed("output path leaves out_dir"));
-                }
-                let output = publish(&target, &bytes)?;
+                let output = publish(&self.target(&out, &relative)?, &bytes)?;
                 Ok((output, bytes.len(), log))
             }))
             .unwrap_or_else(|_| Err(failed("batch conversion panicked; no output was published")));
@@ -230,6 +247,75 @@ impl Automation {
                 Ok((output, bytes, steps)) => {
                     completed += 1;
                     files.push(json!({"path":path.to_string_lossy(),"status":"ok","output":output.to_string_lossy(),"bytes":bytes,"steps":steps}));
+                }
+                Err(e) => {
+                    failed_count += 1;
+                    files.push(json!({"path":path.to_string_lossy(),"status":"error","error":e.to_string()}));
+                    stopped = stop;
+                }
+            }
+        }
+        let skipped = files.len().saturating_sub(completed + failed_count);
+        Ok(json!({"completed":completed,"failed":failed_count,"skipped":skipped,"stopped":stopped,"files":files}))
+    }
+
+    /// Sign every PDF the paths select with one digital ID, each in a fresh session so no
+    /// document state is shared and the caller's tabs are untouched. Signed copies go under
+    /// `out_dir`; sources are never changed.
+    pub(crate) fn sign_batch(&self, args: &Args) -> Result<Value> {
+        let stop = args.opt_bool("stop_on_error")?.unwrap_or(false);
+        let id = self.open_id(args)?;
+        let page = match args.opt_int("page")? {
+            Some(p) if p >= 1 => p as usize - 1,
+            Some(p) => return Err(Args::wrong("page", &format!("1 or more, not {p}"))),
+            None => 0,
+        };
+        let rect = args.nums::<4>("rect")?;
+        let certify = match args.opt_str("certify")? {
+            None => None,
+            Some("no_changes") => Some(1),
+            Some("form_fill") => Some(2),
+            Some("comments") => Some(3),
+            Some(other) => return Err(Args::wrong("certify", &format!("no_changes, form_fill or comments, not {other:?}"))),
+        };
+        let template = pdfcraft_engine::SignOptions {
+            reason: args.opt_str("reason")?.map(str::to_string),
+            location: args.opt_str("location")?.map(str::to_string),
+            contact: args.opt_str("contact")?.map(str::to_string),
+            certify,
+            ..Default::default()
+        };
+        let (out, discovery) = self.discover(args)?;
+        let mut files = discovery.skipped;
+        let (mut completed, mut failed_count) = (0, 0);
+        let mut stopped = false;
+        for (path, relative) in discovery.files {
+            let is_pdf = path.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+            if stopped || !is_pdf {
+                files.push(json!({"path":path.to_string_lossy(),"status":"skipped","reason":if stopped {"stopped after error"} else {"not a PDF"}}));
+                continue;
+            }
+            let result: Result<_> = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let current = self.resolve_discovered(&path)?;
+                let bytes = crate::read_input(&current)?;
+                let name = path.file_name().and_then(std::ffi::OsStr::to_str).ok_or_else(|| failed("input name is not UTF-8"))?;
+                let mut session = Session::new();
+                let doc = session.open(name, None, Arc::new(bytes), None).map_err(failed)?;
+                let mut opts = template.clone();
+                if let Some(r) = rect {
+                    let info = &session.get(doc).ok_or_else(|| failed("the document did not open"))?.info;
+                    opts.page = page.min(info.pages.len().saturating_sub(1));
+                    opts.rect = Some(crate::signing::user_rect(info.pages.get(opts.page), r)?);
+                }
+                let signed = session.sign(doc, &id, opts).map_err(failed)?;
+                let output = publish(&self.target(&out, &relative)?, &signed)?;
+                Ok((output, signed.len()))
+            }))
+            .unwrap_or_else(|_| Err(failed("batch signing panicked; no output was published")));
+            match result {
+                Ok((output, bytes)) => {
+                    completed += 1;
+                    files.push(json!({"path":path.to_string_lossy(),"status":"ok","output":output.to_string_lossy(),"bytes":bytes}));
                 }
                 Err(e) => {
                     failed_count += 1;

@@ -214,6 +214,9 @@ unapplied with a warning.
 folders. The CLI also exposes it as `pdfcraft-cli batch`. See the
 [batch guide](../../docs/cli-batch.md) for examples, output protection, errors and limits.
 
+`sign_batch` signs every PDF in files and folders with one digital ID, with the same discovery,
+output protection and report (see "Signing a folder" in the batch guide).
+
 ## Viewer navigation history
 
 A running PdfCraft instance launched with `--control FILE` exposes its per-tab history through
