@@ -573,7 +573,10 @@ impl PdfCraftApp {
             }
         }
         let added = certs.len() - before;
-        self.apply_trusted_certificates(certs);
+        // Nothing new: the verdicts can't change, so nothing is revalidated or redrawn.
+        if added > 0 {
+            self.apply_trusted_certificates(certs);
+        }
         added
     }
 
@@ -585,10 +588,38 @@ impl PdfCraftApp {
         self.ask(crate::pickers::Ask::Files(dialog), None, |app, paths| app.open_certificate_import(&paths));
     }
 
-    /// Read the certificates in `paths` and show them for confirmation. Nothing is trusted yet.
+    /// Read the certificates in `paths` on a worker, then show them for confirmation (see
+    /// [`Self::poll_certificate_import`]). Reading up to the import's limits must not hold up
+    /// the frame. Nothing is trusted yet; a newer pick replaces a read still running.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn open_certificate_import(&mut self, paths: &[PathBuf]) {
-        match CertImport::from_files(paths) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let paths = paths.to_vec();
+        let ctx = self.ctx.clone();
+        let work = move || {
+            let read = pdfcraft_engine::guard(|| CertImport::from_files(&paths)).and_then(|r| r);
+            let _ = tx.send(read);
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        };
+        match std::thread::Builder::new().name("pdfcraft-cert-import".into()).spawn(work) {
+            Ok(_) => self.cert_import_job = Some(rx),
+            Err(e) => self.notify_fmt("Couldn't import the certificates: {e}", &[("e", &e.to_string())]),
+        }
+    }
+
+    /// Show the certificates a finished read found, or say why it failed. Called every frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn poll_certificate_import(&mut self) {
+        let Some(rx) = self.cert_import_job.as_ref() else { return };
+        let read = match rx.try_recv() {
+            Ok(read) => read,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("the reading stopped unexpectedly".to_string()),
+        };
+        self.cert_import_job = None;
+        match read {
             Ok(v) => {
                 self.cert_import = Some(v);
                 self.dialog = Some(crate::Dialog::ImportCertificates);
@@ -747,6 +778,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Import certificates… as the app runs it, waiting for the worker's read to finish.
+    fn import_now(app: &mut PdfCraftApp, paths: &[PathBuf]) {
+        app.open_certificate_import(paths);
+        let start = std::time::Instant::now();
+        while app.cert_import_job.is_some() && start.elapsed() < std::time::Duration::from_secs(20) {
+            app.poll_certificate_import();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(app.cert_import_job.is_none(), "the read finished");
+    }
+
     /// A self-signed certificate named `cn`, for the trust tests.
     fn test_cert(cn: &str) -> Certificate {
         let key = PrivateKey::generate_p256().unwrap();
@@ -792,7 +834,7 @@ mod tests {
         let file = dir.join("bundle.pem");
         std::fs::write(&file, [&root, &other, &root].map(sign::x509::to_pem).concat()).unwrap();
         let mut app = PdfCraftApp::new();
-        app.open_certificate_import(std::slice::from_ref(&file));
+        import_now(&mut app, std::slice::from_ref(&file));
         assert_eq!(app.dialog, Some(crate::Dialog::ImportCertificates));
         assert!(app.session.trusted_certificates().is_empty(), "nothing is trusted before the user confirms");
         let v = app.cert_import.take().unwrap();
@@ -894,6 +936,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The files are read on a worker: picking them returns at once, and the dialog opens only
+    /// when a later frame collects the result.
+    #[test]
+    fn certificates_are_read_off_the_frame() {
+        let dir = scratch();
+        let file = dir.join("one.cer");
+        std::fs::write(&file, sign::x509::to_pem(&test_cert("Off Frame"))).unwrap();
+        let mut app = PdfCraftApp::new();
+        app.open_certificate_import(std::slice::from_ref(&file));
+        assert!(app.cert_import_job.is_some() && app.dialog.is_none() && app.cert_import.is_none());
+        let start = std::time::Instant::now();
+        while app.cert_import.is_none() && start.elapsed() < std::time::Duration::from_secs(20) {
+            app.poll_certificate_import();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(app.dialog, Some(crate::Dialog::ImportCertificates));
+        assert_eq!(app.cert_import.map(|v| v.certs.len()), Some(1));
+        assert!(app.cert_import_job.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_file_that_is_not_a_certificate_or_too_large_opens_no_import() {
         let dir = scratch();
@@ -905,7 +968,7 @@ mod tests {
         for file in [&junk, &huge] {
             assert!(CertImport::from_file(file).is_err(), "{}", file.display());
             let mut app = PdfCraftApp::new();
-            app.open_certificate_import(std::slice::from_ref(file));
+            import_now(&mut app, std::slice::from_ref(file));
             assert!(app.cert_import.is_none() && app.dialog.is_none(), "{}", file.display());
             assert!(app.session.trusted_certificates().is_empty());
         }
