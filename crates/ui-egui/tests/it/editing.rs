@@ -4570,11 +4570,22 @@ fn check_existing_artwork(name: &'static str, bytes: Vec<u8>) {
     });
     h.run_steps(4);
     let id = h.state().views[0].id;
+    // The artwork fills the page, and a move keeps it on its page (#5264). Shrink it to
+    // half the page in the middle first so it has room to move.
+    let full = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    let (qw, qh) = ((full[2] - full[0]) / 4.0, (full[3] - full[1]) / 4.0);
+    let (mx, my) = ((full[0] + full[2]) / 2.0, (full[1] + full[3]) / 2.0);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage {
+        page: 0,
+        index: 0,
+        change: pdfcraft_engine::ImageEdit::Move([mx - qw, my - qh, mx + qw, my + qh]),
+    });
+    h.run_steps(4);
     let before = h.state().session.get(id).unwrap().page_images(0)[0].rect;
     assert!(h.state_mut().execute("edit.edit_text"));
     h.run_steps(2);
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
-    // Select it, then drag it a quarter of the page to the right.
+    // Select it, then drag it an eighth of the page (a quarter of its width) to the right.
     let c = r.center();
     h.hover_at(c);
     h.run_steps(1);
@@ -4583,7 +4594,7 @@ fn check_existing_artwork(name: &'static str, bytes: Vec<u8>) {
     h.drop_at(c);
     h.run_steps(2);
     assert!(h.state().views[0].image_selection.is_some(), "selected");
-    let to = c + egui::vec2(r.width() / 4.0, 0.0);
+    let to = c + egui::vec2(r.width() / 8.0, 0.0);
     h.hover_at(c);
     h.run_steps(1);
     h.drag_at(c);
