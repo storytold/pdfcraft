@@ -186,11 +186,10 @@ impl ImageState {
                     self.path.curve_to(self.point(x1, y1), end, end);
                 }
             }
-            b"h"
-                // ClosePath with no subpath panics by the same contract (#3581).
-                if self.path.elements().last().is_some() => {
-                    self.path.close_path();
-                }
+            // ClosePath with no subpath panics by the same contract (#3581).
+            b"h" if self.path.elements().last().is_some() => {
+                self.path.close_path();
+            }
             b"re" => {
                 if let Some([x, y, w, h]) = op.nums::<4>() {
                     self.path.move_to(self.point(x, y));

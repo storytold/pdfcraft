@@ -66,7 +66,7 @@ pub use links::{
 };
 pub use signature_image::{ImageSignaturePreview, SignatureImage};
 pub use signature_scan::{PhotoRect, ScanError, SignaturePhoto, Turn};
-pub use stamp_preview::StampPreview;
+pub use stamp_preview::{CommentLayer, StampPreview};
 pub use text_preview::{TextEditPreview, UnmarkedPages};
 
 pub use pdfcraft_organize::{BoxSpec, FieldConflicts, PageBox, SplitBy, Transition, TransitionSpec, mime_for_name, split_ranges};
@@ -82,6 +82,7 @@ pub use pdfcraft_edit::added::{
     CHAR_SPACING_LIMIT as ADDED_CHAR_SPACING_LIMIT, paste_place as added_paste_place, paste_rect as added_paste_rect, text_rect as added_text_rect,
     text_width as added_text_width,
 };
+pub use pdfcraft_edit::paragraph_align;
 pub use pdfcraft_edit::{
     Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, HeaderFooter, MarkKind, Watermark,
 };
@@ -93,7 +94,7 @@ pub use pdfcraft_forms::{
 };
 
 pub use pdfcraft_a11y as a11y;
-pub use pdfcraft_edit::{BlockKey, BlockStyle, PageImage, RangeStyle, TextBlock, TextLine, block_overlapping, first_undrawable};
+pub use pdfcraft_edit::{Backdrop, BlockKey, BlockStyle, PageImage, RangeStyle, TextBlock, TextLine, block_overlapping, first_undrawable};
 pub use pdfcraft_measure as measure;
 pub use pdfcraft_xfa::Report as XfaLayout;
 
@@ -125,7 +126,9 @@ use bookmarks::outline_rows;
 pub use bookmarks::{BookmarkPage, BookmarkRow};
 use comments::comment_list;
 pub use comments::{SummarySort, comment_kind, comment_summary, comment_type_name};
-pub use document::{Document, TextNotice, display_bytes_for, render_password_for};
+#[cfg(test)]
+use document::page_runs;
+pub use document::{Document, EditNotice, TextNotice, display_bytes_for, render_password_for};
 use document::{display_bytes, info_fields, recovered_render_password, same_pages, shown_under_redactions, undrawn_notices};
 pub use edit::{BATCH_LABELS, EDIT_LABELS, Edit};
 pub use error::{EditError, SourceProblem};

@@ -6,6 +6,7 @@ use super::{
     render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state, undrawn_notices, uses_scripts,
     write_incremental, xfa, xfa_sync_datasets,
 };
+use crate::{EditNotice, MarkKind};
 
 impl Session {
     /// Apply an edit. On success the previous state is undoable and the view data is refreshed.
@@ -166,13 +167,7 @@ impl Session {
         if signed && ((rewrites(&next) && !rewrites(&editor.cos)) || (next.is_modified() && next.revisions().is_empty())) {
             return Err(EditError::SignedRewrite(edit.label().to_string()));
         }
-        // What this edit drew with `?` (a value or comment text its font can't draw, stored as
-        // typed): reported, never silent (AGENTS.md §4).
-        let notices = if matches!(scope_of(&edit), Scope::Form | Scope::Comments | Scope::Full) {
-            guard(|| undrawn_notices(&editor.cos, &next)).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let notices = edit_notices(&edit, &editor.cos, &next);
         let previous = std::mem::replace(&mut editor.cos, next);
         let keys = keys_after(&edit).unwrap_or_else(|| editor.keys.clone());
         let previous_keys = std::mem::replace(&mut editor.keys, keys);
@@ -525,4 +520,22 @@ impl Session {
         doc.bytes = bytes;
         Ok(())
     }
+}
+
+/// What `edit`, taking `prev` to `next`, wants said: never silent (AGENTS.md §4).
+fn edit_notices(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfcraft_cos::Document) -> Vec<EditNotice> {
+    // What it drew with `?` (a value or comment text its font can't draw, stored as typed).
+    let mut notices: Vec<EditNotice> = if matches!(scope_of(edit), Scope::Form | Scope::Comments | Scope::Full) {
+        guard(|| undrawn_notices(prev, next)).unwrap_or_default().into_iter().map(EditNotice::Undrawn).collect()
+    } else {
+        Vec::new()
+    };
+    // Pages whose own white backdrop Remove background couldn't turn back on.
+    if matches!(edit, Edit::RemoveMarks { kind: MarkKind::Background }) {
+        let pages = guard(|| pdfcraft_edit::backdrops_left_off(next)).unwrap_or_default();
+        if !pages.is_empty() {
+            notices.push(EditNotice::BackdropsLeftOff { pages });
+        }
+    }
+    notices
 }

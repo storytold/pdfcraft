@@ -536,6 +536,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Odczytuje {names}, które z kolei odczytują je. Żadna kolejność nie naprawi pętli: zmień jedną z formuł.
 	Not in order	Poza kolejnością
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Brakuje go w kolejności obliczeń zapisanej w pliku PDF: inne przeglądarki PDF mogą go nie obliczać.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Odczytuje {name}, którego nie ma w formularzu, więc nie dostaje stamtąd żadnej wartości.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Jego skrypt odczytuje też pola, których nazwy tworzy w trakcie działania, więc tych odczytów nie da się sprawdzić.
+	Missing field	Brak pola
+	Unchecked reads	Niesprawdzone odczyty
+	{field} reads fields named as it runs	{field} odczytuje pola nazywane w trakcie działania
+	Some names are built as it runs	Niektóre nazwy powstają w trakcie działania
 	Back to Prepare a form	Wróć do „Przygotuj formularz”
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Żadne pole tego formularza nie oblicza jeszcze swojej wartości. Nadaj polu obliczenie na karcie Obliczenia w jego właściwościach, a pojawi się tutaj.
 	{names} and {last}	{names} i {last}
@@ -592,6 +598,9 @@
 	Clean Up	Porządkowanie
 	Color Images	Obrazy kolorowe
 	Grayscale Images	Obrazy w skali szarości
+	Monochrome Images	Obrazy monochromatyczne
+	CCITT Group 4	CCITT grupa 4
+	JBIG2 (lossless)	JBIG2 (bezstratna)
 	Bicubic downsampling to	Zmniejsz rozdzielczość metodą dwusześcienną do
 	for images above	dla obrazów powyżej
 	Compression	Kompresja
@@ -858,6 +867,14 @@
 	Applies to 1 page	Dotyczy 1 strony
 	Applies to {n} pages	Liczba objętych stron: {n}
 	Replaces the existing one on those pages.	Zastępuje istniejący element na tych stronach.
+	Checking pages…	Sprawdzanie stron…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Strona z własnym białym wypełnieniem, które zasłoniłoby tło: {pages}. Zastąp
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Strony z własnym białym wypełnieniem, które zasłoniłoby tło: {pages}. Zastąp
+	Removing the background puts the page's own backdrop back.	Usunięcie tła przywraca własne białe wypełnienie strony.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Strona zakryta obrazem (skan?): {pages}; tło nie będzie tam widoczne.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Strony zakryte obrazami (skany?): {pages}; tło nie będzie tam widoczne.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Strona zmieniona po dodaniu tła, więc jej własne białe wypełnienie pozostaje wyłączone: {pages}. Na białym papierze wygląda tak samo.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Strony zmienione po dodaniu tła, więc ich własne białe wypełnienia pozostają wyłączone: {pages}. Na białym papierze wyglądają tak samo.
 	PDF or image	PDF lub obraz
 	No file chosen	Nie wybrano pliku
 	Page number	Numer strony
@@ -2373,6 +2390,11 @@ animation effects	Off	Wyłączone
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} jest obliczane przed {fields}, które odczytuje.|{field} jest obliczane przed {fields}, które odczytuje.|{field} jest obliczane przed {fields}, które odczytuje.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Jeszcze {n} pole jest obliczane za wcześnie.|Jeszcze {n} pola są obliczane za wcześnie.|Jeszcze {n} pól jest obliczanych za wcześnie.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	W kolejności zapisanej w pliku PDF brakuje {fields}, więc inne przeglądarki PDF mogą go nie obliczać.|W kolejności zapisanej w pliku PDF brakuje {fields}, więc inne przeglądarki PDF mogą ich nie obliczać.|W kolejności zapisanej w pliku PDF brakuje {fields}, więc inne przeglądarki PDF mogą ich nie obliczać.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formuła odczytuje pole, którego nie ma w formularzu|{n} formuły odczytują pola, których nie ma w formularzu|{n} formuł odczytuje pola, których nie ma w formularzu
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} odczytuje {fields}, którego nie ma w formularzu.|{field} odczytuje {fields}, których nie ma w formularzu.|{field} odczytuje {fields}, których nie ma w formularzu.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Jeszcze {n} formuła odczytuje brakujące pole.|Jeszcze {n} formuły odczytują brakujące pola.|Jeszcze {n} formuł odczytuje brakujące pola.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} tworzy część nazw pól w trakcie działania, więc te odczyty nie są sprawdzane.|{fields} tworzą część nazw pól w trakcie działania, więc te odczyty nie są sprawdzane.|{fields} tworzą część nazw pól w trakcie działania, więc te odczyty nie są sprawdzane.
+@plural	{fields} is missing|{fields} are missing	Brak {fields}|Brak {fields}|Brak {fields}
 	Scan	Skanuj
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Podpisz się na białej kartce i zrób jej zdjęcie przy jasnym, równomiernym świetle (użyj lampy błyskowej). Wybierz zdjęcie lub upuść je tutaj: PdfCraft znajdzie podpis i usunie papier.
 	Choose photo…	Wybierz zdjęcie…
@@ -2653,3 +2675,7 @@ animation effects	Off	Wyłączone
 	Rotate the selected pages clockwise	Obróć zaznaczone strony w prawo
 	Extract the selected pages…	Wyodrębnij zaznaczone strony…
 	Delete the selected pages	Usuń zaznaczone strony
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Opcje tej odpowiedzi
+	Export value	Wartość eksportowa

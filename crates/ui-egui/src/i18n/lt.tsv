@@ -701,6 +701,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Skaito {names}, kurie savo ruožtu skaito jį. Jokia tvarka neištaisys ciklo: pakeiskite vieną iš formulių.
 	Not in order	Ne tvarkoje
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Trūksta PDF faile įrašytoje skaičiavimo tvarkoje: kitos PDF peržiūros programos gali jo neskaičiuoti.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Skaito {name}, kurio formoje nėra, todėl iš ten negauna jokios reikšmės.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Jo scenarijus taip pat skaito laukus, kurių pavadinimus sudaro vykdymo metu, todėl šių skaitymų patikrinti negalima.
+	Missing field	Trūksta lauko
+	Unchecked reads	Nepatikrinti skaitymai
+	{field} reads fields named as it runs	{field} skaito laukus, pavadinamus vykdymo metu
+	Some names are built as it runs	Kai kurie pavadinimai sudaromi vykdymo metu
 	Back to Prepare a form	Grįžti į „Rengti formą“
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Nė vienas šios formos laukas dar neskaičiuoja savo reikšmės. Nustatykite laukui skaičiavimą jo savybių kortelėje „Skaičiavimas“, ir jis bus rodomas čia.
 	{names} and {last}	{names} ir {last}
@@ -999,6 +1005,14 @@
 	Replacement text	Pakaitinis tekstas
 	Replacement: pages of {name}	Pakaitinis dokumentas: {name} puslapiai
 	Replaces the existing one on those pages.	Tuose puslapiuose pakeičia esamą.
+	Checking pages…	Tikrinami puslapiai…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Puslapis su savo baltu užpildu, kuris paslėptų foną: {pages}. Pakeisti
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Puslapiai su savo baltu užpildu, kuris paslėptų foną: {pages}. Pakeisti
+	Removing the background puts the page's own backdrop back.	Pašalinus foną, grąžinamas paties puslapio baltas užpildas.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Paveikslėliu padengtas puslapis (nuskaitytas?): {pages}; fonas ten nesimatys.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Paveikslėliais padengti puslapiai (nuskaityti?): {pages}; fonas ten nesimatys.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Puslapis pasikeitė po fono pridėjimo, todėl jo baltas užpildas lieka išjungtas: {pages}. Ant balto popieriaus jis atrodo taip pat.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Puslapiai pasikeitė po fono pridėjimo, todėl jų balti užpildai lieka išjungti: {pages}. Ant balto popieriaus jie atrodo taip pat.
 	Report	Ataskaita
 	Report…	Ataskaita…
 	Requires user to enter a password for:	Naudotojas turi įvesti slaptažodį, kad galėtų:
@@ -2123,6 +2137,9 @@ comment menu	Edit	Redaguoti
 	Formulas and similar non-text elements need alternate text. Add alternate text to them.	Formulėms ir panašiems netekstiniams elementams reikia alternatyviojo teksto. Pridėkite jį.
 	Gray	Pilka
 	Grayscale Images	Pilkų atspalvių paveikslėliai
+	Monochrome Images	Vienspalviai paveikslėliai
+	CCITT Group 4	CCITT 4 grupė
+	JBIG2 (lossless)	JBIG2 (be nuostolių)
 	Green	Žalia
 	Green on black	Žalia juodame fone
 	H / Space (hold)	H / tarpo klavišas (laikyti)
@@ -2668,6 +2685,11 @@ certificate	SHA-256 digest	SHA-256 santrauka
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} apskaičiuojamas anksčiau už {fields}, kurį skaito.|{field} apskaičiuojamas anksčiau už {fields}, kuriuos skaito.|{field} apskaičiuojamas anksčiau už {fields}, kuriuos skaito.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Dar {n} laukas apskaičiuojamas per anksti.|Dar {n} laukai apskaičiuojami per anksti.|Dar {n} laukų apskaičiuojama per anksti.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} nėra PDF faile įrašytoje tvarkoje, todėl kitos PDF peržiūros programos gali jo neapskaičiuoti.|{fields} nėra PDF faile įrašytoje tvarkoje, todėl kitos PDF peržiūros programos gali jų neapskaičiuoti.|{fields} nėra PDF faile įrašytoje tvarkoje, todėl kitos PDF peržiūros programos gali jų neapskaičiuoti.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formulė skaito lauką, kurio formoje nėra|{n} formulės skaito laukus, kurių formoje nėra|{n} formulių skaito laukus, kurių formoje nėra
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} skaito {fields}, kurio formoje nėra.|{field} skaito {fields}, kurių formoje nėra.|{field} skaito {fields}, kurių formoje nėra.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Dar {n} formulė skaito trūkstamą lauką.|Dar {n} formulės skaito trūkstamus laukus.|Dar {n} formulių skaito trūkstamus laukus.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} kai kuriuos laukų pavadinimus sudaro vykdymo metu, todėl šie skaitymai netikrinami.|{fields} kai kuriuos laukų pavadinimus sudaro vykdymo metu, todėl šie skaitymai netikrinami.|{fields} kai kuriuos laukų pavadinimus sudaro vykdymo metu, todėl šie skaitymai netikrinami.
+@plural	{fields} is missing|{fields} are missing	Trūksta {fields}|Trūksta {fields}|Trūksta {fields}
 key	Ctrl	Ctrl
 key	Shift	Shift
 key	Delete	Delete
@@ -2818,3 +2840,7 @@ theme	Appearance	Išvaizda
 	Rotate the selected pages clockwise	Pasukti pasirinktus puslapius pagal laikrodžio rodyklę
 	Extract the selected pages…	Išskleisti pasirinktus puslapius…
 	Delete the selected pages	Ištrinti pasirinktus puslapius
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Šio atsakymo parinktys
+	Export value	Eksporto reikšmė

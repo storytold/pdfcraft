@@ -127,6 +127,9 @@ impl PdfCraftApp {
                     }
                     "none" => None,
                     _ => Some(Dialog::About),
+                };
+                if let Some(Dialog::Marks(kind)) = self.dialog {
+                    self.marks_draft.opened(kind);
                 }
             }
             ("tools", _) if value == "full" => self.expand_all_tools(),

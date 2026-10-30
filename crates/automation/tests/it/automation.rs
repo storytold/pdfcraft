@@ -2226,6 +2226,35 @@ fn nested_replies_stay_in_the_listing() {
     assert!(replies.contains(&"DIRECT_REPLY") && replies.contains(&"NESTED_REPLY"), "the nested reply is listed: {replies:?}");
 }
 
+/// comment_delete on a reply deletes that reply and the replies to it, as the Comments panel's
+/// reply menu does: the comment and its other replies stay, and one undo brings it back.
+#[test]
+fn deleting_a_reply_keeps_its_comment_and_the_other_replies() {
+    let dir = workdir("delete-reply");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let root = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [40, 40], "contents": "ROOT_NOTE", "author": "A" }));
+    let root_id = root["comment"]["id"].as_str().unwrap().to_string();
+    ok(&mut a, "comment_reply", json!({ "doc": doc, "id": root_id, "text": "WRONG_REPLY", "author": "B" }));
+    ok(&mut a, "comment_reply", json!({ "doc": doc, "id": root_id, "text": "RIGHT_REPLY", "author": "C" }));
+    let replies = |a: &mut Automation| -> Vec<Value> {
+        let list = ok(a, "comment_list", json!({ "doc": doc }));
+        assert_eq!(list["count"], 1, "{list}");
+        list["comments"][0]["replies"].as_array().unwrap().clone()
+    };
+    let wrong = replies(&mut a).into_iter().find(|r| r["contents"] == "WRONG_REPLY").unwrap();
+    ok(&mut a, "comment_reply", json!({ "doc": doc, "id": wrong["id"], "text": "ANSWER_TO_WRONG", "author": "D" }));
+    let texts = |a: &mut Automation| -> Vec<String> { replies(a).iter().filter_map(|r| r["contents"].as_str().map(str::to_owned)).collect() };
+    assert_eq!(texts(&mut a), ["WRONG_REPLY", "RIGHT_REPLY", "ANSWER_TO_WRONG"]);
+
+    ok(&mut a, "comment_delete", json!({ "doc": doc, "page": wrong["page"], "index": wrong["index"] }));
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(list["comments"][0]["contents"], "ROOT_NOTE", "{list}");
+    assert_eq!(texts(&mut a), ["RIGHT_REPLY"], "the reply took the answer to it along");
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Delete comment");
+    assert_eq!(texts(&mut a), ["WRONG_REPLY", "RIGHT_REPLY", "ANSWER_TO_WRONG"]);
+}
+
 /// Replies thread by their `/IRT` reference, not `/NM`: PyMuPDF names the first comment on every
 /// page `fitz-A0`. A shared id is refused rather than taken to mean page 1's comment.
 #[test]
@@ -3668,6 +3697,38 @@ fn fill_sign_text_font_size_is_saved_and_validated() {
 }
 
 #[test]
+fn fill_sign_text_and_date_colours_are_saved_and_validated() {
+    let dir = workdir("fill-sign-text-colour");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (kind, y) in [("text", 40), ("date", 80)] {
+        ok(
+            &mut a,
+            "fill_sign_add",
+            json!({ "doc": doc, "page": 1, "type": kind, "at": [20, y], "text": "Blue", "color": "#3366CC", "font_size": 6.5 }),
+        );
+    }
+    for (kind, color) in [("text", "not-a-colour"), ("signature", "#3366CC"), ("check", "#3366CC")] {
+        assert!(matches!(
+            a.call("fill_sign_add", &json!({ "doc": doc, "page": 1, "type": kind, "at": [20, 100], "text": "No", "color": color })),
+            Err(ToolError::InvalidArgs(_))
+        ));
+    }
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "coloured.pdf" }));
+    let pdf = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("coloured.pdf")).unwrap())).unwrap();
+    let page = pdfcraft_model::pages(&pdf).remove(0);
+    let annotations = pdf.resolve(page.dict.get(b"Annots").unwrap());
+    let annotations = annotations.as_array().unwrap();
+    assert_eq!(annotations.len(), 2, "invalid requests add nothing");
+    for reference in annotations {
+        let annotation = pdf.resolve(reference);
+        // FreeText stores its text colour in DA; C is the annotation background.
+        let da = annotation.as_dict().unwrap().get(b"DA").unwrap().as_string().unwrap();
+        assert_eq!(String::from_utf8(da.bytes.to_vec()).unwrap(), "0.2 0.4 0.8 rg /Helv 6.5 Tf");
+    }
+}
+
+#[test]
 fn image_signatures_through_tools_preserve_transparency_and_survive_save() {
     let dir = workdir("image-signatures");
     let mut png = Vec::new();
@@ -5058,6 +5119,151 @@ fn the_calculation_order_is_read_fixed_and_set() {
     assert_eq!((value(&mut a, "total"), value(&mut a, "tax")), (json!("0"), json!("0")), "undone with the values it recalculated");
 }
 
+/// A malformed form with two calculated fields named `dup`, one summing `src`, the other `x`.
+fn two_calculations_with_one_name() -> Vec<u8> {
+    let widget = |name: &str, y: u32, reads: &str| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /Rect [50 {y} 250 {}] /P 3 0 R /AA << /C << /S /JavaScript /JS (AFSimple_Calculate\\(\"SUM\", \"{reads}\"\\);) >> >> >>",
+            y + 20
+        )
+    };
+    pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>",
+        "<< /Fields [5 0 R 6 0 R 7 0 R 8 0 R] /DA (/Helv 0 Tf 0 g) /CO [6 0 R 7 0 R 5 0 R] >>",
+        &widget("dup", 700, "x"),
+        &widget("dup", 660, "src"),
+        &widget("src", 620, "x"),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (x) /Rect [50 580 250 600] /P 3 0 R /V (3) >>",
+    ])
+}
+
+/// Each row of the calculation order gets its own field's formula, even where two fields share a
+/// name (a malformed form): the first dup sums src, the second x.
+#[test]
+fn the_calculation_order_gives_each_field_its_own_formula() {
+    let dir = workdir("calcdup");
+    std::fs::write(dir.join("dup.pdf"), two_calculations_with_one_name()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "dup.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "form_calculation_order", json!({ "doc": doc }));
+    assert_eq!(r["calculation_order"], json!(["dup", "src", "dup"]));
+    let formulas: Vec<Value> = r["fields"].as_array().unwrap().iter().map(|f| f["formula"].clone()).collect();
+    assert_eq!(
+        formulas,
+        [json!({ "op": "sum", "fields": ["src"] }), json!({ "op": "sum", "fields": ["x"] }), json!({ "op": "sum", "fields": ["x"] })]
+    );
+}
+
+/// The calculation order through the tool shows each formula, in form_set_props's shape or as a
+/// script, and flags a read of a field the form doesn't have and a script that builds the names
+/// it reads; form_fields shows a custom script too.
+#[test]
+fn the_calculation_order_shows_formulas_and_what_they_cannot_read() {
+    let dir = workdir("calcformulas");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (i, name) in ["qty", "price", "sub", "tax", "total"].into_iter().enumerate() {
+        let y = 20 + 30 * i;
+        ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, y, 180, y + 22], "name": name }));
+    }
+    let script = "event.value = getField(\"sub\").value / 10 + getField(\"row\" + 1).value;";
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "sub", "calculate": { "notation": "qty * pric" } }));
+    ok(&mut a, "form_set_script", json!({ "doc": doc, "field": "tax", "event": "calculate", "script": script }));
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "total", "calculate": { "op": "sum", "fields": ["sub", "tax"] } }));
+    let r = ok(&mut a, "form_calculation_order", json!({ "doc": doc }));
+    assert_eq!(r["calculation_order"], json!(["sub", "tax", "total"]));
+    let formulas: Vec<Value> = r["fields"].as_array().unwrap().iter().map(|f| f["formula"].clone()).collect();
+    assert_eq!(formulas, [json!({ "notation": "qty * pric" }), json!({ "script": script }), json!({ "op": "sum", "fields": ["sub", "tax"] })]);
+    assert_eq!(r["fields"][0]["issues"], json!([{ "issue": "missing_field", "field": "pric" }]));
+    assert_eq!(r["fields"][1]["reads"], json!(["sub"]));
+    assert_eq!(r["fields"][1]["issues"], json!([{ "issue": "built_names" }]));
+    assert_eq!(r["fields"][2]["issues"], json!([]));
+    assert_eq!(r["fixable"], false, "neither is an order to fix");
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let tax = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "tax").unwrap();
+    assert_eq!(tax["calculate"], json!({ "script": script }));
+    // A script is set with form_set_script, and form_set_props says so, also when a notation
+    // comes with it.
+    for calculate in [json!({ "script": script }), json!({ "notation": "qty * 2", "script": script })] {
+        let e = err(&mut a, "form_set_props", json!({ "doc": doc, "field": "tax", "calculate": calculate }));
+        assert!(e.to_string().contains("form_set_script"), "{calculate}: {e}");
+    }
+}
+
+/// Every operation comes back from form_fields and form_calculation_order as form_set_props takes
+/// it, so a formula can be read and given back: product and average came back as prd and avg,
+/// which it refused.
+#[test]
+fn every_calculation_op_can_be_read_and_given_back() {
+    let dir = workdir("calcops");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (name, y) in [("a", 20), ("b", 60), ("total", 100)] {
+        ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, y, 180, y + 22], "name": name }));
+    }
+    for op in ["sum", "product", "average", "min", "max"] {
+        let calculate = json!({ "op": op, "fields": ["a", "b"] });
+        ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "total", "calculate": calculate }));
+        let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+        let shown = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "total").unwrap()["calculate"].clone();
+        let order = ok(&mut a, "form_calculation_order", json!({ "doc": doc }));
+        assert_eq!((&shown, &order["fields"][0]["formula"]), (&calculate, &calculate), "{op}");
+        ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "total", "calculate": shown }));
+    }
+}
+
+/// form_set_props refuses a calculate or validate it would only partly apply (a key it doesn't
+/// know, a value of the wrong type, a notation beside op and fields) as a bad argument, before
+/// the edit runs, and changes nothing. A validate read back from form_fields, with null for the
+/// bound it doesn't have, is taken back.
+#[test]
+fn calculate_and_validate_refuse_what_they_would_drop() {
+    let dir = workdir("calcstrict");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (name, y) in [("a", 20), ("b", 60), ("total", 100)] {
+        ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, y, 180, y + 22], "name": name }));
+    }
+    let set = json!({ "op": "sum", "fields": ["a", "b"] });
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "total", "calculate": set, "validate": { "min": 0, "max": 10 } }));
+    let total = |a: &mut Automation| {
+        let fields = ok(a, "form_fields", json!({ "doc": doc }));
+        fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "total").unwrap().clone()
+    };
+    for (calculate, says) in [
+        (json!({ "notation": "a", "op": "sum", "fields": ["b"] }), "not both"),
+        (json!({ "notation": "a", "op": "sum" }), "not both"),
+        (json!({ "notation": "a", "fields": ["b"] }), "not both"),
+        // A notation that wouldn't read back as itself from the script's comment.
+        (json!({ "notation": "a EVCALC b" }), "can't be stored"),
+        (json!({ "notation": "a */ x /*" }), "can't be stored"),
+        (json!({ "notation": " " }), "can't be stored"),
+        (json!({ "op": "sum", "fields": ["a", 5] }), "field names"),
+        (json!({ "op": "sum", "fields": "a" }), "list of field names"),
+        (json!({ "notation": 5 }), "notation must be a string"),
+        (json!({ "op": 5, "fields": ["a"] }), "op must be"),
+        (json!({ "fields": ["a"] }), "needs op"),
+        (json!({ "op": "sum", "feilds": ["a"] }), "unknown key \"feilds\""),
+    ] {
+        // InvalidArgs, not Failed: an unstorable notation is refused by the tool itself, not
+        // only by the edit underneath it.
+        let e = err(&mut a, "form_set_props", json!({ "doc": doc, "field": "total", "calculate": calculate }));
+        assert!(matches!(e, ToolError::InvalidArgs(_)) && e.to_string().contains(says), "{calculate}: {e:?}");
+    }
+    for (validate, says) in [(json!({ "min": 0, "max": "100" }), "max must be a number"), (json!({ "min": 0, "mxa": 5 }), "unknown key \"mxa\"")] {
+        let e = err(&mut a, "form_set_props", json!({ "doc": doc, "field": "total", "validate": validate }));
+        assert!(matches!(e, ToolError::InvalidArgs(_)) && e.to_string().contains(says), "{validate}: {e:?}");
+    }
+    let t = total(&mut a);
+    assert_eq!((&t["calculate"], &t["validate"]), (&set, &json!({ "min": 0.0, "max": 10.0 })), "nothing changed");
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "total", "validate": { "min": null, "max": 5 } }));
+    let shown = total(&mut a)["validate"].clone();
+    assert_eq!(shown, json!({ "min": null, "max": 5.0 }));
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "total", "validate": shown }));
+}
+
 #[test]
 fn page_tab_orders_are_read_and_set_per_page_through_tools() {
     let dir = workdir("pagetabs");
@@ -6293,6 +6499,15 @@ fn optimizing_through_tools() {
     let cat_doc = ok(&mut a, "doc_open", json!({ "path": "cat16.pdf" }))["doc"].as_u64().unwrap();
     let retained = ok(&mut a, "doc_optimize", json!({ "doc": cat_doc, "path": "retained.pdf", "compatibility": "retain", "object_streams": false }));
     assert_eq!(retained["pdf_version"].as_str(), Some("1.6"), "{retained}");
+    // The same with the catalog's /Version given by reference: read through it.
+    let v16 = cos14.add(pdfcraft_cos::Object::name("1.6"));
+    cos14.update_dict(root, |c| c.set(b"Version".to_vec(), pdfcraft_cos::Object::Ref(v16))).unwrap();
+    let ref16 = pdfcraft_cos::write_full(&cos14, &pdfcraft_cos::SaveOptions { object_streams: false, ..Default::default() }).unwrap();
+    std::fs::write(dir.join("ref16.pdf"), &ref16).unwrap();
+    let ref_doc = ok(&mut a, "doc_open", json!({ "path": "ref16.pdf" }))["doc"].as_u64().unwrap();
+    let by_ref =
+        ok(&mut a, "doc_optimize", json!({ "doc": ref_doc, "path": "retained-ref.pdf", "compatibility": "retain", "object_streams": false }));
+    assert_eq!(by_ref["pdf_version"].as_str(), Some("1.6"), "{by_ref}");
 
     assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "compatibility": "1.3" })), Err(ToolError::InvalidArgs(_))));
     assert!(matches!(
@@ -6370,6 +6585,240 @@ fn lzw_streams_are_stored_with_flate_through_tools() {
     let off = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "kept.pdf", "lzw_to_flate": false }));
     assert_eq!(off["lzw_streams"].as_u64(), Some(0), "{off}");
     assert_eq!(filters("kept.pdf"), (Some(Object::name("LZWDecode")), ops));
+}
+
+/// A one-page PDF drawing a 1-bit scan of text (glyph strokes with ragged edges, as a scanner
+/// leaves them) of 1000 × 400 samples, stored with Flate.
+fn scanned_page() -> Vec<u8> {
+    scan_drawn(b"q 500 0 0 200 50 500 cm /Scan Do Q")
+}
+
+/// [`scanned_page`]'s scan, drawn by `content` (which names it `/Scan`).
+fn scan_drawn(content: &[u8]) -> Vec<u8> {
+    use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_full};
+    let (w, h) = (1000usize, 400usize);
+    let stride = w.div_ceil(8);
+    let mut data = vec![0xFFu8; stride * h];
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    for line in (4..h - 20).step_by(24) {
+        let mut x = 8;
+        while x + 12 < w {
+            let wide = 3 + (next() % 5) as usize;
+            let (top, bottom) = (line + (next() % 4) as usize, line + 14);
+            for y in top..bottom {
+                let left = x + usize::from(next() % 8 == 0);
+                let right = x + wide - usize::from(next() % 8 == 0);
+                for xx in left..right {
+                    data[y * stride + xx / 8] &= !(0x80 >> (xx % 8));
+                }
+            }
+            x += wide + 2 + (next() % 4) as usize;
+        }
+    }
+    let mut doc = Document::new_empty();
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(w as i64));
+    d.set(b"Height".to_vec(), Object::Int(h as i64));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    let image = doc.add(Object::Stream(Stream::flate(d, &data)));
+    let pages = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).unwrap();
+    let mut x = Dict::new();
+    x.set(b"Scan".to_vec(), Object::Ref(image));
+    let mut res = Dict::new();
+    res.set(b"XObject".to_vec(), Object::Dict(x));
+    let content = doc.add(Object::Stream(Stream::from_raw(Dict::new(), content.to_vec())));
+    let mut p = Dict::new();
+    p.set(b"Type".to_vec(), Object::name("Page"));
+    p.set(b"Parent".to_vec(), Object::Ref(pages));
+    p.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]));
+    p.set(b"Resources".to_vec(), Object::Dict(res));
+    p.set(b"Contents".to_vec(), Object::Ref(content));
+    let page = doc.add(Object::Dict(p));
+    doc.update_dict(pages, |d| {
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+        d.set(b"Count".to_vec(), Object::Int(1));
+    })
+    .unwrap();
+    write_full(&doc, &SaveOptions::default()).unwrap()
+}
+
+/// A scan saved as a 1-bit PNG becomes a page whose picture stays one bit per pixel (not the eight
+/// bits the PNG decodes to), and Export all images gives the picture back.
+#[test]
+fn a_one_bit_scan_stays_one_bit_and_exports() {
+    let dir = workdir("bilevel");
+    let (w, h) = (800u32, 200u32);
+    let stride = (w as usize).div_ceil(8);
+    let mut bits = vec![0xFFu8; stride * h as usize];
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            if y % 25 >= 6 && y % 25 < 18 && (x * 7 + y / 25 * 13) % 11 < 4 {
+                bits[y * stride + x / 8] &= !(0x80 >> (x % 8));
+            }
+        }
+    }
+    let mut png_bytes = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png_bytes, w, h);
+        enc.set_color(png::ColorType::Grayscale);
+        enc.set_depth(png::BitDepth::One);
+        enc.write_header().unwrap().write_image_data(&bits).unwrap();
+    }
+    std::fs::write(dir.join("scan.png"), &png_bytes).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["scan.png"] }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "scan.pdf" }));
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("scan.pdf")).unwrap())).unwrap();
+    let images: Vec<Option<i64>> = saved
+        .object_numbers()
+        .into_iter()
+        .filter_map(|num| match &*saved.get(pdfcraft_cos::ObjRef { num, generation: saved.generation(num) }) {
+            pdfcraft_cos::Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => Some(s.dict.int(b"BitsPerComponent")),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(images, [Some(1)]);
+    let r = ok(&mut a, "doc_export_all_images", json!({ "doc": doc, "folder": "out" }));
+    let files = r["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1, "{r}");
+    let exported = std::fs::read(files[0]["path"].as_str().unwrap()).unwrap();
+    let mut reader = png::Decoder::new(std::io::Cursor::new(exported)).read_info().unwrap();
+    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+    let frame = reader.next_frame(&mut buf).unwrap();
+    let white: Vec<bool> = buf[..frame.buffer_size()].as_chunks::<3>().0.iter().map(|p| *p == [255, 255, 255]).collect();
+    let expected: Vec<bool> =
+        (0..h as usize).flat_map(|y| (0..w as usize).map(move |x| (y, x))).map(|(y, x)| bits[y * stride + x / 8] & (0x80 >> (x % 8)) != 0).collect();
+    assert_eq!(white, expected);
+}
+
+/// With `mono: { compression: jbig2 }` a scan's black-and-white image is stored as lossless JBIG2,
+/// smaller than as Group 4, and exports as the same picture.
+#[test]
+fn doc_optimize_stores_black_and_white_images_as_jbig2() {
+    let dir = workdir("optimize-jbig2");
+    std::fs::write(dir.join("scan.pdf"), scanned_page()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "scan.pdf" }))["doc"].as_u64().unwrap();
+    let g4 = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "g4.pdf" }));
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "jbig2.pdf", "mono": { "compression": "jbig2" } }));
+    assert_eq!((r["images"].as_u64(), r["images_recompressed"].as_u64()), (Some(1), Some(1)), "{r}");
+    assert!(r["image_bytes_after"].as_u64() < g4["image_bytes_after"].as_u64(), "JBIG2 {r}, Group 4 {g4}");
+    let written = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("jbig2.pdf")).unwrap())).unwrap();
+    let filters: Vec<Vec<u8>> = written
+        .object_numbers()
+        .into_iter()
+        .filter_map(|num| match &*written.get(pdfcraft_cos::ObjRef { num, generation: written.generation(num) }) {
+            pdfcraft_cos::Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => s.dict.name(b"Filter").map(<[u8]>::to_vec),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(filters, [b"JBIG2Decode".to_vec()]);
+    // Export ▸ Images gives the copy's picture back as it gives the scan's.
+    let copy = ok(&mut a, "doc_open", json!({ "path": "jbig2.pdf" }))["doc"].as_u64().unwrap();
+    let mut exported = |doc: u64, folder: &str| {
+        let r = ok(&mut a, "doc_export_all_images", json!({ "doc": doc, "folder": folder }));
+        let files = r["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1, "{r}");
+        std::fs::read(files[0]["path"].as_str().unwrap()).unwrap()
+    };
+    assert_eq!(exported(copy, "from-jbig2"), exported(doc, "from-scan"));
+}
+
+/// A scan's black-and-white image is stored as CCITT Group 4 by default, and kept as it is with
+/// `mono: { compression: retain }`.
+#[test]
+fn doc_optimize_stores_black_and_white_images_as_ccitt_group_4() {
+    let dir = workdir("optimize-mono");
+    std::fs::write(dir.join("scan.pdf"), scanned_page()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "scan.pdf" }))["doc"].as_u64().unwrap();
+    let kept = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "kept.pdf", "mono": { "compression": "retain" } }));
+    assert_eq!((kept["images"].as_u64(), kept["images_recompressed"].as_u64()), (Some(1), Some(0)), "{kept}");
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "small.pdf" }));
+    assert_eq!((r["images"].as_u64(), r["images_recompressed"].as_u64()), (Some(1), Some(1)), "{r}");
+    assert!(r["image_bytes_after"].as_u64() < r["image_bytes_before"].as_u64(), "{r}");
+    // The copy written stores the image as Group 4.
+    let small = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("small.pdf")).unwrap())).unwrap();
+    let filters: Vec<Vec<u8>> = small
+        .object_numbers()
+        .into_iter()
+        .filter_map(|num| match &*small.get(pdfcraft_cos::ObjRef { num, generation: small.generation(num) }) {
+            pdfcraft_cos::Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => s.dict.name(b"Filter").map(<[u8]>::to_vec),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(filters, [b"CCITTFaxDecode".to_vec()]);
+    // An unknown compression, one that isn't a name, a misspelled key, or a mono that isn't an
+    // object is refused, not read as the default.
+    for mono in [json!({ "compression": "jpeg" }), json!({ "compression": false }), json!({ "compresson": "retain" }), json!("retain")] {
+        assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "mono": mono })), Err(ToolError::InvalidArgs(_))), "{mono}");
+    }
+}
+
+/// A scan drawn at 600 ppi is averaged down to 300 ppi by default. `mono: { downsample: false }`
+/// keeps its size, `ppi` and `above_ppi` choose others, and values of the wrong type are refused.
+#[test]
+fn doc_optimize_averages_black_and_white_scans_down() {
+    let dir = workdir("optimize-mono-downsample");
+    // 1000 × 400 samples on 120 × 48 pt: 600 ppi.
+    std::fs::write(dir.join("scan.pdf"), simple_rule_scan_drawn(b"q 120 0 0 48 50 500 cm /Scan Do Q")).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "scan.pdf" }))["doc"].as_u64().unwrap();
+    let sizes = |name: &str| image_sizes(&dir.join(name));
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "small.pdf" }));
+    assert_eq!(r["images_resampled"].as_u64(), Some(1), "{r}");
+    assert_eq!(sizes("small.pdf"), [(Some(500), Some(200))]);
+    let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "kept.pdf", "mono": { "downsample": false } }));
+    assert_eq!(r["images_resampled"].as_u64(), Some(0), "{r}");
+    assert_eq!(sizes("kept.pdf"), [(Some(1000), Some(400))]);
+    ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "200.pdf", "mono": { "ppi": 200, "above_ppi": 250 } }));
+    assert_eq!(sizes("200.pdf"), [(Some(333), Some(133))]);
+    for mono in [json!({ "downsample": "yes" }), json!({ "ppi": "300" }), json!({ "above": 450 })] {
+        assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "mono": mono })), Err(ToolError::InvalidArgs(_))), "{mono}");
+    }
+}
+
+/// The width and height of every image in the PDF at `path`.
+fn image_sizes(path: &std::path::Path) -> Vec<(Option<i64>, Option<i64>)> {
+    let written = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(path).unwrap())).unwrap();
+    written
+        .object_numbers()
+        .into_iter()
+        .filter_map(|num| match &*written.get(pdfcraft_cos::ObjRef { num, generation: written.generation(num) }) {
+            pdfcraft_cos::Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => Some((s.dict.int(b"Width"), s.dict.int(b"Height"))),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The batch optimize step's `ppi` reaches black-and-white images too: they go to the larger of
+/// it and Reduce File Size's 300 ppi. Before, a batch run took every scan to 300 ppi whatever
+/// `ppi` said, so `ppi: 600` halved 600 ppi scans.
+#[test]
+fn batch_ppi_bounds_how_far_black_and_white_scans_are_resampled() {
+    let dir = workdir("batch-mono-ppi");
+    // 1000 × 400 samples on 120 × 48 pt: 600 ppi.
+    std::fs::write(dir.join("scan.pdf"), simple_rule_scan_drawn(b"q 120 0 0 48 50 500 cm /Scan Do Q")).unwrap();
+    let mut a = auto(&dir);
+    for (ppi, size) in [(None, (500, 200)), (Some(600), (1000, 400)), (Some(96), (500, 200))] {
+        let out = format!("out-{ppi:?}");
+        let mut args = json!({ "paths": ["scan.pdf"], "steps": ["optimize"], "out_dir": out });
+        if let Some(ppi) = ppi {
+            args["ppi"] = json!(ppi);
+        }
+        let report = ok(&mut a, "doc_batch", args);
+        assert_eq!(report["completed"], 1, "{report}");
+        assert_eq!(image_sizes(&dir.join(&out).join("scan.pdf")), [(Some(size.0), Some(size.1))], "ppi {ppi:?}");
+    }
 }
 
 /// A one-page PDF whose page picture is drawn as `rows` grey images one pixel row high, 600 px
@@ -6974,7 +7423,7 @@ fn exporting_to_word_html_and_rtf() {
     let dir = workdir("office");
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
-    for ext in ["docx", "pptx", "html", "rtf"] {
+    for ext in ["docx", "pptx", "html", "rtf", "md"] {
         let r = ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": format!("a.{ext}") }));
         assert_eq!(r["format"], ext);
     }
@@ -6983,6 +7432,10 @@ fn exporting_to_word_html_and_rtf() {
     assert!(std::fs::read(dir.join("a.docx")).unwrap().starts_with(b"PK"));
     assert!(std::fs::read(dir.join("a.pptx")).unwrap().starts_with(b"PK"));
     assert!(std::fs::read_to_string(dir.join("a.rtf")).unwrap().contains("Page 2"));
+    // #1595: Markdown, with a rule between pages.
+    let md = std::fs::read_to_string(dir.join("a.md")).unwrap();
+    assert!(md.contains("Page 1") && md.contains("Page 3") && md.matches("\n---\n").count() == 2, "{md}");
+    assert_eq!(ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "b.markdown" }))["format"], "md");
     assert!(a.call("doc_export_office", &json!({ "doc": doc, "path": "a.xyz" })).is_err());
 }
 
@@ -8962,8 +9415,8 @@ fn text_box_and_callout_fill_and_border_through_tools() {
 }
 
 /// Three paragraphs: Alpha (two rows), Bravo (one row) and Charlie (two rows), at the leading
-/// of #2516. A third Alpha row brings its last baseline within 2.5 × size of Bravo's, so the next
-/// read groups the two as one paragraph.
+/// of #2516. Alpha's last baseline is 35.6 pt above Bravo's; moving Alpha down 21.2 pt leaves
+/// 14.4 pt, Alpha's own leading, so the next read groups the two as one paragraph.
 fn three_paragraph_pdf() -> Vec<u8> {
     use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
     use std::sync::Arc;
@@ -9012,6 +9465,10 @@ fn an_emptied_paragraph_does_not_pass_its_number_to_an_overlapping_neighbour() {
 /// #2516: a paragraph number names the paragraph `text_paragraphs` listed. When an edit regroups
 /// the page so that paragraph no longer exists on its own, the next edit by that number is
 /// refused. It used to rewrite whichever paragraph had taken the number, and that text was gone.
+///
+/// Moving Alpha down (no text change) is the regrouping edit: #2517 wraps a rewrite that adds or
+/// keeps rows in a marked region precisely so it can't be mistaken for a neighbour by geometry
+/// alone, so a text rewrite can no longer manufacture this scenario; a pure move still can.
 #[test]
 fn text_edit_refuses_a_paragraph_number_an_earlier_edit_regrouped() {
     let dir = workdir("text-edit-stale-number");
@@ -9023,12 +9480,9 @@ fn text_edit_refuses_a_paragraph_number_an_earlier_edit_regrouped() {
     assert!(listed["paragraphs"][1]["text"].as_str().unwrap().starts_with("Bravo"));
 
     // Listing again here would renumber the page, so the first edit's result says what moved.
-    let first = ok(
-        &mut a,
-        "text_edit",
-        json!({"doc":doc,"page":1,"paragraph":1,"text":"Alpha paragraph, first row.\nAlpha paragraph, second row.\nAlpha paragraph, a third row."}),
-    );
-    assert_eq!(first["stale_paragraphs"], json!([1, 2]), "the third row regroups Alpha with Bravo: {first}");
+    // Moving Alpha down by 21.2 pt brings its last row within 14.4 pt of Bravo, its own leading.
+    let first = ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"dy":-21.2}));
+    assert_eq!(first["stale_paragraphs"], json!([1, 2]), "moving Alpha down regroups it with Bravo: {first}");
 
     // Paragraph 2 of the earlier listing was Bravo, which is now part of Alpha's paragraph.
     let stale = a.call("text_edit", &json!({"doc":doc,"page":1,"paragraph":2,"text":"Bravo paragraph, edited."}));
@@ -9043,13 +9497,14 @@ fn text_edit_refuses_a_paragraph_number_an_earlier_edit_regrouped() {
     assert!(relisted["paragraphs"][1]["text"].as_str().unwrap().starts_with("Charlie"));
     ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":2,"text":"Charlie paragraph, edited."}));
     let text = page_text(&mut a, doc).join(" ");
-    assert!(text.contains("Charlie paragraph, edited.") && text.contains("Alpha paragraph, a third row."), "{text}");
+    assert!(text.contains("Charlie paragraph, edited.") && text.contains("Alpha paragraph, second row."), "{text}");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// An edit that merges its paragraph into a neighbour leaves no paragraph of its own to follow:
 /// the merged one holds the edited text too, but rewriting it by the edited paragraph's number
-/// would drop the neighbour's text (#2516).
+/// would drop the neighbour's text (#2516). Moving Alpha down (see the previous test) is the
+/// regrouping edit, since a text rewrite is marked precisely so it cannot merge this way (#2517).
 #[test]
 fn text_edit_does_not_follow_a_paragraph_into_the_one_it_merged_with() {
     let dir = workdir("text-edit-merged-number");
@@ -9057,11 +9512,7 @@ fn text_edit_does_not_follow_a_paragraph_into_the_one_it_merged_with() {
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({"path":"p.pdf"}))["doc"].as_u64().unwrap();
     ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
-    let first = ok(
-        &mut a,
-        "text_edit",
-        json!({"doc":doc,"page":1,"paragraph":1,"text":"Alpha paragraph, first row.\nAlpha paragraph, second row.\nAlpha paragraph, a third row."}),
-    );
+    let first = ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"dy":-21.2}));
     assert!(first.get("paragraph").is_none(), "the result must not present the merged paragraph as the edited one: {first}");
 
     // Paragraph 1 was Alpha. Alpha now shares a paragraph with Bravo, so the number is refused.
@@ -9075,6 +9526,8 @@ fn text_edit_does_not_follow_a_paragraph_into_the_one_it_merged_with() {
 
 /// The editor background preview takes the same paragraph number as `text_edit`, so it hides the
 /// paragraph the number named in the listing and refuses a number an edit made stale (#2516).
+/// Moving Alpha down (see the two tests above) is the regrouping edit; a text rewrite is marked
+/// precisely so it cannot merge this way (#2517).
 #[test]
 fn page_render_hide_text_block_refuses_a_paragraph_number_an_earlier_edit_regrouped() {
     let dir = workdir("hide-text-block-stale-number");
@@ -9082,11 +9535,7 @@ fn page_render_hide_text_block_refuses_a_paragraph_number_an_earlier_edit_regrou
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({"path":"p.pdf"}))["doc"].as_u64().unwrap();
     ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
-    ok(
-        &mut a,
-        "text_edit",
-        json!({"doc":doc,"page":1,"paragraph":1,"text":"Alpha paragraph, first row.\nAlpha paragraph, second row.\nAlpha paragraph, a third row."}),
-    );
+    ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"dy":-21.2}));
 
     // Paragraph 2 of the listing was Bravo, now inside Alpha's paragraph; position 2 is Charlie.
     let stale = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72,"hide_text_block":2}));
@@ -9308,6 +9757,46 @@ fn bookmark_list_reports_colour_and_style() {
     assert_eq!(style(&ok(&mut b, "bookmark_list", json!({ "doc": re }))["bookmarks"]), style(&set), "saved");
 }
 
+/// `aligns` gives each line of added text an alignment of its own; `align` alone is the whole box
+/// again. Text edits take `aligns` for a paragraph's rows the same way.
+#[test]
+fn added_text_lines_take_their_own_alignments() {
+    let dir = workdir("paragraph-aligns");
+    let mut a = auto(&dir);
+    let id = ok(&mut a, "doc_create", json!({"from":"blank","width":600,"height":400}))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({"doc":id,"page":1,"text":"Left line\nRight line","at":[40,50],"width":500,"size":12,"aligns":[null,"right"]}));
+    let rect = |a: &mut Automation, text: &str| -> Vec<f64> {
+        let lines = ok(a, "text_lines", json!({"doc":id,"page":1}));
+        let line = lines["lines"].as_array().unwrap().iter().find(|l| l["text"] == text).cloned().unwrap();
+        line["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect()
+    };
+    assert!((rect(&mut a, "Left line")[0] - 40.0).abs() < 1.0);
+    assert!((rect(&mut a, "Right line")[2] - 540.0).abs() < 1.0, "{:?}", rect(&mut a, "Right line"));
+    // The whole box centred: the right-aligned line goes with it.
+    ok(&mut a, "content_update", json!({"doc":id,"page":1,"index":1,"align":"center"}));
+    let right = rect(&mut a, "Right line");
+    assert!(((right[0] + right[2]) / 2.0 - 290.0).abs() < 1.0, "{right:?}");
+    assert!(a.call("content_update", &json!({"doc":id,"page":1,"index":1,"aligns":["sideways"]})).is_err());
+    assert!(a.call("content_update", &json!({"doc":id,"page":1,"index":1,"aligns":"right"})).is_err());
+}
+
+/// Existing-row alignment is withheld until its intent survives later editing sessions.
+#[test]
+fn text_edit_row_alignment_is_refused_without_changing_existing_text() {
+    let dir = workdir("paragraph-row-aligns");
+    let body = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (The quick brown fox jumps over the lazy dog) Tj T* (and keeps running.) Tj ET";
+    std::fs::write(dir.join("rows.pdf"), win_ansi_paragraph_pdf(body)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "rows.pdf" }))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "text_lines", json!({ "doc": doc, "page": 1 }));
+    let refused = err(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "aligns": [null, "right"] }));
+    assert!(matches!(&refused, ToolError::Failed(m) | ToolError::InvalidArgs(m) if m.contains("selected-row alignment")), "{refused:?}");
+    assert_eq!(ok(&mut a, "text_lines", json!({ "doc": doc, "page": 1 })), before);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "unchanged.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "unchanged.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "text_lines", json!({ "doc": reopened, "page": 1 })), before);
+}
+
 /// An editable combo box (ISO 32000-2 Table 233, Edit) takes a value that isn't one of its
 /// options, and its page appearance shows it, before and after a save; one without Edit takes
 /// only its options.
@@ -9456,4 +9945,248 @@ fn clearing_a_kids_default_through_tools_does_not_bring_back_its_parents() {
     let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
     let city = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "address.city").unwrap().clone();
     assert!(city["value"].is_null() || city["value"] == "", "reset clears it rather than restoring the parent's Main St: {}", city["value"]);
+}
+
+/// #2517, through the same tools as the report. One blank line is two paragraphs, and editing
+/// the first leaves the second. The neighbour at y=656.8 is one blank line below (two 14.4 pt
+/// leadings under the second row). Growing the first paragraph, saving, reopening and editing
+/// again leaves that neighbour in place. An explicit TL of 27.6 pt stays one paragraph.
+#[test]
+fn a_blank_line_stays_a_separate_paragraph_through_tools() {
+    let dir = workdir("blank-line");
+    let body = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (First paragraph, first row.) Tj T* (First paragraph, second row.) Tj ET \
+                BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Second paragraph, first row.) Tj T* (Second paragraph, second row.) Tj ET";
+    std::fs::write(dir.join("a.pdf"), helvetica_page(body)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "text_paragraphs", json!({ "doc": doc, "page": 1 }));
+    assert_eq!(before["count"], 2, "{before}");
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "text": "First paragraph, edited row.\nFirst paragraph, second row." }));
+    let after = ok(&mut a, "text_paragraphs", json!({ "doc": doc, "page": 1 }));
+    assert_eq!(after["count"], 2, "{after}");
+    let second = after["paragraphs"][1]["text"].as_str().unwrap();
+    assert!(second.contains("Second paragraph"), "{second}");
+
+    let grown = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (One) Tj T* (Two) Tj ET \
+                 BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Neighbour) Tj ET";
+    std::fs::write(dir.join("grown.pdf"), helvetica_page(grown)).unwrap();
+    let grown_doc = ok(&mut a, "doc_open", json!({ "path": "grown.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({ "doc": grown_doc, "page": 1 }))["count"], 2);
+    ok(&mut a, "text_edit", json!({ "doc": grown_doc, "page": 1, "paragraph": 1, "text": "One\nTwo\nThree" }));
+    ok(&mut a, "doc_save", json!({ "doc": grown_doc, "path": "grown-out.pdf" }));
+    let saved = ok(&mut a, "doc_open", json!({ "path": "grown-out.pdf" }))["doc"].as_u64().unwrap();
+    let after = ok(&mut a, "text_paragraphs", json!({ "doc": saved, "page": 1 }));
+    assert_eq!(after["count"], 2, "{after}");
+    assert!(after["paragraphs"][1]["text"].as_str().unwrap().contains("Neighbour"), "{after}");
+    ok(&mut a, "text_edit", json!({ "doc": saved, "page": 1, "paragraph": 1, "text": "One\nTwo\nFour" }));
+    let after = ok(&mut a, "text_paragraphs", json!({ "doc": saved, "page": 1 }));
+    assert_eq!(after["count"], 2, "{after}");
+    assert!(after["paragraphs"][1]["text"].as_str().unwrap().contains("Neighbour"), "{after}");
+
+    let spaced = "BT /F1 12 Tf 27.6 TL 1 0 0 1 72 700 Tm (One) Tj T* (Two) Tj T* (Three) Tj ET";
+    std::fs::write(dir.join("spaced.pdf"), helvetica_page(spaced)).unwrap();
+    let spaced_doc = ok(&mut a, "doc_open", json!({ "path": "spaced.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({ "doc": spaced_doc, "page": 1 }))["count"], 1);
+}
+
+/// #2529, through the same tools as a width drag. The typed double space falls on the wrap.
+/// Omitting `text` reflows with the saved gap count. An incremental save and a full rewrite
+/// both still have both spaces after the box is widened again.
+#[test]
+fn narrowing_then_widening_keeps_a_typed_double_space_through_tools() {
+    let dir = workdir("double-space-width");
+    std::fs::write(dir.join("a.pdf"), helvetica_page("BT /F1 24 Tf 20 150 Td (One  Two) Tj ET")).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "text_paragraphs", json!({ "doc": doc, "page": 1 }))["paragraphs"][0]["editor_text"], "One  Two");
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "width": 45.0 }));
+    let narrow = &ok(&mut a, "text_paragraphs", json!({ "doc": doc, "page": 1 }))["paragraphs"][0];
+    assert_eq!(narrow["editor_text"], "One\nTwo", "{narrow}");
+    for (name, full) in [("narrow-inc.pdf", false), ("narrow-full.pdf", true)] {
+        ok(&mut a, "doc_save", json!({ "doc": doc, "path": name, "full": full }));
+        let saved = ok(&mut a, "doc_open", json!({ "path": name }))["doc"].as_u64().unwrap();
+        let block = &ok(&mut a, "text_paragraphs", json!({ "doc": saved, "page": 1 }))["paragraphs"][0];
+        assert_eq!(block["editor_text"], "One\nTwo", "{name}: {block}");
+        ok(&mut a, "text_edit", json!({ "doc": saved, "page": 1, "paragraph": 1, "width": 200.0 }));
+        let wide_name = format!("wide-{name}");
+        ok(&mut a, "doc_save", json!({ "doc": saved, "path": wide_name, "full": full }));
+        let wide = ok(&mut a, "doc_open", json!({ "path": wide_name }))["doc"].as_u64().unwrap();
+        let block = &ok(&mut a, "text_paragraphs", json!({ "doc": wide, "page": 1 }))["paragraphs"][0];
+        assert_eq!(block["editor_text"], "One  Two", "{name}: the second typed space was lost: {block}");
+    }
+}
+
+fn paragraph_texts(a: &mut Automation, doc: u64) -> Vec<String> {
+    ok(a, "text_paragraphs", json!({ "doc": doc, "page": 1 }))["paragraphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["text"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// The reported edits, through open / text_paragraphs / text_edit / save / reopen / text_extract.
+/// Covers an explicit TL, the three ways a file moves rows without TL, a blank line written with
+/// Td, a two-row file that must stay split, and a partial rewrite that adds a row.
+#[test]
+fn paragraph_grouping_survives_save_and_reopen_through_tools() {
+    let dir = workdir("paragraph-grouping");
+    let mut a = auto(&dir);
+    for step in [27.6_f64, 28.8] {
+        let y2 = 700.0 - step;
+        let y3 = 700.0 - 2.0 * step;
+        let bodies = [
+            format!("BT /F1 12 Tf 1 0 0 1 72 700 Tm (One) Tj 0 -{step} Td (Two) Tj 0 -{step} Td (Three) Tj ET"),
+            format!(
+                "BT /F1 12 Tf 1 0 0 1 72 700 Tm (One) Tj ET BT /F1 12 Tf 1 0 0 1 72 {y2} Tm (Two) Tj ET BT /F1 12 Tf 1 0 0 1 72 {y3} Tm (Three) Tj ET"
+            ),
+            format!("BT /F1 12 Tf 72 700 Td (One) Tj ET BT /F1 12 Tf 72 {y2} Td (Two) Tj ET BT /F1 12 Tf 72 {y3} Td (Three) Tj ET"),
+        ];
+        for (i, body) in bodies.iter().enumerate() {
+            let path = format!("step-{step}-{i}.pdf");
+            std::fs::write(dir.join(&path), helvetica_page(body)).unwrap();
+            let doc = ok(&mut a, "doc_open", json!({ "path": path }))["doc"].as_u64().unwrap();
+            let paras = paragraph_texts(&mut a, doc);
+            assert_eq!(paras.len(), 1, "{path}: {paras:?}");
+            assert!(paras[0].contains("One") && paras[0].contains("Two") && paras[0].contains("Three"), "{path}: {paras:?}");
+            let extracted = page_text(&mut a, doc);
+            assert!(extracted[0].contains("One") && extracted[0].contains("Three"), "{path}: {extracted:?}");
+        }
+    }
+
+    // One gap and no third row: still two paragraphs.
+    let pair = format!("BT /F1 12 Tf 72 700 Td (One) Tj ET BT /F1 12 Tf 72 {} Td (Two) Tj ET", 700.0 - 27.6);
+    std::fs::write(dir.join("pair.pdf"), helvetica_page(&pair)).unwrap();
+    let pair_doc = ok(&mut a, "doc_open", json!({ "path": "pair.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, pair_doc).len(), 2);
+
+    // Blank line written with Td, not TL. The inner step repeats; the break does not.
+    let inner = 14.4_f64;
+    let blank = format!(
+        "BT /F1 12 Tf 72 700 Td (One) Tj ET BT /F1 12 Tf 72 {} Td (Two) Tj ET \
+         BT /F1 12 Tf 72 {} Td (Neighbour) Tj ET BT /F1 12 Tf 72 {} Td (Line) Tj ET",
+        700.0 - inner,
+        700.0 - 3.0 * inner,
+        700.0 - 4.0 * inner
+    );
+    std::fs::write(dir.join("blank.pdf"), helvetica_page(&blank)).unwrap();
+    let blank_doc = ok(&mut a, "doc_open", json!({ "path": "blank.pdf" }))["doc"].as_u64().unwrap();
+    let blank_paras = paragraph_texts(&mut a, blank_doc);
+    assert_eq!(blank_paras.len(), 2, "{blank_paras:?}");
+    assert!(blank_paras[0].contains("One") && blank_paras[0].contains("Two"), "{blank_paras:?}");
+    assert!(blank_paras[1].contains("Neighbour") && blank_paras[1].contains("Line"), "{blank_paras:?}");
+
+    // The first row is unchanged. Save incremental, reopen, edit again, save in full, reopen.
+    let partial = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET \
+                   BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Neighbor stays.) Tj ET";
+    std::fs::write(dir.join("partial.pdf"), helvetica_page(partial)).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "partial.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, doc).len(), 2);
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "text": "Alpha first row.\nTwo\nThree" }));
+    let incremental = ok(&mut a, "doc_save", json!({ "doc": doc, "path": "partial.pdf" }));
+    assert_eq!(incremental["incremental"], true, "{incremental}");
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "partial.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, reopened), ["Alpha first row. Two Three", "Neighbor stays."]);
+    ok(&mut a, "text_edit", json!({ "doc": reopened, "page": 1, "paragraph": 1, "text": "Alpha first row.\nTwo\nFour" }));
+    let full = ok(&mut a, "doc_save", json!({ "doc": reopened, "path": "partial-full.pdf", "full": true }));
+    assert_eq!(full["incremental"], false, "{full}");
+    let again = ok(&mut a, "doc_open", json!({ "path": "partial-full.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, again), ["Alpha first row. Two Four", "Neighbor stays."]);
+    let extracted = page_text(&mut a, again);
+    assert!(extracted[0].contains("Neighbor stays.") && extracted[0].contains("Four"), "{extracted:?}");
+}
+
+/// Editing the only paragraph on the page, while leaving its second row in the source, stays
+/// one paragraph through save and reopen. A neighbour in a different marked region stays in
+/// its own paragraph.
+#[test]
+fn a_partial_rewrite_of_the_last_paragraph_stays_one_through_tools() {
+    let dir = workdir("paragraph-tail");
+    let mut a = auto(&dir);
+    let only = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET";
+    std::fs::write(dir.join("only.pdf"), helvetica_page(only)).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "only.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, doc), ["Alpha first row. Alpha next row."]);
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "text": "One.\nAlpha next row." }));
+    assert_eq!(paragraph_texts(&mut a, doc), ["One. Alpha next row."]);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "only.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "only.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, reopened), ["One. Alpha next row."]);
+    ok(&mut a, "text_edit", json!({ "doc": reopened, "page": 1, "paragraph": 1, "text": "One.\nTwo." }));
+    assert_eq!(paragraph_texts(&mut a, reopened), ["One. Two."]);
+
+    let marked = "/H1 << /MCID 0 >> BDC BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET EMC \
+                  /P << /MCID 1 >> BDC BT /F1 12 Tf 14.4 TL 1 0 0 1 72 656.8 Tm (Neighbor stays.) Tj ET EMC";
+    std::fs::write(dir.join("marked.pdf"), helvetica_page(marked)).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "marked.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, doc).len(), 2);
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "text": "One.\nAlpha next row." }));
+    assert_eq!(paragraph_texts(&mut a, doc), ["One. Alpha next row.", "Neighbor stays."]);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "marked.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "marked.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, reopened), ["One. Alpha next row.", "Neighbor stays."]);
+    ok(&mut a, "text_edit", json!({ "doc": reopened, "page": 1, "paragraph": 1, "text": "One.\nTwo." }));
+    assert_eq!(paragraph_texts(&mut a, reopened), ["One. Two.", "Neighbor stays."]);
+}
+
+/// Both ends of one text object, through open / text_edit / save / reopen / text_extract.
+/// Editing the last paragraph must not take the one before it, and editing the first must
+/// not take the one after it. Incremental and full saves.
+#[test]
+fn a_shared_text_object_keeps_both_paragraphs_through_tools() {
+    let dir = workdir("shared-text-object");
+    let mut a = auto(&dir);
+    let body =
+        "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj T* T* (Neighbor stays.) Tj T* (Neighbor next.) Tj ET";
+    std::fs::write(dir.join("last.pdf"), helvetica_page(body)).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "last.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, doc), ["Alpha first row. Alpha next row.", "Neighbor stays. Neighbor next."]);
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 2, "text": "Neighbor stays.\nChanged." }));
+    assert_eq!(paragraph_texts(&mut a, doc), ["Alpha first row. Alpha next row.", "Neighbor stays. Changed."]);
+    let incremental = ok(&mut a, "doc_save", json!({ "doc": doc, "path": "last.pdf" }));
+    assert_eq!(incremental["incremental"], true, "{incremental}");
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "last.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, reopened), ["Alpha first row. Alpha next row.", "Neighbor stays. Changed."]);
+    ok(&mut a, "text_edit", json!({ "doc": reopened, "page": 1, "paragraph": 2, "text": "Neighbor stays.\nEdited." }));
+    let full = ok(&mut a, "doc_save", json!({ "doc": reopened, "path": "last-full.pdf", "full": true }));
+    assert_eq!(full["incremental"], false, "{full}");
+    let again = ok(&mut a, "doc_open", json!({ "path": "last-full.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, again), ["Alpha first row. Alpha next row.", "Neighbor stays. Edited."]);
+    let extracted = page_text(&mut a, again);
+    assert!(extracted[0].contains("Alpha first row.") && extracted[0].contains("Edited."), "{extracted:?}");
+
+    std::fs::write(dir.join("first.pdf"), helvetica_page(body)).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "first.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "text": "Alpha first row.\nTwo\nThree" }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "first.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "first.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, reopened), ["Alpha first row. Two Three", "Neighbor stays. Neighbor next."]);
+    ok(&mut a, "text_edit", json!({ "doc": reopened, "page": 1, "paragraph": 1, "text": "Alpha first row.\nTwo\nFour" }));
+    ok(&mut a, "doc_save", json!({ "doc": reopened, "path": "first-full.pdf", "full": true }));
+    let again = ok(&mut a, "doc_open", json!({ "path": "first-full.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(paragraph_texts(&mut a, again), ["Alpha first row. Two Four", "Neighbor stays. Neighbor next."]);
+    let extracted = page_text(&mut a, again);
+    assert!(extracted[0].contains("Four") && extracted[0].contains("Neighbor stays."), "{extracted:?}");
+}
+
+/// Unambiguous separated one-pixel rules test the requested scale independently of the
+/// conservative local-tone guard. Ragged text can legitimately be retained by that guard.
+fn simple_rule_scan_drawn(content: &[u8]) -> Vec<u8> {
+    use pdfcraft_cos::{Document, Object, SaveOptions, Stream, write_full};
+    let mut doc = Document::open(std::sync::Arc::new(scan_drawn(content))).unwrap();
+    for number in doc.object_numbers() {
+        let reference = pdfcraft_cos::ObjRef::new(number, doc.generation(number));
+        let object = doc.get(reference);
+        let Object::Stream(image) = &*object else { continue };
+        if image.dict.name(b"Subtype") != Some(b"Image") {
+            continue;
+        }
+        let mut data = vec![0xFF; 125 * 400];
+        for y in 0..400 {
+            data[y * 125] &= 0x7F;
+            data[y * 125 + 124] &= 0xFE;
+        }
+        doc.set(reference, Object::Stream(Stream::flate(image.dict.clone(), &data)));
+    }
+    write_full(&doc, &SaveOptions::default()).unwrap()
 }

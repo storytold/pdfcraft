@@ -946,6 +946,14 @@
 	Replacement text	Teks pengganti
 	Replacement: pages of {name}	Pengganti: halaman dari {name}
 	Replaces the existing one on those pages.	Menggantikan yang ada di halaman-halaman itu.
+	Checking pages…	Memeriksa halaman…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Halaman {pages} memiliki isian putihnya sendiri, yang akan menutupi latar belakang. Ganti
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Halaman-halaman {pages} memiliki isian putihnya sendiri, yang akan menutupi latar belakang. Ganti
+	Removing the background puts the page's own backdrop back.	Menghapus latar belakang akan mengembalikan isian putih milik halaman.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Sebuah gambar menutupi halaman {pages} (hasil pindai?), jadi latar belakang tidak akan terlihat di sana.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Gambar menutupi halaman-halaman {pages} (hasil pindai?), jadi latar belakang tidak akan terlihat di sana.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Halaman {pages} berubah setelah latar belakang ditambahkan, jadi isian putihnya sendiri tetap mati. Di kertas putih tampilannya sama.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Halaman {pages} berubah setelah latar belakang ditambahkan, jadi isian putihnya sendiri tetap mati. Di kertas putih tampilannya sama.
 	Report	Laporan
 	Report…	Laporan…
 	Requires user to enter a password for:	Memerlukan pengguna untuk memasukkan kata sandi untuk:
@@ -2055,6 +2063,9 @@ comment menu	Edit	Edit
 	Formulas and similar non-text elements need alternate text. Add alternate text to them.	Rumus dan elemen non-teks serupa memerlukan teks alternatif. Tambahkan teks alternatif ke elemen tersebut.
 	Gray	Abu-abu
 	Grayscale Images	Gambar Skala Abu-abu
+	Monochrome Images	Gambar Monokrom
+	CCITT Group 4	CCITT Grup 4
+	JBIG2 (lossless)	JBIG2 (tanpa kehilangan)
 	Green	Hijau
 	Green on black	Hijau di atas hitam
 	H / Space (hold)	H / Space (tahan)
@@ -2722,6 +2733,12 @@ theme	Appearance	Tampilan
 	Links on page	Links on page
 	Loop	Loop
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Reads {name}, which the form doesn't have, so it gets no value there.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.
+	Missing field	Missing field
+	Unchecked reads	Unchecked reads
+	{field} reads fields named as it runs	{field} reads fields named as it runs
+	Some names are built as it runs	Some names are built as it runs
 	Move only what must move, so every field calculates after the fields it reads.	Move only what must move, so every field calculates after the fields it reads.
 	Moves only what must move	Moves only what must move
 	No field reads it	No field reads it
@@ -2795,3 +2812,6 @@ theme	Appearance	Tampilan
 	Rotate the selected pages clockwise	Putar halaman yang dipilih searah jarum jam
 	Extract the selected pages…	Ekstrak halaman yang dipilih…
 	Delete the selected pages	Hapus halaman yang dipilih
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Opsi untuk balasan ini

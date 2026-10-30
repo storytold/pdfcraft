@@ -7039,3 +7039,106 @@ fn test_clip_only_text_raster_preserves_clipping_without_painting() {
     assert!(pixels.contains(&[0, 0, 255, 255]), "fill shows through the 7 Tr clip");
     assert!(pixels.contains(&white), "the clip is text-shaped, not the whole page");
 }
+
+/// A malformed token in a content stream used to end the stream there, so the renderer, text
+/// extraction, Find and search-based redaction lost the rest of the page while the edit
+/// reader, MuPDF and pdftotext read it (#3565, #3568). Each token below is now stepped over.
+#[test]
+fn a_malformed_token_does_not_end_the_content_stream() {
+    // One token between two text objects. `BEFORE` is drawn before it, `AFTER` after.
+    let page = |token: &str| {
+        let stream = format!("BT /F1 8 Tf 2 30 Td (BEFORE) Tj ET {token} BT /F1 8 Tf 2 10 Td (AFTER) Tj ET");
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 60 40] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >> endobj\n5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", stream.len()).as_bytes());
+        pdf.extend_from_slice(stream.as_bytes());
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let text = renderer.render(RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() });
+        assert!(text.error.is_none(), "{token}: {:?}", text.error);
+        text.text.expect("a text layer").plain_text()
+    };
+
+    for token in [
+        // A `re` with three operands: the typed iterator used to abort on a path operator it
+        // could not dispatch, which is what #3568 reports.
+        "20 10 10 re",
+        // Eleven operands: under the 256 the stack holds, so this one runs on its own last
+        // operand. Past the limit is covered by
+        // `an_operator_past_the_operand_limit_reads_its_own_operands` below.
+        "0 0 0 0 0 0 0 0 0 0 0 g",
+        // A stray delimiter: the lexer could not read an operator and jumped to the end.
+        ")",
+        // The same with no space after it. Stepping over the regular characters that follow a
+        // delimiter ate the next operator, so the page lost its second text object
+        // (#3636 review); only the delimiter is stepped over.
+        ")BT ET",
+        // A malformed `#` escape in a name, so neither an object nor an operator read.
+        "/C#2 gs",
+        // And the well-formed forms still work.
+        "20 10 10 5 re n",
+        "0.5 g",
+    ] {
+        let text = page(token);
+        assert!(text.contains("BEFORE"), "{token}: {text:?}");
+        assert!(text.contains("AFTER"), "{token}: the rest of the page was lost: {text:?}");
+        assert!(text.find("BEFORE") < text.find("AFTER"), "{token}: the page is read in order: {text:?}");
+    }
+}
+
+/// An operator preceded by more operands than the stack holds is applied to its own operands,
+/// which are the ones nearest it, rather than to whichever of the strays survived. The parser
+/// had a branch meant to drop such an instruction whole, dead because `Stack::push` always
+/// reported success (noted in review of #3636); reviving it loses legitimate content, which
+/// `an_operator_with_hundreds_of_operands_does_not_end_the_content` measures, so the dead branch
+/// is gone and this pins what the ring buffer does instead.
+#[test]
+fn an_operator_past_the_operand_limit_reads_its_own_operands() {
+    // The strays are `1` and the operator's own operand is `0`, so the two answers differ: white
+    // if the operator read a stray, black if it read its own.
+    let page = |strays: usize| {
+        let stream = format!("{}0 g 0 0 20 20 re f", "1 ".repeat(strays));
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 20 20] /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{stream}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+            stream.len()
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(p.error.is_none(), "{strays} strays: {:?}", p.error);
+        p.rgba.as_chunks::<4>().0.to_vec()
+    };
+    let all_black = |pixels: &[[u8; 4]]| pixels.iter().all(|p| *p == [0, 0, 0, 255]);
+
+    // None, a few, the limit, and past it: the fill is the black the `g` asked for every time.
+    for strays in [0, 5, 255, 256, 257, 600] {
+        assert!(all_black(&page(strays)), "{strays} stray operands: the `g` reads its own operand");
+    }
+}
+
+/// Content after an inline image whose data holds `EI` is still read. This pins the property
+/// but does **not** exercise the look-ahead gating added for #3636's review: accepting a false
+/// `EI` truncates the image, while the text after the real one is read either way, and this
+/// assertion passes with the gating removed. Showing the truncation needs valid ASCII85 data
+/// that contains `EI`, which this fixture does not have.
+#[test]
+fn content_after_an_inline_image_holding_ei_is_still_read() {
+    // An ASCII85 image whose data holds `EI\n`, then an `re` with three operands and twenty
+    // `q`s -- enough steps to satisfy the look-ahead's counter if the bad `re` were skipped --
+    // before the real `EI`. `AFTER` is drawn once the image is over.
+    let stream = b"q 100 0 0 100 10 10 cm BI /W 4 /H 4 /CS /G /BPC 8 /F /A85 ID EI
+20 10 10 re q q q q q q q q q q q q q q q q q q q q EI Q BT /F1 8 Tf 2 4 Td (AFTER) Tj ET"
+        .to_vec();
+    let mut pdf =
+        b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 120 120] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >> endobj\n5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n"
+            .to_vec();
+    pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", stream.len()).as_bytes());
+    pdf.extend_from_slice(&stream);
+    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+
+    let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let text = renderer.render(RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() });
+    assert!(text.error.is_none(), "{:?}", text.error);
+    let page = text.text.expect("a text layer").plain_text();
+    // The image ran to the real `EI`, so the text after it is the page's only text: the first
+    // `EI` inside the data was not taken for the end.
+    assert!(page.contains("AFTER"), "the content after the image was lost: {page:?}");
+}
