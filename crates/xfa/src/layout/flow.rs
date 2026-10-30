@@ -1,6 +1,6 @@
 use super::common::{clamp_opt, divide, is_row, moved, solid_extent, splittable};
 use super::items::Item;
-use super::{Ctx, Frame, Layout, Layouter, MAX_DEPTH, Node, Rect, SomIndices, Subform, XfaError, data_path, instance_count};
+use super::{Ctx, Frame, Layout, Layouter, MAX_DEPTH, Node, Rect, SomIndices, Subform, XfaError, data_path, subform_instances};
 
 impl Layouter<'_> {
     /// Place `node` as one block of size (`w`, `h`) at the cursor: in this content area when it fits,
@@ -285,11 +285,7 @@ impl Layouter<'_> {
     /// repeating subform's `occur` and data instances ([`instance_count`]); one for anything else.
     pub(super) fn instances(&self, node: &Node, parent_som: &str) -> usize {
         let Node::Subform(sf) = node else { return 1 };
-        let from_data = match (&sf.common.name, self.data) {
-            (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
-            _ => 0,
-        };
-        instance_count(&sf.occur, from_data)
+        subform_instances(self.tpl, self.data, sf, parent_som)
     }
 
     /// The data holds more instances of `node` than `laid_out`: say so, since calculations

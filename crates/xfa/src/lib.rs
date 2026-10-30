@@ -18,6 +18,7 @@ pub mod pdf;
 pub mod picture;
 pub mod script;
 pub mod text;
+mod traverse;
 
 use pdfcraft_cos::Document;
 
