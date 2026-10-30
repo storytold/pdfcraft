@@ -62,6 +62,7 @@ pub(crate) use organize::grid_page_rect;
 use organize::organize_grid;
 #[cfg(test)]
 use organize::sharp_enough;
+pub(crate) use selection::SelectionKey;
 use selection::{Selection, Span, click_unit, selection_actions};
 pub use xform::PageXform;
 use xform::snap_to_pixels;

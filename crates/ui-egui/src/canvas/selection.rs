@@ -42,6 +42,10 @@ impl Selection {
     }
 }
 
+/// A page's text selection, compared and nothing else ([`DocView::page_selection`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SelectionKey(Selection);
+
 /// The glyphs `clicks` quick clicks select around glyph `a`: two the word, three the line, more
 /// the page.
 pub(super) fn click_unit(text: &PageText, clicks: u32, a: usize) -> Option<(usize, usize)> {
@@ -60,6 +64,12 @@ impl DocView {
         let page = info.pages.get(s.page)?;
         let quads: Vec<[f64; 8]> = s.rects(text).into_iter().map(|r| page.view_rect_to_quad(r)).collect();
         (!quads.is_empty()).then_some((s.page, quads))
+    }
+
+    /// What is selected on a page, to tell when the selection changes; `None` without one, and
+    /// for Select All of the whole document, whose pages may not be read yet.
+    pub(crate) fn page_selection(&self) -> Option<SelectionKey> {
+        self.selection.filter(|_| !self.all_text).map(SelectionKey)
     }
 
     pub(crate) fn clear_selection(&mut self) {

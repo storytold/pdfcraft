@@ -115,6 +115,7 @@ impl PdfCraftApp {
             app_frame_shown: None,
             password_prompt: None,
             document_copy: None,
+            primary_selection: Default::default(),
             unlock_prompt: None,
             full_screen: false,
             inbox: Default::default(),

@@ -394,6 +394,8 @@ pub struct PdfCraftApp {
     pub password_prompt: Option<PasswordPrompt>,
     /// Copy of a whole document's text (#2639) whose pages are being read off the UI thread.
     document_copy: Option<DocumentCopy>,
+    /// Where a middle click pastes the text selected on a page (Linux and the BSDs, #4821).
+    primary_selection: platform::primary_selection::PrimarySelection,
     pub unlock_prompt: Option<UnlockPrompt>,
     pub full_screen: bool,
     /// Files delivered asynchronously (web drag-and-drop, web file picker).

@@ -2002,3 +2002,79 @@ fn a_moved_picture_is_drawn_from_the_fresh_raster_while_a_tile_is_still_stale() 
     h.state_mut().views[0].stale_tiles.clear();
     h.state_mut().views[0].tiles.clear();
 }
+
+/// #4821: the text selected on a page becomes the primary selection, where a middle click pastes
+/// it, once the selection holds still for a frame; a drag in progress doesn't write it on every
+/// frame, the same selection isn't written twice, and a document that refuses copying gives none.
+#[test]
+fn a_settled_page_selection_becomes_the_primary_selection() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("two.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two"])).unwrap();
+    assert_eq!(app.active, Some(0));
+    app.views[0].texts.insert(0, Arc::new(find_test_text("Alpha one")));
+    // The window has the focus.
+    let ctx = egui::Context::default();
+    let focus = |ctx: &egui::Context, focused: bool| ctx.run_pass(egui::RawInput { focused, ..Default::default() }, |_| {}).textures_delta.clear();
+    focus(&ctx, true);
+    let written = |app: &PdfCraftApp| app.primary_selection.written.clone();
+    // A drag: the selection grows on every frame, and nothing is written while it does.
+    for head in 1..5 {
+        app.views[0].select_text(0, 0, head);
+        app.finish_render_frame(&ctx);
+    }
+    assert!(written(&app).is_empty(), "nothing while the selection moves");
+    // It holds still for a frame: written once, and not again.
+    app.finish_render_frame(&ctx);
+    app.finish_render_frame(&ctx);
+    assert_eq!(written(&app), vec!["Alpha".to_owned()]);
+    // Another selection replaces it; clearing it leaves the last one where it is, as X11 does.
+    app.views[0].select_text(0, 6, 8);
+    app.finish_render_frame(&ctx);
+    app.finish_render_frame(&ctx);
+    app.views[0].clear_selection();
+    app.finish_render_frame(&ctx);
+    app.finish_render_frame(&ctx);
+    assert_eq!(written(&app), vec!["Alpha".to_owned(), "one".to_owned()]);
+    // The same text selected again, after another application took the primary selection,
+    // takes it back, even when it was cleared for only one frame.
+    app.views[0].select_text(0, 6, 8);
+    app.finish_render_frame(&ctx);
+    app.finish_render_frame(&ctx);
+    app.views[0].clear_selection();
+    app.finish_render_frame(&ctx);
+    app.views[0].select_text(0, 6, 8);
+    app.finish_render_frame(&ctx);
+    app.finish_render_frame(&ctx);
+    assert_eq!(written(&app), vec!["Alpha".to_owned(), "one".to_owned(), "one".to_owned(), "one".to_owned()]);
+    // Away from the window, another application's selection may be the primary one: a
+    // selection settling meanwhile isn't written.
+    focus(&ctx, false);
+    app.views[0].select_text(0, 0, 4);
+    app.finish_render_frame(&ctx);
+    app.finish_render_frame(&ctx);
+    assert_eq!(written(&app).len(), 4, "nothing written without the focus");
+    focus(&ctx, true);
+    // Select All of the whole document reads its pages only when copied: not on selecting.
+    assert!(app.views[0].continuous);
+    app.views[0].select_all();
+    assert!(app.views[0].all_text);
+    app.finish_render_frame(&ctx);
+    app.finish_render_frame(&ctx);
+    assert_eq!(written(&app).len(), 4, "no whole-document text");
+
+    // A document whose security refuses copying (Table 22, bit 5).
+    use pdfcraft_engine::{Edit as E, Protection, Session};
+    let mut s = Session::new();
+    let id = s.open("locked.pdf", None, Arc::new(text_pages_pdf(&["Alpha one"])), None).unwrap();
+    s.apply(id, E::Protect(Protection { permissions_password: Some("owner".into()), copy: false, ..Default::default() })).unwrap();
+    let locked = s.save_bytes(id).unwrap().as_ref().clone();
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("locked.pdf", None, locked).unwrap();
+    assert!(!app.session.get(app.views[0].id).unwrap().allows_copying());
+    app.views[0].texts.insert(0, Arc::new(find_test_text("Alpha one")));
+    app.views[0].select_text(0, 0, 4);
+    app.finish_render_frame(&ctx);
+    app.finish_render_frame(&ctx);
+    assert!(written(&app).is_empty(), "copying isn't allowed");
+    assert!(app.toast.is_none(), "and selecting doesn't say so");
+}

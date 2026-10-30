@@ -59,6 +59,9 @@ pollster = "1.0"
 [target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
 # Discover configured font directories without linking libfontconfig or running a subprocess.
 fontconfig-parser = "0.5.8"
+# The primary selection on Wayland (#4821) through the compositor's data-control protocol; X11
+# otherwise. Already in the tree through egui-winit.
+arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Safe AppKit calls for drag coordinates and repairing an existing per-file PDFCraft binding.
