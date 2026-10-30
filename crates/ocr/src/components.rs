@@ -1,6 +1,6 @@
 //! Connected components of a binarized page (ClearScan stage 2).
 //!
-//! [`analyze`] labels a [`Bitmap`](crate::binarize::Bitmap) into blobs and classifies each one
+//! [`analyze`] labels a [`Bitmap`] into blobs and classifies each one
 //! as a text glyph, a rule or drawing, a photograph, or speckle noise. The labeler is the
 //! classical two-pass algorithm (Rosenfeld & Pfaltz 1966, with the union-find of Hoshen &
 //! Kopelman 1976): the first pass gives each ink pixel a provisional label from the neighbors
@@ -123,7 +123,7 @@ impl Default for AnalyzeOptions {
 /// One connected blob.
 ///
 /// `bounds` is half-open `[left, top, right, bottom]` in bitmap pixels, the same convention
-/// as the OCR boxes, so the two meet in [`crate::align`] without a conversion. `mask`, when
+/// as the OCR boxes, so the two meet in [`align`](mod@crate::align) without a conversion. `mask`, when
 /// present, is that box: its `(0, 0)` is `(left, top)` of the page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Component {
@@ -351,7 +351,8 @@ impl Raw {
 
 /// Which blobs get a dense mask. `per_cap` limits one box; `total` limits the sum. Smaller
 /// boxes win ties broken by the lower index, and a box over `per_cap` is never stored.
-fn mask_plan(areas: &[u64], per_cap: u64, total: u64) -> Vec<bool> {
+/// Stage 3 reuses it to plan which glyph clusters get a prototype canvas.
+pub(crate) fn mask_plan(areas: &[u64], per_cap: u64, total: u64) -> Vec<bool> {
     let mut order: Vec<usize> = (0..areas.len()).filter(|&index| areas.get(index).copied().unwrap_or(0) > 0).collect();
     order.sort_by(|&a, &b| {
         let area = |index| areas.get(index).copied().unwrap_or(u64::MAX);
@@ -670,7 +671,7 @@ fn mask_from_pixels(pixels: &[(u32, u32)], raw: &Raw, max_mask_pixels: u64) -> O
     build.finish()
 }
 
-struct UnionFind {
+pub(crate) struct UnionFind {
     parent: Vec<u32>,
     rank: Vec<u8>,
     cap: u32,
@@ -679,6 +680,13 @@ struct UnionFind {
 impl UnionFind {
     fn new(max_components: u32) -> UnionFind {
         UnionFind { parent: vec![0], rank: vec![0], cap: max_components.saturating_add(1).max(1) }
+    }
+
+    /// Every index `0..len` its own root, for clustering a known set of items (no new
+    /// labels are minted; [`UnionFind::find`] and [`UnionFind::union`] are all there is).
+    pub(crate) fn with_len(len: usize) -> UnionFind {
+        let len = len.min(u32::MAX as usize);
+        UnionFind { parent: (0..len as u32).collect(), rank: vec![0; len], cap: len.saturating_add(1) as u32 }
     }
 
     fn len(&self) -> usize {
@@ -695,7 +703,7 @@ impl UnionFind {
         Some(id)
     }
 
-    fn find(&mut self, start: u32) -> u32 {
+    pub(crate) fn find(&mut self, start: u32) -> u32 {
         let mut root = start;
         let limit = self.parent.len();
         for _ in 0..limit {
@@ -725,7 +733,7 @@ impl UnionFind {
         root
     }
 
-    fn union(&mut self, a: u32, b: u32) {
+    pub(crate) fn union(&mut self, a: u32, b: u32) {
         let a = self.find(a);
         let b = self.find(b);
         if a == 0 || b == 0 || a == b {

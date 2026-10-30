@@ -8,19 +8,22 @@
 //!
 //! The models read the Latin alphabet (English and other languages written without accents).
 //!
-//! For glyph work (the ClearScan pipeline), [`preprocess`] prepares a scan first — greyscale,
+//! For glyph work (the ClearScan pipeline), [`preprocess`](mod@preprocess) prepares a scan first — greyscale,
 //! Sauvola/Otsu binarization, deskew — and [`Ocr::recognize_annotated`] reads the same pages
 //! keeping per-character boxes and line metrics (baseline, x-height, cap height, descent).
-//! [`components`] then labels the binarized page into blobs and separates text from rules,
-//! photos and speckles; [`align`] matches those glyphs to the OCR boxes and either keeps
-//! touching letters as one ligature or cuts them apart on the character boundaries.
-//! See the [`preprocess`], [`annotations`], [`components`] and [`align`] modules.
+//! [`components`](mod@components) then labels the binarized page into blobs and separates text from rules,
+//! photos and speckles; [`align`](mod@align) matches those glyphs to the OCR boxes and either keeps
+//! touching letters as one ligature or cuts them apart on the character boundaries; and
+//! [`cluster`](mod@cluster) groups the resolved glyphs into clusters of the same shape and averages their
+//! centroid-aligned greyscale into pristine master prototypes.
+//! See the [`preprocess`](mod@preprocess), [`annotations`](mod@annotations), [`components`](mod@components), [`align`](mod@align) and [`cluster`](mod@cluster) modules.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod align;
 pub mod annotations;
 pub mod binarize;
+pub mod cluster;
 pub mod components;
 pub mod deskew;
 pub mod grey;
@@ -30,6 +33,7 @@ use std::path::{Path, PathBuf};
 
 pub use align::{AlignParams, CharRef, MatchRole, PageAlignment, ResolvedGlyph, TouchingStrategy, align, iou};
 pub use annotations::{AnnotatedLine, AnnotatedWord, CharBox};
+pub use cluster::{ClusterParams, Clusters, GlyphCluster, Prototype, SkipReason, cluster, cluster_pages};
 pub use components::{AnalyzeOptions, Component, ComponentKind, ComponentSet, Connectivity, FilterParams, analyze, analyze_page};
 pub use preprocess::{PreprocessedOptions, PreprocessedPage};
 
