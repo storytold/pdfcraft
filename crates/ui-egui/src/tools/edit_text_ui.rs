@@ -588,8 +588,13 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     let galley = editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width);
                     if snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
                 };
+                let id = egui::Id::unique("edit-text-line-input");
+                for _ in 0..tabs_pressed(ui, id) {
+                    insert_tab_spaces(ui.ctx(), id, &mut ed.text);
+                    ctx.request_repaint();
+                }
                 let output = egui::TextEdit::multiline(&mut ed.text)
-                    .id(egui::Id::unique("edit-text-line-input"))
+                    .id(id)
                     .font(font.clone())
                     .margin(egui::Margin::ZERO)
                     .layouter(&mut layouter)
@@ -597,6 +602,9 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     .frame(egui::Frame::NONE)
                     .desired_width(width)
                     .desired_rows(rows)
+                    // Tab stays in the paragraph (`tabs_pressed`); egui would move the keyboard
+                    // to the next control instead, and drop the paragraph (#3881).
+                    .lock_focus(true)
                     .show(ui);
                 // The editor paints over the page with no visible label; name it for assistive tech.
                 output.response.response.clone().accessible_name(tl!("Text editing line"));
@@ -649,6 +657,43 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
         }
         None => None,
     }
+}
+
+/// What the Tab key puts into an open paragraph: a tab stop's worth of spaces. PDF text has no
+/// tab character (a tab is not a glyph of any font, so the paragraph would be rewritten in a
+/// substitute face), and the draft shows the same gap the page will.
+pub(crate) const TAB_SPACES: &str = "    ";
+
+/// How many plain Tab presses the open paragraph's text box `id` got this frame, taking each one
+/// so that neither egui's text box (which would insert a tab character, or outdent on Shift) nor
+/// its focus order (which would move the keyboard to the next control, #3881) acts on it. Every
+/// press in a frame counts, so a burst inserts a group each rather than losing all but one.
+/// Shift+Tab is taken and does nothing: a paragraph has no indentation to remove.
+fn tabs_pressed(ui: &mut egui::Ui, id: egui::Id) -> usize {
+    if !ui.memory(|m| m.has_focus(id)) {
+        return 0;
+    }
+    ui.input_mut(|i| {
+        i.count_and_consume_key(egui::Modifiers::SHIFT, egui::Key::Tab);
+        i.count_and_consume_key(egui::Modifiers::NONE, egui::Key::Tab)
+    })
+}
+
+/// Put [`TAB_SPACES`] into `text` where the text box `id`'s caret is (replacing its selection),
+/// and move the caret past them. With no caret state yet, they go at the end.
+fn insert_tab_spaces(ctx: &egui::Context, id: egui::Id, text: &mut String) {
+    let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+    let chars = text.chars().count();
+    let range = state.cursor.char_range().map_or(chars..chars, |r| {
+        let r = r.as_sorted_char_range();
+        (usize::from(r.start).min(chars))..(usize::from(r.end).min(chars))
+    });
+    let byte = |index: usize| text.char_indices().nth(index).map_or(text.len(), |(at, _)| at);
+    let (start, end) = (byte(range.start), byte(range.end.max(range.start)));
+    text.replace_range(start..end, TAB_SPACES);
+    let caret = egui::text::CCursor::new(range.start.saturating_add(TAB_SPACES.len()));
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::one(caret)));
+    state.store(ctx, id);
 }
 
 /// The edit a closed paragraph editor applies, or `None` when nothing in it changed.
