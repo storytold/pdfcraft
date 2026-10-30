@@ -164,6 +164,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Flatten",
     "Flatten Fill & Sign",
     "Protect with password",
+    "Protect with certificates",
     "Remove security",
 ];
 
@@ -347,6 +348,7 @@ impl Edit {
             Edit::Flatten { comments: false, fields: true } => Label::of("Flatten form fields"),
             Edit::Flatten { .. } => Label::of("Flatten"),
             Edit::FlattenFillSign => Label::of("Flatten Fill & Sign"),
+            Edit::ProtectCertificates(_) => Label::of("Protect with certificates"),
             Edit::Protect(_) => Label::of("Protect with password"),
             Edit::RemoveProtection => Label::of("Remove security"),
             // A batch carries its own name, already worded by whoever built it.

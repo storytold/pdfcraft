@@ -365,7 +365,7 @@ impl Session {
     /// have changed it (Document Properties ▸ Fonts, `doc_info`). A no-op otherwise.
     pub fn refresh_fonts(&mut self, id: DocId) {
         let Some(doc) = self.docs.iter_mut().find(|d| d.id == id && d.fonts_stale) else { return };
-        if let Ok(info) = pdfcraft_render::inspect(doc.bytes.clone(), doc.password.as_deref()) {
+        if let Ok(info) = pdfcraft_render::inspect_with_credentials(doc.bytes.clone(), doc.password.as_deref(), doc.config.authenticated.as_ref()) {
             doc.info.fonts = info.fonts;
         }
         doc.fonts_stale = false;

@@ -12,11 +12,15 @@ pub mod der;
 pub mod dss;
 #[cfg(test)]
 mod ec512;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod envelope;
 pub mod graphic;
 #[cfg(target_os = "macos")]
 pub mod keychain;
 pub mod keys;
 pub mod pdf;
+#[cfg(target_os = "linux")]
+pub mod pkcs11;
 pub mod pkcs12;
 pub mod revocation;
 pub mod status_layers;

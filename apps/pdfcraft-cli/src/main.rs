@@ -98,6 +98,10 @@ help and feedback: https://discord.gg/artcraft"
 );
 
 fn main() -> ExitCode {
+    #[cfg(target_os = "linux")]
+    if let Some(code) = pdfcraft_engine::sign::pkcs11::worker_if_requested() {
+        return code;
+    }
     // Before anything uses aws-lc: an `OPENSSL_ia32cap` naming a CPU feature this processor lacks
     // would stop it, so the CLI runs again without it (#2916, `pdfcraft_platform::crypto_env`).
     if let Some(code) = pdfcraft_platform::crypto_env::run_without_cpu_override() {

@@ -615,7 +615,7 @@ pub(super) fn worker(
                                 }
                             }
                             shared.stats.parser_builds.fetch_add(1, Ordering::Relaxed);
-                            parse(&bytes, config.password.as_deref())
+                            parse(&bytes, &config)
                         };
                         match shared.parser.acquire(load, || {
                             request_cancelled.load(Ordering::Acquire)

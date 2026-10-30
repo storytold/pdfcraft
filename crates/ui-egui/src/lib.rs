@@ -35,8 +35,10 @@ macro_rules! tl_ctx {
     };
 }
 pub mod canvas;
+pub mod certificate_ui;
 mod chrome;
 mod image_engine;
+pub mod secret_pin;
 pub use combine_grid::ThumbState as CombineThumb;
 pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
 mod commands;
@@ -51,6 +53,8 @@ pub use content_ui::TextDraft;
 pub use create_ui::Clip;
 pub use link_ui::LinkDraft;
 pub use optimize_ui::{OptimizeDraft, OptimizeTab};
+#[cfg(target_os = "linux")]
+pub use sign_ui::TokenSigning;
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignGraphic, SignStep};
 mod bidi;
 mod dialogs;
@@ -560,6 +564,7 @@ pub struct PdfCraftApp {
     /// Whether the window currently has the app's header bar (`None` until the first frame).
     app_frame_shown: Option<bool>,
     pub password_prompt: Option<PasswordPrompt>,
+    pub certificate_prompt: Option<certificate_ui::OpenPrompt>,
     /// Copy of a whole document's text (#2639) whose pages are being read off the UI thread.
     document_copy: Option<DocumentCopy>,
     pub unlock_prompt: Option<UnlockPrompt>,
@@ -626,6 +631,12 @@ pub struct PdfCraftApp {
     /// A dynamic form's preSign step, run when signing a field began: the document and its undo
     /// depth after the step. Taken back if signing ends without a signature.
     pub(crate) presign: Option<(DocId, usize)>,
+    #[cfg(target_os = "linux")]
+    pub token_signing: Option<sign_ui::TokenSigning>,
+    #[cfg(target_os = "linux")]
+    pub(crate) token_signing_sequence: u64,
+    #[cfg(target_os = "linux")]
+    pub(crate) token_discovery: Option<sign_ui::TokenDiscovery>,
     /// Digital ID files the user has created or added.
     pub digital_ids: Vec<DigitalIdEntry>,
     /// Signatures panel: expanded entries (field names).
@@ -815,6 +826,7 @@ pub struct PdfCraftApp {
     pub hairlines_draft: hairlines_ui::HairlinesDraft,
     /// Protect Using Password dialog state.
     pub protect_draft: protect::ProtectDraft,
+    pub certificate_protect: certificate_ui::ProtectDraft,
     /// New bookmarks from text styles dialog state (#1693).
     pub text_style_draft: bookmark_styles_ui::TextStyleDraft,
     /// Set Page Boxes dialog state.

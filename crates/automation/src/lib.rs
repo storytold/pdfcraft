@@ -54,6 +54,7 @@ use text_cache::TextCache;
 
 mod assemble;
 mod bookmark_io;
+mod certificate_security;
 mod dispatch;
 mod documents;
 mod error;
