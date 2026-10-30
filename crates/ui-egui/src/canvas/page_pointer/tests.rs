@@ -263,9 +263,9 @@ fn uses(line: &str, name: &str) -> bool {
     line.match_indices(name).any(|(at, _)| name.starts_with('.') || !line[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_'))
 }
 
-/// Each use of one of `names` in the page modules' code (their tests left out), as (file, the
-/// top-level function or `impl` method it is in, line, name).
-fn page_module_uses<'a>(names: &[&'a str]) -> Vec<(&'static str, Option<String>, usize, &'a str)> {
+/// Each name `find` finds in a line of the page modules' code (their tests left out), as (file,
+/// the top-level function or `impl` method it is in, line, name).
+fn page_module_matches(find: impl Fn(&str) -> Vec<String>) -> Vec<(&'static str, Option<String>, usize, String)> {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut found = Vec::new();
     for file in PAGE_MODULES {
@@ -285,21 +285,31 @@ fn page_module_uses<'a>(names: &[&'a str]) -> Vec<(&'static str, Option<String>,
             if line.trim_start().starts_with("//") {
                 continue;
             }
-            for name in names.iter().filter(|name| uses(line, name)) {
-                found.push((file, function.map(str::to_owned), n + 1, *name));
+            for name in find(line) {
+                found.push((file, function.map(str::to_owned), n + 1, name));
             }
         }
     }
     found
 }
 
+/// Each use of one of `names` in the page modules' code (their tests left out).
+fn page_module_uses(names: &[&str]) -> Vec<(&'static str, Option<String>, usize, String)> {
+    page_module_matches(|line| names.iter().filter(|name| uses(line, name)).map(|name| (*name).to_owned()).collect())
+}
+
 /// Each use of one of `names` in the page modules' code (their tests left out) outside the
 /// functions `allowed` to, as "src/file:line: `name` why"; then each allowed function that uses
 /// none of them any more, as "src/file: fn function unused".
 fn misuses(names: &[&str], allowed: &[(&str, &str, &str)], why: &str, unused: &str) -> Vec<String> {
+    misuses_in(page_module_uses(names), allowed, why, unused)
+}
+
+/// [`misuses`], of what was `found`.
+fn misuses_in(found: Vec<(&str, Option<String>, usize, String)>, allowed: &[(&str, &str, &str)], why: &str, unused: &str) -> Vec<String> {
     let mut problems = Vec::new();
     let mut needed = vec![false; allowed.len()];
-    for (file, function, n, name) in page_module_uses(names) {
+    for (file, function, n, name) in found {
         match allowed.iter().position(|(f, function_name, _)| *f == file && function.as_deref() == Some(*function_name)) {
             Some(k) => needed[k] = true,
             None => problems.push(format!("src/{file}:{n}: `{name}` {why}")),
@@ -385,6 +395,33 @@ const ROUTER_WRITERS: [(&str, &str, &str); 3] = [
 /// Ways to make a `Hit`.
 const HIT_BUILDS: [&str; 2] = ["Hit::new(", "Hit {"];
 
+/// Whether `name` is a hit test's: `hit`, or `…_hit`.
+fn is_hit_test(name: &str) -> bool {
+    name == "hit" || name.ends_with("_hit")
+}
+
+/// The hit tests `line` calls, by path or bare. A method, after its `.`, is left out:
+/// `PageCx::hit` finds the comment under a point, not a `Hit`.
+fn hit_test_calls(line: &str) -> Vec<String> {
+    line.match_indices("hit(")
+        .filter_map(|(at, _)| {
+            let end = at + "hit".len();
+            let start = line[..end].char_indices().rev().find(|(_, c)| !(c.is_alphanumeric() || *c == '_')).map_or(0, |(i, c)| i + c.len_utf8());
+            let (before, name) = (&line[..start], &line[start..end]);
+            (is_hit_test(name) && !before.ends_with('.') && !before.ends_with("fn ")).then(|| name.to_owned())
+        })
+        .collect()
+}
+
+/// The functions that call a hit test: (file, function, why). Only `PageHits::at` asks at the
+/// press point; the others ask where the pointer is.
+const HIT_TESTERS: [(&str, &str, &str); 4] = [
+    ("canvas.rs", "at", "`PageHits::at`: every module's hits at a point, for the pointer's cursor and tip and, once, the press's owner"),
+    ("canvas.rs", "page_overlays", "a link's click counts only released over the link its press was on"),
+    ("tools/forms_ui.rs", "page_input", "the field's tooltip under the pointer, and a click counts only released over the widget its press was on"),
+    ("tools/comments/input.rs", "grabs", "with no button down, whether a comment would take a press under the pointer, for hover painting"),
+];
+
 /// What ignores the press the pages hold until the button is up.
 const PRESS_IGNORES: [&str; 1] = ["press_cancelled = true"];
 
@@ -396,7 +433,8 @@ const PRESS_IGNORERS: [(&str, &str, &str); 1] = [("canvas.rs", "cancel_on_escape
 /// so what the cursor promised is what the press does. Where each module tested the press
 /// point again, or asked another whether it wanted the press, the answers disagreed: a press on
 /// one check box released over the next ticked the second, and a drag could be taken over
-/// halfway. Escape is the one way to drop a press and ignore it until the button is up.
+/// halfway. Only `PageHits::at` asks the hit tests at the press point. Escape is the one way to
+/// drop a press and ignore it until the button is up.
 #[test]
 fn page_modules_act_on_a_press_only_through_the_router() {
     let mut problems = misuses(
@@ -417,15 +455,22 @@ fn page_modules_act_on_a_press_only_through_the_router() {
     ));
     // A hit test is a function named `hit` or `…_hit`: one answer to "what of mine is here?",
     // which gives the module's cursor, its tip and its press.
+    problems.extend(misuses_in(
+        page_module_matches(hit_test_calls),
+        &HIT_TESTERS,
+        "calls a hit test. The hits at the press point decide its owner once, in `PageHits::at`: act on the press when \
+         `view.router.owner(page)` says it is yours, rather than testing its point again. Testing where the pointer \
+         is (a tooltip, a click released over what it was pressed on)? Add the function to HIT_TESTERS in \
+         src/canvas/page_pointer/tests.rs, with why.",
+        "calls no hit test any more: remove it from HIT_TESTERS.",
+    ));
     let builds = page_module_uses(&HIT_BUILDS);
     assert!(!builds.is_empty(), "no page module makes a `Hit` any more: update HIT_BUILDS");
-    problems.extend(builds.into_iter().filter(|(_, function, _, _)| !function.as_deref().is_some_and(|f| f == "hit" || f.ends_with("_hit"))).map(
-        |(file, _, n, name)| {
-            format!(
-                "src/{file}:{n}: `{name}` makes a hit outside a hit test. A page module answers \"what of mine is \
+    problems.extend(builds.into_iter().filter(|(_, function, _, _)| !function.as_deref().is_some_and(is_hit_test)).map(|(file, _, n, name)| {
+        format!(
+            "src/{file}:{n}: `{name}` makes a hit outside a hit test. A page module answers \"what of mine is \
                      here?\" in one function, named `hit` or `…_hit`, so its cursor, its tip and its press agree."
-            )
-        },
-    ));
+        )
+    }));
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
