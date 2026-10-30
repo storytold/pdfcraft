@@ -58,6 +58,15 @@ that warning and keeps the existing layout and accepted widget values.
   filled there shows them here. The engine does both: values on open (recorded in the
   document's warnings), the packet after every form edit.
 
+Date data pictures also accept the existing English abbreviated and full month-name tokens
+(`MMM` and `MMMM`). They still need a year and an original `D` or `DD` day-of-month token;
+a weekday (`E` through `EEEE`) alone is insufficient, even when normalization gives it the
+same letters as a day of month. Incomplete pictures keep stored text and use ISO for new dates.
+Numeric weekday tokens (`E` and `EE`) use the same ISO fallback even beside `D`/`DD`,
+because the shared converter cannot represent numeric weekdays. Named weekdays
+(`EEE` and `EEEE`) with a day of month still read and write normally.
+This uses the existing date converter and does not add locale-aware month names.
+
 Layout measures each container once per (node, width): width-less containers would otherwise
 be measured exponentially often in their nesting. A measurement budget backs this up.
 

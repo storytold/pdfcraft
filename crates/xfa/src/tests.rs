@@ -826,6 +826,155 @@ fn a_date_is_read_from_the_data_in_its_data_picture() {
     assert_eq!(by("when").value.as_deref(), Some("10/18/2026"), "no data picture: the data holds ISO");
 }
 
+/// Named months hold a month just as numeric ones do; a weekday alone holds no day of month.
+#[test]
+fn named_month_data_pictures_require_a_complete_date() {
+    let (tpl, _) = parse(&bound_date_template("")).unwrap();
+    let mut field = crate::data::template_field(&tpl, "form[0].page[0].due[0]").unwrap().clone();
+    for (picture, expected) in [
+        ("date{DD MMM YYYY}", Some("dd mmm yyyy")),
+        ("date{MMMM D, YYYY}", Some("mmmm d, yyyy")),
+        ("date{EEE, MMM D, YYYY}", Some("ddd, mmm d, yyyy")),
+        ("date{EEEE, MMMM DD, YYYY}", Some("dddd, mmmm dd, yyyy")),
+        ("date{E MMM D YYYY}", None),
+        ("date{EE MMMM DD YYYY}", None),
+        ("date{D MMM E YYYY}", None),
+        ("date{DD MMMM EE YYYY}", None),
+        ("date{E MM D YYYY}", None),
+        ("EE M DD YYYY", None),
+        ("date{MMM YYYY}", None),
+        ("date{E MMM YYYY}", None),
+        ("date{EE MMMM YYYY}", None),
+        ("date{EEE MMM YYYY}", None),
+        ("date{EEEE, MMM YYYY}", None),
+        ("E MMM YYYY", None),
+        ("EE MMMM YYYY", None),
+        ("date{E MM YYYY}", None),
+        ("date{EE M YYYY}", None),
+        ("date{DD MMM}", None),
+        ("date{DD MMMMM YYYY}", None),
+    ] {
+        field.data_picture = Some(picture.into());
+        assert_eq!(crate::data::data_date_letters(&field).as_deref(), expected, "{picture}");
+    }
+}
+
+/// Numeric weekday tokens never become day-of-month fields, even beside a real day token.
+#[test]
+fn named_month_data_pictures_with_only_weekdays_keep_iso_fallback() {
+    for (picture, initial) in [
+        ("E MMM YYYY", "1 Oct 2026"),
+        ("EE MMMM YYYY", "01 October 2026"),
+        ("E MMM D YYYY", "1 Oct 19 2026"),
+        ("EE MMMM DD YYYY", "01 October 19 2026"),
+        ("D MMM E YYYY", "19 Oct 1 2026"),
+        ("DD MMMM EE YYYY", "19 October 01 2026"),
+    ] {
+        let xml =
+            bound_date_template(&format!("<form><page><due>{initial}</due></page></form>")).replace("date{YYYYMMDD}", &format!("date{{{picture}}}"));
+        let (tpl, _) = parse(&xml).unwrap();
+        let data = parse_datasets(&xml).unwrap();
+        let live = form_tree(&tpl, Some(&data), &Overrides::default()).root;
+        assert_eq!(node_at(&live, "form[0].page[0].due[0]").unwrap().value, initial, "{picture}");
+        let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
+        render_into(&mut doc).unwrap();
+        let mut fields = field_data(&doc);
+        assert!(fields.iter().any(|f| f.name == "due" && f.data == FieldData::Text(initial.into())), "{picture}: {fields:?}");
+        assert_eq!(write_datasets(&mut doc, &fields).unwrap(), DatasetsWrite::default());
+        let due = fields.iter_mut().find(|f| f.name == "due").unwrap();
+        due.data = FieldData::Text("10/19/2026".into());
+        doc.update_dict(due.obj, |d| d.set(b"V".to_vec(), Object::String(pdfcraft_cos::PdfString::text("10/19/2026")))).unwrap();
+        let written = write_datasets(&mut doc, &fields).unwrap();
+        assert!(written.written && written.warnings.is_empty(), "{picture}: {written:?}");
+        let reopened = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let packets = read_packets(&reopened).unwrap().unwrap();
+        let data = parse_datasets(&packets.xdp).unwrap();
+        assert_eq!(data.text_at(&som_to_path("form[0].page[0].due[0]")), Some("2026-10-19"), "{picture}");
+        let layout = layout_xml(&packets.xdp).unwrap();
+        let due = layout.pages.iter().flat_map(widgets).find(|w| w.name == "due").unwrap();
+        assert_eq!(due.value.as_deref(), Some("10/19/2026"), "{picture}");
+    }
+}
+
+/// A newly filled date uses ISO instead of writing a day number into a weekday position.
+#[test]
+fn named_month_data_pictures_with_numeric_weekdays_write_iso_from_empty_data() {
+    for picture in ["E MMM D YYYY", "EE MMMM DD YYYY", "D MMM E YYYY", "DD MMMM EE YYYY"] {
+        let xml = bound_date_template("").replace("date{YYYYMMDD}", &format!("date{{{picture}}}"));
+        let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
+        render_into(&mut doc).unwrap();
+        let mut fields = field_data(&doc);
+        let due = fields.iter_mut().find(|f| f.name == "due").unwrap();
+        due.data = FieldData::Text("10/19/2026".into());
+        doc.update_dict(due.obj, |d| d.set(b"V".to_vec(), Object::String(pdfcraft_cos::PdfString::text("10/19/2026")))).unwrap();
+        let report = write_datasets(&mut doc, &fields).unwrap();
+        assert!(report.written && report.warnings.is_empty(), "{picture}: {report:?}");
+        let reopened = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let packets = read_packets(&reopened).unwrap().unwrap();
+        let data = parse_datasets(&packets.xdp).unwrap();
+        assert_eq!(data.text_at(&som_to_path("form[0].page[0].due[0]")), Some("2026-10-19"), "{picture}");
+    }
+}
+
+/// A named-month bind picture controls dataset reads and writes, while the field shows its
+/// numeric edit picture and scripts read ISO. Save/reopen keeps the bound spelling and other data.
+#[test]
+fn named_month_data_pictures_round_trip_through_saved_datasets() {
+    for (picture, initial, edited) in [
+        ("DD MMM YYYY", "18 Oct 2026", "19 Oct 2026"),
+        ("MMMM D, YYYY", "October 18, 2026", "October 19, 2026"),
+        ("EEE, MMM D YYYY", "Sun, Oct 18 2026", "Mon, Oct 19 2026"),
+        ("EEEE, MMMM D YYYY", "Sunday, October 18 2026", "Monday, October 19 2026"),
+    ] {
+        let xml = bound_date_template(&format!("<form><page><due>{initial}</due><other>keep me</other></page></form>"))
+            .replace("date{YYYYMMDD}", &format!("date{{{picture}}}"));
+        let (tpl, _) = parse(&xml).unwrap();
+        let data = parse_datasets(&xml).unwrap();
+        let live = form_tree(&tpl, Some(&data), &Overrides::default()).root;
+        assert_eq!(node_at(&live, "form[0].page[0].due[0]").unwrap().value, "2026-10-18", "{picture}");
+        let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
+        render_into(&mut doc).unwrap();
+        let mut fields = field_data(&doc);
+        assert!(fields.iter().any(|f| f.name == "due" && f.data == FieldData::Text("10/18/2026".into())), "{picture}: {fields:?}");
+        assert_eq!(write_datasets(&mut doc, &fields).unwrap(), DatasetsWrite::default(), "unchanged: {picture}");
+        let due = fields.iter_mut().find(|f| f.name == "due").unwrap();
+        due.data = FieldData::Text("10/19/2026".into());
+        doc.update_dict(due.obj, |d| d.set(b"V".to_vec(), Object::String(pdfcraft_cos::PdfString::text("10/19/2026")))).unwrap();
+        let written = write_datasets(&mut doc, &fields).unwrap();
+        assert!(written.written && written.warnings.is_empty(), "{picture}: {written:?}");
+        let reopened = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let packets = read_packets(&reopened).unwrap().unwrap();
+        let data = parse_datasets(&packets.xdp).unwrap();
+        assert_eq!(data.text_at(&som_to_path("form[0].page[0].due[0]")), Some(edited), "{picture}");
+        assert_eq!(data.text_at(&som_to_path("form[0].page[0].other[0]")), Some("keep me"));
+        let values = read_values(&reopened, &fields);
+        assert!(values.contains(&("due".into(), FieldData::Text("10/19/2026".into()))), "{picture}: {values:?}");
+        let layout = layout_xml(&packets.xdp).unwrap();
+        let due = layout.pages.iter().flat_map(widgets).find(|w| w.name == "due").unwrap();
+        assert_eq!(due.value.as_deref(), Some("10/19/2026"), "{picture}");
+    }
+}
+
+/// Writing a date also needs the bind picture when no named-month value was read first.
+#[test]
+fn named_month_data_pictures_write_month_names_from_empty_data() {
+    for (picture, expected) in [("DD MMM YYYY", "19 Oct 2026"), ("MMMM D, YYYY", "October 19, 2026")] {
+        let xml = bound_date_template("").replace("date{YYYYMMDD}", &format!("date{{{picture}}}"));
+        let mut doc = Document::open(Arc::new(shell(&xml))).unwrap();
+        render_into(&mut doc).unwrap();
+        let mut fields = field_data(&doc);
+        let due = fields.iter_mut().find(|f| f.name == "due").unwrap();
+        due.data = FieldData::Text("10/19/2026".into());
+        doc.update_dict(due.obj, |d| d.set(b"V".to_vec(), Object::String(pdfcraft_cos::PdfString::text("10/19/2026")))).unwrap();
+        let written = write_datasets(&mut doc, &fields).unwrap();
+        assert!(written.written && written.warnings.is_empty(), "{picture}: {written:?}");
+        let reopened = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let packets = read_packets(&reopened).unwrap().unwrap();
+        let data = parse_datasets(&packets.xdp).unwrap();
+        assert_eq!(data.text_at(&som_to_path("form[0].page[0].due[0]")), Some(expected), "{picture}");
+    }
+}
+
 /// A SOM path names the template field its segment numbers count to, repeating rows included.
 #[test]
 fn som_paths_name_the_template_field_their_numbers_count_to() {
