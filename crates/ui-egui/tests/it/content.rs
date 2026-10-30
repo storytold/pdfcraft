@@ -331,6 +331,28 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     assert_eq!(images(&h), 2, "Prepare Form pastes fields");
 }
 
+/// egui-winit 0.37 swallows both the press and the release of ⌘V / Ctrl+V when the clipboard holds
+/// only a picture (a Win+Shift+S screenshot), and sends a PasteImage event instead: that pastes it.
+#[test]
+fn a_screenshot_pasted_with_no_key_events_lands_on_the_page() {
+    use pdfcraft_ui_egui::Clip;
+    let mut h = harness();
+    let images = |h: &Harness<'static, PdfCraftApp>| added(h).iter().filter(|a| matches!(a.content, pdfcraft_engine::AddedContent::Image(_))).count();
+    let shot = || egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::new([30, 20], vec![egui::Color32::GRAY; 30 * 20])));
+    h.state_mut().clipboard_override = Some(Clip::Image { width: 30, height: 20, rgba: [90u8, 90, 90, 255].repeat(30 * 20) });
+    h.event(shot());
+    h.run_steps(3);
+    assert_eq!(images(&h), 1, "one paste, one picture");
+    let pdfcraft_engine::AddedContent::Image(img) = &added(&h)[0].content else { panic!("an image was added") };
+    assert_eq!(img.rect, [135.0, 190.0, 165.0, 210.0], "in the middle of the page, at its own size");
+    // A text field with the keyboard keeps the paste for itself.
+    assert!(h.state_mut().execute("edit.find"));
+    h.run_steps(3);
+    h.event(shot());
+    h.run_steps(3);
+    assert_eq!(images(&h), 1, "the Find field has the keyboard");
+}
+
 /// #125: text the standard fonts can't draw stays in the editor with a warning instead of being
 /// written to the page as `?` (or lost).
 #[test]
