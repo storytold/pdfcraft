@@ -99,7 +99,8 @@ pub(crate) fn prints(doc: &Document, d: &Dict, content: Content) -> bool {
     let subtype = subtype_obj.as_deref().and_then(Object::as_name).unwrap_or(b"");
     match subtype {
         b"Widget" => true,
-        b"Link" | b"Popup" => false,
+        b"Link" => content != Content::FormFieldsOnly,
+        b"Popup" => false,
         b"Stamp" => content != Content::Document && content != Content::FormFieldsOnly,
         // ISO 32000-2 Table 167: an Invisible annotation of a type that isn't standard (Table
         // 171) is not printed even with its Print flag set.

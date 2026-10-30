@@ -8168,8 +8168,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::imposed_pdf_has_the_sheets_and_honours_comments_and_forms", "crates/print/src/tests/appearances.rs::annotation_appearances_do_not_replace_page_xobjects"]
-notes = "Print flag honoured; appearance resource names preserve existing page XObjects and distinct annotations, including inherited resources"
+evidence = ["crates/print/src/tests.rs::imposed_pdf_has_the_sheets_and_honours_comments_and_forms", "crates/print/src/tests/appearances.rs::annotation_appearances_do_not_replace_page_xobjects", "crates/print/src/tests/appearances.rs::printable_link_appearances_follow_flags_and_content_modes", "crates/print/src/tests/appearances.rs::raster_copy_retains_printable_links_in_document_modes"]
+notes = "Print flag honoured; appearance resource names preserve existing page XObjects and distinct annotations, including inherited resources. Existing printable Link appearances are document content, excluded from form-fields-only output; missing Link appearances are not synthesized. Print as Image shares Link selection, but its renderer still omits NoView appearances."
 
 [[feature]]
 id = "print.print-with-comment-summary"

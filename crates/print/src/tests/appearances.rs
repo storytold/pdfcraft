@@ -85,6 +85,79 @@ fn xobject(doc: &Document, owner: &Dict, name: &[u8]) -> ObjRef {
     objects.as_dict().unwrap().get(name).unwrap().as_ref().unwrap()
 }
 
+/// An existing Link appearance is document artwork, subject to Print and Hidden flags.
+#[test]
+fn printable_link_appearances_follow_flags_and_content_modes() {
+    for indirect in [false, true] {
+        for flags in [4, 5, 36, 0, 2, 6] {
+            let (mut doc, ap, link) = widget_fixture(Some(Object::name("Form")), None);
+            let subtype = if indirect { Object::Ref(doc.add(Object::name("Link"))) } else { Object::name("Link") };
+            let action = Object::Dict(Dict::from_iter([
+                (b"S".to_vec(), Object::name("URI")),
+                (b"URI".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"https://example.invalid/".to_vec()))),
+            ]));
+            doc.update_dict(link, |d| {
+                d.set(b"Subtype".to_vec(), subtype);
+                d.remove(b"FT");
+                d.set(b"F".to_vec(), Object::Int(flags));
+                d.set(b"A".to_vec(), action);
+            })
+            .unwrap();
+            let before = saved(&doc);
+            let state = doc.read_state();
+            let original_ap = doc.get(ap);
+            let original_link = doc.get(link);
+            for content in [Content::Document, Content::DocumentAndMarkups, Content::DocumentAndStamps, Content::FormFieldsOnly] {
+                let output = impose(&doc, &print_settings(content)).unwrap();
+                let reopened = Document::open(Arc::new(output.clone())).unwrap();
+                assert_eq!(pdfcraft_model::pages(&reopened).len(), 1);
+                let printed = render(output);
+                let visible = flags & 4 != 0 && flags & 2 == 0 && content != Content::FormFieldsOnly;
+                let expected = if visible { [0, 255, 0, 255] } else { [255, 255, 255, 255] };
+                assert_eq!(pixel(&printed, 30, 70), expected, "Link flags={flags}, {content:?}, indirect={indirect}");
+                let green = printed.rgba.as_chunks::<4>().0.iter().filter(|pixel| **pixel == [0, 255, 0, 255]).count();
+                assert_eq!(green, if visible { 800 } else { 0 }, "complete Link appearance extent");
+                let blue = if content == Content::FormFieldsOnly { [255, 255, 255, 255] } else { [0, 0, 255, 255] };
+                assert_eq!(pixel(&printed, 4, 96), blue, "document artwork under {content:?}");
+            }
+            assert!(state.matches(&doc));
+            assert_eq!(doc.get(ap), original_ap);
+            assert_eq!(doc.get(link), original_link, "printing preserves the source Link action and flags");
+            assert_eq!(saved(&doc), before);
+        }
+    }
+}
+
+/// Print as Image filters its copy through keep_printed before rendering the retained APs.
+#[test]
+fn raster_copy_retains_printable_links_in_document_modes() {
+    for (subtype, flags, has_ap) in
+        [("Link", 4, true), ("Link", 5, true), ("Link", 0, true), ("Link", 2, true), ("Link", 6, true), ("Popup", 4, true), ("Link", 4, false)]
+    {
+        let (mut doc, _, annotation) = widget_fixture(Some(Object::name("Form")), None);
+        doc.update_dict(annotation, |d| {
+            d.set(b"Subtype".to_vec(), Object::name(subtype));
+            d.set(b"F".to_vec(), Object::Int(flags));
+            if !has_ap {
+                d.remove(b"AP");
+            }
+        })
+        .unwrap();
+        let before = saved(&doc);
+        for content in [Content::Document, Content::DocumentAndMarkups, Content::DocumentAndStamps, Content::FormFieldsOnly] {
+            let mut copy = doc.clone();
+            keep_printed(&mut copy, content);
+            let printed = render(saved(&copy));
+            let visible = subtype == "Link" && flags & 4 != 0 && flags & 2 == 0 && has_ap && content != Content::FormFieldsOnly;
+            let expected = if visible { [0, 255, 0, 255] } else { [255, 255, 255, 255] };
+            assert_eq!(pixel(&printed, 30, 70), expected, "{subtype}, flags={flags}, AP={has_ap}, {content:?}");
+            let blue = if content == Content::FormFieldsOnly { [255, 255, 255, 255] } else { [0, 0, 255, 255] };
+            assert_eq!(pixel(&printed, 4, 96), blue);
+        }
+        assert_eq!(saved(&doc), before, "raster filtering leaves the source unchanged");
+    }
+}
+
 /// Printing keeps occupied page resource names and distinct annotation appearances intact,
 /// whether the page resources are direct or inherited from the page tree.
 #[test]

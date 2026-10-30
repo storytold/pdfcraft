@@ -36,6 +36,9 @@ Each source page becomes a Form XObject (its content wrapped in q/Q, plus the pr
 annotations); sheets place them with a clip. The result is a fresh, unencrypted,
 garbage-collected file (callers check the print permission).
 Annotation appearances receive unused XObject names, preserving existing page resources even when they use the same naming prefix.
+Existing printable Link appearances are included in the document modes, and excluded from form-fields-only output.
+Print as Image shares this Link selection; its renderer still omits NoView appearances.
+Missing Link appearances are not synthesized.
 
 The GUI Print dialog remembers its last selected paper size across application sessions,
 including when Print is cancelled. The preference stores a canonical name such as `A4`;
@@ -62,7 +65,7 @@ In a browser there is no spooler: the app (`pdfcraft-ui-egui`'s `web_print`) dra
 PDF's sheets with PdfCraft's renderer and prints them through the browser's print dialog, which
 sets copies, two-sided printing and colour. This crate stays free of web APIs.
 
-Not yet: print as image, poster labels, PostScript output, colour conversion for
+Not yet: poster labels, PostScript output, colour conversion for
 grayscale.
 
 ## Architectural sheets and scale
