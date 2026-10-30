@@ -1,7 +1,9 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M5 #3741: rebase Comments shortcut onto main 47f42ba0, including upstream nextest isolation; shortcut behavior and estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
+> **Last reviewed:** 2026-10-30 | **Last updated:** 2026-10-30 | **Change:** patch (M5 #3741: Ctrl+M opens Comments on Windows/Linux; macOS leaves Command+M available for Minimize; platform mapping and dispatch regressions; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
 > **Last reviewed:** 2026-10-27 · **Last updated:** 2026-10-27 · **Change:** patch (M2, PR #4172: integrate main 1dd2737b; preserve viewer-only CJK fallback and regression coverage across engine, renderer and Combine module splits; estimates unchanged)
 > **Last reviewed:** 2026-10-27 · **Last updated:** 2026-10-27 · **Change:** patch (M2, PR #4172: integrate main 9a9813bf and preserve viewer-only CJK fallback through the engine module split; estimates unchanged)
@@ -213,10 +215,14 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-01 (M5, #3741 rebase):** Rebased the Comments shortcut onto main `47f42ba0`, retaining both roadmap histories and upstream nextest isolation. Scoped engine/automation/UI tests: 2,668 passed, 9 existing ignored; all three CI-style frame-budget tests passed. Formatting, strict Clippy, layers/assets/parity and the UI wasm check passed. Shortcut behavior and estimates unchanged.
+
 - **2026-10-18 (M3, #1354, local candidate):** Integrated --two-paged with current main, retaining upstream modal/picker ownership and single-tab reuse. Native launch/opening/password regressions, negative checks against the old wrapper, visual inspection, formatting, strict scoped Clippy, layers, assets, parity and scoped WASM compilation pass. Three existing socket tests are unavailable in this workspace; one existing network test remains ignored. No push or GitHub merge; estimates unchanged.
 - **2026-10-31 (M2, PR #4172 review):** Added same-machine pixel oracles for GBK Song, Hei, Kai and FangSong, including all four subset-prefixed Founder aliases. Reference PDFs use explicit Unicode mappings and independently selected installed faces; font data and rasters remain in memory. All eight cases ran; wrong-glyph and wrong-family production mutations each failed the new assertion and were restored. Validation: 422 renderer unit tests, renderer all-target Clippy with -D warnings, formatting, layers/assets/parity and renderer WASM checks passed; existing optional-patch/WASM warnings and parity notes remain. Estimates unchanged.
 
 - **2026-10-31 (M2, PR #4172):** Integrated main fa5f9f8c, retaining both roadmap histories and raster regression groups. Restored display_config and thumbnail_config imports after the upstream explicit-import migration. Validation: 422 renderer unit tests, engine/UI all-target checks, scoped all-target Clippy with -D warnings, formatting, layers, assets, parity and renderer/engine WASM checks passed. Existing optional-patch/WASM warnings and parity notes remain; no full engine/UI runtime test rerun. Display-only font policy and estimates unchanged.
+
+- **2026-10-30 (M5, #3741):** Ctrl+M opens the Comments panel without toggling it closed on Windows/Linux. macOS leaves Command+M for Minimize. Registry bindings resolve by platform for dispatch, menus, palette, help and control/headless metadata; synthetic regressions cover both mappings, real modifier shapes and native Minimize layout. Estimates unchanged.
 
 - **2026-10-28 (M2, PR #4172):** Integrated main 5af10276, preserving both roadmap histories and reviewing auto-merged export tests and accessibility UI changes. Validation: 488 scoped tests passed (18 engine, 412 renderer unit, 43 renderer integration, 15 Combine; one existing renderer integration test ignored); scoped all-target Clippy with -D warnings, formatting, layers, assets, parity and renderer/engine WASM checks passed. Viewer-only CJK fallback and print/output font policy remain unchanged; estimates unchanged.
 
@@ -727,6 +733,8 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | patch | M5 #3741: rebase onto main 47f42ba0, retaining both roadmap histories and upstream nextest isolation; scoped tests, strict Clippy, formatting, layers/assets/parity and UI wasm checks pass; shortcut behavior and estimates unchanged. |
+| 2026-10-30 | patch | M5 #3741: Ctrl+M opens Comments on Windows/Linux; macOS leaves Command+M available for Minimize; platform mapping and dispatch regressions; estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
 | 2026-10-23 | minor | M8, #3205 follow-up: phone-pattern redaction includes the +39 country code on labelled Italian geographic numbers with a slash; dates, protocol identifiers and whole-run guards remain. Estimates unchanged. |

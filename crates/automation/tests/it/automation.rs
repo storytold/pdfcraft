@@ -1555,6 +1555,7 @@ fn command_list_reports_enablement_and_tools() {
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
     let list = ok(&mut a, "command_list", json!({ "doc": doc }));
     let find = |id: &str| list["commands"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap().clone();
+    assert_eq!(find("comment.list")["shortcut"], if cfg!(target_os = "macos") { json!(null) } else { json!("Ctrl+M") });
     assert_eq!(find("page.rotate")["tool"], "page_rotate");
     assert_eq!(find("page.rotate")["enabled"], true);
     assert_eq!(find("edit.undo")["enabled"], false);

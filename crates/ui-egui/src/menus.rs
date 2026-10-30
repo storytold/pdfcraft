@@ -277,6 +277,7 @@ impl PdfCraftApp {
     /// enabled and checked state as the app is now. A modal dialog doesn't grey anything here;
     /// that is the [`Gate`]'s job ([`PdfCraftApp::menu_gate`]).
     pub fn menu_bar(&self, ctx: &egui::Context) -> MenuBar {
+        let mac = crate::commands::mac_shortcuts(ctx);
         let mut used: Vec<&str> = Vec::new();
         let list = |ids: &[&'static str], used: &mut Vec<&'static str>| -> Vec<Node> {
             ids.iter()
@@ -285,7 +286,7 @@ impl PdfCraftApp {
                         return Node::Separator;
                     }
                     used.push(id);
-                    self.menu_item(id, None)
+                    self.menu_item(id, None, mac)
                 })
                 .collect()
         };
@@ -296,7 +297,7 @@ impl PdfCraftApp {
                 // Optimize and Close.
                 let recent = matches!(&node, Node::Item(it) if it.command.id == "file.open_recent");
                 if recent {
-                    nodes.push(self.recent_menu());
+                    nodes.push(self.recent_menu(mac));
                     continue;
                 }
                 let after = match &node {
@@ -330,7 +331,7 @@ impl PdfCraftApp {
             FILL.iter()
                 .map(|&(id, label)| {
                     used.push(id);
-                    self.menu_item(id, Some(tl!(label)))
+                    self.menu_item(id, Some(tl!(label)), mac)
                 })
                 .collect(),
         )];
@@ -359,7 +360,7 @@ impl PdfCraftApp {
         view.extend(list(MODES, &mut used));
         view.push(Node::submenu(tl!("Display theme"), list(THEMES, &mut used)));
         view.push(Node::Separator);
-        view.push(Node::submenu(tl!("Tools"), self.tools_menu(&used)));
+        view.push(Node::submenu(tl!("Tools"), self.tools_menu(&used, mac)));
         view.extend(list(&["view.palette"], &mut used));
         let mut bar = MenuBar {
             menus: vec![
@@ -381,11 +382,11 @@ impl PdfCraftApp {
     /// One item: a registry command with its live label (Undo names the edit) and shortcut, or a
     /// menu-only one. Radio and check items get their kind here, their state from
     /// [`PdfCraftApp::menu_state`].
-    fn menu_item(&self, id: &'static str, label: Option<&str>) -> Node {
+    fn menu_item(&self, id: &'static str, label: Option<&str>, mac: bool) -> Node {
         let (english, shortcut) = match commands::command(id) {
             Some(spec) => {
                 let current = commands::current_label(spec, &self.session, self.active_ids().map(|(_, doc)| doc));
-                (crate::i18n::menu_label(id, &current), spec.shortcut.or((id == "edit.copy").then_some(crate::commands::COPY)))
+                (crate::i18n::menu_label(id, &current), spec.shortcut_for(mac).or((id == "edit.copy").then_some(crate::commands::COPY)))
             }
             None => match extra(id) {
                 Some((_, label, shortcut)) => (tl!(label).to_owned(), *shortcut),
@@ -403,7 +404,7 @@ impl PdfCraftApp {
     }
 
     /// File ▸ Open Recent: the recent files, newest first, then Clear Recent Files.
-    fn recent_menu(&self) -> Node {
+    fn recent_menu(&self, mac: bool) -> Node {
         let mut items: Vec<Node> = self
             .recent
             .iter()
@@ -411,10 +412,10 @@ impl PdfCraftApp {
             .map(|(index, r)| Item::new(CommandRef::with_params("file.open_recent", serde_json::json!({ "index": index })), r.name.clone()).into())
             .collect();
         if items.is_empty() {
-            items.push(self.menu_item(NO_RECENT, None));
+            items.push(self.menu_item(NO_RECENT, None, mac));
         } else {
             items.push(Node::Separator);
-            items.push(self.menu_item("file.clear_recent", Some(tl!("Clear Recent Files"))));
+            items.push(self.menu_item("file.clear_recent", Some(tl!("Clear Recent Files")), mac));
         }
         let label = commands::command("file.open_recent").map_or("Open Recent", |c| c.label);
         Node::submenu(crate::i18n::menu_label("file.open_recent", label), items)
@@ -422,7 +423,7 @@ impl PdfCraftApp {
 
     /// View ▸ Tools: the All tools groups, each a submenu of its ready tools that no other menu
     /// lists, sections apart.
-    fn tools_menu(&self, used: &[&str]) -> Vec<Node> {
+    fn tools_menu(&self, used: &[&str], mac: bool) -> Vec<Node> {
         TOOL_GROUPS
             .iter()
             .filter(|g| g.availability == Availability::Ready)
@@ -439,7 +440,7 @@ impl PdfCraftApp {
                             }
                             seen.push(id);
                             let label = if tool.actions.is_empty() { Some(tl!(tool.label)) } else { None };
-                            nodes.push(self.menu_item(id, label));
+                            nodes.push(self.menu_item(id, label, mac));
                         }
                     }
                 }
@@ -697,7 +698,7 @@ mod tests {
                 continue; // A submenu of the recent files.
             }
             let it = item(&bar, &CommandRef::new(spec.id));
-            let shortcut = spec.shortcut.or((spec.id == "edit.copy").then_some(crate::commands::COPY));
+            let shortcut = spec.shortcut_for(crate::commands::mac_shortcuts(&ctx)).or((spec.id == "edit.copy").then_some(crate::commands::COPY));
             assert_eq!(it.shortcut, shortcut.and_then(chord), "{} has its registry shortcut", spec.id);
         }
         // Every item runs a registry command or one of the menu's own.
