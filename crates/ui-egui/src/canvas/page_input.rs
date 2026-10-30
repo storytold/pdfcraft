@@ -226,6 +226,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         adding_text: tool == QuickTool::AddText,
         edit_on_click: matches!(tool, QuickTool::AddText | QuickTool::EditText),
         style: text_style,
+        pages: &frame.page_frames,
     };
     let on_content = !placing && editing_content && can_modify && crate::content_ui::page_input(cx, ccx, view);
     // Add text acts on the page's own paragraphs: the one its press was on, until the button is up,
