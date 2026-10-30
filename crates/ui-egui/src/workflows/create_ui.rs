@@ -86,15 +86,19 @@ fn stem(name: &str) -> &str {
 }
 
 impl PdfCraftApp {
-    /// Convert a non-PDF file (image, text) into a new tab. Returns `None` when `bytes` is not
-    /// something Create understands (the caller then tries to open it as a PDF).
+    /// Convert a non-PDF file (image, text, Office document) into a new tab. Returns `None` when
+    /// `bytes` is not something Create understands (the caller then tries to open it as a PDF).
     pub(crate) fn open_converted(&mut self, name: &str, bytes: &[u8]) -> Option<Result<(), String>> {
         use pdfcraft_engine::SourceKind;
-        if !matches!(pdfcraft_engine::source_kind(name, bytes), Some(SourceKind::Image | SourceKind::Text)) {
-            return None;
+        let is_office_name = name.rsplit_once('.').is_some_and(|(_, e)| pdfcraft_engine::OFFICE.contains(&e.to_ascii_lowercase().as_str()));
+        match pdfcraft_engine::source_kind(name, bytes) {
+            Some(SourceKind::Pdf) if is_office_name => Some(self.open_created_bytes(&format!("{}.pdf", stem(name)), Ok(Arc::new(bytes.to_vec())))),
+            Some(SourceKind::Image | SourceKind::Text | SourceKind::Office) => {
+                let created = self.session.convert_to_pdf(name, &Arc::new(bytes.to_vec())).map(|(_, pdf)| pdf);
+                Some(self.open_created_bytes(&format!("{}.pdf", stem(name)), created.map_err(|e| e.to_string())))
+            }
+            _ => None,
         }
-        let created = self.session.convert_to_pdf(name, &Arc::new(bytes.to_vec())).map(|(_, pdf)| pdf);
-        Some(self.open_created_bytes(&format!("{}.pdf", stem(name)), created.map_err(|e| e.to_string())))
     }
 
     fn open_created_bytes(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>) -> Result<(), String> {

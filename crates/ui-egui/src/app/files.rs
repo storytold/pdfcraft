@@ -173,6 +173,14 @@ impl PdfCraftApp {
                 Some(Err(error)) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
                 None => {}
             },
+            open_worker::ResultKind::ConvertedPdf(pdf) => match self.open_converted_pdf(&pending.name, pdf) {
+                Ok(()) => {
+                    if let Some(command) = pending.then {
+                        self.execute(command);
+                    }
+                }
+                Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
+            },
             open_worker::ResultKind::Prepared { bytes, result } => match *result {
                 Ok(prepared) => match self.finish_open(&pending.name, pending.path.clone(), bytes.len(), prepared, pending.activate) {
                     Ok(id) => {

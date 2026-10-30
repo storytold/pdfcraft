@@ -20,7 +20,12 @@ pub(crate) enum Input {
 
 pub(crate) enum ResultKind {
     Conversion(Arc<Vec<u8>>),
-    Prepared { bytes: Arc<Vec<u8>>, result: Box<Result<PreparedDocument, OpenError>> },
+    /// Office document already converted to PDF bytes on the worker thread.
+    ConvertedPdf(Arc<Vec<u8>>),
+    Prepared {
+        bytes: Arc<Vec<u8>>,
+        result: Box<Result<PreparedDocument, OpenError>>,
+    },
     ReadFailed(String),
     RemoteFailed(String),
     RecoveryFailed(String),
@@ -159,6 +164,7 @@ fn run(queue: Arc<(Mutex<Queue>, Condvar)>) {
     }
 }
 
+/// Read the input source and either convert Office documents or prepare PDFs off the UI thread.
 fn prepare(job: Job) -> ResultKind {
     let bytes = match &job.input {
         Input::Path(path) => match std::fs::read(path) {
@@ -175,8 +181,13 @@ fn prepare(job: Job) -> ResultKind {
         },
         Input::Bytes(bytes) => bytes.clone(),
     };
-    if matches!(pdfcraft_engine::source_kind(&job.name, &bytes), Some(SourceKind::Image | SourceKind::Text)) {
-        return ResultKind::Conversion(bytes);
+    match pdfcraft_engine::source_kind(&job.name, &bytes) {
+        Some(SourceKind::Image | SourceKind::Text) => return ResultKind::Conversion(bytes),
+        Some(SourceKind::Office) => match pdfcraft_engine::office::convert(&job.name, &bytes) {
+            Ok(pdf) => return ResultKind::ConvertedPdf(Arc::new(pdf)),
+            Err(error) => return ResultKind::Failed(error.to_string()),
+        },
+        _ => {}
     }
     let result = job.context.prepare_open(job.name, job.path, bytes.clone(), job.password.as_deref());
     ResultKind::Prepared { bytes, result: Box::new(result) }
