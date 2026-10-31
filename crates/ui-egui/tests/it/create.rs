@@ -380,3 +380,31 @@ fn multiple_files_past_a_thousand_are_all_used() {
     let doc = app.session.get(app.views[0].id).unwrap();
     assert_eq!(doc.info.pages.len(), 1001, "every picked file is used, in order");
 }
+
+/// Opening an imported image and closing its tab without making any changes does not
+/// trigger a "save changes" confirmation prompt (#4942).
+#[test]
+fn unmodified_imported_image_closes_without_save_prompt() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.open_bytes("photo.png", None, png()).unwrap();
+    assert_eq!(app.views.len(), 1);
+    assert!(!app.has_unsaved_work(0), "freshly imported image has no unsaved user edits");
+    app.request_close_tab(0);
+    assert!(app.close_request.is_none(), "no save confirmation prompt asked on close");
+    assert!(app.views.is_empty(), "tab closed cleanly");
+}
+
+/// An imported image that receives a user edit prompts to save on tab close (#4942).
+#[test]
+fn modified_imported_image_prompts_to_save_on_close() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.open_bytes("photo.png", None, png()).unwrap();
+    assert_eq!(app.views.len(), 1);
+    app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    assert!(app.has_unsaved_work(0), "edited imported image has unsaved work");
+    app.request_close_tab(0);
+    assert!(app.close_request.is_some(), "save prompt is presented when closing edited image");
+    assert_eq!(app.views.len(), 1, "tab stays open pending user decision");
+}
