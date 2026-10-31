@@ -294,7 +294,7 @@ pub(crate) fn info(d: &Document) -> Value {
         // Custom document properties (Document Properties ▸ Custom): /Info entries beyond the
         // ones the spec names, set and cleared with doc_set_info.
         "custom": i.custom.iter().map(|(name, value)| json!({ "name": name, "value": value })).collect::<Vec<_>>(),
-        "creator": i.creator, "producer": i.producer,
+        "creator": i.creator, "producer": i.producer, "created": i.created, "modified": i.modified,
         "tagged": i.tagged,
         "has_javascript": i.has_javascript,
         // Where the document opens (/OpenAction, named destinations resolved): 1-based page and

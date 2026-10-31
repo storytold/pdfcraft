@@ -532,6 +532,8 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                 }
                 row(ui, "Application", i.creator.clone().unwrap_or_default());
                 row(ui, "PDF producer", i.producer.clone().unwrap_or_default());
+                row(ui, "Created", i.created.clone().unwrap_or_default());
+                row(ui, "Modified", i.modified.clone().unwrap_or_default());
             }
             PropsTab::InitialView => {
                 use pdfcraft_engine::{InitialLayout as L, Magnification as M, Navigation as N};
