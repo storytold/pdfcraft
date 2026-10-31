@@ -182,6 +182,15 @@ fn a_file_opened_on_disk_reads_saves_as_a_copy_and_refuses_edits() {
     assert!(a.call("page_rotate", &json!({ "doc": doc, "pages": [1], "degrees": 90 })).is_err());
     json(&mut a, "doc_save", json!({ "doc": doc }));
     assert_eq!(std::fs::read(dir.join("large.pdf")).unwrap(), pdf, "saving over itself changes nothing");
+    let flattened = a.call("doc_save", &json!({ "doc": doc, "path": "flat.pdf", "flatten_fill_sign": true }));
+    assert!(flattened.is_err(), "a copy is not a flattened file");
+    assert!(!dir.join("flat.pdf").exists());
+    std::fs::remove_file(dir.join("large.pdf")).unwrap();
+    json(&mut a, "doc_save", json!({ "doc": doc }));
+    assert_eq!(std::fs::read(dir.join("large.pdf")).unwrap(), pdf, "a deleted file comes back");
+    std::fs::write(dir.join("large.pdf"), b"another program's newer file").unwrap();
+    assert!(a.call("doc_save", &json!({ "doc": doc })).is_err());
+    assert_eq!(std::fs::read(dir.join("large.pdf")).unwrap(), b"another program's newer file", "and a newer file stays");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

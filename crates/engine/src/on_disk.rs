@@ -7,6 +7,8 @@ use std::time::SystemTime;
 
 use pdfcraft_cos::ByteSource;
 
+use crate::EditError;
+
 /// Files from this size up open from disk, when they can (see [`crate::OpenContext::prepare_on_disk`]).
 /// A smaller file costs little to hold, and holding it leaves it free to edit.
 pub const ON_DISK_FROM: u64 = 1 << 30;
@@ -16,11 +18,22 @@ pub const ON_DISK_REASON: &str = "this large file is being read from disk; load 
 
 /// A file on disk, read at any offset from any thread. It keeps the handle it was opened with, so
 /// a file replaced under its name reads as it was, and it refuses to read a file changed in place:
-/// offsets into it mean nothing then.
+/// offsets into it mean nothing then. On Windows that handle makes `MoveFileEx` over the file fail
+/// while it is open; renaming, deleting and `ReplaceFile` still work.
 pub struct FileSource {
     file: File,
     size: u64,
     modified: Option<SystemTime>,
+}
+
+/// Whether saving a file that stayed on disk to its own `path` has to write it: only when it has
+/// gone. A file of another size there is not this one, and a save must not replace it.
+pub fn must_write_back(path: &Path, size: u64) -> Result<bool, EditError> {
+    match std::fs::metadata(path) {
+        Ok(found) if found.len() == size => Ok(false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        _ => Err(EditError::ReplacedOnDisk),
+    }
 }
 
 impl FileSource {
@@ -74,7 +87,7 @@ fn read_exact_at(_: &File, _: u64, _: &mut [u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Edit, EditError, Session};
+    use crate::{Edit, Session};
     use pdfcraft_cos::OnDiskFile;
     use pdfcraft_testkit::Pdf;
     use std::sync::Arc;
@@ -193,10 +206,11 @@ mod tests {
         let (session, id) = open(&file.path).expect("stays on disk");
         let doc = session.get(id).unwrap();
         let source = doc.export_source();
-        assert!(crate::export::extract_images(&source, &[0], 1).is_err_and(|e| e.contains("load it")));
+        assert!(crate::export::extract_images(&source, &[0], 1).is_err_and(|e| e.contains("load the whole file")));
         assert!(session.export_data(id, crate::DataFormat::Xfdf, true, false).is_err());
         assert!(
-            crate::print_raster::rasterize(doc, &[0], &Default::default(), pdfcraft_print::Content::default()).is_err_and(|e| e.contains("load it"))
+            crate::print_raster::rasterize(doc, &[0], &Default::default(), pdfcraft_print::Content::default())
+                .is_err_and(|e| e.contains("load the whole file"))
         );
     }
 
@@ -219,11 +233,8 @@ mod tests {
         let mut renderer = pdfcraft_render::PageRenderer::new(session.get(id).unwrap().source(), Default::default());
         let swapped = file.dir.join("new.pdf");
         std::fs::write(&swapped, b"another file").unwrap();
-        #[cfg(unix)]
-        {
-            std::fs::rename(&swapped, &file.path).unwrap();
-            assert_eq!(renderer.render(Default::default()).error, None);
-        }
+        std::fs::rename(&swapped, &file.path).unwrap();
+        assert_eq!(renderer.render(Default::default()).error, None);
     }
 
     #[test]

@@ -120,6 +120,33 @@ fn save_as_copies_the_file_and_saving_in_place_changes_nothing() {
 }
 
 #[test]
+fn saving_in_place_puts_back_a_file_that_was_deleted() {
+    let pdf = large();
+    let file = Temp::new("deleted", &pdf);
+    let mut h = harness(true);
+    h.state_mut().open_path(&file.path);
+    h.run_steps(4);
+    assert!(on_disk(h.state()));
+    std::fs::remove_file(&file.path).unwrap();
+    assert!(h.state_mut().save_active(SaveTarget::InPlace));
+    assert_eq!(std::fs::read(&file.path).unwrap(), pdf);
+}
+
+#[test]
+fn saving_in_place_leaves_a_file_that_took_its_name() {
+    let file = Temp::new("replaced", &large());
+    let mut h = harness(true);
+    h.state_mut().open_path(&file.path);
+    h.run_steps(4);
+    assert!(on_disk(h.state()));
+    let newer = file.dir.join("newer.pdf");
+    std::fs::write(&newer, b"another program's newer file").unwrap();
+    std::fs::rename(&newer, &file.path).unwrap();
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    assert_eq!(std::fs::read(&file.path).unwrap(), b"another program's newer file");
+}
+
+#[test]
 fn a_file_that_can_not_stay_on_disk_opens_as_before() {
     let mut damaged = large();
     let tail = damaged.windows(9).rposition(|w| w == b"startxref").unwrap();

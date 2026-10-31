@@ -70,7 +70,7 @@ impl OpenContext {
 
     /// Prepare the large file at `path` to read from disk, with only its structure in memory.
     /// `None` when it should be read whole: it is small, or not a PDF this can follow through
-    /// its bytes (damaged, encrypted, a dynamic XFA form, or mostly structure).
+    /// its bytes (damaged, encrypted, an XFA form, whose data goes into its fields at open, or mostly structure).
     pub fn prepare_on_disk(&self, name: impl Into<String>, path: &Path) -> Option<PreparedDocument> {
         let name = name.into();
         guard(|| self.prepare_on_disk_unguarded(name, path)).ok().flatten()

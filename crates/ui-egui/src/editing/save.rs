@@ -217,14 +217,22 @@ impl PdfCraftApp {
 
 impl PdfCraftApp {
     /// Save a document that stayed on disk: it can't have changed, so that is copying the file a
-    /// piece at a time. It keeps reading from where it was, and to itself there is nothing to do.
+    /// piece at a time. It keeps reading from where it was, and to itself there is nothing to do
+    /// unless the file has gone.
     #[cfg(not(target_arch = "wasm32"))]
     fn save_on_disk(&mut self, id: pdfcraft_engine::DocId, dest: &str, file: &pdfcraft_cos::OnDiskFile) -> bool {
         let own = self.session.get(id).and_then(|d| d.path.as_deref()).is_some_and(|p| crate::same_file(p, dest));
-        if own {
-            return true;
-        }
         let path = std::path::Path::new(dest);
+        if own {
+            match pdfcraft_engine::on_disk::must_write_back(path, file.size()) {
+                Ok(true) => {}
+                Ok(false) => return true,
+                Err(e) => {
+                    self.notify_fmt("Couldn't save {name}: {e}", &[("name", dest), ("e", &e.to_string())]);
+                    return false;
+                }
+            }
+        }
         match pdfcraft_platform::staging::write_atomically_from(path, pdfcraft_platform::staging::StagingName::TagThenSuffix, |out| file.copy_to(out))
         {
             Ok(()) => {
