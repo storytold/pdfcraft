@@ -112,7 +112,8 @@ impl PdfCraftApp {
 }
 
 /// What the document declares: its standards and its output intents.
-fn declared_line(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
+/// `pdfa`: the PDF/A dialog, which also offers to remove the document's PDF/A identification.
+fn declared_line(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, pdfa: bool) {
     let declared = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.standards()).unwrap_or_default();
     let mut standards: Vec<String> = declared.pdfa.iter().map(|(p, c)| format!("PDF/A-{p}{}", c.to_lowercase())).collect();
     standards.extend(declared.pdfua.map(|p| format!("PDF/UA-{p}")));
@@ -123,7 +124,7 @@ fn declared_line(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     ui.horizontal(|ui| {
         ui.label(crate::i18n::fmt(tl!("Declared conformance: {shown}"), &[("shown", &shown)]));
         // Worded as Edit ▸ Undo will name it.
-        remove = declared.pdfa.is_some() && widgets::pill_button(ui, &crate::i18n::edit_label(&removal.label()), false).clicked();
+        remove = pdfa && declared.pdfa.is_some() && widgets::pill_button(ui, &crate::i18n::edit_label(&removal.label()), false).clicked();
     });
     if remove && app.apply_edit(removal) {
         app.pdfa.issues = None;
@@ -178,7 +179,7 @@ fn outcome(ui: &mut egui::Ui, refusal: Option<&Refusal>, saved: Option<&SavedChe
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new("PDF/A").font(theme::semibold(18.0)));
     ui.add_space(6.0);
-    declared_line(ui, app, t);
+    declared_line(ui, app, t, true);
     ui.add_space(6.0);
     let before = app.pdfa.level;
     ui.horizontal(|ui| {
@@ -345,7 +346,7 @@ impl PdfCraftApp {
 pub(crate) fn pdfx_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new("PDF/X").font(theme::semibold(18.0)));
     ui.add_space(6.0);
-    declared_line(ui, app, t);
+    declared_line(ui, app, t, false);
     ui.add_space(6.0);
     let before = (app.pdfx.level, app.pdfx.condition.clone());
     ui.horizontal(|ui| {
