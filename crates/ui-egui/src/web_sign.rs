@@ -415,7 +415,8 @@ trailer << /Root 1 0 R >>
         h.get_by_label("Continue").click();
         h.run_steps(3);
         h.state_mut().sign_draft.as_mut().unwrap().password = "test".into();
-        h.get_by_label("Sign").click();
+        // The dialog's button, not the Sign menu main added to the menu bar.
+        h.get_by(|n| n.role() != egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("Sign")).click();
         h.run_steps(4);
 
         let s = h.state();
