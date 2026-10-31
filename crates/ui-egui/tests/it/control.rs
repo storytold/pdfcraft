@@ -1727,8 +1727,14 @@ fn rail_opens_a_panel_then_closes_the_open_one() {
 #[test]
 fn control_quit_retains_inactive_fill_sign_typing_after_cancel() {
     let (mut h, c) = harness();
-    h.state_mut().views[0].fill_text =
-        Some(pdfcraft_ui_egui::fill_sign::TypeBox { page: 0, at: [40.0, 200.0], text: "Unsaved signature note".into(), size: 10.0, focus: false });
+    h.state_mut().views[0].fill_text = Some(pdfcraft_ui_egui::fill_sign::TypeBox {
+        page: 0,
+        at: [40.0, 200.0],
+        text: "Unsaved signature note".into(),
+        size: 10.0,
+        color: [0.0; 3],
+        focus: false,
+    });
     h.state_mut().active = None;
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
     assert_eq!(ok(&mut h, &c, "ui.quit", json!({})), json!({"quitting":false,"needs_confirmation":true}));

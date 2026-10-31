@@ -14,6 +14,7 @@ use pdfcraft_render::DocInfo;
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
 use crate::page_pointer::PagePointer;
+use crate::page_router::{Hit, Owner, ParagraphPart};
 
 mod background;
 mod image;
@@ -21,7 +22,7 @@ mod layout;
 
 pub(crate) use background::TextBackground;
 pub use image::{CropMode, ImageSelection};
-pub(crate) use image::{ImageAction, ImageCx, image_input, image_owns_pointer};
+pub(crate) use image::{ImageAction, ImageCx, body_hit as picture_hit, handle_hit as picture_handle_hit, image_input};
 #[cfg(test)]
 use image::{rotate_knob, turn_degrees};
 #[cfg(test)]
@@ -84,6 +85,122 @@ pub struct LineEditor {
     /// horizontal scale (%), and what they were.
     pub extras: Extras,
     extras0: Extras,
+    /// The text the box's own Undo history starts from; see [`forget_typing_before`].
+    typing_from: Option<String>,
+}
+
+/// The paragraph editor's text box.
+pub(crate) fn input_id() -> egui::Id {
+    egui::Id::unique("edit-text-line-input")
+}
+
+/// The page text box `id` keeps its own Undo history, across every paragraph or box it has shown
+/// in every tab (they share the id). Once the page has `text` (the box opened on it, or formatting
+/// applied it), that history is cleared: Undo in the box takes back only what was typed since, and
+/// then reaches the document. Kept, it put back text from another paragraph, or the whole paragraph
+/// as it was before a format change, into a box showing the page as it is now. `from` is the box's
+/// own record of that; which document `doc` last used the history is kept beside it, since a box
+/// in another tab on the same text would otherwise take that document's typing with its Redo.
+/// When another document's box takes the text box, the box it leaves keeps its history (and
+/// caret) aside, and gets it back on its return, so its typing can still be undone there. Each
+/// box claims the text box when it is drawn, and Undo and Redo from the menu claim it first too,
+/// since they can run before the box is drawn again after a tab switch.
+pub(crate) fn forget_typing_before(ctx: &egui::Context, id: egui::Id, doc: pdfcraft_engine::DocId, from: &mut Option<String>, text: &str) {
+    let owner = id.with("typing-doc");
+    let last = ctx.data(|d| d.get_temp::<pdfcraft_engine::DocId>(owner));
+    if from.as_deref() == Some(text) && last == Some(doc) {
+        return;
+    }
+    let aside = |doc: pdfcraft_engine::DocId| id.with(("typing-aside", doc));
+    let aligns = id.with(ALIGN_HISTORY);
+    if let Some(left) = last.filter(|l| *l != doc)
+        && let Some(state) = egui::TextEdit::load_state(ctx, id)
+    {
+        // A copy of its own: a state's history is shared between its clones, and the next box
+        // clears it in place. The rows' alignments by text go with it.
+        let mut kept = egui::text_edit::TextEditState::default();
+        kept.cursor = state.cursor;
+        kept.set_undoer(state.undoer());
+        ctx.data_mut(|d| {
+            let rows = d.get_temp::<AlignHistory>(aligns).unwrap_or_default();
+            d.insert_temp(aside(left), (kept, rows));
+        });
+    }
+    // Only the same box, still on the text it opened on, takes its history back.
+    let back =
+        ctx.data_mut(|d| d.remove_temp::<(egui::text_edit::TextEditState, AlignHistory)>(aside(doc))).filter(|_| from.as_deref() == Some(text));
+    // A box new to the text box starts with nothing of the last one's: no history, caret,
+    // selection or rows' alignments by text.
+    let (state, rows) = back.unwrap_or_default();
+    egui::TextEdit::store_state(ctx, id, state);
+    ctx.data_mut(|d| {
+        d.insert_temp(owner, doc);
+        d.insert_temp(aligns, rows);
+    });
+    *from = Some(text.to_owned());
+}
+
+/// Each text a page box has shown through its own typing, with its rows' alignments then, oldest
+/// last: egui's history keeps only the text and the caret.
+type AlignHistory = Vec<(String, Vec<Vec<Option<pdfcraft_engine::TextAlign>>>)>;
+const ALIGN_HISTORY: &str = "aligns-by-text";
+/// As many texts as egui's own history keeps.
+const ALIGN_HISTORY_LEN: usize = 100;
+
+/// The page text box `id` went from `before` to `after` through its own typing (typing, Undo or
+/// Redo), and each list of row alignments in `aligns` follows. A text the box showed before gets
+/// back the alignments it had then, so Undo bringing back a deleted row brings back its
+/// alignment; a new text follows the edit ([`pdfcraft_engine::paragraph_align::remap`]). An
+/// alignment picked since makes the older texts' alignments stale, and they are dropped.
+pub(crate) fn follow_typing(
+    ctx: &egui::Context,
+    id: egui::Id,
+    before: &str,
+    after: &str,
+    aligns: &mut [&mut Vec<Option<pdfcraft_engine::TextAlign>>],
+) {
+    let now: Vec<Vec<_>> = aligns.iter().map(|a| a.to_vec()).collect();
+    // Where the edit left the caret, as a byte of `after`: it says which of two same rows changed.
+    let caret = egui::TextEdit::load_state(ctx, id)
+        .and_then(|s| s.cursor.char_range())
+        .map(|r| after.char_indices().nth(r.primary.index.into()).map_or(after.len(), |(at, _)| at));
+    let next = ctx.data_mut(|d| {
+        let seen = d.get_temp_mut_or_default::<AlignHistory>(id.with(ALIGN_HISTORY));
+        if seen.iter().any(|(text, was)| text == before && *was != now) {
+            seen.clear();
+        }
+        remember(seen, before, now.clone());
+        let next = match seen.iter().rev().find(|(text, _)| text == after) {
+            Some((_, was)) if was.len() == now.len() => was.clone(),
+            _ => now.iter().map(|a| pdfcraft_engine::paragraph_align::remap_at(before, after, a, caret)).collect(),
+        };
+        remember(seen, after, next.clone());
+        next
+    });
+    for (slot, a) in aligns.iter_mut().zip(next) {
+        **slot = a;
+    }
+}
+
+fn remember(seen: &mut AlignHistory, text: &str, aligns: Vec<Vec<Option<pdfcraft_engine::TextAlign>>>) {
+    seen.retain(|(t, _)| t != text);
+    seen.push((text.to_owned(), aligns));
+    if seen.len() > ALIGN_HISTORY_LEN {
+        seen.remove(0);
+    }
+}
+
+/// Select `range` (bytes of `text`) in the page text box `id` again. egui keeps a box's selection
+/// only while it has the focus, so a click on Format text drops it; given back as formatting
+/// returns the focus, it stays shown, and a second choice reaches the same text.
+pub(crate) fn reselect(ctx: &egui::Context, id: egui::Id, text: &str, range: &std::ops::Range<usize>) {
+    let chars = |at: usize| text.get(..at).map(|s| s.chars().count());
+    let (Some(start), Some(end)) = (chars(range.start), chars(range.end)) else { return };
+    if start < end {
+        let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(start), egui::text::CCursor::new(end))));
+        egui::TextEdit::store_state(ctx, id, state);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -161,7 +278,9 @@ impl LineEditor {
             family: (l.family != o.family || self.family_chosen || l.bold != o.bold || l.italic != o.italic).then_some((l.family, l.bold, l.italic)),
             size: (l.size != o.size).then_some(l.size),
             color: (l.color != o.color).then_some(l.color),
-            align: (l.align != o.align).then_some(l.align),
+            // The whole paragraph's alignment when it was picked, or when the rows' own were
+            // dropped for it (the rows are where those put them, so leaving it out keeps them there).
+            align: (l.align != o.align || l.aligns.is_empty() && !o.aligns.is_empty()).then_some(l.align),
             underline: (self.extras.underline != self.extras0.underline).then_some(self.extras.underline),
             line_spacing: (self.extras.line_spacing != self.extras0.line_spacing && self.extras.line_spacing > 0.0)
                 .then_some(self.extras.line_spacing),
@@ -169,6 +288,12 @@ impl LineEditor {
             scale: (self.extras.scale != self.extras0.scale).then_some(self.extras.scale),
             ..Default::default()
         };
+        // Rows aligned on their own, sent with every rewrite of the paragraph while it is open
+        // (a colour or size change too): nothing in the page records them, so a rewrite without
+        // them would undo them. Alone, they are sent only when they changed.
+        if l.aligns != o.aligns || self.text != self.original || style != pdfcraft_engine::BlockStyle::default() {
+            style.aligns = l.aligns.clone();
+        }
         if let Some(range) = &self.selection
             && (style.family.is_some()
                 || style.resource.is_some()
@@ -192,15 +317,24 @@ impl LineEditor {
         style
     }
 
-    /// After applying formatting: the paragraph now has it.
+    /// After applying formatting: the paragraph now has it. The selection stays, as the box still
+    /// shows it, so a second alignment or format picked for it applies to the same rows.
     pub fn applied(&mut self) {
-        self.selection = None;
         self.font_resource = None;
         self.family_chosen = false;
         self.look0 = self.look.clone();
         self.extras0 = self.extras;
         self.original = self.text.clone();
+        // The page now has this text: the box's history restarts, even when the format left the
+        // text as it was, so a Redo from before can't put undone typing back on top of it.
+        self.typing_from = None;
         self.focus = true;
+    }
+
+    /// Take the shared text box for this paragraph ([`forget_typing_before`]): its own history,
+    /// or none once the page has its text.
+    pub(crate) fn claim_typing(&mut self, ctx: &egui::Context, doc: pdfcraft_engine::DocId) {
+        forget_typing_before(ctx, input_id(), doc, &mut self.typing_from, &self.original);
     }
 
     /// Adopt the rewritten paragraph's current geometry before the next overlay frame.
@@ -208,8 +342,26 @@ impl LineEditor {
         self.source_rect = block.editing_rect().map(|v| v as f32);
         self.multiline = block.rows.len() > 1;
         self.source = Some((block.clone(), lines));
-        self.text = block.editor_text.clone();
+        let before = std::mem::replace(&mut self.text, block.editor_text.clone());
+        if self.text != before {
+            // A byte range of the old text: it may name other characters, or none, in the new.
+            self.selection = None;
+        }
+        self.follow_rows(&before);
         self.original = self.text.clone();
+    }
+
+    /// The text changed from `before` through the box's own typing (typing, Undo, Redo): rows
+    /// aligned on their own keep their alignment, and a row Undo brings back gets its own back.
+    pub(crate) fn follow_typed_rows(&mut self, ctx: &egui::Context, before: &str) {
+        follow_typing(ctx, input_id(), before, &self.text, &mut [&mut self.look.aligns, &mut self.look0.aligns]);
+    }
+
+    /// The text changed from `before`: rows aligned on their own keep their alignment.
+    pub(crate) fn follow_rows(&mut self, before: &str) {
+        for look in [&mut self.look, &mut self.look0] {
+            look.aligns = pdfcraft_engine::paragraph_align::remap(before, &self.text, &look.aligns);
+        }
     }
 }
 
@@ -357,18 +509,20 @@ pub(crate) fn paragraph_on_frame(xf: &PageXform, info: &DocInfo, page: usize, bl
     frame.valid && frame.rect.expand(6.0).contains(local) && !frame.rect.contains(local)
 }
 
-/// The source text's ink box with the same two-pixel tolerance as ordinary paragraph clicks.
-/// Unlike the editing frame, this does not expand when the user reserves blank space.
+/// The source ink in the paragraph's local axes, with two screen pixels of tolerance.
+/// Neither reserved frame space nor the empty corners of a rotated ink AABB count as ink.
 pub(crate) fn paragraph_ink_contains(xf: &PageXform, info: &DocInfo, page: usize, block: &pdfcraft_engine::TextBlock, p: Pos2) -> bool {
-    paragraph_box(xf, info, page, block.rect).contains(p)
-}
-
-/// Topmost source image at a screen point, respecting its placement and every active clip.
-/// Both mixed selection and the text tool use this before yielding empty frame space.
-pub(crate) fn image_at(xf: &PageXform, info: &DocInfo, page: usize, images: &[pdfcraft_engine::PageImage], p: Pos2) -> Option<usize> {
-    let (x, y) = xf.screen_to_view(p);
-    let user = info.pages.get(page)?.view_to_user(x, y).map(f64::from);
-    images.iter().rposition(|image| image.contains(user))
+    let geometry = ParagraphFrame::new(xf, info, page, block);
+    let frame = block.editing_frame();
+    let ink = block.ink_frame;
+    let ink = Rect::from_min_max(
+        egui::pos2((ink[0] - frame[0]) as f32 * geometry.scale, (frame[3] - ink[3]) as f32 * geometry.scale),
+        egui::pos2((ink[2] - frame[0]) as f32 * geometry.scale, (frame[3] - ink[1]) as f32 * geometry.scale),
+    );
+    geometry.valid
+        && [ink.min.x, ink.min.y, ink.max.x, ink.max.y].into_iter().all(f32::is_finite)
+        && ink.is_positive()
+        && ink.expand(2.0).contains(geometry.local(p))
 }
 
 /// A paragraph box being moved, rewrapped horizontally or resized vertically from an edge.
@@ -385,8 +539,9 @@ pub struct BlockDrag {
 
 /// How far an edge grip reaches either side of a box's edge (screen pixels).
 const EDGE_REACH: f32 = 6.0;
-/// How far outside an open paragraph's frame the pointer still means the frame (screen pixels).
-const FRAME_REACH: f32 = 4.0;
+/// How far outside an open paragraph's frame the pointer still means the frame (screen pixels):
+/// the frame's Move cursor shows, and a press there takes hold of the box (`object_ui`).
+pub(crate) const FRAME_REACH: f32 = 6.0;
 
 /// The width and height handles drawn on a paragraph box's edges (screen).
 fn resize_handles(b: Rect) -> [Rect; 4] {
@@ -427,25 +582,42 @@ fn edge_at(b: Rect, p: Pos2) -> Option<Grip> {
     }
 }
 
-/// A paragraph's box on screen: its text rect (user space), with a little room around it.
-fn paragraph_box(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) -> Rect {
-    xf.user_rect(info, page, rect.map(|v| v as f32)).expand(2.0)
+/// Whether Add text acts on an existing paragraph, including its oriented empty frame.
+pub(crate) fn over_paragraph(xf: &PageXform, info: &DocInfo, page: usize, lines: &[pdfcraft_engine::TextBlock], p: Pos2) -> bool {
+    lines.iter().any(|l| paragraph_contains(xf, info, page, l, p) || paragraph_ink_contains(xf, info, page, l, p))
 }
 
-/// Whether a press at `p` takes hold of an edge handle of one of the paragraphs. The handle is
-/// drawn half outside the box and grabs from a little further out still,
-/// where a press is not on the box itself, so area selection must leave it to [`page_input`].
-pub(crate) fn grabs_edge<'a>(
-    xf: &PageXform,
-    info: &DocInfo,
-    page: usize,
-    mut blocks: impl Iterator<Item = &'a pdfcraft_engine::TextBlock>,
-    p: Pos2,
-) -> bool {
-    blocks.any(|block| {
-        let frame = ParagraphFrame::new(xf, info, page, block);
-        frame.valid && edge_at(frame.rect, frame.local(p)).is_some()
-    })
+/// The paragraph under `p`, shared by the cursor and captured press. Edge handles win over
+/// ink; ink wins over background pictures; reserved empty frame space is below visible objects.
+pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, lines: &[pdfcraft_engine::TextBlock], active: Option<usize>, p: Pos2) -> Option<Hit> {
+    if !xf.rect.contains(p) {
+        return None;
+    }
+    let frames: Vec<_> = lines.iter().map(|l| ParagraphFrame::new(xf, info, page, l)).collect();
+    let framed = grip_at(&frames, p);
+    if active.is_none()
+        && let Some((block, grip)) = framed.filter(|(_, grip)| *grip != Grip::Move)
+    {
+        let part = match grip {
+            Grip::Left => ParagraphPart::Left,
+            Grip::Right => ParagraphPart::Right,
+            Grip::Top => ParagraphPart::Top,
+            Grip::Bottom => ParagraphPart::Bottom,
+            Grip::Move => ParagraphPart::Body,
+        };
+        return Some(Hit::new(Owner::Paragraph { block, part }, Layer::Handle, grip.cursor(frames.get(block)?)));
+    }
+    let ink = lines.iter().rposition(|l| paragraph_ink_contains(xf, info, page, l, p));
+    let block = ink.or_else(|| frames.iter().rposition(|frame| frame.valid && frame.rect.contains(frame.local(p))))?;
+    let layer = if ink.is_none() {
+        Layer::ToolArea
+    } else if active == Some(block) {
+        Layer::Editor
+    } else {
+        Layer::Text
+    };
+    let icon = if active.is_none() { egui::CursorIcon::Move } else { egui::CursorIcon::Text };
+    Some(Hit::new(Owner::Paragraph { block, part: ParagraphPart::Body }, layer, icon))
 }
 
 fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
@@ -495,6 +667,7 @@ fn open_editor(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], bo
         family_chosen: false,
         extras: Extras::default(),
         extras0: Extras::default(),
+        typing_from: None,
     });
 }
 
@@ -504,7 +677,7 @@ pub(crate) fn page_input(
     cx: PageToolContext<'_>,
     lines: &[pdfcraft_engine::TextBlock],
     view: &mut DocView,
-    images: &[pdfcraft_engine::PageImage],
+    hovered: Option<usize>,
     allow_interaction: bool,
 ) -> bool {
     let PageToolContext { ui, resp, xf, ptr, page, doc, .. } = cx;
@@ -515,15 +688,6 @@ pub(crate) fn page_input(
     }
     let frames: Vec<_> = lines.iter().map(|l| ParagraphFrame::new(xf, info, page, l)).collect();
     let boxes: Vec<Rect> = frames.iter().map(|frame| frame.bounds()).collect();
-    // Preserve edge grips, then prefer visible text over background artwork. An image in
-    // reserved blank space gets the pointer before the paragraph's empty frame interior.
-    let grab = |p| {
-        let frame = grip_at(&frames, p);
-        frame
-            .filter(|(_, grip)| *grip != Grip::Move)
-            .or_else(|| lines.iter().rposition(|l| paragraph_ink_contains(xf, info, page, l, p)).map(|i| (i, Grip::Move)))
-            .or_else(|| if image_at(xf, info, page, images, p).is_none() { frame } else { None })
-    };
     // Outlines stay on their page, like its text (#3061).
     let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(xf.rect.expand(1.0)));
     let active = view.line_editor.as_ref().filter(|e| e.page == page).map(|e| e.block);
@@ -589,7 +753,8 @@ pub(crate) fn page_input(
                     offset: (shift != 0.0).then_some([shift * cos, shift * sin]),
                     ..Default::default()
                 };
-                Edit::EditTextBlock { page, block: d.block, text: l.text.clone(), style }
+                // Rejoin soft wraps while retaining typed hard breaks when the width changes.
+                Edit::EditTextBlock { page, block: d.block, text: l.reflow_text.clone(), style }
             } else {
                 // Translation must keep the selected source operators. Rewriting unchanged text
                 // would also remove unrelated paragraphs that now overlap this one (#594).
@@ -610,38 +775,42 @@ pub(crate) fn page_input(
         return true;
     }
     // Dragging a box (not while a paragraph is open for typing) moves it; from an edge, resizes it.
-    // What it grabs comes from where the button went down, not where the pointer is now: egui
+    // What it grabs is what the press was on ([`hit`]), not what is under the pointer now: egui
     // only calls it a drag once the pointer has moved a few pixels (or been held a moment), and a
     // quick flick has left the edge by then.
+    let owner = match view.router.owner(page) {
+        Some(Owner::Paragraph { block, part }) => Some((block, part)),
+        _ => None,
+    };
     if resp.drag_started()
+        && active.is_none()
         && let Some(o) = ptr.origin
+        && let Some((block, part)) = owner
     {
-        // A quick image drag may already be outside the image. Its origin still owns this
-        // start; hovering the paragraph now must not block the image tool from taking it.
-        let Some((block, grip)) = grab(o) else { return false };
+        let grip = match part {
+            ParagraphPart::Body => Grip::Move,
+            ParagraphPart::Left => Grip::Left,
+            ParagraphPart::Right => Grip::Right,
+            ParagraphPart::Top => Grip::Top,
+            ParagraphPart::Bottom => Grip::Bottom,
+        };
+        view.block_drag = Some(BlockDrag { page, block, generation: doc.edit_generation(), start: o, grip });
+        return true;
+    }
+    // The central hit table also supplies the hovered paragraph, so its outline and its
+    // cursor agree even when artwork occupies empty frame space.
+    if let Some(hovered) = hovered
+        && let Some(frame) = frames.get(hovered)
+    {
+        if active != Some(hovered) {
+            frame.paint(&painter, frame.rect, Color32::TRANSPARENT, Stroke::new(1.5, ACCENT));
+        }
         if active.is_none() {
-            view.block_drag = Some(BlockDrag { page, block, generation: doc.edit_generation(), start: o, grip });
-            return true;
+            frame.handles(&painter, frame.rect);
         }
     }
-    let Some(p) = ptr.within(xf.rect) else { return false };
-    let Some((hit, grip)) = grab(p) else { return false };
-    if active != Some(hit) {
-        frames[hit].paint(&painter, frames[hit].rect, Color32::TRANSPARENT, Stroke::new(1.5, ACCENT));
-    }
-    let on_edge = active.is_none() && grip != Grip::Move;
-    if active.is_none() {
-        frames[hit].handles(&painter, frames[hit].rect);
-    }
-    // A closed paragraph moves when dragged (the four-way arrow says so; a click still opens it
-    // for typing); an edge rewraps it. The open one takes the text cursor.
-    if on_edge {
-        view.cursor.claim(Layer::Handle, grip.cursor(&frames[hit]));
-    } else if active.is_none() {
-        view.cursor.claim(Layer::Text, egui::CursorIcon::Move);
-    } else {
-        view.cursor.claim(if active == Some(hit) { Layer::Editor } else { Layer::Text }, egui::CursorIcon::Text);
-    }
+    // A click opens the paragraph the press was on.
+    let Some((hit, _)) = owner else { return hovered.is_some() };
     if resp.clicked() {
         view.image_selection = None;
         // A click that moves the editor to another paragraph applies the open one first, so its
@@ -669,9 +838,12 @@ pub(crate) fn page_input(
 
 /// The inline editor; returns the edit once the text is applied.
 pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -> Option<Edit> {
-    // Clicks outside the document (the Format text panel) keep the paragraph open. Where the
-    // click landed is `interact_pos`: `latest_pos` is gone on the frame a tap lifts.
-    let outside = ctx.input(|i| i.pointer.interact_pos()).is_some_and(|p| !view.viewport_rect().contains(p));
+    let view_id = view.id;
+    // Clicks outside the document (the Format text panel) keep the paragraph open, as does the
+    // keyboard moving there. Where the click landed is `interact_pos`: `latest_pos` is gone on the
+    // frame a tap lifts.
+    let away = |p: egui::Pos2| !view.viewport_rect().contains(p);
+    let outside = ctx.input(|i| i.pointer.interact_pos()).is_some_and(away) || focus_pos(ctx).is_some_and(away);
     let page = view.line_editor.as_ref()?.page;
     let xf = view.page_xform(page)?;
     let hold = view.objects.hold_editor;
@@ -840,8 +1012,11 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     let galley = editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width, top_padding);
                     if snapshot.turned || snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
                 };
+                let before = ed.text.clone();
+                let input = input_id();
+                ed.claim_typing(ui.ctx(), view_id);
                 let output = egui::TextEdit::multiline(&mut ed.text)
-                    .id(egui::Id::unique("edit-text-line-input"))
+                    .id(input)
                     .font(font.clone())
                     .margin(egui::Margin::ZERO)
                     .layouter(&mut layouter)
@@ -868,11 +1043,15 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 }
                 let r = output.response;
                 if r.changed() {
+                    ed.follow_typed_rows(ctx, &before);
                     // The next pass measures the updated draft with the Apply/Save rewrite.
                     ctx.request_repaint();
                 }
                 if ed.focus {
                     r.request_focus();
+                    if let Some(range) = &ed.selection {
+                        reselect(ui.ctx(), input, &ed.text, range);
+                    }
                     ed.focus = false;
                 }
                 let lost = lost_focus_once(&r, &mut ed.had_focus);
@@ -895,6 +1074,9 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
         Some(apply) => {
             let ed = view.line_editor.take()?;
             if !apply {
+                // Esc leaves the text but not the paragraph: its box is selected, as in Acrobat,
+                // so Delete removes it without aiming for the frame. The draft is discarded.
+                view.objects.select_paragraph_next(ed.page, ed.block);
                 return None;
             }
             view.applied_editor = Some(ed.clone());
@@ -915,6 +1097,13 @@ pub(crate) fn finished_edit(ed: LineEditor) -> Option<Edit> {
     })
 }
 
+/// Where the keyboard is: the centre of the widget that has it. A text box that loses it to a
+/// widget reached by Tab or a screen reader (the Format text panel's controls) judges where it
+/// went by this, as it judges a click by where the click landed.
+pub(crate) fn focus_pos(ctx: &egui::Context) -> Option<egui::Pos2> {
+    ctx.memory(|m| m.focused()).and_then(|id| ctx.read_response(id)).map(|r| r.rect.center())
+}
+
 /// Whether an editor's text box `r` lost the keyboard this frame, given whether it `had` it at
 /// the end of the editor's last frame (updated here). egui's `lost_focus` holds for a second
 /// frame as well, and an editor that judges a click away by where the click landed must judge it
@@ -928,6 +1117,109 @@ pub(crate) fn lost_focus_once(r: &egui::Response, had: &mut bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Formatting applied restarts the rows' alignments by text with the box's history: a Redo
+    /// past the format can't bring back an alignment from before it (FredApps on bfc6f8b1).
+    #[test]
+    fn formatting_applied_restarts_the_alignments_by_text() {
+        use pdfcraft_engine::{DocId, TextAlign::Right};
+        let (ctx, id) = (egui::Context::default(), egui::Id::unique("box"));
+        let mut from = None;
+        forget_typing_before(&ctx, id, DocId(1), &mut from, "A\nB");
+        let mut aligns = vec![None, Some(Right)];
+        follow_typing(&ctx, id, "A\nB", "A", &mut [&mut aligns]);
+        // Formatting applied: the page now has "A", and the box's record of its text is reset.
+        from = None;
+        forget_typing_before(&ctx, id, DocId(1), &mut from, "A");
+        follow_typing(&ctx, id, "A", "A\nB", &mut [&mut aligns]);
+        assert_eq!(aligns, pdfcraft_engine::paragraph_align::remap("A", "A\nB", &[None]), "the row before the format doesn't come back aligned");
+    }
+
+    /// The rows' alignments by text go aside with the box's history when another tab's box takes
+    /// the text box, and come back with it: Undo after the trip still restores a deleted row's
+    /// alignment, while the other tab's box starts with none.
+    #[test]
+    fn alignments_by_text_survive_a_trip_to_another_tab() {
+        use pdfcraft_engine::{DocId, TextAlign::Right};
+        let (ctx, id) = (egui::Context::default(), egui::Id::unique("box"));
+        let (mut a_from, mut b_from) = (None, None);
+        forget_typing_before(&ctx, id, DocId(1), &mut a_from, "A\nB");
+        let mut aligns = vec![None, Some(Right)];
+        follow_typing(&ctx, id, "A\nB", "A", &mut [&mut aligns]);
+        forget_typing_before(&ctx, id, DocId(2), &mut b_from, "A\nB");
+        let mut other = vec![None, None];
+        follow_typing(&ctx, id, "A\nB", "A", &mut [&mut other]);
+        follow_typing(&ctx, id, "A", "A\nB", &mut [&mut other]);
+        assert_eq!(other, [None, None], "tab B's box gets back its own alignments, not tab A's");
+        forget_typing_before(&ctx, id, DocId(1), &mut a_from, "A\nB");
+        follow_typing(&ctx, id, "A", "A\nB", &mut [&mut aligns]);
+        assert_eq!(aligns, [None, Some(Right)], "back in tab A, Undo brings the row back right-aligned");
+    }
+
+    /// Undo back to a text the box showed brings its rows' alignments back, unless an alignment
+    /// was picked since: then the older alignments are stale, and the edit is followed instead, so
+    /// Undo never takes back the pick.
+    #[test]
+    fn typing_history_restores_alignments_unless_one_was_picked_since() {
+        use pdfcraft_engine::TextAlign::{Center, Right};
+        let (ctx, id) = (egui::Context::default(), egui::Id::unique("box"));
+        let mut aligns = vec![None, Some(Center), Some(Right)];
+        follow_typing(
+            &ctx,
+            id,
+            "A
+B
+C",
+            "A
+C",
+            &mut [&mut aligns],
+        );
+        assert_eq!(aligns, [None, Some(Right)], "the deleted row's entry goes");
+        follow_typing(
+            &ctx,
+            id,
+            "A
+C",
+            "A
+B
+C",
+            &mut [&mut aligns],
+        );
+        assert_eq!(aligns, [None, Some(Center), Some(Right)], "Undo brings it back");
+        follow_typing(
+            &ctx,
+            id,
+            "A
+B
+C",
+            "A
+C",
+            &mut [&mut aligns],
+        );
+        // An alignment picked for the first row, with no typing.
+        aligns = vec![Some(Right), Some(Right)];
+        let picked = aligns.clone();
+        follow_typing(
+            &ctx,
+            id,
+            "A
+C",
+            "A
+B
+C",
+            &mut [&mut aligns],
+        );
+        assert_eq!(
+            aligns,
+            pdfcraft_engine::paragraph_align::remap(
+                "A
+C", "A
+B
+C", &picked
+            ),
+            "the pick stays"
+        );
+    }
 
     #[test]
     fn the_rotate_knob_moves_below_when_there_is_no_room_above() {
@@ -983,6 +1275,7 @@ mod tests {
             family_chosen: false,
             extras: Extras::default(),
             extras0: Extras::default(),
+            typing_from: None,
         };
         (app, ed)
     }
@@ -1128,6 +1421,8 @@ mod tests {
             text: "Typed text".into(),
             style: crate::content_ui::default_style(),
             focus: true,
+            selection: None,
+            typing_from: None,
         };
         app.views[0].content.draft = Some(draft.clone());
 

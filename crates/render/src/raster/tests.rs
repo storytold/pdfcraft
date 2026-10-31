@@ -7039,3 +7039,246 @@ fn test_clip_only_text_raster_preserves_clipping_without_painting() {
     assert!(pixels.contains(&[0, 0, 255, 255]), "fill shows through the 7 Tr clip");
     assert!(pixels.contains(&white), "the clip is text-shaped, not the whole page");
 }
+
+#[cfg(target_os = "windows")]
+mod gbk_glyphs;
+
+/// Chinese and Korean CID fonts that aren't embedded (Adobe-CNS1 `MSung-Light`, Adobe-GB1
+/// `STSong-Light`, Adobe-Korea1 `HYGoThic-Medium`; Acrobat also writes Japanese `KozGoPr6N`
+/// text boxes without the font) drew nothing, because craft-fonts has only Japanese faces.
+/// They now draw in a face already installed on the machine, read at runtime. A machine
+/// without such a face draws nothing, as before, so each check is skipped there.
+#[test]
+fn non_embedded_chinese_and_korean_cid_fonts_draw_with_an_installed_face() {
+    use hayro::hayro_interpret::font::FallbackFontQuery;
+    use hayro::hayro_interpret::hayro_cmap::CharacterCollection;
+    // (base font, collection, ordering, encoding, encoded text, descendant subtype)
+    let cases = [
+        ("MSung-Light", CidFamily::AdobeCNS1, "CNS1", "UniCNS-UCS2-H", "7E419AD45B57", "CIDFontType0"), // 繁體字
+        ("STSong-Light", CidFamily::AdobeGB1, "GB1", "UniGB-UCS2-H", "72698D448DF7", "CIDFontType0"),   // 物资跷
+        ("HYGoThic-Medium", CidFamily::AdobeKorea1, "Korea1", "UniKS-UCS2-H", "D55CAE00", "CIDFontType0"), // 한글
+        // The real Windows book uses non-embedded TrueType CID fonts and a legacy GBK CMap,
+        // without ToUnicode. These bytes encode 中文; they are not Unicode code points.
+        ("SimSun", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("SimHei", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("KaiTi", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("FangSong", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("ABCDEF+FZSSK--GBK1-0", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("ABCDEF+FZHTK--GBK1-0", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("ABCDEF+FZKTK--GBK1-0", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        ("ABCDEF+FZFSK--GBK1-0", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+    ];
+    for (base_font, family, ordering, encoding, code, subtype) in cases {
+        let query = FontQuery::Fallback(FallbackFontQuery {
+            post_script_name: Some(base_font.into()),
+            character_collection: Some(CharacterCollection { family, supplement: 2 }),
+            ..FallbackFontQuery::default()
+        });
+        if super::system_fallback(&query).is_none() {
+            eprintln!("no installed face for {base_font} (or PDFCRAFT_SYSTEM_FONTS=0): skipped");
+            continue;
+        }
+        let content = format!("BT /F1 40 Tf 5 15 Td <{code}> Tj ET");
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /{base_font} /Encoding /{encoding} /DescendantFonts [6 0 R] >> endobj
+6 0 obj << /Type /Font /Subtype /{subtype} /BaseFont /{base_font} /CIDSystemInfo << /Registry (Adobe) /Ordering ({ordering}) /Supplement 2 >>
+  /FontDescriptor 7 0 R /DW 1000 >> endobj
+7 0 obj << /Type /FontDescriptor /FontName /{base_font} /Flags 6 /FontBBox [0 -141 1000 859] /ItalicAngle 0 /Ascent 859 /Descent -141 /CapHeight 700 /StemV 80 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len()
+        );
+        let pdf = Arc::new(pdf.into_bytes());
+        let ink = |config: RenderConfig| {
+            let mut r = PageRenderer::new(pdf.clone(), config);
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+            assert!(p.error.is_none(), "{base_font}: {:?}", p.error);
+            p.rgba.as_chunks::<4>().0.iter().filter(|c| c[0] < 128).count()
+        };
+        // Two to four glyphs at 40 pt cover several hundred dark pixels; a blank run has none.
+        let shown = ink(RenderConfig { system_fonts: true, ..RenderConfig::default() });
+        assert!(shown > 300, "{base_font}: the text is drawn ({shown} dark pixels)");
+        // Off by default: exports, printing and OCR render without an installed font, so
+        // nothing drawn with one can be saved (AGENTS.md §1.2, §1.4).
+        let saved = ink(RenderConfig::default());
+        assert!(saved < 50, "{base_font}: not drawn without system_fonts ({saved} dark pixels)");
+        if encoding == "GBK-EUC-H" {
+            #[cfg(target_os = "windows")]
+            gbk_glyphs::assert_expected_glyphs(&pdf, base_font);
+            let mut renderer = PageRenderer::new(pdf, RenderConfig { system_fonts: true, ..Default::default() });
+            let text = renderer.render(RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() });
+            assert!(text.error.is_none(), "{base_font}: {:?}", text.error);
+            assert_eq!(text.text.unwrap().plain_text().trim(), "中文", "the fallback preserves GBK text mapping");
+        }
+    }
+}
+
+/// Print preview must match output even after the same worker cached an installed face.
+/// Switching back to the viewer must not retain the print resolver's missing-font result.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn print_preview_excludes_installed_fonts_without_poisoning_viewer_cache() {
+    use hayro::hayro_interpret::font::FallbackFontQuery;
+    use hayro::hayro_interpret::hayro_cmap::CharacterCollection;
+    let query = FontQuery::Fallback(FallbackFontQuery {
+        post_script_name: Some("SimSun".into()),
+        character_collection: Some(CharacterCollection { family: CidFamily::AdobeGB1, supplement: 2 }),
+        ..Default::default()
+    });
+    if super::system_fallback(&query).is_none() {
+        eprintln!("no installed GB1 face (or PDFCRAFT_SYSTEM_FONTS=0): skipped");
+        return;
+    }
+    let content = "BT /F1 40 Tf 5 15 Td <D6D0CEC4> Tj ET";
+    let bytes = Arc::new(format!(
+        "%PDF-1.7\n\
+         1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 120 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /SimSun /Encoding /GBK-EUC-H /DescendantFonts [6 0 R] >> endobj\n\
+         6 0 obj << /Type /Font /Subtype /CIDFontType2 /BaseFont /SimSun /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 2 >> /FontDescriptor 7 0 R /DW 1000 >> endobj\n\
+         7 0 obj << /Type /FontDescriptor /FontName /SimSun /Flags 6 /FontBBox [0 -141 1000 859] /ItalicAngle 0 /Ascent 859 /Descent -141 /CapHeight 700 /StemV 80 >> endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF", content.len()
+    ).into_bytes());
+    let config = RenderConfig::default().on_screen();
+    let mut inline = PageRenderer::new(bytes.clone(), config.clone());
+    let mut output = PageRenderer::new(bytes.clone(), RenderConfig::default());
+    let pool = RenderPool::new(bytes, 1, config);
+    for tile in [None, Some(Tile { x: 0, y: 0, w: 120, h: 60 })] {
+        // Cover both directions with a warm worker cache, including other caller tag bits.
+        for tag in [PRINT_TAG | 1, 2, PRINT_TAG | 3, 4] {
+            let req = RenderRequest { page: 0, scale: 1.0, tile, tag, ..Default::default() };
+            let truth = output.render(req);
+            assert!(truth.error.is_none(), "{:?}", truth.error);
+            pool.set_queue(vec![req]);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let worker = loop {
+                if let Some(page) = pool.try_recv() {
+                    break page;
+                }
+                assert!(std::time::Instant::now() < deadline, "print-preview worker timed out");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            for page in [inline.render(req), worker] {
+                assert!(page.error.is_none(), "{:?}", page.error);
+                if tag & PRINT_TAG != 0 {
+                    assert_eq!(page.rgba, truth.rgba, "print preview must match output, tile={tile:?}");
+                } else {
+                    let ink = page.rgba.as_chunks::<4>().0.iter().filter(|c| c[0] < 128).count();
+                    assert!(ink > 300, "viewer still draws installed Chinese glyphs: {ink}");
+                }
+            }
+        }
+    }
+}
+
+/// A malformed token in a content stream used to end the stream there, so the renderer, text
+/// extraction, Find and search-based redaction lost the rest of the page while the edit
+/// reader, MuPDF and pdftotext read it (#3565, #3568). Each token below is now stepped over.
+#[test]
+fn a_malformed_token_does_not_end_the_content_stream() {
+    // One token between two text objects. `BEFORE` is drawn before it, `AFTER` after.
+    let page = |token: &str| {
+        let stream = format!("BT /F1 8 Tf 2 30 Td (BEFORE) Tj ET {token} BT /F1 8 Tf 2 10 Td (AFTER) Tj ET");
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 60 40] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >> endobj\n5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", stream.len()).as_bytes());
+        pdf.extend_from_slice(stream.as_bytes());
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let text = renderer.render(RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() });
+        assert!(text.error.is_none(), "{token}: {:?}", text.error);
+        text.text.expect("a text layer").plain_text()
+    };
+
+    for token in [
+        // A `re` with three operands: the typed iterator used to abort on a path operator it
+        // could not dispatch, which is what #3568 reports.
+        "20 10 10 re",
+        // Eleven operands: under the 256 the stack holds, so this one runs on its own last
+        // operand. Past the limit is covered by
+        // `an_operator_past_the_operand_limit_reads_its_own_operands` below.
+        "0 0 0 0 0 0 0 0 0 0 0 g",
+        // A stray delimiter: the lexer could not read an operator and jumped to the end.
+        ")",
+        // The same with no space after it. Stepping over the regular characters that follow a
+        // delimiter ate the next operator, so the page lost its second text object
+        // (#3636 review); only the delimiter is stepped over.
+        ")BT ET",
+        // A malformed `#` escape in a name, so neither an object nor an operator read.
+        "/C#2 gs",
+        // And the well-formed forms still work.
+        "20 10 10 5 re n",
+        "0.5 g",
+    ] {
+        let text = page(token);
+        assert!(text.contains("BEFORE"), "{token}: {text:?}");
+        assert!(text.contains("AFTER"), "{token}: the rest of the page was lost: {text:?}");
+        assert!(text.find("BEFORE") < text.find("AFTER"), "{token}: the page is read in order: {text:?}");
+    }
+}
+
+/// An operator preceded by more operands than the stack holds is applied to its own operands,
+/// which are the ones nearest it, rather than to whichever of the strays survived. The parser
+/// had a branch meant to drop such an instruction whole, dead because `Stack::push` always
+/// reported success (noted in review of #3636); reviving it loses legitimate content, which
+/// `an_operator_with_hundreds_of_operands_does_not_end_the_content` measures, so the dead branch
+/// is gone and this pins what the ring buffer does instead.
+#[test]
+fn an_operator_past_the_operand_limit_reads_its_own_operands() {
+    // The strays are `1` and the operator's own operand is `0`, so the two answers differ: white
+    // if the operator read a stray, black if it read its own.
+    let page = |strays: usize| {
+        let stream = format!("{}0 g 0 0 20 20 re f", "1 ".repeat(strays));
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 20 20] /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{stream}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+            stream.len()
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(p.error.is_none(), "{strays} strays: {:?}", p.error);
+        p.rgba.as_chunks::<4>().0.to_vec()
+    };
+    let all_black = |pixels: &[[u8; 4]]| pixels.iter().all(|p| *p == [0, 0, 0, 255]);
+
+    // None, a few, the limit, and past it: the fill is the black the `g` asked for every time.
+    for strays in [0, 5, 255, 256, 257, 600] {
+        assert!(all_black(&page(strays)), "{strays} stray operands: the `g` reads its own operand");
+    }
+}
+
+/// Content after an inline image whose data holds `EI` is still read. This pins the property
+/// but does **not** exercise the look-ahead gating added for #3636's review: accepting a false
+/// `EI` truncates the image, while the text after the real one is read either way, and this
+/// assertion passes with the gating removed. Showing the truncation needs valid ASCII85 data
+/// that contains `EI`, which this fixture does not have.
+#[test]
+fn content_after_an_inline_image_holding_ei_is_still_read() {
+    // An ASCII85 image whose data holds `EI\n`, then an `re` with three operands and twenty
+    // `q`s -- enough steps to satisfy the look-ahead's counter if the bad `re` were skipped --
+    // before the real `EI`. `AFTER` is drawn once the image is over.
+    let stream = b"q 100 0 0 100 10 10 cm BI /W 4 /H 4 /CS /G /BPC 8 /F /A85 ID EI
+20 10 10 re q q q q q q q q q q q q q q q q q q q q EI Q BT /F1 8 Tf 2 4 Td (AFTER) Tj ET"
+        .to_vec();
+    let mut pdf =
+        b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 120 120] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >> endobj\n5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n"
+            .to_vec();
+    pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", stream.len()).as_bytes());
+    pdf.extend_from_slice(&stream);
+    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+
+    let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let text = renderer.render(RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() });
+    assert!(text.error.is_none(), "{:?}", text.error);
+    let page = text.text.expect("a text layer").plain_text();
+    // The image ran to the real `EI`, so the text after it is the page's only text: the first
+    // `EI` inside the data was not taken for the end.
+    assert!(page.contains("AFTER"), "the content after the image was lost: {page:?}");
+}

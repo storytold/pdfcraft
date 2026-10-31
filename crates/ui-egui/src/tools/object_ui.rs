@@ -9,6 +9,7 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
+use crate::page_router::{Hit, ObjectsPart, Owner};
 
 const BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
@@ -25,6 +26,9 @@ pub(crate) struct ObjectSelection {
     pub hold_editor: bool,
     blocked_page: Option<usize>,
     input_blocked: bool,
+    /// A paragraph (page, block) to select once the document is at hand: Esc in the inline
+    /// editor asks for it, and the next `prepare` selects it.
+    select_paragraph: Option<(usize, usize)>,
 }
 
 #[derive(Clone, Copy)]
@@ -62,6 +66,14 @@ impl ObjectSelection {
         self.gesture = None;
         self.pending = None;
         self.blocked_page = None;
+        self.select_paragraph = None;
+    }
+
+    /// Select paragraph `block` of `page` as an object at the next `prepare`, as Acrobat does
+    /// when Esc leaves a text box: the box is then selected, so Delete removes it, the arrow keys
+    /// move it and its frame drags it, without aiming for the frame.
+    pub(crate) fn select_paragraph_next(&mut self, page: usize, block: usize) {
+        self.select_paragraph = Some((page, block));
     }
 
     pub fn prepare(&mut self, doc: &Document, enabled: bool, ctx: &egui::Context) {
@@ -106,6 +118,15 @@ impl ObjectSelection {
         if self.page.is_some() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.clear();
         }
+        // After the Escape check: the Esc that closed the editor must not clear what it selected.
+        if let Some((page, block)) = self.select_paragraph.take()
+            && let Ok(objects) = self.inventory(doc, page)
+            && let Some(object) = objects.into_iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
+        {
+            self.clear();
+            self.page = Some(page);
+            self.selected.push(object);
+        }
     }
 
     /// The move of the whole selection by `offset` (user space). The selection follows it.
@@ -149,7 +170,7 @@ fn screen(xf: &PageXform, info: &DocInfo, page: usize, object: &EditableObject) 
     xf.user_rect(info, page, object.rect.map(|v| v as f32))
 }
 
-fn modified(ui: &egui::Ui) -> bool {
+pub(crate) fn modified(ui: &egui::Ui) -> bool {
     ui.input(|i| {
         let modifiers = i
             .events
@@ -178,6 +199,55 @@ fn leave_single(view: &mut DocView) {
     view.image_selection = None;
     view.line_editor = None;
     view.block_drag = None;
+}
+
+fn added_at(s: &mut ObjectSelection, doc: &Document, xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> Option<ObjectTarget> {
+    s.inventory(doc, page)
+        .ok()?
+        .iter()
+        .rev()
+        .find(|o| o.target.kind == ObjectKind::Added && screen(xf, info, page, o).expand(2.0).contains(p))
+        .map(|o| o.target)
+}
+
+/// The selection or open paragraph frame under `p`. The central table supplies the visible
+/// object beneath it: a selected frame must leave an unselected image in its empty space alone.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn hit(
+    view: &mut DocView,
+    doc: &Document,
+    xf: &PageXform,
+    info: &DocInfo,
+    page: usize,
+    open: Option<&pdfcraft_engine::TextBlock>,
+    beneath: Option<&Hit>,
+    additive: bool,
+    p: Pos2,
+) -> Option<Hit> {
+    // Added metadata is in the display space in which it was written. The page may since
+    // have rotated or been cropped: modifier selection and existing groups use the inventory's
+    // actual placement, just like moving that selection. Its raw text is not a separate object.
+    let has_selection = view.objects.page == Some(page) && !view.objects.selected.is_empty();
+    let actual_added = if additive || has_selection { added_at(&mut view.objects, doc, xf, info, page, p) } else { None };
+    if additive && let Some(target) = actual_added {
+        return Some(Hit::new(Owner::Objects { part: ObjectsPart::Item { target } }, Layer::Placed, egui::CursorIcon::Move));
+    }
+    let s = &view.objects;
+    let target = actual_added.or_else(|| beneath.and_then(|h| h.owner.object_target()));
+    let visible = actual_added.or_else(|| beneath.filter(|h| h.layer != Layer::ToolArea).and_then(|h| h.owner.object_target()));
+    if has_selection
+        && s.selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o))).contains(p)
+        && visible.is_none_or(|target| s.selected.iter().any(|o| o.target == target))
+    {
+        return Some(Hit::new(Owner::Objects { part: ObjectsPart::Selection { target } }, Layer::Placed, egui::CursorIcon::Move));
+    }
+    open.filter(|block| {
+        crate::edit_text_ui::paragraph_on_frame(xf, info, page, block, p)
+            || (block.rotation.abs() < 0.001
+                && info.pages.get(page).is_some_and(|p| (p.rotation + xf.rot).is_multiple_of(360))
+                && on_frame(xf.user_rect(info, page, block.editing_rect().map(|v| v as f32)), p))
+    })
+    .map(|_| Hit::new(Owner::Objects { part: ObjectsPart::Frame }, Layer::Handle, egui::CursorIcon::Move))
 }
 
 /// Returns true while group selection owns the interaction. Ordinary clicks still reach the
@@ -265,14 +335,7 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
         return s.page == Some(page) && !s.selected.is_empty();
     };
     if !pressed {
-        if s.page == Some(page) && !s.selected.is_empty() {
-            let union = s.selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o)));
-            if union.contains(p) {
-                view.cursor.claim(Layer::Placed, egui::CursorIcon::Move);
-            }
-            return true;
-        }
-        return false;
+        return s.page == Some(page) && !s.selected.is_empty();
     }
     let objects = match s.inventory(doc, page) {
         Ok(objects) => objects,
@@ -285,31 +348,13 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
         }
     };
     let additive = modified(ui);
-    let text_blocks = doc.text_blocks(page);
-    let image = crate::edit_text_ui::image_at(xf, info, page, &doc.page_images(page), p);
-    // A page-sized background image must not hide editable labels or added notes.
-    // Frame-only space is a fallback: it must not hide another visible object. Within each
-    // kind, prefer the last object as the ordinary single-item tools do.
-    let visible_hit = [ObjectKind::Added, ObjectKind::Text, ObjectKind::Image].into_iter().find_map(|kind| {
-        objects.iter().rev().find(|o| {
-            o.target.kind == kind
-                && match kind {
-                    ObjectKind::Added => screen(xf, info, page, o).expand(2.0).contains(p),
-                    ObjectKind::Text => {
-                        text_blocks.get(o.target.index).is_some_and(|b| crate::edit_text_ui::paragraph_ink_contains(xf, info, page, b, p))
-                    }
-                    ObjectKind::Image => image == Some(o.target.index),
-                }
-        })
+    let owner = view.router.owner(page);
+    let target = owner.and_then(|owner| owner.object_target()).or_else(|| {
+        (owner == Some(Owner::Objects { part: ObjectsPart::Frame }))
+            .then(|| view.line_editor.as_ref().filter(|e| e.page == page).map(|e| ObjectTarget { kind: ObjectKind::Text, index: e.block }))
+            .flatten()
     });
-    // Blank frame space follows the text's orientation; its AABB is only for rectangular
-    // selection and moving a selection that already exists.
-    let hit = visible_hit.or_else(|| {
-        objects.iter().rev().find(|o| {
-            o.target.kind == ObjectKind::Text
-                && text_blocks.get(o.target.index).is_some_and(|b| crate::edit_text_ui::paragraph_contains(xf, info, page, b, p))
-        })
-    });
+    let hit = target.and_then(|target| objects.iter().find(|o| o.target == target));
     if additive {
         if s.page != Some(page) {
             s.clear();
@@ -335,23 +380,14 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
         view.current = page;
         return true;
     }
-    if s.page == Some(page) && !s.selected.is_empty() {
-        let union = s.selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o)));
-        if union.contains(p) && visible_hit.is_none_or(|hit| s.selected.iter().any(|o| o.target == hit.target)) && !resp.double_clicked() {
-            s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
-            return true;
-        }
+    // The captured owner decides whether the selection moves, never a second press hit test.
+    if matches!(owner, Some(Owner::Objects { part: ObjectsPart::Selection { .. } })) && !resp.double_clicked() {
+        s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
+        return true;
     }
-    // The frame of the paragraph open for typing takes hold of the box, as in Acrobat: a click
-    // selects it (for the arrow keys), a drag moves it. Its text keeps the caret.
-    if let Some(block) = view.line_editor.as_ref().filter(|e| e.page == page && !e.has_changes()).map(|e| e.block)
+    if owner == Some(Owner::Objects { part: ObjectsPart::Frame })
+        && let Some(block) = view.line_editor.as_ref().filter(|e| e.page == page && !e.has_changes()).map(|e| e.block)
         && let Some(object) = objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
-        && text_blocks.get(block).is_some_and(|b| {
-            crate::edit_text_ui::paragraph_on_frame(xf, info, page, b, p)
-                || (b.rotation.abs() < 0.001
-                    && info.pages.get(page).is_some_and(|p| (p.rotation + xf.rot).is_multiple_of(360))
-                    && on_frame(screen(xf, info, page, object), p))
-        })
     {
         s.clear();
         s.page = Some(page);
@@ -362,13 +398,8 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
         return true;
     }
     s.clear();
-    // A closed paragraph's edge handle reaches past its box; leave those presses to the
-    // paragraph resize controls instead of starting an area selection (#2276).
-    let on_edge = view.line_editor.as_ref().is_none_or(|e| e.page != page) && crate::edit_text_ui::grabs_edge(xf, info, page, text_blocks.iter(), p);
-    let in_text_frame = text_blocks
-        .iter()
-        .any(|b| (b.horizontal_frame.is_some() || b.vertical_frame.is_some()) && crate::edit_text_ui::paragraph_contains(xf, info, page, b, p));
-    if hit.is_some() || on_edge || in_text_frame {
+    // A press on any routed object or handle belongs to it; only empty page starts a marquee.
+    if owner.is_some() {
         return false;
     }
     leave_single(view);
@@ -381,11 +412,8 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
 /// Whether `p` is on the frame drawn around a paragraph open for typing (`r`, screen): just
 /// outside the text, where a press would otherwise close the paragraph.
 fn on_frame(r: Rect, p: Pos2) -> bool {
-    r.expand(2.0 + FRAME_REACH).contains(p) && !r.expand(2.0).contains(p)
+    r.expand(2.0 + crate::edit_text_ui::FRAME_REACH).contains(p) && !r.expand(2.0).contains(p)
 }
-
-/// How far outside a paragraph's frame a press still grabs it (screen pixels).
-const FRAME_REACH: f32 = 6.0;
 
 /// The arrow keys move the selected image or objects a point, Shift and an arrow ten points,
 /// as in Acrobat. They are taken before the view turns the page with them.
@@ -397,22 +425,28 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document
     let objects = view.objects.page.filter(|_| !view.objects.selected.is_empty() && view.objects.gesture.is_none());
     let Some(page) = objects.or(image.map(|(page, _)| page)) else { return };
     let Some(xf) = view.page_xform(page) else { return };
-    use egui::{Key, Modifiers};
+    use egui::Key;
     let mut step = egui::Vec2::ZERO;
     ctx.input_mut(|i| {
-        for (key, direction) in [
-            (Key::ArrowLeft, egui::vec2(-1.0, 0.0)),
-            (Key::ArrowRight, egui::vec2(1.0, 0.0)),
-            (Key::ArrowUp, egui::vec2(0.0, -1.0)),
-            (Key::ArrowDown, egui::vec2(0.0, 1.0)),
-        ] {
-            // Shift first: a plain key pattern also matches a Shift press.
-            if i.consume_key(Modifiers::SHIFT, key) {
-                step += direction * 10.0;
-            } else if i.consume_key(Modifiers::NONE, key) {
-                step += direction;
+        // Only an arrow pressed alone or with Shift, judged by each press's own modifiers (the
+        // frame's can differ when a key is let go in the same frame). Alt+← / Alt+→ go back and
+        // forward through the view history (#3632) and Ctrl/⌘+← / → turn the page, both in
+        // `canvas::shortcuts`.
+        i.events.retain(|e| {
+            let egui::Event::Key { key, pressed: true, modifiers, .. } = e else { return true };
+            if modifiers.alt || modifiers.ctrl || modifiers.command || modifiers.mac_cmd {
+                return true;
             }
-        }
+            let direction = match key {
+                Key::ArrowLeft => egui::vec2(-1.0, 0.0),
+                Key::ArrowRight => egui::vec2(1.0, 0.0),
+                Key::ArrowUp => egui::vec2(0.0, -1.0),
+                Key::ArrowDown => egui::vec2(0.0, 1.0),
+                _ => return true,
+            };
+            step += direction * if modifiers.shift { 10.0 } else { 1.0 };
+            false
+        });
     });
     if step == egui::Vec2::ZERO {
         return;

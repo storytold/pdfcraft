@@ -173,7 +173,7 @@ fn xfdf_fields(doc: &Document, out: &mut String) {
         }
         node.values = match f.kind {
             FieldKind::CheckBox | FieldKind::Radio if f.value.is_empty() => vec!["Off".into()],
-            _ => f.value.clone(),
+            _ => f.export_values(),
         };
     }
     fn write_node(name: &str, node: &Node, out: &mut String) {
