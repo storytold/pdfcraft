@@ -1105,7 +1105,7 @@ fn mono(doc: &Document, s: &Stream, ppi: f64, defaults: bool, settings: &MonoSet
     // What can't be averaged, whatever it holds, comes to the same `None` below, after a decode that
     // would spend the run's allowance on it.
     let too_wide = d.int(b"Width").is_some_and(|w| w > i64::from(pdfcraft_filters::MAX_CCITT_COLUMNS));
-    if only_to_resample && (!downsample || defaults || too_wide || (jbig2 && dark_is_one(doc, d).is_none())) {
+    if only_to_resample && (!downsample || defaults || too_wide || settings.target_ppi >= ppi || (jbig2 && dark_is_one(doc, d).is_none())) {
         return None;
     }
     let (data, w, h, packed) = one_bit(doc, s, !retain, defaults, budget)?;
@@ -1416,13 +1416,16 @@ mod dimension_tests {
             edit(&mut dict);
             Stream::from_raw(dict, pdfcraft_filters::encode_jbig2_generic(&[0xF0; 4], 16, 2).unwrap())
         };
-        let settings = MonoSettings { compression: MonoCompression::Retain, ..MonoSettings::REDUCE };
-        let spent = |s: &Stream, defaults: bool| {
+        let spent_at = |target_ppi: f64, s: &Stream, defaults: bool| {
+            let settings = MonoSettings { compression: MonoCompression::Retain, above_ppi: 100.0, target_ppi, ..MonoSettings::REDUCE };
             let mut budget = ImageBudget::with_work(u64::MAX);
             let _ = mono(&Document::new_empty(), s, 720.0, defaults, &settings, &mut budget);
             u64::MAX - budget.work_left()
         };
+        let spent = |s: &Stream, defaults: bool| spent_at(300.0, s, defaults);
         let plain = image(&|_| {});
+        assert_eq!(spent_at(720.0, &plain, false), 0, "already at the target");
+        assert!(spent_at(719.0, &plain, false) > 0, "just above it");
         assert!(spent(&plain, false) > 0, "one that can be averaged is decoded");
         assert_eq!(spent(&plain, true), 0, "drawn where a device colour space is remapped");
         let width = |w: i64| image(&move |d| d.set(b"Width".to_vec(), Object::Int(w)));
