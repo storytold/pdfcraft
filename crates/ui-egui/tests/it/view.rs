@@ -1161,6 +1161,54 @@ fn single_page_fit_page_fits_the_shown_page() {
 }
 
 #[test]
+fn fit_page_while_scrolling_shows_one_whole_page() {
+    // Scrolling at Zoom to page level, the current page shows whole and no other page shows:
+    // fitted between two margins, the top of the next page showed beneath it.
+    use pdfcraft_ui_egui::canvas::Fit;
+    let mut h = harness(&[]);
+    let alone = |h: &Harness<'static, PdfCraftApp>, page: usize, how: &str| {
+        let vp = h.state().views[0].viewport_rect();
+        let r = rect(h, page).expect("the page shown");
+        assert!(r.top() >= vp.top() - 1.0 && r.bottom() <= vp.bottom() + 1.0, "{how}: page {} whole: {r:?} in {vp:?}", page + 1);
+        for other in (0..3).filter(|&p| p != page) {
+            if let Some(o) = rect(h, other) {
+                assert!(o.bottom() <= vp.top() + 1.0 || o.top() >= vp.bottom() - 1.0, "{how}: page {} out of sight: {o:?} in {vp:?}", other + 1);
+            }
+        }
+    };
+    // As a document opens at Fit page: at the top, the first page lower than going to it puts it.
+    h.state_mut().views[0].fit = Fit::Page;
+    h.run_steps(4);
+    alone(&h, 0, "at the top");
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(4);
+    alone(&h, 1, "going to page 2");
+    // From partway down a page at Fit width, both ways in fit the current page.
+    let scrolled = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Num2); // fit width
+        h.run_steps(4);
+        let at = h.state().views[0].viewport_rect().center();
+        h.hover_at(at);
+        h.event(wheel(MouseWheelUnit::Line, -4.0, TouchPhase::Move));
+        h.run_steps(4);
+        let vp = h.state().views[0].viewport_rect();
+        assert!(rect(h, 1).expect("page 2").top() < vp.top(), "partway down page 2");
+        assert_eq!(h.state().views[0].current, 1);
+    };
+    scrolled(&mut h);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num0); // fit page
+    h.run_steps(4);
+    alone(&h, 1, "⌘0");
+    scrolled(&mut h);
+    crate::support::open_menu(&mut h, "View");
+    crate::support::menu_row(&h, "Zoom").hover();
+    h.run_steps(3);
+    h.get_by_label_contains("Zoom to page level").click();
+    h.run_steps(4);
+    alone(&h, 1, "View ▸ Zoom ▸ Zoom to page level");
+}
+
+#[test]
 fn clicking_a_link_goes_to_its_destination() {
     // Default fit-width zoom: pages are taller than the window, so the target can scroll to the top.
     let mut h = harness(&[]);
