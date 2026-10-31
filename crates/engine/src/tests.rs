@@ -6158,24 +6158,27 @@ fn a_static_xfa_form_takes_many_data_values_as_one_by_one() {
 /// Opening a static XFA form whose datasets fill thousands of fields took minutes: each value
 /// read the whole form again (twice), so the time grew with the square of the fields. Eight
 /// times the fields now takes at most about eight times as long (it took about fifty).
+///
+/// Each round opens the small form and then the large one, so a busy spell on a shared machine
+/// slows both, and the best round's ratio is checked. Timing every small opening before the
+/// large ones let such a spell fall on the large ones alone.
 #[test]
 fn opening_a_static_xfa_form_grows_linearly_with_its_data_values() {
-    let time = |n: usize| {
-        let bytes = Arc::new(pdfcraft_xfa::fixtures::static_shell_many(n));
-        (0..3)
-            .map(|_| {
-                let mut s = Session::new();
-                let start = std::time::Instant::now();
-                s.open("many.pdf", None, bytes.clone(), None).expect("opens");
-                start.elapsed()
-            })
-            .min()
-            .unwrap_or_default()
+    let small = Arc::new(pdfcraft_xfa::fixtures::static_shell_many(100));
+    let large = Arc::new(pdfcraft_xfa::fixtures::static_shell_many(800));
+    let time = |bytes: &Arc<Vec<u8>>| {
+        let mut s = Session::new();
+        let start = std::time::Instant::now();
+        s.open("many.pdf", None, bytes.clone(), None).expect("opens");
+        start.elapsed()
     };
-    let small = time(100);
-    let large = time(800);
-    let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-6);
-    assert!(ratio < 16.0, "100 fields: {small:?}, 800 fields: {large:?} ({ratio:.1}x)");
+    // The first openings also pay for what the process sets up once.
+    time(&small);
+    time(&large);
+    let rounds: Vec<_> = (0..5).map(|_| (time(&small), time(&large))).collect();
+    let ratio = |(s, l): &(std::time::Duration, std::time::Duration)| l.as_secs_f64() / s.as_secs_f64().max(1e-6);
+    let best = rounds.iter().map(ratio).fold(f64::INFINITY, f64::min);
+    assert!(best < 16.0, "100 and 800 fields, by round: {rounds:?} (best {best:.1}x)");
 }
 
 /// A date goes into the XFA data in the field's data picture (`<bind><picture>`), as other
