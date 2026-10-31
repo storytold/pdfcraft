@@ -248,6 +248,7 @@ impl<'a> Inspector<'a> {
         }
         self.layers(catalog, &mut info.layers);
         info.layer_groups = self.layer_groups(catalog);
+        info.layer_order = self.layer_order(catalog, &info.layers);
         self.fonts(&mut info.fonts);
         if let Some(names) = catalog.get(b"Names").ok().and_then(|o| self.dict(o)) {
             if let Some(ef) = names.get(b"EmbeddedFiles").ok().and_then(|o| self.dict(o)) {

@@ -1,9 +1,9 @@
 #[cfg(test)]
 use super::core::inspect;
 use super::core::{Inspector, load_options};
-use super::model::{Attachment, AttachmentSource, FontInfo, Layer, PageTransition, TransitionStyle};
-use super::navigation::NameTreeSeen;
-use super::{AssertUnwindSafe, Dictionary, DocInfo, Document, HashSet, Object, ObjectId, catch_unwind};
+use super::model::{Attachment, AttachmentSource, FontInfo, Layer, LayerItem, LayerRow, PageTransition, TransitionStyle};
+use super::navigation::{NameTreeSeen, text_string};
+use super::{AssertUnwindSafe, Dictionary, DocInfo, Document, HashMap, HashSet, Object, ObjectId, catch_unwind};
 
 /// Decoded bytes read from an XFA form's configuration packet (or a whole-XDP `/XFA` stream) to
 /// find `dynamicRender`. Designer's packets are a few kilobytes; a whole XDP can hold the template.
@@ -11,6 +11,25 @@ const MAX_XFA_CONFIG_BYTES: usize = 16 << 20;
 
 /// At most this many layers are read from all of `/RBGroups` together.
 const MAX_LAYER_GROUP_ENTRIES: usize = 4096;
+
+/// The configuration's auto state (`/AS`): at most this many usage application dictionaries,
+/// `/OCGs` entries across them, and `/Category` names in each are read. The renderer's
+/// (vendored hayro-interpret patch (67)) have the same values.
+const MAX_AUTO_STATE_APPLICATIONS: usize = 256;
+const MAX_AUTO_STATE_GROUPS: usize = 4096;
+const MAX_AUTO_STATE_CATEGORIES: usize = 16;
+
+/// The Layers panel's rows from `/Order`: at most this many rows, nested at most this deep, and
+/// a label keeps at most this many characters.
+pub(super) const MAX_LAYER_ORDER_ROWS: usize = 4096;
+const MAX_LAYER_ORDER_DEPTH: usize = 32;
+pub(super) const MAX_LAYER_LABEL_CHARS: usize = 256;
+
+#[cfg(test)]
+thread_local! {
+    /// Layer labels decoded by [`Inspector::layer_order`] on this thread.
+    pub(super) static LABEL_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 impl<'a> Inspector<'a> {
     // ── object helpers ──────────────────────────────────────────────────────────────────────
@@ -100,17 +119,143 @@ impl<'a> Inspector<'a> {
             .and_then(|o| self.resolve(o).as_array().ok())
             .map(|a| a.iter().filter_map(|x| x.as_reference().ok()).collect())
             .unwrap_or_default();
+        let auto = config.map(|c| self.view_auto_state(c)).unwrap_or_default();
         let Ok(Object::Array(ocgs)) = props.get(b"OCGs").map(|o| self.resolve(o)) else { return };
         for g in ocgs {
             let Some(d) = self.dict(g) else { continue };
             let id = g.as_reference().ok();
+            // The View auto state, when it manages the group, then the configuration.
             let visible = match id {
+                Some(id) if let Some(&state) = auto.get(&id) => state,
                 Some(id) if off.contains(&id) => false,
                 Some(id) if on.contains(&id) => true,
                 _ => !base_off,
             };
             let Some(id) = id else { continue };
             out.push(Layer { id, name: self.text(d, b"Name").unwrap_or_else(|| "Layer".into()), visible, initial: visible });
+        }
+    }
+
+    /// The state the configuration's auto state (`/AS`) gives each group it manages for the View
+    /// event (ISO 32000-2 §8.11.4.4, Table 101), which overrides `/BaseState`, `/ON` and `/OFF`
+    /// as the document opens. Keep in step with the renderer's (vendored hayro-interpret patch
+    /// (67), `apply_view_auto_state`): each usage application with `/Event /View` and `/View` in
+    /// its `/Category` recommends the `/ViewState` of each group in its `/OCGs` whose `/Usage`
+    /// gives one; a group is on only if all its recommendations are. Groups with none are absent.
+    /// Other categories (`/Zoom`, `/User`, `/Language`) give no recommendation here.
+    fn view_auto_state(&self, config: &Dictionary) -> HashMap<ObjectId, bool> {
+        let mut out: HashMap<ObjectId, bool> = HashMap::new();
+        let Some(applications) = config.get(b"AS").ok().and_then(|o| self.resolve(o).as_array().ok()) else { return out };
+        let mut groups_left = MAX_AUTO_STATE_GROUPS;
+        for application in applications.iter().take(MAX_AUTO_STATE_APPLICATIONS) {
+            let Some(application) = self.dict(application) else { continue };
+            if self.name(application, b"Event").as_deref() != Some("View") {
+                continue;
+            }
+            let views = application.get(b"Category").ok().and_then(|o| self.resolve(o).as_array().ok()).is_some_and(|categories| {
+                categories.iter().take(MAX_AUTO_STATE_CATEGORIES).any(|c| matches!(c, Object::Name(n) if n.as_slice() == b"View"))
+            });
+            if !views {
+                continue;
+            }
+            let Some(groups) = application.get(b"OCGs").ok().and_then(|o| self.resolve(o).as_array().ok()) else { continue };
+            for g in groups {
+                if groups_left == 0 {
+                    return out;
+                }
+                groups_left -= 1;
+                let Ok(id) = g.as_reference() else { continue };
+                let state = self
+                    .dict(g)
+                    .and_then(|d| d.get(b"Usage").ok())
+                    .and_then(|o| self.dict(o))
+                    .and_then(|u| u.get(b"View").ok())
+                    .and_then(|o| self.dict(o))
+                    .and_then(|v| self.name(v, b"ViewState"));
+                let on = match state.as_deref() {
+                    Some("ON") => true,
+                    Some("OFF") => false,
+                    _ => continue,
+                };
+                let entry = out.entry(id).or_insert(true);
+                *entry &= on;
+            }
+        }
+        out
+    }
+
+    /// The Layers panel's rows: the default configuration's `/Order` (ISO 32000-2 Table 99). Its
+    /// entries are groups, shown by name, and nested arrays, shown as a tree one level deeper;
+    /// a nested array may start with a text string, a label that is not a group. Groups not
+    /// listed aren't presented, and `/Order` defaults to the empty array in the default
+    /// configuration, so a document without one presents no layers. An entry that is neither a
+    /// group in `/OCGs` nor an array is skipped. Bounded by `MAX_LAYER_ORDER_*`, an indirect
+    /// array is read once, so a cycle ends, and an indirect label is decoded once, however many
+    /// arrays it heads.
+    pub(super) fn layer_order(&self, catalog: &Dictionary, layers: &[Layer]) -> Vec<LayerRow> {
+        let mut out = Vec::new();
+        let Some(config) = catalog.get(b"OCProperties").ok().and_then(|o| self.dict(o)).and_then(|p| p.get(b"D").ok()).and_then(|o| self.dict(o))
+        else {
+            return out;
+        };
+        let Some(order) = config.get(b"Order").ok() else { return out };
+        let index: HashMap<ObjectId, usize> = layers.iter().enumerate().map(|(i, l)| ((l.id.0, l.id.1), i)).collect();
+        let mut seen = HashSet::new();
+        if let Object::Reference(id) = order {
+            seen.insert(*id);
+        }
+        if let Ok(items) = self.resolve(order).as_array() {
+            self.layer_order_rows(items, 0, &index, &mut seen, &mut HashMap::new(), &mut out);
+        }
+        out
+    }
+
+    /// `labels` holds each indirect label already decoded: one string object can head any
+    /// number of direct arrays, and each decode costs its full length before the cut.
+    fn layer_order_rows(
+        &self,
+        items: &'a [Object],
+        depth: usize,
+        index: &HashMap<ObjectId, usize>,
+        seen: &mut HashSet<ObjectId>,
+        labels: &mut HashMap<ObjectId, String>,
+        out: &mut Vec<LayerRow>,
+    ) {
+        if depth > MAX_LAYER_ORDER_DEPTH {
+            return;
+        }
+        for item in items {
+            if out.len() >= MAX_LAYER_ORDER_ROWS {
+                return;
+            }
+            if let Object::Reference(id) = item {
+                if let Some(&layer) = index.get(id) {
+                    out.push(LayerRow { depth, item: LayerItem::Layer(layer) });
+                    continue;
+                }
+                // An indirect nested array, read once.
+                if !seen.insert(*id) {
+                    continue;
+                }
+            }
+            let Ok(nested) = self.resolve(item).as_array() else { continue };
+            let rest = match nested.split_first() {
+                Some((first, rest)) if let Object::String(bytes, _) = self.resolve(first) => {
+                    let decode = || {
+                        #[cfg(test)]
+                        LABEL_DECODES.with(|n| n.set(n.get().saturating_add(1)));
+                        text_string(bytes).chars().take(MAX_LAYER_LABEL_CHARS).collect::<String>()
+                    };
+                    let label = match first {
+                        Object::Reference(id) => labels.entry(*id).or_insert_with(decode).clone(),
+                        _ => decode(),
+                    };
+                    out.push(LayerRow { depth, item: LayerItem::Label(label) });
+                    rest
+                }
+                _ => nested.as_slice(),
+            };
+            self.layer_order_rows(rest, depth.saturating_add(1), index, seen, labels, out);
         }
     }
 
