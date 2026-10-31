@@ -6,6 +6,8 @@ use ahash::AHashMap;
 use tracing::warn;
 
 use sctk::reexports::client::backend::ObjectId;
+use sctk::reexports::client::protocol::wl_data_device::WlDataDevice;
+use sctk::reexports::client::protocol::wl_data_device_manager::WlDataDeviceManager;
 use sctk::reexports::client::protocol::wl_seat::WlSeat;
 use sctk::reexports::client::protocol::wl_touch::WlTouch;
 use sctk::reexports::client::{Connection, Proxy, QueueHandle};
@@ -19,6 +21,7 @@ use crate::event::WindowEvent;
 use crate::keyboard::ModifiersState;
 use crate::platform_impl::wayland::state::WinitState;
 
+pub(crate) mod dnd;
 mod keyboard;
 mod pointer;
 mod text_input;
@@ -34,6 +37,9 @@ use touch::TouchPoint;
 
 #[derive(Debug, Default)]
 pub struct WinitSeatState {
+    // PdfCraft patch: receiving data devices belong to seats, not pointer capabilities (#634).
+    data_device: Option<WlDataDevice>,
+
     /// The pointer bound on the seat.
     pointer: Option<Arc<ThemedPointer<WinitPointerData>>>,
 
@@ -62,6 +68,15 @@ pub struct WinitSeatState {
 impl WinitSeatState {
     pub fn new() -> Self {
         Default::default()
+    }
+
+    pub fn bind_data_device(
+        &mut self,
+        manager: Option<&WlDataDeviceManager>,
+        queue_handle: &QueueHandle<WinitState>,
+        seat: &WlSeat,
+    ) {
+        self.data_device = manager.map(|manager| manager.get_data_device(seat, queue_handle, ()));
     }
 }
 
@@ -203,10 +218,12 @@ impl SeatHandler for WinitState {
     fn new_seat(
         &mut self,
         _connection: &Connection,
-        _queue_handle: &QueueHandle<Self>,
+        queue_handle: &QueueHandle<Self>,
         seat: WlSeat,
     ) {
-        self.seats.insert(seat.id(), WinitSeatState::new());
+        let mut seat_state = WinitSeatState::new();
+        seat_state.bind_data_device(self.dnd.manager.as_ref(), queue_handle, &seat);
+        self.seats.insert(seat.id(), seat_state);
     }
 
     fn remove_seat(
@@ -216,6 +233,12 @@ impl SeatHandler for WinitState {
         seat: WlSeat,
     ) {
         if let Some(mut seat_state) = self.seats.remove(&seat.id()) {
+            if let Some(device) = seat_state.data_device.take() {
+                self.dnd_remove_device(&device);
+                if device.version() >= 2 {
+                    device.release();
+                }
+            }
             if let Some(text_input) = seat_state.text_input.take() {
                 text_input.destroy();
             }

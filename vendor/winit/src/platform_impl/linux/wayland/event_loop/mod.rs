@@ -453,6 +453,7 @@ impl<T: 'static> EventLoop<T> {
             buffer_sink.append(&mut state.window_events_sink.lock().unwrap());
         });
         for event in buffer_sink.drain() {
+            self.with_state(|state| state.dnd.record_cursor(&event));
             let event = event.map_nonuser_event().unwrap();
             callback(event, &self.window_target);
         }
@@ -462,6 +463,7 @@ impl<T: 'static> EventLoop<T> {
             buffer_sink.append(&mut state.events_sink);
         });
         for event in buffer_sink.drain() {
+            self.with_state(|state| state.dnd.record_cursor(&event));
             let event = event.map_nonuser_event().unwrap();
             callback(event, &self.window_target);
         }
@@ -473,11 +475,14 @@ impl<T: 'static> EventLoop<T> {
 
         for window_id in window_ids.iter() {
             let event = self.with_state(|state| {
+                let drop_ready = state.dnd.has_ready_drop(*window_id);
                 let window_requests = state.window_requests.get_mut();
                 if window_requests.get(window_id).unwrap().take_closed() {
                     mem::drop(window_requests.remove(window_id));
                     mem::drop(state.windows.get_mut().remove(window_id));
-                    return Some(WindowEvent::Destroyed);
+                    // PdfCraft patch: a closed window must release pending file offers (#634).
+                    state.dnd_remove_window(*window_id);
+                    return Some((WindowEvent::Destroyed, None));
                 }
 
                 let mut window =
@@ -494,15 +499,35 @@ impl<T: 'static> EventLoop<T> {
 
                 // Redraw the frame while at it.
                 redraw_requested |= window.refresh_frame();
+                redraw_requested |= drop_ready;
 
-                redraw_requested.then_some(WindowEvent::RedrawRequested)
+                redraw_requested
+                    .then_some((WindowEvent::RedrawRequested, Some(window.scale_factor())))
             });
 
-            if let Some(event) = event {
+            if let Some((event, drop_scale)) = event {
                 callback(
                     Event::WindowEvent { window_id: crate::window::WindowId(*window_id), event },
                     &self.window_target,
                 );
+                if let Some(scale) = drop_scale {
+                    // PdfCraft patch: consume ordinary input at its current cursor first. Each
+                    // completed file transfer then gets its own frame at its saved drop position,
+                    // before restoring the current cursor or delivering another transfer (#634).
+                    while let Some(batch) =
+                        self.with_state(|state| state.dnd_take_drop(*window_id, scale))
+                    {
+                        batch.dispatch(|event| {
+                            callback(
+                                Event::WindowEvent {
+                                    window_id: crate::window::WindowId(*window_id),
+                                    event,
+                                },
+                                &self.window_target,
+                            );
+                        });
+                    }
+                }
             }
         }
 
@@ -515,7 +540,8 @@ impl<T: 'static> EventLoop<T> {
         callback(Event::AboutToWait, &self.window_target);
 
         // Update the window frames and schedule redraws.
-        let mut wake_up = false;
+        // A completed drop may have restored a newer drag's hover after the input drain.
+        let mut wake_up = self.with_state(|state| !state.events_sink.is_empty());
         for window_id in window_ids.drain(..) {
             wake_up |= self.with_state(|state| match state.windows.get_mut().get_mut(&window_id) {
                 Some(window) => {
