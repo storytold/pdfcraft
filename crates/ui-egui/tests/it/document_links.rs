@@ -149,6 +149,93 @@ fn pending(url: &str, origin: LinkOrigin) -> Option<PendingLink> {
     Some(PendingLink { url: url.into(), origin })
 }
 
+const BOOKMARK_URL: &str = "https://example.org/from-a-bookmark";
+
+/// Three 300×400 pages whose bookmarks open a web address, go to page 2 of `target.pdf` (a remote
+/// go-to, whose `[1 /Fit]` is the other file's page) and go to page 3 here.
+fn bookmark_fixture() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 6 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R >>".to_string(),
+        "<< /Type /Outlines /First 7 0 R /Last 9 0 R /Count 3 >>".to_string(),
+        format!("<< /Title (Website) /Parent 6 0 R /Next 8 0 R /A << /S /URI /URI ({BOOKMARK_URL}) >> >>"),
+        "<< /Title (Chapter in target) /Parent 6 0 R /Prev 7 0 R /Next 9 0 R /A << /S /GoToR /F (target.pdf) /D [1 /Fit] >> >>".to_string(),
+        "<< /Title (Appendix) /Parent 6 0 R /Prev 8 0 R /Dest [5 0 R /Fit] >>".to_string(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// The app with [`bookmark_fixture`] open from `source_path` (in memory when `None`) and the
+/// Bookmarks panel showing.
+fn bookmark_harness(source_path: Option<String>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("source.pdf", source_path, bookmark_fixture()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "bookmarks").unwrap();
+        app
+    });
+    h.run_steps(8);
+    h
+}
+
+/// Click the Bookmarks panel row titled `title`.
+fn click_bookmark(h: &mut Harness<'static, PdfCraftApp>, title: &str) {
+    h.get_by_label(title).click();
+    h.run_steps(4);
+}
+
+/// A bookmark that opens a web address asks first, as a link does, and stays on the page; a
+/// bookmark to a page here still goes there.
+#[test]
+fn a_web_bookmark_asks_first_like_a_link() {
+    let _gpu = gpu();
+    let mut h = bookmark_harness(None);
+    click_bookmark(&mut h, "Website");
+    assert_eq!(h.state().pending_link, pending(BOOKMARK_URL, LinkOrigin::Link));
+    assert_eq!(h.state().last_opened_url, None, "nothing opens before the user answers");
+    assert_eq!(h.state().views[0].current, 0);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert_eq!((h.state().pending_link.clone(), h.state().last_opened_url.clone()), (None, None));
+
+    click_bookmark(&mut h, "Appendix");
+    assert_eq!(h.state().views[0].current, 2);
+}
+
+/// A bookmark to another PDF opens that file at its page, as a link does. Its `[1 /Fit]` is the
+/// other file's page 2, never this file's: the source document stays where it was.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_bookmark_to_another_pdf_opens_it_instead_of_moving_here() {
+    let _gpu = gpu();
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-bookmark-gotor-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("target.pdf"), linked_pages(2, None)).unwrap();
+    let mut h = bookmark_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()));
+    click_bookmark(&mut h, "Chapter in target");
+    support::wait_until(&mut h, "remote document", |app| app.views.len() == 2);
+    assert_eq!(h.state().views[0].current, 0, "the source stays on its page");
+    assert_eq!(h.state().active, Some(1));
+    assert_eq!(h.state().views[1].current, 1, "the other file opens at the bookmark's page");
+}
+
 #[test]
 fn a_link_asks_first_and_opens_when_allowed() {
     let _gpu = gpu();

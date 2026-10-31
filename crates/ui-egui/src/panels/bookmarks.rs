@@ -194,10 +194,13 @@ pub(super) fn outline_item(
             let pos = pos2(rect.right() - 6.0 - g.size().x, rect.top() + 14.0 - g.size().y / 2.0);
             ui.painter().galley(pos, g, t.text_faint);
         }
-        if theme::hand(resp.clone()).clicked()
-            && let Some(p) = item.page
-        {
-            *cx.nav = Some(Nav::Dest(p, item.view));
+        if theme::hand(resp.clone()).clicked() {
+            match (item.page, &item.action) {
+                (Some(p), _) => *cx.nav = Some(Nav::Dest(p, item.view)),
+                // A web address, another PDF or a layer change, as a link runs it.
+                (None, Some(action)) => *cx.nav = Some(Nav::Action(action.clone())),
+                (None, None) => {}
+            }
         }
         if resp.double_clicked() && cx.editable {
             *cx.action = Some(BmAction::StartRename(path.to_vec()));
@@ -340,6 +343,7 @@ mod bookmark_filter {
             title: title.into(),
             page: Some(0),
             view: pdfcraft_render::DestView::Top,
+            action: None,
             children,
             open: true,
             color: None,

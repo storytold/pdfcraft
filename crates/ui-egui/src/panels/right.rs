@@ -439,6 +439,11 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             Some(doc) => app.views[index].go_to_dest(p, dest, &doc.info),
             None => app.views[index].go_to_page(p),
         },
+        Some(Nav::Action(target)) => {
+            if let Some((source, file, destination)) = crate::canvas::follow_link(app, index, Some(target)) {
+                app.open_remote_link(source, file, destination);
+            }
+        }
         Some(Nav::Flash(p, r)) => {
             let v = &mut app.views[index];
             if let Some(doc) = app.session.get(id) {

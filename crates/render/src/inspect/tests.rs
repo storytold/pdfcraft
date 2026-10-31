@@ -1617,6 +1617,57 @@ fn outline_items_carry_their_colour_and_style() {
     );
 }
 
+/// A bookmark's action (`/A`, ISO 32000-2 §12.3.3 Table 151) is read as a link's is. Only a
+/// go-to's `/D` is a page of this document: a remote go-to's names a page or destination of the
+/// other file (§12.6.4.3), so `[0 /FitH 200]` there is not this file's first page. A web address,
+/// another PDF and actions PdfCraft doesn't run are kept for the bookmark to run or report. An
+/// action without a type is still read as the go-to its `/D` suggests.
+#[test]
+fn bookmark_actions_are_read_as_links_read_them() {
+    use DestView::*;
+    let actions = [
+        ("Go to", "/A << /S /GoTo /D [3 0 R /FitH 300] >>"),
+        ("Web", "/A << /S /URI /URI (https://example.org/manual) >>"),
+        ("Other file", "/A << /S /GoToR /F (other.pdf) /D [0 /FitH 200] /NewWindow true >>"),
+        ("Other file, named", "/A << /S /GoToR /F (other.pdf) /D (sec) >>"),
+        ("Launch", "/A << /S /Launch /F (other.pdf) >>"),
+        ("Menu item", "/A << /S /Named /N /NextPage >>"),
+        ("Script", "/A << /S /JavaScript /JS (app.alert\\(1\\)) >>"),
+        ("No type", "/A << /D [3 0 R /Fit] >>"),
+    ];
+    let n = actions.len();
+    let items: Vec<String> = actions
+        .iter()
+        .enumerate()
+        .map(|(k, (title, action))| {
+            let prev = if k == 0 { String::new() } else { format!(" /Prev {} 0 R", 4 + k) };
+            let next = if k + 1 == n { String::new() } else { format!(" /Next {} 0 R", 6 + k) };
+            format!("<< /Title ({title}) /Parent 4 0 R{prev}{next} {action} >>")
+        })
+        .collect();
+    let info = inspect(Arc::new(outline_file(&items)), None).expect("opens");
+    let got: Vec<_> = info.outline.iter().map(|o| (o.title.as_str(), o.page, o.view, o.action.clone())).collect();
+    let remote = |destination, new_window| Some(LinkTarget::RemoteGoTo { launch: false, file: "other.pdf".into(), destination, new_window });
+    assert_eq!(
+        got,
+        [
+            ("Go to", Some(0), FitH { top: Some(300.0) }, None),
+            ("Web", None, Top, Some(LinkTarget::Uri("https://example.org/manual".into()))),
+            ("Other file", None, Top, remote(RemoteDestination::Page { page: 0, view: FitH { top: Some(200.0) } }, Some(true))),
+            ("Other file, named", None, Top, remote(RemoteDestination::Named("sec".into()), None)),
+            (
+                "Launch",
+                None,
+                Top,
+                Some(LinkTarget::RemoteGoTo { launch: true, file: "other.pdf".into(), destination: RemoteDestination::Default, new_window: None })
+            ),
+            ("Menu item", None, Top, Some(LinkTarget::Other("Named".into()))),
+            ("Script", None, Top, Some(LinkTarget::Other("JavaScript".into()))),
+            ("No type", Some(0), Fit, None),
+        ]
+    );
+}
+
 #[test]
 fn outline_window_keeps_the_first_bookmarks_and_says_when_more_follow() {
     const COUNT: usize = OUTLINE_WINDOW + 5;

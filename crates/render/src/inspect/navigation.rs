@@ -1,7 +1,7 @@
 #[cfg(test)]
 use super::core::inspect;
 use super::core::spend;
-use super::model::{DestView, OutlineItem, PageInfo};
+use super::model::{DestView, LinkTarget, OutlineItem, PageInfo};
 use super::{
     BTreeMap, Dictionary, HashMap, HashSet, Inspector, MAX_LABEL_BYTES, MAX_LABEL_TOTAL_BYTES, MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK,
     MAX_PREFIX_BYTES, MAX_PREFIX_TOTAL_BYTES, Object, ObjectId, alpha, roman,
@@ -185,8 +185,9 @@ impl<'a> Inspector<'a> {
 
     /// The window `DocInfo::outline` keeps: the first `OUTLINE_WINDOW` bookmarks in outline order,
     /// nested no deeper than `OUTLINE_DEPTH`, and whether any bookmark was left out. Iterative, and
-    /// each bookmark is read once, so the work and memory stay within the window.
-    pub(super) fn outline_window(&self, first: &'a Object) -> (Vec<OutlineItem>, bool) {
+    /// each bookmark is read once, so the work and memory stay within the window. Web addresses are
+    /// spent from `text_budget`, as links' are.
+    pub(super) fn outline_window(&self, first: &'a Object, text_budget: &mut usize) -> (Vec<OutlineItem>, bool) {
         let mut seen = HashSet::new();
         // The listed bookmarks in outline order, with their depth.
         let mut listed: Vec<(usize, OutlineItem)> = Vec::new();
@@ -210,12 +211,20 @@ impl<'a> Inspector<'a> {
                 break;
             }
             *slot = d.get(b"Next").ok();
-            let dest = d
-                .get(b"Dest")
-                .ok()
-                .and_then(|dest| self.dest(dest, 0))
-                .or_else(|| d.get(b"A").ok().and_then(|a| self.dict(a)).and_then(|a| a.get(b"D").ok()).and_then(|dest| self.dest(dest, 0)));
-            let (page, view) = dest.map_or((None, DestView::Top), |(p, v)| (Some(p), v));
+            // A bookmark goes to its `/Dest`, else does what its action `/A` does, as a link would.
+            // Only a go-to's `/D` is a page here: a remote go-to's names a page of the other file.
+            // An action without a type is still read as the go-to its `/D` suggests.
+            let action = match d.get(b"Dest").ok().and_then(|dest| self.dest(dest, 0)) {
+                Some((page, view)) => Some(LinkTarget::Page(page, view)),
+                None => d.get(b"A").ok().and_then(|a| self.dict(a)).and_then(|a| match a.get(b"S") {
+                    Ok(_) => self.action_target(a, text_budget),
+                    Err(_) => a.get(b"D").ok().and_then(|dest| self.dest(dest, 0)).map(|(page, view)| LinkTarget::Page(page, view)),
+                }),
+            };
+            let ((page, view), action) = match action {
+                Some(LinkTarget::Page(page, view)) => ((Some(page), view), None),
+                other => ((None, DestView::Top), other),
+            };
             match d.get(b"First").ok() {
                 Some(child) if depth < OUTLINE_DEPTH => levels.push(Some(child)),
                 Some(_) => more = true,
@@ -229,7 +238,7 @@ impl<'a> Inspector<'a> {
             };
             let flags = d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0);
             let (italic, bold) = (flags & 1 != 0, flags & 2 != 0);
-            listed.push((depth, OutlineItem { title, page, view, children: Vec::new(), open, color, italic, bold }));
+            listed.push((depth, OutlineItem { title, page, view, action, children: Vec::new(), open, color, italic, bold }));
         }
         (nest_outline(listed), more)
     }

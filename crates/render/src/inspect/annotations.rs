@@ -15,11 +15,11 @@ const MAX_REMOTE_DESTINATION_NAME_BYTES: usize = 1024;
 /// are not listed: real comments stay far below, many small ones sharing one long string do not.
 pub(super) const MAX_ANNOTATION_BYTES: usize = 64 << 20;
 
-/// Web-address text the link listing, and name, description and embedded-file key text the
-/// attachment listing, keep together. Many links or attachments can share one long string, which
-/// each would otherwise copy. Past it, a link to a web address lists as a URI action without its
-/// address, an attachment under its generic name without a description, and an embedded file whose
-/// key does not fit is not listed.
+/// Web-address text the bookmark and link listings, and name, description and embedded-file key
+/// text the attachment listing, keep together. Many bookmarks, links or attachments can share one
+/// long string, which each would otherwise copy. Past it, a bookmark or link to a web address lists
+/// as a URI action without its address, an attachment under its generic name without a
+/// description, and an embedded file whose key does not fit is not listed.
 pub(super) const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
 
 /// The bytes a listed annotation keeps.
@@ -192,33 +192,42 @@ impl<'a> Inspector<'a> {
         link_replies(&mut info.annotations);
     }
 
+    /// The link annotation `d`, at position `index` of page `page`'s `/Annots`: where its `/Dest`
+    /// goes, else what its action `/A` does ([`Self::action_target`]). `None` when it has no
+    /// rectangle, or a destination or action that leads nowhere.
     fn link(&self, page: usize, index: usize, d: &Dictionary, text_budget: &mut usize) -> Option<Link> {
         let rect = rect4(self.resolve(d.get(b"Rect").ok()?));
         let target = if let Ok(dest) = d.get(b"Dest") {
             let (page, view) = self.dest(dest, 0)?;
             LinkTarget::Page(page, view)
         } else {
-            let a = d.get(b"A").ok().and_then(|a| self.dict(a))?;
-            match self.name(a, b"S").as_deref() {
-                Some("GoTo") => {
-                    let (page, view) = self.dest(a.get(b"D").ok()?, 0)?;
-                    LinkTarget::Page(page, view)
-                }
-                Some("URI") => {
-                    let uri = a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok())?;
-                    match spend(uri, text_budget, |b| String::from_utf8_lossy(b).into_owned()) {
-                        Some(uri) => LinkTarget::Uri(uri),
-                        None => LinkTarget::Other("URI".into()),
-                    }
-                }
-                Some("SetOCGState") => self.layer_state(a),
-                Some("GoToR") => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
-                Some("Launch") => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
-                Some(other) => LinkTarget::Other(other.to_string()),
-                None => return None,
-            }
+            self.action_target(d.get(b"A").ok().and_then(|a| self.dict(a))?, text_budget)?
         };
         Some(Link { page, index, rect, target })
+    }
+
+    /// What an action does when a link or a bookmark runs it. Only a go-to's `/D` is a place in
+    /// this document; a remote go-to's names a page or destination of another file (ISO 32000-2
+    /// §12.6.4.3). `None` for an action without a type, or a go-to whose destination is not here.
+    /// A web address is spent from `text_budget` (see [`MAX_LINK_ATTACHMENT_TEXT_BYTES`]).
+    pub(super) fn action_target(&self, a: &Dictionary, text_budget: &mut usize) -> Option<LinkTarget> {
+        Some(match self.name(a, b"S").as_deref()? {
+            "GoTo" => {
+                let (page, view) = self.dest(a.get(b"D").ok()?, 0)?;
+                LinkTarget::Page(page, view)
+            }
+            "URI" => {
+                let uri = a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok())?;
+                match spend(uri, text_budget, |b| String::from_utf8_lossy(b).into_owned()) {
+                    Some(uri) => LinkTarget::Uri(uri),
+                    None => LinkTarget::Other("URI".into()),
+                }
+            }
+            "SetOCGState" => self.layer_state(a),
+            "GoToR" => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
+            "Launch" => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
+            other => LinkTarget::Other(other.to_string()),
+        })
     }
 
     fn remote_go_to(&self, action: &Dictionary) -> Option<LinkTarget> {

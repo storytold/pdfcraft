@@ -2774,9 +2774,9 @@ fn schedule_presentation_turn(ui: &egui::Ui, view: &mut DocView, click: Option<b
     }
 }
 
-/// Follows the link that was clicked. A link to another file comes back, to be opened once the
-/// document is no longer borrowed.
-fn follow_link(
+/// Follows the link, or the bookmark's action, that was clicked. A link to another file comes
+/// back, to be opened once the document is no longer borrowed.
+pub(crate) fn follow_link(
     app: &mut PdfCraftApp,
     index: usize,
     target: Option<LinkTarget>,

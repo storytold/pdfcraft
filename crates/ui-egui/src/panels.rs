@@ -33,6 +33,8 @@ pub(crate) enum Nav {
     Page(usize),
     /// A bookmark's destination: its page and where on it.
     Dest(usize, pdfcraft_render::DestView),
+    /// A bookmark's action that goes nowhere in this document, run as a link's is.
+    Action(pdfcraft_render::LinkTarget),
     Flash(usize, [f32; 4]),
 }
 

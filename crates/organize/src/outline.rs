@@ -293,7 +293,9 @@ fn view_of_explicit(doc: &Document, dest: &[Object]) -> Option<(Vec<u8>, Vec<Opt
 }
 
 /// The explicit destination an item goes to: its `/Dest` when that names a page here, else the
-/// destination of its GoTo action `/A`.
+/// destination of its GoTo action `/A` (or of an action without a type). Another action's `/D` is
+/// not a place here: a remote go-to's names a page or destination of the other file (ISO 32000-2
+/// §12.6.4.3).
 fn item_dest(doc: &Document, targets: &mut Targets, d: &Dict) -> Option<Vec<Object>> {
     if let Some(dest) = d.get(b"Dest").and_then(|dest| explicit_dest(doc, targets, dest, 0))
         && page_of_explicit(targets, &dest).is_some()
@@ -301,8 +303,8 @@ fn item_dest(doc: &Document, targets: &mut Targets, d: &Dict) -> Option<Vec<Obje
         return Some(dest);
     }
     let action = doc.resolve(d.get(b"A")?);
-    let dest = action.as_dict()?.get(b"D")?;
-    explicit_dest(doc, targets, dest, 0)
+    let action = action.as_dict().filter(|a| a.get(b"S").is_none_or(|s| doc.resolve(s).as_name() == Some(b"GoTo")))?;
+    explicit_dest(doc, targets, action.get(b"D")?, 0)
 }
 
 /// A bookmark's title as viewers show it: the decoded text, without NULs or surrounding space.
