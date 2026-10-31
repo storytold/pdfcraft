@@ -428,6 +428,11 @@ pub struct PdfCraftApp {
     /// A save waiting behind [`Dialog::OverwriteChanged`] (the web build has no files to check).
     #[cfg(not(target_arch = "wasm32"))]
     pub pending_overwrite: Option<editing::PendingOverwrite>,
+    /// A save waiting behind [`Dialog::RedactBeforeSave`].
+    pub pending_redact_save: Option<editing::PendingRedactSave>,
+    /// The documents whose redaction marks the user chose to save as marks, each at the edit
+    /// generation it was last saved at: saving one again unchanged doesn't ask again.
+    pub kept_redaction_marks: std::collections::HashMap<DocId, u64>,
     /// Save to this path instead of asking (tests and automation).
     pub save_override: Option<String>,
     /// Document Properties ▸ Description fields being edited: (document, Title/Author/Subject/Keywords).

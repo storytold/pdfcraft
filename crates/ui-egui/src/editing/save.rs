@@ -1,4 +1,4 @@
-use super::{PdfCraftApp, StagingName, staging_suffixes};
+use super::{Edit, PdfCraftApp, StagingName, staging_suffixes};
 
 /// A save held back by [`Dialog::OverwriteChanged`](crate::Dialog::OverwriteChanged): the file
 /// on disk is another version than the document came from (#2166).
@@ -7,6 +7,18 @@ pub struct PendingOverwrite {
     pub id: pdfcraft_engine::DocId,
     pub dest: String,
     target: SaveTarget,
+    /// What was to run once the document is written (close its tab, quit).
+    after: Box<dyn FnOnce(&mut PdfCraftApp) + Send>,
+}
+
+/// A save held back by [`Dialog::RedactBeforeSave`](crate::Dialog::RedactBeforeSave): the
+/// document has redaction marks that aren't applied, so what they cover would be saved (#4741).
+pub struct PendingRedactSave {
+    pub id: pdfcraft_engine::DocId,
+    target: SaveTarget,
+    /// Where the Save As picker said to write, when marks were added while it was open; `None`
+    /// goes on as Save does, asking where if it must.
+    dest: Option<String>,
     /// What was to run once the document is written (close its tab, quit).
     after: Box<dyn FnOnce(&mut PdfCraftApp) + Send>,
 }
@@ -39,6 +51,38 @@ impl PdfCraftApp {
     /// [`Self::save_view`], then `after` once the document is written: now, or on a later frame
     /// when the user had to choose where. `after` never runs when the save fails or is cancelled.
     pub(crate) fn save_then(&mut self, index: usize, target: SaveTarget, after: impl FnOnce(&mut Self) + Send + 'static) -> bool {
+        self.save_then_checked(index, target, true, after)
+    }
+
+    /// [`Self::save_then`]; `check_marks` false skips the question about unapplied redaction
+    /// marks, for the save the user just answered it for.
+    fn save_then_checked(&mut self, index: usize, target: SaveTarget, check_marks: bool, after: impl FnOnce(&mut Self) + Send + 'static) -> bool {
+        // A redaction mark only outlines what it covers until it is applied: saved as it is, the
+        // text and images under it stay in the file for anyone to read (#4741). Ask first, unless
+        // these marks were already kept on purpose and nothing changed since.
+        if check_marks
+            && let Some(id) = self.views.get(index).map(|v| v.id)
+            && self.must_ask_about_marks(id)
+        {
+            self.hold_for_marks(PendingRedactSave { id, target, dest: None, after: Box::new(after) });
+            return false;
+        }
+        // Marks kept on purpose stay kept for what this save writes, although writing moves the
+        // document's generation on.
+        let kept = self
+            .views
+            .get(index)
+            .and_then(|v| self.session.get(v.id).map(|d| (v.id, d.edit_generation())))
+            .filter(|(id, generation)| self.kept_redaction_marks.get(id) == Some(generation))
+            .map(|(id, _)| id);
+        let after = move |app: &mut Self| {
+            if let Some(id) = kept
+                && let Some(generation) = app.session.get(id).map(|d| d.edit_generation())
+            {
+                app.kept_redaction_marks.insert(id, generation);
+            }
+            after(app);
+        };
         // What's typed in a field is part of what's saved (#166).
         if let Some(id) = self.views.get(index).map(|v| v.id)
             && !self.commit_typing_in(id)
@@ -60,9 +104,18 @@ impl PdfCraftApp {
                     let name = if name.to_ascii_lowercase().ends_with(".pdf") { name } else { format!("{name}.pdf") };
                     let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name);
                     let dialog = in_document_folder(dialog, doc_path.as_deref());
+                    let asked_at = self.session.get(id).map(|d| d.edit_generation());
                     // The bytes are taken once the user has chosen, so edits made meanwhile are saved too.
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, dest| {
-                        app.save_doc_to_then(id, &dest.to_string_lossy(), target, Box::new(after));
+                        let dest = dest.to_string_lossy().into_owned();
+                        // The window takes input while the picker is open (on Windows it has no
+                        // parent window): marks added meanwhile are asked about before anything
+                        // is written there.
+                        if app.session.get(id).map(|d| d.edit_generation()) != asked_at && app.must_ask_about_marks(id) {
+                            app.hold_for_marks(PendingRedactSave { id, target, dest: Some(dest), after: Box::new(after) });
+                            return;
+                        }
+                        app.save_doc_to_then(id, &dest, target, Box::new(after));
                     });
                     return false;
                 }
@@ -152,6 +205,65 @@ impl PdfCraftApp {
         if let Some(index) = self.views.iter().position(|v| v.id == p.id) {
             self.save_then(index, SaveTarget::As, p.after);
         }
+    }
+
+    /// Whether saving document `id` must first ask about its redaction marks: it has some, and
+    /// they weren't kept on purpose at its current generation.
+    fn must_ask_about_marks(&self, id: pdfcraft_engine::DocId) -> bool {
+        self.session.get(id).is_some_and(|doc| doc.redaction_marks() > 0 && self.kept_redaction_marks.get(&id) != Some(&doc.edit_generation()))
+    }
+
+    /// Hold save `p` behind [`Dialog::RedactBeforeSave`](crate::Dialog::RedactBeforeSave).
+    fn hold_for_marks(&mut self, p: PendingRedactSave) {
+        self.pending_redact_save = Some(p);
+        self.dialog = Some(crate::Dialog::RedactBeforeSave);
+    }
+
+    /// Go on with save `p` once its marks are answered for: to the place the Save As picker gave,
+    /// or as Save does. `check_marks` as for [`Self::save_then_checked`].
+    fn resume_save(&mut self, index: usize, p: PendingRedactSave, check_marks: bool) {
+        let PendingRedactSave { id, target, dest, after } = p;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dest) = dest {
+            self.save_doc_to_then(id, &dest, target, after);
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (id, dest);
+        self.save_then_checked(index, target, check_marks, after);
+    }
+
+    /// [`Dialog::RedactBeforeSave`](crate::Dialog::RedactBeforeSave)'s Redact all and save: apply
+    /// the marks, as Redact all does, then go on with the save. A refused apply saves nothing.
+    pub(crate) fn redact_then_save(&mut self) {
+        let Some(p) = self.pending_redact_save.take() else { return };
+        let Some(index) = self.views.iter().position(|v| v.id == p.id) else { return };
+        // The document being saved is the one in front (Save, or the close prompt brought it
+        // forward); applying edits goes to the document in front.
+        self.active = Some(index);
+        if self.apply_edit(Edit::ApplyRedactions { pages: None }) {
+            self.resume_save(index, p, true);
+        }
+    }
+
+    /// [`Dialog::RedactBeforeSave`](crate::Dialog::RedactBeforeSave)'s Save with marks: write the
+    /// marks as they are, for applying later, and don't ask again until the document changes.
+    /// Only a save that writes counts: one cancelled on the way (the Save As picker, or the
+    /// question about a file changed on disk) leaves the next Save asking again, as does that
+    /// question's Save as…, which starts the save over.
+    pub(crate) fn save_keeping_redaction_marks(&mut self) {
+        let Some(p) = self.pending_redact_save.take() else { return };
+        let Some(index) = self.views.iter().position(|v| v.id == p.id) else { return };
+        let PendingRedactSave { id, target, dest, after } = p;
+        // The marks are noted as kept once the file is written, at the generation it is saved
+        // at (writing moves the document's generation on).
+        let after = Box::new(move |app: &mut Self| {
+            if let Some(generation) = app.session.get(id).map(|d| d.edit_generation()) {
+                app.kept_redaction_marks.insert(id, generation);
+            }
+            after(app);
+        });
+        self.resume_save(index, PendingRedactSave { id, target, dest, after }, false);
     }
 
     /// Write document `id` to `dest` and make it the document's file. Returns `true` if written.
