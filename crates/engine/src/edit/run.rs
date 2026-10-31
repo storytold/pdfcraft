@@ -605,7 +605,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             let rect = match rect {
                 Some(r) => *r,
                 None => {
-                    let p = pdfcraft_model::pages(doc).swap_remove(*page);
+                    let pages = pdfcraft_model::pages(doc);
+                    let p = pages.get(*page).ok_or(pdfcraft_edit::EditError::NoSuchPage(*page))?;
                     let (pw, ph) = p.display_size(doc);
                     let k = ((pw * 0.8) / natural.0).min((ph * 0.8) / natural.1).min(1.0);
                     let (w, h) = (natural.0 * k, natural.1 * k);
