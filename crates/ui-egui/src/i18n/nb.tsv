@@ -2724,6 +2724,15 @@ key	Space	Mellomrom
 # Page gaps (AI-assisted, not separately native-reviewed)
 	Show gaps between pages	Vis mellomrom mellom sidene
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skjul mellomrommene slik at sidekantene møtes. Margene inne i PDF-en endres ikke.
+	Change a signed document?	Endre et signert dokument?
+	Change anyway	Endre likevel
+	It is certified with no changes allowed: any change invalidates the certification.	Det er sertifisert uten at endringer er tillatt: enhver endring gjør sertifiseringen ugyldig.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Det er sertifisert: utfylling av skjemaer og signering er tillatt; andre endringer gjør sertifiseringen ugyldig.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Det er sertifisert: utfylling av skjemaer, signering og kommentering er tillatt; andre endringer gjør sertifiseringen ugyldig.
+	Remove security?	Fjerne sikkerhet?
+	The extracted pages aren't protected: the original's security settings don't carry over.	De uttrukne sidene er ikke beskyttet: originalens sikkerhetsinnstillinger følger ikke med.
+	The passwords and the restrictions are removed when you save.	Passordene og begrensningene fjernes når du lagrer.
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Dette dokumentet er signert. En endring legger til en ny versjon: signaturene forblir gyldige for versjonen de signerte, og visningsprogrammer vil vise at dokumentet ble endret etter signering.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	I dag

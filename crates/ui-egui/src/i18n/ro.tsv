@@ -2815,6 +2815,16 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	Change a signed document?	Modificați un document semnat?
+	Change anyway	Modifică oricum
+	It is certified with no changes allowed: any change invalidates the certification.	Este certificat fără a permite modificări: orice modificare invalidează certificarea.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Este certificat: completarea formularelor și semnarea sunt permise; alte modificări invalidează certificarea.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Este certificat: completarea formularelor, semnarea și comentarea sunt permise; alte modificări invalidează certificarea.
+	Remove security?	Eliminați securitatea?
+	The extracted pages aren't protected: the original's security settings don't carry over.	Paginile extrase nu sunt protejate: setările de securitate ale originalului nu se transferă.
+	The passwords and the restrictions are removed when you save.	Parolele și restricțiile sunt eliminate la salvare.
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Acest document este semnat. O modificare adaugă o versiune nouă: semnăturile rămân valabile pentru versiunea pe care au semnat-o, iar vizualizatoarele vor arăta că documentul a fost modificat după semnare.
+	The split files aren't protected: the original's security settings don't carry over.	Fișierele împărțite nu sunt protejate: setările de securitate ale originalului nu se transferă.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi

@@ -1839,6 +1839,16 @@ action wizard	Start	Iniciar
 	The document's security settings don't allow printing	La configuración de seguridad del documento no permite imprimir
 	Open a document first	Abre primero un documento
 	Security will be removed when you save	La seguridad se quitará al guardar
+	The extracted pages aren't protected: the original's security settings don't carry over.	Las páginas extraídas no están protegidas: la configuración de seguridad del original no se conserva.
+	The split files aren't protected: the original's security settings don't carry over.	Los archivos divididos no están protegidos: la configuración de seguridad del original no se conserva.
+	Change a signed document?	¿Cambiar un documento firmado?
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Este documento está firmado. Un cambio añade una versión nueva: las firmas siguen siendo válidas para la versión que firmaron, y los visores mostrarán que el documento se cambió después de firmarlo.
+	It is certified with no changes allowed: any change invalidates the certification.	Está certificado sin permitir cambios: cualquier cambio invalida la certificación.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Está certificado: se permiten rellenar formularios y firmar; otros cambios invalidan la certificación.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Está certificado: se permiten rellenar formularios, firmar y comentar; otros cambios invalidan la certificación.
+	Change anyway	Cambiar de todos modos
+	Remove security?	¿Quitar la seguridad?
+	The passwords and the restrictions are removed when you save.	Las contraseñas y las restricciones se quitan al guardar.
 	Click text or an image to edit it	Haz clic en un texto o una imagen para editarlo
 	Drag a rectangle to create a link; double-click a link to edit it	Arrastra un rectángulo para crear un enlace; haz doble clic en un enlace para editarlo
 	There are no redaction marks to apply	No hay marcas de censura que aplicar

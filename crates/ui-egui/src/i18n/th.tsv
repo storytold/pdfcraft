@@ -2711,6 +2711,15 @@ key	Space	Space
 	Collapse all tools	ยุบเครื่องมือทั้งหมด
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
+	Change a signed document?	เปลี่ยนเอกสารที่เซ็นแล้วหรือไม่
+	Change anyway	เปลี่ยนต่อไป
+	It is certified with no changes allowed: any change invalidates the certification.	เอกสารนี้ได้รับการรับรองโดยไม่อนุญาตให้เปลี่ยนแปลง: การเปลี่ยนแปลงใดๆ จะทำให้การรับรองเป็นโมฆะ
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	เอกสารนี้ได้รับการรับรอง: อนุญาตให้กรอกแบบฟอร์มและเซ็น การเปลี่ยนแปลงอื่นจะทำให้การรับรองเป็นโมฆะ
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	เอกสารนี้ได้รับการรับรอง: อนุญาตให้กรอกแบบฟอร์ม เซ็น และแสดงความคิดเห็น การเปลี่ยนแปลงอื่นจะทำให้การรับรองเป็นโมฆะ
+	Remove security?	เอาความปลอดภัยออกหรือไม่
+	The extracted pages aren't protected: the original's security settings don't carry over.	หน้าที่แยกออกมาไม่ได้รับการป้องกัน: การตั้งค่าความปลอดภัยของต้นฉบับไม่ได้ติดไปด้วย
+	The passwords and the restrictions are removed when you save.	รหัสผ่านและข้อจำกัดจะถูกเอาออกเมื่อคุณบันทึก
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	เอกสารนี้เซ็นแล้ว การเปลี่ยนแปลงจะเพิ่มเวอร์ชันใหม่: ลายเซ็นยังคงใช้ได้สำหรับเวอร์ชันที่เซ็นไว้ และโปรแกรมดูจะแสดงว่าเอกสารถูกเปลี่ยนหลังการเซ็น
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	วันนี้

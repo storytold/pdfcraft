@@ -1787,6 +1787,16 @@
 	The document's security settings don't allow printing	文档安全设置不允许打印
 	Open a document first	请先打开文档
 	Security will be removed when you save	保存时将删除安全性设置
+	The extracted pages aren't protected: the original's security settings don't carry over.	提取的页面不受保护：原文档的安全设置不会带过去。
+	The split files aren't protected: the original's security settings don't carry over.	拆分后的文件不受保护：原文档的安全设置不会带过去。
+	Change a signed document?	要更改已签名的文档吗？
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	此文档已签名。更改会添加一个新版本：签名对其签署的版本仍然有效，但阅读器会显示文档在签名后被更改过。
+	It is certified with no changes allowed: any change invalidates the certification.	它已认证且不允许任何更改：任何更改都会使认证失效。
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	它已认证：允许填写表单和签名；其他更改会使认证失效。
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	它已认证：允许填写表单、签名和添加注释；其他更改会使认证失效。
+	Change anyway	仍要更改
+	Remove security?	要移除安全性吗？
+	The passwords and the restrictions are removed when you save.	保存时会移除密码和限制。
 	Click text or an image to edit it	单击文本或图像进行编辑
 	Drag a rectangle to create a link; double-click a link to edit it	拖动矩形创建链接；双击链接进行编辑
 	There are no redaction marks to apply	没有可应用的密文标记

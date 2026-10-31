@@ -50,6 +50,12 @@ struct Pending {
     revert_now: bool,
     overwrite_now: bool,
     overwrite_elsewhere: bool,
+    signed_edit_now: bool,
+    remove_security_now: bool,
+    /// What waited on the signed-document answer: run once this dialog is closed
+    /// ([`finish_close`]), so a dialog it raises (Save over the changed file?) isn't closed
+    /// with this one.
+    resume_now: Option<crate::Resume>,
     summarize_now: bool,
     optimize_now: bool,
     duplicate_now: Option<Edit>,
@@ -281,6 +287,16 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
         }
         Dialog::OverwriteChanged => {
             if !dialog_overwrite_changed(ui, app, req) {
+                return false;
+            }
+        }
+        Dialog::SignedEdit => {
+            if !dialog_signed_edit(ui, app, req) {
+                return false;
+            }
+        }
+        Dialog::RemoveSecurity => {
+            if !dialog_remove_security(ui, req) {
                 return false;
             }
         }
@@ -1283,6 +1299,64 @@ fn dialog_overwrite_changed(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut 
     false
 }
 
+/// `Dialog::SignedEdit` content (#2168). Returns `false` when it has its own buttons and no footer
+/// is wanted.
+fn dialog_signed_edit(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
+    // The strictest certification among the signed signatures, if any.
+    let certify = app
+        .pending_signed_edit
+        .as_ref()
+        .map(|(id, _)| *id)
+        .or_else(|| app.active_ids().map(|(_, id)| id))
+        .and_then(|id| app.session.get(id))
+        .and_then(|d| d.signatures.iter().filter(|s| s.signed).filter_map(|s| s.certify).min());
+    ui.label(egui::RichText::new(tl!("Change a signed document?")).font(theme::semibold(18.0)));
+    ui.add_space(8.0);
+    ui.label(tl!(
+        "This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing."
+    ));
+    if let Some(p) = certify {
+        ui.add_space(6.0);
+        ui.label(match p {
+            1 => tl!("It is certified with no changes allowed: any change invalidates the certification."),
+            2 => tl!("It is certified: filling in forms and signing are allowed; other changes invalidate the certification."),
+            _ => {
+                tl!("It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.")
+            }
+        });
+    }
+    ui.add_space(12.0);
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        if widgets::pill_button(ui, tl!("Change anyway"), true).clicked() {
+            req.signed_edit_now = true;
+            req.close = true;
+        }
+        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+            req.close = true;
+        }
+    });
+    false
+}
+
+/// `Dialog::RemoveSecurity` content (#2168). Returns `false` when it has its own buttons and no
+/// footer is wanted.
+fn dialog_remove_security(ui: &mut egui::Ui, req: &mut Pending) -> bool {
+    ui.label(egui::RichText::new(tl!("Remove security?")).font(theme::semibold(18.0)));
+    ui.add_space(8.0);
+    ui.label(tl!("The passwords and the restrictions are removed when you save."));
+    ui.add_space(12.0);
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        if widgets::pill_button(ui, tl!("Remove security"), true).clicked() {
+            req.remove_security_now = true;
+            req.close = true;
+        }
+        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+            req.close = true;
+        }
+    });
+    false
+}
+
 /// `Dialog::Print` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_print(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
     let t = Tokens::get(ui.ctx());
@@ -1656,6 +1730,24 @@ fn finish_requests(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, re
     if dialog == Dialog::OverwriteChanged && (modal_closed || req.close) {
         app.pending_overwrite = None;
     }
+    if req.signed_edit_now {
+        if let Some((id, e)) = app.pending_signed_edit.take() {
+            app.signed_edits_confirmed.insert(id);
+            // The edit is the asking document's, which may not be the active tab any more.
+            if let Some(i) = app.views.iter().position(|v| v.id == id) {
+                app.active = Some(i);
+                app.apply_edit(e);
+            }
+            req.resume_now = app.resume_after_signed_edit.take();
+        }
+    } else if dialog == Dialog::SignedEdit && (req.close || modal_closed) {
+        // Cancelled (or closed any other way): the change is not made, nor what waited on it.
+        app.pending_signed_edit = None;
+        app.resume_after_signed_edit = None;
+    }
+    if req.remove_security_now && app.apply_edit(Edit::RemoveProtection) {
+        app.notify_tr("Security will be removed when you save");
+    }
 }
 
 /// Runs the document actions the dialog asked for.
@@ -1835,7 +1927,14 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
 fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: &mut Pending) {
     // Protect / Remove security replace the Properties dialog.
     let replaces = req.link_command.is_some_and(|c| c.starts_with("protect.")) || req.open_revision.is_some();
-    if modal_closed || req.close || replaces {
+    // An action of this dialog was the first change to a signed document: its question takes
+    // the dialog's place, rather than being closed with it.
+    let asked = dialog != Dialog::SignedEdit && app.dialog == Some(Dialog::SignedEdit);
+    if asked {
+        app.props_draft = None;
+        app.view_draft = None;
+        app.bulk_field_props = None;
+    } else if modal_closed || req.close || replaces {
         app.dialog = None;
         app.props_draft = None;
         app.view_draft = None;
@@ -1844,6 +1943,9 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
         app.unmarked_page = Default::default();
     } else {
         app.dialog = Some(req.next.unwrap_or(dialog));
+    }
+    if let Some(resume) = req.resume_now.take() {
+        resume(app);
     }
     if let Some(cmd) = req.link_command {
         app.execute(cmd);

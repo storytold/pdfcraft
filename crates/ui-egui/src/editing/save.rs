@@ -43,6 +43,15 @@ impl PdfCraftApp {
         if let Some(id) = self.views.get(index).map(|v| v.id)
             && !self.commit_typing_in(id)
         {
+            // The typing is the first change to a signed document and waits on its question:
+            // the save (and what follows it, such as closing the tab) goes on once it's answered.
+            if self.signed_edit_waits(id) {
+                self.resume_after_signed_edit = Some(Box::new(move |app: &mut Self| {
+                    if let Some(i) = app.views.iter().position(|v| v.id == id) {
+                        app.save_then(i, target, after);
+                    }
+                }));
+            }
             return false;
         }
         let Some(id) = self.views.get(index).map(|v| v.id) else { return false };

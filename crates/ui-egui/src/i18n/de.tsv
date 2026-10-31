@@ -1762,6 +1762,16 @@
 	The document's security settings don't allow printing	Die Sicherheitseinstellungen des Dokuments erlauben kein Drucken
 	Open a document first	Öffne zuerst ein Dokument
 	Security will be removed when you save	Die Sicherheit wird beim Speichern entfernt
+	The extracted pages aren't protected: the original's security settings don't carry over.	Die extrahierten Seiten sind nicht geschützt: Die Sicherheitseinstellungen des Originals werden nicht übernommen.
+	The split files aren't protected: the original's security settings don't carry over.	Die geteilten Dateien sind nicht geschützt: Die Sicherheitseinstellungen des Originals werden nicht übernommen.
+	Change a signed document?	Signiertes Dokument ändern?
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Dieses Dokument ist signiert. Eine Änderung fügt eine neue Version hinzu: Die Signaturen bleiben für die signierte Version gültig, und Anzeigeprogramme zeigen, dass das Dokument nach dem Signieren geändert wurde.
+	It is certified with no changes allowed: any change invalidates the certification.	Es ist zertifiziert, ohne dass Änderungen erlaubt sind: Jede Änderung macht die Zertifizierung ungültig.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Es ist zertifiziert: Ausfüllen von Formularen und Signieren sind erlaubt; andere Änderungen machen die Zertifizierung ungültig.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Es ist zertifiziert: Ausfüllen von Formularen, Signieren und Kommentieren sind erlaubt; andere Änderungen machen die Zertifizierung ungültig.
+	Change anyway	Trotzdem ändern
+	Remove security?	Sicherheit entfernen?
+	The passwords and the restrictions are removed when you save.	Die Kennwörter und die Einschränkungen werden beim Speichern entfernt.
 	Click text or an image to edit it	Klicke auf Text oder ein Bild, um es zu bearbeiten
 	Drag a rectangle to create a link; double-click a link to edit it	Ziehe ein Rechteck auf, um einen Link zu erstellen; doppelklicke auf einen Link, um ihn zu bearbeiten
 	There are no redaction marks to apply	Keine Schwärzungsmarkierungen zum Anwenden vorhanden

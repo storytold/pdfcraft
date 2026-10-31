@@ -1668,6 +1668,16 @@
 	Security settings	Varnostne nastavitve
 	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	Varnostne nastavitve morajo podpornim tehnologijam omogočati branje vsebine („Omogoči dostop do besedila bralnikom zaslona“). Spremenite varnost dokumenta, da to dovolite.
 	Security will be removed when you save	Zaščita bo odstranjena ob shranjevanju
+	The extracted pages aren't protected: the original's security settings don't carry over.	Izvlečene strani niso zaščitene: varnostne nastavitve izvirnika se ne prenesejo.
+	The split files aren't protected: the original's security settings don't carry over.	Razdeljene datoteke niso zaščitene: varnostne nastavitve izvirnika se ne prenesejo.
+	Change a signed document?	Želite spremeniti podpisan dokument?
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	Ta dokument je podpisan. Sprememba doda novo različico: podpisi ostanejo veljavni za različico, ki so jo podpisali, pregledovalniki pa bodo pokazali, da je bil dokument po podpisu spremenjen.
+	It is certified with no changes allowed: any change invalidates the certification.	Je certificiran brez dovoljenih sprememb: vsaka sprememba razveljavi certifikat.
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	Je certificiran: izpolnjevanje obrazcev in podpisovanje sta dovoljena; druge spremembe razveljavijo certifikat.
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	Je certificiran: izpolnjevanje obrazcev, podpisovanje in komentiranje so dovoljeni; druge spremembe razveljavijo certifikat.
+	Change anyway	Vseeno spremeni
+	Remove security?	Želite odstraniti zaščito?
+	The passwords and the restrictions are removed when you save.	Gesla in omejitve se odstranijo ob shranjevanju.
 	Select (V)	Izberi (V)
 	Select Action:	Izberite dejanje:
 	Select All	Izberi vse
