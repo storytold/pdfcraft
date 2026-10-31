@@ -281,7 +281,7 @@ impl SignatureDrag {
         let shift = painter.ctx().input(|i| i.modifiers.shift);
         // As far as its frame has gone from where the move started (once applied, its box is
         // already where it went).
-        let rect = cx.adjusted_rect(a, cv.gesture.as_ref(), cx.ptr.pos, shift, pending);
+        let rect = cx.adjusted_rect(a, cv.gesture.as_ref(), cv.move_anchor, cx.ptr.pos, shift, pending);
         let from = cx.xf.user_rect(cx.info, *page, m.layer.from);
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(cx.xf.rect));
         m.layer.paint(&painter, cx, *page, from.translate(rect.min - from.min));
