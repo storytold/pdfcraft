@@ -1865,3 +1865,38 @@ fn full_screen_neither_is_remembered_nor_hides_the_last_view() {
     view.leave_presentation();
     assert_eq!((view.fit, view.zoom, view.layout, view.continuous), (Fit::None, 0.5, PageLayout::TwoUp, false), "the remembered view");
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn home_recent_context_menu_reveals_the_target_without_opening_or_removing_it() {
+    let missing = std::env::temp_dir().join(format!("pdfcraft-recent-missing-{}", std::process::id())).join("jährlicher report.pdf");
+    assert!(!missing.exists());
+    let expected = missing.to_string_lossy().into_owned();
+    let target = expected.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        for (name, path) in [("first.pdf", ".".to_owned()), ("target.pdf", target)] {
+            app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path, pages: 1, size: 0 });
+        }
+        app
+    });
+    h.run_steps(4);
+    let label = if cfg!(target_os = "macos") { "Reveal in Finder" } else { "Reveal in File Explorer" };
+    h.get_by_label("target.pdf").click_secondary();
+    h.run_steps(3);
+    assert!(!h.get_by_label(label).accesskit_node().is_disabled());
+    assert!(h.state().views.is_empty(), "right-click must not open the PDF");
+    assert_eq!(h.state().recent.len(), 2);
+    h.get_by_label(label).click();
+    h.run_steps(3);
+    assert!(h.query_by_label(label).is_none(), "choosing the action closes its menu");
+    assert!(h.state().views.is_empty(), "reveal must not open the PDF");
+    assert_eq!(h.state().active, None);
+    assert_eq!(h.state().recent.len(), 2, "reveal must not remove missing recent files");
+    assert_eq!(h.state().recent[1].path, expected);
+    assert!(
+        h.state().toast.as_ref().is_some_and(|(text, _)| text.contains("The file no longer exists")),
+        "the selected path is checked and the existing reveal error is shown"
+    );
+}
