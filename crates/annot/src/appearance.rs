@@ -128,9 +128,16 @@ fn smooth_curve(pts: &[(f64, f64)]) -> String {
 /// Bumps one cloudy outline draws at most (plus one per edge); past it the bumps grow.
 pub(crate) const MAX_CLOUD_BUMPS: usize = 20_000;
 
+/// Coordinates past this are not drawn as a cloud: every bump writes its coordinates in full, so an
+/// outline 1e300 across would be tens of megabytes of digits. PDF user space is far smaller.
+const MAX_CLOUD_COORD: f64 = 1e7;
+
 /// A closed cloudy outline through `pts` (§12.5.4 `/BE /S /C`): each edge becomes a row of
 /// half-circle bumps of about `r`, bulging outwards.
 pub fn cloud_path(pts: &[(f64, f64)], r: f64) -> String {
+    if pts.iter().any(|p| !(p.0.abs() <= MAX_CLOUD_COORD && p.1.abs() <= MAX_CLOUD_COORD)) {
+        return straight_outline(pts);
+    }
     let area: f64 = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| a.0 * b.1 - b.0 * a.1).sum();
     // Outward normal of an edge: to the right of travel for counter-clockwise outlines.
     let sign = if area >= 0.0 { 1.0 } else { -1.0 };
@@ -157,6 +164,16 @@ pub fn cloud_path(pts: &[(f64, f64)], r: f64) -> String {
             let p1 = (a.0 + ux * step * (j + 1) as f64, a.1 + uy * step * (j + 1) as f64);
             c.push_str(&format!("{} {} {} {} {} {} c\n", n(p0.0 + nx * h), n(p0.1 + ny * h), n(p1.0 + nx * h), n(p1.1 + ny * h), n(p1.0), n(p1.1)));
         }
+    }
+    c.push_str("h\n");
+    c
+}
+
+/// The outline of `pts` with straight edges, closed.
+fn straight_outline(pts: &[(f64, f64)]) -> String {
+    let mut c = String::new();
+    for (i, p) in pts.iter().enumerate() {
+        c.push_str(&format!("{} {} {}\n", n(p.0), n(p.1), if i == 0 { "m" } else { "l" }));
     }
     c.push_str("h\n");
     c

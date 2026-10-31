@@ -2194,3 +2194,30 @@ fn degenerate_and_absurd_leader_and_caption_values_do_not_panic() {
     assert!(long.contains(&format!("({}) Tj", "w".repeat(256))), "cut to 256");
     assert!(!long.contains(&"w".repeat(257)));
 }
+
+/// A cloudy polygon whose finite but absurd vertices (1e300) used to draw 20,000 bumps of 300-digit
+/// numbers each: a ~40 MB appearance stream built on every redraw of a hostile file.
+#[test]
+fn cloudy_polygon_with_absurd_vertices_stays_small() {
+    for big in [1e300, 1e15, f64::MAX] {
+        let mut d = pdfcraft_cos::Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Polygon"));
+        d.set(b"Rect".to_vec(), Object::Array([0.0, 0.0, 300.0, 300.0].into_iter().map(Object::Real).collect()));
+        d.set(b"C".to_vec(), Object::Array([1.0, 0.0, 0.0].into_iter().map(Object::Real).collect()));
+        d.set(b"Vertices".to_vec(), Object::Array([0.0, 0.0, big, 0.0, big, big, 0.0, big].into_iter().map(Object::Real).collect()));
+        let mut be = pdfcraft_cos::Dict::new();
+        be.set(b"S".to_vec(), Object::name("C"));
+        d.set(b"BE".to_vec(), Object::Dict(be));
+        let started = std::time::Instant::now();
+        let stream = crate::appearance::build(&d).unwrap_or_else(|| panic!("{big}: no appearance was built"));
+        let bytes = stream.decoded().unwrap_or_else(|_| panic!("{big}: the appearance did not decode"));
+        let len = bytes.len();
+        assert!(len < 1_000_000, "{big}: {len} bytes of appearance stream");
+        // The fallback is the plain outline: one move, three straight edges, a close and no curves.
+        let text = String::from_utf8_lossy(&bytes);
+        let ops = |op: &str| text.lines().filter(|l| l.split(' ').next_back() == Some(op)).count();
+        assert_eq!((ops("m"), ops("l"), ops("c")), (1, 3, 0), "{big}: not the straight outline: {text}");
+        assert!(text.lines().any(|l| l == "h"), "{big}: the outline is not closed");
+        assert!(started.elapsed().as_secs() < 1, "{big}: took {:?}", started.elapsed());
+    }
+}
