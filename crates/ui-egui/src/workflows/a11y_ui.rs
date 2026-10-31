@@ -111,7 +111,7 @@ pub(crate) fn options_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Accessibility Checker Options")).font(theme::semibold(18.0)));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            egui::ComboBox::from_id_salt("a11y-profile").selected_text(o.profile.label()).width(160.0).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("a11y-profile").selected_text(o.profile.label()).width(160.0).show_ui(ui, |ui| {
                 for p in Profile::ALL {
                     ui.selectable_value(&mut o.profile, p, p.label());
                 }
