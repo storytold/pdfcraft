@@ -1018,7 +1018,8 @@ fn lossless_decode_maps_each_component_before_colour_conversion() {
         ("DeviceRGB", vec![0, 64, 255], vec![0., 1., 1., 0., 0., 1.], [0, 191, 255]),
         ("DeviceGray", vec![0], vec![0.2, 0.8], [51, 51, 51]),
         ("DeviceGray", vec![128], vec![-1., 2.], [129, 129, 129]),
-        ("DeviceCMYK", vec![0, 0, 0, 0], vec![0., 1., 1., 0., 0., 1., 0., 1.], [255, 0, 255]),
+        // Magenta, in the sRGB the page draws it in: through the renderer's CMYK profile (#2269).
+        ("DeviceCMYK", vec![0, 0, 0, 0], vec![0., 1., 1., 0., 0., 1., 0., 1.], [236, 0, 140]),
     ] {
         let mut dict = image_dict(1, 1, space, 8);
         dict.set(b"Decode".to_vec(), decode_array(&decode));
@@ -1214,7 +1215,8 @@ fn flat_four_component_jpeg(samples: [u8; 4], transform: u8) -> Vec<u8> {
 fn cmyk_and_ycck_jpegs_export_in_the_colours_the_page_shows() {
     // Issue #1640: in a PDF a CMYK JPEG's samples are ink amounts, inverted only by its /Decode,
     // while JPEG decoders and image viewers read them inverted (Adobe's convention for files).
-    // Exported cyan came out red. YCCK samples (Y 179, Cb 171, Cr 1) are cyan ink too.
+    // Exported cyan came out red. YCCK samples (Y 179, Cb 171, Cr 1) are cyan ink too. Issue
+    // #2269: in the colours the page draws cyan ink in.
     let inverting = Object::Array([1, 0, 1, 0, 1, 0, 1, 0].map(Object::Int).to_vec());
     for (what, samples, transform, decode, masked) in [
         ("CMYK", [255, 0, 0, 0], 0, None, true),
@@ -1237,11 +1239,457 @@ fn cmyk_and_ycck_jpegs_export_in_the_colours_the_page_shows() {
             }
             Stream::from_raw(d, jpeg.clone())
         });
-        let (ext, rgba) = exported_rgba(&doc);
-        assert!(rgba.as_chunks::<4>().0.iter().all(|p| p[0] <= 6 && p[1] >= 249 && p[2] >= 249), "{what}: {:?}", &rgba[..4]);
-        if decode.is_some() && !masked {
-            // Inverted like an image file expects: still written as is.
-            assert_eq!((ext, &extract_images(&doc, &[0], 0).images[0].data), ("jpg", &jpeg), "{what}");
+        let (drawn, exported, ext) = drawn_and_exported(&doc);
+        assert!(exported[0] <= 6 && exported[2] >= 200, "{what}: cyan, not red: {exported:?}");
+        assert!(close(drawn, exported), "{what}: the page draws {drawn:?}, the export has {exported:?}");
+        // Even stored inverted, as image files expect: viewers convert CMYK in their own way.
+        assert_eq!(ext, "png", "{what}");
+    }
+}
+
+/// The colour the page renderer draws at the centre of page 0, the exported image's first pixel
+/// over white (where the page draws it too), and the exported file's extension.
+fn drawn_and_exported(doc: &Document) -> ([u8; 3], [u8; 3], &'static str) {
+    let bytes = write_full(doc, &SaveOptions::default()).unwrap();
+    let page = pdfcraft_render::PageRenderer::new(Arc::new(bytes.clone()), Default::default()).render(pdfcraft_render::RenderRequest {
+        page: 0,
+        scale: 4.0,
+        ..Default::default()
+    });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    let i = ((page.height / 2 * page.width + page.width / 2) * 4) as usize;
+    let drawn = [page.rgba[i], page.rgba[i + 1], page.rgba[i + 2]];
+    let (ext, rgba) = exported_rgba(&Document::open(Arc::new(bytes)).unwrap());
+    let over_white = |c: u8| ((u32::from(c) * u32::from(rgba[3]) + 255 * (255 - u32::from(rgba[3])) + 127) / 255) as u8;
+    (drawn, [over_white(rgba[0]), over_white(rgba[1]), over_white(rgba[2])], ext)
+}
+
+/// Within a level of each other: the page and export round the same conversion alike, but a
+/// 16-bit sample reaches it by another path.
+fn close(a: [u8; 3], b: [u8; 3]) -> bool {
+    a.iter().zip(b).all(|(x, y)| x.abs_diff(y) <= 1)
+}
+
+/// The CMYK profile the renderer draws DeviceCMYK with: a real CMYK ICC profile.
+const CMYK_PROFILE: &[u8] = include_bytes!("../../../vendor/hayro-interpret/assets/CGATS001Compat-v2-micro.icc");
+
+fn adobe_rgb() -> Vec<u8> {
+    moxcms::ColorProfile::new_adobe_rgb().encode().unwrap()
+}
+
+/// An `/ICCBased` colour space of `n` components over `profile`.
+fn icc_space(doc: &mut Document, profile: &[u8], n: i64) -> Object {
+    let mut d = Dict::new();
+    d.set(b"N".to_vec(), Object::Int(n));
+    let r = doc.add(Object::Stream(Stream::from_raw(d, profile.to_vec())));
+    Object::Array(vec![Object::name("ICCBased"), Object::Ref(r)])
+}
+
+/// A 4×2 image of one colour: `px` repeated, in `space`.
+fn flat(space: Object, bpc: i64, px: &[u8]) -> Stream {
+    let mut d = image_dict(4, 2, "DeviceGray", bpc);
+    d.set(b"ColorSpace".to_vec(), space);
+    Stream::from_raw(d, px.repeat(8))
+}
+
+/// An 8×8 JPEG of one RGB colour (and the ICC profile in an APP2 segment, when given).
+fn flat_rgb_jpeg(px: [u8; 3], profile: Option<&[u8]>) -> Vec<u8> {
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 100).encode(&px.repeat(64), 8, 8, image::ExtendedColorType::Rgb8).unwrap();
+    profile.map_or(out.clone(), |p| with_icc(&out, p))
+}
+
+/// `jpeg` with `profile` in one APP2 `ICC_PROFILE` segment after SOI.
+fn with_icc(jpeg: &[u8], profile: &[u8]) -> Vec<u8> {
+    let mut v = jpeg[..2].to_vec();
+    v.extend_from_slice(&[0xFF, 0xE2]);
+    v.extend_from_slice(&(2 + 14 + profile.len() as u16).to_be_bytes());
+    v.extend_from_slice(b"ICC_PROFILE\0");
+    v.extend_from_slice(&[1, 1]);
+    v.extend_from_slice(profile);
+    v.extend_from_slice(&jpeg[2..]);
+    v
+}
+
+fn dct(mut s: Stream, w: i64, decode: Option<Object>) -> Stream {
+    s.dict.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+    s.dict.set(b"Width".to_vec(), Object::Int(w));
+    s.dict.set(b"Height".to_vec(), Object::Int(w));
+    if let Some(decode) = decode {
+        s.dict.set(b"Decode".to_vec(), decode);
+    }
+    s
+}
+
+#[test]
+fn exported_images_show_the_colours_the_page_draws() {
+    // Issue #2269: exported images came out in other colours than the page shows. CMYK was
+    // converted with (1 − c)(1 − k) (cyan ink as pure (0, 255, 255), black ink as (0, 0, 0))
+    // instead of the renderer's CMYK profile, and ICC profiles were left out (an Adobe RGB
+    // image as if it were sRGB). Each image is drawn and exported; the colours must agree.
+    let ink = [40, 120, 200, 30];
+    let inverting = || Object::Array([1, 0, 1, 0, 1, 0, 1, 0].map(Object::Int).to_vec());
+    type Build = Box<dyn FnOnce(&mut Document) -> Stream>;
+    let cases: Vec<(&str, &str, Build)> = vec![
+        ("DeviceRGB", "png", Box::new(|_| flat(Object::name("DeviceRGB"), 8, &[200, 60, 30]))),
+        ("DeviceGray", "png", Box::new(|_| flat(Object::name("DeviceGray"), 8, &[90]))),
+        ("an RGB JPEG", "jpg", Box::new(|_| dct(Stream::from_raw(image_dict(8, 8, "DeviceRGB", 8), flat_rgb_jpeg([200, 60, 30], None)), 8, None))),
+        ("cyan ink", "png", Box::new(|_| flat(Object::name("DeviceCMYK"), 8, &[255, 0, 0, 0]))),
+        ("magenta ink", "png", Box::new(|_| flat(Object::name("DeviceCMYK"), 8, &[0, 255, 0, 0]))),
+        ("black ink", "png", Box::new(|_| flat(Object::name("DeviceCMYK"), 8, &[0, 0, 0, 255]))),
+        ("mixed inks", "png", Box::new(move |_| flat(Object::name("DeviceCMYK"), 8, &ink))),
+        (
+            "16-bit CMYK",
+            "png",
+            Box::new(move |_| {
+                flat(Object::name("DeviceCMYK"), 16, &ink.iter().flat_map(|&c| (u16::from(c) * 257).to_be_bytes()).collect::<Vec<_>>())
+            }),
+        ),
+        (
+            "CMYK stored inverted with an inverting /Decode",
+            "png",
+            Box::new(move |_| {
+                let mut s = flat(Object::name("DeviceCMYK"), 8, &ink.map(|c| 255 - c));
+                s.dict.set(b"Decode".to_vec(), inverting());
+                s
+            }),
+        ),
+        (
+            "an indexed image over CMYK",
+            "png",
+            Box::new(move |_| {
+                let table = [[0; 4], ink].concat();
+                flat(
+                    Object::Array(vec![
+                        Object::name("Indexed"),
+                        Object::name("DeviceCMYK"),
+                        Object::Int(1),
+                        Object::String(PdfString::literal(table)),
+                    ]),
+                    8,
+                    &[1],
+                )
+            }),
+        ),
+        (
+            "CMYK with a soft mask and its /Matte",
+            "png",
+            Box::new(move |doc| {
+                let mut m = image_dict(4, 2, "DeviceGray", 8);
+                m.set(b"Matte".to_vec(), Object::Array([0, 0, 0, 1].map(Object::Int).to_vec()));
+                let m = doc.add(Object::Stream(Stream::from_raw(m, vec![128; 8])));
+                let mut s = flat(Object::name("DeviceCMYK"), 8, &[20, 60, 100, 143]);
+                s.dict.set(b"SMask".to_vec(), Object::Ref(m));
+                s
+            }),
+        ),
+        (
+            "an inverted Adobe CMYK JPEG",
+            "png",
+            Box::new(move |_| {
+                dct(Stream::from_raw(image_dict(8, 8, "DeviceCMYK", 8), flat_four_component_jpeg(ink.map(|c| 255 - c), 0)), 8, Some(inverting()))
+            }),
+        ),
+        (
+            "ICCBased Adobe RGB",
+            "png",
+            Box::new(|doc| {
+                let cs = icc_space(doc, &adobe_rgb(), 3);
+                flat(cs, 8, &[200, 60, 30])
+            }),
+        ),
+        (
+            "ICCBased Display P3",
+            "png",
+            Box::new(|doc| {
+                let cs = icc_space(doc, &moxcms::ColorProfile::new_display_p3().encode().unwrap(), 3);
+                flat(cs, 8, &[200, 60, 30])
+            }),
+        ),
+        (
+            "ICCBased CMYK",
+            "png",
+            Box::new(move |doc| {
+                let cs = icc_space(doc, CMYK_PROFILE, 4);
+                flat(cs, 8, &ink)
+            }),
+        ),
+        (
+            "an indexed image over Adobe RGB",
+            "png",
+            Box::new(|doc| {
+                let base = icc_space(doc, &adobe_rgb(), 3);
+                flat(
+                    Object::Array(vec![
+                        Object::name("Indexed"),
+                        base,
+                        Object::Int(1),
+                        Object::String(PdfString::literal(vec![0, 0, 0, 200, 60, 30])),
+                    ]),
+                    8,
+                    &[1],
+                )
+            }),
+        ),
+        (
+            "an RGB JPEG drawn through Adobe RGB, without the profile in the file",
+            "png",
+            Box::new(|doc| {
+                let mut s = dct(Stream::from_raw(image_dict(8, 8, "DeviceRGB", 8), flat_rgb_jpeg([200, 60, 30], None)), 8, None);
+                s.dict.set(b"ColorSpace".to_vec(), icc_space(doc, &adobe_rgb(), 3));
+                s
+            }),
+        ),
+    ];
+    for (what, extension, build) in cases {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, build);
+        let (drawn, exported, ext) = drawn_and_exported(&doc);
+        assert!(close(drawn, exported), "{what}: the page draws {drawn:?}, the export has {exported:?}");
+        assert_eq!(ext, extension, "{what}");
+    }
+}
+
+/// A `[/CalGray …]`, `[/CalRGB …]` or `[/Lab …]` colour space with these dictionary entries.
+fn cie_space(family: &str, entries: Vec<(&str, Object)>) -> Object {
+    let mut d = Dict::new();
+    for (key, value) in entries {
+        d.set(key.as_bytes().to_vec(), value);
+    }
+    Object::Array(vec![Object::name(family), Object::Dict(d)])
+}
+
+fn reals(v: &[f64]) -> Object {
+    Object::Array(v.iter().map(|&x| Object::Real(x)).collect())
+}
+
+#[test]
+fn calibrated_and_lab_images_export_in_the_colours_the_page_draws() {
+    // CalGray and CalRGB images were exported as device grey and RGB, their gamma, white point
+    // and matrix left out (a CalGray image with the default gamma 1 came out far darker than
+    // the page shows it), and Lab images weren't exported at all. Each image is drawn and
+    // exported; the colours must agree.
+    let d65 = || reals(&[0.9505, 1.0, 1.089]);
+    let d50 = || reals(&[0.9642, 1.0, 0.8249]);
+    let cal_gray = move || cie_space("CalGray", vec![("WhitePoint", d65())]);
+    let matrix = || reals(&[0.4497, 0.2446, 0.0252, 0.3163, 0.672, 0.1412, 0.1845, 0.0833, 0.9227]);
+    let cal_rgb = move || cie_space("CalRGB", vec![("WhitePoint", d65()), ("Gamma", reals(&[1.8, 1.8, 1.8])), ("Matrix", matrix())]);
+    let range = || Object::Array([-128, 127, -128, 127].map(Object::Int).to_vec());
+    let lab = move || cie_space("Lab", vec![("WhitePoint", d50()), ("Range", range())]);
+    let px = [200, 60, 30];
+    let indexed = |base: Object, entry: &[u8]| {
+        let table = [&vec![0; entry.len()][..], entry].concat();
+        flat(Object::Array(vec![Object::name("Indexed"), base, Object::Int(1), Object::String(PdfString::literal(table))]), 8, &[1])
+    };
+    let matted = |doc: &mut Document, space: Object, matte: Object, px: &[u8]| {
+        let mut m = image_dict(4, 2, "DeviceGray", 8);
+        m.set(b"Matte".to_vec(), matte);
+        let m = doc.add(Object::Stream(Stream::from_raw(m, vec![128; 8])));
+        let mut s = flat(space, 8, px);
+        s.dict.set(b"SMask".to_vec(), Object::Ref(m));
+        s
+    };
+    type Build = Box<dyn FnOnce(&mut Document) -> Stream>;
+    let cases: Vec<(&str, &str, Build)> = vec![
+        ("CalGray, gamma 1", "png", Box::new(move |_| flat(cal_gray(), 8, &[90]))),
+        (
+            "CalGray with a gamma and a black point",
+            "png",
+            Box::new(move |_| {
+                let entries = vec![("WhitePoint", d50()), ("BlackPoint", reals(&[0.01; 3])), ("Gamma", Object::Real(2.2))];
+                flat(cie_space("CalGray", entries), 8, &[90])
+            }),
+        ),
+        ("CalRGB", "png", Box::new(move |_| flat(cal_rgb(), 8, &px))),
+        ("CalRGB, only a white point", "png", Box::new(move |_| flat(cie_space("CalRGB", vec![("WhitePoint", d50())]), 8, &px))),
+        ("Lab", "png", Box::new(move |_| flat(lab(), 8, &px))),
+        ("Lab, the default range", "png", Box::new(move |_| flat(cie_space("Lab", vec![("WhitePoint", d65())]), 8, &px))),
+        ("16-bit Lab", "png", Box::new(move |_| flat(lab(), 16, &px.iter().flat_map(|&c| (u16::from(c) * 257).to_be_bytes()).collect::<Vec<_>>()))),
+        (
+            "Lab stored inverted with an inverting /Decode",
+            "png",
+            Box::new(move |_| {
+                let mut s = flat(lab(), 8, &px.map(|c| 255 - c));
+                s.dict.set(b"Decode".to_vec(), Object::Array([100, 0, 127, -128, 127, -128].map(Object::Int).to_vec()));
+                s
+            }),
+        ),
+        ("an indexed image over CalRGB", "png", Box::new(move |_| indexed(cal_rgb(), &px))),
+        ("an indexed image over Lab", "png", Box::new(move |_| indexed(lab(), &px))),
+        (
+            // The matte is L*, a* and b* values: white.
+            "Lab with a soft mask and its /Matte",
+            "png",
+            Box::new(move |doc| matted(doc, lab(), Object::Array([100, 0, 0].map(Object::Int).to_vec()), &[230, 140, 120])),
+        ),
+        ("CalRGB with a soft mask and its /Matte", "png", Box::new(move |doc| matted(doc, cal_rgb(), reals(&[1.0, 1.0, 1.0]), &[230, 200, 180]))),
+        (
+            "a CalRGB JPEG",
+            "png",
+            Box::new(move |_| {
+                let mut s = dct(Stream::from_raw(image_dict(8, 8, "DeviceRGB", 8), flat_rgb_jpeg(px, None)), 8, None);
+                s.dict.set(b"ColorSpace".to_vec(), cal_rgb());
+                s
+            }),
+        ),
+        (
+            "a CalGray JPEG",
+            "png",
+            Box::new(move |_| {
+                let mut jpeg = Vec::new();
+                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 100).encode(&[90; 64], 8, 8, image::ExtendedColorType::L8).unwrap();
+                let mut s = dct(Stream::from_raw(image_dict(8, 8, "DeviceGray", 8), jpeg), 8, None);
+                s.dict.set(b"ColorSpace".to_vec(), cal_gray());
+                s
+            }),
+        ),
+        (
+            // Neither the page nor the export reads an entry of too few or too many numbers,
+            // or of something else: each takes its default.
+            "CalRGB entries that aren't as many numbers as they should be",
+            "png",
+            Box::new(move |_| {
+                let entries = vec![
+                    ("WhitePoint", reals(&[0.9505, 1.0])),
+                    ("Gamma", Object::Array(vec![Object::Real(1.8), Object::name("x"), Object::Real(1.8)])),
+                    ("Matrix", reals(&[1.0; 10])),
+                    ("BlackPoint", Object::Real(0.1)),
+                ];
+                flat(cie_space("CalRGB", entries), 8, &px)
+            }),
+        ),
+        (
+            "CalRGB entries given by reference",
+            "png",
+            Box::new(move |doc| {
+                let white = doc.add(d50());
+                let gamma = doc.add(Object::Real(2.2));
+                let entries = vec![("WhitePoint", Object::Ref(white)), ("Gamma", Object::Array(vec![Object::Ref(gamma); 3])), ("Matrix", matrix())];
+                let space = doc.add(cie_space("CalRGB", entries));
+                flat(Object::Ref(space), 8, &px)
+            }),
+        ),
+    ];
+    // Every case that disagrees, reported together.
+    let mut wrong = Vec::new();
+    for (what, extension, build) in cases {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, build);
+        if let Some((_, _, why)) = extract_images(&doc, &[0], 0).skipped.first() {
+            wrong.push(format!("{what}: not exported ({why})"));
+            continue;
+        }
+        let (drawn, exported, ext) = drawn_and_exported(&doc);
+        if !close(drawn, exported) || ext != extension {
+            wrong.push(format!("{what}: the page draws {drawn:?}, the export has {exported:?} as {ext}"));
+        }
+    }
+    assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
+}
+
+#[test]
+fn lab_jpegs_are_written_as_is_or_reported() {
+    // Lab JPEGs aren't decoded yet. One without transparency is written as the file it is (as
+    // other JPEGs PdfCraft can't convert); one with a soft mask is reported.
+    let jpeg = flat_rgb_jpeg([200, 60, 30], None);
+    for masked in [false, true] {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |doc| {
+            let mut s = dct(Stream::from_raw(image_dict(8, 8, "DeviceRGB", 8), jpeg.clone()), 8, None);
+            s.dict.set(b"ColorSpace".to_vec(), cie_space("Lab", vec![("WhitePoint", reals(&[0.9505, 1.0, 1.089]))]));
+            if masked {
+                let m = doc.add(Object::Stream(Stream::from_raw(image_dict(8, 8, "DeviceGray", 8), vec![128; 64])));
+                s.dict.set(b"SMask".to_vec(), Object::Ref(m));
+            }
+            s
+        });
+        let out = extract_images(&doc, &[0], 0);
+        if masked {
+            assert!(out.images.is_empty() && out.skipped[0].2.contains("Lab JPEG"), "{out:?}");
+        } else {
+            let image = &out.images[0];
+            assert!(image.extension == "jpg" && image.data == jpeg, "written as a {} of {} bytes", image.extension, image.data.len());
+        }
+    }
+}
+
+#[test]
+fn lab_images_with_another_decode_are_reported() {
+    // The page maps a Lab image's samples through any /Decode; export applies only the default
+    // one and its inverse so far. With another, the export showed the default range's colours
+    // (17 levels off for a /Decode [0 100 -50 50 -50 50]), so such an image is reported.
+    let lab = || {
+        cie_space(
+            "Lab",
+            vec![("WhitePoint", reals(&[0.9642, 1.0, 0.8249])), ("Range", Object::Array([-128, 127, -128, 127].map(Object::Int).to_vec()))],
+        )
+    };
+    for (what, decode, exported) in [
+        ("a narrower /Decode", Some([0, 100, -50, 50, -50, 50]), false),
+        ("the default /Decode written out", Some([0, 100, -128, 127, -128, 127]), true),
+        ("no /Decode", None, true),
+    ] {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |_| {
+            let mut s = flat(lab(), 8, &[200, 60, 30]);
+            if let Some(decode) = decode {
+                s.dict.set(b"Decode".to_vec(), Object::Array(decode.map(Object::Int).to_vec()));
+            }
+            s
+        });
+        let out = extract_images(&doc, &[0], 0);
+        if exported {
+            assert!(out.skipped.is_empty(), "{what}: {:?}", out.skipped);
+            let (drawn, exported, _) = drawn_and_exported(&doc);
+            assert!(close(drawn, exported), "{what}: the page draws {drawn:?}, the export has {exported:?}");
+        } else {
+            assert!(out.images.is_empty() && out.skipped.first().is_some_and(|(_, _, why)| why.contains("/Decode")), "{what}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn damaged_calibrated_and_lab_spaces_are_reported() {
+    for space in [
+        Object::Array(vec![Object::name("CalRGB")]),
+        Object::Array(vec![Object::name("Lab"), Object::Int(5)]),
+        Object::Array(vec![Object::name("CalGray"), reals(&[1.0, 1.0, 1.0])]),
+    ] {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |_| flat(space.clone(), 8, &[90, 90, 90]));
+        let out = extract_images(&doc, &[0], 0);
+        assert!(out.images.is_empty() && out.skipped[0].2.contains("damaged"), "{space:?}: {out:?}");
+    }
+}
+
+#[test]
+fn jpegs_that_carry_the_profile_the_page_uses_are_written_unchanged() {
+    // A colour-managed viewer shows such a file in the page's colours, and an image made into a
+    // PDF by PdfCraft exports as the file it was. Any other profile, and CMYK samples a viewer
+    // would read as a negative, need converting.
+    let inverting = Object::Array([1, 0, 1, 0, 1, 0, 1, 0].map(Object::Int).to_vec());
+    let rgb = flat_rgb_jpeg([200, 60, 30], Some(&adobe_rgb()));
+    let cmyk = with_icc(&flat_four_component_jpeg([215, 135, 55, 225], 0), CMYK_PROFILE);
+    let p3 = moxcms::ColorProfile::new_display_p3().encode().unwrap();
+    for (what, jpeg, profile, n, decode, unchanged) in [
+        ("RGB, the same profile", &rgb, adobe_rgb(), 3, None, true),
+        ("RGB, another profile", &rgb, p3, 3, None, false),
+        ("CMYK stored inverted, the same profile", &cmyk, CMYK_PROFILE.to_vec(), 4, Some(inverting.clone()), true),
+        ("CMYK, the same profile, read as ink amounts", &cmyk, CMYK_PROFILE.to_vec(), 4, None, false),
+    ] {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |doc| {
+            let mut s = dct(Stream::from_raw(image_dict(8, 8, "DeviceRGB", 8), jpeg.clone()), 8, decode);
+            s.dict.set(b"ColorSpace".to_vec(), icc_space(doc, &profile, n));
+            s
+        });
+        let (drawn, exported, ext) = drawn_and_exported(&doc);
+        if unchanged {
+            let reopened = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+            assert_eq!((ext, &extract_images(&reopened, &[0], 0).images[0].data), ("jpg", jpeg), "{what}");
+        } else {
+            assert_eq!(ext, "png", "{what}");
+            assert!(close(drawn, exported), "{what}: the page draws {drawn:?}, the export has {exported:?}");
         }
     }
 }
@@ -1277,6 +1725,59 @@ fn a_jpeg_with_an_exif_orientation_becomes_an_upright_page() {
     assert!((m1[2] - 60.0).abs() < 0.01 && (m1[3] - 20.0).abs() < 0.01, "{m1:?}");
     let img = image_of(&doc, 1);
     assert_eq!((img.int(b"Width"), img.int(b"Height")), (Some(60), Some(20)));
+}
+
+#[test]
+fn device_jpegs_are_written_without_the_profile_the_page_ignores() {
+    // The page draws a DeviceRGB or DeviceGray JPEG's samples as they are, whatever ICC profile
+    // the JPEG file carries, and a viewer would draw them through that profile (with Adobe RGB,
+    // (30, 160, 60) showed as (0, 161, 47)). The file is written without its APP2 ICC_PROFILE
+    // segments, however many, and keeps every other byte: an APP2 that isn't a profile stays.
+    let rgb = flat_rgb_jpeg([30, 160, 60], None);
+    let mut gray = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut gray, 100).encode(&[90; 64], 8, 8, image::ExtendedColorType::L8).unwrap();
+    let adobe = adobe_rgb();
+    let (head, tail) = adobe.split_at(adobe.len() / 2);
+    // An APP2 segment that isn't a profile (an MPF index), after SOI.
+    let mpf = |jpeg: &[u8]| [&jpeg[..2], &[0xFF, 0xE2, 0, 8], b"MPF\0", &[0, 0], &jpeg[2..]].concat();
+    for (what, space, written, expected) in [
+        ("DeviceRGB with an Adobe RGB profile", "DeviceRGB", with_icc(&rgb, &adobe), rgb.clone()),
+        ("DeviceRGB with the profile in two chunks", "DeviceRGB", with_icc(&with_icc(&rgb, tail), head), rgb.clone()),
+        ("DeviceRGB with a profile and another APP2", "DeviceRGB", mpf(&with_icc(&rgb, &adobe)), mpf(&rgb)),
+        ("DeviceGray with a grey profile", "DeviceGray", with_icc(&gray, &icc_profile(b"GRAY")), gray.clone()),
+        ("DeviceRGB without a profile", "DeviceRGB", rgb.clone(), rgb.clone()),
+    ] {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |_| dct(Stream::from_raw(image_dict(8, 8, space, 8), written), 8, None));
+        let reopened = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let image = &extract_images(&reopened, &[0], 0).images[0];
+        assert_eq!((image.extension, &image.data), ("jpg", &expected), "{what}");
+    }
+}
+
+#[test]
+fn damaged_and_mismatched_icc_profiles_export_as_the_page_draws_them() {
+    // A profile the renderer can't read, or one for other components than /N says: the export
+    // follows the page (the device space of /N components when the profile is unreadable), and
+    // nothing panics.
+    let adobe = adobe_rgb();
+    for (what, profile, n, px) in [
+        ("garbage", b"not an ICC profile".to_vec(), 3, vec![200, 60, 30]),
+        ("truncated", adobe[..adobe.len() / 2].to_vec(), 3, vec![200, 60, 30]),
+        ("empty", Vec::new(), 3, vec![200, 60, 30]),
+        ("an RGB profile for one component", adobe.clone(), 1, vec![90]),
+        ("an RGB profile for four components", adobe.clone(), 4, vec![40, 120, 200, 30]),
+        ("a CMYK profile for three components", CMYK_PROFILE.to_vec(), 3, vec![200, 60, 30]),
+        ("a CMYK profile for one component", CMYK_PROFILE.to_vec(), 1, vec![90]),
+    ] {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |doc| {
+            let cs = icc_space(doc, &profile, n);
+            flat(cs, 8, &px)
+        });
+        let (drawn, exported, _) = drawn_and_exported(&doc);
+        assert!(close(drawn, exported), "{what}: the page draws {drawn:?}, the export has {exported:?}");
+    }
 }
 
 #[test]

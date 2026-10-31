@@ -1,7 +1,7 @@
 //! PDF colors and color spaces.
 
 use crate::cache::{Cache, CacheKey};
-use crate::function::Function;
+use crate::function::{Function, interpolate};
 use crate::util::hash128;
 use hayro_syntax::object;
 use hayro_syntax::object::Array;
@@ -661,15 +661,25 @@ pub(crate) struct CalGray {
 // See <https://github.com/mozilla/pdf.js/blob/06f44916c8936b92f464d337fe3a0a6b2b78d5b4/src/core/colorspace.js#L752>
 impl CalGray {
     fn new(dict: &Dict<'_>) -> Option<Self> {
-        let white_point = dict.get::<[f32; 3]>(WHITE_POINT).unwrap_or([1.0, 1.0, 1.0]);
-        let black_point = dict.get::<[f32; 3]>(BLACK_POINT).unwrap_or([0.0, 0.0, 0.0]);
-        let gamma = dict.get::<f32>(GAMMA).unwrap_or(1.0);
+        Some(Self::from_entries(
+            dict.get(WHITE_POINT),
+            dict.get(BLACK_POINT),
+            dict.get(GAMMA),
+        ))
+    }
 
-        Some(Self {
-            white_point,
-            black_point,
-            gamma,
-        })
+    /// PdfCraft patch (72): from the dictionary's entries, a missing one taking its default
+    /// (shared with [`CieToSrgb::cal_gray`]).
+    fn from_entries(
+        white_point: Option<[f32; 3]>,
+        black_point: Option<[f32; 3]>,
+        gamma: Option<f32>,
+    ) -> Self {
+        Self {
+            white_point: white_point.unwrap_or([1.0, 1.0, 1.0]),
+            black_point: black_point.unwrap_or([0.0, 0.0, 0.0]),
+            gamma: gamma.unwrap_or(1.0),
+        }
     }
 }
 
@@ -712,19 +722,28 @@ pub(crate) struct CalRgb {
 // see that in many cases each viewer does whatever it wants, even Acrobat), so this is good enough for us.
 impl CalRgb {
     fn new(dict: &Dict<'_>) -> Option<Self> {
-        let white_point = dict.get::<[f32; 3]>(WHITE_POINT).unwrap_or([1.0, 1.0, 1.0]);
-        let black_point = dict.get::<[f32; 3]>(BLACK_POINT).unwrap_or([0.0, 0.0, 0.0]);
-        let matrix = dict
-            .get::<[f32; 9]>(MATRIX)
-            .unwrap_or([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
-        let gamma = dict.get::<[f32; 3]>(GAMMA).unwrap_or([1.0, 1.0, 1.0]);
+        Some(Self::from_entries(
+            dict.get(WHITE_POINT),
+            dict.get(BLACK_POINT),
+            dict.get(GAMMA),
+            dict.get(MATRIX),
+        ))
+    }
 
-        Some(Self {
-            white_point,
-            black_point,
-            matrix,
-            gamma,
-        })
+    /// PdfCraft patch (72): from the dictionary's entries, a missing one taking its default
+    /// (shared with [`CieToSrgb::cal_rgb`]).
+    fn from_entries(
+        white_point: Option<[f32; 3]>,
+        black_point: Option<[f32; 3]>,
+        gamma: Option<[f32; 3]>,
+        matrix: Option<[f32; 9]>,
+    ) -> Self {
+        Self {
+            white_point: white_point.unwrap_or([1.0, 1.0, 1.0]),
+            black_point: black_point.unwrap_or([0.0, 0.0, 0.0]),
+            matrix: matrix.unwrap_or([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+            gamma: gamma.unwrap_or([1.0, 1.0, 1.0]),
+        }
     }
 
     const BRADFORD_SCALE_MATRIX: [f32; 9] = [
@@ -877,12 +896,16 @@ pub(crate) struct Lab {
 
 impl Lab {
     fn new(dict: &Dict<'_>) -> Option<Self> {
-        let white_point = dict.get::<[f32; 3]>(WHITE_POINT).unwrap_or([1.0, 1.0, 1.0]);
-        let range = dict
-            .get::<[f32; 4]>(RANGE)
-            .unwrap_or([-100.0, 100.0, -100.0, 100.0]);
+        Some(Self::from_entries(dict.get(WHITE_POINT), dict.get(RANGE)))
+    }
 
-        Some(Self { range, white_point })
+    /// PdfCraft patch (72): from the dictionary's entries, a missing one taking its default
+    /// (shared with [`CieToSrgb::lab`]).
+    fn from_entries(white_point: Option<[f32; 3]>, range: Option<[f32; 4]>) -> Self {
+        Self {
+            range: range.unwrap_or([-100.0, 100.0, -100.0, 100.0]),
+            white_point: white_point.unwrap_or([1.0, 1.0, 1.0]),
+        }
     }
 
     /// The white point the space's L\*a\*b\* values are relative to (ISO 32000-2
@@ -1446,6 +1469,145 @@ pub fn cmyk_to_srgb8(input: &[u8], output: &mut [u8]) -> Option<()> {
 static CMYK_TRANSFORM: LazyLock<ICCProfile> = LazyLock::new(|| {
     ICCProfile::new(include_bytes!("../assets/CGATS001Compat-v2-micro.icc"), 4).unwrap()
 });
+
+/// PdfCraft patch (71): convert 8-bit `DeviceCMYK` samples (four a pixel) in `input` to sRGB
+/// (three a pixel) in `output`, as pages draw `DeviceCMYK`, so that a caller writing image
+/// samples out (image export) shows the colours the page does. `None` when the lengths don't
+/// hold the same number of pixels.
+pub fn device_cmyk_to_srgb(input: &[u8], output: &mut [u8]) -> Option<()> {
+    if input.len() % 4 != 0 || input.len() / 4 * 3 != output.len() {
+        return None;
+    }
+    CMYK_TRANSFORM.convert_u8(input, output)
+}
+
+/// PdfCraft patch (71): the conversion of an `ICCBased` colour space's 8-bit samples to sRGB,
+/// as pages draw that colour space.
+#[derive(Clone, Debug)]
+pub struct IccToSrgb(ICCProfile);
+
+impl IccToSrgb {
+    /// The conversion through `profile` for samples of `components` (1, 3 or 4) components.
+    /// `None` when the profile can't be read for that many components; pages then draw the
+    /// colour space's `/Alternate` instead.
+    pub fn new(profile: &[u8], components: usize) -> Option<Self> {
+        ICCProfile::new(profile, components).map(Self)
+    }
+
+    /// Whether pages draw this profile's samples as they are, as sRGB (a three-component
+    /// profile marked as sRGB).
+    pub fn is_srgb(&self) -> bool {
+        self.0.is_srgb() && self.0.0.number_components == 3
+    }
+
+    /// Convert the samples in `input` to sRGB (three a pixel) in `output`. `None` when the
+    /// lengths don't hold the same number of pixels.
+    pub fn convert(&self, input: &[u8], output: &mut [u8]) -> Option<()> {
+        let n = self.0.0.number_components;
+        if n == 0 || input.len() % n != 0 || input.len() / n * 3 != output.len() {
+            return None;
+        }
+        if self.is_srgb() {
+            output.copy_from_slice(input);
+            return Some(());
+        }
+        self.0.transform_u8().transform(input, output).ok()
+    }
+}
+
+/// PdfCraft patch (72): the conversion of a `CalGray`, `CalRGB` or `Lab` colour space's samples
+/// to sRGB, as pages draw that colour space. The constructors take the colour space
+/// dictionary's entries, `None` for one that is missing or isn't as many numbers as it should
+/// be: pages then use its default.
+#[derive(Clone, Debug)]
+pub struct CieToSrgb(ColorSpace);
+
+impl CieToSrgb {
+    /// A `CalGray` colour space: its `/WhitePoint`, `/BlackPoint` and `/Gamma`.
+    pub fn cal_gray(
+        white_point: Option<[f32; 3]>,
+        black_point: Option<[f32; 3]>,
+        gamma: Option<f32>,
+    ) -> Self {
+        let space = CalGray::from_entries(white_point, black_point, gamma);
+        Self(ColorSpace(Arc::new(ColorSpaceType::CalGray(space))))
+    }
+
+    /// A `CalRGB` colour space: its `/WhitePoint`, `/BlackPoint`, `/Gamma` and `/Matrix`.
+    pub fn cal_rgb(
+        white_point: Option<[f32; 3]>,
+        black_point: Option<[f32; 3]>,
+        gamma: Option<[f32; 3]>,
+        matrix: Option<[f32; 9]>,
+    ) -> Self {
+        let space = CalRgb::from_entries(white_point, black_point, gamma, matrix);
+        Self(ColorSpace(Arc::new(ColorSpaceType::CalRgb(space))))
+    }
+
+    /// A `Lab` colour space: its `/WhitePoint` and `/Range`.
+    pub fn lab(white_point: Option<[f32; 3]>, range: Option<[f32; 4]>) -> Self {
+        let space = Lab::from_entries(white_point, range);
+        Self(ColorSpace(Arc::new(ColorSpaceType::Lab(space))))
+    }
+
+    /// The components of a colour: 1 for `CalGray`, 3 for `CalRGB` and `Lab`.
+    pub fn components(&self) -> usize {
+        usize::from(self.0.num_components())
+    }
+
+    /// Convert an image's 8-bit samples in `input` to sRGB (three a pixel) in `output`, decoded
+    /// as images with the default `/Decode` are: 0–255 onto 0–1, for `Lab` onto L\* 0–100 and
+    /// the a\* and b\* `/Range`. `None` when the lengths don't hold the same number of pixels.
+    pub fn convert(&self, input: &[u8], output: &mut [u8]) -> Option<()> {
+        self.convert_bytes(input, output, false)
+    }
+
+    /// Convert the entries of an `/Indexed` palette over this colour space (its lookup table's
+    /// bytes) to sRGB (three an entry), as pages look them up. These decode as [`Self::convert`]
+    /// does, but `Lab` in other float steps, so a colour can come out a level apart.
+    pub fn convert_palette(&self, input: &[u8], output: &mut [u8]) -> Option<()> {
+        self.convert_bytes(input, output, true)
+    }
+
+    /// One colour, its components as a PDF writes them (a soft mask's `/Matte`, for one), in
+    /// sRGB. `None` when `input` isn't one colour's components.
+    pub fn convert_colour(&self, input: &[f32]) -> Option<[u8; 3]> {
+        if input.len() != self.components() {
+            return None;
+        }
+        let mut output = [0; 3];
+        self.0.convert_f32(input, &mut output, false)?;
+        Some(output)
+    }
+
+    fn convert_bytes(&self, input: &[u8], output: &mut [u8], palette: bool) -> Option<()> {
+        // A few thousand pixels at a time: decoded to `f32`, a whole image takes four times
+        // its size.
+        const PIXELS: usize = 4096;
+        let n = self.components();
+        if n == 0 || input.len() % n != 0 || input.len() / n * 3 != output.len() {
+            return None;
+        }
+        let decode = self.0.default_decode_arr(8.0);
+        let mut decoded = Vec::with_capacity(PIXELS * n);
+        for (input, output) in input.chunks(PIXELS * n).zip(output.chunks_mut(PIXELS * 3)) {
+            decoded.clear();
+            decoded.extend(input.iter().zip(decode.iter().cycle()).map(
+                |(&sample, &(min, max))| {
+                    if palette {
+                        // As `Indexed::new` reads its lookup table.
+                        sample as f32 / 255.0
+                    } else {
+                        // As `decode_sample` (x_object.rs) decodes an 8-bit sample.
+                        interpolate(sample as f32, 0.0, 255.0, min, max)
+                    }
+                },
+            ));
+            self.0.convert_f32(&decoded, output, palette)?;
+        }
+        Some(())
+    }
+}
 
 pub(crate) trait ToRgb {
     fn convert_sample(&self, input: &[f32], output: &mut [u8], manual_scale: bool) -> Option<()> {
