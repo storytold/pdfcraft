@@ -106,6 +106,7 @@ fn listed(page: usize, index: usize, contents: &str, parent: Option<(usize, usiz
         fill_sign: false,
         no_rotate: false,
         points: Vec::new(),
+        text_turn: 0,
     }
 }
 
@@ -611,7 +612,7 @@ fn edit_text_from_the_menu_follows_the_view_rotation_without_a_drawn_page() {
         let mut h = egui_kittest::Harness::new_ui_state(
             |ui, view: &mut DocView| {
                 ui.button("Page").context_menu(|ui| {
-                    let _ = context_menu(ui, view, &info, &prefs, true, true);
+                    let _ = context_menu(ui, view, &info, &|_, _| true, &prefs, true, true);
                 });
             },
             view,
