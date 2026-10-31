@@ -24,13 +24,6 @@ impl Document {
         &self.version
     }
 
-    /// Set the version a full save writes in the header (`%PDF-1.4`): a standard that caps the
-    /// version (PDF/X-1a:2003 is PDF 1.4) needs a header that says no more. An incremental save
-    /// keeps the header the file has.
-    pub fn set_version(&mut self, version: &str) {
-        self.version = version.to_owned();
-    }
-
     /// Set the PDF header version (`"1.4"`, `"1.7"`, `"2.0"`, …) written by a full save.
     pub fn set_version(&mut self, version: impl Into<String>) {
         self.version = version.into();
