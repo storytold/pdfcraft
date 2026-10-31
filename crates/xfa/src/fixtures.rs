@@ -739,3 +739,78 @@ if (this.rawValue == "1") {
 "##
     .to_string()
 }
+
+/// A form whose radio group `grp` (buttons `r1` and `r2`) has enter and exit scripts of its own,
+/// as each button has, all of them adding a line to `log` (`grp enter`, `r1 exit`, …, separated
+/// by `|`); `before` and `after` are text fields around it.
+pub fn group_focus_template() -> String {
+    let log = |what: &str| {
+        format!(
+            r#"<script contentType="application/x-javascript">var l = xfa.form.form.log; l.rawValue = (l.rawValue == null || l.rawValue == "" ? "" : l.rawValue + "|") + "{what}";</script>"#
+        )
+    };
+    let events = |who: &str| {
+        format!(r#"<event activity="enter">{}</event><event activity="exit">{}</event>"#, log(&format!("{who} enter")), log(&format!("{who} exit")))
+    };
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="before" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+ <exclGroup name="grp" layout="lr-tb">{grp}
+  <field name="r1" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>1</text></items>{r1}</field>
+  <field name="r2" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>2</text></items>{r2}</field>
+ </exclGroup>
+ <field name="after" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+ <field name="log" w="7in" h="0.3in"><ui><textEdit/></ui></field>
+</subform>
+</template>
+</xdp:xdp>
+"##,
+        grp = events("grp"),
+        r1 = events("r1"),
+        r2 = events("r2"),
+    )
+}
+
+/// A form whose text field `probe` counts its enters in `enters` and its exits in `exits`, whose
+/// text field `quiet` only shows a message when it is left, and whose radio button `size.large`
+/// counts its enters in `picks` and its exits in `drops` (each button of a radio group is a field
+/// with scripts of its own), whose text field `hint` clears its "Type here" when it gains focus, and
+/// whose text field `relay` puts that "Type here" back in `hint` when it loses focus.
+pub fn focus_template() -> String {
+    let js = "application/x-javascript";
+    let count = |name: &str| format!(r#"<script contentType="{js}">{name}.rawValue = Number({name}.rawValue) + 1;</script>"#);
+    let counter = |name: &str| {
+        format!(r#"<field name="{name}" w="2in" h="0.3in" access="protected"><ui><textEdit/></ui><value><integer>0</integer></value></field>"#)
+    };
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <field name="probe" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="enter">{}</event><event activity="exit">{}</event></field>
+ <field name="quiet" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="exit"><script contentType="{js}">xfa.host.messageBox("left quiet");</script></event></field>
+ <exclGroup name="size" layout="lr-tb">
+  <field name="small" w="0.5in" h="0.25in"><ui><checkButton/></ui><items><text>S</text></items></field>
+  <field name="large" w="0.5in" h="0.25in"><ui><checkButton/></ui><items><text>L</text></items><event activity="enter">{}</event><event activity="exit">{}</event></field>
+ </exclGroup>
+ {}{}{}{}
+ <field name="hint" w="2in" h="0.3in"><ui><textEdit/></ui><value><text>Type here</text></value><event activity="enter"><script contentType="{js}">if (this.rawValue == "Type here") this.rawValue = "";</script></event></field>
+ <field name="relay" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="exit"><script contentType="{js}">hint.rawValue = "Type here";</script></event></field>
+</subform>
+</template>
+</xdp:xdp>
+"##,
+        count("enters"),
+        count("exits"),
+        count("picks"),
+        count("drops"),
+        counter("exits"),
+        counter("enters"),
+        counter("picks"),
+        counter("drops")
+    )
+}

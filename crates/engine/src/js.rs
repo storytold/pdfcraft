@@ -11,6 +11,15 @@ pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Pan
 
 use crate::{DocId, Edit, EditError, Session};
 
+/// A field gaining or losing focus ([`Session::field_focus`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldFocus {
+    /// The field gained focus: its `enter` scripts run.
+    Enter,
+    /// The field lost focus: its `exit` scripts run.
+    Exit,
+}
+
 /// What scripts produced for the viewer since it last looked.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct JsOutput {
@@ -261,6 +270,55 @@ impl Session {
     /// What scripts printed or asked for since the last call (alerts, console, print, …).
     pub fn take_js_output(&mut self, id: DocId) -> JsOutput {
         self.docs.iter_mut().find(|d| d.id == id).map(|d| std::mem::take(&mut d.js_output)).unwrap_or_default()
+    }
+
+    /// Widget `widget` of field `name` in document `id` gained or lost focus: on a laid-out XFA form,
+    /// run the field's `enter` or `exit` scripts, as one undoable edit when they change something
+    /// (and none when they don't). An exit that the field's new value already ran (the value's
+    /// change runs it) isn't run a second time. For a radio button the focus also enters or leaves
+    /// its group ([`Session::field_focus_crossing`]). Returns whether the document changed; what the
+    /// scripts showed or asked for is in [`Session::take_js_output`].
+    pub fn field_focus(&mut self, id: DocId, name: &str, widget: usize, focus: FieldFocus) -> Result<bool, EditError> {
+        self.field_focus_crossing(id, name, widget, focus, true)
+    }
+
+    /// [`Session::field_focus`], saying whether the focus also enters or leaves the radio group
+    /// whose button is widget `widget` (`crossing`); it doesn't when it moves between two buttons
+    /// of one group. As another viewer runs them, entering a group runs the group's enter scripts
+    /// before the button's and leaving it runs the group's exit scripts after the button's, while a
+    /// move between its buttons runs only theirs. Each object's scripts are an undoable edit of
+    /// their own when they change something.
+    pub fn field_focus_crossing(&mut self, id: DocId, name: &str, widget: usize, focus: FieldFocus, crossing: bool) -> Result<bool, EditError> {
+        if self.js_off {
+            return Ok(false);
+        }
+        let doc = self.doc_mut(id)?;
+        let Some(tpl) = doc.xfa_template.clone().filter(|t| pdfcraft_xfa::has_focus_scripts(t)) else { return Ok(false) };
+        let Some(cos) = doc.editor.as_ref().map(|e| &e.cos) else { return Ok(false) };
+        let Some(som) = doc.form.iter().find(|f| f.name == name).and_then(|f| crate::xfa::widget_som(cos, f, widget)) else { return Ok(false) };
+        let activity = match focus {
+            FieldFocus::Enter => "enter",
+            FieldFocus::Exit => "exit",
+        };
+        // Which of them run, decided before any does: each edit forgets the exits a value's
+        // change ran. Gaining focus starts afresh; losing it runs an exit unless the change just did.
+        let mut run = Vec::new();
+        for (som, has) in crate::xfa::focus_targets(cos, &tpl, &som, activity, crossing) {
+            let ran = doc.xfa_exited.remove(&som);
+            if has && !(ran && focus == FieldFocus::Exit) {
+                run.push(som);
+            }
+        }
+        let before = doc.generation;
+        for som in run {
+            // A script that ran away turned the form's scripts off (the group's, say): the rest
+            // don't run, and the notice that says so is in the output.
+            if self.get(id).is_some_and(|d| d.xfa_template.is_none()) {
+                break;
+            }
+            self.apply(id, Edit::XfaEvent { som, activity: activity.into() })?;
+        }
+        Ok(self.get(id).is_some_and(|d| d.generation != before))
     }
 
     /// Run `script` in document `id`, for a button (`target`: the field, event "Mouse Up") or
