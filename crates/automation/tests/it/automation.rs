@@ -2097,6 +2097,55 @@ fn numbering_pages_through_tools() {
     assert!(matches!(a.call("page_number", &json!({ "doc": doc, "from": 1, "to": 1, "style": "klingon" })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// A rectangle's fill and a text box's text each take an opacity of their own through the tools
+/// (the line or border keeps the comment's `opacity`); `opacity` sets the whole comment's again.
+#[test]
+fn comment_parts_take_opacities_of_their_own_through_the_tools() {
+    let dir = workdir("part-opacity");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(
+        &mut a,
+        "comment_add",
+        json!({ "doc": doc, "page": 1, "type": "rectangle", "rect": [10, 10, 60, 40], "fill": "yellow", "fill_opacity": 0.25 }),
+    );
+    ok(
+        &mut a,
+        "comment_add",
+        json!({ "doc": doc, "page": 1, "type": "textbox", "rect": [10, 200, 190, 240], "contents": "Hello", "fill": "#FFFF99", "width": 1, "fill_opacity": 0.2, "text_opacity": 1 }),
+    );
+    let find = |a: &mut Automation, kind: &str| {
+        let list = ok(a, "comment_list", json!({ "doc": doc, "page": 1 }));
+        list["comments"].as_array().unwrap().iter().find(|c| c["type"] == kind).unwrap().clone()
+    };
+    let rect = find(&mut a, "Square");
+    assert_eq!((rect["opacity"].as_f64(), rect["fill_opacity"].as_f64(), rect.get("text_opacity")), (Some(1.0), Some(0.25), None));
+    let tb = find(&mut a, "FreeText");
+    assert_eq!((tb["opacity"].as_f64(), tb["fill_opacity"].as_f64(), tb["text_opacity"].as_f64()), (Some(1.0), Some(0.2), Some(1.0)));
+    // The fill changes, the text stays; an undo step.
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": tb["page"], "index": tb["index"], "fill_opacity": 0.5 }));
+    let tb = find(&mut a, "FreeText");
+    assert_eq!((tb["fill_opacity"].as_f64(), tb["text_opacity"].as_f64()), (Some(0.5), Some(1.0)));
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Change comment properties");
+    ok(&mut a, "edit_redo", json!({ "doc": doc }));
+    // The whole comment's opacity: everything at it again.
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": rect["page"], "index": rect["index"], "opacity": 0.6 }));
+    let rect = find(&mut a, "Square");
+    assert_eq!((rect["opacity"].as_f64(), rect["fill_opacity"].as_f64()), (Some(0.6), Some(0.6)));
+    // Only the parts a comment has, at 0–1.
+    for (tool, args) in [
+        ("comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [0, 0], "to": [50, 50], "fill_opacity": 0.5 })),
+        ("comment_add", json!({ "doc": doc, "page": 1, "type": "rectangle", "rect": [80, 10, 120, 40], "text_opacity": 0.5 })),
+        ("comment_edit", json!({ "doc": doc, "page": rect["page"], "index": rect["index"], "fill_opacity": 2 })),
+    ] {
+        assert!(matches!(a.call(tool, &args), Err(ToolError::InvalidArgs(_))), "{args}");
+    }
+    assert!(matches!(
+        a.call("comment_edit", &json!({ "doc": doc, "page": rect["page"], "index": rect["index"], "text_opacity": 0.5 })),
+        Err(ToolError::Failed(_))
+    ));
+}
+
 #[test]
 fn comments_through_tools() {
     let dir = workdir("comments");

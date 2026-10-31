@@ -1,4 +1,4 @@
-use super::{Dict, Object, PdfString, Rgb, Stream, color, ext_gstate, form, literal, n, nums, rg, rg_stroke, text_width, win_ansi};
+use super::{Dict, Object, PartOpacity, PdfString, Rgb, Stream, color, ext_gstate, form, literal, n, nums, rg, rg_stroke, text_width, win_ansi};
 
 /// The label and colour of a standard rubber stamp name (ISO 32000-2 Table 184), for a stamp
 /// another program wrote without an appearance. Names are matched byte for byte, as PDF names
@@ -51,7 +51,7 @@ pub(crate) fn display_stamp(d: &Dict) -> Option<Stream> {
     // A malformed `/C` falls back to the stamp's own colour rather than hiding the stamp.
     let stroke = color(d, b"C").flatten();
     let mut res = Dict::new();
-    if let Some(gs) = ext_gstate(opacity, false) {
+    if let Some(gs) = ext_gstate(PartOpacity { line: opacity, fill: opacity, text: opacity }, false) {
         res.set(b"ExtGState".to_vec(), Object::Dict(gs));
     }
     // A stamp whose intent (`/IT`, PDF 2.0) is an image or a snapshot has no `/Name` to default.

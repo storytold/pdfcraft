@@ -2583,3 +2583,7 @@ animation effects	Off	Izklopljeni
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti tega odgovora
 	Export value	Izvozna vrednost
+	Text opacity	Neprosojnost besedila
+	Border opacity	Neprosojnost obrobe
+	Line opacity	Neprosojnost črte
+	Fill opacity	Neprosojnost polnila

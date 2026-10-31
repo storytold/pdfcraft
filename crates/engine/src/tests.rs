@@ -2098,7 +2098,7 @@ fn rect_comment(page: usize, rect: [f64; 4]) -> Edit {
     Edit::AddAnnotation(NewAnnotation {
         page,
         shape: Shape::Rectangle { rect },
-        style: Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width: 2.0, fill: Some([1.0, 0.0, 0.0]) },
+        style: Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width: 2.0, fill: Some([1.0, 0.0, 0.0]), ..Style::default() },
         contents: "Look here".into(),
         author: "Reviewer".into(),
     })

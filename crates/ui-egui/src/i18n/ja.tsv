@@ -2578,3 +2578,7 @@ animation effects	Off	オフ
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	この返信のオプション
 	Export value	書き出し値
+	Text opacity	テキストの不透明度
+	Border opacity	枠線の不透明度
+	Line opacity	線の不透明度
+	Fill opacity	塗りつぶしの不透明度

@@ -2901,3 +2901,7 @@ theme	Appearance	Aspecto
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opciones de esta respuesta
 	Export value	Valor de exportación
+	Text opacity	Opacidad del texto
+	Border opacity	Opacidad del borde
+	Line opacity	Opacidad de la línea
+	Fill opacity	Opacidad del relleno

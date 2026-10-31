@@ -2838,3 +2838,7 @@ theme	Appearance	Aspecte
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcions d'aquesta resposta
+	Text opacity	Opacitat del text
+	Border opacity	Opacitat de la vora
+	Line opacity	Opacitat de la línia
+	Fill opacity	Opacitat del farciment

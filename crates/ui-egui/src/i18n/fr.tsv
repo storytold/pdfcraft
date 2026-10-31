@@ -2844,3 +2844,7 @@ certificate	Version	Version
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Options de cette réponse
 	Export value	Valeur d’exportation
+	Text opacity	Opacité du texte
+	Border opacity	Opacité de la bordure
+	Line opacity	Opacité de la ligne
+	Fill opacity	Opacité du fond

@@ -2528,3 +2528,7 @@ animation effects	Off	關
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	此回覆的選項
 	Export value	匯出值
+	Text opacity	文字不透明度
+	Border opacity	邊框不透明度
+	Line opacity	線條不透明度
+	Fill opacity	填充不透明度

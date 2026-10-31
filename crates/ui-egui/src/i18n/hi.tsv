@@ -2809,3 +2809,7 @@ theme	Appearance	स्वरूप
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	इस जवाब के विकल्प
+	Text opacity	टेक्स्ट की अपारदर्शिता
+	Border opacity	किनारे की अपारदर्शिता
+	Line opacity	रेखा की अपारदर्शिता
+	Fill opacity	फ़िल की अपारदर्शिता

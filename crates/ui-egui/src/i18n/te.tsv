@@ -2487,3 +2487,7 @@ animation effects	Off	ఆఫ్
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ఈ ప్రత్యుత్తరం ఎంపికలు
 	Export value	ఎగుమతి విలువ
+	Text opacity	టెక్స్ట్ అపారదర్శకత
+	Border opacity	అంచు అపారదర్శకత
+	Line opacity	గీత అపారదర్శకత
+	Fill opacity	నింపు అపారదర్శకత

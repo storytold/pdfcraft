@@ -115,6 +115,8 @@ impl PdfCraftApp {
                     "tool": t.command(),
                     "color": s.color,
                     "opacity": s.opacity,
+                    "fill_opacity": s.fill_opacity,
+                    "text_opacity": s.text_opacity,
                     "width": s.width,
                     "fill": s.fill,
                 }))
@@ -315,6 +317,8 @@ impl PdfCraftApp {
                 if let Some(o) = e["opacity"].as_f64() {
                     self.comment_prefs.set_opacity(tool, o);
                 }
+                // The fill's and text's own opacities, where saved (older settings have none).
+                self.comment_prefs.set_part_opacity(tool, e["fill_opacity"].as_f64(), e["text_opacity"].as_f64());
                 if let Some(w) = e["width"].as_f64() {
                     self.comment_prefs.set_width(tool, w);
                 }

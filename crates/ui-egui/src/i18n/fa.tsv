@@ -2816,3 +2816,8 @@ theme	Appearance	ظاهر
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	گزینه‌های این پاسخ
+
+	Text opacity	کدری متن
+	Border opacity	کدری حاشیه
+	Line opacity	کدری خط
+	Fill opacity	کدری پر کردن

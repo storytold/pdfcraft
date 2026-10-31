@@ -2845,3 +2845,7 @@ key	Space	Space
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất
+	Text opacity	Độ mờ văn bản
+	Border opacity	Độ mờ viền
+	Line opacity	Độ mờ đường
+	Fill opacity	Độ mờ màu tô

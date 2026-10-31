@@ -1,6 +1,6 @@
 # UI and interaction parity
 
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (Pages inspector thumbnail size slider and buttons #3808; full screen presents one page at a time #1459; the selected field nudges with the arrow keys in Prepare a form #2608) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-24 · **Change:** minor (a comment's text, border or line, and fill each at an opacity of its own) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How PdfCraft's tools, panels, shortcuts and feel compare with Acrobat Pro's current interface (the
 2023+ "new Acrobat": All tools pane on the left, quick-action toolbar, Home view). Behaviour is
@@ -75,13 +75,14 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Print dialog with preview | yes | yes | shipped |
 | Document Properties (description, security, fonts, initial view, custom, advanced) | yes | all but Custom and XMP | partial |
 | Field Properties (General, Appearance, Position, Options, Actions, Format, Validate, Calculate, Signed) | yes | all but Signed | partial |
-| Comment properties and properties bar | yes | yes | shipped |
+| Comment properties and properties bar | yes | yes; a text box's text, border and fill and a shape's line and fill each take an opacity of their own (Acrobat: one per comment) | shipped |
 | Preferences | ≈ 20 pages | Interface language, Documents and view, Identity, Fill & Sign, JavaScript | partial (gap 19) |
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | Comment Properties sets a text box's text, border and fill opacity and a shape's line and fill opacity each on its own (Acrobat: one per comment); Make Properties Default carries them into the tool |
 | 2026-10-21 | minor | Pages inspector thumbnail sizing (#3808), separate from page and Organize zoom; view setting retained on reload and exposed through UI control. Not persisted between sessions. |
 | 2026-10-15 | minor | A selected field nudges with the arrow keys in Prepare a form: a point, Shift ten points, one undo step per press (#2608) |
 | 2026-10-14 | minor | Full screen shows one fitted page (or spread) at a time on black with click and key paging, as Acrobat's Full Screen Mode (#379, #1459, #1353) |

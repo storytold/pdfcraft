@@ -2481,3 +2481,7 @@ animation effects	Off	ປິດ
 	Unchecked reads	Unchecked reads
 	{field} reads fields named as it runs	{field} reads fields named as it runs
 	Some names are built as it runs	Some names are built as it runs
+	Text opacity	ຄວາມໂປ່ງແສງຂອງຂໍ້ຄວາມ
+	Border opacity	ຄວາມໂປ່ງແສງຂອງຂອບ
+	Line opacity	ຄວາມໂປ່ງແສງຂອງເສັ້ນ
+	Fill opacity	ຄວາມໂປ່ງແສງຂອງສີຕື່ມ

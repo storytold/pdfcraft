@@ -2863,3 +2863,7 @@ theme	Appearance	Aparência
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opções desta resposta
 	Export value	Valor de exportação
+	Text opacity	Opacidade do texto
+	Border opacity	Opacidade da borda
+	Line opacity	Opacidade da linha
+	Fill opacity	Opacidade do preenchimento

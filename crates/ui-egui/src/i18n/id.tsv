@@ -2810,3 +2810,7 @@ theme	Appearance	Tampilan
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsi untuk balasan ini
+	Text opacity	Opasitas teks
+	Border opacity	Opasitas bingkai
+	Line opacity	Opasitas garis
+	Fill opacity	Opasitas isian

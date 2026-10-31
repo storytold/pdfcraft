@@ -218,9 +218,11 @@ impl Edit {
             Edit::MoveAnnotation { .. } => Label::of("Move comment"),
             Edit::ReshapeAnnotation { .. } => Label::of("Reshape comment"),
             Edit::ResizeAnnotation { .. } => Label::of("Resize comment"),
-            Edit::StyleAnnotation { .. } | Edit::FillAnnotation { .. } | Edit::FontSizeAnnotation { .. } | Edit::SetAnnotationInfo { .. } => {
-                Label::of("Change comment properties")
-            }
+            Edit::StyleAnnotation { .. }
+            | Edit::FillAnnotation { .. }
+            | Edit::PartOpacity { .. }
+            | Edit::FontSizeAnnotation { .. }
+            | Edit::SetAnnotationInfo { .. } => Label::of("Change comment properties"),
             Edit::SetFieldValue { name, .. } => Label::with("Fill in {name}", name.as_str()),
             Edit::SetFieldImage { name, .. } => Label::with("Set the image of {name}", name.as_str()),
             Edit::ResetForm { .. } => Label::of("Clear form"),

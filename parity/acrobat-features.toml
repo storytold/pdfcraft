@@ -3911,6 +3911,18 @@ evidence = ["crates/ui-egui/tests/it/comments.rs::comment_properties_change_appe
 notes = "Appearance (colour, fill colour for rectangles/ovals/polygons/text boxes/callouts, opacity, thickness, note icon, font size of text boxes, typewriter text and callouts: 1-400 pt, written to /DA and the rich-text strings, the box grows to fit and never shrinks; comment_edit font_size), General (author, subject), Review History. Still missing: font family, bold/italic, alignment and per-run formatting of text boxes; the quick bar has no font size for new text boxes (they start at 12 pt, callouts 10 pt)"
 
 [[feature]]
+id = "comment.part-opacity"
+title = "A comment's text, border or line, and fill each at an opacity of its own"
+area = "E"
+tier = "P1"
+milestone = "M5"
+status = "shipped"
+commands = []
+tools = ["comment_add", "comment_edit", "comment_list"]
+evidence = ["crates/annot/src/tests.rs::parts_are_drawn_at_opacities_of_their_own", "crates/ui-egui/tests/it/comments.rs::comment_properties_set_each_parts_opacity", "crates/automation/tests/it/automation.rs::comment_parts_take_opacities_of_their_own_through_the_tools", "crates/ui-egui/tests/it/ui.rs::part_opacity_defaults_persist_and_clamp"]
+notes = "Comment Properties shows an opacity for each part instead of one for the whole comment: a text box, typewriter text or callout its Text, Border and Fill opacity, a rectangle, oval, polygon or cloud its Line and Fill opacity (a part that isn't drawn, such as an unset fill, is greyed); lines, drawings and the rest keep one Opacity. A see-through fill with an opaque line marks an area on a plan without hiding it. Stored as the line's /CA, the fill's /ca (PDF 2.0's opacity for what is filled) and the text's /PCTextOpacity (PdfCraft's own), each only where it differs, and drawn with two graphics states in the appearance, so every viewer shows it; an app that redraws the comment from its keys (Acrobat after editing it) uses one opacity again. The quick bar's Opacity and comment_edit `opacity` set the whole comment's; Make Properties Default carries the parts into the tool (saved with the settings). Headless: comment_add / comment_edit `fill_opacity`, `text_opacity`; comment_list reports `opacity`, `fill_opacity`, `text_opacity`. Acrobat has one opacity per comment."
+
+[[feature]]
 id = "comment.properties-bar"
 title = "Comment properties bar"
 area = "E"

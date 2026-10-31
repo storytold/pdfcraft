@@ -2854,3 +2854,7 @@ certificate	Version	الإصدار
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	خيارات هذا الرد
 	Export value	قيمة التصدير
+	Text opacity	عتامة النص
+	Border opacity	عتامة الحد
+	Line opacity	عتامة الخط
+	Fill opacity	عتامة التعبئة
