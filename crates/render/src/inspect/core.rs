@@ -2,8 +2,8 @@ use super::annotations::MAX_LINK_ATTACHMENT_TEXT_BYTES;
 use super::model::{AttachmentSource, PageInfo, Xfa};
 use super::navigation::text_string;
 use super::{
-    Arc, AssertUnwindSafe, DecryptionError, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, LoadOptions, LoadPdfError, Object,
-    ObjectId, OnceCell, OpenError, Pdf, Structure, catch_unwind,
+    Arc, AssertUnwindSafe, DecryptionError, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, LoadOptions, LoadPdfError,
+    ON_DISK_BODY_LIMIT, Object, ObjectId, OnDiskFile, OnceCell, OpenError, Pdf, PdfSource, Structure, catch_unwind,
 };
 
 /// lopdf decodes object and cross-reference streams while it loads, with no limit unless one is
@@ -44,46 +44,8 @@ pub fn check_pages(bytes: Arc<Vec<u8>>, password: Option<&str>, expected: usize)
 /// Inspect a document. Fails only if the renderer itself cannot open the file (or needs a
 /// password). Never panics: parser crashes are caught and reported.
 pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, OpenError> {
-    let pdf = catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes.clone(), password.unwrap_or(""))))
-        .map_err(|p| OpenError::Invalid(format!("the parser crashed: {}", crate::raster::panic_message(&p))))?
-        .map_err(|e| match e {
-            LoadPdfError::Decryption(DecryptionError::PasswordProtected) => {
-                if password.is_some() {
-                    OpenError::WrongPassword
-                } else {
-                    OpenError::NeedsPassword
-                }
-            }
-            LoadPdfError::Decryption(other) => OpenError::Unsupported(format!("encryption not supported: {other:?}")),
-            LoadPdfError::Invalid => OpenError::Invalid("no readable page tree or cross-reference data was found".into()),
-        })?;
-    let mut info = DocInfo { file_size: bytes.len(), pdf_version: version_label(&format!("{:?}", pdf.version())), ..Default::default() };
-    let pages = catch_unwind(AssertUnwindSafe(|| {
-        let mut out = Vec::new();
-        for (i, page) in pdf.pages().iter().enumerate() {
-            let (w, h) = page.render_dimensions();
-            let c = page.intersected_crop_box();
-            let rotation = match page.rotation() {
-                hayro::hayro_syntax::page::Rotation::None => 0,
-                hayro::hayro_syntax::page::Rotation::Horizontal => 90,
-                hayro::hayro_syntax::page::Rotation::Flipped => 180,
-                hayro::hayro_syntax::page::Rotation::FlippedHorizontal => 270,
-            };
-            let crop = [c.x0 as f32, c.y0 as f32, c.x1 as f32, c.y1 as f32];
-            // Degenerate boxes still get a usable placeholder size so layout never divides by zero.
-            let (w, h) = if w.is_finite() && h.is_finite() && w >= 1.0 && h >= 1.0 { (w, h) } else { (612.0, 792.0) };
-            out.push(PageInfo { width: w, height: h, label: (i + 1).to_string(), crop, rotation });
-        }
-        out
-    }));
-    match pages {
-        Ok(p) => info.pages = p,
-        Err(p) => return Err(OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p)))),
-    }
+    let mut info = page_geometry(PdfSource::Whole(bytes.clone()), password)?;
     let options = load_options(password);
-    // Geometry no longer needs the renderer parser. Do not overlap its allocations with
-    // structural inspection, including the compatibility fallback for damaged files.
-    drop(pdf);
     inspect_structure(&mut info, |tmp| {
         // The lazy reader first; lopdf's repair/tolerance path when it can't expose the same
         // page tree or an object a panel needs. No partial result is published.
@@ -110,6 +72,75 @@ pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, O
     if info.pages.is_empty() {
         return Err(OpenError::Invalid("the document has no pages".into()));
     }
+    Ok(info)
+}
+
+/// [`inspect`] for a file kept on disk. `None` when the lazy reader can't read all of it: the
+/// tolerant reader needs the whole file, so read it whole.
+pub fn inspect_on_disk(file: &Arc<OnDiskFile>) -> Result<Option<DocInfo>, OpenError> {
+    let mut info = page_geometry(PdfSource::OnDisk(file.clone()), None)?;
+    let mut complete = false;
+    inspect_structure(&mut info, |tmp| {
+        let doc = LazyStructure::on_disk(file.clone(), ON_DISK_BODY_LIMIT)?;
+        let mut t = DocInfo { pages: tmp.pages.clone(), ..Default::default() };
+        let inspector = Inspector::new(&doc);
+        if inspector.page_index.len() != t.pages.len() {
+            return Err("the page tree reads differently".into());
+        }
+        inspector.fill(&mut t);
+        if doc.failed() {
+            return Err("an object could not be read".into());
+        }
+        *tmp = t;
+        complete = true;
+        Ok(())
+    });
+    Ok((complete && !info.pages.is_empty()).then_some(info))
+}
+
+/// The renderer's view of a document: its version and the geometry of its pages. Fails only if
+/// the renderer cannot open the file (or needs a password). Never panics.
+fn page_geometry(source: PdfSource, password: Option<&str>) -> Result<DocInfo, OpenError> {
+    let pdf = catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(source.data(), password.unwrap_or(""))))
+        .map_err(|p| OpenError::Invalid(format!("the parser crashed: {}", crate::raster::panic_message(&p))))?
+        .map_err(|e| match e {
+            LoadPdfError::Decryption(DecryptionError::PasswordProtected) => {
+                if password.is_some() {
+                    OpenError::WrongPassword
+                } else {
+                    OpenError::NeedsPassword
+                }
+            }
+            LoadPdfError::Decryption(other) => OpenError::Unsupported(format!("encryption not supported: {other:?}")),
+            LoadPdfError::Invalid => OpenError::Invalid("no readable page tree or cross-reference data was found".into()),
+        })?;
+    let file_size = usize::try_from(source.size()).unwrap_or(usize::MAX);
+    let mut info = DocInfo { file_size, pdf_version: version_label(&format!("{:?}", pdf.version())), ..Default::default() };
+    let pages = catch_unwind(AssertUnwindSafe(|| {
+        let mut out = Vec::new();
+        for (i, page) in pdf.pages().iter().enumerate() {
+            let (w, h) = page.render_dimensions();
+            let c = page.intersected_crop_box();
+            let rotation = match page.rotation() {
+                hayro::hayro_syntax::page::Rotation::None => 0,
+                hayro::hayro_syntax::page::Rotation::Horizontal => 90,
+                hayro::hayro_syntax::page::Rotation::Flipped => 180,
+                hayro::hayro_syntax::page::Rotation::FlippedHorizontal => 270,
+            };
+            let crop = [c.x0 as f32, c.y0 as f32, c.x1 as f32, c.y1 as f32];
+            // Degenerate boxes still get a usable placeholder size so layout never divides by zero.
+            let (w, h) = if w.is_finite() && h.is_finite() && w >= 1.0 && h >= 1.0 { (w, h) } else { (612.0, 792.0) };
+            out.push(PageInfo { width: w, height: h, label: (i + 1).to_string(), crop, rotation });
+        }
+        out
+    }));
+    match pages {
+        Ok(p) => info.pages = p,
+        Err(p) => return Err(OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p)))),
+    }
+    // Geometry no longer needs the renderer parser. Do not overlap its allocations with
+    // structural inspection, including the compatibility fallback for damaged files.
+    drop(pdf);
     Ok(info)
 }
 

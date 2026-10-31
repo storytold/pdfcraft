@@ -444,7 +444,7 @@ fn idle_and_skipped_workers_release_source_without_parsing() {
         // A dropped pool disconnects this channel. Running synchronously makes this check
         // deterministic even when a worker starts after the pool has already been replaced.
         drop(wake_tx);
-        worker(0, bytes, RenderConfig::default(), shared.clone(), wake_rx, out, Arc::new(std::sync::atomic::AtomicBool::new(false)));
+        worker(0, bytes.into(), RenderConfig::default(), shared.clone(), wake_rx, out, Arc::new(std::sync::atomic::AtomicBool::new(false)));
         assert_eq!(shared.parses.load(std::sync::atomic::Ordering::Relaxed), 0);
         assert!(source.upgrade().is_none(), "retired workers release their source bytes");
         if skipped {
@@ -7651,7 +7651,7 @@ fn decoded_images_with_identical_dictionaries_keep_their_own_pixels() {
     assert_eq!(rgb_at(&out.rgba, w, 35, 35), [0, 0, 255], "the second image drew the first one's pixels");
     assert_eq!(rgb_at(&out.rgba, w, 100, 35), [255, 0, 0]);
     // One cache across a preview and then a final render, as a render worker keeps it.
-    let pdf = parse(&Arc::new(pdf), None).expect("parses");
+    let pdf = parse(&Arc::new(pdf).into(), None).expect("parses");
     let cache = RenderCache::new();
     let settings = InterpreterSettings::default();
     let preview = render_page(&pdf, &cache, &settings, &RenderConfig::default(), req(true)).expect("preview renders");
@@ -8486,6 +8486,8 @@ mod default_colour_spaces;
 // #4260: DeviceN colours with many inks, and tint transforms that cannot be evaluated
 // (vendored hayro-syntax patch 28, hayro-interpret patch 55).
 mod devicen_inks;
+
+mod on_disk;
 
 // #3776: isolated DeviceCMYK groups blend in CMYK (vendored hayro-interpret patch 70, hayro
 // patch 27).

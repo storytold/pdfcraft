@@ -12,6 +12,7 @@ mod inspect;
 mod pixels;
 mod raster;
 mod reading;
+mod source;
 mod structure;
 mod system_font;
 pub mod text;
@@ -19,7 +20,8 @@ pub mod transition;
 
 pub use inspect::{
     Annotation, Attachment, AttachmentSource, DestView, DocInfo, Field, FieldKind, FontInfo, Layer, LayerOp, Link, LinkTarget, OutlineItem, PageInfo,
-    PageTransition, RemoteDestination, TransitionStyle, Xfa, attachment_data, check_pages, inspect, link_replies, pretty_date, thread_tops,
+    PageTransition, RemoteDestination, TransitionStyle, Xfa, attachment_data, attachment_on_disk, check_pages, inspect, inspect_on_disk,
+    link_replies, pretty_date, thread_tops,
 };
 pub use pixels::Pixels;
 pub use raster::{
@@ -27,6 +29,7 @@ pub use raster::{
     Retiring, Tile, device_pixels, effective_scale,
 };
 pub use reading::{ReadingColors, ReadingParams};
+pub use source::PdfSource;
 pub use text::{PageText, TextGlyph};
 
 /// Errors surfaced to the user when a document cannot be opened.

@@ -124,6 +124,13 @@ impl<'a> Stream<'a> {
     /// Stream filters will not be applied.
     pub fn raw_data(&self) -> Cow<'a, [u8]> {
         let ctx = self.dict.ctx();
+        // PdfCraft patch (34): the empty data of a body cut out of the bytes points to where it was.
+        let detached = self
+            .data
+            .is_empty()
+            .then(|| ctx.xref().detached_body_at(self.data))
+            .flatten()
+            .map(|body| ctx.xref().read_detached(body).unwrap_or_default());
 
         if ctx.xref().needs_decryption(ctx)
             && self
@@ -134,12 +141,16 @@ impl<'a> Stream<'a> {
         {
             Cow::Owned(
                 ctx.xref()
-                    .decrypt(self.obj_id(), self.data, DecryptionTarget::Stream)
+                    .decrypt(
+                        self.obj_id(),
+                        detached.as_deref().unwrap_or(self.data),
+                        DecryptionTarget::Stream,
+                    )
                     // TODO: MAybe an error would be better?
                     .unwrap_or_default(),
             )
         } else {
-            Cow::Borrowed(self.data)
+            detached.map_or(Cow::Borrowed(self.data), Cow::Owned)
         }
     }
 
@@ -367,11 +378,12 @@ fn forward_stream_eol(r: &mut Reader<'_>) -> Option<()> {
 }
 
 fn parse_proper<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>> {
-    let length = dict.get::<u32>(LENGTH)?;
-
     r.skip_white_spaces_and_comments();
     r.forward_tag(b"stream")?;
     forward_stream_eol(r)?;
+    // PdfCraft patch (34): a body cut out of the bytes has none of its length here.
+    let cut = r.tail().and_then(|at| dict.ctx().xref().detached_body_at(at));
+    let length = if cut.is_some() { 0 } else { dict.get::<u32>(LENGTH)? };
     let data = r.read_bytes(length as usize)?;
     r.skip_white_spaces();
     r.forward_tag(b"endstream")?;

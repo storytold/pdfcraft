@@ -7,6 +7,21 @@ use alloc::borrow::Cow;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Formatter};
 
+/// PdfCraft patch (34): large stream bodies that are not among the bytes of a [`PdfData`]. Those
+/// bytes are then the file with the bodies cut out, so a file of gigabytes needs only its structure
+/// in memory. Everything else about parsing stays as it is: file offsets go through
+/// [`Self::held_offset`], and a stream that starts where a body was cut reads it when asked.
+pub trait DetachedBodies {
+    /// Where the byte at `offset` of the file is held; `None` for a byte of a cut body.
+    fn held_offset(&self, offset: usize) -> Option<usize>;
+    /// The cut body that belongs at position `held` of the bytes, as its start in the file and
+    /// its length.
+    fn body_at(&self, held: usize) -> Option<(u64, u64)>;
+    /// Read a cut body. `None` when the file can't give it: the stream then reads as empty, so
+    /// the implementor is the one who can tell that this happened.
+    fn read(&self, start: u64, len: u64) -> Option<Vec<u8>>;
+}
+
 /// A container for the bytes of a PDF file.
 #[derive(Clone)]
 pub struct PdfData {
@@ -14,6 +29,32 @@ pub struct PdfData {
     inner: Arc<dyn AsRef<[u8]> + Send + Sync>,
     #[cfg(not(feature = "std"))]
     inner: Arc<dyn AsRef<[u8]>>,
+    #[cfg(feature = "std")]
+    detached: Option<Arc<dyn DetachedBodies + Send + Sync>>,
+    #[cfg(not(feature = "std"))]
+    detached: Option<Arc<dyn DetachedBodies>>,
+}
+
+impl PdfData {
+    /// PdfCraft patch (34): `data` is a file with the stream bodies of `detached` cut out.
+    #[cfg(feature = "std")]
+    pub fn with_detached<T>(data: Arc<T>, detached: Arc<dyn DetachedBodies + Send + Sync>) -> Self
+    where
+        T: AsRef<[u8]> + Send + Sync + 'static,
+    {
+        Self {
+            inner: data,
+            detached: Some(detached),
+        }
+    }
+
+    pub(crate) fn detached(&self) -> Option<&(dyn DetachedBodies + 'static)> {
+        #[cfg(feature = "std")]
+        let detached = self.detached.as_deref().map(|d| d as _);
+        #[cfg(not(feature = "std"))]
+        let detached = self.detached.as_deref();
+        detached
+    }
 }
 
 impl Debug for PdfData {
@@ -31,14 +72,20 @@ impl AsRef<[u8]> for PdfData {
 #[cfg(feature = "std")]
 impl<T: AsRef<[u8]> + Send + Sync + 'static> From<Arc<T>> for PdfData {
     fn from(data: Arc<T>) -> Self {
-        Self { inner: data }
+        Self {
+            inner: data,
+            detached: None,
+        }
     }
 }
 
 #[cfg(not(feature = "std"))]
 impl<T: AsRef<[u8]> + 'static> From<Arc<T>> for PdfData {
     fn from(data: Arc<T>) -> Self {
-        Self { inner: data }
+        Self {
+            inner: data,
+            detached: None,
+        }
     }
 }
 
@@ -46,6 +93,7 @@ impl From<Vec<u8>> for PdfData {
     fn from(data: Vec<u8>) -> Self {
         Self {
             inner: Arc::new(data),
+            detached: None,
         }
     }
 }

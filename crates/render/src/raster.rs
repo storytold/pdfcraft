@@ -31,6 +31,7 @@ use hayro::vello_cpu::color::AlphaColor;
 use hayro::vello_cpu::color::palette::css::{TRANSPARENT, WHITE};
 use hayro::{RenderCache, RenderSettings, render_into, render_size};
 
+use crate::PdfSource;
 use crate::{Pixels, ReadingColors};
 
 mod pool;
@@ -480,7 +481,7 @@ fn take_warnings(warnings: &Mutex<Vec<RenderWarning>>) -> Vec<RenderWarning> {
 
 /// A single-threaded renderer over one parsed document (used by the CLI and tests).
 pub struct PageRenderer {
-    bytes: Arc<Vec<u8>>,
+    source: PdfSource,
     config: RenderConfig,
     pdf: Option<Pdf>,
     settings: InterpreterSettings,
@@ -488,10 +489,11 @@ pub struct PageRenderer {
 }
 
 impl PageRenderer {
-    pub fn new(bytes: Arc<Vec<u8>>, config: RenderConfig) -> Self {
-        let pdf = parse(&bytes, config.password.as_deref());
+    pub fn new(source: impl Into<PdfSource>, config: RenderConfig) -> Self {
+        let source = source.into();
+        let pdf = parse(&source, config.password.as_deref());
         let settings = config.settings();
-        Self { bytes, config, pdf, settings, stats: RenderStats { parser_builds: 1, ..RenderStats::default() } }
+        Self { source, config, pdf, settings, stats: RenderStats { parser_builds: 1, ..RenderStats::default() } }
     }
 
     pub fn page_count(&self) -> usize {
@@ -533,18 +535,29 @@ impl PageRenderer {
         let cache = RenderCache::new();
         let warnings = Arc::new(Mutex::new(Vec::new()));
         let settings = warning_settings(&self.settings, warnings.clone());
-        let r = render_page(pdf, &cache, &settings, &self.config, req);
+        let failed_reads = self.source.failed_reads();
+        let r = all_read(render_page(pdf, &cache, &settings, &self.config, req), &self.source, failed_reads);
         let warnings = take_warnings(&warnings);
         if matches!(r, Err((_, true))) {
-            self.pdf = parse(&self.bytes, self.config.password.as_deref());
+            self.pdf = parse(&self.source, self.config.password.as_deref());
             self.stats.parser_builds += 1;
         }
         finish(req, start, r, warnings)
     }
 }
 
-fn parse(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Option<Pdf> {
-    catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes.clone(), password.unwrap_or("")).ok())).ok().flatten()
+fn parse(source: &PdfSource, password: Option<&str>) -> Option<Pdf> {
+    catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(source.data(), password.unwrap_or("")).ok())).ok().flatten()
+}
+
+/// `result`, unless a read of the file failed since there were `failed_reads`: a page drawn
+/// without a stream it needs would look complete. Reads of the same file by another page count too,
+/// and that page's error then says the same.
+fn all_read<T>(result: Result<T, (String, bool)>, source: &PdfSource, failed_reads: u64) -> Result<T, (String, bool)> {
+    if result.is_ok() && source.failed_reads() != failed_reads {
+        return Err(("part of the file could not be read: it may have changed or gone away".into(), false));
+    }
+    result
 }
 
 pub(crate) fn panic_message(p: &Box<dyn std::any::Any + Send>) -> String {
