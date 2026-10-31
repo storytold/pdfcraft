@@ -166,8 +166,8 @@ fn apply_step(s: &mut Session, id: DocId, step: &Step, log: &mut Vec<String>) ->
         }
         Step::RemoveHiddenInformation => Edit::RemoveHidden { which: crate::HIDDEN.to_vec() },
         Step::Sanitize => Edit::Sanitize,
-        Step::FlattenComments => Edit::Flatten { comments: true, fields: false },
-        Step::FlattenFields => Edit::Flatten { comments: false, fields: true },
+        Step::FlattenComments => Edit::Flatten { comments: true, fields: false, keep_signature_fields: false },
+        Step::FlattenFields => Edit::Flatten { comments: false, fields: true, keep_signature_fields: false },
         Step::AddWatermark(t) => {
             Edit::AddWatermark { pages: all, settings: crate::Watermark { text: t.clone(), ..Default::default() }, replace: false, file: None }
         }

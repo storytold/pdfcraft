@@ -97,10 +97,22 @@ fn upright(m: [f64; 6], degrees: i64, rect: [f64; 4]) -> [f64; 6] {
     ]
 }
 
+/// What [`flatten_with`] flattens.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FlattenOptions {
+    /// Every comment.
+    pub comments: bool,
+    /// Every form field.
+    pub fields: bool,
+    /// With `fields`: leave signature fields (signed or not) as they are, so a form can be filled,
+    /// flattened, and then signed in the signature field it was prepared with.
+    pub keep_signature_fields: bool,
+}
+
 #[derive(Clone, Copy)]
 enum Which {
     /// Every comment and/or every form field.
-    Comments { comments: bool, fields: bool },
+    Comments(FlattenOptions),
     /// Fill & Sign text, marks and signatures only.
     FillSign,
 }
@@ -111,15 +123,29 @@ fn selected(doc: &Document, d: &Dict, which: Which) -> bool {
         // Comments are what the comment list calls comments: links, pop-ups and the non-markup
         // multimedia and print-production annotations (3D, Screen, Movie, RichMedia,
         // PrinterMark, TrapNet, Watermark) are neither comments nor fields, and stay (#3087).
-        Which::Comments { comments, fields } => {
+        Which::Comments(o) => {
             if subtype == b"Widget" {
-                fields
+                o.fields && !(o.keep_signature_fields && is_signature_field(doc, d))
             } else {
-                comments && pdfcraft_annot::is_comment_subtype(&String::from_utf8_lossy(subtype))
+                o.comments && pdfcraft_annot::is_comment_subtype(&String::from_utf8_lossy(subtype))
             }
         }
         Which::FillSign => !matches!(subtype, b"Link" | b"Popup" | b"Widget") && pdfcraft_annot::is_fill_sign(doc, d),
     }
+}
+
+/// Whether a widget belongs to a signature field: its own `/FT`, or the one it inherits from its
+/// parent fields (§12.7.4.1), followed a bounded number of levels.
+fn is_signature_field(doc: &Document, widget: &Dict) -> bool {
+    let mut node = widget.clone();
+    for _ in 0..64 {
+        if let Some(ft) = node.get(b"FT") {
+            return doc.resolve(ft).as_name() == Some(b"Sig");
+        }
+        let Some(parent) = node.get(b"Parent").and_then(|p| doc.resolve(p).as_dict().cloned()) else { return false };
+        node = parent;
+    }
+    false
 }
 
 /// An XObject name that is not already on the page, so a later flatten cannot replace `PCFl0`.
@@ -139,7 +165,13 @@ fn xobject_name(existing: &Dict, pending: &Dict, n: &mut u32) -> String {
 /// Flatten comments and/or form fields on `pages`. Returns how many annotations were merged
 /// into page content.
 pub fn flatten(doc: &mut Document, pages: &[usize], comments: bool, fields: bool) -> Result<usize, EditError> {
-    flatten_which(doc, pages, Which::Comments { comments, fields })
+    flatten_with(doc, pages, FlattenOptions { comments, fields, keep_signature_fields: false })
+}
+
+/// [`flatten`] with the choices of [`FlattenOptions`]. Returns how many annotations were merged
+/// into page content.
+pub fn flatten_with(doc: &mut Document, pages: &[usize], options: FlattenOptions) -> Result<usize, EditError> {
+    flatten_which(doc, pages, Which::Comments(options))
 }
 
 /// Bake Fill & Sign text, marks and signatures into `pages` and remove those annotations.
@@ -339,7 +371,7 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
     }
     // A field whose widgets are on no page has nothing to draw, but flattening every field of the
     // document must still take it out of the form, or other software keeps seeing one (#1470).
-    let orphans = matches!(which, Which::Comments { fields: true, .. }) && (0..all.len()).all(|i| pages.contains(&i));
+    let orphans = matches!(which, Which::Comments(o) if o.fields) && (0..all.len()).all(|i| pages.contains(&i));
     if !removed_widgets.is_empty() || orphans {
         let on_page: HashSet<ObjRef> = page_list(doc)
             .iter()
@@ -347,7 +379,7 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
             .flatten()
             .filter_map(|e| e.as_ref())
             .collect();
-        prune_fields(doc, &removed_widgets, orphans.then_some(&on_page))?;
+        prune_fields(doc, &removed_widgets, orphans.then_some(&on_page), matches!(which, Which::Comments(o) if o.keep_signature_fields))?;
     }
     Ok(drawn)
 }
@@ -360,7 +392,7 @@ thread_local! {
 
 /// Remove flattened widgets from the AcroForm field tree, and fields left without widgets. With
 /// `on_page`, also the widgets (fields without kids) that are on no page.
-fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&HashSet<ObjRef>>) -> Result<(), EditError> {
+fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&HashSet<ObjRef>>, keep_signatures: bool) -> Result<(), EditError> {
     let Some(root) = doc.root() else { return Ok(()) };
     let Some(af) = doc.get(root).as_dict().and_then(|d| d.get(b"AcroForm").cloned()) else { return Ok(()) };
     let af_ref = af.as_ref();
@@ -376,6 +408,7 @@ fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&
         widgets: &HashSet<ObjRef>,
         on_page: Option<&HashSet<ObjRef>>,
         known: &mut HashMap<ObjRef, (bool, Option<usize>)>,
+        keep_signatures: bool,
         depth: usize,
     ) -> (bool, bool) {
         #[cfg(test)]
@@ -394,7 +427,7 @@ fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&
         known.insert(r, (true, None));
         let Some(d) = doc.get(r).as_dict().cloned() else { return (true, false) };
         let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) else {
-            let survives = on_page.is_none_or(|p| p.contains(&r));
+            let survives = (keep_signatures && is_signature_field(doc, &d)) || on_page.is_none_or(|p| p.contains(&r));
             known.insert(r, (survives, None));
             return (survives, false);
         };
@@ -403,7 +436,7 @@ fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&
             .iter()
             .filter(|k| {
                 k.as_ref().is_none_or(|kr| {
-                    let (survives, kid_cut) = keep(doc, kr, widgets, on_page, known, depth + 1);
+                    let (survives, kid_cut) = keep(doc, kr, widgets, on_page, known, keep_signatures, depth + 1);
                     cut |= kid_cut;
                     survives
                 })
@@ -413,12 +446,13 @@ fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&
         if survivors.len() != kids.len() {
             let _ = doc.update_dict(r, |d| d.set(b"Kids".to_vec(), Object::Array(survivors.clone())));
         }
-        known.insert(r, (!survivors.is_empty(), cut.then_some(depth)));
-        (!survivors.is_empty(), cut)
+        let survives = !survivors.is_empty() || (keep_signatures && is_signature_field(doc, &d));
+        known.insert(r, (survives, cut.then_some(depth)));
+        (survives, cut)
     }
     let mut known = HashMap::new();
     let survivors: Vec<Object> =
-        fields.iter().filter(|f| f.as_ref().is_none_or(|r| keep(doc, r, widgets, on_page, &mut known, 0).0)).cloned().collect();
+        fields.iter().filter(|f| f.as_ref().is_none_or(|r| keep(doc, r, widgets, on_page, &mut known, keep_signatures, 0).0)).cloned().collect();
     if survivors.len() == fields.len() && widgets.is_empty() {
         return Ok(()); // only looked for fields on no page, and there were none
     }

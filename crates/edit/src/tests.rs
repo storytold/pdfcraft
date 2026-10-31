@@ -8500,6 +8500,75 @@ fn a_run_of_spaces_in_a_subset_without_a_space_glyph_keeps_its_width() {
     assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
 }
 
+/// Fill, flatten, then sign in the prepared field: signature widgets with appearances remain
+/// on the page and in the field tree only when signature preservation is requested.
+#[test]
+fn flattening_fields_can_keep_signature_fields() {
+    let form = |keep: bool| {
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R 8 0 R] >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R] >>",
+            &stream("", " "),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Jordan) /Rect [10 150 190 170] /F 4 /P 3 0 R /AP << /N 9 0 R >> >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Sig /T (signature) /Rect [10 80 190 120] /F 4 /P 3 0 R /AP << /N 9 0 R >> >>",
+            "<< /Type /Annot /Subtype /Widget /Parent 8 0 R /Rect [10 20 190 60] /F 4 /P 3 0 R /AP << /N 9 0 R >> >>",
+            "<< /FT /Sig /T (witness) /Kids [7 0 R] >>",
+            &stream("/Type /XObject /Subtype /Form /BBox [0 0 180 20]", "BT /Helv 12 Tf 2 5 Td (Jordan) Tj ET"),
+        ]);
+        let options = FlattenOptions { comments: false, fields: true, keep_signature_fields: keep };
+        let drawn = if keep { 1 } else { 3 };
+        assert_eq!(flatten_with(&mut doc, &[0], options).unwrap(), drawn, "kept signature boxes are not drawn");
+        let doc = reopen(&doc);
+        let refs = |o: Option<&Object>| -> Vec<u32> {
+            o.map(|o| doc.resolve(o))
+                .and_then(|a| a.as_array().cloned())
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|r| r.as_ref().map(|r| r.num))
+                .collect()
+        };
+        let page = &pdfcraft_model::pages(&doc)[0];
+        let catalog = doc.get(doc.root().unwrap());
+        let acroform = doc.resolve(catalog.as_dict().unwrap().get(b"AcroForm").unwrap());
+        (refs(page.dict.get(b"Annots")), refs(acroform.as_dict().unwrap().get(b"Fields")))
+    };
+    assert_eq!(form(true), (vec![6, 7], vec![6, 8]), "the signature fields stay, the text field is flattened");
+    assert_eq!(form(false), (vec![], vec![]), "by default every field is flattened");
+}
+
+#[test]
+fn flattening_orphans_can_keep_signature_fields() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R 7 0 R 8 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 7 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (on_page) /Rect [10 10 150 40] /F 4 /AP << /N 10 0 R >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (orphan) /Rect [10 50 150 80] /F 4 /AP << /N 10 0 R >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (hidden) /Rect [10 90 150 120] /F 2 /AP << /N 10 0 R >> >>",
+        "<< /FT /Sig /T (parent) /Kids [9 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 8 0 R /Rect [10 130 150 160] /F 4 /AP << /N 10 0 R >> >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream",
+    ]);
+    assert_eq!(
+        flatten_with(&mut doc, &[0], FlattenOptions { comments: false, fields: true, keep_signature_fields: true }).unwrap(),
+        1,
+        "only the field on the page is drawn"
+    );
+    let doc = reopen(&doc);
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let fields = doc.resolve(af.as_dict().unwrap().get(b"Fields").unwrap());
+    let left: Vec<pdfcraft_cos::ObjRef> = fields.as_array().unwrap().iter().filter_map(|f| f.as_ref()).collect();
+    assert_eq!(
+        left,
+        [pdfcraft_cos::ObjRef::new(6, 0), pdfcraft_cos::ObjRef::new(7, 0), pdfcraft_cos::ObjRef::new(8, 0)],
+        "orphan signatures and the hidden text field stay"
+    );
+}
+
 /// Inside a text object `q`/`Q` save and restore the text and text line matrices (ISO 32000-2
 /// §9.4.1, as corrected by the PDF Association's errata, issue 368), as the renderer does: the
 /// text after `Q` is found, and stays, where it is drawn.
