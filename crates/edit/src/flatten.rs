@@ -136,6 +136,119 @@ fn xobject_name(existing: &Dict, pending: &Dict, n: &mut u32) -> String {
     }
 }
 
+/// Copy usable property resources, including inherited resources supplied by the page model.
+/// Invalid data must stay intact rather than being replaced while transferring membership.
+fn properties(doc: &Document, page: &Dict) -> Option<Dict> {
+    let Some(resources) = page.get(b"Resources") else { return Some(Dict::new()) };
+    let resources = doc.resolve(resources);
+    let Object::Dict(resources) = &*resources else { return None };
+    let Some(properties) = resources.get(b"Properties") else { return Some(Dict::new()) };
+    match &*doc.resolve(properties) {
+        Object::Dict(properties) => Some(properties.clone()),
+        _ => None,
+    }
+}
+
+/// Validate an ISO 32000-1 §8.11.2.2 `/VE` visibility expression within recursion depth 16
+/// and a shared node-visit `budget`.
+fn valid_ve(doc: &Document, expr: &Object, depth: usize, budget: &mut usize) -> bool {
+    if depth > 16 || *budget == 0 {
+        return false;
+    }
+    *budget -= 1;
+    let resolved = doc.resolve(expr);
+    if let Some(arr) = resolved.as_array() {
+        let [op, rest @ ..] = arr.as_slice() else { return false };
+        let op_obj = doc.resolve(op);
+        let Some(name) = op_obj.as_name() else { return false };
+        match (name, rest) {
+            (b"Not", [operand]) => valid_ve(doc, operand, depth + 1, budget),
+            (b"And" | b"Or", [_, ..]) => rest.iter().all(|o| valid_ve(doc, o, depth + 1, budget)),
+            _ => false,
+        }
+    } else if depth > 0 {
+        expr.as_ref().is_some_and(|r| matches!(&*doc.get(r), Object::Dict(d) if d.name(b"Type") == Some(b"OCG")))
+    } else {
+        false
+    }
+}
+
+/// Validate an `/OCMD` dictionary's `/P` policy and `/VE` visibility expression, if present.
+fn valid_ocmd(doc: &Document, d: &Dict) -> bool {
+    if let Some(p) = d.get(b"P")
+        && !matches!(doc.resolve(p).as_name(), Some(b"AllOn" | b"AnyOn" | b"AnyOff" | b"AllOff"))
+    {
+        return false;
+    }
+    if let Some(ve) = d.get(b"VE")
+        && !valid_ve(doc, ve, 0, &mut 4096)
+    {
+        return false;
+    }
+    true
+}
+
+/// Preserve the stored value, not a reconstructed membership dictionary. A direct inline
+/// dictionary lacks an indirect reference (ObjRef) to identify it in page resources, and an
+/// OCMD with a malformed or overly deep `/VE` expression stays on the annotation.
+fn transferable(doc: &Document, annotation: &Dict, usable_properties: bool) -> bool {
+    let Some(membership) = annotation.get(b"OC") else { return true };
+    if !usable_properties {
+        return false;
+    }
+    match &*doc.resolve(membership) {
+        Object::Dict(d) => match d.name(b"Type") {
+            Some(b"OCG") => membership.as_ref().is_some(),
+            Some(b"OCMD") => valid_ocmd(doc, d),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Retained annotations keep their replies and pop-ups, including transitive reply chains.
+fn retained_annotations(doc: &Document, list: &[Object], usable_properties: bool) -> HashSet<ObjRef> {
+    let mut children: HashMap<ObjRef, Vec<ObjRef>> = HashMap::new();
+    let mut pending = Vec::new();
+    for entry in list {
+        let Some(reference) = entry.as_ref() else { continue };
+        let object = doc.resolve(entry);
+        let Some(annotation) = object.as_dict() else { continue };
+        if !transferable(doc, annotation, usable_properties) {
+            pending.push(reference);
+        }
+        if let Some(parent) = annotation.reference(b"IRT") {
+            children.entry(parent).or_default().push(reference);
+        }
+        if annotation.name(b"Subtype") == Some(b"Popup")
+            && let Some(parent) = annotation.reference(b"Parent")
+        {
+            children.entry(parent).or_default().push(reference);
+        }
+    }
+    let mut retained = HashSet::new();
+    while let Some(current) = pending.pop() {
+        if !retained.insert(current) {
+            continue;
+        }
+        if let Some(kids) = children.get(&current) {
+            pending.extend(kids.iter().copied());
+        }
+    }
+    retained
+}
+
+/// A Properties resource name that is not already on the page or in `pending`.
+fn property_name(existing: &Dict, pending: &Dict, n: &mut u64) -> Option<String> {
+    loop {
+        let name = format!("PCFlOC{n}");
+        *n = n.checked_add(1)?;
+        if !existing.contains(name.as_bytes()) && !pending.contains(name.as_bytes()) {
+            return Some(name);
+        }
+    }
+}
+
 /// Flatten comments and/or form fields on `pages`. Returns how many annotations were merged
 /// into page content.
 pub fn flatten(doc: &mut Document, pages: &[usize], comments: bool, fields: bool) -> Result<usize, EditError> {
@@ -157,10 +270,16 @@ pub fn flatten_fill_sign(doc: &mut Document, pages: &[usize]) -> Result<usize, E
 fn undrawn_on(doc: &Document, all: &[pdfcraft_model::Page], pages: &[usize], which: Which) -> Option<(usize, bool, char)> {
     for &i in pages {
         let list = all.get(i)?.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+        let usable_properties = properties(doc, &all[i].dict).is_some();
+        let retained = retained_annotations(doc, &list, usable_properties);
         for entry in &list {
+            let Some(r) = entry.as_ref() else { continue };
+            if retained.contains(&r) {
+                continue;
+            }
             let Some(d) = doc.resolve(entry).as_dict().cloned() else { continue };
             let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
-            if !selected(doc, &d, which) || flags & (HIDDEN | NO_VIEW) != 0 {
+            if !selected(doc, &d, which) || flags & (HIDDEN | NO_VIEW) != 0 || !transferable(doc, &d, usable_properties) {
                 continue;
             }
             let widget = d.name(b"Subtype") == Some(b"Widget");
@@ -172,6 +291,26 @@ fn undrawn_on(doc: &Document, all: &[pdfcraft_model::Page], pages: &[usize], whi
         }
     }
     None
+}
+
+/// Ensure comments without stored appearances have appearances generated before flattening.
+fn prepare_appearances(doc: &mut Document, list: &[Object], which: Which, retained: &HashSet<ObjRef>, usable_properties: bool) {
+    for entry in list {
+        let Some(r) = entry.as_ref() else { continue };
+        if retained.contains(&r) {
+            continue;
+        }
+        let d = doc.resolve(entry).as_dict().cloned().unwrap_or_default();
+        let subtype = d.name(b"Subtype").unwrap_or_default();
+        if subtype == b"Widget" || !selected(doc, &d, which) || !transferable(doc, &d, usable_properties) {
+            continue;
+        }
+        let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+        if flags & (HIDDEN | NO_VIEW) != 0 || appearance(doc, &d).is_some() {
+            continue;
+        }
+        let _ = pdfcraft_annot::set_appearance(doc, r);
+    }
 }
 
 /// Runs [`flatten_in`] on a copy of `doc` (unchanged objects are shared) and keeps it only on
@@ -205,6 +344,10 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
         let Some(list) = annots_obj.as_ref().map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()) else { continue };
         let mut content = String::new();
         let mut xobjects = Dict::new();
+        let existing_properties = properties(doc, &page.dict);
+        let mut added_properties = Dict::new();
+        let mut retained = retained_annotations(doc, &list, existing_properties.is_some());
+        let mut property_n = 0u64;
         let mut name_n = 0u32;
         let existing_xo = page
             .dict
@@ -221,27 +364,18 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
         // A viewer draws many comments from their dictionary even when the file stores no
         // appearance (notes, FreeText, ink, stamps…). Build the appearance it would show, so
         // flattening keeps a comment that still has ink on screen instead of deleting it.
-        for entry in &list {
-            let Some(r) = entry.as_ref() else { continue };
-            let d = doc.resolve(entry).as_dict().cloned().unwrap_or_default();
-            let subtype = d.name(b"Subtype").unwrap_or_default();
-            if subtype == b"Widget" || !selected(doc, &d, which) {
-                continue;
-            }
-            let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
-            if flags & (HIDDEN | NO_VIEW) != 0 || appearance(doc, &d).is_some() {
-                continue;
-            }
-            // A subtype this build cannot draw fails here and is kept below, so the comment is
-            // not deleted with nothing drawn in its place. (Text the standard fonts can't draw
-            // was refused before anything changed: `undrawn_on`.)
-            let _ = pdfcraft_annot::set_appearance(doc, r);
-        }
+        prepare_appearances(doc, &list, which, &retained, existing_properties.is_some());
         for (k, entry) in list.iter().enumerate() {
             let obj = doc.resolve(entry);
             let Some(d) = obj.as_dict() else { continue };
             let subtype = d.name(b"Subtype").unwrap_or_default();
             let widget = subtype == b"Widget";
+            if entry.as_ref().is_some_and(|r| retained.contains(&r)) || !transferable(doc, d, existing_properties.is_some()) {
+                if let Some(r) = entry.as_ref() {
+                    retained.insert(r);
+                }
+                continue;
+            }
             if !selected(doc, d, which) {
                 continue;
             }
@@ -255,8 +389,22 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
                 let form = doc.get(ap).as_dict().cloned().unwrap_or_default();
                 if let Some(m) = placement(doc, &form, rect) {
                     let m = if flags & NO_ROTATE != 0 { upright(m, rotation, rect) } else { m };
+                    if let Some(membership) = d.get(b"OC") {
+                        let Some(existing) = existing_properties.as_ref() else { continue };
+                        let Some(name) = property_name(existing, &added_properties, &mut property_n) else {
+                            if let Some(r) = entry.as_ref() {
+                                retained.insert(r);
+                            }
+                            continue;
+                        };
+                        content.push_str(&format!("/OC /{name} BDC\n"));
+                        added_properties.set(name.into_bytes(), membership.clone());
+                    }
                     let name = xobject_name(&existing_xo, &xobjects, &mut name_n);
                     content.push_str(&format!("q {} {} {} {} {} {} cm /{name} Do Q\n", n(m[0]), n(m[1]), n(m[2]), n(m[3]), n(m[4]), n(m[5])));
+                    if d.contains(b"OC") {
+                        content.push_str("EMC\n");
+                    }
                     xobjects.set(name.into_bytes(), Object::Ref(ap));
                     drawn += 1;
                     drew = true;
@@ -297,7 +445,7 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
         // it could not be drawn: its content would go with nothing in its place.
         for entry in &list {
             let Some(r) = entry.as_ref() else { continue };
-            if undrawn.contains(&r) {
+            if undrawn.contains(&r) || retained.contains(&r) {
                 continue;
             }
             let obj = doc.get(r);
@@ -321,6 +469,13 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
                 xo.set(k.clone(), v.clone());
             }
             res.set(b"XObject".to_vec(), Object::Dict(xo));
+            if !added_properties.is_empty() {
+                let mut properties = existing_properties.unwrap_or_default();
+                for (key, value) in added_properties.iter() {
+                    properties.set(key.clone(), value.clone());
+                }
+                res.set(b"Properties".to_vec(), Object::Dict(properties));
+            }
             doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
             let page = page_list(doc)[i].clone();
             place_tagged(doc, &page, "Flattened", content.into_bytes(), false)?;
