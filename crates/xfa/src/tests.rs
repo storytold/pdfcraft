@@ -4145,3 +4145,80 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
 }
+
+#[test]
+fn fields_by_som_reads_a_field_listed_many_times_once() {
+    // A field lists itself twice and its one widget twice: walked once per path to it, that is
+    // 2^64 visits at the depth limit.
+    let mut doc = Document::new_empty();
+    let widget = Object::Ref(som_field(&mut doc, "name", Some("form1[0].name[0]"), None));
+    let parent = doc.add(Object::Null);
+    let kids = Object::Array(vec![Object::Ref(parent), widget.clone(), Object::Ref(parent), widget]);
+    doc.set(parent, field_named("form1", None, Some(kids)));
+    let by_som = fields_by_som_of(doc, vec![Object::Ref(parent)]);
+    assert_eq!(by_som.len(), 1, "{by_som:?}");
+    assert_eq!(by_som.get("form1[0].name[0]").map(String::as_str), Some("form1.name"));
+}
+
+#[test]
+fn fields_by_som_reads_a_field_listed_under_many_generations_once() {
+    // `Document::get` finds a field by object number alone, so `5 0 R` and `5 1 R` are one field.
+    // The AcroForm lists one under 2,000 generations: read again for each, its 1,000 kids would
+    // spend the walk's 2^20 steps before the field listed after it.
+    let mut doc = Document::new_empty();
+    let leaf = som_field(&mut doc, "leaf", None, None);
+    let a = som_field(&mut doc, "a", None, Some(Object::Array(vec![Object::Ref(leaf); 1_000])));
+    let b = som_field(&mut doc, "b", Some("form1[0].b[0]"), None);
+    let mut fields: Vec<Object> = (0..2_000).map(|g| Object::Ref(pdfcraft_cos::ObjRef::new(a.num, g))).collect();
+    fields.push(Object::Ref(b));
+    let by_som = fields_by_som_of(doc, fields);
+    assert_eq!(by_som.get("form1[0].b[0]").map(String::as_str), Some("b"), "{by_som:?}");
+}
+
+#[test]
+fn fields_by_som_counts_kids_that_are_not_references() {
+    // 2,000 fields share one `/Kids` array of 1,000 nulls. Skipped uncounted, the nulls would
+    // cost nothing against the walk's 2^20 steps, however many fields share however long an
+    // array. Counted, they spend the steps here, and the walk stops before the last field.
+    let mut doc = Document::new_empty();
+    let nulls = doc.add(Object::Array(vec![Object::Null; 1_000]));
+    let first = som_field(&mut doc, "first", Some("form1[0].first[0]"), None);
+    let last = som_field(&mut doc, "last", Some("form1[0].last[0]"), None);
+    let mut fields = vec![Object::Ref(first)];
+    fields.extend((0..2_000).map(|i| Object::Ref(som_field(&mut doc, &format!("f{i}"), None, Some(Object::Ref(nulls))))));
+    fields.push(Object::Ref(last));
+    let by_som = fields_by_som_of(doc, fields);
+    assert!(by_som.contains_key("form1[0].first[0]"), "{by_som:?}");
+    assert!(!by_som.contains_key("form1[0].last[0]"), "{by_som:?}");
+}
+
+/// An AcroForm field named `t`, with SOM path `som` and `kids` when given.
+fn field_named(t: &str, som: Option<&str>, kids: Option<Object>) -> Object {
+    let s = |t: &str| Object::String(pdfcraft_cos::PdfString::literal(t));
+    let mut d = Dict::new();
+    d.set(b"T".to_vec(), s(t));
+    if let Some(som) = som {
+        d.set(crate::pdf::SOM_KEY.to_vec(), s(som));
+    }
+    if let Some(kids) = kids {
+        d.set(b"Kids".to_vec(), kids);
+    }
+    Object::Dict(d)
+}
+
+/// [`field_named`], added to `doc`.
+fn som_field(doc: &mut Document, t: &str, som: Option<&str>, kids: Option<Object>) -> pdfcraft_cos::ObjRef {
+    doc.add(field_named(t, som, kids))
+}
+
+/// [`fields_by_som`] of `doc`, its catalog's AcroForm listing `fields`.
+fn fields_by_som_of(mut doc: Document, fields: Vec<Object>) -> std::collections::HashMap<String, String> {
+    let mut acro = Dict::new();
+    acro.set(b"Fields".to_vec(), Object::Array(fields));
+    let mut cat = Dict::new();
+    cat.set(b"Type".to_vec(), Object::Name(b"Catalog".to_vec()));
+    cat.set(b"AcroForm".to_vec(), Object::Dict(acro));
+    let cat = doc.add(Object::Dict(cat));
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(cat));
+    fields_by_som(&doc)
+}
