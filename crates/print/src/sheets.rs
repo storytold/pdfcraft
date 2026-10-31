@@ -149,6 +149,9 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
         Layout::Size(mode) => {
             for &p in &pages {
                 let d = sizes[p];
+                if !(d.0.is_finite() && d.1.is_finite() && d.0 > 0.0 && d.1 > 0.0) {
+                    return Err(PrintError::Invalid("invalid page size".into()));
+                }
                 let size = oriented(paper, settings.orientation, d.0 > d.1);
                 let fit = fit_scale(d, (size.0 - 2.0 * MARGIN, size.1 - 2.0 * MARGIN));
                 let s = match mode {
