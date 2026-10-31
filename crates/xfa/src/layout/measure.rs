@@ -164,13 +164,13 @@ impl Layouter<'_> {
     }
 
     /// How tall value `v` is laid out `w` wide: text wrapped in the context's font and paragraph,
-    /// an image at its aspect ratio, and nothing for lines, rectangles and empty values.
+    /// an image at its aspect ratio, and nothing for lines, rectangles, arcs and empty values.
     fn value_height(&self, v: &Value, w: f64, ctx: &Ctx) -> f64 {
         match v {
             Value::Text(t) => text::measure_height(&text::plain(t), w, &ctx.para, &Face::of(&ctx.font), &|id, max| self.embed(id, max)),
             Value::Rich(r) => text::measure_height(r, w, &ctx.para, &Face::of(&ctx.font), &|id, max| self.embed(id, max)),
             Value::Image { data, .. } => crate::image::size(data).map_or(w, |(iw, ih)| if iw > 0 { w * ih as f64 / iw as f64 } else { w }),
-            Value::Line { .. } | Value::Rectangle(_) | Value::Empty => 0.0,
+            Value::Line { .. } | Value::Rectangle(_) | Value::Arc(_) | Value::Empty => 0.0,
         }
     }
 

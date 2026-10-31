@@ -6,9 +6,9 @@ use roxmltree::Node as XmlNode;
 
 use crate::XfaError;
 use crate::model::{
-    Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout, Margin, Node,
-    Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Rect, RichText, Run, Script, Stroke, Subform, Template, Ui, VAlign,
-    Value,
+    Access, Anchor, ArcShape, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout,
+    Margin, Node, Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Rect, RichText, Run, Script, Stroke, Subform,
+    Template, Ui, VAlign, Value,
 };
 
 /// Deepest element nesting followed (templates are shallow; hostile ones are not).
@@ -410,6 +410,20 @@ fn parse_value(n: Option<XmlNode>, warnings: &mut Vec<String>) -> Value {
                 let mut b = parse_border(Some(c)).unwrap_or_default();
                 b.fill = parse_fill(child(c, "fill"));
                 return Value::Rectangle(Box::new(b));
+            }
+            "arc" => {
+                // Angles in degrees. Only arcs with a sweep that aren't circular are drawn: those
+                // are the ones Acrobat's rendering of #5160 shows.
+                let angle = |name: &str| c.attribute(name).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
+                let circular = c.attribute("circular").is_some_and(|v| v.trim() == "1");
+                if let Some(sweep) = angle("sweepAngle").filter(|_| !circular) {
+                    return Value::Arc(Box::new(ArcShape {
+                        start: angle("startAngle").unwrap_or(0.0) % 360.0,
+                        sweep: sweep.clamp(-360.0, 360.0),
+                        edge: child(c, "edge").map(parse_edge).unwrap_or_default(),
+                        fill: parse_fill(child(c, "fill")),
+                    }));
+                }
             }
             "date" | "time" | "dateTime" | "integer" | "decimal" | "float" | "boolean" => return Value::Text(text_of(c)),
             _ => {}

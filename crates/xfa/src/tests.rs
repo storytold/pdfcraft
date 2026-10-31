@@ -2431,6 +2431,90 @@ fn rounded_corners_make_a_border_one_rounded_shape() {
     assert_eq!((lines_at(3.6), lines_at(4.8)), (4, 2));
 }
 
+/// The paths of the curves on the first page of `doc`: for each content line drawing curves, its
+/// paint operator, colour operands and the points it passes through (each `m`, `l` and curve end),
+/// in PDF coordinates.
+fn curve_paths(doc: &Document) -> Vec<(String, Vec<(f64, f64)>)> {
+    let root = doc.get(doc.root().unwrap());
+    let pages = doc.resolve(root.as_dict().unwrap().get(b"Pages").unwrap());
+    let kid = pages.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap()[0].clone();
+    let page = doc.resolve(&kid);
+    let contents = doc.resolve(page.as_dict().unwrap().get(b"Contents").unwrap());
+    let Object::Stream(c) = &*contents else { panic!("a content stream") };
+    let ops = String::from_utf8_lossy(&c.decoded().unwrap()).into_owned();
+    let mut out = Vec::new();
+    for line in ops.lines().filter(|l| l.split_whitespace().any(|t| t == "c")) {
+        let (mut nums, mut points, mut paint) = (Vec::<f64>::new(), Vec::new(), String::new());
+        for t in line.split_whitespace() {
+            if let Ok(v) = t.parse::<f64>() {
+                nums.push(v);
+                continue;
+            }
+            match t {
+                "m" | "l" | "c" if nums.len() >= 2 => points.push((nums[nums.len() - 2], nums[nums.len() - 1])),
+                "rg" | "RG" => paint.push_str(&format!("{t} {:?} ", nums)),
+                "S" | "f" | "B" | "s" | "b" => paint.push_str(t),
+                _ => {}
+            }
+            nums.clear();
+        }
+        out.push((paint, points));
+    }
+    out
+}
+
+/// #5160: an `<arc>` value draws the arc of the ellipse inscribed in its box, from `startAngle`
+/// (0° at three o'clock, counter-clockwise) through `sweepAngle`, and its fill is the area
+/// between the arc and the straight line joining its ends, as Acrobat draws the issue's form.
+#[test]
+fn arc_values_draw_the_arc_of_the_ellipse_in_their_box() {
+    let body = r#"
+<draw name="Circle1" w="25.4mm" h="25.4mm" y="9.525mm"><value><arc hand="right" sweepAngle="90"/></value><para vAlign="middle" hAlign="center"/></draw>
+<draw name="Circle1" y="9.525mm" x="25.4mm" w="25.4mm" h="25.4mm"><value><arc hand="right" sweepAngle="90" startAngle="180"/></value><para vAlign="middle" hAlign="center"/></draw>
+<draw name="Circle1" x="12.7mm" w="25.4mm" h="25.4mm"><value><arc hand="right" sweepAngle="180" startAngle="180"/></value><para vAlign="middle" hAlign="center"/></draw>
+<draw name="Circle1" x="0in" y="3in" w="25.4mm" h="25.4mm"><value><arc hand="right" sweepAngle="90"><fill><color value="255,0,0"/></fill></arc></value></draw>
+"#;
+    let xdp = one_area_form(r#"layout="tb""#, &format!(r#"<subform name="body" layout="position" w="7.5in" h="9in">{body}</subform>"#));
+    let mut doc = Document::open(Arc::new(shell(&xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let paths = curve_paths(&doc);
+    // The box's top left (in the content area at 0.5in), its size, the arc's start and sweep, and
+    // whether this is its fill.
+    let arcs = [
+        ((0.0, 27.0), 72.0, 0.0, 90.0, false),
+        ((72.0, 27.0), 72.0, 180.0, 90.0, false),
+        ((36.0, 0.0), 72.0, 180.0, 180.0, false),
+        ((0.0, 216.0), 72.0, 0.0, 90.0, true),
+    ];
+    for ((x, y), size, start, sweep, filled) in arcs {
+        let (cx, cy) = (36.0 + x + size / 2.0, 792.0 - (36.0 + y + size / 2.0));
+        let at = |deg: f64| {
+            let a = f64::to_radians(deg);
+            (cx + 36.0 * a.cos(), cy + 36.0 * a.sin())
+        };
+        let near = |p: (f64, f64), q: (f64, f64)| (p.0 - q.0).abs() < 0.5 && (p.1 - q.1).abs() < 0.5;
+        // Two of the arcs start at the same point: each is told by both its ends.
+        let ends = |pts: &[(f64, f64)]| pts.first().is_some_and(|p| near(*p, at(start))) && pts.last().is_some_and(|p| near(*p, at(start + sweep)));
+        let paint_ok = |paint: &str| if filled { paint.contains("rg [1.0, 0.0, 0.0]") && paint.ends_with('f') } else { paint.ends_with('S') };
+        let Some((_, points)) = paths.iter().find(|(paint, pts)| ends(pts) && paint_ok(paint)) else {
+            panic!("no arc (filled: {filled}) from {start}° to {}° in the box at {x},{y}: {paths:?}", start + sweep)
+        };
+        // Every point is on the circle (a fill doesn't pass through the centre), and they go
+        // counter-clockwise.
+        let mut last = start - 0.01;
+        for p in points {
+            let r = ((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt();
+            assert!((r - 36.0).abs() < 0.5, "{p:?} is {r} from the centre");
+            let mut deg = (p.1 - cy).atan2(p.0 - cx).to_degrees();
+            while deg < last - 1.0 {
+                deg += 360.0;
+            }
+            assert!(deg >= last - 0.01 && deg <= start + sweep + 0.01, "{deg}° after {last}°: {points:?}");
+            last = deg;
+        }
+    }
+}
+
 /// A rounded box a page break cuts keeps its rounded corners on each page, square where it was
 /// cut, and its edge stops there instead of closing across the cut.
 #[test]

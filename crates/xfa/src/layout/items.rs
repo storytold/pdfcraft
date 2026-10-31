@@ -20,6 +20,8 @@ pub enum Item {
     },
     /// A box with rounded (or inverted) corners: its fill, and its edge drawn inside it.
     Rounded(Box<Rounded>),
+    /// Part of an ellipse ([`Value::Arc`](crate::model::Value::Arc)).
+    Arc(Box<EllipseArc>),
     Text(Span),
     Image {
         rect: Rect,
@@ -44,6 +46,19 @@ pub struct Rounded {
     /// A page break cut the box here: that side has no edge, and its corners are square.
     pub open_top: bool,
     pub open_bottom: bool,
+}
+
+/// Part of the ellipse inscribed in `rect` ([`Item::Arc`]), from `start` degrees (0 at three
+/// o'clock, counter-clockwise) through `sweep` (at most a whole turn either way).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EllipseArc {
+    pub rect: Rect,
+    pub start: f64,
+    pub sweep: f64,
+    /// The area between the arc and the straight line joining its ends.
+    pub fill: Option<[f64; 3]>,
+    /// The edge, drawn inside the ellipse: its width, colour and whether it is dashed.
+    pub edge: Option<(f64, [f64; 3], bool)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
