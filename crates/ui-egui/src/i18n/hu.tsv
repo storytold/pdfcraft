@@ -199,6 +199,19 @@
 	Prepare for distribution…	Előkészítés terjesztésre…
 	Optimize scanned documents…	Beolvasott dokumentumok optimalizálása…
 	Compare files…	Fájlok összehasonlítása…
+	Validate structure…	Szerkezet ellenőrzése…
+	Validate structure	Szerkezet ellenőrzése
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	{objects} objektum ellenőrizve az Arlington PDF Model alapján (PDF {version}).
+	No errors: the structure follows the Arlington PDF Model.	Nincs hiba: a szerkezet követi az Arlington PDF Model előírásait.
+	No errors in the rules that were evaluated.	Nincs hiba a kiértékelt szabályokban.
+	Errors	Hibák
+	Information	Információ
+	Not evaluated: {list}	Nem kiértékelt: {list}
+	Only the first {n} of each kind are listed.	Fajtánként csak az első {n} látható.
+	The document has more objects than one check covers; the rest was not checked.	A dokumentum több objektumot tartalmaz, mint amennyit egy ellenőrzés lefed; a többi nem lett ellenőrizve.
+	Checking the structure… {n} objects so far	A szerkezet ellenőrzése… eddig {n} objektum
+	The check was cancelled.	Az ellenőrzés megszakítva.
+	The check stopped unexpectedly.	Az ellenőrzés váratlanul leállt.
 	Detect form fields	Űrlapmezők felismerése
 	Merge data files into spreadsheet…	Adatfájlok egyesítése táblázatba…
 	Flatten form fields	Űrlapmezők beégetése

@@ -1428,6 +1428,37 @@ theme	Appearance	Giao diện
 	Compare	So sánh
 	Compare files	So sánh tệp
 	Compare files…	So sánh tệp…
+	Validate structure…	Xác thực cấu trúc…
+	Validate structure	Xác thực cấu trúc
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	Đã kiểm tra {objects} đối tượng theo Arlington PDF Model cho PDF {version}.
+	No errors: the structure follows the Arlington PDF Model.	Không có lỗi: cấu trúc tuân theo Arlington PDF Model.
+	No errors in the rules that were evaluated.	Không có lỗi trong các quy tắc đã được đánh giá.
+	Errors	Lỗi
+	Not evaluated: {list}	Chưa đánh giá: {list}
+	Only the first {n} of each kind are listed.	Chỉ liệt kê {n} mục đầu tiên của mỗi loại.
+	The document has more objects than one check covers; the rest was not checked.	Tài liệu có nhiều đối tượng hơn phạm vi một lần kiểm tra; phần còn lại chưa được kiểm tra.
+	Checking the structure… {n} objects so far	Đang kiểm tra cấu trúc… {n} đối tượng cho đến nay
+	The check was cancelled.	Đã hủy kiểm tra.
+	The check stopped unexpectedly.	Việc kiểm tra dừng đột ngột.
+# What Validate structure reports (arlington::WORDINGS).
+	{type} lacks the required entry {key}	{type} thiếu mục bắt buộc {key}
+	{key} in {type} is {found}, but must be {expected}	{key} trong {type} là {found}, nhưng phải là {expected}
+	{key} in {type} is {value}, which is not one of {allowed}	{key} trong {type} là {value}, không thuộc {allowed}
+	{key} in {type} is {value}, which breaks the rule {rule}	{key} trong {type} là {value}, vi phạm quy tắc {rule}
+	{key} in {type} must be {expected} when {rule}	{key} trong {type} phải là {expected} khi {rule}
+	{key} in {type} must be an indirect reference	{key} trong {type} phải là tham chiếu gián tiếp
+	{key} in {type} must be a direct object, not a reference	{key} trong {type} phải là đối tượng trực tiếp, không phải tham chiếu
+	{key} in {type} is from PDF {since}, later than the file's PDF {version}	{key} trong {type} có từ PDF {since}, muộn hơn PDF {version} của tệp
+	{key} in {type} is deprecated since PDF {since}	{key} trong {type} đã lỗi thời từ PDF {since}
+	The value {value} of {key} in {type} is from PDF {since}, later than the file's PDF {version}	Giá trị {value} của {key} trong {type} có từ PDF {since}, muộn hơn PDF {version} của tệp
+	The value {value} of {key} in {type} is deprecated since PDF {since}	Giá trị {value} của {key} trong {type} đã lỗi thời từ PDF {since}
+	{key} in {type} is a {found}, which is from PDF {since}, later than the file's PDF {version}	{key} trong {type} là {found}, có từ PDF {since}, muộn hơn PDF {version} của tệp
+	{key} in {type} breaks the rule {rule}	{key} trong {type} vi phạm quy tắc {rule}
+	{type} has {count} elements, more than the {max} it allows	{type} có {count} phần tử, nhiều hơn mức {max} cho phép
+	{type} has {count} elements, but they come in sets of {n}	{type} có {count} phần tử, nhưng chúng phải theo nhóm {n}
+	{key} in {type} refers to object {object}, which doesn't exist	{key} trong {type} trỏ tới đối tượng {object}, vốn không tồn tại
+	{key} in {type} matches none of the types it may have ({candidates})	{key} trong {type} không khớp với kiểu nào mà nó có thể có ({candidates})
+	{key} is not an entry of {type} in the model	{key} không phải là mục của {type} trong mô hình
 	Compress a PDF	Nén một PDF
 	Console	Bảng điều khiển
 	Convert colors	Chuyển đổi màu

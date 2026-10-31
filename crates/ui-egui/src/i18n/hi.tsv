@@ -206,6 +206,18 @@
 	Prepare for distribution…	वितरण के लिए तैयार करें…
 	Optimize scanned documents…	स्कैन किए गए दस्तावेज़ अनुकूलित करें…
 	Compare files…	फ़ाइलों की तुलना करें…
+	Validate structure…	संरचना सत्यापित करें…
+	Validate structure	संरचना सत्यापित करें
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	PDF {version} के लिए Arlington PDF मॉडल से {objects} ऑब्जेक्ट जाँचे गए।
+	No errors: the structure follows the Arlington PDF Model.	कोई त्रुटि नहीं: संरचना Arlington PDF मॉडल का पालन करती है।
+	No errors in the rules that were evaluated.	जिन नियमों का मूल्यांकन हुआ उनमें कोई त्रुटि नहीं।
+	Errors	त्रुटियाँ
+	Not evaluated: {list}	मूल्यांकन नहीं हुआ: {list}
+	Only the first {n} of each kind are listed.	हर प्रकार के केवल पहले {n} सूचीबद्ध हैं।
+	The document has more objects than one check covers; the rest was not checked.	दस्तावेज़ में एक जाँच की सीमा से अधिक ऑब्जेक्ट हैं; बाकी की जाँच नहीं हुई।
+	Checking the structure… {n} objects so far	संरचना जाँची जा रही है… अब तक {n} ऑब्जेक्ट
+	The check was cancelled.	जाँच रद्द कर दी गई।
+	The check stopped unexpectedly.	जाँच अनपेक्षित रूप से रुक गई।
 	Detect form fields	फ़ॉर्म फ़ील्ड का पता लगाएँ
 	Merge data files into spreadsheet…	डेटा फ़ाइलों को स्प्रेडशीट में मर्ज करें…
 	Flatten form fields	फ़ॉर्म फ़ील्ड फ़्लैट करें

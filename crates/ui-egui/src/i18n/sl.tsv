@@ -422,6 +422,19 @@
 	Compare Files	Primerjava datotek
 	Compare files	Primerjaj datoteke
 	Compare files…	Primerjaj datoteke…
+	Validate structure…	Preveri strukturo…
+	Validate structure	Preveri strukturo
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	Preverjenih objektov: {objects}, glede na Arlington PDF Model za PDF {version}.
+	No errors: the structure follows the Arlington PDF Model.	Brez napak: struktura ustreza modelu Arlington PDF Model.
+	No errors in the rules that were evaluated.	V ovrednotenih pravilih ni napak.
+	Errors	Napake
+	Information	Informacije
+	Not evaluated: {list}	Ni ovrednoteno: {list}
+	Only the first {n} of each kind are listed.	Prikazanih je le prvih {n} vsake vrste.
+	The document has more objects than one check covers; the rest was not checked.	Dokument ima več objektov, kot jih zajame eno preverjanje; preostanek ni bil preverjen.
+	Checking the structure… {n} objects so far	Preverjanje strukture… doslej {n} objektov
+	The check was cancelled.	Preverjanje je bilo preklicano.
+	The check stopped unexpectedly.	Preverjanje se je nepričakovano ustavilo.
 	Compare this file with an older version: Compare files… in All tools.	To datoteko primerjajte s starejšo različico: Primerjaj datoteke… v meniju Vsa orodja.
 	Compatibility	Združljivost
 	Completed	Končano

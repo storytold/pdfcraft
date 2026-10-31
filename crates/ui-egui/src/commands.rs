@@ -224,6 +224,7 @@ impl PdfCraftApp {
             "print.dialog" => self.open_print(),
             "optimize.advanced" => self.dialog = Some(Dialog::Optimize),
             "doc.compare" => self.dialog = Some(Dialog::CompareFiles),
+            "standards.structure" => self.open_structure(),
             "standards.pdfa" => {
                 self.pdfa.issues = None;
                 self.dialog = Some(Dialog::PdfA);

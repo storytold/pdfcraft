@@ -1,5 +1,5 @@
 use super::commands::{parse_dpi, read};
-use super::options::{AUDIT_OPTIONS, CHECK_ONE_OPTIONS, CHECK_OPTIONS, flag, positional, validate_options};
+use super::options::{AUDIT_OPTIONS, CHECK_ONE_OPTIONS, CHECK_OPTIONS, VALIDATE_OPTIONS, flag, positional, validate_options};
 use super::{
     Arc, CliError, Command, Duration, Instant, PageRenderer, Path, PathBuf, RenderConfig, RenderRequest, RequestKind, Stdio, inspect, stdout_line,
 };
@@ -35,6 +35,42 @@ pub(crate) fn audit(args: &[String]) -> Result<(), CliError> {
         .collect();
     println!("{}", serde_json::json!({ "file": path, "findings": items, "count": items.len() }));
     if items.is_empty() { Ok(()) } else { Err(format!("audit: {} faux redaction(s) found", items.len()).into()) }
+}
+
+/// `validate`: the `structure_validate` report for one file, failing when it has errors.
+pub(crate) fn validate(args: &[String]) -> Result<(), CliError> {
+    validate_options("validate", args, VALIDATE_OPTIONS)?;
+    // An option at the end with no value would otherwise read as not given: no password, or
+    // every severity.
+    if let Some(spec) = args.last().and_then(|last| VALIDATE_OPTIONS.iter().find(|spec| spec.name == last)) {
+        return Err(format!("validate: {} needs a value", spec.name).into());
+    }
+    let path = *positional(args, VALIDATE_OPTIONS).first().ok_or("validate: missing file")?;
+    let least = match flag(args, "--severity").unwrap_or("info") {
+        "error" => pdfcraft_engine::structure::Severity::Error,
+        "warning" => pdfcraft_engine::structure::Severity::Warning,
+        "info" => pdfcraft_engine::structure::Severity::Info,
+        other => return Err(format!("validate: --severity must be error, warning or info, not {other:?}").into()),
+    };
+    let bytes = read(path)?;
+    let mut session = pdfcraft_engine::Session::new();
+    let id = session.open(path, None, bytes, flag(args, "--password")).map_err(|e| format!("{path}: {e}"))?;
+    let options = pdfcraft_engine::structure::Options::default();
+    let mut report =
+        session.get(id).and_then(|d| d.validate_structure(&options)).ok_or_else(|| format!("{path}: the document can't be read for checking"))?;
+    report.findings.retain(|f| f.severity <= least);
+    let mut json = pdfcraft_automation::structure_report_json(&report);
+    json["file"] = serde_json::json!(path);
+    let failed = (!report.is_valid()).then(|| format!("validate: {} error(s) against the Arlington PDF Model", report.errors));
+    match stdout_line(format_args!("{json}")) {
+        // A reader that stops early (`| head`) doesn't make a file with errors pass.
+        Err(CliError::Stdout(e)) if e.kind() == std::io::ErrorKind::BrokenPipe && failed.is_some() => {}
+        written => written?,
+    }
+    match failed {
+        Some(m) => Err(m.into()),
+        None => Ok(()),
+    }
 }
 
 /// Child-process body for `check`: prints one JSON line.

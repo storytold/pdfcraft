@@ -205,6 +205,19 @@ comment menu	Edit	సవరించు
 	Prepare for distribution…	పంపిణీకి సిద్ధం చేయి…
 	Optimize scanned documents…	స్కాన్ చేసిన పత్రాలను ఆప్టిమైజ్ చేయి…
 	Compare files…	ఫైల్‌లను పోల్చు…
+	Validate structure…	నిర్మాణాన్ని ధృవీకరించు…
+	Validate structure	నిర్మాణాన్ని ధృవీకరించు
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	PDF {version} కోసం Arlington PDF Model ప్రకారం {objects} ఆబ్జెక్ట్‌లను తనిఖీ చేశాము.
+	No errors: the structure follows the Arlington PDF Model.	లోపాలు లేవు: నిర్మాణం Arlington PDF Model ను అనుసరిస్తోంది.
+	No errors in the rules that were evaluated.	మూల్యాంకనం చేసిన నియమాలలో లోపాలు లేవు.
+	Errors	లోపాలు
+	Information	సమాచారం
+	Not evaluated: {list}	మూల్యాంకనం చేయనివి: {list}
+	Only the first {n} of each kind are listed.	ప్రతి రకంలో మొదటి {n} మాత్రమే చూపబడ్డాయి.
+	The document has more objects than one check covers; the rest was not checked.	ఒక తనిఖీ పరిధి కంటే పత్రంలో ఎక్కువ ఆబ్జెక్ట్‌లు ఉన్నాయి; మిగిలినవి తనిఖీ చేయబడలేదు.
+	Checking the structure… {n} objects so far	నిర్మాణాన్ని తనిఖీ చేస్తోంది… ఇప్పటివరకు {n} ఆబ్జెక్ట్‌లు
+	The check was cancelled.	తనిఖీ రద్దు చేయబడింది.
+	The check stopped unexpectedly.	తనిఖీ అనుకోకుండా ఆగిపోయింది.
 	Detect form fields	ఫారం ఫీల్డ్‌లను గుర్తించు
 	Merge data files into spreadsheet…	డేటా ఫైల్‌లను స్ప్రెడ్‌షీట్‌లోకి విలీనం చేయి…
 	Flatten form fields	ఫారం ఫీల్డ్‌లను ఫ్లాటెన్ చేయి
