@@ -356,6 +356,7 @@ impl PdfCraftApp {
                     password: None,
                     activate: true,
                     after_open: None,
+                    from_attachment: None,
                     recovered: Some(meta.clone()),
                     then: None,
                 });

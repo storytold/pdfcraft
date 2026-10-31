@@ -1790,6 +1790,98 @@ fn shared_field_snapshots_isolate_writes_errors_and_script_globals() {
     assert!(read.changed.is_empty());
 }
 
+mod data_objects {
+    use super::*;
+    use crate::xfa::{XfaDoc, XfaEffect, XfaEvent, run_xfa};
+
+    /// `exportDataObject`, as a document method or a bare global, asks to open the named attached
+    /// file when `nLaunch` is 1 or 2 and to save it otherwise; without `cName` it is an error.
+    #[test]
+    fn export_data_object_asks_to_open_or_save_an_attached_file() {
+        let o = go(
+            "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2}); exportDataObject('notes.txt'); \
+             this.exportDataObject({cName: 'form.pdf', nLaunch: 1});",
+            &Event::field("Mouse Up", "total", ""),
+        );
+        assert_eq!(o.error, None);
+        assert_eq!(
+            o.requests,
+            [
+                Request::OpenAttachment { name: "Guide.pdf".into(), open: true },
+                Request::OpenAttachment { name: "notes.txt".into(), open: false },
+                Request::OpenAttachment { name: "form.pdf".into(), open: true },
+            ]
+        );
+        let o = go("this.exportDataObject({nLaunch: 2})", &Event::field("Mouse Up", "total", ""));
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("cName")), "{:?}", o.error);
+        assert!(o.requests.is_empty());
+    }
+
+    /// Only `nLaunch` 1 and 2 open the file: other values (1.5, 3, a huge number) save it, as the
+    /// default 0 does.
+    #[test]
+    fn export_data_object_opens_only_for_n_launch_1_and_2() {
+        for launch in ["1.5", "3", "1e9", "-1"] {
+            let o = go(&format!("this.exportDataObject({{cName: 'Guide.pdf', nLaunch: {launch}}});"), &Event::field("Mouse Up", "total", ""));
+            assert_eq!(o.requests, [Request::OpenAttachment { name: "Guide.pdf".into(), open: false }], "nLaunch {launch}");
+        }
+    }
+
+    /// In an XFA script `event.target` is the document, so `exportDataObject` works on it, while
+    /// `xfa.event.target` is still the node the event happened on.
+    #[test]
+    fn in_xfa_scripts_event_target_is_the_document_and_xfa_event_target_the_node() {
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa(
+            "event.target.exportDataObject({cName: 'Guide.pdf', nLaunch: 2}); xfa.event.target.name",
+            &event,
+            &XfaDoc::default(),
+            &super::xfa_model::form(),
+            Limits::default(),
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("go"), "xfa.event.target is still the button");
+        assert!(o.effects.contains(&XfaEffect::OpenAttachment { name: "Guide.pdf".into(), open: true }), "{:?}", o.effects);
+    }
+
+    /// In an XFA script the bare `event` is named as the matching field event, with type
+    /// `Field`, for each activity that has one (click, change and exit as measured in another
+    /// viewer, the rest from the public API reference); other activities keep their XFA name and
+    /// have no type. `xfa.event` keeps the activity's name, and `event.target.numPages` is the
+    /// count `xfa.layout.pageCount()` gives.
+    #[test]
+    fn in_xfa_scripts_event_names_the_field_event_and_its_target_counts_the_pages() {
+        let doc = XfaDoc { page_count: 3, ..Default::default() };
+        let cases = [
+            ("click", "Mouse Up|Field"),
+            ("change", "Keystroke|Field"),
+            ("exit", "Blur|Field"),
+            ("enter", "Focus|Field"),
+            ("mouseDown", "Mouse Down|Field"),
+            ("mouseUp", "Mouse Up|Field"),
+            ("mouseEnter", "Mouse Enter|Field"),
+            ("mouseExit", "Mouse Exit|Field"),
+            ("calculate", "Calculate|Field"),
+            ("validate", "Validate|Field"),
+            ("initialize", "initialize|undefined"),
+            ("docReady", "docReady|undefined"),
+            ("preSign", "preSign|undefined"),
+        ];
+        for (activity, named) in cases {
+            let event = XfaEvent { activity: activity.into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+            let o = run_xfa(
+                "event.name + '|' + String(event.type) + '|' + event.target.numPages + '|' + xfa.layout.pageCount() + '|' + xfa.event.name",
+                &event,
+                &doc,
+                &super::xfa_model::form(),
+                Limits::default(),
+            );
+            assert_eq!(o.error, None, "{activity}: {o:?}");
+            assert_eq!(o.result.as_deref(), Some(format!("{named}|3|3|{activity}").as_str()), "{activity}");
+        }
+    }
+}
+
 mod scand {
     use super::*;
     use crate::xfa::{XfaDoc, XfaEvent, run_xfa};

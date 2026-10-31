@@ -273,6 +273,10 @@ pub(crate) fn snapshot_tab_name(title: &str, file_name: &str, snapshot: &Snapsho
 
 pub struct DocView {
     pub id: DocId,
+    /// The document and attached file this tab was opened from (where the file lives in it, and
+    /// its name), when a form or the Attachments panel opened it: asking for that attachment
+    /// again comes back to this tab.
+    pub from_attachment: Option<(DocId, pdfcraft_render::AttachmentSource, String)>,
     pub zoom: f32,
     pub fit: Fit,
     pub layout: PageLayout,
@@ -610,6 +614,7 @@ impl DocView {
     pub fn new(id: DocId, info: &DocInfo, defaults: ViewDefaults) -> Self {
         Self {
             id,
+            from_attachment: None,
             zoom: defaults.zoom,
             fit: defaults.fit,
             layout: defaults.layout,
@@ -793,6 +798,7 @@ impl DocView {
         fresh.snapshot = self.snapshot.clone();
         fresh.close_requested = self.close_requested;
         fresh.cover = self.cover;
+        fresh.from_attachment = self.from_attachment.take();
         // Still presenting, with the display to go back to on leaving.
         fresh.presentation = self.presentation.take();
         fresh.back = std::mem::take(&mut self.back);

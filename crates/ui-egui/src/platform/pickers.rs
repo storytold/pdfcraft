@@ -374,6 +374,7 @@ mod tests {
             stamp: None,
             activate: true,
             after_open: None,
+            from_attachment: None,
             recovered: None,
             then: None,
         });
