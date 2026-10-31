@@ -2797,6 +2797,16 @@ certificate	Version	الإصدار
 	Make properties default	جعل الخصائص افتراضية
 	Pages selected	الصفحات المحددة
 	Page properties	خصائص الصفحة
+	Narrower than	أضيق من
+	New width	العرض الجديد
+	Zero-width lines always count as narrower.	الخطوط ذات العرض الصفري تُعدّ دائمًا أضيق.
+	Also	أيضًا
+	Type 3 font glyphs	رموز خطوط Type 3
+	Pattern strokes	ضربات الأنماط
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	الخطوط المرسومة داخل رموز Type 3 وأنماط التبليط؛ معطّلة افتراضيًا.
+	No hairlines found on those pages	لم يُعثر على خطوط شعرية في تلك الصفحات
+	Fixed {n} hairlines on {p} pages	تم إصلاح {n} خطًا شعريًا في {p} صفحة
+	Fix hairlines…	إصلاح الخطوط الرفيعة…
 	Create & Edit	الإنشاء والتحرير
 	Review & Compare	المراجعة والمقارنة
 	Forms & Signatures	النماذج والتوقيعات

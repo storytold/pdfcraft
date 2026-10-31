@@ -2483,6 +2483,16 @@ animation effects	Off	Изключени
 	Make properties default	Задаване като свойства по подразбиране
 	Pages selected	Избрани страници
 	Page properties	Свойства на страницата
+	Narrower than	По-тънки от
+	New width	Нова дебелина
+	Zero-width lines always count as narrower.	Линиите с нулева дебелина винаги се броят за по-тънки.
+	Also	Също
+	Type 3 font glyphs	Глифи на шрифтове Type 3
+	Pattern strokes	Щрихи на шарки
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Линии, начертани в глифи Type 3 и в повтарящи се шарки; изключено по подразбиране.
+	No hairlines found on those pages	На тези страници не са намерени тънки линии
+	Fixed {n} hairlines on {p} pages	Поправени {n} тънки линии на {p} страници
+	Fix hairlines…	Поправи тънките линии…
 	Create & Edit	Създаване и редактиране
 	Review & Compare	Преглед и сравнение
 	Forms & Signatures	Формуляри и подписи

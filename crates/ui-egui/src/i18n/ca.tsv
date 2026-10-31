@@ -2820,6 +2820,16 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	Also	També
+	Fix hairlines…	Corregeix les línies de cabell…
+	Fixed {n} hairlines on {p} pages	S'han corregit {n} línies de cabell en {p} pàgines
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Línies dibuixades dins de glifs de tipus 3 i patrons de mosaic; desactivat per defecte.
+	Narrower than	Més estret que
+	New width	Amplada nova
+	No hairlines found on those pages	No s'han trobat línies de cabell en aquestes pàgines
+	Pattern strokes	Traços de patró
+	Type 3 font glyphs	Glifs de tipus de lletra Type 3
+	Zero-width lines always count as narrower.	Les línies de gruix zero sempre es consideren més estretes.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui

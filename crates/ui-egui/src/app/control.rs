@@ -120,6 +120,12 @@ impl PdfCraftApp {
                         self.execute("page.number");
                         Some(Dialog::NumberPages)
                     }
+                    "fix-hairlines" => {
+                        // Through the command, so it is refused with no document or none that
+                        // can be modified, as the menu is.
+                        self.execute("prepress.hairlines");
+                        return Ok(());
+                    }
                     "page-properties" => {
                         // Same path as the panel, so the selected pages and their order are seeded.
                         self.execute("page.properties");

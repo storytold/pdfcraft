@@ -2429,6 +2429,16 @@ animation effects	Off	ఆఫ్
 	Make properties default	లక్షణాలను డిఫాల్ట్‌గా చేయి
 	Pages selected	ఎంచుకున్న పేజీలు
 	Page properties	పేజీ లక్షణాలు
+	Narrower than	దీని కంటే సన్నని
+	New width	కొత్త వెడల్పు
+	Zero-width lines always count as narrower.	సున్నా వెడల్పు గీతలు ఎల్లప్పుడూ సన్ననివిగా లెక్కించబడతాయి.
+	Also	అలాగే
+	Type 3 font glyphs	Type 3 ఫాంట్ గ్లిఫ్‌లు
+	Pattern strokes	ప్యాటర్న్ స్ట్రోక్‌లు
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Type 3 గ్లిఫ్‌లు మరియు టైలింగ్ ప్యాటర్న్‌ల లోపల గీసిన గీతలు; డిఫాల్ట్‌గా ఆఫ్.
+	No hairlines found on those pages	ఆ పేజీలలో హెయిర్‌లైన్‌లు కనబడలేదు
+	Fixed {n} hairlines on {p} pages	{p} పేజీలలో {n} హెయిర్‌లైన్‌లు సరిచేయబడ్డాయి
+	Fix hairlines…	అతి సన్నని గీతలను సరిచేయి…
 	Create & Edit	సృష్టించు & సవరించు
 	Review & Compare	సమీక్షించు & పోల్చు
 	Forms & Signatures	ఫారమ్‌లు & సంతకాలు

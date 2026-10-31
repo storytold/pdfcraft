@@ -2534,6 +2534,16 @@ animation effects	Off	Desativados
 	Make properties default	Tornar propriedades padrão
 	Pages selected	Páginas selecionadas
 	Page properties	Propriedades da página
+	Narrower than	Mais finas que
+	New width	Nova espessura
+	Zero-width lines always count as narrower.	Linhas de espessura zero sempre contam como mais finas.
+	Also	Também
+	Type 3 font glyphs	Glifos de fontes Type 3
+	Pattern strokes	Traços de padrões
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Linhas desenhadas dentro de glifos Type 3 e padrões de mosaico; desativado por padrão.
+	No hairlines found on those pages	Nenhuma linha fina encontrada nessas páginas
+	Fixed {n} hairlines on {p} pages	{n} linhas finas corrigidas em {p} páginas
+	Fix hairlines…	Corrigir linhas finas…
 	Create & Edit	Criar e editar
 	Review & Compare	Revisar e comparar
 	Forms & Signatures	Formulários e assinaturas

@@ -125,6 +125,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::MoveInTabOrder { .. }
         | Edit::SetCalculationOrder { .. }
         | Edit::SetInitialView(_)
+        | Edit::FixHairlines { .. }
         | Edit::AddAttachment { .. }
         | Edit::DeleteAttachment { .. }
         | Edit::AutoTagText
@@ -355,6 +356,12 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::EraseInk { page, index, path, radius } => {
             pdfcraft_annot::erase_ink(doc, *page, *index, path, *radius, &cx.meta())?;
+        }
+        Edit::FixHairlines { pages, settings } => {
+            let fixed = pdfcraft_edit::fix_hairlines(doc, pages, settings)?;
+            if fixed.lines == 0 {
+                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("no hairlines found on those pages".into())));
+            }
         }
         Edit::AddAttachment { name, bytes, description, mime } => {
             pdfcraft_organize::add_attachment(doc, name, bytes, description.as_deref(), mime.as_deref(), cx.date.as_deref())?;

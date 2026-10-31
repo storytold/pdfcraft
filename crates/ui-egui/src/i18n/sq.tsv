@@ -2546,6 +2546,16 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+	Also	Gjithashtu
+	Fix hairlines…	Rregullo vijat e holla…
+	Fixed {n} hairlines on {p} pages	U rregulluan {n} vija të holla në {p} faqe
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Vija të vizatuara brenda glifeve Type 3 dhe modeleve me pllaka; të çaktivizuara si parazgjedhje.
+	Narrower than	Më e ngushtë se
+	New width	Gjerësia e re
+	No hairlines found on those pages	Nuk u gjetën vija të holla në ato faqe
+	Pattern strokes	Vijat e modeleve
+	Type 3 font glyphs	Glifet e shkronjave Type 3
+	Zero-width lines always count as narrower.	Vijat me gjerësi zero llogariten gjithmonë si më të ngushta.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Sot

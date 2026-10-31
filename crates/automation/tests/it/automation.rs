@@ -9284,6 +9284,23 @@ fn a_root_less_write_output_is_atomic_too() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Fix hairlines through the tools: counts what changed, and reports zero without an edit.
+#[test]
+fn fix_hairlines_through_tools() {
+    let dir = workdir("hairlines");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // The fixture's text pages have no strokes.
+    let r = ok(&mut a, "doc_fix_hairlines", json!({ "doc": doc }));
+    assert_eq!((r["fixed"].as_u64(), r["undo"].is_null()), (Some(0), true));
+    // A zero-width rule drawn by the page content tools counts as a hairline.
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [10, 10], "to": [100, 10], "width": 0 }));
+    let r = ok(&mut a, "doc_fix_hairlines", json!({ "doc": doc, "pages": [1] }));
+    // Comments are annotations, not page content: still nothing in the page's own content.
+    assert_eq!(r["fixed"].as_u64(), Some(0), "{r}");
+    assert!(matches!(a.call("doc_fix_hairlines", &json!({ "doc": doc, "width": 0 })), Err(ToolError::InvalidArgs(_))));
+}
+
 #[test]
 fn attaching_and_deleting_files_through_the_tools() {
     let dir = workdir("attach");

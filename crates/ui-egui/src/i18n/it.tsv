@@ -2732,6 +2732,16 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+	Narrower than	Più sottili di
+	New width	Nuovo spessore
+	Zero-width lines always count as narrower.	Le linee di spessore zero contano sempre come più sottili.
+	Also	Inoltre
+	Type 3 font glyphs	Glifi dei font Type 3
+	Pattern strokes	Tratti dei motivi
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Linee tracciate dentro glifi Type 3 e motivi a mosaico; disattivato per impostazione predefinita.
+	No hairlines found on those pages	Nessuna linea sottile trovata in queste pagine
+	Fixed {n} hairlines on {p} pages	Corrette {n} linee sottili in {p} pagine
+	Fix hairlines…	Correggi linee sottilissime…
 	Create & Edit	Crea e modifica
 	Review & Compare	Revisione e confronto
 	Forms & Signatures	Moduli e firme

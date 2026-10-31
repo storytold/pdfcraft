@@ -231,6 +231,7 @@ impl Edit {
             Edit::SetTabOrder { .. } | Edit::MoveInTabOrder { .. } => Label::of("Set tab order"),
             Edit::SetCalculationOrder { .. } => Label::of("Set calculation order"),
             Edit::SetInitialView(_) => Label::of("Change initial view"),
+            Edit::FixHairlines { .. } => Label::of("Fix hairlines"),
             Edit::AddAttachment { name, .. } => Label::with("Attach {name}", name.as_str()),
             Edit::DeleteAttachment { key } => Label::with("Delete attachment {key}", key.as_str()),
             Edit::AutoTagText => Label::of("Automatically tag text"),

@@ -2518,6 +2518,16 @@ animation effects	Off	Өшірулі
 	Make properties default	Қасиеттерді әдепкі ету
 	Pages selected	Таңдалған беттер
 	Page properties	Бет қасиеттері
+	Narrower than	Мынадан жіңішке
+	New width	Жаңа ені
+	Zero-width lines always count as narrower.	Ені нөл сызықтар әрқашан жіңішке саналады.
+	Also	Сондай-ақ
+	Type 3 font glyphs	Type 3 қаріп глифтері
+	Pattern strokes	Өрнек штрихтары
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Type 3 глифтері мен қайталанатын өрнектер ішінде сызылған сызықтар; әдепкі бойынша өшірулі.
+	No hairlines found on those pages	Бұл беттерде жіңішке сызықтар табылмады
+	Fixed {n} hairlines on {p} pages	{p} бетте {n} жіңішке сызық түзетілді
+	Fix hairlines…	Жіңішке сызықтарды түзету…
 	Create & Edit	Жасау және өңдеу
 	Review & Compare	Шолу және салыстыру
 	Forms & Signatures	Пішіндер және қолтаңбалар

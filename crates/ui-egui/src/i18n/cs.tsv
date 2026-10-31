@@ -2594,6 +2594,16 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+	Narrower than	Užší než
+	New width	Nová šířka
+	Zero-width lines always count as narrower.	Čáry s nulovou šířkou se vždy počítají jako užší.
+	Also	Také
+	Type 3 font glyphs	Glyfy písem Type 3
+	Pattern strokes	Tahy vzorů
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Čáry kreslené uvnitř glyfů Type 3 a dlaždicových vzorů; ve výchozím stavu vypnuto.
+	No hairlines found on those pages	Na těchto stránkách nebyly nalezeny vlasové čáry
+	Fixed {n} hairlines on {p} pages	Opraveno {n} vlasových čar na {p} stránkách
+	Fix hairlines…	Opravit vlasové čáry…
 	Create & Edit	Vytváření a úpravy
 	Review & Compare	Revize a porovnání
 	Forms & Signatures	Formuláře a podpisy

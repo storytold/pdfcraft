@@ -132,6 +132,17 @@ pub fn tools() -> Vec<ToolDef> {
                 "dpi": {"type":"number","minimum":72,"maximum":600},
                 "language": {"type":"string"}, "skip_text_pages": {"type":"boolean"}
             }), &["paths","out_dir","steps"])),
+        t("doc_fix_hairlines", "Fix hairlines", "Print production: strokes narrower than narrower_than points on the page (after every transformation; zero-width lines always) are given width points, in page content and form XObjects; Type 3 glyphs and tiling patterns only when asked. Returns fixed (strokes) and pages; nothing to fix gives 0 and no edit.")
+            .cmd("prepress.hairlines")
+            .with(schema(
+                json!({
+                    "doc": doc(), "pages": pages("to fix (default all)"),
+                    "narrower_than": { "type": "number", "minimum": 0, "description": "Points on the page (default 0.216)." },
+                    "width": { "type": "number", "exclusiveMinimum": 0, "description": "Points on the page (default 0.72)." },
+                    "type3": { "type": "boolean" }, "patterns": { "type": "boolean" },
+                }),
+                &["doc"],
+            )),
         t("attachment_add", "Attach a file", "Attach the file at path to the document (document level, the Attachments panel; not a paper-clip comment on a page). name defaults to the file's name; the attachment's key, unique in the document, is returned. Undoable.")
             .cmd("edit.attach")
             .with(schema(json!({"doc": doc(), "path": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}}), &["doc", "path"])),

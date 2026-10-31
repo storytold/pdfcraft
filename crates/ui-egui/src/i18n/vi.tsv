@@ -2794,6 +2794,16 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+	Narrower than	Mảnh hơn
+	New width	Độ rộng mới
+	Zero-width lines always count as narrower.	Đường có độ rộng bằng 0 luôn được tính là mảnh hơn.
+	Also	Ngoài ra
+	Type 3 font glyphs	Glyph của phông chữ Type 3
+	Pattern strokes	Nét vẽ trong mẫu tô
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Các đường vẽ bên trong glyph Type 3 và mẫu tô lát; mặc định tắt.
+	No hairlines found on those pages	Không tìm thấy đường siêu mảnh nào trên các trang đó
+	Fixed {n} hairlines on {p} pages	Đã sửa {n} đường siêu mảnh trên {p} trang
+	Fix hairlines…	Sửa các đường siêu mảnh…
 	Attach a file…	Đính kèm tệp…
 	Delete attachment	Xóa tệp đính kèm
 	Attaching files is not available on the web yet	Chưa thể đính kèm tệp trên web

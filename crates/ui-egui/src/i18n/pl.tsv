@@ -2496,6 +2496,16 @@ animation effects	Off	Wyłączone
 	Make properties default	Ustaw właściwości jako domyślne
 	Pages selected	Zaznaczone strony
 	Page properties	Właściwości strony
+	Narrower than	Węższe niż
+	New width	Nowa szerokość
+	Zero-width lines always count as narrower.	Linie o zerowej szerokości zawsze liczą się jako węższe.
+	Also	Także
+	Type 3 font glyphs	Glify fontów Type 3
+	Pattern strokes	Pociągnięcia wzorów
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Linie rysowane wewnątrz glifów Type 3 i wzorów kafelkowych; domyślnie wyłączone.
+	No hairlines found on those pages	Na tych stronach nie znaleziono linii włosowych
+	Fixed {n} hairlines on {p} pages	Poprawiono {n} linii włosowych na {p} stronach
+	Fix hairlines…	Popraw cienkie linie…
 	Create & Edit	Tworzenie i edycja
 	Review & Compare	Recenzja i porównanie
 	Forms & Signatures	Formularze i podpisy
