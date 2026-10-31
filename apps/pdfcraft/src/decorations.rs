@@ -1,23 +1,23 @@
-//! Who draws the window frame on Linux.
+//! Selects PdfCraft's optional app-drawn window header on Linux and BSD.
 //!
-//! Wayland compositors that draw frames for their clients offer `zxdg_decoration_manager_v1`
-//! (KDE, Sway, Hyprland, COSMIC). GNOME doesn't: it leaves the frame to the app, and winit then
-//! drew an imitation of GNOME's. Without that protocol PdfCraft turns winit's frame off and draws
-//! a header bar like GNOME's own apps (`pdfcraft_ui_egui::window_controls`), with the window
-//! buttons GNOME's `button-layout` names. X11 window managers always draw the frame.
+//! The default is the toolkit frame. On GNOME/Wayland, winit provides Adwaita-style
+//! client-side controls when the compositor has no server-side decorations; X11 window
+//! managers and other Wayland compositors can provide their own frame.
 //!
-//! `PDFCRAFT_TITLEBAR=app` or `=system` overrides the choice.
+//! `PDFCRAFT_TITLEBAR=app` explicitly opts into the integrated PdfCraft header;
+//! `PDFCRAFT_TITLEBAR=system` (or an unset variable) keeps the toolkit frame.
 
 use pdfcraft_ui_egui::window_controls::Layout;
 
-/// The window buttons to draw in the app, or `None` when the desktop draws the frame.
+/// The window buttons to draw in the app, or `None` to keep the toolkit frame.
 pub(crate) fn app_drawn() -> Option<Layout> {
-    let drawn = match std::env::var("PDFCRAFT_TITLEBAR").ok().as_deref().map(str::trim) {
-        Some("app") => true,
-        Some("system") => false,
-        _ => compositor_leaves_frame_to_app(),
-    };
-    drawn.then(button_layout)
+    let titlebar = std::env::var("PDFCRAFT_TITLEBAR").ok();
+    wants_app_frame(titlebar.as_deref()).then(button_layout)
+}
+
+/// Only an explicit `app` override opts into custom window decorations.
+fn wants_app_frame(value: Option<&str>) -> bool {
+    matches!(value.map(str::trim), Some("app"))
 }
 
 /// GNOME's button order, or minimize, maximize and close on the right when it names none.
@@ -33,38 +33,22 @@ fn button_layout() -> Layout {
     Layout::default()
 }
 
-/// Whether this is a Wayland session whose compositor draws no frames.
-#[cfg(target_os = "linux")]
-fn compositor_leaves_frame_to_app() -> bool {
-    use wayland_client::Connection;
-    use wayland_client::globals::registry_queue_init;
-    // No Wayland compositor: X11, whose window manager draws the frame (winit falls back to it).
-    let Ok(conn) = Connection::connect_to_env() else { return false };
-    let Ok((globals, _queue)) = registry_queue_init::<Registry>(&conn) else { return false };
-    let offered = globals.contents().with_list(|list| list.iter().any(|g| g.interface == "zxdg_decoration_manager_v1"));
-    if !offered {
-        log::info!("the Wayland compositor draws no window frames; PdfCraft draws its own title bar");
+#[cfg(test)]
+mod tests {
+    use super::wants_app_frame;
+
+    #[test]
+    fn toolkit_frame_is_the_default() {
+        assert!(!wants_app_frame(None));
+        assert!(!wants_app_frame(Some("")));
+        assert!(!wants_app_frame(Some("system")));
+        assert!(!wants_app_frame(Some("unexpected")));
     }
-    !offered
-}
 
-#[cfg(not(target_os = "linux"))]
-fn compositor_leaves_frame_to_app() -> bool {
-    false
-}
-
-#[cfg(target_os = "linux")]
-struct Registry;
-
-#[cfg(target_os = "linux")]
-impl wayland_client::Dispatch<wayland_client::protocol::wl_registry::WlRegistry, wayland_client::globals::GlobalListContents> for Registry {
-    fn event(
-        _: &mut Self,
-        _: &wayland_client::protocol::wl_registry::WlRegistry,
-        _: wayland_client::protocol::wl_registry::Event,
-        _: &wayland_client::globals::GlobalListContents,
-        _: &wayland_client::Connection,
-        _: &wayland_client::QueueHandle<Self>,
-    ) {
+    #[test]
+    fn app_frame_requires_explicit_opt_in() {
+        assert!(wants_app_frame(Some("app")));
+        assert!(wants_app_frame(Some(" app ")));
+        assert!(!wants_app_frame(Some("APP")));
     }
 }
