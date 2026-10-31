@@ -13,6 +13,25 @@ macro_rules! getter {
 }
 
 pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
+    // Field objects may carry script-defined helpers. Keep one wrapper per field and context,
+    // including the wrapper used by event.target; native accessors still read live host state.
+    type FieldObjects = std::cell::RefCell<std::collections::HashMap<String, JsObject>>;
+    if let Some(objects) = ctx.get_data::<FieldObjects>()
+        && let Some(object) = objects.borrow().get(name)
+    {
+        return object.clone();
+    }
+    let object = new_field_object(ctx, name);
+    if !ctx.has_data::<FieldObjects>() {
+        ctx.insert_data(FieldObjects::default());
+    }
+    if let Some(objects) = ctx.get_data::<FieldObjects>() {
+        objects.borrow_mut().insert(name.to_string(), object.clone());
+    }
+    object
+}
+
+fn new_field_object(ctx: &mut Context, name: &str) -> JsObject {
     let n = JsString::from(name);
     let value_get = getter!(ctx, n, |f, c| value_of(&f, c));
     let value_set = {

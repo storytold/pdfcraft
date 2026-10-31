@@ -109,7 +109,8 @@ pub struct DocInfo {
     pub num_pages: usize,
     /// The current page, 0-based.
     pub page: usize,
-    /// Document information (`this.info.title` etc.): lower-case key, value.
+    /// Document information (`this.info.title` etc.): scripting key and value. Custom keys
+    /// retain the spelling used by the document.
     pub info: Vec<(String, String)>,
     /// The document has an XFA form, so scripts see `xfa_installed`.
     pub xfa: bool,

@@ -6,6 +6,11 @@ use super::{Arc, Attribute, BTreeSet, Context, HostHooks, JsNativeError, JsResul
 /// Longest script, in bytes.
 pub(crate) const MAX_SCRIPT_BYTES: usize = 256 * 1024;
 
+/// Document libraries include rule tables as well as code. Keep a separate bounded budget
+/// for those libraries without increasing the limit for field scripts or generated code.
+pub(crate) const MAX_DOCUMENT_SCRIPT_BYTES: usize = 1024 * 1024;
+const MAX_DOCUMENT_SCRIPTS_BYTES: usize = 8 * 1024 * 1024;
+
 /// Largest width or precision accepted by `util.printf`.
 pub(crate) const MAX_PRINTF_WIDTH_PRECISION: usize = 4096;
 
@@ -33,8 +38,12 @@ pub(crate) const SCRIPT_STACK: usize = 1 << 30;
 /// and comments are skipped; brackets in regular expressions and templates count, which only
 /// errs on the safe side.
 pub(crate) fn refuse(source: &str) -> Option<String> {
-    if source.len() > MAX_SCRIPT_BYTES {
-        return Some(format!("the script is too long ({} KiB; the limit is {} KiB)", source.len() / 1024, MAX_SCRIPT_BYTES / 1024));
+    refuse_with_limit(source, MAX_SCRIPT_BYTES)
+}
+
+fn refuse_with_limit(source: &str, limit: usize) -> Option<String> {
+    if source.len() > limit {
+        return Some(format!("the script is too long ({} KiB; the limit is {} KiB)", source.len() / 1024, limit / 1024));
     }
     let too_deep = || Some("the script is nested too deeply to run safely".to_string());
     let b = source.as_bytes();
@@ -115,15 +124,23 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
     // A document script too long or too deeply nested to run safely is skipped and reported,
     // as one that throws is; the others and the script still run (#3940).
     let mut skipped = Vec::new();
+    let mut remaining = MAX_DOCUMENT_SCRIPTS_BYTES;
     let kept: Vec<(usize, &str)> = doc_scripts
         .iter()
         .enumerate()
-        .filter_map(|(i, d)| match refuse(d) {
-            Some(why) => {
-                skipped.push((i, why));
-                None
+        .filter_map(|(i, d)| {
+            match refuse_with_limit(d, MAX_DOCUMENT_SCRIPT_BYTES)
+                .or_else(|| if d.len() > remaining { Some("the document scripts exceed their combined 8 MiB limit".into()) } else { None })
+            {
+                Some(why) => {
+                    skipped.push((i, why));
+                    None
+                }
+                None => {
+                    remaining -= d.len();
+                    Some((i, d.as_str()))
+                }
             }
-            None => Some((i, d.as_str())),
         })
         .collect();
     let (kept, skipped) = (&kept, &skipped);

@@ -7097,6 +7097,39 @@ fn ocr_recognize_files_with_distinct_names_runs_as_before() {
     }
 }
 
+/// Large rule libraries and script-defined field helpers survive a save/reopen and keep
+/// calculating when character inputs change. The fixture is entirely synthetic.
+#[test]
+fn character_calculations_with_large_libraries_survive_reopen() {
+    let dir = workdir("character-rule-library");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    for (name, y) in [("Score", 20), ("Modifier", 60)] {
+        ok(&mut a, "form_add_field", json!({"doc":doc,"page":1,"type":"text","rect":[20,y,180,y+22],"name":name}));
+    }
+    let library = format!("/*{}*/ getField('Score').modifier = function () {{ return Math.floor((this.value - 10) / 2); }};", " ".repeat(300_000),);
+    ok(&mut a, "js_set_document_script", json!({"doc":doc,"name":"rules","script":library}));
+    let out = ok(
+        &mut a,
+        "form_set_script",
+        json!({"doc":doc,"field":"Modifier","event":"calculate","script":"event.value = getField('Score').modifier();"}),
+    );
+    assert_eq!(out["errors"], json!([]), "{out}");
+    ok(&mut a, "form_fill", json!({"doc":doc,"values":{"Score":"18"}}));
+    let modifier = |a: &mut Automation, doc: u64| {
+        ok(a, "form_fields", json!({"doc":doc}))["fields"].as_array().unwrap().iter().find(|f| f["name"] == "Modifier").unwrap()["value"].clone()
+    };
+    assert_eq!(modifier(&mut a, doc), json!("4"));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"character.pdf"}));
+    ok(&mut a, "doc_close", json!({"doc":doc}));
+    let doc = ok(&mut a, "doc_open", json!({"path":"character.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "js_document_scripts", json!({"doc":doc}))["scripts"][0]["script"], library);
+    assert_eq!(modifier(&mut a, doc), json!("4"));
+    ok(&mut a, "form_fill", json!({"doc":doc,"values":{"Score":"8"}}));
+    assert_eq!(modifier(&mut a, doc), json!("-1"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Field scripts set through the tools validate, calculate and format, and `js_run` reports console
 /// lines, every message with its details, and requests.
 #[test]

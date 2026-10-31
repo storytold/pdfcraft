@@ -5256,6 +5256,89 @@ fn scripted_form_with(helpers: &str) -> Vec<u8> {
     out
 }
 
+fn acroform_startup_fixture(script: &str) -> Vec<u8> {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form_with(""))).unwrap();
+    pdfcraft_forms::set_props(&mut cos, "go", &pdfcraft_forms::FieldProps { caption: Some((0, "Unsupported viewer".into())), ..Default::default() })
+        .unwrap();
+    pdfcraft_forms::set_document_script(&mut cos, "helpers", Some(script)).unwrap();
+    pdfcraft_cos::write_incremental(&cos, &Default::default()).unwrap()
+}
+
+#[test]
+fn acroform_startup_scripts_hide_warning_widgets_on_open() {
+    let bytes = Arc::new(acroform_startup_fixture(
+        "getField('go').display = display.hidden; getField('qty').value = Number(getField('qty').value) + 1; console.println('started');",
+    ));
+    for enabled in [false, true] {
+        let mut s = Session::new();
+        s.set_javascript(enabled);
+        let id = s.open("startup.pdf", None, bytes.clone(), None).unwrap();
+        let doc = s.get(id).unwrap();
+        let cos = &doc.editor.as_ref().unwrap().cos;
+        let warning = doc.form.iter().find(|f| f.name == "go").unwrap();
+        assert_eq!(js::field_state(cos, warning).display == pdfcraft_js::DISPLAY_HIDDEN, enabled);
+        let qty = doc.form.iter().find(|f| f.name == "qty").unwrap();
+        assert_eq!(qty.value, if enabled { vec!["1".to_string()] } else { Vec::new() });
+        assert!(!doc.dirty);
+        assert!(doc.can_undo().is_none());
+        // Check the real rendered badge area, not only the field model's visibility flag.
+        let page = render_page(&s, id);
+        let dark = (260..300)
+            .flat_map(|y| (40..160).map(move |x| (y * page.width as usize + x) * 4))
+            .filter(|&i| page.rgba[i..i + 3].iter().any(|c| *c < 200))
+            .count();
+        assert_eq!(dark == 0, enabled, "warning pixels: {dark}");
+        let out = s.take_js_output(id);
+        assert!(out.errors.is_empty(), "{out:?}");
+        assert_eq!(out.console, if enabled { vec!["started".to_string()] } else { Vec::new() });
+    }
+}
+
+#[test]
+fn acroform_startup_keeps_earlier_changes_and_reports_later_script_errors() {
+    let bytes = Arc::new(acroform_startup_fixture("getField('go').display = display.hidden; throw new Error('optional feature missing');"));
+    let mut s = Session::new();
+    let id = s.open("startup.pdf", None, bytes, None).unwrap();
+    let doc = s.get(id).unwrap();
+    let cos = &doc.editor.as_ref().unwrap().cos;
+    let warning = doc.form.iter().find(|f| f.name == "go").unwrap();
+    assert_eq!(js::field_state(cos, warning).display, pdfcraft_js::DISPLAY_HIDDEN);
+    let out = s.take_js_output(id);
+    assert!(out.errors.iter().any(|e| e.contains("optional feature missing")), "{out:?}");
+}
+
+#[test]
+fn acroform_startup_applies_reset_requests() {
+    let bytes = Arc::new(acroform_startup_fixture("resetForm(['price']);"));
+    let mut s = Session::new();
+    let id = s.open("startup.pdf", None, bytes, None).unwrap();
+    assert!(s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().value.is_empty());
+    assert!(s.take_js_output(id).is_empty());
+}
+
+#[test]
+fn acroform_startup_respects_form_filling_permissions() {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(acroform_startup_fixture("getField('go').display = display.hidden;"))).unwrap();
+    cos.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "open",
+        owner_password: "owner",
+        permissions: 0,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap());
+    let mut s = Session::new();
+    let id = s.open("startup.pdf", None, bytes, Some("open")).unwrap();
+    let doc = s.get(id).unwrap();
+    let cos = &doc.editor.as_ref().unwrap().cos;
+    let warning = doc.form.iter().find(|f| f.name == "go").unwrap();
+    assert_eq!(js::field_state(cos, warning).display, pdfcraft_js::DISPLAY_VISIBLE);
+    let out = s.take_js_output(id);
+    assert!(out.errors.iter().any(|e| e.contains("filling in form fields")), "{out:?}");
+}
+
 /// AcroForm field scripts validate, calculate and format through edits, and a button script's
 /// changes, messages and requests come back.
 #[test]

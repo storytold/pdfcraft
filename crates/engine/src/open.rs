@@ -225,6 +225,30 @@ impl Session {
             },
             (_, cos) => (bytes, info, cos),
         };
+        // Ordinary AcroForms also initialize their document libraries on open. In particular,
+        // some forms carry a visible unsupported-viewer badge that their startup script hides.
+        // XFA has already initialized above; never run its container's fallback libraries here.
+        let (bytes, info, cos) = match cos {
+            Ok(Ok(cos)) if !context.js_off && info.xfa.is_none() => {
+                let mut work = cos.clone();
+                let initialized = guard(|| js::on_open(&mut work, &name, &mut script_output))
+                    .unwrap_or_else(|m| Err(crate::EditError::Invalid(format!("its startup scripts failed unexpectedly ({m})"))))
+                    .map_err(|e| e.to_string())
+                    .and_then(|()| if work.is_modified() { rebase(&work).map(Some) } else { Ok(None) });
+                match initialized {
+                    Ok(Some((b, mut i, c))) => {
+                        i.warnings.push("This form's scripts changed it on opening; saving keeps those changes".into());
+                        (b, i, Ok(Ok(c)))
+                    }
+                    Ok(None) => (bytes, info, Ok(Ok(cos))),
+                    Err(e) => {
+                        script_output.errors.push(format!("The form's startup changes could not be applied: {e}"));
+                        (bytes, info, Ok(Ok(cos)))
+                    }
+                }
+            }
+            cos => (bytes, info, cos),
+        };
         // The catalog leads to no page, but the reader found pages by scanning: gather the page
         // objects into a page tree as one more revision, or page edits address none of them
         // (#1656). Kept only when the reader then shows the same pages, and never on a signed

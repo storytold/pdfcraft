@@ -395,6 +395,49 @@ fn document_level_functions_are_available() {
     assert_eq!(o.value, "8");
 }
 
+#[test]
+fn field_objects_keep_helpers_and_match_the_event_target() {
+    let o = go(
+        "var field = getField('qty'); field.adjust = function () { this.value += 2; }; \
+         getField('qty').adjust(); event.value = (field === event.target) + ':' + field.value;",
+        &Event::field("Calculate", "qty", ""),
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "true:6");
+    assert_eq!(o.changed[0].value, ["6"]);
+    let fresh = go("event.value = typeof getField('qty').adjust;", &Event::field("Calculate", "qty", ""));
+    assert_eq!(fresh.value, "undefined", "helpers must not leak to another script context");
+}
+
+#[test]
+fn large_document_rule_tables_are_available_to_calculations() {
+    // Synthetic rule data, rather than a third-party character-sheet fixture.
+    let rules = format!("var rules = [{}]; function modifier(n) {{ return Math.floor((n - 10) / 2); }}", "0,".repeat(150_000));
+    let o = run(
+        "event.value = modifier(getField('qty').value) + ':' + rules.length;",
+        &Event::field("Calculate", "total", ""),
+        &doc(),
+        &fields(),
+        &[rules],
+        Limits::default(),
+    );
+    assert_eq!(o.doc_errors, Vec::<String>::new());
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "-3:150000");
+}
+
+#[test]
+fn document_libraries_have_a_combined_budget() {
+    let padding = format!("/*{}*/", " ".repeat(crate::run::MAX_DOCUMENT_SCRIPT_BYTES - 4));
+    let mut docs = vec![padding; 9];
+    docs.push("function afterBudget() { return 42; }".into());
+    let o = run("event.value = typeof afterBudget;", &Event::field("Calculate", "total", ""), &doc(), &fields(), &docs, Limits::default());
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "undefined");
+    assert_eq!(o.doc_errors.len(), 2);
+    assert!(o.doc_errors.iter().all(|e| e.contains("combined 8 MiB limit")), "{:?}", o.doc_errors);
+}
+
 /// #3940: a document script that throws after defining a helper (here calling an Acrobat method
 /// PdfCraft lacks) still leaves the helper, and the later scripts, to the field script.
 #[test]
@@ -429,7 +472,7 @@ fn a_failing_document_script_does_not_stop_the_field_script() {
 fn a_document_script_too_big_to_run_is_skipped_and_reported() {
     let docs = [
         "this.getField('qty').buttonSetIcon(null);".to_string(),
-        format!("var big = 1{};", "+1".repeat(MAX_SCRIPT_BYTES / 2)),
+        format!("var big = 1{};", "+1".repeat(crate::run::MAX_DOCUMENT_SCRIPT_BYTES / 2)),
         "function double(x) { return x * 2; }".to_string(),
         format!("var deep = {}1{};", "(".repeat(10_000), ")".repeat(10_000)),
     ];

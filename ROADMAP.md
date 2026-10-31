@@ -213,6 +213,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-31 (M6, AcroForm startup):** Ordinary AcroForm document libraries run on opening with JavaScript enabled, so a form can hide its unsupported-viewer badge. Startup changes respect form-filling permissions, script errors stay visible, and XFA is initialized separately. Full MPMB compatibility remains partial. Estimates unchanged.
 - **2026-10-31 (M2, PR #4172 review):** Added same-machine pixel oracles for GBK Song, Hei, Kai and FangSong, including all four subset-prefixed Founder aliases. Reference PDFs use explicit Unicode mappings and independently selected installed faces; font data and rasters remain in memory. All eight cases ran; wrong-glyph and wrong-family production mutations each failed the new assertion and were restored. Validation: 422 renderer unit tests, renderer all-target Clippy with -D warnings, formatting, layers/assets/parity and renderer WASM checks passed; existing optional-patch/WASM warnings and parity notes remain. Estimates unchanged.
 
 - **2026-10-31 (M2, PR #4172):** Integrated main fa5f9f8c, retaining both roadmap histories and raster regression groups. Restored display_config and thumbnail_config imports after the upstream explicit-import migration. Validation: 422 renderer unit tests, engine/UI all-target checks, scoped all-target Clippy with -D warnings, formatting, layers, assets, parity and renderer/engine WASM checks passed. Existing optional-patch/WASM warnings and parity notes remain; no full engine/UI runtime test rerun. Display-only font policy and estimates unchanged.
@@ -719,6 +720,8 @@ Newest first: the date, what moved, and the new overall estimate.
 - **2026-10-10 (UI docking):** Tools and Inspector can be regrouped, split beside the PDF, or floated inside the app window. Existing toggles reopen panels at their saved locations; UI commands arrange/reset panels, and preferences retain their layout. Read/full-screen modes preserve the focused document view. No milestone percentage change.
 
 ## Revision history
+
+**2026-10-30 · minor:** M6 character-sheet scripting foundations: bounded larger document libraries, stable field wrappers within a run, and case-preserved custom metadata. Full MPMB compatibility remains unqualified. Estimates unchanged.
 
 **2026-10-25 · minor:** M14 localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build has no Hans face. Estimates unchanged.
 
