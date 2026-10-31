@@ -1102,7 +1102,10 @@ fn mono(doc: &Document, s: &Stream, ppi: f64, defaults: bool, settings: &MonoSet
     // JBIG2 (whose symbols may be smaller than its own coding) can be smaller stored again alone.
     let alone_to_g4 = s.filters().len() == 1 && settings.compression == MonoCompression::CcittG4;
     let only_to_resample = retain || (alone_to_g4 && (jbig2 || fax.is_some_and(|p| p.k < 0)));
-    if only_to_resample && !downsample {
+    // What can't be averaged, whatever it holds, comes to the same `None` below, after a decode that
+    // would spend the run's allowance on it.
+    let too_wide = d.int(b"Width").is_some_and(|w| w > i64::from(pdfcraft_filters::MAX_CCITT_COLUMNS));
+    if only_to_resample && (!downsample || defaults || too_wide || (jbig2 && dark_is_one(doc, d).is_none())) {
         return None;
     }
     let (data, w, h, packed) = one_bit(doc, s, !retain, defaults, budget)?;
@@ -1396,6 +1399,36 @@ mod dimension_tests {
         assert_eq!(report.images_resampled, 2);
         let changed = refs.iter().filter(|r| matches!(&*doc.get(**r), Object::Stream(s) if *s != image)).count();
         assert_eq!(changed, 2, "the third is as it was");
+    }
+
+    /// Decoded only to be resampled, what can't be averaged whatever it holds isn't decoded, so it
+    /// takes nothing from the images that can be, and isn't counted as refused past the allowance.
+    #[test]
+    fn a_jbig2_image_that_cant_be_averaged_spends_nothing() {
+        let image = |edit: &dyn Fn(&mut Dict)| {
+            let mut dict = Dict::new();
+            dict.set(b"Subtype".to_vec(), Object::name("Image"));
+            dict.set(b"Width".to_vec(), Object::Int(16));
+            dict.set(b"Height".to_vec(), Object::Int(2));
+            dict.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+            dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+            dict.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+            edit(&mut dict);
+            Stream::from_raw(dict, pdfcraft_filters::encode_jbig2_generic(&[0xF0; 4], 16, 2).unwrap())
+        };
+        let settings = MonoSettings { compression: MonoCompression::Retain, ..MonoSettings::REDUCE };
+        let spent = |s: &Stream, defaults: bool| {
+            let mut budget = ImageBudget::with_work(u64::MAX);
+            let _ = mono(&Document::new_empty(), s, 720.0, defaults, &settings, &mut budget);
+            u64::MAX - budget.work_left()
+        };
+        let plain = image(&|_| {});
+        assert!(spent(&plain, false) > 0, "one that can be averaged is decoded");
+        assert_eq!(spent(&plain, true), 0, "drawn where a device colour space is remapped");
+        let wide = image(&|d| d.set(b"Width".to_vec(), Object::Int(i64::from(pdfcraft_filters::MAX_CCITT_COLUMNS) + 1)));
+        assert_eq!(spent(&wide, false), 0, "too wide to average");
+        let tinted = image(&|d| d.set(b"ColorSpace".to_vec(), Object::Array(vec![Object::name("CalGray"), Object::Dict(Dict::new())])));
+        assert_eq!(spent(&tinted, false), 0, "no way to tell which sample is dark");
     }
 
     /// A JPEG larger than its dictionary says is refused from its header, before its pixels are decoded.

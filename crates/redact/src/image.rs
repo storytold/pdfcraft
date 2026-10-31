@@ -59,13 +59,19 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     let fax = |f: &Object| f.as_name().is_some_and(|n| matches!(n, b"CCITTFaxDecode" | b"CCF"));
     let jbig2 = |f: &Object| f.as_name() == Some(b"JBIG2Decode".as_slice());
     let readable = |f: &Object| f.as_name().is_some_and(supported);
+    // `/Crypt` was undone when the object was loaded (ISO 32000-2 §7.4.10), and decoding leaves it
+    // out wherever it stands.
+    let crypt = |f: &Object| f.as_name() == Some(b"Crypt".as_slice());
     let (ok, is_fax, is_jbig2) = match s.dict.get(b"Filter") {
         None => (true, false, false),
-        Some(f @ Object::Name(_)) => (readable(f) || fax(f) || jbig2(f), fax(f), jbig2(f)),
-        Some(Object::Array(a)) => match a.split_last() {
-            Some((last, before)) if fax(last) || jbig2(last) => (before.iter().all(readable), fax(last), jbig2(last)),
-            _ => (a.iter().all(readable), false, false),
-        },
+        Some(f @ Object::Name(_)) => (readable(f) || crypt(f) || fax(f) || jbig2(f), fax(f), jbig2(f)),
+        Some(Object::Array(a)) => {
+            let chain: Vec<&Object> = a.iter().filter(|f| !crypt(f)).collect();
+            match chain.split_last() {
+                Some((last, before)) if fax(last) || jbig2(last) => (before.iter().all(|f| readable(f)), fax(last), jbig2(last)),
+                _ => (chain.iter().all(|f| readable(f)), false, false),
+            }
+        }
         _ => (false, false, false),
     };
     if !ok {

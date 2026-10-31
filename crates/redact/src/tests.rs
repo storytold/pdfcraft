@@ -804,6 +804,13 @@ fn a_jbig2_image_has_its_covered_pixels_cleared_instead_of_being_removed() {
         (
             format!("{image} /ColorSpace /DeviceGray /Filter [/ASCIIHexDecode /JBIG2Decode] /DecodeParms [null << /JBIG2Globals 8 0 R >>]"),
             hex,
+            vec![globals.clone()],
+            [0x00, 0xFF, 0xFF, 0xFF],
+        ),
+        // `/Crypt` was undone on load, and takes a place in the parameters.
+        (
+            format!("{image} /ColorSpace /DeviceGray /Filter [/Crypt /JBIG2Decode] /DecodeParms [null << /JBIG2Globals 8 0 R >>]"),
+            white.clone(),
             vec![globals],
             [0x00, 0xFF, 0xFF, 0xFF],
         ),
