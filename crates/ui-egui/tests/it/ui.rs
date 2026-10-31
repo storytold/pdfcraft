@@ -465,6 +465,39 @@ fn read_mode_hides_the_quick_toolbar() {
     h.get_by_label("Select (V)");
 }
 
+/// All tools ▸ Edit a PDF turns on Edit text & images at once, as the Edit tab does, so the page
+/// is editable without clicking Edit again. Another tool from there puts editing down.
+#[test]
+fn edit_a_pdf_from_all_tools_turns_on_editing() {
+    use pdfcraft_ui_egui::{Mode, QuickTool};
+    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    assert_eq!(h.state().mode, Mode::AllTools);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    h.get_by_label("Edit a PDF").click();
+    h.run_steps(3);
+    assert_eq!(h.state().mode, Mode::AllTools, "the workspace stays All tools, with its way back");
+    assert_eq!(h.state().quick_tool, QuickTool::EditText, "Edit text & images is on at once");
+    h.state_mut().set_option("tool", "organize").unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "another tool puts editing down");
+    // In the Edit workspace, another tool from its panel leaves editing on, as before.
+    h.state_mut().set_option("mode", "edit").unwrap();
+    h.state_mut().set_option("tool", "edit").unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::EditText);
+    h.state_mut().set_option("tool", "organize").unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::EditText);
+    // Read mode hides the quick toolbar and keeps the tools down, so the control channel's
+    // `tool edit` there leaves editing off (review on #4605).
+    h.state_mut().run_command("view.read_mode");
+    h.run_steps(2);
+    assert_eq!(h.state().mode, Mode::Read);
+    h.state_mut().set_option("tool", "edit").unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "no editing tool in Read mode");
+}
+
 /// Opening a document with Read as the default mode puts down the tool in use, as entering Read
 /// mode from the mode bar does: the hidden toolbar would leave no way to see or change it.
 #[test]
