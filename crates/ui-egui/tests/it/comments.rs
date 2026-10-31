@@ -3023,6 +3023,46 @@ fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
     h.run_steps(3);
 }
 
+/// #2137 review: a pop-up is edited under comment permission, not change permission: in a
+/// document whose security allows comments but not changes, an open pop-up still takes typing
+/// and closes.
+#[test]
+fn a_pop_up_is_editable_where_comments_are_allowed_but_changes_are_not() {
+    let plain = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 150 40 170] /T (Ada) /Popup 5 0 R >> endobj
+5 0 obj << /Type /Annot /Subtype /Popup /Parent 4 0 R /Rect [60 60 260 160] /Open true >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(plain.to_vec())).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        // Everything but bit 4, modifying the document.
+        permissions: -1 ^ 8,
+        encrypt_metadata: true,
+        seed: [4; 32],
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = harness(move |app| {
+        app.open_bytes("restricted.pdf", None, bytes).expect("opens");
+        // Only the restricted document, so it is the first view.
+        app.close_tab(0);
+    });
+    h.run_steps(6);
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the open pop-up shows");
+    field(&h, "Add a comment");
+    let close = h.query_all_by_label("Close").find(|n| window.contains(n.rect().center())).expect("the pop-up's ×");
+    close.click();
+    h.run_steps(4);
+    let note = comments(&h).into_iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!(note.popup.map(|p| p.open), Some(false), "closed");
+}
+
 /// A double-click on a sticky note opens its pop-up window on the page, where its text is read
 /// and edited; the title bar drags it (saved as the pop-up's place, one undo step); × closes it
 /// (comment.popups, comment.connector-lines).

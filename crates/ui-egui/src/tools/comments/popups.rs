@@ -92,7 +92,8 @@ pub(crate) fn popups(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, hi
                                 ui.label(egui::RichText::new(m).font(theme::regular(11.0)).color(t.text_faint));
                             }
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if crate::icons::button(ui, "x", 18.0, false, tl!("Close")).clicked() {
+                                // Closing changes the comment's /Open, which needs comment permission.
+                                if ui.add_enabled_ui(allowed, |ui| crate::icons::button(ui, "x", 18.0, false, tl!("Close"))).inner.clicked() {
                                     edits.push(Edit::SetAnnotationPopup { page, index: a.index, rect: None, open: Some(false) });
                                 }
                             });

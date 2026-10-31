@@ -310,7 +310,12 @@ pub fn set_popup(doc: &mut Document, page: usize, index: usize, rect: Option<[f6
         None => None,
     };
     let _ = meta;
-    match d.reference(b"Popup").filter(|pr| doc.get(*pr).as_dict().is_some()) {
+    // Only a pop-up that is this comment's: `/Popup` naming another annotation (or a pop-up
+    // whose `/Parent` is another comment) would move or open that one, so it gets its own.
+    let own_popup = |pr: &ObjRef| {
+        doc.get(*pr).as_dict().is_some_and(|pd| pd.name(b"Subtype") == Some(b"Popup") && pd.reference(b"Parent").is_none_or(|parent| parent == r))
+    };
+    match d.reference(b"Popup").filter(own_popup) {
         Some(pr) => doc.update_dict(pr, |p| {
             if let Some(rect) = rect {
                 p.set(b"Rect".to_vec(), num_array(&rect));

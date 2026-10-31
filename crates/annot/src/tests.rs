@@ -2230,6 +2230,17 @@ fn pop_ups_open_close_and_move_and_are_reported() {
     assert!(given.open);
     assert!((given.rect[0] - 130.0).abs() < 0.01 && (given.rect[2] - 330.0).abs() < 0.01, "beside the mark: {:?}", given.rect);
 
+    // #2137 review: a /Popup naming another annotation (here the note) isn't this comment's: the
+    // note is left alone and the mark gets a pop-up of its own.
+    let (_, mr) = annot_ref(&mut doc, 0, mark).unwrap();
+    doc.update_dict(mr, |m| m.set(b"Popup".to_vec(), Object::Ref(r))).unwrap();
+    let note_before = annot_dict(&doc, r);
+    set_popup(&mut doc, 0, mark, Some([10.0, 10.0, 110.0, 60.0]), Some(true), &meta("h1")).unwrap();
+    assert_eq!(annot_dict(&doc, r), note_before, "the note isn't moved or opened");
+    let own = annot_dict(&doc, mr).reference(b"Popup").expect("a pop-up of its own");
+    assert_ne!(own, r);
+    assert_eq!(doc.get(own).as_dict().and_then(|p| p.reference(b"Parent")), Some(mr));
+
     // None of their own.
     let text_box = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [10.0, 10.0, 110.0, 40.0], font_size: 12.0 }), &meta("t1")).unwrap();
     assert!(matches!(set_popup(&mut doc, 0, text_box, None, Some(true), &meta("t1")), Err(AnnotError::Invalid(_))));
