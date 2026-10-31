@@ -11,4 +11,4 @@ Label = "Total area coverage"
 Label = "Page maximum: 118%"
 Label = "Point at the page to read its ink coverage."
 CheckBox "Highlight coverage above" [off]
-SpinButton = "300%"
+SpinButton "%" = "300%"
