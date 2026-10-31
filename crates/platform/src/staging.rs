@@ -185,7 +185,21 @@ pub fn write_atomically_with(
             keep_created(&file, created);
             sync_staged(&file, sync_all)?;
         }
-        std::fs::rename(&tmp, path)
+        let rename_result = std::fs::rename(&tmp, path);
+        #[cfg(windows)]
+        if rename_result.is_ok()
+            && let Some(keep) = &keep
+        {
+            // Restore the replaced file's own attributes after the rename (#5001, #4593):
+            // Samba/NAS servers mark dot-named staging files hidden by default and persist that
+            // flag through metadata writes and renames. Restoring the permissions (attributes)
+            // returns a plain file to plain, while keeping a deliberately hidden file hidden.
+            // When saving a brand-new file (`keep` is None), no baseline exists and server defaults stand.
+            if let Err(e) = std::fs::set_permissions(path, keep.permissions()) {
+                log::debug!("could not restore replaced file attributes on {}: {e}", path.display());
+            }
+        }
+        rename_result
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
