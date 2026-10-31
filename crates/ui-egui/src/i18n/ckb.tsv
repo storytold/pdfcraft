@@ -2748,6 +2748,7 @@ certificate	Version	وەشان
 	No tools match your search.	هیچ ئامرازێک لەگەڵ گەڕانەکەت ناگونجێت.
 	Expand all tools	فراوانکردنی هەموو ئامرازەکان
 	Collapse all tools	کۆکردنەوەی هەموو ئامرازەکان
+	Courier can't draw “{c}” ({code}) in other PDF viewers. Choose Helvetica or Times.	Courier ناتوانێت «{c}» ({code}) لە پیشاندەرەکانی تری PDF بکێشێت. Helvetica یان Times هەڵبژێرە.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ئەمڕۆ

@@ -2799,6 +2799,7 @@ certificate	SHA-256 digest	Impronta SHA-256
 	field names can't contain a period: {name}	i nomi dei campi non possono contenere un punto: {name}
 	two cells would both be named {name}	due celle si chiamerebbero entrambe {name}
 	a field named {name} already exists	esiste già un campo chiamato {name}
+	Courier can't draw “{c}” ({code}) in other PDF viewers. Choose Helvetica or Times.	Courier non può visualizzare «{c}» ({code}) in altri visualizzatori PDF. Scegliere Helvetica o Times.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Oggi

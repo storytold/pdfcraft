@@ -2820,6 +2820,7 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	Courier can't draw “{c}” ({code}) in other PDF viewers. Choose Helvetica or Times.	Courier nu poate desena „{c}” ({code}) în alte vizualizatoare PDF. Alegeți Helvetica sau Times.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi

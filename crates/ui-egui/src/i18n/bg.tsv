@@ -2530,6 +2530,7 @@ animation effects	Off	Изключени
 	field names can't contain a period: {name}	имената на полетата не може да съдържат точка: {name}
 	two cells would both be named {name}	две клетки биха имали едно и също име {name}
 	a field named {name} already exists	вече съществува поле с име {name}
+	Courier can't draw “{c}” ({code}) in other PDF viewers. Choose Helvetica or Times.	Courier не може да изобрази „{c}“ ({code}) в други програми за PDF. Изберете Helvetica или Times.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Днес
