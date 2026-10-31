@@ -915,6 +915,13 @@ fn held_offset(detached: Option<&dyn DetachedBodies>, offset: usize) -> Option<u
     }
 }
 
+/// PdfCraft patch (34): where a table entry points. An offset inside a cut body becomes the end of
+/// the bytes: nothing reads there, so the entry still replaces older sections and the repair runs,
+/// as it does for such an entry in the whole file.
+fn held_entry(data: &[u8], detached: Option<&dyn DetachedBodies>, offset: usize) -> usize {
+    held_offset(detached, offset).unwrap_or(data.len())
+}
+
 /// The offset of the previous xref section (`Prev`).
 // PdfCraft patch: (#2366) some writers give `Prev` as a reference `N G R`. When this section's
 // own entries (`own`) place that object and it holds an offset (iText's `indirectPrev.pdf`), that
@@ -1036,12 +1043,10 @@ fn populate_from_xref_table<'a>(
 
             // Specification says we should ignore any object number > SIZE, but probably
             // not important?
-            if entry.used
-                && let Some(offset) = held_offset(detached, entry.offset)
-            {
+            if entry.used {
                 own.insert(
                     ObjectIdentifier::new(obj_number as i32, entry.gen_number),
-                    EntryType::Normal(offset),
+                    EntryType::Normal(held_entry(data, detached, entry.offset)),
                 );
             }
         }
@@ -1109,10 +1114,11 @@ fn populate_from_xref_stream<'a>(
     }
 
     if detached.is_some() {
-        own.retain(|_, entry| match entry {
-            EntryType::Normal(offset) => held_offset(detached, *offset).map(|held| *offset = held).is_some(),
-            EntryType::ObjStream(..) => true,
-        });
+        for entry in own.values_mut() {
+            if let EntryType::Normal(offset) = entry {
+                *offset = held_entry(data, detached, *offset);
+            }
+        }
     }
 
     if let Some(prev) = prev_offset(data, stream.dict(), &own) {
@@ -1841,6 +1847,20 @@ mod tests {
     /// adds object 5 after them, its section reached through `/Prev`.
     #[cfg(feature = "std")]
     fn cut_fixture(update: bool, readable: bool) -> crate::Pdf {
+        let (file, start) = cut_file(update);
+        cut(file, start, readable)
+    }
+
+    #[cfg(feature = "std")]
+    fn cut(file: Vec<u8>, start: usize, readable: bool) -> crate::Pdf {
+        let mut held = file.clone();
+        held.drain(start..start + 5000);
+        let cut = CutBody { file, start, len: 5000, readable };
+        crate::Pdf::new(PdfData::with_detached(Arc::new(held), Arc::new(cut))).unwrap()
+    }
+
+    #[cfg(feature = "std")]
+    fn cut_file(update: bool) -> (Vec<u8>, usize) {
         let mut file = b"%PDF-1.7\n".to_vec();
         let mut offsets = Vec::new();
         for body in [
@@ -1868,10 +1888,20 @@ mod tests {
             let last = file.len();
             file.extend_from_slice(format!("xref\n5 1\n{added:010} 00000 n \ntrailer\n<</Size 6/Root 1 0 R/Prev {table}>>\nstartxref\n{last}\n%%EOF\n").as_bytes());
         }
-        let mut held = file.clone();
-        held.drain(start..start + 5000);
-        let cut = CutBody { file, start, len: 5000, readable };
-        crate::Pdf::new(PdfData::with_detached(Arc::new(held), Arc::new(cut))).unwrap()
+        (file, start)
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn an_entry_inside_a_cut_body_repairs_as_in_the_whole_file() {
+        let (mut file, start) = cut_file(false);
+        let table = file.windows(9).position(|w| w == b"xref\n0 5\n").unwrap();
+        // Object 3 is the page: only a repair finds it.
+        let entry = table + 9 + 3 * 20;
+        file.splice(entry..entry + 10, format!("{:010}", start + 100).into_bytes());
+        let pdf = cut(file, start, true);
+        let page = pdf.xref().get::<Dict<'_>>(ObjectIdentifier::new(3, 0));
+        assert!(page.is_some());
     }
 
     #[cfg(feature = "std")]

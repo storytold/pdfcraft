@@ -65,6 +65,26 @@ fn pages_draw_the_same_with_their_bodies_on_disk() {
 }
 
 #[test]
+fn a_cross_reference_entry_inside_a_body_draws_as_in_the_whole_file() {
+    let mut pdf = scanned();
+    let image = pdf.windows(4).position(|w| w == b"/Wid").unwrap();
+    let inside = pdf[image..].windows(7).position(|w| w == b"stream\n").unwrap() + image + 200;
+    // Object 6 is the first page's image: only a repair finds it.
+    let table = pdf.windows(6).position(|w| w == b"\nxref\n").unwrap() + 6;
+    let entry = table + pdf[table..].iter().position(|b| *b == b'\n').unwrap() + 1 + 6 * 20;
+    pdf.splice(entry..entry + 10, format!("{inside:010}").into_bytes());
+    let (file, _) = on_disk(pdf.clone());
+    let mut whole = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let mut held = PageRenderer::new(file, RenderConfig::default());
+    assert_eq!(held.page_count(), 2);
+    let request = RenderRequest { page: 0, scale: 1.0, ..Default::default() };
+    let (a, b) = (whole.render(request), held.render(request));
+    assert_eq!(b.error, None);
+    assert!(a.rgba.as_chunks::<4>().0.iter().any(|p| p[0] != 255), "the image draws");
+    assert!(a.rgba == b.rgba);
+}
+
+#[test]
 fn the_pool_draws_pages_on_disk() {
     let (file, _) = on_disk(scanned());
     let pool = RenderPool::new_inline(file, RenderConfig::default());

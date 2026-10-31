@@ -337,21 +337,22 @@ impl<'a> Walk<'a> {
                     };
                     let end = start.saturating_add(len);
                     let structural = matches!(dict.name(b"Type"), Some(b"ObjStm" | b"XRef"));
-                    if len < MIN_BODY || structural {
-                        if !self.hold_to(end)? {
-                            return Ok(Next::GiveUp);
-                        }
-                        return Ok(Next::At(end));
-                    }
-                    if !self.hold_to(start)? {
+                    let keep = len < MIN_BODY || structural;
+                    if !self.hold_to(if keep { end } else { start })? {
                         return Ok(Next::GiveUp);
                     }
-                    if let (None, Some(num)) = (proven, refers_to) {
-                        self.searched.push((self.cuts.len(), num));
+                    if !keep {
+                        if let (None, Some(num)) = (proven, refers_to) {
+                            self.searched.push((self.cuts.len(), num));
+                        }
+                        self.cuts.push(Cut { body: DiskBody { start, len }, held: self.held.len() });
+                        self.done = end;
                     }
-                    self.cuts.push(Cut { body: DiskBody { start, len }, held: self.held.len() });
-                    self.done = end;
-                    return Ok(Next::At(end));
+                    // Still in this window: loading it again per small stream would use up the budget.
+                    match end.checked_sub(self.base).and_then(|at| usize::try_from(at).ok()).filter(|at| *at < self.window.len()) {
+                        Some(at) => from = at,
+                        None => return Ok(Next::At(end)),
+                    }
                 }
                 _ => {}
             }
@@ -721,6 +722,32 @@ mod tests {
         let entry = find(&pdf, b"\n", table).unwrap() + 1 + 20;
         pdf.splice(entry..entry + 10, format!("{inside:010}").into_bytes());
         assert_reads_the_same(&pdf, Arc::new(walked(&pdf)));
+    }
+
+    #[test]
+    fn small_streams_do_not_read_a_window_each() {
+        struct Counted(Vec<u8>, AtomicU64);
+        impl ByteSource for Counted {
+            fn size(&self) -> u64 {
+                self.0.len() as u64
+            }
+            fn read_at(&self, offset: u64, out: &mut [u8]) -> std::io::Result<()> {
+                self.1.fetch_add(out.len() as u64, Ordering::Relaxed);
+                let at = offset as usize;
+                out.copy_from_slice(self.0.get(at..at + out.len()).ok_or(std::io::ErrorKind::UnexpectedEof)?);
+                Ok(())
+            }
+        }
+        let mut pdf = Pdf::new().obj("<</Type/Catalog/Pages 2 0 R>>").obj("<</Type/Pages/Kids[]/Count 0>>");
+        for i in 0..2_000 {
+            pdf = pdf.stream("", noise(i as u8, 100));
+        }
+        let pdf = pdf.stream("", noise(0, 2_000_000)).build();
+        let size = pdf.len() as u64;
+        let source = Arc::new(Counted(pdf, AtomicU64::new(0)));
+        assert!(OnDiskFile::read(source.clone()).unwrap().is_some());
+        let read = source.1.load(Ordering::Relaxed);
+        assert!(read < size * 2, "read {read} bytes of a file of {size}");
     }
 
     #[test]
