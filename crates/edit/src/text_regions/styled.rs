@@ -1,7 +1,7 @@
 use super::grouping::{across, is_centred, row_rect};
 use super::{
     BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
-    RangeStyle, TextBlock, TextLine, Type3Glyph, coincident_ops, content_streams, fallback_face, japanese_glyph_from, needs_type3, no_fallback_font,
+    RangeStyle, TextBlock, TextLine, Type3Glyph, content_streams, drop_and_patch, fallback_face, japanese_glyph_from, needs_type3, no_fallback_font,
     no_glyph_for, page_dict, reveal_ops, rewritten_contents, source_encodes, source_family, source_program, source_show, source_space, source_width,
     splice, type3_faces, type3_glyph, write_type3_glyphs,
 };
@@ -727,6 +727,7 @@ fn paragraph_marker(block: &TextBlock, lines: &[TextLine], ops: &[Op]) -> Option
 struct RewriteAnchor<'a> {
     lead: &'a TextLine,
     drop: std::collections::HashSet<usize>,
+    partial_patches: HashMap<usize, Op>,
     start: usize,
     split: bool,
 }
@@ -754,8 +755,7 @@ fn rewrite_anchor<'a>(
         }
     };
     let origin = &lead.origin;
-    let mut drop = coincident_ops(lines, &members);
-    drop.extend(members.iter().flat_map(|line| line.ops.iter().copied()));
+    let (drop, partial_patches) = drop_and_patch(lines, &members, ops);
     let start = lead.ops.first().copied().unwrap_or(origin.bt_op);
     let split = ops
         .get(origin.bt_op..start)
@@ -763,7 +763,7 @@ fn rewrite_anchor<'a>(
         .iter()
         .enumerate()
         .any(|(index, op)| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.contains(&(origin.bt_op + index)));
-    RewriteAnchor { lead, drop, start, split }
+    RewriteAnchor { lead, drop, partial_patches, start, split }
 }
 
 /// Open (`op` is `"BMC"`) or close (`"EMC"`) the `/P` marker that wraps the whole rewrite when
@@ -798,31 +798,48 @@ fn push_row_break_marker(block_ops: &mut Vec<Op>, row_soft: &[bool], row_gap: &[
 /// marker opened at its start and closed at its `next` line or, when nothing follows, after the
 /// paragraph's own last `ET` (appended past the stream's last operator when that close is at or
 /// beyond `ops.len()`, since `splice`'s callback never visits that index).
+#[allow(clippy::too_many_arguments)]
 fn splice_with_marker(
     pieces: &Pieces,
     ops: &[Op],
     marker: Option<(usize, Option<usize>, usize)>,
+    mut partial_patches: HashMap<usize, Op>,
     at: usize,
+    split: bool,
     mut block_ops: Vec<Op>,
     drop: &std::collections::HashSet<usize>,
 ) -> Vec<Vec<u8>> {
     let data = splice(pieces, ops, |i| {
-        let mut insert = Vec::new();
+        let mut prefix = Vec::new();
         if let Some((start_at, next, close)) = marker {
             if i == start_at {
-                insert.push(Op::new("BMC", vec![Object::name("P")]));
+                prefix.push(Op::new("BMC", vec![Object::name("P")]));
             }
             if next.is_none() && i == close {
-                insert.push(Op::new("EMC", vec![]));
+                prefix.push(Op::new("EMC", vec![]));
             }
             if next == Some(i) {
-                insert.push(Op::new("EMC", vec![]));
+                prefix.push(Op::new("EMC", vec![]));
             }
         }
+        let mut insert = Vec::new();
+        let keep = if let Some(patched) = partial_patches.remove(&i) {
+            insert.push(patched);
+            false
+        } else {
+            !drop.contains(&i)
+        };
         if i == at {
-            insert.append(&mut block_ops);
+            if split {
+                insert.extend(std::mem::take(&mut block_ops));
+            } else {
+                let mut b = std::mem::take(&mut block_ops);
+                b.extend(insert);
+                insert = b;
+            }
         }
-        (insert, !drop.contains(&i))
+        prefix.extend(insert);
+        (prefix, keep)
     });
     if !marker.is_some_and(|(_, next, close)| next.is_none() && close >= ops.len()) {
         return data;
@@ -971,8 +988,8 @@ pub(crate) fn rewrite_styled_block(
         kept.iter().enumerate().filter(|(_, k)| **k).filter_map(|(r, _)| block.rows.get(r)).flatten().copied().collect();
     // The rewrite is placed after the last rewritten row unless a text-show operator there
     // would make a kept following row depend on that position.
-    let anchor = rewrite_anchor(block, lines, first, &ops, &kept_lines, &mut kept);
-    let RewriteAnchor { lead, drop, start, split } = anchor;
+    let anchor = rewrite_anchor(block, &lines[..source_count], first, &ops, &kept_lines, &mut kept);
+    let RewriteAnchor { lead, drop, partial_patches, start, split } = anchor;
     let o = &lead.origin;
     // What is in force where the rewrite is drawn, and what the text after it expects.
     let after = if split { &o.state } else { &o.bt_state };
@@ -1182,8 +1199,8 @@ pub(crate) fn rewrite_styled_block(
     // A kept source row sits outside `block_ops`. Bound the whole paragraph when a marker is
     // safe. The close is not part of `block_ops`: that vector can end inside a text object
     // when the rewrite splits one, and a kept row's operators come later in the stream.
-    let marker = if marked { None } else { paragraph_marker(block, lines, &ops) };
-    let data = splice_with_marker(&pieces, &ops, marker, at, block_ops, &drop);
+    let marker = if marked || !partial_patches.is_empty() { None } else { paragraph_marker(block, lines, &ops) };
+    let data = splice_with_marker(&pieces, &ops, marker, partial_patches, at, split, block_ops, &drop);
     let contents = rewritten_contents(doc, &streams, data);
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     doc.update_dict(p.obj, |d| {
