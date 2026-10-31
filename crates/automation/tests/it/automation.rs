@@ -7144,6 +7144,8 @@ fn javascript_through_tools() {
         ])
     );
     assert_eq!(r["requests"][0]["page"], 2);
+    let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "JSON.stringify(this.getPageBox())" }));
+    assert_eq!(r["result"], "[0,300,200,0]");
     let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
     let total = f["fields"].as_array().unwrap().iter().find(|x| x["name"] == "Total").unwrap().clone();
     assert_eq!(total["value"], "3750");
