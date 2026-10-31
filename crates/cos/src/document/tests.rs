@@ -898,9 +898,41 @@ fn temporary_reader_keeps_file_views_and_evicts_data_of_its_own() {
     // Data of its own (decrypted streams, strings) counts: past the budget the cache is
     // cleared after the next read, including a failed one.
     let owned = Object::Stream(crate::Stream::from_raw(Dict::new(), vec![b'y'; ObjectReader::STREAM_BYTES + 1]));
-    reader.document.cache.lock().unwrap().insert(3, Arc::new(owned));
+    reader.document.cache.lock().unwrap().insert(5, Arc::new(owned));
     assert_eq!(*reader.get(ObjRef::new(99, 0)), Object::Null);
     assert!(reader.document.cache.lock().unwrap().is_empty(), "owned data over budget is evicted");
+}
+
+#[test]
+fn temporary_reader_running_total_matches_the_cache() {
+    let mut bodies = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_owned(), "<< /Type /Pages /Kids [] /Count 0 >>".to_owned()];
+    bodies.extend((0..300).map(|i| format!("<< /Value {i} /Name ({}) >>", "s".repeat(i % 40))));
+    let refs: Vec<_> = bodies.iter().map(String::as_str).collect();
+    let doc = Document::open(Arc::new(build(&refs, "/Root 1 0 R"))).unwrap();
+    let mut reader = doc.object_reader();
+    for num in (1..=302).chain([5, 301, 99_999, 7]) {
+        let _ = reader.try_get(ObjRef::new(num, 0));
+        let cache = reader.document.cache.lock().unwrap();
+        let measured = cache.values().fold(0usize, |n, o| n.saturating_add(owned_bytes(o, &reader.document.data, 0)));
+        assert_eq!((reader.counted_objects, reader.counted_bytes), (cache.len(), measured), "after object {num}");
+        assert!(cache.len() < ObjectReader::OBJECTS);
+    }
+}
+
+#[test]
+fn temporary_reader_recounts_when_a_read_replaces_cache_entries() {
+    // One cached object, then a read of a string over the editor cache's byte budget: the
+    // editor eviction keeps only the newcomer, so the cache length stays at one. The
+    // string is data of its own and must not stay cached past the reader's budget.
+    let big = format!("({})", "a".repeat(Document::EDITOR_CACHE_BYTES + 1));
+    let bytes = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Small 1 >>", &big], "/Root 1 0 R");
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    let mut reader = doc.object_reader();
+    let _ = reader.get(ObjRef::new(3, 0));
+    assert_eq!((reader.document.cache.lock().unwrap().len(), reader.counted_objects), (1, 1));
+    assert!(matches!(&*reader.get(ObjRef::new(4, 0)), Object::String(_)));
+    assert!(reader.document.cache.lock().unwrap().is_empty(), "a replaced entry must be counted: the string is over budget");
+    assert_eq!((reader.counted_objects, reader.counted_bytes), (0, 0));
 }
 
 #[test]
