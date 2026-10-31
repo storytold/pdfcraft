@@ -307,7 +307,7 @@ fn label_for(words: &[Word], rect: [f64; 4], right_of: bool) -> String {
         .iter()
         .filter(|w| w.rect[1] >= rect[3] - 1.0 && w.rect[1] - rect[3] < 24.0 && w.rect[0] < rect[2] && w.rect[2] > rect[0] - 4.0)
         .collect();
-    let Some(line) = above.iter().map(|w| mid(w.rect)).min_by(|a, b| a.total_cmp(b)) else { return String::new() };
+    let Some(line) = above.iter().map(|w| mid(w.rect)).min_by(f64::total_cmp) else { return String::new() };
     let mut on: Vec<&&Word> = above.iter().filter(|w| (mid(w.rect) - line).abs() < 3.0).collect();
     on.sort_by(|a, b| a.rect[0].total_cmp(&b.rect[0]));
     clean(&on.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" "))
