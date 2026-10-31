@@ -316,7 +316,7 @@ impl Shown {
     /// offset across it (for upright text: the user-space x, x and y). A vertical run goes along
     /// its column instead, the way the pen moves: for upright text down, with the column's x
     /// across.
-    fn span(&self) -> ((f64, f64), f64, f64, f64) {
+    pub(super) fn span(&self) -> ((f64, f64), f64, f64, f64) {
         let m = self.tm.then(&self.state.ctm);
         let dir = match self.state.vertical {
             Some(w1) => direction(&Matrix([m.0[2] * w1.signum(), m.0[3] * w1.signum(), 0.0, 0.0, 0.0, 0.0])),
@@ -333,8 +333,8 @@ impl Shown {
 pub(super) struct Pen {
     pub(super) bt: usize,
     dir: (f64, f64),
-    across: f64,
-    end: f64,
+    pub(super) across: f64,
+    pub(super) end: f64,
     pub(super) size: f64,
     vertical: bool,
 }

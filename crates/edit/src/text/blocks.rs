@@ -44,6 +44,27 @@ impl TextBlock {
         if self.editor_text.len() > 4_000_000 || draft.len() > 4_000_000 {
             return vec![(0..draft.len(), self.lines.first().copied().unwrap_or(0))];
         }
+        let sources = self.edited_char_sources(draft);
+        let fallback = self.lines.first().copied().unwrap_or(0);
+        let mut result: Vec<(std::ops::Range<usize>, usize)> = Vec::new();
+        for ((byte, ch), source) in draft.char_indices().zip(sources) {
+            let source = source.0;
+            let end = byte.saturating_add(ch.len_utf8());
+            if let Some((range, _)) = result.last_mut().filter(|(_, prev)| *prev == source) {
+                range.end = end;
+            } else {
+                result.push((byte..end, source));
+            }
+        }
+        if result.is_empty() && !draft.is_empty() {
+            result.push((0..draft.len(), fallback));
+        }
+        result
+    }
+
+    /// Style inheritance and retained source-byte identity are distinct: inserted characters
+    /// inherit a style, but never inherit a source glyph's kerning boundary.
+    pub(super) fn edited_char_sources(&self, draft: &str) -> Vec<(usize, Option<usize>)> {
         let old: Vec<_> = self.editor_text.chars().collect();
         let new: Vec<_> = draft.char_indices().collect();
         let chars: Vec<_> = new.iter().map(|(_, c)| *c).collect();
@@ -53,7 +74,7 @@ impl TextBlock {
             while self.spans.get(span).is_some_and(|(r, _)| byte >= r.end) {
                 span += 1;
             }
-            original.push(self.spans.get(span).or_else(|| self.spans.last()).map_or(0, |(_, i)| *i));
+            original.push((self.spans.get(span).or_else(|| self.spans.last()).map_or(0, |(_, i)| *i), Some(byte)));
         }
         let mut sources = Vec::with_capacity(new.len());
         let slices = |text: &[char]| words(text).into_iter().map(|w| text.get(w).unwrap_or_default().to_vec()).collect::<Vec<_>>();
@@ -81,18 +102,7 @@ impl TextBlock {
             }
             None => replaced(&original, 0, &old, &chars, &mut sources),
         }
-        let fallback = original.first().copied().unwrap_or(0);
-        let mut result: Vec<(std::ops::Range<usize>, usize)> = Vec::new();
-        for (i, (byte, ch)) in new.iter().enumerate() {
-            let source = sources.get(i).copied().unwrap_or(fallback);
-            let end = byte.saturating_add(ch.len_utf8());
-            if let Some((range, _)) = result.last_mut().filter(|(_, prev)| *prev == source) {
-                range.end = end;
-            } else {
-                result.push((*byte..end, source));
-            }
-        }
-        result
+        sources
     }
 }
 
@@ -181,20 +191,20 @@ fn backtrack(trace: &[Vec<isize>], n: isize, m: isize, max: isize) -> Vec<Step> 
 
 /// `old`, at char `at` of the source, became `new`: characters kept at either end keep their
 /// runs, and the rest inherit the run just before the change (or the first one it replaces).
-fn replaced(original: &[usize], at: usize, old: &[char], new: &[char], out: &mut Vec<usize>) {
+fn replaced(original: &[(usize, Option<usize>)], at: usize, old: &[char], new: &[char], out: &mut Vec<(usize, Option<usize>)>) {
     let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
     let suffix = old.iter().rev().zip(new.iter().rev()).take(old.len().min(new.len()).saturating_sub(prefix)).take_while(|(a, b)| a == b).count();
     let start = at.saturating_add(prefix);
-    let inherited = start.checked_sub(1).and_then(|i| original.get(i)).or_else(|| original.get(start)).copied().unwrap_or(0);
+    let inherited = start.checked_sub(1).and_then(|i| original.get(i)).or_else(|| original.get(start)).copied().unwrap_or((0, None));
     for i in 0..new.len() {
         let source = if i < prefix {
             original.get(at.saturating_add(i)).copied()
         } else if i >= new.len().saturating_sub(suffix) {
             original.get(at.saturating_add(old.len()).saturating_sub(new.len() - i)).copied()
         } else {
-            Some(inherited)
+            Some((inherited.0, None))
         };
-        out.push(source.unwrap_or(inherited));
+        out.push(source.unwrap_or((inherited.0, None)));
     }
 }
 

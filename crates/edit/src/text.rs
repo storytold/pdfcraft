@@ -47,16 +47,19 @@ pub use editor::{TextEditLayout, TextEditorFont, register_text_font, text_edit_l
 pub(crate) use fallback::SOURCE_SPACE_CALLS;
 use fallback::{
     MAX_TYPE3_GLYPHS, Type3Glyph, fallback_face, needs_type3, no_fallback_font, no_glyph_for, same_base_font, same_font, source_encodes,
-    source_family, source_program, source_show, source_space, source_width, strip_subset_tag, type3_faces, type3_glyph, write_type3_glyphs,
+    source_family, source_program, source_space, source_width, strip_subset_tag, type3_faces, type3_glyph, write_type3_glyphs,
 };
 #[cfg(test)]
 use fallback::{add_type3_font, is_type3_fallback};
-use interp::{Origin, Paint, union};
-use lines::page_dict;
+use interp::{Origin, Paint, TextState, union};
 pub(crate) use lines::{FormBudget, content_streams, content_streams_within, form_call, rewritten_contents, splice};
 pub use lines::{MAX_FORM_DEPTH, MAX_FORM_VISITS, glyph_text_lines, text_lines};
+use lines::{
+    SpacingExpansion, TextPositioning, expand_spacing_runs, page_dict, refuse_dependent_following_text, single_line_block, spacing_ops,
+    text_lines_with_runs,
+};
 pub use rewrite::{LineEdit, replace_line, rewrite_block};
-use rewrite::{coincident_ops, rewrite_block_from};
+use rewrite::{coincident_ops, positioned_show, rewrite_block_from};
 #[cfg(test)]
 pub(crate) use rewrite::{replace_line_with_limit, rewrite_block_with_limit};
 pub(crate) use rewrite::{reveal_ops, selectable_blocks, translate_blocks};
@@ -111,6 +114,10 @@ pub struct TextLine {
     /// does not require one rendering mode, so a line that starts as ink can continue as a mask;
     /// [`refuse_clipping_text`] reads this rather than the origin's mode alone.
     clips: bool,
+    /// Joining these shows required non-sequential positioning, not ordinary text advance.
+    positioned: bool,
+    /// Mode/rise changes inside a run are outside the spacing-only rewrite, even if restored.
+    mixed_appearance: bool,
     /// Why the line can't be edited: its font's writing mode (its CMap's `WMode`) couldn't be read,
     /// so which way its glyphs advance is unknown. The line is listed as horizontal text.
     unreadable_mode: Option<String>,

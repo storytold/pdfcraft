@@ -80,12 +80,13 @@ pub fn text_edit_layout(doc: &Document, page: usize, block: usize, text: &str, s
 pub(crate) fn layout_draft(
     doc: &Document,
     page: usize,
-    lines: &[TextLine],
+    reading: (&[TextLine], &[Vec<TextLine>]),
     source: &TextBlock,
     block: usize,
     text: &str,
     style: &BlockStyle,
 ) -> Result<TextEditLayout, EditError> {
+    let (lines, runs) = reading;
     if text == source.editor_text && *style == BlockStyle::default() {
         return Ok(TextEditLayout { source_rect: source.rect, draft_rect: Some(source.rect), overflow: false });
     }
@@ -100,7 +101,7 @@ pub(crate) fn layout_draft(
         }
     }
     let mut draft = doc.clone();
-    rewrite_block_from(&mut draft, page, lines.to_vec(), block, Some(text), style, MAX_TYPE3_GLYPHS)?;
+    rewrite_block_from(&mut draft, page, (lines.to_vec(), runs.to_vec()), block, Some(text), style, MAX_TYPE3_GLYPHS)?;
     let mut rect: Option<[f64; 4]> = None;
     for line in text_lines(&draft, page)? {
         if let Some(count) = untouched.get_mut(&key(&line))
