@@ -9,8 +9,8 @@
 //!   with the origin at the top-left of the displayed page.
 //! - An optional root directory confines every path a tool reads or writes. Separately,
 //!   [`file_access::AutomationRoots`] (`pdfcraft-cli mcp --automation-read-root` and
-//!   `--automation-write-root`) holds a read folder and a write folder, each left out meaning no
-//!   access of its kind.
+//!   `--automation-write-root`, each may be repeated) holds read folders and write folders; a kind
+//!   with no folder grants none of its access.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -76,7 +76,7 @@ use paths::{write_atomic_synced, write_atomic_with};
 pub struct Automation {
     session: Session,
     root: Option<PathBuf>,
-    /// The read and write folders of `--automation-read-root` / `--automation-write-root`.
+    /// The read and write folders of `--automation-read-root` / `--automation-write-root` (each may be repeated).
     roots: Option<Arc<file_access::AutomationRoots>>,
     /// Synchronous renderers, rebuilt when a document's working bytes change.
     renderers: HashMap<DocId, (Arc<Vec<u8>>, PageRenderer)>,
