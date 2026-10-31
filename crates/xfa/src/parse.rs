@@ -470,8 +470,9 @@ fn parse_items(n: XmlNode, warnings: &mut Vec<String>) -> (Vec<String>, Vec<Stri
 }
 
 /// The items a `<bindItems>` element takes from the data (XFA 3.3, "Dynamic Properties"):
-/// one per data node its `ref` names, shown as what `labelRef` names under that node and
-/// saved as what `valueRef` does, each the node's own value (`$`) when missing. The ref is
+/// one per data node its `ref` names, saved as what `valueRef` names under that node (the
+/// node's own value, `$`, when missing) and shown as what `labelRef` does. With no `labelRef`
+/// the saved value is also the label, as the spec says; an empty one is read the same way. The ref is
 /// read from the XDP the template sits in: `xfa.datasets.`, `$datasets.` or `!` start at the
 /// datasets packet (where Designer's forms keep lists beside `xfa:data`), `$data.` at
 /// `xfa:data` and `$record.` at its record. `None` for a ref this reader cannot follow
@@ -499,8 +500,15 @@ fn bind_items(n: XmlNode, b: XmlNode, warnings: &mut Vec<String>) -> Option<(Vec
         }
         node.attribute(r).map(str::to_string).or_else(|| child(node, r).map(|c| text_of(c).trim().to_string())).unwrap_or_default()
     };
-    let (labels, values): (Vec<String>, Vec<String>) =
-        nodes.into_iter().take(MAX_ITEMS).map(|node| (read(node, b.attribute("labelRef")), read(node, b.attribute("valueRef")))).unzip();
+    let label_ref = b.attribute("labelRef").filter(|r| !r.trim().is_empty());
+    let (labels, values): (Vec<String>, Vec<String>) = nodes
+        .into_iter()
+        .take(MAX_ITEMS)
+        .map(|node| {
+            let value = read(node, b.attribute("valueRef"));
+            (label_ref.map_or_else(|| value.clone(), |r| read(node, Some(r))), value)
+        })
+        .unzip();
     // Saved values are kept only when some differ from the shown text, as for `<items>`.
     let values = if labels == values { Vec::new() } else { values };
     Some((labels, values))

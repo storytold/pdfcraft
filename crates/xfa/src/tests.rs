@@ -4164,8 +4164,8 @@ fn choice_options(form: &Form) -> Vec<(String, Vec<(String, String)>)> {
 /// #3072: a drop-down whose options come from the data (`<bindItems>`, XFA 3.3 "Dynamic
 /// Properties") lists them, from a list beside `xfa:data` as Designer's forms keep them
 /// (`xfa.datasets.…`), from the data itself (`$data`, `$record`), with the value in an
-/// attribute or a child and the label the node's own text (`$`). A ref the reader cannot
-/// follow leaves the template's own items.
+/// attribute or a child and the label the node's own text (`$`), or the value when there is
+/// no labelRef or an empty one. A ref the reader cannot follow leaves the template's own items.
 #[test]
 fn bind_items_fill_choice_lists_from_the_data() {
     let xdp = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -4181,6 +4181,10 @@ fn bind_items_fill_choice_lists_from_the_data() {
   <bindItems ref="$record.colours.colour[*]"/></field>
  <field name="kept" w="2in" h="0.3in"><ui><choiceList/></ui>
   <bindItems ref="somewhere.relative[*]" labelRef="$" valueRef="v"/><items><text>Own</text></items></field>
+ <field name="plain" w="2in" h="0.3in"><ui><choiceList/></ui>
+  <bindItems ref="xfa.datasets.LOVFile.LOV.GenderList.Gender[*]" valueRef="lic"/></field>
+ <field name="blank" w="2in" h="0.3in"><ui><choiceList/></ui>
+  <bindItems ref="xfa.datasets.LOVFile.LOV.GenderList.Gender[*]" labelRef=" " valueRef="lic"/></field>
 </subform>
 </template>
 <xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/">
@@ -4199,6 +4203,9 @@ fn bind_items_fill_choice_lists_from_the_data() {
     assert_eq!(of("country"), pairs(&[("CA", "Canada"), ("JP", "Japan")]), "{options:?}");
     assert_eq!(of("colour"), pairs(&[("Red", "Red"), ("Blue", "Blue")]), "{options:?}");
     assert_eq!(of("kept"), pairs(&[("Own", "Own")]), "{options:?}");
+    // With no labelRef (or an empty one) the values are the labels too, not the nodes' text.
+    assert_eq!(of("plain"), pairs(&[("", ""), ("Female", "Female"), ("Male", "Male")]), "{options:?}");
+    assert_eq!(of("blank"), pairs(&[("", ""), ("Female", "Female"), ("Male", "Male")]), "{options:?}");
     assert!(form.warnings.iter().any(|w| w.contains("kept")), "{:?}", form.warnings);
     // The value bound to the field is a saved value: it stays selected.
     let sex = form
