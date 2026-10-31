@@ -63,7 +63,7 @@ const CKB_DAYS: [&str; 7] = ["یەکشەممە", "دووشەممە", "سێشەم
 
 /// The languages month and weekday names can be written in (Preferences ▸ Date format ▸ Language):
 /// the interface languages, in the same order and with the same names.
-pub static DATE_LANGUAGES: [DateLanguage; 35] = [
+pub static DATE_LANGUAGES: [DateLanguage; 36] = [
     DateLanguage {
         code: "en",
         name: "English",
@@ -387,6 +387,28 @@ pub static DATE_LANGUAGES: [DateLanguage; 35] = [
         months_short: ["saus.", "vas.", "kov.", "bal.", "geg.", "birž.", "liep.", "rugpj.", "rugs.", "spal.", "lapkr.", "gruod."],
         days: ["sekmadienis", "pirmadienis", "antradienis", "trečiadienis", "ketvirtadienis", "penktadienis", "šeštadienis"],
         days_short: ["sk", "pr", "an", "tr", "kt", "pn", "št"],
+    },
+    DateLanguage {
+        code: "ka",
+        name: "ქართული",
+        months: [
+            "იანვარი",
+            "თებერვალი",
+            "მარტი",
+            "აპრილი",
+            "მაისი",
+            "ივნისი",
+            "ივლისი",
+            "აგვისტო",
+            "სექტემბერი",
+            "ოქტომბერი",
+            "ნოემბერი",
+            "დეკემბერი",
+        ],
+        months_with_day: None,
+        months_short: ["იან", "თებ", "მარ", "აპრ", "მაი", "ივნ", "ივლ", "აგვ", "სექ", "ოქტ", "ნოე", "დეკ"],
+        days: ["კვირა", "ორშაბათი", "სამშაბათი", "ოთხშაბათი", "ხუთშაბათი", "პარასკევი", "შაბათი"],
+        days_short: ["კვ", "ორ", "სამ", "ოთხ", "ხუთ", "პარ", "შაბ"],
     },
     // Indonesian. Month and weekday names are the same with and after a day number, so
     // `months_with_day` is `None`.

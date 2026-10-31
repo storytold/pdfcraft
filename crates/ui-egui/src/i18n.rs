@@ -159,7 +159,7 @@ fn plural_sl(n: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 35] = [
+pub static LANGUAGES: [LangInfo; 36] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("i18n/ja.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
@@ -249,6 +249,11 @@ pub static LANGUAGES: [LangInfo; 35] = [
     LangInfo { code: "tr", name: "Türkçe", source: include_str!("i18n/tr.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
     // Lithuanian; every `lt-*` locale (`lt-LT`, `lt_LT.UTF-8`) resolves here. Three plural forms (one, few, other).
     LangInfo { code: "lt", name: "Lietuvių", source: include_str!("i18n/lt.tsv"), plural: plural_lithuanian, rtl: false, catalog: OnceLock::new() },
+    // Georgian; every `ka-*` locale (`ka-GE`, `ka_GE.UTF-8`) resolves here. Nouns stay singular after
+    // a numeral, so one plural form.
+    LangInfo {
+        code: "ka", name: "ქართული", source: include_str!("i18n/ka.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new()
+    },
     // Indonesian; every `id-*` locale (`id-ID`, `id_ID.UTF-8`) resolves here. CLDR `id` counts have
     // one form ("other"), so `@plural` entries list a single form.
     LangInfo { code: "id", name: "Bahasa Indonesia", source: include_str!("i18n/id.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
@@ -412,6 +417,7 @@ impl Lang {
             "th" => "Thai",
             "ca" => "Catalan",
             "ro" => "Romanian",
+            "ka" => "Georgian",
             "lo" => "Lao",
             "hi" => "Hindi",
             "ko" => "Korean",
