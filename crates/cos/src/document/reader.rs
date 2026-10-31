@@ -3,7 +3,7 @@ use super::state::SECTION_READS;
 use super::xref::{
     MAX_COMPACT_XREF_BYTES, MAX_COMPACT_XREF_ROWS, Revision, XrefEntry, XrefIndex, XrefRange, XrefRevisionSection, XrefSection, XrefSectionData,
 };
-use super::{Arc, BTreeMap, CosError, Dict, Document, HashMap, HashSet, Lexer, ObjRef, Object, is_whitespace, parse_indirect, parse_indirect_shared};
+use super::{Arc, BTreeMap, CosError, Dict, Document, HashMap, HashSet, Lexer, ObjRef, Object, is_whitespace, parse_indirect};
 
 impl Document {
     #[allow(clippy::type_complexity)]
@@ -124,7 +124,13 @@ impl Document {
         Ok(Some((XrefIndex::Compact { revisions: sections, max_num, has_entries }, trailer, revisions)))
     }
 
+    /// Where the cross-reference section at file offset `off` is in `data`.
+    fn section_at(&self, off: usize) -> Result<usize, CosError> {
+        self.held_offset(off).ok_or(CosError::Syntax { offset: off, detail: "cross-reference section inside a stream body".into() })
+    }
+
     fn read_compact_section(&self, off: usize) -> Result<Option<(XrefSection, Dict, bool)>, CosError> {
+        let off = self.section_at(off)?;
         let data = &self.data;
         let mut lx = Lexer::new(data, off);
         if lx.eat_keyword(b"xref") {
@@ -151,7 +157,7 @@ impl Document {
                 if !valid_xref_range(start, count) || count > 10_000_000 {
                     return Err(CosError::Syntax { offset: lx.pos, detail: "invalid xref object range".into() });
                 }
-                let shifted = subsection_start(data, self.header_offset, lx.pos, start, count);
+                let shifted = subsection_start(data, self.header_offset, lx.pos, start, count, &|at| self.held_offset(at));
                 renumbered |= shifted != start;
                 let start = shifted;
                 let Some(next_rows) = usize::try_from(count).ok().and_then(|count| row_count.checked_add(count)) else { return Ok(None) };
@@ -441,6 +447,7 @@ impl Document {
     ) -> Result<(Dict, bool), CosError> {
         #[cfg(test)]
         SECTION_READS.with(|c| c.set(c.get() + 1));
+        let off = self.section_at(off)?;
         let data = &self.data;
         let mut lx = Lexer::new(data, off);
         if lx.eat_keyword(b"xref") {
@@ -457,7 +464,7 @@ impl Document {
                 if !valid_xref_range(start, count) || count > 10_000_000 {
                     return Err(CosError::Syntax { offset: lx.pos, detail: "invalid xref object range".into() });
                 }
-                let shifted = subsection_start(data, self.header_offset, lx.pos, start, count);
+                let shifted = subsection_start(data, self.header_offset, lx.pos, start, count, &|at| self.held_offset(at));
                 if shifted != start {
                     log.push(format!("xref subsection at {off} is numbered from 1 but begins with object 0's entry; read from 0"));
                 }
@@ -678,7 +685,7 @@ impl Document {
             if trailer.as_ref().is_some_and(|((catalog, p), _)| *catalog && *p > at) {
                 continue;
             }
-            if let Ok((_, Object::Stream(s))) = parse_indirect_shared(&data, at, &|_| None, &self.endstreams)
+            if let Ok((_, Object::Stream(s))) = self.parse_at(at, &|_| None)
                 && s.dict.name(b"Type") == Some(b"XRef")
                 && let Some(r) = rank(at, &s.dict)
                 && trailer.as_ref().is_none_or(|(best, _)| r > *best)
@@ -824,7 +831,7 @@ pub(super) fn rfind(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 /// from 0 when its second row, read that way, locates an object that is indeed numbered 1, at
 /// that offset or, as `load` reads offsets, relative to a header shifted by `header_offset`.
 /// `rows` is the position just after the subsection header.
-fn subsection_start(data: &[u8], header_offset: usize, rows: usize, start: i64, count: i64) -> i64 {
+fn subsection_start(data: &[u8], header_offset: usize, rows: usize, start: i64, count: i64, held: &dyn Fn(usize) -> Option<usize>) -> i64 {
     if start != 1 || count < 2 {
         return start;
     }
@@ -840,9 +847,7 @@ fn subsection_start(data: &[u8], header_offset: usize, rows: usize, start: i64, 
     let (Some(0), Some(65535), true) = row() else { return start };
     let (Some(second), _, false) = row() else { return start };
     let object_one = |at: usize| {
-        if at >= data.len() {
-            return false;
-        }
+        let Some(at) = held(at).filter(|at| *at < data.len()) else { return false };
         let mut obj = Lexer::new(data, at);
         matches!((obj.object(), obj.object()), (Ok(Object::Int(1)), Ok(Object::Int(_)))) && obj.eat_keyword(b"obj")
     };

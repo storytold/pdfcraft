@@ -8,8 +8,9 @@
 //! Done: every cross-reference form (tables, streams, hybrid `/XRefStm`), object streams, repair
 //! by scanning, encryption on load and save (R2–R6, crypt filters, `/EFF`), incremental writing,
 //! and full saves that pack objects into compressed object streams with a cross-reference stream.
-//! Not yet: streaming very large files within a memory budget (`ByteSource`,
-//! `core.lazy-loading`), and linearized output (`core.linearization`, M11). See the README.
+//! Very large files can stay on disk, with only their structure in memory ([`OnDiskFile`],
+//! `core.lazy-loading`), for reading; editing one still takes the whole file. Not yet: linearized
+//! output (`core.linearization`, M11). See the README.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -17,6 +18,7 @@ mod budget;
 mod bytes;
 mod document;
 mod object;
+mod on_disk;
 pub mod page_labels;
 mod parser;
 mod security;
@@ -26,6 +28,7 @@ pub use budget::{DecodeBudget, MAX_PAGE_DECODED, MAX_PAGE_FORMS};
 pub use bytes::Bytes;
 pub use document::{Document, ReadState, Revision, SourceIdentity, XrefEntry};
 pub use object::{Dict, MAX_DECODED, MAX_JBIG2_GLOBALS, Name, ObjRef, Object, PdfString, Stream};
+pub use on_disk::{ByteSource, DiskBody, OnDiskFile};
 pub use parser::{Lexer, is_whitespace, parse_indirect};
 pub use pdfcraft_crypt::{
     Algorithm, Auth, Method as CryptMethod, NewEncryption, Permissions, SecurityHandler, effective_password, pdfdoc_byte, pdfdoc_char,

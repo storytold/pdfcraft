@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use crate::object::{Dict, ObjRef, Object, PdfString, Stream};
+use crate::on_disk::OnDiskFile;
 use crate::{Bytes, CosError};
 
 const MAX_DEPTH: usize = 128;
@@ -23,7 +24,7 @@ pub(crate) fn is_delimiter(b: u8) -> bool {
     matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%')
 }
 
-fn is_regular(b: u8) -> bool {
+pub(crate) fn is_regular(b: u8) -> bool {
     !is_whitespace(b) && !is_delimiter(b)
 }
 
@@ -410,19 +411,21 @@ fn hexval(b: u8) -> Option<u8> {
 /// Parse an indirect object at `offset`: `N G obj <object> [stream…endstream] endobj`.
 /// `resolve_length` resolves an indirect `/Length`. Returns the object and its (num, gen).
 pub fn parse_indirect(data: &[u8], offset: usize, resolve_length: &dyn Fn(ObjRef) -> Option<i64>) -> Result<(ObjRef, Object), CosError> {
-    parse_indirect_in(data, None, offset, resolve_length, None)
+    parse_indirect_in(data, None, offset, resolve_length, None, None)
 }
 
 /// [`parse_indirect`] for a document's own bytes: stream data points into `data` instead of
 /// being copied out of it.
-/// `endstreams` is the document's [`EndstreamIndex`] for `data`.
+/// `endstreams` is the document's [`EndstreamIndex`] for `data`; `on_disk` is the file `data` was
+/// held from, when stream bodies stayed there.
 pub(crate) fn parse_indirect_shared(
     data: &Arc<Vec<u8>>,
     offset: usize,
     resolve_length: &dyn Fn(ObjRef) -> Option<i64>,
     endstreams: &EndstreamIndex,
+    on_disk: Option<&Arc<OnDiskFile>>,
 ) -> Result<(ObjRef, Object), CosError> {
-    parse_indirect_in(data, Some(data), offset, resolve_length, Some(endstreams))
+    parse_indirect_in(data, Some(data), offset, resolve_length, Some(endstreams), on_disk)
 }
 
 /// Where `endstream` occurs in a document's bytes, found once, the first time a stream's
@@ -442,6 +445,7 @@ fn parse_indirect_in(
     offset: usize,
     resolve_length: &dyn Fn(ObjRef) -> Option<i64>,
     endstreams: Option<&EndstreamIndex>,
+    on_disk: Option<&Arc<OnDiskFile>>,
 ) -> Result<(ObjRef, Object), CosError> {
     let mut lx = Lexer::new(data, offset);
     lx.skip_ws();
@@ -482,6 +486,11 @@ fn parse_indirect_in(
             _ => {}
         }
         let start = lx.pos;
+        if let Some((file, body)) = on_disk.and_then(|file| Some((file, file.body_at(start)?))) {
+            let mut dict = dict.clone();
+            dict.set(b"Length".to_vec(), Object::Int(i64::try_from(body.len).unwrap_or(i64::MAX)));
+            return Ok((id, Object::Stream(Stream { dict, raw: Bytes::on_disk(file.clone(), body) })));
+        }
         let declared = match dict.get(b"Length") {
             Some(Object::Int(n)) => Some(*n),
             Some(Object::Ref(r)) => resolve_length(*r),

@@ -193,7 +193,7 @@ pub(super) fn owned_bytes(object: &Object, data: &Arc<Vec<u8>>, depth: usize) ->
     match object {
         Object::String(s) => s.bytes.len(),
         Object::Stream(s) => {
-            let own = if s.raw.shares(data) { 0 } else { s.raw.len() };
+            let own = if s.raw.shares(data) { 0 } else { s.raw.stored_len() };
             s.dict.iter().fold(own, |n, (_, v)| n.saturating_add(owned_bytes(v, data, depth + 1)))
         }
         Object::Array(a) => a.iter().fold(0usize, |n, v| n.saturating_add(owned_bytes(v, data, depth + 1))),
