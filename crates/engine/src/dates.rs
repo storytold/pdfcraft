@@ -698,10 +698,10 @@ fn runs(fmt: &str) -> Vec<(char, usize, bool)> {
 /// letters is copied as is; a month or day out of range shows as its number.
 pub fn format_day(fmt: &str, (y, m, d): (i64, u32, u32), lang: &DateLanguage) -> String {
     let runs = runs(fmt);
-    let with_day = runs.iter().any(|&(c, n, escaped)| !escaped && c == 'd' && n <= 2);
     let month = (m as usize).checked_sub(1);
     let weekday = weekday(y, m, d);
     let mut out = String::new();
+    let mut day_before_month = false;
     for (c, n, escaped) in runs {
         match (c, n) {
             _ if escaped => out.push(c),
@@ -709,9 +709,9 @@ pub fn format_day(fmt: &str, (y, m, d): (i64, u32, u32), lang: &DateLanguage) ->
             ('y', _) => out.push_str(&format!("{:02}", y.rem_euclid(100))),
             ('m', 3..) => {
                 let names = if n >= 4 {
-                    lang.months_with_day.filter(|_| with_day).unwrap_or(lang.months)
+                    lang.months_with_day.filter(|_| day_before_month).unwrap_or(lang.months)
                 } else {
-                    lang.months_short_with_day.filter(|_| with_day).unwrap_or(lang.months_short)
+                    lang.months_short_with_day.filter(|_| day_before_month).unwrap_or(lang.months_short)
                 };
                 match month.and_then(|i| names.get(i)) {
                     Some(name) => out.push_str(name),
@@ -727,8 +727,14 @@ pub fn format_day(fmt: &str, (y, m, d): (i64, u32, u32), lang: &DateLanguage) ->
                     None => out.push_str(&d.to_string()),
                 }
             }
-            ('d', 2) => out.push_str(&format!("{d:02}")),
-            ('d', _) => out.push_str(&d.to_string()),
+            ('d', 2) => {
+                day_before_month = true;
+                out.push_str(&format!("{d:02}"));
+            }
+            ('d', _) => {
+                day_before_month = true;
+                out.push_str(&d.to_string());
+            }
             _ => out.extend(std::iter::repeat_n(c, n)),
         }
     }
@@ -826,6 +832,8 @@ mod tests {
         let day = (2026, 4, 8);
         assert_eq!(format_day("d mmmm yyyy", day, lang), "8 באפריל 2026");
         assert_eq!(format_day("d mmm yyyy", day, lang), "8 באפר׳ 2026");
+        assert_eq!(format_day("mmmm d, yyyy", day, lang), "אפריל 8, 2026");
+        assert_eq!(format_day("mmm d, yyyy", day, lang), "אפר׳ 8, 2026");
         assert_eq!(format_day("mmmm", day, lang), "אפריל");
         assert_eq!(format_day("mmm", day, lang), "אפר׳");
     }
