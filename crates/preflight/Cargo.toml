@@ -17,7 +17,7 @@ pdfcraft-filters = { workspace = true }
 pdfcraft-model = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-roxmltree = "0.20"
+roxmltree = "0.21"
 
 [dev-dependencies]
 flate2 = { workspace = true }

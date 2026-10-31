@@ -96,7 +96,7 @@ pub(crate) fn panel(
     let chosen = builtin.iter().chain(&single).find(|p| p.id == state.profile).cloned().or_else(|| builtin.first().cloned());
     let shown = chosen.as_ref().map(|p| say(&p.name)).unwrap_or_default();
     let before = state.profile.clone();
-    egui::ComboBox::from_id_salt("preflight-profile").selected_text(shown).width((ui.available_width() - 8.0).max(80.0)).show_ui(ui, |ui| {
+    craft_ui::ComboBox::from_id_salt("preflight-profile").selected_text(shown).width((ui.available_width() - 8.0).max(80.0)).show_ui(ui, |ui| {
         for p in &builtin {
             ui.selectable_value(&mut state.profile, p.id.clone(), say(&p.name));
         }
