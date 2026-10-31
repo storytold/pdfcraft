@@ -2541,3 +2541,11 @@ animation effects	Off	Изключени
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Опции за този отговор
 	Export value	Стойност за експортиране
+# Fast Web View (linearized saving)
+	Saving	Записване
+	Save As optimizes for Fast Web View	„Запиши като“ оптимизира за бърз уеб преглед
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	„Запиши като“ записва линеаризиран файл, чиято първа страница се показва, преди останалото да е изтеглено. „Запиши“ добавя промените в края на файла, което изключва бързия уеб преглед.
+	Fast Web View	Бърз уеб преглед
+	Saved {name}, optimized for Fast Web View	Записан: {name}, оптимизиран за бърз уеб преглед
+	Saved {name} without Fast Web View: {e}	Записан без бърз уеб преглед: {name} ({e})
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	Записан: {name}. Бързият уеб преглед е изключен: „Запиши“ добавя промените в края на файла.

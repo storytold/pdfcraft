@@ -2491,3 +2491,11 @@ animation effects	Off	Выкл
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметры этого ответа
 	Export value	Значение экспорта
+# Fast Web View (linearized saving)
+	Saving	Сохранение
+	Save As optimizes for Fast Web View	«Сохранить как» оптимизирует для быстрого веб-просмотра
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	«Сохранить как» записывает линеаризованный файл: его первая страница отображается, пока остальное ещё загружается. «Сохранить» дописывает изменения в конец файла, и быстрый веб-просмотр отключается.
+	Fast Web View	Быстрый веб-просмотр
+	Saved {name}, optimized for Fast Web View	Сохранено: {name}, оптимизировано для быстрого веб-просмотра
+	Saved {name} without Fast Web View: {e}	Сохранено без быстрого веб-просмотра: {name}. Причина: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	Сохранено: {name}. Быстрый веб-просмотр отключён: «Сохранить» дописывает изменения в конец файла.

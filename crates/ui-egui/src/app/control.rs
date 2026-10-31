@@ -350,6 +350,13 @@ impl PdfCraftApp {
                     _ => return Err("flatten-fill-sign must be true or false".into()),
                 };
             }
+            ("fast-web-view", _) => {
+                self.save_as_fast_web_view = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("fast-web-view must be true or false".into()),
+                };
+            }
             ("comment", Some(v)) => {
                 // `--comment 2:4` selects the 4th annotation of page 2 (1-based, as comment_list reports).
                 let (p, i) = value.split_once(':').ok_or("comment: PAGE:INDEX")?;

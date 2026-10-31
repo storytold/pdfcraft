@@ -51,6 +51,22 @@ impl Session {
         guard(|| write_full(&cos, &opts)).map_err(EditError::Write)?.map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
     }
 
+    /// Save As optimized for Fast Web View: the current state as a linearized file (ISO 32000-2
+    /// Annex F), a full rewrite that puts the first page's objects first with hint tables for
+    /// the rest. Refused for signed documents ([`EditError::Signed`]), like any full rewrite, and
+    /// for documents [`pdfcraft_cos::write_linearized`] cannot linearize (no pages, a page listed
+    /// twice), with the reason. The result counts the pages that received attributes they used to
+    /// inherit from the page tree.
+    pub fn save_linearized_bytes(&self, id: DocId) -> Result<pdfcraft_cos::Linearized, EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        if doc.is_signed() {
+            return Err(EditError::Signed);
+        }
+        let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
+        let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
+        guard(|| pdfcraft_cos::write_linearized(&editor.cos, &opts)).map_err(EditError::Write)?.map_err(|e| EditError::Write(e.to_string()))
+    }
+
     /// Check that `bytes`, from [`Self::save_bytes`] or [`Self::save_full_bytes`], reopen as this
     /// document before they are written (#1698): [`Self::mark_saved`] only finds out after the
     /// file has been replaced. Same error as `mark_saved`.
@@ -81,6 +97,7 @@ impl Session {
             editor.saved = bytes;
             editor.saved_keys = keys;
             editor.unsaved_file = false;
+            editor.saved_linearization = editor.cos.linearization();
         }
         if let Some(p) = path {
             doc.name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());

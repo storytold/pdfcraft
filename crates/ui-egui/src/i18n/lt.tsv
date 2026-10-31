@@ -2839,3 +2839,11 @@ theme	Appearance	Išvaizda
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Šio atsakymo parinktys
 	Export value	Eksporto reikšmė
+# Fast Web View (linearized saving)
+	Saving	Įrašymas
+	Save As optimizes for Fast Web View	„Įrašyti kaip“ optimizuoja greitam peržiūrėjimui internete
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	„Įrašyti kaip“ įrašo linearizuotą failą, kurio pirmasis puslapis parodomas dar neatsisiuntus likusios dalies. „Įrašyti“ prideda pakeitimus failo gale, todėl greitas peržiūrėjimas internete išjungiamas.
+	Fast Web View	Greitas peržiūrėjimas internete
+	Saved {name}, optimized for Fast Web View	Įrašyta: {name}, optimizuota greitam peržiūrėjimui internete
+	Saved {name} without Fast Web View: {e}	Įrašyta be greito peržiūrėjimo internete: {name} ({e})
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	Įrašyta: {name}. Greitas peržiūrėjimas internete išjungtas: „Įrašyti“ prideda pakeitimus failo gale.

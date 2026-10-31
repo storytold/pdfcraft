@@ -112,7 +112,7 @@ fn write_string(s: &PdfString, out: &mut Vec<u8>) {
     out.push(b')');
 }
 
-fn write_dict(d: &Dict, out: &mut Vec<u8>) {
+pub(crate) fn write_dict(d: &Dict, out: &mut Vec<u8>) {
     out.extend_from_slice(b"<<");
     for (k, v) in d.iter() {
         write_name(k, out);
@@ -133,7 +133,7 @@ fn write_stream(s: &Stream, out: &mut Vec<u8>) {
 
 /// The object as written: encrypted with its (output) number when the document is encrypted,
 /// except the `/Encrypt` dictionary itself (`source_num` is its number in the source document).
-fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &'a Object) -> Cow<'a, Object> {
+pub(crate) fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &'a Object) -> Cow<'a, Object> {
     match doc.output_security() {
         (Some(h), encrypt_num) if Some(source_num) != encrypt_num => {
             let pass = if doc.encryption_changed() { crate::security::Pass::EncryptReplacing } else { crate::security::Pass::Encrypt };
@@ -143,7 +143,7 @@ fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &
     }
 }
 
-fn write_indirect(num: u32, generation: u16, o: &Object, out: &mut Vec<u8>) {
+pub(crate) fn write_indirect(num: u32, generation: u16, o: &Object, out: &mut Vec<u8>) {
     let _ = writeln!(out, "{num} {generation} obj");
     serialize(o, out);
     out.extend_from_slice(b"\nendobj\n");
@@ -403,7 +403,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
 /// Object `r` read again for writing. The traversal read it once and only kept its number, so
 /// a second read that fails, finds nothing or finds a different kind of object must fail the
 /// save rather than write `null` in its place.
-fn reread(reader: &mut ObjectReader, r: ObjRef, is_stream: bool) -> Result<Arc<Object>, CosError> {
+pub(crate) fn reread(reader: &mut ObjectReader, r: ObjRef, is_stream: bool) -> Result<Arc<Object>, CosError> {
     let o = reader.try_get(r)?;
     if matches!(*o, Object::Null) || matches!(*o, Object::Stream(_)) != is_stream {
         return Err(CosError::Syntax { offset: 0, detail: format!("object {} read differently while saving; nothing was written", r.num) });
@@ -444,7 +444,7 @@ impl ObjectStreamBatch {
 
 /// Trailer keys a full rewrite generates itself. Everything else is copied, with references
 /// renumbered, so a save does not drop metadata the reader accepted.
-fn trailer_key_rewritten(key: &[u8]) -> bool {
+pub(crate) fn trailer_key_rewritten(key: &[u8]) -> bool {
     matches!(
         key,
         b"Size" | b"Prev" | b"XRefStm" | b"Type" | b"W" | b"Index" | b"Filter" | b"DecodeParms" | b"Length" | b"Root" | b"Info" | b"Encrypt" | b"ID"
@@ -486,7 +486,7 @@ pub(crate) fn unlinked_additions(doc: &Document) -> HashSet<u32> {
     pending.into_keys().collect()
 }
 
-fn collect_refs(o: &Object, f: &mut impl FnMut(ObjRef)) {
+pub(crate) fn collect_refs(o: &Object, f: &mut impl FnMut(ObjRef)) {
     match o {
         Object::Ref(r) => f(*r),
         Object::Array(a) => a.iter().for_each(|x| collect_refs(x, f)),
@@ -496,7 +496,7 @@ fn collect_refs(o: &Object, f: &mut impl FnMut(ObjRef)) {
     }
 }
 
-fn renumber(o: &Object, map: &HashMap<ObjRef, u32>) -> Object {
+pub(crate) fn renumber(o: &Object, map: &HashMap<ObjRef, u32>) -> Object {
     match o {
         Object::Ref(r) => map.get(r).map(|n| Object::Ref(ObjRef::new(*n, 0))).unwrap_or(Object::Null),
         Object::Array(a) => Object::Array(a.iter().map(|x| renumber(x, map)).collect()),
@@ -507,7 +507,7 @@ fn renumber(o: &Object, map: &HashMap<ObjRef, u32>) -> Object {
 }
 
 /// Classic xref table with one subsection per run of consecutive numbers (§7.5.4).
-fn write_xref_table(out: &mut Vec<u8>, offsets: &BTreeMap<u32, (u64, u16, bool)>, include_zero: bool) {
+pub(crate) fn write_xref_table(out: &mut Vec<u8>, offsets: &BTreeMap<u32, (u64, u16, bool)>, include_zero: bool) {
     out.extend_from_slice(b"xref\n");
     let mut all: Vec<(u32, (u64, u16, bool))> = offsets.iter().map(|(k, v)| (*k, *v)).collect();
     if include_zero {
@@ -598,7 +598,7 @@ fn write_xref_stream(out: &mut Vec<u8>, base: u64, trailer: &mut Dict, mut rows:
     trailer.set(b"Size".to_vec(), Object::Int(num as i64 + 1));
 }
 
-fn stamp_mod_date(doc: &mut Document, opts: &SaveOptions) {
+pub(crate) fn stamp_mod_date(doc: &mut Document, opts: &SaveOptions) {
     let Some(date) = &opts.mod_date else { return };
     let date = Object::String(PdfString::literal(date.as_bytes().to_vec()));
     match doc.trailer().get(b"Info").cloned() {
@@ -615,7 +615,7 @@ fn stamp_mod_date(doc: &mut Document, opts: &SaveOptions) {
 }
 
 /// Keep an existing `/ID`, or create one (two equal 16-byte strings, §14.4).
-fn ensure_id(trailer: &mut Dict, opts: &SaveOptions, content: &[u8]) {
+pub(crate) fn ensure_id(trailer: &mut Dict, opts: &SaveOptions, content: &[u8]) {
     if matches!(trailer.get(b"ID"), Some(Object::Array(a)) if a.len() == 2) {
         return;
     }

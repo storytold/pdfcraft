@@ -2577,3 +2577,11 @@ animation effects	Off	Ki
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	A válasz beállításai
 	Export value	Exportérték
+# Fast Web View (linearized saving)
+	Saving	Mentési beállítások
+	Save As optimizes for Fast Web View	A Mentés másként gyors webes megjelenítésre optimalizál
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	A Mentés másként linearizált fájlt ír, amelynek első oldala már a többi rész letöltése előtt megjelenik. A Mentés a fájl végéhez fűzi a módosításokat, ami kikapcsolja a gyors webes megjelenítést.
+	Fast Web View	Gyors webes megjelenítés
+	Saved {name}, optimized for Fast Web View	{name} mentve, gyors webes megjelenítésre optimalizálva
+	Saved {name} without Fast Web View: {e}	{name} mentve gyors webes megjelenítés nélkül: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	{name} mentve. A gyors webes megjelenítés ki van kapcsolva: a Mentés a fájl végéhez fűzi a módosításokat.

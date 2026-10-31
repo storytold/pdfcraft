@@ -7,6 +7,8 @@ pub struct PendingOverwrite {
     pub id: pdfcraft_engine::DocId,
     pub dest: String,
     target: SaveTarget,
+    /// Save As with "Save As optimizes for Fast Web View" on: write it linearized.
+    fast_web_view: bool,
     /// What was to run once the document is written (close its tab, quit).
     after: Box<dyn FnOnce(&mut PdfCraftApp) + Send>,
 }
@@ -48,6 +50,8 @@ impl PdfCraftApp {
         let Some(id) = self.views.get(index).map(|v| v.id) else { return false };
         let Some(doc) = self.session.get(id) else { return false };
         let (name, path) = (doc.name.clone(), doc.path.clone());
+        // Save As rewrites the file linearized when the preference asks for it; Save appends.
+        let fast_web_view = target == SaveTarget::As && self.save_as_fast_web_view;
         #[cfg(not(target_arch = "wasm32"))]
         {
             let doc_path = path.clone();
@@ -62,12 +66,12 @@ impl PdfCraftApp {
                     let dialog = in_document_folder(dialog, doc_path.as_deref());
                     // The bytes are taken once the user has chosen, so edits made meanwhile are saved too.
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, dest| {
-                        app.save_doc_to_then(id, &dest.to_string_lossy(), target, Box::new(after));
+                        app.save_doc_to_then(id, &dest.to_string_lossy(), target, fast_web_view, Box::new(after));
                     });
                     return false;
                 }
             };
-            self.save_doc_to_then(id, &destination, target, Box::new(after))
+            self.save_doc_to_then(id, &destination, target, fast_web_view, Box::new(after))
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -75,13 +79,18 @@ impl PdfCraftApp {
             if !self.flatten_fill_sign_for_save(id) {
                 return false;
             }
-            let bytes = match self.session.save_bytes(id) {
+            // The web build downloads what Save writes, as on `main`, or the linearized file.
+            let (bytes, not_optimized) = self.bytes_to_save(id, fast_web_view, false);
+            let bytes = match bytes {
                 Ok(b) => b,
                 Err(e) => {
                     self.notify_fmt("Couldn't save {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
                     return false;
                 }
             };
+            if let Some(e) = &not_optimized {
+                self.notify_fmt("Saved {name} without Fast Web View: {e}", &[("name", &name), ("e", e)]);
+            }
             // An embedding page that asked for saves (`?host=parent`) gets the bytes; otherwise
             // the browser downloads them.
             let to_host = self.host_save.is_some();
@@ -122,14 +131,21 @@ impl PdfCraftApp {
     /// `pending_overwrite` behind [`Dialog::OverwriteChanged`](crate::Dialog::OverwriteChanged).
     /// Returns `true` if written now.
     #[cfg(not(target_arch = "wasm32"))]
-    fn save_doc_to_then(&mut self, id: pdfcraft_engine::DocId, dest: &str, target: SaveTarget, after: Box<dyn FnOnce(&mut Self) + Send>) -> bool {
+    fn save_doc_to_then(
+        &mut self,
+        id: pdfcraft_engine::DocId,
+        dest: &str,
+        target: SaveTarget,
+        fast_web_view: bool,
+        after: Box<dyn FnOnce(&mut Self) + Send>,
+    ) -> bool {
         let own = self.session.get(id).and_then(|d| d.path.as_deref()).is_some_and(|p| crate::same_file(p, dest));
         if own && self.watch.disk_differs(id, dest, self.session.get(id).map(|d| d.saved_bytes())) {
-            self.pending_overwrite = Some(PendingOverwrite { id, dest: dest.to_string(), target, after });
+            self.pending_overwrite = Some(PendingOverwrite { id, dest: dest.to_string(), target, fast_web_view, after });
             self.dialog = Some(crate::Dialog::OverwriteChanged);
             return false;
         }
-        let saved = self.save_doc_to(id, dest, target);
+        let saved = self.save_doc_to(id, dest, target, fast_web_view);
         if saved {
             after(self);
         }
@@ -140,7 +156,7 @@ impl PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn overwrite_changed_file(&mut self) {
         let Some(p) = self.pending_overwrite.take() else { return };
-        if self.save_doc_to(p.id, &p.dest, p.target) {
+        if self.save_doc_to(p.id, &p.dest, p.target, p.fast_web_view) {
             (p.after)(self);
         }
     }
@@ -153,10 +169,31 @@ impl PdfCraftApp {
             self.save_then(index, SaveTarget::As, p.after);
         }
     }
+    /// The bytes a save of document `id` writes: linearized for Fast Web View when asked (Save As
+    /// with the preference on), otherwise a clean full copy when `full` (Save As to another file,
+    /// #2165) or what Save writes. A document that can't be linearized (a signed one, whose
+    /// signatures a rewrite would break, or one without pages) is saved the other way rather than
+    /// not at all, and the reason comes back for the notice.
+    pub(crate) fn bytes_to_save(
+        &self,
+        id: pdfcraft_engine::DocId,
+        fast_web_view: bool,
+        full: bool,
+    ) -> (Result<std::sync::Arc<Vec<u8>>, pdfcraft_engine::EditError>, Option<String>) {
+        let plain = || if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) };
+        if fast_web_view {
+            match self.session.save_linearized_bytes(id) {
+                Ok(linearized) => return (Ok(std::sync::Arc::new(linearized.bytes)), None),
+                Err(e) => return (plain(), Some(e.to_string())),
+            }
+        }
+        (plain(), None)
+    }
 
-    /// Write document `id` to `dest` and make it the document's file. Returns `true` if written.
+    /// Write document `id` to `dest` and make it the document's file, linearized for Fast Web
+    /// View when `fast_web_view` (see [`Self::bytes_to_save`]). Returns `true` if written.
     #[cfg(not(target_arch = "wasm32"))]
-    fn save_doc_to(&mut self, id: pdfcraft_engine::DocId, dest: &str, target: SaveTarget) -> bool {
+    fn save_doc_to(&mut self, id: pdfcraft_engine::DocId, dest: &str, target: SaveTarget, fast_web_view: bool) -> bool {
         // Save As answers on a later frame: commit what was typed meanwhile, too (#166), even
         // if another tab is active by then.
         if !self.commit_typing_in(id) || !self.flatten_fill_sign_for_save(id) {
@@ -175,7 +212,9 @@ impl PdfCraftApp {
             self.notify_tr("The document was closed before it could be saved.");
             return false;
         };
-        let bytes = if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) };
+        let was_fast = self.session.get(id).and_then(|d| d.linearization()).is_some_and(|l| l.is_fast_web_view());
+        let saved_before = self.session.get(id).map(|d| d.saved_bytes());
+        let (bytes, not_optimized) = self.bytes_to_save(id, fast_web_view, full);
         let bytes = match bytes.and_then(|b| self.session.check_save(id, &b).map(|()| b)) {
             Ok(b) => b,
             Err(e) => {
@@ -189,6 +228,7 @@ impl PdfCraftApp {
         }
         // Our own write is not a change on disk to reload (#431).
         self.watch.known_now(id, dest);
+        let appended = !full && saved_before.is_some_and(|b| bytes.starts_with(&b));
         match self.session.mark_saved(id, bytes, Some(dest.to_string())) {
             Ok(()) => {
                 self.forget_recovery(id);
@@ -199,7 +239,19 @@ impl PdfCraftApp {
                     // Saving over a version that changed on disk keeps this one: nothing to ask.
                     view.disk_changed = false;
                 }
-                self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
+                let name = short_name(dest);
+                let fast_now = self.session.get(id).and_then(|d| d.linearization()).is_some_and(|l| l.is_fast_web_view());
+                match not_optimized {
+                    Some(e) => self.notify_fmt("Saved {name} without Fast Web View: {e}", &[("name", &name), ("e", &e)]),
+                    None if fast_web_view => self.notify_fmt("Saved {name}, optimized for Fast Web View", &[("name", &name)]),
+                    // An incremental save appends after the first page's data (Annex F): say that
+                    // the file lost Fast Web View. A save written in full (Save As a copy, or a
+                    // change of encryption) appends nothing.
+                    None if was_fast && !fast_now && appended => {
+                        self.notify_fmt("Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.", &[("name", &name)]);
+                    }
+                    None => self.notify_fmt("Saved {name}", &[("name", &name)]),
+                }
                 #[cfg(target_os = "macos")]
                 crate::macos_association::repair(std::path::Path::new(dest));
                 true

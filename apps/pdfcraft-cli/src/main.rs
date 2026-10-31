@@ -75,8 +75,9 @@ pdfcraft-cli info   <file.pdf> [--password PW]            document summary as JS
 pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
 pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
 pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
-                      [--insert-blank 1] [--title T] [--author A] [--full]
-                      (options run in order; page numbers refer to the document after the earlier options)
+                      [--insert-blank 1] [--title T] [--author A] [--full] [--fast-web-view]
+                      (options run in order; page numbers refer to the document after the earlier options;
+                      --fast-web-view writes it linearized: a full rewrite whose first page loads first)
 pdfcraft-cli combine <a.pdf> <b.pdf> … --out combined.pdf
 pdfcraft-cli extract <in.pdf> --pages 1,3,5-8 --out out.pdf    (pages and ranges, in the order given)
 pdfcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]

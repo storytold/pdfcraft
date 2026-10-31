@@ -72,12 +72,13 @@ pub(crate) fn check_one(args: &[String]) -> Result<(), CliError> {
     stdout_line(format_args!("{line}"))?;
     Ok(())
 }
-
-/// Open with cos, touch every object, edit the catalog, save incrementally and in full (both
-/// output styles), and reopen each result. Errors are fine; panics, hangs and aborts are bugs.
+/// Open with cos, touch every object, edit the catalog, save incrementally, in full (both
+/// output styles) and linearized, and reopen each result. Errors are fine; panics, hangs and
+/// aborts are bugs.
 fn edit_round_trip(bytes: &[u8]) {
-    use pdfcraft_cos::{Document, Object, SaveOptions, write_full, write_incremental};
+    use pdfcraft_cos::{Document, Object, SaveOptions, write_full, write_incremental, write_linearized};
     let Ok(mut doc) = Document::open(Arc::new(bytes.to_vec())) else { return };
+    let _ = doc.linearization();
     for num in doc.object_numbers().into_iter().take(20_000) {
         if let Ok(o) = doc.try_get(num)
             && let Object::Stream(s) = &*o
@@ -89,12 +90,14 @@ fn edit_round_trip(bytes: &[u8]) {
         let _ = doc.update_dict(root, |d| d.set(b"PdfCraftFuzz".to_vec(), Object::Bool(true)));
     }
     let classic = SaveOptions { object_streams: false, ..SaveOptions::default() };
-    for out in [write_incremental(&doc, &SaveOptions::default()), write_full(&doc, &SaveOptions::default()), write_full(&doc, &classic)]
+    let linearized = write_linearized(&doc, &SaveOptions::default()).map(|l| l.bytes);
+    for out in [write_incremental(&doc, &SaveOptions::default()), write_full(&doc, &SaveOptions::default()), write_full(&doc, &classic), linearized]
         .into_iter()
         .flatten()
     {
         if let Ok(again) = Document::open(Arc::new(out)) {
             let _ = again.root().map(|r| again.get(r));
+            let _ = again.linearization();
         }
     }
 }

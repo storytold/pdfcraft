@@ -2844,3 +2844,11 @@ certificate	Version	Version
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Options de cette réponse
 	Export value	Valeur d’exportation
+# Fast Web View (linearized saving)
+	Saving	Enregistrement
+	Save As optimizes for Fast Web View	Enregistrer sous optimise pour l'affichage web rapide
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	Enregistrer sous écrit un fichier linéarisé dont la première page s'affiche avant la fin du téléchargement. Enregistrer ajoute les modifications à la fin du fichier, ce qui désactive l'affichage web rapide.
+	Fast Web View	Affichage web rapide
+	Saved {name}, optimized for Fast Web View	{name} enregistré, optimisé pour l'affichage web rapide
+	Saved {name} without Fast Web View: {e}	{name} enregistré sans affichage web rapide : {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	{name} enregistré. L'affichage web rapide est désactivé : Enregistrer ajoute les modifications à la fin du fichier.

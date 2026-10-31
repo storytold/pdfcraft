@@ -2576,3 +2576,11 @@ animation effects	Off	Өшірулі
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Осы жауаптың параметрлері
 	Export value	Экспорт мәні
+# Fast Web View (linearized saving)
+	Saving	Сақтау баптаулары
+	Save As optimizes for Fast Web View	«Басқаша сақтау» жылдам веб-қарау үшін оңтайландырады
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	«Басқаша сақтау» сызықтандырылған файл жазады: оның бірінші беті қалған бөлігі жүктеліп біткенше көрсетіледі. «Сақтау» өзгерістерді файлдың соңына қосады, сондықтан жылдам веб-қарау өшеді.
+	Fast Web View	Жылдам веб-қарау
+	Saved {name}, optimized for Fast Web View	«{name}» сақталды, жылдам веб-қарау үшін оңтайландырылды
+	Saved {name} without Fast Web View: {e}	«{name}» жылдам веб-қараусыз сақталды: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	«{name}» сақталды. Жылдам веб-қарау өшірулі: «Сақтау» өзгерістерді файлдың соңына қосады.

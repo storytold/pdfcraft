@@ -2487,3 +2487,11 @@ animation effects	Off	ఆఫ్
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ఈ ప్రత్యుత్తరం ఎంపికలు
 	Export value	ఎగుమతి విలువ
+# Fast Web View (linearized saving)
+	Saving	సేవ్ సెట్టింగ్‌లు
+	Save As optimizes for Fast Web View	వేరే పేరుతో సేవ్ చేయి వేగవంతమైన వెబ్ వీక్షణ కోసం ఆప్టిమైజ్ చేస్తుంది
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	వేరే పేరుతో సేవ్ చేయి లీనియరైజ్ చేసిన ఫైల్‌ను రాస్తుంది: మిగతా భాగం డౌన్‌లోడ్ కాకముందే దాని మొదటి పేజీ కనిపిస్తుంది. సేవ్ చేయి మార్పులను ఫైల్ చివరకు జోడిస్తుంది, దాంతో వేగవంతమైన వెబ్ వీక్షణ ఆఫ్ అవుతుంది.
+	Fast Web View	వేగవంతమైన వెబ్ వీక్షణ
+	Saved {name}, optimized for Fast Web View	{name} సేవ్ చేయబడింది, వేగవంతమైన వెబ్ వీక్షణ కోసం ఆప్టిమైజ్ చేయబడింది
+	Saved {name} without Fast Web View: {e}	{name} వేగవంతమైన వెబ్ వీక్షణ లేకుండా సేవ్ చేయబడింది: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	{name} సేవ్ చేయబడింది. వేగవంతమైన వెబ్ వీక్షణ ఆఫ్‌లో ఉంది: సేవ్ చేయి మార్పులను ఫైల్ చివరకు జోడిస్తుంది.

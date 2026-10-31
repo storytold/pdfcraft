@@ -18,6 +18,12 @@ pub(crate) fn info(args: &[String]) -> Result<(), CliError> {
     let mut info = inspect(bytes.clone(), render_password.as_deref()).map_err(|e| e.to_string())?;
     let pdf_pages = info.pages.len();
     let acroform_fields = info.fields.len();
+    // Linearized (Fast Web View, ISO 32000-2 Annex F); a stale linearization says why it is not.
+    let linearization = pdfcraft_cos::Document::open_with_password(bytes.clone(), password).ok().map(|d| d.linearization());
+    let stale = match linearization {
+        Some(pdfcraft_cos::Linearization::Stale(why)) => Some(why.to_string()),
+        _ => None,
+    };
     // Dynamic XFA forms: say what laying the template out gives (what the app shows).
     let xfa_layout = (info.xfa == Some(pdfcraft_render::Xfa::Dynamic))
         .then(|| {
@@ -45,6 +51,8 @@ pub(crate) fn info(args: &[String]) -> Result<(), CliError> {
         "first_page_pt": info.pages.first().map(|p| [p.width, p.height]),
         "title": info.title, "author": info.author, "producer": info.producer, "creator": info.creator,
         "encrypted": info.encrypted, "tagged": info.tagged, "javascript": info.has_javascript,
+        "fast_web_view": linearization.map(pdfcraft_cos::Linearization::is_fast_web_view),
+        "linearization_stale": stale,
         "pdfa": declared.pdfa.as_ref().map(|(part, conformance)| format!("PDF/A-{part}{}", conformance.to_lowercase())),
         "pdfua": declared.pdfua,
         "output_intents": declared.output_intents,
@@ -158,9 +166,9 @@ fn page_list(s: &str) -> Result<Vec<usize>, String> {
 }
 
 /// The options `edit` understands, for its "unknown option" message.
-const EDIT_OPTIONS: &str = "--out, --password, --full, --rotate, --delete, --move, --insert-blank, --title, --author";
-
-/// Apply page and metadata edits through the engine and save (incrementally unless `--full`).
+const EDIT_OPTIONS: &str = "--out, --password, --full, --fast-web-view, --rotate, --delete, --move, --insert-blank, --title, --author";
+/// Apply page and metadata edits through the engine and save (incrementally unless `--full`, or
+/// linearized for Fast Web View with `--fast-web-view`).
 ///
 /// Every argument is parsed before the file is opened: an option this command does not know
 /// (a typo like `--rotat`) is an error, not something to skip — skipping it would write an
@@ -171,6 +179,7 @@ pub(crate) fn edit(args: &[String]) -> Result<(), CliError> {
     let mut out: Option<&str> = None;
     let mut password: Option<&str> = None;
     let mut full = false;
+    let mut fast_web_view = false;
     let mut edits = Vec::new();
     let mut i = 0;
     while let Some(arg) = args.get(i).map(String::as_str) {
@@ -178,6 +187,11 @@ pub(crate) fn edit(args: &[String]) -> Result<(), CliError> {
         match arg {
             "--full" => {
                 full = true;
+                i += 1;
+                continue;
+            }
+            "--fast-web-view" => {
+                fast_web_view = true;
                 i += 1;
                 continue;
             }
@@ -264,7 +278,14 @@ pub(crate) fn edit(args: &[String]) -> Result<(), CliError> {
         }
         session.apply(id, e).map_err(|e| e.to_string())?;
     }
-    let bytes = if full { session.save_full_bytes(id) } else { session.save_bytes(id) }.map_err(|e| e.to_string())?;
+    let bytes = if fast_web_view {
+        session.save_linearized_bytes(id).map(|l| std::sync::Arc::new(l.bytes))
+    } else if full {
+        session.save_full_bytes(id)
+    } else {
+        session.save_bytes(id)
+    }
+    .map_err(|e| e.to_string())?;
     // As the app's Save: the file must reopen with its pages before it replaces anything (#1698).
     session.check_save(id, &bytes).map_err(|e| e.to_string())?;
     write_pdf(Path::new(out), &bytes)

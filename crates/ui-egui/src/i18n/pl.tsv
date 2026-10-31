@@ -2674,3 +2674,11 @@ animation effects	Off	Wyłączone
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcje tej odpowiedzi
 	Export value	Wartość eksportowa
+# Fast Web View (linearized saving)
+	Saving	Zapisywanie
+	Save As optimizes for Fast Web View	Zapisz jako optymalizuje pod kątem szybkiego widoku w sieci Web
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	Zapisz jako zapisuje plik zlinearyzowany, którego pierwsza strona pojawia się, zanim pobierze się reszta. Zapisz dopisuje zmiany na końcu pliku, co wyłącza szybki widok w sieci Web.
+	Fast Web View	Szybki widok w sieci Web
+	Saved {name}, optimized for Fast Web View	Zapisano {name} zoptymalizowany pod kątem szybkiego widoku w sieci Web
+	Saved {name} without Fast Web View: {e}	Zapisano {name} bez szybkiego widoku w sieci Web: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	Zapisano {name}. Szybki widok w sieci Web jest wyłączony: Zapisz dopisuje zmiany na końcu pliku.

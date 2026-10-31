@@ -2854,3 +2854,11 @@ certificate	Version	الإصدار
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	خيارات هذا الرد
 	Export value	قيمة التصدير
+# Fast Web View (linearized saving)
+	Saving	الحفظ
+	Save As optimizes for Fast Web View	«حفظ باسم» يُحسّن الملف للعرض السريع على الويب
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	يكتب «حفظ باسم» ملفًا خطيًّا تظهر صفحته الأولى قبل اكتمال تنزيل الباقي. أما «حفظ» فيضيف التغييرات إلى نهاية الملف، مما يوقف العرض السريع على الويب.
+	Fast Web View	العرض السريع على الويب
+	Saved {name}, optimized for Fast Web View	تم حفظ {name} مُحسَّنًا للعرض السريع على الويب
+	Saved {name} without Fast Web View: {e}	تم حفظ {name} دون العرض السريع على الويب: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	تم حفظ {name}. العرض السريع على الويب متوقف: «حفظ» يضيف التغييرات إلى نهاية الملف.

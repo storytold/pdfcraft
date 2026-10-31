@@ -143,10 +143,23 @@ impl Automation {
         };
         let same_file = doc.path.as_deref().is_some_and(|p| Path::new(p) == target);
         // Saving to a new file is a full rewrite unless asked otherwise, like Save As.
-        let full = a.opt_bool("full")?.unwrap_or(!same_file);
+        let fast_web_view = a.opt_bool("fast_web_view")?.unwrap_or(false);
+        let full = a.opt_bool("full")?;
+        if fast_web_view && full == Some(false) {
+            return Err(failed("fast_web_view writes a full rewrite: it cannot be combined with full: false"));
+        }
+        let full = fast_web_view || full.unwrap_or(!same_file);
         let flatten_fill_sign = a.opt_bool("flatten_fill_sign")?.unwrap_or(false);
         if flatten_fill_sign {
             self.apply(a, Edit::FlattenFillSign)?;
+        }
+        if fast_web_view {
+            let linearized = self.session.save_linearized_bytes(id).map_err(failed)?;
+            let given =
+                json!({ "pages_given_inherited_attributes": linearized.pages_given_inherited, "pages_given_type": linearized.pages_given_type });
+            let mut saved = self.publish_save(id, &target, Arc::new(linearized.bytes), false, write)?;
+            saved["fast_web_view"] = given;
+            return Ok(saved);
         }
         let bytes = if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) }.map_err(failed)?;
         // A save that adds or removes encryption, or must not keep the old revision (Sanitize,
