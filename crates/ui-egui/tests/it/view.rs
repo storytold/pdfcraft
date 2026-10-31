@@ -668,6 +668,64 @@ fn changing_continuous_layout_resets_wheel_acceleration() {
     assert!((moved - base).abs() < 1.0, "a layout jump clears the old burst: moved {moved}, base {base}");
 }
 
+#[test]
+fn a_fast_spin_scrolls_as_smoothly_as_single_notches() {
+    use pdfcraft_ui_egui::scroll_speed::ScrollSpeed;
+    // #5371: in a fast spin, the accelerated surplus (up to five more notches) landed in the frame
+    // each notch arrived, on top of egui's eased base, so the page jumped at every notch.
+    const PAGES: usize = 60;
+    let mut pdf = String::from("%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
+    let kids: String = (0..PAGES).map(|i| format!("{} 0 R ", i + 3)).collect();
+    pdf += &format!("2 0 obj << /Type /Pages /Kids [{kids}] /Count {PAGES} /MediaBox [0 0 300 400] >> endobj\n");
+    for i in 0..PAGES {
+        pdf += &format!("{} 0 obj << /Type /Page /Parent 2 0 R >> endobj\n", i + 3);
+    }
+    pdf += "trailer << /Root 1 0 R >>\n%%EOF";
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("long.pdf", None, pdf.into_bytes()).expect("opens");
+        for (k, v) in [("left", "closed"), ("panel", "none"), ("layout", "continuous"), ("zoom", "100")] {
+            app.set_option(k, v).unwrap();
+        }
+        app
+    });
+    h.run_steps(8);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    // How far the document scrolled down in one frame, from a page on screen in both.
+    fn step_moved(h: &mut Harness<'static, PdfCraftApp>) -> f32 {
+        let tops = |h: &Harness<'static, PdfCraftApp>| (0..PAGES).map(|p| rect(h, p).map(|r| r.min.y)).collect::<Vec<_>>();
+        let before = tops(h);
+        h.step();
+        let after = tops(h);
+        before.iter().zip(&after).find_map(|(b, a)| Some(b.as_ref()? - a.as_ref()?)).expect("a page stays on screen")
+    }
+    // A notch every third frame (50 ms), inside the 80 ms that counts as a spin, for 24 notches.
+    let mut moves = Vec::new();
+    for _ in 0..24 {
+        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+        for _ in 0..3 {
+            moves.push(step_moved(&mut h));
+        }
+    }
+    // The last eight notches, at the full multiplier. Eased like a single notch, each frame of a
+    // notch moves 47%, 32% and 22% of its distance; landing at once, the first frame moved 90%.
+    let steady = moves.get(48..).expect("72 frames");
+    let (least, most) = steady.iter().fold((f32::MAX, 0.0_f32), |(lo, hi), m| (lo.min(*m), hi.max(*m)));
+    assert!(most < 4.0 * least, "no frame of a steady spin jumps ahead of the others: {steady:?}");
+    let base = ScrollSpeed::default().line_points();
+    let moved: f32 = steady.iter().sum();
+    assert!(moved > 8.0 * 4.0 * base, "the spin still accelerates: {moved} over eight notches of {base}");
+    // Turned back at once, the wheel scrolls up: what the spin still owed downwards stops. The
+    // page is drawn a frame behind its scroll, so the first frame still shows the spin's last.
+    h.event(wheel(MouseWheelUnit::Line, 1.0, TouchPhase::Move));
+    step_moved(&mut h);
+    let back: f32 = (0..20).map(|_| step_moved(&mut h)).sum();
+    assert!(back < 0.0, "a notch back after the spin scrolls up: moved {back}");
+}
+
 /// Steps `frames` frames and returns how far the document scrolled down over them, from the
 /// pages on screen in each pair of consecutive frames (a page can leave the screen on the way).
 /// Used by wheel and non-macOS glide tests below.
