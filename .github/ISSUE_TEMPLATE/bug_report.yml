@@ -1,0 +1,69 @@
+name: Bug report
+description: Something in PdfCraft doesn't work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Search [open and closed issues](https://github.com/storytold/pdfcraft/issues?q=is%3Aissue) first, and add details to an existing report if it describes the same problem.
+
+        If you opened this from PdfCraft's Help > Report an Issue… item, the version and system fields are already filled in: check them before you submit. Nothing is sent until you submit this form.
+
+        **Reports and attachments are public.** Use made-up data only: don't attach confidential PDFs, and remove personal details, passwords and full local file paths from anything you paste. A small synthetic PDF is often enough.
+  - type: input
+    id: version
+    attributes:
+      label: PdfCraft version
+      description: The exact version from Help > About PdfCraft. For a source build, include the commit hash.
+      placeholder: "Exact version, and build or commit if available"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: For the web build, also give your browser and its version. Add the OS version (for Linux, the distribution) if you know it.
+      placeholder: "For example: Windows 11, macOS 26, or Ubuntu 24.04 / Wayland"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps with the exact tools, menu items and settings. Say whether it happens every time or only sometimes.
+      placeholder: |
+        1. Open a PDF.
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should happen after these steps? If you are comparing with another PDF application, give its name and version.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happens instead? Include the exact error text, or say whether the app froze, closed or lost changes.
+    validations:
+      required: true
+  - type: textarea
+    id: document-info
+    attributes:
+      label: Document details (optional)
+      description: File type and how the PDF was made (for example, scanned, exported from Word, or created in PdfCraft), page count, and whether a new blank document also reproduces it. No confidential content.
+  - type: textarea
+    id: system-info
+    attributes:
+      label: System information (optional)
+      description: Report an Issue fills this in. Otherwise add what looks relevant, such as the graphics card and driver for display problems. Remove usernames and full paths.
+      render: text
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Screenshots, sample files or logs (optional)
+      description: Attach a cropped screenshot or a small synthetic PDF that reproduces the problem. Only share files you have permission to publish.
