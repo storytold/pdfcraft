@@ -30,6 +30,9 @@ const MAX_IMAGE_PIXELS: u64 = 1 << 28;
 /// sources need not fit u16: a 65536-pixel strip can safely shrink to a 16-pixel image.
 /// This resource cap follows the existing CCITT column limit; the filter-work estimate below
 /// additionally bounds tables/scratch before entering the opaque PicScale planner.
+/// Filter work itself stays linear in source + target pixels: `draw_image` rejects sources over
+/// `MAX_IMAGE_PIXELS`, so even a worst-case full-limit photo is one bounded pass, not an
+/// unbounded operation — a refused plan falls back to nearest, which is cheaper still.
 const MAX_RESAMPLING_SOURCE_SIDE: u32 = 1 << 20;
 const MAX_RESAMPLING_PLAN_BYTES: usize = 128 << 20;
 
@@ -723,19 +726,72 @@ impl Renderer {
         new_width: u32,
         new_height: u32,
         pixel_format: ImagePixelFormat,
-        interpolate: bool,
+        smooth: bool,
+        explicit_interpolate: bool,
     ) -> (Vec<u8>, u32, u32) {
-        // PdfCraft patch (#624): `/Interpolate` governs the pre-minification pass too. Using
-        // Catmull-Rom here for an image that did not request interpolation blends hard edges
-        // before ImageQuality::Low gets a chance to sample it. Keep the pre-resize (and its
-        // bounded memory/performance behaviour), but use nearest-neighbour when interpolation
-        // is disabled. PDF's default for `/Interpolate` is false.
+        // PdfCraft patch (#624, revised): the caller passes `smooth` — true for `/Interpolate`
+        // images and for every minified image, since nearest-neighbour minification makes
+        // scanned text illegible. Magnification without `/Interpolate` still resizes nearest.
+        // A smooth plan can still be refused (sources wider than the resampling side limit, for
+        // example); an image that was only smoothed because it was minified then falls back to
+        // the nearest resize, which has no such limit, rather than to its full-resolution data.
         let nearest = Scaler::new(ResamplingFunction::Nearest);
-        let scaler = if interpolate { &self.scaler } else { &nearest };
-        let resized = match pixel_format {
+        let scaler = if smooth { &self.scaler } else { &nearest };
+        // A refused plan returns the owned input unchanged, so the nearest retry reuses it
+        // instead of copying the source buffer (an unchecked clone could abort on a huge image).
+        let mut resized = self.resize_format(
+            pixel_format,
+            scaler,
+            smooth,
+            data,
+            src_width,
+            src_height,
+            new_width,
+            new_height,
+        );
+        resized = match resized {
+            Err(original) if smooth && !explicit_interpolate => {
+                log::warn!("Smooth image resampling plan was refused; falling back to nearest-neighbour");
+                self.resize_format(
+                    pixel_format,
+                    &nearest,
+                    false,
+                    original,
+                    src_width,
+                    src_height,
+                    new_width,
+                    new_height,
+                )
+            }
+            other => other,
+        };
+        match resized {
+            Ok(out) => (out, new_width, new_height),
+            Err(original) => {
+                log::warn!(
+                    "Image resampling failed or exceeded its buffer limit; falling back to source data"
+                );
+                (original, src_width, src_height)
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn resize_format(
+        &self,
+        pixel_format: ImagePixelFormat,
+        scaler: &Scaler,
+        smooth: bool,
+        data: Vec<u8>,
+        src_width: u32,
+        src_height: u32,
+        new_width: u32,
+        new_height: u32,
+    ) -> Result<Vec<u8>, Vec<u8>> {
+        match pixel_format {
             ImagePixelFormat::Luma => self.resize_image_data_impl::<1>(
                 scaler,
-                interpolate,
+                smooth,
                 data,
                 src_width,
                 src_height,
@@ -747,7 +803,7 @@ impl Renderer {
             ),
             ImagePixelFormat::Rgb => self.resize_image_data_impl::<3>(
                 scaler,
-                interpolate,
+                smooth,
                 data,
                 src_width,
                 src_height,
@@ -759,7 +815,7 @@ impl Renderer {
             ),
             ImagePixelFormat::Rgba => self.resize_image_data_impl::<4>(
                 scaler,
-                interpolate,
+                smooth,
                 data,
                 src_width,
                 src_height,
@@ -769,15 +825,6 @@ impl Renderer {
                     scaler.plan_rgba_resampling(source_size, target_size, true)
                 },
             ),
-        };
-        match resized {
-            Ok(out) => (out, new_width, new_height),
-            Err(original) => {
-                log::warn!(
-                    "Image resampling failed or exceeded its buffer limit; falling back to source data"
-                );
-                (original, src_width, src_height)
-            }
         }
     }
 
@@ -923,14 +970,21 @@ impl Renderer {
                 return;
             }
         }
-        let mut quality = if interpolate {
+        // PdfCraft patch: a minified image is filtered whatever its `/Interpolate`, like the
+        // mismatched-mask path above. Nearest-neighbour minification of a 300-dpi scan at 100 %
+        // zoom drops whole pixel rows and columns, which makes scanned text jagged and
+        // illegible; Chrome and Acrobat smooth minification regardless of the flag. Nearest
+        // stays for 1:1 and magnified images, where it is both faster and sharper — and for
+        // Type 3 glyph images, whose crisp palette pixels issue #624 protects.
+        let requested_resize = x_scale < 1.0 || y_scale < 1.0;
+        let mut smooth = interpolate || (requested_resize && !self.in_type3_glyph);
+        let mut quality = if smooth {
             ImageQuality::Medium
         } else {
             ImageQuality::Low
         };
         let has_alpha = alpha_data.is_some();
         let mut may_have_transparency = has_alpha || self.force_images_may_have_transparency();
-        let requested_resize = x_scale < 1.0 || y_scale < 1.0;
         let (new_width, new_height) = match image_resampling_size(
             source_width,
             source_height,
@@ -943,28 +997,61 @@ impl Renderer {
         ) {
             Some(target) => target,
             None => {
-                if image_byte_len(source_width, source_height, 4, MAX_IMAGE_PIXELS).is_none() {
-                    log::warn!(
-                        "Image resampling exceeded its buffer limit and the original resolution cannot fit the backend; image skipped"
-                    );
-                    return;
+                // PdfCraft patch: a smooth plan can be refused (a source side over
+                // MAX_RESAMPLING_SOURCE_SIDE, for example) while a nearest plan still fits.
+                // Retry with nearest sizing before falling back to the original resolution, so
+                // the nearest-fallback contract in `resize_image_data` is not bypassed.
+                let nearest_target = if smooth {
+                    image_resampling_size(
+                        source_width,
+                        source_height,
+                        channels,
+                        data_len,
+                        x_scale,
+                        y_scale,
+                        MAX_IMAGE_PIXELS,
+                        false,
+                    )
+                } else {
+                    None
+                };
+                match nearest_target {
+                    Some(target) => {
+                        smooth = false;
+                        quality = ImageQuality::Low;
+                        log::warn!(
+                            "Smooth image sizing was refused; falling back to nearest-neighbour sizing"
+                        );
+                        target
+                    }
+                    None => {
+                        if image_byte_len(source_width, source_height, 4, MAX_IMAGE_PIXELS)
+                            .is_none()
+                        {
+                            log::warn!(
+                                "Image resampling exceeded its buffer limit and the original resolution cannot fit the backend; image skipped"
+                            );
+                            return;
+                        }
+                        log::warn!(
+                            "Image resampling exceeded its buffer limit; retaining the original resolution"
+                        );
+                        (source_width, source_height)
+                    }
                 }
-                log::warn!(
-                    "Image resampling exceeded its buffer limit; retaining the original resolution"
-                );
-                (source_width, source_height)
             }
         };
         // PdfCraft patch (#624): High is bicubic and would blend the nearest pre-resize of an image
-        // that did not request interpolation, so only interpolated glyph images are promoted.
-        if requested_resize && self.in_type3_glyph && interpolate {
+        // that did not request interpolation, so only interpolated glyph images are promoted —
+        // and not after a refused smooth plan fell back to nearest.
+        if requested_resize && self.in_type3_glyph && smooth {
             quality = ImageQuality::High;
         }
         // PdfCraft patch: an axis-aligned, interpolated image that is shrunk lands on whole device
         // pixels. It is shrunk once to exactly its snapped device rectangle and drawn 1:1 at the
         // snapped corner. Otherwise the shrunk raster (rounded up to a whole size) is sampled a
         // second time at a fractional scale and offset, which blurs scans and photos.
-        let snapped = if interpolate
+        let snapped = if smooth
             && requested_resize
             && !self.in_type3_glyph
             && (new_width, new_height) != (source_width, source_height)
@@ -980,7 +1067,7 @@ impl Renderer {
         // nearest-sampled straight into premultiplied target RGBA. That skips the full-resolution
         // RGBA copy below and the premultiply pass after it.
         let direct = match &alpha_data {
-            Some(alpha) if needs_resize && !interpolate => nearest_premultiplied_rgba(
+            Some(alpha) if needs_resize && !smooth => nearest_premultiplied_rgba(
                 &image_data,
                 &alpha.data,
                 (source_width, source_height),
@@ -1039,6 +1126,7 @@ impl Renderer {
                 new_width,
                 new_height,
                 format,
+                smooth,
                 interpolate,
             )
         } else {
