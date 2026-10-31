@@ -105,7 +105,7 @@ impl Automation {
                 (None, None) => Vec::new(),
             };
             matched_words = needles.iter().map(|w| (w.clone(), 0)).collect();
-            let texts = self.page_texts(id, &pages)?;
+            let texts = self.redaction_page_texts(id, &pages)?;
             let info = self.doc(a)?.info.clone();
             for (&p, text) in pages.iter().zip(&texts) {
                 let hits: Vec<(Option<usize>, _)> = match pattern {

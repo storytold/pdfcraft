@@ -1,9 +1,12 @@
 //! Text extraction (bootstrap for `pdfcraft-text`, architecture §8).
 //!
-//! A hayro `Device` that ignores paint and records every glyph: its Unicode value (ToUnicode →
+//! A hayro `Device` that ignores paint and records extracted glyphs: their Unicode value (ToUnicode →
 //! encoding → glyph name fallbacks, handled by hayro) and its box in *page view space*, i.e.
 //! points with the origin at the top-left of the displayed page, rotation applied, y down. The UI
 //! maps view space to the screen with a single scale.
+//! Effective convex quadrilateral clips (including transformed form BBoxes) exclude wholly
+//! outside glyphs. Other path shapes remain conservative. Mixed clipped ActualText spans
+//! retain surviving glyph Unicode rather than exposing their complete replacement.
 //!
 //! On top of the glyph list: line grouping (baseline clustering), word gaps, plain-text output,
 //! case-insensitive search and reading-order selection.
@@ -372,14 +375,17 @@ impl PageText {
 
 use hayro::hayro_interpret::TransformExt;
 
+mod clips;
 mod device;
 mod layout;
 mod order;
 
 use device::WORD_GAP;
 #[cfg(test)]
+pub(crate) use device::extract_page;
+#[cfg(test)]
 use device::{MAX_REDRAW_TEXT, REDRAW_TEXT_BYTES, Replaced, TextDevice};
-pub(crate) use device::{extract_page, extract_page_filtered};
+pub(crate) use device::{extract_page_filtered, extract_page_for_redaction};
 pub use layout::layout;
 #[cfg(test)]
 use layout::{from_upright, to_upright};

@@ -265,3 +265,67 @@ fn removing_hidden_information_and_sanitizing() {
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Sanitize document"));
 }
+
+fn clipped_query_fixture(query: &str) -> Vec<u8> {
+    let form = format!("BT /F1 10 Tf 200 200 Td ({query}) Tj ET");
+    let page = format!("BT /F1 10 Tf 20 20 Td ({query}) Tj ET /Fm Do");
+    let widths = "600 ".repeat(95);
+    let bodies = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Fm 6 0 R >> >> >>"
+            .into(),
+        format!("<< /Length {} >>\nstream\n{page}\nendstream", page.len()),
+        format!(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 126 /Widths [{widths}] /FontDescriptor << /Type /FontDescriptor /FontName /Courier /Flags 33 /FontBBox [-23 -250 715 805] /ItalicAngle 0 /Ascent 629 /Descent -157 /CapHeight 562 /StemV 51 >> >>"
+        ),
+        format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 50 50] /Matrix [1 0 0 1 0 0] /Resources << /Font << /F1 5 0 R >> >> /Length {} >>\nstream\n{form}\nendstream",
+            form.len()
+        ),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = vec![];
+    for (i, b) in bodies.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{b}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(b"xref\n0 7\n0000000000 65535 f \n");
+    for n in offsets {
+        out.extend_from_slice(format!("{n:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer << /Size 7 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    out
+}
+
+#[test]
+fn query_redaction_includes_clipped_copies_in_the_saved_document() {
+    use pdfcraft_ui_egui::RedactSearchMode;
+    for mode in [RedactSearchMode::Phrase, RedactSearchMode::Words, RedactSearchMode::Patterns] {
+        let query = if mode == RedactSearchMode::Patterns { "x@y.test" } else { "QUERY" };
+        let bytes = clipped_query_fixture(query);
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("clipped.pdf", None, bytes).unwrap();
+        app.redact_search.mode = mode;
+        app.redact_search.pattern = pdfcraft_engine::RedactPattern::Email;
+        app.redact_search.text = query.into();
+        app.redact_search.words = query.into();
+        assert_eq!(app.redact_search(), 2, "{mode:?}");
+        let id = app.views[0].id;
+        assert_eq!(app.session.get(id).unwrap().redaction_marks(), 2);
+        app.session.apply(id, pdfcraft_engine::Edit::ApplyRedactions { pages: None }).unwrap();
+        assert_eq!(app.session.get(id).unwrap().redaction_marks(), 0);
+        let saved = app.session.save_full_bytes(id).unwrap();
+        // Full save retains only reachable objects. Inspect decoded content, not visual extraction.
+        let parsed = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+        for (_, object) in parsed.scan_objects() {
+            if let pdfcraft_cos::Object::Stream(stream) = object.as_ref() {
+                let decoded = stream.decoded_strict().unwrap();
+                assert!(!decoded.windows(query.len()).any(|s| s == query.as_bytes()), "{mode:?}");
+            }
+        }
+        app.open_bytes("saved.pdf", None, saved.as_ref().clone()).unwrap();
+        assert_eq!(app.session.get(app.views.last().unwrap().id).unwrap().redaction_marks(), 0);
+    }
+}

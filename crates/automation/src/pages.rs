@@ -141,6 +141,24 @@ impl Automation {
             .collect()
     }
 
+    /// Redaction must not reuse or populate the visual text cache: clipped text still needs removal.
+    pub(crate) fn redaction_page_texts(&self, id: DocId, pages: &[usize]) -> Result<Vec<Arc<PageText>>> {
+        let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
+        let password = doc.password.as_deref().map(Arc::from);
+        let results: HashMap<_, _> =
+            extract_parallel_with(&doc.bytes, password, pages, |r, p| r.redaction_text(p).map(Arc::new)).into_iter().collect();
+        pages
+            .iter()
+            .map(|p| {
+                results
+                    .get(p)
+                    .cloned()
+                    .unwrap_or_else(|| Err("text extraction returned no result".into()))
+                    .map_err(|e| failed(format!("page {}: {e}", p + 1)))
+            })
+            .collect()
+    }
+
     /// Keep per-page failures until the caller chooses strict or partial-result semantics.
     pub(crate) fn page_text_results(
         &mut self,
@@ -350,13 +368,21 @@ fn render_warning_text(warning: pdfcraft_render::RenderWarning) -> &'static str 
 
 /// Extract the text of `pages` (0-based) with one renderer per worker thread.
 pub(crate) fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]) -> PageTexts {
-    let extract = |r: &mut PageRenderer, p: usize| {
+    extract_parallel_with(bytes, password, pages, |r, p| {
         let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
         match out.error {
             Some(e) => Err(e),
             None => Ok(out.text.unwrap_or_default()),
         }
-    };
+    })
+}
+
+fn extract_parallel_with(
+    bytes: &Arc<Vec<u8>>,
+    password: Option<Arc<str>>,
+    pages: &[usize],
+    extract: fn(&mut PageRenderer, usize) -> std::result::Result<Arc<PageText>, String>,
+) -> PageTexts {
     let config = RenderConfig { password, ..Default::default() };
     let workers = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get).min(8) };
     // Small jobs aren't worth a second parse of the document.

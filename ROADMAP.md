@@ -1,5 +1,6 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** minor (M2, PR #3628: align bounded extraction and saved-redaction controls with moved modules; hosted verification pending; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
@@ -212,6 +213,10 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-10-31 (M2, PR #3628):** Aligned extraction and redaction with current module boundaries. Preserved upstream CropBox filtering and added a redaction control for it. Hosted verification is pending; earlier saved-file evidence remains historical.
+
+- **2026-10-23 (M2, #3503 partial):** Extraction, Find and plain-text export omit text wholly outside supported transformed and nested form bounds and convex quadrilateral clips. Near-degenerate bounds and clipped ActualText retain their controls. Sequential restored clips preserve text; live depth and vertex caps still refuse excessive clipping. Query redaction and verification include clipped glyphs when finding text to remove. Tests cover decoded saved content, save/reopen and unchanged pixels. Office export and arbitrary curved clips remain separate. Estimates unchanged.
 
 - **2026-10-31 (M2, PR #4172 review):** Added same-machine pixel oracles for GBK Song, Hei, Kai and FangSong, including all four subset-prefixed Founder aliases. Reference PDFs use explicit Unicode mappings and independently selected installed faces; font data and rasters remain in memory. All eight cases ran; wrong-glyph and wrong-family production mutations each failed the new assertion and were restored. Validation: 422 renderer unit tests, renderer all-target Clippy with -D warnings, formatting, layers/assets/parity and renderer WASM checks passed; existing optional-patch/WASM warnings and parity notes remain. Estimates unchanged.
 

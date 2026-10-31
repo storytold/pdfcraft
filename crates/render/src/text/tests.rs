@@ -1,3 +1,4 @@
+mod form_bounds;
 use super::*;
 
 fn em_box(text: &str, x0: f32, y0: f32, x1: f32, y1: f32) -> TextGlyph {
@@ -1931,6 +1932,8 @@ fn text_outside_the_crop_box_is_clipped() {
             let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
             let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
             assert_eq!(text.plain_text(), "Inside crop\nActualIn\nKeptSpan\nA", "rotate={rotate} unit={unit}");
+            let redaction = extract_page_for_redaction(&pdf, 0, &InterpreterSettings::default()).unwrap();
+            assert_eq!(redaction.plain_text(), "Inside crop\nActualIn\nKeptSpan\nA", "redaction rotate={rotate} unit={unit}");
             assert!(!text.find("Inside").is_empty(), "rotate={rotate} unit={unit}");
             assert!(!text.find("ActualIn").is_empty(), "rotate={rotate} unit={unit}");
             assert!(!text.find("KeptSpan").is_empty(), "rotate={rotate} unit={unit}");
@@ -1963,5 +1966,6 @@ fn text_outside_the_crop_box_is_clipped() {
         let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
         let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
         assert!(text.is_empty(), "expected no glyphs on {crop:?}, got {:?}", text.plain_text());
+        assert!(extract_page_for_redaction(&pdf, 0, &InterpreterSettings::default()).unwrap().is_empty(), "redaction crop={crop:?}");
     }
 }

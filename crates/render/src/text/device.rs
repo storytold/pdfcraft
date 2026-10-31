@@ -1,3 +1,4 @@
+use super::clips;
 use super::layout::{Flow, along_baseline, arrange_flow, compatible, continues, from_upright, to_upright, unrolled};
 use super::{
     Affine, BezPath, BlendMode, ClipPath, Context, Device, Glyph, GlyphDrawMode, HashMap, Image, InterpreterCache, InterpreterSettings, PageText,
@@ -33,6 +34,9 @@ pub(super) struct TextDevice {
     excluded_depth: Option<usize>,
     actual_filtered: bool,
     actual_cropped: bool,
+    actual_clipped: bool,
+    clips: clips::TextClips,
+    clip_bounds: bool,
     partial_replacement: bool,
 }
 
@@ -117,6 +121,9 @@ impl TextDevice {
             excluded_depth: None,
             actual_filtered: false,
             actual_cropped: false,
+            actual_clipped: false,
+            clips: clips::TextClips::default(),
+            clip_bounds: true,
             partial_replacement: false,
         }
     }
@@ -132,13 +139,14 @@ impl TextDevice {
     fn end_actual_text(&mut self) {
         let Some((_, text, drawn)) = self.actual.take() else { return };
         let cropped = std::mem::take(&mut self.actual_cropped);
+        let clipped = std::mem::take(&mut self.actual_clipped);
         if std::mem::take(&mut self.actual_filtered) {
             // ActualText has no mapping from replacement words to individual glyphs. A mixed
             // span cannot be filtered honestly; a wholly excluded span can simply be omitted.
             self.partial_replacement |= !drawn.is_empty();
             return;
         }
-        if cropped {
+        if cropped || clipped {
             self.glyphs.extend(drawn.into_iter().filter(|d| !d.2.text.chars().all(|c| c.is_control())));
             return;
         }
@@ -260,9 +268,16 @@ impl<'a> Device<'a> for TextDevice {
     fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
     fn set_blend_mode(&mut self, _: BlendMode) {}
     fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'a>, _: &PathDrawMode) {}
-    fn push_clip_path(&mut self, _: &ClipPath) {}
+    fn push_clip_path(&mut self, clip: &ClipPath) {
+        if self.clip_bounds {
+            self.clips.push(&clip.path);
+        }
+    }
     fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
     fn draw_glyph(&mut self, glyph: &Glyph<'a>, transform: Affine, glyph_transform: Affine, _: &Paint<'a>, mode: &GlyphDrawMode) {
+        if self.clips.exceeded {
+            return;
+        }
         if self.excluded_depth.is_some() || (self.filter.images && matches!(mode, GlyphDrawMode::Invisible)) {
             self.actual_filtered |= self.actual.is_some();
             return;
@@ -335,6 +350,10 @@ impl<'a> Device<'a> for TextDevice {
             self.actual_cropped |= replaced && outside_crop;
             return;
         }
+        if !self.clips.visible(&corners) {
+            self.actual_clipped |= replaced;
+            return;
+        }
         let length = dx.hypot(dy);
         let direction = if length.is_finite() && length > 0.0 { [dx / length, dy / length] } else { [1.0, 0.0] };
         // A glyph whose Unicode is several characters (a ligature such as "ffi") stays one glyph
@@ -351,7 +370,11 @@ impl<'a> Device<'a> for TextDevice {
         }
     }
     fn draw_image(&mut self, _: Image<'a, '_>, _: Affine) {}
-    fn pop_clip_path(&mut self) {}
+    fn pop_clip_path(&mut self) {
+        if self.clip_bounds {
+            self.clips.pop();
+        }
+    }
     fn pop_transparency_group(&mut self) {}
     fn begin_marked_content(&mut self, tag: &[u8], mcid: Option<i32>) {
         self.depth = self.depth.saturating_add(1);
@@ -377,11 +400,26 @@ impl<'a> Device<'a> for TextDevice {
 }
 
 /// Extract the text of one page. Panics inside the interpreter are the caller's to catch.
+#[cfg(test)]
 pub(crate) fn extract_page(pdf: &Pdf, page: usize, settings: &InterpreterSettings) -> Option<PageText> {
     extract_page_filtered(pdf, page, settings, TextFilter::default()).ok()
 }
 
 pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &InterpreterSettings, filter: TextFilter) -> Result<PageText, String> {
+    extract_page_with_clips(pdf, page, settings, filter, true)
+}
+
+pub(crate) fn extract_page_for_redaction(pdf: &Pdf, page: usize, settings: &InterpreterSettings) -> Result<PageText, String> {
+    extract_page_with_clips(pdf, page, settings, TextFilter::default(), false)
+}
+
+fn extract_page_with_clips(
+    pdf: &Pdf,
+    page: usize,
+    settings: &InterpreterSettings,
+    filter: TextFilter,
+    clip_bounds: bool,
+) -> Result<PageText, String> {
     let pages = pdf.pages();
     let p = pages.get(page).ok_or("the page could not be read")?;
     let (w, h) = p.render_dimensions();
@@ -395,7 +433,11 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
     let mut dev = TextDevice::new();
     dev.page = initial.transform_rect_bbox(Rect::new(c.x0, c.y0, c.x1, c.y1));
     dev.filter = filter;
+    dev.clip_bounds = clip_bounds;
     interpret_page(p, &mut ctx, &mut dev);
+    if dev.clips.exceeded {
+        return Err(clips::LIMIT_ERROR.into());
+    }
     // A replacement the content never closed ends with the page.
     dev.finish();
     if dev.partial_replacement {

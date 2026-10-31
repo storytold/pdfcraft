@@ -762,9 +762,8 @@ pub(crate) fn shown_under_redactions(
     let mut renderer = pdfcraft_render::PageRenderer::new(Arc::new(bytes), config);
     let mut residue = 0;
     for &pi in &marked {
-        let request = pdfcraft_render::RenderRequest { page: pi, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() };
-        // A page that cannot be read back cannot be confirmed clean.
-        let (Some(info), Some(text)) = (pages.get(pi), renderer.render(request).text) else { return Err(RedactError::Unreadable(pi + 1).into()) };
+        // A page that cannot be read back cannot be confirmed clean. Include clipped source text.
+        let (Some(info), Ok(text)) = (pages.get(pi), renderer.redaction_text(pi)) else { return Err(RedactError::Unreadable(pi + 1).into()) };
         let rects: Vec<[f64; 4]> = marks
             .iter()
             .filter(|m| m.page == pi)
