@@ -3,8 +3,9 @@ use crate::context::{Context, path_as_rect};
 use crate::device::Device;
 use crate::util::{BezPathExt, Float32Ext};
 use crate::{FillRule, Paint, PathDrawMode, StrokeProps};
-use kurbo::{BezPath, Cap, Join, PathEl};
+use kurbo::{BezPath, Cap, Join, PathEl, Point};
 use smallvec::smallvec;
+use std::borrow::Cow;
 
 pub(crate) fn fill_path<'a>(
     context: &mut Context<'a>,
@@ -52,7 +53,14 @@ pub(crate) fn close_path(context: &mut Context<'_>) {
     // This is necessary to prevent artifacts (see for example issue 157),
     // but it does cause some weird lines (maybe conflation artifacts) in
     // pdftc_900k_0907.
-    if context.path().elements().last() != Some(&PathEl::ClosePath) && !context.path().is_empty() {
+    //
+    // PdfCraft patch (61): a path that is a single `m` is closed too. kurbo's `is_empty` counts
+    // only segments, so upstream dropped the `h` of `x y m h`, and the single-point closed
+    // subpath a round cap paints as a dot (ISO 32000-2 §8.5.3.2) became a trailing `m`, which
+    // paints nothing.
+    if context.path().elements().last() != Some(&PathEl::ClosePath)
+        && !context.path().elements().is_empty()
+    {
         context.path_mut().close_path();
 
         *(context.last_point_mut()) = *context.sub_path_start();
@@ -136,7 +144,16 @@ pub(crate) fn stroke_path_impl<'a>(
     device.set_blend_mode(context.get().graphics_state.blend_mode);
     let paint = get_paint(context, true);
 
-    let path = path.unwrap_or(context.path());
+    // PdfCraft patch (61): see `resolve_degenerate_subpaths`.
+    let path = resolve_degenerate_subpaths(
+        path.unwrap_or(context.path()),
+        stroke_props.line_cap,
+        stroke_props.line_width,
+    );
+    let path = path.as_ref();
+    if path.elements().is_empty() {
+        return;
+    }
     let draw_mode = PathDrawMode::Stroke(stroke_props);
 
     if let Some(rect) = path_as_rect(path) {
@@ -144,6 +161,76 @@ pub(crate) fn stroke_path_impl<'a>(
     } else {
         device.draw_path(path, base_transform, &paint, &draw_mode);
     }
+}
+
+/// PdfCraft patch (61): `path` as `S` strokes it, by ISO 32000-2 §8.5.3.2: "If a subpath is
+/// degenerate (consists of a single-point closed path or of two or more points at the same
+/// coordinates), the S operator shall paint it only if round line caps have been specified,
+/// producing a filled circle centred at the single point." With butt or projecting square caps
+/// it "shall produce no output". So with round caps a degenerate subpath becomes a segment
+/// centred on its point, a thousandth of the line width long (kurbo draws no cap on a segment of
+/// length zero), and is left out for the other caps. The other subpaths, and zero-length dashes
+/// of them, are not touched. Borrowed when nothing changes.
+pub(crate) fn resolve_degenerate_subpaths(
+    path: &BezPath,
+    cap: Cap,
+    line_width: f32,
+) -> Cow<'_, BezPath> {
+    let elements = path.elements();
+    if !subpaths(elements).any(|sub| degenerate_point(sub).is_some()) {
+        return Cow::Borrowed(path);
+    }
+    let mut out = BezPath::new();
+    for sub in subpaths(elements) {
+        match degenerate_point(sub) {
+            Some(p) if cap == Cap::Round => {
+                // A hairline (width 0) is widened by the device, so it keeps a length kurbo still
+                // caps; an enormous width keeps the segment within half a unit.
+                let half = (f64::from(line_width) * 5e-4).max(5e-5).min(0.5);
+                out.move_to((p.x - half, p.y));
+                out.line_to((p.x + half, p.y));
+            }
+            Some(_) => {}
+            None => sub.iter().for_each(|el| out.push(*el)),
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// The subpaths of `elements`: each starts at a `MoveTo`, except perhaps the first.
+fn subpaths(elements: &[PathEl]) -> impl Iterator<Item = &[PathEl]> {
+    let mut rest = elements;
+    std::iter::from_fn(move || {
+        if rest.is_empty() {
+            return None;
+        }
+        let end = rest
+            .iter()
+            .skip(1)
+            .position(|el| matches!(el, PathEl::MoveTo(_)))
+            .map_or(rest.len(), |i| i.saturating_add(1));
+        let (sub, tail) = rest.split_at_checked(end).unwrap_or((rest, &[]));
+        rest = tail;
+        Some(sub)
+    })
+}
+
+/// The point a degenerate subpath stays at: one that starts with a `MoveTo` and has at least one
+/// segment or a `ClosePath`, every point of which (control points too) is the start point. A lone
+/// `MoveTo` (a trailing `m`) is not one: it paints nothing whatever the caps.
+fn degenerate_point(sub: &[PathEl]) -> Option<Point> {
+    let (PathEl::MoveTo(start), rest) = sub.split_first()? else {
+        return None;
+    };
+    let at = |p: &Point| p == start;
+    let degenerate = !rest.is_empty()
+        && rest.iter().all(|el| match el {
+            PathEl::MoveTo(p) | PathEl::LineTo(p) => at(p),
+            PathEl::QuadTo(a, b) => at(a) && at(b),
+            PathEl::CurveTo(a, b, c) => at(a) && at(b) && at(c),
+            PathEl::ClosePath => true,
+        });
+    degenerate.then_some(*start)
 }
 
 pub(crate) fn get_paint<'a>(context: &Context<'a>, is_stroke: bool) -> Paint<'a> {
