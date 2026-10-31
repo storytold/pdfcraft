@@ -7008,6 +7008,9 @@ mod devicen_inks;
 // patch 27).
 mod isolated_cmyk_groups;
 
+// Issue #1700: a 1-bit source shrunk 1:1..2:1 averages its box instead of picking a stroke away.
+mod one_bit_minification;
+
 /// #3109 / #3116: clipping-only text (`7 Tr`) installs a clip for subsequent painting
 /// but draws no pixels itself.
 #[test]
