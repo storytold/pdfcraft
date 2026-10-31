@@ -8040,6 +8040,8 @@ fn growable_xfa_text_paginates_after_fill_save_and_print() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A print button repeated on every page of an XFA form runs its own XFA click script (a print
+/// request) through js_run, from each copy, before and after saving and reopening.
 #[test]
 fn repeated_xfa_print_buttons_work_through_tools_and_after_reopen() {
     let dir = workdir("xfa-print-buttons");
@@ -8065,6 +8067,115 @@ fn repeated_xfa_print_buttons_work_through_tools_and_after_reopen() {
     ok(&mut a, "doc_close", json!({ "doc": doc }));
     let doc = ok(&mut a, "doc_open", json!({ "path": "saved.pdf" }))["doc"].as_u64().unwrap();
     check(&mut a, doc);
+}
+
+/// form_focus runs a radio group's own enter and exit scripts when the focus enters or leaves the
+/// group, and not when within_group says it moves between two of its buttons.
+#[test]
+fn a_radio_groups_own_focus_scripts_run_through_form_focus() {
+    let dir = workdir("xfa-group-focus");
+    std::fs::write(dir.join("group.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::group_focus_template())).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "group.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let group = fields["fields"].as_array().unwrap().iter().find(|f| f["type"] == "radio").unwrap()["name"].clone();
+    let log = |a: &mut Automation| {
+        let fields = ok(a, "form_fields", json!({ "doc": doc }));
+        fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "log").map(|f| f["value"].clone()).unwrap_or(Value::Null)
+    };
+    ok(&mut a, "form_focus", json!({ "doc": doc, "field": group, "event": "enter" }));
+    ok(&mut a, "form_focus", json!({ "doc": doc, "field": group, "event": "exit", "within_group": true }));
+    ok(&mut a, "form_focus", json!({ "doc": doc, "field": group, "widget": 2, "event": "enter", "within_group": true }));
+    ok(&mut a, "form_focus", json!({ "doc": doc, "field": group, "widget": 2, "event": "exit" }));
+    assert_eq!(log(&mut a), json!("grp enter|r1 enter|r1 exit|r2 enter|r2 exit|grp exit"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// form_focus runs a field's XFA enter and exit scripts on every focus change; scripts that
+/// change nothing leave no edit, a radio button's own scripts run for its widget, and unknown
+/// fields, widgets and events are refused.
+#[test]
+fn xfa_focus_scripts_run_through_form_focus() {
+    let dir = workdir("xfa-focus");
+    std::fs::write(dir.join("focus.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::focus_template())).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "focus.pdf" }))["doc"].as_u64().unwrap();
+    let value = |a: &mut Automation, n: &str| {
+        let f = ok(a, "form_fields", json!({ "doc": doc }));
+        f["fields"].as_array().unwrap().iter().find(|f| f["name"] == n).map(|f| f["value"].clone()).unwrap()
+    };
+    for _ in 0..3 {
+        assert_eq!(ok(&mut a, "form_focus", json!({ "doc": doc, "field": "probe", "event": "enter" }))["changed"], true);
+        assert_eq!(ok(&mut a, "form_focus", json!({ "doc": doc, "field": "probe", "event": "exit" }))["changed"], true);
+    }
+    assert_eq!((value(&mut a, "enters"), value(&mut a, "exits")), (json!("3"), json!("3")));
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(value(&mut a, "exits"), "2", "each run is one undo step");
+    // A script that only shows a message changes nothing: no edit (the document stays saved and
+    // what was undone can still be redone), and the message comes back.
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "saved.pdf" }));
+    let quiet = ok(&mut a, "form_focus", json!({ "doc": doc, "field": "quiet", "event": "exit" }));
+    assert_eq!(
+        (quiet["changed"].clone(), quiet["alerts"].clone()),
+        (json!(false), json!([{ "message": "left quiet", "title": null, "icon": "error", "buttons": "ok" }])),
+        "{quiet}"
+    );
+    let state = &ok(&mut a, "doc_info", json!({ "doc": doc }))["document"];
+    assert_eq!((state["dirty"].clone(), state["redo"].clone()), (json!(false), json!("Run form script")), "{state}");
+    // The second radio button has an enter script of its own.
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let group = fields["fields"].as_array().unwrap().iter().find(|f| f["type"] == "radio").unwrap()["name"].clone();
+    assert_eq!(ok(&mut a, "form_focus", json!({ "doc": doc, "field": group, "event": "enter" }))["changed"], false);
+    assert_eq!(ok(&mut a, "form_focus", json!({ "doc": doc, "field": group, "event": "enter", "widget": 2 }))["changed"], true);
+    assert_eq!(value(&mut a, "picks"), "1");
+    for bad in [
+        json!({ "doc": doc, "field": "nowhere", "event": "enter" }),
+        json!({ "doc": doc, "field": group, "event": "enter", "widget": 3 }),
+        json!({ "doc": doc, "field": "probe", "event": "enter", "widget": 0 }),
+        json!({ "doc": doc, "field": "probe", "event": "click" }),
+    ] {
+        assert!(a.call("form_focus", &bad).is_err(), "{bad}");
+    }
+}
+
+/// form_focus refuses a field with no widget, which nothing can focus, instead of reporting a
+/// focus change that ran nothing.
+#[test]
+fn form_focus_refuses_a_field_with_no_widget() {
+    let dir = workdir("focus-no-widget");
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [60 60 200 80] /P 3 0 R >>",
+        "<< /FT /Tx /T (total) /V (3) >>",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("total.pdf"), bytes).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "total.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert!(fields["fields"].as_array().unwrap().iter().any(|f| f["name"] == "total"), "the field without a widget is listed: {fields}");
+    for args in [json!({ "doc": doc, "field": "total", "event": "enter" }), json!({ "doc": doc, "field": "total", "event": "enter", "widget": 1 })] {
+        let e = err(&mut a, "form_focus", args.clone()).to_string();
+        assert!(e.contains("\"total\" has no widget to focus"), "{args}: {e}");
+    }
+    assert_eq!(
+        ok(&mut a, "form_focus", json!({ "doc": doc, "field": "name", "event": "enter" }))["changed"],
+        false,
+        "a field with a widget still takes it"
+    );
 }
 
 /// A dynamic XFA form's scripts run on open, on fills and for buttons through the tools, with undo,
@@ -8100,6 +8211,66 @@ fn xfa_scripts_run_for_buttons_and_field_changes_through_tools() {
     assert_eq!(r["alerts"], json!([{ "message": "Hello 4", "title": null, "icon": "error", "buttons": "ok" }]));
 }
 
+/// Filling an XFA check box or radio group through form_fill clicks it, as the app does: the
+/// change scripts, then the click scripts, a radio group's before those of the button now on.
+#[test]
+fn xfa_check_box_and_radio_clicks_run_through_form_fill() {
+    let dir = workdir("xfa-toggle");
+    std::fs::write(dir.join("toggle.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::toggle_template())).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "toggle.pdf" }))["doc"].as_u64().unwrap();
+    // What the scripts have written to the form's log field so far.
+    let log = |a: &mut Automation| {
+        let f = ok(a, "form_fields", json!({ "doc": doc }));
+        f["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == "log")
+            .map(|f| f["value"].as_str().unwrap_or_default().to_string())
+            .unwrap_or_default()
+    };
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "agree": true } }));
+    assert_eq!(log(&mut a), "change 1;click 1;");
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let answer = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "answer").cloned().expect("the radio group");
+    let no = answer["options"].as_array().and_then(|o| o.get(1)).and_then(|o| o.as_str().map(str::to_string)).unwrap_or_else(|| panic!("{answer}"));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "answer": no } }));
+    assert!(log(&mut a).ends_with("group click;no click;no exit;group exit;"), "{}", log(&mut a));
+}
+
+/// A check box filled while form_focus has put the focus on it keeps its exit for the focus
+/// loss: filled twice, it runs its exit once, on form_focus exit. Filled without the focus on
+/// it, its exit follows the change.
+#[test]
+fn a_check_box_filled_with_the_focus_runs_its_exit_on_form_focus_exit() {
+    let dir = workdir("xfa-toggle-focus");
+    std::fs::write(dir.join("toggle.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::toggle_focus_template())).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "toggle.pdf" }))["doc"].as_u64().unwrap();
+    let log = |a: &mut Automation| {
+        let f = ok(a, "form_fields", json!({ "doc": doc }));
+        f["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == "log")
+            .map(|f| f["value"].as_str().unwrap_or_default().to_string())
+            .unwrap_or_default()
+    };
+    ok(&mut a, "form_focus", json!({ "doc": doc, "field": "cb", "event": "enter" }));
+    for on in [true, false] {
+        ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "cb": on } }));
+    }
+    assert_eq!(log(&mut a), "cb enter 0|cb change 1|cb click 1|cb change 0|cb click 0", "no exit while it has the focus");
+    ok(&mut a, "form_focus", json!({ "doc": doc, "field": "cb", "event": "exit" }));
+    assert!(log(&mut a).ends_with("|cb click 0|cb exit 0"), "{}", log(&mut a));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "cb": true } }));
+    assert!(log(&mut a).ends_with("|cb exit 0|cb change 1|cb click 1|cb exit 1"), "without the focus: {}", log(&mut a));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A form whose opening script runs away has its scripts turned off, and doc_info says so.
 #[test]
 fn active_xfa_skips_container_fallback_scripts_after_save_and_reopen() {
     let dir = workdir("xfa-container-scripts");

@@ -440,12 +440,15 @@ pub fn form_tree(tpl: &Template, data: Option<&DataNode>, ov: &Overrides) -> Liv
 /// Does the template declare any script (an event, calculation or validation)? Forms without
 /// one need no live form and run nothing.
 pub fn has_scripts(tpl: &Template) -> bool {
+    /// Is any of `s` a non-blank script?
     fn any(s: &[Script]) -> bool {
         s.iter().any(|s| !s.text.trim().is_empty())
     }
+    /// Has field `f` an event, calculate or validate script?
     fn field(f: &Field) -> bool {
         any(&f.scripts) || [&f.calculate, &f.validate].into_iter().flatten().any(|s| !s.text.trim().is_empty())
     }
+    /// Has any object among `nodes` (and their containers, `depth` levels down) a script?
     fn walk(nodes: &[Node], depth: usize) -> bool {
         depth <= MAX_DEPTH
             && nodes.iter().any(|n| match n {
@@ -457,6 +460,31 @@ pub fn has_scripts(tpl: &Template) -> bool {
             })
     }
     any(&tpl.root.scripts) || walk(&tpl.root.children, 1) || tpl.root.page_set.as_ref().is_some_and(|ps| ps.areas.iter().any(|a| walk(&a.items, 1)))
+}
+
+/// Does any field or exclusion group of the template (in the body or on a master page) have an
+/// `enter` or `exit` script? Forms without one have nothing to run when the focus moves.
+pub fn has_focus_scripts(tpl: &Template) -> bool {
+    /// Has field `f` a non-blank enter or exit script?
+    fn field(f: &Field) -> bool {
+        f.scripts.iter().any(|s| matches!(s.activity.as_str(), "enter" | "exit") && !s.text.trim().is_empty())
+    }
+    /// Has any field among `nodes` (and their containers, `depth` levels down) one?
+    fn walk(nodes: &[Node], depth: usize) -> bool {
+        depth <= MAX_DEPTH
+            && nodes.iter().any(|n| match n {
+                Node::Subform(sf) => walk(&sf.children, depth + 1),
+                Node::Area(a) => walk(&a.children, depth + 1),
+                Node::Field(f) => field(f),
+                // An exclusion group's own enter and exit scripts count as well as its buttons'.
+                Node::ExclGroup(g) => {
+                    g.scripts.iter().any(|s| matches!(s.activity.as_str(), "enter" | "exit") && !s.text.trim().is_empty())
+                        || g.fields.iter().any(field)
+                }
+                Node::Draw(_) => false,
+            })
+    }
+    walk(&tpl.root.children, 1) || tpl.root.page_set.as_ref().is_some_and(|ps| ps.areas.iter().any(|a| walk(&a.items, 1)))
 }
 
 /// The template with `ov` applied to its objects (instance 0 of each; scripts that hide one
