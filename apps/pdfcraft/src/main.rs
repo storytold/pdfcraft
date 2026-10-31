@@ -2,6 +2,9 @@
 //!
 //! Usage: `pdfcraft [options] [files…]` (`-h` / `--help` prints a short version of this, [`USAGE`]).
 //! `--create-images [images…]` stages the images in one PDF and asks for the page DPI.
+//! `--combine [files…]` lists the files in Combine files (the file manager's "Combine files" entry,
+//! #585); with a PdfCraft already running, they join its list on Windows and Linux (macOS has
+//! no single-instance hand-off, so there a second `--combine` launch opens a window of its own).
 //!
 //! View options (applied after the files open; also the seed of the UI control channel):
 //! `--page N  --zoom 150  --layout single|continuous|two-up|two-page  --continuous on|off  --panel comments|bookmarks|pages|fields|layers|attachments|none
@@ -65,6 +68,7 @@ Opens the files in the PdfCraft desktop app.
 Options:
   --new-window                open a window of its own instead of passing the files to a running PdfCraft
   --create-images [images…]   put the images in one PDF and ask for the page DPI
+  --combine [files…]          list the files in Combine files
   --control <file>            enable the UI control channel (pdfcraft-cli ui --control <file> …)
   --page N, --zoom 150, --layout continuous, --theme dark, …
                               view settings applied once the files are open
@@ -222,6 +226,7 @@ fn main() -> eframe::Result {
     let mut options: Vec<(String, String)> = Vec::new();
     let mut control_file: Option<String> = None;
     let mut create_images = false;
+    let mut combine = false;
     let mut new_window = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -231,6 +236,7 @@ fn main() -> eframe::Result {
             "-h" | "--help" => return print_and_exit(USAGE),
             "--control" => control_file = args.next(),
             "--create-images" => create_images = true,
+            "--combine" => combine = true,
             "--new-window" => new_window = true,
             flag if flag.starts_with("--") => {
                 let value = args.next().unwrap_or_default();
@@ -264,13 +270,14 @@ fn main() -> eframe::Result {
     // Absolute for this instance too: links relative to a document resolve against its folder,
     // never the working directory.
     let files = single_instance::absolute(&files);
-    let instance = match single_instance::claim(&files, may_hand_off) {
+    let request = if combine { single_instance::Request::Combine(files.clone()) } else { single_instance::Request::Open(files.clone()) };
+    let instance = match single_instance::claim(&request, may_hand_off) {
         single_instance::Claim::HandedOff => return Ok(()),
         single_instance::Claim::Primary(server) => Some(server),
         single_instance::Claim::Alone => None,
     };
     let choice = renderer_choice(std::env::var("PDFCRAFT_RENDERER").ok().as_deref());
-    let launch = Launch { files, options, control_file, create_images, integrated, window_controls };
+    let launch = Launch { files, options, control_file, create_images, combine, integrated, window_controls };
     // Finder, Open With and the Dock deliver files as Apple events, not arguments; catch the one
     // that launched us as well as later ones. Lives until the event loop returns.
     #[cfg(target_os = "macos")]
@@ -377,6 +384,8 @@ struct Launch {
     options: Vec<(String, String)>,
     control_file: Option<String>,
     create_images: bool,
+    /// `--combine`: the files go to the Combine files list.
+    combine: bool,
     integrated: bool,
     /// The window buttons the app draws, when the desktop leaves the frame to it.
     window_controls: Option<pdfcraft_ui_egui::window_controls::Layout>,
@@ -400,7 +409,7 @@ fn app_creator<'a>(
     instance: Option<&'a single_instance::Server>,
     #[cfg(target_os = "macos")] apple_events: &'a apple_events::AppleEvents,
 ) -> eframe::AppCreator<'a> {
-    let Launch { files, options, control_file, create_images, integrated, window_controls } = launch;
+    let Launch { files, options, control_file, create_images, combine, integrated, window_controls } = launch;
     Box::new(move |cc| {
         started.set(true);
         let mut app = PdfCraftApp::new();
@@ -467,7 +476,9 @@ fn app_creator<'a>(
                 &[("folder", &w.folder.display().to_string()), ("error", &w.error)],
             );
         }
-        if create_images {
+        if combine {
+            app.combine_paths(&files);
+        } else if create_images {
             if let Err(e) = app.begin_image_import_paths(&files) {
                 app.notify(e);
             }
