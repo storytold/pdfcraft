@@ -7,6 +7,14 @@ use crate::canvas::{DocView, Fit, PageLayout};
 use crate::theme::{self, ThemePreference, Tokens};
 use crate::{Dialog, Mode, PdfCraftApp, PropsTab, RightPanel, icons, widgets, window_controls};
 
+/// A scrollable rail item can open a pane or change the current document's view.
+#[derive(Clone, Copy, Debug, Hash)]
+enum ViewRailItem {
+    Panel(RightPanel),
+    Continuous,
+    Layout,
+}
+
 /// Height of the tab strip when it doubles as the macOS title bar (#789). AppKit draws the traffic
 /// lights itself, centred in the standard 28 pt title-bar band at the top of the window, and moving
 /// them takes AppKit calls the workspace forbids (`unsafe`). So on macOS the strip is that band:
@@ -549,7 +557,7 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let page_count = doc.info.pages.len();
     let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
     let item = |panel: RightPanel, icon: &str, label: &str, marker: Option<&str>| {
-        let item = RailItem::new(panel, icons::source(icon), tl!(label)).marker(marker.is_some());
+        let item = RailItem::new(ViewRailItem::Panel(panel), icons::source(icon), tl!(label)).marker(marker.is_some());
         match marker {
             Some(marker) => item.marker_label(tl!(marker)),
             None => item,
@@ -570,11 +578,20 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     items.push(item(RightPanel::Tags, "tag", "Tags", None));
     let view = &mut app.views[index];
+    let scroll_icon = if view.continuous() { "scroll-continuous" } else { "scroll-normal" };
+    let scroll_label = if view.continuous() { tl!("Turn off continuous scrolling") } else { tl!("Turn on continuous scrolling") };
+    items.push(RailItem::new(ViewRailItem::Continuous, icons::source(scroll_icon), scroll_label));
+    let next_layout = match view.layout {
+        PageLayout::Single => PageLayout::TwoUp,
+        PageLayout::TwoUp => PageLayout::Single,
+    };
+    items.push(RailItem::new(ViewRailItem::Layout, icons::source(view.layout.icon()), tl!(next_layout.label())));
     let mut page_display = None;
+    let open = app.right.map(ViewRailItem::Panel);
     let rail = Rail::new(egui::Id::unique("rail"))
         .edge(Edge::End)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(6, 8)).stroke(Stroke::new(1.0, t.divider)))
-        .show(ui, &items, app.right.as_ref(), |ui| {
+        .show(ui, &items, open.as_ref(), |ui| {
             // Page navigation cluster at the bottom, a panel of its own so that in a short
             // window the buttons above scroll instead of running into it (#3282).
             ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
@@ -589,7 +606,7 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
                 // Between rotate and zoom, as in Acrobat. Its command runs once `view` is free.
                 let tip = crate::i18n::fmt(tl!("Page display: {layout}"), &[("layout", tl!(view.layout.label()))]);
-                let resp = icons::button(ui, view.layout.icon(), 32.0, false, &tip);
+                let resp = icons::button(ui, "settings", 32.0, false, &tip);
                 page_display = egui::Popup::menu(&resp)
                     .show(|ui| {
                         ui.set_min_width(220.0);
@@ -700,8 +717,10 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             });
         });
     match rail.request {
-        Some(RailRequest::Open(panel)) => app.choose_right_panel(Some(panel)),
-        Some(RailRequest::Close(_)) => app.choose_right_panel(None),
+        Some(RailRequest::Open(ViewRailItem::Panel(panel))) => app.choose_right_panel(Some(panel)),
+        Some(RailRequest::Close(ViewRailItem::Panel(_))) => app.choose_right_panel(None),
+        Some(RailRequest::Open(ViewRailItem::Continuous)) => page_display = Some("view.continuous"),
+        Some(RailRequest::Open(ViewRailItem::Layout)) => page_display = Some(next_layout.command()),
         _ => {}
     }
     if let Some(id) = page_display {

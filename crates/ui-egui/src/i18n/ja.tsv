@@ -138,6 +138,8 @@
 	Next view	次の表示
 	Page display	ページ表示
 	Continuous scrolling	連続スクロール
+	Turn on continuous scrolling	連続スクロールをオンにする
+	Turn off continuous scrolling	連続スクロールをオフにする
 	Show gaps between pages	ページ間の余白を表示
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	ページ間の余白を非表示にしてページの端をつなげます。PDF 内の余白は変更されません。
 	Two-page view	見開き表示

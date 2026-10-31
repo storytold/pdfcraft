@@ -932,6 +932,8 @@
 	Next view	下一個檢視
 	Page display	頁面顯示
 	Continuous scrolling	連續捲動
+	Turn on continuous scrolling	開啟連續捲動
+	Turn off continuous scrolling	關閉連續捲動
 	Show gaps between pages	顯示頁面間距
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	隱藏間距以連接頁面邊緣。PDF 內的頁邊距保持不變。
 	Two-page view	雙頁檢視

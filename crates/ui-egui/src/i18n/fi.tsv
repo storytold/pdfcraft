@@ -133,6 +133,8 @@
 	Next view	Seuraava näkymä
 	Page display	Sivun näyttö
 	Continuous scrolling	Jatkuva vieritys
+	Turn on continuous scrolling	Ota jatkuva vieritys käyttöön
+	Turn off continuous scrolling	Poista jatkuva vieritys käytöstä
 	Show gaps between pages	Näytä sivujen väliset välit
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Piilota välit, jolloin sivujen reunat liittyvät yhteen. PDF:n sisäiset marginaalit pysyvät ennallaan.
 	Two-page view	Kahden sivun näkymä

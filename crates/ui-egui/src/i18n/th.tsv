@@ -127,6 +127,8 @@
 	Next view	มุมมองถัดไป
 	Page display	การแสดงหน้า
 	Continuous scrolling	เลื่อนต่อเนื่อง
+	Turn on continuous scrolling	เปิดการเลื่อนต่อเนื่อง
+	Turn off continuous scrolling	ปิดการเลื่อนต่อเนื่อง
 	Show gaps between pages	แสดงช่องว่างระหว่างหน้า
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	ซ่อนช่องว่างเพื่อให้ขอบหน้าต่อกัน ระยะขอบภายใน PDF ยังคงเหมือนเดิม
 	Two-page view	มุมมองสองหน้า

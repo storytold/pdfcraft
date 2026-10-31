@@ -1204,6 +1204,67 @@ fn cover_page_command_needs_two_page_view() {
 }
 
 #[test]
+fn rail_layout_button_alternates_without_a_menu() {
+    use pdfcraft_ui_egui::canvas::PageLayout;
+
+    let (mut h, c) = harness();
+    let before = h.state().session.get(h.state().views[0].id).unwrap().bytes.clone();
+    let mut button_rect = None;
+    for continuous in [false, true] {
+        ok(&mut h, &c, "ui.set", json!({"key": "continuous", "value": if continuous { "on" } else { "off" }}));
+        for (label, previous_label, layout) in [
+            ("Two-page view", "Single page", PageLayout::TwoUp),
+            ("Single page", "Two-page view", PageLayout::Single),
+            ("Two-page view", "Single page", PageLayout::TwoUp),
+            ("Single page", "Two-page view", PageLayout::Single),
+        ] {
+            let found = ok(&mut h, &c, "ui.inspect", json!({"query": label}));
+            let widgets = found["widgets"].as_array().unwrap();
+            let button = widgets.iter().find(|w| w["label"] == label && w["clickable"] == true).unwrap();
+            if let Some(rect) = &button_rect {
+                assert_eq!(&button["rect"], rect);
+            } else {
+                button_rect = Some(button["rect"].clone());
+            }
+            let previous = ok(&mut h, &c, "ui.inspect", json!({"query": previous_label}));
+            assert!(!previous["widgets"].as_array().unwrap().iter().any(|w| w["label"] == previous_label && w["clickable"] == true));
+            ok(&mut h, &c, "ui.click", json!({"label": label}));
+            assert_eq!(h.state().views[0].layout, layout);
+            assert_eq!(h.state().views[0].continuous, continuous);
+        }
+    }
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.bytes, before);
+    assert!(!doc.dirty);
+}
+
+#[test]
+fn rail_continuous_button_toggles_without_changing_page_layout_or_document() {
+    let (mut h, c) = harness();
+    let before = h.state().session.get(h.state().views[0].id).unwrap().bytes.clone();
+    for layout in ["single", "two-page"] {
+        ok(&mut h, &c, "ui.set", json!({"key": "layout", "value": layout}));
+        let base_layout = h.state().views[0].layout;
+        for expected in [true, false, true, false] {
+            // The label names what a click selects, so it tells the current mode without the icon.
+            let (label, other) = if expected {
+                ("Turn on continuous scrolling", "Turn off continuous scrolling")
+            } else {
+                ("Turn off continuous scrolling", "Turn on continuous scrolling")
+            };
+            let shown = ok(&mut h, &c, "ui.inspect", json!({"query": other}));
+            assert!(!shown["widgets"].as_array().unwrap().iter().any(|w| w["label"] == other && w["clickable"] == true));
+            ok(&mut h, &c, "ui.click", json!({"label": label}));
+            assert_eq!(h.state().views[0].continuous(), expected);
+            assert_eq!(h.state().views[0].layout, base_layout);
+        }
+    }
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.bytes, before);
+    assert!(!doc.dirty);
+}
+
+#[test]
 fn commands_keys_and_typing() {
     let (mut h, c) = harness();
     let list = ok(&mut h, &c, "ui.commands", json!({}));

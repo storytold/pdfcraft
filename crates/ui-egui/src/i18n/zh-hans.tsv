@@ -988,6 +988,8 @@
 	Next view	下一个视图
 	Page display	页面显示
 	Continuous scrolling	连续滚动
+	Turn on continuous scrolling	开启连续滚动
+	Turn off continuous scrolling	关闭连续滚动
 	Show gaps between pages	显示页面间距
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	隐藏间距以连接页面边缘。PDF 内的页边距保持不变。
 	Two-page view	双页视图

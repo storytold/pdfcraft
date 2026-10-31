@@ -137,6 +137,8 @@
 	Next view	ມຸມມອງຖັດໄປ
 	Page display	ການສະແດງຜົນໜ້າ
 	Continuous scrolling	ເລື່ອນຕໍ່ເນື່ອງ
+	Turn on continuous scrolling	ເປີດການເລື່ອນຕໍ່ເນື່ອງ
+	Turn off continuous scrolling	ປິດການເລື່ອນຕໍ່ເນື່ອງ
 	Show gaps between pages	ສະແດງຊ່ອງຫວ່າງລະຫວ່າງໜ້າ
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	ເຊື່ອງຊ່ອງຫວ່າງເພື່ອຕໍ່ຂອບໜ້າເຂົ້າກັນ. ຂອບພາຍໃນ PDF ຍັງຄືເກົ່າ.
 	Two-page view	ມຸມມອງສອງໜ້າ

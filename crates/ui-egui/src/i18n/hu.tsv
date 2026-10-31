@@ -109,6 +109,8 @@
 	Next view	Következő nézet
 	Page display	Oldalmegjelenítés
 	Continuous scrolling	Folyamatos görgetés
+	Turn on continuous scrolling	Folyamatos görgetés bekapcsolása
+	Turn off continuous scrolling	Folyamatos görgetés kikapcsolása
 	Show gaps between pages	Oldalak közötti térköz megjelenítése
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Rejtse el a térközöket az oldalszélek összeillesztéséhez. A PDF-en belüli margók változatlanok maradnak.
 	Two-page view	Kétoldalas nézet
