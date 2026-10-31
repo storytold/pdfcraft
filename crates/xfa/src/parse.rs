@@ -740,7 +740,21 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     } else {
         root.descendants().find(is_template).ok_or_else(|| XfaError::Malformed("no <template> element".into()))?
     };
-    let mut warnings = Vec::new();
+    // Prototype references (`use`, `usehref`) are resolved first: the parser reads the template
+    // written again with them merged in. The saved state below still comes from `doc`.
+    let (expanded, mut warnings) = crate::proto::expand(template);
+    let expanded_doc;
+    let template = match expanded.as_deref().map(|x| roxmltree::Document::parse_with_options(x, opts)) {
+        Some(Ok(d)) => {
+            expanded_doc = d;
+            expanded_doc.root_element()
+        }
+        Some(Err(e)) => {
+            warnings.push(format!("the template with its prototypes resolved could not be read again ({e}); it is read without them"));
+            template
+        }
+        None => template,
+    };
     let sf = children(template, "subform").next().ok_or_else(|| XfaError::Malformed("the template has no root subform".into()))?;
     let mut root_sf = parse_subform(sf, &mut warnings, 0);
     if root_sf.page_set.is_none() {
