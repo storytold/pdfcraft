@@ -764,3 +764,50 @@ fn a_new_file_from_the_os_brings_the_window_forward_before_it_is_prepared() {
     assert_eq!(doc.info.pages.len(), 2);
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+fn a_relative_link_is_parked_for_consent_without_being_read() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-open-relative-consent-{}", std::process::id()));
+    let up_two = dir.parent().and_then(std::path::Path::parent).expect("the temp folder is at least two levels deep");
+    // A rooted spec without a drive lands on the source's own root: `/` on Unix, its drive on Windows.
+    let root = dir.ancestors().last().expect("an absolute temp folder has a root");
+    let cases = [
+        ("sub/../target.pdf", dir.join("target.pdf")),
+        ("../../secret.pdf", up_two.join("secret.pdf")),
+        (r"\Users\v\x.pdf", root.join("Users").join("v").join("x.pdf")),
+    ];
+    for (spec, resolved) in cases {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("source.pdf", Some(dir.join("source.pdf").to_string_lossy().into_owned()), fixture(1)).expect("source document");
+        let source = app.views[0].id;
+        app.open_remote_link(source, spec.into(), pdfcraft_render::RemoteDestination::Default);
+        // `schedule_open` queues on this same call, so a read at click time would already show here.
+        assert!(app.pending_opens.is_empty(), "{spec}: nothing is read before the user answers");
+        assert!(app.toast.is_none(), "{spec}: the spec is not refused before the prompt");
+        let pending = app.pending_remote_link.as_ref().unwrap_or_else(|| panic!("{spec}: a relative target asks first"));
+        assert_eq!(pending.path, resolved, "{spec}");
+    }
+}
+
+/// `C:x.pdf` is relative to the current folder of drive C. Windows resolves it next to a source on
+/// that drive, so it asks first like any relative spec; elsewhere it is not a local path at all.
+#[test]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+fn a_drive_relative_link_is_never_opened_without_consent() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-open-drive-relative-consent-{}", std::process::id()));
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("source.pdf", Some(dir.join("source.pdf").to_string_lossy().into_owned()), fixture(1)).expect("source document");
+    let source = app.views[0].id;
+    let drive = if cfg!(windows) { dir.to_string_lossy().chars().next().expect("a drive letter") } else { 'C' };
+    app.open_remote_link(source, format!("{drive}:x.pdf"), pdfcraft_render::RemoteDestination::Default);
+    assert!(app.pending_opens.is_empty(), "nothing is read before the user answers");
+    #[cfg(windows)]
+    assert_eq!(app.pending_remote_link.as_ref().expect("a drive-relative target asks first").path, dir.join("x.pdf"));
+    #[cfg(not(windows))]
+    {
+        assert!(app.pending_remote_link.is_none());
+        let toast = &app.toast.as_ref().expect("the spec is refused").0;
+        assert!(toast.contains("only local document paths are supported"), "{toast}");
+    }
+}
