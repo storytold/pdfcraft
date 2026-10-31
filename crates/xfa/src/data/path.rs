@@ -40,6 +40,20 @@ pub fn som_to_path(som: &str) -> DataPath {
         .collect()
 }
 
+/// The text a field or draw at `som` binds to in `data`: its data path, or, when the data has no
+/// node there, the path with unbound subforms taken out (#5442). `None` when neither has a value.
+pub(crate) fn bound_text(tpl: &Template, data: &DataNode, som: &str) -> Option<String> {
+    let path = data_path(tpl, som);
+    data.text_at(&path).map(str::to_string).or_else(|| data.text_at(&data.transparent_path(&path)).map(str::to_string))
+}
+
+/// [`bound_text`] for a value (a multi-select list's picks are read as one value, see
+/// [`DataNode::value_at`]).
+pub(crate) fn bound_value(tpl: &Template, data: &DataNode, som: &str) -> Option<String> {
+    let path = data_path(tpl, som);
+    data.value_at(&path).or_else(|| data.value_at(&data.transparent_path(&path)))
+}
+
 /// The data path the object at `som` binds to: [`som_to_path`] without the areas on the way.
 /// An area is a named container in the form, so it is part of SOM expressions, but only
 /// subforms, exclusion groups and fields are data scopes: what an area holds binds under the

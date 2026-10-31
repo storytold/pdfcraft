@@ -35,6 +35,7 @@ pub(crate) use import::MAX_IMPORT_BYTES;
 pub use import::{DataImport, ImportNode, export_data, import_data, parse_data_file, write_data_image};
 pub use passwords::{clear_password_values, has_password_values};
 pub(crate) use path::template_field;
+pub(crate) use path::{bound_text, bound_value};
 pub use path::{data_path, parse_datasets, som_to_path};
 pub use values::{FieldData, FieldDatum, is_on, read_values, read_values_with};
 #[cfg(test)]
@@ -73,6 +74,22 @@ impl DataNode {
     /// How many children of the node at `parent` are named `name`.
     pub fn count(&self, parent: &[(String, usize)], name: &str) -> usize {
         self.get(parent).map_or(0, |n| n.children.iter().filter(|c| c.name == name).count())
+    }
+
+    /// `path` with the subform segments the data has no node for taken out. Those subforms are
+    /// transparent to data binding (XFA 3.3): their fields bind to the data of the scope above
+    /// them, so a value in the data root is found by a field inside an unbound subform (#5442).
+    /// The last segment, the field itself, is kept.
+    pub fn transparent_path(&self, path: &[(String, usize)]) -> DataPath {
+        let mut out = DataPath::new();
+        let Some((last, inner)) = path.split_last() else { return out };
+        for (name, idx) in inner {
+            if self.count(&out, name) > 0 {
+                out.push((name.clone(), *idx));
+            }
+        }
+        out.push(last.clone());
+        out
     }
 
     pub fn text_at(&self, path: &[(String, usize)]) -> Option<&str> {

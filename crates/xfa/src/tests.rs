@@ -4145,3 +4145,23 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
 }
+
+/// #5442: a field inside a subform that has no bind and no data of its own is bound to the data of
+/// the scope above (XFA 3.3: an unbound subform is transparent). The value sits in the data root.
+#[test]
+fn a_field_in_an_unbound_subform_reads_the_data_root() {
+    let xdp = r##"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="data" layout="tb"><pageSet><pageArea name="P"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet><subform name="DemoPage" layout="tb"><field name="GV" w="2in" h="0.3in"><ui><textEdit/></ui><bind match="dataRef" ref="$.GV"/></field></subform></subform></template><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><data><GV>abc</GV></data></xfa:data></xfa:datasets></xdp:xdp>"##;
+    let (tpl, _) = parse(xdp).unwrap();
+    let data = parse_datasets(xdp).expect("datasets");
+    assert_eq!(crate::data::bound_value(&tpl, &data, "data[0].DemoPage[0].GV[0]").as_deref(), Some("abc"));
+    assert_eq!(crate::data::bound_text(&tpl, &data, "data[0].DemoPage[0].GV[0]").as_deref(), Some("abc"));
+}
+
+/// A subform that does have its own data node keeps its scope: the value is read from inside it.
+#[test]
+fn a_bound_subform_keeps_its_data_scope() {
+    let xdp = r##"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="data" layout="tb"><pageSet><pageArea name="P"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet><subform name="DemoPage" layout="tb"><field name="GV" w="2in" h="0.3in"><ui><textEdit/></ui><bind match="dataRef" ref="$.GV"/></field></subform></subform></template><xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><data><DemoPage><GV>inner</GV></DemoPage><GV>outer</GV></data></xfa:data></xfa:datasets></xdp:xdp>"##;
+    let (tpl, _) = parse(xdp).unwrap();
+    let data = parse_datasets(xdp).expect("datasets");
+    assert_eq!(crate::data::bound_value(&tpl, &data, "data[0].DemoPage[0].GV[0]").as_deref(), Some("inner"));
+}

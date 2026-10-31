@@ -2,7 +2,7 @@ use super::common::{button_action, date_pattern};
 use super::items::{BorderShape, Item, Widget, WidgetBorder, WidgetKind};
 use super::{
     Access, Border, Ctx, Engine, Face, Field, HAlign, Layouter, MAX_DATA_IMAGE, Margin, Para, Placement, Presence, Rect, Ui, VAlign, Value, XfaError,
-    data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, text,
+    bound_text, bound_value, data_date_letters, data_to_iso, is_on, iso_to_pattern, text,
 };
 
 impl Layouter<'_> {
@@ -71,7 +71,7 @@ impl Layouter<'_> {
                 let field_name = f.common.name.clone().unwrap_or_else(|| "an image field".into());
                 let text: Vec<u8> = self
                     .data
-                    .and_then(|d| d.text_at(&data_path(self.tpl, &som_path())))
+                    .and_then(|d| bound_text(self.tpl, d, &som_path()))
                     .map(|t| t.bytes().filter(|b| !b.is_ascii_whitespace()).collect())
                     .unwrap_or_default();
                 let from_data = if text.is_empty() {
@@ -103,12 +103,7 @@ impl Layouter<'_> {
             Ui::Barcode => {
                 // The value as text, where the bars would be.
                 self.warn_once("barcode fields show their value as text, not as bars");
-                let value = self
-                    .data
-                    .and_then(|d| d.text_at(&data_path(self.tpl, &som_path())))
-                    .map(str::to_string)
-                    .or_else(|| f.value.plain())
-                    .unwrap_or_default();
+                let value = self.data.and_then(|d| bound_text(self.tpl, d, &som_path())).or_else(|| f.value.plain()).unwrap_or_default();
                 if !value.trim().is_empty() {
                     let mut para = fctx.para.clone();
                     para.h_align = HAlign::Center;
@@ -125,8 +120,7 @@ impl Layouter<'_> {
         // A text field that grew past what a content area holds can't be one widget: its text
         // is drawn as lines the page breaks fall between, and stays what the data holds.
         if f.grows_with_text() && rect.h > self.cursor().0.h + 0.01 {
-            let value =
-                self.data.and_then(|d| d.value_at(&data_path(self.tpl, &som_path()))).filter(|t| !t.trim().is_empty()).or_else(|| f.value.plain());
+            let value = self.data.and_then(|d| bound_value(self.tpl, d, &som_path())).filter(|t| !t.trim().is_empty()).or_else(|| f.value.plain());
             if let Some(value) = value.filter(|t| !t.trim().is_empty()) {
                 let name = f.common.name.clone().unwrap_or_else(|| "a text field".into());
                 self.warn_once(format!("{name}: its text is longer than a page; it is shown across pages and can't be edited here"));
@@ -157,7 +151,7 @@ impl Layouter<'_> {
         let read_only = matches!(f.access, Access::ReadOnly | Access::Protected);
         // The data's value wins over the template's default.
         let data_value: Option<String> =
-            self.data.and_then(|d| d.value_at(&data_path(self.tpl, &som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+            self.data.and_then(|d| bound_value(self.tpl, d, &som)).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
         // A choice list's default is a saved value too.
         let template_default = f.value.plain().map(|v| f.saved_value(v.trim())).filter(|v| !v.is_empty());
         let plain_value = data_value.clone().or_else(|| template_default.clone());
