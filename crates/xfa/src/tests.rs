@@ -2412,8 +2412,9 @@ fn rounded_corners_make_a_border_one_rounded_shape() {
     let round = at(0.0).expect("the rounded border is one shape");
     assert_eq!((round.rect.w, round.rect.h, round.radii), (144.0, 72.0, [18.0; 4]));
     assert_eq!((round.fill, round.edge), (Some([230.0 / 255.0; 3]), Some((1.0, [1.0, 0.0, 0.0], false))));
+    // Two corners alternate: the first is drawn top-left and bottom-right.
     let mixed = at(1.2).expect("the box with two corners given");
-    assert_eq!((mixed.radii, mixed.inverted), ([7.2, 14.4, 14.4, 14.4], [false, true, true, true]));
+    assert_eq!((mixed.radii, mixed.inverted), ([7.2, 14.4, 7.2, 14.4], [false, true, false, true]));
     assert_eq!(at(2.4).expect("the huge radius").radii, [36.0; 4], "at most half the shorter side");
     assert!(at(3.6).is_none() && at(4.8).is_none(), "hidden corners and unlike edges keep a square box");
     let fill_only = at(6.0).expect("a fill with hidden edges is rounded too");
@@ -2429,6 +2430,34 @@ fn rounded_corners_make_a_border_one_rounded_shape() {
             .count()
     };
     assert_eq!((lines_at(3.6), lines_at(4.8)), (4, 2));
+}
+
+/// Corners not listed are drawn the way edges are, from the corner on the same side, as
+/// readers draw them (XFA 3.3 p. 38 gives the order top-left, top-right, bottom-right,
+/// bottom-left, and says the last corner listed is reused): one serves all four, two
+/// alternate, three reuse the second for the bottom-left.
+#[test]
+fn corners_not_listed_follow_the_edge_pattern() {
+    let radii = |corners: &str| {
+        let body = format!(
+            r#"<subform name="body" layout="position" w="7.5in" h="9in"><draw name="d" x="0in" y="0in" w="2in" h="1in"><value><text>d</text></value><border><edge/>{corners}</border></draw></subform>"#
+        );
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        rounded(&form.pages[0]).first().map(|r| r.radii)
+    };
+    let (round, square) = (r#"<corner radius="0.25in"/>"#, r#"<corner/>"#);
+    assert_eq!(radii(&format!("{round}{square}")), Some([18.0, 0.0, 18.0, 0.0]), "round top-left and bottom-right");
+    assert_eq!(radii(&format!("{square}{round}")), Some([0.0, 18.0, 0.0, 18.0]));
+    assert_eq!(
+        radii(r#"<corner radius="5pt"/><corner radius="10pt"/><corner radius="15pt"/>"#),
+        Some([5.0, 10.0, 15.0, 10.0]),
+        "the second serves the bottom-left"
+    );
+    assert_eq!(radii(round), Some([18.0; 4]));
+    for (listed, sides) in [(1, [0, 0, 0, 0]), (2, [0, 1, 0, 1]), (3, [0, 1, 2, 1]), (4, [0, 1, 2, 3])] {
+        assert_eq!(std::array::from_fn::<_, 4, _>(|i| crate::parse::drawn_side(listed, i)), sides.map(Some), "{listed}");
+    }
+    assert_eq!(crate::parse::drawn_side(0, 2), None);
 }
 
 /// A rounded box a page break cuts keeps its rounded corners on each page, square where it was
@@ -4144,4 +4173,31 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     assert!(!has_password_values(&doc));
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
+}
+
+/// Review on #5010: the text the reader returns is held to what `parse` accepts. A packet within
+/// the 64 MB byte limit that isn't valid UTF-8 grows as each bad byte becomes a three-byte
+/// replacement character: 33 MiB of them come to 99 MiB of text, past the limit, and are refused
+/// as too large rather than handed to `parse`, which would refuse them only later.
+#[test]
+fn packets_whose_text_grows_past_the_template_limit_are_refused() {
+    let mut doc = Document::open(Arc::new(shell("<template><subform/></template>"))).unwrap();
+    let mut bytes = b"<template>".to_vec();
+    bytes.resize(bytes.len() + (33 << 20), 0xFF);
+    assert!(bytes.len() <= crate::packets::MAX_XDP, "the packet is within the byte limit");
+    let packet = pdfcraft_cos::ObjRef::new(5, 0);
+    doc.set(packet, Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), &bytes)));
+    match read_packets(&doc) {
+        Err(XfaError::TooLarge(m)) => assert!(m.contains("bytes of text"), "{m}"),
+        other => panic!("{:?}", other.map(|p| p.map(|p| p.xdp.len()))),
+    }
+    // As one stream rather than an array of named parts too.
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| {
+        let mut acro = c.get(b"AcroForm").and_then(Object::as_dict).cloned().unwrap();
+        acro.set(b"XFA".to_vec(), Object::Ref(packet));
+        c.set(b"AcroForm".to_vec(), Object::Dict(acro));
+    })
+    .unwrap();
+    assert!(matches!(read_packets(&doc), Err(XfaError::TooLarge(_))));
 }

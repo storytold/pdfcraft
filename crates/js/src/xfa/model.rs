@@ -50,6 +50,9 @@ pub struct XfaNode {
     /// Fields: the value shown in the field's display picture, what `formattedValue` reads;
     /// `None` when the picture doesn't change it (the raw value is read then).
     pub formatted: Option<String>,
+    /// The template's attributes and property elements of the object (border, ui, validate, …),
+    /// shared: snapshots taken for each script point at the same tree.
+    pub props: std::sync::Arc<super::XfaProps>,
 }
 
 /// The event a script runs for.

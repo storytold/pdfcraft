@@ -347,6 +347,31 @@ pub struct Common {
     pub para: ParaSpec,
     /// Table cells: how many columns this cell spans.
     pub col_span: usize,
+    /// The object's own attributes and its property elements as the template writes them, for
+    /// scripts to read (see [`Props`]). Shared: the live form's instances of the object and
+    /// copies of the template point at the same tree.
+    pub props: std::sync::Arc<Props>,
+}
+
+/// What scripts read of an object's properties (XFA 3.3 ch. 3, "Properties vs. Children",
+/// p. 78): the object's own attributes and the property elements the template gives it (border,
+/// font, para, margin, ui, validate, occur, break, assist, format, value, bind, desc, extras, keep),
+/// as written. Properties the template leaves out are not here: the scripting host supplies
+/// their defaults.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Props {
+    pub attrs: Vec<(String, String)>,
+    pub elements: Vec<Prop>,
+}
+
+/// One property element: its tag, attributes, text (for elements that hold text, such as
+/// `picture` or `toolTip`) and its own property elements.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Prop {
+    pub tag: String,
+    pub attrs: Vec<(String, String)>,
+    pub text: Option<std::sync::Arc<str>>,
+    pub children: Vec<Prop>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -737,6 +762,41 @@ pub struct Template {
     /// Fields that compute the page number or the page count on layout, by `id`, so text that
     /// embeds them can show the numbers.
     pub page_roles: Vec<(String, PageRole)>,
+    /// What a user of the template keeps for as long as it lives (see [`TemplateCache`]).
+    pub cache: TemplateCache,
+}
+
+/// Room for one value a user of a template keeps alongside it for as long as the template
+/// lives, and drops with it (the engine keeps the script engine's copies of the property trees
+/// here, so they go when the form is closed). Not part of the template: a clone starts empty,
+/// and two caches always compare equal.
+#[derive(Default)]
+pub struct TemplateCache(std::sync::OnceLock<Box<dyn std::any::Any + Send + Sync>>);
+
+impl TemplateCache {
+    /// The value kept here, made by `make` the first time; `None` when a value of another type
+    /// was kept first.
+    pub fn get_or_init<T: std::any::Any + Send + Sync>(&self, make: impl FnOnce() -> T) -> Option<&T> {
+        self.0.get_or_init(|| Box::new(make())).downcast_ref()
+    }
+}
+
+impl Clone for TemplateCache {
+    fn clone(&self) -> Self {
+        TemplateCache::default()
+    }
+}
+
+impl PartialEq for TemplateCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for TemplateCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TemplateCache")
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

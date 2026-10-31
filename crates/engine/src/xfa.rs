@@ -8,9 +8,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use pdfcraft_js::xfa::{XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode};
+use pdfcraft_js::xfa::{XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaProp, XfaProps};
 use pdfcraft_js::xfa_session::{Script, XfaSession};
-use pdfcraft_xfa::model::Template;
+use pdfcraft_xfa::model::{Prop, Props, Template};
 use pdfcraft_xfa::{FormNode, LiveForm, NodeKind, ScriptEvent};
 
 use crate::js::JsOutput;
@@ -134,8 +134,94 @@ pub(crate) struct XfaRun<'a> {
     pub time_scale: u32,
 }
 
-/// The live form node `n`, with its descendants, as the script engine's snapshot of it.
-fn to_js(n: &FormNode) -> XfaNode {
+/// The script engine's copies of a form's property trees, by the address of the tree each was
+/// made from: made the first time a script of the form needs one, then shared by every later
+/// script and event of that form. They are kept in the form's template
+/// ([`pdfcraft_xfa::model::TemplateCache`]), so they go with it when the form is closed, and
+/// the lock is the form's own. Each entry holds a weak reference to its tree, which keeps the
+/// address from being reused while the entry exists; entries whose tree is gone (a tree of a
+/// copy of the template, such as one with a script's overrides applied) are dropped each time
+/// the map is used.
+type PropsCopies = HashMap<usize, (std::sync::Weak<Props>, Arc<XfaProps>)>;
+type PropsCache = std::sync::Mutex<PropsCopies>;
+
+/// The form's map of copies, with the entries of trees that are gone dropped; `None` only when
+/// the template's cache holds something else. A poisoned lock only means a panic elsewhere
+/// while it was held: the map is still a valid memo.
+fn props_copies(tpl: &Template) -> Option<std::sync::MutexGuard<'_, PropsCopies>> {
+    let mut copies = tpl.cache.get_or_init(PropsCache::default)?.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    copies.retain(|_, (tree, _)| tree.strong_count() > 0);
+    Some(copies)
+}
+
+/// The copy made of `p`, if there is one.
+fn copy_of(copies: &PropsCopies, p: &Arc<Props>) -> Option<Arc<XfaProps>> {
+    let (tree, copy) = copies.get(&(Arc::as_ptr(p) as usize))?;
+    (std::sync::Weak::as_ptr(tree) == Arc::as_ptr(p) && tree.strong_count() > 0).then(|| Arc::clone(copy))
+}
+
+/// The script engine's copy of the template's property tree `p`.
+fn convert_props(p: &Props) -> XfaProps {
+    fn prop(p: &Prop, depth: usize) -> XfaProp {
+        XfaProp {
+            tag: p.tag.clone(),
+            attrs: p.attrs.clone(),
+            // Shared, not copied: a validation's script can be long.
+            text: p.text.clone(),
+            // The parser keeps 8 levels; this bounds the walk whatever builds the tree.
+            children: if depth > 64 { Vec::new() } else { p.children.iter().map(|c| prop(c, depth + 1)).collect() },
+        }
+    }
+    XfaProps { attrs: p.attrs.clone(), elements: p.elements.iter().map(|e| prop(e, 0)).collect() }
+}
+
+/// The live form node `n` of the form whose template is `tpl`, with its descendants, as the
+/// script engine's snapshot of it; the property trees are the form's shared copies
+/// ([`PropsCopies`]), not copied again. The map is locked only to look copies up and to add the
+/// ones made (outside the lock) for trees met for the first time.
+fn to_js(n: &FormNode, tpl: &Template) -> XfaNode {
+    fn trees<'a>(n: &'a FormNode, out: &mut HashMap<usize, &'a Arc<Props>>, depth: usize) {
+        out.entry(Arc::as_ptr(&n.props) as usize).or_insert(&n.props);
+        if depth <= 256 {
+            n.children.iter().for_each(|c| trees(c, out, depth + 1));
+        }
+    }
+    let mut needed = HashMap::new();
+    trees(n, &mut needed, 0);
+    let mut found: HashMap<usize, Arc<XfaProps>> = HashMap::with_capacity(needed.len());
+    let missing: Vec<&Arc<Props>> = {
+        let copies = props_copies(tpl);
+        needed
+            .iter()
+            .filter_map(|(&key, p)| match copies.as_ref().and_then(|c| copy_of(c, p)) {
+                Some(copy) => {
+                    found.insert(key, copy);
+                    None
+                }
+                None => Some(*p),
+            })
+            .collect()
+    };
+    if !missing.is_empty() {
+        let made: Vec<(&Arc<Props>, Arc<XfaProps>)> = missing.into_iter().map(|p| (p, Arc::new(convert_props(p)))).collect();
+        let mut copies = props_copies(tpl);
+        for (p, copy) in made {
+            let key = Arc::as_ptr(p) as usize;
+            // Another thread may have made one meanwhile: keep the first.
+            let copy = match copies.as_mut() {
+                Some(c) => copy_of(c, p).unwrap_or_else(|| {
+                    c.insert(key, (Arc::downgrade(p), Arc::clone(&copy)));
+                    copy
+                }),
+                None => copy,
+            };
+            found.insert(key, copy);
+        }
+    }
+    to_js_with(n, &found, 0)
+}
+
+fn to_js_with(n: &FormNode, copies: &HashMap<usize, Arc<XfaProps>>, depth: usize) -> XfaNode {
     XfaNode {
         name: n.name.clone(),
         som: n.som.clone(),
@@ -154,7 +240,8 @@ fn to_js(n: &FormNode) -> XfaNode {
         occur_min: n.occur_min,
         occur_max: n.occur_max,
         index: n.index,
-        children: n.children.iter().map(to_js).collect(),
+        children: if depth > 256 { Vec::new() } else { n.children.iter().map(|c| to_js_with(c, copies, depth + 1)).collect() },
+        props: copies.get(&(Arc::as_ptr(&n.props) as usize)).cloned().unwrap_or_else(|| Arc::new(convert_props(&n.props))),
         formatted: n.display_picture.as_deref().and_then(|p| pdfcraft_xfa::formatted_value(p, &n.value)),
     }
 }
@@ -662,7 +749,8 @@ impl<'a, 'b> Runner<'a, 'b> {
         #[cfg(test)]
         self.check_live();
         let event = XfaEvent { activity: ev.activity.clone(), target: ev.som.clone(), new_text: new_text.to_string(), prev_text: String::new() };
-        let root = to_js(&self.live().root);
+        let tpl = self.tpl;
+        let root = to_js(&self.live().root, tpl);
         let script = Script {
             source: ev.script.clone(),
             formcalc: ev.formcalc,
@@ -953,5 +1041,84 @@ mod tests {
             split_instance(&Template::default(), "form[0].table[0].row[2]").map(|(p, ps, n, i)| (p.len(), ps, n, i)),
             Some((2, "form[0].table[0]".into(), "row".into(), 2))
         );
+    }
+
+    /// The scripts' snapshot shares the template's property trees: the next script's, and the
+    /// next event's (a live form built again, from a copy of the template as overrides make
+    /// one), point at the trees the first converted rather than converting them again.
+    #[test]
+    fn snapshots_share_property_trees_across_runs_and_events() {
+        let fields: String = (0..2_000)
+            .map(|i| format!(r#"<field name="f{i}"><ui><choiceList/></ui><border><edge/><fill><color value="1,2,3"/></fill></border></field>"#))
+            .collect();
+        let xml = format!(
+            r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">{fields}</subform></template>"#
+        );
+        let (tpl, _) = pdfcraft_xfa::parse(&xml).unwrap();
+        let live = pdfcraft_xfa::form_tree(&tpl, None, &Default::default());
+        let a = to_js(&live.root, &tpl);
+        let b = to_js(&live.root, &tpl);
+        // A tree built again (with a script's overrides) is still the form's: same copies.
+        let copy = pdfcraft_xfa::apply_overrides(&tpl, &Default::default());
+        let c = to_js(&pdfcraft_xfa::form_tree(&copy, None, &Default::default()).root, &tpl);
+        assert_eq!(a.children.len(), 2_000);
+        for ((x, y), z) in a.children.iter().zip(&b.children).zip(&c.children) {
+            assert!(Arc::ptr_eq(&x.props, &y.props) && Arc::ptr_eq(&x.props, &z.props));
+        }
+        assert_eq!(a.children[0].props.elements[1].children[1].children[0].attrs, [("value".to_string(), "1,2,3".to_string())]);
+    }
+
+    /// A form's copies of its property trees are its own: kept for its later snapshots, and
+    /// dropped with its template when the form is closed, whatever other forms do.
+    #[test]
+    fn a_closed_forms_property_copies_go_with_its_template() {
+        let xml = |name: &str| {
+            format!(
+                r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb"><field name="{name}"><border><edge/></border></field></subform></template>"#
+            )
+        };
+        let (closed, _) = pdfcraft_xfa::parse(&xml("a")).unwrap();
+        let (open, _) = pdfcraft_xfa::parse(&xml("b")).unwrap();
+        let live = pdfcraft_xfa::form_tree(&closed, None, &Default::default());
+        let snapshot = to_js(&live.root, &closed);
+        let copy = Arc::downgrade(&snapshot.children[0].props);
+        drop(snapshot);
+        assert!(copy.upgrade().is_some(), "kept for the form's next snapshot");
+        // Another form's snapshot neither keeps nor needs this form's copies.
+        let other = to_js(&pdfcraft_xfa::form_tree(&open, None, &Default::default()).root, &open);
+        assert!(!Arc::ptr_eq(&other.children[0].props, &copy.upgrade().unwrap_or_default()));
+        drop(live);
+        drop(closed);
+        assert!(copy.upgrade().is_none(), "closing the form drops its copies at once");
+    }
+
+    /// A field's click script reads its own and other objects' properties through a laid-out
+    /// dynamic form: template values, the spec's defaults, and a write read back, which changes
+    /// nothing on the form.
+    #[test]
+    fn a_click_script_reads_field_properties() {
+        let template = pdfcraft_xfa::fixtures::scripted_template()
+            .replace(
+                r#"<field name="hello" w="1in" h="0.3in"><ui><button/></ui>"#,
+                r#"<field name="hello" w="1in" h="0.3in"><ui><button/></ui><border><fill><color value="200,200,255"/></fill></border>"#,
+            )
+            .replace(
+                r#"xfa.host.messageBox("Hello " + qty.rawValue);"#,
+                r#"qty.validate.nullTest = "error"; xfa.host.messageBox([this.ui.oneOfChild.className, this.border.fill.color.value, this.border.presence, qty.ui.oneOfChild.className, qty.validate.message.text.value, qty.validate.nullTest, table.row.occur.max, more.ui.oneOfChild.className, this.isPropertySpecified("border"), qty.isPropertySpecified("border")].join("|"));"#,
+            );
+        let mut s = crate::Session::new();
+        let id = s.open("props.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+        let _ = s.take_js_output(id);
+        let fields =
+            |s: &crate::Session| s.get(id).unwrap().form.iter().map(|f| (f.name.clone(), f.value.clone(), f.read_only())).collect::<Vec<_>>();
+        let before = fields(&s);
+        let out = s.run_javascript(id, "", Some("hello")).unwrap();
+        assert!(out.error.is_none(), "{out:?}");
+        assert_eq!(
+            out.alerts,
+            [pdfcraft_js::Message::plain("button|200,200,255|visible|numericEdit|Quantity must be 100 or less|error|-1|checkButton|true|false")]
+        );
+        assert!(s.take_js_output(id).errors.is_empty());
+        assert_eq!(fields(&s), before, "a property write changes nothing yet");
     }
 }

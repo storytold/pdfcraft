@@ -109,8 +109,17 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   The object model covers what forms commonly use (`xfa.form`
   navigation and SOM resolution, `rawValue`, `presence`, `access`, instance managers,
   `xfa.host` messages, reset, print, focus and URLs, `xfa.layout` page numbers, `xfa.event`);
-  not `xfa.template`, data descriptions, `xfa.connectionSet`, `border`/`font`/`ui` properties
-  (reads give a sink that accepts writes), `execEvent`, or the change event per keystroke.
+  property objects (`border`, `font`, `para`, `margin`, `ui` and its `oneOfChild`, `validate`,
+  `calculate`, `occur`, `break`, `breakBefore`, `breakAfter`, `assist`, `format`, `bind`,
+  `desc`, `extras`, `keep`, `caption` and a field's `items`), read as the template writes them
+  (the parser keeps each object's property elements, shared by every instance and every
+  script's snapshot) with the spec's defaults for what forms read, `getElement`,
+  `isPropertySpecified`, `getAttribute`, and a node's `mandatory`, validation messages and
+  colour shorthands; writes to them are read back in the same script but change nothing yet.
+  Not `xfa.template`, data descriptions, `xfa.connectionSet`, the choice-list methods
+  (`addItem`, `clearItems`, `boundItem`; `selectedIndex` reads give a sink that accepts
+  writes), a node's `value` as its value element, `traversal` and `overflow`, property reads
+  in FormCalc, `execEvent`, or the change event per keystroke.
   Validate failures show their message and keep the value, as Acrobat does for scripts.
   A hidden instance of a repeating subform hides every instance (overrides apply to the template).
   A repeating subform shows what its data holds once the data holds any instance, else its
