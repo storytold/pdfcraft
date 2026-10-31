@@ -295,7 +295,27 @@ mod tests {
     use super::*;
     use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
     use windows::Win32::UI::Shell::SHCreateMemStream;
-    use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD};
+    use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD};
+
+    /// A child window under the message-only root: valid without an interactive desktop (CI).
+    fn preview_host_window(width: i32, height: i32) -> windows_core::Result<HWND> {
+        unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                windows::core::w!("STATIC"),
+                windows::core::w!(""),
+                WINDOW_STYLE(WS_CHILD.0),
+                0,
+                0,
+                width,
+                height,
+                Some(HWND_MESSAGE),
+                None,
+                None,
+                None,
+            )
+        }
+    }
 
     fn pdf(w: u32, h: u32, content: &str) -> Vec<u8> {
         let objects = [
@@ -331,21 +351,7 @@ mod tests {
             let stream = SHCreateMemStream(Some(&bytes)).unwrap();
             init.Initialize(&stream, 0).unwrap();
             let preview: IPreviewHandler = init.cast().unwrap();
-            let hwnd = CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
-                windows::core::w!("STATIC"),
-                windows::core::w!(""),
-                WINDOW_STYLE(WS_CHILD.0),
-                0,
-                0,
-                320,
-                240,
-                None,
-                None,
-                None,
-                None,
-            )
-            .unwrap();
+            let hwnd = preview_host_window(320, 240).expect("a message-only host window for the preview pane");
             let rect = RECT { left: 0, top: 0, right: 320, bottom: 240 };
             preview.SetWindow(hwnd, &rect).unwrap();
             preview.DoPreview().unwrap();
@@ -360,21 +366,7 @@ mod tests {
             let preview: IPreviewHandler = init.cast().unwrap();
             let stream = SHCreateMemStream(Some(b"not a PDF")).unwrap();
             init.Initialize(&stream, 0).unwrap();
-            let hwnd = CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
-                windows::core::w!("STATIC"),
-                windows::core::w!(""),
-                WINDOW_STYLE(WS_CHILD.0),
-                0,
-                0,
-                64,
-                64,
-                None,
-                None,
-                None,
-                None,
-            )
-            .unwrap();
+            let hwnd = preview_host_window(64, 64).expect("a message-only host window for the preview pane");
             let rect = RECT { left: 0, top: 0, right: 64, bottom: 64 };
             preview.SetWindow(hwnd, &rect).unwrap();
             assert!(preview.DoPreview().is_err());
