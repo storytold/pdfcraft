@@ -4549,6 +4549,36 @@ fn comb_fields_show_their_cells() {
     assert!(!plain.contains(" m ") && plain.contains("(A) Tj"), "{plain}");
 }
 
+/// Each trigger of ISO 32000-2 Table 197 finds its own action on the widget: Mouse Up in `/A`
+/// (a push button's) or `/AA /U`, the others in `/AA` D, E, X, Fo and Bl. A widget without one
+/// for a trigger has none, and a widget index the field doesn't have finds nothing.
+#[test]
+fn each_trigger_reads_its_own_widget_action() {
+    let doc = Document::open(Arc::new(crate::fixtures::trigger_form())).expect("opens");
+    let fields = fields(&doc);
+    let field = |n: &str| fields.iter().find(|f| f.name == n).unwrap_or_else(|| panic!("no field {n}"));
+    // The key the script found is under (each names it in a comment).
+    let key = |n: &str, t: Trigger| match widget_action(&doc, field(n), 0, t) {
+        Some(af::ButtonAction::Script(js)) => js.strip_prefix("/* ").and_then(|r| r.split_once(" */")).map(|(k, _)| k.to_string()),
+        _ => None,
+    };
+    for (t, k) in [
+        (Trigger::MouseUp, "U"),
+        (Trigger::MouseDown, "D"),
+        (Trigger::MouseEnter, "E"),
+        (Trigger::MouseExit, "X"),
+        (Trigger::OnFocus, "Fo"),
+        (Trigger::OnBlur, "Bl"),
+    ] {
+        assert_eq!(key("a", t).as_deref(), Some(k), "a {t:?}");
+        assert_eq!(key("cb", t).as_deref(), Some(k), "cb {t:?}");
+        let button = if t == Trigger::MouseUp { "A" } else { k };
+        assert_eq!(key("btn", t).as_deref(), Some(button), "btn {t:?}: Mouse Up from /A");
+        assert_eq!(widget_action(&doc, field("log"), 0, t), None, "log has no actions");
+    }
+    assert_eq!(widget_action(&doc, field("a"), 1, Trigger::MouseEnter), None, "a has one widget");
+}
+
 /// Check boxes and radio buttons with an `/MK` look and appearances of their own, in a form that
 /// sets `/NeedAppearances` (`need`) or not.
 fn mk_buttons(need: bool) -> Document {

@@ -73,6 +73,23 @@ pub struct FormView {
     /// The widget holding egui's keyboard focus for the focused check box or radio button, and
     /// whether it takes the arrows (radio buttons). The page keys still work around it.
     pub(crate) keys: Option<(egui::Id, bool)>,
+    /// The field and widget that had focus when it was last looked at: when the focus moves, the
+    /// one it left runs its XFA exit scripts and the one it reached its enter scripts
+    /// (`PdfCraftApp::run_focus_scripts`).
+    pub(crate) focused: Option<(String, usize)>,
+    /// The field and widget under the pointer when it was last looked at, and the one this
+    /// frame's pages found under it: when they differ, the one left runs its Mouse Exit action
+    /// and the one reached its Mouse Enter (`PdfCraftApp::run_pointer_triggers`).
+    pub(crate) hovered: Option<(String, usize)>,
+    pub(crate) hover_seen: Option<(String, usize)>,
+    /// Mouse Down actions this frame's presses set off, run before what the press commits.
+    pub(crate) pressed_on: Vec<(String, usize)>,
+    /// Fields (not push buttons, whose click is `button`) a click released on: their Mouse Up
+    /// actions run once the focus scripts have, as another viewer orders them.
+    pub(crate) released_on: Vec<(String, usize)>,
+    /// The primary button went down in the open field editor (not on the page, which saw the
+    /// press that opened it): its release over the field is that field's Mouse Up.
+    pub(crate) editor_press: bool,
 }
 
 /// A form message for the app to show, with document data kept separate so the visible
@@ -95,6 +112,12 @@ fn fillable(f: &FormField) -> bool {
     !f.read_only() && !matches!(f.kind, FormFieldKind::PushButton | FormFieldKind::Signature)
 }
 
+/// Whether the field takes the focus, on a click and as a Tab stop: one that can be filled in,
+/// or a push button, as another viewer gives it the focus and a Tab stop too.
+fn takes_focus(f: &FormField) -> bool {
+    fillable(f) || (f.kind == FormFieldKind::PushButton && !f.read_only())
+}
+
 /// Whether a combo box takes typed text as well as a choice from its list: the Edit flag
 /// (ISO 32000-2 Table 233), which only means something with Combo set.
 fn editable_combo(f: &FormField) -> bool {
@@ -113,6 +136,7 @@ pub(crate) fn draft_text(f: &FormField) -> String {
     value
 }
 
+/// The editor's draft for widget `widget` of field `f`, opened on the field's value.
 fn open_focus(f: &FormField, widget: usize) -> Focus {
     Focus {
         name: f.name.clone(),
@@ -126,6 +150,17 @@ fn open_focus(f: &FormField, widget: usize) -> Focus {
         calendar_rect: None,
         calendar_text: None,
         had_focus: false,
+    }
+}
+
+/// After a script changed the field being edited from `before` to `after`, each given as its
+/// editor text ([`draft_text`]: a combo box's shown option) and its value: the editor shows
+/// `after`, as [`open_focus`] would, unless the person has typed there already (the draft no
+/// longer holds `before`), whose typing then stays theirs to commit.
+pub(crate) fn refresh_draft(focus: &mut Focus, before: (&str, &[String]), after: (String, &[String])) {
+    if focus.picked.as_slice() == before.1 && focus.text == before.0 {
+        focus.text = after.0;
+        focus.picked = after.1.to_vec();
     }
 }
 
@@ -186,17 +221,29 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, form: &[FormField
 /// `true` while a field holds the press.
 pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], allowed: bool, view: &mut DocView) -> bool {
     let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
+    // The field under the pointer, for its tooltip and its Mouse Enter and Exit actions.
+    let hovered = ptr.within(xf.rect).and_then(|p| hit(xf, info, page, form, allowed, p)).and_then(|h| match h.owner {
+        Owner::Field { field, widget } => form.get(field).map(|f| (f, widget)),
+        _ => None,
+    });
+    // Its Mouse Enter and Exit actions run where the form may be filled in, as its other
+    // actions do: elsewhere a script changing a value would only be refused, on every pass.
+    if allowed && let Some((f, wi)) = hovered {
+        view.forms.hover_seen = Some((f.name.clone(), wi));
+    }
     // The field's tooltip (`/TU`) under the pointer, as Acrobat shows it on hover (#3854). ISO
     // 32000-2 Table 226 makes it the name the user interface identifies the field by.
-    if let Some(p) = ptr.within(xf.rect)
-        && let Some(Owner::Field { field, .. }) = hit(xf, info, page, form, allowed, p).map(|h| h.owner)
-        && let Some(tip) = form.get(field).and_then(|f| f.tooltip.as_deref()).filter(|t| !t.trim().is_empty())
-    {
+    if let Some(tip) = hovered.and_then(|(f, _)| f.tooltip.as_deref()).filter(|t| !t.trim().is_empty()) {
         resp.clone().on_hover_text_at_pointer(tip);
     }
     let Some(Owner::Field { field, widget: wi }) = view.router.owner(page) else { return false };
     let Some((f, w)) = form.get(field).and_then(|f| f.widgets.get(wi).map(|w| (f, w))) else { return false };
     let usable = usable(f, w, allowed);
+    // A press on a field that takes input runs its Mouse Down action first, before the field
+    // the focus leaves commits (another viewer's order).
+    if allowed && !f.read_only() && !w.read_only && resp.is_pointer_button_down_on() && ptr.pressed().is_some() {
+        view.forms.pressed_on.push((f.name.clone(), wi));
+    }
     // A text field opens on the press rather than the click, so a drag that starts on it
     // selects its text (#2213).
     if f.kind == FormFieldKind::Text
@@ -218,12 +265,23 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], allowed: b
         view.forms.notice = Some(FormNotice::Security);
         return true;
     }
+    if allowed && !f.read_only() && !w.read_only && f.kind != FormFieldKind::PushButton {
+        view.forms.released_on.push((f.name.clone(), wi));
+    }
     match f.kind {
         _ if f.read_only() || w.read_only => view.forms.notice = Some(FormNotice::ReadOnly(f.name.clone())),
-        FormFieldKind::PushButton => match &f.button {
-            Some(a) => view.forms.button = Some((f.name.clone(), a.clone())),
-            None => view.forms.notice = Some(FormNotice::NoAction(f.name.clone())),
-        },
+        FormFieldKind::PushButton => {
+            // The button takes the focus, as a check box does: what it leaves commits and blurs
+            // first, and Tab goes on from it.
+            if view.forms.focus.as_ref().is_none_or(|x| x.name != f.name || x.widget != wi) {
+                commit(view, form);
+                view.forms.focus = Some(open_focus(f, wi));
+            }
+            match &f.button {
+                Some(a) => view.forms.button = Some((f.name.clone(), a.clone())),
+                None => view.forms.notice = Some(FormNotice::NoAction(f.name.clone())),
+            }
+        }
         FormFieldKind::Signature => view.sign.field = Some(f.name.clone()),
         FormFieldKind::CheckBox | FormFieldKind::Radio => {
             // The box takes the focus, as in Acrobat, so Tab goes on from it (#2223). The overlay
@@ -706,11 +764,12 @@ fn settle_text_editor(
 fn tab_to_next_field(view: &mut DocView, form: &[FormField], f: &FormField, widget: usize, forward: bool, edit: Option<Edit>) -> Option<Edit> {
     commit(view, form);
     let pending = view.pending_edit.take();
-    // The next field that can be filled in, check boxes and radio buttons included (#2223), in
-    // the document's tab order (each page's /Tabs: rows, columns or structure), wrapping.
+    // The next field that takes the focus, check boxes, radio buttons (#2223) and push buttons
+    // included, in the document's tab order (each page's /Tabs: rows, columns or structure),
+    // wrapping.
     let mut order: Vec<(usize, &FormField, usize)> = form
         .iter()
-        .filter(|x| fillable(x))
+        .filter(|x| takes_focus(x))
         .flat_map(|x| x.widgets.iter().enumerate().filter(|(_, w)| w.page.is_some() && !w.hidden).map(move |(wi, w)| (w.tab, x, wi)))
         .collect();
     order.sort_by_key(|o| o.0);
@@ -774,10 +833,11 @@ pub(crate) fn overlay(
     let w = f.widgets.get(focus.widget)?;
     let page = w.page?;
     let Some(xf) = view.page_xform(page) else {
-        // A check box or radio button scrolled out of view lets go (it has no draft to keep):
-        // taking the keyboard back when its page returns would turn scrolling arrows into
-        // choices, or pull the keyboard from wherever the user went meanwhile.
-        if matches!(f.kind, FormFieldKind::CheckBox | FormFieldKind::Radio) {
+        // A check box, radio button or push button scrolled out of view lets go (it has no draft
+        // to keep): taking the keyboard back when its page returns would turn scrolling arrows
+        // into choices, or pull the keyboard from wherever the user went meanwhile, and a focus
+        // nothing shows would keep the page keys off.
+        if matches!(f.kind, FormFieldKind::CheckBox | FormFieldKind::Radio | FormFieldKind::PushButton) {
             view.forms.focus = None;
         }
         return None;
@@ -840,6 +900,21 @@ pub(crate) fn overlay(
                         })
                         // The form field's own logical name; not a visual/preordered label.
                         .accessible_name(f.name.clone());
+                    // A press in the open editor is a press on its field, whose Mouse Down runs, and
+                    // the release that follows over the field its Mouse Up, as another viewer runs
+                    // both for a click on the field being edited. (The press that opened the
+                    // editor went to the page, which queued them already.)
+                    let (pressed_here, released) = ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_released()));
+                    if pressed_here && r.is_pointer_button_down_on() {
+                        view.forms.pressed_on.push((f.name.clone(), focus.widget));
+                        view.forms.editor_press = true;
+                    }
+                    if released
+                        && std::mem::take(&mut view.forms.editor_press)
+                        && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| rect.contains(p))
+                    {
+                        view.forms.released_on.push((f.name.clone(), focus.widget));
+                    }
                     settle_text_editor(ui, fx, &r, primary_down, laid_out, text_box.zip(before));
                     let lost = crate::edit_text_ui::lost_focus_once(&r, &mut fx.had_focus);
                     let (enter, esc, tab, shift) = ui.input(|i| {
@@ -935,25 +1010,26 @@ pub(crate) fn overlay(
                 close = true;
             }
         }
-        FormFieldKind::CheckBox | FormFieldKind::Radio => {
-            // Nothing is drawn over the box, but a widget there holds egui's keyboard focus, so
-            // Space, Tab and the arrows come here instead of turning or scrolling the page.
-            let id = egui::Id::unique(("form-field", view.id.0, &f.name, focus.widget));
-            let mut has_focus = false;
-            // Not interactable, so clicks still reach the page under it.
-            let area = egui::Area::new(egui::Id::unique(("form-toggle", view.id.0))).order(egui::Order::Foreground).interactable(false);
-            area.fixed_pos(rect.min).show(ctx, |ui| {
-                let r = ui.interact(rect, id, egui::Sense::focusable_noninteractive());
-                if let Some(fx) = view.forms.focus.as_mut()
-                    && std::mem::take(&mut fx.request_focus)
-                {
-                    r.request_focus();
+        FormFieldKind::PushButton => {
+            let has_focus = hold_keys(ctx, view, f, focus.widget, rect);
+            let (esc, tab, shift) = ctx.input(|i| (i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Tab), i.modifiers.shift));
+            // Space or Enter presses the focused button, as a click's release does.
+            let press = has_focus
+                && ctx
+                    .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space) || i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            if esc || clicked_outside() {
+                close = true;
+            } else if tab {
+                next = Some(!shift);
+            } else if press {
+                match &f.button {
+                    Some(a) => view.forms.button = Some((f.name.clone(), a.clone())),
+                    None => view.forms.notice = Some(FormNotice::NoAction(f.name.clone())),
                 }
-                let filter = egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: false };
-                ui.memory_mut(|m| m.set_focus_lock_filter(id, filter));
-                has_focus = r.has_focus();
-            });
-            view.forms.keys = Some((id, f.kind == FormFieldKind::Radio));
+            }
+        }
+        FormFieldKind::CheckBox | FormFieldKind::Radio => {
+            let has_focus = hold_keys(ctx, view, f, focus.widget, rect);
             let (esc, tab, shift) = ctx.input(|i| (i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Tab), i.modifiers.shift));
             let space = has_focus && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));
             let arrow = has_focus && f.kind == FormFieldKind::Radio;
@@ -995,6 +1071,30 @@ pub(crate) fn overlay(
     edit.or_else(|| view.pending_edit.take())
 }
 
+/// For a focused check box, radio button or push button: nothing is drawn over it, but a widget
+/// there holds egui's keyboard focus, so Space, Tab and the arrows come to the field instead of
+/// turning or scrolling the page (radio buttons take the arrows). Returns whether it has the
+/// focus.
+fn hold_keys(ctx: &egui::Context, view: &mut DocView, f: &FormField, widget: usize, rect: Rect) -> bool {
+    let id = egui::Id::unique(("form-field", view.id.0, &f.name, widget));
+    let mut has_focus = false;
+    // Not interactable, so clicks still reach the page under it.
+    let area = egui::Area::new(egui::Id::unique(("form-toggle", view.id.0))).order(egui::Order::Foreground).interactable(false);
+    area.fixed_pos(rect.min).show(ctx, |ui| {
+        let r = ui.interact(rect, id, egui::Sense::focusable_noninteractive());
+        if let Some(fx) = view.forms.focus.as_mut()
+            && std::mem::take(&mut fx.request_focus)
+        {
+            r.request_focus();
+        }
+        let filter = egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: false };
+        ui.memory_mut(|m| m.set_focus_lock_filter(id, filter));
+        has_focus = r.has_focus();
+    });
+    view.forms.keys = Some((id, f.kind == FormFieldKind::Radio));
+    has_focus
+}
+
 /// Where a field's widget is on screen (tests and automation).
 pub fn field_screen_rect(view: &DocView, info: &DocInfo, f: &FormField, widget: usize) -> Option<Rect> {
     let w = f.widgets.get(widget)?;
@@ -1005,8 +1105,49 @@ pub fn field_screen_rect(view: &DocView, info: &DocInfo, f: &FormField, widget: 
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_SCREEN_FONT, bounded_line_width};
+    use super::*;
     use std::cell::Cell;
+
+    /// A draft as the editor opens it on a field holding `value`.
+    fn draft(value: &[&str]) -> Focus {
+        Focus {
+            name: "hint".into(),
+            widget: 0,
+            text: value.first().map(|s| s.to_string()).unwrap_or_default(),
+            picked: value.iter().map(|s| s.to_string()).collect(),
+            request_focus: true,
+            select_all: false,
+            press: None,
+            calendar: None,
+            calendar_rect: None,
+            calendar_text: None,
+            had_focus: false,
+        }
+    }
+
+    /// An untouched draft takes the value a script gave the field; typing is kept.
+    #[test]
+    fn a_draft_follows_a_scripts_change_until_something_is_typed() {
+        let before = vec!["Type here".to_string()];
+        let mut untouched = draft(&["Type here"]);
+        refresh_draft(&mut untouched, ("Type here", &before), (String::new(), &[]));
+        assert_eq!((untouched.text.as_str(), untouched.picked.len()), ("", 0));
+        let mut typed = draft(&["Type here"]);
+        typed.text = "Ann".into();
+        refresh_draft(&mut typed, ("Type here", &before), (String::new(), &[]));
+        assert_eq!(typed.text, "Ann", "the person's typing stays");
+        // A list's choices count as typing too.
+        let mut picked = draft(&["a"]);
+        picked.picked.push("b".into());
+        refresh_draft(&mut picked, ("a", &["a".to_string()]), ("c".into(), &["c".to_string()]));
+        assert_eq!(picked.picked, ["a", "b"]);
+        // A combo box's editor shows the option's shown text, not its export value: that is
+        // what an untouched draft holds, and what it takes.
+        let mut combo = draft(&["a"]);
+        combo.text = "Apple".into();
+        refresh_draft(&mut combo, ("Apple", &["a".to_string()]), ("Banana".into(), &["b".to_string()]));
+        assert_eq!((combo.text.as_str(), combo.picked.as_slice()), ("Banana", ["b".to_string()].as_slice()));
+    }
 
     #[test]
     fn a_line_is_never_laid_out_above_the_screen_font_bound() {
