@@ -112,3 +112,31 @@ fn a_page_or_dpi_the_renderer_cannot_use_is_refused_before_reading_the_file() {
         assert!(!out.exists(), "{option} {value}: no output may be written");
     }
 }
+
+#[test]
+fn missing_render_values_do_not_write_output() {
+    let pdf = fixture("missing-values");
+    let original = std::fs::read(&pdf).unwrap();
+    for option in ["--dpi", "--page"] {
+        let out = tmp("missing-values", &format!("{}.png", &option[2..]));
+        let _ = std::fs::remove_file(&out);
+        let result = Command::new(BIN).args(["render", pdf.to_str().unwrap(), "--out", out.to_str().unwrap(), option]).output().unwrap();
+        assert_eq!(result.status.code(), Some(1), "{option}: {}", String::from_utf8_lossy(&result.stderr));
+        assert!(String::from_utf8_lossy(&result.stderr).contains(&format!("render: {option} needs a value")));
+        assert!(!out.exists());
+        assert_eq!(std::fs::read(&pdf).unwrap(), original);
+    }
+    let out = tmp("missing-values", "default.png");
+    let _ = std::fs::remove_file(&out);
+    let result = Command::new(BIN).args(["render", pdf.to_str().unwrap(), "--out", out.to_str().unwrap()]).output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    assert!(out.exists());
+    assert_eq!(std::fs::read(&pdf).unwrap(), original);
+}
+
+#[test]
+fn info_accepts_an_empty_password() {
+    let pdf = fixture("empty-password");
+    let result = Command::new(BIN).args(["info", pdf.to_str().unwrap(), "--password", ""]).output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+}
