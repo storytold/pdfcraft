@@ -254,3 +254,6 @@ navigation-history tool; use the opt-in UI control channel to navigate the displ
 (`#RRGGBB`, default black) for `text` and `date`. The colour is saved in the
 FreeText appearance and survives reopening. Other mark/signature types reject
 `color`; their appearance controls are separate.
+
+Typed signatures and initials also accept `style: "script"` (default) or
+`style: "print"`; the chosen face is drawn into the annotation as outlines.

@@ -10,6 +10,15 @@ static FONT: &[u8] = include_bytes!("../../../assets/fonts/DancingScript.ttf");
 /// the script font lacks (Dancing Script is Latin and Vietnamese only: no Cyrillic or Greek).
 pub static INTER_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 
+/// The face used for a typed Fill & Sign signature.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignatureStyle {
+    #[default]
+    Script,
+    Print,
+}
+
 /// Forward slant of fallback glyphs in a typed signature (about 12°), so they lean like the script.
 const FALLBACK_SLANT: f64 = 0.21;
 
@@ -199,6 +208,18 @@ pub fn script_missing(text: &str) -> Option<char> {
     text.chars().find(|c| !c.is_whitespace() && charmap.map(*c).is_none() && fallback_map.as_ref().and_then(|m| m.map(*c)).is_none())
 }
 
+/// The first non-whitespace character that the selected signature face cannot draw.
+pub fn signature_missing(text: &str, style: SignatureStyle) -> Option<char> {
+    match style {
+        SignatureStyle::Script => script_missing(text),
+        SignatureStyle::Print => {
+            let font = FontRef::new(INTER_REGULAR).ok()?;
+            let map = font.charmap();
+            text.chars().find(|c| !c.is_whitespace() && map.map(*c).is_none())
+        }
+    }
+}
+
 /// The outlines of `text` in the script font. Characters it lacks (Cyrillic, Greek, …) are drawn
 /// from Inter, slanted and scaled to the script's capital height; characters neither font has are
 /// skipped (check [`script_missing`] first where nobody sees a preview). Over-limit input returns
@@ -255,6 +276,39 @@ pub fn script_outline(text: &str) -> ScriptOutline {
     ScriptOutline { contours: pen.contours, width: pen.dx, ascent: metrics.ascent as f64 * scale, descent: metrics.descent as f64 * scale }
 }
 
+/// Outlines of a typed signature in the selected bundled face. Existing signatures use Script.
+pub fn signature_outline(text: &str, style: SignatureStyle) -> ScriptOutline {
+    if style == SignatureStyle::Script {
+        return script_outline(text);
+    }
+    if text.chars().take(MAX_SIGNATURE_CHARS + 1).count() > MAX_SIGNATURE_CHARS {
+        return ScriptOutline::default();
+    }
+    let Ok(font) = FontRef::new(INTER_REGULAR) else { return ScriptOutline::default() };
+    let loc = LocationRef::default();
+    let metrics = font.metrics(Size::unscaled(), loc);
+    let scale = 1.0 / metrics.units_per_em.max(1) as f64;
+    let charmap = font.charmap();
+    let glyphs = font.outline_glyphs();
+    let advances = font.glyph_metrics(Size::unscaled(), loc);
+    let mut pen = Flatten::new(scale);
+    pen.max_points = 262_144;
+    for ch in text.chars() {
+        if let Some(gid) = charmap.map(ch) {
+            if let Some(g) = glyphs.get(gid) {
+                let _ = g.draw(DrawSettings::unhinted(Size::unscaled(), loc), &mut pen);
+                pen.close();
+            }
+            pen.dx += advances.advance_width(gid).unwrap_or(0.0) as f64 * scale;
+        }
+    }
+    pen.close();
+    if pen.too_complex {
+        return ScriptOutline::default();
+    }
+    ScriptOutline { contours: pen.contours, width: pen.dx, ascent: metrics.ascent as f64 * scale, descent: metrics.descent as f64 * scale }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -302,6 +356,15 @@ mod tests {
         assert_eq!(super::script_missing("Саша Дермановић Νίκος"), None);
         assert_eq!(super::script_missing("Саша 张"), Some('张'));
         assert_eq!(super::script_missing(" \t"), None);
+    }
+
+    #[test]
+    fn signature_styles_use_distinct_faces_and_report_their_missing_glyphs() {
+        let script = super::signature_outline("Ada Lovelace", super::SignatureStyle::Script);
+        let print = super::signature_outline("Ada Lovelace", super::SignatureStyle::Print);
+        assert_ne!(script.contours, print.contours);
+        assert_eq!(super::signature_missing("Саша", super::SignatureStyle::Print), None);
+        assert_eq!(super::signature_missing("张三", super::SignatureStyle::Print), Some('张'));
     }
 
     #[test]

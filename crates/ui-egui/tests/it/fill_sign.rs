@@ -467,6 +467,22 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
 }
 
 #[test]
+fn typed_signature_style_survives_preferences_and_editing() {
+    let saved = SavedSig::TypedStyle { text: "Ada Lovelace".into(), style: pdfcraft_engine::SignatureStyle::Print };
+    let mut app = PdfCraftApp::new();
+    app.signature = Some(saved.clone());
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&app.persist());
+    assert_eq!(restored.signature, Some(saved.clone()));
+    let draft = pdfcraft_ui_egui::fill_sign::SigDraft::from_saved(false, &saved);
+    assert_eq!(draft.style, pdfcraft_engine::SignatureStyle::Print);
+    assert_eq!(draft.saved(), Some(saved));
+    let mut legacy = PdfCraftApp::new();
+    legacy.restore(r#"{"signature_text":"Ada"}"#);
+    assert_eq!(legacy.signature, Some(SavedSig::Typed("Ada".into())));
+}
+
+#[test]
 fn undo_button_and_ctrl_z_take_back_one_drawn_stroke_at_a_time() {
     let mut h = harness();
     let drawn = SavedSig::Drawn(vec![vec![[0.1, 0.1], [0.5, 0.2]], vec![[0.2, 0.3], [0.6, 0.1]], vec![[0.7, 0.2], [0.9, 0.3]]]);

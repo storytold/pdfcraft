@@ -121,7 +121,15 @@ impl PdfCraftApp {
                 .collect::<Vec<_>>(),
             // Drawn signatures keep their original form (older settings read the same).
             "signature": match &self.signature { Some(fill_sign::SavedSig::Drawn(s)) => Some(s), _ => None },
-            "signature_text": match &self.signature { Some(fill_sign::SavedSig::Typed(t)) => Some(t), _ => None },
+            "signature_text": match &self.signature {
+                Some(fill_sign::SavedSig::Typed(t)) => Some(t),
+                Some(fill_sign::SavedSig::TypedStyle { text, .. }) => Some(text),
+                _ => None,
+            },
+            "signature_style": match &self.signature {
+                Some(fill_sign::SavedSig::TypedStyle { style, .. }) => *style,
+                _ => pdfcraft_engine::SignatureStyle::Script,
+            },
             "signature_image": match &self.signature { Some(s @ fill_sign::SavedSig::Image(_)) => Some(s), _ => None },
             "initials": self.initials,
             "sign_graphic": self.sign_graphic,
@@ -342,7 +350,11 @@ impl PdfCraftApp {
             self.signature = Some(fill_sign::SavedSig::Drawn(s));
         }
         if let Some(t) = v["signature_text"].as_str().filter(|t| !t.trim().is_empty()) {
-            self.signature = Some(fill_sign::SavedSig::Typed(t.to_string()));
+            let style = serde_json::from_value(v["signature_style"].clone()).unwrap_or_default();
+            self.signature = Some(match style {
+                pdfcraft_engine::SignatureStyle::Script => fill_sign::SavedSig::Typed(t.to_string()),
+                style => fill_sign::SavedSig::TypedStyle { text: t.to_string(), style },
+            });
         }
         if let Ok(s @ fill_sign::SavedSig::Image(_)) = serde_json::from_value::<fill_sign::SavedSig>(v["signature_image"].clone()) {
             self.signature = Some(s);

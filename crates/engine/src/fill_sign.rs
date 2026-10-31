@@ -1,6 +1,6 @@
 //! Fill & Sign geometry: typed signatures, and boxes placed as a turned page displays them.
 
-use crate::{Shape, script_outline, signature_image};
+use crate::{Shape, SignatureStyle, signature_image, signature_outline};
 
 /// Fill & Sign: `text` in the script font as a typed signature, its left edge at `at` (user
 /// space, vertically centred) and `height` points tall. `None` for text with no outlines.
@@ -9,7 +9,12 @@ use crate::{Shape, script_outline, signature_image};
 /// the box runs along the displayed axes, like an image signature's
 /// ([`SignatureImage::rect`](crate::SignatureImage::rect)), and the outlines are turned back so the name reads across.
 pub fn typed_signature_shape(at: [f64; 2], text: &str, height: f64, rotation: i64) -> Option<Shape> {
-    let o = script_outline(text);
+    typed_signature_shape_with_style(at, text, height, rotation, SignatureStyle::Script)
+}
+
+/// Place typed text in a selected bundled signature face.
+pub fn typed_signature_shape_with_style(at: [f64; 2], text: &str, height: f64, rotation: i64, style: SignatureStyle) -> Option<Shape> {
+    let o = signature_outline(text, style);
     let [left, bottom, right, top] = o.bounds();
     let span = (top - bottom).max(0.1);
     let width = right - left;
@@ -42,6 +47,11 @@ pub fn text_box_at(rotation: i64, at: [f64; 2], width: f64, height: f64) -> Opti
 /// `text` in the script font as the graphic of a visible digital signature, as Fill & Sign types
 /// it. `None` for text with no outlines.
 pub fn typed_signature_graphic(text: &str) -> Option<pdfcraft_sign::Graphic> {
-    let o = script_outline(text);
+    typed_signature_graphic_with_style(text, SignatureStyle::Script)
+}
+
+/// `text` in a selected bundled face as a graphic of a visible digital signature.
+pub fn typed_signature_graphic_with_style(text: &str, style: SignatureStyle) -> Option<pdfcraft_sign::Graphic> {
+    let o = signature_outline(text, style);
     o.contours.iter().any(|c| c.len() > 2).then_some(pdfcraft_sign::Graphic::Outlines(o.contours))
 }

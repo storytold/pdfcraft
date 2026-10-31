@@ -1298,7 +1298,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "fill_sign_add",
             "Fill & Sign: type text or place a mark",
-            "Fill in a form that has no fields, as Acrobat's Fill & Sign does: type text (`text`, default 10 pt; `font_size` 4–300 pt; optional `color` as #RRGGBB for text/date, default black), place a check, cross, dot or line, today's date (in Preferences ▸ Date format, see fill_sign_date_format, or `format`; `font_size` also applies), or a signature or initials (either `text` drawn in a script font, or `path` to a local PNG/JPEG image up to 4 MiB and 32 megapixels, scaled down to 4 megapixels, preserving transparency; with `scan: true`, `path` is instead a photo of a signature on paper, within the same limits: the signature is found, and the paper, shadows and table around it are removed, with `sensitivity` 0–100, default 50, picking up fainter ink when higher). `at` [x, y] is in points from the top-left of the page: text's top-left, mark's centre, signature's left edge centred vertically. Image signatures fit within 150 pt wide and 32 pt tall (24 pt for initials). Creates movable, undoable annotations. Typed text the standard fonts can't draw is saved and drawn as `?` (`warnings` in the result says so); a typed signature neither the script font nor its fallback can draw is refused (pass `path` instead).",
+            "Fill in a form that has no fields: type text, place a mark or date, or add a signature or initials. Typed signatures accept optional `style` (`script`, default, or `print`) and `text`; image signatures use `path` to a local PNG/JPEG. Scanned images use `scan: true`. `at` is in points from the displayed page's top-left. Signatures are movable and undoable.",
         )
         .cmd("sign.fill.text")
         .with(schema(
@@ -1308,6 +1308,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "type": { "type": "string", "enum": ["text", "check", "cross", "dot", "line", "date", "signature", "initials"] },
                 "at": point(),
                 "text": { "type": "string", "minLength": 1 },
+                "style": { "type": "string", "enum": ["script", "print"], "description": "For a typed signature or initials (default: script)." },
                 "font_size": { "type": "number", "minimum": 4, "maximum": 300, "description": "For type text or date (default 10 pt)." },
                 "color": color(),
                 "path": { "type": "string", "description": "PNG or JPEG for signature/initials; pass either path or text." },
