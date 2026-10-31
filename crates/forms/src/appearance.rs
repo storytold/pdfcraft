@@ -497,6 +497,16 @@ pub(crate) fn is_round(doc: &Document, wd: &Dict) -> bool {
     matches!(wd.get(b"PCXfaRound").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true)))
 }
 
+/// How many lines a text widget PdfCraft laid out for an XFA field draws through its value
+/// (`/PCXfaLineThrough 1` or `2`, written by the XFA layout); 0 for none or anything else.
+fn line_through(doc: &Document, wd: &Dict) -> u8 {
+    match wd.get(b"PCXfaLineThrough").map(|o| doc.resolve(o)).and_then(|o| o.as_int()) {
+        Some(1) => 1,
+        Some(2) => 2,
+        _ => 0,
+    }
+}
+
 /// [`frame`] for a round check button: the `/MK /BG` background as a disc and the `/MK /BC`
 /// border as a circle, both centred in the `w` × `h` box and as wide as its shorter side. A
 /// dashed border stays dashed and an underline stays an underline; any other style is drawn
@@ -786,11 +796,17 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     let mut body: Vec<u8> = Vec::new();
     // The first character drawn that the font can't hold (drawn as `?`), for the caller to report.
     let mut unencodable: Option<char> = None;
+    let strikes = line_through(doc, &wd);
+    // Where each piece of text went (x, baseline, text), for the lines through it.
+    let mut drawn: Vec<(f64, f64, String)> = Vec::new();
     let mut show = |body: &mut Vec<u8>, x: f64, y: f64, text: &str| {
         // A line break in a single-line value is a space, as in viewers (multiline text is split).
         let text: String = text.chars().map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect();
         if unencodable.is_none() {
             unencodable = enc.first_unencodable(&text);
+        }
+        if strikes > 0 && !text.trim().is_empty() {
+            drawn.push((x, y, text.clone()));
         }
         body.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
         body.extend(literal(&enc.encode(&text)));
@@ -899,7 +915,19 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     )
     .into_bytes();
     content.extend(body);
-    content.extend_from_slice(b"ET\nQ\nEMC\n");
+    content.extend_from_slice(b"ET\n");
+    // Lines through the text, in its colour (still the fill colour after ET): one at about half
+    // the height of a lower-case letter, two a little above and below it.
+    let offsets: &[f64] = if strikes > 1 { &[-0.06, 0.06] } else { &[0.0] };
+    let thick = (size * 0.05).max(0.3);
+    for (x, y, text) in &drawn {
+        let w = width_of(text.trim_end(), size);
+        for dy in offsets {
+            let mid = y + size * (0.28 + dy);
+            content.extend(format!("{} {} {} {} re f\n", n(*x), n(mid - thick / 2.0), n(w), n(thick)).bytes());
+        }
+    }
+    content.extend_from_slice(b"Q\nEMC\n");
     let mut fonts = Dict::new();
     fonts.set(font_name.into_bytes(), font_obj);
     let mut res = Dict::new();

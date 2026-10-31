@@ -132,6 +132,59 @@ pub struct Corner {
     pub presence: Presence,
     pub radius: f64,
     pub inverted: bool,
+    /// The corner's own stroke (thickness, colour) when the corner element gives either (XFA 3.3
+    /// p. 663): a rounded corner is drawn with it; `None`, it is drawn as the edges are.
+    pub stroke: Option<(f64, Color)>,
+}
+
+/// What a fill paints over its colour (XFA 3.3 p. 734): nothing more (solid), a hatching
+/// pattern (p. 806), a linear or radial gradient to another colour (p. 770, p. 820), or a
+/// stipple of another colour (p. 839).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum FillKind {
+    #[default]
+    Solid,
+    Pattern {
+        kind: Hatch,
+        color: Color,
+    },
+    /// From the fill colour on the side `to` points away from, to `color` on the side it names.
+    Linear {
+        to: Side,
+        color: Color,
+    },
+    /// From the fill colour at the centre to `color` at the edges, or the other way round.
+    Radial {
+        to_center: bool,
+        color: Color,
+    },
+    /// `rate` (0-1) of `color` over the fill colour.
+    Stipple {
+        rate: f64,
+        color: Color,
+    },
+}
+
+/// The strokes of a hatching pattern (XFA 3.3 p. 807).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Hatch {
+    #[default]
+    CrossHatch,
+    CrossDiagonal,
+    DiagonalLeft,
+    DiagonalRight,
+    Horizontal,
+    Vertical,
+}
+
+/// A side of a box, the way a linear gradient runs (XFA 3.3 p. 770).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Side {
+    #[default]
+    Right,
+    Left,
+    Top,
+    Bottom,
 }
 
 /// A box border: four edges (top, right, bottom, left), four corners (top-left, top-right,
@@ -142,6 +195,8 @@ pub struct Border {
     pub edges: [Edge; 4],
     pub corners: [Corner; 4],
     pub fill: Option<Color>,
+    /// What the fill paints over its colour.
+    pub fill_kind: FillKind,
 }
 
 impl Border {
@@ -174,6 +229,8 @@ pub struct FontSpec {
     pub bold: Option<bool>,
     pub italic: Option<bool>,
     pub underline: Option<bool>,
+    /// Lines through the text: 0, 1 or 2 (`lineThrough`, XFA 3.3 p. 742).
+    pub line_through: Option<u8>,
     pub color: Option<Color>,
     /// `fontHorizontalScale`, as a fraction (0.9 for `90%`).
     pub h_scale: Option<f64>,
@@ -187,6 +244,7 @@ pub struct Font {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+    pub line_through: u8,
     pub color: Color,
     /// Horizontal scale of the glyphs, as a fraction (1.0: as designed).
     pub h_scale: f64,
@@ -195,7 +253,16 @@ pub struct Font {
 impl Default for Font {
     /// XFA's default font: Courier 10 pt.
     fn default() -> Self {
-        Font { typeface: "Courier".into(), size: 10.0, bold: false, italic: false, underline: false, color: Color::BLACK, h_scale: 1.0 }
+        Font {
+            typeface: "Courier".into(),
+            size: 10.0,
+            bold: false,
+            italic: false,
+            underline: false,
+            line_through: 0,
+            color: Color::BLACK,
+            h_scale: 1.0,
+        }
     }
 }
 
@@ -209,6 +276,7 @@ impl Font {
             bold: spec.bold.unwrap_or(self.bold),
             italic: spec.italic.unwrap_or(self.italic),
             underline: spec.underline.unwrap_or(self.underline),
+            line_through: spec.line_through.unwrap_or(self.line_through),
             color: spec.color.unwrap_or(self.color),
             h_scale: spec.h_scale.unwrap_or(self.h_scale),
         }
@@ -296,6 +364,9 @@ pub struct ParaSpec {
     pub space_above: Option<f64>,
     pub space_below: Option<f64>,
     pub text_indent: Option<f64>,
+    /// The distance between default tab stops (`tabDefault`, XFA 3.3 p. 802); none set, a tab
+    /// is a space.
+    pub tab_default: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -309,6 +380,7 @@ pub struct Para {
     pub space_above: f64,
     pub space_below: f64,
     pub text_indent: f64,
+    pub tab_default: Option<f64>,
 }
 
 impl Para {
@@ -322,6 +394,7 @@ impl Para {
             space_above: spec.space_above.unwrap_or(self.space_above),
             space_below: spec.space_below.unwrap_or(self.space_below),
             text_indent: spec.text_indent.unwrap_or(self.text_indent),
+            tab_default: spec.tab_default.or(self.tab_default),
         }
     }
 }

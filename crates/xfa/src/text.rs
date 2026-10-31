@@ -81,6 +81,8 @@ pub struct Face {
     pub size: f64,
     pub color: [f64; 3],
     pub underline: bool,
+    /// Lines through the text (0, 1 or 2).
+    pub line_through: u8,
     /// Horizontal scale of the glyphs (`fontHorizontalScale`), as a fraction: widths are
     /// measured at it and the text is written with `Tz`.
     pub h_scale: f64,
@@ -97,6 +99,7 @@ impl Face {
             size: font.size.clamp(1.0, 300.0),
             color: font.color.0,
             underline: font.underline,
+            line_through: font.line_through,
             h_scale: font.h_scale.clamp(0.01, 10.0),
         }
     }
@@ -111,6 +114,7 @@ impl Face {
             size: run.size.unwrap_or(self.size).clamp(1.0, 300.0),
             color: self.color,
             underline: run.underline.unwrap_or(self.underline),
+            line_through: self.line_through,
             h_scale: run.h_scale.unwrap_or(self.h_scale).clamp(0.01, 10.0),
         }
     }
@@ -185,6 +189,10 @@ fn ink_width(w: &Word) -> f64 {
     if ink.len() == w.text.len() { w.width } else { w.face.width(ink) }
 }
 
+/// The text of a tab's word: placed at the next tab stop when the paragraph sets
+/// `tabDefault` (XFA 3.3 p. 802), else as wide as a space; never drawn.
+const TAB: &str = "	";
+
 /// Most bytes of embedded field values one text block shows, as much as a text of its own
 /// holds: a value embedded over and over is expanded only so far.
 pub(crate) const MAX_EMBEDDED: usize = 1 << 20;
@@ -219,7 +227,7 @@ fn words(runs: &[Run], base: &Face, embed: &dyn Fn(&str, usize) -> String, embed
                 .text
                 .chars()
                 .filter_map(|c| match c {
-                    '\r' | '\n' | '\t' | '\u{2028}' | '\u{2029}' | '\u{2009}' | '\u{202F}' | '\u{3000}' => Some(' '),
+                    '\r' | '\n' | '\u{2028}' | '\u{2029}' | '\u{2009}' | '\u{202F}' | '\u{3000}' => Some(' '),
                     '\u{00AD}' | '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' => None,
                     '\u{2010}'..='\u{2013}' => Some('-'),
                     '\u{2018}' | '\u{2019}' => Some('\''),
@@ -229,6 +237,16 @@ fn words(runs: &[Run], base: &Face, embed: &dyn Fn(&str, usize) -> String, embed
         };
         let mut cur = String::new();
         for ch in text.chars() {
+            // A tab is a word of its own, as wide as a space until the line places it at a tab
+            // stop (see [`TAB`]).
+            if ch == '\t' {
+                if !cur.is_empty() {
+                    let width = face.width(&cur);
+                    out.push(Word { text: std::mem::take(&mut cur), face: face.clone(), width, link: run.link.clone() });
+                }
+                out.push(Word { text: TAB.into(), face: face.clone(), width: face.width(" "), link: run.link.clone() });
+                continue;
+            }
             cur.push(ch);
             if ch == ' ' {
                 let width = face.width(&cur);
@@ -261,7 +279,18 @@ pub fn layout(rich: &RichText, rect: Rect, para: &Para, base: &Face, embed: &dyn
         let mut line = Line { words: Vec::new(), width: 0.0, size: base.size, first: true };
         let mut first_in_para = true;
         let indent = |first: bool| if first { para.text_indent.max(0.0) } else { 0.0 };
-        for w in ws {
+        for mut w in ws {
+            if w.text == TAB {
+                // To the next tab stop, counted from the line's start; it always stays on the line.
+                if let Some(td) = para.tab_default.filter(|t| t.is_finite() && *t > 0.0) {
+                    let at = line.width + indent(line.first);
+                    w.width = ((at / td).floor() + 1.0) * td - at;
+                }
+                line.width += w.width;
+                line.words.push(w);
+                first_in_para = false;
+                continue;
+            }
             // A word fits when what it draws does: the spaces after it would end the line. Spaces
             // alone draw nothing, so they always stay on the line (keeping their width, so a word
             // after them still starts past them).
@@ -346,6 +375,15 @@ pub fn layout(rich: &RichText, rect: Rect, para: &Para, base: &Face, embed: &dyn
         // Words of one face and one link make one span, so a link's text is a span of its own.
         let mut run: Option<Span> = None;
         for w in line.words {
+            if w.text == TAB {
+                // Ends the span before it; the next one starts at the stop.
+                if let Some(s) = run.take() {
+                    x += s.face.width(&s.text);
+                    spans.push(s);
+                }
+                x += w.width;
+                continue;
+            }
             match &mut run {
                 Some(s) if s.face == w.face && s.link == w.link => s.text.push_str(&w.text),
                 _ => {

@@ -6,9 +6,9 @@ use roxmltree::Node as XmlNode;
 
 use crate::XfaError;
 use crate::model::{
-    Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout, Margin, Node,
-    Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Prop, Props, Rect, RichText, Run, Script, Stroke, Subform,
-    Template, Ui, VAlign, Value,
+    Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FillKind, FontSpec, HAlign, Hatch,
+    Layout, Margin, Node, Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Prop, Props, Rect, RichText, Run, Script,
+    Side, Stroke, Subform, Template, Ui, VAlign, Value,
 };
 
 /// Deepest element nesting followed (templates are shallow; hostile ones are not).
@@ -142,7 +142,55 @@ fn parse_border(n: Option<XmlNode>) -> Option<Border> {
     let n = n?;
     let edges: Vec<Edge> = children(n, "edge").take(4).map(parse_edge).collect();
     let four = std::array::from_fn(|i| drawn_side(edges.len(), i).and_then(|k| edges.get(k).copied()).unwrap_or_default());
-    Some(Border { presence: Presence::parse(n.attribute("presence")), edges: four, corners: parse_corners(n), fill: parse_fill(child(n, "fill")) })
+    Some(Border {
+        presence: Presence::parse(n.attribute("presence")),
+        edges: four,
+        corners: parse_corners(n),
+        fill: parse_fill(child(n, "fill")),
+        fill_kind: parse_fill_kind(child(n, "fill")),
+    })
+}
+
+/// What a `<fill>` paints over its colour: its one fill-type child (XFA 3.3 p. 734; none is
+/// solid), with that child's colour (black when it gives none, as a colour does, p. 655) and
+/// type (p. 807 crossHatch, p. 770 toRight, p. 820 toEdge) or stipple rate (p. 839, 50).
+fn parse_fill_kind(n: Option<XmlNode>) -> FillKind {
+    let Some(n) = n else { return FillKind::Solid };
+    // The last one: a template has one; a script that gives a fill another type adds it after.
+    let Some(k) = n.children().rfind(|c| c.is_element() && matches!(c.tag_name().name(), "pattern" | "linear" | "radial" | "stipple" | "solid"))
+    else {
+        return FillKind::Solid;
+    };
+    let color = parse_color(child(k, "color")).unwrap_or(Color::BLACK);
+    let ty = k.attribute("type").map(str::trim);
+    match k.tag_name().name() {
+        "pattern" => FillKind::Pattern {
+            kind: match ty {
+                Some("crossDiagonal") => Hatch::CrossDiagonal,
+                Some("diagonalLeft") => Hatch::DiagonalLeft,
+                Some("diagonalRight") => Hatch::DiagonalRight,
+                Some("horizontal") => Hatch::Horizontal,
+                Some("vertical") => Hatch::Vertical,
+                _ => Hatch::CrossHatch,
+            },
+            color,
+        },
+        "linear" => FillKind::Linear {
+            to: match ty {
+                Some("toLeft") => Side::Left,
+                Some("toTop") => Side::Top,
+                Some("toBottom") => Side::Bottom,
+                _ => Side::Right,
+            },
+            color,
+        },
+        "radial" => FillKind::Radial { to_center: ty == Some("toCenter"), color },
+        "stipple" => {
+            let rate = k.attribute("rate").and_then(|r| r.trim().parse::<f64>().ok()).filter(|r| r.is_finite()).unwrap_or(50.0);
+            FillKind::Stipple { rate: (rate / 100.0).clamp(0.0, 1.0), color }
+        }
+        _ => FillKind::Solid,
+    }
 }
 
 /// Which of the `listed` edges (or corners) of a border is drawn on side `index`: edges go
@@ -173,6 +221,8 @@ fn parse_corners(n: XmlNode) -> [Corner; 4] {
             presence: Presence::parse(c.attribute("presence")),
             radius: attr_measure(c, "radius").filter(|r| r.is_finite()).unwrap_or(0.0).max(0.0),
             inverted: c.attribute("inverted") == Some("1"),
+            stroke: (c.attribute("thickness").is_some() || child(c, "color").is_some())
+                .then(|| (attr_measure(c, "thickness").unwrap_or(0.5).max(0.0), parse_color(child(c, "color")).unwrap_or(Color::BLACK))),
         })
         .collect();
     std::array::from_fn(|i| drawn_side(given.len(), i).and_then(|k| given.get(k).copied()).unwrap_or_default())
@@ -188,6 +238,11 @@ fn parse_font(n: Option<XmlNode>) -> FontSpec {
         bold: n.attribute("weight").map(|w| w == "bold"),
         italic: n.attribute("posture").map(|p| p == "italic"),
         underline: n.attribute("underline").map(|u| u != "0"),
+        line_through: n.attribute("lineThrough").map(|l| match l.trim() {
+            "1" => 1,
+            "2" => 2,
+            _ => 0,
+        }),
         color: parse_color(child(n, "fill").and_then(|f| child(f, "color"))),
         h_scale: n.attribute("fontHorizontalScale").and_then(scale),
     }
@@ -204,6 +259,7 @@ fn parse_para(n: Option<XmlNode>) -> ParaSpec {
         space_above: attr_measure(n, "spaceAbove"),
         space_below: attr_measure(n, "spaceBelow"),
         text_indent: attr_measure(n, "textIndent"),
+        tab_default: attr_measure(n, "tabDefault").filter(|t| *t > 0.0),
     }
 }
 

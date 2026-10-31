@@ -1,5 +1,5 @@
 use super::items::{Action, Item, Rounded};
-use super::{HashMap, Layout, MAX_DEPTH, Node, Rect, Script, date_letters, iso_to_pattern};
+use super::{Border, HashMap, Layout, MAX_DEPTH, Node, Presence, Rect, Script, date_letters, iso_to_pattern};
 
 pub(super) fn collect_values(nodes: &[Node], out: &mut HashMap<String, String>, depth: usize) {
     if depth > MAX_DEPTH {
@@ -24,6 +24,16 @@ pub(super) fn collect_values(nodes: &[Node], out: &mut HashMap<String, String>, 
             Node::ExclGroup(_) | Node::Draw(_) => {}
         }
     }
+}
+
+/// The corners of border `b` drawn with their own stroke (XFA 3.3 p. 663): those that give one
+/// ([`crate::model::Corner::stroke`]), are shown and rounded, on a border whose edge is drawn
+/// (`edged`).
+pub(super) fn corner_strokes(b: &Border, edged: bool) -> [Option<(f64, [f64; 3])>; 4] {
+    b.corners.map(|c| match c.stroke {
+        Some((w, color)) if edged && c.presence == Presence::Visible && c.radius > 0.0 && w > 0.0 => Some((w.clamp(0.1, 20.0), color.0)),
+        _ => None,
+    })
 }
 
 pub(super) fn clamp_opt(v: f64, min: Option<f64>, max: Option<f64>) -> f64 {

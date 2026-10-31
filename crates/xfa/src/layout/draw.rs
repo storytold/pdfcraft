@@ -1,8 +1,8 @@
-use super::common::clean_name;
+use super::common::{clean_name, corner_strokes};
 use super::items::{Item, Rounded};
 use super::{
-    Arc, Border, Ctx, Draw, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Presence, Rect, SomIndices,
-    Stroke, Subform, Value, XfaError, data_path, text,
+    Arc, Border, Ctx, Draw, ExclGroup, Face, Field, FillKind, Font, Hatch, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Presence, Rect,
+    Side, SomIndices, Stroke, Subform, Value, XfaError, data_path, text,
 };
 
 impl Layouter<'_> {
@@ -169,11 +169,19 @@ impl Layouter<'_> {
                 edge,
                 open_top: false,
                 open_bottom: false,
+                corners: corner_strokes(b, vis[0]),
             };
-            return self.push(Item::Rounded(Box::new(shape)));
+            if b.fill().is_none() || b.fill_kind == FillKind::Solid {
+                return self.push(Item::Rounded(Box::new(shape)));
+            }
+            // The fill, what it paints over its colour, then the edge on top.
+            self.push(Item::Rounded(Box::new(Rounded { edge: None, corners: [None; 4], ..shape.clone() })))?;
+            self.fill_overlay(b, rect)?;
+            return self.push(Item::Rounded(Box::new(Rounded { fill: None, ..shape })));
         }
         if let Some(fill) = b.fill() {
             self.push(Item::Fill { rect, color: fill.0 })?;
+            self.fill_overlay(b, rect)?;
         }
         let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right(), rect.bottom());
         // Top, right, bottom, left; lines sit inside the box.
@@ -198,6 +206,119 @@ impl Layouter<'_> {
                 color,
                 dashed: matches!(e.stroke, Stroke::Dashed | Stroke::Dotted),
             })?;
+        }
+        Ok(())
+    }
+
+    /// What border `b`'s fill paints over its colour inside `rect` (see [`FillKind`]): a
+    /// hatching pattern's strokes, a gradient as bands from the fill colour to the other, a
+    /// stipple as the blend of the two at its rate. On a rounded box the overlay covers the box,
+    /// not its curves.
+    pub(super) fn fill_overlay(&mut self, b: &Border, rect: Rect) -> Result<(), XfaError> {
+        /// Strokes of a hatching pattern, this far apart (the spec leaves the interval to the
+        /// application, XFA 3.3 p. 806), this wide.
+        const PITCH: f64 = 4.0;
+        const STROKE: f64 = 0.5;
+        /// Bands a gradient is drawn in.
+        const BANDS: usize = 64;
+        let Some(base) = b.fill() else { return Ok(()) };
+        if !(rect.w > 0.0 && rect.h > 0.0 && rect.w.is_finite() && rect.h.is_finite()) {
+            return Ok(());
+        }
+        let mix = |a: [f64; 3], z: [f64; 3], t: f64| -> [f64; 3] { std::array::from_fn(|i| a[i] + (z[i] - a[i]) * t) };
+        let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right(), rect.bottom());
+        match b.fill_kind {
+            FillKind::Solid => {}
+            FillKind::Stipple { rate, color } => self.push(Item::Fill { rect, color: mix(base.0, color.0, rate) })?,
+            FillKind::Pattern { kind, color } => {
+                let line = |from: (f64, f64), to: (f64, f64)| Item::Line { from, to, width: STROKE, color: color.0, dashed: false };
+                let (horizontal, vertical, down, up) = match kind {
+                    Hatch::CrossHatch => (true, true, false, false),
+                    Hatch::Horizontal => (true, false, false, false),
+                    Hatch::Vertical => (false, true, false, false),
+                    Hatch::CrossDiagonal => (false, false, true, true),
+                    Hatch::DiagonalLeft => (false, false, true, false),
+                    Hatch::DiagonalRight => (false, false, false, true),
+                };
+                // Strokes at PITCH from each other: at most a few thousand on a page-sized box.
+                let steps = |len: f64| ((len / PITCH).floor() as usize).min(4_000);
+                if horizontal {
+                    for k in 1..=steps(rect.h) {
+                        let y = y0 + k as f64 * PITCH;
+                        if y < y1 {
+                            self.push(line((x0, y), (x1, y)))?;
+                        }
+                    }
+                }
+                if vertical {
+                    for k in 1..=steps(rect.w) {
+                        let x = x0 + k as f64 * PITCH;
+                        if x < x1 {
+                            self.push(line((x, y0), (x, y1)))?;
+                        }
+                    }
+                }
+                // Diagonals: lines x - y = c (top-left to bottom-right, "diagonalLeft") and
+                // x + y = c (bottom-left to top-right), clipped to the box; PITCH apart across.
+                let span = rect.w + rect.h;
+                let n = steps(span * std::f64::consts::FRAC_1_SQRT_2);
+                let gap = PITCH * std::f64::consts::SQRT_2;
+                for k in 1..=n {
+                    let t = k as f64 * gap;
+                    if down {
+                        // From the left or top side to the bottom or right side.
+                        let start = if t < rect.h { (x0, y1 - t) } else { (x0 + (t - rect.h), y0) };
+                        let len = (x1 - start.0).min(y1 - start.1);
+                        if len > 0.0 {
+                            self.push(line(start, (start.0 + len, start.1 + len)))?;
+                        }
+                    }
+                    if up {
+                        let start = if t < rect.h { (x0, y0 + t) } else { (x0 + (t - rect.h), y1) };
+                        let len = (x1 - start.0).min(start.1 - y0);
+                        if len > 0.0 {
+                            self.push(line(start, (start.0 + len, start.1 - len)))?;
+                        }
+                    }
+                }
+            }
+            FillKind::Linear { to, color } => {
+                for k in 0..BANDS {
+                    let (a, z) = (k as f64 / BANDS as f64, (k + 1) as f64 / BANDS as f64);
+                    let t = (a + z) / 2.0;
+                    // Each band reaches into the next, which is drawn over it, so no seam of
+                    // the colour below shows where two smoothed edges meet.
+                    let reach = ((k + 2).min(BANDS) as f64 / BANDS as f64) - a;
+                    let band = match to {
+                        Side::Right => Rect::new(x0 + rect.w * a, y0, rect.w * reach, rect.h),
+                        Side::Left => Rect::new(x1 - rect.w * (a + reach), y0, rect.w * reach, rect.h),
+                        Side::Bottom => Rect::new(x0, y0 + rect.h * a, rect.w, rect.h * reach),
+                        Side::Top => Rect::new(x0, y1 - rect.h * (a + reach), rect.w, rect.h * reach),
+                    };
+                    self.push(Item::Fill { rect: band, color: mix(base.0, color.0, t) })?;
+                }
+            }
+            FillKind::Radial { to_center, color } => {
+                // Nested ovals from the edge in, each a band of the gradient (start colour at
+                // the centre, `color` at the edge; the other way round for toCenter).
+                let (centre, edge) = if to_center { (color.0, base.0) } else { (base.0, color.0) };
+                for k in 0..BANDS {
+                    let f = 1.0 - k as f64 / BANDS as f64;
+                    let r = Rect::new(x0 + rect.w * (1.0 - f) / 2.0, y0 + rect.h * (1.0 - f) / 2.0, rect.w * f, rect.h * f);
+                    let most = r.w.min(r.h) / 2.0;
+                    let oval = Rounded {
+                        rect: r,
+                        radii: [most; 4],
+                        inverted: [false; 4],
+                        fill: Some(mix(centre, edge, f)),
+                        edge: None,
+                        open_top: false,
+                        open_bottom: false,
+                        corners: [None; 4],
+                    };
+                    self.push(Item::Rounded(Box::new(oval)))?;
+                }
+            }
         }
         Ok(())
     }

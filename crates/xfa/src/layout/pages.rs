@@ -58,6 +58,18 @@ impl Layouter<'_> {
                 let y = s.baseline + s.face.size * UNDERLINE_DROP;
                 self.push(Item::Line { from: (s.x, y), to: (s.x + w, y), width: (s.face.size * 0.06).max(0.3), color: s.face.color, dashed: false })?;
             }
+            // Lines through the text (`lineThrough`, XFA 3.3 p. 742): one at about half the
+            // height of a lower-case letter, two a little above and below it.
+            if s.face.line_through > 0 && !s.text.trim().is_empty() {
+                let w = s.face.width(s.text.trim_end());
+                let mid = s.baseline - s.face.size * 0.28;
+                let width = (s.face.size * 0.05).max(0.3);
+                let ys: &[f64] = if s.face.line_through > 1 { &[-0.06, 0.06] } else { &[0.0] };
+                for dy in ys {
+                    let y = mid + s.face.size * dy;
+                    self.push(Item::Line { from: (s.x, y), to: (s.x + w, y), width, color: s.face.color, dashed: false })?;
+                }
+            }
             if !s.text.trim().is_empty() {
                 self.push(Item::Text(s))?;
             }

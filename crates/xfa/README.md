@@ -26,7 +26,10 @@ that warning and keeps the existing layout and accepted widget values.
   rich text (`exData` XHTML: paragraphs, `br`, bold/italic/underline/size spans, embedded fields),
   text-field limits (`text/maxChars` and `exData/maxLength`, carried into AcroForm `/MaxLen`),
   required fields and exclusion groups (`<validate nullTest="error">`), inline JPEG, PNG and GIF images, lines, rectangles, occurrences, `breakBefore`/`breakAfter`, overflow
-  leaders, `columnWidths` and `colSpan`.
+  leaders, `columnWidths` and `colSpan`. Fills draw their pattern (hatching), linear or radial
+  gradient or stipple over the fill colour (a widget's on the page under it); a rounded corner
+  that gives its own colour and thickness is drawn with them; `lineThrough` strikes draw text
+  and, through `/PCXfaLineThrough` on the widget, a field's value; `tabDefault` sets tab stops.
 - **Layout** (`layout`): positioned, `tb`, `lr-tb`/`rl-tb`, `table` and `row` layouts; a
   container without a width is as wide as its content; flow across content areas and pages with
   page masters chosen by occurrence; a table's header row repeats after a break; presence

@@ -1,7 +1,7 @@
 use super::common::{button_action, date_pattern};
 use super::items::{BorderShape, Item, Widget, WidgetBorder, WidgetKind};
 use super::{
-    Access, Border, Ctx, Engine, Face, Field, HAlign, Layouter, MAX_DATA_IMAGE, Margin, Para, Placement, Presence, Rect, Ui, VAlign, Value, XfaError,
+    Access, Border, Ctx, Engine, Face, Field, FillKind, HAlign, Layouter, MAX_DATA_IMAGE, Margin, Para, Placement, Presence, Rect, Ui, VAlign, Value, XfaError,
     data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, text,
 };
 
@@ -236,6 +236,14 @@ impl Layouter<'_> {
             Ui::PasswordEdit => (WidgetKind::Password, ui, widget_border(f.ui_border.as_ref(), false), plain_value, f.tooltip.clone()),
             _ => (WidgetKind::Text, ui, widget_border(f.ui_border.as_ref(), false), plain_value, f.tooltip.clone()),
         };
+        // A widget fill that is more than a colour (a pattern, a gradient, a stipple) is page
+        // content under the widget, whose own background stays clear (see `widget_border`).
+        if let Some(b) = f.ui_border.as_ref().filter(|b| b.fill().is_some() && b.fill_kind != FillKind::Solid) {
+            if let Some(base) = b.fill() {
+                self.push(Item::Fill { rect, color: base.0 })?;
+            }
+            self.fill_overlay(b, rect)?;
+        }
         if rect.w < 1.0 || rect.h < 1.0 {
             return Ok(());
         }
@@ -302,7 +310,8 @@ fn widget_border(b: Option<&Border>, check: bool) -> WidgetBorder {
     let edge = (0..4).find(|&i| vis[i]).map(|i| b.edges[i]).unwrap_or_default();
     WidgetBorder {
         color: (shape != BorderShape::None).then_some(edge.color.0),
-        fill: b.fill().map(|c| c.0),
+        // A fill that is more than a colour is drawn on the page under the widget instead.
+        fill: b.fill().filter(|_| b.fill_kind == FillKind::Solid).map(|c| c.0),
         shape,
         width: edge.thickness.clamp(0.1, 12.0),
     }

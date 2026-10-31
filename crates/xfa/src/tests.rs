@@ -2559,6 +2559,7 @@ fn rounded_boxes_are_written_as_curved_paths() {
         edge: edge.then_some((2.0, [1.0, 0.0, 0.0], false)),
         open_top: open.0,
         open_bottom: open.1,
+        corners: [None; 4],
     };
     let content = |r: Rounded| crate::pdf::rounded(&r, 792.0);
     let ops = content(shape([false; 4], true, (false, false)));
@@ -4150,6 +4151,7 @@ fn faces_measure_text_at_their_standard_14_widths() {
         size: 10.0,
         color: [0.0; 3],
         underline: false,
+        line_through: 0,
         h_scale: 1.0,
     };
     let sample = "Mill Wax 0123 Departure Date";
@@ -4269,4 +4271,131 @@ fn packets_whose_text_grows_past_the_template_limit_are_refused() {
     })
     .unwrap();
     assert!(matches!(read_packets(&doc), Err(XfaError::TooLarge(_))));
+}
+
+/// A colour in 0..1 components from 0..255 ones.
+fn rgb255(r: f64, g: f64, b: f64) -> [f64; 3] {
+    [r / 255.0, g / 255.0, b / 255.0]
+}
+
+/// The template's drawing properties no script sets: fills with a pattern, gradient or stipple,
+/// a rounded corner's own stroke, lines through text and default tab stops.
+fn drawing_template() -> Template {
+    let box_ = |name: &str, fill: &str| {
+        format!(r#"<draw name="{name}" w="2in" h="0.5in"><border><edge/><fill><color value="200,200,200"/>{fill}</fill></border></draw>"#)
+    };
+    let xml = format!(
+        r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ {}{}{}{}{}
+ <field name="widget" w="2in" h="0.3in"><ui><textEdit><border><edge/><fill><color value="200,200,200"/><pattern type="vertical"><color value="255,0,0"/></pattern></fill></border></textEdit></ui></field>
+ <draw name="round" w="2in" h="0.5in"><border><edge/><corner radius="10pt" thickness="3pt"><color value="255,0,0"/></corner></border></draw>
+ <draw name="struck" w="3in" h="0.3in"><font typeface="Helvetica" size="12pt" lineThrough="1"/><value><text>Struck</text></value></draw>
+ <field name="value" w="3in" h="0.3in"><ui><textEdit/></ui><font typeface="Helvetica" size="12pt" lineThrough="2"/><caption reserve="1in"><font typeface="Helvetica" size="10pt"/><value><text>Own font</text></value></caption></field>
+ <draw name="tabs" w="5in" h="0.3in"><para tabDefault="1in"/><value><text>a	b</text></value></draw>
+</subform></template>"#,
+        box_("hatch", r#"<pattern type="crossHatch"><color value="255,0,0"/></pattern>"#),
+        box_("linear", r#"<linear type="toRight"><color value="255,0,0"/></linear>"#),
+        box_("radial", r#"<radial><color value="255,0,0"/></radial>"#),
+        box_("stipple", r#"<stipple rate="50"><color value="255,0,0"/></stipple>"#),
+        box_("solid", ""),
+    );
+    crate::parse(&xml).unwrap().0
+}
+
+/// What the page holds inside `r`.
+fn items_in(page: &Page, r: Rect) -> Vec<&Item> {
+    let inside = |x: f64, y: f64| x >= r.x - 0.01 && x <= r.right() + 0.01 && y >= r.y - 0.01 && y <= r.bottom() + 0.01;
+    page.items
+        .iter()
+        .filter(|i| match i {
+            Item::Line { from, to, .. } => inside(from.0, from.1) && inside(to.0, to.1),
+            Item::Fill { rect, .. } => inside(rect.x, rect.y) && inside(rect.right(), rect.bottom()),
+            Item::Rounded(b) => inside(b.rect.x, b.rect.y) && inside(b.rect.right(), b.rect.bottom()),
+            _ => false,
+        })
+        .collect()
+}
+
+/// A template's fill with a pattern, gradient or stipple (XFA 3.3 p. 734, 806, 770, 820, 839)
+/// is drawn over its colour: hatching strokes in the pattern's colour, a gradient in bands
+/// that reach under each other (no seam shows), nested ovals, the stipple's blend; a solid fill
+/// is one colour. A widget's patterned background is page content under it.
+#[test]
+fn template_fills_with_patterns_gradients_and_stipples_are_drawn() {
+    let form = crate::layout::layout(&drawing_template(), None).unwrap();
+    let page = &form.pages[0];
+    let (red, grey) = (rgb255(255.0, 0.0, 0.0), rgb255(200.0, 200.0, 200.0));
+    let boxes: Vec<Rect> =
+        page.items.iter().filter_map(|i| if let Item::Fill { rect, color } = i { (*color == grey).then_some(*rect) } else { None }).collect();
+    assert!(boxes.len() >= 5, "{boxes:?}");
+    let (hatch, linear, radial, stipple, solid) = (boxes[0], boxes[1], boxes[2], boxes[3], boxes[4]);
+    let red_lines = |r: Rect| {
+        items_in(page, r)
+            .into_iter()
+            .filter_map(|i| if let Item::Line { from, to, color, .. } = i { (*color == red).then_some((*from, *to)) } else { None })
+            .collect::<Vec<_>>()
+    };
+    let lines = red_lines(hatch);
+    assert!(lines.iter().any(|(f, t)| f.1 == t.1) && lines.iter().any(|(f, t)| f.0 == t.0), "both directions: {lines:?}");
+    let bands: Vec<Rect> = items_in(page, linear)
+        .into_iter()
+        .filter_map(|i| if let Item::Fill { rect, color } = i { (*color != grey).then_some(*rect) } else { None })
+        .collect();
+    assert_eq!(bands.len(), 64);
+    assert!(bands.windows(2).all(|w| w[0].right() > w[1].x + 0.1), "each band reaches under the next");
+    assert_eq!(items_in(page, radial).into_iter().filter(|i| matches!(i, Item::Rounded(_))).count(), 64);
+    let half = std::array::from_fn::<f64, 3, _>(|i| (grey[i] + red[i]) / 2.0);
+    assert!(items_in(page, stipple).iter().any(|i| matches!(i, Item::Fill { color, .. } if *color == half)));
+    assert!(red_lines(solid).is_empty() && items_in(page, solid).iter().filter(|i| matches!(i, Item::Fill { .. })).count() == 1);
+    let w = widgets(page).into_iter().find(|w| w.som == "form[0].widget[0]").unwrap();
+    assert_eq!(w.border.fill, None, "the widget's own background stays clear");
+    assert!(red_lines(w.rect).iter().all(|(f, t)| f.0 == t.0) && !red_lines(w.rect).is_empty(), "vertical strokes under it");
+}
+
+/// A rounded corner that gives its own colour and thickness (XFA 3.3 p. 663) is drawn with them
+/// over the edge; corners not listed take corner 0's, as edges do (p. 38).
+#[test]
+fn a_template_corners_own_stroke_is_drawn() {
+    let form = crate::layout::layout(&drawing_template(), None).unwrap();
+    let rounded: Vec<&crate::layout::Rounded> = form.pages[0]
+        .items
+        .iter()
+        .filter_map(|i| if let Item::Rounded(r) = i { Some(&**r) } else { None })
+        .filter(|r| r.radii.iter().any(|v| *v > 0.0))
+        .collect();
+    let corners: Vec<_> = rounded.iter().filter(|r| r.corners.iter().any(Option::is_some)).collect();
+    assert_eq!(corners.len(), 1, "{rounded:?}");
+    assert_eq!(corners[0].corners, [Some((3.0, rgb255(255.0, 0.0, 0.0))); 4]);
+    let ops = crate::pdf::rounded(corners[0], 792.0);
+    assert!(ops.contains("1 0 0 RG") && ops.contains("3 w"), "{ops}");
+}
+
+/// `lineThrough` (XFA 3.3 p. 742) strikes a draw's text once, and a field's value twice (the
+/// widget says so to the forms layer); a caption with its own font is not struck.
+#[test]
+fn template_line_through_strikes_text_and_values() {
+    let form = crate::layout::layout(&drawing_template(), None).unwrap();
+    let page = &form.pages[0];
+    let span = |t: &str| page.items.iter().find_map(|i| if let Item::Text(s) = i { s.text.contains(t).then(|| s.clone()) } else { None }).unwrap();
+    let through = |s: &crate::text::Span| {
+        page.items.iter().filter(|i| matches!(i, Item::Line { from, to, color, .. } if from.1 == to.1 && *color == s.face.color && (from.0 - s.x).abs() < 0.01 && from.1 < s.baseline && from.1 > s.baseline - s.face.size * 0.6)).count()
+    };
+    assert_eq!(through(&span("Struck")), 1);
+    assert_eq!(through(&span("Own font")), 0);
+    let w = widgets(page).into_iter().find(|w| w.som == "form[0].value[0]").unwrap();
+    assert_eq!(w.face.line_through, 2);
+}
+
+/// `para.tabDefault` (XFA 3.3 p. 802): the text after a tab starts at the next tab stop.
+#[test]
+fn template_tabs_go_to_the_default_tab_stops() {
+    let form = crate::layout::layout(&drawing_template(), None).unwrap();
+    let xs: Vec<(String, f64)> = form.pages[0]
+        .items
+        .iter()
+        .filter_map(|i| if let Item::Text(s) = i { matches!(s.text.trim(), "a" | "b").then(|| (s.text.trim().to_string(), s.x)) } else { None })
+        .collect();
+    assert_eq!(xs.len(), 2, "{xs:?}");
+    assert!((xs[1].1 - xs[0].1 - 72.0).abs() < 0.01, "{xs:?}");
 }
