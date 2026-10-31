@@ -6321,7 +6321,7 @@ fn spot_colour_images_run_their_tint_transform_once_per_sample_value() {
 
 /// Images converted through patch 28's table keep the colour of every sample: the samples of
 /// a pixel in order, each through its own `/Decode` range, rows that end mid-byte, and an image
-/// whose data stops part-way through a row (that row is padded with decoded zeros, as before).
+/// whose data stops part-way through a row (the rest is padded with raw zeros, patch 67).
 #[test]
 fn images_converted_through_a_table_keep_every_samples_colour() {
     let close = |got: [u8; 3], want: [u8; 3], at: (usize, usize)| {
@@ -6394,10 +6394,13 @@ fn images_converted_through_a_table_keep_every_samples_colour() {
     let pdf = image_cache_pdf("q 124 0 0 60 0 0 cm /A Do Q", "<< /XObject << /A 5 0 R >> >>", &[(&image, &data)]);
     let out = render_first_page(pdf);
     let w = out.width as usize;
-    for y in 0..9 {
+    for y in 0..12 {
         for x in 0..31 {
-            // The rest of the 9th row is decoded zero (black), not sample 0 (0.2 under this range).
-            let gray = if y < 8 || x < 12 { (51.0 + 0.6 * sample(x, y) as f64).round() as u8 } else { 0 };
+            // The rest of the 9th row and rows 10 to 12 are sample 0, 0.2 under this range, as
+            // Chrome draws them (patch 67). They were decoded zero (black), and rows 10 to 12
+            // weren't drawn.
+            let present = y < 8 || (y == 8 && x < 12);
+            let gray = (51.0 + 0.6 * if present { sample(x, y) } else { 0 } as f64).round() as u8;
             // The rows present keep the declared rows' height: 60 pt / 12.
             close(rgb_at(&out.rgba, w, 4 * x + 2, 10 + 5 * y + 2), [gray; 3], (x, y));
         }
@@ -7007,6 +7010,10 @@ mod devicen_inks;
 // #3776: isolated DeviceCMYK groups blend in CMYK (vendored hayro-interpret patch 70, hayro
 // patch 27).
 mod isolated_cmyk_groups;
+
+// #2780: images and soft masks whose data stops short of their height (vendored
+// hayro-interpret patch 67).
+mod short_image_data;
 
 /// #3109 / #3116: clipping-only text (`7 Tr`) installs a clip for subsequent painting
 /// but draws no pixels itself.
