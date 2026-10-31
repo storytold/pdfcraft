@@ -2463,6 +2463,12 @@ animation effects	Off	Kapalı
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	“{from}” belgesinin imzalanmış sürümünü (düzeltme {rev}) görüntülüyorsunuz. Bu bir anlık görüntüdür: buradaki değişiklikler özgün belgeyi etkilemez.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	“{from}” belgesinin {rev}. düzeltmesini görüntülüyorsunuz. Bu bir anlık görüntüdür: buradaki değişiklikler özgün belgeyi etkilemez.
+
+# Ask Agent
+	Ask Agent	Ajana sor
+	Instruction	Talimat
+	Send	Gönder
+	Keep	Koru
 	Turn upside down (180°)	Baş aşağı çevir (180°)
 	4 x 6 in label (101.6 x 152.4 mm)	4 × 6 inç etiket (101,6 × 152,4 mm)
 	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Her sayfayı basılı alanına göre kırpar, dik çevirir ve germeden sayfaya sığdırır. Sayfa başına bir etiket.

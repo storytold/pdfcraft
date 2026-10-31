@@ -2541,6 +2541,12 @@ animation effects	Off	Vypnuto
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Prohlížíte si podepsanou verzi dokumentu „{from}“ (revize {rev}). Je to snímek: změny zde neovlivní originál.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Prohlížíte si revizi {rev} dokumentu „{from}“. Je to snímek: změny zde neovlivní originál.
+
+# Ask Agent
+	Ask Agent	Zeptat se agenta
+	Instruction	Instrukce
+	Send	Odeslat
+	Keep	Ponechat
 	Turn upside down (180°)	Otočit vzhůru nohama (180°)
 	4 x 6 in label (101.6 x 152.4 mm)	Štítek 4 × 6 in (101,6 × 152,4 mm)
 	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Ořízne každou stránku na potištěnou oblast, otočí ji svisle a přizpůsobí listu bez deformace. Jeden štítek na list.

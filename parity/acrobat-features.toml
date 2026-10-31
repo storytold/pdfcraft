@@ -9620,6 +9620,18 @@ evidence = ["crates/ui-egui/tests/it/control.rs::inspect_and_click_by_label_and_
 notes = ""
 
 [[feature]]
+id = "misc.mcp-connected-window"
+title = "MCP tools on the open window (pdfcraft-cli mcp --connect)"
+area = "N"
+tier = "P1"
+milestone = "M13"
+status = "shipped"
+commands = []
+tools = ["doc_list"]
+evidence = ["apps/pdfcraft-cli/tests/it/mcp_connect.rs::mcp_connect_runs_the_tools_in_the_open_window", "crates/ui-egui/tests/it/control.rs::control_tool_call_runs_on_the_windows_documents_and_shows_the_change", "crates/automation/src/window.rs::tools_run_on_the_windows_own_session", "crates/automation/src/window.rs::the_window_refuses_signing_and_closing_tabs", "crates/automation/src/window.rs::nested_commands_cannot_sign_or_close_the_window", "apps/pdfcraft/tests/it/mcp_connect.rs::connected_form_fill_uses_the_windows_fields_and_one_undo_step", "crates/automation/src/mcp.rs::connected_mode_runs_tools_in_the_window_and_adds_ui_tools"]
+notes = "Every tool and resource runs on the window's documents through the control channel's tool.call (token required, loopback only); MCP adds read-only ui_state/ui_inspect/ui_screenshot, not UI input. All sign_* tools, signature/initials placement, embedded signature-image export, applying redactions and closing tabs are refused, also through nested commands. Uncommitted typing blocks document tools. Not yet: long tools run on the window's thread (30 s control timeout)."
+
+[[feature]]
 id = "misc.ui-screenshots"
 title = "Screenshots of the window or a region via the control channel"
 area = "N"
@@ -10254,3 +10266,15 @@ commands = []
 tools = []
 evidence = []
 notes = ""
+
+[[feature]]
+id = "misc.ask-agent"
+title = "Ask an external agent about the captured PDF target"
+area = "N"
+tier = "P2"
+milestone = "M13"
+status = "partial"
+commands = []
+tools = []
+evidence = ["crates/ui-egui/src/control/tool_tests.rs::ask_agent_tcp_auth_owner_late_reply_and_longpoll", "crates/ui-egui/tests/it/control.rs::ask_agent_owner_edits_and_escape_closes_the_request", "crates/ui-egui/tests/it/control.rs::ask_agent_chip_click_and_network_review_are_person_only", "crates/automation/src/mcp.rs::ask_agent_common_tools_are_discoverable"]
+notes = "Connected MCP wait_for_request/reply_to_request use a session-only, connection-owned FIFO and worker long polls. The chip/bubble freezes the PDF target and retains answers across Escape/close. Stage (a) supports replies and claimed native tool calls; non-read-only calls and the agent's closing comment can mutate the document, and those edits can be kept or undone. Native action/review adapters are not yet implemented in this stage. Synthetic network UI input and remote review are blocked, and the person signs in a separate native interaction. Native GUI and WASM are not verified."

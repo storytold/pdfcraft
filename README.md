@@ -311,6 +311,12 @@ Every engine feature is reachable without the GUI, through one table of JSON-Sch
 
   `--root` confines every file the agent can read or write to one directory. Builds that should not include the server at all can use `cargo build -p pdfcraft-cli --no-default-features`.
 
+  `--connect FILE` points the server at the desktop app you have open, started with `pdfcraft --control FILE` (see below): the same tools then work on the window's own documents, so you see every change as the agent makes it, and `ui_state`, `ui_screenshot` and `ui_inspect` let it inspect the window read-only. UI input is not exposed through MCP; document tools perform the edits. It goes through the window's control channel and its token, nothing else. Signing, reusable signature images, applying redactions and closing tabs stay with you: connected tools refuse them, including nested commands. Finish any uncommitted typing before a document tool runs. A lost reply is never automatically replayed. See [connected-mode limits](docs/mcp.md#connected-mode-the-open-window).
+
+  ```json
+  { "mcpServers": { "pdfcraft": { "command": "pdfcraft-cli", "args": ["mcp", "--connect", "/home/you/.pdfcraft-control.json"] } } }
+  ```
+
 - **The Rust API** (`pdfcraft_automation::Automation::call`), for embedding.
 
 Edits stay in memory, undoable, until `doc_save`. Saving to the same file appends an incremental update, so the original bytes are preserved, and the write is atomic. Unsaved changes are never discarded silently.
@@ -332,7 +338,10 @@ pdfcraft-cli ui --control ~/.pdfcraft-control.json resize width=1200 height=800
 pdfcraft-cli ui --control ~/.pdfcraft-control.json focus label="Read"
 pdfcraft-cli ui --control ~/.pdfcraft-control.json inspect focused=true
 pdfcraft-cli ui --control ~/.pdfcraft-control.json quit
+pdfcraft-cli ui --control ~/.pdfcraft-control.json tool.call name=doc_info arguments='{"doc":1}'
 ```
+
+`tool.call {name, arguments?, root?}` runs any automation tool on the window's documents (the `doc` ids `state` reports), and the window shows the change; `pdfcraft-cli mcp --connect FILE` relays every MCP tool through it.
 
 `ui.panel` opens, closes or sizes a side panel: `{"panel":"tools"|"side","open":true|false,"width":320}`.
 `tools` is the Tools panel and `side` the panel the rail opens (reopening it shows the one open last).

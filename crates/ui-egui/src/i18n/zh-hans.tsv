@@ -2431,6 +2431,12 @@ animation effects	Off	关
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	您正在查看“{from}”的已签名版本（修订版本 {rev}）。这是快照：在此处所做的更改不会影响原始文档。
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	您正在查看“{from}”的修订版本 {rev}。这是快照：在此处所做的更改不会影响原始文档。
+
+# Ask Agent
+	Ask Agent	询问代理
+	Instruction	指令
+	Send	发送
+	Keep	保留
 	Turn upside down (180°)	上下颠倒 (180°)
 	4 x 6 in label (101.6 x 152.4 mm)	4 × 6 英寸标签 (101.6 × 152.4 毫米)
 	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	将每页裁切到其打印区域，转正后不拉伸地适合纸张。每张纸一个标签。

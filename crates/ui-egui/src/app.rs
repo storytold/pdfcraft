@@ -252,6 +252,8 @@ impl PdfCraftApp {
             fonts_ready: false,
             fonts_cjk: theme::CjkPreference::Default,
             control: None,
+            ask_agent: ask_agent::AskAgent::default(),
+            tool_runner: None,
             bookmark_rename: None,
             last_opened_url: None,
             community_card_closed: false,
@@ -533,6 +535,7 @@ impl eframe::App for PdfCraftApp {
             let events = std::mem::take(&mut self.menu_input);
             ctx.input_mut(|i| i.events.extend(events));
         }
+        self.ask_agent_input(ctx);
         self.shortcuts(ctx);
         // Scrolling and group-drag previews are transient: never resume after changing tabs,
         // opening a modal/palette, or returning to a window that lost focus.
@@ -603,6 +606,7 @@ impl eframe::App for PdfCraftApp {
             // Notices too: a refused field value or a failed save must be seen in full screen.
             self.show_progress(&ctx);
             widgets::toast(self, &ctx);
+            self.ask_agent_show(&ctx);
             self.finish_render_frame(&ctx);
             if let Some(mut control) = self.control.take() {
                 control.finish_frame(&ctx, self);
@@ -641,6 +645,7 @@ impl eframe::App for PdfCraftApp {
         dialogs::show(self, &ctx);
         self.show_progress(&ctx);
         widgets::toast(self, &ctx);
+        self.ask_agent_show(&ctx);
         self.finish_render_frame(&ctx);
         // Screenshots are issued only after a settled pass that really drew the window.
         if let Some(mut control) = self.control.take() {

@@ -6,7 +6,13 @@ impl Control {
     /// actionable errors.
     pub(super) fn handle(&mut self, ctx: &egui::Context, host: &mut impl Host, method: &str, p: &Value, since: web_time::Instant) -> Handled {
         let str_param = |k: &str| p.get(k).and_then(Value::as_str).ok_or_else(|| format!("{method}: missing string parameter {k}"));
+        if (host.private_dialog() || self.passes() < self.private_until_pass) && matches!(method, "tool.inspect" | "ui.screenshot") {
+            return Handled::Now(Err(format!(
+                "{method}: a private signing or password dialog is open; close it yourself before inspecting the window"
+            )));
+        }
         let r: Result<Handled, String> = (|| match method {
+            "ui.askAgent" => Ok(Handled::Now(host.ask_agent(p))),
             "ui.state" => {
                 let mut state = host.state();
                 // Viewport info is fresh in `logic`; the last UI pass's rectangle can be stale.
@@ -28,7 +34,32 @@ impl Control {
                 Ok(Handled::Now(host.set(str_param("key")?, &value)))
             }
             "ui.open" => Ok(Handled::Now(host.open(str_param("path")?))),
-            "ui.inspect" => Ok(Handled::Now(Ok(self.inspect(p)))),
+            "tool.call" => {
+                only_params(p, method, &["name", "arguments", "root", "requestId", "__agentOwner", "__askConnection"])?;
+                let root = match p.get("root") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(r)) => Some(r.as_str()),
+                    Some(_) => return Err("tool.call: root must be a folder path".into()),
+                };
+                let name = str_param("name")?;
+                let args = p.get("arguments").unwrap_or(&Value::Null);
+                if p["__askConnection"] == true {
+                    Ok(Handled::Now(host.agent_tool(
+                        p["__agentOwner"].as_u64().ok_or("NOT_OWNER: missing socket context")?,
+                        p["requestId"].as_u64(),
+                        name,
+                        args,
+                        root,
+                    )))
+                } else {
+                    Ok(Handled::Now(host.tool(name, args, root)))
+                }
+            }
+            "ui.inspect" | "tool.inspect" => {
+                let mut value = self.inspect(p);
+                value["askAgent"] = host.state()["askAgent"].clone();
+                Ok(Handled::Now(Ok(value)))
+            }
             "ui.click" => self.click(p, since),
             "ui.focus" => self.focus(p, since),
             "ui.resize" => {
@@ -88,7 +119,7 @@ impl Control {
                 Ok(Handled::Screenshot(region))
             }
             other => Err(format!(
-                "unknown method {other:?} (ui.state, ui.inspect, ui.click, ui.focus, ui.resize, ui.quit, ui.move, ui.drag, ui.type, ui.key, ui.command, ui.commands, ui.set, ui.open, ui.screenshot)"
+                "unknown method {other:?} (ui.state, ui.inspect, ui.click, ui.focus, ui.resize, ui.quit, ui.move, ui.drag, ui.type, ui.key, ui.command, ui.commands, ui.set, ui.open, ui.screenshot, tool.call)"
             )),
         })();
         r.unwrap_or_else(|e| Handled::Now(Err(e)))
@@ -275,7 +306,9 @@ fn widget(id: NodeId, n: &accesskit::Node, depth: usize, focused: bool) -> Value
     if let Some(l) = n.label() {
         obj.insert("label".into(), json!(l));
     }
-    if let Some(v) = n.value() {
+    if n.role() != accesskit::Role::PasswordInput
+        && let Some(v) = n.value()
+    {
         obj.insert("value".into(), json!(v));
     }
     if let Some(d) = n.description() {

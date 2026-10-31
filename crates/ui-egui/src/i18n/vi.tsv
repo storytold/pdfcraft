@@ -2841,7 +2841,12 @@ key	Space	Space
 	Rotate the selected pages clockwise	Xoay các trang đã chọn theo chiều kim đồng hồ
 	Extract the selected pages…	Trích xuất các trang đã chọn…
 	Delete the selected pages	Xóa các trang đã chọn
-
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất
+
+# Ask Agent
+	Ask Agent	Hỏi tác nhân
+	Instruction	Chỉ dẫn
+	Send	Gửi
+	Keep	Giữ

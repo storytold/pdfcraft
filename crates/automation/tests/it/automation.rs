@@ -1596,7 +1596,7 @@ fn mcp_session_over_stdio() {
 
     assert_eq!(replies[0]["result"]["protocolVersion"], "2025-03-26");
     assert_eq!(replies[0]["result"]["serverInfo"]["name"], "pdfcraft");
-    assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), tools().len());
+    assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), tools().len() + 2);
     assert_eq!(replies[2]["result"]["structuredContent"]["pages"], 3);
     assert_eq!(replies[2]["result"]["isError"], false);
     let img = &replies[3]["result"]["content"][0];
@@ -1670,7 +1670,8 @@ fn tool_names(reply: &Value) -> Vec<String> {
 fn mcp_default_lists_every_tool_and_has_no_meta_tools() {
     let mut s = McpServer::new(Automation::new());
     let names = tool_names(&rpc(&mut s, 1, "tools/list", json!({})));
-    assert_eq!(names.len(), tools().len());
+    assert_eq!(names.len(), tools().len() + 2);
+    assert!(names.contains(&"wait_for_request".to_string()) && names.contains(&"reply_to_request".to_string()));
     assert!(!names.iter().any(|n| n == "tool_search" || n == "tool_call"));
     assert!(!rpc(&mut s, 2, "initialize", json!({}))["result"]["instructions"].as_str().unwrap().contains("tool_search"));
     // Without --compact the meta tools do not exist.
@@ -1683,7 +1684,7 @@ fn mcp_compact_lists_the_core_tools_and_two_meta_tools() {
     let mut s = McpServer::new(Automation::new()).with_compact(true);
     let list = rpc(&mut s, 1, "tools/list", json!({}));
     let mut expected: Vec<String> = pdfcraft_automation::mcp::COMPACT_CORE_TOOLS.iter().map(|n| n.to_string()).collect();
-    expected.extend(["tool_search".to_string(), "tool_call".to_string()]);
+    expected.extend(["tool_search".to_string(), "tool_call".to_string(), "wait_for_request".to_string(), "reply_to_request".to_string()]);
     assert_eq!(tool_names(&list), expected);
     let all: Vec<&str> = tools().iter().map(|t| t.name).collect();
     for core in pdfcraft_automation::mcp::COMPACT_CORE_TOOLS {
@@ -1709,7 +1710,7 @@ fn mcp_compact_tool_search_filters_by_query_and_category() {
 
     let everything = search(json!({}));
     assert_eq!(everything["result"]["isError"], false);
-    assert_eq!(everything["result"]["structuredContent"]["count"], tools().len());
+    assert_eq!(everything["result"]["structuredContent"]["count"], tools().len() + 2);
     let first = &everything["result"]["structuredContent"]["tools"][0];
     assert!(first["name"].is_string() && first["description"].is_string() && first["read_only"].is_boolean(), "{first}");
 
@@ -1741,6 +1742,14 @@ fn mcp_compact_tool_search_filters_by_query_and_category() {
     let def = tools().into_iter().find(|t| t.name == "page_rotate").unwrap();
     assert_eq!(one["input_schema"], def.input_schema);
     assert_eq!(one["description"], def.description);
+
+    // Connected Ask Agent adapters are discoverable even when the headless engine table cannot execute them.
+    let wait = search(json!({ "name": "wait_for_request" }))["result"]["structuredContent"]["tool"].clone();
+    assert_eq!(wait["read_only"], true);
+    assert_eq!(wait["input_schema"]["additionalProperties"], false);
+    let request_tools = search(json!({ "category": "reply" }))["result"]["structuredContent"].clone();
+    assert_eq!(request_tools["count"], 1);
+    assert_eq!(request_tools["tools"][0]["name"], "reply_to_request");
 
     // Bad arguments are tool errors.
     for bad in [json!({ "name": "no_such_tool" }), json!({ "query": 3 }), json!({ "category": ["doc"] }), json!("doc")] {
@@ -1814,8 +1823,8 @@ fn mcp_compact_tool_call_reports_errors_without_panicking() {
         json!({ "name": "tool_search" }),
     ] {
         let r = rpc(&mut s, 5, "tools/call", json!({ "name": "tool_call", "arguments": args }));
-        assert_eq!(r["result"]["isError"], true, "{args}");
-        assert!(!text(&r).is_empty());
+        assert_eq!(r["error"]["code"], -32602, "{args}: {r}");
+        assert!(r["error"]["message"].as_str().is_some_and(|message| !message.is_empty()));
     }
 
     // Direct calls keep the usual protocol error for an unknown tool, and the session survives all of it.
@@ -1853,9 +1862,11 @@ fn mcp_compact_meta_tools_reject_unknown_arguments() {
     let dir = workdir("mcp-compact-keys");
     let mut s = compact_server(&dir);
     let list = rpc(&mut s, 1, "tools/list", json!({}));
-    let metas = &list["result"]["tools"].as_array().unwrap()[pdfcraft_automation::mcp::COMPACT_CORE_TOOLS.len()..];
+    let extra_tools = &list["result"]["tools"].as_array().unwrap()[pdfcraft_automation::mcp::COMPACT_CORE_TOOLS.len()..];
+    assert_eq!(extra_tools.len(), 4);
+    let metas: Vec<&Value> = extra_tools.iter().filter(|tool| matches!(tool["name"].as_str(), Some("tool_search" | "tool_call"))).collect();
     assert_eq!(metas.len(), 2);
-    for meta in metas {
+    for meta in extra_tools {
         assert_eq!(meta["inputSchema"]["additionalProperties"], false, "{}", meta["name"]);
     }
     let text = |r: &Value| r["error"]["message"].as_str().or_else(|| r["result"]["content"][0]["text"].as_str()).unwrap_or_default().to_string();
@@ -1881,7 +1892,9 @@ fn mcp_compact_meta_tools_reject_unknown_arguments() {
     // Keys inside "arguments" are left to the target tool, which rejects its unknown ones itself.
     let inner = via_tool_call(&mut s, 7, "doc_list", json!({ "unexpected": "value" }));
     assert_eq!(inner["result"]["isError"], true, "{inner}");
-    assert!(text(&inner).contains("doc_list: unknown argument \"unexpected\""), "{}", text(&inner));
+    let failure: Value = serde_json::from_str(&text(&inner)).unwrap();
+    assert_eq!(failure["errorCode"], "INVALID_PARAMS");
+    assert!(failure["error"].as_str().unwrap().contains("doc_list: unknown argument \"unexpected\""));
 }
 
 #[cfg(feature = "mcp")]

@@ -180,6 +180,14 @@ pub(crate) fn undrawn_notices(prev: &pdfcraft_cos::Document, next: &pdfcraft_cos
 }
 
 impl Document {
+    /// Native page object references in the current document order.
+    /// References identify pages across nonstructural edits; pair them with this
+    /// document's identity rather than treating a page ordinal as an identity.
+    /// Returns an empty list when the editable object graph is unavailable.
+    pub fn page_ids(&self) -> Vec<pdfcraft_cos::ObjRef> {
+        self.editor.as_ref().map(|editor| pdfcraft_model::pages(&editor.cos).into_iter().map(|page| page.obj).collect()).unwrap_or_default()
+    }
+
     /// How the document opens (Document Properties ▸ Initial View).
     /// Accessibility ▸ Check for accessibility: the full check (`None` if the document can't be
     /// read for editing).
@@ -400,6 +408,12 @@ impl Document {
     /// What Redo would redo, in parts.
     pub fn redo_label(&self) -> Option<&Label> {
         self.editor.as_ref().and_then(|e| e.redo.last()).map(|(l, ..)| l)
+    }
+
+    /// How many Undo steps the document holds: one per edit applied, so a tool that applies
+    /// several (a batch) is counted once per step.
+    pub fn undo_depth(&self) -> usize {
+        self.editor.as_ref().map_or(0, |e| e.undo.len())
     }
 
     pub fn editable(&self) -> bool {

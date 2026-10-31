@@ -8154,6 +8154,64 @@ fn copy_image_finds_a_picture_inside_form_artwork_under_text() {
     assert!(d.page_image_copy_file(0, 1).is_err());
 }
 
+#[test]
+fn page_ids_are_distinct_and_stable_across_rotation_and_undo() {
+    let mut session = Session::new();
+    let bytes = session.create_blank(200.0, 300.0, 2).unwrap();
+    let id = session.open("page-identities.pdf", None, bytes, None).unwrap();
+    let original = session.get(id).unwrap().page_ids();
+    assert_eq!(original.len(), 2);
+    assert_ne!(original.first(), original.get(1));
+    assert!(session.get(id).unwrap().can_undo().is_none());
+
+    session.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    assert_eq!(session.get(id).unwrap().info.pages[0].rotation, 90);
+    assert_eq!(session.get(id).unwrap().page_ids(), original);
+    session.undo(id).unwrap();
+    assert_eq!(session.get(id).unwrap().info.pages[0].rotation, 0);
+    assert_eq!(session.get(id).unwrap().page_ids(), original);
+
+    // The read-only facade must also be safe when no COS editor is available.
+    let document = session.docs.iter_mut().find(|document| document.id == id).unwrap();
+    document.editor = None;
+    assert!(document.page_ids().is_empty());
+}
+
+#[test]
+fn group_undo_collapses_multiple_edits_into_one_step() {
+    let mut session = Session::new();
+    let bytes = session.create_blank(200.0, 300.0, 2).unwrap();
+    let id = session.open("group-undo.pdf", None, bytes, None).unwrap();
+    session.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    session.apply(id, Edit::RotatePages { pages: vec![1], degrees: 180 }).unwrap();
+    assert_eq!(session.get(id).unwrap().info.pages[0].rotation, 90);
+    assert_eq!(session.get(id).unwrap().info.pages[1].rotation, 180);
+
+    session.group_undo(id, 2, Label::of("Ask Agent")).unwrap();
+    assert_eq!(session.get(id).unwrap().can_undo(), Some("Ask Agent"));
+    assert!(matches!(session.group_undo(id, 0, Label::of("Ask Agent")), Err(EditError::NothingToUndo)));
+    session.undo(id).unwrap();
+    assert_eq!(session.get(id).unwrap().info.pages[0].rotation, 0);
+    assert_eq!(session.get(id).unwrap().info.pages[1].rotation, 0);
+    assert!(session.get(id).unwrap().can_undo().is_none());
+}
+
+#[test]
+fn undo_depth_counts_one_step_per_edit() {
+    let mut session = Session::new();
+    let bytes = session.create_blank(200.0, 300.0, 2).unwrap();
+    let id = session.open("undo-depth.pdf", None, bytes, None).unwrap();
+    assert_eq!(session.get(id).unwrap().undo_depth(), 0);
+    session.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    assert_eq!(session.get(id).unwrap().undo_depth(), 1);
+    session.apply(id, Edit::RotatePages { pages: vec![1], degrees: 90 }).unwrap();
+    assert_eq!(session.get(id).unwrap().undo_depth(), 2);
+    session.group_undo(id, 2, Label::of("Ask Agent")).unwrap();
+    assert_eq!(session.get(id).unwrap().undo_depth(), 1, "the two steps are one now");
+    session.undo(id).unwrap();
+    assert_eq!(session.get(id).unwrap().undo_depth(), 0);
+}
+
 /// `fixture(2)` with the catalog pointing at a page tree object the file does not have (#1656).
 fn fixture_without_page_tree() -> Vec<u8> {
     let bytes = fixture(2);

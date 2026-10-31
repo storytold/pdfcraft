@@ -1977,6 +1977,210 @@ fn click_and_drag_refuse_coordinates_that_overflow_like_move() {
     ok(&mut h, &c, "ui.drag", json!({ "from": [x, y], "to": [x + 10.0, y], "steps": 2 }));
 }
 
+/// `tool.call` runs a tool on the window's own documents through the runner the desktop app
+/// provides; the window then shows what changed: an edited document is drawn again, a new one
+/// gets a tab behind the person's.
+#[test]
+fn control_tool_call_runs_on_the_windows_documents_and_shows_the_change() {
+    let (mut h, c) = harness_pages(1);
+    let e = call(&mut h, &c, "tool.call", json!({ "name": "doc_list" })).unwrap_err();
+    assert!(e.contains("can't run automation tools"), "{e}");
+    type ToolCalls = Arc<Mutex<Vec<(String, Value, Option<String>)>>>;
+    let seen: ToolCalls = Arc::default();
+    let log = seen.clone();
+    h.state_mut().tool_runner = Some(Box::new(move |session, name, args, root| {
+        log.lock().unwrap().push((name.to_string(), args.clone(), root.map(|r| r.display().to_string())));
+        let doc = session.docs().first().map(|d| d.id).ok_or("no document")?;
+        match name {
+            "page_insert_blank" => {
+                session.apply(doc, pdfcraft_engine::Edit::InsertBlankPage { at: 1, width: 200.0, height: 300.0 }).map_err(|e| e.to_string())?
+            }
+            "doc_create" => {
+                session.open_new("Untitled.pdf", Arc::new(fixture(1))).map_err(|e| e.to_string())?;
+            }
+            _ => return Err(format!("{name}: refused")),
+        }
+        Ok(json!({ "content": [{ "type": "json", "value": { "ran": name } }] }))
+    }));
+    let before = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(before["active"]["pages_on_screen"].as_array().unwrap().len(), 1, "{before}");
+    let r = ok(&mut h, &c, "tool.call", json!({ "name": "page_insert_blank", "arguments": { "doc": 1, "at": 2 }, "root": "/work" }));
+    assert_eq!(r["content"][0]["value"]["ran"], "page_insert_blank", "{r}");
+    assert_eq!(seen.lock().unwrap()[0], ("page_insert_blank".into(), json!({ "doc": 1, "at": 2 }), Some("/work".into())));
+    h.run_steps(4);
+    let after = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(after["documents"][0]["pages"], 2, "{after}");
+    assert_eq!(after["active"]["page"], 1, "the person's reading position is kept");
+    ok(&mut h, &c, "ui.set", json!({"key":"page","value":2}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["page"], 2, "the new page can be viewed");
+    ok(&mut h, &c, "ui.set", json!({"key":"page","value":1}));
+    // A document the tool makes gets a tab; the person's stays active.
+    ok(&mut h, &c, "tool.call", json!({ "name": "doc_create", "arguments": {} }));
+    h.run_steps(2);
+    let tabs = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(tabs["documents"].as_array().unwrap().len(), 2, "{tabs}");
+    assert_eq!(tabs["documents"][0]["active"], true, "{tabs}");
+    // The runner's refusal is the client's error; junk parameters are refused before it runs.
+    let e = call(&mut h, &c, "tool.call", json!({ "name": "sign_document", "arguments": { "doc": 1 } })).unwrap_err();
+    assert!(e.contains("refused"), "{e}");
+    for junk in [json!({}), json!({ "name": 3 }), json!({ "name": "doc_list", "root": 1 }), json!({ "name": "doc_list", "extra": true })] {
+        assert!(call(&mut h, &c, "tool.call", junk.clone()).is_err(), "{junk}");
+    }
+    assert_eq!(seen.lock().unwrap().len(), 2, "signing and junk never reached the runner");
+}
+
+#[test]
+fn control_does_not_expose_private_dialogs() {
+    let (mut h, c) = harness();
+    for dialog in [pdfcraft_ui_egui::Dialog::Signature, pdfcraft_ui_egui::Dialog::Sign, pdfcraft_ui_egui::Dialog::Protect] {
+        for method in ["tool.inspect", "ui.screenshot"] {
+            h.state_mut().dialog = Some(dialog);
+            let e = call(&mut h, &c, method, json!({})).unwrap_err();
+            assert!(e.contains("private"), "{e}");
+        }
+        assert!(ok(&mut h, &c, "ui.state", json!({})).is_object());
+        h.state_mut().dialog = None;
+    }
+}
+
+#[test]
+fn ask_agent_owner_edits_and_escape_closes_the_request() {
+    let (mut h, c) = harness();
+    let hub = c.agent_hub();
+    let _ = hub.listen(100, Some("editor"), std::time::Duration::ZERO, || true);
+    ok(&mut h, &c, "ui.set", json!({"key":"select","value":"1"}));
+    ok(&mut h, &c, "ui.askAgent", json!({}));
+    let sent = ok(&mut h, &c, "ui.askAgent", json!({"instruction":"Explain this page"}));
+    let id = sent["id"].as_u64().unwrap();
+    let request = hub.listen(100, None, std::time::Duration::ZERO, || true).unwrap();
+    assert_eq!(request.id, id);
+    assert_eq!(request.instruction, "Explain this page");
+    assert_eq!(request.selection["pages"], json!([1]));
+
+    // The agent that took the request may edit the document for it; others may not.
+    assert!(hub.may_edit(100, Some(id)).is_ok());
+    assert_eq!(hub.may_edit(101, Some(id)).unwrap_err().code, "NOT_OWNER");
+    assert_eq!(hub.may_edit(100, None).unwrap_err().code, "HELD");
+
+    h.state_mut().tool_runner = Some(Box::new(|_, name, _, _| Ok(json!({ "content": [{ "type": "json", "value": { "ran": name } }] }))));
+    let note = json!({"doc":1,"page":1,"type":"note","at":[20,20],"contents":"From the agent"});
+    ok(&mut h, &c, "tool.call", json!({"name":"comment_add","arguments":note,"requestId":id,"__askConnection":true,"__agentOwner":100}));
+    assert!(
+        call(&mut h, &c, "tool.call", json!({"name":"comment_add","arguments":note,"requestId":id,"__askConnection":true,"__agentOwner":101}))
+            .is_err()
+    );
+    assert!(call(&mut h, &c, "tool.call", json!({"name":"comment_add","arguments":note})).is_err());
+
+    ok(&mut h, &c, "ui.key", json!({"key":"Escape"}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["askAgent"]["bubbleOpen"], false);
+
+    // Escape closes the request, as Close does: a late answer is refused.
+    assert!(hub.snapshot(id).is_none());
+    assert_eq!(hub.reply(100, id, "Page one response", true, None).unwrap_err().code, "NO_REQUEST");
+}
+
+#[test]
+fn ask_agent_chip_click_and_network_review_are_person_only() {
+    use std::io::{BufRead, BufReader, Write};
+    let (mut h, c) = harness();
+    let _ = c.agent_hub().listen(7, Some("Synthetic editor"), std::time::Duration::ZERO, || true);
+    ok(&mut h, &c, "ui.set", json!({"key":"select","value":"1"}));
+    h.run_steps(3);
+    h.get_by_label("Ask Agent").click();
+    h.run_steps(3);
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["askAgent"]["bubbleOpen"], true);
+    let sent = ok(&mut h, &c, "ui.askAgent", json!({"instruction":"Explain synthetic PDF"}));
+    let claim = c.agent_hub().listen(7, None, std::time::Duration::ZERO, || true).unwrap();
+    c.agent_hub().reply(7, claim.id, "Reviewing the captured synthetic page", false, None).unwrap();
+    h.run_steps(2);
+
+    let endpoint = pdfcraft_ui_egui::control::serve(c.clone()).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut w = std::net::TcpStream::connect(("127.0.0.1", endpoint.port)).unwrap();
+        let mut r = BufReader::new(w.try_clone().unwrap());
+        let mut call = |msg: Value| {
+            writeln!(w, "{msg}").unwrap();
+            let mut line = String::new();
+            r.read_line(&mut line).unwrap();
+            serde_json::from_str::<Value>(&line).unwrap()
+        };
+        call(json!({"id":1,"method":"auth","params":{"token":endpoint.token}}));
+        let accept = call(json!({"id":3,"method":"ui.askAgent","params":{"accept":sent["id"]}}));
+        tx.send(accept).unwrap();
+    });
+    let mut result = None;
+    for _ in 0..300 {
+        h.step();
+        if let Ok(value) = rx.try_recv() {
+            result = Some(value);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let accept = result.unwrap();
+    assert!(accept["error"].to_string().contains("HUMAN_REVIEW_REQUIRED"), "{accept}");
+}
+
+#[test]
+fn ask_agent_bubble_flow_keep_undo_followup() {
+    let (mut h, c) = harness();
+    let hub = c.agent_hub();
+    let _ = hub.listen(50, Some("worker"), std::time::Duration::ZERO, || true);
+
+    // 1. Open Ask Agent and send first instruction
+    ok(&mut h, &c, "ui.askAgent", json!({}));
+    let open_repeat = ok(&mut h, &c, "ui.askAgent", json!({}));
+    assert_eq!(open_repeat["open"], true);
+    let sent = ok(&mut h, &c, "ui.askAgent", json!({"instruction":"First turn"}));
+    let id1 = sent["id"].as_u64().unwrap();
+    let req1 = hub.listen(50, None, std::time::Duration::ZERO, || true).unwrap();
+    assert_eq!(req1.id, id1);
+
+    // 2. Reply to first turn
+    hub.reply(50, id1, "First turn answered", true, None).unwrap();
+    let s = hub.snapshot(id1).unwrap();
+    assert_eq!(s.answer.as_deref(), Some("First turn answered"));
+
+    // 3. Keep and Undo are the person's: refused over the control channel; closing ends the request.
+    let refused = call(&mut h, &c, "ui.askAgent", json!({"accept":id1}));
+    assert!(refused.unwrap_err().starts_with("HUMAN_REVIEW_REQUIRED"));
+    ok(&mut h, &c, "ui.askAgent", json!({"close":true}));
+    assert!(hub.snapshot(id1).is_none());
+
+    // 4. A second request goes through the same way.
+    let sent2 = ok(&mut h, &c, "ui.askAgent", json!({"instruction":"Second turn"}));
+    let id2 = sent2["id"].as_u64().unwrap();
+    assert_eq!(hub.listen(50, None, std::time::Duration::ZERO, || true).unwrap().id, id2);
+    hub.reply(50, id2, "Second turn answered", true, None).unwrap();
+    ok(&mut h, &c, "ui.askAgent", json!({"close":true}));
+    assert!(hub.snapshot(id2).is_none());
+}
+
+#[test]
+fn ask_agent_counts_every_step_of_a_batch() {
+    let (mut h, c) = harness();
+    let hub = c.agent_hub();
+    let _ = hub.listen(60, Some("worker"), std::time::Duration::ZERO, || true);
+    ok(&mut h, &c, "ui.set", json!({"key":"select","value":"1"}));
+    ok(&mut h, &c, "ui.askAgent", json!({}));
+    let sent = ok(&mut h, &c, "ui.askAgent", json!({"instruction":"Add two pages"}));
+    let id = sent["id"].as_u64().unwrap();
+    hub.listen(60, None, std::time::Duration::ZERO, || true).unwrap();
+
+    // A batch applies one edit per step: each one is counted, so Keep groups them all and Undo
+    // takes them all back, instead of the single tool call counting as one edit.
+    h.state_mut().tool_runner = Some(Box::new(|session, _name, _args, _root| {
+        let doc = session.docs()[0].id;
+        for page in [0, 1] {
+            session.apply(doc, pdfcraft_engine::Edit::RotatePages { pages: vec![page], degrees: 90 }).map_err(|e| e.to_string())?;
+        }
+        Ok(json!({"steps": 2}))
+    }));
+    ok(&mut h, &c, "tool.call", json!({"name":"command_batch","arguments":{"steps":[]},"requestId":id,"__askConnection":true,"__agentOwner":60}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["askAgent"]["edits"], 2);
+}
+
 #[test]
 fn page_size_shows_while_the_pointer_is_in_the_bottom_left_quadrant() {
     let (mut h, _c) = harness();

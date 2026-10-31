@@ -2472,6 +2472,12 @@ animation effects	Off	Izklopljeni
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Ogledate si podpisano različico dokumenta „{from}“ (revizija {rev}). To je posnetek: spremembe tukaj ne bodo vplivale na izvirnik.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Ogledate si revizijo {rev} dokumenta „{from}“. To je posnetek: spremembe tukaj ne bodo vplivale na izvirnik.
+
+# Ask Agent
+	Ask Agent	Vprašaj agenta
+	Instruction	Navodilo
+	Send	Pošlji
+	Keep	Obdrži
 	Turn upside down (180°)	Obrni na glavo (180°)
 	4 x 6 in label (101.6 x 152.4 mm)	Nalepka 4 × 6 in (101,6 × 152,4 mm)
 	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Vsako stran obreže na natisnjeno območje, jo poravna pokonci in prilagodi listu brez raztegovanja. Ena nalepka na list.

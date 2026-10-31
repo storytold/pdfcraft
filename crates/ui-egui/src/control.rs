@@ -42,6 +42,16 @@
 //!   (`"focused": true`) instead of adding a tab; native opens report `pending: true` until
 //!   they complete and are listed in `ui.state.pending_opens`; only a failed open replies `Err`.
 //! - `ui.screenshot {region?}`: PNG of the window (base64), optionally cropped to a rect.
+//! - `tool.inspect {query?, role?, focused?, limit?}`: the read-only MCP inspection boundary;
+//!   unlike the existing trusted UI driver, refuses private signing/password views and stale
+//!   private widget trees. MCP never exposes the UI driver's input methods.
+//! - `tool.call {name, arguments?, root?}`: run an automation tool (`pdfcraft-cli tools`) on the
+//!   window's own documents, between frames like a menu command, so the person sees the change;
+//!   `doc` ids are the ones `ui.state` reports. `root` confines the paths it reads or writes. The
+//!   result is `{content: [{type: "json", value} | {type: "png", data, width, height}]}`. Signing,
+//!   creating digital IDs, trusting certificates and closing tabs are refused: they are the
+//!   person's to do (`pdfcraft_automation::window`). `pdfcraft-cli mcp --connect FILE` relays
+//!   every MCP tool here.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -55,6 +65,7 @@ mod pending;
 mod plugin;
 mod requests;
 mod screenshot;
+mod tool;
 #[cfg(not(target_arch = "wasm32"))]
 mod transport;
 
@@ -68,6 +79,10 @@ use screenshot::{Geometry, MAX_IMAGE_BYTES, retried_reservation};
 pub use transport::{Endpoint, serve};
 
 pub type Reply = Result<Value, String>;
+
+/// Runs automation tool `name` with `args` on the window's session (`tool.call`), with an
+/// optional root folder; the result in the control channel's form. The desktop app provides it.
+pub type ToolRunner = Box<dyn FnMut(&mut pdfcraft_engine::Session, &str, &Value, Option<&std::path::Path>) -> Reply>;
 
 /// Seconds to wait for frames (input to be handled, a screenshot to be taken) before reporting
 /// that the window is not being drawn. `App::logic` also runs while a window is hidden,
@@ -113,6 +128,7 @@ pub struct ControlRequest {
 pub struct ControlClient {
     tx: Sender<ControlRequest>,
     ctx: egui::Context,
+    agent_hub: crate::ask_agent::AgentHub,
 }
 
 impl ControlClient {
@@ -125,6 +141,11 @@ impl ControlClient {
         }
         self.ctx.request_repaint();
         rx
+    }
+
+    /// Ask Agent's queue, shared with the control channel's connection threads.
+    pub fn agent_hub(&self) -> crate::ask_agent::AgentHub {
+        self.agent_hub.clone()
     }
 }
 
@@ -209,6 +230,8 @@ pub struct Control {
     pending: Vec<Pending>,
     /// Requests admitted while the app cannot yet run a real UI pass (fonts not ready).
     deferred: VecDeque<DeferredRequest>,
+    /// Keep private snapshots inaccessible until fresh non-private UI passes replaced them.
+    private_until_pass: u64,
 }
 
 /// Install the control channel on `ctx`: returns the app half and a client.
@@ -217,13 +240,20 @@ pub fn attach(ctx: &egui::Context) -> (Control, ControlClient) {
     ctx.add_plugin(ControlPlugin { shared: shared.clone() });
     ctx.enable_accesskit();
     let (tx, rx) = channel();
-    (Control { rx, shared, pending: Vec::new(), deferred: VecDeque::new() }, ControlClient { tx, ctx: ctx.clone() })
+    (
+        Control { rx, shared, pending: Vec::new(), deferred: VecDeque::new(), private_until_pass: 0 },
+        ControlClient { tx, ctx: ctx.clone(), agent_hub: crate::ask_agent::AgentHub::default() },
+    )
 }
 
 /// What a request needs from the app (implemented by `PdfCraftApp`).
 pub(crate) trait Host {
     /// Return the UI-state snapshot reported by `ui.state`.
     fn state(&self) -> Value;
+    /// Handle an `ui.askAgent` request.
+    fn ask_agent(&mut self, _p: &Value) -> Reply {
+        Err("ui.askAgent: not available in this host".into())
+    }
     /// Run one registered command by id and return its reply.
     fn command(&mut self, id: &str) -> Reply;
     /// Apply or reset the side panel layout from a control request.
@@ -236,6 +266,18 @@ pub(crate) trait Host {
     fn open(&mut self, path: &str) -> Reply;
     /// Request application exit; returns whether it closed without asking for confirmation.
     fn quit(&mut self, ctx: &egui::Context) -> bool;
+    /// Run automation tool `name` on the window's documents (`tool.call`).
+    fn tool(&mut self, _name: &str, _args: &Value, _root: Option<&str>) -> Reply {
+        Err("tool.call: not available in this host".into())
+    }
+    /// Run automation tool `name` for an Ask Agent connection (`owner`, claimed `request`).
+    fn agent_tool(&mut self, _owner: u64, _request: Option<u64>, _name: &str, _args: &Value, _root: Option<&str>) -> Reply {
+        Err("tool.call: not available in this host".into())
+    }
+    /// Whether a private signing or password view is open, which inspection must not reveal.
+    fn private_dialog(&self) -> bool {
+        false
+    }
 
     /// A generation that changes when the input target (document, dialog, focus) does.
     ///
@@ -265,6 +307,9 @@ impl Control {
     /// Handle new requests and finish waiting ones. Call at the start of every frame (`logic`).
     pub(crate) fn tick(&mut self, ctx: &egui::Context, host: &mut impl Host) {
         self.set_epoch(host.input_epoch());
+        if host.private_dialog() {
+            self.private_until_pass = self.passes().saturating_add(2);
+        }
         self.finish_pending(ctx, host);
         let ready = host.accepts_input();
         if !ready {
@@ -457,6 +502,8 @@ impl Control {
 
 #[cfg(test)]
 mod lifecycle_tests;
+#[cfg(test)]
+mod tool_tests;
 
 #[cfg(test)]
 mod pointer_tests {
