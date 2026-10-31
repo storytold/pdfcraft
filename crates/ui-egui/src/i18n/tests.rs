@@ -382,8 +382,9 @@ fn plurals_and_placeholders() {
 
 #[test]
 fn language_persists_and_invalid_input_keeps_current_language() {
+    let default = option_env!("PDFCRAFT_DEFAULT_LANGUAGE").and_then(normalize_pref).unwrap_or(AUTO);
     let mut app = crate::PdfCraftApp::default();
-    assert_eq!(app.language, AUTO);
+    assert_eq!(app.language, default);
     app.set_option("language", "JA").unwrap();
     assert_eq!(app.language, "ja");
     assert!(app.set_option("language", "xx").is_err());
@@ -398,7 +399,7 @@ fn language_persists_and_invalid_input_keeps_current_language() {
     // Settings written before the system-locale default (no key) follow the system.
     let mut legacy = crate::PdfCraftApp::default();
     legacy.restore("{}");
-    assert_eq!(legacy.language, AUTO);
+    assert_eq!(legacy.language, default);
 }
 
 #[test]
