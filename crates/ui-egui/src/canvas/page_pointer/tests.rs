@@ -374,10 +374,16 @@ const PAGE_HIT_CALLS: [&str; 8] = [
     "content_ui::hit(",
 ];
 
+/// Geometry helpers from the paragraph-frame implementation also belong in hit producers,
+/// not in the handlers consuming the captured press (including modifier selection).
+const PARAGRAPH_PRESS_RETESTS: [&str; 6] =
+    ["grip_at(", "grabs_edge(", "paragraph_contains(", "paragraph_ink_contains(", "paragraph_on_frame(", "image_at("];
+
 fn routed_press_handler(code: &str) -> bool {
     let code = code.lines().filter(|line| !line.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
     code.contains("router.owner(")
         && !PAGE_HIT_CALLS.iter().any(|call| code.contains(call))
+        && !PARAGRAPH_PRESS_RETESTS.iter().any(|call| uses(&code, call))
         && !uses(&code, "hit(")
         && !uses(&code, "body_hit(")
         && !uses(&code, "handle_hit(")
@@ -434,6 +440,9 @@ fn the_page_press_guard_rejects_missing_owners_and_second_hit_tests() {
     assert!(!routed_press_handler("// view.router.owner(page)\nlet owner = None;"));
     assert!(!routed_press_handler("let owner = view.router.owner(page);\nlet again = cx.hit(origin);"));
     for call in PAGE_HIT_CALLS {
+        assert!(!routed_press_handler(&format!("let owner = view.router.owner(page);\n{call}origin);")), "{call}");
+    }
+    for call in PARAGRAPH_PRESS_RETESTS {
         assert!(!routed_press_handler(&format!("let owner = view.router.owner(page);\n{call}origin);")), "{call}");
     }
 }

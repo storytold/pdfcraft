@@ -1144,6 +1144,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     let prepare_allowed = can_modify && table_preview.is_none() && frame.out.open_table.is_none();
     let hits = PageHits {
         page: i,
+        doc,
         xf: &xf,
         info,
         tool,
@@ -1159,7 +1160,12 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         lines: &lines,
         images: &images,
         clip: ui.clip_rect(),
+        additive: crate::object_ui::modified(ui),
     };
+    let hovered_paragraph = pointer.and_then(|p| crate::page_router::top(hits.at(view, p), tool)).and_then(|h| match h.owner {
+        crate::page_router::Owner::Paragraph { block, .. } => Some(block),
+        _ => None,
+    });
     if let Some(o) = ptr.pressed().filter(|o| xf.rect.contains(*o)) {
         let at = hits.at(view, o);
         view.router.press(i, at, tool);
@@ -1316,7 +1322,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     let on_edit_text = (tool == QuickTool::EditText || over_source) && can_modify && {
         // Editable text takes precedence over background/overlapping artwork. Both
         // inventories are painted every frame, even when text owns the pointer.
-        let text_used = crate::edit_text_ui::page_input(cx, &lines, view, !others_own_pointer);
+        let text_used = crate::edit_text_ui::page_input(cx, &lines, view, hovered_paragraph, !others_own_pointer);
         let image_cx = crate::edit_text_ui::ImageCx {
             ui,
             resp,
@@ -1380,6 +1386,7 @@ fn edit_inventory(
 /// What the page modules have under a point on one page, for the page router.
 struct PageHits<'a> {
     page: usize,
+    doc: &'a pdfcraft_engine::Document,
     xf: &'a PageXform,
     info: &'a DocInfo,
     tool: QuickTool,
@@ -1398,6 +1405,8 @@ struct PageHits<'a> {
     images: &'a [pdfcraft_engine::PageImage],
     /// The pages' visible area (the picture's rotate knob stays inside it).
     clip: Rect,
+    /// A modifier press toggles objects in a mixed selection.
+    additive: bool,
 }
 
 impl PageHits<'_> {
@@ -1406,9 +1415,10 @@ impl PageHits<'_> {
     /// open paragraph's frame, the selected picture's grips over them all; then form fields
     /// (Prepare's, being moved, over the comments; filled ones under added content and the
     /// comments that move).
-    fn at(&self, view: &DocView, p: Pos2) -> Vec<crate::page_router::Hit> {
+    fn at(&self, view: &mut DocView, p: Pos2) -> Vec<crate::page_router::Hit> {
         let PageHits {
             page,
+            doc,
             xf,
             info,
             tool,
@@ -1424,6 +1434,7 @@ impl PageHits<'_> {
             lines,
             images,
             clip,
+            additive,
         } = *self;
         let fields = if preparing {
             crate::prepare::hit(xf, info, page, form, field_tool, prepare_allowed, &view.prepare, p)
@@ -1435,31 +1446,36 @@ impl PageHits<'_> {
         // With Add text, only the paragraphs and pictures not under added content.
         let editing =
             can_modify && (tool == QuickTool::EditText || tool == QuickTool::AddText && !crate::content_ui::hits_added(xf, info, page, added, p));
+        // Resolve added content once; mixed selection uses the same target as its own tool.
+        let picks_up = matches!(tool, QuickTool::Select | QuickTool::AddText | QuickTool::EditText);
+        // Modifier selection resolves added items from their actual inventory placement in
+        // object_ui::hit, including after the page's display space has changed.
+        let placed = (editing_content && can_modify && picks_up && !(tool == QuickTool::EditText && additive))
+            .then(|| crate::content_ui::hit(xf, info, page, added, view, p))
+            .flatten();
         let (pictures, paragraphs, objects, grips) = if editing {
             let open = view.line_editor.as_ref().filter(|e| e.page == page);
-            let frame = open
-                .filter(|e| !e.has_changes())
-                .and_then(|e| lines.get(e.block))
-                .map(|l| xf.user_rect(info, page, l.rect.map(|v| v as f32)).expand(2.0));
+            let frame = open.filter(|e| !e.has_changes()).and_then(|e| lines.get(e.block));
             // Add text acts on the page's paragraphs only in their boxes, edges included (it
             // finishes the box being typed there, `over_source`): not on pictures, nor beside a
             // paragraph, where a click starts a new box.
             let edit_text = tool == QuickTool::EditText;
             let on_paragraphs = edit_text || crate::edit_text_ui::over_paragraph(xf, info, page, lines, p);
+            let pictures = edit_text.then(|| crate::edit_text_ui::picture_hit(xf, page, info, images, view, p)).flatten();
+            let paragraphs = on_paragraphs.then(|| crate::edit_text_ui::hit(xf, info, page, lines, open.map(|e| e.block), p)).flatten();
+            // Mixed selection resolves added items from their actual inventory placement;
+            // the ordinary tool's saved display box may be stale after a page rotation.
+            let beneath = crate::page_router::top(pictures.iter().chain(paragraphs.iter()).cloned(), tool);
             (
-                edit_text.then(|| crate::edit_text_ui::picture_hit(xf, page, info, images, view, p)).flatten(),
-                on_paragraphs.then(|| crate::edit_text_ui::hit(xf, info, page, lines, open.map(|e| e.block), p)).flatten(),
-                edit_text.then(|| crate::object_ui::hit(view, xf, info, page, frame, p)).flatten(),
+                pictures,
+                paragraphs,
+                edit_text.then(|| crate::object_ui::hit(view, doc, xf, info, page, frame, beneath.as_ref(), additive, p)).flatten(),
                 edit_text.then(|| crate::edit_text_ui::picture_handle_hit(clip, xf, page, info, images, view, p)).flatten(),
             )
         } else {
             (None, None, None, None)
         };
-        // Added text and pictures, over the page's own paragraphs and under the objects selected
-        // together.
-        let picks_up = matches!(tool, QuickTool::Select | QuickTool::AddText | QuickTool::EditText);
-        let added = (editing_content && can_modify && picks_up).then(|| crate::content_ui::hit(xf, info, page, added, view, p)).flatten();
-        [link_hit(info, xf, page, p), comments::hit(pcx, view, p), pictures, paragraphs, added, objects, grips, fields]
+        [link_hit(info, xf, page, p), comments::hit(pcx, view, p), pictures, paragraphs, placed, objects, grips, fields]
             .into_iter()
             .flatten()
             .collect()

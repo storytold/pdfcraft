@@ -2813,6 +2813,7 @@ theme	Appearance	ظاهر
 	two cells would both be named {name}	دو خانه هر دو با نام {name} نام‌گذاری می‌شوند
 	a field named {name} already exists	فیلدی با نام {name} از قبل وجود دارد
 	Today	امروز
+	Text extends outside the frame.	متن از کادر بیرون می‌زند.
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	گزینه‌های این پاسخ

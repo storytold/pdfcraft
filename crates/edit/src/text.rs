@@ -24,8 +24,11 @@ use crate::EditError;
 mod regions;
 #[path = "text_session.rs"]
 mod session;
+#[path = "text_frame.rs"]
+mod text_frame;
 use regions::{alignment_frame, group_blocks, is_centred, rewrite_styled_block};
 pub use session::TextSession;
+use text_frame::HorizontalFrame;
 
 mod blocks;
 mod editor;
@@ -99,6 +102,7 @@ pub struct TextLine {
     origin: Origin,
     /// Explicit marked-content scope (when present); distinct scopes must not be guessed into one paragraph.
     scope: Option<usize>,
+    horizontal_frame: Option<HorizontalFrame>,
     /// The layers and graphics state parameters it is drawn in; see [`Paint`].
     paint: Paint,
     /// Right-to-left `/ActualText` already supplies typing order; glyph text still needs bidi
@@ -153,6 +157,10 @@ mod tests {
         TextBlock {
             text: text.into(),
             rect,
+            ink_frame: rect,
+            horizontal_frame: None,
+            vertical_frame: None,
+            horizontal_alignment: None,
             base_font: String::new(),
             size: 12.0,
             bold: false,

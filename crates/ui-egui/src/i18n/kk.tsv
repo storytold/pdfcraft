@@ -2560,6 +2560,7 @@ animation effects	Off	Өшірулі
 	field names can't contain a period: {name}	өріс атауларында нүкте болмауы керек: {name}
 	two cells would both be named {name}	екі ұяшықтың да атауы {name} болар еді
 	a field named {name} already exists	{name} атты өріс бар
+	Text extends outside the frame.	Мәтін жақтаудан шығып тұр.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Бүгін

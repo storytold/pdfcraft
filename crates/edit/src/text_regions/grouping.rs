@@ -4,6 +4,7 @@ fn same_plane(a: &TextLine, b: &TextLine) -> bool {
     let at = Matrix(a.origin.tm).then(&Matrix(a.origin.ctm));
     let bt = Matrix(b.origin.tm).then(&Matrix(b.origin.ctm));
     a.scope == b.scope
+        && a.horizontal_frame == b.horizontal_frame
         && a.paint == b.paint
         && [0, 2].iter().all(|axis| {
             let ax = at.0.get(*axis).copied().unwrap_or(0.0);
@@ -280,6 +281,12 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
         let Some(first) = row.first().and_then(|i| lines.get(*i)) else { continue };
         let (Some(rect), Some(frame)) = (row_rect(row, lines), frame_row_rect(row, lines)) else { continue };
         let joins = blocks.last().is_some_and(|block| {
+            if mixed
+                && first.horizontal_frame.is_some()
+                && block.lines.first().and_then(|i| lines.get(*i)).is_some_and(|prev| prev.horizontal_frame == first.horizontal_frame)
+            {
+                return true;
+            }
             // A bullet of its own opens a list item (#2564): such a row is a new paragraph, and
             // letting it join is what made an edit of the row above delete this item and the ones
             // after it.
@@ -350,6 +357,10 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 reflow_text: String::new(),
                 spans: Vec::new(),
                 rect,
+                ink_frame: frame,
+                horizontal_frame: first.horizontal_frame.map(|f| f.bounds),
+                vertical_frame: first.horizontal_frame.and_then(|f| f.vertical),
+                horizontal_alignment: first.horizontal_frame.map(|f| f.align),
                 base_font: first.base_font.clone(),
                 size: first.size,
                 bold: first.bold,
@@ -393,6 +404,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
         }
         block.text.push_str(row_text.trim_matches(paragraph_separator));
         block.rect = union(block.rect, rect);
+        block.ink_frame = union(block.ink_frame, frame);
         block.rows.push(row.clone());
     }
     for block in &mut blocks {
@@ -443,10 +455,12 @@ fn break_gap(block: &TextBlock, lines: &[TextLine], row_index: usize) -> Option<
     if line.soft_break {
         return Some(line.soft_gap);
     }
-    let prev = block.rows.get(row_index.wrapping_sub(1)).and_then(|row| row_rect(row, lines))?;
-    let next = block.rows.get(row_index).and_then(|row| row_rect(row, lines))?;
+    let prev = block.rows.get(row_index.wrapping_sub(1)).and_then(|row| frame_row_rect(row, lines))?;
+    let next = block.rows.get(row_index).and_then(|row| frame_row_rect(row, lines))?;
     let size = line.size.max(1.0);
-    let slack = block.rect[2] - prev[2];
+    // The measure runs along the baseline, including turned paragraphs: a world-axis
+    // bounding box would compare their height or diagonal instead of their row widths.
+    let slack = block.ink_frame[2] - prev[2];
     let width = prev[2] - prev[0];
     // Short rows define the right edge by their own letters. A body line that fills the
     // measure leaves almost no room for the next word.

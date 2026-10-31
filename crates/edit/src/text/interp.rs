@@ -1,6 +1,6 @@
 use super::fallback::is_type3_fallback;
 use super::rewrite::vertical_advance;
-use super::{Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, Rc};
+use super::{Dict, Document, EditError, HashMap, HorizontalFrame, Matrix, Metrics, Object, Op, Rc};
 
 /// Text and graphics state captured for rewriting.
 #[derive(Clone, Debug, PartialEq)]
@@ -189,6 +189,14 @@ pub(super) fn to_frame(dir: (f64, f64), p: (f64, f64)) -> (f64, f64) {
     (p.0 * dir.0 + p.1 * dir.1, p.1 * dir.0 - p.0 * dir.1)
 }
 
+pub(super) fn from_frame(dir: (f64, f64), p: (f64, f64)) -> (f64, f64) {
+    (p.0 * dir.0 - p.1 * dir.1, p.0 * dir.1 + p.1 * dir.0)
+}
+
+pub(super) fn frame_corners([left, bottom, right, top]: [f64; 4]) -> [(f64, f64); 4] {
+    [(left, bottom), (right, bottom), (right, top), (left, top)]
+}
+
 /// The box covering both `[x0, y0, x1, y1]` boxes.
 pub(crate) fn union(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
     [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]
@@ -298,6 +306,7 @@ pub(super) struct Shown {
     pub(super) visual_order: bool,
     pub(super) decodable: bool,
     pub(super) scope: Option<usize>,
+    pub(super) horizontal_frame: Option<HorizontalFrame>,
     pub(super) paint: Paint,
     pub(super) logical_order: bool,
     pub(super) actual_text: bool,
@@ -438,6 +447,8 @@ pub(super) struct Carry {
     /// errata, issue 368), as the renderer does.
     pub(super) stack: Vec<(Ts, Matrix, Matrix)>,
     pub(super) marked: Vec<Option<usize>>,
+    /// Only actual private frames need storage; ordinary nested marked spans inherit the last.
+    pub(super) frames: Vec<(usize, HorizontalFrame)>,
     /// For each open marked-content sequence, its optional content group when it is `/OC`.
     pub(super) layers: Vec<Option<Vec<u8>>>,
     /// Bytes of glyph text the rest of the page may still produce (see [`MAX_PAGE_TEXT`]).
@@ -472,7 +483,7 @@ impl Carry {
             dash: (Vec::new(), 0.0),
             line_cap: 0,
         };
-        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT }
+        Carry { ts, stack: Vec::new(), marked: Vec::new(), frames: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT }
     }
 }
 
@@ -486,16 +497,20 @@ type Invocation = (usize, Vec<u8>, Ts);
 #[derive(Default)]
 struct MarkedContent {
     regions: Vec<Option<usize>>,
+    frames: Vec<(usize, HorizontalFrame)>,
     layers: Vec<Option<Vec<u8>>>,
     actual_text: Vec<Option<(usize, usize, String)>>,
 }
 
 impl MarkedContent {
-    fn begin(&mut self, doc: &Document, op: &Op, index: usize, logical_text: Option<&Dict>, shown_count: usize) {
+    fn begin(&mut self, doc: &Document, op: &Op, index: usize, logical_text: Option<&Dict>, shown_count: usize, frame: Option<HorizontalFrame>) {
         // Marked text paragraphs/headings are authoritative boundaries. Ignore artifacts and
         // inner spans, which inherit their enclosing region.
         let region = matches!(op.name(0), Some(b"P" | b"H" | b"H1" | b"H2" | b"H3" | b"H4" | b"H5" | b"H6" | b"LI" | b"TD" | b"TH"));
-        self.regions.push(if region { Some(index) } else { self.regions.last().copied().flatten() });
+        self.regions.push(if region || frame.is_some() { Some(index) } else { self.regions.last().copied().flatten() });
+        if let Some(frame) = frame {
+            self.frames.push((self.regions.len(), frame));
+        }
         // A layer named in the resources is told apart by its name, an inline one by where it opens.
         let layer = op.is("BDC") && op.name(0) == Some(b"OC".as_slice());
         self.layers
@@ -514,6 +529,9 @@ impl MarkedContent {
 
     fn end(&mut self, index: usize, shown: &mut Vec<Shown>) {
         self.regions.pop();
+        if self.frames.last().is_some_and(|(depth, _)| *depth > self.regions.len()) {
+            self.frames.pop();
+        }
         self.layers.pop();
         if let Some(Some((start, open, logical))) = self.actual_text.pop() {
             let tail = shown.split_off(start.min(shown.len()));
@@ -698,7 +716,12 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     let rect = corners.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
     // The same corners along and across the baseline: the run's own box, not its
     // upright bounding box turned (which is wider by the box's height on a slant).
-    let dir = direction(&trm0);
+    let actual_dir = direction(&trm0);
+    // Metadata cannot assign baseline coordinates from another orientation to these glyphs.
+    // Ignore a mismatched marker, keeping the source ink editable.
+    let horizontal_frame =
+        marked.frames.last().map(|(_, f)| *f).filter(|f| (f.direction.0 - actual_dir.0).abs() < 1e-3 && (f.direction.1 - actual_dir.1).abs() < 1e-3);
+    let dir = horizontal_frame.map_or(actual_dir, |f| f.direction);
     let frame = corners
         .iter()
         .map(|&p| to_frame(dir, p))
@@ -753,6 +776,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         visual_order: m.visual_order,
         decodable,
         scope: marked.regions.last().copied().flatten(),
+        horizontal_frame,
         paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
         logical_order: false,
         actual_text: false,
@@ -781,8 +805,13 @@ pub(super) fn interpret(
     let mut stack: Vec<(Ts, Matrix, Matrix)> = std::mem::take(&mut carry.stack);
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     let mut bt = 0usize;
-    let mut marked =
-        MarkedContent { regions: std::mem::take(&mut carry.marked), layers: std::mem::take(&mut carry.layers), ..MarkedContent::default() };
+    let mut marked = MarkedContent {
+        regions: std::mem::take(&mut carry.marked),
+        frames: std::mem::take(&mut carry.frames),
+        layers: std::mem::take(&mut carry.layers),
+        ..MarkedContent::default()
+    };
+    let closed_frames = HorizontalFrame::closed(ops);
     // A rewrite names a wrap (`/PCSoft`) or a break it kept (`/PCHard`) in an empty marker
     // before the next line. Neither name is a paragraph region, so it does not change scope.
     let mut soft_break = false;
@@ -816,7 +845,8 @@ pub(super) fn interpret(
                     hard_break = true;
                     soft_break = false;
                 }
-                marked.begin(doc, op, i, logical_text, out.len());
+                let frame = closed_frames.contains(&i).then(|| HorizontalFrame::read(op, i, ts.ctm)).flatten();
+                marked.begin(doc, op, i, logical_text, out.len(), frame);
             }
             b"EMC" => {
                 marked.end(i, &mut out);
@@ -949,6 +979,7 @@ pub(super) fn interpret(
     carry.ts = ts;
     carry.stack = stack;
     carry.marked = marked.regions;
+    carry.frames = marked.frames;
     carry.layers = marked.layers;
     positioned_tracking(&mut out);
     Ok(out)

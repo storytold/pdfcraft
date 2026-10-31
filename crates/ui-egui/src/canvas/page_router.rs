@@ -52,8 +52,10 @@ pub(crate) enum PicturePart {
 /// What of the objects a hit is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ObjectsPart {
+    /// Modifier selection of an added item at its actual placement in the document.
+    Item { target: pdfcraft_engine::ObjectTarget },
     /// The objects selected together: a drag moves them all.
-    Selection,
+    Selection { target: Option<pdfcraft_engine::ObjectTarget> },
     /// The frame drawn around the paragraph open for typing: a click selects the box, a drag moves it.
     Frame,
 }
@@ -63,9 +65,27 @@ pub(crate) enum ObjectsPart {
 pub(crate) enum ParagraphPart {
     /// The paragraph: a drag moves it, a click opens it for typing.
     Body,
-    /// Its left or right edge (on screen): a drag rewraps it.
+    /// Its edges along the baseline: a drag rewraps it, including on a turned page.
     Left,
     Right,
+    /// Its edges normal to the baseline: a drag changes the frame without moving its text.
+    Top,
+    Bottom,
+}
+
+impl Owner {
+    /// The single editable object beneath a press, also retained when its selection owns it.
+    pub(crate) fn object_target(self) -> Option<pdfcraft_engine::ObjectTarget> {
+        use pdfcraft_engine::{ObjectKind, ObjectTarget};
+        match self {
+            Self::Paragraph { block, .. } => Some(ObjectTarget { kind: ObjectKind::Text, index: block }),
+            Self::Picture { index, .. } => Some(ObjectTarget { kind: ObjectKind::Image, index }),
+            Self::Added { index, .. } => Some(ObjectTarget { kind: ObjectKind::Added, index }),
+            Self::Objects { part: ObjectsPart::Item { target } } => Some(target),
+            Self::Objects { part: ObjectsPart::Selection { target } } => target,
+            _ => None,
+        }
+    }
 }
 
 /// The part of a comment a hit is on.

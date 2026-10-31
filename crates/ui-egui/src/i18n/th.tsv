@@ -2711,6 +2711,7 @@ key	Space	Space
 	Collapse all tools	ยุบเครื่องมือทั้งหมด
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
+	Text extends outside the frame.	ข้อความล้นออกนอกกรอบ
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	วันนี้

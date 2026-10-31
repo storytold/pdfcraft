@@ -22,7 +22,11 @@ fn source_look(base_font: &str, size: f64, color: [f64; 3], detected_bold: bool,
 }
 
 pub(super) fn look_of(b: &pdfcraft_engine::TextBlock) -> pdfcraft_engine::AddedText {
-    source_look(&b.base_font, b.size, b.color, b.bold, b.italic)
+    let mut look = source_look(&b.base_font, b.size, b.color, b.bold, b.italic);
+    if let Some(align) = b.horizontal_alignment {
+        look.align = align;
+    }
+    look
 }
 
 pub(crate) fn editor_font(look: &pdfcraft_engine::AddedText, size: f32) -> FontId {
@@ -113,7 +117,8 @@ pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32,
     if let Some((block, lines)) = &ed.source {
         let lefts: Vec<_> = block.rows.iter().filter_map(|r| r.first().and_then(|i| lines.get(*i)).map(|l| l.rect[0])).collect();
         let left_span = lefts.iter().copied().fold(f64::NEG_INFINITY, f64::max) - lefts.iter().copied().fold(f64::INFINITY, f64::min);
-        let centered = block.rows.len() > 1
+        let centered = !ed.turned
+            && block.rows.len() > 1
             && left_span > block.size * 0.5
             && block.rows.iter().all(|row| {
                 let rect = row
@@ -125,6 +130,13 @@ pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32,
             });
         if centered {
             job.halign = egui::Align::Center;
+        }
+        if block.horizontal_alignment.is_some() {
+            job.halign = match ed.look.align {
+                pdfcraft_engine::TextAlign::Center => egui::Align::Center,
+                pdfcraft_engine::TextAlign::Right => egui::Align::RIGHT,
+                _ => egui::Align::LEFT,
+            };
         }
         for (range, index) in block.edited_spans(text) {
             let Some(line) = lines.get(index) else { continue };
@@ -154,7 +166,11 @@ pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32,
             }
             let native_width = ui.fonts_mut(|f| f.layout_no_wrap(line.text.clone(), font.clone(), Color32::BLACK).size().x);
             let target_width = ((line.rect[2] - line.rect[0]) * look.size / line.size.max(0.01)) as f32 * scale;
-            let spacing = if original_face { (target_width - native_width) / line.text.chars().count().saturating_sub(1).max(1) as f32 } else { 0.0 };
+            let spacing = if original_face && !ed.turned {
+                (target_width - native_width) / line.text.chars().count().saturating_sub(1).max(1) as f32
+            } else {
+                0.0
+            };
             job.append(
                 text.get(range).unwrap_or_default(),
                 0.0,
@@ -194,9 +210,13 @@ pub(super) fn unseen(mut galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
 
 /// Align the editable galley's baselines to the source rows instead of egui's interface
 /// leading. Glyphs, meshes, caret and selection receive the same transform.
-pub(super) fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32) -> Arc<egui::Galley> {
+pub(super) fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32, top_padding: f32) -> Arc<egui::Galley> {
     let mut job = editor_job(ui, ed, text, scale, width);
+    if ed.turned {
+        return ui.fonts_mut(|fonts| fonts.layout_job(job));
+    }
     let centered = job.halign == egui::Align::Center;
+    let right_aligned = job.halign == egui::Align::RIGHT;
     job.halign = egui::Align::LEFT;
     let mut galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
     let Some((block, lines)) = &ed.source else { return galley };
@@ -246,13 +266,15 @@ pub(super) fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f
         let descent = (sources.get(index).map_or(last_baseline, |s| s.0) - source_rect[1]) as f32 * scale * ratio as f32;
         let base_y = (block.rect[3] - baseline) as f32 * scale;
         let row = Arc::make_mut(&mut placed.row);
-        placed.pos.y = base_y - ascent;
+        placed.pos.y = top_padding + base_y - ascent;
         let free = (width - row.size.x).max(0.0);
         placed.pos.x = match own {
             Some(pdfcraft_engine::TextAlign::Center) => free / 2.0,
             Some(pdfcraft_engine::TextAlign::Right) => free,
             Some(pdfcraft_engine::TextAlign::Left | pdfcraft_engine::TextAlign::Justify) => 0.0,
             None if centered => (width - row.size.x) / 2.0,
+            None if right_aligned => width - row.size.x,
+            None if block.horizontal_frame.is_some() => 0.0,
             None => (source_rect[0] - block.rect[0]) as f32 * scale,
         };
         for glyph in &mut row.glyphs {

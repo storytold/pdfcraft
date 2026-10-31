@@ -1,3 +1,5 @@
+use super::super::interp::TextState;
+use super::super::text_frame::HorizontalFrame;
 use super::grouping::{across, is_centred, row_rect};
 use super::{
     BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
@@ -399,6 +401,33 @@ fn paragraph_geometry(doc: &Document, page: &pdfcraft_model::Page, block: &TextB
         block.rect[2] - block.rect[0]
     };
     Ok((dx, dy, style.width.unwrap_or(natural).clamp(1.0, 14_400.0)))
+}
+
+/// A width change rewrites every row and emits at the last source run. Validate its frame
+/// before embedding fallback fonts: a refused edit must leave no new objects.
+fn paragraph_frame(
+    block: &TextBlock,
+    lines: &[TextLine],
+    first: &TextLine,
+    style: &BlockStyle,
+    geometry: (f64, f64, f64),
+    align: crate::added::Align,
+) -> Result<Option<Op>, EditError> {
+    let (dx, dy, width) = geometry;
+    if style.width.is_none() {
+        return Ok(None);
+    }
+    let lead = block.lines.last().and_then(|i| lines.get(*i)).unwrap_or(first);
+    HorizontalFrame::start(
+        block.editing_rect()[0] + dx,
+        first.origin.baseline + dy,
+        width,
+        style.vertical_frame.map(|[bottom, top]| [bottom + dy, top + dy]),
+        align,
+        Matrix(lead.origin.ctm),
+        first.direction(),
+    )
+    .map(Some)
 }
 
 type WrappedStyledRows = (StyledRows, RowRanges, Vec<usize>, Vec<bool>, Vec<usize>);
@@ -838,6 +867,27 @@ fn splice_with_marker(
     data
 }
 
+/// Apply range and paragraph overrides to a run's source state. Shaped runs omit calibration
+/// because their glyph positions already supply the measured advance.
+fn styled_run_state(source: &TextLine, font: &str, size: f64, range: Option<&RangeStyle>, style: &BlockStyle, calibration: Option<f64>) -> TextState {
+    let mut state = source.origin.state.clone();
+    state.font = Some((font.to_owned(), size));
+    if let Some(c) = range.and_then(|r| r.char_spacing).or(style.char_spacing) {
+        state.char_spacing = c / source.origin.k.max(1e-6);
+    }
+    if let Some(s) = range.and_then(|r| r.scale).or(style.scale) {
+        state.scale = (s / 100.0).clamp(0.1, 10.0);
+    }
+    if let Some(calibration) = calibration {
+        state.scale *= calibration;
+    }
+    if let Some([r, g, b]) = range.and_then(|r| r.color).or(style.color) {
+        let n = pdfcraft_content::num;
+        state.fill = vec![Op::new("rg", vec![n(r), n(g), n(b)])];
+    }
+    state
+}
+
 /// Rewrite visual rows while keeping the source style on each surviving character. Resource
 /// names may differ between Unicode subsets of the same face; encoding searches those subsets.
 pub(crate) fn rewrite_styled_block(
@@ -865,6 +915,11 @@ pub(crate) fn rewrite_styled_block(
     let mut res = p.dict.get(b"Resources").and_then(|resource| doc.resolve(resource).as_dict().cloned()).unwrap_or_default();
     let (mut fonts, mut metrics) = page_font_metrics(doc, &res, block, lines);
     let (dx, dy, width) = paragraph_geometry(doc, &p, block, style)?;
+    let frame_left = block.editing_rect()[0];
+    let crop = p.crop(doc);
+    let centered = is_centred(block, lines, (crop[0] + crop[2]) / 2.0, first.size);
+    let align = style.align.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
+    let saved_frame = paragraph_frame(block, lines, first, style, (dx, dy, width), align)?;
     let prepared = CharacterPreparation {
         doc,
         first,
@@ -972,7 +1027,10 @@ pub(crate) fn rewrite_styled_block(
     // The rewrite is placed after the last rewritten row unless a text-show operator there
     // would make a kept following row depend on that position.
     let anchor = rewrite_anchor(block, lines, first, &ops, &kept_lines, &mut kept);
-    let RewriteAnchor { lead, drop, start, split } = anchor;
+    let RewriteAnchor { lead, mut drop, start, split } = anchor;
+    if let Some(frame) = first.horizontal_frame {
+        frame.remove(&ops, &mut drop);
+    }
     let o = &lead.origin;
     // What is in force where the rewrite is drawn, and what the text after it expects.
     let after = if split { &o.state } else { &o.bt_state };
@@ -983,6 +1041,7 @@ pub(crate) fn rewrite_styled_block(
     let glyph_resources = embed_shaped_resources(doc, &mut fonts, &shaped_runs)?;
     let n = pdfcraft_content::num;
     let mut block_ops = vec![Op::new("q", vec![])];
+    block_ops.extend(saved_frame.clone());
     block_ops.extend(reveal_ops(block, lines, style, o.ctm)?);
     let back = Matrix([o.ctm[0], o.ctm[1], o.ctm[2], o.ctm[3], 0.0, 0.0])
         .invert()
@@ -995,8 +1054,6 @@ pub(crate) fn rewrite_styled_block(
     // that marker, so it is omitted and geometry groups those rows as before.
     let marked = kept.iter().all(|row| !*row);
     push_whole_paragraph_marker(&mut block_ops, marked, "BMC");
-    let crop = p.crop(doc);
-    let centered = is_centred(block, lines, (crop[0] + crop[2]) / 2.0, first.size);
     let source_leading = block
         .rows
         .windows(2)
@@ -1030,7 +1087,7 @@ pub(crate) fn rewrite_styled_block(
         let asked = row_lines.get(row_index).and_then(|l| style.aligns.get(*l)).copied().flatten().or(style.align);
         let align = asked.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
         let original_rect = block.rows.get(row_index).and_then(|row| row_rect(row, lines)).unwrap_or(block.rect);
-        let left = if style.width.is_none() && asked.is_none() { original_rect[0] } else { block.rect[0] };
+        let left = if style.width.is_none() && asked.is_none() { original_rect[0] } else { frame_left };
         let available = if style.width.is_none() && asked.is_none() { original_rect[2] - original_rect[0] } else { width };
         let mut x = left
             + match align {
@@ -1049,20 +1106,8 @@ pub(crate) fn rewrite_styled_block(
             let segment = row.get(pos..end).unwrap_or_default();
             let string: String = segment.iter().map(|c| c.0).collect();
             let m = metrics.get(&item.2).ok_or_else(|| EditError::Invalid("the paragraph font is missing".into()))?;
-            let mut state = source.origin.state.clone();
-            state.font = Some((item.2.clone(), size_of(source, item.1)));
-            if let Some(c) = overrides.get(&item.1).and_then(|r| r.char_spacing).or(style.char_spacing) {
-                state.char_spacing = c / source.origin.k.max(1e-6);
-            }
-            if let Some(s) = overrides.get(&item.1).and_then(|r| r.scale).or(style.scale) {
-                state.scale = (s / 100.0).clamp(0.1, 10.0);
-            }
-            if !shaped_runs.contains_key(&(row_index, pos)) {
-                state.scale *= calibration.get(&item.1).copied().unwrap_or(1.0);
-            }
-            if let Some([r, g, b]) = overrides.get(&item.1).and_then(|r| r.color).or(style.color) {
-                state.fill = vec![Op::new("rg", vec![n(r), n(g), n(b)])];
-            }
+            let scale_correction = (!shaped_runs.contains_key(&(row_index, pos))).then(|| calibration.get(&item.1).copied().unwrap_or(1.0));
+            let mut state = styled_run_state(source, &item.2, size_of(source, item.1), overrides.get(&item.1).copied(), style, scale_correction);
             let inverse = Matrix(o.ctm).invert().ok_or_else(|| EditError::Invalid("the paragraph has a singular transform".into()))?;
             let mut tm = Matrix(source.origin.tm).then(&Matrix(source.origin.ctm)).then(&inverse).0;
             let (ax, ay) = back.apply(x - source.origin.x, baseline - source.origin.baseline);
@@ -1171,6 +1216,9 @@ pub(crate) fn rewrite_styled_block(
         };
     }
     push_whole_paragraph_marker(&mut block_ops, marked, "EMC");
+    if saved_frame.is_some() {
+        block_ops.push(Op::new("EMC", vec![]));
+    }
     block_ops.push(Op::new("Q", vec![]));
     block_ops.extend(after.ops());
     if split {

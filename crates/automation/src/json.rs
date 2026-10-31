@@ -7,6 +7,20 @@ const MAX_BOOKMARK_POSITION: f64 = 1_000_000.0;
 
 // ---- JSON helpers ----------------------------------------------------------------------------
 
+/// Automation's height anchors the top edge perpendicular to the paragraph's baseline.
+pub(crate) fn parse_text_height_frame(a: &Args<'_>, source: &pdfcraft_engine::TextBlock) -> Result<Option<[f64; 2]>> {
+    let Some(height) = a.opt_num("height")? else { return Ok(None) };
+    if !height.is_finite() || height <= 0.0 || height > 14_400.0 {
+        return Err(ToolError::InvalidArgs("height must be finite, greater than 0 and at most 14400 points".into()));
+    }
+    let top = source.editing_frame()[3];
+    let bottom = top - height;
+    if !top.is_finite() || !bottom.is_finite() {
+        return Err(ToolError::InvalidArgs("the paragraph's height has invalid geometry".into()));
+    }
+    Ok(Some([bottom, top]))
+}
+
 /// The most bookmark levels `bookmark_from_text_styles` takes.
 const MAX_STYLE_LEVELS: usize = 9;
 

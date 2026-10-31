@@ -41,6 +41,10 @@ impl Session {
                 if style.cover.is_none()
                     && let Some(info) = doc.info.pages.get(page)
                     && let Some(b) = editor.text_blocks(page).ok().and_then(|b| b.get(block).filter(|b| b.invisible).cloned())
+                    // Height-only edits change metadata, so the invisible OCR must stay invisible.
+                    && !(style.vertical_frame.is_some()
+                        && text == b.editor_text
+                        && pdfcraft_edit::BlockStyle { vertical_frame: None, ..style.clone() } == Default::default())
                     && let Some((paper, ink)) = guard(|| scan_colours::sample(&editor.cos, info, page, &b)).ok().flatten()
                 {
                     style.cover = Some(paper);
