@@ -13,7 +13,7 @@ use super::xmp::{metadata, xfa_requires_dynamic_render, xmp_has_language, xmp_va
 use super::{Collected, Part};
 use crate::content::{self, Scan};
 use crate::structure::{self, FIRST_HEADING, Found, Frame, Kind, Visitor};
-use crate::{Finding, MAX_FINDINGS, Options, Rule, RuleResult};
+use crate::{Finding, MAX_FINDINGS, Options, Rule, RuleResult, Status};
 
 /// The Accessibility Checker rules whose findings are a failure condition as they stand. The
 /// Checker's Lbl and LBody rule is not among them: it also wants every Lbl in a list item, while
@@ -124,13 +124,23 @@ pub(super) fn run(doc: &Document, part: Part, c: &mut Collected) -> Option<u8> {
     let mut rules: BTreeSet<Rule> = FROM_CHECKER.iter().map(|(rule, _)| *rule).collect();
     rules.insert(Rule::HeadingNesting);
     let report = crate::check_scanned(doc, &Options { rules, pages: None }, &pages, &all, &scan);
-    for RuleResult { rule, findings, .. } in report.results {
+    for RuleResult { rule, status, findings } in report.results {
+        // Unsure (content past a page's decode budget may hold what it didn't find): not
+        // checked rather than passed, unless something else fails the condition.
+        let unsure = status == Status::Manual;
         if rule == Rule::HeadingNesting {
+            if unsure {
+                c.undecided("14-002");
+                c.undecided("14-003");
+            }
             for f in findings {
                 let first = f.values.iter().any(|(hole, what)| *hole == "{what}" && what == FIRST_HEADING);
                 c.extend_rule(if first { "14-002" } else { "14-003" }, vec![f]);
             }
         } else if let Some(&(_, id)) = FROM_CHECKER.iter().find(|(r, _)| *r == rule) {
+            if unsure {
+                c.undecided(id);
+            }
             c.extend_rule(id, findings);
         }
     }

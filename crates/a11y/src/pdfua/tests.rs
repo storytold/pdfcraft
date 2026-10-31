@@ -1298,3 +1298,19 @@ fn hostile_fonts_end_without_panicking() {
         }
     }
 }
+
+/// Content past the page's decode budget may hold what the checker didn't see: untagged content
+/// or a font without Unicode mappings. Those conditions are not checked rather than passed.
+#[test]
+fn content_past_the_decode_budget_is_not_checked() {
+    use pdfcraft_cos::{ObjRef, Stream};
+    let mut doc = pdf(&ua(), "/Info 8 0 R");
+    let r = verify(&doc, Part::Ua1);
+    assert_eq!((outcome(&r, "01-005"), outcome(&r, "10-001")), (Outcome::Passed, Outcome::Passed));
+    let filler = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+    let mut contents = vec![Object::Ref(ObjRef::new(4, 0))];
+    contents.extend(std::iter::repeat_n(Object::Ref(filler), 256));
+    doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(contents))).unwrap();
+    let r = verify(&doc, Part::Ua1);
+    assert_eq!((outcome(&r, "01-005"), outcome(&r, "10-001")), (Outcome::NotChecked, Outcome::NotChecked));
+}
