@@ -183,3 +183,8 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.marshiyar]
+display_name = "Arshiya"
+real_name = "Arshiya Rahgozar"
+sync_github_name = false
