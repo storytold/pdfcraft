@@ -46,7 +46,7 @@ impl Session {
             return Err(EditError::Signed);
         }
         let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
-        let opts = save_options(&editor.cos, self.now());
+        let opts = crate::doc_state::save_options(&editor.cos, self.now());
         let cos = writable(&editor.cos)?;
         guard(|| write_full(&cos, &opts)).map_err(EditError::Write)?.map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
     }
