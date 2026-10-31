@@ -2856,6 +2856,8 @@ theme	Appearance	Aparência
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hoje
 @plural	{n} reply|{n} replies	{n} resposta|{n} respostas
+	Downloading the text recognition models…	Baixando os modelos de reconhecimento de texto…
+	Couldn't download the text recognition models: {e}	Não foi possível baixar os modelos de reconhecimento de texto: {e}
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
 	Page tools	Ferramentas de página

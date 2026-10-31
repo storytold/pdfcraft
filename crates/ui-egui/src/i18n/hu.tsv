@@ -2570,6 +2570,8 @@ animation effects	Off	Ki
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Ma
 @plural	{n} reply|{n} replies	{n} válasz|{n} válasz
+	Downloading the text recognition models…	A szövegfelismerési modellek letöltése…
+	Couldn't download the text recognition models: {e}	A szövegfelismerési modellek letöltése nem sikerült: {e}
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
 	Page tools	Oldaleszközök

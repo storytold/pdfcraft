@@ -2847,6 +2847,8 @@ certificate	Version	الإصدار
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	اليوم
 @plural	{n} reply|{n} replies	{n} رد|{n} رد|{n} ردّان|{n} ردود|{n} ردًا|{n} رد
+	Downloading the text recognition models…	جارٍ تنزيل نماذج التعرف على النص…
+	Couldn't download the text recognition models: {e}	تعذّر تنزيل نماذج التعرف على النص: {e}
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
 	Page tools	أدوات الصفحات

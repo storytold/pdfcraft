@@ -2803,6 +2803,8 @@ certificate	SHA-256 digest	Impronta SHA-256
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Oggi
 @plural	{n} reply|{n} replies	{n} risposta|{n} risposte
+	Downloading the text recognition models…	Download dei modelli di riconoscimento del testo…
+	Couldn't download the text recognition models: {e}	Impossibile scaricare i modelli di riconoscimento del testo: {e}
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
 	Page tools	Strumenti pagina

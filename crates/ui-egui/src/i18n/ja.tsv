@@ -2571,6 +2571,8 @@ animation effects	Off	オフ
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今日
 @plural	{n} reply|{n} replies	{n} 件の返信
+	Downloading the text recognition models…	テキスト認識のモデルをダウンロードしています…
+	Couldn't download the text recognition models: {e}	テキスト認識のモデルをダウンロードできませんでした: {e}
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
 	Page tools	ページツール

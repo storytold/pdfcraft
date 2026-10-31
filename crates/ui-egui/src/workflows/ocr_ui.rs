@@ -71,6 +71,10 @@ struct ScanToRead {
     generation: u64,
 }
 
+/// Files to recognize, by name, and the settings they were chosen with.
+#[cfg(target_arch = "wasm32")]
+pub type WaitingFiles = (Vec<(String, Vec<u8>)>, OcrSettings);
+
 pub struct OcrRun {
     pub doc: DocId,
     pub progress: Arc<Mutex<OcrProgress>>,
@@ -78,6 +82,9 @@ pub struct OcrRun {
     /// when it found no words (a page with text of its own is skipped, and Edit must not make noise),
     /// and its result waits for Read mode and dialogs and is dropped if the document changed.
     pub automatic: Option<AutoOcr>,
+    /// The web build reads the pages in Web Workers, pumped by [`PdfCraftApp::poll_ocr`].
+    #[cfg(target_arch = "wasm32")]
+    pub web: Option<crate::ocr_web::Pages>,
 }
 
 /// What an Edit-started run needs to know to refuse a result that no longer fits its document.
@@ -146,12 +153,37 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.add(crate::widgets::checkbox(&mut d.text_pages, tl!("Also recognize pages that already have text")))
             .on_hover_text(tl!("Pictures on those pages are recognized too; words already in the page's text are not added again"));
     });
+    #[cfg(not(target_arch = "wasm32"))]
     if !available {
         ui.label(
             egui::RichText::new(tl!("Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them."))
                 .small()
                 .color(t.text_muted),
         );
+        ui.add_space(6.0);
+    }
+    #[cfg(target_arch = "wasm32")]
+    if !available {
+        match crate::ocr_web::state() {
+            crate::ocr_web::State::Failed(e) => {
+                ui.horizontal_wrapped(|ui| {
+                    let msg = crate::i18n::fmt(tl!("Couldn't download the text recognition models: {e}"), &[("e", &e)]);
+                    ui.label(egui::RichText::new(msg).small().color(t.text_muted));
+                    if widgets::pill_button(ui, tl!("Download"), false).clicked() {
+                        crate::ocr_web::start(ui.ctx().clone());
+                    }
+                });
+            }
+            state => {
+                if state == crate::ocr_web::State::NotStarted {
+                    crate::ocr_web::start(ui.ctx().clone());
+                }
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(egui::RichText::new(tl!("Downloading the text recognition models…")).small().color(t.text_muted));
+                });
+            }
+        }
         ui.add_space(6.0);
     }
     ui.add_space(6.0);
@@ -181,6 +213,10 @@ impl PdfCraftApp {
             self.notify(why);
             return;
         }
+        #[cfg(target_arch = "wasm32")]
+        if self.web_models_missing() {
+            return;
+        }
         let d = &self.ocr_draft;
         let pages: Vec<usize> = match d.pages {
             OcrPages::All => Vec::new(),
@@ -199,10 +235,11 @@ impl PdfCraftApp {
     /// boxes over it do not count as text, but real page text does, and such a page (a flyer with a
     /// background picture) is left alone, and is judged again only when the document changes. It
     /// is one undoable step, "Recognize text", and is not run again for that page after Undo.
+    /// Without the OCR models the page waits for them (see [`Self::await_ocr_models`]).
     pub(crate) fn auto_ocr_scanned_page(&mut self) {
         let Some(scan) = self.scan_to_read() else { return };
         if !pdfcraft_engine::ocr::available() {
-            self.views[scan.view].auto_ocr_skipped.insert(scan.page, scan.generation);
+            self.await_ocr_models(&scan);
             return;
         }
         self.views[scan.view].auto_ocr_tried.insert(scan.page);
@@ -213,6 +250,30 @@ impl PdfCraftApp {
         settings.skip_text_pages = true;
         settings.native_text_only = true;
         self.start_ocr_pages(scan.doc, &[scan.page], settings, true);
+    }
+
+    /// Edit found a scan but the OCR models aren't loaded. The page is set aside until they are
+    /// (rather than judged again every frame), and the web build starts downloading them, as
+    /// Recognize Text does. After a failed download it doesn't try again by itself: Recognize Text
+    /// does, and the page is read once the models are in.
+    fn await_ocr_models(&mut self, scan: &ScanToRead) {
+        self.views[scan.view].auto_ocr_awaiting_models.insert(scan.page, scan.generation);
+        #[cfg(target_arch = "wasm32")]
+        if crate::ocr_web::state() == crate::ocr_web::State::NotStarted
+            && let Some(ctx) = self.ctx.clone()
+        {
+            crate::ocr_web::start(ctx);
+            self.notify(tl!("Downloading the text recognition models…"));
+        }
+    }
+
+    /// The OCR models have just loaded: the scans Edit set aside for want of them may be read.
+    /// Only the web build loads them while running.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) fn ocr_models_loaded(&mut self) {
+        for view in &mut self.views {
+            view.auto_ocr_awaiting_models.clear();
+        }
     }
 
     /// The page Edit should read now, if there is one: Edit is on outside Read mode with no dialog
@@ -228,7 +289,7 @@ impl PdfCraftApp {
         // Not in Read mode (which leaves the Edit tool picked but is not editing) and not beneath a
         // dialog or prompt: nothing may change the document under those. It is tried again once
         // they are gone.
-        if !editing || self.mode == crate::Mode::Read || self.modal_open() || self.ocr_run.is_some() || self.ocr_batch.is_some() {
+        if !editing || self.mode == crate::Mode::Read || self.modal_open() || self.ocr_run.is_some() || self.ocr_batch_running() {
             return None;
         }
         let (view, doc) = self.active_ids()?;
@@ -243,7 +304,9 @@ impl PdfCraftApp {
         // A page found not to be a scan is judged again only once the document has changed, not
         // every frame (listing its images parses the page).
         let generation = document.edit_generation();
-        if self.views[view].auto_ocr_skipped.get(&page) == Some(&generation) {
+        if self.views[view].auto_ocr_skipped.get(&page) == Some(&generation)
+            || self.views[view].auto_ocr_awaiting_models.get(&page) == Some(&generation)
+        {
             return None;
         }
         let info = document.info.pages.get(page)?;
@@ -269,6 +332,18 @@ impl PdfCraftApp {
         };
         let Some(job) = self.session.ocr_job(id, pages, settings) else { return };
         let progress = Arc::new(Mutex::new(OcrProgress { total: job.pages.len(), ..Default::default() }));
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.ocr_run = Some(OcrRun { doc: id, progress, automatic: auto, web: Some(crate::ocr_web::Pages::new(job.steps())) });
+            self.poll_ocr();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.run_ocr_job(id, job, progress, auto);
+    }
+
+    /// Read the pages on a worker thread (inline in tests).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn run_ocr_job(&mut self, id: DocId, job: pdfcraft_engine::ocr::OcrJob, progress: Arc<Mutex<OcrProgress>>, auto: Option<AutoOcr>) {
         let p = progress.clone();
         // A failure is written on the worker thread: in the UI's language.
         let lang = crate::i18n::current();
@@ -288,14 +363,11 @@ impl PdfCraftApp {
                 s.result = Some(result);
             }
         };
-        #[cfg(not(target_arch = "wasm32"))]
         if self.run_inline {
             work();
         } else {
             std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work).ok();
         }
-        #[cfg(target_arch = "wasm32")]
-        work();
         self.ocr_run = Some(OcrRun { doc: id, progress, automatic: auto });
         self.poll_ocr();
     }
@@ -303,7 +375,7 @@ impl PdfCraftApp {
     /// Recognize text in each file, writing the searchable copies into a folder the user picks
     /// (the export folder override in tests), under the same names.
     pub fn ocr_files(&mut self, files: Vec<(String, Vec<u8>)>) {
-        if self.ocr_batch.is_some() {
+        if self.ocr_batch_running() {
             self.notify_tr("Text recognition is already running");
             return;
         }
@@ -324,10 +396,73 @@ impl PdfCraftApp {
     /// [`Self::ocr_files`] once the folder for the searchable files is known.
     fn ocr_files_into(&mut self, files: Vec<(String, Vec<u8>)>, settings: OcrSettings, #[cfg(not(target_arch = "wasm32"))] dir: std::path::PathBuf) {
         // Another batch may have started while the folder picker was open.
-        if self.ocr_batch.is_some() {
+        if self.ocr_batch_running() {
             self.notify_tr("Text recognition is already running");
             return;
         }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // The files wait for the models rather than having to be chosen again.
+            if self.web_models_missing() {
+                self.ocr_web_waiting = Some((files, settings));
+                return;
+            }
+            self.start_web_batch(files, settings);
+            self.poll_ocr();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.run_ocr_files(files, settings, dir);
+    }
+
+    /// Whether Recognize Text in Multiple Files is running (on the web, or waiting for the
+    /// models to download).
+    fn ocr_batch_running(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        if self.ocr_web_waiting.is_some() {
+            return true;
+        }
+        self.ocr_batch.is_some()
+    }
+
+    /// The web build: read the files in Web Workers (advanced by [`Self::poll_ocr`]).
+    #[cfg(target_arch = "wasm32")]
+    fn start_web_batch(&mut self, files: Vec<(String, Vec<u8>)>, settings: OcrSettings) {
+        let progress = Arc::new(Mutex::new(BatchProgress { total: files.len(), ..Default::default() }));
+        self.ocr_web_batch = Some(crate::ocr_web::Batch::new(files, settings));
+        self.ocr_batch = Some(progress);
+    }
+
+    /// The web build: start the files that waited for the models once they are loaded, or give
+    /// them up with the reason when the download failed.
+    #[cfg(target_arch = "wasm32")]
+    fn start_waiting_web_batch(&mut self) {
+        if self.ocr_web_waiting.is_none() {
+            return;
+        }
+        if pdfcraft_engine::ocr::available() {
+            if let Some((files, settings)) = self.ocr_web_waiting.take() {
+                self.start_web_batch(files, settings);
+            }
+            return;
+        }
+        match crate::ocr_web::state() {
+            crate::ocr_web::State::Loading => {}
+            crate::ocr_web::State::Failed(e) => {
+                self.ocr_web_waiting = None;
+                self.notify(failed(&e));
+            }
+            // Not loading and not loaded (nothing has started the download): start it.
+            crate::ocr_web::State::NotStarted => {
+                if let Some(ctx) = self.ctx.clone() {
+                    crate::ocr_web::start(ctx);
+                }
+            }
+        }
+    }
+
+    /// Recognize text in the files on a worker thread (inline in tests).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn run_ocr_files(&mut self, files: Vec<(String, Vec<u8>)>, settings: OcrSettings, dir: std::path::PathBuf) {
         let progress = Arc::new(Mutex::new(BatchProgress { total: files.len(), ..Default::default() }));
         let p = progress.clone();
         // The summary is written on the worker thread: draw it in the UI's language.
@@ -335,36 +470,25 @@ impl PdfCraftApp {
         let work = move || {
             crate::i18n::set_current(lang);
             // A panic in the recognizer still ends the batch with a summary (#3919).
-            #[cfg(not(target_arch = "wasm32"))]
-            let summary = pdfcraft_engine::guard(|| recognize_files(files, &settings, &p, &dir));
-            #[cfg(target_arch = "wasm32")]
-            let summary = pdfcraft_engine::guard(|| recognize_files(files, &settings, &p));
-            let summary = summary.unwrap_or_else(|panic| failed(&panic));
+            let summary = pdfcraft_engine::guard(|| recognize_files(files, &settings, &p, &dir)).unwrap_or_else(|panic| failed(&panic));
             if let Ok(mut s) = p.lock() {
                 s.done = s.total;
                 s.message = Some(summary);
             }
         };
-        #[cfg(not(target_arch = "wasm32"))]
         if self.run_inline {
             work();
         } else {
             std::thread::Builder::new().name("pdfcraft-ocr-files".into()).spawn(work).ok();
         }
-        #[cfg(target_arch = "wasm32")]
-        work();
         self.ocr_batch = Some(progress);
         self.poll_ocr();
     }
 }
 
 /// Recognize each file and write its searchable copy into `dir`; returns the summary to show.
-fn recognize_files(
-    files: Vec<(String, Vec<u8>)>,
-    settings: &OcrSettings,
-    p: &Mutex<BatchProgress>,
-    #[cfg(not(target_arch = "wasm32"))] dir: &std::path::Path,
-) -> String {
+#[cfg(not(target_arch = "wasm32"))]
+fn recognize_files(files: Vec<(String, Vec<u8>)>, settings: &OcrSettings, p: &Mutex<BatchProgress>, dir: &std::path::Path) -> String {
     let (mut ok, mut words, mut failed) = (0, 0, Vec::new());
     match pdfcraft_engine::ocr::engine() {
         Err(e) => failed.push(e),
@@ -375,10 +499,7 @@ fn recognize_files(
                 }
                 let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), &ocr, |_, _| true);
                 let saved = r.and_then(|r| {
-                    #[cfg(not(target_arch = "wasm32"))]
                     crate::editing::write_atomically(&dir.join(&name).to_string_lossy(), &r.bytes).map_err(|e| e.to_string())?;
-                    #[cfg(target_arch = "wasm32")]
-                    crate::editing::download(&name, &r.bytes)?;
                     Ok(r.words())
                 });
                 match saved {
@@ -391,16 +512,7 @@ fn recognize_files(
             }
         }
     }
-    let done = if ok == 1 {
-        crate::i18n::fmt(tl!("Recognized {w} words in 1 file"), &[("w", &words.to_string())])
-    } else {
-        crate::i18n::fmt(tl!("Recognized {w} words in {n} files"), &[("w", &words.to_string()), ("n", &ok.to_string())])
-    };
-    let mut msg = done;
-    if !failed.is_empty() {
-        msg.push_str(&crate::i18n::fmt(tl!("; failed: {list}"), &[("list", &failed.join("; "))]));
-    }
-    msg
+    batch_summary(ok, words, &failed)
 }
 
 impl PdfCraftApp {
@@ -413,8 +525,70 @@ impl PdfCraftApp {
         }
     }
 
+    /// The web build downloads the models the first time they're needed: while they aren't
+    /// loaded, start (or retry) the download, say so and return `true`.
+    #[cfg(target_arch = "wasm32")]
+    fn web_models_missing(&mut self) -> bool {
+        if pdfcraft_engine::ocr::available() {
+            return false;
+        }
+        if crate::ocr_web::state() != crate::ocr_web::State::Loading
+            && let Some(ctx) = self.ctx.clone()
+        {
+            crate::ocr_web::start(ctx);
+        }
+        self.notify(tl!("Downloading the text recognition models…"));
+        true
+    }
+
+    /// The web build: advance the pages being read in Web Workers.
+    #[cfg(target_arch = "wasm32")]
+    fn pump_web_ocr(&mut self) {
+        self.start_waiting_web_batch();
+        if self.views.iter().any(|v| !v.auto_ocr_awaiting_models.is_empty()) && pdfcraft_engine::ocr::available() {
+            self.ocr_models_loaded();
+        }
+        let Some(ctx) = self.ctx.clone() else { return };
+        let mut busy = false;
+        if let Some(run) = self.ocr_run.as_mut()
+            && let Some(pages) = run.web.as_mut()
+        {
+            busy = true;
+            let cancel = run.progress.lock().map_or(true, |s| s.cancel);
+            let found = pages.pump(cancel, &ctx);
+            let finished = found.is_some();
+            if let Ok(mut s) = run.progress.lock() {
+                (s.done, s.total) = (pages.done(), pages.total());
+                if let Some(found) = found {
+                    s.result = Some(Ok(found));
+                }
+            }
+            if finished {
+                run.web = None;
+            }
+        }
+        if let Some(batch) = self.ocr_web_batch.as_mut() {
+            busy = true;
+            let finished = batch.pump(&ctx);
+            if let Some(Ok(mut s)) = self.ocr_batch.as_ref().map(|b| b.lock()) {
+                s.done = batch.done();
+                if finished {
+                    s.message = Some(batch_summary(batch.ok, batch.words, &batch.failed));
+                }
+            }
+            if finished {
+                self.ocr_web_batch = None;
+            }
+        }
+        if !busy {
+            crate::ocr_web::close_idle_workers(&ctx);
+        }
+    }
+
     /// Show progress; apply the result once the worker is done.
     pub(crate) fn poll_ocr(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        self.pump_web_ocr();
         if let Some(b) = self.ocr_batch.clone() {
             let msg = b.lock().map(|mut s| s.message.take().ok_or((s.done, s.total))).map_err(|e| e.to_string());
             match msg {
@@ -532,6 +706,19 @@ impl PdfCraftApp {
     }
 }
 
+/// "Recognized … words in … files", and the files that failed.
+fn batch_summary(ok: usize, words: usize, failed: &[String]) -> String {
+    let mut msg = if ok == 1 {
+        crate::i18n::fmt(tl!("Recognized {w} words in 1 file"), &[("w", &words.to_string())])
+    } else {
+        crate::i18n::fmt(tl!("Recognized {w} words in {n} files"), &[("w", &words.to_string()), ("n", &ok.to_string())])
+    };
+    if !failed.is_empty() {
+        msg.push_str(&crate::i18n::fmt(tl!("; failed: {list}"), &[("list", &failed.join("; "))]));
+    }
+    msg
+}
+
 /// "Recognize text failed: {e}", in the current language.
 fn failed(e: &str) -> String {
     crate::i18n::fmt(tl!("{label} failed: {e}"), &[("label", tl!("Recognize text")), ("e", e)])
@@ -539,6 +726,7 @@ fn failed(e: &str) -> String {
 
 /// `recognize`, with a panic in it (a damaged model, a page the recognizer can't take) turned into
 /// the run's error: the run has to end either way, or it refuses every later one (#3919).
+#[cfg(not(target_arch = "wasm32"))]
 fn recognize_guarded<T>(recognize: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
     pdfcraft_engine::guard(recognize).unwrap_or_else(|panic| Err(failed(&panic)))
 }
@@ -624,6 +812,18 @@ mod tests {
         let add = Edit::AddImage { page: 0, rect: Some([0.0, 0.0, 595.0, 842.0]), name: "scan.png".into(), bytes: Arc::new(png.into_inner()) };
         app.session.apply(id, add).unwrap();
         assert_eq!(found(&mut app), Some(0), "a picture over the page makes it a scan");
+    }
+    /// A scan found while the OCR models were missing waits for them, and is read once they load,
+    /// though the document has not changed. Before, it was taken for no scan and left unread.
+    #[test]
+    fn a_scan_found_without_the_models_is_read_once_they_load() {
+        let mut app = app_with(scan());
+        let scan = app.scan_to_read().unwrap();
+        app.await_ocr_models(&scan);
+        assert_eq!(found(&mut app), None, "it waits for the models, not judged every frame");
+        app.ocr_models_loaded();
+        assert_eq!(found(&mut app), Some(0), "read once they are in");
+        assert!(app.views[0].auto_ocr_skipped.is_empty(), "never taken for no scan");
     }
     /// A finished run Edit started is applied only once Read mode and dialogs are gone; one the user
     /// asked for is applied at once. The result is made up, so no OCR models are needed.

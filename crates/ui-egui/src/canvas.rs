@@ -393,6 +393,10 @@ pub struct DocView {
     /// Pages Edit looked at and found not to be a scan, with the document's edit generation then:
     /// they are looked at again only after the document changes (an image added, say).
     pub(crate) auto_ocr_skipped: std::collections::HashMap<usize, u64>,
+    /// Scans Edit found while the OCR models weren't loaded, with the document's edit generation
+    /// then: they wait for the models (the web build downloads them when first needed), and are
+    /// read once the models are in (see `PdfCraftApp::ocr_models_loaded`) or the document changes.
+    pub(crate) auto_ocr_awaiting_models: std::collections::HashMap<usize, u64>,
     /// Turns wheel input into page turns in single-page view.
     wheel: crate::wheel_pager::WheelPager,
     /// Until this time, apply precise (touchpad) wheel input 1:1 and suppress egui's eased copy.
@@ -674,6 +678,7 @@ impl DocView {
             shown: false,
             auto_ocr_tried: Default::default(),
             auto_ocr_skipped: Default::default(),
+            auto_ocr_awaiting_models: Default::default(),
             wheel: Default::default(),
             precise_scroll_until: 0.0,
             wheel_boost_x: Default::default(),

@@ -2593,6 +2593,8 @@ animation effects	Off	Вимкнено
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Сьогодні
 @plural	{n} reply|{n} replies	{n} відповідь|{n} відповіді|{n} відповідей
+	Downloading the text recognition models…	Завантажуються моделі розпізнавання тексту…
+	Couldn't download the text recognition models: {e}	Не вдалося завантажити моделі розпізнавання тексту: {e}
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
 	Page tools	Інструменти сторінок

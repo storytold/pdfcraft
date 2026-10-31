@@ -2576,6 +2576,8 @@ animation effects	Off	Izklopljeni
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Danes
 @plural	{n} reply|{n} replies	{n} odgovor|{n} odgovora|{n} odgovori|{n} odgovorov
+	Downloading the text recognition models…	Prenašanje modelov za prepoznavanje besedila…
+	Couldn't download the text recognition models: {e}	Modelov za prepoznavanje besedila ni bilo mogoče prenesti: {e}
 
 # Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
 	Page tools	Orodja za strani
