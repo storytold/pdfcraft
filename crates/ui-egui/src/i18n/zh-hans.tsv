@@ -1820,6 +1820,8 @@
 	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	此表单还包含 XFA 数据，PdfCraft 暂不读取。您可以填写字段，但 Acrobat 可能显示 XFA 值。
 	This document contains {n} interactive form fields.	本文档包含 {n} 个交互式表单域。
 	This file was damaged and has been repaired. Saving keeps the repaired version.	此文件已损坏并已修复。保存将保留修复后的版本。
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	第 {page} 页的内容超过 PdfCraft 能读取的量：其中一部分没有绘制，文字也无法搜索或复制。
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	有 {n} 页的内容超过 PdfCraft 能读取的量（最先是第 {page} 页）：其中部分没有绘制，文字也无法搜索或复制。
 	Dismiss	关闭
 	Hide field highlights	隐藏字段高亮
 	Highlight fields	高亮显示字段

@@ -1909,6 +1909,8 @@ key	Space	Mezerník
 	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Tento formulář obsahuje také data XFA, která PdfCraft zatím nečte. Pole můžete vyplnit, ale Acrobat může místo nich zobrazit hodnoty XFA.
 	This document contains {n} interactive form fields.	Tento dokument obsahuje interaktivní formulářová pole (počet: {n}).
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Tento soubor byl poškozený a byl opraven. Uložením se zachová opravená verze.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	Stránka {page} obsahuje více obsahu, než PdfCraft dokáže přečíst: část se nevykreslí a její text nelze vyhledat ani zkopírovat.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} stránek obsahuje více obsahu, než PdfCraft dokáže přečíst, první je stránka {page}: jejich části se nevykreslí a jejich text nelze vyhledat ani zkopírovat.
 	Dismiss	Zavřít
 	Hide field highlights	Skrýt zvýraznění polí
 	Highlight fields	Zvýraznit pole

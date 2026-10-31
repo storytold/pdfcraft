@@ -1780,6 +1780,8 @@
 	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Ez az űrlap XFA-adatokat is tartalmaz, amelyeket a PdfCraft még nem olvas. Kitöltheted a mezőit, de az Acrobat helyettük az XFA-értékeket mutathatja.
 	This document contains {n} interactive form fields.	Ez a dokumentum {n} interaktív űrlapmezőt tartalmaz.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Ez a fájl sérült volt, és javítottuk. A mentés megtartja a javított változatot.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	A(z) {page}. oldal több tartalmat tartalmaz, mint amennyit a PdfCraft be tud olvasni: egy része nem rajzolódik ki, és a szövege nem kereshető és nem másolható.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} oldal több tartalmat tartalmaz, mint amennyit a PdfCraft be tud olvasni, elsőként a(z) {page}. oldal: részeik nem rajzolódnak ki, és a szövegük nem kereshető és nem másolható.
 	Dismiss	Elvetés
 	Hide field highlights	Mezőkiemelés elrejtése
 	Highlight fields	Mezők kiemelése

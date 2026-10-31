@@ -2838,3 +2838,7 @@ theme	Appearance	Aspect
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opțiuni pentru acest răspuns
+
+# AI-assisted additions for the cut-content notice (#623) (2026-10-22); not reviewed by a native speaker.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	Pagina {page} conține mai mult conținut decât poate citi PdfCraft: o parte nu este desenată, iar textul ei nu poate fi căutat sau copiat.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} pagini conțin mai mult conținut decât poate citi PdfCraft, începând cu pagina {page}: unele părți nu sunt desenate, iar textul lor nu poate fi căutat sau copiat.

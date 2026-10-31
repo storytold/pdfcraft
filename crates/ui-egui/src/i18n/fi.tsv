@@ -2847,3 +2847,7 @@ theme	Appearance	Teema
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tämän vastauksen asetukset
+
+# AI-assisted additions for the cut-content notice (#623) (2026-10-22); not reviewed by a native speaker.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	Sivulla {page} on enemmän sisältöä kuin PdfCraft pystyy lukemaan: osaa siitä ei piirretä, eikä sen tekstiä voi etsiä tai kopioida.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} sivulla on enemmän sisältöä kuin PdfCraft pystyy lukemaan, ensimmäisenä sivu {page}: osia niistä ei piirretä, eikä niiden tekstiä voi etsiä tai kopioida.

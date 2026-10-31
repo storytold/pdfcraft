@@ -1872,6 +1872,8 @@
 	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	このフォームには PdfCraft がまだ読み取れない XFA データも含まれます。フィールドには入力できますが、Acrobat は代わりに XFA の値を表示する場合があります。
 	This document contains {n} interactive form fields.	この文書には対話型フォームフィールドが {n} 個あります。
 	This file was damaged and has been repaired. Saving keeps the repaired version.	このファイルは破損していたため修復しました。保存すると修復済みの状態が保持されます。
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	ページ {page} の内容は PdfCraft が読み取れる量を超えています。一部が描画されず、その文字は検索もコピーもできません。
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} ページ（最初はページ {page}）の内容が PdfCraft の読み取れる量を超えています。一部が描画されず、その文字は検索もコピーもできません。
 	Dismiss	閉じる
 	Hide field highlights	フィールドのハイライトを非表示
 	Highlight fields	フィールドをハイライト

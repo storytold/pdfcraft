@@ -10190,3 +10190,31 @@ fn simple_rule_scan_drawn(content: &[u8]) -> Vec<u8> {
     }
     write_full(&doc, &SaveOptions::default()).unwrap()
 }
+
+/// text_extract says when a page's text is incomplete because its content was cut at the
+/// renderer's limits (#623); a page read whole carries no such mark.
+#[test]
+fn text_extract_says_when_a_pages_content_was_cut() {
+    use std::io::Write as _;
+    let dir = workdir("cut-content");
+    // 288 MiB of whitespace, past the renderer's 256 MiB per-stream limit, as one Flate stream.
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    let chunk = vec![0u8; 1 << 20];
+    for _ in 0..288 {
+        z.write_all(&chunk).unwrap();
+    }
+    let stream = z.finish().unwrap();
+    let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents 4 0 R >> endobj\n".to_vec();
+    pdf.extend_from_slice(format!("4 0 obj << /Filter /FlateDecode /Length {} >> stream\n", stream.len()).as_bytes());
+    pdf.extend_from_slice(&stream);
+    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+    std::fs::write(dir.join("cut.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let cut = ok(&mut a, "doc_open", json!({ "path": "cut.pdf" }))["doc"].as_u64().unwrap();
+    let out = ok(&mut a, "text_extract", json!({ "doc": cut }));
+    assert_eq!(out["pages"][0]["truncated"], json!(true), "{out}");
+    let whole = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let out = ok(&mut a, "text_extract", json!({ "doc": whole, "pages": [1] }));
+    assert!(out["pages"][0].get("truncated").is_none(), "{out}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

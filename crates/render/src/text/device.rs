@@ -1,7 +1,7 @@
 use super::layout::{Flow, along_baseline, arrange_flow, compatible, continues, from_upright, to_upright, unrolled};
 use super::{
-    Affine, BezPath, BlendMode, ClipPath, Context, Device, Glyph, GlyphDrawMode, HashMap, Image, InterpreterCache, InterpreterSettings, PageText,
-    Paint, PathDrawMode, Pdf, Rect, Shape, SoftMask, TextFilter, TextGlyph, TransformExt, interpret_page,
+    Affine, BezPath, BlendMode, ClipPath, Context, Device, Glyph, GlyphDrawMode, HashMap, Image, InterpreterCache, InterpreterSettings,
+    InterpreterWarning, PageText, Paint, PathDrawMode, Pdf, Rect, Shape, SoftMask, TextFilter, TextGlyph, TransformExt, interpret_page,
 };
 
 /// Largest sine of the angle between a glyph's writing direction and a flow's for the glyph to be
@@ -388,7 +388,22 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
     let cache = InterpreterCache::new();
     // Annotation appearances are included: form-field values and comment text are searchable,
     // as in Acrobat, and match what other extractors report.
-    let settings = settings.clone();
+    // The interpreter says when the content was cut at its limits (#623): the text is then
+    // marked incomplete, and the caller's own sink still hears it.
+    let cut = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let settings = {
+        let flag = cut.clone();
+        let inner = settings.warning_sink.clone();
+        InterpreterSettings {
+            warning_sink: std::sync::Arc::new(move |warning| {
+                if matches!(warning, InterpreterWarning::ContentTruncated) {
+                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                inner(warning);
+            }),
+            ..settings.clone()
+        }
+    };
     let initial = p.initial_transform(true).to_kurbo();
     let c = p.intersected_crop_box();
     let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, f64::from(w), f64::from(h)), &cache, p.xref(), settings);
@@ -515,5 +530,6 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
     for f in extra {
         emit(&mut text, &f.ids, &f.line_of, &f.space_before, None);
     }
+    text.truncated = cut.load(std::sync::atomic::Ordering::Relaxed);
     Ok(text)
 }

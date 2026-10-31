@@ -1866,6 +1866,8 @@
 	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Questo modulo contiene anche dati XFA, che PdfCraft non legge ancora. Puoi compilarne i campi, ma Acrobat potrebbe mostrare invece i valori XFA.
 	This document contains {n} interactive form fields.	Campi modulo interattivi in questo documento: {n}.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Questo file era danneggiato ed è stato riparato. Il salvataggio mantiene la versione riparata.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	La pagina {page} contiene più contenuto di quanto PdfCraft possa leggere: una parte non viene disegnata e il suo testo non può essere cercato né copiato.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} pagine contengono più contenuto di quanto PdfCraft possa leggere, la pagina {page} per prima: parti di esse non vengono disegnate e il loro testo non può essere cercato né copiato.
 	Dismiss	Ignora
 	Hide field highlights	Nascondi evidenziazione campi
 	Highlight fields	Evidenzia campi

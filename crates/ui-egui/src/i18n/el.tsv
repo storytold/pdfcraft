@@ -2170,6 +2170,8 @@
 	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Αυτή η φόρμα περιέχει επίσης δεδομένα XFA, τα οποία το PdfCraft δεν διαβάζει ακόμη. Μπορείτε να συμπληρώσετε τα πεδία της, αλλά το Acrobat ενδέχεται να εμφανίσει τις τιμές XFA.
 	This document contains {n} interactive form fields.	Το έγγραφο περιέχει {n} διαδραστικά πεδία φόρμας.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Το αρχείο ήταν κατεστραμμένο και επιδιορθώθηκε. Η αποθήκευση διατηρεί την επιδιορθωμένη έκδοση.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	Η σελίδα {page} περιέχει περισσότερο περιεχόμενο από όσο μπορεί να διαβάσει το PdfCraft: ένα μέρος της δεν σχεδιάζεται και το κείμενό της δεν μπορεί να αναζητηθεί ή να αντιγραφεί.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} σελίδες περιέχουν περισσότερο περιεχόμενο από όσο μπορεί να διαβάσει το PdfCraft, πρώτη η σελίδα {page}: μέρη τους δεν σχεδιάζονται και το κείμενό τους δεν μπορεί να αναζητηθεί ή να αντιγραφεί.
 	Dismiss	Κλείσιμο ειδοποίησης
 	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	Καρφιτσώστε έναν φάκελο για να εμφανίζονται εδώ τα νεότερα PDF του, όπως εκείνα που αποθηκεύει ο σαρωτής σας ή ένας συγχρονισμένος φάκελος στο νέφος.
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Αυτός ο φάκελος δεν είναι διαθέσιμος αυτή τη στιγμή. Μπορεί να έχει μετακινηθεί ή ο δίσκος ή ο συγχρονισμός νέφους να είναι εκτός σύνδεσης.

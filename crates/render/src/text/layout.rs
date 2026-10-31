@@ -138,7 +138,7 @@ pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
     let mut slots: Vec<Option<TextGlyph>> = glyphs.into_iter().map(Some).collect();
     // Each glyph is emitted exactly once.
     let glyphs = order.iter().filter_map(|i| slots.get_mut(*i).and_then(Option::take)).collect();
-    PageText { glyphs, line_of, space_before }
+    PageText { glyphs, line_of, space_before, truncated: false }
 }
 
 /// [`layout`] as the reading order of indices into `glyphs`, with each one's line and word gap.

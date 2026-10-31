@@ -2810,3 +2810,7 @@ theme	Appearance	Tampilan
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsi untuk balasan ini
+
+# AI-assisted additions for the cut-content notice (#623) (2026-10-22); not reviewed by a native speaker.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	Halaman {page} berisi lebih banyak konten daripada yang dapat dibaca PdfCraft: sebagian tidak digambar, dan teksnya tidak dapat dicari atau disalin.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} halaman berisi lebih banyak konten daripada yang dapat dibaca PdfCraft, dimulai dari halaman {page}: sebagian tidak digambar, dan teksnya tidak dapat dicari atau disalin.
