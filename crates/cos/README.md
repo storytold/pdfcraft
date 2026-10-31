@@ -18,6 +18,8 @@ written back out, because that is how data gets silently dropped. Typed views li
 ```rust
 let doc = Document::open(bytes)?;                               // Arc<Vec<u8>>
 let doc = Document::open_with_password(bytes, Some("owner"))?;  // encrypted files
+let file = Arc::new(OnDiskFile::read(source)?.ok_or(TooLittleToGain)?); // from a ByteSource
+let doc = Document::open_on_disk(file, limit)?;                 // read with bodies left on disk
 
 let root = doc.root();                               // Option<ObjRef> — the catalog
 let obj  = doc.get(ObjRef { num: 12, gen: 0 });      // load (and cache): Arc<Object>
@@ -57,8 +59,8 @@ another. Edits never touch the original bytes.
 - **Tolerant, never fatal.** The lexer works on a byte slice and a position; it allocates nothing
   for skipped data, bounds-checks every index, and caps nesting depth. Malformed input yields
   `CosError`, never a panic — this crate is the first thing a hostile file meets. Exhausted xref entries are skipped with a repair log; exhausted /Size hints allocate unused numbers without overflowing or replacing existing objects.
-- **Lazy.** Objects are parsed on first use and cached. (Whole-file buffering is still the case;
-  `ByteSource` streaming is `core.lazy-loading`, not yet done.)
+- **Lazy.** Objects are parsed on first use and cached. A file is held whole, unless `OnDiskFile`
+  keeps a large one's stream bodies on disk for reading (`core.lazy-loading`).
 - **Encryption** is handled on load and save through `pdfcraft-crypt`: every standard-security
   revision R2–R6 (RC4, AES-128/256), crypt filters, `/EFF` embedded-file encryption, and
   `/EncryptMetadata`. `security.rs` knows what the spec exempts — the `/Encrypt` dictionary, xref
@@ -85,8 +87,7 @@ recognisable in a diff and byte-stable when re-serialized.
 
 ## Not done here
 
-- Streaming very large files within a memory budget (`ByteSource`, `core.lazy-loading`); files are
-  read whole today.
+- Editing a file kept on disk, and a global memory budget (`core.lazy-loading`).
 - Linearized output, Fast Web View (`core.linearization`, M11).
 - Structural validation against the Arlington model (`core.arlington-validation`), which will live
   in the reserved `arlington` crate.

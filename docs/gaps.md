@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (gap 13: a clean PDF of 1 GiB or more opens from disk for reading; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
@@ -309,10 +310,16 @@ update the numbers.
   Saving still peaks at three copies (the saved file is assembled in memory beside the working
   one), and display appearances for comments without one add a copy. A 100,000-page file (28 MB)
   opens at 403 MiB in 5.5 s and each edit re-inspects it for ≈ 5 s.
-- **Blocked part:** reading a GB file from disk on demand (`ByteSource`) needs every reader to
-  take ranges, but the `hayro` renderer parses one contiguous buffer (`Pdf::new(PdfData)`), so it
-  waits on gap 2's renderer decision. Until then the budget is one copy of the file to view and two
-  to edit.
+- **Done:** a clean, unencrypted PDF of 1 GiB or more opens from disk (`OnDiskFile`,
+  `crates/cos/src/on_disk.rs`). A file that size is that size because of its stream bodies, so
+  everything else stays in memory as one buffer the parsers read as usual, and a body is read when
+  it is wanted (hayro-syntax patch 34). The renderer decision is not needed: any renderer needs
+  the same one callback. Measured 2026-10-31 on a synthetic 2 GiB image file with one update
+  (release build, Linux, file in the OS cache, three pages at 0.25 scale): 76 MiB peak and 0.01 s to
+  open, against 2,134 MiB and 2.20 s read whole, with the same pixels.
+- **Left:** editing a file that stayed on disk (Load to edit reads it whole, and the budget is then
+  one copy of the file to view and two to edit), encrypted files (`cos` decrypts stream bodies as it
+  loads them, and permissions come from the editor), a global memory budget.
 - **Estimate:** 25–45 h. **Doc:** this file.
 
 ### 14. Arabic RTL unqualified end to end; no Hindi, Indonesian, Korean
@@ -412,6 +419,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | Gap 13: a clean PDF of 1 GiB or more opens from disk for reading, without waiting on gap 2. Estimates unchanged. |
 | 2026-10-25 | minor | Gaps 5 and 14 current state: native release builds embed LXGW WenKai Lite for Simplified Chinese, while the web build has no Hans face; Arabic catalogs stay logical with explicit RTL label direction and mirrored stock chrome, while native/browser RTL input, IME and complex workflows remain unqualified. Estimates unchanged. |
 | 2026-10-18 | minor | Gap 3: #2517 a partial rewrite keeps a kept source row in the paragraph and leaves the next marked region closed around its text. Estimates unchanged. |
 | 2026-10-15 | minor | Gap 3: #2517 a blank line at ordinary leading stays a paragraph break. Estimates unchanged. |
