@@ -2,6 +2,12 @@ use super::device::{DIRECTION_TOLERANCE, Drawn, WORD_GAP};
 use super::order::{NONE, REDRAW_CANDIDATES, Run, Scratch, Seg, fingerprint, is_script_on, place_glyphs, redraws, restarts_run, reverse_rtl};
 use super::{HashMap, PageText, TextGlyph};
 
+/// A gap also breaks words when it is wider than this many times the line's typical letter gap and
+/// than `MIN_WORD_GAP` of the line height: a narrow space a producer left as a move between two
+/// runs, with no space character, in text set close.
+const SPACED_GAP: f32 = 3.0;
+const MIN_WORD_GAP: f32 = 0.1;
+
 /// Glyphs in reading order, as indices into the page's glyphs, with their lines and word gaps.
 pub(super) struct Flow {
     /// The top of the flow's topmost glyph in view space.
@@ -433,7 +439,11 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                 let tight_cluster = (pt.chars().any(is_complex) || ct.chars().any(is_complex)) && gap < h * 0.6;
                 let run_start = sc.breaks.binary_search(&c).is_ok();
                 if let Some(space) = spaces.get_mut(w + 1) {
-                    *space = (gap > threshold || run_start) && !cjk && !tight_cluster && !pt.trim().is_empty() && !ct.trim().is_empty();
+                    *space = (gap > threshold || (gap > SPACED_GAP * typical && gap > h * MIN_WORD_GAP) || run_start)
+                        && !cjk
+                        && !tight_cluster
+                        && !pt.trim().is_empty()
+                        && !ct.trim().is_empty();
                 }
             }
             // Right-to-left spans are reversed (visual → logical) with their gaps, and only then is a second copy made.
