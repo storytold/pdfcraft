@@ -17,6 +17,10 @@ fn page_of(tok: &str, count: usize, labels: &[String]) -> Result<usize, PrintErr
     if let Some(i) = labels.iter().position(|l| l == t) {
         return Ok(i);
     }
+    // `usize::from_str` accepts a leading '+', which is not part of a page number.
+    if !t.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(PrintError::NotAPage(t.to_string()));
+    }
     match t.parse::<usize>() {
         Ok(n) if n >= 1 && n <= count => Ok(n - 1),
         Ok(n) => Err(PrintError::OutOfRange(n, count)),
@@ -123,6 +127,13 @@ mod tests {
     #[test]
     fn open_ended_range_of_empty_document_is_an_error() {
         assert!(select_pages(0, Some("-"), &[], Subset::All, false).is_err());
+    }
+
+    #[test]
+    fn plus_sign_is_not_a_page() {
+        for r in ["+3", "+2-4", "2-+4"] {
+            assert!(matches!(select_pages(5, Some(r), &[], Subset::All, false), Err(PrintError::NotAPage(_))), "accepted {r}");
+        }
     }
 
     #[test]
