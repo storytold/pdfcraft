@@ -19,6 +19,9 @@ pub mod windows;
 /// (its biggest thumbnail cache); larger requests are reduced to it.
 pub const MAX_SIDE: u32 = 2560;
 
+/// The largest width or height of a preview-pane bitmap (still bounded to keep memory predictable).
+pub const MAX_PREVIEW_SIDE: u32 = 4096;
+
 /// A rendered thumbnail: `width` × `height` pixels, top-down rows, 4 bytes per pixel in B, G, R, A
 /// order (a Windows 32-bit DIB), opaque.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,20 +37,36 @@ pub struct Thumbnail {
 pub fn render_thumbnail(bytes: impl Into<Arc<Vec<u8>>>, side: u32) -> Result<Thumbnail, String> {
     let side = side.clamp(1, MAX_SIDE);
     let bytes = bytes.into();
-    catch_unwind(AssertUnwindSafe(|| render(bytes, side))).unwrap_or_else(|_| Err("the renderer crashed".into()))
+    catch_unwind(AssertUnwindSafe(|| render(bytes, Fit::Square(side)))).unwrap_or_else(|_| Err("the renderer crashed".into()))
 }
 
-fn render(bytes: Arc<Vec<u8>>, side: u32) -> Result<Thumbnail, String> {
+/// Renders the first page fitted into a rectangle of at most `max_width` × `max_height` pixels
+/// (each at least 1, at most [`MAX_PREVIEW_SIDE`]), onto white. Never panics.
+pub fn render_page_fit(bytes: impl Into<Arc<Vec<u8>>>, max_width: u32, max_height: u32) -> Result<Thumbnail, String> {
+    let max_width = max_width.clamp(1, MAX_PREVIEW_SIDE);
+    let max_height = max_height.clamp(1, MAX_PREVIEW_SIDE);
+    let bytes = bytes.into();
+    catch_unwind(AssertUnwindSafe(|| render(bytes, Fit::Rectangle { max_width, max_height }))).unwrap_or_else(|_| Err("the renderer crashed".into()))
+}
+
+enum Fit {
+    Square(u32),
+    Rectangle { max_width: u32, max_height: u32 },
+}
+
+fn render(bytes: Arc<Vec<u8>>, fit: Fit) -> Result<Thumbnail, String> {
     let mut renderer = PageRenderer::new(bytes, RenderConfig::default());
     if renderer.page_count() == 0 {
         return Err("the document could not be opened or has no pages".into());
     }
     let (w, h) = renderer.page_size(0).ok_or("the first page's size could not be read")?;
-    let longest = w.max(h);
-    if !longest.is_finite() || longest < 0.5 {
+    if !w.is_finite() || !h.is_finite() || w < 0.5 || h < 0.5 {
         return Err(format!("the first page has an invalid size ({w}×{h} pt)"));
     }
-    let scale = side as f32 / longest;
+    let scale = match fit {
+        Fit::Square(side) => side as f32 / w.max(h),
+        Fit::Rectangle { max_width, max_height } => (max_width as f32 / w).min(max_height as f32 / h),
+    };
     let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale, tag: 0, preview: true });
     if let Some(e) = page.error {
         return Err(e);
@@ -97,6 +116,15 @@ pub(crate) mod tests {
     fn pixel(t: &Thumbnail, x: u32, y: u32) -> [u8; 4] {
         let i = ((y * t.width + x) * 4) as usize;
         [t.bgra[i], t.bgra[i + 1], t.bgra[i + 2], t.bgra[i + 3]]
+    }
+
+    #[test]
+    fn the_first_page_is_fitted_into_a_rectangle_on_white_paper() {
+        let t = render_page_fit(pdf(200, 100, "1 0 0 rg 0 0 100 100 re f"), 400, 100).unwrap();
+        assert_eq!((t.width, t.height), (200, 100));
+        assert_eq!(pixel(&t, 50, 50), [0, 0, 255, 255]);
+        let t = render_page_fit(pdf(200, 100, ""), 100, 200).unwrap();
+        assert_eq!((t.width, t.height), (100, 50));
     }
 
     #[test]

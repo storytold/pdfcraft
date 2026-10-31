@@ -4560,6 +4560,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfcraft-preview"
+version = "0.16.1"
+dependencies = [
+ "pdfcraft-thumbnails",
+ "windows",
+ "windows-core",
+]
+
+[[package]]
 name = "pdfcraft-print"
 version = "0.16.1"
 dependencies = [

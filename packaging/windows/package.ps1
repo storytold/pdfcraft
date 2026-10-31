@@ -6,6 +6,7 @@
   Produces, in $env:DIST (default: dist/release):
     pdfcraft-<version>-windows-<arch>.msi            per-machine installer (WiX v5), with the File Explorer
                                                      thumbnail handler pdfcraft_thumbnails.dll
+                                                     and preview handler pdfcraft_preview.dll
     pdfcraft-<version>-windows-<arch>-portable.zip   pdfcraft.exe + pdfcraft-cli.exe + models\ + portable.txt
 
   The binaries link the C runtime statically (+crt-static), so neither the MSI nor the portable
@@ -77,7 +78,7 @@ if (-not $SkipBuild) {
   [Environment]::SetEnvironmentVariable($flagVar, '-C target-feature=+crt-static')
   # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
   $env:PDFCRAFT_REQUIRE_WINRES = '1'
-  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p pdfcraft -p pdfcraft-cli -p pdfcraft-thumbnails --target $Target }
+  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p pdfcraft -p pdfcraft-cli -p pdfcraft-thumbnails -p pdfcraft-preview --target $Target }
 }
 
 $Bin = Join-Path $TargetDir "$Target\release"
@@ -102,10 +103,13 @@ foreach ($check in @(@('pdfcraft.exe', 2), @('pdfcraft-cli.exe', 3))) {
 $h = Get-PeHeader (Join-Path $Bin 'pdfcraft_thumbnails.dll')
 if ($h.Machine -ne $Machine) { throw "pdfcraft_thumbnails.dll is for machine 0x$('{0:X}' -f $h.Machine), expected 0x$('{0:X}' -f $Machine) ($Arch)" }
 Write-Output "ok pdfcraft_thumbnails.dll: $Arch"
+$h = Get-PeHeader (Join-Path $Bin 'pdfcraft_preview.dll')
+if ($h.Machine -ne $Machine) { throw "pdfcraft_preview.dll is for machine 0x$('{0:X}' -f $h.Machine), expected 0x$('{0:X}' -f $Machine) ($Arch)" }
+Write-Output "ok pdfcraft_preview.dll: $Arch"
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-Copy-Item (Join-Path $Bin 'pdfcraft.exe'), (Join-Path $Bin 'pdfcraft-cli.exe'), (Join-Path $Bin 'pdfcraft_thumbnails.dll') $Stage
+Copy-Item (Join-Path $Bin 'pdfcraft.exe'), (Join-Path $Bin 'pdfcraft-cli.exe'), (Join-Path $Bin 'pdfcraft_thumbnails.dll'), (Join-Path $Bin 'pdfcraft_preview.dll') $Stage
 # The document icon embeds Lucide artwork: carry its ISC notice and the project licences
 # beside the binaries in both distributions.
 foreach ($f in 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE') {
@@ -113,7 +117,7 @@ foreach ($f in 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE') {
 }
 Copy-Item (Join-Path $Root 'assets\app-icon\LICENSE-document.txt') $Stage
 
-& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'pdfcraft.exe') (Join-Path $Stage 'pdfcraft-cli.exe') (Join-Path $Stage 'pdfcraft_thumbnails.dll')
+& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'pdfcraft.exe') (Join-Path $Stage 'pdfcraft-cli.exe') (Join-Path $Stage 'pdfcraft_thumbnails.dll') (Join-Path $Stage 'pdfcraft_preview.dll')
 
 # OCR models (#103): the app looks in models\ beside pdfcraft.exe. `cargo xtask models` fetches every
 # ATTRIBUTION.toml `kind = "model"` file (verified by SHA-256) with its licence and ATTRIBUTION.txt;
