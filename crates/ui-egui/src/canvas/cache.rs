@@ -217,6 +217,12 @@ impl DocView {
         self.pages.get(&page).map(|p| p.tex.id())
     }
 
+    /// The size of `page`'s whole-page raster, when one is drawn and up to date (not waiting for
+    /// its replacement after a change; tests and automation).
+    pub fn drawn_page_size(&self, page: usize) -> Option<[usize; 2]> {
+        self.pages.get(&page).filter(|p| p.tag != STALE_TAG).map(|p| p.tex.size())
+    }
+
     /// Whether `page`'s whole-page raster (a tiled page's backdrop too) is still the one from
     /// before its last change, whatever its tiles are.
     pub(crate) fn page_raster_out_of_date(&self, page: usize) -> bool {
@@ -275,6 +281,22 @@ impl DocView {
     /// Only the displayed document owns raster textures. Tabs keep their document and view
     /// state, but do not each retain a separate full application texture allowance.
     pub(crate) fn suspend_rendering(&mut self, pool: &RenderPool) {
+        let queued = !self.last_queue.is_empty();
+        self.release_rasters();
+        if queued {
+            pool.set_queue(Vec::new());
+        }
+        // Results already finished for this tab would otherwise sit in its pool, rasters and
+        // all, until the tab is shown again. (An inline pool renders inside try_recv: skip it.)
+        if !pool.is_inline() {
+            while pool.try_recv().is_some() {}
+        }
+    }
+
+    /// The view's half of [`DocView::suspend_rendering`]: its rasters and its demand go, and its
+    /// document's pool is left alone. On its own for a view whose document another view on screen
+    /// renders through the same pool (split view).
+    pub(crate) fn release_rasters(&mut self) {
         self.begin_render_frame();
         self.pages.clear();
         self.tiles.clear();
@@ -288,15 +310,8 @@ impl DocView {
         self.signature_drag = Default::default();
         self.text_background = Default::default();
         self.move_background = Default::default();
-        if !self.last_queue.is_empty() {
-            pool.set_queue(Vec::new());
-            self.last_queue.clear();
-        }
-        // Results already finished for this tab would otherwise sit in its pool, rasters and
-        // all, until the tab is shown again. (An inline pool renders inside try_recv: skip it.)
-        if !pool.is_inline() {
-            while pool.try_recv().is_some() {}
-        }
+        self.last_queue.clear();
+        self.pane.shared = false;
     }
 
     pub(super) fn thumbnail_requests(&self, info: &DocInfo, ppp: f32) -> Vec<RenderRequest> {
@@ -476,7 +491,8 @@ impl DocView {
             return;
         }
         let queue = self.prepare_render_queue(info, ctx.pixels_per_point());
-        if queue != self.last_queue {
+        // (Shared with another view of the document last frame, the pool's queue was both views'.)
+        if queue != self.last_queue || std::mem::take(&mut self.pane.shared) {
             pool.set_queue(queue.clone());
             self.last_queue = queue;
         }
@@ -488,25 +504,69 @@ impl DocView {
         }
     }
 
+    /// [`DocView::finish_render_frame`] for several views of one document on screen at once (split
+    /// view), `group` in `views`: the document's one render pool works for
+    /// all of them, and a request they share (the same page at the same scale) is rendered once
+    /// and handed to each.
+    pub(crate) fn finish_shared_render_frame(ctx: &egui::Context, info: &DocInfo, pool: &RenderPool, views: &mut [DocView], group: &[usize]) {
+        // As for one view (#3149): an edit after the canvases collected demand leaves its scales
+        // and indexes on the old pages, in every view of the document (the pool's queue is theirs).
+        if group.iter().any(|&i| views.get(i).is_some_and(|v| v.frame_geometry_changed)) {
+            for &i in group {
+                if let Some(view) = views.get_mut(i) {
+                    view.begin_render_frame();
+                    view.last_queue.clear();
+                }
+            }
+            pool.set_queue(Vec::new());
+            ctx.request_repaint();
+            return;
+        }
+        let ppp = ctx.pixels_per_point();
+        let mut changed = false;
+        let mut union: Vec<RenderRequest> = Vec::new();
+        for &i in group {
+            let Some(view) = views.get_mut(i) else { continue };
+            let queue = view.prepare_render_queue(info, ppp);
+            changed |= !view.pane.shared || queue != view.last_queue;
+            for r in &queue {
+                if !union.contains(r) {
+                    union.push(*r);
+                }
+            }
+            view.last_queue = queue;
+            view.pane.shared = true;
+        }
+        if changed {
+            pool.set_queue(union);
+        }
+        // A result can go to both views, so one view holding its rasters holds them for both.
+        if !group.iter().any(|&i| views.get(i).is_some_and(|v| v.hold_rasters)) {
+            receive_batch(pool, |r| {
+                let wanting: Vec<usize> =
+                    group.iter().copied().filter(|&i| views.get(i).is_some_and(|v| v.last_queue.contains(&r.request))).collect();
+                let Some((&last, rest)) = wanting.split_last() else { return 0 };
+                let mut uploaded = 0usize;
+                for &i in rest {
+                    if let Some(view) = views.get_mut(i) {
+                        uploaded = uploaded.saturating_add(view.receive_result(ctx, copy_result(&r)));
+                    }
+                }
+                if let Some(view) = views.get_mut(last) {
+                    uploaded = uploaded.saturating_add(view.receive_result(ctx, r));
+                }
+                uploaded
+            });
+        }
+        if group.iter().any(|&i| views.get(i).is_some_and(|v| !v.last_queue.is_empty())) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
+        }
+    }
+
     /// Pull a bounded batch of current results into textures. Demand is committed first, so
     /// offscreen results and obsolete scale/configuration tags never allocate a ColorImage.
     pub fn receive(&mut self, ctx: &egui::Context, pool: &RenderPool) {
-        let budget = if pool.is_inline() { 1 } else { RESULTS_PER_FRAME };
-        let mut uploaded = 0usize;
-        #[cfg(not(target_arch = "wasm32"))]
-        let started = std::time::Instant::now();
-        for _ in 0..budget {
-            let Some(r) = pool.try_recv() else { break };
-            uploaded = uploaded.saturating_add(self.receive_result(ctx, r));
-            // One whole-page upload may exceed the frame allowance; it must still progress.
-            if uploaded >= UPLOAD_BYTES_PER_FRAME {
-                break;
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            if started.elapsed() >= std::time::Duration::from_millis(4) {
-                break;
-            }
-        }
+        receive_batch(pool, |r| self.receive_result(ctx, r));
     }
 
     pub(super) fn receive_result(&mut self, ctx: &egui::Context, r: pdfcraft_render::RenderedPage) -> usize {
@@ -671,6 +731,44 @@ impl DocView {
                 self.frame_queue.push(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale, tag, preview: false });
             }
         }
+    }
+}
+
+/// Take a bounded batch of finished renders from `pool` and hand each to `receive`, which
+/// returns the bytes it uploaded: at most a few results, one frame's upload allowance, and 4 ms
+/// a frame.
+fn receive_batch(pool: &RenderPool, mut receive: impl FnMut(pdfcraft_render::RenderedPage) -> usize) {
+    let budget = if pool.is_inline() { 1 } else { RESULTS_PER_FRAME };
+    let mut uploaded = 0usize;
+    #[cfg(not(target_arch = "wasm32"))]
+    let started = std::time::Instant::now();
+    for _ in 0..budget {
+        let Some(r) = pool.try_recv() else { break };
+        uploaded = uploaded.saturating_add(receive(r));
+        // One whole-page upload may exceed the frame allowance; it must still progress.
+        if uploaded >= UPLOAD_BYTES_PER_FRAME {
+            break;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if started.elapsed() >= std::time::Duration::from_millis(4) {
+            break;
+        }
+    }
+}
+
+/// A copy of a render result, for a second view of the document that asked for the same request
+/// (split view). Not `Clone` on purpose: page rasters are large, and this is the one place they
+/// are copied.
+fn copy_result(r: &pdfcraft_render::RenderedPage) -> pdfcraft_render::RenderedPage {
+    pdfcraft_render::RenderedPage {
+        request: r.request,
+        width: r.width,
+        height: r.height,
+        rgba: r.rgba.clone(),
+        error: r.error.clone(),
+        text: r.text.clone(),
+        warnings: r.warnings.clone(),
+        millis: r.millis,
     }
 }
 

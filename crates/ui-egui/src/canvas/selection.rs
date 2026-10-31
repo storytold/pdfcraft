@@ -190,7 +190,7 @@ pub(super) fn selection_actions(
     let x = rect.left().clamp(viewport.left() + 8.0, (viewport.right() - 520.0).max(viewport.left() + 8.0));
     let y = if rect.bottom() + 48.0 < viewport.bottom() { rect.bottom() + 6.0 } else { (rect.top() - 44.0).max(viewport.top() + 6.0) };
     let mut chosen = None;
-    egui::Area::new(egui::Id::unique(("text-selection-actions", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(
+    egui::Area::new(egui::Id::unique(("text-selection-actions", view.view_key()))).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(
         ui.ctx(),
         |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {

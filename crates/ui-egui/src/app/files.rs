@@ -648,20 +648,25 @@ impl PdfCraftApp {
             return;
         }
         self.remember_view(index);
-        let id = self.views.remove(index).id;
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
-            if self.closed_tabs.len() == 10 {
-                self.closed_tabs.remove(0);
+        let view = self.views.remove(index);
+        let (id, place) = (view.id, view.place());
+        // Another tab showing the same document (split view) keeps it open.
+        if !self.views.iter().any(|v| v.id == id) {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
+                if self.closed_tabs.len() == 10 {
+                    self.closed_tabs.remove(0);
+                }
+                self.closed_tabs.push(path);
             }
-            self.closed_tabs.push(path);
+            self.forget_recovery(id);
+            self.session.close(id);
         }
-        self.forget_recovery(id);
-        self.session.close(id);
         self.active = match self.active {
             _ if self.views.is_empty() => None,
             Some(a) if a > index => Some(a - 1),
-            Some(a) if a >= self.views.len() => Some(self.views.len() - 1),
+            // The tab after it in its strip comes forward (or the last).
+            Some(a) if a == index => self.after_close(place, index),
             other => other,
         };
     }

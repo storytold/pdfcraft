@@ -86,9 +86,10 @@ pub struct LineEditor {
     typing_from: Option<String>,
 }
 
-/// The paragraph editor's text box.
-pub(crate) fn input_id() -> egui::Id {
-    egui::Id::unique("edit-text-line-input")
+/// The paragraph editor's text box: one for the tabs of a pane (they share it), and one for each pane
+/// of split view, which can show an editor in each.
+pub(crate) fn input_id(place: crate::panes::Place) -> egui::Id {
+    egui::Id::unique(("edit-text-line-input", place))
 }
 
 /// The page text box `id` keeps its own Undo history, across every paragraph or box it has shown
@@ -330,8 +331,8 @@ impl LineEditor {
 
     /// Take the shared text box for this paragraph ([`forget_typing_before`]): its own history,
     /// or none once the page has its text.
-    pub(crate) fn claim_typing(&mut self, ctx: &egui::Context, doc: pdfcraft_engine::DocId) {
-        forget_typing_before(ctx, input_id(), doc, &mut self.typing_from, &self.original);
+    pub(crate) fn claim_typing(&mut self, ctx: &egui::Context, doc: pdfcraft_engine::DocId, place: crate::panes::Place) {
+        forget_typing_before(ctx, input_id(place), doc, &mut self.typing_from, &self.original);
     }
 
     /// Adopt the rewritten paragraph's current geometry before the next overlay frame.
@@ -350,8 +351,8 @@ impl LineEditor {
 
     /// The text changed from `before` through the box's own typing (typing, Undo, Redo): rows
     /// aligned on their own keep their alignment, and a row Undo brings back gets its own back.
-    pub(crate) fn follow_typed_rows(&mut self, ctx: &egui::Context, before: &str) {
-        follow_typing(ctx, input_id(), before, &self.text, &mut [&mut self.look.aligns, &mut self.look0.aligns]);
+    pub(crate) fn follow_typed_rows(&mut self, ctx: &egui::Context, before: &str, place: crate::panes::Place) {
+        follow_typing(ctx, input_id(place), before, &self.text, &mut [&mut self.look.aligns, &mut self.look0.aligns]);
     }
 
     /// The text changed from `before`: rows aligned on their own keep their alignment.
@@ -659,6 +660,9 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     let away = |p: egui::Pos2| !view.viewport_rect().contains(p);
     let outside = ctx.input(|i| i.pointer.interact_pos()).is_some_and(away) || focus_pos(ctx).is_some_and(away);
     let page = view.line_editor.as_ref()?.page;
+    // Keyed by view: split view can show an editor in each pane.
+    let key = view.view_key();
+    let place = view.place();
     let xf = view.page_xform(page)?;
     let hold = view.objects.hold_editor;
     // An OCR word is invisible text over a scan: the textless background still shows the scanned
@@ -710,7 +714,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     // Over the page, so only where the document shows: a paragraph scrolled under the mode bar or
     // a side panel must leave them their pointer (#2755). It stays at its paragraph, cut off as
     // the page is, rather than pushed back into the window.
-    egui::Area::new(egui::Id::unique("edit-text-line"))
+    egui::Area::new(egui::Id::unique(("edit-text-line", key)))
         .order(egui::Order::Foreground)
         .fade_in(false)
         .fixed_pos(Pos2::new(ed.rect.left(), ed.rect.top()))
@@ -772,8 +776,8 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     if snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
                 };
                 let before = ed.text.clone();
-                let input = input_id();
-                ed.claim_typing(ui.ctx(), view_id);
+                let input = input_id(place);
+                ed.claim_typing(ui.ctx(), view_id, place);
                 let output = egui::TextEdit::multiline(&mut ed.text)
                     .id(input)
                     .font(font.clone())
@@ -801,7 +805,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 }
                 let r = output.response;
                 if r.changed() {
-                    ed.follow_typed_rows(ctx, &before);
+                    ed.follow_typed_rows(ctx, &before, place);
                     // The next pass measures the updated draft with the Apply/Save rewrite.
                     ctx.request_repaint();
                 }

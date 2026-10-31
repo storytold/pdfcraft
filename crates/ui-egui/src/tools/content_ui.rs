@@ -627,7 +627,7 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
     // Shown at once, like the paragraph editor: a fade-in shows the page's copy through it. Over
     // the page, so only where the document shows: text scrolled under the mode bar or a side
     // panel must leave them their pointer (#2755).
-    egui::Area::new(egui::Id::unique(("added-text", view.id.0)))
+    egui::Area::new(egui::Id::unique(("added-text", view.view_key())))
         .fade_in(false)
         .order(egui::Order::Foreground)
         .fixed_pos(at)

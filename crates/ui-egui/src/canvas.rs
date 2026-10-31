@@ -272,6 +272,9 @@ pub(crate) fn snapshot_tab_name(title: &str, file_name: &str, snapshot: &Snapsho
 }
 
 pub struct DocView {
+    /// Where the tab shows (split view's panes) and the key that tells two
+    /// views of one document apart (`crate::panes`).
+    pub(crate) pane: crate::panes::ViewPane,
     pub id: DocId,
     pub zoom: f32,
     pub fit: Fit,
@@ -609,6 +612,7 @@ impl DocView {
     /// any layout or zoom the PDF itself asks for.
     pub fn new(id: DocId, info: &DocInfo, defaults: ViewDefaults) -> Self {
         Self {
+            pane: Default::default(),
             id,
             zoom: defaults.zoom,
             fit: defaults.fit,
@@ -786,7 +790,7 @@ impl DocView {
         fresh.organize = self.organize;
         fresh.grid_zoom = self.grid_zoom;
         fresh.thumbnail_zoom = self.thumbnail_zoom;
-        // Same document id, so the scroll offset egui keeps for it is still this document's.
+        // Same view key (`pane`), so the scroll offset egui keeps for it is still this view's.
         fresh.shown = self.shown;
         fresh.highlight_fields = self.highlight_fields;
         fresh.notice_dismissed = self.notice_dismissed;
@@ -803,11 +807,51 @@ impl DocView {
         fresh.viewport_w = self.viewport_w;
         fresh.viewport_h = self.viewport_h;
         fresh.viewport_screen = self.viewport_screen;
+        fresh.pane = self.pane.clone();
         *self = fresh;
         // Marks the kept images out of date and clamps the page to the new page count.
         self.document_changed(info);
         self.page_input = self.current_page_label(info.pages.get(self.current).map(|page| page.label.as_str()));
         self.page_input_reselect = true;
+    }
+
+    /// Another view of this document changed it (split view: an edit, Undo,
+    /// a reload): start afresh as a reload does, keeping the reader's place, so nothing here
+    /// points into the old version.
+    pub(crate) fn follow_document(&mut self, info: &DocInfo) {
+        let continuous = self.continuous;
+        self.document_replaced(info);
+        self.continuous = continuous;
+    }
+
+    /// A second view of this document (split view), showing what this one shows.
+    pub(crate) fn twin(&self, info: &DocInfo) -> Self {
+        let mut v = Self::new(self.id, info, ViewDefaults::default());
+        v.zoom = self.zoom;
+        v.fit = self.fit;
+        v.layout = self.layout;
+        v.continuous = self.continuous;
+        v.show_page_gaps = self.show_page_gaps;
+        v.rotation = self.rotation;
+        v.cover = self.cover;
+        v.current = self.current;
+        v.page_input = self.page_input.clone();
+        v.highlight_fields = self.highlight_fields;
+        v.notice_dismissed = self.notice_dismissed;
+        v.scripts_off_noted = self.scripts_off_noted;
+        v.goto = Some((self.current, 0.0));
+        v
+    }
+
+    /// The key that tells this view apart from another view of the same document (split view):
+    /// unique for the app's life. Ids of what is drawn over the page are keyed by it.
+    pub fn view_key(&self) -> u64 {
+        self.pane.key
+    }
+
+    /// Where this tab shows: the main pane or split view's second pane.
+    pub fn place(&self) -> crate::panes::Place {
+        self.pane.place
     }
 
     /// Select pages in the organize grid (tests, automation). Empty clears the selection.
@@ -2575,17 +2619,14 @@ fn apply_notice(app: &mut PdfCraftApp, index: usize, notice: Option<Notice>) {
 }
 
 /// The snapshot notice bar's Close was clicked: close here, where no document borrow is held. The
-/// tab is looked up by id: indices may have shifted since the click, and the flag rides its own
-/// view, so a stale flag can never close the wrong tab. Whether a tab was closed (or asked about).
+/// tab is looked up by its view key (indices may have shifted since the click, and split view can
+/// show one document in two tabs), and the flag rides its own view, so a stale flag can never
+/// close the wrong tab. Whether a tab was closed (or asked about).
 fn close_requested_tab(app: &mut PdfCraftApp, index: usize) -> bool {
-    let pending = app.views.get(index).filter(|v| v.close_requested).map(|v| v.id).and_then(|id| app.views.iter().position(|v| v.id == id));
+    let pending = app.views.get(index).filter(|v| v.close_requested).map(|v| v.view_key()).and_then(|key| app.tab_with_key(key));
     let Some(i) = pending else { return false };
     app.views[i].close_requested = false;
-    if app.has_unsaved_work(i) {
-        app.close_request = Some(crate::CloseRequest::Tab(app.views[i].id));
-    } else {
-        app.close_tab(i);
-    }
+    app.request_close_tab(i);
     true
 }
 
@@ -2614,8 +2655,9 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
         },
         ..Default::default()
     });
-    // Each document keeps its own scroll position when switching tabs (#189).
-    scroll = scroll.id_salt(("page-view", view.id));
+    // Each tab keeps its own scroll position when switching tabs (#189), and so does each view of
+    // one document in split view.
+    scroll = scroll.id_salt(("page-view", view.view_key()));
     // Every scroll here asks for no animation. An animated area would still queue a zero-length
     // offset target for the next frame, which overwrites the jump a page turn just set.
     scroll = scroll.animated(false);
@@ -3229,7 +3271,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         today,
     };
     let mut page_out = PageOut::default();
-    let out = page_scroll(ui, scroll, egui::Id::unique(("page-view-scope", view.id)), |ui, viewport| {
+    // Keyed by the view, not the document: with one document in both panes of split view, shared
+    // ids gave the main pane's clicks on the page to the second pane's widgets.
+    let out = page_scroll(ui, scroll, egui::Id::unique(("page-view-scope", view.view_key())), |ui, viewport| {
         draw_pages(ui, viewport, view, &env, &mut page_out, &mut app.signature_preview)
     });
     let PageOut {
