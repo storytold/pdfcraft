@@ -561,6 +561,9 @@ pub struct Style {
     pub width: f64,
     /// Interior fill for rectangles and ovals (`/IC`), background for text boxes.
     pub fill: Option<Rgb>,
+    /// A text box's, typewriter text's or callout's border colour where it differs from the
+    /// text's (`None`: the text colour), the stroking colour in its `/DA`.
+    pub border_color: Option<Rgb>,
 }
 
 /// The style properties changed by one annotation edit. `None` leaves a property unchanged.
@@ -592,7 +595,7 @@ pub struct TextReplacement<'a> {
 
 impl Default for Style {
     fn default() -> Self {
-        Self { color: [1.0, 0.82, 0.0], opacity: 1.0, width: 1.0, fill: None }
+        Self { color: [1.0, 0.82, 0.0], opacity: 1.0, width: 1.0, fill: None, border_color: None }
     }
 }
 
@@ -618,9 +621,11 @@ impl Style {
             Shape::CustomStamp { .. } => ([0.0, 0.0, 0.0], 0.0),
             Shape::TypedSignature { .. } => ([0.0, 0.0, 0.0], 0.0),
             // Red outline while marked; a black box once applied.
-            Shape::Redact { .. } => return Self { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: Some([0.0, 0.0, 0.0]) },
+            Shape::Redact { .. } => {
+                return Self { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: Some([0.0, 0.0, 0.0]), border_color: None };
+            }
         };
-        Self { color, opacity: 1.0, width, fill: None }
+        Self { color, opacity: 1.0, width, fill: None, border_color: None }
     }
 }
 

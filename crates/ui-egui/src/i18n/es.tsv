@@ -2936,3 +2936,9 @@ theme	Appearance	Aspecto
 	No image on clipboard to paste	No hay ninguna imagen en el portapapeles para pegar
 	Pinned {tool} to Home	{tool} fijado en Inicio
 	Unpinned {tool} from Home	{tool} desfijado de Inicio
+# Fill & Sign text: the border around it (M5).
+	Border:	Borde:
+
+# A text border's own colour (M5).
+	Border colour	Color del borde
+	Same as text	Igual que el texto

@@ -2576,3 +2576,9 @@ animation effects	Off	Изключени
 	No image on clipboard to paste	Няма изображение в клипборда за поставяне
 	Pinned {tool} to Home	{tool} е закачен в Начало
 	Unpinned {tool} from Home	{tool} е откачен от Начало
+# Fill & Sign text: the border around it (M5).
+	Border:	Рамка:
+
+# A text border's own colour (M5).
+	Border colour	Цвят на рамката
+	Same as text	Като текста

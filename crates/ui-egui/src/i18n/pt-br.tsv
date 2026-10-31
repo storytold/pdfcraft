@@ -2898,3 +2898,9 @@ theme	Appearance	Aparência
 	No image on clipboard to paste	Nenhuma imagem na área de transferência para colar
 	Pinned {tool} to Home	{tool} fixado no Início
 	Unpinned {tool} from Home	{tool} desafixado do Início
+# Fill & Sign text: the border around it (M5).
+	Border:	Borda:
+
+# A text border's own colour (M5).
+	Border colour	Cor da borda
+	Same as text	Igual ao texto

@@ -2823,3 +2823,10 @@ theme	Appearance	ظاهر
 	No image on clipboard to paste	تصویری در حافظهٔ موقت برای چسباندن نیست
 	Pinned {tool} to Home	{tool} به خانه سنجاق شد
 	Unpinned {tool} from Home	{tool} از خانه جدا شد
+
+# Fill & Sign text: the border around it (M5).
+	Border:	حاشیه:
+
+# A text border's own colour (M5).
+	Border colour	رنگ حاشیه
+	Same as text	همانند متن
