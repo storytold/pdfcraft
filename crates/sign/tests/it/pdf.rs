@@ -352,6 +352,78 @@ fn later_changes_are_classified_under_the_signature_permissions() {
 }
 
 #[test]
+fn a_no_changes_certification_refuses_another_signature() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let certified = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(1), ..opts() }).unwrap();
+    let again = |bytes: &[u8]| pdfcraft_sign::sign(&open(bytes), &id, &SignOptions { rect: None, ..opts() });
+    let e = again(&certified).unwrap_err().to_string();
+    assert!(e.contains("certified with no changes allowed"), "{e}");
+    // The signature's own level counts, not the catalog's link to it: without the link, or with a
+    // later revision that relaxes both the link and the signature's /P, it is still P 1.
+    let unlinked = edit_after(&certified, |doc| {
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            c.remove(b"Perms");
+        })
+        .unwrap();
+    });
+    let e = again(&unlinked).unwrap_err().to_string();
+    assert!(e.contains("certified with no changes allowed"), "unlinked: {e}");
+    let relaxed = edit_after(&certified, |doc| {
+        let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+        let sig = doc.resolve(catalog.get(b"Perms").unwrap()).as_dict().and_then(|p| p.get(b"DocMDP").and_then(Object::as_ref)).unwrap();
+        doc.update_dict(sig, |v| {
+            if let Some(Object::Array(r)) = v.get_mut(b"Reference")
+                && let Some(Object::Dict(sr)) = r.first_mut()
+                && let Some(Object::Dict(tp)) = sr.get_mut(b"TransformParams")
+            {
+                tp.set(b"P".to_vec(), Object::Int(3));
+            }
+        })
+        .unwrap();
+        doc.update_dict(doc.root().unwrap(), |c| {
+            c.remove(b"Perms");
+        })
+        .unwrap();
+    });
+    let e = again(&relaxed).unwrap_err().to_string();
+    assert!(e.contains("certified with no changes allowed"), "relaxed: {e}");
+    // A later revision that rewrites the other numbers of the /ByteRange does not hide the signature
+    // either: it is the one whose range still ends the signed revision.
+    let reranged = edit_after(&certified, |doc| {
+        let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+        let sig = doc.resolve(catalog.get(b"Perms").unwrap()).as_dict().and_then(|p| p.get(b"DocMDP").and_then(Object::as_ref)).unwrap();
+        doc.update_dict(sig, |v| {
+            if let Some(Object::Array(range)) = v.get_mut(b"ByteRange")
+                && let Some(Object::Int(n)) = range.get_mut(1)
+            {
+                *n -= 1;
+            }
+            if let Some(Object::Array(r)) = v.get_mut(b"Reference")
+                && let Some(Object::Dict(sr)) = r.first_mut()
+                && let Some(Object::Dict(tp)) = sr.get_mut(b"TransformParams")
+            {
+                tp.set(b"P".to_vec(), Object::Int(3));
+            }
+        })
+        .unwrap();
+        doc.update_dict(doc.root().unwrap(), |c| {
+            c.remove(b"Perms");
+        })
+        .unwrap();
+    });
+    let e = again(&reranged).unwrap_err().to_string();
+    assert!(e.contains("certified with no changes allowed"), "reranged: {e}");
+    // P 2 and P 3 permit signing, and an approval signature never forbids it.
+    for level in [2, 3] {
+        let c = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(level), ..opts() }).unwrap();
+        again(&c).unwrap();
+    }
+    let approved = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    again(&approved).unwrap();
+}
+
+#[test]
 fn invisible_signatures_and_refusals() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
     let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { rect: None, ..opts() }).unwrap();

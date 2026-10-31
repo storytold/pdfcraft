@@ -6186,6 +6186,21 @@ fn drawing_comments_through_tools() {
 }
 
 #[test]
+fn signing_refuses_a_document_certified_with_no_changes() {
+    let dir = workdir("signing-certified");
+    let mut a = auto(&dir);
+    ok(&mut a, "sign_id_create", json!({ "name": "Ada Lovelace", "key": "p256", "password": "secret12", "path": "ada.p12" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "sign_document", json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "certify": "no_changes", "out": "certified.pdf" }));
+    // The document now shows the certified file; a second signature would make it read as modified.
+    match a.call("sign_document", &json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "out": "second.pdf" })) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("certified with no changes allowed"), "{m}"),
+        other => panic!("a P 1 certification forbids a second signature: {other:?}"),
+    }
+    assert!(!dir.join("second.pdf").exists());
+}
+
+#[test]
 fn signing_with_an_image_typed_or_drawn_graphic_through_tools() {
     let dir = workdir("signing-graphic");
     // A solid red 120 x 40 picture.
