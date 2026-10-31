@@ -1718,6 +1718,8 @@ action wizard	Start	ప్రారంభించు
 	{n} pages	{n} పేజీలు
 	Copy or cut pages first	ముందుగా పేజీలను కాపీ చేయండి లేదా కత్తిరించండి
 	Couldn't save {name}: {e}	{name}ను సేవ్ చేయడం సాధ్యం కాలేదు: {e}
+	the website did not confirm that it stored the file	వెబ్‌సైట్ ఫైల్‌ను నిల్వ చేసినట్లు నిర్ధారించలేదు
+	earlier saves are still waiting for the website	మునుపటి సేవ్‌లు ఇంకా వెబ్‌సైట్ కోసం వేచి ఉన్నాయి
 	Saved {name}	{name} సేవ్ చేయబడింది
 	Saved, but reopening failed: {e}	సేవ్ చేయబడింది, కానీ మళ్లీ తెరవడం విఫలమైంది: {e}
 	Downloaded {name}	{name} డౌన్‌లోడ్ చేయబడింది

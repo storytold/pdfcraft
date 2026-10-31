@@ -66,7 +66,8 @@ fn main() {
                         {
                             app.comment_prefs.author = author.chars().take(200).collect();
                         }
-                        bridge.listen(app.startup_inbox.clone(), cc.egui_ctx.clone());
+                        bridge.listen(app.startup_inbox.clone(), app.host_inbox.clone(), cc.egui_ctx.clone());
+                        app.set_host_save_prefix(&host::save_id_prefix());
                         app.host_save = Some(bridge.save_fn());
                         app.host_dirty = Some(bridge.dirty_fn());
                         bridge.post_ready();
@@ -127,10 +128,16 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 /// `type`:
 ///
 /// - `pdfcraft:ready` (to the parent): the app is listening; send files now.
+/// - `pdfcraft:init` (from the parent, optional): `{ acknowledgeSaves, saveTimeoutMs }`. With
+///   `acknowledgeSaves: true` the parent answers every save, and a document counts as saved
+///   only once it has (`pdfcraft_ui_egui::host`, #1792). Without it, a save counts once posted.
 /// - `pdfcraft:open` (from the parent): `{ name, bytes }`, where `bytes` is an `ArrayBuffer` or
 ///   `Uint8Array` holding a PDF. It opens in a tab, like a `?file=` URL.
 /// - `pdfcraft:save` (to the parent): `{ name, saveAs, bytes }` when the user saves; `bytes` is
 ///   a transferred `ArrayBuffer`. The parent stores the file (and reports its own errors).
+///   After `acknowledgeSaves` it also has a `saveId`, which the parent's answer names:
+///   `pdfcraft:saved` `{ saveId }` once the file is stored, or `pdfcraft:save-failed`
+///   `{ saveId, error }`.
 /// - `pdfcraft:dirty` (to the parent): `{ dirty }` whenever unsaved work appears or goes away.
 /// - `pdfcraft:failed` (to the parent): `{ error }` when the app couldn't start.
 ///
@@ -139,6 +146,7 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 #[cfg(target_arch = "wasm32")]
 mod host {
     use eframe::wasm_bindgen::{JsCast, JsValue, closure::Closure};
+    use pdfcraft_ui_egui::host::{HostInbox, HostMessage, HostSave};
 
     #[derive(Clone)]
     pub struct Bridge {
@@ -186,8 +194,9 @@ mod host {
             }
         }
 
-        /// Hear `pdfcraft:open` from the parent and queue the file like a `?file=` download.
-        pub fn listen(&self, inbox: pdfcraft_ui_egui::Inbox, ctx: egui::Context) {
+        /// Hear `pdfcraft:open` from the parent and queue the file like a `?file=` download, and
+        /// queue what it says about saves for the app.
+        pub fn listen(&self, inbox: pdfcraft_ui_egui::Inbox, host_inbox: HostInbox, ctx: egui::Context) {
             let parent = self.parent.clone();
             let origin = self.origin.clone();
             let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
@@ -195,7 +204,14 @@ mod host {
                     return;
                 }
                 let data = event.data();
-                if string(&data, "type").as_deref() != Some("pdfcraft:open") {
+                let kind = string(&data, "type");
+                if kind.as_deref() != Some("pdfcraft:open") {
+                    if let Some(message) = kind.as_deref().and_then(|kind| host_message(kind, &data))
+                        && let Ok(mut q) = host_inbox.lock()
+                    {
+                        q.push(message);
+                        ctx.request_repaint();
+                    }
                     return;
                 }
                 let name = string(&data, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "document.pdf".to_string());
@@ -220,11 +236,18 @@ mod host {
 
         pub fn save_fn(&self) -> pdfcraft_ui_egui::HostSaveFn {
             let bridge = self.clone();
-            Box::new(move |name: &str, bytes: &[u8], save_as: bool| {
-                let buffer = js_sys::Uint8Array::from(bytes).buffer();
-                let m =
-                    message(&[("type", "pdfcraft:save".into()), ("name", name.into()), ("saveAs", save_as.into()), ("bytes", buffer.clone().into())])
-                        .ok_or_else(|| "couldn't build the message".to_string())?;
+            Box::new(move |save: HostSave<'_>| {
+                let buffer = js_sys::Uint8Array::from(save.bytes).buffer();
+                let mut fields: Vec<(&str, JsValue)> = vec![
+                    ("type", "pdfcraft:save".into()),
+                    ("name", save.name.into()),
+                    ("saveAs", save.save_as.into()),
+                    ("bytes", buffer.clone().into()),
+                ];
+                if let Some(id) = save.save_id {
+                    fields.push(("saveId", id.into()));
+                }
+                let m = message(&fields).ok_or_else(|| "couldn't build the message".to_string())?;
                 bridge.post(&m, Some(&buffer))
             })
         }
@@ -243,6 +266,27 @@ mod host {
         }
     }
 
+    /// `pdfcraft:init`, `pdfcraft:saved` or `pdfcraft:save-failed` from the parent.
+    fn host_message(kind: &str, data: &JsValue) -> Option<HostMessage> {
+        let save_id = || string(data, "saveId");
+        match kind {
+            "pdfcraft:init" => Some(HostMessage::Init {
+                acknowledge_saves: field(data, "acknowledgeSaves").and_then(|v| v.as_bool()) == Some(true),
+                save_timeout_ms: field(data, "saveTimeoutMs").and_then(|v| v.as_f64()),
+            }),
+            "pdfcraft:saved" => Some(HostMessage::Saved { save_id: save_id()? }),
+            "pdfcraft:save-failed" => Some(HostMessage::SaveFailed { save_id: save_id()?, error: string(data, "error").unwrap_or_default() }),
+            _ => None,
+        }
+    }
+
+    /// Starts the ids of this page's saves: random, so an answer meant for the page before a
+    /// reload never matches a save of this one.
+    pub fn save_id_prefix() -> String {
+        // `Math.random()` is in [0, 1): the product fits 53 bits.
+        format!("{:x}-", (js_sys::Math::random() * 9_007_199_254_740_992.0) as u64)
+    }
+
     fn message(fields: &[(&str, JsValue)]) -> Option<js_sys::Object> {
         let m = js_sys::Object::new();
         for (key, value) in fields {
@@ -252,7 +296,11 @@ mod host {
     }
 
     fn string(data: &JsValue, key: &str) -> Option<String> {
-        js_sys::Reflect::get(data, &JsValue::from_str(key)).ok()?.as_string()
+        field(data, key)?.as_string()
+    }
+
+    fn field(data: &JsValue, key: &str) -> Option<JsValue> {
+        js_sys::Reflect::get(data, &JsValue::from_str(key)).ok()
     }
 }
 

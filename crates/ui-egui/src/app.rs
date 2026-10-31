@@ -155,6 +155,8 @@ impl PdfCraftApp {
             failed_inbox: Default::default(),
             unsaved_flag: Default::default(),
             os_events: None,
+            host_inbox: Default::default(),
+            host_saves: Default::default(),
             host_save: None,
             host_dirty: None,
             close_request: None,
@@ -510,6 +512,8 @@ impl eframe::App for PdfCraftApp {
         #[cfg(target_os = "macos")]
         craft_quit::on_close_request(ctx);
         self.autosave_tick(ctx, web_time::Instant::now());
+        // Answers from an embedding page that confirms its saves (#1792), timed in egui's seconds.
+        self.poll_host(ctx, ctx.input(|i| i.time));
         // Reload documents whose files a build rewrote (#431).
         #[cfg(not(target_arch = "wasm32"))]
         self.watch_files();

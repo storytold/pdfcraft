@@ -1955,6 +1955,8 @@ comment menu	Edit	Edit
 	Couldn't reload {name}: {e}	Tidak dapat memuat ulang {name}: {e}
 	Couldn't save the image: {e}	Tidak dapat menyimpan gambar: {e}
 	Couldn't save {name}: {e}	Tidak dapat menyimpan {name}: {e}
+	the website did not confirm that it stored the file	situs tidak mengonfirmasi bahwa file sudah disimpan
+	earlier saves are still waiting for the website	penyimpanan sebelumnya masih menunggu situs
 	Couldn't save: {e}	Tidak dapat menyimpan: {e}
 	Couldn't show the file picker. Please try again.	Tidak dapat menampilkan pemilih file. Silakan coba lagi.
 	Couldn't split: {e}	Tidak dapat memisah: {e}

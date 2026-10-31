@@ -1853,6 +1853,8 @@ key	Space	Mezerník
 	{n} pages	{n} str.
 	Copy or cut pages first	Nejdřív stránky zkopírujte nebo vyjměte
 	Couldn't save {name}: {e}	{name} nelze uložit: {e}
+	the website did not confirm that it stored the file	web nepotvrdil, že soubor uložil
+	earlier saves are still waiting for the website	předchozí uložení stále čekají na web
 	Saved {name}	Uloženo: {name}
 	Saved, but reopening failed: {e}	Uloženo, ale opětovné otevření selhalo: {e}
 	Downloaded {name}	Staženo: {name}

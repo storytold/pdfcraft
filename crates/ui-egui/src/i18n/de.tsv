@@ -1734,6 +1734,8 @@
 	{n} pages	{n} Seiten
 	Copy or cut pages first	Kopiere oder schneide zuerst Seiten aus
 	Couldn't save {name}: {e}	{name} konnte nicht gespeichert werden: {e}
+	the website did not confirm that it stored the file	die Website hat nicht bestätigt, dass sie die Datei gespeichert hat
+	earlier saves are still waiting for the website	frühere Speichervorgänge warten noch auf die Website
 	Saved {name}	{name} gespeichert
 	Saved, but reopening failed: {e}	Gespeichert, aber erneutes Öffnen fehlgeschlagen: {e}
 	Downloaded {name}	{name} heruntergeladen

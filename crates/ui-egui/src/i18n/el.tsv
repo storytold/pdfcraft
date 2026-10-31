@@ -2121,6 +2121,8 @@
 	{n} pages	{n} σελίδες
 	Copy or cut pages first	Αντιγράψτε ή αποκόψτε πρώτα σελίδες
 	Couldn't save {name}: {e}	Δεν ήταν δυνατή η αποθήκευση του {name}: {e}
+	the website did not confirm that it stored the file	ο ιστότοπος δεν επιβεβαίωσε ότι αποθήκευσε το αρχείο
+	earlier saves are still waiting for the website	προηγούμενες αποθηκεύσεις περιμένουν ακόμη τον ιστότοπο
 	Saved {name}	Αποθηκεύτηκε το {name}
 	Saved, but reopening failed: {e}	Αποθηκεύτηκε, αλλά το εκ νέου άνοιγμα απέτυχε: {e}
 	Downloaded {name}	Έγινε λήψη του {name}

@@ -1793,6 +1793,8 @@
 	{n} pages	Liczba stron: {n}
 	Copy or cut pages first	Najpierw skopiuj lub wytnij strony
 	Couldn't save {name}: {e}	Nie można zapisać {name}: {e}
+	the website did not confirm that it stored the file	strona internetowa nie potwierdziła, że zapisała plik
+	earlier saves are still waiting for the website	wcześniejsze zapisy wciąż czekają na stronę internetową
 	Saved {name}	Zapisano {name}
 	Saved, but reopening failed: {e}	Zapisano, ale ponowne otwarcie nie powiodło się: {e}
 	Downloaded {name}	Pobrano {name}

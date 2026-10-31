@@ -2016,6 +2016,8 @@ comment menu	Edit	Sửa
 	Couldn't reload {name}: {e}	Không thể tải lại {name}: {e}
 	Couldn't save the image: {e}	Không thể lưu hình ảnh: {e}
 	Couldn't save {name}: {e}	Không thể lưu {name}: {e}
+	the website did not confirm that it stored the file	trang web chưa xác nhận đã lưu tệp
+	earlier saves are still waiting for the website	các lần lưu trước vẫn đang chờ trang web
 	Couldn't save: {e}	Không thể lưu: {e}
 	Couldn't show the file picker. Please try again.	Không thể hiển thị bộ chọn tệp. Vui lòng thử lại.
 	Couldn't split: {e}	Không thể tách: {e}

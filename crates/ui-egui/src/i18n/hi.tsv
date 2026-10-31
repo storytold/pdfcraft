@@ -1715,6 +1715,8 @@
 	{n} pages	{n} पृष्ठ
 	Copy or cut pages first	पहले पृष्ठ कॉपी करें या काटें
 	Couldn't save {name}: {e}	{name} सहेजा नहीं जा सका: {e}
+	the website did not confirm that it stored the file	वेबसाइट ने पुष्टि नहीं की कि उसने फ़ाइल सहेज ली है
+	earlier saves are still waiting for the website	पहले के सहेजने के अनुरोध अभी भी वेबसाइट की प्रतीक्षा कर रहे हैं
 	Saved {name}	{name} सहेजा गया
 	Saved, but reopening failed: {e}	सहेजा गया, लेकिन दोबारा खोलना विफल रहा: {e}
 	Downloaded {name}	{name} डाउनलोड हुआ

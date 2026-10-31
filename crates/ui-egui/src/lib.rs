@@ -57,6 +57,7 @@ mod home;
 mod panels;
 pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
+pub mod host;
 pub mod i18n;
 pub mod theme;
 mod widgets;
@@ -411,6 +412,10 @@ pub struct PdfCraftApp {
     pub unsaved_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Requests from the operating system, polled every frame (macOS Apple events).
     pub os_events: Option<OsEventsFn>,
+    /// Messages from the embedding page (web, see [`host`]), read every frame.
+    pub host_inbox: host::HostInbox,
+    /// Saves handed to the embedding page that wait for its answer (#1792).
+    host_saves: host::HostSaves<host::WaitingSave>,
     /// Save delivers to the embedding page instead of downloading (web, see [`HostSaveFn`]).
     pub host_save: Option<HostSaveFn>,
     /// Reports unsaved work to the embedding page (web, see [`HostDirtyFn`]).

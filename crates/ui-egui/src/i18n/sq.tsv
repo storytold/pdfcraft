@@ -464,6 +464,8 @@
 	Couldn't recover {name}: {e}	Nuk u rikuperua {name}: {e}
 	Couldn't save the image: {e}	Nuk u ruajt dot imazhi: {e}
 	Couldn't save {name}: {e}	Nuk u ruajt {name}: {e}
+	the website did not confirm that it stored the file	faqja e internetit nuk konfirmoi se e ruajti skedarin
+	earlier saves are still waiting for the website	ruajtjet e mëparshme ende presin faqen e internetit
 	Couldn't save: {e}	Nuk u ruajt: {e}
 	Couldn't show the file picker. Please try again.	Nuk u shfaq dot zgjedhësi i skedarëve. Provo përsëri.
 	Couldn't split: {e}	Nuk u nda dot: {e}

@@ -1757,6 +1757,8 @@
 	{n} pages	{n} پەڕە
 	Copy or cut pages first	سەرەتا پەڕەکان کۆپی یان ببڕە
 	Couldn't save {name}: {e}	نەتوانرا {name} پاشەکەوت بکرێت: {e}
+	the website did not confirm that it stored the file	ماڵپەڕەکە پشتڕاستی نەکردەوە کە فایلەکەی پاشەکەوت کردووە
+	earlier saves are still waiting for the website	پاشەکەوتکردنەکانی پێشوو هێشتا چاوەڕێی ماڵپەڕەکەن
 	Saved {name}	{name} پاشەکەوتکرا
 	Saved, but reopening failed: {e}	پاشەکەوتکرا، بەڵام کردنەوەوە شکستی هێنا: {e}
 	Downloaded {name}	{name} داگیرا

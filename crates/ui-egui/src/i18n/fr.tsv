@@ -1729,6 +1729,8 @@
 	{n} pages	{n} pages
 	Copy or cut pages first	Copiez ou coupez d'abord des pages
 	Couldn't save {name}: {e}	Impossible d'enregistrer {name} : {e}
+	the website did not confirm that it stored the file	le site web n'a pas confirmé avoir enregistré le fichier
+	earlier saves are still waiting for the website	des enregistrements précédents attendent encore le site web
 	Saved {name}	{name} enregistré
 	Saved, but reopening failed: {e}	Enregistré, mais la réouverture a échoué : {e}
 	Downloaded {name}	{name} téléchargé

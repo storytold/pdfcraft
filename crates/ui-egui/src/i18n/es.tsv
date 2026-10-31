@@ -1811,6 +1811,8 @@ action wizard	Start	Iniciar
 	{n} pages	{n} páginas
 	Copy or cut pages first	Copia o corta páginas primero
 	Couldn't save {name}: {e}	No se pudo guardar {name}: {e}
+	the website did not confirm that it stored the file	el sitio web no confirmó que hubiera guardado el archivo
+	earlier saves are still waiting for the website	los guardados anteriores siguen esperando al sitio web
 	Saved {name}	{name} guardado
 	Saved, but reopening failed: {e}	Guardado, pero no se pudo volver a abrir: {e}
 	Downloaded {name}	{name} descargado

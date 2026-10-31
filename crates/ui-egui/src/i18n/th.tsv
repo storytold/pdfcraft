@@ -1737,6 +1737,8 @@
 	{n} pages	{n} หน้า
 	Copy or cut pages first	คัดลอกหรือตัดหน้าก่อน
 	Couldn't save {name}: {e}	บันทึก {name} ไม่ได้: {e}
+	the website did not confirm that it stored the file	เว็บไซต์ไม่ได้ยืนยันว่าจัดเก็บไฟล์แล้ว
+	earlier saves are still waiting for the website	การบันทึกก่อนหน้ายังคงรอเว็บไซต์อยู่
 	Saved {name}	บันทึก {name} แล้ว
 	Saved, but reopening failed: {e}	บันทึกแล้ว แต่เปิดใหม่ไม่สำเร็จ: {e}
 	Downloaded {name}	ดาวน์โหลด {name} แล้ว
