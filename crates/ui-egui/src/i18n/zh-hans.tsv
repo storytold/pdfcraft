@@ -208,6 +208,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	读取 {names}，而它们又读取此字段。任何顺序都无法修正循环：请修改其中一个公式。
 	Not in order	不在顺序中
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF 中保存的计算顺序缺少此字段：其他 PDF 查看器可能不会计算它。
+	Reads {name}, which the form doesn't have, so it gets no value there.	读取表单中不存在的 {name}，因此从中得不到值。
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	其脚本还会读取运行时才拼出名称的字段，因此无法检查这些读取。
+	Missing field	缺少字段
+	Unchecked reads	未检查的读取
+	{field} reads fields named as it runs	{field} 读取运行时才确定名称的字段
+	Some names are built as it runs	部分名称在运行时才拼出
 	Back to Prepare a form	返回准备表单
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	此表单中还没有计算自身值的字段。在字段属性的“计算”选项卡中为字段设置计算后，它会显示在这里。
 	{names} and {last}	{names}和{last}
@@ -265,6 +271,9 @@
 	Clean Up	清理
 	Color Images	彩色图像
 	Grayscale Images	灰度图像
+	Monochrome Images	单色图像
+	CCITT Group 4	CCITT 第 4 组
+	JBIG2 (lossless)	JBIG2（无损）
 	Bicubic downsampling to	双三次降采样至
 	for images above	（高于此分辨率的图像）
 	Compression	压缩
@@ -288,6 +297,7 @@
 	Discard private data of other applications	丢弃其他应用程序的私有数据
 	Discard hidden text	丢弃隐藏文本
 	Use Flate to encode streams that are not encoded	使用 Flate 编码未编码的流
+	In streams that use LZW encoding, use Flate instead	在使用 LZW 编码的流中改用 Flate
 	Remove invalid links and bookmarks	删除无效链接和书签
 	Remove unreferenced named destinations	删除未引用的命名目标
 	Compress document structure (object streams)	压缩文档结构（对象流）
@@ -482,14 +492,9 @@
 	Copy Image in Original Format	以原始格式复制图像
 	The image has been copied as a {ext} file	图像已复制为 {ext} 文件
 	The page has changed; select the image again	页面已更改；请重新选择图像
-	Check for updates	检查更新
 	No check has run yet.	尚未运行检查。
-	Checking for a newer version…	正在检查新版本…
 	PdfCraft {v} is available.	PdfCraft {v} 可用。
 	You have version {c}. Download the new version from its release page.	当前版本为 {c}。请从其发布页面下载新版本。
-	PdfCraft {c} is up to date.	PdfCraft {c} 已是最新。
-	Couldn't check for updates: {e}	无法检查更新：{e}
-	You have version {c}. All releases are listed at {page}.	当前版本为 {c}。所有版本列在 {page}。
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	向 GitHub 查询最新版本。不会自动下载或安装任何内容。
 	Download	下载
 	Later	稍后
@@ -534,6 +539,14 @@
 	Applies to 1 page	应用于 1 页
 	Applies to {n} pages	应用于 {n} 页
 	Replaces the existing one on those pages.	替换这些页面上的现有内容。
+	Checking pages…	正在检查页面…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	第 {pages} 页有自己的白色填充，会遮住背景。替换它
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	第 {pages} 页各有自己的白色填充，会遮住背景。替换它们
+	Removing the background puts the page's own backdrop back.	移除背景后，页面自己的白色填充会恢复。
+	A picture covers page {pages} (a scan?), so the background won't show there.	第 {pages} 页被一张图片覆盖（扫描件？），因此那里不会显示背景。
+	Pictures cover pages {pages} (scans?), so the background won't show there.	第 {pages} 页被图片覆盖（扫描件？），因此那里不会显示背景。
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	第 {pages} 页在添加背景后有改动，因此其自身的白色填充保持关闭。在白纸上看起来一样。
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	第 {pages} 页在添加背景后有改动，因此它们自身的白色填充保持关闭。在白纸上看起来一样。
 	PDF or image	PDF 或图像
 	No file chosen	未选择文件
 	Page number	页码
@@ -1838,6 +1851,15 @@
 	Tool	工具
 	Command	命令
 	Search tools and commands…	搜索工具和命令…
+
+# Accessible names for inputs that have no visible label.
+	Added text	已添加的文本
+	Link URL	链接 URL
+	Search tools and commands	搜索工具和命令
+	Text editing line	文本编辑行
+	Text to place	要放置的文本
+	Tooltip	提示
+	Words or phrases to redact	要密文的单词或短语
 	No matching tools	没有匹配的工具
 	All tools	所有工具
 	Read	阅读
@@ -1912,6 +1934,10 @@
 	Perimeter	周长
 	Area	面积
 	Drawing scale	图面比例
+	Scale	比例
+	Common scales	常用比例
+	Enter a scale such as 1:50.	请输入比例，例如 1:50。
+	Applying a scale switches units to m / mm.	应用比例会将单位切换为 m / mm。
 	Snapping	吸附
 	Export measurements	导出测量结果
 	Open a PDF to measure it.	打开 PDF 以进行测量。
@@ -2144,7 +2170,10 @@
 	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	用于打开 PDF 时。如果启动参数或控制通道明确指定了模式，则本次会话优先使用该模式。
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	PDF 未指定布局或缩放时使用。连续滚动时页面不会逐页吸附。
 	Reopen the files that were open when PdfCraft last closed	重新打开上次关闭 PdfCraft 时打开的文件
+	Restore the last view (page, zoom and page display) when a document is opened again	再次打开文档时恢复上次的视图（页面、缩放和页面显示）
 	Reload documents when their files change on disk	文件在磁盘上更改时重新加载对应的文档
+	Don't show again	不再显示
+	Show a notice when a document is secured	文档已加密时显示通知
 	Always use my default zoom and page layout	始终使用我的默认缩放和页面布局
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	此文件已在磁盘上更改。“重新加载”显示新版本并放弃未保存的更改；“保存”则用此版本替换它。
 	Reload	重新加载
@@ -2354,6 +2383,11 @@ animation effects	Off	关
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} 在它读取的 {fields} 之前计算。
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	另有 {n} 个字段计算过早。
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} 不在 PDF 中保存的顺序里，其他 PDF 查看器可能不会计算。
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} 个公式读取了表单中不存在的字段
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} 读取表单中不存在的 {fields}。
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	另有 {n} 个公式读取了缺失的字段。
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} 在运行时才拼出部分字段名称，因此这些读取不会被检查。
+@plural	{fields} is missing|{fields} are missing	缺少 {fields}
 	Scan	扫描
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	在白纸上签名，并在明亮、均匀的光线下拍照（使用闪光灯）。选择照片或将其拖放到此处：PdfCraft 会找到签名并去除纸张背景。
 	Choose photo…	选择照片…
@@ -2447,6 +2481,19 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+	Create & Edit	创建和编辑
+	Review & Compare	审阅和比较
+	Forms & Signatures	表单和签名
+	Protect & Standardize	保护和标准化
+	Customize & Automate	自定义和自动化
+	No tools match your search.	没有与搜索匹配的工具。
+	Expand all tools	展开所有工具
+	Collapse all tools	折叠所有工具
+	Attach a file…	附加文件…
+	Delete attachment	删除附件
+	Attaching files is not available on the web yet	网页版尚不支持附加文件
+	Attach {name}	附加 {name}
+	Delete attachment {key}	删除附件 {key}
 	Font	字体
 	Bulleted list	项目符号列表
 	Numbered list	编号列表
@@ -2481,3 +2528,19 @@ animation effects	Off	关
 	field names can't contain a period: {name}	字段名称不能包含句点：{name}
 	two cells would both be named {name}	两个单元格的名称都会是 {name}
 	a field named {name} already exists	已存在名为 {name} 的字段
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	今天
+@plural	{n} reply|{n} replies	{n} 条回复
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	页面工具
+	Insert pages from a file after the selection…	在所选内容后插入文件中的页面…
+	Rotate the selected pages counterclockwise	逆时针旋转所选页面
+	Rotate the selected pages clockwise	顺时针旋转所选页面
+	Extract the selected pages…	提取所选页面…
+	Delete the selected pages	删除所选页面
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	此回复的选项
+	Export value	导出值

@@ -158,15 +158,30 @@ fn phone(s: &[char], i: usize) -> Option<usize> {
     if seps == 0 && !labelled(s, i) || digit(s.get(end)) || run_continues(s, end.checked_sub(1)?, 1, &SEPS) {
         return None;
     }
-    // Only an area code with a trunk 0 takes a slash, so "2024/123456" is no phone number; and
-    // only one, right after it ("0426/123456", not "0426/12/3456" or "0426 12/3456").
     let slash = run.contains(&'/');
-    if run.iter().filter(|c| **c == '/').count() > 1 || slash && !run.iter().take_while(|c| **c != '/').all(char::is_ascii_digit) {
+    // Italian geographic numbers retain their initial 0 after +39. For a labelled number,
+    // apply the national slash rule after that country code and an optional separating space.
+    // AGCOM's E.164 plan gives geographic numbers 6 to 11 national digits (#3205).
+    let slash_run = if plus && slash {
+        if !labelled(s, i) || !(8..=13).contains(&n) {
+            return None;
+        }
+        let national = run.strip_prefix(&['3', '9'])?;
+        national.strip_prefix(&[' ']).unwrap_or(national)
+    } else {
+        run
+    };
+    // Only an area code beginning with 0 takes a slash, so "2024/123456" is no phone number;
+    // and only one, right after it (not "0426/12/3456" or "0426 12/3456").
+    if run.iter().filter(|c| **c == '/').count() > 1
+        || slash
+            && (slash_run.first() != Some(&'0') || !digit(slash_run.get(1)) || !slash_run.iter().take_while(|c| **c != '/').all(char::is_ascii_digit))
+    {
         return None;
     }
     let ok = if plus {
         // E.164: a `+` country code and up to 15 digits in all ("+49 2151 123456").
-        !slash && (8..=15).contains(&n)
+        (8..=15).contains(&n)
     } else {
         // North American: 10 digits, 11 with a country code ("(555) 123-4567").
         let nanp = (10..=11).contains(&n) && !slash;
@@ -346,7 +361,7 @@ fn date(s: &[char], i: usize) -> Option<usize> {
     // Numeric: m/d/yy(yy), m-d-yyyy, d.m.yyyy, yyyy-mm-dd.
     if let Some(a) = number(s, i, 1, 4) {
         let sep = s.get(i + a).copied();
-        if matches!(sep, Some('/' | '-' | '.'))
+        if matches!(sep, Some('-'..='/'))
             && let Some(b) = number(s, i + a + 1, 1, 2)
             && s.get(i + a + 1 + b).copied() == sep
             && let Some(c) = number(s, i + a + b + 2, if a == 4 { 1 } else { 2 }, if a == 4 { 2 } else { 4 })
@@ -503,6 +518,39 @@ mod tests {
             ),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    /// Labelled Italian geographic numbers match completely while dates and other digit runs stay unmarked.
+    fn labelled_italian_international_slash_numbers_match_whole() {
+        for (text, number) in [
+            ("tel. +39 0426/123456", "+39 0426/123456"),
+            ("Fax: +390426/123456", "+390426/123456"),
+            ("Telefono +39 02/12345678", "+39 02/12345678"),
+            ("tel. +39 02/1234", "+39 02/1234"),
+            ("tel. +39 0426/1234567", "+39 0426/1234567"),
+        ] {
+            assert_eq!(found(Pattern::Phone, text), [number], "{text}");
+        }
+        for text in [
+            "+39 0426/123456",
+            "tel. +39 2024/123456",
+            "tel. +39 0/123456789",
+            "tel. +39 0426/12/3456",
+            "tel. +39 0426 12/3456",
+            "tel. +39 0426/ 123456",
+            "tel. +39 02/123",
+            "tel. +39 0426/12345678",
+            "tel. +39 0426/1234567890",
+            "tel. +39  0426/123456",
+            "tel. +39-0426/123456",
+            "tel. +39 -0426/123456",
+            "tel. +40 0426/123456",
+            "protocol 2024/123456",
+            "on 01/10/2026",
+        ] {
+            assert!(found(Pattern::Phone, text).is_empty(), "{text}");
+        }
     }
 
     #[test]

@@ -310,7 +310,7 @@
 	Black and white	Alb-negru
 	Bold	Aldin
 	Booklet	Broșură
-	Booklet subset:	Subset broșură:
+	Booklet subset:	Selecție broșură:
 	Bookmark options	Opțiuni semne de carte
 	Bookmarks Panel and Page	Panoul Semne de carte și pagina
 	Border Color:	Culoare chenar:
@@ -342,12 +342,10 @@
 	Check Again	Verificare din nou
 	Check again	Verificare din nou
 	Check box is checked by default	Caseta de selectare este bifată implicit
-	Check for updates	Căutare actualizări
 	Check spelling	Verificare ortografică
 	Check the pages	Verificați paginile
 	Check the pages of {name}: {why}	Verificați paginile din {name}: {why}
 	Checking Options ({on} of 32 in all categories)	Opțiuni de verificare ({on} din 32 în toate categoriile)
-	Checking for a newer version…	Se caută o versiune mai nouă…
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Alegeți o imagine PNG sau JPEG (până la 4 MiB). Transparența se păstrează.
 	Choose a folder for the exported files	Alegeți un folder pentru fișierele exportate
 	Choose a folder for the extracted pages	Alegeți un folder pentru paginile extrase
@@ -407,7 +405,6 @@
 	Copies:	Copii:
 	Copy selected text	Copiere text selectat
 	Copy text	Copiere text
-	Couldn't check for updates: {e}	Nu s-au putut căuta actualizări: {e}
 	Couldn't open the printer's preferences: {e}	Nu s-au putut deschide preferințele imprimantei: {e}
 	Counterclockwise 90 degrees	90 de grade în sens invers acelor de ceasornic
 	Country/Region	Țară/regiune
@@ -868,7 +865,6 @@
 	Patterns (graphics objects)	Modele (obiecte grafice)
 	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft nu s-a închis normal. Aceste documente aveau modificări salvate automat:
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft funcționează offline. Fără telemetrie, fără cont și fără procesare în cloud, cu excepția cazului în care adăugați un furnizor.
-	PdfCraft {c} is up to date.	PdfCraft {c} este la zi.
 	PdfCraft {v} is available.	Este disponibil PdfCraft {v}.
 	Percentage	Procent
 	Permissions password	Parolă de permisiuni
@@ -933,6 +929,8 @@
 	Redaction code:	Cod de anonimizare:
 	Reload	Reîncărcare
 	Reload documents when their files change on disk	Reîncarcă documentele când fișierele lor se modifică pe disc
+	Don't show again	Nu mai afișa
+	Show a notice when a document is secured	Afișează o notificare când un document este securizat
 	Remove checkmark	Eliminare bifă
 	Remove invalid links and bookmarks	Eliminare linkuri și semne de carte nevalide
 	Remove page	Eliminare pagină
@@ -953,6 +951,14 @@
 	Replacement text	Text de înlocuire
 	Replacement: pages of {name}	Înlocuire: pagini din {name}
 	Replaces the existing one on those pages.	Înlocuiește-l pe cel existent pe acele pagini.
+	Checking pages…	Se verifică paginile…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Pagina {pages} are o umplere albă proprie, care ar ascunde fundalul. Înlocuiește-o
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Paginile {pages} au o umplere albă proprie, care ar ascunde fundalul. Înlocuiește-o
+	Removing the background puts the page's own backdrop back.	Eliminarea fundalului readuce umplerea albă proprie a paginii.
+	A picture covers page {pages} (a scan?), so the background won't show there.	O imagine acoperă pagina {pages} (o scanare?), deci fundalul nu se va vedea acolo.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Imagini acoperă paginile {pages} (scanări?), deci fundalul nu se va vedea acolo.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Pagina {pages} s-a schimbat după adăugarea fundalului, așa că umplerea ei albă proprie rămâne oprită. Pe hârtie albă arată la fel.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Paginile {pages} s-au schimbat după adăugarea fundalului, așa că umplerile lor albe proprii rămân oprite. Pe hârtie albă arată la fel.
 	Report	Raport
 	Report…	Raport…
 	Requires user to enter a password for:	Utilizatorul trebuie să introducă o parolă pentru:
@@ -1018,6 +1024,15 @@
 	Scroll tabs right	Derulare file la dreapta
 	Search comments	Căutare în comentarii
 	Search tools and commands…	Căutare instrumente și comenzi…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Text adăugat
+	Link URL	URL-ul linkului
+	Search tools and commands	Căutare instrumente și comenzi
+	Text editing line	Linie de editare a textului
+	Text to place	Text de plasat
+	Tooltip	Sfat ecran
+	Words or phrases to redact	Cuvinte sau expresii de anonimizat
 	Searchable Image (Exact)	Imagine în care se poate căuta (exactă)
 	Searching… {s} of {p} pages	Se caută… {s} din {p} pagini
 	Searching… {s}/{p}	Se caută… {s}/{p}
@@ -1101,7 +1116,7 @@
 	Split into files…	Împărțire în fișiere…
 	Square	Pătrat
 	Standard Business	Afaceri standard
-	Start	Start
+	Start	Începe de la
 	Start Checking	Pornire verificare
 	Start page number	Număr pagină de început
 	Status	Stare
@@ -1109,7 +1124,7 @@
 	Strength: {s}	Putere: {s}
 	Style	Stil
 	Subject	Subiect
-	Subset	Subset
+	Subset	Selecție
 	Summarize Options	Opțiuni rezumat
 	Summary	Rezumat
 	Switch to List view to change the pages it takes.	Treceți la vizualizarea Listă pentru a schimba paginile pe care le ia.
@@ -1228,6 +1243,7 @@
 	Update	Actualizare
 	Use 72 DPI (one point per pixel)	Folosire 72 DPI (un punct pe pixel)
 	Use Flate to encode streams that are not encoded	Folosire Flate pentru codarea fluxurilor necodate
+	In streams that use LZW encoding, use Flate instead	Folosire Flate în locul LZW pentru fluxurile codate LZW
 	Use a Digital ID from a file	Folosire ID digital dintr-un fișier
 	Use custom DPI	Folosire DPI personalizat
 	Use each image's embedded DPI; use 72 DPI when it is absent.	Folosește DPI-ul încorporat al fiecărei imagini; 72 DPI când lipsește.
@@ -1267,7 +1283,6 @@
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formular XFA: câmpurile și datele XFA sunt sincronizate, ca alte vizualizatoare să arate ce completați.
 	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Urmează să aplicați 1 marcaj de anonimizare. Textul, imaginile și desenele de sub marcaje, precum și comentariile și câmpurile de formular care se suprapun cu ele, se elimină definitiv.
 	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Urmează să aplicați {n} marcaje de anonimizare. Textul, imaginile și desenele de sub marcaje, precum și comentariile și câmpurile de formular care se suprapun cu ele, se elimină definitiv.
-	You have version {c}. All releases are listed at {page}.	Aveți versiunea {c}. Toate versiunile sunt listate la {page}.
 	You have version {c}. Download the new version from its release page.	Aveți versiunea {c}. Descărcați versiunea nouă de pe pagina ei de lansare.
 	Your changes will be lost if you don't save them.	Modificările se vor pierde dacă nu le salvați.
 	ZIP	ZIP
@@ -1401,6 +1416,10 @@
 	Draw freehand	Desenare liberă
 	Drawing	Desen
 	Drawing scale	Scara desenului
+	Scale	Scară
+	Common scales	Scări uzuale
+	Enter a scale such as 1:50.	Introduceți o scară, de exemplu 1:50.
+	Applying a scale switches units to m / mm.	Aplicarea unei scări schimbă unitățile în m / mm.
 	Drop-down list	Listă derulantă
 	Duplicate pages	Duplicare pagini
 	Edit a PDF	Editare PDF
@@ -2111,6 +2130,9 @@ comment menu	Edit	Editare
 	Formulas and similar non-text elements need alternate text. Add alternate text to them.	Formulele și alte elemente non-text similare au nevoie de text alternativ. Adăugați-le text alternativ.
 	Gray	Gri
 	Grayscale Images	Imagini în tonuri de gri
+	Monochrome Images	Imagini monocrome
+	CCITT Group 4	CCITT grupa 4
+	JBIG2 (lossless)	JBIG2 (fără pierderi)
 	Green	Verde
 	Green on black	Verde pe negru
 	H / Space (hold)	H / Spațiu (ținut apăsat)
@@ -2708,6 +2730,14 @@ key	Space	Spațiu
 	Optimizing… merging image fragments	Se optimizează… unificare fragmente de imagine
 	Outline colour:	Culoare contur:
 	Page properties	Proprietăți pagină
+	Create & Edit	Creare și editare
+	Review & Compare	Revizuire și comparare
+	Forms & Signatures	Formulare și semnături
+	Protect & Standardize	Protejare și standardizare
+	Customize & Automate	Personalizare și automatizare
+	No tools match your search.	Niciun instrument nu corespunde căutării.
+	Expand all tools	Extinderea tuturor instrumentelor
+	Collapse all tools	Restrângerea tuturor instrumentelor
 	Pages counted	Pagini numărate
 	Pages selected	Pagini selectate
 	Print as image	Imprimare ca imagine
@@ -2748,69 +2778,80 @@ theme	Appearance	Aspect
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Vizualizați versiunea semnată a „{from}” (revizia {rev}). Este o copie instantanee: modificările făcute aici nu afectează originalul.
 	the name is not a plain file name	numele nu este un nume simplu de fișier
 # Untranslated: English text until a translator fills these in.
-	Zoom — type a percentage and press Enter	Zoom — type a percentage and press Enter
-	Calculation order	Calculation order
-	Fix order	Fix order
-	Move only what must move, so every field calculates after the fields it reads.	Move only what must move, so every field calculates after the fields it reads.
-	Earlier in calculation order	Earlier in calculation order
-	Later in calculation order	Later in calculation order
-	Too early	Too early
-	Reads {name}, which calculates later, so it shows an old value.	Reads {name}, which calculates later, so it shows an old value.
-	Loop	Loop
-	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.
-	Not in order	Not in order
-	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.
-	Back to Prepare a form	Back to Prepare a form
-	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.
-	{names} and {last}	{names} and {last}
-	{field} reads no other field	{field} reads no other field
-	{field} reads {fields}	{field} reads {fields}
-	No field reads it	No field reads it
-	The order saved in the PDF needs tidying	The order saved in the PDF needs tidying
-	Moves only what must move	Moves only what must move
-	Every field calculates after the fields it reads.	Every field calculates after the fields it reads.
-	Every field outside a loop calculates after the fields it reads.	Every field outside a loop calculates after the fields it reads.
-	{field} reads its own value	{field} reads its own value
-	{fields} read each other	{fields} read each other
-	No order can fix a loop. Change one of the formulas.	No order can fix a loop. Change one of the formulas.
-	Edit {field}'s formula	Edit {field}'s formula
-	Order · top calculates first	Order · top calculates first
+	Zoom — type a percentage and press Enter	Zoom — tastați un procent și apăsați Enter
+	Calculation order	Ordine de calcul
+	Fix order	Corectare ordine
+	Move only what must move, so every field calculates after the fields it reads.	Mută doar ce trebuie mutat, astfel încât fiecare câmp să se calculeze după câmpurile pe care le citește.
+	Earlier in calculation order	Mai devreme în ordinea de calcul
+	Later in calculation order	Mai târziu în ordinea de calcul
+	Too early	Prea devreme
+	Reads {name}, which calculates later, so it shows an old value.	Citește {name}, care se calculează mai târziu, deci afișează o valoare veche.
+	Loop	Buclă
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Citește {names}, care îl citesc la rândul lor. Nicio ordine nu poate rezolva o buclă: modificați una dintre formule.
+	Not in order	În afara ordinii
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Lipsește din ordinea de calcul salvată în PDF: alte aplicații de vizualizare PDF s-ar putea să nu-l calculeze.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Citește {name}, care nu există în formular, deci nu primește nicio valoare de acolo.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Scriptul său citește și câmpuri ale căror nume le construiește în timpul rulării, deci aceste citiri nu pot fi verificate.
+	Missing field	Câmp lipsă
+	Unchecked reads	Citiri neverificate
+	{field} reads fields named as it runs	{field} citește câmpuri numite în timpul rulării
+	Some names are built as it runs	Unele nume sunt construite în timpul rulării
+	Back to Prepare a form	Înapoi la Pregătire formular
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Niciun câmp din acest formular nu își calculează încă valoarea. Adăugați un calcul unui câmp în fila Calcul din proprietățile lui și va apărea aici.
+	{names} and {last}	{names} și {last}
+	{field} reads no other field	{field} nu citește niciun alt câmp
+	{field} reads {fields}	{field} citește {fields}
+	No field reads it	Niciun câmp nu îl citește
+	The order saved in the PDF needs tidying	Ordinea salvată în PDF trebuie corectată
+	Moves only what must move	Mută doar ce trebuie mutat
+	Every field calculates after the fields it reads.	Fiecare câmp se calculează după câmpurile pe care le citește.
+	Every field outside a loop calculates after the fields it reads.	Fiecare câmp din afara unei bucle se calculează după câmpurile pe care le citește.
+	{field} reads its own value	{field} își citește propria valoare
+	{fields} read each other	{fields} se citesc reciproc
+	No order can fix a loop. Change one of the formulas.	Nicio ordine nu poate rezolva o buclă. Modificați una dintre formule.
+	Edit {field}'s formula	Editare formulă {field}
+	Order · top calculates first	Ordine · cel de sus se calculează primul
 	Script	Script
-	Links on page	Links on page
-	Show on the page which fields each field reads	Show on the page which fields each field reads
-	Drag a field to move it, or select it and press {up} or {down}.	Drag a field to move it, or select it and press {up} or {down}.
-	Set calculation order	Set calculation order
-@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} calculation now uses the new name.|{n} calculations now use the new name.|{n} calculations now use the new name.
-@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.|The calculation order has {n} entries that calculate nothing. Fix order removes them.
-@plural	{fields} reads it|{fields} read it	{fields} reads it|{fields} read it|{fields} read it
-@plural	{n} field shows an old value|{n} fields show old values	{n} field shows an old value|{n} fields show old values|{n} fields show old values
-@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.
-@plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} more field calculates too early.|{n} more fields calculate too early.|{n} more fields calculate too early.
-@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.
-	Bulleted list	Bulleted list
-	Numbered list	Numbered list
-	Alignment	Alignment
-	Superscript	Superscript
-	Subscript	Subscript
-	Paragraph spacing	Paragraph spacing
-	Less	Less
-	Other options	Other options
-	Shrink the page content to make room for the header and footer	Shrink the page content to make room for the header and footer
-	Printer default	Printer default
-	Layer options	Layer options
-	Reset to Initial Visibility	Reset to Initial Visibility
-	Reading the printer's settings…	Reading the printer's settings…
-	The document's security settings don't allow printing	The document's security settings don't allow printing
-	Always use my default zoom and page layout	Always use my default zoom and page layout
-	Thumbnail size	Thumbnail size
-	Smaller thumbnails	Smaller thumbnails
-	Larger thumbnails	Larger thumbnails
-	Reshape comment	Reshape comment
-	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	The signature's signed attributes have no content type, which CMS requires; it was read anyway.
-	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.
-	The signature's signed attributes have no message digest, so the signature does not cover the document.	The signature's signed attributes have no message digest, so the signature does not cover the document.
-	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	The signature's signed attributes name a content type other than data, so it is not a signature of the document.
-	Remove {standard} identification	Remove {standard} identification
+	Links on page	Legături pe pagină
+	Show on the page which fields each field reads	Arată pe pagină ce câmpuri citește fiecare câmp
+	Drag a field to move it, or select it and press {up} or {down}.	Trageți un câmp pentru a-l muta sau selectați-l și apăsați {up} sau {down}.
+	Set calculation order	Setare ordine de calcul
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} calcul folosește acum noul nume.|{n} calcule folosesc acum noul nume.|{n} de calcule folosesc acum noul nume.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Ordinea de calcul are {n} intrare care nu calculează nimic. Corectare ordine o elimină.|Ordinea de calcul are {n} intrări care nu calculează nimic. Corectare ordine le elimină.|Ordinea de calcul are {n} de intrări care nu calculează nimic. Corectare ordine le elimină.
+@plural	{fields} reads it|{fields} read it	{fields} îl citește|{fields} îl citesc|{fields} îl citesc
+@plural	{n} field shows an old value|{n} fields show old values	{n} câmp afișează o valoare veche|{n} câmpuri afișează valori vechi|{n} de câmpuri afișează valori vechi
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} se calculează înaintea câmpului {fields}, pe care îl citește.|{field} se calculează înaintea câmpurilor {fields}, pe care le citește.|{field} se calculează înaintea câmpurilor {fields}, pe care le citește.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Încă {n} câmp se calculează prea devreme.|Încă {n} câmpuri se calculează prea devreme.|Încă {n} de câmpuri se calculează prea devreme.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} lipsește din ordinea salvată în PDF, deci alte aplicații de vizualizare PDF s-ar putea să nu-l calculeze.|{fields} lipsesc din ordinea salvată în PDF, deci alte aplicații de vizualizare PDF s-ar putea să nu le calculeze.|{fields} lipsesc din ordinea salvată în PDF, deci alte aplicații de vizualizare PDF s-ar putea să nu le calculeze.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formulă citește un câmp care nu există în formular|{n} formule citesc câmpuri care nu există în formular|{n} de formule citesc câmpuri care nu există în formular
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} citește {fields}, care nu există în formular.|{field} citește {fields}, care nu există în formular.|{field} citește {fields}, care nu există în formular.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Încă {n} formulă citește un câmp lipsă.|Încă {n} formule citesc câmpuri lipsă.|Încă {n} de formule citesc câmpuri lipsă.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} construiește unele nume de câmpuri în timpul rulării, deci aceste citiri nu sunt verificate.|{fields} construiesc unele nume de câmpuri în timpul rulării, deci aceste citiri nu sunt verificate.|{fields} construiesc unele nume de câmpuri în timpul rulării, deci aceste citiri nu sunt verificate.
+@plural	{fields} is missing|{fields} are missing	{fields} lipsește|{fields} lipsesc|{fields} lipsesc
+	Bulleted list	Listă cu marcatori
+	Numbered list	Listă numerotată
+	Alignment	Aliniere
+	Superscript	Exponent
+	Subscript	Indice
+	Paragraph spacing	Spațiere între paragrafe
+	Less	Mai puțin
+	Other options	Alte opțiuni
+	Shrink the page content to make room for the header and footer	Micșorează conținutul paginii pentru a face loc antetului și subsolului
+	Printer default	Implicit pentru imprimantă
+	Layer options	Opțiuni straturi
+	Reset to Initial Visibility	Revenire la vizibilitatea inițială
+	Reading the printer's settings…	Se citesc setările imprimantei…
+	The document's security settings don't allow printing	Setările de securitate ale documentului nu permit imprimarea
+	Always use my default zoom and page layout	Folosește întotdeauna zoomul și aspectul de pagină implicite
+	Thumbnail size	Dimensiunea miniaturilor
+	Smaller thumbnails	Miniaturi mai mici
+	Larger thumbnails	Miniaturi mai mari
+	Reshape comment	Remodelare comentariu
+	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	Atributele semnate ale semnăturii nu au tipul de conținut cerut de CMS; au fost citite oricum.
+	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	Această semnătură folosește o cheie RSA mai scurtă de 2048 de biți, care nu mai este considerată suficient de puternică pentru semnături. Se validează în continuare, dar nu ar trebui să vă bazați pe ea.
+	The signature's signed attributes have no message digest, so the signature does not cover the document.	Atributele semnate ale semnăturii nu au rezumatul mesajului, deci semnătura nu acoperă documentul.
+	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	Atributele semnate ale semnăturii indică alt tip de conținut decât „data”, deci nu este o semnătură a documentului.
+	Remove {standard} identification	Eliminare identificare {standard}
 
 # Prepare a form ▸ Text field table (AI-assisted, not separately native-reviewed)
 	Add text field table	Adăugare tabel de câmpuri text
@@ -2835,3 +2876,26 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Astăzi
+
+# AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
+	Restore the last view (page, zoom and page display) when a document is opened again	Restabilește ultima vizualizare (pagina, zoomul și afișarea paginilor) când un document este redeschis
+	Attach a file…	Atașare fișier…
+	Attach {name}	Atașare {name}
+	Attaching files is not available on the web yet	Atașarea fișierelor nu este încă disponibilă pe web
+	Delete attachment	Ștergere atașament
+	Delete attachment {key}	Ștergere atașament {key}
+@plural	{n} reply|{n} replies	{n} răspuns|{n} răspunsuri|{n} de răspunsuri
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Instrumente pentru pagini
+	Insert pages from a file after the selection…	Inserează pagini dintr-un fișier după selecție…
+	Rotate the selected pages counterclockwise	Rotește paginile selectate în sens antiorar
+	Rotate the selected pages clockwise	Rotește paginile selectate în sens orar
+	Extract the selected pages…	Extrage paginile selectate…
+	Delete the selected pages	Șterge paginile selectate
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Opțiuni pentru acest răspuns
