@@ -704,6 +704,10 @@ impl Automation {
                 let edit = Edit::DeleteAttachment { key: a.str("name")?.into() };
                 self.apply(&a, edit)?
             }
+            "attachment_edit" => {
+                let edit = Edit::EditAttachmentDescription { key: a.str("name")?.into(), description: Some(a.str("description")?.into()) };
+                self.apply(&a, edit)?
+            }
             "doc_remove_hidden" => self.doc_remove_hidden(&a)?,
             "doc_audit_redactions" => self.doc_audit_redactions(&a)?,
             "fill_sign_add" => self.fill_sign_add(&a)?,

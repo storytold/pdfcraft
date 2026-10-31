@@ -3441,6 +3441,43 @@ fn attachments_are_added_listed_and_deleted() {
 }
 
 #[test]
+fn attachment_description_changes_only_the_file_spec_and_can_be_cleared() {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    let key = add_attachment(&mut doc, "notes.txt", b"keep these bytes", Some("Original"), Some("text/plain"), None).unwrap();
+    let root = doc.root().unwrap();
+    let names = doc.get(root).as_dict().unwrap().get(b"Names").cloned().unwrap();
+    let tree = doc.resolve(&names).as_dict().unwrap().get(b"EmbeddedFiles").cloned().unwrap();
+    let tree = doc.resolve(&tree);
+    let pairs = tree.as_dict().unwrap().get(b"Names").cloned().unwrap();
+    let resolved_pairs = doc.resolve(&pairs);
+    let pairs = resolved_pairs.as_array().unwrap();
+    let spec_ref = pairs.get(1).and_then(Object::as_ref).unwrap();
+    let stream_ref = doc.get(spec_ref).as_dict().unwrap().get(b"EF").and_then(Object::as_dict).unwrap().reference(b"F").unwrap();
+    doc.update_dict(spec_ref, |spec| spec.set(b"CustomKey".to_vec(), Object::name("preserved"))).unwrap();
+
+    set_attachment_description(&mut doc, &key, Some("Revised description")).unwrap();
+    let spec_object = doc.get(spec_ref);
+    let spec = spec_object.as_dict().unwrap();
+    assert_eq!(spec.get(b"Desc").and_then(Object::as_string).map(pdfcraft_cos::PdfString::to_text).as_deref(), Some("Revised description"));
+    assert_eq!(spec.get(b"UF").and_then(Object::as_string).map(pdfcraft_cos::PdfString::to_text).as_deref(), Some("notes.txt"));
+    assert_eq!(spec.get(b"CustomKey"), Some(&Object::name("preserved")));
+    assert_eq!(spec.get(b"EF").and_then(Object::as_dict).and_then(|ef| ef.reference(b"F")), Some(stream_ref));
+    let stream_object = doc.get(stream_ref);
+    let pdfcraft_cos::Object::Stream(stream) = stream_object.as_ref() else { panic!("the attachment file remains a stream") };
+    assert_eq!(stream.decoded().unwrap(), b"keep these bytes");
+    assert_eq!(attachment_keys(&doc), ["notes.txt"]);
+
+    set_attachment_description(&mut doc, &key, Some("  ")).unwrap();
+    assert!(!doc.get(spec_ref).as_dict().unwrap().contains(b"Desc"));
+    let reopened = save_and_reopen(&doc);
+    assert_eq!(attachment_keys(&reopened), ["notes.txt"]);
+    assert_eq!(
+        set_attachment_description(&mut doc, "missing.txt", Some("x")),
+        Err(OrganizeError::Invalid("there is no attachment named missing.txt".into()))
+    );
+}
+
+#[test]
 fn rotate_repeated_indices_accumulate_from_the_current_page_value() {
     for level in 0..3 {
         for indices in [vec![0, 0], vec![0, 1, 0]] {

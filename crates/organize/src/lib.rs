@@ -26,7 +26,7 @@ mod transition;
 pub mod view;
 mod xmp;
 
-pub use attachments::{add_attachment, attachment_keys, delete_attachment, mime_for_name};
+pub use attachments::{add_attachment, attachment_keys, delete_attachment, mime_for_name, set_attachment_description};
 pub use boxes::{BoxSpec, PageBox, page_boxes, set_page_box};
 pub use comments::import_comments;
 pub use dedupe::dedupe_resources;

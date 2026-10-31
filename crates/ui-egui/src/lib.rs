@@ -432,6 +432,8 @@ pub struct PdfCraftApp {
     pub save_override: Option<String>,
     /// Document Properties ▸ Description fields being edited: (document, Title/Author/Subject/Keywords).
     pub props_draft: Option<(DocId, [String; 4])>,
+    /// Attachment description being edited: (document, name-tree key, description).
+    pub attachment_description_draft: Option<(DocId, String, String)>,
     /// Document Properties ▸ Initial View (and reading options) being edited.
     pub view_draft: Option<(DocId, pdfcraft_engine::InitialView)>,
     /// Document Properties ▸ Custom being edited.

@@ -22,7 +22,7 @@ fn attachments_pdf() -> Vec<u8> {
         [format!("<< /Type /EmbeddedFile /Length {} >>\nstream\n", INNER.len()).as_bytes(), INNER, b"\nendstream"].concat(),
         b"<< /Type /Filespec /F (inner.pdf) /UF (inner.pdf) /EF << /F 4 0 R >> >>".to_vec(),
         b"<< /Type /EmbeddedFile /Length 11 >>\nstream\nhello notes\nendstream".to_vec(),
-        b"<< /Type /Filespec /F (notes.txt) /UF (notes.txt) /EF << /F 6 0 R >> >>".to_vec(),
+        b"<< /Type /Filespec /F (notes.txt) /UF (notes.txt) /Desc (Original) /EF << /F 6 0 R >> >>".to_vec(),
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
@@ -149,6 +149,25 @@ fn the_right_click_menu_opens_saves_and_deletes() {
     let doc = s.session.get(s.views[0].id).unwrap();
     assert_eq!(doc.info.attachments.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["notes.txt"], "Delete from the menu");
     assert!(doc.can_undo().is_some_and(|l| l.starts_with("Delete attachment")), "as one undoable edit");
+}
+
+#[test]
+fn the_description_can_be_edited_from_the_row_menu() {
+    let mut h = harness();
+    right_click(&mut h, "notes.txt");
+    h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Edit description").click();
+    h.run_steps(2);
+    let description = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Description");
+    description.click();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    description.type_text("Edited in the panel");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let state = h.state();
+    let doc = state.session.get(state.views[0].id).unwrap();
+    let attachment = doc.info.attachments.iter().find(|a| a.name == "notes.txt").unwrap();
+    assert_eq!(attachment.description.as_deref(), Some("Edited in the panel"));
+    assert!(doc.can_undo().is_some_and(|label| label == "Edit attachment description"));
 }
 
 #[test]

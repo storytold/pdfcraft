@@ -125,6 +125,8 @@ pub enum Dialog {
     Signature,
     /// Comment Properties.
     CommentProps,
+    /// Edit the description of an embedded document attachment.
+    AttachmentDescription,
     /// Replace Pages (after choosing the file).
     ReplacePages,
     /// Prepare a form ▸ Field Properties.

@@ -28,8 +28,8 @@ mod combine;
 mod copy;
 mod fields;
 
-pub(crate) use carry::set_attachments;
 use carry::{Mark, source_outline, write_outline_level};
+pub(crate) use carry::{set_attachments, set_attachments_exact};
 pub use combine::{
     CombineOutcome, Combiner, Run, SplitBy, combine, combine_grouped, combine_grouped_with, combine_selected, combine_selected_with, combine_with,
     extract_pages, split, split_ranges,

@@ -54,6 +54,7 @@ struct Pending {
     optimize_now: bool,
     duplicate_now: Option<Edit>,
     page_props_now: Option<(pdfcraft_engine::DocId, u64, Edit)>,
+    attachment_description_now: Option<(pdfcraft_engine::DocId, Edit)>,
     replace_now: bool,
     open_revision: Option<usize>,
     a11y_now: bool,
@@ -333,6 +334,24 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.props_now = req.apply;
             req.close = req.apply || cancel;
             return false;
+        }
+        Dialog::AttachmentDescription => {
+            let Some((doc, _, _)) = app.attachment_description_draft.as_ref() else {
+                req.close = true;
+                return false;
+            };
+            if app.active_ids().is_none_or(|(_, active)| active != *doc) {
+                req.close = true;
+                return false;
+            }
+            let Some((_, key, description)) = app.attachment_description_draft.as_mut() else {
+                req.close = true;
+                return false;
+            };
+            ui.heading(tl!("Edit attachment description"));
+            ui.label(key.as_str());
+            let label = ui.label(tl!("Description"));
+            ui.add(widgets::line(description)).labelled_by(label.id);
         }
         Dialog::Signature => {
             if !dialog_signature(ui, app, req) {
@@ -1553,6 +1572,7 @@ fn dialog_about(ui: &mut egui::Ui, req: &mut Pending) -> bool {
     true
 }
 
+/// Draw the active dialog's footer and record any requested action in `req`.
 fn dialog_footer(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     ui.add_space(16.0);
     let changed = draft_changes(app).is_some_and(|c| !c.is_empty());
@@ -1580,6 +1600,17 @@ fn dialog_footer(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: 
             } else if dialog == Dialog::Split {
                 if ui.add_enabled_ui(req.split_ready.is_some(), |ui| widgets::pill_button(ui, tl!("Split"), true)).inner.clicked() {
                     req.split_now = req.split_ready.clone();
+                    req.close = true;
+                }
+                if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+                    req.close = true;
+                }
+            } else if dialog == Dialog::AttachmentDescription {
+                if widgets::pill_button(ui, tl!("OK"), true).clicked() {
+                    if let Some((doc, key, description)) = app.attachment_description_draft.as_ref() {
+                        req.attachment_description_now =
+                            Some((*doc, Edit::EditAttachmentDescription { key: key.clone(), description: Some(description.clone()) }));
+                    }
                     req.close = true;
                 }
                 if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
@@ -1660,6 +1691,14 @@ fn finish_requests(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, re
 
 /// Runs the document actions the dialog asked for.
 fn finish_actions(app: &mut PdfCraftApp, req: &mut Pending) {
+    if let Some((doc, edit)) = req.attachment_description_now.take() {
+        app.attachment_description_draft = None;
+        if app.active_ids().is_some_and(|(_, active)| active == doc) {
+            app.apply_edit(edit);
+        } else {
+            app.notify_tr("The document changed while the dialog was open, so nothing was changed. Open the description editor again.");
+        }
+    }
     if req.summarize_now {
         app.summarize_comments();
     }
@@ -1837,6 +1876,9 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     let replaces = req.link_command.is_some_and(|c| c.starts_with("protect.")) || req.open_revision.is_some();
     if modal_closed || req.close || replaces {
         app.dialog = None;
+        if dialog == Dialog::AttachmentDescription {
+            app.attachment_description_draft = None;
+        }
         app.props_draft = None;
         app.view_draft = None;
         app.custom_draft = None;
