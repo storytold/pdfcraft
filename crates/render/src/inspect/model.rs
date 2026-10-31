@@ -220,6 +220,15 @@ pub enum LinkTarget {
         destination: RemoteDestination,
         new_window: Option<bool>,
     },
+    /// An embedded Go-To action (ISO 32000-2 §12.6.4.4, Tables 204–205) to a PDF embedded in
+    /// this document: the attachment its target dictionary names as a child (`/R /C`), by its
+    /// `/N` key in the EmbeddedFiles name tree or by its file attachment annotation (`/P`, `/A`),
+    /// and the destination `/D` in it. The caller opens it from this document's bytes.
+    EmbeddedGoTo {
+        source: AttachmentSource,
+        destination: RemoteDestination,
+        new_window: Option<bool>,
+    },
     Other(String),
 }
 

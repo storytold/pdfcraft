@@ -5597,6 +5597,65 @@ fn a_launch_link_to_a_pdf_opens_it_like_a_remote_link() {
     assert_eq!(a.session().docs().len(), before, "nothing was opened or launched");
 }
 
+/// An embedded Go-To link (ISO 32000-2 §12.6.4.4) opens the PDF attached to the document, from
+/// the document itself: no file of that name is read, inside the root or out of it. One to a
+/// file that isn't attached, or isn't a PDF, opens nothing.
+#[test]
+fn an_embedded_go_to_link_opens_the_attached_pdf() {
+    let (_base, root) = sandbox("gotoe");
+    // A file of the attachment's name next to the document, which must not be what opens.
+    std::fs::write(root.join("inner.pdf"), fixture(1)).unwrap();
+    let embedded = fixture(3);
+    let stream = |dict: &str, data: &[u8]| {
+        let mut s = format!("<< {dict} /Length {} >>\nstream\n", data.len()).into_bytes();
+        s.extend_from_slice(data);
+        s.extend_from_slice(b"\nendstream");
+        s
+    };
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(inner.pdf) 5 0 R (notes.txt) 6 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Annots [7 0 R 8 0 R 9 0 R] >>".to_vec(),
+        stream("/Type /EmbeddedFile", &embedded),
+        b"<< /Type /Filespec /F (inner.pdf) /UF (inner.pdf) /EF << /F 4 0 R >> >>".to_vec(),
+        b"<< /Type /Filespec /F (notes.txt) /EF << /F 10 0 R >> >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /GoToE /T << /R /C /N (inner.pdf) >> /D [2 /Fit] >> >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Link /Rect [0 20 10 30] /A << /S /GoToE /T << /R /C /N (missing.pdf) >> /D [0 /Fit] >> >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Link /Rect [0 40 10 50] /A << /S /GoToE /T << /R /C /N (notes.txt) >> /D [0 /Fit] >> >>".to_vec(),
+        stream("/Type /EmbeddedFile", b"just some notes"),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        pdf.extend_from_slice(o);
+        pdf.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(root.join("outer.pdf"), pdf).unwrap();
+    let mut a = auto(&root);
+    let source = ok(&mut a, "doc_open", json!({ "path": "outer.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": source }));
+    let link = &info["links"][0]["target"];
+    assert_eq!((link["action"].as_str(), &link["embedded_file"]), (Some("GoToE"), &json!({ "name": "inner.pdf" })), "{info}");
+    let opened = ok(&mut a, "link_open", json!({ "doc": source, "page": 1, "index": 1 }));
+    assert_eq!(opened["document"]["pages"], 3, "the attached PDF, not the file beside the document: {opened}");
+    assert_eq!((opened["embedded_file"].as_str(), opened["destination_applied"].as_bool()), (Some("inner.pdf"), Some(true)));
+    assert_eq!(opened["destination"], json!({ "kind": "page", "page": 3, "view": { "kind": "fit" } }), "{opened}");
+    let before = a.session().docs().len();
+    for (index, why) in [(2, "not attached"), (3, "notes.txt is not a PDF")] {
+        let e = err(&mut a, "link_open", json!({ "doc": source, "page": 1, "index": index }));
+        assert!(matches!(&e, ToolError::Failed(m) if m.contains(why)), "{e}");
+    }
+    assert_eq!(a.session().docs().len(), before, "nothing else was opened");
+}
+
 #[test]
 fn local_gotor_link_open_refuses_directories_devices_and_non_pdf_targets() {
     let (_base, root) = sandbox("gotor-not-a-file");
