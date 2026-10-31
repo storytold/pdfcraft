@@ -4145,3 +4145,82 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
 }
+
+/// The choice lists of a laid-out form, by field name: `(saved value, shown text)` per option.
+fn choice_options(form: &Form) -> Vec<(String, Vec<(String, String)>)> {
+    form.pages
+        .iter()
+        .flat_map(|p| &p.items)
+        .filter_map(|i| match i {
+            Item::Widget(w) => match &w.kind {
+                WidgetKind::Choice { options, .. } => Some((w.name.clone(), options.clone())),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// #3072: a drop-down whose options come from the data (`<bindItems>`, XFA 3.3 "Dynamic
+/// Properties") lists them, from a list beside `xfa:data` as Designer's forms keep them
+/// (`xfa.datasets.…`), from the data itself (`$data`, `$record`), with the value in an
+/// attribute or a child and the label the node's own text (`$`). A ref the reader cannot
+/// follow leaves the template's own items.
+#[test]
+fn bind_items_fill_choice_lists_from_the_data() {
+    let xdp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium stock="letter" short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="sex" w="2in" h="0.3in"><ui><choiceList/></ui>
+  <bindItems ref="xfa.datasets.LOVFile.LOV.GenderList.Gender[*]" labelRef="$" valueRef="lic"/><items save="1"/></field>
+ <field name="country" w="2in" h="0.3in"><ui><choiceList/></ui>
+  <bindItems ref="$data.form.lists.country[*]" labelRef="name" valueRef="code"/></field>
+ <field name="colour" w="2in" h="0.3in"><ui><choiceList/></ui>
+  <bindItems ref="$record.colours.colour[*]"/></field>
+ <field name="kept" w="2in" h="0.3in"><ui><choiceList/></ui>
+  <bindItems ref="somewhere.relative[*]" labelRef="$" valueRef="v"/><items><text>Own</text></items></field>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/">
+<xfa:data><form><sex>Female</sex>
+ <colours><colour>Red</colour><colour>Blue</colour></colours>
+ <lists><country><code>CA</code><name>Canada</name></country><country><code>JP</code><name>Japan</name></country></lists>
+</form></xfa:data>
+<LOVFile><LOV><GenderList><Gender lic=""/><Gender lic="Female">F Female</Gender><Gender lic="Male">M Male</Gender></GenderList></LOV></LOVFile>
+</xfa:datasets>
+</xdp:xdp>"#;
+    let form = layout_xml(xdp).unwrap();
+    let options = choice_options(&form);
+    let of = |name: &str| options.iter().find(|(n, _)| n.starts_with(name)).map(|(_, o)| o.clone()).unwrap_or_default();
+    let pairs = |p: &[(&str, &str)]| p.iter().map(|(v, l)| (v.to_string(), l.to_string())).collect::<Vec<_>>();
+    assert_eq!(of("sex"), pairs(&[("", ""), ("Female", "F Female"), ("Male", "M Male")]), "{options:?}");
+    assert_eq!(of("country"), pairs(&[("CA", "Canada"), ("JP", "Japan")]), "{options:?}");
+    assert_eq!(of("colour"), pairs(&[("Red", "Red"), ("Blue", "Blue")]), "{options:?}");
+    assert_eq!(of("kept"), pairs(&[("Own", "Own")]), "{options:?}");
+    assert!(form.warnings.iter().any(|w| w.contains("kept")), "{:?}", form.warnings);
+    // The value bound to the field is a saved value: it stays selected.
+    let sex = form
+        .pages
+        .iter()
+        .flat_map(|p| &p.items)
+        .find_map(|i| if let Item::Widget(w) = i { w.name.starts_with("sex").then(|| w.value.clone()) } else { None });
+    assert_eq!(sex.flatten().as_deref(), Some("Female"));
+}
+
+/// A hostile `<bindItems>` ref (a `[*]` at every level of a wide tree) keeps at most the item cap.
+#[test]
+fn bind_items_are_capped() {
+    let rows: String = (0..60).map(|_| format!("<r>{}</r>", "<c>x</c>".repeat(60))).collect();
+    let xdp = format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="p"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium stock="letter" short="8.5in" long="11in"/></pageArea></pageSet>
+<field name="many" w="2in" h="0.3in"><ui><choiceList/></ui><bindItems ref="!big.r[*].c[*]"/></field></subform></template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data/><big>{rows}</big></xfa:datasets></xdp:xdp>"#
+    );
+    let form = layout_xml(&xdp).unwrap();
+    let options = choice_options(&form);
+    assert_eq!(options.first().map(|(_, o)| o.len()), Some(1000), "{:?}", options.first().map(|(n, o)| (n, o.len())));
+    assert!(form.warnings.iter().any(|w| w.contains("many")), "{:?}", form.warnings);
+}
