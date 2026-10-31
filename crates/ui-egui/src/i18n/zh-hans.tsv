@@ -2542,3 +2542,15 @@ animation effects	Off	关
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	此回复的选项
 	Export value	导出值
+	Simulate overprinting	模拟叠印
+	Separating page {n}…	正在分色第 {n} 页…
+	The page could not be separated: {error}	无法对此页分色：{error}
+	Inks	油墨
+	Too many spot inks to separate: {names}	专色过多，无法分色：{names}
+	Total area coverage	总油墨覆盖率
+	Page maximum: {n}%	页面最大值：{n}%
+	Point at the page to read its ink coverage.	将指针移到页面上即可查看油墨覆盖率。
+	Highlight coverage above	突出显示覆盖率高于
+	Simulation: {profile}	模拟：{profile}
+	Simulation: device formulas	模拟：设备公式
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	没有可用的 CMYK 输出意图：RGB 和基于 CIE 的颜色按 ISO 32000 设备公式分色。

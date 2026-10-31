@@ -164,7 +164,7 @@ fn check(h: &Harness<'static, PdfCraftApp>, name: &str) -> Result<(), String> {
 }
 
 /// Every panel, in the order of the rail.
-const ALL: [RightPanel; 11] = [
+const ALL: [RightPanel; 12] = [
     RightPanel::Comments,
     RightPanel::Bookmarks,
     RightPanel::Pages,
@@ -176,6 +176,7 @@ const ALL: [RightPanel; 11] = [
     RightPanel::Tags,
     RightPanel::Search,
     RightPanel::Compare,
+    RightPanel::OutputPreview,
 ];
 
 /// Opens `p` with something in it and names its snapshot. No wildcard on purpose: a new
@@ -224,6 +225,18 @@ fn open(p: RightPanel) -> (Harness<'static, PdfCraftApp>, &'static str) {
             h.get_by_label("Compare").click();
             h.run_steps(3);
             return (h, "compare");
+        }
+        RightPanel::OutputPreview => {
+            // The pages are separated on a worker: the panel is read once it lists the inks.
+            let mut h = harness("output-preview");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while h.query_by_label("Cyan").is_none() {
+                assert!(std::time::Instant::now() < deadline, "the page was never separated");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            h.run_steps(2);
+            return (h, "output-preview");
         }
     };
     (harness(name), name)

@@ -2528,3 +2528,15 @@ animation effects	Off	關
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	此回覆的選項
 	Export value	匯出值
+	Simulate overprinting	模擬疊印
+	Separating page {n}…	正在分色第 {n} 頁…
+	The page could not be separated: {error}	無法對此頁分色：{error}
+	Inks	油墨
+	Too many spot inks to separate: {names}	特別色過多，無法分色：{names}
+	Total area coverage	總油墨覆蓋率
+	Page maximum: {n}%	頁面最大值：{n}%
+	Point at the page to read its ink coverage.	將指標移到頁面上即可查看油墨覆蓋率。
+	Highlight coverage above	醒目提示覆蓋率高於
+	Simulation: {profile}	模擬：{profile}
+	Simulation: device formulas	模擬：裝置公式
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	沒有可用的 CMYK 輸出目的：RGB 與基於 CIE 的色彩依 ISO 32000 裝置公式分色。

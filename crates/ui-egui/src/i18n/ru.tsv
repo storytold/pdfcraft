@@ -2491,3 +2491,15 @@ animation effects	Off	Выкл
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметры этого ответа
 	Export value	Значение экспорта
+	Simulate overprinting	Имитировать наложение красок
+	Separating page {n}…	Цветоделение страницы {n}…
+	The page could not be separated: {error}	Не удалось выполнить цветоделение страницы: {error}
+	Inks	Краски
+	Too many spot inks to separate: {names}	Слишком много плашечных красок для цветоделения: {names}
+	Total area coverage	Общее покрытие красками
+	Page maximum: {n}%	Максимум на странице: {n}%
+	Point at the page to read its ink coverage.	Наведите указатель на страницу, чтобы увидеть покрытие красками.
+	Highlight coverage above	Выделять покрытие выше
+	Simulation: {profile}	Имитация: {profile}
+	Simulation: device formulas	Имитация: формулы устройства
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	Нет пригодного выходного намерения CMYK: цвета RGB и цвета на основе CIE разделяются по формулам устройства из ISO 32000.

@@ -2577,3 +2577,15 @@ animation effects	Off	Ki
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	A válasz beállításai
 	Export value	Exportérték
+	Simulate overprinting	Felülnyomás szimulálása
+	Separating page {n}…	{n}. oldal színbontása…
+	The page could not be separated: {error}	Az oldal színbontása nem sikerült: {error}
+	Inks	Festékek
+	Too many spot inks to separate: {names}	Túl sok direkt szín a bontáshoz: {names}
+	Total area coverage	Teljes festékfedettség
+	Page maximum: {n}%	Oldal maximuma: {n}%
+	Point at the page to read its ink coverage.	Mutasson az oldalra a festékfedettség leolvasásához.
+	Highlight coverage above	Kiemelés, ha a fedettség nagyobb, mint
+	Simulation: {profile}	Szimuláció: {profile}
+	Simulation: device formulas	Szimuláció: eszközképletek
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	Nincs használható CMYK kimeneti cél: az RGB és a CIE-alapú színek az ISO 32000 eszközképletei szerint bontódnak.

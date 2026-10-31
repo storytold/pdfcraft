@@ -8297,11 +8297,11 @@ title = "Output preview"
 area = "L"
 tier = "P1"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["prepress.output_preview"]
+tools = ["print_output_preview"]
+evidence = ["crates/render/src/separations.rs::the_composite_of_process_and_spot_plates_looks_like_the_page", "crates/render/src/separations.rs::page_inks_lists_spot_colours_in_the_order_first_painted_including_patterns_and_images", "crates/automation/tests/it/automation.rs::output_preview_through_tools", "crates/ui-egui/tests/it/output_preview.rs::output_preview_lists_inks_and_reads_coverage_under_the_pointer", "crates/render/src/separations.rs::rgb_separates_through_the_output_intents_cmyk_profile", "crates/render/src/separations.rs::the_composite_and_process_swatches_show_the_inks_through_the_output_intent", "crates/automation/tests/it/automation.rs::output_preview_separates_through_the_output_intent", "crates/ui-egui/tests/it/output_preview.rs::output_preview_names_the_output_intent_it_simulates"]
+notes = "Print production ▸ Output preview opens a right-hand panel: the pages on screen (the current one first, up to four) are separated on a worker at about 180 dpi on A4 and shown as the enabled inks print them, with an ink list (switches, swatches), ink and total coverage under the pointer, the page maximum and a coverage highlight; headless print_output_preview. Plates come from a hayro-interpret plate patch (34; crates/render/README.md). Process colour is colour-managed through the page's or document's CMYK output intent profile (relative colorimetric, patch 36), and the composite and process swatches soft-proof through it; the panel and the tool say what is simulated (Simulation: the profile description, or device formulas). Missing vs Acrobat: choosing a simulation profile (only the document's output intent is used; without a CMYK one, RGB, gray and CIE colours separate by the ISO 32000-2 device formulas and ICC CMYK passes through unconverted), rendering intents other than relative colorimetric and black point compensation, paper colour and black ink simulation, the Show filter (RGB, CMYK, spot, images, smooth shades), object inspector, colour warnings, Ink Manager. The composite multiplies spot ink appearances over the CMYK profile rendering, an approximation of real ink mixing."
 
 [[feature]]
 id = "print.separations"
@@ -8309,11 +8309,11 @@ title = "Separations preview with area coverage"
 area = "L"
 tier = "P1"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["prepress.output_preview"]
+tools = ["print_output_preview"]
+evidence = ["crates/render/src/separations.rs::device_cmyk_puts_each_component_on_its_own_plate", "crates/render/src/separations.rs::a_spot_colour_paints_its_own_plate_and_knocks_out_the_process_plates", "crates/render/src/separations.rs::devicen_components_go_to_the_plates_they_name", "crates/render/src/separations.rs::icc_based_cmyk_is_separated_as_its_components", "crates/render/src/separations.rs::gray_and_rgb_are_process_colour_and_never_take_the_nonzero_overprint_mode", "crates/render/src/separations.rs::images_are_separated_sample_by_sample", "crates/render/src/separations.rs::shadings_are_separated_through_their_colour_space", "crates/render/src/separations.rs::an_uncoloured_pattern_paints_the_film_of_the_colour_it_is_used_with", "crates/render/src/separations.rs::soft_masks_keep_the_luminosity_of_their_own_colours", "crates/render/src/separations.rs::the_all_colorant_paints_every_plate_and_none_paints_nothing", "crates/automation/tests/it/automation.rs::output_preview_through_tools", "crates/ui-egui/tests/it/output_preview.rs::output_preview_lists_inks_and_reads_coverage_under_the_pointer", "crates/render/src/separations.rs::rgb_separates_through_the_output_intents_cmyk_profile", "crates/render/src/separations.rs::without_a_usable_cmyk_output_intent_process_colour_uses_the_device_formulas", "crates/render/src/separations.rs::cmyk_in_the_output_intents_own_profile_passes_through_and_other_cmyk_converts", "crates/render/src/separations.rs::device_gray_stays_on_the_black_plate_under_an_output_intent", "crates/render/src/separations.rs::cie_and_icc_colours_convert_through_the_profile_relative_to_their_white", "crates/render/src/separations.rs::images_convert_through_the_output_intent_sample_by_sample", "crates/render/src/separations.rs::a_pages_own_output_intents_replace_the_catalogs_and_pdfx_comes_first", "crates/render/src/separations.rs::hostile_output_intents_and_profiles_fall_back_to_the_device_formulas"]
+notes = "One plate per ink: the four process inks plus each spot ink the page paints (Separation, DeviceN, Indexed bases; in fills, strokes, text, images, shadings, patterns and Type 3 glyphs; an ink used only in a soft mask is left out), with each ink's coverage under the pointer, highest tint and printed area, and a plate as film (print_output_preview image plate). Coverage is per pixel at the separation's resolution, anti-aliased edges included. Process colour from RGB, CIE-based and ICC spaces, and ICCBased CMYK in another profile, converts to the CMYK of the page's or document's output intent profile (CMYK with BToA tables, GTS_PDFX first; relative colorimetric through moxcms; DeviceCMYK, CMYK in that profile and DeviceGray stay as they are); without one, by the device formulas with identity black generation and undercolour removal, ICCBased CMYK unconverted. Approximated: always relative colorimetric (ri, /RI and image /Intent not read), no black point compensation, Default colour spaces not applied, CMYK-to-CMYK without black preservation, CalRGB and CalGray clipped to sRGB; transfer functions, BG/UCR and halftones not applied; non-separable blend modes and RGB transparency groups blended per plate. At most 32 spot inks separated per page (more are listed); plates at most 4 MP."
 
 [[feature]]
 id = "print.total-area-coverage"
@@ -8321,11 +8321,11 @@ title = "Total area coverage warning"
 area = "L"
 tier = "P1"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["prepress.output_preview"]
+tools = ["print_output_preview"]
+evidence = ["crates/render/src/separations.rs::total_area_coverage_sums_the_enabled_inks", "crates/render/src/separations.rs::the_composite_marks_pixels_over_the_coverage_limit", "crates/automation/tests/it/automation.rs::output_preview_through_tools", "crates/ui-egui/tests/it/output_preview.rs::output_preview_lists_inks_and_reads_coverage_under_the_pointer"]
+notes = "The Output preview panel shows the total of the enabled inks under the pointer and the page maximum (amber when above the limit), and can paint every pixel above a chosen limit (default 300%) in a highlight colour. Headless: print_output_preview total_area_coverage (maximum, where, share of the page above tac_limit) and mark_tac. Missing: a Preflight total-coverage check (Preflight is gap 9) and per-object reports; the panel measures at about 180 dpi on A4."
 
 [[feature]]
 id = "print.color-warnings"
@@ -8369,11 +8369,11 @@ title = "Overprint preview"
 area = "L"
 tier = "P1"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["prepress.output_preview"]
+tools = ["print_output_preview"]
+evidence = ["crates/render/src/separations.rs::overprinting_keeps_the_plates_a_colour_does_not_specify", "crates/render/src/separations.rs::op_sets_stroke_overprint_and_fill_overprint_too_without_op", "crates/render/src/separations.rs::nonzero_overprint_mode_leaves_zero_device_cmyk_components", "crates/render/src/separations.rs::a_spot_colour_image_overprints_like_any_paint", "crates/render/src/separations.rs::the_composite_shows_overprinted_inks_mixed", "crates/automation/tests/it/automation.rs::output_preview_through_tools", "crates/ui-egui/tests/it/output_preview.rs::output_preview_lists_inks_and_reads_coverage_under_the_pointer"]
+notes = "Simulate overprinting in the Output preview panel (on by default) and print_output_preview overprint: OP for strokes, op for everything else (OP alone sets both) and OPM as ISO 32000-2 §8.6.7 describes them, the nonzero mode for colours set in DeviceCMYK only (not ICCBased CMYK, images or shadings); without it every paint knocks out. The composite shows overprinted inks mixed. Missing: overprint preview in the ordinary page view, print and export outside the panel (Acrobat's Use Overprint Preview preference), and colour-accurate ink mixing (spot inks multiply)."
 
 [[feature]]
 id = "print.convert-colors"

@@ -2844,3 +2844,15 @@ certificate	Version	Version
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Options de cette réponse
 	Export value	Valeur d’exportation
+	Simulate overprinting	Simuler la surimpression
+	Separating page {n}…	Séparation de la page {n}…
+	The page could not be separated: {error}	Impossible de séparer la page : {error}
+	Inks	Encres
+	Too many spot inks to separate: {names}	Trop d'encres d'accompagnement à séparer : {names}
+	Total area coverage	Couverture totale de la surface
+	Page maximum: {n}%	Maximum de la page : {n} %
+	Point at the page to read its ink coverage.	Pointez la page pour lire la couverture d'encre.
+	Highlight coverage above	Surligner la couverture au-delà de
+	Simulation: {profile}	Simulation : {profile}
+	Simulation: device formulas	Simulation : formules du périphérique
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	Aucune intention de sortie CMJN utilisable : les couleurs RVB et fondées sur CIE sont séparées selon les formules de périphérique de l'ISO 32000.

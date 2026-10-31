@@ -52,6 +52,8 @@ pub enum RightPanel {
     Search,
     /// Compare files: the differences.
     Compare,
+    /// Print production ▸ Output preview: inks, coverage and overprinting.
+    OutputPreview,
 }
 
 /// Quick-action bar tools (the vertical floating strip).

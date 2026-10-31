@@ -2885,3 +2885,15 @@ certificate	Version	Verze
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti této odpovědi
 	Export value	Exportní hodnota
+	Simulate overprinting	Simulovat přetisk
+	Separating page {n}…	Separuje se strana {n}…
+	The page could not be separated: {error}	Stranu nelze separovat: {error}
+	Inks	Inkousty
+	Too many spot inks to separate: {names}	Příliš mnoho přímých barev k separaci: {names}
+	Total area coverage	Celkové krytí plochy
+	Page maximum: {n}%	Maximum strany: {n} %
+	Point at the page to read its ink coverage.	Najeďte ukazatelem na stranu a zobrazí se krytí barvami.
+	Highlight coverage above	Zvýraznit krytí nad
+	Simulation: {profile}	Simulace: {profile}
+	Simulation: device formulas	Simulace: vzorce zařízení
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	Žádný použitelný výstupní záměr CMYK: barvy RGB a barvy založené na CIE se separují podle vzorců zařízení z ISO 32000.

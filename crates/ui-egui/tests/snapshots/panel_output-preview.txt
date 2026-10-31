@@ -1,0 +1,14 @@
+Label = "Output preview"
+Button "Close" [off]
+CheckBox "Simulate overprinting" [on]
+Label = "Simulation: device formulas"
+Label = "Inks"
+CheckBox "Cyan" [on]
+CheckBox "Magenta" [on]
+CheckBox "Yellow" [on]
+CheckBox "Black" [on]
+Label = "Total area coverage"
+Label = "Page maximum: 118%"
+Label = "Point at the page to read its ink coverage."
+CheckBox "Highlight coverage above" [off]
+SpinButton "%" = "300%"

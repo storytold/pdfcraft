@@ -1201,6 +1201,24 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("standards.pdfa")
             .with(schema(json!({ "doc": doc(), "level": { "type": "string", "enum": ["2b", "3b"], "description": "Default 2b." } }), &["doc"])),
+        t("print_output_preview", "Output preview", "Print production ▸ Output preview: separate a page into one plate per ink, as a separating device would print it. Lists the inks (the four process inks, then each spot colour the page paints, in the order first painted) with their colour, highest tint and printed area; the page's highest total area coverage (sum of the enabled inks, percent) and how much of it is above tac_limit; and each ink's coverage at points. overprint (default true) honours OP, op and OPM as separating devices do; false knocks everything out, as on a composite device. image composite returns the page as the enabled inks print it (mark_tac paints pixels above tac_limit green); image plate returns one ink's plate as film (black = solid). simulation says how process colour from other spaces became CMYK: through the CMYK profile of the page's or document's output intent (ISO 32000-2 14.11.5; relative colorimetric; RGB as sRGB, CIE-based and ICC colours, and ICC CMYK in another profile; DeviceGray stays on black), or, without one, by the ISO 32000-2 device formulas (reason says why); its label is what the panel shows. Does not modify the document.")
+            .ro()
+            .cmd("prepress.output_preview")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "page": { "type": "integer", "minimum": 1 },
+                    "dpi": { "type": "number", "minimum": 1, "maximum": 300, "description": "Resolution of the plates. Default 72." },
+                    "overprint": { "type": "boolean", "description": "Simulate overprinting. Default true." },
+                    "inks": { "type": "array", "items": { "type": "string" }, "description": "Ink names to include in totals and the composite (default all)." },
+                    "tac_limit": { "type": "number", "minimum": 0, "maximum": 10000, "description": "Total area coverage limit in percent. Default 300." },
+                    "points": { "type": "array", "items": point(), "maxItems": 256, "description": "Read each ink's coverage at these points." },
+                    "image": { "type": "string", "enum": ["none", "composite", "plate"], "description": "Also return a PNG. Default none." },
+                    "plate": { "type": "string", "description": "The ink whose plate image plate returns." },
+                    "mark_tac": { "type": "boolean", "description": "In the composite, paint pixels above tac_limit. Default false." }
+                }),
+                &["doc", "page"],
+            )),
         t("print_readiness", "Print readiness", "Verification only. Reports effective image resolution where each image is drawn (not against the page size), page boxes and bleed past the trim, output intents, fonts that are not embedded, and the PDF/A-2b structural result. Does not modify the document, embed fonts, invent a press profile, or check PDF/X.")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),

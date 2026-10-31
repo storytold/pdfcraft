@@ -1,5 +1,7 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (gap 18: Output Preview separates process colour through the CMYK output intent profile; hayro-interpret patch 36; estimate 20–40 → 18–38 h) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 18: Output Preview — separations, total area coverage and overprint preview — partial; hayro-interpret plate patch 35) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
@@ -53,7 +55,7 @@ update the numbers.
 | 15 | Forms: JavaScript object model, actions, submit, XFA depth | feature | 40–75 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 16 | UI precision gaps (multi-select move, rulers, accelerators, windows) | UI/UX | 30–60 | [ui-parity.md](ui-parity.md) |
 | 17 | Certificate security and other protect gaps | feature, spec | 15–30 | [pdf-spec-parity.md](pdf-spec-parity.md) |
-| 18 | Print production tools absent | feature | 25–45 | [target-app-parity.md](target-app-parity.md) |
+| 18 | Print production tools mostly absent | feature | 18–38 | [target-app-parity.md](target-app-parity.md) |
 | 19 | Preferences mostly missing | UI/UX | 15–25 | [ui-parity.md](ui-parity.md) |
 | 20 | Scanners, GPU page rendering, pen pressure, Read Out Loud | hardware | 25–50 | [hardware-parity.md](hardware-parity.md) |
 | 21 | Compare: filters by Acrobat's finer kinds of change, page ranges, scanned documents | feature | 8–16 | [target-app-parity.md](target-app-parity.md) |
@@ -67,7 +69,7 @@ update the numbers.
 
 - **Missing:** our own renderer (M2: `model` crate, font engine, DisplayList devices, ADR-0004), or
   an owner decision to adopt another engine; and any measurement of rendering against Acrobat.
-- **Evidence:** pages are drawn by vendored `hayro` 0.7 with 26 local patches to `hayro-interpret`,
+- **Evidence:** pages are drawn by vendored `hayro` 0.7 with 50 local patches to `hayro-interpret`,
   15 to `hayro`, 3 to `hayro-jbig2` and 17 to `hayro-syntax` (`vendor/README.md`); `lopdf` still
   backs document inspection. All 7 rendering P0 features are `partial`. User reports: TikZ pattern
   fills drawn wrong ([#794](https://github.com/storytold/pdfcraft/issues/794)), blurry text at
@@ -355,13 +357,23 @@ update the numbers.
   redaction, protected view, URL and attachment trust.
 - **Estimate:** 15–30 h. **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
 
-### 18. Print production tools absent
+### 18. Print production tools mostly absent
 
-- **Missing:** Output Preview, separations, total area coverage, overprint preview, ink manager,
-  colour conversion, printer marks, fix hairlines, flattener preview, colour management settings;
-  print as image; PostScript output.
-- **Evidence:** 18 print-production features planned (L area).
-- **Estimate:** 25–45 h (part of the L area's 30–55). **Doc:** [target-app-parity.md](target-app-parity.md).
+- **Missing:** ink manager, colour conversion, printer marks, fix hairlines, flattener preview,
+  colour warnings and the object inspector, colour management settings (choosing a simulation
+  profile, paper and black ink simulation); print as image; PostScript output. Output Preview
+  separates process colour through the document's CMYK output intent profile (relative
+  colorimetric) but only that one: without it, RGB, gray and CIE colours separate by the ISO
+  32000-2 device formulas and ICC CMYK passes through unconverted. Rendering intents other than
+  relative colorimetric, black point compensation and `Default` colour spaces are not applied,
+  spot inks mix multiplicatively in the composite, and overprint preview is in the panel only,
+  not in the ordinary view, print or export.
+- **Evidence:** Output Preview, separations with area coverage, total area coverage and overprint
+  preview are `partial` (one plate per ink through hayro-interpret patch 53, colour-managed
+  through the output intent by patch 54, a right-hand panel and `print_output_preview`;
+  `crates/render/README.md`); the other 13 of the 17 M11 print-production features are planned
+  (L area).
+- **Estimate:** 18–38 h (part of the L area's 30–55). **Doc:** [target-app-parity.md](target-app-parity.md).
 
 ### 19. Preferences mostly missing
 
@@ -419,6 +431,8 @@ update the numbers.
 | 2026-10-15 | minor | Gap 21: the side-by-side view had already shipped; the Compare panel filters text changes and visual differences. Estimate 10–20 h → 8–16 h |
 | 2026-10-20 | minor | Gap 6 #3673: Character encoding accepts Identity-H/V with Adobe CJK collections, or a predefined non-Identity CMap; negative and indirect-reference regressions and a read-only automation test passed after failing before the fix. Per-glyph validation and embedded-font extraction remain separate. Scores and estimates unchanged. |
 | 2026-10-17 | minor | Gap 6: the redaction audit counts a cover over one word of a long line instead of a clean bill (#2662, fixed by #2698). Estimates unchanged. |
+| 2026-10-16 | minor | Gap 18: Output Preview separates RGB, CIE-based and ICC colours, and ICC CMYK in another profile, through the CMYK output intent profile (relative colorimetric, hayro-interpret patch 54) and soft-proofs the composite through it; choosing a simulation profile, other rendering intents and black point compensation remain; estimate 20–40 → 18–38 h. Gap 2: 35 hayro-interpret patches |
+| 2026-10-15 | minor | Gap 18: Output Preview (separations with area coverage, total area coverage, overprint preview) partial through hayro-interpret plate patch 53; colour management, Ink Manager and the other print-production tools remain; estimate 25–45 → 20–40 h. Gap 2: 34 hayro-interpret patches |
 | 2026-10-15 | minor | Gap 12: the text oracle scores reading order as well as word F1, which is a bag of words and cannot see order; the first measurement separated 18 improvements from 6 regressions in a change F1 called unchanged on 26 of 29 files. Estimates unchanged. |
 | 2026-10-14 | minor | M1: raw-deflate fallback preserves decoding-limit errors in strict and tolerant decoding; synthetic filter and COS stream regressions. Estimates unchanged. |
 | 2026-10-15 | patch | Gap 24: record localization and installers as partial (unusable Chinese, Telugu and Arabic; unsigned Linux packages) |

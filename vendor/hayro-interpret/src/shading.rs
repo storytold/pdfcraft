@@ -139,6 +139,16 @@ pub struct Shading {
 }
 
 impl Shading {
+    /// PdfCraft patch (53): the shading drawn as `plate`'s plate, through its simulation
+    /// (patch 54).
+    pub(crate) fn for_plate(&mut self, plate: &crate::color::Plate) {
+        self.color_space = self
+            .color_space
+            .plate(plate.ink.clone(), plate.simulation.clone());
+        let simulation = plate.simulation.as_ref().map(|s| s.digest());
+        self.cache_key = hash128(&(self.cache_key, &plate.ink, simulation));
+    }
+
     /// PdfCraft patch (38): a shading in a device space is drawn in its default colour space
     /// from `defaults`, the resources it is painted with (ISO 32000-2 §8.6.5.6), and keyed by
     /// it as an image is.

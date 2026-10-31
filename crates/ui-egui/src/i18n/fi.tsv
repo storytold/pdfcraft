@@ -2847,3 +2847,15 @@ theme	Appearance	Teema
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tämän vastauksen asetukset
+	Simulate overprinting	Simuloi päällepainatus
+	Separating page {n}…	Erotellaan sivua {n}…
+	The page could not be separated: {error}	Sivua ei voitu erotella: {error}
+	Inks	Musteet
+	Too many spot inks to separate: {names}	Liian monta spottimustetta eroteltavaksi: {names}
+	Total area coverage	Kokonaispeitto
+	Page maximum: {n}%	Sivun enimmäisarvo: {n}%
+	Point at the page to read its ink coverage.	Osoita sivua nähdäksesi sen musteen peiton.
+	Highlight coverage above	Korosta peitto, joka ylittää
+	Simulation: {profile}	Simulointi: {profile}
+	Simulation: device formulas	Simulointi: laitekaavat
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	Käyttökelpoista CMYK-tulostustarkoitusta ei ole: RGB- ja CIE-pohjaiset värit erotellaan ISO 32000 -standardin laitekaavoilla.

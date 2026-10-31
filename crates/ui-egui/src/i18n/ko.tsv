@@ -2809,3 +2809,15 @@ theme	Appearance	모양
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	이 답글의 옵션
+	Simulate overprinting	중복 인쇄 시뮬레이션
+	Separating page {n}…	{n}페이지 분판 중…
+	The page could not be separated: {error}	페이지를 분판할 수 없습니다: {error}
+	Inks	잉크
+	Too many spot inks to separate: {names}	분판할 별색 잉크가 너무 많습니다: {names}
+	Total area coverage	총 영역 커버리지
+	Page maximum: {n}%	페이지 최대값: {n}%
+	Point at the page to read its ink coverage.	페이지를 가리키면 잉크 커버리지를 볼 수 있습니다.
+	Highlight coverage above	다음 값을 넘는 커버리지 강조
+	Simulation: {profile}	시뮬레이션: {profile}
+	Simulation: device formulas	시뮬레이션: 장치 공식
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	사용할 수 있는 CMYK 출력 의도가 없습니다. RGB 및 CIE 기반 색상은 ISO 32000 장치 공식으로 분판됩니다.

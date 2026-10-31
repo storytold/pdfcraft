@@ -1,6 +1,8 @@
-use crate::color::{Color, ColorSpace, device_cmyk_to_gray};
+use crate::color::{Color, ColorSpace, InkUse, Plate, device_cmyk_to_gray};
 use crate::context::{Context, path_as_rect};
 use crate::device::Device;
+use crate::interpret::state::PaintData;
+use crate::pattern::Pattern;
 use crate::util::{BezPathExt, Float32Ext};
 use crate::{FillRule, Paint, PathDrawMode, StrokeProps};
 use kurbo::{BezPath, Cap, Join, PathEl};
@@ -153,6 +155,23 @@ pub(crate) fn get_paint<'a>(context: &Context<'a>, is_stroke: bool) -> Paint<'a>
         context.get().non_stroke_data()
     };
 
+    // PdfCraft patch (53): report spot inks, and draw separations.
+    if let Some(sink) = &context.settings.ink_sink {
+        data.color_space.report_spots(sink);
+        if let Some(Pattern::Shading(s)) = &data.pattern {
+            s.shading.color_space.report_spots(sink);
+        }
+    }
+    if let Some(plate) = &context.settings.plate {
+        let state = &context.get().graphics_state;
+        let overprint = if is_stroke {
+            state.overprint_stroke
+        } else {
+            state.overprint_fill
+        };
+        return plate_paint(context, data, plate, overprint, state.overprint_mode);
+    }
+
     if data.color_space.is_pattern() || data.pattern.is_some() {
         if let Some(mut pattern) = data.pattern {
             if let Some(tf) = &data.transfer_function {
@@ -183,4 +202,40 @@ pub(crate) fn get_paint<'a>(context: &Context<'a>, is_stroke: bool) -> Paint<'a>
             Paint::Color(color)
         }
     }
+}
+
+/// PdfCraft patch (53): the paint `data` as drawn on `plate`: a colour becomes its film, a
+/// shading is converted through the plate, and a paint that leaves the plate as it is (an
+/// overprinting paint that doesn't specify the plate's ink, or the `None` colorant) becomes
+/// transparent. Transfer functions are left out: they act on device colorants, which the
+/// film doesn't model.
+fn plate_paint<'a>(
+    context: &Context<'a>,
+    data: PaintData<'a>,
+    plate: &Plate,
+    overprint: bool,
+    overprint_mode: u8,
+) -> Paint<'a> {
+    let untouched = || Paint::Color(Color::film(0.0, 0.0));
+    if !(data.color_space.is_pattern() || data.pattern.is_some()) {
+        let color = Color::new(data.color_space, data.color, data.alpha);
+        return Paint::Color(color.for_plate(plate, overprint, overprint_mode));
+    }
+    let Some(mut pattern) = data.pattern else {
+        // Pattern was likely invalid, use transparent paint.
+        return untouched();
+    };
+    match &mut pattern {
+        Pattern::Shading(s) => {
+            match s.shading.color_space.ink_use(&plate.ink) {
+                InkUse::Nothing => return untouched(),
+                InkUse::Unspecified if plate.overprint && overprint => return untouched(),
+                InkUse::Paints | InkUse::Unspecified => {}
+            }
+            std::sync::Arc::make_mut(&mut s.shading).for_plate(plate);
+        }
+        Pattern::Tiling(t) => t.for_plate(plate, overprint, overprint_mode),
+    }
+    pattern.pre_concat_transform(context.root_transform());
+    Paint::Pattern(Box::new(pattern))
 }

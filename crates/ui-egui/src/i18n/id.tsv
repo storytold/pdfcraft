@@ -2810,3 +2810,15 @@ theme	Appearance	Tampilan
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsi untuk balasan ini
+	Simulate overprinting	Simulasikan overprint
+	Separating page {n}…	Memisahkan halaman {n}…
+	The page could not be separated: {error}	Halaman tidak dapat dipisahkan: {error}
+	Inks	Tinta
+	Too many spot inks to separate: {names}	Terlalu banyak tinta spot untuk dipisahkan: {names}
+	Total area coverage	Cakupan area total
+	Page maximum: {n}%	Maksimum halaman: {n}%
+	Point at the page to read its ink coverage.	Arahkan ke halaman untuk membaca cakupan tintanya.
+	Highlight coverage above	Sorot cakupan di atas
+	Simulation: {profile}	Simulasi: {profile}
+	Simulation: device formulas	Simulasi: rumus perangkat
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	Tidak ada niat keluaran CMYK yang dapat digunakan: warna RGB dan berbasis CIE dipisahkan dengan rumus perangkat ISO 32000.

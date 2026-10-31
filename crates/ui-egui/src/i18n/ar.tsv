@@ -2854,3 +2854,15 @@ certificate	Version	الإصدار
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	خيارات هذا الرد
 	Export value	قيمة التصدير
+	Simulate overprinting	محاكاة الطباعة الفوقية
+	Separating page {n}…	جارٍ فصل ألوان الصفحة {n}…
+	The page could not be separated: {error}	تعذّر فصل ألوان الصفحة: {error}
+	Inks	الأحبار
+	Too many spot inks to separate: {names}	عدد الأحبار الخاصة أكبر من أن يُفصل: {names}
+	Total area coverage	إجمالي تغطية الحبر
+	Page maximum: {n}%	الحد الأقصى للصفحة: {n}%
+	Point at the page to read its ink coverage.	أشر إلى الصفحة لقراءة تغطية الحبر.
+	Highlight coverage above	تمييز التغطية الأعلى من
+	Simulation: {profile}	المحاكاة: {profile}
+	Simulation: device formulas	المحاكاة: صيغ الجهاز
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	لا يوجد هدف إخراج CMYK صالح للاستخدام: تُفصل ألوان RGB والألوان المستندة إلى CIE وفق صيغ الجهاز في ISO 32000.

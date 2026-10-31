@@ -407,7 +407,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
         sections: &[ToolSection {
             title: "Print production",
             items: &[
-                item("Output preview", "layers", "prepress.output_preview", Planned("M11")),
+                item("Output preview", "layers", "prepress.output_preview", Ready),
                 item("Preflight", "file-check", "preflight.run", Planned("M11")),
                 item("Convert colors", "palette", "prepress.convert_colors", Planned("M11")),
                 item("Set page boxes", "square-dashed-mouse-pointer", "page.boxes", Ready),

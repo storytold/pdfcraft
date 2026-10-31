@@ -2600,3 +2600,15 @@ animation effects	Off	Вимкнено
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметри цієї відповіді
 	Export value	Значення експорту
+	Simulate overprinting	Імітувати накладання фарб
+	Separating page {n}…	Кольороподіл сторінки {n}…
+	The page could not be separated: {error}	Не вдалося виконати кольороподіл сторінки: {error}
+	Inks	Фарби
+	Too many spot inks to separate: {names}	Забагато плашкових фарб для кольороподілу: {names}
+	Total area coverage	Загальне покриття фарбами
+	Page maximum: {n}%	Максимум на сторінці: {n}%
+	Point at the page to read its ink coverage.	Наведіть вказівник на сторінку, щоб побачити покриття фарбами.
+	Highlight coverage above	Виділяти покриття понад
+	Simulation: {profile}	Імітація: {profile}
+	Simulation: device formulas	Імітація: формули пристрою
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	Немає придатного профілю виводу CMYK: кольори RGB і кольори на основі CIE розділяються за формулами пристрою з ISO 32000.

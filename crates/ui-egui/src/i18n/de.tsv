@@ -2579,3 +2579,15 @@ animation effects	Off	Aus
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Optionen für diese Antwort
 	Export value	Exportwert
+	Simulate overprinting	Überdrucken simulieren
+	Separating page {n}…	Seite {n} wird separiert…
+	The page could not be separated: {error}	Die Seite konnte nicht separiert werden: {error}
+	Inks	Druckfarben
+	Too many spot inks to separate: {names}	Zu viele Volltonfarben zum Separieren: {names}
+	Total area coverage	Gesamtfarbauftrag
+	Page maximum: {n}%	Seitenmaximum: {n} %
+	Point at the page to read its ink coverage.	Zeigen Sie auf die Seite, um den Farbauftrag abzulesen.
+	Highlight coverage above	Farbauftrag hervorheben über
+	Simulation: {profile}	Simulation: {profile}
+	Simulation: device formulas	Simulation: Geräteformeln
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	Kein verwendbarer CMYK-Output-Intent: RGB- und CIE-basierte Farben werden nach den Geräteformeln von ISO 32000 separiert.

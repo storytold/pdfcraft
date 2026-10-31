@@ -2845,3 +2845,15 @@ key	Space	Space
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất
+	Simulate overprinting	Mô phỏng in chồng
+	Separating page {n}…	Đang tách màu trang {n}…
+	The page could not be separated: {error}	Không thể tách màu trang: {error}
+	Inks	Mực in
+	Too many spot inks to separate: {names}	Quá nhiều mực pha để tách màu: {names}
+	Total area coverage	Tổng độ phủ mực
+	Page maximum: {n}%	Mức tối đa của trang: {n}%
+	Point at the page to read its ink coverage.	Trỏ vào trang để xem độ phủ mực.
+	Highlight coverage above	Tô sáng độ phủ vượt quá
+	Simulation: {profile}	Mô phỏng: {profile}
+	Simulation: device formulas	Mô phỏng: công thức thiết bị
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	Không có mục đích đầu ra CMYK dùng được: màu RGB và màu dựa trên CIE được tách theo công thức thiết bị của ISO 32000.

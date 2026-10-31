@@ -2838,3 +2838,15 @@ theme	Appearance	Aspecte
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcions d'aquesta resposta
+	Simulate overprinting	Simula la sobreimpressió
+	Separating page {n}…	S'està separant la pàgina {n}…
+	The page could not be separated: {error}	No s'ha pogut separar la pàgina: {error}
+	Inks	Tintes
+	Too many spot inks to separate: {names}	Massa tintes planes per separar: {names}
+	Total area coverage	Cobertura total d'àrea
+	Page maximum: {n}%	Màxim de la pàgina: {n}%
+	Point at the page to read its ink coverage.	Assenyala la pàgina per llegir-ne la cobertura de tinta.
+	Highlight coverage above	Ressalta la cobertura superior a
+	Simulation: {profile}	Simulació: {profile}
+	Simulation: device formulas	Simulació: fórmules de dispositiu
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	No hi ha cap propòsit de sortida CMYK utilitzable: els colors RGB i els basats en CIE se separen amb les fórmules de dispositiu d'ISO 32000.

@@ -269,6 +269,12 @@ pub(crate) struct GraphicsState<'a> {
     pub(crate) soft_mask: Option<SoftMask<'a>>,
     pub(crate) transfer_function: Option<ActiveTransferFunction>,
     pub(crate) blend_mode: BlendMode,
+
+    // PdfCraft patch (53): the overprint parameters (ISO 32000-2 §8.6.7, `OP`, `op` and `OPM`
+    // in a graphics state parameter dictionary). They only matter when drawing separations.
+    pub(crate) overprint_stroke: bool,
+    pub(crate) overprint_fill: bool,
+    pub(crate) overprint_mode: u8,
 }
 
 impl Default for GraphicsState<'_> {
@@ -286,6 +292,9 @@ impl Default for GraphicsState<'_> {
             soft_mask: None,
             transfer_function: None,
             blend_mode: BlendMode::default(),
+            overprint_stroke: false,
+            overprint_fill: false,
+            overprint_mode: 0,
         }
     }
 }
@@ -407,6 +416,21 @@ pub(crate) fn handle_gs_single<'a>(
                 // kurbo apparently cannot properly deal with offsets that are exactly 0.
                 .map(|n| if n == 0.0 { 0.01 } else { n })
                 .collect();
+        }
+        // PdfCraft patch (53): `OP` sets stroking overprint, and non-stroking overprint too when
+        // the dictionary has no `op` of its own; `OPM` is 0 or 1 (§8.6.7).
+        "OP" => {
+            let overprint = dict.get::<bool>(key)?;
+            let state = &mut context.get_mut().graphics_state;
+            state.overprint_stroke = overprint;
+            if !dict.contains_key("op") {
+                state.overprint_fill = overprint;
+            }
+        }
+        "op" => context.get_mut().graphics_state.overprint_fill = dict.get::<bool>(key)?,
+        "OPM" => {
+            let mode = dict.get::<u8>(key)?;
+            context.get_mut().graphics_state.overprint_mode = u8::from(mode == 1);
         }
         "Type" => {}
         _ => {}

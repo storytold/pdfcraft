@@ -12,6 +12,7 @@ mod inspect;
 mod pixels;
 mod raster;
 mod reading;
+mod separations;
 mod structure;
 mod system_font;
 pub mod text;
@@ -27,6 +28,7 @@ pub use raster::{
     Retiring, Tile, device_pixels, effective_scale,
 };
 pub use reading::{ReadingColors, ReadingParams};
+pub use separations::{Coverage, InkInfo, InkStats, MAX_PLATE_PIXELS, MAX_SPOT_INKS, Separations, Simulation};
 pub use text::{PageText, TextGlyph};
 
 /// Errors surfaced to the user when a document cannot be opened.

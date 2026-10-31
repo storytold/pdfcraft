@@ -2809,3 +2809,15 @@ theme	Appearance	स्वरूप
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	इस जवाब के विकल्प
+	Simulate overprinting	ओवरप्रिंटिंग का अनुकरण करें
+	Separating page {n}…	पृष्ठ {n} अलग किया जा रहा है…
+	The page could not be separated: {error}	पृष्ठ अलग नहीं किया जा सका: {error}
+	Inks	स्याहियाँ
+	Too many spot inks to separate: {names}	अलग करने के लिए बहुत अधिक स्पॉट स्याहियाँ: {names}
+	Total area coverage	कुल क्षेत्र कवरेज
+	Page maximum: {n}%	पृष्ठ अधिकतम: {n}%
+	Point at the page to read its ink coverage.	स्याही कवरेज पढ़ने के लिए पृष्ठ पर पॉइंटर रखें।
+	Highlight coverage above	इससे अधिक कवरेज हाइलाइट करें
+	Simulation: {profile}	अनुकरण: {profile}
+	Simulation: device formulas	अनुकरण: डिवाइस सूत्र
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	कोई उपयोग योग्य CMYK आउटपुट इंटेंट नहीं: RGB और CIE-आधारित रंग ISO 32000 के डिवाइस सूत्रों से अलग किए जाते हैं।

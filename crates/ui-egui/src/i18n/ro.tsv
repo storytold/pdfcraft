@@ -2838,3 +2838,15 @@ theme	Appearance	Aspect
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opțiuni pentru acest răspuns
+	Simulate overprinting	Simulare supratipar
+	Separating page {n}…	Se separă pagina {n}…
+	The page could not be separated: {error}	Pagina nu a putut fi separată: {error}
+	Inks	Cerneluri
+	Too many spot inks to separate: {names}	Prea multe cerneluri spot de separat: {names}
+	Total area coverage	Acoperire totală a suprafeței
+	Page maximum: {n}%	Maximul paginii: {n}%
+	Point at the page to read its ink coverage.	Indicați pagina pentru a citi acoperirea cu cerneală.
+	Highlight coverage above	Evidențiere acoperire peste
+	Simulation: {profile}	Simulare: {profile}
+	Simulation: device formulas	Simulare: formule de dispozitiv
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	Nu există o intenție de ieșire CMYK utilizabilă: culorile RGB și cele bazate pe CIE se separă după formulele de dispozitiv din ISO 32000.

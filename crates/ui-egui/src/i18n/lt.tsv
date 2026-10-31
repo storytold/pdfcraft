@@ -2839,3 +2839,15 @@ theme	Appearance	Išvaizda
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Šio atsakymo parinktys
 	Export value	Eksporto reikšmė
+	Simulate overprinting	Imituoti perspaudimą
+	Separating page {n}…	Atskiriamos {n} puslapio spalvos…
+	The page could not be separated: {error}	Nepavyko atskirti puslapio spalvų: {error}
+	Inks	Dažai
+	Too many spot inks to separate: {names}	Per daug specialiųjų dažų atskyrimui: {names}
+	Total area coverage	Bendras dažų padengimas
+	Page maximum: {n}%	Puslapio didžiausia vertė: {n} %
+	Point at the page to read its ink coverage.	Nurodykite puslapį, kad pamatytumėte dažų padengimą.
+	Highlight coverage above	Paryškinti padengimą virš
+	Simulation: {profile}	Imitacija: {profile}
+	Simulation: device formulas	Imitacija: įrenginio formulės
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	Nėra tinkamo CMYK išvesties profilio: RGB ir CIE pagrįstos spalvos išskiriamos pagal ISO 32000 įrenginio formules.

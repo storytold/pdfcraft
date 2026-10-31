@@ -2810,3 +2810,15 @@ certificate	SHA-256 digest	Impronta SHA-256
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opzioni per questa risposta
 	Export value	Valore di esportazione
+	Simulate overprinting	Simula sovrastampa
+	Separating page {n}…	Separazione della pagina {n}…
+	The page could not be separated: {error}	Impossibile separare la pagina: {error}
+	Inks	Inchiostri
+	Too many spot inks to separate: {names}	Troppi inchiostri spot da separare: {names}
+	Total area coverage	Copertura totale dell'area
+	Page maximum: {n}%	Massimo della pagina: {n}%
+	Point at the page to read its ink coverage.	Punta la pagina per leggere la copertura degli inchiostri.
+	Highlight coverage above	Evidenzia la copertura oltre
+	Simulation: {profile}	Simulazione: {profile}
+	Simulation: device formulas	Simulazione: formule del dispositivo
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	Nessun output intent CMYK utilizzabile: i colori RGB e basati su CIE vengono separati con le formule del dispositivo di ISO 32000.

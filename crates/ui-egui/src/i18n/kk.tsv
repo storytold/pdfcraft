@@ -2576,3 +2576,15 @@ animation effects	Off	Өшірулі
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Осы жауаптың параметрлері
 	Export value	Экспорт мәні
+	Simulate overprinting	Үстінен басуды үлгілеу
+	Separating page {n}…	{n}-бет түстерге бөлінуде…
+	The page could not be separated: {error}	Бетті түстерге бөлу мүмкін болмады: {error}
+	Inks	Бояулар
+	Too many spot inks to separate: {names}	Бөлу үшін арнайы бояулар тым көп: {names}
+	Total area coverage	Жалпы бояу жабыны
+	Page maximum: {n}%	Беттегі ең жоғары мән: {n}%
+	Point at the page to read its ink coverage.	Бояу жабынын көру үшін бетті көрсетіңіз.
+	Highlight coverage above	Мына мәннен жоғары жабынды бөлектеу
+	Simulation: {profile}	Үлгілеу: {profile}
+	Simulation: device formulas	Үлгілеу: құрылғы формулалары
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	Пайдалануға болатын CMYK шығыс профилі жоқ: RGB және CIE негізіндегі түстер ISO 32000 құрылғы формулаларымен бөлінеді.

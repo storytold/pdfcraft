@@ -2674,3 +2674,15 @@ animation effects	Off	Wyłączone
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcje tej odpowiedzi
 	Export value	Wartość eksportowa
+	Simulate overprinting	Symuluj nadruk
+	Separating page {n}…	Rozbarwianie strony {n}…
+	The page could not be separated: {error}	Nie udało się rozbarwić strony: {error}
+	Inks	Farby
+	Too many spot inks to separate: {names}	Zbyt wiele farb dodatkowych do rozbarwienia: {names}
+	Total area coverage	Całkowite pokrycie farbą
+	Page maximum: {n}%	Maksimum strony: {n}%
+	Point at the page to read its ink coverage.	Wskaż stronę, aby odczytać pokrycie farbą.
+	Highlight coverage above	Wyróżnij pokrycie powyżej
+	Simulation: {profile}	Symulacja: {profile}
+	Simulation: device formulas	Symulacja: wzory urządzenia
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	Brak użytecznego profilu wyjściowego CMYK: kolory RGB i oparte na CIE są rozdzielane według wzorów urządzenia z ISO 32000.

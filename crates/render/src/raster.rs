@@ -482,8 +482,8 @@ fn take_warnings(warnings: &Mutex<Vec<RenderWarning>>) -> Vec<RenderWarning> {
 pub struct PageRenderer {
     bytes: Arc<Vec<u8>>,
     config: RenderConfig,
-    pdf: Option<Pdf>,
-    settings: InterpreterSettings,
+    pub(crate) pdf: Option<Pdf>,
+    pub(crate) settings: InterpreterSettings,
     stats: RenderStats,
 }
 
@@ -496,6 +496,13 @@ impl PageRenderer {
 
     pub fn page_count(&self) -> usize {
         self.pdf.as_ref().map(|p| p.pages().len()).unwrap_or(0)
+    }
+
+    /// Parse the document again after a renderer panic, which may leave the parser's caches
+    /// inconsistent (as [`render`](Self::render) does).
+    pub(crate) fn reparse(&mut self) {
+        self.pdf = parse(&self.bytes, self.config.password.as_deref());
+        self.stats.parser_builds += 1;
     }
 
     /// Snapshot the work counters collected by this renderer.

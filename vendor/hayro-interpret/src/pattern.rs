@@ -1,7 +1,7 @@
 //! PDF patterns.
 
 use crate::cache::Cache;
-use crate::color::{Color, ColorSpace, DefaultColorSpaces};
+use crate::color::{Color, ColorSpace, DefaultColorSpaces, Plate};
 use crate::context::{Context, InterpreterCache};
 use crate::device::Device;
 use crate::font::Glyph;
@@ -174,6 +174,30 @@ pub struct TilingPattern<'a> {
     pub(crate) settings: InterpreterSettings,
     pub(crate) xref: &'a XRef,
     nesting_depth: u32,
+}
+
+impl TilingPattern<'_> {
+    /// PdfCraft patch (53): an uncoloured pattern draws its cell in the colour it is used
+    /// with, so on a plate it draws that colour's film. A coloured pattern's cell is separated
+    /// as it is drawn.
+    pub(crate) fn for_plate(&mut self, plate: &Plate, overprint: bool, overprint_mode: u8) {
+        if !self.is_color {
+            self.stroke_paint = self
+                .stroke_paint
+                .for_plate(plate, overprint, overprint_mode);
+            self.non_stroking_paint =
+                self.non_stroking_paint
+                    .for_plate(plate, overprint, overprint_mode);
+        }
+        let simulation = plate.simulation.as_ref().map(|s| s.digest());
+        self.cache_key = hash128(&(
+            self.cache_key,
+            &plate.ink,
+            plate.overprint,
+            overprint,
+            simulation,
+        ));
+    }
 }
 
 impl Debug for TilingPattern<'_> {

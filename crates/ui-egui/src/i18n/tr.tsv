@@ -2574,3 +2574,15 @@ animation effects	Off	Kapalı
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Bu yanıtın seçenekleri
 	Export value	Dışa aktarma değeri
+	Simulate overprinting	Üst baskıyı simüle et
+	Separating page {n}…	{n}. sayfa ayrıştırılıyor…
+	The page could not be separated: {error}	Sayfa ayrıştırılamadı: {error}
+	Inks	Mürekkepler
+	Too many spot inks to separate: {names}	Ayrıştırılamayacak kadar çok spot mürekkep: {names}
+	Total area coverage	Toplam alan kaplaması
+	Page maximum: {n}%	Sayfa en yüksek değeri: %{n}
+	Point at the page to read its ink coverage.	Mürekkep kaplamasını görmek için sayfanın üzerine gelin.
+	Highlight coverage above	Şunun üzerindeki kaplamayı vurgula
+	Simulation: {profile}	Simülasyon: {profile}
+	Simulation: device formulas	Simülasyon: aygıt formülleri
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	Kullanılabilir bir CMYK çıktı amacı yok: RGB ve CIE tabanlı renkler ISO 32000 aygıt formülleriyle ayrılır.

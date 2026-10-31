@@ -9284,6 +9284,144 @@ fn a_root_less_write_output_is_atomic_too() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A 100 × 100 pt page: solid black under a spot colour ("Gold" at 50%) that overprints it in
+/// the middle 40 × 40 pt, and a 4-colour rich black (260%) in the top-left 20 × 20 pt.
+fn output_preview_pdf() -> Vec<u8> {
+    let content = "0 0 0 1 k 0 0 100 100 re f 0.6 0.5 0.5 1 k 0 80 20 20 re f /GS1 gs /CS0 cs 0.5 scn 30 30 40 40 re f";
+    inks_pdf(content, "", &[])
+}
+
+/// A 100 × 100 pt page with `content`, a spot colour `/CS0` (Gold) and an overprinting
+/// `/GS1`, more catalog entries in `catalog`, and `extra` objects numbered from 5.
+fn inks_pdf(content: &str, catalog: &str, extra: &[Vec<u8>]) -> Vec<u8> {
+    let mut objs: Vec<Vec<u8>> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>").into_bytes(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /ColorSpace << /CS0 [/Separation /Gold /DeviceCMYK << /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 0.3 1 0] /N 1 >>] >> /ExtGState << /GS1 << /op true >> >> >> >>".to_vec(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
+    ];
+    objs.extend_from_slice(extra);
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn output_preview_through_tools() {
+    let dir = workdir("output-preview");
+    std::fs::write(dir.join("inks.pdf"), output_preview_pdf()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "inks.pdf" }))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    let points = json!([[50, 50], [10, 10], [90, 90], [500, 5]]);
+    let r = ok(&mut a, "print_output_preview", json!({ "doc": doc, "page": 1, "points": points, "tac_limit": 250 }));
+    let names: Vec<&str> = r["inks"].as_array().unwrap().iter().map(|i| i["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Cyan", "Magenta", "Yellow", "Black", "Gold"], "{r}");
+    assert_eq!(r["inks"][4]["kind"], "spot");
+    assert_eq!(r["inks"][3]["max"], 100.0);
+    assert_eq!(r["overprint"], true);
+    assert_eq!(r["simulation"], json!({ "label": "device formulas", "method": "device_formulas", "reason": "the document has no output intent" }));
+    assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(100), Some(100)), "72 dpi by default");
+    // The spot colour overprints the black: both print in the middle.
+    assert_eq!(r["points"][0]["inks"]["Black"], 100.0, "{r}");
+    assert_eq!(r["points"][0]["inks"]["Gold"], 49.8, "a tint of 0.5 is 127 of 255: {r}");
+    assert_eq!(r["points"][0]["total"], 149.8, "{r}");
+    assert_eq!(r["points"][1]["total"], 259.6, "the rich black, top left: {r}");
+    assert_eq!(r["points"][2]["inks"]["Cyan"], 0.0);
+    assert_eq!(r["points"][3]["outside"], true);
+    let tac = &r["total_area_coverage"];
+    assert_eq!(tac["max"]["percent"], 259.6, "{r}");
+    let at = tac["max"]["at"].as_array().unwrap();
+    assert!(at[0].as_f64().unwrap() < 20.0 && at[1].as_f64().unwrap() < 20.0, "{r}");
+    assert_eq!(tac["above_area"], 4.0, "20 × 20 of 100 × 100 pt: {r}");
+
+    // Without overprint simulation the spot colour knocks the black out; inks narrows the totals.
+    let knocked =
+        ok(&mut a, "print_output_preview", json!({ "doc": doc, "page": 1, "overprint": false, "points": [[50, 50]], "inks": ["Black", "Gold"] }));
+    assert_eq!(knocked["points"][0]["inks"]["Black"], 0.0, "{knocked}");
+    assert_eq!(knocked["inks"][0]["enabled"], false);
+    assert_eq!(knocked["total_area_coverage"]["max"]["percent"], 100.0, "only black and Gold count: {knocked}");
+
+    // A plate as film, and the composite with the coverage warning.
+    let out = a.call("print_output_preview", &json!({ "doc": doc, "page": 1, "image": "plate", "plate": "Gold", "dpi": 36 })).unwrap();
+    let Content::Png { data, width, height } = &out[1] else { panic!("expected a PNG") };
+    assert_eq!((*width, *height), (50, 50));
+    let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut pixels).unwrap();
+    // An opaque raster is written as RGB, one with transparency as RGBA.
+    let step = info.color_type.samples();
+    let px = |x: usize, y: usize| pixels[(y * 50 + x) * step];
+    assert_eq!((px(25, 25), px(2, 2)), (128, 255), "Gold at 50% in the middle, none elsewhere");
+    let out = a.call("print_output_preview", &json!({ "doc": doc, "page": 1, "image": "composite", "mark_tac": true, "tac_limit": 250 })).unwrap();
+    let Content::Png { data, .. } = &out[1] else { panic!("expected a PNG") };
+    let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+    let step = reader.next_frame(&mut pixels).unwrap().color_type.samples();
+    assert_eq!(pixels[(10 * 100 + 10) * step..][..3], [0, 220, 0], "the rich black is above 250%");
+    assert_ne!(pixels[(50 * 100 + 50) * step..][..3], [0, 220, 0]);
+
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc })), before, "the preview doesn't change the document");
+    for bad in [
+        json!({ "doc": doc, "page": 2 }),
+        json!({ "doc": doc, "page": 1, "dpi": 301 }),
+        json!({ "doc": doc, "page": 1, "inks": ["Silver"] }),
+        json!({ "doc": doc, "page": 1, "image": "plate" }),
+        json!({ "doc": doc, "page": 1, "image": "film" }),
+        json!({ "doc": doc, "page": 1, "tac_limit": -1 }),
+        json!({ "doc": doc, "page": 1, "points": [[1]] }),
+    ] {
+        assert!(matches!(a.call("print_output_preview", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    let tool = tools().into_iter().find(|t| t.name == "print_output_preview").unwrap();
+    assert!(tool.read_only && tool.command == Some("prepress.output_preview"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[path = "../../../render/tests/support/synthetic_icc.rs"]
+mod synthetic_icc;
+
+#[test]
+fn output_preview_separates_through_the_output_intent() {
+    let dir = workdir("output-preview-intent");
+    let profile = synthetic_icc::cmyk_profile("PdfCraft synthetic press", true);
+    let mut stream = format!("<< /N 4 /Length {} >>\nstream\n", profile.len()).into_bytes();
+    stream.extend_from_slice(&profile);
+    stream.extend_from_slice(b"\nendstream");
+    let intent = "/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier (Synthetic 1) /DestOutputProfile 5 0 R >>]";
+    std::fs::write(dir.join("press.pdf"), inks_pdf("0.5 0.5 0.5 rg 0 0 100 100 re f", intent, &[stream])).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "press.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "print_output_preview", json!({ "doc": doc, "page": 1, "points": [[50, 50]] }));
+    let expected = json!({
+        "label": "PdfCraft synthetic press",
+        "method": "output_intent",
+        "profile": "PdfCraft synthetic press",
+        "condition": "Synthetic 1",
+        "rendering_intent": "RelativeColorimetric",
+    });
+    assert_eq!(r["simulation"], expected, "{r}");
+    // The press prints a neutral gray with equal inks (`synthetic_icc`), not on black alone.
+    let press = synthetic_icc::btoa(synthetic_icc::srgb_gray_lightness(0.5), 0.0, 0.0);
+    for (ink, want) in ["Cyan", "Magenta", "Yellow", "Black"].into_iter().zip(press) {
+        let got = r["points"][0]["inks"][ink].as_f64().unwrap();
+        assert!((got - want * 100.0).abs() <= 2.0, "{ink}: {got}% where the press prints {:.1}%: {r}", want * 100.0);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn attaching_and_deleting_files_through_the_tools() {
     let dir = workdir("attach");

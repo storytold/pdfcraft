@@ -2578,3 +2578,15 @@ animation effects	Off	オフ
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	この返信のオプション
 	Export value	書き出し値
+	Simulate overprinting	オーバープリントをシミュレート
+	Separating page {n}…	ページ {n} を色分解しています…
+	The page could not be separated: {error}	ページを色分解できませんでした: {error}
+	Inks	インキ
+	Too many spot inks to separate: {names}	特色が多すぎるため色分解されません: {names}
+	Total area coverage	総インキ量
+	Page maximum: {n}%	ページ最大値: {n}%
+	Point at the page to read its ink coverage.	ページにポインターを合わせるとインキ量が表示されます。
+	Highlight coverage above	次を超えるインキ量を強調表示
+	Simulation: {profile}	シミュレーション: {profile}
+	Simulation: device formulas	シミュレーション: デバイス変換式
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	使用できる CMYK 出力インテントがありません。RGB と CIE ベースのカラーは ISO 32000 のデバイス変換式で色分解されます。

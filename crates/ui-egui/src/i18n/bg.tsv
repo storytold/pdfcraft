@@ -2541,3 +2541,15 @@ animation effects	Off	Изключени
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Опции за този отговор
 	Export value	Стойност за експортиране
+	Simulate overprinting	Симулиране на надпечатване
+	Separating page {n}…	Цветоотделяне на страница {n}…
+	The page could not be separated: {error}	Страницата не можа да бъде цветоотделена: {error}
+	Inks	Мастила
+	Too many spot inks to separate: {names}	Твърде много специални мастила за цветоотделяне: {names}
+	Total area coverage	Общо покритие на площта
+	Page maximum: {n}%	Максимум на страницата: {n}%
+	Point at the page to read its ink coverage.	Посочете страницата, за да видите покритието с мастило.
+	Highlight coverage above	Открояване на покритие над
+	Simulation: {profile}	Симулация: {profile}
+	Simulation: device formulas	Симулация: формули на устройството
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	Няма използваемо CMYK изходно намерение: цветовете RGB и тези, базирани на CIE, се разделят по формулите на устройството от ISO 32000.

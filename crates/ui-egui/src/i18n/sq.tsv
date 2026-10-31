@@ -2564,3 +2564,15 @@ animation effects	Off	Joaktiv
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsionet për këtë përgjigje
+	Simulate overprinting	Simulo mbishtypjen
+	Separating page {n}…	Po ndahet faqja {n}…
+	The page could not be separated: {error}	Faqja nuk mund të ndahej: {error}
+	Inks	Bojërat
+	Too many spot inks to separate: {names}	Shumë bojëra spot për t'u ndarë: {names}
+	Total area coverage	Mbulimi total i sipërfaqes
+	Page maximum: {n}%	Maksimumi i faqes: {n}%
+	Point at the page to read its ink coverage.	Drejto treguesin te faqja për të lexuar mbulimin me bojë.
+	Highlight coverage above	Thekso mbulimin mbi
+	Simulation: {profile}	Simulimi: {profile}
+	Simulation: device formulas	Simulimi: formulat e pajisjes
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	Nuk ka synim dalje CMYK të përdorshëm: ngjyrat RGB dhe ato të bazuara në CIE ndahen me formulat e pajisjes së ISO 32000.

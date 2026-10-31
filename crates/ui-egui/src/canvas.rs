@@ -427,6 +427,8 @@ pub struct DocView {
     pub(crate) pending_text_open: Option<(usize, pdfcraft_engine::BlockKey)>,
     pub(crate) text_background: crate::edit_text_ui::TextBackground,
     pub(crate) move_background: crate::content_ui::MoveBackground,
+    /// Print production ▸ Output preview: separated pages and the panel's choices.
+    pub(crate) output_preview: crate::output_preview_ui::OutputPreview,
     /// Edit text & images: the images per page (by document generation), and the selected one.
     pub(crate) edit_images: HashMap<usize, (u64, Vec<pdfcraft_engine::PageImage>)>,
     pub(crate) objects: crate::object_ui::ObjectSelection,
@@ -690,6 +692,7 @@ impl DocView {
             pending_text_open: None,
             text_background: Default::default(),
             move_background: Default::default(),
+            output_preview: Default::default(),
             edit_images: HashMap::new(),
             objects: Default::default(),
             image_selection: None,
@@ -1866,6 +1869,7 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     paint_page_surface(ui, view, frame, &PageSlot { i, r, xf });
     let painter = ui.painter();
     view.text_background.paint(painter, &xf, i, view.line_editor.as_ref(), view.content.draft.as_ref());
+    view.output_preview.paint(ui.ctx(), painter, &xf, i, pointer);
     if editing_content {
         view.move_background.paint(painter, &xf, i, info, &view.content, pointer);
     }
@@ -3030,6 +3034,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let editing_content =
         (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
     let text_style = app.text_style.clone();
+    let output_preview = app.right == Some(crate::RightPanel::OutputPreview);
+    let run_inline = app.run_inline;
     let show_secured_notice = app.show_secured_notice;
     let view = &mut app.views[index];
     // Opened without the owner password and something is restricted. The notice says so unless
@@ -3168,6 +3174,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         view.content.selected = None;
     }
     view.move_background.prepare(ui.ctx(), doc, &view.content, scale);
+    // Output preview separates the pages that were on screen last frame, the current one first.
+    let on_screen: Vec<usize> = view.screen_rects.iter().map(|(page, _)| *page).collect();
+    view.output_preview.prepare(ui.ctx(), doc, output_preview, view.current, &on_screen, run_inline);
 
     scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
     let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);

@@ -2584,3 +2584,15 @@ animation effects	Off	Ανενεργά
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Επιλογές για αυτήν την απάντηση
 	Export value	Τιμή εξαγωγής
+	Simulate overprinting	Προσομοίωση υπερεκτύπωσης
+	Separating page {n}…	Διαχωρισμός σελίδας {n}…
+	The page could not be separated: {error}	Δεν ήταν δυνατός ο διαχωρισμός της σελίδας: {error}
+	Inks	Μελάνια
+	Too many spot inks to separate: {names}	Πάρα πολλά μελάνια σποτ για διαχωρισμό: {names}
+	Total area coverage	Συνολική κάλυψη μελανιού
+	Page maximum: {n}%	Μέγιστο σελίδας: {n}%
+	Point at the page to read its ink coverage.	Δείξτε τη σελίδα για να δείτε την κάλυψη μελανιού.
+	Highlight coverage above	Επισήμανση κάλυψης άνω του
+	Simulation: {profile}	Προσομοίωση: {profile}
+	Simulation: device formulas	Προσομοίωση: τύποι συσκευής
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	Δεν υπάρχει χρησιμοποιήσιμο προφίλ εξόδου CMYK: τα χρώματα RGB και τα χρώματα βάσει CIE διαχωρίζονται με τους τύπους συσκευής του ISO 32000.
