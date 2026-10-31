@@ -29,7 +29,12 @@ pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterRe
         // would be drawn as gray).
         resolve_palette_indices: params.num_components.is_none(),
         strict: false,
-        target_resolution: params.target_dimension,
+        // PdfCraft patch (review on #3884): `hayro-jpeg2000` 0.3.5 places a reduced resolution's
+        // samples using the image area's offset on the reference grid unscaled, so with an offset
+        // it leaves rows out or slices past a row (a panic); such an image is decoded at full size.
+        target_resolution: params
+            .target_dimension
+            .filter(|_| image_area_offset(data) == Some((0, 0))),
     };
 
     // PdfCraft patch (21): a JP2 colour specification naming an enumerated colour space the
@@ -117,6 +122,22 @@ fn has_palette(data: &[u8]) -> bool {
         .find(|&(kind, _, _)| kind == *b"jp2h")
         .and_then(|(_, start, end)| data.get(start..end))
         .is_some_and(|header| boxes(header).any(|(kind, _, _)| kind == *b"pclr"))
+}
+
+/// PdfCraft patch (review on #3884): the offset of the image area on the reference grid
+/// (`XOsiz`, `YOsiz`) in the SIZ marker segment (ISO 15444-1 A.5.1) of raw codestream or JP2 file
+/// `data`, whose codestream is the contents of its `jp2c` box (I.5.4). `None` when it can't be read.
+fn image_area_offset(data: &[u8]) -> Option<(u32, u32)> {
+    const SOC_SIZ: [u8; 4] = [0xff, 0x4f, 0xff, 0x51];
+    let codestream = if data.starts_with(&SOC_SIZ) {
+        data
+    } else {
+        let (_, start, end) = boxes(data).find(|&(kind, _, _)| kind == *b"jp2c")?;
+        data.get(start..end).filter(|c| c.starts_with(&SOC_SIZ))?
+    };
+    // After SOC and SIZ: Lsiz (2), Rsiz (2), Xsiz (4), Ysiz (4), XOsiz (4), YOsiz (4).
+    let read = |at: usize| Some(u32::from_be_bytes(codestream.get(at..at + 4)?.try_into().ok()?));
+    Some((read(16)?, read(20)?))
 }
 
 /// The enumerated colour spaces (`EnumCS`, ISO 15444-1 I.5.3.3 and 15444-2 M.11.7.2) the decoder
@@ -242,7 +263,7 @@ fn scale(
 
 #[cfg(test)]
 mod tests {
-    use super::{decode, scale, without_refused_enumerated_colour};
+    use super::{decode, image_area_offset, scale, without_refused_enumerated_colour};
     use crate::bit_reader::{BitReader, bit_mask};
     use crate::object::stream::{ImageColorSpace, ImageDecodeParams};
     use alloc::vec::Vec;
@@ -479,5 +500,54 @@ mod tests {
         }
         assert_eq!(bpc(&one_bit_jp2(&palette)), Some(8));
         assert_eq!(bpc(&one_bit_jp2(&[])), Some(1));
+    }
+
+    /// A 4x4, one-component, 8-bit codestream whose image area starts at reference-grid point
+    /// (`x`, `y`): one tile from the grid origin, one decomposition level, reversible wavelet,
+    /// and an empty packet per resolution, so every sample is 128.
+    fn one_level_codestream(x: u32, y: u32) -> Vec<u8> {
+        let mut out = alloc::vec![0xff, 0x4f, 0xff, 0x51, 0, 41, 0, 0]; // SOC, SIZ, Lsiz, Rsiz.
+        for value in [x + 4, y + 4, x, y, x + 4, y + 4, 0, 0] {
+            out.extend_from_slice(&value.to_be_bytes());
+        }
+        out.extend_from_slice(&[0, 1, 7, 1, 1]); // One component: eight bits, no subsampling.
+        // COD: LRCP, one layer, no component transform, one decomposition level, 64x64
+        // codeblocks, reversible wavelet. QCD: no quantization, four subbands.
+        out.extend_from_slice(&[0xff, 0x52, 0, 12, 0, 0, 0, 1, 0, 1, 4, 4, 0, 1]);
+        out.extend_from_slice(&[0xff, 0x5c, 0, 7, 0x40, 0x40, 0x48, 0x48, 0x50]);
+        // SOT for tile zero, one tile part of 16 bytes, SOD, two empty packets, EOC.
+        out.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0, 0, 0, 0, 16, 0, 1, 0xff, 0x93, 0, 0]);
+        out.extend_from_slice(&[0xff, 0xd9]);
+        out
+    }
+
+    #[test]
+    fn image_area_offset_reads_raw_codestreams_and_jp2_files() {
+        assert_eq!(image_area_offset(&one_level_codestream(7, 3)), Some((7, 3)));
+        assert_eq!(image_area_offset(PALETTE_JP2), Some((0, 0)));
+        let raw = one_level_codestream(7, 3);
+        for cut in [0, 4, 19, 23] {
+            assert_eq!(image_area_offset(raw.get(..cut).unwrap()), None, "cut at {cut}");
+        }
+        assert_eq!(image_area_offset(&jp2(1, &[])), None, "a jp2c box too short for SIZ");
+    }
+
+    /// Review on #3884: `hayro-jpeg2000` 0.3.5 compares an image area's reference-grid offset
+    /// (`XOsiz`, `YOsiz`), unscaled, with the coordinates of a reduced resolution, so a hint that
+    /// skips a level left rows out (offset 7, 7: no reduced row was copied at all) or sliced past
+    /// the reduced row (offset 7, 0: a panic). With an offset the image is decoded at full size;
+    /// without one the hint still picks the reduced level.
+    #[test]
+    fn jpx_size_hint_is_dropped_only_for_an_offset_image_area() {
+        for (x, y, expected) in [(7, 0, 4), (0, 7, 4), (7, 7, 4), (0, 0, 2)] {
+            let params = ImageDecodeParams {
+                target_dimension: Some((2, 2)),
+                ..ImageDecodeParams::default()
+            };
+            let result = decode(&one_level_codestream(x, y), &params).unwrap();
+            let image = result.image_data.unwrap();
+            assert_eq!((image.width, image.height), (expected, expected), "offset ({x}, {y})");
+            assert_eq!(result.data.as_ref(), alloc::vec![128; (expected * expected) as usize], "offset ({x}, {y})");
+        }
     }
 }

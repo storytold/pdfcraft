@@ -2673,6 +2673,26 @@ fn a_large_step_still_tiles_where_the_next_cell_shows() {
 /// no decomposition, reversible wavelet, and one empty packet per component. Empty
 /// coefficients decode to the midpoint (128) after the unsigned DC level shift.
 fn jpx_midpoint_pdf(bpc: u8, components: u16) -> Vec<u8> {
+    let codestream = jpx_midpoint_codestream(components);
+    let content = "q 20 0 0 20 5 5 cm /Im1 Do Q 1 0 0 rg 0 0 4 4 re f";
+    let mut pdf = format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent {bpc} /Filter /JPXDecode /Length {} >> stream\n",
+        content.len(),
+        codestream.len()
+    )
+    .into_bytes();
+    pdf.extend_from_slice(&codestream);
+    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
+    pdf
+}
+
+/// [`jpx_midpoint_pdf`]'s one-pixel codestream on its own.
+fn jpx_midpoint_codestream(components: u16) -> Vec<u8> {
     let mut codestream = vec![0xff, 0x4f, 0xff, 0x51]; // SOC, SIZ.
     codestream.extend_from_slice(&(38 + 3 * components).to_be_bytes());
     codestream.extend_from_slice(&0_u16.to_be_bytes()); // Rsiz.
@@ -2692,22 +2712,7 @@ fn jpx_midpoint_pdf(bpc: u8, components: u16) -> Vec<u8> {
     codestream.extend_from_slice(&[0, 1, 0xff, 0x93]); // One tile part, SOD.
     codestream.extend(std::iter::repeat_n(0, usize::from(components)));
     codestream.extend_from_slice(&[0xff, 0xd9]); // EOC.
-
-    let content = "q 20 0 0 20 5 5 cm /Im1 Do Q 1 0 0 rg 0 0 4 4 re f";
-    let mut pdf = format!(
-        "%PDF-1.7\n\
-1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
-2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
-3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n\
-4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
-5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent {bpc} /Filter /JPXDecode /Length {} >> stream\n",
-        content.len(),
-        codestream.len()
-    )
-    .into_bytes();
-    pdf.extend_from_slice(&codestream);
-    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
-    pdf
+    codestream
 }
 
 /// [`jpx_midpoint_pdf`]'s codestream (every sample 128) wrapped in a JP2 file whose header
@@ -2871,6 +2876,39 @@ fn jpx_32_bit_image_does_not_prevent_other_page_content_from_rendering() {
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "other page content draws");
         if bpc == 8 {
             assert_eq!(&page.rgba[((25 * 40 + 15) * 4)..][..4], &[128, 128, 128, 255], "the valid image paints gray");
+        }
+    }
+}
+
+/// #3884: a JPX image filling a `/Rotate 90` page (Acrobat Paper Capture scans) crashed the page
+/// with "attempt to divide by zero". The decode-size hint mapped the image's corners as points,
+/// so it took in the translation, and on a rotated page one corner lands on the device origin:
+/// a hint side of 0, which `hayro-jpeg2000` divides the image size by. The hint now comes from
+/// the transform's linear part and is never below one pixel.
+#[test]
+fn jpx_image_on_a_rotated_page_draws_instead_of_crashing() {
+    let codestream = jpx_midpoint_codestream(1);
+    for rotate in [0, 90, 180, 270] {
+        let content = "q 40 0 0 40 0 0 cm /Im1 Do Q";
+        let mut bytes = format!(
+            "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Rotate {rotate} /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /JPXDecode /Length {} >> stream\n",
+            content.len(),
+            codestream.len()
+        )
+        .into_bytes();
+        bytes.extend_from_slice(&codestream);
+        bytes.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
+        let mut renderer = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
+        for scale in [0.5, 1.0, 1.5] {
+            let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale, tag: 0, ..Default::default() });
+            assert!(page.error.is_none(), "/Rotate {rotate} at {scale}x: {:?}", page.error);
+            let centre = (page.height / 2 * page.width + page.width / 2) as usize * 4;
+            assert_eq!(page.rgba.get(centre..centre + 4), Some(&[128, 128, 128, 255][..]), "/Rotate {rotate} at {scale}x paints the image");
         }
     }
 }
