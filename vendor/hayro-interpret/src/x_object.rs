@@ -681,13 +681,23 @@ fn decoded_mask_size(mask: &DecodedMask) -> usize {
 /// `/Filter` or its inline abbreviation `/F`. Errs towards `true`: a name the decoder would
 /// ignore still counts, which only keeps the target in the key as before.
 fn uses_jpx(stream: &Stream<'_>) -> bool {
+    uses_filter(stream, JPX_DECODE)
+}
+
+/// PdfCraft patch (73): whether `stream` is JBIG2, so that what the page has left, which all of it
+/// shares, says something about why this stream failed.
+fn uses_jbig2(stream: &Stream<'_>) -> bool {
+    uses_filter(stream, JBIG2_DECODE)
+}
+
+fn uses_filter(stream: &Stream<'_>, filter: &[u8]) -> bool {
     let dict = stream.dict();
-    let is_jpx = |name: &Name<'_>| name.deref() == JPX_DECODE;
+    let is_filter = |name: &Name<'_>| name.deref() == filter;
     [F, FILTER].into_iter().any(|key| {
-        dict.get::<Name<'_>>(key).is_some_and(|name| is_jpx(&name))
+        dict.get::<Name<'_>>(key).is_some_and(|name| is_filter(&name))
             || dict
                 .get::<Array<'_>>(key)
-                .is_some_and(|filters| filters.iter::<Name<'_>>().any(|name| is_jpx(&name)))
+                .is_some_and(|filters| filters.iter::<Name<'_>>().any(|name| is_filter(&name)))
     })
 }
 
@@ -758,7 +768,7 @@ fn decode_context<'a>(
         .map_err(|_| {
             // PdfCraft patch (73): left out for the page's allowance, it is content the page's
             // budget skipped, which is reported, and no failure of this image.
-            (obj.warning_sink)(if hayro_syntax::page_jbig2_work_spent() {
+            (obj.warning_sink)(if hayro_syntax::page_jbig2_work_spent() && uses_jbig2(&obj.stream) {
                 InterpreterWarning::ContentTruncated
             } else {
                 InterpreterWarning::ImageDecodeFailure
@@ -1020,10 +1030,8 @@ fn decode_raster(
     // allowance takes the image with it. Both are reported, and only here is the file not to blame
     // for what the mask would have hidden being shown.
     let dict = obj.stream.dict();
-    if alpha.is_none()
-        && hayro_syntax::page_jbig2_work_spent()
-        && (dict.contains_key(SMASK) || dict.contains_key(MASK))
-    {
+    let mask = dict.get::<Stream<'_>>(SMASK).or_else(|| dict.get::<Stream<'_>>(MASK));
+    if alpha.is_none() && hayro_syntax::page_jbig2_work_spent() && mask.is_some_and(|m| uses_jbig2(&m)) {
         return None;
     }
 

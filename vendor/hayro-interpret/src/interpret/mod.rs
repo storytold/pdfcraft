@@ -168,12 +168,25 @@ pub enum InterpreterWarning {
     ColorFallback,
 }
 
+/// PdfCraft patch (73): ends a page's JBIG2 allowance with the page, so that what decodes on its
+/// thread afterwards has no page to run out on.
+struct PageJbig2Work;
+
+impl Drop for PageJbig2Work {
+    fn drop(&mut self) {
+        hayro_syntax::set_page_jbig2_work(u64::MAX);
+    }
+}
+
 /// interpret the contents of the page and render them into the device.
 pub fn interpret_page<'a>(
     page: &Page<'a>,
     context: &mut Context<'a>,
     device: &mut impl Device<'a>,
 ) {
+    // PdfCraft patch (73): a context used again is another page.
+    hayro_syntax::set_page_jbig2_work(context.settings.jbig2_work);
+    let _allowance = PageJbig2Work;
     let resources = page.resources();
     let mut content = page.content_reader();
     // PdfCraft patch: the page's own contents count against its content budget too, where they

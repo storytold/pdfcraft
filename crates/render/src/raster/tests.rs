@@ -3677,7 +3677,7 @@ fn the_jbig2_images_of_a_page_share_one_allowance() {
 /// other reason leaves the picture, as it did.
 #[test]
 fn a_picture_whose_jbig2_mask_is_past_the_pages_allowance_is_not_drawn() {
-    let draw = |entry: &str, mask: &[u8], work: u64| {
+    let draw = |entry: &str, filter: &str, mask: &[u8], work: u64| {
         let content = b"q 20 0 0 20 5 5 cm /Im1 Do Q";
         let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n".to_vec();
         pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
@@ -3688,7 +3688,11 @@ fn a_picture_whose_jbig2_mask_is_past_the_pages_allowance_is_not_drawn() {
         );
         let kind = if entry == "/Mask" { "/ImageMask true" } else { "/ColorSpace /DeviceGray" };
         pdf.extend_from_slice(
-            format!("6 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 {kind} /Filter /JBIG2Decode /Length {} >> stream\n", mask.len()).as_bytes(),
+            format!(
+                "6 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 {kind} /Filter {filter} /Length {} >> stream\n",
+                mask.len()
+            )
+            .as_bytes(),
         );
         pdf.extend_from_slice(mask);
         pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
@@ -3710,10 +3714,60 @@ fn a_picture_whose_jbig2_mask_is_past_the_pages_allowance_is_not_drawn() {
         (shown, page.warnings.contains(&RenderWarning::ContentTruncated))
     };
     let mask = black_jbig2_page();
-    assert_eq!(draw("/SMask", &mask, u64::MAX), (false, false), "the mask hides all of it");
-    assert_eq!(draw("/SMask", &mask, 0), (false, true), "past the allowance a soft mask hides it too");
-    assert_eq!(draw("/Mask", &mask, 0), (false, true), "and so does a stencil mask");
-    assert_eq!(draw("/SMask", b"no JBIG2 here", 1 << 20), (true, false), "any other bad mask is no mask");
+    let jbig2 = "/JBIG2Decode";
+    assert_eq!(draw("/SMask", jbig2, &mask, u64::MAX), (false, false), "the mask hides all of it");
+    assert_eq!(draw("/SMask", jbig2, &mask, 0), (false, true), "past the allowance a soft mask hides it too");
+    assert_eq!(draw("/Mask", jbig2, &mask, 0), (false, true), "and so does a stencil mask");
+    assert_eq!(draw("/SMask", jbig2, b"no JBIG2 here", 1 << 20), (true, false), "any other bad mask is no mask");
+    let other = draw("/SMask", "/DCTDecode", b"no JPEG here", 0);
+    assert_eq!(other, (true, false), "and a page with nothing left says nothing of a mask that isn't JBIG2");
+}
+
+/// A page's allowance ends with it, so what decodes on its thread afterwards has no page to run out
+/// on, and a `Context` used again starts afresh.
+#[test]
+fn a_pages_jbig2_allowance_ends_with_the_page() {
+    use hayro::hayro_interpret::font::Glyph;
+    use hayro::hayro_interpret::hayro_syntax::Pdf;
+    use hayro::hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        TransformExt, interpret_page,
+    };
+    use hayro_syntax::page_jbig2_work_spent;
+    use kurbo::{Affine, BezPath, Rect};
+
+    /// Notes at each path whether the page has run out.
+    struct Spent(Vec<bool>);
+    impl<'a> Device<'a> for Spent {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'a>, _: &PathDrawMode) {
+            self.0.push(page_jbig2_work_spent());
+        }
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'a>, _: Affine, _: Affine, _: &Paint<'a>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, _: Image<'a, '_>, _: Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+
+    let content = "0 0 4 4 re f";
+    let bytes = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len()
+    );
+    let pdf = Pdf::new(Arc::new(bytes.into_bytes())).expect("parses");
+    let page = &pdf.pages()[0];
+    let cache = InterpreterCache::new();
+    let settings = InterpreterSettings { jbig2_work: 0, ..InterpreterSettings::default() };
+    let mut ctx = Context::new(page.initial_transform(true).to_kurbo(), Rect::new(0.0, 0.0, 40.0, 40.0), &cache, page.xref(), settings);
+    let mut device = Spent(Vec::new());
+    for _ in 0..2 {
+        interpret_page(page, &mut ctx, &mut device);
+        assert!(!page_jbig2_work_spent(), "no page is being drawn");
+    }
+    assert_eq!(device.0, [true, true], "each time, the page has what its settings give it");
 }
 
 /// An image that can't be decoded has still cost its reading, which a page repeats for each time
