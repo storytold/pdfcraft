@@ -1,6 +1,7 @@
 use super::{
     Arc, BookmarkPage, BookmarkRow, DocId, Document, EditError, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, Session, SummarySort,
-    apply_layer_state, comment_summary, display_config, local_utc_offset, outline_rows, parse_ymd, render_threads, use_layer_choices,
+    apply_dark_reading, apply_layer_state, comment_summary, display_config, local_utc_offset, outline_rows, parse_ymd, render_threads,
+    use_layer_choices,
 };
 
 impl Session {
@@ -262,6 +263,36 @@ impl Session {
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.generation += 1;
         true
+    }
+
+    /// Set display-only dark pages. Does not change bytes or history. Explicit reading-colour
+    /// presets take precedence without resetting this preference. Returns whether it changed;
+    /// when the pages are drawn by the renderer (images kept), cached rasters must be dropped.
+    pub fn set_dark_pages(&mut self, id: DocId, enabled: bool) -> bool {
+        let Some(doc) = self.docs.iter_mut().find(|doc| doc.id == id) else { return false };
+        let changed = doc.dark_pages != enabled;
+        doc.dark_pages = enabled;
+        apply_dark_reading(doc);
+        changed
+    }
+
+    /// Set how dark pages are drawn (palette, keep images). Returns whether it changed.
+    pub fn set_dark_style(&mut self, id: DocId, style: pdfcraft_render::DarkPages) -> bool {
+        let Some(doc) = self.docs.iter_mut().find(|doc| doc.id == id) else { return false };
+        let changed = doc.dark_style != style;
+        doc.dark_style = style;
+        apply_dark_reading(doc);
+        changed
+    }
+
+    /// The dark-page preference; `None` when no such document is open.
+    pub fn dark_pages(&self, id: DocId) -> Option<bool> {
+        Some(self.get(id)?.dark_pages)
+    }
+
+    /// How dark pages are drawn; `None` when no such document is open.
+    pub fn dark_style(&self, id: DocId) -> Option<pdfcraft_render::DarkPages> {
+        Some(self.get(id)?.dark_style)
     }
 
     /// The document's reading-colours setting; `None` when no such document is open.

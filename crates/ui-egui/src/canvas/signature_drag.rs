@@ -1,6 +1,8 @@
 //! Cached page and stamp layers: a stamp (an image signature, a Fill & Sign mark, any other stamp)
 //! follows each pointer frame, moved or resized, without editing the PDF. Any other comment
-//! follows the pointer while it is moved: its own layer is drawn where it goes.
+//! follows the pointer while it is moved: its own layer is drawn where it goes. The layers are
+//! drawn in the page's display colours (dark pages, reading colours), and a change of colours
+//! redraws them without decoding the image or starting the renderers again.
 
 use egui::{ColorImage, TextureHandle, TextureOptions, pos2, vec2};
 use pdfcraft_engine::{Document, Edit};
@@ -8,6 +10,8 @@ use pdfcraft_render::{PageInfo, RenderPool, RenderRequest, Tile};
 
 use crate::QuickTool;
 use crate::comments::{CommentView, Gesture, PageCx};
+use crate::page_colors::PageColors;
+use crate::preview_raster::PreviewRaster;
 
 /// The longest side, in pixels, a stamp's own layer is rendered at.
 const MAX_STAMP_SIDE: f32 = 2048.0;
@@ -24,21 +28,25 @@ pub(crate) struct SignatureDrag {
     /// can't be read): only its frame follows the pointer, and the layer isn't made again on
     /// every frame of the drag.
     no_layer: Option<(u64, usize, usize)>,
+    /// The display colours of the last [`Self::prepare`], which [`Self::prepare_move`] draws in too.
+    colors: PageColors,
 }
 
 struct Moving {
     /// The comment's layer: `from` is its box when the move started.
     layer: StampLayer,
+    /// The display colours the layer is drawn in.
+    colors: PageColors,
     /// Released and applied: keep it where it went until the page shows it there.
     settling: bool,
 }
 
 struct Layers {
     front: Front,
-    renderer: RenderPool,
-    background: Option<TextureHandle>,
-    tag: Option<u64>,
-    received_tag: Option<u64>,
+    /// The page without the stamp, in `colors`.
+    background: PreviewRaster,
+    /// The display colours the layers are drawn in.
+    colors: PageColors,
     /// Keep the final position visible until the normal page raster catches up.
     settling: bool,
 }
@@ -48,6 +56,8 @@ enum Front {
     /// An image signature's own image, sharp at every zoom.
     Image {
         texture: TextureHandle,
+        /// The decoded image, kept to draw it again in other display colours.
+        source: pdfcraft_engine::SignatureImage,
         opacity: f32,
         /// The page /Rotate the PDF draws the image turned back by.
         turn: i64,
@@ -69,7 +79,18 @@ struct StampLayer {
 }
 
 impl SignatureDrag {
-    pub fn prepare(&mut self, ctx: &egui::Context, doc: &Document, selected: Option<(usize, usize)>, scale: f32) {
+    /// Prepare the layers for the stamp `selected`, in dark page colours when `dark` is on (unless
+    /// the document's reading colours apply).
+    pub fn prepare(
+        &mut self,
+        ctx: &egui::Context,
+        doc: &Document,
+        selected: Option<(usize, usize)>,
+        scale: f32,
+        dark: Option<pdfcraft_render::DarkPages>,
+    ) {
+        let colors = PageColors::for_reading(dark, doc.renderer.reading_colors());
+        self.colors = colors;
         let key = selected.map(|(p, i)| (doc.edit_generation(), p, i));
         if self.key != key {
             self.key = key;
@@ -84,49 +105,41 @@ impl SignatureDrag {
                     // As displayed, the image is turned by the page's rotation less the turn it is drawn back by.
                     let shown = doc.info.pages.get(page).map_or(0, |p| i64::from(p.rotation)) - preview.turn;
                     self.aspect_ratio = Some(if shown.rem_euclid(180) == 0 { ratio } else { ratio.recip() });
-                    let texture = ctx.load_texture(
-                        "signature-drag-image",
-                        ColorImage::from_rgba_unmultiplied(preview.image.size(), preview.image.rgba()),
-                        TextureOptions::LINEAR,
-                    );
-                    let front = Front::Image { texture, opacity: preview.opacity, turn: preview.turn };
-                    self.layers = Some(Layers::new(front, preview.renderer()));
+                    let texture = image_texture(ctx, &preview.image, colors);
+                    let renderer = preview.renderer();
+                    let front = Front::Image { texture, source: preview.image, opacity: preview.opacity, turn: preview.turn };
+                    self.layers = Some(Layers::new(front, renderer, colors));
                 } else if let Ok(Some(preview)) = doc.stamp_preview(page, index) {
                     let stamp = StampLayer { renderer: preview.stamp_renderer(), from: a.rect, tag: None, pixels: None, failed: None };
-                    self.layers = Some(Layers::new(Front::Stamp(Box::new(stamp)), preview.background_renderer()));
+                    self.layers = Some(Layers::new(Front::Stamp(Box::new(stamp)), preview.background_renderer(), colors));
                 }
             }
         }
         let (Some((_, page, _)), Some(layers)) = (self.key, self.layers.as_mut()) else { return };
+        if layers.colors != colors {
+            // Other display colours: the image is drawn again from its decoded pixels, the stamp
+            // rendered again (the background raster redraws itself).
+            layers.colors = colors;
+            match &mut layers.front {
+                Front::Image { texture, source, .. } => *texture = image_texture(ctx, source, colors),
+                Front::Stamp(stamp) => stamp.recolour(),
+            }
+        }
         // The background matches the page view up to one whole-page texture; past that the view
         // tiles and this preview stays at that cap.
         let Some(p) = doc.info.pages.get(page) else { return };
-        let background_scale = scale.min(crate::canvas::BASE_SIDE / p.width.max(p.height).max(1.0));
-        let tag = (background_scale * 1000.0) as u64;
-        if layers.tag != Some(tag) {
-            layers.renderer.set_queue(vec![RenderRequest { page, scale: background_scale, tag, preview: true, ..Default::default() }]);
-            layers.tag = Some(tag);
+        let max_side = ctx.input(|i| i.max_texture_side) as f32;
+        let background_scale = scale.min(crate::canvas::BASE_SIDE.min(max_side) / p.width.max(p.height).max(1.0));
+        layers.background.prepare(ctx, page, background_scale, colors, true);
+        if layers.background.failed() {
+            // Leave the ordinary page raster usable if an unsupported PDF can't preview.
+            self.layers = None;
+            return;
         }
-        if let Some(out) = layers.renderer.try_recv()
-            && out.request.tag == tag
-        {
-            if out.error.is_none() {
-                layers.received_tag = Some(tag);
-                layers.background = Some(ctx.load_texture(
-                    "signature-drag-background",
-                    ColorImage::from_rgba_premultiplied([out.width as usize, out.height as usize], &out.rgba),
-                    TextureOptions::LINEAR,
-                ));
-            } else {
-                // Leave the ordinary page raster usable if an unsupported PDF can't preview.
-                self.layers = None;
-                return;
-            }
-        }
-        let mut pending = layers.received_tag != Some(tag);
+        let mut pending = false;
         // The stamp itself is small: it stays sharp at every zoom.
         if let Front::Stamp(stamp) = &mut layers.front {
-            match stamp.update(ctx, page, p, scale) {
+            match stamp.update(ctx, page, p, scale, colors) {
                 Some(waiting) => pending |= waiting,
                 // Nothing to lay over the page: the frame alone follows the pointer, as before.
                 None => {
@@ -138,6 +151,14 @@ impl SignatureDrag {
         if pending {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
+    }
+
+    /// The layers are still waiting for pixels.
+    pub fn pending(&self) -> bool {
+        self.layers.as_ref().is_some_and(|layers| {
+            layers.background.pending()
+                || matches!(&layers.front, Front::Stamp(stamp) if stamp.tag.is_none() || stamp.pixels.as_ref().map(|(tag, ..)| *tag) != stamp.tag)
+        })
     }
 
     pub fn contains(&self, page: usize, index: usize) -> bool {
@@ -190,7 +211,7 @@ impl SignatureDrag {
         if !(dragging || released || layers.settling) {
             return;
         }
-        let (Some(background), Some(a), Some(p)) = (&layers.background, cx.get(index), cx.info.pages.get(page)) else { return };
+        let (Some(background), Some(a), Some(p)) = (layers.background.texture(), cx.get(index), cx.info.pages.get(page)) else { return };
         if let Front::Stamp(stamp) = &layers.front
             && stamp.pixels.is_none()
         {
@@ -201,7 +222,7 @@ impl SignatureDrag {
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(cx.xf.rect));
         cx.xf.paint_image(&painter, background.id(), 0.0, 0.0, 1.0, 1.0);
         match &layers.front {
-            Front::Image { texture, opacity, turn } => cx.xf.paint_user_image(
+            Front::Image { texture, opacity, turn, .. } => cx.xf.paint_user_image(
                 &painter,
                 texture.id(),
                 p,
@@ -221,7 +242,9 @@ impl SignatureDrag {
     /// While a comment without stamp layers is moved, its own layer: rendered when the move
     /// starts, kept after release until the page's raster shows it where it went (`stale`: the
     /// page is still drawn as before its last change).
+    /// The layer is drawn in the display colours of the last [`Self::prepare`].
     pub fn prepare_move(&mut self, ctx: &egui::Context, doc: &Document, cv: &CommentView, pending: Option<&Edit>, stale: bool, scale: f32) {
+        let colors = self.colors;
         let generation = doc.edit_generation();
         let dragged = match cv.gesture {
             Some(Gesture::Move { page, index, .. }) if !self.contains(page, index) => Some((generation, page, index)),
@@ -251,14 +274,18 @@ impl SignatureDrag {
                     // isn't drawn in its /Rect, and the frame it follows is that box too.
                     let rotation = doc.info.pages.get(page).map_or(0, |p| p.rotation);
                     let layer = StampLayer { renderer: alone.renderer(), from: a.shown_rect(rotation), tag: None, pixels: None, failed: None };
-                    self.moving = Some((key, Moving { layer, settling: false }));
+                    self.moving = Some((key, Moving { layer, colors, settling: false }));
                 }
                 _ => self.no_layer = Some(key),
             }
         }
         let Some(((_, page, _), m)) = self.moving.as_mut() else { return };
         let Some(p) = doc.info.pages.get(*page) else { return };
-        match m.layer.update(ctx, *page, p, scale) {
+        if m.colors != colors {
+            m.colors = colors;
+            m.layer.recolour();
+        }
+        match m.layer.update(ctx, *page, p, scale, colors) {
             Some(pending) => {
                 if pending {
                     ctx.request_repaint_after(std::time::Duration::from_millis(16));
@@ -292,7 +319,7 @@ impl StampLayer {
     /// Render the layer's tile at `scale` (or less, within [`MAX_STAMP_SIDE`]) and take it when
     /// it arrives. `Some(true)` while the pixels at this scale are still on their way, `None`
     /// when there is nothing to draw.
-    fn update(&mut self, ctx: &egui::Context, page: usize, p: &PageInfo, scale: f32) -> Option<bool> {
+    fn update(&mut self, ctx: &egui::Context, page: usize, p: &PageInfo, scale: f32, colors: PageColors) -> Option<bool> {
         let (scale, tile) = stamp_tile(p, self.from, scale)?;
         let tag = (scale * 1000.0) as u64;
         if self.tag != Some(tag) {
@@ -311,10 +338,17 @@ impl StampLayer {
             };
             let s = out.request.scale;
             let area = [t.x as f32 / s, t.y as f32 / s, t.x.saturating_add(t.w) as f32 / s, t.y.saturating_add(t.h) as f32 / s];
-            let image = crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba);
+            let image = crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba, colors);
             self.pixels = Some((tag, ctx.load_texture("signature-drag-stamp", image, TextureOptions::LINEAR), area));
         }
         Some(self.pixels.as_ref().is_none_or(|(received, ..)| *received != tag))
+    }
+
+    /// Other display colours: render the layer again (a failed render is tried again too).
+    fn recolour(&mut self) {
+        self.tag = None;
+        self.pixels = None;
+        self.failed = None;
     }
 
     /// The layer's pixels where its box goes on screen, `rect`: moved, and stretched as its box
@@ -340,9 +374,18 @@ impl StampLayer {
 }
 
 impl Layers {
-    fn new(front: Front, renderer: RenderPool) -> Self {
-        Self { front, renderer, background: None, tag: None, received_tag: None, settling: false }
+    fn new(front: Front, renderer: RenderPool, colors: PageColors) -> Self {
+        Self { front, background: PreviewRaster::new(renderer), colors, settling: false }
     }
+}
+
+/// An image signature's pixels as a texture, in `colors`.
+fn image_texture(ctx: &egui::Context, image: &pdfcraft_engine::SignatureImage, colors: PageColors) -> TextureHandle {
+    ctx.load_texture(
+        "signature-drag-image",
+        colors.decoded_image(ColorImage::from_rgba_unmultiplied(image.size(), image.rgba())),
+        TextureOptions::LINEAR,
+    )
 }
 
 /// The scale and tile of the page raster that hold a stamp at `rect` (user space), a pixel to
@@ -414,5 +457,64 @@ mod tests {
         cv.gesture = None;
         drag.prepare_move(&ctx, doc, &cv, None, false, 1.0);
         assert_eq!(drag.no_layer, None, "forgotten when the drag ends");
+    }
+
+    /// An image signature's layers: its decoded source and the texture drawn from it.
+    fn image(layers: &Layers) -> (&pdfcraft_engine::SignatureImage, &TextureHandle) {
+        match &layers.front {
+            Front::Image { source, texture, .. } => (source, texture),
+            Front::Stamp(_) => panic!("an image signature"),
+        }
+    }
+
+    #[test]
+    fn dark_pages_signature_layers_refresh_without_document_edits() {
+        let ctx = egui::Context::default();
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(12, 4, image::Rgba([0, 0, 0, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let signature = pdfcraft_engine::SignatureImage::from_bytes(png.get_ref()).unwrap();
+        let mut session = pdfcraft_engine::Session::new();
+        let blank = session.create_blank(100.0, 100.0, 1).unwrap();
+        let id = session.open_new("signature.pdf", blank).unwrap();
+        let page = session.get(id).unwrap().info.pages[0].clone();
+        session.apply(id, signature.edit(0, &page, [10.0, 50.0], false, "Test").unwrap()).unwrap();
+        let doc = session.get(id).unwrap();
+        let source = doc.bytes.clone();
+        let generation = doc.edit_generation();
+        let mut preview = SignatureDrag::default();
+        preview.prepare(&ctx, doc, Some((0, 0)), 1.0, None);
+        let decoded = image(preview.layers.as_ref().unwrap()).0.clone();
+        for (requests, dark) in [false, true, false, true].into_iter().enumerate() {
+            for _ in 0..100 {
+                preview.prepare(&ctx, doc, Some((0, 0)), 1.0, dark.then_some(crate::page_colors::FILTERING));
+                if !preview.pending() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            let layers = preview.layers.as_ref().unwrap();
+            let (decoded_now, texture) = image(layers);
+            assert_eq!(decoded_now.rgba().as_ptr(), decoded.rgba().as_ptr(), "dark toggles reuse decoded image bytes");
+            assert_eq!(layers.background.stats().render_requests, requests as u64 + 1, "background renderer survives toggles");
+            let colors = PageColors::for_reading(dark.then_some(crate::page_colors::FILTERING), Default::default());
+            let images = crate::page_colors::uploaded_textures(&ctx, &[texture, layers.background.texture().unwrap()]);
+            assert!(images[0].iter().all(|pixel| *pixel == colors.raster(egui::Color32::BLACK)));
+            assert!(images[1].iter().all(|pixel| *pixel == colors.paper()));
+            assert_eq!(doc.bytes, source);
+            assert_eq!(doc.edit_generation(), generation);
+            assert_eq!(doc.can_undo(), Some("Add signature"));
+        }
+        let edit = Edit::MoveAnnotation { page: 0, index: 0, dx: 5.0, dy: 0.0 };
+        session.apply(id, edit.clone()).unwrap();
+        let doc = session.get(id).unwrap();
+        preview.committed(&edit, doc.edit_generation());
+        preview.prepare(&ctx, doc, Some((0, 0)), 1.0, None);
+        let layers = preview.layers.as_ref().unwrap();
+        assert!(layers.settling, "a dark toggle preserves the released gesture until the main page arrives");
+        assert_eq!(image(layers).0.rgba().as_ptr(), decoded.rgba().as_ptr());
+        preview.page_received(0);
+        assert!(!preview.layers.as_ref().unwrap().settling);
+        preview.prepare(&ctx, doc, None, 1.0, None);
+        assert!(preview.layers.is_none(), "deselection releases prepared layers");
     }
 }

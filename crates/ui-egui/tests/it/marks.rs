@@ -630,3 +630,37 @@ fn page_range_from_one_to_one_selects_only_the_first_page() {
     assert_eq!(corner(&mut r, 0), vec![red, green, blue, 255], "page 1 has the background");
     assert_eq!(corner(&mut r, 1), vec![255, 255, 255, 255], "page 2 does not");
 }
+
+/// Update's preview of the page without its marks is drawn in the page's display colours, as the
+/// page and its thumbnail are. Dark pages that recolour every pixel filter the finished raster,
+/// so the preview must be filtered too, and drawn again when dark pages are turned off.
+#[test]
+fn the_update_preview_follows_dark_pages() {
+    let uploads = Uploads::default();
+    let pdf = content_fixture();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).renderer(uploads.clone()).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("doc.pdf", None, pdf.clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.background"));
+    h.run_steps(2);
+    h.state_mut().marks_draft.bg.color = [1.0, 1.0, 0.6];
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    h.state_mut().set_dark_style(pdfcraft_render::DarkPages { images: pdfcraft_render::DarkImages::Recolour, ..Default::default() });
+    assert!(h.state_mut().execute("view.dark_pages"));
+    h.run_steps(2);
+    assert!(h.state_mut().execute("edit.background.update"));
+    h.run_steps(2);
+    // The page without its yellow background: dark paper, not white.
+    let paper = |c: egui::Color32| c.r() < 60 && c.r().abs_diff(c.g()) < 8 && c.r().abs_diff(c.b()) < 8;
+    wait_for_preview(&mut h, &uploads, "the unmarked page on dark paper", |i| paper(at(i, 0.5, 0.75)));
+    assert!(h.state_mut().execute("view.dark_pages"));
+    wait_for_preview(&mut h, &uploads, "the unmarked page in its own colours", |i| at(i, 0.5, 0.75) == egui::Color32::WHITE);
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+}

@@ -5498,6 +5498,74 @@ fn tiles_match_full_render() {
     }
 }
 
+/// Dark pages that keep opaque images (the default) recolour an image with transparency
+/// (here a black image with a soft mask, as an image signature is) as ink, so it shows on the
+/// dark paper, and keep an opaque image as it is; keeping all images keeps both.
+#[test]
+fn dark_pages_recolour_images_with_transparency_and_keep_opaque_ones() {
+    // Two black 2 x 2 images: /Im at the left is opaque, /Sig at the right has a soft mask.
+    let content = "q 20 0 0 20 10 15 cm /Im Do Q q 20 0 0 20 60 15 cm /Sig Do Q";
+    let pdf = format!(
+        "%PDF-1.4\n\
+         1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 50] /Contents 4 0 R /Resources << /XObject << /Im 5 0 R /Sig 6 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length 25 >> stream\n000000000000000000000000>\nendstream endobj\n\
+         6 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /SMask 7 0 R /Filter /ASCIIHexDecode /Length 25 >> stream\n000000000000000000000000>\nendstream endobj\n\
+         7 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length 9 >> stream\nFFFFFFFF>\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    )
+    .into_bytes();
+    let render = |images| {
+        let dark_reading = crate::DarkPages { palette: crate::DarkPalette::Black, images }.reading_colors();
+        let mut r = PageRenderer::new(Arc::new(pdf.clone()), RenderConfig { dark_reading, ..Default::default() });
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0, preview: false });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        page
+    };
+    let pixel = |page: &RenderedPage, x: u32, y: u32| -> [u8; 4] { page.rgba[((y * page.width + x) * 4) as usize..][..4].try_into().unwrap() };
+    // Device pixels at scale 2: /Im covers 20..60 x 30..70, /Sig 120..160 x 30..70.
+    let opaque = render(crate::DarkImages::KeepOpaque);
+    assert_eq!(pixel(&opaque, 5, 5), [0, 0, 0, 255], "the black palette's paper");
+    assert_eq!(pixel(&opaque, 40, 50), [0, 0, 0, 255], "the opaque image keeps its black");
+    assert_eq!(pixel(&opaque, 140, 50), [255, 255, 255, 255], "the image with transparency becomes the palette's ink");
+    let all = render(crate::DarkImages::KeepAll);
+    assert_eq!((pixel(&all, 40, 50), pixel(&all, 140, 50)), ([0, 0, 0, 255], [0, 0, 0, 255]), "keeping all images keeps both");
+}
+
+/// A Multiply highlight on dark pages. Multiply only darkens, so on the dark paper the
+/// yellow band hardly showed and the light text under it turned the band's dark colour. Dark
+/// pages exchange light and dark, so the highlight draws as Screen (vendored hayro patch
+/// 27): the band lights the paper in a yellow tone and the text under it stays the ink.
+#[test]
+fn dark_pages_draw_a_multiply_highlight_as_a_light_band_under_light_text() {
+    // A black bar (the text) at 100..110 under a yellow highlight over 15..120.
+    let content = "0 g 100 40 10 20 re f";
+    let pdf = format!(
+        "%PDF-1.7\n\
+         1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Annots [5 0 R] >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /Annot /Subtype /Highlight /Rect [15 35 120 65] /QuadPoints [15 65 120 65 15 35 120 35] /C [1 1 0] >> endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    )
+    .into_bytes();
+    let dark_reading = crate::DarkPages { palette: crate::DarkPalette::Black, images: crate::DarkImages::KeepOpaque }.reading_colors();
+    let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig { dark_reading, ..Default::default() });
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    let pixel = |x: u32, y: u32| -> [u8; 4] { page.rgba[((y * page.width + x) * 4) as usize..][..4].try_into().unwrap() };
+    assert_eq!(pixel(150, 50), [0, 0, 0, 255], "the black palette's paper outside the band");
+    let [r, g, b, _] = pixel(30, 50);
+    assert!(r > 40 && g > 40 && b + 30 < r.min(g), "the band lights the paper in yellow: {r} {g} {b}");
+    let [r, g, b, _] = pixel(105, 50);
+    assert!(r > 230 && g > 230 && b > 200, "the text under the band stays light: {r} {g} {b}");
+}
+
 /// White-on-black: the page clears black, the black filled rectangle maps to the text colour,
 /// and the image's pixels are byte-identical to the plain render — photos never pass through
 /// the mapping, not even its white quadrant, which would map to black if they did.
@@ -5542,6 +5610,45 @@ fn reading_colors_map_solid_paints_and_leave_images() {
         }
     }
     assert_eq!(pixel(&on, 150, 55), &[255, 255, 255, 255], "the image's white quadrant stays white");
+
+    // Dark pages that keep their images: the same remapping in the palette's colours, the
+    // image untouched; an explicit preset wins over it, and print previews use neither.
+    let palette = crate::DarkPalette::Sepia;
+    let dark_reading = crate::DarkPages { palette, images: crate::DarkImages::KeepOpaque }.reading_colors();
+    let render_with = |config: RenderConfig, tag: u64| {
+        let page = PageRenderer::new(Arc::new(pdf.clone()), config).render(RenderRequest { tag, ..req });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        page
+    };
+    let dark = render_with(RenderConfig { dark_reading, ..Default::default() }, 0);
+    let [pr, pg, pb] = palette.paper();
+    let [ir, ig, ib] = palette.ink();
+    assert_eq!(pixel(&dark, 5, 5), &[pr, pg, pb, 255], "the page clears to the palette's paper");
+    assert_eq!(pixel(&dark, 50, 60), &[ir, ig, ib, 255], "black paint becomes the palette's ink");
+    for y in 44..56u32 {
+        for x in 124..156u32 {
+            assert_eq!(pixel(&dark, x, y), pixel(&off, x, y), "image pixel {x},{y} is kept");
+        }
+    }
+    // Coloured paint keeps its hue (the palette's dark page filter), where reading colours
+    // map it by luminance to grey.
+    let red_pdf = pdf.clone().into_iter().collect::<Vec<u8>>();
+    let red_pdf = String::from_utf8(red_pdf).unwrap().replacen("0 0 0 rg 10 10 30 20 re f", "1 0 0 rg 10 10 30 20 re f", 1).into_bytes();
+    let red = |config: RenderConfig| {
+        let page = PageRenderer::new(Arc::new(red_pdf.clone()), config).render(req);
+        assert!(page.error.is_none(), "{:?}", page.error);
+        page
+    };
+    let kept = red(RenderConfig { dark_reading, ..Default::default() });
+    let [r, g, b, _] = <[u8; 4]>::try_from(pixel(&kept, 50, 60)).unwrap();
+    assert!(r > g + 40 && r > b + 40, "the red rectangle stays red: {r} {g} {b}");
+    let greyed = red(RenderConfig { reading_colors: ReadingColors::WHITE_ON_BLACK, ..Default::default() });
+    let [r, g, b, _] = <[u8; 4]>::try_from(pixel(&greyed, 50, 60)).unwrap();
+    assert!(r == g && g == b, "a reading preset maps it to grey: {r} {g} {b}");
+    let both = render_with(RenderConfig { reading_colors: ReadingColors::WHITE_ON_BLACK, dark_reading, ..Default::default() }, 0);
+    assert_eq!(both.rgba, on.rgba, "an explicit preset wins over dark pages");
+    let printed = render_with(RenderConfig { dark_reading, ..Default::default() }, PRINT_TAG);
+    assert_eq!(printed.rgba, off.rgba, "print previews keep the original colours");
 }
 
 /// #2975: a stencil mask (`/ImageMask true`) is painted in the fill colour at the fill

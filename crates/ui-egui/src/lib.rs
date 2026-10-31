@@ -54,7 +54,9 @@ mod dialogs;
 pub use edit_text_ui::CropMode;
 mod editing;
 mod home;
+mod page_colors;
 mod panels;
+mod preview_raster;
 pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
@@ -606,6 +608,7 @@ pub struct PdfCraftApp {
     pub initials: Option<fill_sign::SavedSig>,
     /// The Create signature / initials dialog, and its typed preview.
     pub signature_draft: fill_sign::SigDraft,
+    pub(crate) page_signature_preview: Option<fill_sign::PageSignaturePreview>,
     pub(crate) signature_preview: Option<(fill_sign::SavedSig, egui::TextureHandle)>,
     /// The Scan tab's photo, keyed by its version.
     pub(crate) signature_photo: Option<(u64, egui::TextureHandle)>,

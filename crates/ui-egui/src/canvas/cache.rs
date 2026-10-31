@@ -3,6 +3,7 @@ use super::{
     Arc, Color32, DocInfo, DocView, HashSet, PRINT_TAG, PT, PageText, Range, RenderPool, RenderRequest, RequestKind, TextureHandle, TextureOptions,
     device_pixels,
 };
+use crate::page_colors::PageColors;
 
 pub(super) const THUMB_TAG: u64 = 1 << 63;
 
@@ -127,7 +128,7 @@ impl DocView {
     }
 
     pub fn render_pending(&self) -> bool {
-        !self.last_queue.is_empty() || self.text_background.pending() || self.move_background.pending()
+        !self.last_queue.is_empty() || self.text_background.pending() || self.move_background.pending() || self.signature_drag.pending()
     }
 
     /// The cached tile keys of a page, as (scale tag, tile x, tile y) (diagnostics and tests).
@@ -171,6 +172,41 @@ impl DocView {
             f.matches.clear();
             f.current = None;
         }
+    }
+
+    /// The dark-page setting while dark pages are on.
+    pub fn dark(&self) -> Option<pdfcraft_render::DarkPages> {
+        self.dark_pages.then_some(self.dark_style)
+    }
+
+    /// Change how dark pages are drawn, refreshing every retained page raster when it shows.
+    pub fn set_dark_style(&mut self, style: pdfcraft_render::DarkPages) {
+        if self.dark_style == style {
+            return;
+        }
+        self.dark_style = style;
+        if self.dark_pages {
+            self.refresh_dark_pages();
+        }
+    }
+
+    /// Toggle the display-only page filter and refresh every retained page raster.
+    pub fn set_dark_pages(&mut self, on: bool) {
+        if self.dark_pages == on {
+            return;
+        }
+        self.dark_pages = on;
+        self.refresh_dark_pages();
+    }
+
+    fn refresh_dark_pages(&mut self) {
+        for page in self.pages.values_mut() {
+            page.tag = STALE_TAG;
+        }
+        self.stale_thumbs.extend(self.thumbs.keys().copied());
+        self.grid_pages.clear();
+        self.tiles.clear();
+        self.last_queue.clear();
     }
 
     /// Only `page` changed (a comment was added, edited or removed): re-render that page and
@@ -497,7 +533,8 @@ impl DocView {
         let started = std::time::Instant::now();
         for _ in 0..budget {
             let Some(r) = pool.try_recv() else { break };
-            uploaded = uploaded.saturating_add(self.receive_result(ctx, r));
+            let colors = PageColors::for_request(self.dark(), pool.reading_colors(), r.request.tag);
+            uploaded = uploaded.saturating_add(self.receive_result(ctx, r, colors));
             // One whole-page upload may exceed the frame allowance; it must still progress.
             if uploaded >= UPLOAD_BYTES_PER_FRAME {
                 break;
@@ -509,7 +546,7 @@ impl DocView {
         }
     }
 
-    pub(super) fn receive_result(&mut self, ctx: &egui::Context, r: pdfcraft_render::RenderedPage) -> usize {
+    pub(super) fn receive_result(&mut self, ctx: &egui::Context, r: pdfcraft_render::RenderedPage, colors: PageColors) -> usize {
         if !self.last_queue.contains(&r.request) {
             return 0;
         }
@@ -563,7 +600,7 @@ impl DocView {
             return 0;
         }
         // The length was checked above, so the renderer's buffer becomes the texture data as is.
-        let img = texture_image([r.width as usize, r.height as usize], r.rgba);
+        let img = texture_image([r.width as usize, r.height as usize], r.rgba, colors);
         if let Some(t) = r.request.tile {
             let key = (page, r.request.tag, t.x, t.y);
             let tex = ctx.load_texture(format!("tile-{:?}-{page}-{}-{}", self.id, t.x, t.y), img, TextureOptions::LINEAR);
@@ -706,14 +743,15 @@ pub(super) const OLD_TILES: usize = 64;
 /// so gestures stay on stretched surfaces instead of queueing full-page interprets.
 const SLOW_MILLIS: u32 = 500;
 
-/// A rendered raster as texture data. Its words are premultiplied RGBA bytes, exactly
-/// `Color32`s, so the renderer's buffer becomes the image without a copy on the UI thread.
-pub(crate) fn texture_image(size: [usize; 2], pixels: pdfcraft_render::Pixels) -> egui::ColorImage {
-    match bytemuck::allocation::try_cast_vec::<u32, Color32>(pixels.into_words()) {
+/// A rendered raster as texture data. Without the dark filter, its premultiplied RGBA words
+/// become the image without a copy. Reading-colour presets are already applied by the renderer.
+pub(crate) fn texture_image(size: [usize; 2], pixels: pdfcraft_render::Pixels, colors: PageColors) -> egui::ColorImage {
+    let image = match bytemuck::allocation::try_cast_vec::<u32, Color32>(pixels.into_words()) {
         Ok(px) if px.len() == size[0].saturating_mul(size[1]) => egui::ColorImage::new(size, px),
         Ok(px) => egui::ColorImage::from_rgba_premultiplied(size, bytemuck::cast_slice(&px)),
         Err((_, words)) => egui::ColorImage::from_rgba_premultiplied(size, bytemuck::cast_slice(&words)),
-    }
+    };
+    colors.image(image)
 }
 
 /// A luminance preview for a monochrome print. `Color32` stores premultiplied pixels, so a

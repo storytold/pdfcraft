@@ -12,6 +12,7 @@ use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, TextureHand
 use pdfcraft_engine::{DocId, Edit};
 use pdfcraft_render::{DestView, DocInfo, LayerOp, LinkTarget, PRINT_TAG, PageText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels};
 
+use crate::page_colors::PageColors;
 use crate::page_cursor::{Layer, Subject};
 use crate::page_pointer::PagePointer;
 use crate::theme::{self, Tokens};
@@ -192,12 +193,25 @@ pub struct ViewDefaults {
     /// Highlight existing fields: a preference in Acrobat, so it carries over to the next
     /// document and the next session. On for new settings; a stored choice wins.
     pub highlight_fields: bool,
+    /// Recolour rendered pages for comfortable reading on a dark background.
+    pub dark_pages: bool,
+    /// How dark pages are drawn: the palette, and whether images keep their colours.
+    pub dark_style: pdfcraft_render::DarkPages,
 }
 
 impl Default for ViewDefaults {
     fn default() -> Self {
         // Single page, scrolling continuously at fit width: the earlier "continuous" default.
-        Self { layout: PageLayout::Single, continuous: true, show_page_gaps: true, fit: Fit::Width, zoom: 1.0, highlight_fields: true }
+        Self {
+            layout: PageLayout::Single,
+            continuous: true,
+            show_page_gaps: true,
+            fit: Fit::Width,
+            zoom: 1.0,
+            highlight_fields: true,
+            dark_pages: false,
+            dark_style: Default::default(),
+        }
     }
 }
 
@@ -284,6 +298,10 @@ pub struct DocView {
     pub current: usize,
     pub organize: bool,
     pub highlight_fields: bool,
+    /// Display-only dark-page filter; PDF content and exported pixels are unchanged.
+    pub dark_pages: bool,
+    /// How dark pages are drawn (the app's preference): palette, and whether images keep colours.
+    pub dark_style: pdfcraft_render::DarkPages,
     pub page_input: String,
     /// Select the replacement page label once if its editor remains focused.
     pub(crate) page_input_reselect: bool,
@@ -619,6 +637,8 @@ impl DocView {
             current: 0,
             organize: false,
             highlight_fields: defaults.highlight_fields,
+            dark_pages: defaults.dark_pages,
+            dark_style: defaults.dark_style,
             page_input: "1".into(),
             page_input_reselect: false,
             notice_dismissed: false,
@@ -769,7 +789,7 @@ impl DocView {
     }
 
     /// The document was replaced by a newer version of its file (#431). The reader's place
-    /// stays: zoom, layout, rotation, page, scroll, full screen, view history and the find bar,
+    /// stays: zoom, layout, rotation, page, scroll, dark pages, full screen, view history and the find bar,
     /// the snapshot marker and its pending close, and the page images on screen until their
     /// replacements are drawn, so nothing flashes. Everything that pointed into the old version (a selected
     /// comment, a field being typed in, text being edited, a drag, page selection) starts
@@ -789,6 +809,8 @@ impl DocView {
         // Same document id, so the scroll offset egui keeps for it is still this document's.
         fresh.shown = self.shown;
         fresh.highlight_fields = self.highlight_fields;
+        fresh.dark_pages = self.dark_pages;
+        fresh.dark_style = self.dark_style;
         fresh.notice_dismissed = self.notice_dismissed;
         fresh.snapshot = self.snapshot.clone();
         fresh.close_requested = self.close_requested;
@@ -842,6 +864,7 @@ struct PageEnv<'a> {
     can_crop: bool,
     can_fill: bool,
     can_modify: bool,
+    colors: PageColors,
     comments_hidden: bool,
     content_h: f32,
     content_w: f32,
@@ -918,7 +941,7 @@ struct PageFrame<'a> {
     visible: Rect,
     pressed: bool,
     pointer: Option<Pos2>,
-    signature_preview: &'a mut Option<(crate::fill_sign::SavedSig, egui::TextureHandle)>,
+    signature_preview: &'a mut Option<crate::fill_sign::PageSignaturePreview>,
     out: PageOut,
     wanted: Vec<(usize, f32, u64, Option<Tile>)>,
     visible_now: Vec<usize>,
@@ -946,7 +969,7 @@ struct PageSlot {
 /// Paints the page's paper, shadow and raster (or why it can't be shown), and asks for the renders
 /// it wants.
 fn paint_page_surface(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, slot: &PageSlot) {
-    let PageEnv { paper, ppp, scale, t, tag, .. } = frame.env;
+    let PageEnv { colors, paper, ppp, scale, t, tag, .. } = frame.env;
     let PageSlot { i, r, xf } = *slot;
     let visible = frame.visible;
     let info = frame.env.info;
@@ -1000,7 +1023,8 @@ fn paint_page_surface(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFra
                 let now = ui.input(|inp| inp.time);
                 let since = *view.waiting_since.entry(i).or_insert(now);
                 let msg = if now - since > 6.0 { "Still rendering — this page is unusually complex…" } else { "Rendering…" };
-                painter.text(r.center(), Align2::CENTER_CENTER, tl!(msg), theme::regular(12.0), t.text_faint);
+                let loading_color = colors.loading_color(t.text_faint);
+                painter.text(r.center(), Align2::CENTER_CENTER, tl!(msg), theme::regular(12.0), loading_color);
             }
         }
         if tiled && r.intersects(visible) {
@@ -1109,6 +1133,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         can_crop,
         can_fill,
         can_modify,
+        colors,
         comments_hidden,
         custom_stamp,
         date_text,
@@ -1232,6 +1257,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
                 preview: frame.signature_preview,
                 author,
                 date_text,
+                colors,
             },
             view,
         ) {
@@ -1677,6 +1703,7 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
         allowed,
         calc_order,
         can_modify,
+        colors,
         comments_hidden,
         doc,
         doc_links,
@@ -1712,7 +1739,7 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
     if input.area_tool {
         crate::redact_ui::paint(painter, i, view, pointer);
     }
-    comments::paint_page(ui, painter, &pcx, view);
+    comments::paint_page(ui, painter, &pcx, view, colors);
     if editing_content {
         crate::content_ui::paint_page(painter, &xf, i, info, added, view, pointer);
     }
@@ -1737,7 +1764,7 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
             }
         }
     } else {
-        crate::forms_ui::paint_page(painter, &xf, i, info, form, view, pointer);
+        crate::forms_ui::paint_page(painter, &xf, i, info, form, view, pointer, colors);
     }
 
     // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a
@@ -1879,7 +1906,7 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     let painter = ui.painter();
     let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
     let preview_target = (matches!(tool, QuickTool::Select | QuickTool::Fill(_)) && !comments_hidden).then_some(view.comments.selected).flatten();
-    view.signature_drag.prepare(ui.ctx(), doc, preview_target, scale);
+    view.signature_drag.prepare(ui.ctx(), doc, preview_target, scale, view.dark());
     view.signature_drag.paint(painter, &pcx, &view.comments, view.pending_edit.as_ref());
     // Any other comment being moved: drawn where it goes, over the page that still shows it
     // where it was.
@@ -1940,7 +1967,7 @@ fn draw_pages(
     view: &mut DocView,
     env: &PageEnv<'_>,
     out: &mut PageOut,
-    signature_preview: &mut Option<(crate::fill_sign::SavedSig, egui::TextureHandle)>,
+    signature_preview: &mut Option<crate::fill_sign::PageSignaturePreview>,
 ) -> PageRenders {
     let PageEnv {
         allowed,
@@ -2711,7 +2738,7 @@ fn track_scroll<T>(ui: &egui::Ui, view: &mut DocView, out: &egui::containers::sc
 /// The hover tip, find bar, size hint and the in-place editors drawn over the pages. Whether the
 /// text editor was finished.
 fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, primary_down: bool, hover_text: Option<(Pos2, String)>) -> bool {
-    let PageEnv { added, author, avail, can_modify, doc, form, info, prefs, t, today, tool, units, unobstructed, .. } = *env;
+    let PageEnv { added, author, avail, can_modify, colors, doc, form, info, prefs, t, today, tool, units, unobstructed, .. } = *env;
     if let Some((pos, text)) = hover_text {
         // Click-through, as a tooltip is: the pages lose the pointer under anything that isn't.
         let tip = egui::Area::new(egui::Id::unique("canvas-hover")).order(egui::Order::Tooltip).interactable(false);
@@ -2730,17 +2757,17 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
     if let Some(e) = comments::composer(ui.ctx(), view, info, prefs) {
         view.pending_edit = Some(e);
     }
-    if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info) {
+    if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info, colors) {
         view.pending_edit = Some(e);
     }
     let text_box = crate::forms_ui::text_box(doc, view, form);
-    if let Some(e) = crate::forms_ui::overlay(ui.ctx(), view, info, form, primary_down, text_box.as_ref(), today) {
+    if let Some(e) = crate::forms_ui::overlay(ui.ctx(), view, info, form, primary_down, text_box.as_ref(), today, colors) {
         view.pending_edit = Some(e);
     }
-    if let Some(e) = crate::fill_sign::type_box(ui.ctx(), view, info, author) {
+    if let Some(e) = crate::fill_sign::type_box(ui.ctx(), view, info, author, colors) {
         view.pending_edit = Some(e);
     }
-    let (typed, text_done) = crate::content_ui::editor(ui.ctx(), view, info, added);
+    let (typed, text_done) = crate::content_ui::editor(ui.ctx(), view, info, added, colors);
     if typed.is_some() {
         view.pending_edit = typed;
     }
@@ -3007,12 +3034,23 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if close_requested_tab(app, index) {
         return;
     }
+    // Dark pages that keep their images are drawn by the document's renderer: tell it before any
+    // page is asked for; a change there leaves every cached raster out of date.
+    let id = app.views[index].id;
+    let (dark, style) = (app.views[index].dark_pages, app.views[index].dark_style);
+    if app.session.dark_pages(id).is_some_and(|d| d != dark) || app.session.dark_style(id).is_some_and(|s| s != style) {
+        let generation = app.session.get(id).map(|d| d.edit_generation());
+        app.session.set_dark_style(id, style);
+        app.session.set_dark_pages(id, dark);
+        if app.session.get(id).map(|d| d.edit_generation()) != generation {
+            app.views[index].invalidate_content();
+        }
+    }
     let Some(doc) = app.session.get(app.views[index].id) else { return };
     let info = &doc.info;
-    let paper = app.session.reading_colors(app.views[index].id).and_then(|c| c.params).map_or(Color32::WHITE, |p| {
-        let [r, g, b] = p.background;
-        Color32::from_rgb(r, g, b)
-    });
+    let reading = app.session.reading_colors(app.views[index].id).unwrap_or_default();
+    let colors = PageColors::for_reading(app.views[index].dark(), reading);
+    let paper = colors.paper();
     if info.pages.is_empty() {
         app.views[index].auto_scroll.cancel();
         ui.centered_and_justified(|ui| ui.label(tl!("This document has no pages.")));
@@ -3159,7 +3197,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         view.prepare.selected = None;
     }
     view.objects.prepare(doc, tool == QuickTool::EditText && can_modify, ui.ctx());
-    view.text_background.prepare(ui.ctx(), doc, view.line_editor.as_ref(), view.content.draft.as_ref(), scale);
+    view.text_background.prepare(ui.ctx(), doc, view.line_editor.as_ref(), view.content.draft.as_ref(), scale, view.dark());
     let added = if editing_content { doc.added().to_vec() } else { Vec::new() };
     let doc_links = if tool == QuickTool::Link { doc.links().to_vec() } else { Vec::new() };
     if editing_content {
@@ -3167,7 +3205,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     } else {
         view.content.selected = None;
     }
-    view.move_background.prepare(ui.ctx(), doc, &view.content, scale);
+    view.move_background.prepare(ui.ctx(), doc, &view.content, scale, view.dark());
 
     scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
     let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
@@ -3184,6 +3222,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         can_crop,
         can_fill,
         can_modify,
+        colors,
         comments_hidden,
         content_h,
         content_w,
@@ -3230,7 +3269,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     };
     let mut page_out = PageOut::default();
     let out = page_scroll(ui, scroll, egui::Id::unique(("page-view-scope", view.id)), |ui, viewport| {
-        draw_pages(ui, viewport, view, &env, &mut page_out, &mut app.signature_preview)
+        draw_pages(ui, viewport, view, &env, &mut page_out, &mut app.page_signature_preview)
     });
     let PageOut {
         canvas_action,

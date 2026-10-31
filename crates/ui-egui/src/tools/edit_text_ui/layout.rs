@@ -194,8 +194,19 @@ pub(super) fn unseen(mut galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
 
 /// Align the editable galley's baselines to the source rows instead of egui's interface
 /// leading. Glyphs, meshes, caret and selection receive the same transform.
-pub(super) fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32) -> Arc<egui::Galley> {
+pub(super) fn editor_galley(
+    ui: &egui::Ui,
+    ed: &LineEditor,
+    text: &str,
+    scale: f32,
+    width: f32,
+    colors: crate::page_colors::PageColors,
+) -> Arc<egui::Galley> {
     let mut job = editor_job(ui, ed, text, scale, width);
+    // In the page's display colours; the paragraph's own colours stay as they are.
+    for section in &mut job.sections {
+        section.format.color = colors.text(section.format.color);
+    }
     let centered = job.halign == egui::Align::Center;
     job.halign = egui::Align::LEFT;
     let mut galley = ui.fonts_mut(|fonts| fonts.layout_job(job));

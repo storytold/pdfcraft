@@ -8,6 +8,14 @@
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
 # the trailing "…" of dialog commands is kept.
 
+	Dark PDF pages	深色 PDF 頁面
+	Soft dark	柔和深色
+	Sepia	棕褐色
+	Keep opaque images	保留不透明圖片
+	Keep all images	保留所有圖片
+	Recolour images	重新著色圖片
+	Dark page colours	深色頁面配色
+	Images on dark pages	深色頁面上的圖片
 	Menu	選單
 	File	檔案
 	Edit	編輯

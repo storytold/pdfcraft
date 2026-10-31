@@ -38,6 +38,10 @@ pub(crate) const NO_RECENT: &str = "file.no_recent";
 pub(crate) const DOCUMENT: &str = "window.document";
 /// A side panel, `{"panel": name}` ([`PANELS`]).
 pub(crate) const PANEL: &str = "view.panel";
+/// The dark pages' palette, `{"palette": name}` ([`pdfcraft_render::DarkPalette::name`]).
+pub(crate) const DARK_PALETTE: &str = "view.dark_pages.palette";
+/// What dark pages do with images, `{"images": name}` ([`pdfcraft_render::DarkImages::name`]).
+pub(crate) const DARK_IMAGES: &str = "view.dark_pages.images";
 const ACTUAL_SIZE: &str = "view.zoom.actual_size";
 const PAGE_LEVEL: &str = "view.zoom.page_level";
 const FIT_WIDTH: &str = "view.zoom.fit_width";
@@ -167,7 +171,7 @@ const DISPLAY: &[&str] = &[
     "view.fit_width_scrolling",
     "view.fit_one_page",
 ];
-const THEMES: &[&str] = &["view.theme.system", "view.theme.light", "view.theme.dark"];
+const THEMES: &[&str] = &["view.theme.system", "view.theme.light", "view.theme.dark", SEP, "view.dark_pages"];
 const PANES: &[&str] = &["view.side_panel", "view.tools_pane"];
 const PANE_COMMANDS: &[&str] = &["comment.list", "form.fields", "ui.dock.reset"];
 const MODES: &[&str] = &["view.full_screen", "view.read_mode"];
@@ -357,7 +361,19 @@ impl PdfCraftApp {
         view.extend(list(PANE_COMMANDS, &mut used));
         view.push(Node::Separator);
         view.extend(list(MODES, &mut used));
-        view.push(Node::submenu(tl!("Display theme"), list(THEMES, &mut used)));
+        let mut theme = list(THEMES, &mut used);
+        // Under Dark PDF pages: how they look.
+        let dark = |id: &str, key: &str, choices: Vec<(&str, &str)>| -> Vec<Node> {
+            choices
+                .into_iter()
+                .map(|(name, label)| Item::new(CommandRef::with_params(id, serde_json::json!({ key: name })), tl!(label)).radio(false).into())
+                .collect()
+        };
+        let palettes = crate::page_colors::DARK_PALETTES.iter().map(|(p, label)| (p.name(), *label)).collect();
+        let images = crate::page_colors::DARK_IMAGES.iter().map(|(i, label)| (i.name(), *label)).collect();
+        theme.push(Node::submenu(tl!("Dark page colours"), dark(DARK_PALETTE, "palette", palettes)));
+        theme.push(Node::submenu(tl!("Images on dark pages"), dark(DARK_IMAGES, "images", images)));
+        view.push(Node::submenu(tl!("Display theme"), theme));
         view.push(Node::Separator);
         view.push(Node::submenu(tl!("Tools"), self.tools_menu(&used)));
         view.extend(list(&["view.palette"], &mut used));
@@ -396,7 +412,8 @@ impl PdfCraftApp {
         if let Some(c) = shortcut.and_then(chord) {
             item = item.shortcut(c);
         }
-        if matches!(id, "view.layout.single" | "view.layout.two_up") || THEMES.contains(&id) {
+        // The themes are one choice; Dark PDF pages, listed with them, is a toggle of its own.
+        if matches!(id, "view.layout.single" | "view.layout.two_up") || (THEMES.contains(&id) && id != "view.dark_pages") {
             item = item.radio(false);
         }
         item.into()
@@ -489,6 +506,8 @@ impl PdfCraftApp {
                 SELECT_ALL | DELETE => has_doc,
                 ACTUAL_SIZE | PAGE_LEVEL | FIT_WIDTH | FIT_HEIGHT | ZOOM_IN | ZOOM_OUT | ROTATE_CW | ROTATE_CCW => has_doc,
                 PANEL => panel(command).is_some(),
+                DARK_PALETTE => dark_palette(command).is_some(),
+                DARK_IMAGES => dark_images(command).is_some(),
                 id => enabled_id(id),
             };
         let checked = match command.id.as_str() {
@@ -504,7 +523,10 @@ impl PdfCraftApp {
             "view.theme.system" => Some(self.theme_preference == ThemePreference::System),
             "view.theme.light" => Some(self.theme_preference == ThemePreference::Light),
             "view.theme.dark" => Some(self.theme_preference == ThemePreference::Dark),
+            "view.dark_pages" => Some(self.dark_pages_enabled()),
             PANEL => Some(panel(command).is_some_and(|p| self.right == Some(p))),
+            DARK_PALETTE => Some(dark_palette(command) == Some(self.dark_style().palette)),
+            DARK_IMAGES => Some(dark_images(command) == Some(self.dark_style().images)),
             _ => None,
         };
         ItemState { enabled, checked }
@@ -544,6 +566,12 @@ impl PdfCraftApp {
             SELECT_ALL => self.menu_input.extend(key(egui::Key::A, egui::Modifiers::COMMAND)),
             DELETE => self.menu_input.extend(key(egui::Key::Delete, egui::Modifiers::NONE)),
             PANEL => self.choose_right_panel(panel(command)),
+            DARK_PALETTE | DARK_IMAGES => {
+                let mut style = self.dark_style();
+                style.palette = dark_palette(command).unwrap_or(style.palette);
+                style.images = dark_images(command).unwrap_or(style.images);
+                self.set_dark_style(style);
+            }
             ACTUAL_SIZE | PAGE_LEVEL | FIT_WIDTH | FIT_HEIGHT | ZOOM_IN | ZOOM_OUT | ROTATE_CW | ROTATE_CCW => {
                 let Some(v) = self.active.and_then(|i| self.views.get_mut(i)) else { return };
                 match command.id.as_str() {
@@ -632,6 +660,18 @@ fn param_index(command: &CommandRef) -> Option<usize> {
     command.params.get("index").and_then(serde_json::Value::as_u64).and_then(|i| usize::try_from(i).ok())
 }
 
+/// The palette a [`DARK_PALETTE`] command names.
+fn dark_palette(command: &CommandRef) -> Option<pdfcraft_render::DarkPalette> {
+    let name = command.params.get("palette").and_then(serde_json::Value::as_str)?;
+    pdfcraft_render::DarkPalette::parse(name).ok()
+}
+
+/// The images choice a [`DARK_IMAGES`] command names.
+fn dark_images(command: &CommandRef) -> Option<pdfcraft_render::DarkImages> {
+    let name = command.params.get("images").and_then(serde_json::Value::as_str)?;
+    pdfcraft_render::DarkImages::parse(name).ok()
+}
+
 /// The side panel a [`PANEL`] command names.
 fn panel(command: &CommandRef) -> Option<RightPanel> {
     let name = command.params.get("panel").and_then(serde_json::Value::as_str)?;
@@ -704,10 +744,39 @@ mod tests {
         for it in items {
             let id = it.command.id.as_str();
             assert!(
-                commands::command(id).is_some() || extra(id).is_some() || [PANEL, DOCUMENT].contains(&id) || Builtin::of(&it.command).is_some(),
+                commands::command(id).is_some()
+                    || extra(id).is_some()
+                    || [PANEL, DOCUMENT, DARK_PALETTE, DARK_IMAGES].contains(&id)
+                    || Builtin::of(&it.command).is_some(),
                 "{id} runs something"
             );
         }
+    }
+
+    #[test]
+    fn display_theme_sets_dark_pages_and_how_they_look() {
+        use pdfcraft_render::{DarkImages, DarkPalette};
+        let (mut app, ctx) = app(&["a.pdf"]);
+        let kind = |app: &PdfCraftApp, command: &CommandRef| item(&linux(app, &ctx), command).kind;
+        let palette = |name: &str| CommandRef::with_params(DARK_PALETTE, serde_json::json!({ "palette": name }));
+        let images = |name: &str| CommandRef::with_params(DARK_IMAGES, serde_json::json!({ "images": name }));
+        assert_eq!(kind(&app, &CommandRef::new("view.dark_pages")), ItemKind::Check(false));
+        assert_eq!(kind(&app, &palette("soft")), ItemKind::Radio(true));
+        assert_eq!(kind(&app, &images("keep-opaque")), ItemKind::Radio(true));
+        app.run_menu_command(&ctx, &CommandRef::new("view.dark_pages"));
+        app.run_menu_command(&ctx, &palette("sepia"));
+        app.run_menu_command(&ctx, &images("recolour"));
+        assert!(app.views[0].dark_pages);
+        assert_eq!((app.dark_style().palette, app.dark_style().images), (DarkPalette::Sepia, DarkImages::Recolour));
+        assert_eq!(app.views[0].dark_style, app.dark_style(), "open documents follow");
+        assert_eq!(kind(&app, &CommandRef::new("view.dark_pages")), ItemKind::Check(true));
+        assert_eq!((kind(&app, &palette("soft")), kind(&app, &palette("sepia"))), (ItemKind::Radio(false), ItemKind::Radio(true)));
+        assert_eq!(kind(&app, &images("recolour")), ItemKind::Radio(true));
+        // A name the menus don't have is greyed and does nothing.
+        let style = app.dark_style();
+        app.run_menu_command(&ctx, &palette("night"));
+        assert_eq!(app.dark_style(), style);
+        assert!(!app.menu_state(&ctx, &palette("night")).enabled);
     }
 
     #[test]

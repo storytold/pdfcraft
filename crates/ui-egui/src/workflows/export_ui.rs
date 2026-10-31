@@ -306,3 +306,125 @@ impl PdfCraftApp {
         }
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    /// Contributor-original vector fixture, generated in code with a valid xref.
+    fn dark_pages_pdf() -> Vec<u8> {
+        let content = "0 0 0 rg 10 10 20 20 re f 1 0 0 rg 40 10 20 20 re f 0 0 1 rg 70 10 20 20 re f";
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 50] /Resources << >> /Contents 4 0 R >>".to_owned(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        ];
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, object) in objects.iter().enumerate() {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = bytes.len();
+        bytes.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
+        for offset in offsets {
+            bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(format!("trailer << /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+        bytes
+    }
+
+    struct OutputDir(std::path::PathBuf);
+
+    impl Drop for OutputDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn print_pixels(bytes: Vec<u8>) -> (u32, u32, Vec<u8>) {
+        let mut renderer = pdfcraft_render::PageRenderer::new(Arc::new(bytes), Default::default());
+        let out = renderer.render(pdfcraft_render::RenderRequest { scale: 1.0, ..Default::default() });
+        assert!(out.error.is_none(), "{:?}", out.error);
+        (out.width, out.height, out.rgba.to_vec())
+    }
+
+    #[test]
+    fn dark_pages_preserve_document_history_image_export_and_print_output() {
+        let dir = OutputDir(std::env::temp_dir().join(format!("pdfcraft-dark-pages-{}", std::process::id())));
+        std::fs::create_dir(&dir.0).unwrap();
+        for state in ["clean", "edited", "undone"] {
+            let mut app = PdfCraftApp::new();
+            // Save stamps ModDate: hold the clock fixed so byte comparisons test the toggle.
+            app.session = pdfcraft_engine::Session::new().with_clock(|| 1_700_000_000);
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("colours.pdf", None, dark_pages_pdf()).unwrap();
+            let id = app.views[0].id;
+            if state != "clean" {
+                app.session.apply(id, pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Unsaved title".into() }).unwrap();
+                if state == "undone" {
+                    app.session.undo(id).unwrap();
+                }
+            }
+            let doc = app.session.get(id).unwrap();
+            let original = doc.bytes.clone();
+            let display = doc.display.clone();
+            let dirty = doc.dirty;
+            let undo = doc.can_undo().map(str::to_owned);
+            let redo = doc.can_redo().map(str::to_owned);
+            assert_eq!(dirty, state == "edited", "undo to the opened revision is clean");
+            assert_eq!(undo.is_some(), state == "edited");
+            assert_eq!(redo.is_some(), state == "undone");
+            let saved = app.session.save_bytes(id).unwrap();
+            app.export_dir_override = Some(dir.0.to_string_lossy().into_owned());
+            app.export_draft.dpi = 72.0;
+            app.export_draft.format = ImageFormat::Png;
+            app.print_draft.printer = None;
+            let print_path = dir.0.join("print.pdf");
+            app.save_override = Some(print_path.to_string_lossy().into_owned());
+            let mut baseline = None;
+            for dark in [false, true, false] {
+                if app.views[0].dark_pages != dark {
+                    assert!(app.execute("view.dark_pages"));
+                }
+                assert_eq!(app.views[0].dark_pages, dark);
+                // Every pass writes its own files: a failed export can't be read from an earlier one.
+                for old in [dir.0.join("colours_page_1.png"), print_path.clone()] {
+                    if old.exists() {
+                        std::fs::remove_file(old).unwrap();
+                    }
+                }
+                app.start_export(ExportKind::Image);
+                let status = app.export_status.as_ref().and_then(|s| s.lock().ok().and_then(|s| s.clone()));
+                assert!(
+                    matches!(&status, Some((_, _, Some(msg))) if msg.starts_with("Exported 1 image")),
+                    "{state}, dark={dark}: the export finished: {status:?}"
+                );
+                let png = image::load_from_memory(&std::fs::read(dir.0.join("colours_page_1.png")).unwrap()).unwrap().into_rgba8();
+                assert_eq!(png.dimensions(), (100, 50));
+                assert_eq!(png.get_pixel(0, 0).0, [255, 255, 255, 255]);
+                assert_eq!(png.get_pixel(20, 30).0, [0, 0, 0, 255]);
+                assert_eq!(png.get_pixel(50, 30).0, [255, 0, 0, 255]);
+                assert_eq!(png.get_pixel(80, 30).0, [0, 0, 255, 255]);
+                // Exercise the actual Save as PDF branch, never a physical printer.
+                app.save_override = Some(print_path.to_string_lossy().into_owned());
+                assert!(app.print_now());
+                let printed = print_pixels(std::fs::read(&print_path).unwrap());
+                let outputs = (png, printed);
+                if let Some(expected) = &baseline {
+                    assert_eq!(&outputs, expected, "{state}, dark={dark}: original-colour outputs");
+                } else {
+                    baseline = Some(outputs);
+                }
+                let doc = app.session.get(id).unwrap();
+                assert_eq!(doc.bytes, original, "working document unchanged");
+                assert_eq!(doc.display, display, "display source unchanged");
+                assert_eq!(doc.dirty, dirty);
+                assert_eq!(doc.can_undo(), undo.as_deref());
+                assert_eq!(doc.can_redo(), redo.as_deref());
+                assert_eq!(app.session.save_bytes(id).unwrap(), saved, "serialized PDF unchanged");
+            }
+        }
+    }
+}

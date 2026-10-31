@@ -264,6 +264,7 @@ impl PdfCraftApp {
             signature: None,
             initials: None,
             signature_draft: Default::default(),
+            page_signature_preview: None,
             signature_preview: None,
             signature_photo: None,
             saved_signature_previews: [None, None],

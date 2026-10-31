@@ -230,6 +230,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     // View-local history also appears in the Page navigation section; don't duplicate its menu.
     c("view.previous_view", "Previous view", None, Some(Shortcut::cmd("[")), Document, "chevron-left"),
     c("view.next_view", "Next view", None, Some(Shortcut::cmd("]")), Document, "chevron-right"),
+    c("view.dark_pages", "Dark PDF pages", None, None, Nothing, "moon"),
     c("view.focus_page_input", "Go to page…", VIEW, Some(Shortcut::cmd_shift("N")), Document, "text-cursor-input"),
     c(
         "view.side_panel",

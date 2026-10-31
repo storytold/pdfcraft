@@ -75,6 +75,9 @@ pub struct RenderConfig {
     /// View ▸ Reading colours: solid text and line-art paints are remapped for readability and
     /// the page clears to the setting's background. Display only; the document never changes.
     pub reading_colors: ReadingColors,
+    /// Dark PDF pages that keep their images ([`crate::DarkPages::reading_colors`]): the same
+    /// remapping, used while `reading_colors` is off (an explicit preset wins). Display only.
+    pub dark_reading: ReadingColors,
     /// The page clears to transparent instead of white (or the reading background): for a page
     /// holding only what is laid over another raster, such as a comment while it is dragged.
     pub transparent: bool,
@@ -214,10 +217,16 @@ pub struct RenderRequest {
 /// Installed-font fallback is also disabled, matching the output's font policy.
 pub const PRINT_TAG: u64 = 1 << 60;
 
-/// The reading colours a request renders with: print previews ([`PRINT_TAG`]) ignore the
-/// document's setting and render with reading colours off.
+/// The reading colours a request renders with: the document's setting, else dark pages that keep
+/// their images. Print previews ([`PRINT_TAG`]) ignore both and render with them off.
 fn request_reading(config: &RenderConfig, req: &RenderRequest) -> ReadingColors {
-    if req.tag & PRINT_TAG != 0 { ReadingColors::default() } else { config.reading_colors }
+    if req.tag & PRINT_TAG != 0 {
+        ReadingColors::default()
+    } else if config.reading_colors.params.is_some() {
+        config.reading_colors
+    } else {
+        config.dark_reading
+    }
 }
 
 /// What a render that panicked or overran the watchdog is remembered by: its page and kind. Not

@@ -326,6 +326,13 @@ impl PdfCraftApp {
             }
             "view.next_tab" => self.step_tab(true),
             "view.previous_tab" => self.step_tab(false),
+            "view.dark_pages" => {
+                let on = !self.dark_pages_enabled();
+                if let Some(i) = active {
+                    self.views[i].set_dark_pages(on);
+                }
+                self.view_defaults.dark_pages = on;
+            }
             "view.theme" => {
                 let next = if self.theme == ThemeKind::Light { ThemePreference::Dark } else { ThemePreference::Light };
                 self.set_theme_preference(next);

@@ -254,3 +254,13 @@ navigation-history tool; use the opt-in UI control channel to navigate the displ
 (`#RRGGBB`, default black) for `text` and `date`. The colour is saved in the
 FreeText appearance and survives reopening. Other mark/signature types reject
 `color`; their appearance controls are separate.
+
+## Dark PDF page previews
+
+`view_dark_pages {doc, enabled}` applies the desktop dark-page filter to `page_render`
+(including textless editor backgrounds), using the same colour function as the GUI.
+This is a per-open-document view preference: it leaves PDF bytes, history, exports and
+printing unchanged, and reopening starts with the filter off. Explicit `view_reading_colors`
+presets take precedence; turning them off restores the dark-page choice. The desktop app
+separately persists its default for newly opened documents. `command_run` can invoke this
+tool as `view.dark_pages` with `doc` and `enabled` in `params`.

@@ -44,6 +44,11 @@ pub struct Document {
     pub(crate) sig_cache: Arc<pdfcraft_sign::DigestCache>,
     pub(crate) editor: Option<Editor>,
     pub(crate) config: RenderConfig,
+    /// Display-only dark-page preference; independent of document history.
+    pub(crate) dark_pages: bool,
+    /// How dark pages are drawn: the palette, and whether images keep their colours (then the
+    /// renderer draws them, through `config.dark_reading`).
+    pub(crate) dark_style: pdfcraft_render::DarkPages,
     /// What field scripts printed or asked for (see [`Session::take_js_output`]).
     pub(crate) js_output: js::JsOutput,
     /// Dynamic XFA forms: what laying the template out produced (pages and fields are

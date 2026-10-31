@@ -887,6 +887,17 @@ pub fn tools() -> Vec<ToolDef> {
         t("comments_hide", "Hide all comments", "Hide or show every comment on the page (fields and links still draw). A view setting: the file doesn't change.")
             .cmd("comment.hide_all")
             .with(schema(json!({ "doc": doc(), "hidden": { "type": "boolean", "description": "Default true." } }), &["doc"])),
+        t("view_dark_pages", "Set dark PDF pages", "Enable or disable the display-only dark pages for page_render previews. Uses the GUI's colour policy; explicit reading-colour presets take precedence. palette is soft (dark grey paper, light grey ink; the default), black (black paper, white ink) or sepia (dark brown paper, cream ink). images is keep-opaque (the default: the renderer recolours text, line art, fills and images with transparency such as logos and signatures, hues kept, while opaque images such as photos and scans keep their colours), keep-all (every raster image keeps its colours) or recolour (every pixel is filtered, pictures included). palette and images keep their current values when not given. Does not change PDF bytes, undo history, exports or print output. The preference belongs to this open document and resets on reopening. Returns enabled, palette and images.")
+            .cmd("view.dark_pages")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "enabled": { "type": "boolean" },
+                    "palette": { "type": "string", "enum": ["soft", "black", "sepia"] },
+                    "images": { "type": "string", "enum": ["keep-opaque", "keep-all", "recolour"], "description": "What happens to raster images. Default keep-opaque." },
+                }),
+                &["doc", "enabled"],
+            )),
         t("view_reading_colors", "Set reading colours", "Set the document's reading colours (Acrobat's Replace Document Colors, in the Reading Options): solid text and line-art paints are remapped for readability and the page clears to the background colour in page_render. A view setting: the file doesn't change. mode is one of: off, black-on-white, white-on-black, yellow-on-black, green-on-black, or custom (which takes text and background as #RRGGBB). only_black maps only near-black paints (default false) and line_art also maps line-art paints (default true); both override the mode's preset. A flag that differs from the mode's preset default makes the returned mode read custom, because the resulting params no longer match any preset. Returns the resulting setting.")
             .cmd("a11y.reading_options")
             .with(schema(

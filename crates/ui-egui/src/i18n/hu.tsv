@@ -9,6 +9,14 @@
 # consulted or copied; add entries the same way.
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
 # the trailing "…" of dialog commands is kept.
+	Dark PDF pages	Sötét PDF-oldalak
+	Soft dark	Lágy sötét
+	Sepia	Szépia
+	Keep opaque images	Átlátszatlan képek megtartása
+	Keep all images	Minden kép megtartása
+	Recolour images	Képek átszínezése
+	Dark page colours	Sötét oldalak színei
+	Images on dark pages	Képek sötét oldalakon
 	Menu	Menü
 	File	Fájl
 	Edit	Szerkesztés

@@ -15,6 +15,14 @@
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
 # the trailing "…" of dialog commands is kept.
 
+	Dark PDF pages	PDFページを暗く表示
+	Soft dark	ソフトダーク
+	Sepia	セピア
+	Keep opaque images	不透明な画像はそのまま
+	Keep all images	すべての画像をそのまま
+	Recolour images	画像も色を変える
+	Dark page colours	暗いページの配色
+	Images on dark pages	暗いページの画像
 	Menu	メニュー
 	File	ファイル
 	Edit	編集

@@ -46,6 +46,24 @@ impl PdfCraftApp {
         }
     }
 
+    /// How dark pages are drawn: one preference for every document.
+    pub fn dark_style(&self) -> pdfcraft_render::DarkPages {
+        self.view_defaults.dark_style
+    }
+
+    /// Change how dark pages are drawn (palette, images), in every open document too.
+    pub fn set_dark_style(&mut self, style: pdfcraft_render::DarkPages) {
+        self.view_defaults.dark_style = style;
+        for view in &mut self.views {
+            view.set_dark_style(style);
+        }
+    }
+
+    /// The current tab's dark-page choice, or the preference for the next document on Home.
+    pub fn dark_pages_enabled(&self) -> bool {
+        self.active_ids().map_or(self.view_defaults.dark_pages, |(i, _)| self.views[i].dark_pages)
+    }
+
     /// The app-wide reading-colours preference: sets it and applies it to every open document,
     /// not just the active one (Preferences ▸ Reading colours, Acrobat's Replace Document
     /// Colors). A document the change actually touches re-renders.
@@ -95,6 +113,7 @@ impl PdfCraftApp {
             "default_zoom": self.view_defaults.zoom_name(),
             "always_default_view": self.always_default_view,
             "highlight_fields": self.view_defaults.highlight_fields,
+            "dark_pages": self.view_defaults.dark_pages,
             "units": self.units,
             "language": self.language,
             "reading_colors": self.reading_colors,
@@ -144,6 +163,8 @@ impl PdfCraftApp {
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
+        v["dark_pages_palette"] = serde_json::Value::from(self.view_defaults.dark_style.palette.name());
+        v["dark_pages_images"] = serde_json::Value::from(self.view_defaults.dark_style.images.name());
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
@@ -243,6 +264,15 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;
+        }
+        if let Some(on) = v["dark_pages"].as_bool() {
+            self.view_defaults.dark_pages = on;
+        }
+        if let Some(palette) = v["dark_pages_palette"].as_str().and_then(|name| pdfcraft_render::DarkPalette::parse(name).ok()) {
+            self.view_defaults.dark_style.palette = palette;
+        }
+        if let Some(images) = v["dark_pages_images"].as_str().and_then(|name| pdfcraft_render::DarkImages::parse(name).ok()) {
+            self.view_defaults.dark_style.images = images;
         }
         if let Some(closed) = v["comments_panel_closed"].as_bool() {
             self.comments_panel_closed = closed;
