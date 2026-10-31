@@ -78,6 +78,45 @@ impl JsOutput {
             self.errors.push(e);
         }
     }
+
+    fn mark(&self) -> JsMark {
+        JsMark { alerts: self.alerts.len(), console: self.console.len(), requests: self.requests.len(), errors: self.errors.len() }
+    }
+
+    /// Takes out what was added after `mark` and leaves what came before it. The record of the
+    /// document scripts' errors stays, so they are still reported once.
+    fn split_off(&mut self, mark: JsMark) -> JsOutput {
+        JsOutput {
+            alerts: self.alerts.split_off(mark.alerts.min(self.alerts.len())),
+            console: self.console.split_off(mark.console.min(self.console.len())),
+            requests: self.requests.split_off(mark.requests.min(self.requests.len())),
+            errors: self.errors.split_off(mark.errors.min(self.errors.len())),
+            doc_errors: Vec::new(),
+        }
+    }
+}
+
+/// How much script output a document held at one moment (see [`Session::js_output_mark`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct JsMark {
+    alerts: usize,
+    console: usize,
+    requests: usize,
+    errors: usize,
+}
+
+impl Session {
+    /// Where document `id`'s script output ends now. [`Session::take_js_output_since`] takes
+    /// what scripts add after it.
+    pub fn js_output_mark(&self, id: DocId) -> JsMark {
+        self.get(id).map(|d| d.js_output.mark()).unwrap_or_default()
+    }
+
+    /// What scripts printed or asked for after `mark`, taken out of document `id`'s output. The
+    /// output that was waiting at `mark` stays for [`Session::take_js_output`].
+    pub fn take_js_output_since(&mut self, id: DocId, mark: JsMark) -> JsOutput {
+        self.docs.iter_mut().find(|d| d.id == id).map(|d| d.js_output.split_off(mark)).unwrap_or_default()
+    }
 }
 
 fn kind(k: FieldKind) -> pdfcraft_js::FieldType {
@@ -278,8 +317,10 @@ impl Session {
             && let Some(field) = doc.form.iter().find(|f| f.name == t)
             && let Some(som) = crate::xfa::clickable_som(&cos, &tpl, field)
         {
+            // The click returns only the output of its own edit; output from opening or from earlier edits stays.
+            let mark = self.js_output_mark(id);
             self.apply(id, Edit::XfaEvent { som, activity: "click".into() })?;
-            let out = self.take_js_output(id);
+            let out = self.take_js_output_since(id, mark);
             return Ok(Outcome {
                 rc: true,
                 alerts: out.alerts,
