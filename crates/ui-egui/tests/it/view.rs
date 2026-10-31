@@ -1445,6 +1445,126 @@ fn highlight_fields_leaves_a_groups_read_only_button_alone() {
     assert_eq!(tinted, 1, "only the button that can be chosen is tinted");
 }
 
+/// The wash of a read-only widget on a white page with black text (reading colours off): the
+/// paper an eighth of the way toward the text, partly opaque (`canvas::read_only_wash`).
+fn read_only_wash() -> egui::Color32 {
+    egui::Color32::from_rgba_unmultiplied(0xDF, 0xDF, 0xDF, 0x90)
+}
+
+/// The shapes painted with `wash`: `(rects, circles)`.
+fn washes(h: &Harness<'static, PdfCraftApp>, wash: egui::Color32) -> (usize, usize) {
+    let shapes = &h.output().shapes;
+    let rects = shapes.iter().filter(|c| matches!(&c.shape, egui::Shape::Rect(r) if r.fill == wash)).count();
+    let circles = shapes.iter().filter(|c| matches!(&c.shape, egui::Shape::Circle(r) if r.fill == wash)).count();
+    (rects, circles)
+}
+
+/// The shapes painted with the wash of a white page: `(rects, circles)`.
+fn read_only_washes(h: &Harness<'static, PdfCraftApp>) -> (usize, usize) {
+    washes(h, read_only_wash())
+}
+
+/// A read-only field looks disabled: it is washed grey, with field highlighting on or off, and
+/// the field that can be filled is not.
+#[test]
+fn read_only_fields_look_disabled() {
+    for fields in ["on", "off"] {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("locked.pdf", None, LOCKED.to_vec()).expect("opens");
+            app.set_option("left", "closed").unwrap();
+            app.set_option("panel", "none").unwrap();
+            app.set_option("fields", fields).unwrap();
+            app
+        });
+        h.run_steps(6);
+        assert_eq!(read_only_washes(&h), (1, 0), "only the read-only field is washed (highlighting {fields})");
+        // On the locked field (50..250 × 200..230 on the 300×400 pt page, y up), not the open
+        // one, and clipped to the page.
+        let page = rect(&h, 0).expect("page 1");
+        let locked = egui::pos2(page.min.x + page.width() * (150.0 / 300.0), page.min.y + page.height() * (1.0 - 215.0 / 400.0));
+        let (center, clip) = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|c| match &c.shape {
+                egui::Shape::Rect(r) if r.fill == read_only_wash() => Some((r.rect.center(), c.clip_rect)),
+                _ => None,
+            })
+            .expect("a wash");
+        assert!(center.distance(locked) < 1.0, "the locked field is washed: {center:?}, not {locked:?}");
+        assert!(page.contains_rect(clip), "the wash is clipped to the page: {clip:?} in {page:?}");
+    }
+}
+
+/// With reading colours on, the wash follows the page: on white text over a black page it is
+/// the black paper a little toward white, so the field dims instead of lighting up grey.
+#[test]
+fn read_only_fields_look_disabled_in_reading_colours() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.reading_colors = pdfcraft_render::ReadingColors::WHITE_ON_BLACK;
+        app.open_bytes("locked.pdf", None, LOCKED.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "none").unwrap();
+        app
+    });
+    h.run_steps(6);
+    let dark = egui::Color32::from_rgba_unmultiplied(0x1F, 0x1F, 0x1F, 0x90);
+    assert_eq!(washes(&h, dark), (1, 0), "the read-only field is washed toward the black paper");
+    assert_eq!(read_only_washes(&h), (0, 0), "not with the white page's grey");
+}
+
+/// A radio group's read-only button is washed on its own, round as the button is, and the
+/// group's other button is not.
+#[test]
+fn a_groups_read_only_button_looks_disabled() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("radio.pdf", None, LOCKED_RADIO.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "none").unwrap();
+        app
+    });
+    h.run_steps(6);
+    assert_eq!(read_only_washes(&h), (0, 1), "only the locked button is washed, and round");
+}
+
+/// While a radio group waits to be rendered again (after a choice), its preview is drawn over
+/// every button of the group, the locked one included: the locked button's wash is painted over
+/// the preview, so it still looks disabled meanwhile.
+#[test]
+fn a_groups_read_only_button_stays_washed_over_the_groups_preview() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("radio.pdf", None, LOCKED_RADIO.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "none").unwrap();
+        app
+    });
+    h.run_steps(6);
+    // The state a choice leaves until the page's new raster arrives (`editing.rs`).
+    h.state_mut().views[0].forms.unbaked.insert(("choice".to_string(), 0));
+    h.run_steps(1);
+    let r = rect(&h, 0).expect("page 1");
+    let locked = egui::pos2(r.min.x + r.width() * (170.0 / 300.0), r.min.y + r.height() * (1.0 - 320.0 / 400.0));
+    let preview_fill = egui::Color32::from_rgb(0xFF, 0xFF, 0xF4);
+    let shapes = &h.output().shapes;
+    let preview = shapes
+        .iter()
+        .position(|c| matches!(&c.shape, egui::Shape::Rect(s) if s.fill == preview_fill && s.rect.contains(locked)))
+        .expect("the group's preview covers the locked button");
+    let wash = shapes
+        .iter()
+        .position(|c| matches!(&c.shape, egui::Shape::Circle(s) if s.fill == read_only_wash() && s.center.distance(locked) < 1.0))
+        .expect("the locked button is washed");
+    assert!(wash > preview, "the wash ({wash}) is painted over the preview ({preview})");
+}
+
 /// A radio group's read-only button can't be chosen by a click, while the group's other button
 /// can.
 #[test]
