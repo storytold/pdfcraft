@@ -234,6 +234,7 @@ impl PdfCraftApp {
             recovery: None,
             recoverable: Vec::new(),
             recovery_keys: Default::default(),
+            recovered_paths: Default::default(),
             last_autosave: None,
             allow_quit: false,
             deferred_commands: Vec::new(),
