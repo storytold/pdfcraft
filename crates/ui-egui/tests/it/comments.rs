@@ -3260,3 +3260,44 @@ fn a_reply_on_another_page_to_a_locked_comment_is_not_deleted() {
     assert_eq!(comments(&h).len(), 2);
     assert!(h.state().session.get(doc_id).unwrap().can_undo().is_none());
 }
+
+/// An unlocked comment whose reply is locked is not counted or deleted: its thread stays whole.
+#[test]
+fn a_comment_with_a_locked_reply_is_not_deleted() {
+    let bytes = text_fixture_with_annots(
+        "[8 0 R 9 0 R]",
+        "[]",
+        &[
+            "<< /Type /Annot /Subtype /Text /Rect [20 150 40 170] /Contents (Note) >>",
+            "<< /Type /Annot /Subtype /Text /Rect [20 150 40 170] /F 128 /IRT 8 0 R /Contents (Locked reply) >>",
+        ],
+    );
+    let mut h = harness_with_bytes(bytes, |app| app.set_option("panel", "comments").unwrap());
+    crate::support::settle(&mut h);
+    assert_eq!(panel_delete_enabled(&mut h), (false, false));
+    assert!(h.state_mut().execute("comment.delete_all"));
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("All comments are locked"));
+    use pdfcraft_engine::Edit;
+    assert!(!h.state_mut().apply_edit(Edit::DeleteAnnotations { pages: None }));
+    assert_eq!(comments(&h).len(), 2);
+}
+
+/// A page delete that removes a thread also closes an editor open on a reply on another page.
+#[test]
+fn deleting_comments_on_a_page_closes_an_editor_open_on_a_reply_on_another_page() {
+    let bytes = text_fixture_with_annots(
+        "[8 0 R]",
+        "[9 0 R]",
+        &[
+            "<< /Type /Annot /Subtype /Text /Rect [20 150 40 170] /Contents (Note) >>",
+            "<< /Type /Annot /Subtype /Text /Rect [20 150 40 170] /IRT 8 0 R /Contents (Reply) >>",
+        ],
+    );
+    let mut h = harness_with_bytes(bytes, |app| app.set_option("panel", "comments").unwrap());
+    crate::support::settle(&mut h);
+    h.state_mut().views[0].comments.editing = Some((1, 0, "draft reply".into()));
+    assert!(h.state().views[0].comments.editing.is_some());
+    h.state_mut().views[0].current = 0;
+    assert!(h.state_mut().execute("comment.delete_page"));
+    assert!(h.state().views[0].comments.editing.is_none());
+}

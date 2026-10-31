@@ -356,6 +356,19 @@ fn delete_all_annotations_removes_comments_and_preserves_widgets_and_locked_thre
     assert_eq!(delete_all_annotations(&mut doc, None).unwrap(), 0);
 }
 
+/// A locked reply keeps its whole thread, as deleting the one comment refuses it.
+#[test]
+fn delete_all_annotations_keeps_a_thread_with_a_locked_reply() {
+    let mut doc = fixture();
+    let before = delete_all_annotations(&mut fixture(), None).unwrap();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [80.0, 80.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    let reply = add_reply(&mut doc, 0, note, "locked reply", "Bob", &meta("r")).unwrap();
+    set_locked(&mut doc, 0, reply, true).unwrap();
+    assert_eq!(delete_all_annotations(&mut doc, None).unwrap(), before);
+    let doc = reopen(&doc);
+    assert!(summaries(&doc).iter().any(|s| s.contents.as_deref() == Some("locked reply")));
+}
+
 /// Two pages whose `/Annots` are `page0` and `page1`, with `objects` numbered from 5 on.
 fn two_pages(page0: &str, page1: &str, objects: &[String]) -> Document {
     let mut objs = vec![

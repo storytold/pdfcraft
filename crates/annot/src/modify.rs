@@ -127,6 +127,8 @@ struct Listed {
     comment: bool,
     /// Bulk deletion may remove it as the comment its thread starts at ([`bulk_removable`]).
     removable: bool,
+    /// Locked (`/F` bit 8).
+    locked: bool,
     popup_subtype: bool,
     /// `/IRT`, `/Parent` and `/Popup`, resolved as the comment list resolves them.
     irt: Option<ObjRef>,
@@ -145,6 +147,7 @@ impl Listed {
             key,
             comment: first_listing && subtype.is_some_and(|s| is_comment_subtype(&String::from_utf8_lossy(s))),
             removable: d.zip(subtype).is_some_and(|(d, s)| bulk_removable(doc, d, s)),
+            locked: d.is_some_and(|d| annotation_flags(doc, d) & FLAG_LOCKED != 0),
             popup_subtype: matches!(subtype, Some(b"Popup")),
             irt: to(b"IRT"),
             parent: to(b"Parent"),
@@ -187,6 +190,7 @@ fn thread_root(i: usize, link: impl Fn(usize) -> Option<usize>) -> usize {
 ///   comment of its own. Replies, statuses and checkmarks go with their thread, wherever it
 ///   starts, and never on their own: a reply on a page being cleared stays when its thread starts
 ///   at a locked comment or on another page.
+/// - A thread with a locked comment anywhere in it stays whole, as deleting its first comment would refuse.
 /// - A deleted comment's replies and pop-ups go from every page, as deleting one comment takes its
 ///   whole thread.
 /// - An annotation listed on several pages, or an `/Annots` array several pages share, is on the
@@ -222,10 +226,14 @@ pub fn delete_all_annotations(doc: &mut Document, pages: Option<&[usize]>) -> Re
         let l = listed.get(i).filter(|l| l.comment)?;
         first.get(&l.irt?).copied().filter(|&j| j != i && listed.get(j).is_some_and(|p| p.comment))
     };
+    // A locked reply, status or checkmark keeps its thread, as `deletable` refuses it.
+    let blocked: HashSet<usize> = listed.iter().enumerate().filter(|(_, l)| l.comment && l.locked).map(|(i, _)| thread_root(i, link)).collect();
     let roots: HashSet<usize> = listed
         .iter()
         .enumerate()
-        .filter(|(i, l)| l.comment && l.removable && pages.is_none_or(|ps| ps.contains(&l.page)) && thread_root(*i, link) == *i)
+        .filter(|(i, l)| {
+            l.comment && l.removable && !blocked.contains(i) && pages.is_none_or(|ps| ps.contains(&l.page)) && thread_root(*i, link) == *i
+        })
         .map(|(i, _)| i)
         .collect();
     if roots.is_empty() {

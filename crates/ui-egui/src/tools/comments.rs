@@ -12,9 +12,11 @@
 //! Everything is turned into `pdfcraft_engine::Edit`s, queued on the view as `pending_edit` and
 //! applied by the app, so each change is one undo step.
 
+use std::collections::HashSet;
+
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, pos2, vec2};
 use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
-use pdfcraft_render::{Annotation, DocInfo, PageInfo, PageText};
+use pdfcraft_render::{Annotation, DocInfo, PageInfo, PageText, thread_tops};
 
 use crate::canvas::{DocView, PageXform};
 use crate::page_pointer::PagePointer;
@@ -402,12 +404,15 @@ fn in_bulk_delete(a: &Annotation) -> bool {
 }
 
 /// How many comments Delete all comments counts on `page` (every page when `None`), and how many
-/// of them are unlocked and would go.
+/// of them would go (unlocked, with no locked reply, status or checkmark).
 pub(crate) fn bulk_delete_counts(annotations: &[Annotation], page: Option<usize>) -> (usize, usize) {
+    let tops = thread_tops(annotations);
+    let locked_threads: HashSet<(usize, usize)> =
+        annotations.iter().filter(|a| a.locked).filter_map(|a| tops.get(&(a.page, a.index)).copied()).collect();
     annotations
         .iter()
         .filter(|a| page.is_none_or(|p| a.page == p) && in_bulk_delete(a))
-        .fold((0, 0), |(total, unlocked), a| (total + 1, unlocked + usize::from(!a.locked)))
+        .fold((0, 0), |(total, unlocked), a| (total + 1, unlocked + usize::from(!a.locked && !locked_threads.contains(&(a.page, a.index)))))
 }
 
 impl PdfCraftApp {

@@ -72,13 +72,11 @@ fn select_after_edit(
             }
         }
         Edit::DeleteAnnotation { page, index } => view.comments.annotation_deleted(annots_before, &info.annotations, (*page, *index)),
-        Edit::DeleteAnnotations { pages } => {
+        Edit::DeleteAnnotations { .. } => {
+            // Replies on other pages go with their thread, so no open editor can be trusted to still point at its comment.
             view.comments.selected = None;
-            let on_deleted_page = |p: usize| pages.as_ref().is_none_or(|ps| ps.contains(&p));
-            if view.comments.editing.as_ref().is_some_and(|(p, _, _)| on_deleted_page(*p)) {
-                view.comments.editing = None;
-            }
-            if view.comments.composer.as_ref().is_some_and(|c| matches!(c.kind, crate::comments::ComposerKind::Edit(_)) && on_deleted_page(c.page)) {
+            view.comments.editing = None;
+            if view.comments.composer.as_ref().is_some_and(|c| matches!(c.kind, crate::comments::ComposerKind::Edit(_))) {
                 view.comments.composer = None;
             }
         }
@@ -903,7 +901,6 @@ fn content_page(edit: &Edit) -> Option<usize> {
 fn comment_page(edit: &Edit) -> Option<usize> {
     match edit {
         Edit::AddAnnotation(a) => Some(a.page),
-        Edit::DeleteAnnotations { pages: Some(pages) } if pages.len() == 1 => pages.first().copied(),
         Edit::DeleteAnnotation { page, .. }
         | Edit::SetAnnotationContents { page, .. }
         | Edit::ReplyToAnnotation { page, .. }
