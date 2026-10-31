@@ -6382,6 +6382,23 @@ fn a_new_character_comes_from_the_source_fonts_own_embedded_program() {
 }
 
 #[test]
+fn contextual_source_completion_uses_one_encoding_for_the_whole_span() {
+    // Inter is already a repository asset. Its source WinAnsi encoding can show q,
+    // but not combining acute: completion must move the entire contextual span.
+    let inter = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+    let mut doc = embedded_program_page("BT /F1 12 Tf 72 700 Td (q) Tj ET", "Inter-Regular");
+    let draft = "q\u{301}";
+    let style = text::BlockStyle { width: Some(400.0), ..Default::default() };
+    let edit = text::rewrite_block(&mut doc, 0, 0, Some(draft), &style).unwrap();
+    assert_eq!(edit.substituted, None);
+    let doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, draft);
+    let fonts = page_font_programs(&doc);
+    assert!(fonts.iter().all(|(subtype, _)| subtype != b"Type3"));
+    assert!(fonts.iter().any(|(_, program)| program.as_deref() == Some(inter.as_slice())), "the source face supplies the new mark");
+}
+
+#[test]
 fn a_shaped_run_is_one_text_object_with_each_glyph_where_shaping_put_it() {
     let inter = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
     let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Stable text) Tj ET");
