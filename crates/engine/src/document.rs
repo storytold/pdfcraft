@@ -63,6 +63,9 @@ pub struct Document {
     /// [`EditNotice`]): text its fonts can't draw, pages whose own backdrop stays off. The
     /// interface shows it; tools return it.
     pub edit_notices: Vec<EditNotice>,
+    /// What the last successful Save as PDF/A or PDF/X ([`Edit::ConvertPdfA`],
+    /// [`Edit::ConvertPdfX`]) changed, in English; empty after any other edit.
+    pub converted: Vec<String>,
 }
 
 /// Something the last successful edit did that the user should hear about, never left silent
@@ -105,9 +108,6 @@ pub(crate) fn page_runs(pages: &[usize]) -> String {
     }
     let one = |p: usize| p.saturating_add(1);
     runs.iter().map(|&(a, b)| if a == b { one(a).to_string() } else { format!("{}-{}", one(a), one(b)) }).collect::<Vec<_>>().join(", ")
-    /// What the last successful Save as PDF/A or PDF/X ([`Edit::ConvertPdfA`],
-    /// [`Edit::ConvertPdfX`]) changed, in English; empty after any other edit.
-    pub converted: Vec<String>,
 }
 
 /// Text an edit stored as typed but drew with `?` in place of `ch`, because the font it is drawn

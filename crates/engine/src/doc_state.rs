@@ -108,7 +108,6 @@ pub(crate) fn save_options(doc: &pdfcraft_cos::Document, now: Option<i64>) -> Sa
     }
 }
 
-
 /// Validate the signature fields of `cos` (written as `bytes`).
 pub(crate) fn signatures_of(
     cos: &pdfcraft_cos::Document,
