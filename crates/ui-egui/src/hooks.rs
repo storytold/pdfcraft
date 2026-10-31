@@ -20,6 +20,6 @@ pub type OsEventsFn = Box<dyn FnMut() -> Vec<OsEvent>>;
 /// Hands a saved PDF to the page embedding PdfCraft (web). Set by the web app when a host page
 /// (such as a Nextcloud app) asked for saves; without it the browser downloads the file. `Ok`
 /// means handed over: unless the page answers saves ([`host`]), the document then counts as saved.
-pub type HostSaveFn = Box<dyn Fn(host::HostSave<'_>) -> Result<(), String>>;
+pub type HostSaveFn = Box<dyn Fn(crate::host::HostSave<'_>) -> Result<(), String>>;
 /// Told every frame whether any tab has unsaved work, so a host page can warn before leaving.
 pub type HostDirtyFn = Box<dyn FnMut(bool)>;
