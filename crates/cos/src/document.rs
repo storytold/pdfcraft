@@ -63,6 +63,9 @@ pub struct Document {
     encryption_changed: bool,
     /// Set by edits that must not leave earlier revisions in the file (redaction).
     full_save: bool,
+    /// The next full save also gives the file a new identifier (`/ID`), see
+    /// [`Document::require_full_save_with_new_id`].
+    new_id: bool,
     /// The handler and `/Encrypt` object number that saves use, when encryption changed.
     out_security: Option<Arc<pdfcraft_crypt::SecurityHandler>>,
     out_encrypt_num: Option<u32>,

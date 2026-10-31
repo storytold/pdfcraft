@@ -528,8 +528,9 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
     if residue > 0 {
         return Err(RedactError::Residue(residue));
     }
-    // The previous revision still holds the removed content: the next save must rewrite.
-    doc.require_full_save();
+    // The previous revision still holds the removed content: the next save must rewrite, and the
+    // rewritten file is a different file from its source, so it gets a new identifier.
+    doc.require_full_save_with_new_id();
     Ok(report)
 }
 

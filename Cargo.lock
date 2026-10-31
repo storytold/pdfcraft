@@ -4322,6 +4322,7 @@ version = "0.16.1"
 dependencies = [
  "chrono",
  "hayro-syntax",
+ "js-sys",
  "pdfcraft-crypt",
  "pdfcraft-filters",
  "pdfcraft-oracle",
@@ -4329,6 +4330,7 @@ dependencies = [
  "proptest",
  "serde_json",
  "thiserror 2.0.21",
+ "wasm-bindgen",
 ]
 
 [[package]]
