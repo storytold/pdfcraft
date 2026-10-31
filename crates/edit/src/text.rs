@@ -64,7 +64,7 @@ pub(crate) use rewrite::{reveal_ops, selectable_blocks, translate_blocks};
 /// One line of existing text.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextLine {
-    /// The line's text as shown.
+    /// The line's text in logical typing order.
     pub text: String,
     /// Its box in user space.
     pub rect: [f64; 4],
@@ -101,8 +101,8 @@ pub struct TextLine {
     scope: Option<usize>,
     /// The layers and graphics state parameters it is drawn in; see [`Paint`].
     paint: Paint,
-    /// Right-to-left `/ActualText` already supplies typing order; glyph text still needs bidi
-    /// recovery. Left-to-right ActualText (e.g. a Latin ligature) joins its line as usual.
+    /// RTL `/ActualText` and glyph runs with a backwards pen already supply typing order;
+    /// other glyph text needs bidi recovery. Latin ActualText joins its line as usual.
     logical_order: bool,
     /// Some of the line's text is `/ActualText`, which is already in logical order: visual-order
     /// Indic recovery would scramble it.

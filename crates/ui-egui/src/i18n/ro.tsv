@@ -2816,6 +2816,10 @@ theme	Appearance	Aspect
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
 
+# Review-suggestion captions reuse this catalog's existing translations.
+review-suggestion	Replace text	Înlocuire text
+review-suggestion	Replacement text	Text de înlocuire
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi
 

@@ -9676,6 +9676,39 @@ fn comments_are_reshaped_through_the_tool() {
     assert!(matches!(a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": 1, "points": "no" })), Err(ToolError::InvalidArgs(_))));
 }
 
+#[test]
+fn width_only_paragraph_edit_preserves_source_rows_through_save_and_reopen() {
+    use pdfcraft_cos::{Dict, Document, Object, Stream, write_full};
+    let dir = workdir("width-only-source-rows");
+    let mut cos = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&cos)[0].clone();
+    let content = cos.add(Object::Stream(Stream::flate(Dict::new(), b"BT /F1 12 Tf 14 TL 20 220 Td (alpha-) Tj T* (beta words) Tj ET")));
+    cos.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Ref(content))).unwrap();
+    std::fs::write(dir.join("rows.pdf"), write_full(&cos, &Default::default()).unwrap()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"rows.pdf"}))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}));
+    assert_eq!(before["paragraphs"][0]["editor_text"], "alpha-\nbeta words");
+    let formatted = ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"color":"#112233"}));
+    assert!(formatted.get("paragraph").is_some(), "the preserved hard-break paragraph keeps its identity: {formatted}");
+    assert_eq!(
+        ok(&mut a, "text_paragraphs", json!({"doc":doc,"page":1}))["paragraphs"][0]["editor_text"],
+        before["paragraphs"][0]["editor_text"],
+        "formatting without replacement text preserves the authoritative source buffer"
+    );
+    ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"width":160}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"out/rows.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"out/rows.pdf"}))["doc"].as_u64().unwrap();
+    let after = ok(&mut a, "text_paragraphs", json!({"doc":reopened,"page":1}));
+    assert_eq!(after["paragraphs"][0]["editor_text"], before["paragraphs"][0]["editor_text"]);
+    ok(&mut a, "text_edit", json!({"doc":reopened,"page":1,"paragraph":1,"width":160,"text":"alphabeta words"}));
+    assert_eq!(
+        ok(&mut a, "text_paragraphs", json!({"doc":reopened,"page":1}))["paragraphs"][0]["editor_text"],
+        "alphabeta words",
+        "explicit text can merge source rows"
+    );
+}
+
 /// #3193: bookmark_list reports a bookmark's colour and style (ISO 32000-2 §12.3.3, Tables 151
 /// and 152), only where they differ from black and regular. The list is read from the opened file
 /// and, once the document has been edited, from the edited one; both read them alike.

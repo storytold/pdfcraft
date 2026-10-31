@@ -2827,6 +2827,10 @@ key	Space	Space
 	the first row number can be at most {max}	số hàng đầu tiên tối đa là {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	vùng, khoảng cách và độ rộng cột phải là số, khoảng cách từ 0 trở lên và mỗi độ rộng lớn hơn 0
 
+# Review-suggestion captions reuse this catalog's existing translations.
+review-suggestion	Replace text	Thay thế văn bản
+review-suggestion	Replacement text	Văn bản được thay vào
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hôm nay
 

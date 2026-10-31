@@ -61,6 +61,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Brazilian Portuguese UI strings, compiled in by crates/ui-egui/src/i18n.rs"
+sha256 = "7f31ff66c8fe0862447189a10551fec0cf501f355af577c39afb1f4ff41f7ebe"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/es.tsv"
@@ -201,6 +202,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Arabic UI strings, compiled in by crates/ui-egui/src/i18n.rs"
+sha256 = "6eabce2e92e0aed74695156b84186c5a581e59eeb22633dc1dbc8c34e36e719d"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/ckb.tsv"
@@ -241,6 +243,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Lithuanian UI strings, compiled in by crates/ui-egui/src/i18n.rs"
+sha256 = "97a334a043b448222e4179b84323a9c255080807512a08116dc704c528962532"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/hi.tsv"
@@ -279,7 +282,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Romanian UI strings, compiled in by crates/ui-egui/src/i18n.rs"
-
+sha256 = "b521ff6be66fd0e0883ced380199f030b80d098012f3f933330f046f7fb24b3c"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/fi.tsv"
@@ -290,6 +293,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Finnish UI strings, compiled in by crates/ui-egui/src/i18n.rs"
+sha256 = "e2c349f9e361b6280d78b1a845e4e999fe3056e1975e5b332d1e0d06df635a0d"
 
 [[asset]]
 path = "assets/icons/accessibility.svg"
@@ -3423,6 +3427,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Vietnamese UI strings, compiled in by crates/ui-egui/src/i18n.rs"
+sha256 = "1a548171e473d411838aaccfc7780696c17ca31ad607c50967ccebf125a97ed4"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/sl.tsv"
@@ -3529,3 +3534,4 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Catalan UI strings, compiled in by crates/ui-egui/src/i18n.rs"
+sha256 = "4c553bcca703b08a8f6086d16845cd7aacf031f6ed1f898d3aefe18d8225ca1d"

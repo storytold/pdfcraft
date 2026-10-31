@@ -7036,6 +7036,127 @@ fn mode_tabs_keep_the_hand_over_a_paragraph_scrolled_under_them() {
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Convert, "the tab takes the click, not the paragraph's editor");
 }
 
+#[test]
+fn resizing_a_paragraph_keeps_source_rows_and_trailing_hyphens() {
+    let bytes = source_font_fixture_with_text("BT /F1 12 Tf 14 TL 20 220 Td (alpha-) Tj T* (beta words) Tj ET");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("rows.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let source = h.state().session.get(h.state().views[0].id).unwrap().text_blocks(0)[0].clone();
+    assert_eq!(source.editor_text, "alpha-\nbeta words");
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let k = page.width() / 300.0;
+    let edge = egui::pos2(page.left() + source.rect[2] as f32 * k + 2.0, page.top() + (300.0 - source.rect[3] as f32 + 6.0) * k);
+    flick(&mut h, edge, edge + egui::vec2(60.0 * k, 0.0));
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert!(doc.dirty, "the width drag actually applied an edit");
+    assert_eq!(doc.text_blocks(0)[0].editor_text, source.editor_text);
+    assert_eq!(doc.can_undo(), Some("Edit text"));
+}
+
+#[test]
+fn arabic_inline_editor_keeps_source_ink_and_the_applied_visual_until_redraw() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let bytes = source_font_fixture_with_text("BT /F1 24 Tf 20 220 Td /Span <</ActualText <FEFF06450631062D06280627>>> BDC (XXXX) Tj EMC ET");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("logical-source.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let source = h.state().session.get(h.state().views[0].id).unwrap().text_blocks(0)[0].clone();
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let k = page.width() / 300.0;
+    click_at(
+        &mut h,
+        egui::pos2(
+            page.left() + ((source.rect[0] + source.rect[2]) * 0.5) as f32 * k,
+            page.top() + (300.0 - ((source.rect[1] + source.rect[3]) * 0.5) as f32) * k,
+        ),
+    );
+    assert_eq!(h.state().views[0].line_editor.as_ref().unwrap().text, "مرحبا");
+    let visible_arabic = |h: &Harness<'static, PdfCraftApp>| {
+        h.output().shapes.iter().any(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text().chars().any(|c| ('\u{0600}'..='\u{06ff}').contains(&c)) => {
+                t.galley.rows.iter().any(|r| r.visuals.mesh.vertices.iter().any(|v| v.color.a() != 0))
+            }
+            _ => false,
+        })
+    };
+    assert!(!visible_arabic(&h), "an unchanged paragraph keeps its source ink instead of overlaying the interface face");
+    support::wait_until(&mut h, "the Arabic editor background", |app| !app.render_pending());
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "سلام".into();
+    h.run_steps(3);
+    assert!(visible_arabic(&h), "the changed logical buffer has visible glyphs");
+    h.state_mut().views[0].hold_rasters = true;
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+    for _ in 0..3 {
+        h.step();
+        assert!(h.state().views[0].line_editor.is_none(), "the edit applies");
+        assert!(visible_arabic(&h), "the applied visual stays over the textless page until its raster arrives");
+    }
+}
+
+#[test]
+fn rtl_inline_growth_uses_pdf_spacing_and_scale_when_applied() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let bytes =
+        source_font_fixture_with_text("BT /F1 12 Tf 150 Tz 4 Tc 200 220 Td /Span <</ActualText <FEFF06450631062D06280627>>> BDC (XX) Tj EMC ET");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("rtl-spacing.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let id = h.state().views[0].id;
+    let source = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let k = page.width() / 300.0;
+    click_at(
+        &mut h,
+        egui::pos2(
+            page.left() + ((source.rect[0] + source.rect[2]) * 0.5) as f32 * k,
+            page.top() + (300.0 - ((source.rect[1] + source.rect[3]) * 0.5) as f32) * k,
+        ),
+    );
+    let draft = "مرحبا WWW WWW";
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text = draft.into();
+    h.run_steps(3);
+    assert!(!dirty(&h), "measuring a draft does not edit the PDF");
+    assert!(
+        h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == draft)),
+        "native egui receives the logical mixed-script buffer, without a second visual reordering"
+    );
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+    h.run_steps(3);
+    assert!(dirty(&h));
+    let blocks = h.state().session.get(id).unwrap().text_blocks(0);
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].rows.len(), 1, "a row that fits the page must not wrap on Apply");
+    assert_eq!(blocks[0].editor_text, draft);
+    assert!((blocks[0].rect[2] - source.rect[2]).abs() < 0.5, "RTL growth keeps the source right edge: {:?} -> {:?}", source.rect, blocks[0].rect);
+    let saved = h.state_mut().session.save_bytes(id).unwrap();
+    let mut reopened = pdfcraft_engine::Session::new();
+    let reopened_id = reopened.open("saved.pdf", None, saved, None).unwrap();
+    assert_eq!(reopened.get(reopened_id).unwrap().text_blocks(0), blocks);
+}
+
 /// The paragraph opened for typing, as a person opens it: a click on its text.
 fn open_paragraph(h: &mut Harness<'static, PdfCraftApp>) {
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
