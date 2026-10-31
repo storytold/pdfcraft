@@ -4132,11 +4132,11 @@ title = "Open and reposition comment pop-ups"
 area = "E"
 tier = "P1"
 milestone = "M5"
-status = "planned"
+status = "shipped"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["comment_popup", "comment_list"]
+evidence = ["crates/ui-egui/tests/it/comments.rs::a_double_click_opens_a_notes_pop_up_which_drags_and_closes", "crates/annot/src/tests.rs::pop_ups_open_close_and_move_and_are_reported", "crates/automation/tests/it/automation.rs::comment_popups_are_opened_moved_and_listed", "crates/render/src/inspect/tests.rs::a_comments_pop_up_is_read_with_its_place_and_state"]
+notes = "double-click a comment to open its pop-up window on the page (its /Popup /Open and /Rect, so other viewers show it the same); author, date, the text typed in place and the replies; the title bar drags it, × closes it; each is an undo step. Not yet: Acrobat's pop-up options menu (reply, status, delete from the window), replying from the window, resizing the window, Preferences ▸ Commenting pop-up behaviours (open on roll-over, hide when the Comments list opens)"
 
 [[feature]]
 id = "comment.connector-lines"
@@ -4144,11 +4144,11 @@ title = "Connector lines between markups and pop-ups"
 area = "E"
 tier = "P2"
 milestone = "M5"
-status = "planned"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/comments.rs::a_connector_line_joins_a_comment_to_its_open_pop_up_while_the_pointer_is_on_either"]
+notes = "a line in the comment's colour from the comment to its open pop-up while the pointer is on either or the comment is selected (Acrobat's roll-over lines). Not yet: the preference to turn them off"
 
 [[feature]]
 id = "comment.review-history"

@@ -2850,3 +2850,8 @@ key	Space	Space
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất
+
+# AI-assisted additions for comment pop-up windows (2026-10-16); not reviewed by a native speaker.
+	Open comment pop-up	Mở cửa sổ bật lên của bình luận
+	Close comment pop-up	Đóng cửa sổ bật lên của bình luận
+	Move comment pop-up	Di chuyển cửa sổ bật lên của bình luận

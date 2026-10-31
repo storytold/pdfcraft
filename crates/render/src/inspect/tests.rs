@@ -304,6 +304,7 @@ fn no_rotate_comments_are_shown_upright_from_their_corner_and_back() {
         fill_sign: false,
         no_rotate: true,
         points: Vec::new(),
+        popup: None,
     };
     let rect = note.rect.map(f64::from);
     for rotation in [0u16, 90, 180, 270, 45] {
@@ -1848,6 +1849,39 @@ fn carriage_returns_in_comment_text_become_line_breaks() {
 
     let info = inspect(Arc::new(bytes), None).expect("opens");
     assert_eq!(info.annotations[0].contents.as_deref(), Some("one\n\ntwo\nthree"));
+}
+
+/// A comment's pop-up (`/Popup`) is read with its place and state; one without reads none.
+#[test]
+fn a_comments_pop_up_is_read_with_its_place_and_state() {
+    let bytes = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R 5 0 R 6 0 R] >> endobj\n4 0 obj << /Type /Annot /Subtype /Text /Rect [20 260 40 280] /Contents (Hi) /Popup 5 0 R /Open true >> endobj\n5 0 obj << /Type /Annot /Subtype /Popup /Rect [190 160 50 280] /Parent 4 0 R /Open true >> endobj\n6 0 obj << /Type /Annot /Subtype /Square /Rect [10 10 60 60] >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n";
+    let info = inspect(Arc::new(bytes.to_vec()), None).expect("opens");
+    let note = info.annotations.iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!(note.popup, Some(Popup { rect: [50.0, 160.0, 190.0, 280.0], open: true }), "normalised, and open");
+    let square = info.annotations.iter().find(|a| a.subtype == "Square").expect("the square");
+    assert_eq!(square.popup, None);
+    assert!(info.annotations.iter().all(|a| a.subtype != "Popup"), "the pop-up is not a comment of its own");
+
+    // #2137 review: a /Popup naming another annotation, a pop-up of another comment, or one
+    // whose /Parent isn't a reference isn't this comment's pop-up; one without /Parent is.
+    for (target, extra, own) in [
+        ("6 0 R", "", false),
+        ("7 0 R", "7 0 obj << /Type /Annot /Subtype /Popup /Rect [0 0 50 50] /Parent 6 0 R >> endobj\n", false),
+        ("7 0 R", "7 0 obj << /Type /Annot /Subtype /Popup /Rect [0 0 50 50] /Parent << >> >> endobj\n", false),
+        ("7 0 R", "7 0 obj << /Type /Annot /Subtype /Popup /Rect [0 0 50 50] >> endobj\n", true),
+    ] {
+        let text = String::from_utf8_lossy(bytes).replace("/Popup 5 0 R", &format!("/Popup {target}")).replace("trailer", &format!("{extra}trailer"));
+        let info = inspect(Arc::new(text.into_bytes()), None).expect("opens");
+        let note = info.annotations.iter().find(|a| a.subtype == "Text").expect("the note");
+        assert_eq!(note.popup.is_some(), own, "/Popup {target} {extra}");
+    }
+
+    // #2137 review: /Annots may list the note through an object that is only a reference to
+    // it; its pop-up's /Parent names the note itself, and is still its own.
+    let text = String::from_utf8_lossy(bytes).replace("/Annots [4 0 R", "/Annots [8 0 R").replace("trailer", "8 0 obj 4 0 R endobj\ntrailer");
+    let info = inspect(Arc::new(text.into_bytes()), None).expect("opens");
+    let note = info.annotations.iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!(note.popup, Some(Popup { rect: [50.0, 160.0, 190.0, 280.0], open: true }), "listed through 8 0 R");
 }
 
 #[test]

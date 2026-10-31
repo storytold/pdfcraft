@@ -2074,6 +2074,9 @@
 	Microsoft Word (.docx)	Microsoft Word (.docx)
 	Move bookmark	Премести отметката
 	Move comment	Премести коментара
+	Open comment pop-up	Отваряне на изскачащия прозорец на коментара
+	Close comment pop-up	Затваряне на изскачащия прозорец на коментара
+	Move comment pop-up	Преместване на изскачащия прозорец на коментара
 	Move image	Премести изображението
 	Move page	Премести страницата
 	Move pages	Премести страниците

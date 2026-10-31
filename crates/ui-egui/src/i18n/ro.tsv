@@ -2843,3 +2843,8 @@ theme	Appearance	Aspect
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opțiuni pentru acest răspuns
+
+# AI-assisted additions for comment pop-up windows (#2137); not reviewed by a native speaker.
+	Open comment pop-up	Deschidere fereastră pop-up a comentariului
+	Close comment pop-up	Închidere fereastră pop-up a comentariului
+	Move comment pop-up	Mutare fereastră pop-up a comentariului

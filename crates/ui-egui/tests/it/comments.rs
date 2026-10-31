@@ -3022,3 +3022,234 @@ fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
     h.drop_at(from + delta);
     h.run_steps(3);
 }
+
+/// #2137 review: a pop-up is edited under comment permission, not change permission: in a
+/// document whose security allows comments but not changes, an open pop-up still takes typing
+/// and closes.
+#[test]
+fn a_pop_up_is_editable_where_comments_are_allowed_but_changes_are_not() {
+    let plain = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 150 40 170] /T (Ada) /Popup 5 0 R >> endobj
+5 0 obj << /Type /Annot /Subtype /Popup /Parent 4 0 R /Rect [60 60 260 160] /Open true >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(plain.to_vec())).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        // Everything but bit 4, modifying the document.
+        permissions: -1 ^ 8,
+        encrypt_metadata: true,
+        seed: [4; 32],
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = harness(move |app| {
+        app.open_bytes("restricted.pdf", None, bytes).expect("opens");
+        // Only the restricted document, so it is the first view.
+        app.close_tab(0);
+    });
+    h.run_steps(6);
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the open pop-up shows");
+    field(&h, "Add a comment");
+    let close = h.query_all_by_label("Close").find(|n| window.contains(n.rect().center())).expect("the pop-up's ×");
+    close.click();
+    h.run_steps(4);
+    let note = comments(&h).into_iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!(note.popup.map(|p| p.open), Some(false), "closed");
+}
+
+/// #2137 review: a pop-up lists the comment's text replies only, as the Comments panel does. A
+/// review status (`/StateModel /Review`) and a checkmark (`/StateModel /Marked`, the private
+/// reply Mark writes) are replies too, but not ones to read in the thread.
+#[test]
+fn a_pop_up_lists_text_replies_but_not_status_or_checkmark_replies() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 150 40 170] /T (Ada) /NM (note-1) /Contents (Please check) /Popup 5 0 R >> endobj
+5 0 obj << /Type /Annot /Subtype /Popup /Parent 4 0 R /Rect [60 40 260 160] /Open true >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 150 40 170] /F 32 /T (Bob) /NM (reply-1) /IRT 4 0 R /Contents (Agreed with this) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 150 40 170] /F 32 /T (Bob) /NM (reply-2) /IRT 4 0 R /State /Accepted /StateModel /Review /Contents (Accepted set by Bob) >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 150 40 170] /F 32 /T (Ada) /NM (reply-3) /IRT 4 0 R /State /Marked /StateModel /Marked /Contents (Marked set by Ada) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut h = harness(move |app| {
+        app.open_bytes("thread.pdf", None, pdf.to_vec()).expect("opens");
+        app.close_tab(0);
+    });
+    h.run_steps(6);
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the open pop-up shows");
+    let in_window = |label: &str| h.query_all_by_label(label).any(|n| window.contains(n.rect().center()));
+    assert!(in_window("Agreed with this"), "the text reply");
+    assert!(!in_window("Accepted set by Bob"), "not the review status");
+    assert!(!in_window("Marked set by Ada"), "not the checkmark");
+}
+
+/// A double-click on a sticky note opens its pop-up window on the page, where its text is read
+/// and edited; the title bar drags it (saved as the pop-up's place, one undo step); × closes it
+/// (comment.popups).
+#[test]
+fn a_double_click_opens_a_notes_pop_up_which_drags_and_closes() {
+    // Frames a sixtieth apart, so two clicks land within egui's double-click time.
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("author", "Tester").unwrap();
+        app.set_option("quick", "note").unwrap();
+        app
+    });
+    h.run_steps(4);
+    crate::support::settle(&mut h);
+    click_pt(&mut h, (60.0, 160.0));
+    field(&h, "Add a comment").type_text("Please check");
+    h.run_steps(2);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+    let note = comments(&h).into_iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!(note.popup.map(|p| p.open), Some(false));
+    assert!(h.state().views[0].comments.popup_rects.is_empty(), "closed pop-ups are not shown");
+    // Well after the Post click, so egui does not count the next clicks with it.
+    h.run_steps(45);
+
+    // Double-click the icon.
+    let icon = at(&h, (note.rect[0] + note.rect[2]) / 2.0, (note.rect[1] + note.rect[3]) / 2.0);
+    h.hover_at(icon);
+    h.run_steps(1);
+    for _ in 0..2 {
+        h.drag_at(icon);
+        h.run_steps(1);
+        h.drop_at(icon);
+        h.run_steps(1);
+    }
+    h.run_steps(4);
+    let note = comments(&h).into_iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!(note.popup.map(|p| p.open), Some(true), "the pop-up opened");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Open comment pop-up"));
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the pop-up is on screen");
+    h.get_by_label("Tester");
+
+    // Drag the title bar 80 px right and 40 px down: the pop-up's place on the page moves.
+    let before = note.popup.unwrap().rect;
+    let bar = pos2(window.left() + 30.0, window.top() + 12.0);
+    drag(&mut h, bar, bar + egui::vec2(80.0, 40.0));
+    let note = comments(&h).into_iter().find(|a| a.subtype == "Text").expect("the note");
+    let after = note.popup.unwrap().rect;
+    // 80 × 40 screen pixels is about 20 × 10 pt at this zoom.
+    assert!(after[0] > before[0] + 10.0 && after[1] < before[1] - 5.0, "moved right and down on the page: {before:?} -> {after:?}");
+    assert!(((after[2] - after[0]) - (before[2] - before[0])).abs() < 0.5, "the same width");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move comment pop-up"));
+
+    // Close it.
+    h.get_by_label("Close").click();
+    h.run_steps(4);
+    let note = comments(&h).into_iter().find(|a| a.subtype == "Text").expect("the note");
+    assert_eq!(note.popup.map(|p| p.open), Some(false));
+    assert!(h.state().views[0].comments.popup_rects.is_empty());
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Close comment pop-up"));
+}
+
+// Contributor-original PDF: two notes sharing one /NM (as PyMuPDF names them), both with an open
+// pop-up; the second has a reply by reference and a reply to that reply, which has no /NM.
+const POPUPS_SHARING_A_NAME: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /NM (fitz-A0) /T (Alpha) /Contents (First note) /Popup 5 0 R /Open true >> endobj
+5 0 obj << /Type /Annot /Subtype /Popup /Rect [60 110 160 190] /Parent 4 0 R /Open true >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 40 40 60] /NM (fitz-A0) /T (Beta) /Contents (Second note) /Popup 7 0 R /Open true >> endobj
+7 0 obj << /Type /Annot /Subtype /Popup /Rect [180 10 290 90] /Parent 6 0 R /Open true >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 40 40 60] /NM (fitz-A1) /IRT 6 0 R /T (Gamma) /Contents (Reply by reference) >> endobj
+9 0 obj << /Type /Annot /Subtype /Text /Rect [20 40 40 60] /IRT 8 0 R /T (Delta) /Contents (Reply to the reply) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// A pop-up reads its comment's thread by `/IRT` reference, as the Comments panel does: the
+/// replies show once, in the second note's window only, at any depth, though both notes share
+/// one `/NM`.
+#[test]
+fn a_pop_up_lists_its_replies_by_reference_when_names_repeat() {
+    let h = harness_with_bytes(POPUPS_SHARING_A_NAME.to_vec(), |_| {});
+    let windows = h.state().views[0].comments.popup_rects.clone();
+    assert_eq!(windows.len(), 2, "both notes' pop-ups are open: {windows:?}");
+    let (_, second) = windows.iter().find(|(key, _)| *key == (0, 2)).copied().expect("the second note's pop-up");
+    for text in ["Reply by reference", "Reply to the reply"] {
+        // The Comments panel lists the thread too; count only what the windows show.
+        let shown: Vec<Pos2> =
+            h.query_all_by_label(text).map(|n| n.rect().center()).filter(|c| windows.iter().any(|(_, w)| w.contains(*c))).collect();
+        assert_eq!(shown.len(), 1, "{text:?} shows in one window: {shown:?}");
+        assert!(shown.iter().all(|c| second.contains(*c)), "{text:?} is in the second note's window");
+    }
+}
+
+// Contributor-original PDF: one blue note with its pop-up open beside it.
+const BLUE_NOTE_WITH_OPEN_POP_UP: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /C [0 0 1] /T (Alpha) /Contents (A note) /Popup 5 0 R /Open true >> endobj
+5 0 obj << /Type /Annot /Subtype /Popup /Rect [120 20 260 120] /Parent 4 0 R /Open true >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// The line segments of colour `color` the last frame painted.
+fn line_segments(h: &Harness<'static, PdfCraftApp>, color: egui::Color32) -> Vec<[Pos2; 2]> {
+    fn walk(shape: &egui::Shape, color: egui::Color32, out: &mut Vec<[Pos2; 2]>) {
+        match shape {
+            egui::Shape::LineSegment { points, stroke } if stroke.color == color => out.push(*points),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, color, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &h.output().shapes {
+        walk(&clipped.shape, color, &mut out);
+    }
+    out
+}
+
+/// A comment's connector line (comment.connector-lines): in the comment's colour, from the
+/// edge of the comment nearest its open pop-up to the edge of the window nearest that point,
+/// shown while the pointer is on the comment or on the window or the comment is selected, and
+/// not otherwise.
+#[test]
+fn a_connector_line_joins_a_comment_to_its_open_pop_up_while_the_pointer_is_on_either() {
+    let mut h = harness_with_bytes(BLUE_NOTE_WITH_OPEN_POP_UP.to_vec(), |_| {});
+    let blue = egui::Color32::from_rgb(0, 0, 255);
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the pop-up is open");
+    let mark = egui::Rect::from_two_pos(at(&h, 20.0, 180.0), at(&h, 40.0, 160.0));
+    let on_edge = |r: egui::Rect, p: Pos2| {
+        r.expand(1.0).contains(p) && [p.x - r.left(), r.right() - p.x, p.y - r.top(), r.bottom() - p.y].iter().any(|d| d.abs() < 1.0)
+    };
+
+    // Away from both: no line.
+    h.hover_at(at(&h, 280.0, 190.0));
+    h.run_steps(2);
+    assert!(line_segments(&h, blue).is_empty(), "no line with the pointer elsewhere");
+
+    // On the note or on its window: one line, from the note's edge to the window's.
+    for (what, pointer) in [("the note", mark.center()), ("the window", window.center())] {
+        h.hover_at(pointer);
+        h.run_steps(2);
+        let lines = line_segments(&h, blue);
+        assert_eq!(lines.len(), 1, "one line with the pointer on {what}: {lines:?}");
+        let [from, to] = lines[0];
+        assert!(on_edge(mark, from), "starts on the note's edge {mark:?}: {from:?}");
+        assert!(on_edge(window, to), "ends on the window's edge {window:?}: {to:?}");
+        // The nearest points: the note's lower right corner, the window's upper left one.
+        assert!(from.distance(mark.right_bottom()) < 1.0 && to.distance(window.left_top()) < 1.0, "{from:?} -> {to:?}");
+    }
+
+    // Selected, the note keeps its line with the pointer elsewhere.
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.hover_at(at(&h, 280.0, 190.0));
+    h.run_steps(2);
+    assert_eq!(line_segments(&h, blue).len(), 1, "a selected comment shows its line");
+}

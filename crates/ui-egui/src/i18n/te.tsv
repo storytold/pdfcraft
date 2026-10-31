@@ -1905,6 +1905,9 @@ action wizard	Start	ప్రారంభించు
 	Lock comment	వ్యాఖ్యను లాక్ చేయి
 	Unlock comment	వ్యాఖ్యను అన్‌లాక్ చేయి
 	Move comment	వ్యాఖ్యను తరలించు
+	Open comment pop-up	వ్యాఖ్య పాప్-అప్ తెరవండి
+	Close comment pop-up	వ్యాఖ్య పాప్-అప్ మూసివేయండి
+	Move comment pop-up	వ్యాఖ్య పాప్-అప్ తరలించండి
 	Resize comment	వ్యాఖ్య పరిమాణం మార్చు
 	Change comment properties	వ్యాఖ్య లక్షణాలను మార్చు
 	Add field	ఫీల్డ్ జోడించు

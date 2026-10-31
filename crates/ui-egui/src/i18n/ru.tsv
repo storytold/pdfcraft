@@ -1986,6 +1986,9 @@
 	Lock comment	Заблокировать комментарий
 	Unlock comment	Разблокировать комментарий
 	Move comment	Переместить комментарий
+	Open comment pop-up	Открыть всплывающее окно комментария
+	Close comment pop-up	Закрыть всплывающее окно комментария
+	Move comment pop-up	Переместить всплывающее окно комментария
 	Resize comment	Изменить размер комментария
 	Change comment properties	Изменить свойства комментария
 	Add field	Добавить поле

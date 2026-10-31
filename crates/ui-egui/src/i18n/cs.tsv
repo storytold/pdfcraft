@@ -2035,6 +2035,9 @@ key	Space	Mezerník
 	Lock comment	Zamknout komentář
 	Unlock comment	Odemknout komentář
 	Move comment	Přesunout komentář
+	Open comment pop-up	Otevřít okno komentáře
+	Close comment pop-up	Zavřít okno komentáře
+	Move comment pop-up	Přesunout okno komentáře
 	Resize comment	Změnit velikost komentáře
 	Change comment properties	Změnit vlastnosti komentáře
 	Add field	Přidat pole

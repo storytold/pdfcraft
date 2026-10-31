@@ -1985,6 +1985,9 @@
 	Lock comment	قفل التعليق
 	Unlock comment	إلغاء قفل التعليق
 	Move comment	نقل التعليق
+	Open comment pop-up	فتح النافذة المنبثقة للتعليق
+	Close comment pop-up	إغلاق النافذة المنبثقة للتعليق
+	Move comment pop-up	نقل النافذة المنبثقة للتعليق
 	Resize comment	تغيير حجم التعليق
 	Change comment properties	تغيير خصائص التعليق
 	Add field	إضافة حقل

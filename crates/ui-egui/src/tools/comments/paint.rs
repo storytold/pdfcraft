@@ -1,4 +1,5 @@
 use super::geometry::{HANDLES, grabs_points, handle_pos, is_markup, reshapable, reshaped, resizable};
+use super::popups::paint_connectors;
 use super::state::{Gesture, PageCx, SETTLE_SECS};
 use super::{
     Annotation, Color32, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NewAnnotation, Pos2, QuickTool, Rect, SELECT_BLUE, Shape,
@@ -38,6 +39,8 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             for r in cx.screen_rects(a) {
                 painter.rect_stroke(r.expand(2.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
             }
+            // Selected text markup is linked to its open pop-up too.
+            paint_connectors(painter, cx, view, pointer);
             return paint_gesture(painter, cx, view);
         }
         if view.signature_drag.contains(page, index) && matches!(cv.gesture, Some(Gesture::Move { page: p, index: i, .. }) if (p, i) == (page, index))
@@ -57,6 +60,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             }
         }
     }
+    paint_connectors(painter, cx, view, pointer);
     paint_gesture(painter, cx, view);
 }
 

@@ -341,6 +341,17 @@ pub struct Annotation {
     /// The points that shape a line (its two ends, `/L`) or connected lines, a polygon or a
     /// cloud (their corners, `/Vertices`), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,
+    /// The comment's pop-up window (`/Popup`): where it sits and whether it is open.
+    pub popup: Option<Popup>,
+}
+
+/// A comment's pop-up window (ISO 32000-2 §12.5.6.14).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Popup {
+    /// `/Rect` of the `/Popup` annotation, in user space.
+    pub rect: [f32; 4],
+    /// `/Open`: shown open.
+    pub open: bool,
 }
 
 impl Annotation {

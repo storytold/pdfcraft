@@ -3,6 +3,7 @@ use super::geometry::{
     resized, snapped_caret,
 };
 use super::paint::{drawn_shape, edit_anchor, erase, new_comment};
+use super::popups::has_popup;
 use super::state::{Composer, ComposerKind, Gesture, PageCx};
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, vec2};
 use crate::page_cursor::{Layer, Subject};
@@ -149,6 +150,8 @@ pub(crate) fn describe(cx: &PageCx<'_>, view: &mut DocView) {
     // tip is that of the one drawn on top, among those with something to say (#3620).
     let top = cx
         .comments()
+        // An open pop-up already shows the comment: no tooltip over it.
+        .filter(|a| !a.popup.is_some_and(|w| w.open))
         .filter(|a| cx.screen_rects(a).any(|r| r.contains(p)))
         .filter_map(|a| hover_tip(a, cx.prefs).map(|text| (a.index, text)))
         .max_by_key(|(index, _)| *index);
@@ -263,12 +266,20 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
             None => cv.selected = None,
         }
     }
-    if resp.double_clicked()
+    if (resp.double_clicked() || resp.triple_clicked())
         && on_page
         && cx.allowed
         && let Some((a, _)) = owner
     {
         cv.selected = Some((cx.page, a.index));
+        // A double-click opens the comment's pop-up window, as in Acrobat; a text box, whose
+        // text is the comment itself, is edited in place.
+        if has_popup(a) {
+            if !a.popup.is_some_and(|p| p.open) {
+                view.pending_edit = Some(Edit::SetAnnotationPopup { page: cx.page, index: a.index, rect: None, open: Some(true) });
+            }
+            return true;
+        }
         cv.composer = Some(Composer {
             page: cx.page,
             at: edit_anchor(cx.info, a),

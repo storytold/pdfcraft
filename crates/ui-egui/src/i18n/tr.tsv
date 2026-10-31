@@ -1879,6 +1879,9 @@
 	Lock comment	Yorumu kilitle
 	Unlock comment	Yorumun kilidini aç
 	Move comment	Yorumu taşı
+	Open comment pop-up	Yorum açılır penceresini aç
+	Close comment pop-up	Yorum açılır penceresini kapat
+	Move comment pop-up	Yorum açılır penceresini taşı
 	Resize comment	Yorumu yeniden boyutlandır
 	Change comment properties	Yorum özelliklerini değiştir
 	Add field	Alan ekle
