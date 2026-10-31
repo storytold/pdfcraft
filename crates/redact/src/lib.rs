@@ -29,6 +29,7 @@ mod tags;
 mod tests;
 pub(crate) mod type3;
 pub(crate) mod type3_tables;
+pub mod user_regex;
 
 use interp::{Mode, Scope, process};
 

@@ -4351,6 +4351,34 @@ fn redacting_through_tools() {
 }
 
 #[test]
+fn redacting_with_a_caller_regex_through_tools() {
+    let dir = workdir("redact-regex");
+    std::fs::write(
+        dir.join("ids.txt"),
+        "Ref 1 85 05 78 006 084 36 end\nRef 2 91 12 34 567 890 12 end\nCard 4539 1488 0343 6467 and 4539 1488 0343 6468",
+    )
+    .unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "text", "path": "ids.txt" }))["doc"].as_u64().unwrap();
+    let bad = |a: &mut Automation, args: Value| matches!(a.call("redact_mark", &args), Err(ToolError::InvalidArgs(_)));
+    assert!(bad(&mut a, json!({ "doc": doc, "regex": "(unclosed" })));
+    assert!(bad(&mut a, json!({ "doc": doc, "regex": "a*" })));
+    assert!(bad(&mut a, json!({ "doc": doc, "regex": "x".repeat(2000) })));
+    assert!(bad(&mut a, json!({ "doc": doc, "regex": "x", "pattern": "ssn" })));
+    assert!(bad(&mut a, json!({ "doc": doc, "regex": "x", "validate": "crc" })));
+    assert!(bad(&mut a, json!({ "doc": doc, "find": "x", "validate": "luhn" })));
+    assert!(matches!(a.call("redact_mark", &json!({ "doc": doc, "regex": "Z{3}" })), Err(ToolError::Failed(_))));
+    let r = ok(&mut a, "redact_mark", json!({ "doc": doc, "regex": r"\d \d\d \d\d \d\d \d{3} \d{3} \d\d" }));
+    assert_eq!(r["marked"].as_u64(), Some(2));
+    let r = ok(&mut a, "redact_mark", json!({ "doc": doc, "regex": r"\d{4}( \d{4}){3}", "validate": "luhn" }));
+    assert_eq!(r["marked"].as_u64(), Some(1), "only the number with a valid checksum");
+    ok(&mut a, "redact_apply", json!({ "doc": doc }));
+    let text = page_text(&mut a, doc)[0].clone();
+    assert!(!text.contains("85 05") && !text.contains("91 12") && !text.contains("6467"), "{text}");
+    assert!(text.contains("6468"), "{text}");
+}
+
+#[test]
 /// Mark, apply and save remove the complete international number while retaining labels and controls.
 fn redacting_italian_international_slash_numbers_through_tools() {
     let dir = workdir("redact-italian-international-slash");
