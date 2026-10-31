@@ -44,6 +44,13 @@ pub struct Focus {
     /// The text the calendar last saw, so it moves to a typed date once, when the typing becomes
     /// a whole date, and otherwise keeps the month its arrows turned to.
     pub calendar_text: Option<String>,
+    /// What was typed this frame, for the field's XFA change scripts to see
+    /// (`PdfCraftApp::run_keystroke_scripts`); taken once they ran.
+    pub(crate) keystroke: Option<pdfcraft_engine::xfa::Keystroke>,
+    /// The field has no change scripts: its keystrokes stand as typed.
+    pub(crate) no_keystroke_scripts: bool,
+    /// Where the caret goes next frame, after a change script rewrote what was typed.
+    pub(crate) caret: Option<usize>,
     /// Whether the text box had the keyboard at the end of the editor's last frame
     /// ([`crate::edit_text_ui::lost_focus_once`]).
     pub(crate) had_focus: bool,
@@ -73,6 +80,10 @@ pub struct FormView {
     /// The widget holding egui's keyboard focus for the focused check box or radio button, and
     /// whether it takes the arrows (radio buttons). The page keys still work around it.
     pub(crate) keys: Option<(egui::Id, bool)>,
+    /// The field and widget that had focus when it was last looked at: when the focus moves, the
+    /// one it left runs its XFA exit scripts and the one it reached its enter scripts
+    /// (`PdfCraftApp::run_focus_scripts`).
+    pub(crate) focused: Option<(String, usize)>,
 }
 
 /// A form message for the app to show, with document data kept separate so the visible
@@ -113,6 +124,7 @@ pub(crate) fn draft_text(f: &FormField) -> String {
     value
 }
 
+/// The editor's draft for widget `widget` of field `f`, opened on the field's value.
 fn open_focus(f: &FormField, widget: usize) -> Focus {
     Focus {
         name: f.name.clone(),
@@ -125,7 +137,78 @@ fn open_focus(f: &FormField, widget: usize) -> Focus {
         calendar: None,
         calendar_rect: None,
         calendar_text: None,
+        keystroke: None,
+        no_keystroke_scripts: false,
+        caret: None,
         had_focus: false,
+    }
+}
+
+/// The keystroke that turned `before` into `after`, with `sel` the editor's selection (or caret)
+/// just before it, as character positions either way round. Typing or pasting replaces the
+/// selection; with only a caret, a deletion is taken from before it (Backspace) or, when
+/// `forward` (Delete was pressed), after it. Read this way, typing or deleting in a run of the
+/// same letter is placed where the caret was, which the text alone can't tell. When the selection
+/// doesn't explain the change, the text does ([`keystroke_between`]).
+pub(crate) fn keystroke_from(before: &str, after: &str, sel: Option<(usize, usize)>, forward: bool) -> pdfcraft_engine::xfa::Keystroke {
+    let (b, a): (Vec<char>, Vec<char>) = (before.chars().collect(), after.chars().collect());
+    // `b[start..end]` replaced gives `a`: the keystroke, when it does.
+    let fits = |start: usize, end: usize| -> Option<pdfcraft_engine::xfa::Keystroke> {
+        let tail = b.len().checked_sub(end)?;
+        let kept = a.len().checked_sub(tail)?;
+        if start > end || start > kept || b.get(..start)? != a.get(..start)? || b.get(end..)? != a.get(kept..)? {
+            return None;
+        }
+        Some(pdfcraft_engine::xfa::Keystroke {
+            prev: before.to_string(),
+            change: a.get(start..kept)?.iter().collect(),
+            sel_start: start,
+            sel_end: end,
+        })
+    };
+    if let Some((p, q)) = sel {
+        let (start, end) = (p.min(q).min(b.len()), p.max(q).min(b.len()));
+        if let Some(k) = fits(start, end) {
+            return k;
+        }
+        if start == end
+            && let Some(gone) = b.len().checked_sub(a.len()).filter(|n| *n > 0)
+        {
+            let backward = || start.checked_sub(gone).and_then(|from| fits(from, start));
+            let ahead = || fits(start, start.saturating_add(gone));
+            if let Some(k) = if forward { ahead().or_else(backward) } else { backward().or_else(ahead) } {
+                return k;
+            }
+        }
+    }
+    keystroke_between(before, after)
+}
+
+/// The keystroke that turned `before` into `after`: the shortest stretch of `before` that was
+/// replaced (character positions) and what replaced it. Typing `b` after `a` replaces nothing at
+/// 1 with `b`; a backspace there replaces 1..2 with nothing; select-all and typing replaces it all.
+pub(crate) fn keystroke_between(before: &str, after: &str) -> pdfcraft_engine::xfa::Keystroke {
+    let (b, a): (Vec<char>, Vec<char>) = (before.chars().collect(), after.chars().collect());
+    let prefix = b.iter().zip(&a).take_while(|(x, y)| x == y).count();
+    // At most what is left of the shorter text once the prefix is taken: the two never overlap.
+    let room = b.len().min(a.len()).saturating_sub(prefix);
+    let suffix = b.iter().rev().zip(a.iter().rev()).take(room).take_while(|(x, y)| x == y).count();
+    pdfcraft_engine::xfa::Keystroke {
+        prev: before.to_string(),
+        change: a.get(prefix..a.len().saturating_sub(suffix)).unwrap_or_default().iter().collect(),
+        sel_start: prefix,
+        sel_end: b.len().saturating_sub(suffix),
+    }
+}
+
+/// After a script changed the field being edited from `before` to `after`, each given as its
+/// editor text ([`draft_text`]: a combo box's shown option) and its value: the editor shows
+/// `after`, as [`open_focus`] would, unless the person has typed there already (the draft no
+/// longer holds `before`), whose typing then stays theirs to commit.
+pub(crate) fn refresh_draft(focus: &mut Focus, before: (&str, &[String]), after: (String, &[String])) {
+    if focus.picked.as_slice() == before.1 && focus.text == before.0 {
+        focus.text = after.0;
+        focus.picked = after.1.to_vec();
     }
 }
 
@@ -676,6 +759,12 @@ fn settle_text_editor(
             ui.ctx().request_repaint();
         }
     }
+    if let Some(caret) = fx.caret.take()
+        && let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), r.id)
+    {
+        st.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(caret))));
+        st.store(ui.ctx(), r.id);
+    }
     if let Some(press) = fx.press.take()
         && let Some((galley, pos)) = laid_out
         && let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), r.id)
@@ -814,6 +903,12 @@ pub(crate) fn overlay(
                     ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(FIELD_FILL);
                     // A field that doesn't scroll takes no more than fits (ISO 32000-2 Table 228).
                     let before = text_box.map(|_| fx.text.clone());
+                    let typed_from = fx.text.clone();
+                    let editor_id = egui::Id::unique(("form-field", view.id.0, &f.name, focus.widget));
+                    // Where the caret or selection was before this frame's typing.
+                    let typed_at = egui::TextEdit::load_state(ui.ctx(), editor_id)
+                        .and_then(|st| st.cursor.char_range())
+                        .map(|r| (r.primary.index.0, r.secondary.index.0));
                     let mut te = if multiline { egui::TextEdit::multiline(&mut fx.text) } else { egui::TextEdit::singleline(&mut fx.text) };
                     te = te
                         // Wraps (inside the 3 px side margins) at the width the size was fitted to:
@@ -824,7 +919,7 @@ pub(crate) fn overlay(
                         .text_color(Color32::BLACK)
                         .margin(egui::Margin::symmetric(3, 1))
                         .password(f.has(field_flags::PASSWORD))
-                        .id(egui::Id::unique(("form-field", view.id.0, &f.name, focus.widget)));
+                        .id(editor_id);
                     if let Some(max) = f.max_len {
                         te = te.char_limit(max);
                     }
@@ -841,6 +936,14 @@ pub(crate) fn overlay(
                         // The form field's own logical name; not a visual/preordered label.
                         .accessible_name(f.name.clone());
                     settle_text_editor(ui, fx, &r, primary_down, laid_out, text_box.zip(before));
+                    // A keystroke, for the field's XFA change scripts to see (and maybe rewrite).
+                    // Typed or pasted this frame, even when it left the text as it was (an `a` typed
+                    // over a selected `a`): a script may still rewrite it.
+                    let typed = r.has_focus() && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_) | egui::Event::Paste(_))));
+                    if (fx.text != typed_from || typed) && !fx.no_keystroke_scripts {
+                        let forward = ui.input(|i| i.key_pressed(egui::Key::Delete));
+                        fx.keystroke = Some(keystroke_from(&typed_from, &fx.text, typed_at, forward));
+                    }
                     let lost = crate::edit_text_ui::lost_focus_once(&r, &mut fx.had_focus);
                     let (enter, esc, tab, shift) = ui.input(|i| {
                         (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Tab), i.modifiers.shift)
@@ -1005,8 +1108,96 @@ pub fn field_screen_rect(view: &DocView, info: &DocInfo, f: &FormField, widget: 
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_SCREEN_FONT, bounded_line_width};
+    use super::*;
     use std::cell::Cell;
+
+    /// A draft as the editor opens it on a field holding `value`.
+    fn draft(value: &[&str]) -> Focus {
+        Focus {
+            name: "hint".into(),
+            widget: 0,
+            text: value.first().map(|s| s.to_string()).unwrap_or_default(),
+            picked: value.iter().map(|s| s.to_string()).collect(),
+            request_focus: true,
+            select_all: false,
+            press: None,
+            calendar: None,
+            calendar_rect: None,
+            calendar_text: None,
+            keystroke: None,
+            no_keystroke_scripts: false,
+            caret: None,
+            had_focus: false,
+        }
+    }
+
+    /// A keystroke is read off the text before and after it as another viewer reports it to a
+    /// change script: typing, a deletion, a replaced selection, a paste in the middle.
+    #[test]
+    fn a_keystroke_is_the_shortest_replaced_stretch() {
+        let k = |b: &str, a: &str| {
+            let k = keystroke_between(b, a);
+            (k.change, k.sel_start, k.sel_end)
+        };
+        assert_eq!(k("", "a"), ("a".into(), 0, 0));
+        assert_eq!(k("a", "ab"), ("b".into(), 1, 1));
+        assert_eq!(k("ab", "a"), ("".into(), 1, 2), "backspace");
+        assert_eq!(k("a", "q"), ("q".into(), 0, 1), "select all, then type");
+        assert_eq!(k("abcd", "abXYcd"), ("XY".into(), 2, 2), "a paste in the middle");
+        assert_eq!(k("aa", "aaa"), ("a".into(), 2, 2), "a repeated letter");
+        assert_eq!(k("héllo", "héllö"), ("ö".into(), 4, 5), "characters, not bytes");
+        // With the editor's caret or selection, a keystroke in a run of one letter is placed where
+        // it happened, which the text alone can't tell.
+        let at = |b: &str, a: &str, sel: (usize, usize)| {
+            let k = keystroke_from(b, a, Some(sel), false);
+            (k.change, k.sel_start, k.sel_end)
+        };
+        // Delete pressed: in a run of one letter the deletion is the one after the caret.
+        let k = keystroke_from("aaa", "aa", Some((1, 1)), true);
+        assert_eq!((k.change.as_str(), k.sel_start, k.sel_end), ("", 1, 2), "Delete in a run");
+        let k = keystroke_from("aaa", "aa", Some((1, 1)), false);
+        assert_eq!((k.sel_start, k.sel_end), (0, 1), "Backspace in a run");
+        // Typed over the same letter: the text is unchanged, the keystroke still replaces it.
+        let k = keystroke_from("a", "a", Some((0, 1)), false);
+        assert_eq!((k.change.as_str(), k.sel_start, k.sel_end), ("a", 0, 1));
+        assert_eq!(at("aaa", "aaaa", (1, 1)), ("a".into(), 1, 1), "typed after the first a");
+        assert_eq!(at("aaa", "aa", (2, 2)), ("".into(), 1, 2), "Backspace takes the one before the caret");
+        assert_eq!(at("abc", "ac", (2, 2)), ("".into(), 1, 2), "Backspace");
+        assert_eq!(at("abc", "ac", (1, 1)), ("".into(), 1, 2), "Delete takes the one after the caret");
+        assert_eq!(at("abcd", "aXd", (3, 1)), ("X".into(), 1, 3), "typed over a selection made backwards");
+        assert_eq!(at("abc", "abcZ", (9, 9)), ("Z".into(), 3, 3), "a caret past the end is the end");
+        // A selection that doesn't explain the change (an input method's composition, say) leaves
+        // it to the text.
+        assert_eq!(at("abc", "xbc", (3, 3)), ("x".into(), 0, 1));
+        // What the keystroke enters, put back, gives the text after it.
+        let ks = keystroke_between("abcd", "abXYcd");
+        assert_eq!(ks.applied(&ks.change), "abXYcd");
+        assert_eq!(ks.applied("Z"), "abZcd");
+    }
+
+    /// An untouched draft takes the value a script gave the field; typing is kept.
+    #[test]
+    fn a_draft_follows_a_scripts_change_until_something_is_typed() {
+        let before = vec!["Type here".to_string()];
+        let mut untouched = draft(&["Type here"]);
+        refresh_draft(&mut untouched, ("Type here", &before), (String::new(), &[]));
+        assert_eq!((untouched.text.as_str(), untouched.picked.len()), ("", 0));
+        let mut typed = draft(&["Type here"]);
+        typed.text = "Ann".into();
+        refresh_draft(&mut typed, ("Type here", &before), (String::new(), &[]));
+        assert_eq!(typed.text, "Ann", "the person's typing stays");
+        // A list's choices count as typing too.
+        let mut picked = draft(&["a"]);
+        picked.picked.push("b".into());
+        refresh_draft(&mut picked, ("a", &["a".to_string()]), ("c".into(), &["c".to_string()]));
+        assert_eq!(picked.picked, ["a", "b"]);
+        // A combo box's editor shows the option's shown text, not its export value: that is
+        // what an untouched draft holds, and what it takes.
+        let mut combo = draft(&["a"]);
+        combo.text = "Apple".into();
+        refresh_draft(&mut combo, ("Apple", &["a".to_string()]), ("Banana".into(), &["b".to_string()]));
+        assert_eq!((combo.text.as_str(), combo.picked.as_slice()), ("Banana", ["b".to_string()].as_slice()));
+    }
 
     #[test]
     fn a_line_is_never_laid_out_above_the_screen_font_bound() {

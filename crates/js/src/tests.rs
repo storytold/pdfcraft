@@ -1987,6 +1987,40 @@ mod scand {
     }
 }
 
+mod keystrokes {
+    use super::*;
+    use crate::xfa::{XfaDoc, XfaEvent, XfaNode, run_xfa};
+
+    /// A change script sees the keystroke (`change`, `selStart`, `selEnd`, `newText`, `prevText`)
+    /// and may rewrite what it enters, in JavaScript and in FormCalc; another event reports no
+    /// change.
+    #[test]
+    fn change_scripts_see_the_keystroke_and_may_rewrite_it() {
+        let root = XfaNode { name: "form".into(), som: "form[0]".into(), ..Default::default() };
+        let ev = |change: &str| XfaEvent {
+            activity: "change".into(),
+            target: "form[0]".into(),
+            new_text: format!("x{change}"),
+            prev_text: "x".into(),
+            change: change.into(),
+            sel_start: 1,
+            sel_end: 1,
+        };
+        let o = run_xfa("xfa.event.change = xfa.event.change.replace(/[^0-9]/g, '');", &ev("a1b2"), &XfaDoc::default(), &root, Limits::default());
+        assert_eq!((o.error, o.change.as_deref()), (None, Some("12")));
+        let seen = "xfa.event.change + '|' + xfa.event.newText + '|' + xfa.event.prevText + '|' + xfa.event.selStart + '-' + xfa.event.selEnd";
+        let o = run_xfa(seen, &ev("y"), &XfaDoc::default(), &root, Limits::default());
+        assert_eq!(o.result.as_deref(), Some("y|xy|x|1-1"));
+        assert_eq!(o.change.as_deref(), Some("y"), "left as typed");
+        let o = crate::formcalc::run_formcalc("$event.change = Upper($event.change)", &ev("abc"), &XfaDoc::default(), &root, Limits::default());
+        assert_eq!((o.error, o.change.as_deref()), (None, Some("ABC")));
+        let o = crate::formcalc::run_formcalc("$event.selStart", &ev("q"), &XfaDoc::default(), &root, Limits::default());
+        assert_eq!(o.result.as_deref(), Some("1"));
+        let click = XfaEvent { activity: "click".into(), target: "form[0]".into(), ..Default::default() };
+        assert_eq!(run_xfa("xfa.event.change = 'z';", &click, &XfaDoc::default(), &root, Limits::default()).change, None);
+    }
+}
+
 mod menu_items {
     use super::*;
     use crate::xfa::{XfaDoc, XfaEffect, XfaEvent, run_xfa};
