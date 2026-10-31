@@ -2850,3 +2850,7 @@ key	Space	Space
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất
+
+# AI-assisted additions for the cut-content notice (#623) (2026-10-16); not reviewed by a native speaker.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	Trang {page} chứa nhiều nội dung hơn mức PdfCraft có thể đọc: một phần không được vẽ, và không thể tìm hoặc sao chép văn bản của trang.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} trang chứa nhiều nội dung hơn mức PdfCraft có thể đọc, bắt đầu từ trang {page}: một số phần không được vẽ, và không thể tìm hoặc sao chép văn bản của các trang đó.

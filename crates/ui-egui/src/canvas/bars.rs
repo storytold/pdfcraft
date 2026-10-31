@@ -62,8 +62,8 @@ pub(super) enum Notice {
 }
 
 /// The notice bar above the pages: a file changed on disk first, then what a historical
-/// snapshot is, then the signature status bar, a form's scripts having been turned
-/// off, security, forms and warnings.
+/// snapshot is, then pages cut at the renderer's limits, then the signature status bar, a
+/// form's scripts having been turned off, security, forms and warnings.
 pub(super) fn notices(
     view: &mut DocView,
     doc: &pdfcraft_engine::Document,
@@ -121,6 +121,13 @@ pub(super) fn notices(
         if close {
             return Some(Notice::Close);
         }
+    }
+    // Content cut at the renderer's limits (#623): what is missing is not visible, so the page
+    // is named in a bar of its own, which the signature, form and security bars below can't
+    // replace and dismissing them doesn't hide. Dismissing it covers the pages cut so far: a
+    // page found cut later shows it again.
+    if view.cut_pages.iter().any(|p| !view.cut_notice_dismissed.contains(p)) {
+        cut_pages_bar(view, ui, t);
     }
     if let Some((icon, color, template, arg)) = signed {
         let mut open = false;
@@ -243,6 +250,33 @@ pub(super) fn notices(
         return Some(Notice::HideSecured);
     }
     open_security.then_some(Notice::Security).or(toggled)
+}
+
+/// The bar naming the pages whose content was cut at the renderer's limits (#623).
+fn cut_pages_bar(view: &mut DocView, ui: &mut egui::Ui, t: &Tokens) {
+    let Some(&first) = view.cut_pages.iter().next() else { return };
+    let page = first.saturating_add(1).to_string();
+    let n = view.cut_pages.len();
+    let text = if n == 1 {
+        crate::i18n::fmt(
+            tl!("Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied."),
+            &[("page", &page)],
+        )
+    } else {
+        crate::i18n::fmt(
+            tl!(
+                "{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied."
+            ),
+            &[("n", &n.to_string()), ("page", &page)],
+        )
+    };
+    let mut dismiss = false;
+    notice_bar(ui, t, "triangle-alert", t.accent_text, text, |ui| {
+        dismiss = icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked();
+    });
+    if dismiss {
+        view.cut_notice_dismissed.extend(view.cut_pages.iter().copied());
+    }
 }
 
 /// One notice bar: an icon and a message on the left, `buttons` (added right to left) on the

@@ -11,7 +11,8 @@
 use hayro::hayro_interpret::font::Glyph;
 use hayro::hayro_interpret::hayro_syntax::Pdf;
 use hayro::hayro_interpret::{
-    BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask, interpret_page,
+    BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, InterpreterWarning, Paint, PathDrawMode,
+    SoftMask, interpret_page,
 };
 use kurbo::{Affine, BezPath, Rect, Shape};
 use std::collections::{HashMap, HashSet};
@@ -97,6 +98,9 @@ pub struct PageText {
     pub line_of: Vec<u32>,
     /// `true` when a word break precedes the glyph on the same line.
     pub space_before: Vec<bool>,
+    /// The page's content was cut at the renderer's limits (#623), so this text is incomplete:
+    /// whatever the cut part drew is missing, and a search over it can miss.
+    pub truncated: bool,
 }
 
 impl PageText {

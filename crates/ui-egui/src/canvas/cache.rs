@@ -119,6 +119,12 @@ impl DocView {
         }
     }
 
+    /// Pages whose content was cut at the renderer's limits, so part of each is not drawn and
+    /// its text is incomplete (#623; for automation; 0-based, in order).
+    pub fn cut_pages(&self) -> Vec<usize> {
+        self.cut_pages.iter().copied().collect()
+    }
+
     /// Pages that could not be rendered, with the reason (for automation; 0-based pages).
     pub fn page_errors(&self) -> Vec<(usize, &str)> {
         let mut v: Vec<(usize, &str)> = self.errors.iter().map(|(p, e)| (*p, e.as_str())).collect();
@@ -158,6 +164,7 @@ impl DocView {
         self.texts.clear();
         self.text_failed.clear();
         self.errors.clear();
+        self.cut_pages.clear();
         self.slow_pages.clear();
         self.waiting_since.clear();
         self.last_queue.clear();
@@ -201,6 +208,7 @@ impl DocView {
         self.texts.remove(&page);
         self.text_failed.remove(&page);
         self.errors.remove(&page);
+        self.cut_pages.remove(&page);
         self.last_queue.clear();
         if self.selection.is_some_and(|s| s.page == page) {
             self.selection = None;
@@ -514,6 +522,10 @@ impl DocView {
             return 0;
         }
         ctx.request_repaint();
+        // Whether drawn or read for its text, a page cut at the limits is named (#623).
+        if r.warnings.contains(&pdfcraft_render::RenderWarning::ContentTruncated) {
+            self.cut_pages.insert(r.request.page);
+        }
         if r.request.kind == RequestKind::Text {
             match r.text {
                 Some(t) => {

@@ -1862,6 +1862,8 @@
 	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Ця форма також містить дані XFA, які PdfCraft ще не читає. Ви можете заповнювати поля, але Acrobat може показувати натомість значення XFA.
 	This document contains {n} interactive form fields.	Цей документ містить інтерактивні поля форми: {n}.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Цей файл було пошкоджено й виправлено. Збереження збереже виправлену версію.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	Сторінка {page} містить більше вмісту, ніж PdfCraft може прочитати: частину не намальовано, а її текст не можна знайти чи скопіювати.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} сторінок містять більше вмісту, ніж PdfCraft може прочитати, першою є сторінка {page}: частини не намальовано, а їхній текст не можна знайти чи скопіювати.
 	Dismiss	Приховати
 	Hide field highlights	Приховати підсвічування полів
 	Highlight fields	Підсвітити поля

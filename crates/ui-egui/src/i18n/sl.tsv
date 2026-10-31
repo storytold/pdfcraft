@@ -1927,6 +1927,8 @@
 	This drawing exceeds the snapping limit; only the first paths are used.	Ta risba presega mejo pripenjanja; uporabljene so samo prve poti.
 	This field is locked. Unlock it to change its properties.	To polje je zaklenjeno. Odklenite ga, da spremenite njegove lastnosti.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Ta datoteka je bila poškodovana in je bila popravljena. Shranjevanje obdrži popravljeno različico.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	Stran {page} vsebuje več vsebine, kot je PdfCraft lahko prebere: del ni narisan, njenega besedila pa ni mogoče najti ali kopirati.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} strani vsebuje več vsebine, kot je PdfCraft lahko prebere, prva je stran {page}: deli niso narisani, njihovega besedila pa ni mogoče najti ali kopirati.
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Ta mapa trenutno ni na voljo. Morda je bila premaknjena ali pa je njen pogon ali sinhronizacija v oblaku brez povezave.
 	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Ta obrazec vsebuje tudi podatke XFA, ki jih PdfCraft še ne bere. Polja lahko izpolnite, vendar Acrobat morda prikaže vrednosti XFA.
 	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	To je dinamični obrazec XFA, ki ga PdfCraft še ne more prikazati. Tisto, kar vidite, je nadomestna stran datoteke.

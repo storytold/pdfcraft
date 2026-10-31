@@ -2569,3 +2569,7 @@ animation effects	Off	Joaktiv
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsionet për këtë përgjigje
+
+# AI-assisted additions for the cut-content notice (#623) (2026-10-22); not reviewed by a native speaker.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	Faqja {page} përmban më shumë përmbajtje sesa mund të lexojë PdfCraft: një pjesë e saj nuk vizatohet dhe teksti i saj nuk mund të kërkohet ose të kopjohet.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} faqe përmbajnë më shumë përmbajtje sesa mund të lexojë PdfCraft, duke filluar nga faqja {page}: disa pjesë të tyre nuk vizatohen dhe teksti i tyre nuk mund të kërkohet ose të kopjohet.

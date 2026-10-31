@@ -1769,6 +1769,8 @@
 	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	此表單還包含 XFA 資料，PdfCraft 暫不讀取。您可以填寫欄位，但 Acrobat 可能顯示 XFA 值。
 	This document contains {n} interactive form fields.	本文件包含 {n} 個互動式表單欄位。
 	This file was damaged and has been repaired. Saving keeps the repaired version.	此檔案已損壞並已修復。儲存將保留修復後的版本。
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	第 {page} 頁的內容超過 PdfCraft 能讀取的量：其中一部分沒有畫出，文字也無法搜尋或複製。
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	有 {n} 頁的內容超過 PdfCraft 能讀取的量（最先是第 {page} 頁）：其中部分沒有畫出，文字也無法搜尋或複製。
 	Dismiss	關閉
 	Hide field highlights	隱藏欄位醒目提示
 	Highlight fields	醒目提示欄位

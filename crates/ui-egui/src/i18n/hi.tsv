@@ -2814,3 +2814,7 @@ theme	Appearance	स्वरूप
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	इस जवाब के विकल्प
+
+# AI-assisted additions for the cut-content notice (#623) (2026-10-22); not reviewed by a native speaker.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	पृष्ठ {page} में उससे अधिक सामग्री है जितनी PdfCraft पढ़ सकता है: इसका कुछ भाग नहीं दिखाया जाता, और इसका पाठ खोजा या कॉपी नहीं किया जा सकता।
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} पृष्ठों में उससे अधिक सामग्री है जितनी PdfCraft पढ़ सकता है, पहला पृष्ठ {page}: उनके कुछ भाग नहीं दिखाए जाते, और उनका पाठ खोजा या कॉपी नहीं किया जा सकता।

@@ -1758,6 +1758,8 @@
 	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	Bu form aynı zamanda PdfCraft'ın henüz okumadığı XFA verilerini de içerir. Alanlarını doldurabilirsiniz ancak Acrobat bunun yerine XFA değerlerini gösterebilir.
 	This document contains {n} interactive form fields.	Bu belge {n} etkileşimli form alanı içeriyor.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Bu dosya hasarlıydı ve onarıldı. Kaydetmek onarılan sürümü korur.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	Sayfa {page}, PdfCraft'ın okuyabileceğinden daha fazla içerik barındırıyor: bir kısmı çizilmiyor ve metni bulunamıyor ya da kopyalanamıyor.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} sayfa PdfCraft'ın okuyabileceğinden daha fazla içerik barındırıyor, ilki sayfa {page}: bazı kısımları çizilmiyor ve metinleri bulunamıyor ya da kopyalanamıyor.
 	Dismiss	Kapat
 	Hide field highlights	Alan vurgularını gizle
 	Highlight fields	Alanları vurgula
