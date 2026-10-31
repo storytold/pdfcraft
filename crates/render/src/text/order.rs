@@ -424,15 +424,27 @@ fn bidi_class(text: &str) -> Bidi {
 /// more right-to-left than left-to-right glyphs; numbers keep their left-to-right order, and neutrals
 /// (punctuation, gaps) take the direction of their neighbours, or the paragraph's between opposite ones.
 pub(super) fn reverse_rtl(glyphs: &[&TextGlyph], idx: &mut [usize], spaces: &mut [bool]) {
-    // Glyphs and word gaps (None) in visual order.
-    let mut items: Vec<(Option<usize>, Bidi)> = Vec::with_capacity(idx.len() * 2);
-    for (w, &i) in idx.iter().enumerate() {
+    // Glyph clusters and word gaps (None) in visual order. UAX #9 L3 keeps nonspacing
+    // marks after their base: reversing separate mark glyphs would copy fatha before beh.
+    // Ranges refer to the original visual indices, keeping glyphs/boxes intact and work linear.
+    let visual = idx.to_vec();
+    let mut items: Vec<(Option<std::ops::Range<usize>>, Bidi)> = Vec::with_capacity(idx.len() * 2);
+    for (w, &i) in visual.iter().enumerate() {
         if w > 0 && spaces.get(w).copied().unwrap_or(false) {
             items.push((None, Bidi::N));
         }
-        items.push((Some(i), bidi_class(&glyphs[i].text)));
+        let text = glyphs.get(i).map_or("", |g| g.text.as_str());
+        if !text.is_empty()
+            && text.chars().all(|c| unicode_bidi::bidi_class(c) == unicode_bidi::BidiClass::NSM)
+            && let Some((Some(cluster), _)) = items.last_mut()
+        {
+            cluster.end = w + 1;
+            continue;
+        }
+        items.push((Some(w..w + 1), bidi_class(text)));
     }
-    let texts: Vec<&str> = items.iter().map(|it| it.0.map_or("", |i| glyphs[i].text.as_str())).collect();
+    let texts: Vec<&str> =
+        items.iter().map(|it| it.0.as_ref().and_then(|r| visual.get(r.start)).and_then(|&i| glyphs.get(i)).map_or("", |g| g.text.as_str())).collect();
     let text = |k: usize| texts.get(k).copied().unwrap_or("");
     let count = |b: Bidi| items.iter().filter(|it| it.1 == b).count();
     let para = if count(Bidi::R) > count(Bidi::L) { Bidi::R } else { Bidi::L };
@@ -516,15 +528,17 @@ pub(super) fn reverse_rtl(glyphs: &[&TextGlyph], idx: &mut [usize], spaces: &mut
     let mut j = 0;
     let mut gap = false;
     for &o in &order {
-        match items[o].0 {
+        match &items[o].0 {
             None => gap = true,
-            Some(i) => {
-                if let (Some(slot), Some(space)) = (idx.get_mut(j), spaces.get_mut(j)) {
-                    *slot = i;
-                    *space = gap && j > 0;
+            Some(cluster) => {
+                for &i in visual.get(cluster.clone()).unwrap_or_default() {
+                    if let (Some(slot), Some(space)) = (idx.get_mut(j), spaces.get_mut(j)) {
+                        *slot = i;
+                        *space = gap && j > 0;
+                    }
+                    gap = false;
+                    j += 1;
                 }
-                gap = false;
-                j += 1;
             }
         }
     }
