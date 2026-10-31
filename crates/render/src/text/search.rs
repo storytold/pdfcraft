@@ -39,7 +39,11 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
         }
     }
     matched = 0;
-    let word = |i: Option<usize>| i.and_then(|i| chars.get(i)).is_some_and(|c| c.0.is_alphanumeric());
+    // A neighbour bounds a word only in a script that puts spaces between words. Han, kana, Thai
+    // and the like run their words together, so a character of theirs next to the match is no
+    // reason to reject it: Acrobat finds 台北 inside 台北市 with Whole words only on. Digits still
+    // bound, in any script: ๑ is not a whole word inside the number ๑๒.
+    let word = |i: Option<usize>| i.and_then(|i| chars.get(i)).is_some_and(|c| c.0.is_alphanumeric() && (c.0.is_numeric() || !unspaced_script(c.0)));
     let mut hits = Vec::new();
     for (i, &(c, owner)) in chars.iter().enumerate() {
         matched = advance(&needle, &prefix, matched, c);
@@ -74,4 +78,32 @@ fn advance(needle: &[char], prefix: &[usize], mut matched: usize, c: char) -> us
         matched = prefix.get(matched - 1).copied().unwrap_or_default();
     }
     if needle.get(matched) == Some(&c) { matched.saturating_add(1) } else { 0 }
+}
+
+/// Whether `c` is a letter of a script written without spaces between words (CJK ideographs,
+/// kana, bopomofo, Thai, Lao, Myanmar, Khmer, Tibetan), so that a whole-word search cannot take a
+/// neighbouring letter as a word boundary.
+fn unspaced_script(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x0E00..=0x0EFF      // Thai, Lao
+        | 0x0F00..=0x0FFF    // Tibetan
+        | 0x1000..=0x109F    // Myanmar
+        | 0x1780..=0x17FF    // Khmer
+        | 0x2E80..=0x2FDF    // CJK and Kangxi radicals
+        | 0x3005..=0x3007    // 々 〆 〇
+        | 0x3040..=0x30FF    // hiragana, katakana
+        | 0x3100..=0x312F    // bopomofo
+        | 0x31A0..=0x31BF    // bopomofo extended
+        | 0x31F0..=0x31FF    // katakana phonetic extensions
+        | 0x3400..=0x4DBF    // CJK extension A
+        | 0x4E00..=0x9FFF    // CJK unified ideographs
+        | 0xA9E0..=0xA9FF    // Myanmar extended-B
+        | 0xAA60..=0xAA7F    // Myanmar extended-A
+        | 0xF900..=0xFAFF    // CJK compatibility ideographs
+        | 0xFF66..=0xFF9F    // halfwidth katakana
+        // The supplementary and tertiary ideographic planes, all CJK ideographs (extensions B
+        // to J, compatibility supplement).
+        | 0x20000..=0x3FFFF
+    )
 }

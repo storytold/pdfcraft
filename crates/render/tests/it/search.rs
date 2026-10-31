@@ -9,6 +9,31 @@ fn page(parts: &[&str]) -> PageText {
     }
 }
 
+/// Scripts written without spaces between words (Han, kana, bopomofo, Thai, Lao, Myanmar, Khmer,
+/// Tibetan): a neighbouring letter of theirs doesn't bound a whole word.
+fn unspaced(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x0E00..=0x0EFF
+            | 0x0F00..=0x0FFF
+            | 0x1000..=0x109F
+            | 0x1780..=0x17FF
+            | 0x2E80..=0x2FDF
+            | 0x3005..=0x3007
+            | 0x3040..=0x30FF
+            | 0x3100..=0x312F
+            | 0x31A0..=0x31BF
+            | 0x31F0..=0x31FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xA9E0..=0xA9FF
+            | 0xAA60..=0xAA7F
+            | 0xF900..=0xFAFF
+            | 0xFF66..=0xFF9F
+            | 0x20000..=0x3FFFF
+    )
+}
+
 // The original straightforward search is an independent oracle for valid page metadata.
 fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: usize) -> Vec<Range<usize>> {
     let fold = |s: &str| if sensitive { s.to_owned() } else { fold_case(s) };
@@ -28,7 +53,9 @@ fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: 
             }
         }
     }
-    let word = |i: Option<usize>| i.and_then(|i| chars.get(i)).is_some_and(|&(c, _)| c.is_alphanumeric());
+    // A neighbour bounds a word only in a script written with spaces between words, or when it
+    // is a digit.
+    let word = |i: Option<usize>| i.and_then(|i| chars.get(i)).is_some_and(|&(c, _)| c.is_alphanumeric() && (c.is_numeric() || !unspaced(c)));
     let mut hits = Vec::new();
     let mut start = 0;
     while start + needle.len() <= chars.len() {
