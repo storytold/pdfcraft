@@ -232,6 +232,67 @@ fn a_failed_save_as_pdf_keeps_the_dialog_open() {
     assert!(toast.contains("Could not save"), "the user is told why: {toast:?}");
 }
 
+/// #2713, #3739: Print to a CUPS queue tells it when every sheet runs landscape, so a
+/// landscape sheet (an A4 landscape page, or a 6 × 4 label, laid out on Letter) is turned onto
+/// the portrait paper instead of printed unrotated at 100% and cut off at the paper's edge. A
+/// driver choice for the orientation stands and isn't sent twice.
+#[test]
+fn printing_landscape_sheets_tells_cups_to_turn_them() {
+    use pdfcraft_engine::print::spool;
+    use std::sync::{Arc, Mutex};
+    let s = pdfcraft_engine::Session::new();
+    let bytes = s.create_blank(842.0, 595.0, 2).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("landscape.pdf", None, bytes.to_vec()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    let jobs: Arc<Mutex<Vec<spool::Job>>> = Arc::default();
+    let sent = Arc::clone(&jobs);
+    h.state_mut().spooler = Some(Arc::new(move |_pdf: &[u8], job: &spool::Job| {
+        sent.lock().unwrap().push(job.clone());
+        Ok(String::new())
+    }));
+    // Print to the queue; `choose` sets the driver's choices once the dialog has its printer.
+    let print = |h: &mut Harness<'static, PdfCraftApp>, choose: &dyn Fn(&mut pdfcraft_ui_egui::PrintDraft)| -> spool::Job {
+        let before = jobs.lock().unwrap().len();
+        assert!(h.state_mut().execute("print.dialog"));
+        h.run_steps(3);
+        h.state_mut().print_draft.printer = Some("Test_Queue".into());
+        h.run_steps(2);
+        choose(&mut h.state_mut().print_draft);
+        h.run_steps(1);
+        h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
+        for _ in 0..400 {
+            h.run_steps(1);
+            if jobs.lock().unwrap().len() > before {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        jobs.lock().unwrap().last().cloned().expect("the job reached the spooler")
+    };
+    let orientation = |job: &spool::Job| job.options.iter().filter(|(k, _)| k == "orientation-requested").map(|(_, v)| v.clone()).collect::<Vec<_>>();
+    // Fit on Letter with Auto orientation lays both pages out on landscape sheets.
+    let job = print(&mut h, &|_| {});
+    assert_eq!(orientation(&job), if cfg!(windows) { vec![] } else { vec!["4".to_string()] }, "{:?}", job.options);
+    // A driver choice for the orientation goes instead, once.
+    let job = print(&mut h, &|d| {
+        let choice = spool::PrinterOption {
+            key: "orientation-requested".into(),
+            label: "Orientation".into(),
+            group: "General".into(),
+            choices: vec![("4".into(), "Landscape".into()), ("5".into(), "Reverse landscape".into())],
+            default: "4".into(),
+        };
+        d.driver_options = Some(("Test_Queue".into(), vec![choice]));
+        d.driver_choices.insert("orientation-requested".into(), "5".into());
+    });
+    assert_eq!(orientation(&job), ["5"], "{:?}", job.options);
+}
+
 /// Properties… shows the printer driver's own options (CUPS) and sends only those changed.
 #[test]
 fn print_dialog_shows_the_printer_driver_options() {

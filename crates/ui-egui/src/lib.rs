@@ -55,7 +55,7 @@ pub use edit_text_ui::CropMode;
 mod editing;
 mod home;
 mod panels;
-pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
+pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Spooler, Which as PrintWhich, system_printers};
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
 pub mod theme;
@@ -325,6 +325,8 @@ pub struct PdfCraftApp {
     pub printer_source: Option<PrinterSource>,
     /// Where Properties… reads a printer's driver options: the spooler's unless a test stands in.
     pub options_source: Option<OptionsSource>,
+    /// What print jobs go to: the system spooler unless a test stands in ([`Spooler`]).
+    pub spooler: Option<Spooler>,
     // A browser has no background print work: the type is empty there.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) print_tasks: print_ui::PrintTasks,

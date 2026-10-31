@@ -489,6 +489,8 @@ fn printer_options_come_from_the_ppd() {
     assert!(spool::parse_ppd("*OpenUI *Broken\n*Broken A/B\n").is_empty(), "unclosed or malformed blocks are skipped");
 }
 
+/// A driver option's current choice is read from `lpoptions`, and a job passes `lp` only the
+/// driver options that are well-formed PPD keywords, never the ones PdfCraft sets itself.
 #[test]
 fn printer_option_defaults_and_job_arguments() {
     let current =
@@ -507,6 +509,53 @@ fn printer_option_defaults_and_job_arguments() {
     let args = lp_args(&job).join(" ");
     assert!(args.ends_with("-o fit-to-page=false -o InputSlot=Tray2 -o EFMediaType=Heavy1"), "{args}");
     assert!(spool::printer_options("../../etc/passwd").is_empty(), "not a queue name");
+}
+
+/// CUPS is asked to turn the sheets (`orientation-requested` 4) when every one is landscape, a
+/// booklet's included; portrait, mixed, square and empty jobs say nothing (#2713).
+#[test]
+fn landscape_sheets_ask_cups_to_turn_the_page() {
+    let landscape = |size: (f64, f64)| Sheet { size, ..Sheet::default() };
+    let ask = Some(("orientation-requested".to_string(), "4".to_string()));
+    // A landscape Size sheet, and a booklet (always landscape sheets), are both turned.
+    let page = layout(&[(300.0, 200.0)], &settings(vec![0], Layout::Size(SizeMode::Fit))).unwrap();
+    assert_eq!(cups_orientation(&page), ask);
+    let booklet =
+        layout(&[(200.0, 300.0); 4], &settings(vec![0, 1, 2, 3], Layout::Booklet { subset: BookletSubset::BothSides, binding: Binding::Left }))
+            .unwrap();
+    assert_eq!(cups_orientation(&booklet), ask);
+    // Portrait sheets, mixed jobs and nothing at all say nothing.
+    let portrait = layout(&[(200.0, 300.0)], &settings(vec![0], Layout::Size(SizeMode::Fit))).unwrap();
+    assert_eq!(cups_orientation(&portrait), None);
+    assert_eq!(cups_orientation(&[landscape((792.0, 612.0)), landscape((612.0, 792.0))]), None, "a mixed job is not turned as a whole");
+    assert_eq!(cups_orientation(&[landscape((612.0, 612.0))]), None, "a square sheet has no orientation");
+    assert_eq!(cups_orientation(&[]), None);
+    // `lp` is given it, among the job's other options.
+    let job = Job { options: ask.into_iter().collect(), ..Job::default() };
+    assert!(lp_args(&job).join(" ").ends_with("-o fit-to-page=false -o orientation-requested=4"));
+}
+
+/// Both submission paths add the orientation through `add_cups_orientation`: after the job's
+/// other options, never over an orientation the job already names (a driver choice), so `lp` is
+/// never given it twice, and not on Windows, whose print ticket sets it.
+#[test]
+fn a_job_that_names_its_orientation_keeps_it() {
+    let landscape = layout(&[(300.0, 200.0)], &settings(vec![0], Layout::Size(SizeMode::Fit))).unwrap();
+    let media = ("media".to_string(), "Letter".to_string());
+    let mut options = vec![media.clone()];
+    add_cups_orientation(&mut options, &landscape);
+    let turned = if cfg!(windows) { vec![media] } else { vec![media, ("orientation-requested".to_string(), "4".to_string())] };
+    assert_eq!(options, turned);
+    // Added again, it isn't doubled.
+    add_cups_orientation(&mut options, &landscape);
+    assert_eq!(options, turned);
+    // A choice already made stands, however its name is cased: CUPS reads option names without
+    // regard to case, so a second one would replace it.
+    for key in ["orientation-requested", "Orientation-Requested", "ORIENTATION-REQUESTED"] {
+        let mut chosen = vec![(key.to_string(), "5".to_string())];
+        add_cups_orientation(&mut chosen, &landscape);
+        assert_eq!(chosen, [(key.to_string(), "5".to_string())], "{key}");
+    }
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
