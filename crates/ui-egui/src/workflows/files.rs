@@ -868,10 +868,24 @@ pub(crate) fn strip_pdf(name: &str) -> &str {
 }
 
 impl PdfCraftApp {
-    /// Comments ▸ Import comments / Prepare a form ▸ Import data: XFDF, FDF, XML, CSV or text.
+    /// Prepare a form ▸ Import data: XFDF, FDF, XML, CSV or text.
     pub fn import_data_dialog(&mut self) {
+        self.import_dialog(false);
+    }
+
+    /// Comments ▸ Import comments: the files Import data takes, or another PDF to copy the
+    /// comments of.
+    pub fn import_comments_dialog(&mut self) {
+        self.import_dialog(true);
+    }
+
+    fn import_dialog(&mut self, pdf: bool) {
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let mut extensions = vec!["xfdf", "fdf", "xml", "xdp", "csv", "txt"];
+            if pdf {
+                extensions.insert(2, "pdf");
+            }
             let import = |app: &mut Self, path: std::path::PathBuf| match std::fs::read(&path) {
                 Ok(bytes) => {
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -880,11 +894,11 @@ impl PdfCraftApp {
                 Err(e) => app.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
             };
             match self.save_override.clone() {
-                Some(p) if [".xfdf", ".fdf", ".xml", ".xdp", ".csv", ".txt"].iter().any(|e| p.ends_with(e)) => import(self, p.into()),
+                Some(p) if extensions.iter().any(|e| p.ends_with(&format!(".{e}"))) => import(self, p.into()),
                 Some(_) => {}
                 None => {
                     let dialog = rfd::AsyncFileDialog::new()
-                        .add_filter(tl!("Comment and form data").to_string(), &["xfdf", "fdf", "xml", "xdp", "csv", "txt"])
+                        .add_filter(tl!("Comment and form data").to_string(), &extensions)
                         .set_title(tl!("Import data").to_string());
                     let target = self.active_ids().map(|(_, id)| id);
                     self.ask_one(crate::pickers::Ask::File(dialog), target, import);
@@ -892,7 +906,10 @@ impl PdfCraftApp {
             }
         }
         #[cfg(target_arch = "wasm32")]
-        self.notify_tr("Importing data arrives on the web with file pickers for data files");
+        {
+            let _ = pdf;
+            self.notify_tr("Importing data arrives on the web with file pickers for data files");
+        }
     }
 
     /// Export all comments / form data: the format follows the file name's extension.

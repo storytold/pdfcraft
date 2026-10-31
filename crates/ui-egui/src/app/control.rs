@@ -120,8 +120,16 @@ impl PdfCraftApp {
                         self.execute("page.number");
                         Some(Dialog::NumberPages)
                     }
+                    "page-properties" => {
+                        // Same path as the panel, so the selected pages and their order are seeded.
+                        self.execute("page.properties");
+                        self.dialog
+                    }
                     "none" => None,
                     _ => Some(Dialog::About),
+                };
+                if let Some(Dialog::Marks(kind)) = self.dialog {
+                    self.marks_draft.opened(kind);
                 }
             }
             ("tools", _) if value == "full" => self.expand_all_tools(),

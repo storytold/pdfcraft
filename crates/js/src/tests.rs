@@ -37,11 +37,12 @@ fn numbers_with_leading_zeros_stay_text() {
     assert_eq!(o.value, "string:number");
 }
 
+/// A validate script refuses a value with `event.rc = false` and says why in a message.
 #[test]
 fn validate_scripts_reject_with_rc_and_alert() {
     let o = go("if (event.value > 10) { app.alert('Too many'); event.rc = false; }", &Event::field("Validate", "qty", "11"));
     assert!(!o.rc);
-    assert_eq!(o.alerts, ["Too many"]);
+    assert_eq!(o.alerts, [Message::plain("Too many")]);
     let o = go("if (event.value > 10) { event.rc = false; }", &Event::field("Validate", "qty", "3"));
     assert!(o.rc);
 }
@@ -251,9 +252,11 @@ fn kept_bytes(o: &Outcome) -> usize {
         Request::Submit(u) | Request::LaunchUrl(u) | Request::Focus(u) => u.len(),
         _ => 0,
     };
-    o.console.iter().chain(&o.alerts).map(String::len).sum::<usize>() + o.requests.iter().map(req).sum::<usize>()
+    o.console.iter().map(String::len).sum::<usize>() + o.alerts.iter().map(Message::bytes).sum::<usize>() + o.requests.iter().map(req).sum::<usize>()
 }
 
+/// Console lines, messages and requests are capped in number and in bytes, and what is left out is
+/// noted.
 #[test]
 fn exec_menu_item_requests_are_capped_like_other_requests() {
     let o = go("for (var i = 0; i < 12000; i++) app.execMenuItem('Print');", &Event::field("Mouse Up", "agree", ""));
@@ -275,9 +278,97 @@ fn console_alerts_and_requests_are_capped_in_count_and_bytes() {
     assert!(o.console.len() <= crate::xfa::MAX_CONSOLE + 1, "{} console lines", o.console.len());
     assert!(o.alerts.len() <= crate::xfa::MAX_ALERTS, "{} alerts", o.alerts.len());
     assert!(o.requests.len() <= crate::xfa::MAX_EFFECTS, "{} requests", o.requests.len());
-    assert!(o.console.iter().chain(&o.alerts).all(|m| m.chars().count() <= 4_097));
+    assert!(o.console.iter().chain(o.alerts.iter().map(|m| &m.text)).all(|m| m.chars().count() <= 4_097));
     assert!(kept_bytes(&o) <= crate::xfa::MAX_PAYLOAD, "{} bytes kept", kept_bytes(&o));
     assert!(o.console.last().is_some_and(|l| l.contains("left out")), "{:?}", o.console.last());
+}
+
+/// The message `app.alert(args)` shows, from a button's Mouse Up script.
+fn alerted(args: &str) -> Message {
+    let o = go(&format!("app.alert({args});"), &Event::field("Mouse Up", "agree", ""));
+    assert_eq!(o.error, None, "{args}");
+    assert_eq!(o.alerts.len(), 1, "{args}");
+    o.alerts.into_iter().next().unwrap_or_default()
+}
+
+/// `app.alert(cMsg, nIcon, nType, cTitle)` keeps every icon and button set the JavaScript for
+/// Acrobat API Reference numbers, and the title.
+#[test]
+fn app_alert_keeps_its_title_icon_and_buttons() {
+    let icons = [MessageIcon::Error, MessageIcon::Warning, MessageIcon::Question, MessageIcon::Status];
+    let buttons = [MessageButtons::Ok, MessageButtons::OkCancel, MessageButtons::YesNo, MessageButtons::YesNoCancel];
+    for (i, icon) in icons.iter().enumerate() {
+        for (b, kind) in buttons.iter().enumerate() {
+            let m = alerted(&format!("'Sure?', {i}, {b}, 'Order form'"));
+            assert_eq!(m, Message { text: "Sure?".into(), title: Some("Order form".into()), icon: *icon, buttons: *kind }, "{i} {b}");
+        }
+    }
+    // Only the message: no title, the Error icon and the OK button, the defaults.
+    assert_eq!(alerted("'Saved'"), Message::plain("Saved"));
+    assert_eq!(alerted("'Saved', 3"), Message { icon: MessageIcon::Status, ..Message::plain("Saved") });
+}
+
+/// The single-object form names the same parameters, in any order, and reads nothing else.
+#[test]
+fn app_alert_reads_the_object_form() {
+    let m = alerted("{ cTitle: 'Order form', nType: 2, cMsg: 'Clear the rows?', nIcon: 2, bBeep: true }");
+    assert_eq!(
+        m,
+        Message { text: "Clear the rows?".into(), title: Some("Order form".into()), icon: MessageIcon::Question, buttons: MessageButtons::YesNo }
+    );
+    assert_eq!(alerted("{ cMsg: 'Done' }"), Message::plain("Done"));
+}
+
+/// An object without `cMsg` isn't the object form: it is the message itself, as text, so a
+/// String object or a caught error shows what it says; the same for `app.launchURL` and `cURL`.
+#[test]
+fn objects_that_name_no_parameter_are_the_message_itself() {
+    assert_eq!(alerted("new String('Saved')"), Message::plain("Saved"));
+    let o = go("try { throw new Error('No such field'); } catch (e) { app.alert(e); }", &Event::field("Mouse Up", "agree", ""));
+    assert_eq!(o.alerts.first().map(|m| m.text.as_str()), Some("Error: No such field"), "{o:?}");
+    let o = go("app.launchURL(new String('https://example.com/form'));", &Event::field("Mouse Up", "agree", ""));
+    assert_eq!(o.requests, vec![Request::LaunchUrl("https://example.com/form".into())], "{o:?}");
+}
+
+/// An icon or button number that isn't one of the four (fractional, negative, too large, not a
+/// number, or a value that can't be converted) is the default, and the message still shows;
+/// a number given as text counts.
+#[test]
+fn app_alert_falls_back_on_bad_icon_and_button_numbers() {
+    for bad in ["4", "-1", "1.5", "NaN", "Infinity", "'x'", "{}", "Symbol('s')", "null", "undefined"] {
+        let m = alerted(&format!("'Hi', {bad}, {bad}, ''"));
+        assert_eq!(m, Message::plain("Hi"), "{bad}");
+    }
+    assert_eq!(alerted("'Hi', '2', '3'"), Message { icon: MessageIcon::Question, buttons: MessageButtons::YesNoCancel, ..Message::plain("Hi") });
+    // Every call still answers OK (1) until answers are asked for (#4291).
+    let o = go("event.value = String(app.alert('Delete?', 2, 2));", &Event::field("Mouse Up", "agree", ""));
+    assert_eq!(o.value, "1");
+}
+
+/// A title is cut to a message's length like the text, and both are charged to the run's byte
+/// budget: titles can't carry more text out than messages can.
+#[test]
+fn app_alert_titles_are_clipped_and_charged() {
+    use crate::host::Host;
+    let m = alerted("'Hi', 0, 0, new Array(100000).join('t')");
+    assert!(m.title.as_deref().is_some_and(|t| t.chars().count() <= 4_097), "{:?}", m.title.as_ref().map(String::len));
+    // The title's bytes count against the budget with the text's, and a message the budget
+    // has no room for is left out and counted.
+    let mut h = Host {
+        fields: Arc::new(Vec::new()),
+        changed: BTreeSet::new(),
+        alerts: Vec::new(),
+        console: Vec::new(),
+        requests: Vec::new(),
+        doc: doc(),
+        kept: 0,
+        dropped: 0,
+    };
+    h.alert(Message { title: Some("Order form".into()), ..Message::plain("Saved") });
+    assert_eq!(h.kept, "Saved".len() + "Order form".len());
+    h.kept = crate::xfa::MAX_PAYLOAD - "Saved".len();
+    h.alert(Message { title: Some("T".into()), ..Message::plain("Saved") });
+    assert_eq!((h.alerts.len(), h.dropped), (1, 1), "a title past the budget leaves its message out");
 }
 
 #[test]
@@ -435,8 +526,8 @@ fn scripts_cannot_compile_code_from_strings() {
 }
 
 mod xfa_model {
-    use crate::Limits;
     use crate::xfa::*;
+    use crate::{Limits, Message, MessageButtons, MessageIcon};
 
     pub(super) fn field(name: &str, som: &str, value: &str, numeric: bool) -> XfaNode {
         XfaNode {
@@ -670,6 +761,8 @@ mod xfa_model {
         assert_eq!(o.result.as_deref(), Some("4/1"));
     }
 
+    /// `xfa.host`, `xfa.layout`, `xfa.event` and `app` calls become effects, and messages keep
+    /// their details.
     #[test]
     fn host_layout_event_and_app_calls_become_effects() {
         let o = go(
@@ -681,7 +774,12 @@ mod xfa_model {
         assert_eq!(
             o.effects,
             vec![
-                XfaEffect::MessageBox("Hi".into()),
+                XfaEffect::MessageBox(Message {
+                    text: "Hi".into(),
+                    title: Some("T".into()),
+                    icon: MessageIcon::Status,
+                    buttons: MessageButtons::OkCancel
+                }),
                 XfaEffect::ResetData(vec!["qty".into(), "price".into()]),
                 XfaEffect::Print,
                 XfaEffect::SaveAs,
@@ -726,6 +824,7 @@ mod xfa_model {
         assert_eq!(o.result.as_deref(), Some("1002"));
     }
 
+    /// A value set again replaces the earlier one, and hostile loops end at the caps.
     #[test]
     fn values_set_again_merge_and_hostile_loops_are_capped() {
         // A calculate that sets its own value in a loop leaves one effect: the last value.
@@ -747,7 +846,56 @@ mod xfa_model {
         assert!(o.notes.iter().any(|n| n.contains("changes")), "{:?}", o.notes);
         // Long messages are cut.
         let o = go("xfa.host.messageBox(new Array(100000).join('x'));", "form1[0].page1[0]", "click");
-        assert!(matches!(&o.effects[0], XfaEffect::MessageBox(m) if m.chars().count() <= 4_097));
+        assert!(matches!(&o.effects[0], XfaEffect::MessageBox(m) if m.text.chars().count() <= 4_097));
+    }
+
+    /// The message box `script` showed from a button's click script.
+    fn boxed(script: &str) -> Message {
+        let o = go(script, "form1[0].page1[0].go[0]", "click");
+        assert_eq!(o.error, None, "{script}");
+        match o.effects.as_slice() {
+            [XfaEffect::MessageBox(m)] => m.clone(),
+            other => panic!("{script}: {other:?}"),
+        }
+    }
+
+    /// `xfa.host.messageBox(message, title, icon, buttons)` keeps every icon and button set the
+    /// XFA specification numbers, and the title.
+    #[test]
+    fn message_box_keeps_its_title_icon_and_buttons() {
+        let icons = [MessageIcon::Error, MessageIcon::Warning, MessageIcon::Question, MessageIcon::Status];
+        let buttons = [MessageButtons::Ok, MessageButtons::OkCancel, MessageButtons::YesNo, MessageButtons::YesNoCancel];
+        for (i, icon) in icons.iter().enumerate() {
+            for (b, kind) in buttons.iter().enumerate() {
+                let m = boxed(&format!("xfa.host.messageBox('Sure?', 'Order form', {i}, {b})"));
+                assert_eq!(m, Message { text: "Sure?".into(), title: Some("Order form".into()), icon: *icon, buttons: *kind }, "{i} {b}");
+            }
+        }
+        assert_eq!(boxed("xfa.host.messageBox('Saved')"), Message::plain("Saved"));
+        // A bad number is the default; the message still shows.
+        assert_eq!(boxed("xfa.host.messageBox('Hi', '', 7, -2)"), Message::plain("Hi"));
+        assert_eq!(boxed("xfa.host.messageBox('Hi', null, 2.5, 'x')"), Message::plain("Hi"));
+        let m = boxed("xfa.host.messageBox('Hi', new Array(100000).join('t'))");
+        assert!(m.title.as_deref().is_some_and(|t| t.chars().count() <= 4_097));
+        // Answers are always OK for now (#4291).
+        let o = go("this.rawValue = xfa.host.messageBox('Delete?', 'T', 2, 2)", "form1[0].page1[0].qty[0]", "click");
+        assert!(o.effects.iter().any(|e| matches!(e, XfaEffect::SetValue { value, .. } if value == "1")), "{:?}", o.effects);
+    }
+
+    /// `app.alert` in an XFA form's script reads its own order (`cMsg, nIcon, nType, cTitle`)
+    /// and its object form, not `messageBox`'s.
+    #[test]
+    fn app_alert_in_an_xfa_script_reads_app_alerts_arguments() {
+        let m = boxed("app.alert('Sure?', 1, 3, 'Order form')");
+        assert_eq!(
+            m,
+            Message { text: "Sure?".into(), title: Some("Order form".into()), icon: MessageIcon::Warning, buttons: MessageButtons::YesNoCancel }
+        );
+        let m = boxed("app.alert({ cMsg: 'Sure?', cTitle: 'Order form', nIcon: 2, nType: 1 })");
+        assert_eq!(
+            m,
+            Message { text: "Sure?".into(), title: Some("Order form".into()), icon: MessageIcon::Question, buttons: MessageButtons::OkCancel }
+        );
     }
 
     /// Past the byte budget, adding or removing a row is left out of the snapshot as well as the
@@ -818,6 +966,7 @@ mod xfa_model {
         assert_eq!(names, 1);
     }
 
+    /// Time the engine takes to start is not taken from the script's own time.
     #[test]
     fn a_slow_engine_start_does_not_count_against_the_script() {
         let ms = std::time::Duration::from_millis;
@@ -852,9 +1001,9 @@ mod xfa_model {
 
 mod formcalc {
     use super::xfa_model::form;
-    use crate::Limits;
     use crate::formcalc::run_formcalc;
     use crate::xfa::*;
+    use crate::{Limits, Message, MessageButtons, MessageIcon};
 
     fn go(script: &str, target: &str, activity: &str) -> XfaOutcome {
         let ev = XfaEvent { activity: activity.into(), target: target.into(), ..Default::default() };
@@ -1165,6 +1314,7 @@ s"#
         assert!(o.error.unwrap().contains("endif"));
     }
 
+    /// FormCalc resolves form objects, assigns to them and records the effects.
     #[test]
     fn form_objects_resolve_assign_and_record_effects() {
         assert_formcalc_reads_fields_and_rows();
@@ -1242,7 +1392,7 @@ table._row.count"#,
                 XfaEffect::SetValue { som: "form1[0].page1[0].qty[0]".into(), value: "7".into() },
                 XfaEffect::SetPresence { som: "form1[0].page1[0].details[0]".into(), presence: "visible".into() },
                 XfaEffect::SetAccess { som: "form1[0].page1[0].price[0]".into(), access: "readOnly".into() },
-                XfaEffect::MessageBox("Total 17.5".into()),
+                XfaEffect::MessageBox(Message::plain("Total 17.5")),
                 XfaEffect::SetFocus("form1[0].page1[0].qty[0]".into()),
                 XfaEffect::AddInstance { som: "form1[0].page1[0].table[0].row[2]".into() },
             ]
@@ -1311,6 +1461,7 @@ $host.gotoURL("https://example.org")"#,
         assert_eq!(run(&script).result.as_deref(), Some("2"));
     }
 
+    /// Hostile FormCalc scripts end with an error and bounded output.
     #[test]
     fn hostile_formcalc_scripts_end_with_an_error_and_bounded_output() {
         assert_hostile_control_flow_is_bounded();
@@ -1361,7 +1512,7 @@ $host.gotoURL("https://example.org")"#,
         );
         assert!(run_hostile_formcalc("Upper(Concat(Space(600000), Space(600000)))").error.unwrap().contains("too long"));
         let o = run_hostile_formcalc("$host.messageBox(Space(100000))");
-        assert!(matches!(o.effects.as_slice(), [XfaEffect::MessageBox(m)] if m.chars().count() <= 4100), "{:?}", o.effects.len());
+        assert!(matches!(o.effects.as_slice(), [XfaEffect::MessageBox(m)] if m.text.chars().count() <= 4100), "{:?}", o.effects.len());
         let o = run_hostile_formcalc("qty = Space(100000)");
         assert!(matches!(o.effects.as_slice(), [XfaEffect::SetValue { value, .. }] if value.chars().count() == 65_536), "{:?}", o.effects.len());
         assert!(o.notes.iter().any(|n| n.contains("cut")), "{:?}", o.notes);
@@ -1465,6 +1616,27 @@ $host.gotoURL("https://example.org")"#,
             std::time::Duration::from_millis(200),
         );
         assert!(o.abandoned || o.error.is_some(), "{o:?}");
+    }
+
+    /// FormCalc's `$host.messageBox(message, title, icon, buttons)` keeps every icon and button
+    /// set and the title, as the JavaScript one does.
+    #[test]
+    fn formcalc_message_box_keeps_its_title_icon_and_buttons() {
+        let fc = |s: &str| go(s, "form1[0].page1[0].go[0]", "click");
+        let icons = [MessageIcon::Error, MessageIcon::Warning, MessageIcon::Question, MessageIcon::Status];
+        let buttons = [MessageButtons::Ok, MessageButtons::OkCancel, MessageButtons::YesNo, MessageButtons::YesNoCancel];
+        for (i, icon) in icons.iter().enumerate() {
+            for (b, kind) in buttons.iter().enumerate() {
+                let o = fc(&format!("$host.messageBox(\"Sure?\", \"Order form\", {i}, {b})"));
+                let want = Message { text: "Sure?".into(), title: Some("Order form".into()), icon: *icon, buttons: *kind };
+                assert_eq!(o.effects, vec![XfaEffect::MessageBox(want)], "{i} {b}");
+            }
+        }
+        // Missing or bad numbers are the defaults; a long title is cut like the message.
+        assert_eq!(fc("$host.messageBox(\"Hi\")").effects, vec![XfaEffect::MessageBox(Message::plain("Hi"))]);
+        assert_eq!(fc("$host.messageBox(\"Hi\", \"\", 9, 1.5)").effects, vec![XfaEffect::MessageBox(Message::plain("Hi"))]);
+        let o = fc("$host.messageBox(\"Hi\", Space(100000))");
+        assert!(matches!(o.effects.as_slice(), [XfaEffect::MessageBox(m)] if m.title.as_deref().is_some_and(|t| t.chars().count() <= 4_097)));
     }
 
     fn run_hostile_formcalc(script: &str) -> XfaOutcome {
@@ -1884,5 +2056,5 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
     let o = go(XFA_CHECK, &Event::doc("Open"));
     assert_eq!(o.error, None);
     assert_eq!(o.value, "undefined number 3.5");
-    assert_eq!(o.alerts, ["old viewer"]);
+    assert_eq!(o.alerts, [Message::plain("old viewer")]);
 }

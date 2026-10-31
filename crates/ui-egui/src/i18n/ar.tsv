@@ -541,6 +541,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	يقرأ {names} التي تقرؤه بدورها. لا يمكن لأي ترتيب إصلاح الحلقة: غيّر إحدى الصيغ.
 	Not in order	خارج الترتيب
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	غير موجود في ترتيب الحساب المحفوظ في ملف PDF: قد لا تحسبه برامج عرض PDF الأخرى.
+	Reads {name}, which the form doesn't have, so it gets no value there.	يقرأ {name}، وهو غير موجود في النموذج، لذا لا يحصل منه على أي قيمة.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	يقرأ سكربته أيضًا حقولًا يبني أسماءها أثناء التشغيل، لذا لا يمكن التحقق من هذه القراءات.
+	Missing field	حقل مفقود
+	Unchecked reads	قراءات غير مفحوصة
+	{field} reads fields named as it runs	يقرأ {field} حقولًا تُسمّى أثناء التشغيل
+	Some names are built as it runs	تُبنى بعض الأسماء أثناء التشغيل
 	Back to Prepare a form	العودة إلى تجهيز نموذج
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	لا يحسب أي حقل في هذا النموذج قيمته بعد. امنح حقلًا عملية حساب في علامة التبويب «الحساب» ضمن خصائصه، وسيظهر هنا.
 	{names} and {last}	{names} و{last}
@@ -597,6 +603,9 @@
 	Clean Up	تنظيف
 	Color Images	الصور الملونة
 	Grayscale Images	الصور الرمادية
+	Monochrome Images	الصور أحادية اللون
+	CCITT Group 4	CCITT المجموعة 4
+	JBIG2 (lossless)	JBIG2 (بدون فقدان)
 	Bicubic downsampling to	تقليل العينات بطريقة Bicubic إلى
 	for images above	للصور التي تتجاوز
 	Compression	الضغط
@@ -814,14 +823,9 @@
 	Copy Image in Original Format	نسخ الصورة بتنسيقها الأصلي
 	The image has been copied as a {ext} file	نُسخت الصورة كملف {ext}
 	The page has changed; select the image again	تغيّرت الصفحة؛ حدّد الصورة مرة أخرى
-	Check for updates	التحقق من التحديثات
 	No check has run yet.	لم يُجرَ أي تحقق بعد.
-	Checking for a newer version…	جارٍ التحقق من وجود إصدار أحدث…
 	PdfCraft {v} is available.	PdfCraft {v} متاح.
 	You have version {c}. Download the new version from its release page.	لديك الإصدار {c}. نزّل الإصدار الجديد من صفحة إصداره.
-	PdfCraft {c} is up to date.	PdfCraft {c} محدَّث.
-	Couldn't check for updates: {e}	تعذّر التحقق من التحديثات: {e}
-	You have version {c}. All releases are listed at {page}.	لديك الإصدار {c}. كل الإصدارات مدرجة في {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	يسأل GitHub عن أحدث إصدار. لا يُنزَّل أو يُثبَّت شيء تلقائيًا.
 	Download	تنزيل
 	Later	لاحقًا
@@ -866,6 +870,14 @@
 	Applies to 1 page	يُطبَّق على صفحة واحدة
 	Applies to {n} pages	يُطبَّق على {n} صفحات
 	Replaces the existing one on those pages.	يستبدل الموجود على تلك الصفحات.
+	Checking pages…	جارٍ فحص الصفحات…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	الصفحة {pages} ترسم تعبئة بيضاء خاصة بها ستُخفي الخلفية. استبدالها
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	الصفحات {pages} ترسم تعبئة بيضاء خاصة بها ستُخفي الخلفية. استبدالها
+	Removing the background puts the page's own backdrop back.	إزالة الخلفية تعيد التعبئة البيضاء الخاصة بالصفحة.
+	A picture covers page {pages} (a scan?), so the background won't show there.	تغطي صورة الصفحة {pages} (مسح ضوئي؟)، لذا لن تظهر الخلفية فيها.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	تغطي صور الصفحات {pages} (مسح ضوئي؟)، لذا لن تظهر الخلفية فيها.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	تغيّرت الصفحة {pages} بعد إضافة الخلفية، لذا تبقى تعبئتها البيضاء الخاصة متوقفة. تبدو كما هي على الورق الأبيض.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	تغيّرت الصفحات {pages} بعد إضافة الخلفية، لذا تبقى تعبئتها البيضاء الخاصة متوقفة. تبدو كما هي على الورق الأبيض.
 	PDF or image	PDF أو صورة
 	No file chosen	لم يُختر ملف
 	Page number	رقم الصفحة
@@ -2426,6 +2438,11 @@ animation effects	Off	معطّلة
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} يُحسب قبل {fields}، التي يقرؤها.|{field} يُحسب قبل {fields}، الذي يقرؤه.|{field} يُحسب قبل {fields}، اللذين يقرؤهما.|{field} يُحسب قبل {fields}، التي يقرؤها.|{field} يُحسب قبل {fields}، التي يقرؤها.|{field} يُحسب قبل {fields}، التي يقرؤها.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} من الحقول الأخرى تُحسب مبكرًا جدًا.|حقل آخر ({n}) يُحسب مبكرًا جدًا.|حقلان آخران ({n}) يُحسبان مبكرًا جدًا.|{n} حقول أخرى تُحسب مبكرًا جدًا.|{n} حقلًا آخر يُحسب مبكرًا جدًا.|{n} من الحقول الأخرى تُحسب مبكرًا جدًا.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} غير موجودة في الترتيب المحفوظ في PDF، لذا قد لا تحسبها عارضات PDF الأخرى.|{fields} غير موجود في الترتيب المحفوظ في PDF، لذا قد لا تحسبه عارضات PDF الأخرى.|{fields} غير موجودين في الترتيب المحفوظ في PDF، لذا قد لا تحسبهما عارضات PDF الأخرى.|{fields} غير موجودة في الترتيب المحفوظ في PDF، لذا قد لا تحسبها عارضات PDF الأخرى.|{fields} غير موجودة في الترتيب المحفوظ في PDF، لذا قد لا تحسبها عارضات PDF الأخرى.|{fields} غير موجودة في الترتيب المحفوظ في PDF، لذا قد لا تحسبها عارضات PDF الأخرى.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} من الصيغ تقرأ حقولًا غير موجودة في النموذج|صيغة واحدة ({n}) تقرأ حقلًا غير موجود في النموذج|صيغتان ({n}) تقرآن حقولًا غير موجودة في النموذج|{n} صيغ تقرأ حقولًا غير موجودة في النموذج|{n} صيغة تقرأ حقولًا غير موجودة في النموذج|{n} من الصيغ تقرأ حقولًا غير موجودة في النموذج
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	يقرأ {field} الحقول {fields}، وهي غير موجودة في النموذج.|يقرأ {field} الحقل {fields}، وهو غير موجود في النموذج.|يقرأ {field} الحقلين {fields}، وهما غير موجودين في النموذج.|يقرأ {field} الحقول {fields}، وهي غير موجودة في النموذج.|يقرأ {field} الحقول {fields}، وهي غير موجودة في النموذج.|يقرأ {field} الحقول {fields}، وهي غير موجودة في النموذج.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} من الصيغ الأخرى تقرأ حقولًا مفقودة.|صيغة أخرى ({n}) تقرأ حقلًا مفقودًا.|صيغتان أخريان ({n}) تقرآن حقولًا مفقودة.|{n} صيغ أخرى تقرأ حقولًا مفقودة.|{n} صيغة أخرى تقرأ حقولًا مفقودة.|{n} من الصيغ الأخرى تقرأ حقولًا مفقودة.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	يبني {fields} بعض أسماء الحقول أثناء التشغيل، لذا لا يتم التحقق من هذه القراءات.|يبني {fields} بعض أسماء الحقول أثناء التشغيل، لذا لا يتم التحقق من هذه القراءات.|يبني {fields} بعض أسماء الحقول أثناء التشغيل، لذا لا يتم التحقق من هذه القراءات.|يبني {fields} بعض أسماء الحقول أثناء التشغيل، لذا لا يتم التحقق من هذه القراءات.|يبني {fields} بعض أسماء الحقول أثناء التشغيل، لذا لا يتم التحقق من هذه القراءات.|يبني {fields} بعض أسماء الحقول أثناء التشغيل، لذا لا يتم التحقق من هذه القراءات.
+@plural	{fields} is missing|{fields} are missing	{fields} مفقودة|{fields} مفقود|{fields} مفقودان|{fields} مفقودة|{fields} مفقودة|{fields} مفقودة
 	Scan	مسح ضوئي
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	وقّع على ورقة بيضاء والتقط لها صورة في إضاءة ساطعة ومتساوية (استخدم الفلاش). اختر الصورة أو أفلتها هنا: يعثر PdfCraft على التوقيع ويزيل الورق.
 	Choose photo…	اختيار صورة…
@@ -2833,3 +2850,7 @@ certificate	Version	الإصدار
 	Rotate the selected pages clockwise	تدوير الصفحات المحددة باتجاه عقارب الساعة
 	Extract the selected pages…	استخراج الصفحات المحددة…
 	Delete the selected pages	حذف الصفحات المحددة
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	خيارات هذا الرد
+	Export value	قيمة التصدير

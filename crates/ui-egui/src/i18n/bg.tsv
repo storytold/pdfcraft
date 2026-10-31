@@ -202,6 +202,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Чете {names}, които на свой ред го четат. Никой ред не може да поправи цикъл: променете една от формулите.
 	Not in order	Извън реда
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Липсва в реда на изчисляване, записан в PDF файла: други програми за PDF може да не го изчисляват.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Чете {name}, което го няма във формуляра, затова не получава стойност оттам.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Скриптът му чете и полета, чиито имена съставя по време на изпълнение, затова тези четения не могат да бъдат проверени.
+	Missing field	Липсващо поле
+	Unchecked reads	Непроверени четения
+	{field} reads fields named as it runs	{field} чете полета, именувани по време на изпълнение
+	Some names are built as it runs	Някои имена се съставят по време на изпълнение
 	Back to Prepare a form	Назад към „Подготви формуляр“
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Все още нито едно поле в този формуляр не изчислява стойността си. Задайте изчисление на поле в раздела „Изчисляване“ на свойствата му и то ще се покаже тук.
 	{names} and {last}	{names} и {last}
@@ -259,6 +265,9 @@
 	Clean Up	Почистване
 	Color Images	Цветни изображения
 	Grayscale Images	Изображения в сива скала
+	Monochrome Images	Монохромни изображения
+	CCITT Group 4	CCITT група 4
+	JBIG2 (lossless)	JBIG2 (без загуби)
 	Bicubic downsampling to	Бикубично понижаване на резолюцията до
 	for images above	за изображения над
 	Compression	Компресия
@@ -477,14 +486,9 @@
 	Copy Image in Original Format	Копирай изображението в оригиналния формат
 	The image has been copied as a {ext} file	Изображението е копирано като файл {ext}
 	The page has changed; select the image again	Страницата е променена; изберете изображението отново
-	Check for updates	Провери за актуализации
 	No check has run yet.	Още не е извършвана проверка.
-	Checking for a newer version…	Проверка за по-нова версия…
 	PdfCraft {v} is available.	Налична е PdfCraft {v}.
 	You have version {c}. Download the new version from its release page.	Имате версия {c}. Изтеглете новата версия от страницата на изданието.
-	PdfCraft {c} is up to date.	PdfCraft {c} е актуална.
-	Couldn't check for updates: {e}	Неуспешна проверка за актуализации: {e}
-	You have version {c}. All releases are listed at {page}.	Имате версия {c}. Всички издания са изброени на {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Запитва GitHub за най-новото издание. Нищо не се изтегля и не се инсталира автоматично.
 	Download	Изтегли
 	Later	По-късно
@@ -528,6 +532,14 @@
 	Applies to 1 page	Прилага се към 1 страница
 	Applies to {n} pages	Прилага се към {n} страници
 	Replaces the existing one on those pages.	Заменя съществуващия на тези страници.
+	Checking pages…	Проверка на страниците…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Страница {pages} има собствено бяло запълване, което би скрило фона. Замяна
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Страници {pages} имат собствено бяло запълване, което би скрило фона. Замяна
+	Removing the background puts the page's own backdrop back.	Премахването на фона връща собственото бяло запълване на страницата.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Изображение покрива страница {pages} (сканиране?), затова фонът няма да се вижда там.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Изображения покриват страници {pages} (сканирания?), затова фонът няма да се вижда там.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Страница {pages} е променена след добавянето на фона, затова собственото ѝ бяло запълване остава изключено. На бяла хартия изглежда по същия начин.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Страници {pages} са променени след добавянето на фона, затова собственото им бяло запълване остава изключено. На бяла хартия изглеждат по същия начин.
 	PDF or image	PDF или изображение
 	No file chosen	Не е избран файл
 	Page number	Номер на страница
@@ -2368,6 +2380,11 @@ animation effects	Off	Изключени
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} се изчислява преди {fields}, което чете.|{field} се изчислява преди {fields}, които чете.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Още {n} поле се изчислява твърде рано.|Още {n} полета се изчисляват твърде рано.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} липсва в реда, запазен в PDF файла, затова други програми за PDF може да не го изчислят.|{fields} липсват в реда, запазен в PDF файла, затова други програми за PDF може да не ги изчислят.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} формула чете поле, което го няма във формуляра|{n} формули четат полета, които ги няма във формуляра
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} чете {fields}, което го няма във формуляра.|{field} чете {fields}, които ги няма във формуляра.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Още {n} формула чете липсващо поле.|Още {n} формули четат липсващи полета.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} съставя някои имена на полета по време на изпълнение, затова тези четения не се проверяват.|{fields} съставят някои имена на полета по време на изпълнение, затова тези четения не се проверяват.
+@plural	{fields} is missing|{fields} are missing	{fields} липсва|{fields} липсват
 	Scan	Сканиране
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Подпишете се на лист бяла хартия и го снимайте на ярка, равномерна светлина (със светкавица). Изберете снимката или я пуснете тук: PdfCraft открива подписа и премахва хартията.
 	Choose photo…	Избор на снимка…
@@ -2520,3 +2537,7 @@ animation effects	Off	Изключени
 	Rotate the selected pages clockwise	Завъртане на избраните страници по часовниковата стрелка
 	Extract the selected pages…	Извличане на избраните страници…
 	Delete the selected pages	Изтриване на избраните страници
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Опции за този отговор
+	Export value	Стойност за експортиране

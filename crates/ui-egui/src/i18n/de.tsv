@@ -514,6 +514,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Liest {names}, die es wieder lesen. Keine Reihenfolge kann eine Schleife beheben: Ändere eine der Formeln.
 	Not in order	Nicht in der Reihenfolge
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Fehlt in der im PDF gespeicherten Berechnungsreihenfolge: Andere PDF-Viewer berechnen es womöglich nicht.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Liest {name}, das es im Formular nicht gibt, und erhält dort deshalb keinen Wert.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Sein Skript liest auch Felder, deren Namen es erst beim Ausführen bildet. Diese Lesezugriffe lassen sich nicht prüfen.
+	Missing field	Feld fehlt
+	Unchecked reads	Ungeprüfte Lesezugriffe
+	{field} reads fields named as it runs	{field} liest Felder, deren Namen erst beim Ausführen entstehen
+	Some names are built as it runs	Manche Namen entstehen erst beim Ausführen
 	Back to Prepare a form	Zurück zu „Formular vorbereiten“
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Noch berechnet kein Feld dieses Formulars seinen Wert. Gib einem Feld auf dem Tab „Berechnen“ seiner Eigenschaften eine Berechnung, dann erscheint es hier.
 	{names} and {last}	{names} und {last}
@@ -570,6 +576,9 @@
 	Clean Up	Aufräumen
 	Color Images	Farbbilder
 	Grayscale Images	Graustufenbilder
+	Monochrome Images	Monochrome Bilder
+	CCITT Group 4	CCITT Gruppe 4
+	JBIG2 (lossless)	JBIG2 (verlustfrei)
 	Bicubic downsampling to	Bikubische Neuberechnung auf
 	for images above	für Bilder über
 	Compression	Komprimierung
@@ -792,14 +801,9 @@
 	Copy Image in Original Format	Bild im Originalformat kopieren
 	The image has been copied as a {ext} file	Das Bild wurde als {ext}-Datei kopiert
 	The page has changed; select the image again	Die Seite hat sich geändert; wählen Sie das Bild erneut aus
-	Check for updates	Nach Updates suchen
 	No check has run yet.	Es wurde noch nicht gesucht.
-	Checking for a newer version…	Suche nach einer neueren Version…
 	PdfCraft {v} is available.	PdfCraft {v} ist verfügbar.
 	You have version {c}. Download the new version from its release page.	Du hast Version {c}. Lade die neue Version von ihrer Release-Seite herunter.
-	PdfCraft {c} is up to date.	PdfCraft {c} ist auf dem neuesten Stand.
-	Couldn't check for updates: {e}	Updates konnten nicht gesucht werden: {e}
-	You have version {c}. All releases are listed at {page}.	Du hast Version {c}. Alle Releases findest du unter {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Fragt GitHub nach dem neuesten Release. Es wird nichts automatisch heruntergeladen oder installiert.
 	Download	Herunterladen
 	Later	Später
@@ -844,6 +848,14 @@
 	Applies to 1 page	Gilt für 1 Seite
 	Applies to {n} pages	Gilt für {n} Seiten
 	Replaces the existing one on those pages.	Ersetzt das Vorhandene auf diesen Seiten.
+	Checking pages…	Seiten werden geprüft…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Seite {pages} hat eine eigene weiße Fläche, die den Hintergrund verdecken würde. Ersetzen
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Die Seiten {pages} haben eine eigene weiße Fläche, die den Hintergrund verdecken würde. Ersetzen
+	Removing the background puts the page's own backdrop back.	Wird der Hintergrund entfernt, kehrt die eigene weiße Fläche der Seite zurück.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Ein Bild bedeckt Seite {pages} (ein Scan?), daher ist der Hintergrund dort nicht zu sehen.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Bilder bedecken die Seiten {pages} (Scans?), daher ist der Hintergrund dort nicht zu sehen.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Seite {pages} wurde nach dem Hinzufügen des Hintergrunds geändert, daher bleibt ihre eigene weiße Fläche ausgeschaltet. Auf weißem Papier sieht sie gleich aus.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Seiten {pages} wurden nach dem Hinzufügen des Hintergrunds geändert, daher bleiben ihre eigenen weißen Flächen ausgeschaltet. Auf weißem Papier sehen sie gleich aus.
 	PDF or image	PDF oder Bild
 	No file chosen	Keine Datei ausgewählt
 	Page number	Seitenzahl
@@ -2406,6 +2418,11 @@ animation effects	Off	Aus
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} wird vor {fields} berechnet, das es liest.|{field} wird vor {fields} berechnet, die es liest.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} weiteres Feld wird zu früh berechnet.|{n} weitere Felder werden zu früh berechnet.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} fehlt in der im PDF gespeicherten Reihenfolge, daher berechnen andere PDF-Viewer es womöglich nicht.|{fields} fehlen in der im PDF gespeicherten Reihenfolge, daher berechnen andere PDF-Viewer sie womöglich nicht.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} Formel liest ein Feld, das es im Formular nicht gibt|{n} Formeln lesen Felder, die es im Formular nicht gibt
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} liest {fields}, das es im Formular nicht gibt.|{field} liest {fields}, die es im Formular nicht gibt.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} weitere Formel liest ein fehlendes Feld.|{n} weitere Formeln lesen fehlende Felder.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} bildet manche Feldnamen erst beim Ausführen, daher werden diese Lesezugriffe nicht geprüft.|{fields} bilden manche Feldnamen erst beim Ausführen, daher werden diese Lesezugriffe nicht geprüft.
+@plural	{fields} is missing|{fields} are missing	{fields} fehlt|{fields} fehlen
 	Scan	Scannen
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Unterschreiben Sie auf einem weißen Blatt Papier und fotografieren Sie es bei hellem, gleichmäßigem Licht (mit Blitz). Wählen Sie das Foto aus oder ziehen Sie es hierher: PdfCraft findet die Unterschrift und entfernt das Papier.
 	Choose photo…	Foto auswählen…
@@ -2558,3 +2575,7 @@ animation effects	Off	Aus
 	Rotate the selected pages clockwise	Ausgewählte Seiten im Uhrzeigersinn drehen
 	Extract the selected pages…	Ausgewählte Seiten extrahieren…
 	Delete the selected pages	Ausgewählte Seiten löschen
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Optionen für diese Antwort
+	Export value	Exportwert

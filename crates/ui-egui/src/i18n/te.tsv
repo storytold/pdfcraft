@@ -518,6 +518,12 @@ comment menu	Edit	సవరించు
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	{names}ను చదువుతుంది, అవి దీన్ని తిరిగి చదువుతాయి. ఏ క్రమమూ లూప్‌ను సరిచేయదు: సూత్రాలలో ఒకదాన్ని మార్చండి.
 	Not in order	క్రమంలో లేదు
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDFలో సేవ్ చేసిన గణన క్రమంలో లేదు: ఇతర PDF వీక్షకులు దీన్ని లెక్కించకపోవచ్చు.
+	Reads {name}, which the form doesn't have, so it gets no value there.	{name}ను చదువుతుంది, కానీ అది ఫారమ్‌లో లేదు, కాబట్టి దాని నుండి విలువ రాదు.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	దీని స్క్రిప్ట్ నడుస్తున్నప్పుడు పేర్లను కూర్చే ఫీల్డ్‌లను కూడా చదువుతుంది, కాబట్టి ఆ చదువులను తనిఖీ చేయలేము.
+	Missing field	ఫీల్డ్ లేదు
+	Unchecked reads	తనిఖీ చేయని చదువులు
+	{field} reads fields named as it runs	{field} నడుస్తున్నప్పుడు పేరు పెట్టే ఫీల్డ్‌లను చదువుతుంది
+	Some names are built as it runs	కొన్ని పేర్లు నడుస్తున్నప్పుడు కూర్చబడతాయి
 	Back to Prepare a form	‘ఫారాన్ని సిద్ధం చేయి’కి తిరిగి వెళ్లు
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	ఈ ఫారంలో ఏ ఫీల్డ్ ఇంకా తన విలువను గణించదు. ఫీల్డ్ లక్షణాలలోని గణన ట్యాబ్‌లో దానికి గణన ఇవ్వండి, అది ఇక్కడ కనిపిస్తుంది.
 	{names} and {last}	{names} మరియు {last}
@@ -574,6 +580,9 @@ comment menu	Edit	సవరించు
 	Clean Up	చక్కదిద్దడం
 	Color Images	రంగు చిత్రాలు
 	Grayscale Images	గ్రేస్కేల్ చిత్రాలు
+	Monochrome Images	మోనోక్రోమ్ చిత్రాలు
+	CCITT Group 4	CCITT గ్రూప్ 4
+	JBIG2 (lossless)	JBIG2 (నష్టరహితం)
 	Bicubic downsampling to	బైక్యూబిక్ డౌన్‌శాంప్లింగ్, లక్ష్యం:
 	for images above	ఈ రిజల్యూషన్ మించిన చిత్రాలకు:
 	Compression	కుదింపు
@@ -789,14 +798,9 @@ comment menu	Edit	సవరించు
 	Copy Image in Original Format	చిత్రాన్ని అసలు ఫార్మాట్‌లో కాపీ చేయి
 	The image has been copied as a {ext} file	చిత్రం {ext} ఫైల్‌గా కాపీ చేయబడింది
 	The page has changed; select the image again	పేజీ మారింది; చిత్రాన్ని మళ్లీ ఎంచుకోండి
-	Check for updates	అప్‌డేట్‌ల కోసం తనిఖీ చేయి
 	No check has run yet.	ఇంకా తనిఖీ జరగలేదు.
-	Checking for a newer version…	కొత్త వెర్షన్ కోసం తనిఖీ చేస్తోంది…
 	PdfCraft {v} is available.	PdfCraft {v} అందుబాటులో ఉంది.
 	You have version {c}. Download the new version from its release page.	మీ వద్ద వెర్షన్ {c} ఉంది. కొత్త వెర్షన్‌ను దాని విడుదల పేజీ నుండి డౌన్‌లోడ్ చేసుకోండి.
-	PdfCraft {c} is up to date.	PdfCraft {c} తాజా వెర్షన్.
-	Couldn't check for updates: {e}	అప్‌డేట్‌ల కోసం తనిఖీ చేయడం సాధ్యం కాలేదు: {e}
-	You have version {c}. All releases are listed at {page}.	మీ వద్ద వెర్షన్ {c} ఉంది. అన్ని విడుదలల జాబితా: {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	తాజా విడుదల గురించి GitHubను అడుగుతుంది. ఏదీ ఆటోమేటిక్‌గా డౌన్‌లోడ్ లేదా ఇన్‌స్టాల్ చేయబడదు.
 	Download	డౌన్‌లోడ్ చేయి
 	Later	తర్వాత
@@ -840,6 +844,14 @@ comment menu	Edit	సవరించు
 	Applies to 1 page	1 పేజీకి వర్తిస్తుంది
 	Applies to {n} pages	{n} పేజీలకు వర్తిస్తుంది
 	Replaces the existing one on those pages.	ఆ పేజీలలో ఇప్పటికే ఉన్నదాన్ని భర్తీ చేస్తుంది.
+	Checking pages…	పేజీలను తనిఖీ చేస్తోంది…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	పేజీ {pages}కి సొంత తెల్లని నింపు ఉంది, అది నేపథ్యాన్ని దాచేస్తుంది. భర్తీ చేయండి
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	పేజీలు {pages}కి సొంత తెల్లని నింపు ఉంది, అది నేపథ్యాన్ని దాచేస్తుంది. భర్తీ చేయండి
+	Removing the background puts the page's own backdrop back.	నేపథ్యాన్ని తీసివేస్తే పేజీ సొంత తెల్లని నింపు తిరిగి వస్తుంది.
+	A picture covers page {pages} (a scan?), so the background won't show there.	పేజీ {pages}ని ఒక చిత్రం కప్పుతోంది (స్కాన్?), కాబట్టి అక్కడ నేపథ్యం కనిపించదు.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	పేజీలు {pages}ని చిత్రాలు కప్పుతున్నాయి (స్కాన్‌లు?), కాబట్టి అక్కడ నేపథ్యం కనిపించదు.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	నేపథ్యాన్ని జోడించిన తర్వాత పేజీ {pages} మారింది, కాబట్టి దాని సొంత తెల్లని నింపు ఆపివేయబడే ఉంటుంది. తెల్ల కాగితంపై అది అలాగే కనిపిస్తుంది.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	నేపథ్యాన్ని జోడించిన తర్వాత పేజీలు {pages} మారాయి, కాబట్టి వాటి సొంత తెల్లని నింపులు ఆపివేయబడే ఉంటాయి. తెల్ల కాగితంపై అవి అలాగే కనిపిస్తాయి.
 	PDF or image	PDF లేదా చిత్రం
 	No file chosen	ఫైల్ ఏదీ ఎంచుకోలేదు
 	Page number	పేజీ సంఖ్య
@@ -2306,6 +2318,11 @@ animation effects	Off	ఆఫ్
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} తాను చదివే {fields} కంటే ముందు గణించబడుతుంది.|{field} తాను చదివే {fields} కంటే ముందు గణించబడుతుంది.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	మరో {n} ఫీల్డ్ చాలా ముందుగా గణించబడుతుంది.|మరో {n} ఫీల్డ్‌లు చాలా ముందుగా గణించబడతాయి.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} PDFలో సేవ్ చేసిన క్రమంలో లేదు, కాబట్టి ఇతర PDF వ్యూయర్‌లు దాన్ని గణించకపోవచ్చు.|{fields} PDFలో సేవ్ చేసిన క్రమంలో లేవు, కాబట్టి ఇతర PDF వ్యూయర్‌లు వాటిని గణించకపోవచ్చు.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} సూత్రం ఫారమ్‌లో లేని ఫీల్డ్‌ను చదువుతుంది|{n} సూత్రాలు ఫారమ్‌లో లేని ఫీల్డ్‌లను చదువుతాయి
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} ఫారమ్‌లో లేని {fields}‌ను చదువుతుంది.|{field} ఫారమ్‌లో లేని {fields}‌ను చదువుతుంది.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	మరో {n} సూత్రం లేని ఫీల్డ్‌ను చదువుతుంది.|మరో {n} సూత్రాలు లేని ఫీల్డ్‌లను చదువుతాయి.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} నడుస్తున్నప్పుడు కొన్ని ఫీల్డ్ పేర్లను కూర్చుతుంది, కాబట్టి ఆ చదువులు తనిఖీ చేయబడవు.|{fields} నడుస్తున్నప్పుడు కొన్ని ఫీల్డ్ పేర్లను కూర్చుతాయి, కాబట్టి ఆ చదువులు తనిఖీ చేయబడవు.
+@plural	{fields} is missing|{fields} are missing	{fields} లేదు|{fields} లేవు
 	Scan	స్కాన్
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	తెల్ల కాగితంపై సంతకం చేసి, ప్రకాశవంతమైన, సమానమైన వెలుతురులో దాని ఫోటో తీయండి (ఫ్లాష్ ఉపయోగించండి). ఫోటోను ఎంచుకోండి లేదా ఇక్కడ వదలండి: PdfCraft సంతకాన్ని కనుగొని కాగితాన్ని తొలగిస్తుంది.
 	Choose photo…	ఫోటో ఎంచుకోండి…
@@ -2466,3 +2483,7 @@ animation effects	Off	ఆఫ్
 	Rotate the selected pages clockwise	ఎంచుకున్న పేజీలను సవ్య దిశలో తిప్పు
 	Extract the selected pages…	ఎంచుకున్న పేజీలను సంగ్రహించు…
 	Delete the selected pages	ఎంచుకున్న పేజీలను తొలగించు
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	ఈ ప్రత్యుత్తరం ఎంపికలు
+	Export value	ఎగుమతి విలువ

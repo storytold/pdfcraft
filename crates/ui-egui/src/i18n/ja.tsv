@@ -541,6 +541,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	{names} を読み取り、それらがこのフィールドを読み返します。循環はどの順序でも直せません。いずれかの数式を変更してください。
 	Not in order	順序にない
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF に保存された計算順序にありません。ほかの PDF ビューアーでは計算されない可能性があります。
+	Reads {name}, which the form doesn't have, so it gets no value there.	フォームにない {name} を読み取るため、そこからは値を得られません。
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	スクリプトが実行中に名前を組み立てるフィールドも読み取るため、それらの読み取りは確認できません。
+	Missing field	フィールドがない
+	Unchecked reads	未確認の読み取り
+	{field} reads fields named as it runs	{field} は実行中に名前が決まるフィールドを読み取ります
+	Some names are built as it runs	一部の名前は実行中に組み立てられます
 	Back to Prepare a form	「フォームを作成」に戻る
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	このフォームには値を計算するフィールドがまだありません。フィールドのプロパティの［計算］タブで計算を設定すると、ここに表示されます。
 	{names} and {last}	{names}、{last}
@@ -597,6 +603,9 @@
 	Clean Up	クリーンアップ
 	Color Images	カラー画像
 	Grayscale Images	グレースケール画像
+	Monochrome Images	白黒画像
+	CCITT Group 4	CCITT グループ 4
+	JBIG2 (lossless)	JBIG2（可逆）
 	Bicubic downsampling to	バイキュービック法でダウンサンプル:
 	for images above	対象画像の解像度:
 	Compression	圧縮
@@ -815,14 +824,9 @@
 	Copy Image in Original Format	画像を元の形式でコピー
 	The image has been copied as a {ext} file	画像を {ext} ファイルとしてコピーしました
 	The page has changed; select the image again	ページが変更されました。画像をもう一度選択してください
-	Check for updates	アップデートを確認
 	No check has run yet.	まだ確認していません。
-	Checking for a newer version…	新しいバージョンを確認中…
 	PdfCraft {v} is available.	PdfCraft {v} が利用できます。
 	You have version {c}. Download the new version from its release page.	現在のバージョンは {c} です。リリースページから新しいバージョンをダウンロードしてください。
-	PdfCraft {c} is up to date.	PdfCraft {c} は最新です。
-	Couldn't check for updates: {e}	アップデートを確認できませんでした: {e}
-	You have version {c}. All releases are listed at {page}.	現在のバージョンは {c} です。すべてのリリースは {page} に掲載されています。
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	GitHub で最新リリースを確認します。自動でダウンロードやインストールは行いません。
 	Download	ダウンロード
 	Later	後で
@@ -867,6 +871,14 @@
 	Applies to 1 page	1 ページに適用
 	Applies to {n} pages	{n} ページに適用
 	Replaces the existing one on those pages.	対象ページの既存の項目を置き換えます。
+	Checking pages…	ページを確認しています…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	{pages} ページには独自の白い塗りがあり、背景が隠れてしまいます。置き換える
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	{pages} ページに独自の白い塗りがあり、背景が隠れてしまいます。置き換える
+	Removing the background puts the page's own backdrop back.	背景を削除すると、ページ独自の白い塗りが元に戻ります。
+	A picture covers page {pages} (a scan?), so the background won't show there.	{pages} ページは画像（スキャン？）で覆われているため、背景は表示されません。
+	Pictures cover pages {pages} (scans?), so the background won't show there.	{pages} ページが画像（スキャン？）で覆われているため、そこでは背景は表示されません。
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	背景を追加した後に {pages} ページが変更されたため、そのページ独自の白い塗りはオフのままです。白い紙では見た目は変わりません。
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	背景を追加した後に {pages} ページが変更されたため、それらのページ独自の白い塗りはオフのままです。白い紙では見た目は変わりません。
 	PDF or image	PDF または画像
 	No file chosen	ファイルが選択されていません
 	Page number	ページ番号
@@ -2405,6 +2417,11 @@ animation effects	Off	オフ
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} は、読み取る {fields} より先に計算されます。
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	さらに {n} 個のフィールドが早すぎます。
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} は PDF に保存された順序にないため、他の PDF ビューアーでは計算されない場合があります。
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} 個の数式がフォームにないフィールドを読み取ります
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} はフォームにない {fields} を読み取ります。
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	ほかに {n} 個の数式が存在しないフィールドを読み取ります。
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} は一部のフィールド名を実行中に組み立てるため、それらの読み取りは確認されません。
+@plural	{fields} is missing|{fields} are missing	{fields} がありません
 	Scan	スキャン
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	白い紙に署名し、明るく均一な光の下で写真を撮ってください（フラッシュを使用）。写真を選択するか、ここにドロップしてください。PdfCraft が署名を見つけ、紙の部分を取り除きます。
 	Choose photo…	写真を選択…
@@ -2557,3 +2574,7 @@ animation effects	Off	オフ
 	Rotate the selected pages clockwise	選択したページを時計回りに回転
 	Extract the selected pages…	選択したページを抽出…
 	Delete the selected pages	選択したページを削除
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	この返信のオプション
+	Export value	書き出し値

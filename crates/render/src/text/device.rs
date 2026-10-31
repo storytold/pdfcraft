@@ -27,9 +27,12 @@ pub(super) struct TextDevice {
     actual: Option<(usize, String, Vec<Drawn>)>,
     /// Every `/ActualText` replacement made on the page.
     pub(super) replaced: Vec<Replaced>,
+    /// Visible page bounds in view space (`intersected_crop_box` after `initial_transform`).
+    page: Rect,
     filter: TextFilter,
     excluded_depth: Option<usize>,
     actual_filtered: bool,
+    actual_cropped: bool,
     partial_replacement: bool,
 }
 
@@ -109,9 +112,11 @@ impl TextDevice {
             depth: 0,
             actual: None,
             replaced: Vec::new(),
+            page: Rect::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::INFINITY),
             filter: TextFilter::default(),
             excluded_depth: None,
             actual_filtered: false,
+            actual_cropped: false,
             partial_replacement: false,
         }
     }
@@ -126,10 +131,15 @@ impl TextDevice {
     /// Unicode). An empty one (a soft hyphen at a line break, say) stands for no text at all.
     fn end_actual_text(&mut self) {
         let Some((_, text, drawn)) = self.actual.take() else { return };
+        let cropped = std::mem::take(&mut self.actual_cropped);
         if std::mem::take(&mut self.actual_filtered) {
             // ActualText has no mapping from replacement words to individual glyphs. A mixed
             // span cannot be filtered honestly; a wholly excluded span can simply be omitted.
             self.partial_replacement |= !drawn.is_empty();
+            return;
+        }
+        if cropped {
+            self.glyphs.extend(drawn.into_iter().filter(|d| !d.2.text.chars().all(|c| c.is_control())));
             return;
         }
         let Some(glyph) = merge(&drawn, text.clone()) else {
@@ -316,7 +326,13 @@ impl<'a> Device<'a> for TextDevice {
         let b = corners.iter().fold(Rect::new(f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY), |b, p| {
             Rect::new(b.x0.min(p.x), b.y0.min(p.y), b.x1.max(p.x), b.y1.max(p.y))
         });
-        if !(b.x0.is_finite() && b.y0.is_finite() && b.x1.is_finite() && b.y1.is_finite()) || b.width() > 10_000.0 || b.height() > 10_000.0 {
+        let outside_crop = b.x0.max(self.page.x0) >= b.x1.min(self.page.x1) || b.y0.max(self.page.y0) >= b.y1.min(self.page.y1);
+        if !(b.x0.is_finite() && b.y0.is_finite() && b.x1.is_finite() && b.y1.is_finite())
+            || b.width() > 10_000.0
+            || b.height() > 10_000.0
+            || outside_crop
+        {
+            self.actual_cropped |= replaced && outside_crop;
             return;
         }
         let length = dx.hypot(dy);
@@ -374,8 +390,10 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
     // as in Acrobat, and match what other extractors report.
     let settings = settings.clone();
     let initial = p.initial_transform(true).to_kurbo();
-    let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, w as f64, h as f64), &cache, p.xref(), settings);
+    let c = p.intersected_crop_box();
+    let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, f64::from(w), f64::from(h)), &cache, p.xref(), settings);
     let mut dev = TextDevice::new();
+    dev.page = initial.transform_rect_bbox(Rect::new(c.x0, c.y0, c.x1, c.y1));
     dev.filter = filter;
     interpret_page(p, &mut ctx, &mut dev);
     // A replacement the content never closed ends with the page.

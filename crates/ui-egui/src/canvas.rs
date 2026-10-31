@@ -12,6 +12,7 @@ use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, TextureHand
 use pdfcraft_engine::{DocId, Edit};
 use pdfcraft_render::{DestView, DocInfo, LayerOp, LinkTarget, PRINT_TAG, PageText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels};
 
+use crate::page_cursor::{Layer, Subject};
 use crate::page_pointer::PagePointer;
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, QuickTool, RightPanel, comments, icons, widgets};
@@ -26,7 +27,9 @@ pub(super) mod fling;
 pub(super) mod image_pick;
 mod navigation;
 mod organize;
+pub(super) mod page_cursor;
 pub(super) mod page_pointer;
+pub(super) mod page_router;
 pub mod scroll_speed;
 mod selection;
 pub(super) mod signature_drag;
@@ -38,8 +41,7 @@ pub(super) mod zoom_snap;
 
 pub(crate) use area::signature_badges;
 use area::{
-    SUPPRESS_SECS, SUPPRESS_TAIL_SECS, annotation_hover_text, drawing_edge_pointer, glide_interrupted, page_scroll, presentation_click, run_button,
-    set_layers, zoom_anchor,
+    SUPPRESS_SECS, SUPPRESS_TAIL_SECS, drawing_edge_pointer, glide_interrupted, page_scroll, presentation_click, run_button, set_layers, zoom_anchor,
 };
 #[cfg(test)]
 use bars::in_size_hint_zone;
@@ -462,6 +464,8 @@ pub struct DocView {
     pub org_drag: Option<Vec<usize>>,
     /// Pages panel: the pages being dragged to a new place.
     pub panel_drag: Option<Vec<usize>>,
+    /// Transient keyboard owner for this document's Pages sidebar.
+    pub(crate) pages_focus_id: Option<egui::Id>,
     /// Marquee Zoom / Snapshot: the rectangle being dragged (page, start), and a finished one.
     pub marquee: Option<(usize, Pos2)>,
     pub marquee_done: Option<crate::zoom_snap::Marquee>,
@@ -470,6 +474,13 @@ pub struct DocView {
     /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
     pub(crate) fill_signature_page: Option<usize>,
     pub(crate) signature_drag: crate::signature_drag::SignatureDrag,
+    /// What the page modules claim for the cursor this frame; `document_area` sets it once.
+    pub(crate) cursor: crate::page_cursor::PageCursor,
+    /// Who the press the pages hold belongs to.
+    pub(crate) router: crate::page_router::PageRouter,
+    /// Escape cancelled the press the pages hold: the page ignores it until the button is up, so
+    /// its release neither clicks nor ends a drag.
+    pub(crate) press_cancelled: bool,
     /// A non-edit action requested by the organize toolbar, handled by the app.
     pub pending_action: Option<ViewAction>,
     /// The grid gap the next inserted files go to (set by a "+" between pages); otherwise they
@@ -584,6 +595,7 @@ impl DocView {
         self.org_drag = None;
         self.panel_drag = None;
         self.selection_drag = false;
+        self.router.cancel();
         self.auto_scroll.cancel();
         self.prepare.cancel_pointer_gesture();
         self.content.cancel_pointer_gesture();
@@ -717,11 +729,15 @@ impl DocView {
             sign: Default::default(),
             org_drag: None,
             panel_drag: None,
+            pages_focus_id: None,
             marquee: None,
             marquee_done: None,
             fill_text: None,
             fill_signature_page: None,
             signature_drag: Default::default(),
+            cursor: Default::default(),
+            router: Default::default(),
+            press_cancelled: false,
         }
     }
 
@@ -867,13 +883,13 @@ struct PageEnv<'a> {
     visible_pages: &'a Vec<usize>,
     y_shift: f32,
     fill_text_size: f64,
+    fill_text_color: [f64; 3],
     today: (i64, u32, u32),
 }
 
 /// What the page-scroll closure produces for the rest of the frame.
 #[derive(Default)]
 struct PageOut {
-    badge_hover: Option<(Pos2, String)>,
     canvas_action: Option<comments::CanvasAction>,
     clicked_link: Option<LinkTarget>,
     copy_selected: bool,
@@ -911,7 +927,7 @@ struct PageFrame<'a> {
     current_overlap: f32,
     current_height: f32,
     pressed_page: Option<usize>,
-    calc_hover: Option<String>,
+    calc_hover: Option<crate::calc_order_ui::Focus>,
 }
 
 /// Visible heights (points) closer than this are equal: one page size can meet the viewport a
@@ -1065,8 +1081,6 @@ fn paint_page_tiles(ui: &egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>
 struct PageInput {
     /// A tool, a field or a comment took the pointer: text selection must leave it alone.
     consumed: bool,
-    /// A form field is under the pointer and has set its cursor.
-    over_field: bool,
     /// Redact or Highlight draws boxes off text.
     area_tool: bool,
 }
@@ -1113,12 +1127,43 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         tool,
         units,
         fill_text_size,
+        fill_text_color,
         ..
     } = frame.env;
     let PageSlot { i, xf, .. } = *slot;
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     let cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
     let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    let (lines, images) =
+        if matches!(tool, QuickTool::AddText | QuickTool::EditText) && can_modify { edit_inventory(view, doc, i) } else { Default::default() };
+    let field_tool = match tool {
+        QuickTool::Field(f) => Some(f),
+        _ => None,
+    };
+    // While a table is being set up, nothing else is drawn or moved.
+    let prepare_allowed = can_modify && table_preview.is_none() && frame.out.open_table.is_none();
+    let hits = PageHits {
+        page: i,
+        xf: &xf,
+        info,
+        tool,
+        pcx: &pcx,
+        form,
+        can_fill,
+        can_modify,
+        editing_content,
+        preparing,
+        field_tool,
+        prepare_allowed,
+        added,
+        lines: &lines,
+        images: &images,
+        clip: ui.clip_rect(),
+    };
+    if let Some(o) = ptr.pressed().filter(|o| xf.rect.contains(*o)) {
+        let at = hits.at(view, o);
+        view.router.press(i, at, tool);
+    }
     if let QuickTool::Measure(measure_tool) = tool {
         crate::measure_ui::page_input(ui, resp, doc, view, &pcx, measure_tool, units);
     }
@@ -1129,8 +1174,9 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         && allowed
         && let Some(p) = ptr.within(xf.rect)
     {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-        if resp.clicked() {
+        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+        // The tool's own click: nothing drawn over the page here holds the press.
+        if resp.clicked() && view.router.owner(i).is_none() {
             // Centred on the click, upright as the page is shown.
             let (vx, vy) = xf.screen_to_view(p);
             let (w, h) = kind.size();
@@ -1153,8 +1199,9 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         && allowed
         && let Some(p) = ptr.within(xf.rect)
     {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-        if resp.clicked() {
+        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+        // The tool's own click: nothing drawn over the page here holds the press.
+        if resp.clicked() && view.router.owner(i).is_none() {
             // Centred on the click at its natural size (the engine sizes it).
             let (vx, vy) = xf.screen_to_view(p);
             let u = info.pages[i].view_to_user(vx, vy);
@@ -1179,6 +1226,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
             crate::fill_sign::PageInput {
                 tool: ft,
                 text_size: fill_text_size,
+                text_color: fill_text_color,
                 signature: signature.as_ref(),
                 initials: initials.as_ref(),
                 preview: frame.signature_preview,
@@ -1205,7 +1253,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         crate::zoom_snap::page_input(ui, resp, &xf, ptr, i, view);
     }
     if tool == QuickTool::EnhanceCamera {
-        crate::camera_ui::page_input(ui, resp, &xf, ptr, i, view, can_modify);
+        crate::camera_ui::page_input(resp, &xf, ptr, i, view, can_modify);
     }
     if tool == QuickTool::Crop
         && crate::crop::page_input(ui, crate::crop::CropPageInput { resp, xf: &xf, ptr, page: i, info, view, allowed: can_crop })
@@ -1213,30 +1261,14 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         view.current = i;
         frame.out.open_boxes = true;
     }
-    // `over_field`: a form field is under the pointer and has set its cursor.
-    let (on_field, over_field) = if preparing {
-        let field_tool = match tool {
-            QuickTool::Field(f) => Some(f),
-            _ => None,
-        };
-        // While a table is being set up, nothing else is drawn or moved.
-        let allowed = can_modify && table_preview.is_none() && frame.out.open_table.is_none();
-        let o = crate::prepare::page_input(cx, form, field_tool, allowed, view);
+    let on_field = if preparing {
+        let o = crate::prepare::page_input(cx, form, field_tool, prepare_allowed, view);
         frame.out.field_props |= o.properties;
         frame.out.field_placed |= o.placed;
         frame.out.open_table = frame.out.open_table.or(o.table);
-        (o.consumed || field_tool.is_some(), false)
+        o.consumed || field_tool.is_some()
     } else {
-        use crate::forms_ui::FieldPointer;
-        let field = if tool == QuickTool::Select
-            && !(editing_content && can_modify && crate::content_ui::select_grabs(&xf, ptr, i, info, added, view))
-            && !comments::select_grabs(&pcx, view)
-        {
-            crate::forms_ui::page_input(cx, form, can_fill, view)
-        } else {
-            FieldPointer::Away
-        };
-        (field == FieldPointer::Owned, field == FieldPointer::Over)
+        tool == QuickTool::Select && crate::forms_ui::page_input(cx, form, can_fill, view)
     };
     // Redact draws boxes off text; so does Highlight (an area highlight, as in Acrobat).
     let area_tool = tool == QuickTool::Redact && can_modify || tool == QuickTool::Comment(comments::CommentTool::Highlight) && allowed;
@@ -1248,26 +1280,14 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         };
         crate::redact_ui::page_input(cx, over_text, view)
     };
-    let image_owns_pointer = tool == QuickTool::EditText && crate::edit_text_ui::image_owns_pointer(ui, &xf, ptr, i, info, view);
-    let on_objects = !image_owns_pointer && tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(cx, view);
-    let lines = if matches!(tool, QuickTool::AddText | QuickTool::EditText) && can_modify {
-        let generation = doc.edit_generation();
-        match view.edit_lines.get(&i) {
-            Some((g, l)) if *g == generation => l.clone(),
-            _ => {
-                let l = doc.text_blocks(i);
-                view.edit_lines.insert(i, (generation, l.clone()));
-                l
-            }
-        }
-    } else {
-        Vec::new()
-    };
+    let on_objects = tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(cx, view);
+    // Add text acts on the page's own paragraphs over them, and on the one its press was on until
+    // the button is up: a drag that leaves the box still ends, and no new box takes it over.
     let over_source = tool == QuickTool::AddText
-        && pointer.is_some_and(|p| {
-            !crate::content_ui::hits_added(&xf, info, i, added, p)
-                && lines.iter().any(|line| xf.user_rect(info, i, line.rect.map(|v| v as f32)).expand(2.0).contains(p))
-        });
+        && (matches!(view.router.owner(i), Some(crate::page_router::Owner::Paragraph { .. }))
+            || pointer.is_some_and(|p| {
+                !crate::content_ui::hits_added(&xf, info, i, added, p) && crate::edit_text_ui::over_paragraph(&xf, info, i, &lines, p)
+            }));
     let source_blocked = over_source && view.content.hold_blocked();
     if over_source && resp.clicked() && !source_blocked {
         if let Some(edit) = view.content.finish_draft(added) {
@@ -1294,18 +1314,9 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     // instead of vanishing until the pointer comes back.
     let others_own_pointer = on_objects || on_content;
     let on_edit_text = (tool == QuickTool::EditText || over_source) && can_modify && {
-        let generation = doc.edit_generation();
-        let images = match view.edit_images.get(&i) {
-            Some((g, l)) if *g == generation => l.clone(),
-            _ => {
-                let l = doc.page_images(i);
-                view.edit_images.insert(i, (generation, l.clone()));
-                l
-            }
-        };
         // Editable text takes precedence over background/overlapping artwork. Both
         // inventories are painted every frame, even when text owns the pointer.
-        let text_used = crate::edit_text_ui::page_input(cx, &lines, view, !others_own_pointer && !image_owns_pointer);
+        let text_used = crate::edit_text_ui::page_input(cx, &lines, view, !others_own_pointer);
         let image_cx = crate::edit_text_ui::ImageCx {
             ui,
             resp,
@@ -1313,7 +1324,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
             ptr,
             page: i,
             info,
-            allow_interaction: !others_own_pointer && (image_owns_pointer || !text_used),
+            allow_interaction: !others_own_pointer && (matches!(view.router.owner(i), Some(crate::page_router::Owner::Picture { .. })) || !text_used),
         };
         let image_used = crate::edit_text_ui::image_input(&image_cx, &images, view, &mut frame.out.image_action);
         !others_own_pointer && (text_used || image_used)
@@ -1328,7 +1339,131 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         view.links.context = Some((i, l.index));
     }
     let consumed = on_objects || on_edit_text || on_link || on_content || boxing || on_field || comments::page_input(ui, resp, &pcx, view);
-    PageInput { consumed, over_field, area_tool }
+    // The cursor and the tip from what lies under the pointer, after the tools claimed theirs (the
+    // last claim on a layer stands).
+    if frame.env.unobstructed
+        && let Some(p) = pointer
+    {
+        for h in hits.at(view, p) {
+            view.cursor.claim_with_tip(h.layer, h.icon, h.tip);
+        }
+    }
+    PageInput { consumed, area_tool }
+}
+
+/// Edit text's paragraphs and pictures on page `i`, kept while the document is unchanged.
+fn edit_inventory(
+    view: &mut DocView,
+    doc: &pdfcraft_engine::Document,
+    i: usize,
+) -> (Vec<pdfcraft_engine::TextBlock>, Vec<pdfcraft_engine::PageImage>) {
+    let generation = doc.edit_generation();
+    let lines = match view.edit_lines.get(&i) {
+        Some((g, l)) if *g == generation => l.clone(),
+        _ => {
+            let l = doc.text_blocks(i);
+            view.edit_lines.insert(i, (generation, l.clone()));
+            l
+        }
+    };
+    let images = match view.edit_images.get(&i) {
+        Some((g, l)) if *g == generation => l.clone(),
+        _ => {
+            let l = doc.page_images(i);
+            view.edit_images.insert(i, (generation, l.clone()));
+            l
+        }
+    };
+    (lines, images)
+}
+
+/// What the page modules have under a point on one page, for the page router.
+struct PageHits<'a> {
+    page: usize,
+    xf: &'a PageXform,
+    info: &'a DocInfo,
+    tool: QuickTool,
+    pcx: &'a comments::PageCx<'a>,
+    form: &'a [pdfcraft_engine::FormField],
+    can_fill: bool,
+    can_modify: bool,
+    /// Edit a PDF is open: added text and pictures can be picked up.
+    editing_content: bool,
+    preparing: bool,
+    field_tool: Option<crate::prepare::FieldTool>,
+    /// Prepare may draw and move fields (not while a table is being set up).
+    prepare_allowed: bool,
+    added: &'a [pdfcraft_engine::Added],
+    lines: &'a [pdfcraft_engine::TextBlock],
+    images: &'a [pdfcraft_engine::PageImage],
+    /// The pages' visible area (the picture's rotate knob stays inside it).
+    clip: Rect,
+}
+
+impl PageHits<'_> {
+    /// The hits at `p`, bottom up: links, comments; Edit text's pictures under its paragraphs (text
+    /// on top of artwork takes the press), added content, the objects selected together and the
+    /// open paragraph's frame, the selected picture's grips over them all; then form fields
+    /// (Prepare's, being moved, over the comments; filled ones under added content and the
+    /// comments that move).
+    fn at(&self, view: &DocView, p: Pos2) -> Vec<crate::page_router::Hit> {
+        let PageHits {
+            page,
+            xf,
+            info,
+            tool,
+            pcx,
+            form,
+            can_fill,
+            can_modify,
+            editing_content,
+            preparing,
+            field_tool,
+            prepare_allowed,
+            added,
+            lines,
+            images,
+            clip,
+        } = *self;
+        let fields = if preparing {
+            crate::prepare::hit(xf, info, page, form, field_tool, prepare_allowed, &view.prepare, p)
+        } else if tool == QuickTool::Select {
+            crate::forms_ui::hit(xf, info, page, form, can_fill, p)
+        } else {
+            None
+        };
+        // With Add text, only the paragraphs and pictures not under added content.
+        let editing =
+            can_modify && (tool == QuickTool::EditText || tool == QuickTool::AddText && !crate::content_ui::hits_added(xf, info, page, added, p));
+        let (pictures, paragraphs, objects, grips) = if editing {
+            let open = view.line_editor.as_ref().filter(|e| e.page == page);
+            let frame = open
+                .filter(|e| !e.has_changes())
+                .and_then(|e| lines.get(e.block))
+                .map(|l| xf.user_rect(info, page, l.rect.map(|v| v as f32)).expand(2.0));
+            // Add text acts on the page's paragraphs only in their boxes, edges included (it
+            // finishes the box being typed there, `over_source`): not on pictures, nor beside a
+            // paragraph, where a click starts a new box.
+            let edit_text = tool == QuickTool::EditText;
+            let on_paragraphs = edit_text || crate::edit_text_ui::over_paragraph(xf, info, page, lines, p);
+            (
+                edit_text.then(|| crate::edit_text_ui::picture_hit(xf, page, info, images, view, p)).flatten(),
+                on_paragraphs.then(|| crate::edit_text_ui::hit(xf, info, page, lines, open.map(|e| e.block), p)).flatten(),
+                edit_text.then(|| crate::object_ui::hit(view, xf, info, page, frame, p)).flatten(),
+                edit_text.then(|| crate::edit_text_ui::picture_handle_hit(clip, xf, page, info, images, view, p)).flatten(),
+            )
+        } else {
+            (None, None, None, None)
+        };
+        // Added text and pictures, over the page's own paragraphs and under the objects selected
+        // together.
+        let picks_up = matches!(tool, QuickTool::Select | QuickTool::AddText | QuickTool::EditText);
+        let added = (editing_content && can_modify && picks_up).then(|| crate::content_ui::hit(xf, info, page, added, view, p)).flatten();
+        [link_hit(info, xf, page, p), comments::hit(pcx, view, p), pictures, paragraphs, added, objects, grips, fields]
+            .into_iter()
+            .flatten()
+            .collect()
+    }
 }
 
 /// Text layer: find matches, selection, I-beam and drag-to-select.
@@ -1342,12 +1477,7 @@ fn text_layer(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, 
             && !input.consumed
             && let Some(p) = pointer.filter(|p| r.contains(*p))
         {
-            text_pointer_input(
-                ui,
-                view,
-                &text,
-                TextPointer { page: i, xf, rect: r, info, tool, resp, ptr: ptr.clone(), pointer: p, over_field: input.over_field },
-            );
+            text_pointer_input(ui, view, &text, TextPointer { page: i, xf, rect: r, info, tool, resp, ptr: ptr.clone(), pointer: p });
         }
     }
 }
@@ -1397,7 +1527,6 @@ struct TextPointer<'a> {
     resp: &'a egui::Response,
     ptr: PagePointer,
     pointer: Pos2,
-    over_field: bool,
 }
 
 struct TextGesture<'a> {
@@ -1416,30 +1545,32 @@ struct TextGesture<'a> {
 }
 
 fn text_pointer_input(ui: &mut egui::Ui, view: &mut DocView, text: &PageText, pointer: TextPointer<'_>) {
-    let TextPointer { page, xf, rect, info, tool, resp, ptr, pointer: screen_pointer, over_field } = pointer;
+    let TextPointer { page, xf, rect, info, tool, resp, ptr, pointer: screen_pointer } = pointer;
     let (vx, vy) = xf.screen_to_view(screen_pointer);
     let over_text = text.glyphs.iter().any(|glyph| vx >= glyph.rect[0] && vx <= glyph.rect[2] && vy >= glyph.rect[1] && vy <= glyph.rect[3]);
     let over_link = info.links.iter().any(|link| link.page == page && xf.user_rect(info, page, link.rect).contains(screen_pointer));
     let column = tool == QuickTool::ColumnSelect || ui.input(|input| input.modifiers.alt);
     let gesture = TextGesture { page, xf, rect, tool, ptr, resp, pointer: screen_pointer, vx, vy, over_text, over_link, column };
-    update_text_cursor(ui, resp, over_field, &gesture);
+    update_text_cursor(view, &gesture);
     update_selection_on_press(ui, view, text, &gesture);
     update_dragged_selection(view, text, &gesture);
     finish_text_pointer_gesture(ui, view, text, &gesture);
 }
 
-fn update_text_cursor(ui: &egui::Ui, resp: &egui::Response, over_field: bool, gesture: &TextGesture<'_>) {
-    let cursor_free = !gesture.over_link && !over_field && (resp.contains_pointer() || resp.dragged());
-    if gesture.column && cursor_free {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-    } else if gesture.over_text && cursor_free {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+fn update_text_cursor(view: &mut DocView, gesture: &TextGesture<'_>) {
+    // A press on a link selects nothing (it is the link's), so no cursor here says it would.
+    if gesture.column && !gesture.over_link {
+        view.cursor.claim(Layer::Text, egui::CursorIcon::Crosshair);
+    } else if gesture.over_text && !gesture.over_link {
+        view.cursor.claim(Layer::Text, egui::CursorIcon::Text);
     }
 }
 
 fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText, gesture: &TextGesture<'_>) {
+    // A press held by what keeps its drag (a link, a comment that moves) selects no text; one on
+    // text markup lets its drag select the text underneath.
     let press_here = gesture.ptr.origin.is_some_and(|origin| gesture.rect.contains(origin));
-    if gesture.ptr.pressed().is_some() && press_here && !gesture.over_link {
+    if gesture.ptr.pressed().is_some() && press_here && !view.router.keeps_drag() {
         let now = ui.input(|input| input.time);
         let (max_delay, max_dist) = ui.ctx().options(|options| (options.input_options.max_double_click_delay, options.input_options.max_click_dist));
         let consecutive = now - view.last_press_time <= max_delay && view.last_press_pos.is_some_and(|pos| pos.distance(gesture.pointer) <= max_dist);
@@ -1454,7 +1585,7 @@ fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText,
             view.selection = Some(Selection::run(gesture.page, first, last));
         }
     }
-    if gesture.resp.drag_started() && press_here && !gesture.over_link {
+    if gesture.resp.drag_started() && press_here && !view.router.keeps_drag() {
         view.actions_dismissed = None;
         view.selection_drag = true;
         let origin = gesture.ptr.origin.unwrap_or(gesture.pointer);
@@ -1526,7 +1657,7 @@ fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageTex
         && let Some((first, last)) = text.nearest(gesture.vx, gesture.vy).and_then(|anchor| click_unit(text, clicks, anchor))
     {
         view.selection = Some(Selection::run(gesture.page, first, last));
-    } else if gesture.resp.clicked() && view.clicks < 2 && !gesture.over_link {
+    } else if gesture.resp.clicked() && view.clicks < 2 && !view.router.keeps_drag() {
         let shift = ui.input(|input| input.modifiers.shift);
         match (
             view.selection.as_mut().filter(|selection| shift && selection.page == gesture.page).map(|selection| &mut selection.span),
@@ -1571,9 +1702,12 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
     }
     crate::image_pick::drop_stale(doc, view);
     crate::image_pick::paint(painter, &xf, i, info, view);
-    comments::page_after_text(resp, &pcx, view);
-    if tool == QuickTool::Redact && can_modify {
-        crate::redact_ui::after_text(resp, i, info, view);
+    // A cancelled press ends no selection: no markup or redaction is made from it.
+    if !view.press_cancelled {
+        comments::page_after_text(resp, &pcx, view);
+        if tool == QuickTool::Redact && can_modify {
+            crate::redact_ui::after_text(resp, i, info, view);
+        }
     }
     if input.area_tool {
         crate::redact_ui::paint(painter, i, view, pointer);
@@ -1598,8 +1732,8 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
         }
         if calc_order {
             let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
-            if let Some(name) = crate::calc_order_ui::paint_page(tool_cx, form, &view.calc_order, generation, selected) {
-                frame.calc_hover = Some(name);
+            if let Some(field) = crate::calc_order_ui::paint_page(tool_cx, form, &view.calc_order, generation, selected) {
+                frame.calc_hover = Some(field);
             }
         }
     } else {
@@ -1611,51 +1745,22 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
     // in Acrobat). Only what can be filled is marked: a read-only widget (its field's, or a
     // radio button's own) is left as it is drawn.
     paint_field_highlights(painter, &xf, info, form.as_slice(), i, view.highlight_fields);
-    // Fill & Sign keeps its placement cursor clear of link/comment hover feedback. Tips
-    // draw above the palette, so none shows while it is open, even beside it.
-    if !matches!(tool, QuickTool::Fill(_))
-        && unobstructed
-        && let Some(p) = pointer
+    // Links: the hand and the link's target, which count only for the tools that follow or
+    // edit links (`Layer::reached_by`). Tips draw above the palette, so none shows while it is
+    // open, even beside it. A click follows the link its press was on, released over it: one that
+    // slips off the link first follows nothing, as a button's does.
+    if unobstructed
+        && resp.clicked()
+        && tool == QuickTool::Select
+        && !input.consumed
+        && let Some(owner @ crate::page_router::Owner::Link { index }) = view.router.owner(i)
+        && pointer.and_then(|p| link_hit(info, &xf, i, p)).is_some_and(|h| h.owner == owner)
+        && let Some(l) = info.links.get(index)
     {
-        for l in info.links.iter().filter(|l| l.page == i) {
-            let sr = xf.user_rect(info, i, l.rect);
-            if sr.contains(p) {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                let label = match &l.target {
-                    LinkTarget::Page(n, _) => {
-                        crate::i18n::fmt(tl!("Go to page {p}"), &[("p", info.pages.get(*n).map(|p| p.label.as_str()).unwrap_or("?"))])
-                    }
-                    LinkTarget::Uri(u) => u.clone(),
-                    LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
-                    LinkTarget::RemoteGoTo { file, .. } => file.clone(),
-                    LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
-                };
-                frame.out.hover_text = Some((p, label));
-                if resp.clicked() && tool == QuickTool::Select && !input.consumed {
-                    frame.out.clicked_link = Some(l.target.clone());
-                }
-            }
-        }
-        // Annotation hover shows the comment, as Acrobat's popups do; not while drawing
-        // freehand, where it would cover the next stroke (#429).
-        let freehand = matches!(tool, QuickTool::Comment(comments::CommentTool::Ink | comments::CommentTool::Eraser));
-        let gesturing = view.comments.gesture.is_some() || freehand;
-        // Inspection sorts annotations spatially, but the renderer paints in /Annots
-        // order. Keep the shared list intact and choose the last eligible raw index.
-        if frame.out.hover_text.is_none()
-            && !gesturing
-            && let Some((_, text)) = info
-                .annotations
-                .iter()
-                .filter(|a| a.page == i)
-                .filter(|a| !(prefs.hide_empty_highlight_hover && a.subtype == "Highlight" && a.contents.as_deref().is_none_or(str::is_empty)))
-                .filter(|a| pcx.screen_rects(a).any(|r| r.contains(p)))
-                .filter_map(|a| annotation_hover_text(a).map(|text| (a.index, text)))
-                .max_by_key(|(index, _)| *index)
-        {
-            frame.out.hover_text = Some((p, text));
-        }
+        frame.out.clicked_link = Some(l.target.clone());
     }
+    // Comments say what they are with any tool, beside its cursor, as Acrobat's do.
+    comments::describe(&pcx, view);
     for (mp, mr, mc) in &view.compare_marks {
         if *mp == i {
             let sr = xf.user_rect(info, i, *mr).expand(1.5);
@@ -1700,14 +1805,11 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
         let side = (sr.width().min(sr.height()) * 0.8).clamp(24.0, 192.0);
         let mark = Rect::from_center_size(sr.center(), vec2(side, side));
         icons::paint(ui, mark, icon, side * 0.64, color);
-        if let Some(p) = pointer.filter(|p| mark.expand(2.0).contains(*p)) {
-            frame.out.badge_hover = Some((p, badge.summary.to_string()));
+        // Overlapping widgets paint in order, so the topmost badge's verdict is the tip, with
+        // any tool; a link's or a comment's tip wins over any badge.
+        if pointer.is_some_and(|p| mark.expand(2.0).contains(p)) {
+            view.cursor.describe(Subject::SignatureBadge, badge.summary.to_string());
         }
-    }
-    // Overlapping widgets paint in order, so the topmost badge owns the hover; an
-    // earlier link or annotation hover still wins over any badge.
-    if frame.out.hover_text.is_none() {
-        frame.out.hover_text = frame.out.badge_hover.take();
     }
 }
 
@@ -1737,7 +1839,6 @@ fn paint_field_highlights(painter: &egui::Painter, xf: &PageXform, info: &DocInf
 fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i: usize) {
     let PageEnv { allowed, comments_hidden, doc, editing_content, info, ppp, prefs, rects, redact_mark, scale, t, tool, .. } = frame.env;
     let PageFrame { ptr, origin, visible, pressed, pointer, .. } = *frame;
-    frame.out.badge_hover = None;
     let r = snap_to_pixels(rects[i].translate(origin.to_vec2()), ppp);
     if !r.intersects(visible.expand(400.0)) {
         return;
@@ -1773,12 +1874,18 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     }
 
     let slot = PageSlot { i, r, xf };
-    let input = page_tool_input(ui, view, frame, &slot);
+    // A cancelled press takes nothing until the button is up.
+    let input = if view.press_cancelled { PageInput { consumed: true, area_tool: false } } else { page_tool_input(ui, view, frame, &slot) };
     let painter = ui.painter();
     let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
     let preview_target = (matches!(tool, QuickTool::Select | QuickTool::Fill(_)) && !comments_hidden).then_some(view.comments.selected).flatten();
     view.signature_drag.prepare(ui.ctx(), doc, preview_target, scale);
     view.signature_drag.paint(painter, &pcx, &view.comments, view.pending_edit.as_ref());
+    // Any other comment being moved: drawn where it goes, over the page that still shows it
+    // where it was.
+    let stale = view.signature_drag.moving_page().is_some_and(|p| view.page_out_of_date(p));
+    view.signature_drag.prepare_move(ui.ctx(), doc, &view.comments, view.pending_edit.as_ref(), stale, scale);
+    view.signature_drag.paint_move(painter, &pcx, &view.comments, view.pending_edit.as_ref());
 
     // Any press on the page ends Select All of the document: text read or not, any tool,
     // on a link too.
@@ -1788,6 +1895,43 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     }
     text_layer(ui, view, frame, &slot, &input);
     page_overlays(ui, view, frame, &slot, &input);
+}
+
+/// The link under `p` on `page`: the hand, and where a click goes. Only the Select tool follows
+/// links and the Link tool edits them (`Layer::reached_by`).
+fn link_hit(info: &DocInfo, xf: &PageXform, page: usize, p: Pos2) -> Option<crate::page_router::Hit> {
+    let (index, l) = info.links.iter().enumerate().rfind(|(_, l)| l.page == page && xf.user_rect(info, page, l.rect).contains(p))?;
+    let label = match &l.target {
+        LinkTarget::Page(n, _) => crate::i18n::fmt(tl!("Go to page {p}"), &[("p", info.pages.get(*n).map(|p| p.label.as_str()).unwrap_or("?"))]),
+        LinkTarget::Uri(u) => u.clone(),
+        LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
+        LinkTarget::RemoteGoTo { file, .. } => file.clone(),
+        LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
+    };
+    let owner = crate::page_router::Owner::Link { index };
+    Some(crate::page_router::Hit { tip: Some(label), ..crate::page_router::Hit::new(owner, Layer::Link, egui::CursorIcon::PointingHand) })
+}
+
+/// Escape while the pages hold a press abandons the gesture it drives, whichever tool's: nothing is
+/// placed, drawn, moved, resized or opened, and the press is ignored until the button is up. The
+/// frame of the release still belongs to the cancelled press.
+fn cancel_on_escape(ctx: &egui::Context, view: &mut DocView, ptr: &PagePointer) {
+    // Over once the button is up and its release seen, or when a new press comes (its release and
+    // the next press can share a frame).
+    let new_press = matches!(ptr.edges.last(), Some(crate::page_pointer::Edge::Press(_)));
+    if view.press_cancelled && (new_press || !ptr.any_down && ptr.edges.is_empty()) {
+        view.press_cancelled = false;
+    }
+    if !view.press_cancelled && ptr.origin.is_some() && ptr.primary_down && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        // A text selection being dragged goes with its drag: the markup, redaction or Replace
+        // Text that its end would make is not made.
+        if view.selection_drag {
+            view.clear_selection();
+        }
+        view.cancel_pointer_gestures();
+        view.press_cancelled = true;
+    }
 }
 
 fn draw_pages(
@@ -1824,6 +1968,7 @@ fn draw_pages(
         preparing,
         selection_wheel,
         single_paging,
+        tool,
         unobstructed,
         visible_pages,
         y_shift,
@@ -1856,9 +2001,9 @@ fn draw_pages(
     // The Hand tool pans by this widget's drag, before the pages are laid out (above).
     if hand {
         if resp.dragged() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            view.cursor.claim(Layer::Drag, egui::CursorIcon::Grabbing);
         } else if resp.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+            view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Grab);
         }
     }
     let origin = resp_rect.min - vec2(0.0, y_shift);
@@ -1868,6 +2013,18 @@ fn draw_pages(
     // The pointer as the pages see it: nothing over them (a dialog from the frame it opens),
     // or a press they hold. The page modules read it rather than egui's raw pointer state.
     let ptr = PagePointer::read(ui, &resp, modal);
+    cancel_on_escape(ui.ctx(), view, &ptr);
+    view.router.settle(ptr.any_down, !ptr.edges.is_empty());
+    // A new press is no longer the last one's, wherever it lands (the page it is on gives it
+    // its owner; in the gap between pages it has none).
+    if ptr.pressed().is_some() {
+        view.router.cancel();
+        // The page widget is not focusable. Explicitly return keyboard ownership from Pages
+        // when the user presses the document, without stealing focus through a modal.
+        if let Some(id) = view.pages_focus_id {
+            ui.memory_mut(|m| m.surrender_focus(id));
+        }
+    }
     let pointer = ptr.pos;
     // A press on a page makes it the current one (as in Acrobat), so a page command with
     // no selection (Rotate, Delete) acts on the page the reader pointed at, not on a page
@@ -1903,14 +2060,13 @@ fn draw_pages(
         wanted, visible_now, mut current, best_overlap, current_overlap, current_height, pressed_page, calc_hover, out: page_out, ..
     } = frame;
     let PageOut {
-        badge_hover,
         mut canvas_action,
         clicked_link,
         mut copy_selected,
         mut field_menu,
         field_placed,
         field_props,
-        hover_text,
+        hover_text: _,
         image_action,
         open_boxes,
         open_initials,
@@ -1926,6 +2082,8 @@ fn draw_pages(
         let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
         crate::calc_order_ui::paint_trace(ui, painter, visible, &view.calc_order, generation, selected);
     }
+    // The pages' one cursor, from the claim on the highest layer the tool reaches, and the tip.
+    let hover_text = pointer.filter(|_| unobstructed).zip(view.cursor.resolve(ui.ctx(), tool));
     // ScrollArea ignores the wheel while any widget is dragged, so a text-selection drag
     // scrolls the page itself (#721). After the page loop, so it keeps scrolling once the
     // pointer leaves the selection's page for the gap or the next page; over the whole
@@ -2074,10 +2232,10 @@ fn draw_pages(
                 ui.separator();
             }
         }
-        canvas_action = comments::context_menu(ui, view, info, prefs, allowed, can_modify).or(copy_image);
+        canvas_action =
+            comments::context_menu(ui, view, info, &|page, index| doc.annotation_deletable(page, index), prefs, allowed, can_modify).or(copy_image);
     });
     *out = PageOut {
-        badge_hover,
         canvas_action,
         clicked_link,
         copy_selected,
@@ -3067,6 +3225,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         visible_pages: &visible_pages,
         y_shift,
         fill_text_size: app.fill_text_size,
+        fill_text_color: app.fill_text_color,
         today,
     };
     let mut page_out = PageOut::default();
@@ -3074,7 +3233,6 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         draw_pages(ui, viewport, view, &env, &mut page_out, &mut app.signature_preview)
     });
     let PageOut {
-        badge_hover: _,
         canvas_action,
         clicked_link,
         mut copy_selected,
