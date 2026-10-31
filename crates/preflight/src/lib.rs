@@ -259,9 +259,9 @@ impl DeviceColour {
         self.gray || self.rgb || self.cmyk
     }
 
-    /// Note the device colour space `name`, if it is one. Inline images may also use the
-    /// abbreviations (`G`, `RGB`, `CMYK`); anywhere else those are resource names.
-    fn mark(&mut self, name: &[u8], inline: bool) {
+    /// Note the device colour space `name`, and say whether it is one. Inline images may also use
+    /// the abbreviations (`G`, `RGB`, `CMYK`); anywhere else those are resource names.
+    fn mark(&mut self, name: &[u8], inline: bool) -> bool {
         match name {
             b"DeviceGray" => self.gray = true,
             b"DeviceRGB" => self.rgb = true,
@@ -269,7 +269,62 @@ impl DeviceColour {
             b"G" if inline => self.gray = true,
             b"RGB" if inline => self.rgb = true,
             b"CMYK" if inline => self.cmyk = true,
-            _ => {}
+            _ => return false,
+        }
+        true
+    }
+}
+
+/// How deep [`colour_space`] follows a space to the one it draws in: an indexed space over a
+/// Separation under a pattern is three steps, and a deeper or cyclic chain is malformed.
+const MAX_SPACE_DEPTH: u8 = 4;
+
+/// Note the device colour the colour space `cs` draws in: the space itself, an Indexed or Pattern
+/// space's base, or a Separation or DeviceN space's alternate (ISO 32000-2 §8.6.6). The alternate
+/// is what every device without the colorants draws with, every screen and composite proof among
+/// them, so it is a use of that device space under ISO 19005-2 6.2.4.3, which 6.2.4.4 does not
+/// exempt it from. CIE-based and ICC-based spaces are not device colour.
+fn colour_space(doc: &Document, cs: &Object, inline: bool, depth: u8, used: &mut DeviceColour) {
+    if depth > MAX_SPACE_DEPTH {
+        return;
+    }
+    let cs = doc.resolve(cs);
+    let under = match &*cs {
+        Object::Name(n) => {
+            used.mark(n, inline);
+            None
+        }
+        Object::Array(a) => match a.first().map(|f| doc.resolve(f)).as_deref().and_then(Object::as_name) {
+            Some(b"Indexed" | b"Pattern") => a.get(1),
+            Some(b"I") if inline => a.get(1),
+            Some(b"Separation" | b"DeviceN") => a.get(2),
+            // A family without parameters may be written as an array: `[/DeviceRGB]`.
+            Some(family) => {
+                used.mark(family, inline);
+                None
+            }
+            None => None,
+        },
+        _ => None,
+    };
+    if let Some(under) = under {
+        colour_space(doc, under, inline, depth.saturating_add(1), used);
+    }
+}
+
+/// Call `f` with each dictionary of colour spaces by name that `d` holds: its own `/ColorSpace`,
+/// when `d` is a resource dictionary, and its inline `/Resources`' one. Resources held by
+/// reference are objects of their own, reached when those are.
+fn listed_spaces(doc: &Document, d: &Dict, mut f: impl FnMut(&Dict)) {
+    let resources = match d.get(b"Resources") {
+        Some(Object::Dict(r)) => Some(r),
+        _ => None,
+    };
+    for holder in [Some(d), resources].into_iter().flatten() {
+        if let Some(spaces) = holder.get(b"ColorSpace").map(|c| doc.resolve(c))
+            && let Some(spaces) = spaces.as_dict()
+        {
+            f(spaces);
         }
     }
 }
@@ -341,12 +396,13 @@ fn is_content(d: &Dict) -> bool {
 
 /// The device colour a content stream sets. It is read operator by operator, so the bytes of a
 /// string, a comment or an inline image are never taken for an operator, and an operator right
-/// before a delimiter (`1 k/GS0 gs`) is still found.
+/// before a delimiter (`1 k/GS0 gs`) is still found. A colour space the content selects by a
+/// resource's name goes in `named`, to be looked up once every resource is known.
 ///
 /// Operators are read one at a time and dropped, so a stream of millions of tiny operators never
 /// becomes millions of parsed ones in memory, and reading stops once all three spaces are set.
 /// Returns how many operators it read.
-fn content_colour(data: &[u8], used: &mut DeviceColour) -> usize {
+fn content_colour(doc: &Document, data: &[u8], used: &mut DeviceColour, named: &mut std::collections::HashSet<Vec<u8>>) -> usize {
     let mut read = 0;
     for op in pdfcraft_content::ops(data) {
         if used.gray && used.rgb && used.cmyk {
@@ -358,21 +414,23 @@ fn content_colour(data: &[u8], used: &mut DeviceColour) -> usize {
             b"rg" | b"RG" => used.rgb = true,
             b"k" | b"K" => used.cmyk = true,
             b"cs" | b"CS" => {
-                if let Some(name) = op.name(0) {
-                    used.mark(name, false);
+                if let Some(name) = op.name(0)
+                    && !used.mark(name, false)
+                {
+                    named.insert(name.to_vec());
                 }
             }
             b"BI" => {
                 let Some((image, _)) = &op.inline else { continue };
                 match image.get(b"CS").or_else(|| image.get(b"ColorSpace")) {
-                    Some(Object::Name(n)) => used.mark(n, true),
-                    // An indexed space draws in its base: `[/I /DeviceRGB 1 <…>]`.
-                    Some(Object::Array(a)) if a.first().and_then(Object::as_name).is_some_and(|n| n == b"I" || n == b"Indexed") => {
-                        if let Some(base) = a.get(1).and_then(Object::as_name) {
-                            used.mark(base, true);
+                    Some(Object::Name(n)) => {
+                        if !used.mark(n, true) {
+                            named.insert(n.clone());
                         }
                     }
-                    _ => {}
+                    // An indexed space draws in its base: `[/I /DeviceRGB 1 <…>]`.
+                    Some(cs) => colour_space(doc, cs, true, 0, used),
+                    None => {}
                 }
             }
             _ => {}
@@ -385,26 +443,16 @@ fn content_colour(data: &[u8], used: &mut DeviceColour) -> usize {
 fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> DeviceColour {
     let mut used = DeviceColour::default();
     let referenced = referenced_content(doc, objs);
+    let mut named = std::collections::HashSet::new();
     for (r, o) in objs {
         let Some(d) = dict_of(o) else { continue };
-        // A resource dictionary's /ColorSpace, whether it is this object or the page's inline
-        // /Resources.
-        let resources = d.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned());
-        for holder in [Some(d), resources.as_ref()].into_iter().flatten() {
-            if let Some(spaces) = holder.get(b"ColorSpace").map(|c| doc.resolve(c))
-                && let Some(spaces) = spaces.as_dict()
-            {
-                used.default_rgb |= spaces.get(b"DefaultRGB").is_some();
-                used.default_cmyk |= spaces.get(b"DefaultCMYK").is_some();
-            }
-        }
-        if let Some(cs) = d.get(b"ColorSpace").map(|c| doc.resolve(c)) {
-            match &*cs {
-                Object::Name(n) if n == b"DeviceGray" => used.gray = true,
-                Object::Name(n) if n == b"DeviceRGB" => used.rgb = true,
-                Object::Name(n) if n == b"DeviceCMYK" => used.cmyk = true,
-                _ => {}
-            }
+        listed_spaces(doc, d, |spaces| {
+            used.default_rgb |= spaces.get(b"DefaultRGB").is_some();
+            used.default_cmyk |= spaces.get(b"DefaultCMYK").is_some();
+        });
+        // An image's or a shading's own colour space.
+        if let Some(cs) = d.get(b"ColorSpace") {
+            colour_space(doc, cs, false, 0, &mut used);
         }
         // Content streams only: a font program or an ICC profile is data, whatever bytes it holds.
         // Parsing is the expensive part, so once content has used all three spaces no more is read.
@@ -413,7 +461,23 @@ fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)])
             && (referenced.contains(r) || is_content(&s.dict))
             && let Ok(data) = s.decoded()
         {
-            let _ = content_colour(&data, &mut used);
+            let _ = content_colour(doc, &data, &mut used, &mut named);
+        }
+    }
+    // The spaces content selected by name. A name is looked up in every resource dictionary rather
+    // than in the one its stream draws with, which would mean tracking which page, form or font
+    // draws each stream (a form or glyph without resources of its own borrows those of whatever
+    // draws it). A namesake elsewhere can only add a device space, never hide one.
+    if !named.is_empty() {
+        for (_, o) in objs {
+            let Some(d) = dict_of(o) else { continue };
+            listed_spaces(doc, d, |spaces| {
+                for (name, cs) in spaces.iter() {
+                    if named.contains(name) {
+                        colour_space(doc, cs, false, 0, &mut used);
+                    }
+                }
+            });
         }
     }
     used
