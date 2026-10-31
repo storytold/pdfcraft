@@ -1,6 +1,8 @@
 # PDF specification and standards parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (§12.4.4: page transitions and display times read) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> Integration update 2026-10-30: lossless JBIG2 generic and exact-copy symbol coding are included; no lossy substitution. Combined tests passed at bdf5620; the subsequent review fixes require fresh CI.
+
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (§7.4: redaction decodes CCITT fax images, Group 3 on bytes aside; earlier, §7.4: CCITT decoding in `pdfcraft-filters`) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How much of ISO 32000-2 (PDF 2.0) and the PDF subset standards PdfCraft implements, set against
 what Acrobat Pro implements. This is PdfCraft's equivalent of a "geometry" or "codec" checklist:
@@ -21,7 +23,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 |---|---|---|---|---|
 | §7.2–7.5 | Syntax, objects, file structure, xref tables and streams, object streams, hybrid files, incremental updates | full | **own**, tolerant, repairs damaged files | `crates/cos`; corpus 958 files; fuzzed nightly |
 | §7.4 | Stream filters: Flate, LZW, ASCII85, ASCIIHex, RunLength, predictors | full | **own** | `crates/filters` |
-| §7.4 | Image filters: DCT, JPX, JBIG2, CCITTFax | full | **borrowed** (decode only) | `core.image-filters` partial; own codecs M1.1/M1.2; no JBIG2/CCITT encoding (Optimizer) |
+| §7.4 | Image filters: DCT, JPX, JBIG2, CCITTFax | full | **borrowed** (decode); CCITT Group 4 and lossless JBIG2 encoding | `core.image-filters` partial; own codecs M1.1/M1.2; CCITT decoding in `pdfcraft-filters` (`decode_ccitt`, through `hayro-ccitt`) for export, redaction and the Optimizer, which encodes Group 4 (`optimize.mono-compression`); lossless JBIG2 generic-region or exact-copy symbol encoding and image export; no lossy substitution |
 | §7.5.8 | Linearization | R W | R only | `core.linearization` planned |
 | §7.6.4 | Standard security handler R2–R6 (RC4 40/128, AES-128, AES-256), crypt filters, `/EncryptMetadata`, SASLprep | full | **own**, read and write | `crates/crypt`; written files open in Acrobat DC since #836 (#774: Acrobat needs the catalog outside object streams) |
 | §7.6.5 | Public-key security handler | full | none | `core.open-public-key`, `protect.certificate-encryption` planned |
@@ -44,7 +46,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | §12.9 | Measurement and geospatial | full | 2D measuring with viewports and calibration; no geospatial | `comment.geospatial` planned |
 | §12.10 | Document requirements | yes | none | |
 | §13 | Multimedia: sound, movies, screen, rich media, 3D (U3D, PRC) | yes | preserved untouched; not played or shown | `misc.rich-media-*`, `misc.3d-view` planned (P3) |
-| §14.3 | Metadata: info dictionary, XMP | full, XMP editor | info dictionary edited, with its XMP counterparts (title, author, subject, keywords, creator tool, producer) kept in step; XMP written for PDF/A; no XMP editor or custom properties | `organize.xmp-editor` planned |
+| §14.3 | Metadata: info dictionary, XMP | full, XMP editor | info dictionary edited, with its XMP counterparts (title, author, subject, keywords, creator tool, producer) kept in step; XMP written for PDF/A; custom properties listed, added, changed and deleted (Document Properties ▸ Custom, `doc_info`, `doc_set_info`); no XMP editor | `organize.custom-properties` partial, `organize.xmp-editor` planned |
 | §14.6–14.8 | Marked content, logical structure, tagged PDF | full, with editing tools | read (checker, bookmarks from structure, redaction of tags); no tag editing or autotag | gap 11 |
 | §14.9 | Accessibility support: alt text, ActualText, language | full | alt text figure by figure, language, title | `a11y.alt-text-workflow` |
 | §14.10 | Web capture | yes | none | |
@@ -130,6 +132,9 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | §7.4: redaction clears pixels in CCITT fax images through the CCITT decoder, instead of removing them whole (Group 4 and Group 3 off bytes; Group 3 on bytes is still removed whole, as the bootstrap renderer may draw it as other rows than the decoder reads) |
+| 2026-10-26 | minor | §7.4: CCITT decoding (`hayro-ccitt`) in `pdfcraft-filters`, for export and the Optimizer |
+| 2026-10-26 | minor | §7.4: CCITT Group 4 encoding (`fax`) in the Optimizer |
 | 2026-10-14 | minor | §12.4.4: `/Trans` and `/Dur` read into `DocInfo::transitions` and reported by `doc_info` |
 | 2026-10-11 | minor | §7.6.4: encrypted files we write open in Acrobat (#774, fixed by #836) |
 | 2026-10-10 | major | Created from the code, `vendor/README.md` and `parity/acrobat-features.toml`, against ISO 32000-2 and Acrobat Pro 26.002.21931's documented capabilities |
