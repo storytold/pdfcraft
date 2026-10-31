@@ -692,3 +692,39 @@ fn ctrl_tab_steps_through_the_tabs_in_order_and_wraps_around() {
         assert!(!doc.dirty, "switching tabs changes no document");
     }
 }
+
+/// View ▸ Show line weights (Acrobat's Line Weights, ⌘5 / Ctrl+5) toggles by shortcut, by the
+/// menu's checkbox and by command. A view setting of the document: not an edit.
+#[test]
+fn line_weights_toggle_by_shortcut_menu_and_command() {
+    let shown = |h: &Harness<'_, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).expect("the document is open").line_weights_shown()
+    };
+    let mut h = harness();
+    h.ctx.set_os(OperatingSystem::Nix);
+    h.run_steps(2);
+    assert!(shown(&h), "line weights are shown by default");
+    support::open_menu(&mut h, "View");
+    support::menu_row(&h, "Page display").hover();
+    h.run_steps(3);
+    use egui_kittest::kittest::NodeT;
+    // A check item, ticked while line weights show.
+    let item = h.get_by(|n| n.role() == egui::accesskit::Role::MenuItemCheckBox && n.label().as_deref() == Some("Show line weights"));
+    assert_eq!(item.accesskit_node().data().keyboard_shortcut(), Some("Ctrl+5"), "with its shortcut");
+    assert_eq!(item.accesskit_node().data().toggled(), Some(egui::accesskit::Toggled::True));
+    item.click();
+    h.run_steps(3);
+    assert!(!shown(&h), "View ▸ Page display ▸ Show line weights turns line weights off");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num5);
+    h.run_steps(2);
+    assert!(shown(&h), "Ctrl+5 turns them back on");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num5);
+    h.run_steps(2);
+    assert!(!shown(&h), "and off again");
+    h.state_mut().execute("view.line_weights");
+    h.run_steps(2);
+    assert!(shown(&h), "the command toggles too");
+    let s = h.state();
+    assert!(!s.session.get(s.views[0].id).unwrap().dirty, "a view setting is not an edit");
+}

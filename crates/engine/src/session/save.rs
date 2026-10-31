@@ -163,13 +163,17 @@ impl Session {
         let at = self.docs.iter().position(|d| d.id == new_id).ok_or_else(|| OpenError::Invalid("the new version was not kept".into()))?;
         let mut doc = self.docs.remove(at);
         doc.id = id;
-        // How the document is shown is the reader's, not the file's: reading colours and hidden
-        // comments stay as they were (#3443). `open` built the renderer with the defaults.
+        // How the document is shown is the reader's, not the file's: reading colours, hidden
+        // comments and hidden line weights stay as they were (#3443). `open` built the renderer
+        // with the defaults.
         if let Some(old) = self.docs.get(old)
-            && (doc.config.reading_colors != old.config.reading_colors || doc.config.hide_comments != old.config.hide_comments)
+            && (doc.config.reading_colors != old.config.reading_colors
+                || doc.config.hide_comments != old.config.hide_comments
+                || doc.config.hairline_strokes != old.config.hairline_strokes)
         {
             doc.config.reading_colors = old.config.reading_colors;
             doc.config.hide_comments = old.config.hide_comments;
+            doc.config.hairline_strokes = old.config.hairline_strokes;
             doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         }
         // Caches keyed by the edit generation (edit lines, images, measurements) must see a new

@@ -166,6 +166,10 @@ const DISPLAY: &[&str] = &[
     SEP,
     "view.fit_width_scrolling",
     "view.fit_one_page",
+    SEP,
+    // Acrobat's View ▸ Show/Hide ▸ Rulers & Grids ▸ Line Weights: off, every stroke is one pixel
+    // wide, so a plan's thick and thin lines read alike.
+    "view.line_weights",
 ];
 const THEMES: &[&str] = &["view.theme.system", "view.theme.light", "view.theme.dark"];
 const PANES: &[&str] = &["view.side_panel", "view.tools_pane"];
@@ -497,6 +501,7 @@ impl PdfCraftApp {
             "view.continuous" => Some(view.is_some_and(|v| v.continuous())),
             "view.page_gaps" => Some(view.is_some_and(|v| v.show_page_gaps)),
             "view.layout.cover" => Some(view.is_some_and(|v| v.cover)),
+            "view.line_weights" => Some(self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.line_weights_shown())),
             "view.full_screen" => Some(self.full_screen),
             "view.read_mode" => Some(self.mode == crate::Mode::Read),
             "view.side_panel" => Some(self.right.is_some()),

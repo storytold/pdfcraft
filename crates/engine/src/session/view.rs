@@ -251,6 +251,23 @@ impl Session {
         true
     }
 
+    /// Show line weights (Acrobat's View ▸ Show/Hide ▸ Rulers & Grids ▸ Line Weights, ⌘5): with
+    /// `shown` false, every stroke that isn't text is drawn one device pixel wide whatever its
+    /// width, so a plan's thick and thin lines read alike at any zoom. A view setting: the file,
+    /// prints and exports keep the document's widths. Returns whether anything changed; callers
+    /// must drop cached rasters for the document.
+    pub fn set_line_weights(&mut self, id: DocId, shown: bool) -> bool {
+        let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) else { return false };
+        let hairlines = !shown;
+        if doc.config.hairline_strokes == hairlines {
+            return false;
+        }
+        doc.config.hairline_strokes = hairlines;
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.generation += 1;
+        true
+    }
+
     /// Set the document's reading colours (Acrobat's Replace Document Colors). Returns whether
     /// anything changed; callers must drop cached rasters and text for the document.
     pub fn set_reading_colors(&mut self, id: DocId, colors: ReadingColors) -> bool {

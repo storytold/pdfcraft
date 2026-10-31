@@ -10190,3 +10190,41 @@ fn simple_rule_scan_drawn(content: &[u8]) -> Vec<u8> {
     }
     write_full(&doc, &SaveOptions::default()).unwrap()
 }
+
+/// A one-page 200×300 pt document with a 12 pt black line across its middle.
+fn thick_line_fixture() -> Vec<u8> {
+    let body = "12 w 20 150 m 180 150 l S";
+    format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{body}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        body.len()
+    )
+    .into_bytes()
+}
+
+/// The `view_line_weights` tool: off, `page_render` draws a 12 pt line one pixel wide; on, at
+/// its width again. The file never changes, and a call without `shown` is refused.
+#[test]
+fn line_weights_through_tools() {
+    let dir = workdir("line-weights");
+    std::fs::write(dir.join("lines.pdf"), thick_line_fixture()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "lines.pdf" }))["doc"].as_u64().unwrap();
+    let before = std::fs::read(dir.join("lines.pdf")).unwrap();
+    // Rows of the middle column with any ink (a hairline straddling two rows counts two).
+    let inked_rows = |a: &mut Automation| {
+        let px = png_pixels(&a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap()[0]);
+        (0..300).filter(|&y| pixel(&px, 100, y)[0] < 240).count()
+    };
+    let at_width = inked_rows(&mut a);
+    assert!((12..=14).contains(&at_width), "a 12 pt line at 72 dpi: {at_width} rows");
+
+    assert_eq!(ok(&mut a, "view_line_weights", json!({ "doc": doc, "shown": false })), json!({ "shown": false }));
+    let hairline = inked_rows(&mut a);
+    assert!((1..=2).contains(&hairline), "a hairline: {hairline} rows");
+    assert_eq!(ok(&mut a, "view_line_weights", json!({ "doc": doc, "shown": true })), json!({ "shown": true }));
+    assert_eq!(inked_rows(&mut a), at_width, "shown again, the line is back at its width");
+
+    let err = a.call("view_line_weights", &json!({ "doc": doc })).unwrap_err().to_string();
+    assert!(err.contains("shown"), "the error names the missing argument: {err}");
+    assert_eq!(std::fs::read(dir.join("lines.pdf")).unwrap(), before, "a view setting: the file is unchanged");
+}

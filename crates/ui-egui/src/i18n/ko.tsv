@@ -2809,3 +2809,5 @@ theme	Appearance	모양
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	이 답글의 옵션
+# View ▸ Show line weights (M12).
+	Show line weights	선 두께 표시

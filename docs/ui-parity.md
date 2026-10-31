@@ -51,7 +51,8 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Object handles: corners keep proportion, edges free | yes | yes for added images and signatures; Shift on a corner keeps the proportions of comments, stamps and form fields (#2199); no Alt resize from the centre | shipped |
 | Arrange, align and distribute page objects | yes | fields only | partial |
 | Rulers, grids, snap to grid, guides | yes | no | planned |
-| Cursor coordinates, line weights | yes | no | planned |
+| Cursor coordinates | yes | no | planned |
+| Line weights toggle (⌘5 / Ctrl+5) | yes | yes: View ▸ Show line weights; off, every stroke that isn't text is one pixel wide; prints and exports keep the widths | shipped |
 | Measuring snap to paths, endpoints, midpoints, intersections | yes | yes | shipped |
 | Nudge selected objects with arrow keys (Shift for larger steps) | yes | yes in Edit text: a point, Shift ten points, for selected objects, images and an open paragraph's box (#1520); and in Prepare a form, for the selected field (#2608); a selected comment: a screen pixel, ⌘/Ctrl or Shift ten | shipped |
 | Single-key tool accelerators (H, V, Z, …) | yes, opt-in | no | planned |
@@ -83,6 +84,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-21 | minor | Pages inspector thumbnail sizing (#3808), separate from page and Organize zoom; view setting retained on reload and exposed through UI control. Not persisted between sessions. |
+| 2026-10-18 | minor | Line weights toggle shipped: View ▸ Show line weights, ⌘5 / Ctrl+5 (`view.line-weights`) |
 | 2026-10-15 | minor | A selected field nudges with the arrow keys in Prepare a form: a point, Shift ten points, one undo step per press (#2608) |
 | 2026-10-14 | minor | Full screen shows one fitted page (or spread) at a time on black with click and key paging, as Acrobat's Full Screen Mode (#379, #1459, #1353) |
 | 2026-10-11 | minor | Column select shipped (#740, PR #765); several objects move together on one page (#844, PR #907); Shift-⌘-G goes back (#810, PR #835) |
