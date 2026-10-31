@@ -133,15 +133,17 @@ pub enum FilterError {
 pub(crate) struct Failure {
     pub(crate) error: FilterError,
     pub(crate) partial: Vec<u8>,
+    /// Bytes decoded on the way that `partial` doesn't hold: they took as long.
+    pub(crate) discarded: usize,
 }
 
 impl Failure {
     pub(crate) fn corrupt(filter: &'static str, detail: impl Into<String>, partial: Vec<u8>) -> Self {
-        Failure { error: FilterError::Corrupt { filter, detail: detail.into() }, partial }
+        Failure { error: FilterError::Corrupt { filter, detail: detail.into() }, partial, discarded: 0 }
     }
 
     pub(crate) fn limit(max: usize) -> Self {
-        Failure { error: FilterError::LimitExceeded(max), partial: Vec::new() }
+        Failure { error: FilterError::LimitExceeded(max), partial: Vec::new(), discarded: 0 }
     }
 }
 
@@ -267,7 +269,7 @@ fn run(
         spent = spent.saturating_add(work);
         cur = Cow::Owned(match step {
             Ok(v) => v,
-            Err(Failure { error: FilterError::Corrupt { .. }, partial: out }) if !strict => {
+            Err(Failure { error: FilterError::Corrupt { .. }, partial: out, .. }) if !strict => {
                 partial = true;
                 out
             }
@@ -286,15 +288,15 @@ fn decode_one(filter: &Filter, params: &Params, data: &[u8], max: usize) -> (Ste
         Filter::AsciiHex => counted(asciihex::decode(data, max)),
         Filter::Ascii85 => counted(ascii85::decode(data, max)),
         Filter::RunLength => counted(runlength::decode(data, max)),
-        other => (Err(Failure { error: FilterError::Unsupported(other.name().to_owned()), partial: Vec::new() }), 0),
+        other => (Err(Failure { error: FilterError::Unsupported(other.name().to_owned()), partial: Vec::new(), discarded: 0 }), 0),
     }
 }
 
-/// A step with the bytes it produced, its output or its partial output.
+/// A step with the bytes it produced: its output, or its partial output and what it threw away.
 fn counted(step: Step) -> (Step, usize) {
     let n = match &step {
         Ok(v) => v.len(),
-        Err(f) => f.partial.len(),
+        Err(f) => f.partial.len().saturating_add(f.discarded),
     };
     (step, n)
 }
@@ -306,12 +308,12 @@ fn with_predictor(step: Step, params: &Params, name: &'static str) -> (Step, usi
     let (step, n) = counted(step);
     let step = match step {
         Ok(v) => predictor::decode(params, v, name),
-        Err(Failure { error, partial }) => {
+        Err(Failure { error, partial, discarded }) => {
             let partial = match predictor::decode(params, partial, name) {
                 Ok(v) => v,
                 Err(f) => f.partial,
             };
-            Err(Failure { error, partial })
+            Err(Failure { error, partial, discarded })
         }
     };
     (step, n)
@@ -619,6 +621,32 @@ mod tests {
         let mut work = u64::MAX;
         assert!(decode_tolerant_within(&[(Filter::Flate, p)], &data, 1 << 20, &mut work).unwrap().is_empty());
         assert_eq!(u64::MAX - work, data.len() as u64 + (1 << 16));
+    }
+
+    /// A stream that reads as zlib only until it fails, and as raw deflate until that fails too,
+    /// gives back no data, and has still decoded everything the retry did.
+    #[test]
+    fn a_retry_that_fails_pays_for_what_it_decoded() {
+        // Stored as raw deflate: this many bytes, then a block of a reserved type. As zlib: the
+        // same reserved type at once, so the first reading fails with nothing.
+        let mut data = vec![0x78, 0x01, 0x06, 0xFE, 0xF9];
+        data.extend(vec![0u8; 0x0601]);
+        data.push(0x07);
+        let chain = [(Filter::Flate, Params::default())];
+        let (out, partial) = decode_tolerant(&chain, &data, 1 << 20).unwrap();
+        assert!(out.is_empty() && partial, "what is read stays as it was");
+        let (_, _, spent) = decode_tolerant_counted(&chain, &data, 1 << 20).unwrap();
+        assert_eq!(spent, 0x0601);
+        let (e, spent) = decode_counted(&chain, &data, 1 << 20).unwrap_err();
+        assert!(matches!(e, FilterError::Corrupt { .. }), "{e}");
+        assert_eq!(spent, 0x0601);
+        let mut work = u64::MAX;
+        assert!(decode_tolerant_within(&chain, &data, 1 << 20, &mut work).unwrap().is_empty());
+        assert_eq!(u64::MAX - work, (data.len() + 0x0601) as u64);
+        // Through a predictor, which would otherwise lose the count.
+        let p = Params { predictor: 12, columns: 4, ..Params::default() };
+        let (_, _, spent) = decode_tolerant_counted(&[(Filter::Flate, p)], &data, 1 << 20).unwrap();
+        assert_eq!(spent, 0x0601);
     }
 
     /// With nothing left nothing is read. What can't be decoded at all never costs anything, and

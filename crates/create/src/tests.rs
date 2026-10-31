@@ -2312,6 +2312,51 @@ fn flate_images_past_the_exports_allowance_are_left_out_with_the_reason() {
     assert_eq!(budget.refused(), 1);
 }
 
+/// A JPEG is written as it is, at no cost, unless a mask means decoding it: that pays for its
+/// samples, and past the allowance the image goes, with the reason, as it would come out without
+/// its transparency otherwise.
+#[test]
+fn a_jpeg_that_has_to_be_decoded_shares_the_allowance() {
+    use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
+    let mut jpeg = Vec::new();
+    image::RgbImage::from_pixel(4, 4, image::Rgb([9, 9, 9])).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let image_dict = |extra: Option<(&[u8], Object)>| {
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(4));
+        d.set(b"Height".to_vec(), Object::Int(4));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+        d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+        if let Some((key, value)) = extra {
+            d.set(key.to_vec(), value);
+        }
+        d
+    };
+    let mut doc = Document::new_empty();
+    let mut mask = Dict::new();
+    mask.set(b"Subtype".to_vec(), Object::name("Image"));
+    mask.set(b"Width".to_vec(), Object::Int(4));
+    mask.set(b"Height".to_vec(), Object::Int(4));
+    mask.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    mask.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    let mask = doc.add(Object::Stream(Stream::from_raw(mask, vec![0x80; 16])));
+    let masked = doc.add(Object::Stream(Stream::from_raw(image_dict(Some((b"SMask", Object::Ref(mask)))), jpeg.clone())));
+    let plain = doc.add(Object::Stream(Stream::from_raw(image_dict(None), jpeg)));
+
+    let mut budget = ImageBudget::with_work(0);
+    assert!(crate::extract::image_file_within(&doc, plain, &mut budget).is_ok(), "written as it is");
+    assert_eq!(budget.refused(), 0);
+    let mut budget = ImageBudget::with_work(u64::MAX);
+    assert!(crate::extract::image_file_within(&doc, masked, &mut budget).is_ok());
+    let cost = u64::MAX - budget.work_left();
+    assert_eq!(cost, 16 + 16 + 2 * 4 * 4 * 3, "the mask's bytes and pixels, and the JPEG's samples twice");
+    let mut budget = ImageBudget::with_work(cost - 1);
+    let refused = crate::extract::image_file_within(&doc, masked, &mut budget).unwrap_err();
+    assert!(refused.contains("more image decoding than"), "{refused}");
+    assert_eq!(budget.refused(), 1);
+}
+
 /// A mask past the allowance can't be left out as an unreadable one is, or the image comes out
 /// opaque, showing what the mask hides: the image goes, with the reason.
 #[test]
@@ -2326,7 +2371,7 @@ fn an_image_whose_jbig2_mask_is_past_the_allowance_is_left_out() {
     mask.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
     let mut doc = Document::new_empty();
     let mask = doc.add(Object::Stream(Stream::from_raw(mask, pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap())));
-    // A JPEG, which nothing charges, so only its mask can be what stops it.
+    // A JPEG, read for nothing until its mask is, so only the mask can be what stops it.
     let mut jpeg = Vec::new();
     image::RgbImage::from_pixel(1, 1, image::Rgb([9, 9, 9])).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
     let mut image = Dict::new();

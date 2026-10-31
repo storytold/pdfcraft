@@ -490,6 +490,9 @@ pub(crate) fn pixels(doc: &Document, s: &Stream, n: usize, budget: &mut ImageBud
         // never get here: the colour space check excludes them. The JPEG's own size must be the
         // dictionary's: `jpeg_samples` refuses another from its header, before any pixels.
         let ycc = n == 3 && ycc_encoded(doc, s)?;
+        if !budget.pay_jpeg(u64::try_from(bytes).ok()?) {
+            return None;
+        }
         let v = jpeg_samples(&s.raw, usize::try_from(w).ok()?, usize::try_from(h).ok()?, n, ycc)?;
         count_decoded(u64::from(w) * u64::from(h));
         (v.len() == bytes).then_some(v)
@@ -1496,7 +1499,7 @@ mod dimension_tests {
         dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
         dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
         let image = Stream::flate(dict, &samples);
-        let read = (image.raw.len() + samples.len()) as u64;
+        let read = (image.raw.len() + samples.len()) as u64 + 256 * 256;
         let original = doc.add(Object::Stream(image.clone()));
         let mut xobjects = Dict::new();
         xobjects.set(b"I0".to_vec(), Object::Ref(original));
@@ -1545,6 +1548,25 @@ mod dimension_tests {
         assert_eq!((report.images, report.images_refused), (1, 0), "{report:?}");
     }
 
+    /// A JPEG pays for its samples before it is decoded, however few bytes it takes: past what is
+    /// left it isn't, and counts as refused.
+    #[test]
+    fn a_jpeg_pays_for_its_samples() {
+        let mut dict = Dict::new();
+        dict.set(b"Width".to_vec(), Object::Int(16));
+        dict.set(b"Height".to_vec(), Object::Int(8));
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        dict.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+        let jpeg = image_stream(&dict, &[120; 16 * 8 * 3], 3, 16, 8, Compression::Jpeg(60), false).expect("a JPEG");
+        let doc = Document::new_empty();
+        let mut budget = ImageBudget::with_work(2 * 16 * 8 * 3);
+        assert_eq!(pixels(&doc, &jpeg, 3, &mut budget).map(|p| p.len()), Some(16 * 8 * 3));
+        assert_eq!((budget.work_left(), budget.refused()), (0, 0), "exactly that");
+        let mut budget = ImageBudget::with_work(2 * 16 * 8 * 3 - 1);
+        assert!(pixels(&doc, &jpeg, 3, &mut budget).is_none());
+        assert_eq!((budget.work_left(), budget.refused()), (0, 1));
+    }
+
     /// A soft mask resampled with its image is read from the same allowance as the image.
     #[test]
     fn a_soft_mask_resampled_with_its_image_spends_the_allowance() {
@@ -1568,7 +1590,7 @@ mod dimension_tests {
         };
         let mut doc = Document::new_empty();
         let mask = image("DeviceGray");
-        let cost = (mask.raw.len() + noise.len()) as u64;
+        let cost = (mask.raw.len() + noise.len()) as u64 + 256 * 256;
         let masked = doc.add(Object::Stream(mask));
         let mut with_mask = image("DeviceGray");
         with_mask.dict.set(b"SMask".to_vec(), Object::Ref(masked));

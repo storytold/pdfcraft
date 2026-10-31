@@ -94,6 +94,6 @@ recognisable in a diff and byte-stable when re-serialized.
   (`Document::decoded_image`, a JBIG2 image's `/JBIG2Globals` within `MAX_JBIG2_GLOBALS`, 32 MiB,
   their filters undone once a document for the images that share them, up to 64 MiB kept, while
   their segments are decoded for every image, and `ImageBudget` for an operation over many images,
-  which share one allowance of decoding, filters and fax and JBIG2 decoders alike, and are refused
-  past it);
+  which share one allowance of decoding, filters, decoders and pixels alike, and are refused past
+  it);
   DCT and JPX are still decoded through the bootstrap renderer (`core.image-filters`, M2.6).

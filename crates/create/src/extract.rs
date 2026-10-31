@@ -7,6 +7,7 @@
 use std::collections::HashSet;
 
 use pdfcraft_cos::{Dict, Document, ImageBudget, MAX_DECODED, ObjRef, Object, Stream};
+use pdfcraft_filters::FilterError;
 
 /// One image, ready to write.
 #[derive(Clone, Debug, PartialEq)]
@@ -165,7 +166,7 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
     let mut alpha = if mask { None } else { soft_mask(doc, s, w, h, budget).or_else(|| stencil_mask(doc, s, w, h, budget)) };
     // Without its mask the image would come out opaque, showing what the mask hides.
     if budget.refused() > refused {
-        return Err("more image decoding than one operation may do".into());
+        return Err(FilterError::Spent.to_string());
     }
     let key = if mask { None } else { colour_key(doc, s) };
     // Keep the existing JPEG and stencil-mask Decode handling separate from lossless colour images.
@@ -184,6 +185,9 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
     }
     let mut space = if mask { Space::Gray } else { space(doc, s.dict.get(b"ColorSpace"))? };
     let (samples, bpc) = if jpeg {
+        if !budget.pay_jpeg((w as u64).saturating_mul(h as u64).saturating_mul(space.components() as u64)) {
+            return Err(FilterError::Spent.to_string());
+        }
         // Grey, RGB or CMYK samples (YCCK is converted); a JPEG that doesn't decode, or an
         // indexed one (not valid), is written as is, without its transparency.
         let Some((samples, decoded)) = jpeg_samples(&s.raw, &space, w, h) else { return as_is() };

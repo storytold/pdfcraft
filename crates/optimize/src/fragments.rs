@@ -167,7 +167,12 @@ fn merge(doc: &Document, run: &[Fragment], n: usize, budget: &mut ImageBudget) -
         return None;
     }
     let row = (width as usize).checked_mul(n)?;
-    let mut out = vec![255u8; row.checked_mul(height as usize)?];
+    // What this builds isn't what its strips cost to read: four small ones can ask for all of it.
+    let bytes = row.checked_mul(height as usize)?;
+    if !budget.pay_pixels(u64::try_from(bytes).ok()?) {
+        return None;
+    }
+    let mut out = vec![255u8; bytes];
     for f in run {
         let r0 = (((top - f.rect[3]) * density).round().max(0.0) as u32).min(height);
         let r1 = (((top - f.rect[1]) * density).round().max(0.0) as u32).min(height);
@@ -370,10 +375,11 @@ mod tests {
             image.set(k.as_bytes().to_vec(), v);
         }
         image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
-        let mut xobjects = Dict::new();
-        let mut drawn = String::new();
+        let (mut xobjects, mut drawn, mut raw) = (Dict::new(), String::new(), 0);
         for row in 0..8 {
-            let r = doc.add(Object::Stream(Stream::flate(image.clone(), &[row * 30; 8])));
+            let strip = Stream::flate(image.clone(), &[row * 30; 8]);
+            raw += strip.raw.len() as u64;
+            let r = doc.add(Object::Stream(strip));
             xobjects.set(format!("I{row}").into_bytes(), Object::Ref(r));
             drawn.push_str(&format!("q 80 0 0 10 0 {} cm /I{row} Do Q\n", 70 - 10 * i32::from(row)));
         }
@@ -388,9 +394,15 @@ mod tests {
         let mut budget = ImageBudget::with_work(0);
         assert_eq!(merge_page(&mut doc.clone(), page, &mut Report::default(), &mut |_| true, &mut budget).unwrap(), 0);
         assert_eq!(budget.refused(), 1);
+        // Reading each strip, and building the picture of 8 rows of 8 they make.
+        let cost = raw + 8 * (8 + 8) + 8 * 8;
         let mut budget = ImageBudget::with_work(u64::MAX);
-        assert_eq!(merge_page(&mut doc, page, &mut Report::default(), &mut |_| true, &mut budget).unwrap(), 8);
-        assert!(budget.work_left() < u64::MAX);
+        assert_eq!(merge_page(&mut doc.clone(), page, &mut Report::default(), &mut |_| true, &mut budget).unwrap(), 8);
+        assert_eq!(u64::MAX - budget.work_left(), cost);
+        // Enough for the strips and not for the picture: nothing is built.
+        let mut budget = ImageBudget::with_work(cost - 1);
+        assert_eq!(merge_page(&mut doc, page, &mut Report::default(), &mut |_| true, &mut budget).unwrap(), 0);
+        assert_eq!(budget.refused(), 1);
     }
 
     /// Many images drawn on top of each other are not one picture; looking for runs among them reads
