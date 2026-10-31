@@ -60,6 +60,64 @@ fn reopen(doc: &Document) -> Document {
     Document::open(Arc::new(write_incremental(doc, &SaveOptions::default()).unwrap())).unwrap()
 }
 
+/// #5255: a font whose ascent and descent span more than one em (Monaco: 1000 and −250), with
+/// lines set solid. A mark made from a text selection covers the selected line's em box, which
+/// the line below's glyph box reached into by 2 pt: marking "1234" also removed "CRET" below it.
+/// One page like [`one_page`], with font /F1's descriptor at `ascent` and `descent`.
+fn page_with_metrics(content: &[u8], ascent: i32, descent: i32) -> Document {
+    let font = FONT.replace("95 0 R", "6 0 R").replace("/Ascent 800 /Descent -200", &format!("/Ascent {ascent} /Descent {descent}"));
+    pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        stream("", content),
+        font.into_bytes(),
+        widths(),
+    ])
+}
+
+#[test]
+fn a_mark_on_one_line_leaves_the_line_below_when_lines_are_set_solid() {
+    let mut doc = page_with_metrics(b"BT /F1 10 Tf 10 120 Td (ABOVE123) Tj 0 -10 Td (AB1234CD) Tj 0 -10 Td (SECRET) Tj ET", 1000, -250);
+    // "1234" on the baseline at y 110 spans x 20–40; its em box is y 108–118.
+    mark(&mut doc, 0, &[[20.0, 108.0, 40.0, 118.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.glyphs, 4, "{r:?}");
+    assert_eq!(r.glyphs_beside_marks, 4, "CRET below reaches the mark only with its font box: kept and counted");
+    let c = content(&doc, 0);
+    assert!(!c.contains("1234"), "{c}");
+    assert!(c.contains("(SECRET) Tj") && c.contains("(ABOVE123) Tj"), "the lines above and below are whole: {c}");
+    // A rectangle that reaches into the line below still takes the glyphs it covers.
+    mark(&mut doc, 0, &[[20.0, 98.0, 40.0, 108.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 4);
+    assert!(!content(&doc, 0).contains("SECRET"));
+}
+
+/// #5255 at a small size: 9 pt lines set solid in a 1000 / −200 font (a 10.8 pt glyph box). The
+/// line below reached 1.8 pt into the selection's mark.
+#[test]
+fn small_text_set_solid_keeps_the_line_below() {
+    let mut doc = page_with_metrics(b"BT /F1 9 Tf 10 120 Td (ABOVE123) Tj 0 -9 Td (AB1234CD) Tj 0 -9 Td (SECRET) Tj ET", 1000, -200);
+    // "1234" on the baseline at y 111 spans x 19–37; its em box is y 109.2–118.2.
+    mark(&mut doc, 0, &[[19.0, 109.2, 37.0, 118.2]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.glyphs_beside_marks), (4, 4), "{r:?}");
+    let c = content(&doc, 0);
+    assert!(c.contains("(SECRET) Tj") && c.contains("(ABOVE123) Tj"), "{c}");
+}
+
+/// A mark over the bottom of large letters still removes them: a glyph left in the file under a
+/// partial black box stays extractable. 24 pt "SECRET", a mark over the lower 3.8 pt of "SE".
+#[test]
+fn a_mark_over_part_of_large_text_still_removes_it() {
+    let mut doc = one_page(b"BT /F1 24 Tf 10 100 Td (SECRET) Tj ET", "", vec![]);
+    // Glyph boxes span y 95.2–119.2; S and E span x 10–34.
+    mark(&mut doc, 0, &[[10.0, 90.0, 34.0, 99.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.glyphs_beside_marks), (2, 0), "{r:?}");
+    assert!(!content(&doc, 0).contains("SECRET"));
+}
+
 #[test]
 fn glyphs_under_a_mark_go_and_the_rest_stays_put() {
     // "AB1234CD" from x = 10 at 10 pt: each glyph 5 pt wide; 1234 spans x 20–40.

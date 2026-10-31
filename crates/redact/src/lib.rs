@@ -149,6 +149,11 @@ pub struct Report {
     /// only streams a check for text left under the marks may skip: an input stream labelled
     /// like an overlay (`/PCMark /Redaction`) is checked like any other.
     pub overlays: Vec<ObjRef>,
+    /// Glyphs kept although their full font box (descent to ascent) reaches into a mark, because
+    /// their one-em box does not: the overlap is the space font metrics leave between lines, as
+    /// on the line below a mark when lines are set solid. Ink a glyph draws outside its one-em box
+    /// stays in the file, so a caller can report these for a check.
+    pub glyphs_beside_marks: usize,
 }
 
 fn rect_of(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
