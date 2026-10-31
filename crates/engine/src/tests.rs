@@ -6044,6 +6044,41 @@ fn dynamic_xfa_forms_open_with_the_values_and_rows_of_their_data() {
     assert!(!doc.dirty);
 }
 
+/// A filled form whose data has a bare `&` ("Humanitarian & Compassionate" in an IRCC form) is not well-formed XML, though
+/// Adobe's reader takes it: it laid out as nothing, and the form showed only its "Please wait" page.
+#[test]
+fn a_dynamic_xfa_form_whose_data_has_a_bare_ampersand_is_still_laid_out() {
+    let data = "<form><head><familyName>Smith & Sons</familyName></head><table><row><what0>R&D</what0></row></table></form>";
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template_with_data(1, data)));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, bytes, None).expect("opens");
+    let doc = s.get(id).unwrap();
+    assert!(doc.xfa.is_some(), "laid out: {:?}", doc.xfa_warnings);
+    let value = |n: &str| doc.form.iter().find(|f| f.name == n).unwrap_or_else(|| panic!("no field {n}")).value.clone();
+    assert_eq!(value("familyName"), vec!["Smith & Sons".to_string()]);
+    assert_eq!(value("what0"), vec!["R&D".to_string()]);
+    // what is saved back is well-formed
+    s.apply(id, Edit::SetFieldValue { name: "familyName".into(), value: FieldValue::Text("Jones & Co".into()) }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    // the saved datasets stream itself, before any reader could repair it
+    let cos = pdfcraft_cos::Document::open(saved).unwrap();
+    let acro = cos.get(cos.root().unwrap()).as_dict().and_then(|c| c.get(b"AcroForm").map(|a| cos.resolve(a))).unwrap();
+    let packets = acro.as_dict().and_then(|a| a.get(b"XFA").map(|x| cos.resolve(x))).unwrap();
+    // one XDP stream, or an array of packets in which the datasets one is named
+    let stream = match &*packets {
+        pdfcraft_cos::Object::Array(items) => {
+            let at = (0..items.len()).step_by(2).find(|&i| items[i].as_string().is_some_and(|s| s.to_text() == "datasets")).expect("a datasets packet");
+            cos.resolve(&items[at + 1])
+        }
+        _ => packets.clone(),
+    };
+    let pdfcraft_cos::Object::Stream(stream) = &*stream else { panic!("a stream") };
+    let text = String::from_utf8(stream.decoded().unwrap()).unwrap();
+    assert!(!text.contains("Jones & Co") && text.contains("Jones &amp; Co"), "{text}");
+    let data = pdfcraft_xfa::parse_datasets(&text).expect("the saved datasets are XML");
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].head[0].familyName[0]")), Some("Jones & Co"));
+}
+
 /// #3180: an XFA form with no fields whose configuration says `dynamicRender` is `forbidden` is a
 /// static form: its pages are the form. Opening it used to lay the template out into new pages
 /// and write them as a revision, so even a save with no change replaced the pages.
