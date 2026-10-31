@@ -1633,6 +1633,65 @@ fn the_combine_tab_does_not_move_and_documents_stay_in_order() {
     assert_eq!(h.state().views.iter().map(|view| view.id).collect::<Vec<_>>(), ids);
 }
 
+#[test]
+fn dragging_a_tab_to_open_space_detaches_it_into_its_own_window() {
+    use egui::accesskit::Role;
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+    let tab = |h: &Harness<'static, PdfCraftApp>, name: &str| h.get_by_role_and_label(Role::Tab, name).rect();
+
+    // Drag "middle.pdf" downwards into open space (60px below the tab strip)
+    let from = tab(&h, "middle.pdf").center();
+    let to = from + egui::vec2(0.0, 60.0);
+    drag_named_tab(&mut h, "middle.pdf", to, true);
+    h.run_steps(3);
+
+    // middle.pdf is detached
+    assert!(h.state().views[1].detached, "middle.pdf tab should be detached");
+    // Tab strip only retains the remaining non-detached tabs
+    assert!(h.query_by_role_and_label(Role::Tab, "middle.pdf").is_none());
+    assert!(h.query_by_role_and_label(Role::Tab, "first.pdf").is_some());
+    assert!(h.query_by_role_and_label(Role::Tab, "last.pdf").is_some());
+
+    // Re-attaching brings it back to the tab strip
+    h.state_mut().attach_tab(ids[1]);
+    h.run_steps(3);
+    assert!(!h.state().views[1].detached, "middle.pdf should be attached");
+    assert!(h.query_by_role_and_label(Role::Tab, "middle.pdf").is_some());
+}
+
+#[test]
+fn tab_context_menu_can_detach_tab_to_new_window() {
+    use egui::accesskit::Role;
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Right-click first.pdf tab and click "Move to New Window"
+    h.get_by_role_and_label(Role::Tab, "first.pdf").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Move to New Window").click();
+    h.run_steps(3);
+
+    assert!(h.state().views[0].detached, "first.pdf should be detached");
+    assert!(h.query_by_role_and_label(Role::Tab, "first.pdf").is_none());
+    assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[2]));
+}
+
+#[test]
+fn detached_window_views_retain_render_demand_and_are_not_suspended() {
+    let mut h = three_tab_harness();
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+
+    // Detach middle.pdf
+    h.state_mut().detach_tab(ids[1]);
+    h.run_steps(4);
+
+    // middle.pdf is detached and treated as visible by finish_render_frame
+    assert!(h.state().views[1].detached, "middle.pdf is detached");
+    // It rendered in its detached window viewport
+    assert!(h.state().session.get(ids[1]).is_some());
+}
+
 /// The Edit tab turns on Edit text & images at once, as Acrobat does, so every paragraph and image
 /// is boxed and editable with one click; another tab puts the tool down again.
 #[test]

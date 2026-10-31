@@ -1235,11 +1235,14 @@ title = "Multiple windows; drag a tab out into a window"
 area = "B"
 tier = "P1"
 milestone = "M14"
-status = "planned"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = [
+    "crates/ui-egui/tests/it/ui.rs::dragging_a_tab_to_open_space_detaches_it_into_its_own_window",
+    "crates/ui-egui/tests/it/ui.rs::tab_context_menu_can_detach_tab_to_new_window",
+]
+notes = "Dragging a document tab outside the tab strip into open space tears it off into a dedicated window viewport (#5348). Tabs can also be moved to a new window via the tab context menu, and re-attached back to the main window with the Re-attach Tab button."
 
 [[feature]]
 id = "view.split-window"

@@ -312,6 +312,25 @@ impl PdfCraftApp {
         self.active.and_then(|i| self.views.get(i).map(|v| (i, v.id)))
     }
 
+    /// Detaches a document tab into its own window (view.multiple-windows).
+    pub fn detach_tab(&mut self, id: DocId) {
+        if let Some(i) = self.views.iter().position(|v| v.id == id) {
+            self.views[i].detached = true;
+            if self.active == Some(i) {
+                // Switch to the first non-detached view, or None if none remain.
+                self.active = self.views.iter().enumerate().position(|(idx, v)| idx != i && !v.detached);
+            }
+        }
+    }
+
+    /// Re-attaches a detached document tab back to the main window's tab strip.
+    pub fn attach_tab(&mut self, id: DocId) {
+        if let Some(i) = self.views.iter().position(|v| v.id == id) {
+            self.views[i].detached = false;
+            self.active = Some(i);
+        }
+    }
+
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
     /// on the document underneath it.
     pub(crate) fn modal_open(&self) -> bool {
@@ -599,6 +618,7 @@ impl eframe::App for PdfCraftApp {
             // Notices too: a refused field value or a failed save must be seen in full screen.
             self.show_progress(&ctx);
             widgets::toast(self, &ctx);
+            self.show_detached_windows(&ctx);
             self.finish_render_frame(&ctx);
             if let Some(mut control) = self.control.take() {
                 control.finish_frame(&ctx, self);
@@ -637,11 +657,70 @@ impl eframe::App for PdfCraftApp {
         dialogs::show(self, &ctx);
         self.show_progress(&ctx);
         widgets::toast(self, &ctx);
+        self.show_detached_windows(&ctx);
         self.finish_render_frame(&ctx);
         // Screenshots are issued only after a settled pass that really drew the window.
         if let Some(mut control) = self.control.take() {
             control.finish_frame(&ctx, self);
             self.control = Some(control);
+        }
+    }
+}
+
+impl PdfCraftApp {
+    /// Shows any detached document windows in their own viewports (view.multiple-windows).
+    pub(crate) fn show_detached_windows(&mut self, ctx: &egui::Context) {
+        let detached_ids: Vec<pdfcraft_engine::DocId> = self.views.iter().filter(|v| v.detached).map(|v| v.id).collect();
+        if detached_ids.is_empty() {
+            return;
+        }
+        for doc_id in detached_ids {
+            let Some(idx) = self.views.iter().position(|v| v.id == doc_id) else { continue };
+            let is_dirty = self.session.get(doc_id).is_some_and(|d| d.dirty);
+            let display_name = self.session.get(doc_id).map(|d| d.display_name()).unwrap_or_default();
+            let title = crate::canvas::tab_label(self, idx).unwrap_or(display_name);
+            let viewport_id = egui::ViewportId::from_hash_of(("detached-doc", doc_id));
+            let builder = egui::ViewportBuilder::default()
+                .with_title(format!("{title} — PdfCraft"))
+                .with_inner_size([900.0, 700.0])
+                .with_min_inner_size([400.0, 300.0]);
+
+            let mut reattach = false;
+            let mut close = false;
+
+            ctx.show_viewport_immediate(viewport_id, builder, |child_ui, _class| {
+                if child_ui.input(|i| i.viewport().close_requested()) {
+                    close = true;
+                    return;
+                }
+                let t = theme::Tokens::get(child_ui.ctx());
+                egui::Panel::top("detached_header").frame(egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin::symmetric(8, 4))).show(
+                    child_ui,
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(&title).font(theme::semibold(13.0)));
+                            if is_dirty {
+                                ui.label(egui::RichText::new("(edited)").font(theme::regular(11.0)).color(t.text_muted));
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button(tl!("Re-attach Tab")).clicked() {
+                                    reattach = true;
+                                }
+                            });
+                        });
+                    },
+                );
+
+                egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(child_ui, |ui| {
+                    crate::canvas::document_area(self, idx, ui);
+                });
+            });
+
+            if reattach {
+                self.attach_tab(doc_id);
+            } else if close {
+                self.request_close_tab(idx);
+            }
         }
     }
 }

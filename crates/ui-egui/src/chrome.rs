@@ -81,6 +81,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 // their narrowest; then arrows either side say so and step through them.
                 let mut natural: Vec<f32> = Vec::with_capacity(app.views.len() + 1);
                 for i in 0..app.views.len() {
+                    if app.views[i].detached {
+                        continue;
+                    }
                     if let Some(name) = crate::canvas::tab_label(app, i) {
                         natural.push(tab_natural_width(ui, &t, &name));
                     }
@@ -127,6 +130,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             let mut slots = Vec::with_capacity(app.views.len());
                             let mut dragged = None;
                             for i in 0..app.views.len() {
+                                if app.views[i].detached {
+                                    continue;
+                                }
                                 let Some(doc) = app.session.get(app.views[i].id) else { continue };
                                 let Some(name) = crate::canvas::tab_label(app, i) else { continue };
                                 let dirty = doc.dirty;
@@ -163,6 +169,10 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                         action = Some(crate::tab_context::Action::Close(id));
                                         ui.close();
                                     }
+                                    if ui.button(tl!("Move to New Window")).clicked() {
+                                        action = Some(crate::tab_context::Action::Detach(id));
+                                        ui.close();
+                                    }
                                     if ui.add_enabled(!app.closed_tabs.is_empty(), egui::Button::new(tl!("Reopen Closed Tab"))).clicked() {
                                         action = Some(crate::tab_context::Action::Reopen);
                                         ui.close();
@@ -183,25 +193,53 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 }
                             }
                             // Dragging a tab moves it (#1537): a line marks the gap it will land
-                            // in, and releasing the button drops it there.
+                            // in, and releasing the button drops it there. Dragging it outside the
+                            // tab strip tears it off into its own window (view.multiple-windows).
                             if let Some((from, released)) = dragged
-                                && let Some(x) = ui.ctx().pointer_latest_pos().map(|p| p.x)
+                                && let Some(pos) = ui.ctx().pointer_latest_pos()
                             {
-                                let to = drop_index(&slots, from, x);
-                                if released {
-                                    if close.is_none() && action.is_none() {
-                                        app.move_tab(from, to);
+                                let strip_rect = ui.clip_rect();
+                                let is_tear_off = pos.y > strip_rect.bottom() + 15.0 || pos.y < strip_rect.top() - 15.0;
+                                if is_tear_off {
+                                    if released {
+                                        if close.is_none()
+                                            && action.is_none()
+                                            && let Some(view) = app.views.get(from)
+                                        {
+                                            action = Some(crate::tab_context::Action::Detach(view.id));
+                                        }
+                                    } else {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                        if let Some(name) = crate::canvas::tab_label(app, from) {
+                                            let badge_rect = egui::Rect::from_min_size(pos + egui::vec2(12.0, 12.0), egui::vec2(130.0, 26.0));
+                                            ui.painter().rect_filled(badge_rect, 4.0, t.panel);
+                                            ui.painter().rect_stroke(badge_rect, 4.0, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+                                            ui.painter().text(
+                                                badge_rect.center(),
+                                                egui::Align2::CENTER_CENTER,
+                                                name,
+                                                egui::FontId::proportional(12.0),
+                                                t.text,
+                                            );
+                                        }
                                     }
                                 } else {
-                                    drag_x = Some(x);
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                                    if let Some(marker) = drop_marker(&slots, from, to, ui.spacing().item_spacing.x) {
-                                        let span = slots.first().map_or(ui.max_rect().y_range(), |(_, r)| r.y_range());
-                                        // In front of the first tab the gap lies outside the scroll area's
-                                        // clip rect (#2225): keep the whole line inside it.
-                                        let clip = ui.clip_rect();
-                                        let marker = marker.clamp(clip.left() + 1.0, (clip.right() - 1.0).max(clip.left() + 1.0));
-                                        ui.painter().vline(marker, span.shrink(4.0), Stroke::new(2.0, t.accent));
+                                    let to = drop_index(&slots, from, pos.x);
+                                    if released {
+                                        if close.is_none() && action.is_none() {
+                                            app.move_tab(from, to);
+                                        }
+                                    } else {
+                                        drag_x = Some(pos.x);
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                        if let Some(marker) = drop_marker(&slots, from, to, ui.spacing().item_spacing.x) {
+                                            let span = slots.first().map_or(ui.max_rect().y_range(), |(_, r)| r.y_range());
+                                            // In front of the first tab the gap lies outside the scroll area's
+                                            // clip rect (#2225): keep the whole line inside it.
+                                            let clip = ui.clip_rect();
+                                            let marker = marker.clamp(clip.left() + 1.0, (clip.right() - 1.0).max(clip.left() + 1.0));
+                                            ui.painter().vline(marker, span.shrink(4.0), Stroke::new(2.0, t.accent));
+                                        }
                                     }
                                 }
                             }
