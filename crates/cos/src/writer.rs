@@ -2,17 +2,20 @@
 //!
 //! * `write_incremental` appends the edited objects, a cross-reference section in the same style
 //!   as the file's last one (table or stream) and a trailer with `/Prev`. The original bytes are
-//!   never modified, which keeps digital signatures over earlier revisions valid.
+//!   never modified, which keeps digital signatures over earlier revisions valid. With
+//!   `SaveOptions::drop_unlinked`, objects added since the file was read that nothing refers to
+//!   any more are left out (written as free).
 //! * `write_full` writes only objects reachable from the trailer, renumbered densely, with a
 //!   cross-reference table or stream — the "Save As" / garbage-collecting path. Unknown trailer
 //!   entries are copied, including objects reachable only from them.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::Write;
+use std::sync::Arc;
 
 use crate::CosError;
-use crate::document::{Document, ObjectReader};
+use crate::document::{Document, ObjectReader, XrefEntry};
 use crate::object::{Dict, ObjRef, Object, PdfString, Stream};
 
 /// Serialize one object. Deterministic: same object → same bytes.
@@ -156,11 +159,18 @@ pub struct SaveOptions {
     /// Full saves: pack non-stream objects into compressed object streams with a cross-reference
     /// stream (PDF 1.5+, §7.5.7–7.5.8). Off writes a classic table that any reader accepts.
     pub object_streams: bool,
+    /// Incremental saves: leave out what was added since the file was read and nothing refers to
+    /// any more, such as a comment added and deleted again or a redaction mark added and cleared
+    /// (written as free). Off by default, because a writer may add an object only it finds again
+    /// by scanning, as a standalone document timestamp is; such a writer frees the leftovers
+    /// before adding it, with [`Document::free_unlinked_additions`]. Full saves always leave
+    /// these out.
+    pub drop_unlinked: bool,
 }
 
 impl Default for SaveOptions {
     fn default() -> Self {
-        Self { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true }
+        Self { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true, drop_unlinked: false }
     }
 }
 
@@ -209,8 +219,14 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     let base = (original.len() + usize::from(newline)).saturating_sub(shift) as u64;
     let mut out = Vec::new();
     let mut offsets: BTreeMap<u32, (u64, u16, bool)> = BTreeMap::new(); // num → (offset, gen, in use)
+    let unlinked = if opts.drop_unlinked { unlinked_additions(&doc) } else { HashSet::new() };
     for (num, generation, obj) in doc.overlay_entries() {
         match obj {
+            // Written as free, so `/Size` still covers every number this document handed out. The
+            // generation stays: the number was never in use, and an undo can bring it back as is.
+            Some(_) if unlinked.contains(&num) => {
+                offsets.insert(num, (0, generation, false));
+            }
             Some(o) => {
                 offsets.insert(num, (base + out.len() as u64, generation, true));
                 write_indirect(num, generation, &prepared(&doc, num, num, generation, &o), &mut out);
@@ -387,7 +403,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
 /// Object `r` read again for writing. The traversal read it once and only kept its number, so
 /// a second read that fails, finds nothing or finds a different kind of object must fail the
 /// save rather than write `null` in its place.
-fn reread(reader: &mut ObjectReader, r: ObjRef, is_stream: bool) -> Result<std::sync::Arc<Object>, CosError> {
+fn reread(reader: &mut ObjectReader, r: ObjRef, is_stream: bool) -> Result<Arc<Object>, CosError> {
     let o = reader.try_get(r)?;
     if matches!(*o, Object::Null) || matches!(*o, Object::Stream(_)) != is_stream {
         return Err(CosError::Syntax { offset: 0, detail: format!("object {} read differently while saving; nothing was written", r.num) });
@@ -437,6 +453,37 @@ fn trailer_key_rewritten(key: &[u8]) -> bool {
 
 fn output_number(index: usize) -> Result<u32, CosError> {
     u32::try_from(index).ok().and_then(|n| n.checked_add(1)).ok_or_else(|| CosError::Syntax { offset: 0, detail: "too many objects to save".into() })
+}
+
+/// Objects added since the file was read (their numbers are not in use in it) that nothing an
+/// incremental update writes refers to: what one edit added and a later one unlinked, such as a
+/// deleted comment or a cleared redaction mark. The file never held them, so leaving them out
+/// loses nothing, while writing them would keep what the user removed. Only the update is walked:
+/// from the trailer and the file's changed objects through additions. An unchanged object of the
+/// file is not followed: a reference it holds to such a number already reads as null in the file
+/// (a damaged file's dangling reference), and it still does.
+pub(crate) fn unlinked_additions(doc: &Document) -> HashSet<u32> {
+    let added = |num: u32| matches!(doc.xref_entry(num), None | Some(XrefEntry::Free { .. }));
+    let mut pending: HashMap<u32, Arc<Object>> =
+        doc.overlay_entries().filter_map(|(num, _, o)| Some((num, o?))).filter(|(num, _)| added(*num)).collect();
+    if pending.is_empty() {
+        return HashSet::new();
+    }
+    let mut stack: Vec<ObjRef> = Vec::new();
+    doc.trailer().iter().for_each(|(_, v)| collect_refs(v, &mut |r| stack.push(r)));
+    for (num, _, o) in doc.overlay_entries() {
+        if let Some(o) = o
+            && !added(num)
+        {
+            collect_refs(&o, &mut |r| stack.push(r));
+        }
+    }
+    while let Some(r) = stack.pop() {
+        if let Some(o) = pending.remove(&r.num) {
+            collect_refs(&o, &mut |r| stack.push(r));
+        }
+    }
+    pending.into_keys().collect()
 }
 
 fn collect_refs(o: &Object, f: &mut impl FnMut(ObjRef)) {

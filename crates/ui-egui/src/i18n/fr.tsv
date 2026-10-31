@@ -157,6 +157,15 @@
 	Available	Disponible
 	Ready	Prêt
 	Search tools and commands…	Rechercher des outils et des commandes…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Texte ajouté
+	Link URL	URL du lien
+	Search tools and commands	Rechercher des outils et des commandes
+	Text editing line	Ligne de modification du texte
+	Text to place	Texte à placer
+	Tooltip	Info-bulle
+	Words or phrases to redact	Mots ou expressions à biffer
 	No matching tools	Aucun outil correspondant
 	Tool	Outil
 	Command	Commande
@@ -505,6 +514,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Lit {names}, qui le lisent en retour. Aucun ordre ne peut corriger une boucle : modifiez l'une des formules.
 	Not in order	Hors de l'ordre
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Absent de l'ordre de calcul enregistré dans le PDF : d'autres lecteurs PDF risquent de ne pas le calculer.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Lit {name}, qui n'existe pas dans le formulaire : aucune valeur n'en provient.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Son script lit aussi des champs dont il construit les noms à l'exécution : ces lectures ne peuvent pas être vérifiées.
+	Missing field	Champ manquant
+	Unchecked reads	Lectures non vérifiées
+	{field} reads fields named as it runs	{field} lit des champs nommés à l'exécution
+	Some names are built as it runs	Certains noms sont construits à l'exécution
 	Back to Prepare a form	Retour à Préparer un formulaire
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Aucun champ de ce formulaire ne calcule encore sa valeur. Donnez un calcul à un champ dans l'onglet Calculer de ses propriétés, et il apparaîtra ici.
 	{names} and {last}	{names} et {last}
@@ -561,6 +576,9 @@
 	Clean Up	Nettoyer
 	Color Images	Images couleur
 	Grayscale Images	Images en niveaux de gris
+	Monochrome Images	Images monochromes
+	CCITT Group 4	CCITT groupe 4
+	JBIG2 (lossless)	JBIG2 (sans perte)
 	Bicubic downsampling to	Sous-échantillonnage bicubique à
 	for images above	pour les images au-dessus de
 	Compression	Compression
@@ -584,6 +602,7 @@
 	Discard private data of other applications	Ignorer les données privées d'autres applications
 	Discard hidden text	Ignorer le texte masqué
 	Use Flate to encode streams that are not encoded	Utiliser Flate pour coder les flux qui ne sont pas codés
+	In streams that use LZW encoding, use Flate instead	Dans les flux qui utilisent le codage LZW, utiliser Flate à la place
 	Remove invalid links and bookmarks	Retirer les liens et signets non valides
 	Remove unreferenced named destinations	Retirer les destinations nommées non référencées
 	Compress document structure (object streams)	Compresser la structure du document (flux d'objets)
@@ -778,14 +797,9 @@
 	Copy Image in Original Format	Copier l'image au format d'origine
 	The image has been copied as a {ext} file	L'image a été copiée en tant que fichier {ext}
 	The page has changed; select the image again	La page a changé ; sélectionnez de nouveau l'image
-	Check for updates	Rechercher des mises à jour
 	No check has run yet.	Aucune vérification n'a encore été faite.
-	Checking for a newer version…	Recherche d'une version plus récente…
 	PdfCraft {v} is available.	PdfCraft {v} est disponible.
 	You have version {c}. Download the new version from its release page.	Vous avez la version {c}. Téléchargez la nouvelle version depuis sa page de publication.
-	PdfCraft {c} is up to date.	PdfCraft {c} est à jour.
-	Couldn't check for updates: {e}	Impossible de rechercher les mises à jour : {e}
-	You have version {c}. All releases are listed at {page}.	Vous avez la version {c}. Toutes les versions sont listées sur {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Demande à GitHub la dernière version. Rien n'est téléchargé ni installé automatiquement.
 	Download	Télécharger
 	Later	Plus tard
@@ -830,6 +844,14 @@
 	Applies to 1 page	S'applique à 1 page
 	Applies to {n} pages	S'applique à {n} pages
 	Replaces the existing one on those pages.	Remplace celui qui existe déjà sur ces pages.
+	Checking pages…	Vérification des pages…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	La page {pages} a son propre remplissage blanc, qui masquerait l'arrière-plan. Le remplacer
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Les pages {pages} ont leur propre remplissage blanc, qui masquerait l'arrière-plan. Le remplacer
+	Removing the background puts the page's own backdrop back.	Supprimer l'arrière-plan rétablit le remplissage blanc propre à la page.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Une image couvre la page {pages} (une numérisation ?), l'arrière-plan n'y sera donc pas visible.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Des images couvrent les pages {pages} (des numérisations ?), l'arrière-plan n'y sera donc pas visible.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	La page {pages} a changé après l'ajout de l'arrière-plan, son propre remplissage blanc reste donc désactivé. Elle paraît identique sur papier blanc.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Les pages {pages} ont changé après l'ajout de l'arrière-plan, leurs propres remplissages blancs restent donc désactivés. Elles paraissent identiques sur papier blanc.
 	PDF or image	PDF ou image
 	No file chosen	Aucun fichier choisi
 	Page number	Numéro de page
@@ -1971,6 +1993,10 @@
 	Perimeter	Périmètre
 	Area	Aire
 	Drawing scale	Échelle du dessin
+	Scale	Échelle
+	Common scales	Échelles courantes
+	Enter a scale such as 1:50.	Saisissez une échelle comme 1:50.
+	Applying a scale switches units to m / mm.	Appliquer une échelle passe les unités en m / mm.
 	Snapping	Accrochage
 	Export measurements	Exporter les mesures
 	Open a PDF to measure it.	Ouvrez un PDF pour le mesurer.
@@ -2041,7 +2067,10 @@
 	Default zoom	Zoom par défaut
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Utilisé lorsqu'un PDF ne demande ni présentation ni zoom. Le défilement continu ne saute jamais d'une page à l'autre.
 	Reopen the files that were open when PdfCraft last closed	Rouvrir les fichiers qui étaient ouverts lors de la dernière fermeture de PdfCraft
+	Restore the last view (page, zoom and page display) when a document is opened again	Rétablir la dernière vue (page, zoom et affichage des pages) à la réouverture d’un document
 	Reload documents when their files change on disk	Recharger les documents lorsque leurs fichiers sont modifiés sur le disque
+	Don't show again	Ne plus afficher
+	Show a notice when a document is secured	Afficher un avis lorsqu’un document est protégé
 	Always use my default zoom and page layout	Toujours utiliser mon zoom et ma présentation de page par défaut
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ce fichier a été modifié sur le disque. Recharger affiche la nouvelle version et abandonne vos modifications non enregistrées ; Enregistrer la remplace par cette version.
 	Reload	Recharger
@@ -2388,6 +2417,11 @@ animation effects	Off	Désactivés
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} est calculé avant {fields}, qu'il lit.|{field} est calculé avant {fields}, qu'il lit.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} autre champ est calculé trop tôt.|{n} autres champs sont calculés trop tôt.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} manque dans l'ordre enregistré dans le PDF, donc d'autres lecteurs PDF risquent de ne pas le calculer.|{fields} manquent dans l'ordre enregistré dans le PDF, donc d'autres lecteurs PDF risquent de ne pas les calculer.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formule lit un champ absent du formulaire|{n} formules lisent des champs absents du formulaire
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} lit {fields}, absent du formulaire.|{field} lit {fields}, absents du formulaire.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} autre formule lit un champ manquant.|{n} autres formules lisent des champs manquants.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} construit certains noms de champs à l'exécution : ces lectures ne sont pas vérifiées.|{fields} construisent certains noms de champs à l'exécution : ces lectures ne sont pas vérifiées.
+@plural	{fields} is missing|{fields} are missing	{fields} est absent|{fields} sont absents
 	Scan	Numériser
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Signez une feuille de papier blanc et prenez-la en photo sous une lumière vive et uniforme (utilisez le flash). Choisissez la photo ou déposez-la ici : PdfCraft trouve la signature et retire le papier.
 	Choose photo…	Choisir une photo…
@@ -2480,6 +2514,19 @@ animation effects	Off	Désactivés
 	Make properties default	Définir comme propriétés par défaut
 	Pages selected	Pages sélectionnées
 	Page properties	Propriétés de la page
+	Create & Edit	Créer et modifier
+	Review & Compare	Réviser et comparer
+	Forms & Signatures	Formulaires et signatures
+	Protect & Standardize	Protéger et normaliser
+	Customize & Automate	Personnaliser et automatiser
+	No tools match your search.	Aucun outil ne correspond à votre recherche.
+	Expand all tools	Développer tous les outils
+	Collapse all tools	Réduire tous les outils
+	Attach a file…	Joindre un fichier…
+	Delete attachment	Supprimer la pièce jointe
+	Attaching files is not available on the web yet	Joindre des fichiers n'est pas encore disponible sur le web
+	Attach {name}	Joindre {name}
+	Delete attachment {key}	Supprimer la pièce jointe {key}
 	Font	Police
 	Bulleted list	Liste à puces
 	Numbered list	Liste numérotée
@@ -2780,6 +2827,22 @@ certificate	Version	Version
 	field names can't contain a period: {name}	les noms de champ ne peuvent pas contenir de point : {name}
 	two cells would both be named {name}	deux cellules porteraient le nom {name}
 	a field named {name} already exists	un champ nommé {name} existe déjà
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Aujourd'hui
+@plural	{n} reply|{n} replies	{n} réponse|{n} réponses
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Outils de page
+	Insert pages from a file after the selection…	Insérer des pages d'un fichier après la sélection…
+	Rotate the selected pages counterclockwise	Faire pivoter les pages sélectionnées dans le sens antihoraire
+	Rotate the selected pages clockwise	Faire pivoter les pages sélectionnées dans le sens horaire
+	Extract the selected pages…	Extraire les pages sélectionnées…
+	Delete the selected pages	Supprimer les pages sélectionnées
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Options de cette réponse
+	Export value	Valeur d’exportation
 	Highlight content	Mettre en évidence le contenu
 	Mark everything in this tag as an artifact and remove the tag from reading order	Marquer tout le contenu de cette balise comme artefact et retirer la balise de l'ordre de lecture
 	Move into previous tag	Déplacer dans la balise précédente
