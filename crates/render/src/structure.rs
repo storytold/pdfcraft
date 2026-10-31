@@ -172,7 +172,7 @@ impl Structure for LazyStructure {
         }
         slot.1
             .get_or_init(|| {
-                let result = self.source.try_get(id.0).ok().and_then(|o| convert(&o, 0).ok()).map(Box::new);
+                let result = self.source.try_get(id.0).ok().and_then(|o| convert_object(&o).ok()).map(Box::new);
                 if result.is_none() {
                     self.failed.store(true, Ordering::Relaxed);
                 }
@@ -181,6 +181,32 @@ impl Structure for LazyStructure {
             .as_deref()
             .ok_or_else(missing)
     }
+}
+
+/// One indirect object in lopdf's vocabulary. Of a page's (or page tree node's) direct
+/// `/Resources`, only `/Font` is converted: it is the one resource inspection reads
+/// ([`Structure::get_page_fonts`]). A plot that lists its 10,816 shadings in each of 3,753 pages
+/// would otherwise hold 40 million lopdf entries while the panels are filled.
+fn convert_object(object: &CosObject) -> Result<Object> {
+    if let CosObject::Dict(dict) = object
+        && matches!(dict.name(b"Type"), Some(b"Page" | b"Pages"))
+        && let Some(CosObject::Dict(resources)) = dict.get(b"Resources")
+    {
+        let mut page = Dictionary::new();
+        for (key, value) in dict.iter() {
+            if key.as_slice() == b"Resources" {
+                let mut kept = Dictionary::new();
+                if let Some(fonts) = resources.get(b"Font") {
+                    kept.set(b"Font".to_vec(), convert(fonts, 2)?);
+                }
+                page.set(key.clone(), Object::Dictionary(kept));
+            } else {
+                page.set(key.clone(), convert(value, 1)?);
+            }
+        }
+        return Ok(Object::Dictionary(page));
+    }
+    convert(object, 0)
 }
 
 fn convert_dict(dict: &pdfcraft_cos::Dict, depth: usize) -> Result<Dictionary> {
@@ -289,6 +315,30 @@ trailer
         let lazy = LazyStructure::new(Arc::new(bytes), None).unwrap();
         assert_eq!(Structure::page_ids(&eager), expected);
         assert_eq!(Structure::page_ids(&lazy), expected);
+    }
+
+    #[test]
+    fn page_resources_are_converted_for_their_fonts_only() {
+        let mut source = lopdf::Document::with_version("1.7");
+        let font = source.add_object(lopdf::dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let shadings: Dictionary = (0..100).map(|i| (format!("Sh{i}").into_bytes(), Object::Reference((1000 + i, 0)))).collect();
+        let resources = lopdf::dictionary! { "Font" => lopdf::dictionary! { "F1" => font }, "Shading" => shadings, "ProcSet" => vec![Object::Name(b"PDF".to_vec())] };
+        let pages = source.new_object_id();
+        let page = source.add_object(lopdf::dictionary! { "Type" => "Page", "Parent" => pages, "Resources" => resources, "Rotate" => 90 });
+        source.objects.insert(pages, Object::Dictionary(lopdf::dictionary! { "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1 }));
+        let catalog = source.add_object(lopdf::dictionary! { "Type" => "Catalog", "Pages" => pages });
+        source.trailer.set("Root", catalog);
+        let mut bytes = Vec::new();
+        source.save_to(&mut bytes).unwrap();
+        let eager = lopdf::Document::load_mem(&bytes).unwrap();
+        let lazy = LazyStructure::new(Arc::new(bytes), None).unwrap();
+        let converted = lazy.get_dictionary(page).unwrap();
+        let kept: Vec<&[u8]> = converted.get(b"Resources").unwrap().as_dict().unwrap().iter().map(|(k, _)| k.as_slice()).collect();
+        assert_eq!(kept, [b"Font"]);
+        assert_eq!(converted.get(b"Rotate").unwrap().as_i64().unwrap(), 90, "the rest of the page is converted");
+        let fonts = |doc: &dyn Structure| doc.get_page_fonts(page).unwrap().into_iter().map(|(name, font)| (name, font.clone())).collect::<Vec<_>>();
+        assert_eq!(format!("{:?}", fonts(&lazy)), format!("{:?}", fonts(&eager)));
+        assert!(!lazy.failed());
     }
 
     #[test]

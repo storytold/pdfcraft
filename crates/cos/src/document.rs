@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use crate::CosError;
 use crate::object::{Dict, MAX_DECODED, ObjRef, Object, Stream};
-use crate::parser::{EndstreamIndex, Lexer, is_whitespace, parse_indirect, parse_indirect_shared};
+use crate::parser::{EndstreamIndex, Lexer, SharedDicts, is_whitespace, parse_indirect, parse_indirect_shared, parse_indirect_sharing};
 
 mod objects;
 mod open;
@@ -49,6 +49,8 @@ pub struct Document {
     repair_log: Arc<Vec<String>>,
     cache: Arc<Mutex<HashMap<u32, Arc<Object>>>>,
     objstms: Arc<Mutex<HashMap<u32, Arc<ObjStm>>>>,
+    /// Large nested dictionaries parsed once for all their copies (see [`SharedDicts`]).
+    shared_dicts: Arc<SharedDicts>,
     stream_limit: usize,
     overlay: BTreeMap<u32, Slot>,
     next_num: u32,

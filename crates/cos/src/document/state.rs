@@ -197,6 +197,10 @@ pub(super) fn owned_bytes(object: &Object, data: &Arc<Vec<u8>>, depth: usize) ->
             s.dict.iter().fold(own, |n, (_, v)| n.saturating_add(owned_bytes(v, data, depth + 1)))
         }
         Object::Array(a) => a.iter().fold(0usize, |n, v| n.saturating_add(owned_bytes(v, data, depth + 1))),
+        // A dictionary held by other objects too is not this one's to free. The large ones that
+        // recur in many objects (`SharedDicts`) are bounded by that table's own cap, and walking
+        // one for each of its copies would make every cache check as slow as parsing it.
+        Object::Dict(d) if d.is_shared() => 0,
         Object::Dict(d) => d.iter().fold(0usize, |n, (_, v)| n.saturating_add(owned_bytes(v, data, depth + 1))),
         _ => 0,
     }
