@@ -1877,6 +1877,44 @@
 	Add text box	Adicionar caixa de texto
 	Add underline	Adicionar sublinhado
 	An embedded file has no AFRelationship	Um arquivo incorporado não possui AFRelationship
+	The document information doesn't identify the file as {}	As informações do documento não identificam o arquivo como {}
+	The metadata has no {}	Os metadados não têm {}
+	The document information and the metadata name different PDF/X versions	As informações do documento e os metadados indicam versões de PDF/X diferentes
+	The file trailer has no document ID	O trailer do arquivo não tem ID de documento
+	The document doesn't say whether it is trapped (Trapped)	O documento não informa se tem trapping (Trapped)
+	Trapped is {}, but it must be /True or /False	Trapped é {}, mas deve ser /True ou /False
+	The Trapped key and the metadata's pdf:Trapped disagree	A chave Trapped e o pdf:Trapped dos metadados não coincidem
+	There is no PDF/X output intent (GTS_PDFX)	Não há intenção de saída PDF/X (GTS_PDFX)
+	There is more than one PDF/X output intent	Há mais de uma intenção de saída PDF/X
+	The PDF/X output intent has no OutputConditionIdentifier	A intenção de saída PDF/X não tem OutputConditionIdentifier
+	The PDF/X output intent has no embedded profile (DestOutputProfile)	A intenção de saída PDF/X não tem perfil incorporado (DestOutputProfile)
+	The PDF/X output intent has neither an embedded profile nor a characterization in the ICC registry	A intenção de saída PDF/X não tem perfil incorporado nem uma caracterização do registro ICC
+	The output intent's profile isn't a valid ICC profile	O perfil da intenção de saída não é um perfil ICC válido
+	The output intent's profile isn't an output (printer) profile	O perfil da intenção de saída não é um perfil de saída (de impressora)
+	The output intent's profile describes {} colour, but PDF/X-1a needs a CMYK printing condition	O perfil da intenção de saída descreve cor {}, mas o PDF/X-1a precisa de uma condição de impressão CMYK
+	The output intent's profile describes {} colour; it must be gray, RGB or CMYK	O perfil da intenção de saída descreve cor {}; ele deve ser cinza, RGB ou CMYK
+	The output intent's profile has /N {}, which doesn't match its colour space	O perfil da intenção de saída tem /N {}, que não corresponde ao seu espaço de cor
+	The output intent's profile has no device-to-PCS transform (AToB1 or grayTRC)	O perfil da intenção de saída não tem transformação de dispositivo para PCS (AToB1 ou grayTRC)
+	The page has no valid MediaBox	A página não tem uma MediaBox válida
+	The page has neither a TrimBox nor an ArtBox	A página não tem TrimBox nem ArtBox
+	The page has both a TrimBox and an ArtBox	A página tem uma TrimBox e uma ArtBox
+	The {} extends beyond the BleedBox	A {} ultrapassa a BleedBox
+	The {} extends beyond the CropBox	A {} ultrapassa a CropBox
+	The {} extends beyond the MediaBox	A {} ultrapassa a MediaBox
+	A {} annotation lies within the BleedBox	Uma anotação {} está dentro da BleedBox
+	A PrinterMark annotation overlaps the TrimBox or ArtBox	Uma anotação PrinterMark se sobrepõe à TrimBox ou à ArtBox
+	A stream uses JBIG2 compression	Um fluxo usa compressão JBIG2
+	A form XObject refers to a page of another file (reference XObject)	Um XObject de formulário faz referência a uma página de outro arquivo (XObject de referência)
+	An image or form has OPI information	Uma imagem ou formulário tem informações OPI
+	A graphics state uses a soft mask	Um estado gráfico usa uma máscara suave
+	A graphics state sets an opacity below 1	Um estado gráfico define uma opacidade abaixo de 1
+	A graphics state uses the {} blend mode	Um estado gráfico usa o modo de mesclagem {}
+	An image has a soft mask	Uma imagem tem uma máscara suave
+	The {} colour space isn't allowed: PDF/X-1a allows only CMYK, gray and spot colour	O espaço de cor {} não é permitido: o PDF/X-1a permite apenas CMYK, cinza e cores especiais
+	Content uses DeviceRGB colour: PDF/X-1a allows only CMYK, gray and spot colour	O conteúdo usa cor DeviceRGB: o PDF/X-1a permite apenas CMYK, cinza e cores especiais
+	{} colour doesn't match the output intent's colour space	A cor {} não corresponde ao espaço de cor da intenção de saída
+	Content uses {} colour, which doesn't match the output intent's colour space	O conteúdo usa cor {}, que não corresponde ao espaço de cor da intenção de saída
+	Device-independent colour is used, so the output intent needs an embedded profile	É usada cor independente de dispositivo, então a intenção de saída precisa de um perfil incorporado
 	An image asks to be interpolated	Uma imagem solicita interpolação
 	An image has alternates or OPI information	Uma imagem contém alternativas ou informações de OPI
 	Button Style:	Estilo do botão:
@@ -1950,6 +1988,7 @@
 	open to see what it will include	abra para ver o que será incluído
 	Page {p} of {n}	Página {p} de {n}
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Planned	Planejado
 	Planned for milestone	Planejado para o marco
 	PostScript / EPS	PostScript / EPS
@@ -1970,6 +2009,7 @@
 	Save as PDF/A-3b	Salvar como PDF/A-3b
 	Save as PDF/UA	Salvar como PDF/UA
 	Save as PDF/X	Salvar como PDF/X
+	Verify PDF/X	Verificar PDF/X
 	Select a file for the stamp	Selecionar um arquivo para o carimbo
 	Select Icon	Selecionar ícone
 	Set bookmark destination	Definir destino do marcador

@@ -1866,11 +1866,13 @@
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft 可離線使用，不收集遙測資料，也不需要帳號。只有在您新增服務供應商後，才會使用雲端處理。
 	Double-click	滑鼠按兩下
 	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
 	Microsoft Word (.docx)	Microsoft Word（.docx）
 	Spreadsheet (.xlsx)	試算表（.xlsx）
 	Presentation (.pptx)	簡報（.pptx）
 	PostScript / EPS	PostScript / EPS
 	Save as PDF/X	另存新檔為 PDF/X
+	Verify PDF/X	驗證 PDF/X
 	Save as PDF/UA	另存新檔為 PDF/UA
 	JavaScript	JavaScript
 	pages	頁

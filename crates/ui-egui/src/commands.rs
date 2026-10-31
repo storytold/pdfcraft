@@ -228,6 +228,7 @@ impl PdfCraftApp {
                 self.pdfa.issues = None;
                 self.dialog = Some(Dialog::PdfA);
             }
+            "standards.pdfx" => self.open_pdfx(),
             "actions.wizard" | "actions.distribution" | "actions.optimize_scans" => {
                 self.wizard.editing = None;
                 match id {
