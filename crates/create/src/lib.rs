@@ -5,9 +5,11 @@
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream, serialize};
 
 mod extract;
+mod text_font;
 mod upright_image;
 pub use extract::{ExtractedImage, ImageExport, extract_images, image_file};
-use pdfcraft_fonts::{literal, win_ansi, wrap};
+use pdfcraft_fonts::wrap_with;
+use text_font::TextFont;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum CreateError {
@@ -725,14 +727,20 @@ fn turkish_code_page(bytes: &[u8]) -> bool {
 }
 
 /// Plain text set in Helvetica on pages of `page` size with 1-inch margins. Text Helvetica can't
-/// draw (outside Western European) is refused with [`CreateError::Invalid`] naming the line and
-/// the character; text PdfCraft generates goes through [`from_text_escaped`] instead.
+/// draw (outside Western European) is set in the bundled Inter face instead, whole, when Inter
+/// draws all of it (Latin, Greek and Cyrillic letters); anything else is refused with
+/// [`CreateError::Invalid`] naming the line and the first character neither face draws. Text
+/// PdfCraft generates goes through [`from_text_escaped`] instead.
 pub fn from_text(title: &str, text: &str, page: (f64, f64), font_size: f64) -> Result<Document, CreateError> {
-    // Helvetica in WinAnsiEncoding: text it can't draw is refused with where it is, not set as `?`.
-    if let Some((line, c)) = first_undrawable_line(text) {
-        return Err(CreateError::Invalid(pdfcraft_fonts::undrawable_message(&format!("the text (line {line})"), c)));
+    // Helvetica in WinAnsiEncoding draws it: set as it always was.
+    if first_undrawable_line(text).is_none() {
+        return set_text(title, text, page, font_size, false);
     }
-    set_text(title, text, page, font_size)
+    // Otherwise the bundled face, or a refusal with where it is, never `?`.
+    if let Some((line, c)) = text_font::first_missing(text) {
+        return Err(CreateError::Invalid(text_font::undrawable_message(line, c)));
+    }
+    set_text(title, &text.chars().map(text_font::drawn_as).collect::<String>(), page, font_size, true)
 }
 
 /// The line (1-based) and character of the first one Helvetica can't draw. Line breaks, tabs and
@@ -746,10 +754,15 @@ fn first_undrawable_line(text: &str) -> Option<(usize, char)> {
 pub const ESCAPED_NOTE: &str = "Characters Helvetica can't draw are written as [U+XXXX] code points.";
 
 /// [`from_text`] for text PdfCraft generates from documents (a comment summary, a compare
-/// report), which may quote any language. Each character Helvetica can't draw is written as
-/// `[U+XXXX]` instead of being refused or set as `?`, so nothing is lost, and the first line says
-/// so ([`ESCAPED_NOTE`]). Returns the document and how many characters were written that way.
+/// report), which may quote any language. Text the bundled Inter face draws all of is set as
+/// [`from_text`] sets it, nothing escaped. Otherwise each character Helvetica can't draw is
+/// written as `[U+XXXX]` instead of being refused or set as `?`, so nothing is lost, and the first
+/// line says so ([`ESCAPED_NOTE`]). Returns the document and how many characters were written
+/// that way.
 pub fn from_text_escaped(title: &str, text: &str, page: (f64, f64), font_size: f64) -> Result<(Document, usize), CreateError> {
+    if first_undrawable_line(text).is_some() && text_font::first_missing(text).is_none() {
+        return Ok((set_text(title, &text.chars().map(text_font::drawn_as).collect::<String>(), page, font_size, true)?, 0));
+    }
     let mut escaped = 0usize;
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -764,29 +777,25 @@ pub fn from_text_escaped(title: &str, text: &str, page: (f64, f64), font_size: f
         out = format!("{ESCAPED_NOTE}\n\n{out}");
     }
     // The title is a text string in /Info, which holds any character.
-    Ok((set_text(title, &out, page, font_size)?, escaped))
+    Ok((set_text(title, &out, page, font_size, false)?, escaped))
 }
 
-fn set_text(title: &str, text: &str, page: (f64, f64), font_size: f64) -> Result<Document, CreateError> {
+/// `text` set on pages of `page` size, in Helvetica or, with `inter`, the bundled Inter face.
+fn set_text(title: &str, text: &str, page: (f64, f64), font_size: f64, inter: bool) -> Result<Document, CreateError> {
     let size = if font_size.is_finite() && font_size > 0.0 { font_size.clamp(4.0, 72.0) } else { 11.0 };
     let (w, h) = page;
     let margin = 72.0;
     let line_h = size * 1.25;
     let width = (w - 2.0 * margin).max(36.0);
+    let mut doc = Document::new_empty();
+    let font = if inter { TextFont::inter(&mut doc)? } else { TextFont::helvetica(&mut doc) };
     let lines: Vec<String> = text
         .replace("\r\n", "\n")
         .replace('\t', "    ")
         .split('\u{c}')
-        .flat_map(|p| wrap(p, size, width).into_iter().chain(std::iter::once("\u{c}".to_string())))
+        .flat_map(|p| wrap_with(p, size, width, |s, size| font.width(s, size)).into_iter().chain(std::iter::once("\u{c}".to_string())))
         .collect();
     let per_page = (((h - 2.0 * margin) / line_h).floor() as usize).max(1);
-    let mut doc = Document::new_empty();
-    let mut font = Dict::new();
-    font.set(b"Type".to_vec(), Object::name("Font"));
-    font.set(b"Subtype".to_vec(), Object::name("Type1"));
-    font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
-    font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
-    let fr = doc.add(font);
     let mut page_lines: Vec<Vec<String>> = vec![Vec::new()];
     for l in lines.iter().take(lines.len().saturating_sub(1)) {
         if l == "\u{c}" || page_lines.last().is_some_and(|p| p.len() >= per_page) {
@@ -802,12 +811,12 @@ fn set_text(title: &str, text: &str, page: (f64, f64), font_size: f64) -> Result
     for lines in page_lines {
         let mut c = format!("BT /F1 {size} Tf {line_h:.3} TL {margin} {:.3} Td\n", h - margin - size).into_bytes();
         for l in lines {
-            c.extend(literal(&win_ansi(&l)));
+            c.extend(font.show(&l)?);
             c.extend_from_slice(b" Tj T*\n");
         }
         c.extend_from_slice(b"ET\n");
         let mut fonts = Dict::new();
-        fonts.set(b"F1".to_vec(), Object::Ref(fr));
+        fonts.set(b"F1".to_vec(), Object::Ref(font.font()));
         let mut res = Dict::new();
         res.set(b"Font".to_vec(), Object::Dict(fonts));
         add_page(&mut doc, w, h, res, Some(c))?;

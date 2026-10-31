@@ -142,7 +142,7 @@ fn text_keeps_leading_spaces_and_tabs() {
 fn text_helvetica_cannot_draw_is_refused_or_escaped() {
     let err = from_text("notes", "Café —\tok\r\n\u{c}第二页 notes", LETTER, 11.0).unwrap_err();
     let CreateError::Invalid(msg) = &err else { panic!("{err:?}") };
-    assert!(msg.contains("(line 2)") && msg.contains("\"第\" (U+7B2C)") && msg.contains("Western European"), "{msg}");
+    assert!(msg.contains("(line 2)") && msg.contains("\"第\" (U+7B2C)") && msg.contains("Cyrillic letters"), "{msg}");
     // Western European text, tabs, CRLF and form feeds included, still converts.
     from_text("notes", "Café —\tok\r\n\u{c}Seite zwei: Grüße", LETTER, 11.0).unwrap();
     let (doc, escaped) = from_text_escaped("Summary of Comments on 报告.pdf", "Comment: 签名 ok\nPage 2", LETTER, 11.0).unwrap();
@@ -160,6 +160,99 @@ fn text_helvetica_cannot_draw_is_refused_or_escaped() {
     let p = pages(&doc);
     let Object::Stream(s) = &*doc.resolve(p[0].get(b"Contents").unwrap()) else { panic!() };
     assert!(!String::from_utf8_lossy(&s.decoded().unwrap()).contains("U+XXXX"));
+}
+
+/// The decoded content of each page.
+fn page_contents(doc: &Document) -> Vec<String> {
+    pages(doc)
+        .iter()
+        .map(|p| {
+            let Object::Stream(s) = &*doc.resolve(p.get(b"Contents").unwrap()) else { panic!("no content stream") };
+            String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+        })
+        .collect()
+}
+
+/// The text each page shows, read back through its font's `ToUnicode`, one line per `Tj`.
+fn page_text(doc: &Document, page: &Dict) -> Vec<String> {
+    let res = doc.resolve(page.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let fonts = doc.resolve(res.get(b"Font").unwrap()).as_dict().cloned().unwrap();
+    let font = doc.resolve(fonts.get(b"F1").unwrap()).as_dict().cloned().unwrap();
+    let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(doc, &font);
+    let Object::Stream(s) = &*doc.resolve(page.get(b"Contents").unwrap()) else { panic!("no content stream") };
+    let content = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+    content
+        .split("> Tj")
+        .filter_map(|part| part.rsplit_once('<').map(|(_, hex)| hex))
+        .map(|hex| {
+            let bytes: Vec<u8> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect();
+            metrics.decode(&bytes)
+        })
+        .collect()
+}
+
+const PANGRAM: &str = "Жълтата дюля беше щастлива, че пухът, който цъфна, замръзна като гьон.";
+
+/// Cyrillic text was refused (Helvetica can't draw it). Text with letters Helvetica lacks is set
+/// in the bundled Inter face when that draws all of it, its Latin lines too, with Helvetica's
+/// page, margins, line height, wrapping, tabs and form feeds; it reads back as typed.
+#[test]
+fn text_with_cyrillic_is_set_in_the_bundled_face() {
+    let long: String = (0..120).map(|i| format!("Ред {i}: {PANGRAM}\n")).collect();
+    let text = format!("{long}\tТаб, „кавички“, № 5 и Ελληνικά\u{c}Нова страница");
+    let doc = reopen(&from_text("бележки", &text, LETTER, 11.0).unwrap());
+    let fonts: Vec<_> = doc.scan_objects().filter_map(|(_, o)| o.as_dict().and_then(|d| d.name(b"BaseFont").map(<[u8]>::to_vec))).collect();
+    assert!(fonts.iter().any(|f| f == b"Inter") && !fonts.iter().any(|f| f == b"Helvetica"), "{fonts:?}");
+    let programs = doc.scan_objects().filter(|(_, o)| matches!(o.as_ref(), Object::Stream(s) if s.dict.get(b"PCFullFont").is_some())).count();
+    assert_eq!(programs, 1, "one copy of the face for every page");
+    let p = pages(&doc);
+    let contents = page_contents(&doc);
+    assert!(p.len() >= 4, "{} pages", p.len());
+    assert_eq!(media(&p[0]), [0.0, 0.0, 612.0, 792.0]);
+    // The same page set-up as Helvetica's: 11 pt, 1.25 line height, 1-inch margins.
+    assert!(contents[0].starts_with("BT /F1 11 Tf 13.750 TL 72 709.000 Td\n<"), "{}", contents[0]);
+    assert!(contents.iter().all(|c| !c.contains('?') && !c.contains("[U+")));
+    // Each line fits between the margins in Inter's widths, and long lines wrap.
+    let lines: Vec<String> = p.iter().flat_map(|page| page_text(&doc, page)).collect();
+    assert!(lines.len() > 120, "{} lines", lines.len());
+    assert!(lines.iter().all(|l| pdfcraft_fonts::inter_width(l, 11.0) <= 612.0 - 144.0 + 1e-6), "{lines:?}");
+    let joined = lines.join(" ");
+    assert!(joined.contains("Ред 0: Жълтата дюля") && joined.contains("Ред 119:"), "{joined}");
+    assert!(joined.contains("    Таб, „кавички“, № 5 и Ελληνικά"), "a tab is four spaces: {joined}");
+    assert_eq!(page_text(&doc, p.last().unwrap()), ["Нова страница"], "a form feed starts a page");
+    // As many lines on a page as in Helvetica.
+    let latin: String = (0..120).map(|i| format!("Row {i}\n")).collect();
+    let cyrillic: String = (0..120).map(|i| format!("Ред {i}\n")).collect();
+    let per_page =
+        |text: &str| page_contents(&from_text("t", text, LETTER, 11.0).unwrap()).iter().map(|c| c.matches("Tj T*").count()).collect::<Vec<_>>();
+    assert_eq!(per_page(&cyrillic), per_page(&latin));
+}
+
+/// Text the bundled face can't draw all of keeps the Helvetica way: refused, naming the first
+/// character neither face draws, or, for text PdfCraft generates, escaped as before. Text it draws
+/// all of is set in it with nothing escaped, and Western European text stays in Helvetica.
+#[test]
+fn text_the_bundled_face_cannot_draw_is_refused_or_escaped_as_before() {
+    let err = from_text("t", "Бележка\nПодпис: 签名", LETTER, 11.0).unwrap_err();
+    let CreateError::Invalid(msg) = &err else { panic!("{err:?}") };
+    assert!(msg.contains("(line 2)") && msg.contains("\"签\" (U+7B7E)"), "{msg}");
+    let (doc, escaped) = from_text_escaped("r", "Бележка: 签名", LETTER, 11.0).unwrap();
+    assert_eq!(escaped, 9, "every character Helvetica can't draw, as before");
+    let shown = page_contents(&reopen(&doc)).join("\n");
+    assert!(shown.contains(&format!("({ESCAPED_NOTE}) Tj")) && shown.contains("([U+0411][U+0435]"), "{shown}");
+    let (doc, escaped) = from_text_escaped("Обобщение на коментарите", &format!("Коментар: {PANGRAM}\nPage 2"), LETTER, 11.0).unwrap();
+    assert_eq!(escaped, 0);
+    let doc = reopen(&doc);
+    let shown = page_contents(&doc).join("\n");
+    assert!(!shown.contains("[U+") && !shown.contains(ESCAPED_NOTE), "{shown}");
+    assert_eq!(page_text(&doc, &pages(&doc)[0]), [format!("Коментар: {PANGRAM}"), "Page 2".to_string()]);
+    // A soft hyphen, which Inter lacks, is drawn as the hyphen Helvetica draws for it.
+    let doc = reopen(&from_text("t", "при\u{ad}мер", LETTER, 11.0).unwrap());
+    assert_eq!(page_text(&doc, &pages(&doc)[0]), ["при-мер"]);
+    // Western European text is still set in Helvetica, exactly as before.
+    let doc = from_text("t", "Café 5€ ™", LETTER, 11.0).unwrap();
+    let fonts: Vec<_> = doc.scan_objects().filter_map(|(_, o)| o.as_dict().and_then(|d| d.name(b"BaseFont").map(<[u8]>::to_vec))).collect();
+    assert_eq!(fonts, [b"Helvetica".to_vec()]);
 }
 
 fn image_of(doc: &Document, page: usize) -> Dict {

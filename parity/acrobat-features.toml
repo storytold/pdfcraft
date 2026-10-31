@@ -6920,8 +6920,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["create.file"]
 tools = ["doc_create"]
-evidence = ["crates/create/src/tests.rs::text_is_wrapped_and_paginated", "crates/automation/tests/it/automation.rs::creating_and_reducing_through_tools"]
-notes = "Helvetica 11 pt on US Letter; form feeds start pages"
+evidence = ["crates/create/src/tests.rs::text_is_wrapped_and_paginated", "crates/automation/tests/it/automation.rs::creating_and_reducing_through_tools", "crates/create/src/tests.rs::text_with_cyrillic_is_set_in_the_bundled_face", "crates/engine/src/tests.rs::cyrillic_text_files_and_comment_summaries_read_back_as_typed"]
+notes = "Helvetica 11 pt on US Letter; text with letters Helvetica can't draw (Cyrillic, Greek, Central European) is set whole in the bundled Inter face, embedded once; text Inter can't draw either (CJK, Arabic, Hebrew, Thai) is refused, naming the line and character; form feeds start pages"
 
 [[feature]]
 id = "create.from-markdown"
