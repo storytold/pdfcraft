@@ -486,6 +486,31 @@ fn first_page_section_follows_annex_f(bytes: &[u8], doc: &Document, lin: &Dict, 
     assert_eq!(String::from_utf8_lossy(bytes).contains("/ObjStm"), streams);
 }
 
+/// Each page's entry in the page offset hint table: its run of objects, contiguous in the file
+/// from the page object, as long as the table says, and the shared groups it lists in range.
+fn page_runs_follow_their_entries(doc: &Document, hint: &Hints, page_refs: &[ObjRef], len: &std::collections::BTreeMap<u32, (u64, u64)>) {
+    let run = |first: u32, count: u64| -> u64 {
+        (0..count as u32).map(|k| len.get(&(first + k)).unwrap_or_else(|| panic!("object {} is in the run", first + k))).map(|(_, l)| l).sum()
+    };
+    for (i, (page, p)) in page_refs.iter().zip(&hint.pages).enumerate() {
+        assert!(p.objects >= 1);
+        assert_eq!(p.length, run(page.num, p.objects), "page {} length", i + 1);
+        // The run is contiguous in the file, starting with the page object.
+        let mut at = offset(doc, page.num);
+        for k in 0..p.objects as u32 {
+            assert_eq!(len[&(page.num + k)].0, at, "page {} object {k} follows the previous one", i + 1);
+            at += len[&(page.num + k)].1;
+        }
+        assert_eq!((p.content_offset, p.content_length), (0, p.length), "the page run stands for its content");
+        if i == 0 {
+            assert!(p.shared.is_empty(), "the first page lists no shared objects (F.4.1)");
+        }
+        for &id in &p.shared {
+            assert!(id < hint.shared_lengths.len() as u64);
+        }
+    }
+}
+
 #[test]
 fn hint_tables_describe_where_every_page_and_shared_object_is() {
     for streams in LAYOUTS {
@@ -503,23 +528,7 @@ fn hint_tables_describe_where_every_page_and_shared_object_is() {
             };
             // Offsets leave the hint stream out (F.4).
             assert_eq!(hint.first_page_offset + hint_len, offset(&doc, page_refs[0].num));
-            for (i, (page, p)) in page_refs.iter().zip(&hint.pages).enumerate() {
-                assert!(p.objects >= 1);
-                assert_eq!(p.length, run(page.num, p.objects), "page {} length", i + 1);
-                // The run is contiguous in the file, starting with the page object.
-                let mut at = offset(&doc, page.num);
-                for k in 0..p.objects as u32 {
-                    assert_eq!(len[&(page.num + k)].0, at, "page {} object {k} follows the previous one", i + 1);
-                    at += len[&(page.num + k)].1;
-                }
-                assert_eq!((p.content_offset, p.content_length), (0, p.length), "the page run stands for its content");
-                if i == 0 {
-                    assert!(p.shared.is_empty(), "the first page lists no shared objects (F.4.1)");
-                }
-                for &id in &p.shared {
-                    assert!(id < hint.shared_lengths.len() as u64);
-                }
-            }
+            page_runs_follow_their_entries(&doc, &hint, &page_refs, &len);
             // Shared object groups: the first page's objects from its page object, then part 8.
             let n_first = hint.shared_first_page;
             assert_eq!(n_first, hint.pages[0].objects, "every first-page object is a group");
