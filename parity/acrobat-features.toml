@@ -3728,7 +3728,7 @@ status = "shipped"
 commands = ["comment.callout"]
 tools = ["comment_add"]
 evidence = ["crates/annot/src/tests.rs::polygons_clouds_connected_lines_callouts_and_carets_are_drawn", "crates/annot/src/tests.rs::editing_a_callout_refits_the_box_and_keeps_the_leader", "crates/ui-egui/tests/it/comments.rs::polygons_clouds_connected_lines_callouts_and_inserted_text", "crates/automation/tests/it/automation.rs::drawing_comments_through_tools"]
-notes = "drag from the target to the box; resizing re-attaches the leader, and so does editing the text"
+notes = "drag from the target to the box; resizing re-attaches the leader, and so does editing the text. A callout added on a page with /Rotate 90, 180 or 270 is drawn upright as displayed; one saved without /PCTextRotate keeps its previous look. The arrow point and knee are not yet separate handles."
 
 [[feature]]
 id = "comment.pencil"
