@@ -207,7 +207,7 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
                 return invalid(format!("{:?} takes at most {max} characters", f.name));
             }
             // Keystroke (on commit) and Validate, as Acrobat runs them before accepting a value.
-            let t = &af::keystroke(&f.actions.format, &f.name, t).map_err(FormError::Format)?;
+            let t = &f.actions.keystroke(&f.name, t).map_err(FormError::Format)?;
             af::validate(&f.actions.validate, t).map_err(FormError::Invalid)?;
             let t = &scripting::accept(doc, f, t, scripts)?;
             let shadow = t.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");

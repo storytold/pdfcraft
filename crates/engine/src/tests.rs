@@ -8883,6 +8883,8 @@ fn exporting_to_word_keeps_the_page_background() {
     assert!(docx.windows(b"word/settings.xml".len()).any(|w| w == b"word/settings.xml"), "Word is told to show the page colour");
 }
 
+/// A table of contents' entries with dotted leaders export to an office document as paragraphs, in
+/// reading order, not as a table.
 #[test]
 fn exporting_office_keeps_dotted_leader_entries_as_paragraphs() {
     let mut content = String::new();
@@ -8905,7 +8907,8 @@ fn exporting_office_keeps_dotted_leader_entries_as_paragraphs() {
 }
 
 /// A date typed in another of an XFA date field's edit patterns is kept in its first: yymmdd and
-/// yyyymd are rewritten as yyyymmdd, a date none of them reads is refused, and the data holds the date.
+/// yyyymd are rewritten as yyyymmdd, and the data holds the date. Text none of them reads is kept
+/// as typed, in the field and the data, as another viewer keeps it.
 #[test]
 fn a_date_typed_by_another_of_an_xfa_fields_edit_patterns_is_kept_in_its_first() {
     let mut s = Session::new();
@@ -8917,18 +8920,21 @@ fn a_date_typed_by_another_of_an_xfa_fields_edit_patterns_is_kept_in_its_first()
     assert_eq!(value(&s), ["20261018"]);
     s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Text("2026118".into()) }).expect("so is yyyymd");
     assert_eq!(value(&s), ["20261108"]);
-    let refused = s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Text("2618".into()) });
-    assert!(refused.is_err_and(|e| e.to_string().contains("yyyymmdd")), "none of its patterns reads it");
-    assert_eq!(value(&s), ["20261108"]);
     // The data holds the date.
-    let cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
-    let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).expect("a datasets packet");
-    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].leave[0]")), Some("2026-11-08"));
+    let data_of = |s: &Session| {
+        let cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+        let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).expect("a datasets packet");
+        data.text_at(&pdfcraft_xfa::som_to_path("form[0].leave[0]")).map(str::to_string)
+    };
+    assert_eq!(data_of(&s).as_deref(), Some("2026-11-08"));
+    s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Text("2618".into()) }).expect("kept as typed");
+    assert_eq!(value(&s), ["2618"]);
+    assert_eq!(data_of(&s).as_deref(), Some("2618"));
 }
 
-/// A date the field's own scripts refuse is not tried again in another of an XFA date field's
-/// patterns: only a date its format refuses is, which happens before any script runs, so the
-/// scripts run once. This validate script counts its runs in `name` and accepts on its second.
+/// A date typed in another of an XFA date field's patterns is rewritten before any of the field's
+/// scripts run, so they run once, and a date they refuse stays refused. This validate script counts
+/// its runs in `name` and accepts on its second.
 #[test]
 fn a_date_its_validate_script_refuses_is_not_tried_again() {
     let mut s = Session::new();
@@ -8938,7 +8944,7 @@ fn a_date_its_validate_script_refuses_is_not_tried_again() {
     let script = Some("var n = Number(getField('name').value || 0) + 1; getField('name').value = String(n); event.rc = n >= 2;".to_string());
     s.apply(id, Edit::SetFieldScript { name: "leave".into(), event: "validate".into(), script }).unwrap();
     let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap().value.clone();
-    // Its format reads 18OCT26, and so does its DDMMMYY pattern.
+    // Its DDMMMYY pattern reads 18OCT26, which its format would read more loosely too.
     let refused = s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Text("18OCT26".into()) });
     assert!(refused.is_err(), "the validate script refused it, once");
     assert!(value(&s, "name").is_empty(), "nothing the refused run changed is kept: {:?}", value(&s, "name"));

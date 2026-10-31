@@ -85,6 +85,7 @@ be measured exponentially often in their nesting. A measurement budget backs thi
   | `/PCSom` | generated fields | the field's SOM path, so values go back to the data |
   | `/PCXfaLayout` | AcroForm | what laying out produced, so a saved form is not laid out again |
   | `/PCXfaOverrides` | AcroForm | `<< /Presence << /som (hidden) … >> /Access << /som (readOnly) … >> >>`: presence and access scripts set, by SOM path (instance 0 of a repeating subform stands for all); applied to the template before every layout, so undo, save and reopen keep them. Adobe's viewers draw from the XFA packets and don't read it; at most 10 000 entries are read or written |
+  | `/PCXfaDate` | generated date fields | `true`: text the field's date pattern doesn't read is kept, and shown, as typed rather than refused, as an XFA form keeps it; the forms layer reads it |
   | `/PCXfaNode` | generated fields above a signature field | `true`: the field names a step of the signature field's SOM path; a new layout replaces it with the fields it holds |
   | `/PCXfaClick` | generated push buttons | `true`: the template has a click script for this button. Such buttons carry no `/A`: XFA JavaScript is not Acrobat JavaScript, so it is never written as a `/S /JavaScript` action other viewers would run. PdfCraft finds the script by the field's `/PCSom` |
 

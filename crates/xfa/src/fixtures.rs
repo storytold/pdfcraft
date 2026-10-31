@@ -565,6 +565,25 @@ pub fn date_alternatives_template() -> String {
     .to_string()
 }
 
+/// Date fields with each kind of picture: `display` a display picture only, `edit` an edit and a
+/// display picture, `either` an edit picture of two alternatives, `bare` none.
+pub fn date_pictures_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb" locale="en_US">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="display" w="2in" h="0.3in"><ui><dateTimeEdit/></ui><value><date/></value><format><picture>date{MM/DD/YYYY}</picture></format></field>
+ <field name="edit" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{MM/DD/YYYY}</picture></ui><value><date/></value><format><picture>date{MM/DD/YYYY}</picture></format></field>
+ <field name="either" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYYMMDD}|date{DDMMMYY}</picture></ui><value><date/></value><format><picture>date{YYYYMMDD}</picture></format></field>
+ <field name="bare" w="2in" h="0.3in"><ui><dateTimeEdit/></ui><value><date/></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
 /// A form of `sections` sections of `rows` rows, each row with a calculated total (half in
 /// JavaScript, half in FormCalc) and a section sum over its rows: 2 × sections × rows + sections
 /// calculate scripts, every one reading values the earlier ones settled.

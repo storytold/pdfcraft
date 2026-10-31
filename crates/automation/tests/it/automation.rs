@@ -7763,6 +7763,46 @@ fn links_in_xfa_rich_text_are_listed_through_tools() {
     assert_eq!(urls(&mut a, doc), ["mailto:forms@example.com"], "one link after a save and a fresh open, not two");
 }
 
+/// What a date typed into an XFA date field leaves in the form's data, for each kind of picture:
+/// what another viewer kept for the same typing on a synthetic form. A date one of the edit
+/// picture's patterns reads is kept as an ISO date; anything else, ISO text included, as typed,
+/// and nothing is refused.
+#[test]
+fn xfa_date_fields_keep_typed_dates_as_another_viewer_does() {
+    let dir = workdir("xfa-typed-dates");
+    std::fs::write(dir.join("dates.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::date_pictures_template())).unwrap();
+    let mut a = auto(&dir);
+    // typed, then the data for display, edit, either and bare.
+    let seen = [
+        ("2016-10-18", ["2016-10-18", "2016-10-18", "2016-10-18", "2016-10-18"]),
+        ("10/18/2016", ["10/18/2016", "2016-10-18", "10/18/2016", "10/18/2016"]),
+        ("20161018", ["20161018", "20161018", "2016-10-18", "20161018"]),
+        ("18OCT16", ["18OCT16", "18OCT16", "2016-10-18", "18OCT16"]),
+        ("26 10 18", ["26 10 18", "26 10 18", "26 10 18", "26 10 18"]),
+        ("xyz", ["xyz", "xyz", "xyz", "xyz"]),
+    ];
+    for (typed, kept) in seen {
+        for (field, want) in ["display", "edit", "either", "bare"].into_iter().zip(kept) {
+            let doc = ok(&mut a, "doc_open", json!({ "path": "dates.pdf" }))["doc"].as_u64().unwrap();
+            ok(&mut a, "form_fill", json!({ "doc": doc, "values": { field: typed } }));
+            ok(&mut a, "doc_export_data", json!({ "doc": doc, "path": "data.xml", "what": "fields" }));
+            let xml = std::fs::read_to_string(dir.join("data.xml")).unwrap();
+            assert!(xml.contains(&format!("<{field}>{want}</{field}>")), "{typed} in {field}: want {want}, got {xml}");
+            ok(&mut a, "doc_close", json!({ "doc": doc, "discard_changes": true }));
+        }
+    }
+    // What the fields show: an ISO date in the field's own date pattern (MM/DD/YYYY, YYYYMMDD),
+    // read from the appearances flattening draws into the page.
+    let doc = ok(&mut a, "doc_open", json!({ "path": "dates.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "edit": "2016-10-18", "either": "2016-10-18" } }));
+    ok(&mut a, "doc_flatten", json!({ "doc": doc, "comments": false, "fields": true }));
+    let text = ok(&mut a, "text_extract", json!({ "doc": doc }))["pages"][0]["text"].as_str().unwrap().to_string();
+    assert!(text.contains("10/18/2016") && text.contains("20161018") && !text.contains("2016-10-18"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A dynamic XFA form opens laid out from its template through the tools, renders, takes values
+/// and saves them.
 #[test]
 fn dynamic_xfa_forms_open_render_fill_and_save_through_tools() {
     let dir = workdir("xfa");

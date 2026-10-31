@@ -31,6 +31,9 @@ pub const LAYOUT_KEY: &[u8] = b"PCXfaLayout";
 /// PDF action (the script is XFA's, not Acrobat JavaScript); PdfCraft runs the script by the
 /// field's SOM path.
 pub const CLICK_KEY: &[u8] = b"PCXfaClick";
+/// Private key on generated date fields: text the date pattern doesn't read is kept, and shown,
+/// as typed, as an XFA form keeps it (the forms layer reads this key).
+pub const DATE_KEY: &[u8] = b"PCXfaDate";
 /// Private key on the fields generated to name a signature field by its SOM path, one for each
 /// step of the path above it (`form1[0]`, then `page1[0]`): a new layout replaces them with the
 /// fields they hold.
@@ -204,6 +207,7 @@ impl Emitter<'_> {
                     d.set(b"DV".to_vec(), Object::String(PdfString::text(v)));
                 }
                 if let WidgetKind::Date(pattern) = &w.kind {
+                    d.set(DATE_KEY.to_vec(), Object::Bool(true));
                     let mut aa = Dict::new();
                     aa.set(b"F".to_vec(), js_action(&format!("AFDate_FormatEx(\"{pattern}\");")));
                     aa.set(b"K".to_vec(), js_action(&format!("AFDate_KeystrokeEx(\"{pattern}\");")));
