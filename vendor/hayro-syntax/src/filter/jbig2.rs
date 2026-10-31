@@ -56,14 +56,15 @@ fn decode_for_page<D: hayro_jbig2::Decoder>(image: &hayro_jbig2::Image<'_>, deco
     image.decode(decoder).ok()
 }
 
-/// Whether the page has nothing left for another image, which then isn't read at all.
+/// PdfCraft patch (31): whether the page has nothing left for another image, which then isn't read
+/// at all.
 #[cfg(feature = "std")]
-fn page_work_spent() -> bool {
+pub fn page_jbig2_work_spent() -> bool {
     PAGE_WORK_LEFT.with(core::cell::Cell::get) == 0
 }
 
 #[cfg(not(feature = "std"))]
-fn page_work_spent() -> bool {
+pub fn page_jbig2_work_spent() -> bool {
     false
 }
 
@@ -76,7 +77,7 @@ pub(crate) fn decode(
     params: &Dict<'_>,
     image_params: &ImageDecodeParams,
 ) -> Option<FilterResult<'static>> {
-    if page_work_spent() {
+    if page_jbig2_work_spent() {
         return None;
     }
 

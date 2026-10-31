@@ -755,7 +755,15 @@ fn decode_context<'a>(
     let decoded = obj
         .stream
         .decoded_image(&decode_params)
-        .map_err(|_| (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure))
+        .map_err(|_| {
+            // PdfCraft patch (73): left out for the page's allowance, it is content the page's
+            // budget skipped, which is reported, and no failure of this image.
+            (obj.warning_sink)(if hayro_syntax::page_jbig2_work_spent() {
+                InterpreterWarning::ContentTruncated
+            } else {
+                InterpreterWarning::ImageDecodeFailure
+            });
+        })
         .ok()?;
 
     let (mut scale_x, mut scale_y) = (1.0, 1.0);

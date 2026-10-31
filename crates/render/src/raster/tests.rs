@@ -3657,7 +3657,9 @@ fn the_jbig2_images_of_a_page_share_one_allowance() {
     assert_eq!(drawn(one), (true, false), "enough for one");
     assert_eq!(drawn(2 * one - 1), (true, false), "a step short of both");
     assert_eq!(drawn(2 * one), (true, true), "enough for both");
-    let [_, second] = pages(one);
+    let [first, second] = pages(one);
+    assert!(first.warnings.contains(&RenderWarning::ContentTruncated), "the page says it left something out: {:?}", first.warnings);
+    assert!(pages(2 * one)[0].warnings.is_empty(), "and only then");
     assert!(black(&second, 10), "the next page has its own allowance, though this one spent all of it");
     let usual = PageRenderer::new(pdf.clone(), RenderConfig::default()).render(RenderRequest {
         page: 0,

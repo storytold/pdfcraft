@@ -58,7 +58,8 @@ pub fn decode_jbig2_within(data: &[u8], globals: Option<&[u8]>, columns: u32, ro
         return Err(FilterError::LimitExceeded(max));
     }
     let mut out = Rows::new(width, height, false);
-    image.decode_within(&mut out, work).map_err(|e| corrupt(e.to_string()))?;
+    // Stopped by what was left, it isn't a damaged image, whatever the decoder calls it.
+    image.decode_within(&mut out, work).map_err(|e| if *work == 0 { spent() } else { corrupt(e.to_string()) })?;
     Ok(out.out)
 }
 
@@ -159,7 +160,7 @@ mod tests {
         decode_jbig2_within(&data, None, w, h, usize::MAX, &mut work).unwrap();
         assert_eq!(work, 7, "only what it took");
         let mut work = cost - 1;
-        assert!(matches!(decode_jbig2_within(&data, None, w, h, usize::MAX, &mut work), Err(FilterError::Corrupt { .. })), "a step short");
+        assert!(matches!(decode_jbig2_within(&data, None, w, h, usize::MAX, &mut work), Err(FilterError::Unsupported(_))), "a step short");
         assert_eq!(work, 0, "spends all that was left");
         // Nothing left: not read at all, so this garbage isn't reported as garbage.
         assert!(matches!(decode_jbig2_within(b"garbage", None, w, h, usize::MAX, &mut work), Err(FilterError::Unsupported(_))));

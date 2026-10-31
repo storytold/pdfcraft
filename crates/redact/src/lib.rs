@@ -70,6 +70,10 @@ pub enum RedactError {
     /// could not be shown complete.
     #[error("the document's objects nest too deeply to remove hidden information completely; the operation was refused")]
     TooDeep,
+    /// Past what one redaction may decode an image can't be cleared, and removing it whole would
+    /// take what no mark covers with it, unreported.
+    #[error("the images under these marks are more than one redaction can decode, so nothing was changed; redact fewer pages at a time")]
+    ImagesPastAllowance,
     #[error(transparent)]
     Edit(#[from] pdfcraft_edit::EditError),
     #[error(transparent)]
@@ -377,6 +381,12 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
 
 /// [`apply`] without the copy: an error can leave `doc` part redacted.
 fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, RedactError> {
+    let images = pdfcraft_cos::ImageBudget::new(doc);
+    apply_within(doc, pages, images)
+}
+
+/// [`apply_to`], its images decoded within `images`.
+fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_cos::ImageBudget) -> Result<Report, RedactError> {
     let (all_marks, unreadable) = marks_checked(doc);
     // A mark with no readable area is not applied, and applying the others would look complete:
     // refuse before anything changes. Only the pages being applied count.
@@ -412,7 +422,6 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
     let widget_owner: Vec<(ObjRef, ObjRef)> =
         pdfcraft_forms::fields(doc).into_iter().flat_map(|f| f.widgets.iter().map(|w| (w.obj, f.obj)).collect::<Vec<_>>()).collect();
     let listed_before = listed_annotations(doc);
-    let images = pdfcraft_cos::ImageBudget::new(doc);
     let mut applying = Applying {
         report,
         doomed_fields: Vec::new(),
@@ -427,6 +436,9 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
         let rects: Vec<[f64; 4]> = page_marks.iter().flat_map(|m| m.rects.iter().copied()).collect();
         redact_page_content(doc, &mut applying, pi, &page, &rects)?;
         remove_page_annotations(doc, &mut applying, &page, &rects, page_marks)?;
+    }
+    if applying.images.refused() > 0 {
+        return Err(RedactError::ImagesPastAllowance);
     }
     let Applying { mut report, doomed_fields, doomed_xobjects, retired_properties, mut removed_everywhere, .. } = applying;
 

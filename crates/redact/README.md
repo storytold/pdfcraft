@@ -24,8 +24,7 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   is Flate, and refers to no globals: when no other image uses them, they leave the file with the
   original on the full rewrite; when one does, they stay as they are, and may hold the shapes of
   marks under the area (not where they were). Codecs redaction doesn't decode (DCT, JPX) are
-  removed whole (fail-closed), and so is a JBIG2 image past what one redaction may decode
-  (`pdfcraft_cos::ImageBudget`), one whose page isn't its size (the renderer
+  removed whole (fail-closed), and so is a JBIG2 image whose page isn't its size (the renderer
   draws the whole page into the image, so the rows cleared wouldn't be the ones shown) or of more
   than one bit or component, and Group 3 on bytes (`/K` 0 or more, `/EncodedByteAlign`): PdfCraft's
   renderer draws some of its layouts (the fill ending each end-of-line code on a byte) as other
@@ -34,6 +33,9 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   and a byte per row, plus 4 KiB (ASCIIHex text broken into lines under Flate is a little over
   twice; for a fax image's code, about a byte per pixel), are removed whole;
   cleared copies drop `/Alternates` so alternate pixels cannot survive;
+  A run that would decode more JBIG2 than one redaction may (`pdfcraft_cos::ImageBudget`) is refused
+  and changes nothing: such an image can't be cleared, and removing it whole would take what no mark
+  covers with it.
 - **vectors**: covered paths are removed; partly covered paths and shadings are clipped so
   nothing paints inside the areas;
 - **form XObjects**: rewritten recursively into new objects (pages sharing the original keep it);

@@ -8209,6 +8209,24 @@ fn copy_image_reads_the_globals_of_a_jbig2_picture() {
     assert_eq!(truncated, [0]);
 }
 
+/// An Office export leaves out a picture it can't encode, as it did. That isn't a page cut short:
+/// only a picture past what the export may do is reported as one.
+#[test]
+fn an_office_export_doesnt_call_an_unreadable_picture_truncated() {
+    let pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+        2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >> endobj\n\
+        3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n\
+        4 0 obj << /Length 31 >> stream\nq 160 0 0 20 20 100 cm /Im1 Do Q\nendstream endobj\n\
+        5 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /JPXDecode /Length 4 >> stream\nnone\nendstream endobj\n\
+        trailer << /Root 1 0 R >>\n%%EOF"
+        .to_vec();
+    let mut s = Session::new();
+    let id = s.open("picture.pdf", None, Arc::new(pdf), None).unwrap();
+    let (pages, truncated) = s.get(id).unwrap().export_pages_within(true, 1 << 20, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
+    assert!(pages[0].images.is_empty());
+    assert_eq!(truncated, Vec::<usize>::new());
+}
+
 /// Copy Image takes a JBIG2 picture as its pixels and as a PNG file, behind another filter
 /// (ASCIIHexDecode) too: Export's decoding, through `Document::decoded_image`.
 #[test]

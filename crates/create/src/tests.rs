@@ -2275,3 +2275,30 @@ fn jbig2_images_past_the_exports_allowance_are_left_out_with_the_reason() {
     assert!(crate::extract::image_file_within(&doc, a, &mut budget).is_ok());
     assert!(crate::extract::image_file_within(&doc, b, &mut budget).is_err());
 }
+
+/// A mask past the allowance can't be left out as an unreadable one is, or the image comes out
+/// opaque, showing what the mask hides: the image goes, with the reason.
+#[test]
+fn an_image_whose_jbig2_mask_is_past_the_allowance_is_left_out() {
+    use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
+    let mut mask = Dict::new();
+    mask.set(b"Subtype".to_vec(), Object::name("Image"));
+    mask.set(b"Width".to_vec(), Object::Int(16));
+    mask.set(b"Height".to_vec(), Object::Int(2));
+    mask.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    mask.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    mask.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+    let mut doc = Document::new_empty();
+    let mask = doc.add(Object::Stream(Stream::from_raw(mask, pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap())));
+    let mut image = Dict::new();
+    image.set(b"Subtype".to_vec(), Object::name("Image"));
+    image.set(b"Width".to_vec(), Object::Int(1));
+    image.set(b"Height".to_vec(), Object::Int(1));
+    image.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    image.set(b"SMask".to_vec(), Object::Ref(mask));
+    let image = doc.add(Object::Stream(Stream::from_raw(image, vec![0x80])));
+    assert!(crate::extract::image_file_within(&doc, image, &mut ImageBudget::with_work(u64::MAX)).is_ok());
+    let refused = crate::extract::image_file_within(&doc, image, &mut ImageBudget::with_work(0)).unwrap_err();
+    assert!(refused.contains("more JBIG2 decoding than"), "{refused}");
+}

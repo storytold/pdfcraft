@@ -747,8 +747,9 @@ fn jbig2_globals(secret: &[u8]) -> Vec<u8> {
     g
 }
 
-/// An image the run's allowance can't decode can't be cleared, so it is removed whole, like any
-/// other image that can't be read: what a mark covers never stays.
+/// An image the run's allowance can't decode can't be cleared. Removed whole, like an image that
+/// can't be read, it would take what no mark covers with it without a word, so the run stops there,
+/// and [`apply`] leaves the document as it was.
 #[test]
 fn a_jbig2_image_past_the_runs_allowance_is_removed_whole() {
     let mut dict = Dict::new();
@@ -762,7 +763,21 @@ fn a_jbig2_image_past_the_runs_allowance_is_removed_whole() {
     let half = [[0.0, 0.0, 0.5, 1.0]];
     let clear = |work| crate::image::clear(&doc, &image, &pdfcraft_content::Matrix::IDENTITY, &half, &mut pdfcraft_cos::ImageBudget::with_work(work));
     assert!(matches!(clear(u64::MAX), Ok(Some(_))), "cleared in a copy");
-    assert!(matches!(clear(0), Err(())), "removed whole");
+    assert!(matches!(clear(0), Err(())), "it can't be cleared");
+
+    let coded = pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap();
+    let dict = "/Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode";
+    let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(dict, coded)]);
+    mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+    let refused = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0));
+    assert!(matches!(refused, Err(crate::RedactError::ImagesPastAllowance)), "{refused:?}");
+    let mut doc = one_page(
+        b"q 160 0 0 20 0 0 cm /Im Do Q",
+        "/XObject << /Im 7 0 R >>",
+        vec![stream(dict, pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap())],
+    );
+    mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+    assert!(crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(u64::MAX)).is_ok());
 }
 
 /// A JBIG2 image (a scan the optimizer stored as JBIG2) has its covered pixels cleared in a copy,
