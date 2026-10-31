@@ -101,10 +101,10 @@ pub fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
 /// PDF/A is written as its standard allows: no object streams before PDF 1.5 (PDF/X-1a and -3
 /// are PDF 1.3 and 1.4), and no modification date stamped into its document information alone,
 /// which would set it apart from the metadata's (ISO 19005-2 6.6.3 has them agree).
-pub(crate) fn save_options(doc: &pdfcraft_cos::Document, now: Option<i64>) -> SaveOptions {
+pub(crate) fn save_options(doc: &pdfcraft_cos::Document, now: Option<i64>) -> pdfcraft_cos::SaveOptions {
     match pdfcraft_preflight::conform::max_version(doc) {
-        Some(version) => SaveOptions { mod_date: None, object_streams: version >= "1.5", ..SaveOptions::default() },
-        None => SaveOptions { mod_date: now.map(pdfcraft_cos::pdf_date), ..SaveOptions::default() },
+        Some(version) => pdfcraft_cos::SaveOptions { mod_date: None, object_streams: version >= "1.5", ..pdfcraft_cos::SaveOptions::default() },
+        None => pdfcraft_cos::SaveOptions { mod_date: now.map(pdfcraft_cos::pdf_date), ..pdfcraft_cos::SaveOptions::default() },
     }
 }
 
