@@ -95,8 +95,12 @@ fn reveal_via(
     mut run: impl FnMut(&str, &[std::ffi::OsString]) -> Result<bool, String>,
 ) -> Result<(), String> {
     let (program, args) = reveal_command(platform, path)?;
-    if run(program, &args).unwrap_or(false) {
-        return Ok(());
+    match run(program, &args) {
+        Ok(true) => return Ok(()),
+        // Explorer exits with 1 even after it has opened the folder and selected the file, so
+        // only its not starting at all is a failure.
+        Ok(false) if platform == "windows" => return Ok(()),
+        _ => {}
     }
     if matches!(platform, "linux" | "freebsd") {
         // FileManager1 is optional. If absent, open the containing folder with xdg-open.
@@ -243,6 +247,17 @@ mod tests {
         assert_eq!(calls[1], ("xdg-open".into(), vec![std::ffi::OsString::from("/tmp/年度 & reports")]));
         assert!(reveal_via("linux", path, |_, _| Ok(false)).is_err());
         assert!(reveal_via("linux", path, |_, _| Err("command missing".into())).is_err());
+    }
+
+    /// Explorer exits with 1 even after it has opened the folder and selected the file, so on
+    /// Windows that is still a reveal; only Explorer not starting is a failure. Everywhere else
+    /// the exit status counts.
+    #[test]
+    fn explorer_exiting_with_1_has_still_revealed_the_file() {
+        let path = std::path::Path::new(r"C:\Reports\annual report.pdf");
+        assert_eq!(reveal_via("windows", path, |_, _| Ok(false)), Ok(()));
+        assert!(reveal_via("windows", path, |_, _| Err("explorer.exe could not start".into())).is_err());
+        assert!(reveal_via("macos", std::path::Path::new("/tmp/report.pdf"), |_, _| Ok(false)).is_err());
     }
 
     /// #2579 (review of #2625): the `/select,"…"` argument reaches the process exactly as written.
