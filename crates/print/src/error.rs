@@ -1,4 +1,3 @@
-pub use type3::type3_pages;
 /// What can go wrong when printing.
 ///
 /// The three things a *person* can be wrong about — there is nothing to print, a page number past

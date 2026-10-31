@@ -16,7 +16,8 @@ use std::sync::Arc;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
-use crate::{Content, appearance, prints};
+use crate::Content;
+use crate::imposition::{appearance, prints};
 
 /// How deep resources are followed (each form, pattern or soft mask inside another counts two:
 /// the object and its resources); deeper, the page counts as drawing with a Type 3 font.

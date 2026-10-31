@@ -36,7 +36,7 @@ mod sheets;
 pub use error::{PrintError, WORDINGS, Words, in_english};
 #[cfg(test)]
 use imposition::{PAGES_LISTED, appearance, appearance_matrix, decoded_contents, page_form, prints};
-pub use imposition::{impose, keep_printed, sheet_pages};
+pub use imposition::{impose, impose_with_pictures, keep_printed, sheet_pages};
 pub use settings::{
     Binding, BookletSubset, Content, Crop, LABEL_PAPER, Layout, Orientation, PAPERS, PageOrder, Raster, Settings, SizeMode, booklet_duplex,
     cups_media, media_option,
@@ -44,3 +44,4 @@ pub use settings::{
 #[cfg(test)]
 use sheets::text_direction;
 pub use sheets::{LABEL_MARGIN, MARGIN, Placement, Sheet, layout, matching_paper, text_reads_up};
+pub use type3::type3_pages;
