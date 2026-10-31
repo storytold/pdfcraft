@@ -6,6 +6,9 @@
 //!   marks cover; images and vectors partly under a mark lose the covered part;
 //! - content inside form XObjects (rewritten as new objects, so pages sharing them keep theirs);
 //! - comments, links and form fields whose rectangle overlaps a mark;
+//! - document information entries whose value repeats text the marks removed (with the XMP
+//!   property mirroring each entry), and XMP streams that still hold removed text where
+//!   per-entry editing cannot reach — removed whole (see [`clear_marked_metadata`]);
 //! - the marks themselves, replaced by boxes in their fill colour (with their overlay text)
 //!   drawn into the page.
 //!
@@ -21,6 +24,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 pub mod codes;
 mod image;
 mod interp;
+mod metadata;
 mod overlay;
 pub mod patterns;
 pub mod sanitize;
@@ -31,6 +35,7 @@ pub(crate) mod type3;
 pub(crate) mod type3_tables;
 
 use interp::{Mode, Scope, process};
+use metadata::{KernedFragment, normalize, packet_hit};
 
 pub type Rgb = [f64; 3];
 
@@ -145,6 +150,16 @@ pub struct Report {
     /// The form was an AcroForm+XFA form and its `/XFA` packets (which still held redacted field
     /// values, and from which a relayout could rebuild them) were removed.
     pub xfa_removed: bool,
+    /// `/Info` entries whose value repeated text the marks removed, cleared (each with the XMP
+    /// property mirroring it); the last count is the whole dictionary when it could only be
+    /// removed wholesale.
+    pub info_entries_cleared: usize,
+    /// XMP metadata streams removed whole: they still held removed text where per-entry editing
+    /// cannot reach (custom schemas, page-level packets), or could not be decoded and read.
+    pub xmp_removed: usize,
+    /// A metadata collection or comparison limit was exceeded. All `/Info` and catalog/page
+    /// `/Metadata` entries were removed, including unrelated values, rather than risk a leak.
+    pub metadata_cleared_on_limit: bool,
     /// The content streams this apply added to draw the marks' boxes and labels. They are the
     /// only streams a check for text left under the marks may skip: an input stream labelled
     /// like an overlay (`/PCMark /Redaction`) is checked like any other.
@@ -419,6 +434,10 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
         retired_properties: Vec::new(),
         widget_owner,
         removed_everywhere: HashSet::new(),
+        fragments: Vec::new(),
+        kerned: Vec::new(),
+        metadata_bytes: 0,
+        metadata_limited: false,
     };
     for &(pi, page_marks) in &groups {
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
@@ -426,7 +445,9 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
         redact_page_content(doc, &mut applying, pi, &page, &rects)?;
         remove_page_annotations(doc, &mut applying, &page, &rects, page_marks)?;
     }
-    let Applying { mut report, doomed_fields, doomed_xobjects, retired_properties, mut removed_everywhere, .. } = applying;
+    let Applying {
+        mut report, doomed_fields, doomed_xobjects, retired_properties, mut removed_everywhere, fragments, kerned, metadata_limited, ..
+    } = applying;
 
     // 2b. Replies and pop-ups of a removed annotation can be listed on another page than their
     // parent: their `/IRT` or `/Parent` would keep the removed comment reachable.
@@ -528,9 +549,227 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
     if residue > 0 {
         return Err(RedactError::Residue(residue));
     }
+    // 6. Metadata: what the marks removed must not survive in `/Info` or XMP either (#2448).
+    //    Before the full-save flag, so the previous revision's metadata leaves the file too.
+    if metadata_limited {
+        clear_metadata_on_limit(doc, &mut report)?;
+    } else {
+        clear_marked_metadata(doc, &fragments, &kerned, &mut report)?;
+    }
     // The previous revision still holds the removed content: the next save must rewrite.
     doc.require_full_save();
     Ok(report)
+}
+
+/// Decoding limit for a metadata stream (XMP packets are a few kB; padding rarely takes them
+/// past 100 kB — the same cap `pdfcraft_organize` reads packets with).
+const MAX_METADATA: usize = 16 << 20;
+
+/// A shared limit means earlier no-match results are no longer sufficient evidence. Retire
+/// all metadata in the existing catalog/page scope; require_full_save then drops old objects.
+fn clear_metadata_on_limit(doc: &mut Document, report: &mut Report) -> Result<(), RedactError> {
+    report.metadata_cleared_on_limit = true;
+    let count = doc.trailer().get(b"Info").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().map(Dict::len)).unwrap_or(0);
+    doc.trailer_mut().remove(b"Info");
+    report.info_entries_cleared += count;
+    let mut owners: Vec<_> = doc.root().into_iter().collect();
+    owners.extend(pdfcraft_model::pages(doc).iter().map(|p| p.obj));
+    for owner in owners {
+        if doc.get(owner).as_dict().is_some_and(|d| d.contains(b"Metadata")) {
+            doc.update_dict(owner, |d| {
+                d.remove(b"Metadata");
+            })?;
+            report.xmp_removed += 1;
+        }
+    }
+    Ok(())
+}
+
+/// The metadata half of redaction (#2448): a string the marks took off the pages must not stay
+/// in the document information dictionary or the XMP metadata. Runs of removed text two
+/// characters or longer are matched case-insensitively with collapsed whitespace (a single clipped glyph is no evidence a
+/// secret was removed, and would clear unrelated entries that merely contain that character).
+///
+/// Per entry first, so unrelated values survive: each `/Info` string entry whose value contains
+/// a removed run — or is contained in one, for a value shorter than the run (the author of a
+/// whole redacted sentence is removed text too) — goes through `pdfcraft_organize::set_info`,
+/// which also removes the XMP property mirroring it and leaves the rest of the packet byte for
+/// byte. Then, wholesale where per-entry editing cannot reach: every catalog and page
+/// `/Metadata` stream is kept only when it decodes, reads as UTF-8, and holds no removed run or
+/// part of one in decoded XML values (markup names and namespace declarations are excluded);
+/// a trailer `/Info` that is a direct dictionary — the one shape an entry clear cannot edit —
+/// is removed whole when it still matches. Matching errs towards clearing; text that leaves no
+/// searchable run (image text, one surviving piece) needs `sanitize`'s metadata category to be
+/// provably gone.
+fn clear_marked_metadata(doc: &mut Document, fragments: &[String], kerned: &[KernedFragment], report: &mut Report) -> Result<(), RedactError> {
+    let work = metadata::Work::new();
+    // Collection enforces these before allocating; guard this boundary too, before comparison
+    // normalization can expand Unicode. Optional-gap copies are bounded separately as well.
+    if fragments.len() > metadata::MAX_FRAGMENTS
+        || kerned.len() > metadata::MAX_FRAGMENTS
+        || fragments.iter().any(|f| f.len() > metadata::MAX_RUN_BYTES)
+        || kerned.iter().any(|f| f.text.len() > metadata::MAX_RUN_BYTES || f.gaps.len() > metadata::MAX_RUN_BYTES)
+        || fragments.iter().fold(0usize, |n, f| n.saturating_add(f.len())) > metadata::MAX_FRAGMENT_BYTES
+        || kerned.iter().fold(0usize, |n, f| n.saturating_add(f.text.len())) > metadata::MAX_FRAGMENT_BYTES
+    {
+        return clear_metadata_on_limit(doc, report);
+    }
+    let needles: Vec<_> = fragments
+        .iter()
+        .map(|f| KernedFragment { text: normalize(f), gaps: Vec::new() })
+        .chain(kerned.iter().map(KernedFragment::normalized))
+        .filter(|f| f.text.chars().take(2).count() >= 2)
+        .collect();
+    if needles.is_empty() {
+        return Ok(());
+    }
+    // A value goes when it holds a removed run, or when it is itself part of one. The second
+    // direction never matches a value under two characters: one shared character is no evidence
+    // a secret was removed.
+    let hit = |v: &str| {
+        if v.len() > metadata::MAX_VALUE_BYTES || !work.charge(v.len().saturating_mul(4)) {
+            work.exhausted.set(true);
+            return true;
+        }
+        let v = normalize(v);
+        v.chars().take(2).count() >= 2 && needles.iter().any(|n| n.matches_with_budget(&v, &work))
+    };
+
+    // Bound decoding a string value and building the key list before organize::info copies it.
+    let oversized_info = doc
+        .trailer()
+        .get(b"Info")
+        .map(|o| doc.resolve(o))
+        .and_then(|o| {
+            o.as_dict().map(|d| {
+                d.len() > metadata::MAX_FRAGMENTS
+                    || d.iter().any(|(key, v)| {
+                        !work.charge(key.len()) || doc.resolve(v).as_string().is_some_and(|s| s.bytes.len() > metadata::MAX_VALUE_BYTES)
+                    })
+            })
+        })
+        .unwrap_or(false);
+    if oversized_info {
+        return clear_metadata_on_limit(doc, report);
+    }
+
+    // 1. Entry by entry: the value goes, and with it the XMP property that mirrors the entry.
+    clear_info_entries(doc, &work, &hit, report)?;
+
+    // 2. Wholesale: a stream that still holds removed text where per-entry editing cannot reach
+    //    (custom schemas, page-level packets), or that cannot be inspected at all, goes whole.
+    clear_xmp_streams(doc, &work, &hit, report)?;
+
+    // 3. The dictionary one last time: a direct trailer dictionary cannot be edited per entry,
+    //    and a value that survived step 1 takes the whole `/Info` with it (the sanitize shape).
+    if doc
+        .trailer()
+        .get(b"Info")
+        .map(|o| doc.resolve(o))
+        .and_then(|o| o.as_dict().map(|d| d.iter().any(|(_, v)| doc.resolve(v).as_string().is_some_and(|s| hit(&s.to_text())))))
+        .unwrap_or(false)
+    {
+        let n = doc.trailer().get(b"Info").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().map(Dict::len)).unwrap_or(0);
+        doc.trailer_mut().remove(b"Info");
+        report.info_entries_cleared += n;
+    }
+    if work.exhausted.get() {
+        return clear_metadata_on_limit(doc, report);
+    }
+    Ok(())
+}
+
+fn clear_info_entries(doc: &mut Document, work: &metadata::Work, hit: &impl Fn(&str) -> bool, report: &mut Report) -> Result<(), RedactError> {
+    let entries: Vec<(Vec<u8>, Option<String>)> = doc
+        .trailer()
+        .reference(b"Info")
+        .and_then(|r| doc.get(r).as_dict().map(|d| d.iter().map(|(k, v)| (k.clone(), doc.resolve(v).as_string().map(|s| s.to_text()))).collect()))
+        .unwrap_or_default();
+    let mut catalog_charged = false;
+    for (raw_key, val) in entries {
+        let matches = val.as_deref().is_some_and(hit);
+        if work.exhausted.get() {
+            return clear_metadata_on_limit(doc, report);
+        }
+        if !matches {
+            continue;
+        }
+        let mirrored = match raw_key.as_slice() {
+            b"Title" => Some("Title"),
+            b"Author" => Some("Author"),
+            b"Subject" => Some("Subject"),
+            b"Keywords" => Some("Keywords"),
+            b"Creator" => Some("Creator"),
+            b"Producer" => Some("Producer"),
+            _ => None,
+        };
+        if let Some(key) = mirrored {
+            if !catalog_charged
+                && let Some(root) = doc.root()
+                && let Some(meta) = doc.get(root).as_dict().and_then(|d| d.get(b"Metadata").cloned())
+                && let Object::Stream(s) = &*doc.resolve(&meta)
+            {
+                let within_budget = work.charge(s.raw.len())
+                    && s.decoded_within(MAX_METADATA.min(work.decode_limit())).is_ok_and(|bytes| work.charge(bytes.len().saturating_mul(4)));
+                if !within_budget {
+                    return clear_metadata_on_limit(doc, report);
+                }
+                catalog_charged = true;
+            }
+            pdfcraft_organize::set_info(doc, key, "").map_err(|e| pdfcraft_edit::EditError::Invalid(e.to_string()))?;
+            if pdfcraft_organize::info(doc, key).is_none() {
+                report.info_entries_cleared += 1;
+            }
+        } else if let Some(info_ref) = doc.trailer().reference(b"Info") {
+            let mut cleared = false;
+            doc.update_dict(info_ref, |d| {
+                cleared = d.remove(&raw_key).is_some();
+            })?;
+            if cleared {
+                report.info_entries_cleared += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn clear_xmp_streams(doc: &mut Document, work: &metadata::Work, hit: &impl Fn(&str) -> bool, report: &mut Report) -> Result<(), RedactError> {
+    let mut owners: Vec<ObjRef> = doc.root().into_iter().collect();
+    owners.extend(pdfcraft_model::pages(doc).iter().map(|p| p.obj));
+    for owner in owners {
+        let Some(entry) = doc.get(owner).as_dict().and_then(|d| d.get(b"Metadata").cloned()) else { continue };
+        if !work.charge(1) {
+            return clear_metadata_on_limit(doc, report);
+        }
+        let keeps = match &*doc.resolve(&entry) {
+            Object::Stream(s) => {
+                if !work.charge(s.raw.len()) {
+                    return clear_metadata_on_limit(doc, report);
+                }
+                let limit = MAX_METADATA.min(work.decode_limit());
+                match s.decoded_within(limit) {
+                    Ok(bytes) if work.charge(bytes.len().saturating_mul(4)) => {
+                        String::from_utf8(bytes).is_ok_and(|text| !packet_hit(text.as_str(), hit))
+                    }
+                    _ => {
+                        work.exhausted.set(true);
+                        false
+                    }
+                }
+            }
+            _ => false,
+        };
+        if work.exhausted.get() {
+            return clear_metadata_on_limit(doc, report);
+        }
+        if !keeps {
+            doc.update_dict(owner, |d| {
+                d.remove(b"Metadata");
+            })?;
+            report.xmp_removed += 1;
+        }
+    }
+    Ok(())
 }
 
 /// What applying the marks collects across pages.
@@ -542,6 +781,11 @@ struct Applying {
     retired_properties: Vec<Object>,
     widget_owner: Vec<(ObjRef, ObjRef)>,
     removed_everywhere: HashSet<ObjRef>,
+    /// The text the marks removed (maximal runs), for the metadata pass.
+    fragments: Vec<String>,
+    kerned: Vec<KernedFragment>,
+    metadata_bytes: usize,
+    metadata_limited: bool,
 }
 
 /// Step 1 for one page: rewrites its content so nothing readable stays under a mark, and cleans the tags it no longer shows.
@@ -552,14 +796,24 @@ fn redact_page_content(
     page: &pdfcraft_model::Page,
     rects: &[[f64; 4]],
 ) -> Result<(), RedactError> {
-    let Applying { report, doomed_xobjects, retired_properties, .. } = applying;
+    let Applying { report, doomed_xobjects, retired_properties, fragments, kerned, metadata_bytes, metadata_limited, .. } = applying;
     // 1. Content.
     let mut budget = pdfcraft_cos::DecodeBudget::page();
     let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;
     let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let out = {
         let mut scope = Scope::new(rects, Mode::Apply, report, budget);
-        process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY)
+        scope.removed_fragments = std::mem::take(fragments);
+        scope.kerned_fragments = std::mem::take(kerned);
+        scope.metadata_bytes = *metadata_bytes;
+        scope.metadata_limited = *metadata_limited;
+        let out = process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY);
+        scope.flush_run();
+        *metadata_bytes = scope.metadata_bytes;
+        *metadata_limited = scope.metadata_limited;
+        *fragments = scope.removed_fragments;
+        *kerned = scope.kerned_fragments;
+        out
     };
     // Fail closed: the interpreter lays vertical-writing text out horizontally, so it cannot
     // tell whether those glyphs lie under a mark. Rather than report success and possibly
@@ -739,7 +993,6 @@ fn remove_page_annotations(
     })?;
     Ok(())
 }
-
 /// Remove redaction marks without applying them (`None` = all), with their replies and pop-ups as
 /// deleting a comment does: a reply left behind would keep its mark in the file through `/IRT`.
 /// Returns how many marks went.

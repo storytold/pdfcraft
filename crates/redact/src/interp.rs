@@ -122,6 +122,25 @@ pub(crate) struct Scope<'a> {
     xobject_oc_cache: HashMap<ObjRef, bool>,
     /// Content removed from hidden layers (blocks and XObjects).
     pub layer_blocks: usize,
+    /// Redaction (apply mode): the text of each maximal run of removed glyphs, for the metadata
+    /// pass. A run joins across `TJ` kerning numbers (spacing inside one text run: no space, no
+    /// split) and across operators when the next removed glyph starts within 1.5 glyph heights
+    /// of where the last one's advance (spacing included) landed in device space — a
+    /// repositioning gap past 0.15 heights becomes a space — and splits at kept glyphs and at
+    /// page end; a removed glyph whose code has no Unicode meaning triggers `metadata_limited`.
+    pub removed_fragments: Vec<String>,
+    /// Comparison alternatives for ambiguous forward TJ gaps; the canonical runs above stay
+    /// unspaced so intra-word kerning retains its original interpretation.
+    pub kerned_fragments: Vec<crate::metadata::KernedFragment>,
+    /// These totals travel with the fragments across pages. Once exceeded, collection stops
+    /// and apply removes all document/page metadata rather than matching truncated evidence.
+    pub metadata_bytes: usize,
+    pub metadata_limited: bool,
+    /// The run being collected: its text, and where its last removed glyph's advance ended in
+    /// device space with that glyph's height (`None` = no open run).
+    run: String,
+    run_gaps: Vec<usize>,
+    run_end: Option<((f64, f64), f64)>,
     fonts: HashMap<Vec<u8>, Rc<Metrics>>,
     used_names: Vec<Vec<u8>>,
     depth: usize,
@@ -146,6 +165,13 @@ impl<'a> Scope<'a> {
             ocmd_cache: HashMap::new(),
             xobject_oc_cache: HashMap::new(),
             layer_blocks: 0,
+            removed_fragments: Vec::new(),
+            kerned_fragments: Vec::new(),
+            metadata_bytes: 0,
+            metadata_limited: false,
+            run: String::new(),
+            run_gaps: Vec::new(),
+            run_end: None,
             fonts: HashMap::new(),
             used_names: Vec::new(),
             depth: 0,
@@ -181,6 +207,94 @@ impl<'a> Scope<'a> {
             let oy = b[3].min(r[3]) - b[1].max(r[1]);
             ox > mx && oy > my
         })
+    }
+
+    /// End the run of removed text being collected (nothing when it is empty).
+    pub(crate) fn flush_run(&mut self) {
+        self.run_end = None;
+        if !self.run.is_empty() {
+            if self.removed_fragments.len() >= crate::metadata::MAX_FRAGMENTS {
+                self.limit_metadata();
+                return;
+            }
+            if !self.run_gaps.is_empty() {
+                self.kerned_fragments.push(crate::metadata::KernedFragment { text: self.run.clone(), gaps: std::mem::take(&mut self.run_gaps) });
+            }
+            self.removed_fragments.push(std::mem::take(&mut self.run));
+        }
+    }
+
+    fn limit_metadata(&mut self) {
+        self.metadata_limited = true;
+        self.removed_fragments.clear();
+        self.kerned_fragments.clear();
+        self.run.clear();
+        self.run_gaps.clear();
+        self.run_end = None;
+    }
+
+    fn append_removed(&mut self, text: &str) {
+        if self.metadata_limited {
+            return;
+        }
+        let run_bytes = self.run.len().saturating_add(text.len());
+        let total = self.metadata_bytes.saturating_add(text.len());
+        if run_bytes > crate::metadata::MAX_RUN_BYTES || total > crate::metadata::MAX_FRAGMENT_BYTES {
+            self.limit_metadata();
+            return;
+        }
+        self.run.push_str(text);
+        self.metadata_bytes = total;
+    }
+
+    /// A removed glyph: `kerned` says a `TJ` number displaced the text since the last removed
+    /// glyph: the canonical run joins with no space or split. A forward gap may also represent
+    /// a word space, recorded separately for metadata comparison. Otherwise the glyph continues
+    /// the open run when it starts where the last
+    /// one's advance landed — device space, within 1.5 glyph heights, so text drawn one glyph per
+    /// operator still collects as one run — and a gap past 0.15 heights is a word gap (a real
+    /// space, or the joined text would not match the value it was drawn from). Degenerate
+    /// (zero-height) glyphs and non-finite positions never join.
+    fn removed_glyph(&mut self, text: &str, origin: (f64, f64), end: (f64, f64), height: f64, kerned: bool) {
+        if self.metadata_limited || text.is_empty() {
+            return;
+        }
+        if kerned
+            && let Some(((x, y), previous_height)) = self.run_end
+            && previous_height > 0.0
+            && height > 0.0
+        {
+            let (dx, dy) = (origin.0 - x, origin.1 - y);
+            let h = previous_height.max(height);
+            let gap = dx.hypot(dy);
+            if gap.is_finite() && h.is_finite() && gap <= 1.5 * h {
+                let forward = dx * (end.0 - origin.0) + dy * (end.1 - origin.1);
+                if gap > 0.15 * h && forward.is_finite() && forward > 0.0 {
+                    self.run_gaps.push(self.run.len());
+                }
+                self.append_removed(text);
+                self.run_end = Some((end, height));
+                return;
+            }
+        }
+        if let Some(((lx, ly), lh)) = self.run_end
+            && lh > 0.0
+            && height > 0.0
+        {
+            let gap = (origin.0 - lx).hypot(origin.1 - ly);
+            let h = lh.max(height);
+            if gap.is_finite() && h.is_finite() && gap <= 1.5 * h {
+                if gap > 0.15 * h && !self.run.ends_with(char::is_whitespace) {
+                    self.append_removed(" ");
+                }
+                self.append_removed(text);
+                self.run_end = Some((end, height));
+                return;
+            }
+        }
+        self.flush_run();
+        self.append_removed(text);
+        self.run_end = Some((end, height));
     }
 }
 
@@ -220,6 +334,11 @@ struct Glyph {
     /// Advance in unscaled text space (before `Th`).
     advance: f64,
     hit: bool,
+    /// The glyph in device space: its origin, where its advance (spacing included) lands the
+    /// next glyph, and its height — for joining removed text into runs.
+    origin: (f64, f64),
+    end: (f64, f64),
+    height: f64,
 }
 
 /// Process a scope's content streams (state flows from one stream to the next).
@@ -641,11 +760,14 @@ fn clean_replacements(doc: &Document, resources: &Dict, original: &[Op], process
 
 /// Lay out a shown string (or `TJ` array) glyph by glyph, advancing `tm`. Returns the `TJ`
 /// items with the glyphs under a region replaced by displacements, and how many were removed.
-fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<Object>, usize) {
+fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<Object>, usize) {
     let f = &gs.font;
     let size = gs.size;
     let mut out: Vec<Object> = Vec::new();
     let mut removed = 0;
+    // Redaction only: collect what is removed, for the metadata pass. Hidden-text sanitising
+    // (empty regions or a page box) collects nothing.
+    let collect = scope.mode == Mode::Apply && !scope.rects.is_empty() && scope.hidden_text.is_none();
     let push_num = |out: &mut Vec<Object>, v: f64| {
         if v == 0.0 {
             return;
@@ -658,6 +780,11 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
         }
         out.push(num(v));
     };
+    // A `TJ` number displaced the text since the last removed glyph: the glyph after it joins
+    // the run with no space and no split. Set by the number, spent by the next glyph drawn (so
+    // it never reaches the next operator).
+    let mut kerned = false;
+    let mut drew_removed = false;
     for item in items {
         match item {
             Object::String(s) => {
@@ -671,6 +798,14 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
                     let b = trm.bbox([0.0, f.descent, w0, f.ascent]);
                     let origin = trm.apply(0.0, 0.0);
                     let advance = w0 * size + spacing;
+                    // Where this glyph's advance lands the next one (device space, spacing
+                    // included, so character spacing is never read as a word gap), and the
+                    // glyph's height there: `trm.apply(x, 0)` maps text space through
+                    // `tm.apply(size·Th·x, rise)`, so `advance / size` is exactly the next
+                    // origin while nothing repositions the text in between.
+                    let top = trm.apply(0.0, 1.0);
+                    let height = (top.0 - origin.0).hypot(top.1 - origin.1);
+                    let end = if size != 0.0 { trm.apply(advance / size, 0.0) } else { origin };
                     let hit = match scope.hidden_text {
                         // Invisible (Tr 3) and clip-only (Tr 7) text, or text wholly off the page.
                         Some(page) => {
@@ -679,7 +814,7 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
                         }
                         None => scope.glyph_hit(b, origin),
                     };
-                    glyphs.push(Glyph { bytes: pos..pos + len, advance, hit });
+                    glyphs.push(Glyph { bytes: pos..pos + len, advance, hit, origin, end, height });
                     *tm = Matrix::translate(advance * gs.scale, 0.0).then(tm);
                     pos += len;
                 }
@@ -687,6 +822,21 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
                 for g in &glyphs {
                     if g.hit {
                         removed += 1;
+                        if collect {
+                            let t = f.decode(&bytes[g.bytes.clone()]);
+                            if t.is_empty() {
+                                // A code the font gives no meaning: what text was removed cannot
+                                // be known, so fail closed and clear all document/page metadata.
+                                scope.limit_metadata();
+                                kerned = false;
+                                drew_removed = false;
+                            } else {
+                                let k = kerned;
+                                kerned = false;
+                                drew_removed = true;
+                                scope.removed_glyph(&t, g.origin, g.end, g.height, k);
+                            }
+                        }
                         if !run.is_empty() {
                             out.push(string(std::mem::take(&mut run)));
                         }
@@ -695,6 +845,11 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
                             push_num(&mut out, -g.advance * 1000.0 / size);
                         }
                     } else {
+                        if collect {
+                            scope.flush_run();
+                        }
+                        kerned = false;
+                        drew_removed = false;
                         run.extend_from_slice(&bytes[g.bytes.clone()]);
                     }
                 }
@@ -706,6 +861,7 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
                 if let Some(v) = other.as_f64() {
                     *tm = Matrix::translate(-v / 1000.0 * size * gs.scale, 0.0).then(tm);
                     push_num(&mut out, v);
+                    kerned = drew_removed;
                 }
             }
         }
@@ -795,6 +951,9 @@ fn xobject(
                     }
                     return None;
                 }
+                if !scope.rects.is_empty() && scope.hidden_text.is_none() {
+                    scope.limit_metadata();
+                }
                 scope.report.forms_removed += 1;
                 out.replaced.push(name);
                 out.doomed.push(r);
@@ -821,6 +980,9 @@ fn xobject(
                     return None;
                 }
                 Err(_) if scope.mode == Mode::Apply => {
+                    if !scope.rects.is_empty() && scope.hidden_text.is_none() {
+                        scope.limit_metadata();
+                    }
                     scope.report.forms_removed += 1;
                     out.replaced.push(name);
                     out.doomed.push(r);

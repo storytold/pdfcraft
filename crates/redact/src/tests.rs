@@ -6,6 +6,9 @@ use pdfcraft_testkit::{Pdf, stream_obj as stream};
 
 use super::*;
 
+#[path = "metadata_tests.rs"]
+mod metadata_tests;
+
 fn pdf(objs: Vec<Vec<u8>>) -> Document {
     Document::open(Arc::new(Pdf::new().objs(objs).build())).unwrap()
 }
@@ -1563,6 +1566,327 @@ fn hidden_information_is_counted_and_removed() {
     assert!(shown, "the field's value stays visible as page content");
 }
 
+/// A one-page document (see `one_page`) plus `/Info` entries, a catalog XMP packet and a
+/// page-level XMP packet, for the metadata-redaction tests (#2448).
+fn meta_doc(content: &[u8], info: &[(&str, &str)], catalog_packet: Option<&str>, page_packet: Option<&str>) -> Document {
+    let mut doc = one_page(content, "", vec![]);
+    let metadata = |p: &str| {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Metadata"));
+        d.set(b"Subtype".to_vec(), Object::name("XML"));
+        Object::Stream(Stream::from_raw(d, p.as_bytes().to_vec()))
+    };
+    if let Some(p) = catalog_packet {
+        let r = doc.add(metadata(p));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |d| d.set(b"Metadata".to_vec(), Object::Ref(r))).unwrap();
+    }
+    if let Some(p) = page_packet {
+        let r = doc.add(metadata(p));
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| d.set(b"Metadata".to_vec(), Object::Ref(r))).unwrap();
+    }
+    if !info.is_empty() {
+        let mut d = Dict::new();
+        for (k, v) in info {
+            d.set(k.as_bytes().to_vec(), Object::String(pdfcraft_cos::PdfString::text(v)));
+        }
+        let r = doc.add(Object::Dict(d));
+        doc.trailer_mut().set(b"Info".to_vec(), Object::Ref(r));
+    }
+    doc
+}
+
+/// One `/Info` entry as text, straight from the trailer dictionary.
+fn info_value(doc: &Document, key: &str) -> Option<String> {
+    let info = doc.trailer().get(b"Info").map(|o| doc.resolve(o))?;
+    info.as_dict()?.get(key.as_bytes()).and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text()))
+}
+
+/// The catalog's XMP packet, decoded.
+fn xmp_text(doc: &Document) -> Option<String> {
+    let r = doc.get(doc.root()?).as_dict()?.reference(b"Metadata")?;
+    match &*doc.get(r) {
+        Object::Stream(s) => Some(String::from_utf8_lossy(&s.decoded().ok()?).into_owned()),
+        _ => None,
+    }
+}
+
+/// Issue #2448: a string redacted off the page must not survive in `/Info` (here Title, while
+/// Author survives) or in the XMP property mirroring it (here `dc:title`, while the rest of the
+/// packet stays). The match is case-insensitive: the page shows TOPSECRET, the title doesn't.
+#[test]
+fn redacted_text_is_cleared_from_info_and_xmp_on_apply() {
+    let packet = "<x:xmpmeta xmlns:x='adobe:ns:meta/'><rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\
+<rdf:Description rdf:about='' xmlns:dc='http://purl.org/dc/elements/1.1/'><dc:title><rdf:Alt><rdf:li xml:lang='x-default'>TopSecret plan</rdf:li></rdf:Alt></dc:title></rdf:Description>\
+<rdf:Description rdf:about='' xmlns:pdf='http://ns.adobe.com/pdf/1.3/'><pdf:Producer>Writer 1.0</pdf:Producer></rdf:Description>\
+</rdf:RDF></x:xmpmeta>";
+    let clean = "<x:xmpmeta xmlns:x='adobe:ns:meta/'><rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\
+<rdf:Description rdf:about='' xmlns:xmp='http://ns.adobe.com/xap/1.0/'><xmp:CreateTool>Writer</xmp:CreateTool></rdf:Description>\
+</rdf:RDF></x:xmpmeta>";
+    let mut doc =
+        meta_doc(b"BT /F1 10 Tf 10 100 Td (TOPSECRET PLAN) Tj ET", &[("Title", "TopSecret plan"), ("Author", "Ada")], Some(packet), Some(clean));
+    assert_eq!(under(&mut doc, 0, &[[10.0, 95.0, 55.0, 110.0]]), 9, "TOPSECRET is nine glyphs");
+    mark(&mut doc, 0, &[[10.0, 95.0, 55.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.info_entries_cleared, 1, "the Title entry and nothing else: {r:?}");
+    let doc = reopen(&doc);
+    assert_eq!(info_value(&doc, "Title"), None, "the entry repeating removed text is gone");
+    assert_eq!(info_value(&doc, "Author").as_deref(), Some("Ada"), "unrelated entries stay");
+    let xmp = xmp_text(&doc).unwrap_or_default();
+    assert!(!xmp.contains("dc:title"), "the mirrored property went with it: {xmp}");
+    assert!(xmp.contains("Writer 1.0"), "the rest of the packet stays: {xmp}");
+    let page = &pdfcraft_model::pages(&doc)[0];
+    assert!(page.dict.get(b"Metadata").is_some(), "a clean page-level stream stays");
+    assert_no_secret(&doc, b"TOPSECRET");
+    assert_no_secret(&doc, b"TopSecret");
+}
+
+/// Issue #2448, review follow-up: a value SHORTER than the removed run is still removed text —
+/// the author of a whole redacted sentence — whether `/Info` or a custom XMP schema holds it.
+#[test]
+fn a_value_inside_a_longer_removed_run_is_cleared_too() {
+    let packet = "<x:xmpmeta xmlns:x='adobe:ns:meta/'><rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\
+<rdf:Description rdf:about='' xmlns:acme='https://example.org/acme/' acme:code='James Bond'><acme:Agent>James Bond</acme:Agent></rdf:Description>\
+<rdf:Description rdf:about='' xmlns:pdf='http://ns.adobe.com/pdf/1.3/'><pdf:Producer>Writer 1.0</pdf:Producer></rdf:Description>\
+</rdf:RDF></x:xmpmeta>";
+    let mut doc =
+        meta_doc(b"BT /F1 10 Tf 10 100 Td (JAMES BOND IS A SPY) Tj ET", &[("Author", "James Bond"), ("Subject", "Spy stories")], Some(packet), None);
+    assert_eq!(under(&mut doc, 0, &[[10.0, 95.0, 105.0, 110.0]]), 19, "the whole phrase is nineteen glyphs");
+    mark(&mut doc, 0, &[[10.0, 95.0, 105.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.info_entries_cleared, 1, "the Author entry: {r:?}");
+    assert_eq!(r.xmp_removed, 1, "the packet holding the name in its custom schema: {r:?}");
+    let doc = reopen(&doc);
+    assert_eq!(info_value(&doc, "Author"), None, "the shorter value is part of the removed text");
+    assert_eq!(info_value(&doc, "Subject").as_deref(), Some("Spy stories"), "an unrelated value stays");
+    let cat = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+    assert!(!cat.contains(b"Metadata"), "the custom-schema value took the packet with it");
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert_no_secret(&doc, b"JAMES BOND");
+    assert_no_secret(&doc, b"James Bond");
+    let reread = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(info_value(&reread, "Subject").as_deref(), Some("Spy stories"), "unrelated metadata survives in the saved file");
+}
+
+/// Issue #2448: the fallback. A secret held where PdfCraft cannot edit per-entry — a custom XMP
+/// schema, entity-escaped, and a page-level packet — takes the whole stream with it, the same
+/// shape as removing hidden information's metadata category.
+#[test]
+fn an_xmp_stream_holding_redacted_text_is_removed_whole() {
+    let packet = "<x:xmpmeta xmlns:x='adobe:ns:meta/'><rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\
+<rdf:Description rdf:about='' xmlns:acme='https://example.org/acme/'><acme:Project>&lt;SECRET&amp;PLAN&gt;</acme:Project></rdf:Description>\
+<rdf:Description rdf:about='' xmlns:pdf='http://ns.adobe.com/pdf/1.3/'><pdf:Producer>Writer 1.0</pdf:Producer></rdf:Description>\
+</rdf:RDF></x:xmpmeta>";
+    let page_packet = "<x:xmpmeta xmlns:x='adobe:ns:meta/'><rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\
+<rdf:Description rdf:about='' xmlns:pdf='http://ns.adobe.com/pdf/1.3/'><pdf:Keywords>OTHERTEXT</pdf:Keywords></rdf:Description>\
+</rdf:RDF></x:xmpmeta>";
+    let mut doc = meta_doc(b"BT /F1 10 Tf 10 100 Td (MEMO <SECRET&PLAN> OTHERTEXT HERE) Tj ET", &[], Some(packet), Some(page_packet));
+    assert_eq!(under(&mut doc, 0, &[[35.0, 95.0, 100.0, 110.0]]), 13, "<SECRET&PLAN> is thirteen glyphs");
+    mark(&mut doc, 0, &[[35.0, 95.0, 100.0, 110.0], [105.0, 95.0, 150.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.xmp_removed, 2, "the catalog and page streams: {r:?}");
+    let doc = reopen(&doc);
+    let cat = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+    assert!(!cat.contains(b"Metadata"), "the escaped secret took the catalog stream with it");
+    let page = &pdfcraft_model::pages(&doc)[0];
+    assert!(page.dict.get(b"Metadata").is_none(), "the page-level stream went too");
+    assert_no_secret(&doc, b"SECRET&PLAN");
+    assert_no_secret(&doc, b"SECRET&amp;PLAN");
+    assert_no_secret(&doc, b"OTHERTEXT");
+}
+
+/// Issue #2448: a trailer `/Info` that is a direct dictionary is the one shape an entry-by-entry
+/// clear cannot edit, so the final check removes it whole (the hidden-information shape); a save
+/// then writes a fresh date-only `/Info`.
+#[test]
+fn a_direct_info_dictionary_holding_redacted_text_is_removed_whole() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (TOPSECRET PLAN) Tj ET", "", vec![]);
+    let mut info = Dict::new();
+    info.set(b"Title".to_vec(), Object::String(pdfcraft_cos::PdfString::text("TopSecret plan")));
+    info.set(b"Author".to_vec(), Object::String(pdfcraft_cos::PdfString::text("Ada")));
+    doc.trailer_mut().set(b"Info".to_vec(), Object::Dict(info));
+    mark(&mut doc, 0, &[[10.0, 95.0, 55.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.info_entries_cleared, 2, "the whole dictionary, both entries: {r:?}");
+    assert!(doc.trailer().get(b"Info").is_none(), "the whole dictionary went");
+    let doc = reopen(&doc);
+    let info = doc.trailer().get(b"Info").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned());
+    if let Some(d) = &info {
+        assert!(!d.contains(b"Title") && !d.contains(b"Author"), "nothing of it came back: {d:?}");
+    }
+    assert_no_secret(&doc, b"TOPSECRET");
+    assert_no_secret(&doc, b"TopSecret");
+}
+
+/// PR #2598: many generators draw text one glyph per operator (`(T) Tj 5 0 Td (O) Tj …`). The
+/// removed text must join by position — where each glyph's advance landed — or every fragment is
+/// a single character, the two-character floor filters them all, and the `/Title` repeating the
+/// removed text survives.
+#[test]
+fn glyphs_one_operator_at_a_time_still_clear_metadata() {
+    let content = b"BT /F1 10 Tf 10 100 Td (T) Tj 5 0 Td (O) Tj 5 0 Td (P) Tj 5 0 Td (S) Tj 5 0 Td (E) Tj 5 0 Td (C) Tj 5 0 Td (R) Tj 5 0 Td (E) Tj 5 0 Td (T) Tj ET";
+    let mut doc = meta_doc(content, &[("Title", "TOPSECRET"), ("Author", "Ada")], None, None);
+    assert_eq!(under(&mut doc, 0, &[[10.0, 95.0, 55.0, 110.0]]), 9, "the nine glyphs are under the mark");
+    mark(&mut doc, 0, &[[10.0, 95.0, 55.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.info_entries_cleared, 1, "the glyph-per-operator Title: {r:?}");
+    let doc = reopen(&doc);
+    assert_eq!(info_value(&doc, "Title"), None, "the entry repeating removed text is gone");
+    assert_eq!(info_value(&doc, "Author").as_deref(), Some("Ada"), "unrelated entries stay");
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).to_lowercase().contains("topsecret"), "no trace in the saved file");
+}
+
+/// PR #2598: a positional word gap between removed glyphs becomes a real space, so the joined run
+/// still matches the value it was drawn from (without the space it would read "topsecretplan").
+#[test]
+fn positional_word_gaps_join_into_spaces() {
+    let mut doc =
+        meta_doc(b"BT /F1 10 Tf 10 100 Td (TOPSECRET) Tj 47.5 0 Td (PLAN) Tj ET", &[("Title", "TopSecret plan"), ("Author", "Ada")], None, None);
+    // TOPSECRET spans x 10–55 and PLAN starts at 57.5: a 2.5 pt gap at 10 pt text.
+    assert_eq!(under(&mut doc, 0, &[[10.0, 95.0, 80.0, 110.0]]), 13, "both words are under the mark");
+    mark(&mut doc, 0, &[[10.0, 95.0, 80.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.info_entries_cleared, 1, "the joined run must carry the gap as a space: {r:?}");
+    let doc = reopen(&doc);
+    assert_eq!(info_value(&doc, "Title"), None, "the entry repeating removed text is gone");
+    assert_eq!(info_value(&doc, "Author").as_deref(), Some("Ada"), "unrelated entries stay");
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).to_lowercase().contains("topsecret"), "no trace in the saved file");
+}
+
+/// PR #2598, the surgical half: joining glyphs across operators must not make matching any less
+/// surgical. "JAMES BOND IS A SPY" drawn one glyph per operator joins into one run; the author
+/// contained in it still goes, the unrelated Subject still stays.
+#[test]
+fn glyph_per_operator_removal_stays_surgical() {
+    // Nineteen glyphs (spaces included), each `(x) Tj 5 0 Td` continuing exactly where the last
+    // glyph's advance ended.
+    let mut src = String::from("BT /F1 10 Tf 10 100 Td");
+    for c in "JAMES BOND IS A SPY".chars() {
+        src.push_str(&format!(" ({c}) Tj 5 0 Td"));
+    }
+    src.push_str(" ET");
+    let mut doc = meta_doc(src.as_bytes(), &[("Author", "James Bond"), ("Subject", "Spy stories")], None, None);
+    assert_eq!(under(&mut doc, 0, &[[10.0, 95.0, 105.0, 110.0]]), 19, "the whole phrase is nineteen glyphs");
+    mark(&mut doc, 0, &[[10.0, 95.0, 105.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.info_entries_cleared, 1, "the Author entry: {r:?}");
+    let doc = reopen(&doc);
+    assert_eq!(info_value(&doc, "Author"), None, "the shorter value is part of the removed text");
+    assert_eq!(info_value(&doc, "Subject").as_deref(), Some("Spy stories"), "an unrelated value stays");
+}
+
+/// Character spacing must not read as a word gap: a run ends where the interpreter's own advance
+/// (Tc and Tw included) lands, so tracked text still forms one run. With the bare glyph width as
+/// the end, `2 Tc` would put a synthetic space between every pair.
+#[test]
+fn tracked_text_still_forms_one_run() {
+    let mut doc = meta_doc(b"BT /F1 10 Tf 2 Tc 10 100 Td (TOPSECRET) Tj ET", &[("Title", "TOPSECRET"), ("Author", "Ada")], None, None);
+    // Advances are 7 pt each (5 pt glyph + 2 Tc): the nine glyphs span x 10–73.
+    assert_eq!(under(&mut doc, 0, &[[10.0, 95.0, 75.0, 110.0]]), 9, "the tracked glyphs are under the mark");
+    mark(&mut doc, 0, &[[10.0, 95.0, 75.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.info_entries_cleared, 1, "tracking is not a word gap: {r:?}");
+    let doc = reopen(&doc);
+    assert_eq!(info_value(&doc, "Title"), None, "the entry repeating removed text is gone");
+    assert_eq!(info_value(&doc, "Author").as_deref(), Some("Ada"), "unrelated entries stay");
+}
+
+/// A `TJ` kern number is spacing inside one text run, not a word gap: the displaced glyphs join
+/// with no space and no split, so a kerned intra-word value (`[(TOP) -200 (SECRET)] TJ` with
+/// `/Title (TOPSECRET)`) still clears — as it did before the positional joining, which must only
+/// infer spaces where text was repositioned between operators.
+#[test]
+fn kerned_intra_word_text_still_forms_one_run() {
+    let mut doc = meta_doc(b"BT /F1 10 Tf 10 100 Td [(TOP) -200 (SECRET)] TJ ET", &[("Title", "TOPSECRET"), ("Author", "Ada")], None, None);
+    // The -200 kern moves the second half 2 pt along: the six+three glyphs span x 10–57.
+    assert_eq!(under(&mut doc, 0, &[[10.0, 95.0, 60.0, 110.0]]), 9, "the kerned glyphs are under the mark");
+    mark(&mut doc, 0, &[[10.0, 95.0, 60.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.info_entries_cleared, 1, "a kern displacement is not a word gap: {r:?}");
+    let doc = reopen(&doc);
+    assert_eq!(info_value(&doc, "Title"), None, "the entry repeating removed text is gone");
+    assert_eq!(info_value(&doc, "Author").as_deref(), Some("Ada"), "unrelated entries stay");
+}
+
+/// The joining itself, on the interpreter: a run continues across operators whenever the next
+/// removed glyph starts where the last one's advance landed (a `Td` can land there as easily as
+/// a `TJ` number), a positional word gap becomes a space, a `TJ` kern joins with no space, and
+/// anything further away starts a new run.
+#[test]
+fn runs_join_by_position_across_operators() {
+    let mut doc = one_page(
+        b"BT /F1 10 Tf 10 100 Td (BLU) Tj 15 0 Td (E) Tj 5 0 Td [(F) -300 (IN)] TJ ( 7) Tj ET BT /F1 10 Tf 10 200 Td (Gary) Tj ET",
+        "",
+        vec![],
+    );
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    let (_, data) = page_streams(&doc, &page.dict, 0).unwrap();
+    let res = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
+    let mut rep = Report::default();
+    let rects = [[0.0, 90.0, 300.0, 120.0], [0.0, 190.0, 300.0, 220.0]];
+    let mut scope = Scope::new(&rects, Mode::Apply, &mut rep, pdfcraft_cos::DecodeBudget::page());
+    process(&mut doc, &mut scope, &data, &res, pdfcraft_content::Matrix::IDENTITY);
+    scope.flush_run();
+    assert_eq!(
+        scope.removed_fragments,
+        ["BLUEFIN 7", "Gary"],
+        "one run across four operators, the kern joined with no space, the far line its own run"
+    );
+}
+
+/// Issue #2448: a non-ASCII title is stored as UTF-16BE (`PdfString::text`), and the removed
+/// run's Euro sign is only known through the font's ToUnicode map; the match still has to find it.
+#[test]
+fn utf16_info_entries_holding_redacted_text_are_cleared() {
+    let packet = "<x:xmpmeta xmlns:x='adobe:ns:meta/'><rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\
+<rdf:Description rdf:about='' xmlns:pdf='http://ns.adobe.com/pdf/1.3/'><pdf:Producer>Writer 1.0</pdf:Producer></rdf:Description>\
+</rdf:RDF></x:xmpmeta>";
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Metadata 8 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        stream("", b"BT /F1 10 Tf 10 100 Td (TOPSECRET$PLAN) Tj ET"),
+        // The font of `one_page`, plus a ToUnicode map that reads code $ as U+20AC (€).
+        FONT.replace("95 0 R", "6 0 R").replace("/FontDescriptor", "/ToUnicode 7 0 R /FontDescriptor").into_bytes(),
+        widths(),
+        stream("", b"1 beginbfchar <24> <20AC> endbfchar"),
+        stream("/Type /Metadata /Subtype /XML", packet.as_bytes()),
+    ]);
+    let mut info = Dict::new();
+    info.set(b"Title".to_vec(), Object::String(pdfcraft_cos::PdfString::text("Classified SECRET€ memo")));
+    info.set(b"Author".to_vec(), Object::String(pdfcraft_cos::PdfString::text("Ada")));
+    let r = doc.add(Object::Dict(info));
+    doc.trailer_mut().set(b"Info".to_vec(), Object::Ref(r));
+    assert_eq!(under(&mut doc, 0, &[[25.0, 95.0, 60.0, 110.0]]), 7, "SECRET$ is seven glyphs");
+    mark(&mut doc, 0, &[[25.0, 95.0, 60.0, 110.0]], "");
+    apply(&mut doc, None).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(info_value(&doc, "Title"), None, "the UTF-16BE title repeating removed text is gone");
+    assert_eq!(info_value(&doc, "Author").as_deref(), Some("Ada"), "unrelated entries stay");
+    let needle: Vec<u8> = "SECRET€".encode_utf16().flat_map(u16::to_be_bytes).collect();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert_no_secret(&doc, &needle);
+    // A full write may pack /Info into a compressed object stream, so survival is checked by
+    // reading the file back, not by scanning its bytes.
+    let reread = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(info_value(&reread, "Author").as_deref(), Some("Ada"), "unrelated metadata survives");
+}
+
+/// Issue #2448: with nothing to apply, metadata is left alone.
+#[test]
+fn applying_with_no_marks_leaves_metadata_alone() {
+    let packet = "<x:xmpmeta xmlns:x='adobe:ns:meta/'><rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\
+<rdf:Description rdf:about='' xmlns:dc='http://purl.org/dc/elements/1.1/'><dc:title><rdf:Alt><rdf:li xml:lang='x-default'>TopSecret plan</rdf:li></rdf:Alt></dc:title></rdf:Description>\
+</rdf:RDF></x:xmpmeta>";
+    let mut doc = meta_doc(b"BT /F1 10 Tf 10 100 Td (PLAIN) Tj ET", &[("Title", "TopSecret plan")], Some(packet), None);
+    assert_eq!(apply(&mut doc, None), Err(RedactError::NothingToApply));
+    assert_eq!(info_value(&doc, "Title").as_deref(), Some("TopSecret plan"), "the entry stays");
+    assert!(xmp_text(&doc).is_some_and(|x| x.contains("TopSecret")), "the packet stays");
+}
+
 /// A one-page document whose catalog names an outline root (object 5). `items` are the outline
 /// items, objects 6 onward.
 fn outlined_document(items: Vec<Vec<u8>>) -> Document {
@@ -2371,16 +2695,38 @@ fn tags_lose_what_redaction_removed() {
 }
 
 fn assert_no_secret(doc: &Document, secret: &[u8]) {
-    let saved = reopen(doc);
-    for (r, object) in saved.scan_objects() {
+    assert!(!secret_is_present(doc, secret), "secret remains in reopened objects or decoded streams");
+}
+
+fn secret_is_present(doc: &Document, secret: &[u8]) -> bool {
+    let bytes = write_full(doc, &SaveOptions::default()).unwrap();
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    let has = |bytes: &[u8]| bytes.windows(secret.len()).any(|w| w == secret);
+    for (_, object) in saved.scan_objects() {
         let mut bytes = Vec::new();
         pdfcraft_cos::serialize(&object, &mut bytes);
-        assert!(!bytes.windows(secret.len()).any(|w| w == secret), "secret remains in object {r:?}");
-        if let Object::Stream(s) = &*object {
-            let data = s.decoded().unwrap();
-            assert!(!data.windows(secret.len()).any(|w| w == secret), "secret remains in stream {r:?}");
+        if has(&bytes) {
+            return true;
+        }
+        if let Object::Stream(s) = &*object
+            && has(&s.decoded().unwrap())
+        {
+            return true;
+        }
+        // Serialization can escape PDF string bytes (notably UTF-16BE). Inspect strings in
+        // reopened arrays/dictionaries directly as well, without following reference cycles.
+        let mut pending = vec![&*object];
+        while let Some(value) = pending.pop() {
+            match value {
+                Object::String(s) if has(&s.bytes) => return true,
+                Object::Array(a) => pending.extend(a),
+                Object::Dict(d) => pending.extend(d.iter().map(|(_, value)| value)),
+                Object::Stream(s) => pending.extend(s.dict.iter().map(|(_, value)| value)),
+                _ => {}
+            }
         }
     }
+    false
 }
 
 #[test]
