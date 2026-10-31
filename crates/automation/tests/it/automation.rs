@@ -6537,6 +6537,29 @@ fn retained_pdf_version_reports_the_header_raised_for_object_streams() {
     assert_eq!(r["pdf_version"].as_str(), Some("1.5"), "{r}");
 }
 
+/// #3227: retaining the version, the later of the written header and the catalog `/Version` is
+/// reported: a catalog below the header cannot hide it, and equal versions are reported as is.
+#[test]
+fn retained_pdf_version_is_the_later_of_header_and_catalog() {
+    let dir = workdir("optimize-retain-version-later");
+    let mut a = auto(&dir);
+    let blank = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 300, "height": 400 }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_optimize", json!({ "doc": blank, "path": "v14.pdf", "compatibility": "1.4" }));
+    let mut cos = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("v14.pdf")).unwrap())).unwrap();
+    let root = cos.root().unwrap();
+    cos.update_dict(root, |c| c.set(b"Version".to_vec(), pdfcraft_cos::Object::name("1.4"))).unwrap();
+    for (label, header, expected) in [("higher-header", "1.7", "1.7"), ("equal", "1.4", "1.4")] {
+        cos.set_version(header);
+        let input = pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions { object_streams: false, ..Default::default() }).unwrap();
+        std::fs::write(dir.join(format!("{label}-input.pdf")), input).unwrap();
+        let doc = ok(&mut a, "doc_open", json!({ "path": format!("{label}-input.pdf") }))["doc"].as_u64().unwrap();
+        let out = format!("{label}-output.pdf");
+        let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": out, "compatibility": "retain", "object_streams": false }));
+        assert!(std::fs::read(dir.join(&out)).unwrap().starts_with(format!("%PDF-{expected}\n").as_bytes()), "{label}: written header");
+        assert_eq!(r["pdf_version"].as_str(), Some(expected), "{label}: {r}");
+    }
+}
+
 /// `data` as LZW with one 9-bit literal code per byte (clear-table first, EOD last): valid for
 /// fewer than 250 bytes, before the code width grows.
 fn lzw_literals(data: &[u8]) -> Vec<u8> {
