@@ -1,4 +1,4 @@
-use super::{LayerOp, PdfCraftApp, Pos2, Rect};
+use super::{Edit, LayerOp, PdfCraftApp, Pos2, Rect};
 
 /// A validation badge drawn over a signature widget: the widget rectangle (user space), the verdict it shows, and its hover text.
 pub(crate) struct SignatureBadge {
@@ -42,21 +42,15 @@ pub(super) fn page_scroll<R>(
     ui.scope_builder(egui::UiBuilder::new().scope_id(id), |ui| scroll.show_viewport(ui, draw)).inner
 }
 
-/// Run a push button's action (the ones that need no JavaScript engine).
-pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action: pdfcraft_engine::form_scripts::ButtonAction) {
+/// Run a field's action: a push button's click, or any trigger's ([`PdfCraftApp::run_field_trigger`]).
+/// A script goes to the JavaScript engine; the other actions need none.
+pub(crate) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action: pdfcraft_engine::form_scripts::ButtonAction) {
     use pdfcraft_engine::form_scripts::ButtonAction as B;
     let pages = app.session.get(app.views[index].id).map_or(0, |d| d.info.pages.len());
     match action {
-        B::Reset { fields, exclude } => {
-            let all: Vec<String> = app.session.get(app.views[index].id).map(|d| d.form.iter().map(|f| f.name.clone()).collect()).unwrap_or_default();
-            let listed = |n: &String| fields.iter().any(|f| n == f || n.starts_with(&format!("{f}.")));
-            let names = match (fields.is_empty(), exclude) {
-                (true, _) => None,
-                (false, false) => Some(all.iter().filter(|n| listed(n)).cloned().collect()),
-                (false, true) => Some(all.iter().filter(|n| !listed(n)).cloned().collect()),
-            };
+        B::Reset { .. } => {
             app.views[index].forms.focus = None;
-            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::ResetForm { names });
+            app.views[index].pending_edit = action_edit(app, index, &action);
         }
         B::Named(n) => match n.as_str() {
             "Print" => app.open_print(),
@@ -71,27 +65,9 @@ pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action
         },
         B::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Button),
         B::GoTo(p) => app.views[index].go_to_page(p.min(pages.saturating_sub(1))),
-        B::ShowHide { fields, hide } => {
-            let listed = |n: &String| fields.iter().any(|f| n == f || n.starts_with(&format!("{f}.")));
-            // `display.hidden` 1, `display.visible` 0, as a script setting `field.display` would.
-            let changes: Vec<pdfcraft_engine::FieldChange> = app
-                .session
-                .get(app.views[index].id)
-                .map(|d| d.form.iter().filter(|f| listed(&f.name)).map(|f| f.name.clone()).collect::<Vec<_>>())
-                .unwrap_or_default()
-                .into_iter()
-                .map(|name| pdfcraft_engine::FieldChange {
-                    name,
-                    value: None,
-                    read_only: None,
-                    required: None,
-                    display: Some(if hide { 1 } else { 0 }),
-                })
-                .collect();
-            if !changes.is_empty() {
-                let label = if hide { "Hide a field" } else { "Show a field" };
-                app.views[index].pending_edit =
-                    Some(pdfcraft_engine::Edit::Batch { label: label.into(), edits: vec![pdfcraft_engine::Edit::ApplyScriptChanges { changes }] });
+        B::ShowHide { .. } => {
+            if let Some(edit) = action_edit(app, index, &action) {
+                app.views[index].pending_edit = Some(edit);
             }
         }
         B::SetLayers { changes, preserve_rb } => {
@@ -119,6 +95,44 @@ pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, action
             let id = app.views[index].id;
             app.run_button_script(id, name, &js);
         }
+    }
+}
+
+/// The edit a reset or show/hide action makes on tab `index`: the fields it names (and their
+/// kids) reset, or shown or hidden as a script setting `field.display` would. `None` for any
+/// other action, and for a show/hide that names no field the form has.
+pub(crate) fn action_edit(app: &PdfCraftApp, index: usize, action: &pdfcraft_engine::form_scripts::ButtonAction) -> Option<Edit> {
+    use pdfcraft_engine::form_scripts::ButtonAction as B;
+    let doc = app.session.get(app.views.get(index)?.id)?;
+    let listed = |fields: &[String], n: &String| fields.iter().any(|f| n == f || n.starts_with(&format!("{f}.")));
+    match action {
+        B::Reset { fields, exclude } => {
+            let all = doc.form.iter().map(|f| &f.name);
+            let names = match (fields.is_empty(), exclude) {
+                (true, _) => None,
+                (false, false) => Some(all.filter(|n| listed(fields, n)).cloned().collect()),
+                (false, true) => Some(all.filter(|n| !listed(fields, n)).cloned().collect()),
+            };
+            Some(Edit::ResetForm { names })
+        }
+        B::ShowHide { fields, hide } => {
+            // `display.hidden` 1, `display.visible` 0, as a script setting `field.display` would.
+            let changes: Vec<pdfcraft_engine::FieldChange> = doc
+                .form
+                .iter()
+                .filter(|f| listed(fields, &f.name))
+                .map(|f| pdfcraft_engine::FieldChange {
+                    name: f.name.clone(),
+                    value: None,
+                    read_only: None,
+                    required: None,
+                    display: Some(if *hide { 1 } else { 0 }),
+                })
+                .collect();
+            let label = if *hide { "Hide a field" } else { "Show a field" };
+            (!changes.is_empty()).then(|| Edit::Batch { label: label.into(), edits: vec![Edit::ApplyScriptChanges { changes }] })
+        }
+        _ => None,
     }
 }
 
