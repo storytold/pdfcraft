@@ -649,6 +649,7 @@ impl PdfCraftApp {
         }
         self.remember_view(index);
         let id = self.views.remove(index).id;
+        self.placed_signatures.remove(&id);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
             if self.closed_tabs.len() == 10 {

@@ -50,6 +50,7 @@ struct Pending {
     revert_now: bool,
     overwrite_now: bool,
     overwrite_elsewhere: bool,
+    lock_answer: Option<bool>,
     summarize_now: bool,
     optimize_now: bool,
     duplicate_now: Option<Edit>,
@@ -271,6 +272,11 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
         }
         Dialog::SummarizeComments => {
             if !dialog_summarize_comments(ui, app, req) {
+                return false;
+            }
+        }
+        Dialog::LockSignatures => {
+            if !dialog_lock_signatures(ui, app, req) {
                 return false;
             }
         }
@@ -1232,6 +1238,31 @@ fn dialog_summarize_comments(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut
     false
 }
 
+/// `Dialog::LockSignatures` content (#2149). Returns `false` when it has its own buttons and no
+/// footer is wanted.
+fn dialog_lock_signatures(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
+    ui.label(egui::RichText::new(tl!("Lock your signature into the page?")).font(theme::semibold(18.0)));
+    ui.add_space(8.0);
+    ui.label(tl!("A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page."));
+    ui.add_space(8.0);
+    ui.add(widgets::checkbox(&mut app.lock_remember, tl!("Don't ask again")));
+    ui.add_space(12.0);
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        if widgets::pill_button(ui, tl!("Lock and save"), true).clicked() {
+            req.lock_answer = Some(true);
+            req.close = true;
+        }
+        if widgets::pill_button(ui, tl!("Keep editable"), false).clicked() {
+            req.lock_answer = Some(false);
+            req.close = true;
+        }
+        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+            req.close = true;
+        }
+    });
+    false
+}
+
 /// `Dialog::Revert` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_revert(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
     let name = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.name.clone()).unwrap_or_default();
@@ -1656,6 +1687,14 @@ fn finish_requests(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, re
     if dialog == Dialog::OverwriteChanged && (modal_closed || req.close) {
         app.pending_overwrite = None;
     }
+    if let Some(lock) = req.lock_answer {
+        let remember = std::mem::take(&mut app.lock_remember);
+        app.answer_lock_signatures(lock, remember);
+    } else if dialog == Dialog::LockSignatures && (modal_closed || req.close) {
+        // Cancelled or dismissed: nothing is saved.
+        app.pending_lock = None;
+        app.lock_remember = false;
+    }
 }
 
 /// Runs the document actions the dialog asked for.
@@ -1836,7 +1875,11 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     // Protect / Remove security replace the Properties dialog.
     let replaces = req.link_command.is_some_and(|c| c.starts_with("protect.")) || req.open_revision.is_some();
     if modal_closed || req.close || replaces {
-        app.dialog = None;
+        // An answer may have opened another dialog this frame (saving a file that changed on
+        // disk asks about that): it stays.
+        if app.dialog == Some(dialog) {
+            app.dialog = None;
+        }
         app.props_draft = None;
         app.view_draft = None;
         app.custom_draft = None;

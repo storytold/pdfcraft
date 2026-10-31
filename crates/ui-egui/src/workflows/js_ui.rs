@@ -529,6 +529,10 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     ui.add_space(8.0);
     ui.label(egui::RichText::new(tl!("Fill & Sign")).font(theme::semibold(13.0)));
     ui.add(widgets::checkbox(&mut app.flatten_fill_sign_on_save, tl!("Flatten Fill & Sign when saving")));
+    ui.add_enabled(
+        !app.flatten_fill_sign_on_save,
+        widgets::checkbox(&mut app.ask_to_lock_signatures, tl!("Otherwise, ask on the first save after a signature is placed")),
+    );
     ui.label(
         egui::RichText::new(tl!("Text, marks and signatures become part of the page. Other comments stay editable.")).small().color(t.text_muted),
     );

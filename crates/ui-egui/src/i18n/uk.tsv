@@ -2279,6 +2279,17 @@ calendar date	December	грудня
 	Smaller pages	Менші сторінки
 	Reset page size	Скинути розмір сторінок
 	Flatten Fill & Sign when saving	Звести «Заповнення й підпис» під час збереження
+# AI-assisted additions for the lock-signatures prompt (#2149) (2026-10-16); not reviewed by a native speaker.
+	Lock your signature into the page?	Закріпити підпис на сторінці?
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	Розміщений підпис є коментарем, доки його не закріплено: будь-хто з редактором PDF може його перемістити або видалити. Закріплення робить текст, позначки й підписи з «Заповнити й підписати» частиною сторінки.
+	Don't ask again	Більше не питати
+	Lock and save	Закріпити й зберегти
+	Keep editable	Залишити редагованим
+	Lock into the page when saving	Закріплювати на сторінці під час збереження
+	Otherwise, ask on the first save after a signature is placed	Інакше питати під час першого збереження після розміщення підпису
+	Signature added. Others can move it until it's locked.	Підпис додано. Інші можуть переміщувати його, доки його не закріплено.
+	Lock now	Закріпити зараз
+	Signature locked into the page.	Підпис закріплено на сторінці.
 	Text, marks and signatures become part of the page. Other comments stay editable.	Текст, позначки й підписи стають частиною сторінки. Інші коментарі залишаються редагованими.
 	Date format	Формат дати
 	Fill & Sign dates	Дати заповнення й підпису

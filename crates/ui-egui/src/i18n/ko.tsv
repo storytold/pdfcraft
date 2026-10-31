@@ -2791,6 +2791,16 @@ theme	Appearance	모양
 	field names can't contain a period: {name}	필드 이름에는 마침표를 쓸 수 없습니다: {name}
 	two cells would both be named {name}	두 셀의 이름이 모두 {name}이(가) 됩니다
 	a field named {name} already exists	{name}(이)라는 필드가 이미 있습니다
+	Lock your signature into the page?	서명을 페이지에 고정하시겠습니까?
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	배치한 서명은 고정하기 전까지 주석입니다. PDF 편집기가 있는 사람은 누구나 이를 이동하거나 제거할 수 있습니다. 고정하면 채우기 및 서명의 텍스트, 표시 및 서명이 페이지의 일부가 됩니다.
+	Lock and save	고정 및 저장
+	Keep editable	편집 가능하게 유지
+	Don't ask again	다시 묻지 않음
+	Lock into the page when saving	저장할 때 페이지에 고정
+	Otherwise, ask on the first save after a signature is placed	그렇지 않으면 서명을 배치한 후 처음 저장할 때 묻기
+	Signature added. Others can move it until it's locked.	서명이 추가되었습니다. 고정하기 전까지 다른 사람이 이동할 수 있습니다.
+	Lock now	지금 고정
+	Signature locked into the page.	서명이 페이지에 고정되었습니다.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	오늘

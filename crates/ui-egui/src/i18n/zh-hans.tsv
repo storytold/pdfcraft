@@ -140,6 +140,17 @@
 	Side panels	侧边面板
 	Enable Acrobat JavaScript	启用 Acrobat JavaScript
 	Flatten Fill & Sign when saving	保存时拼合填写与签名
+# AI-assisted additions for the lock-signatures prompt (#2149) (2026-10-16); not reviewed by a native speaker.
+	Lock your signature into the page?	将签名锁定到页面中？
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	放置的签名在锁定前只是注释：任何有 PDF 编辑器的人都能移动或删除它。锁定后，“填写和签名”的文字、标记和签名会成为页面的一部分。
+	Don't ask again	不再询问
+	Lock and save	锁定并保存
+	Keep editable	保持可编辑
+	Lock into the page when saving	保存时锁定到页面
+	Otherwise, ask on the first save after a signature is placed	否则，在放置签名后首次保存时询问
+	Signature added. Others can move it until it's locked.	已添加签名。锁定之前，其他人可以移动它。
+	Lock now	立即锁定
+	Signature locked into the page.	签名已锁定到页面。
 	Text, marks and signatures become part of the page. Other comments stay editable.	文字、标记和签名会成为页面内容。其他注释仍可编辑。
 	OK	确定
 	Cancel	取消

@@ -2716,6 +2716,16 @@ key	Space	Space
 	Collapse all tools	ยุบเครื่องมือทั้งหมด
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
+	Lock your signature into the page?	ล็อกลายเซ็นของคุณเข้ากับหน้าหรือไม่
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	ลายเซ็นที่วางไว้เป็นความคิดเห็นจนกว่าจะล็อก: ใครก็ตามที่มีโปรแกรมแก้ไข PDF สามารถย้ายหรือเอาออกได้ การล็อกจะทำให้ข้อความ เครื่องหมาย และลายเซ็นจากกรอกและเซ็นกลายเป็นส่วนหนึ่งของหน้า
+	Lock and save	ล็อกและบันทึก
+	Keep editable	คงไว้ให้แก้ไขได้
+	Don't ask again	ไม่ต้องถามอีก
+	Lock into the page when saving	ล็อกเข้ากับหน้าเมื่อบันทึก
+	Otherwise, ask on the first save after a signature is placed	หรือถามเมื่อบันทึกครั้งแรกหลังจากวางลายเซ็น
+	Signature added. Others can move it until it's locked.	เพิ่มลายเซ็นแล้ว ผู้อื่นสามารถย้ายได้จนกว่าจะล็อก
+	Lock now	ล็อกเดี๋ยวนี้
+	Signature locked into the page.	ล็อกลายเซ็นเข้ากับหน้าแล้ว
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	วันนี้

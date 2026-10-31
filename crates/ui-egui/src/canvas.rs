@@ -473,6 +473,9 @@ pub struct DocView {
     pub fill_text: Option<crate::fill_sign::TypeBox>,
     /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
     pub(crate) fill_signature_page: Option<usize>,
+    /// The "Signature added … Lock now" notice was dismissed; placing another signature shows it
+    /// again (#2149).
+    pub(crate) lock_offer_dismissed: bool,
     pub(crate) signature_drag: crate::signature_drag::SignatureDrag,
     /// What the page modules claim for the cursor this frame; `document_area` sets it once.
     pub(crate) cursor: crate::page_cursor::PageCursor,
@@ -567,6 +570,8 @@ pub enum ViewAction {
     CameraLevel,
     /// After Enhance page: leave the tool for this command (Crop pages, Organize pages).
     CameraNext(&'static str),
+    /// Lock now, on the notice shown after a signature is placed (#2149).
+    LockSignatures,
 }
 
 impl DocView {
@@ -734,6 +739,7 @@ impl DocView {
             marquee_done: None,
             fill_text: None,
             fill_signature_page: None,
+            lock_offer_dismissed: false,
             signature_drag: Default::default(),
             cursor: Default::default(),
             router: Default::default(),
@@ -2570,6 +2576,12 @@ fn apply_notice(app: &mut PdfCraftApp, index: usize, notice: Option<Notice>) {
         Some(Notice::Console) => app.dialog = Some(crate::Dialog::JsConsole),
         // Back on in Preferences ▸ General.
         Some(Notice::HideSecured) => app.show_secured_notice = false,
+        // Handled by the app with the other view actions (`ViewAction`).
+        Some(Notice::LockSignatures) => {
+            if let Some(view) = app.views.get_mut(index) {
+                view.pending_action = Some(ViewAction::LockSignatures);
+            }
+        }
         None => {}
     }
 }
@@ -3031,13 +3043,19 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
     let text_style = app.text_style.clone();
     let show_secured_notice = app.show_secured_notice;
+    // Offer to lock a just-placed signature (#2149) on the same terms the save-time question
+    // asks: one is still there, saving doesn't lock it anyway, and the document isn't signed.
+    let lock_offer = !app.flatten_fill_sign_on_save
+        && app.placed_signatures.contains(&app.views[index].id)
+        && doc.info.annotations.iter().any(|a| a.fill_sign)
+        && !doc.is_signed();
     let view = &mut app.views[index];
     // Opened without the owner password and something is restricted. The notice says so unless
     // the user turned it off (#4035): the restrictions themselves, and Document Properties ▸
     // Security, stay as they are.
     let secured = show_secured_notice && doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
     let repaired = !doc.repair_log().is_empty();
-    let notice = notices(view, doc, secured, repaired, crate::sign_ui::banner(&doc.signatures), ui, &t);
+    let notice = notices(view, doc, secured, repaired, lock_offer, crate::sign_ui::banner(&doc.signatures), ui, &t);
     apply_notice(app, index, notice);
     let Some(doc) = app.session.get(app.views[index].id) else { return };
     let info = &doc.info;

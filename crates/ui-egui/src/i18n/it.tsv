@@ -2216,6 +2216,17 @@
 	Files are combined in this order. Leave Pages empty to take every page.	I file vengono combinati in quest'ordine. Lascia vuoto Pagine per prendere tutte le pagine.
 	Fill & Sign dates	Date di Compila e firma
 	Flatten Fill & Sign when saving	Appiattisci Compila e firma al salvataggio
+# AI-assisted additions for the lock-signatures prompt (#2149) (2026-10-16); not reviewed by a native speaker.
+	Lock your signature into the page?	Bloccare la firma nella pagina?
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	Una firma inserita è un commento finché non viene bloccata: chiunque abbia un editor PDF può spostarla o rimuoverla. Il blocco rende testo, segni e firme di Compila e firma parte della pagina.
+	Don't ask again	Non chiedere più
+	Lock and save	Blocca e salva
+	Keep editable	Mantieni modificabile
+	Lock into the page when saving	Blocca nella pagina al salvataggio
+	Otherwise, ask on the first save after a signature is placed	Altrimenti, chiedi al primo salvataggio dopo aver inserito una firma
+	Signature added. Others can move it until it's locked.	Firma aggiunta. Altri possono spostarla finché non viene bloccata.
+	Lock now	Blocca ora
+	Signature locked into the page.	Firma bloccata nella pagina.
 	H / Space (hold)	H / Spazio (tieni premuto)
 	Home / End	Home / Fine
 	Inserted text	Testo inserito

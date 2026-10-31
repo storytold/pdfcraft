@@ -2204,6 +2204,17 @@ signature pad	Type	Vtipkaj
 	Document properties ({key})	Lastnosti dokumenta ({key})
 	Fill & Sign dates	Datumi pri Izpolni in podpiši
 	Flatten Fill & Sign when saving	Splošči Izpolni in podpiši ob shranjevanju
+# AI-assisted additions for the lock-signatures prompt (#2149) (2026-10-16); not reviewed by a native speaker.
+	Lock your signature into the page?	Zakleniti podpis v stran?
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	Postavljen podpis je komentar, dokler ni zaklenjen: vsak z urejevalnikom PDF ga lahko premakne ali odstrani. Zaklepanje naredi besedilo, oznake in podpise iz Izpolni in podpiši del strani.
+	Don't ask again	Ne sprašuj več
+	Lock and save	Zakleni in shrani
+	Keep editable	Ohrani urejljivo
+	Lock into the page when saving	Ob shranjevanju zakleni v stran
+	Otherwise, ask on the first save after a signature is placed	Sicer vprašaj ob prvem shranjevanju po postavitvi podpisa
+	Signature added. Others can move it until it's locked.	Podpis je dodan. Drugi ga lahko premaknejo, dokler ni zaklenjen.
+	Lock now	Zakleni zdaj
+	Signature locked into the page.	Podpis je zaklenjen v stran.
 	Font size 0 uses automatic sizing.	Velikost pisave 0 pomeni samodejno velikost.
 	Import list…	Uvozi seznam…
 	Larger pages	Večje strani

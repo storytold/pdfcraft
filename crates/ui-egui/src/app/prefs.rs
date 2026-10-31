@@ -101,6 +101,7 @@ impl PdfCraftApp {
             // Null follows the system's text scaling.
             "ui_scale": self.ui_scale,
             "flatten_fill_sign": self.flatten_fill_sign_on_save,
+            "ask_to_lock_signatures": self.ask_to_lock_signatures,
             "fill_text_size": self.fill_text_size,
             "date_format": self.session.date_format(),
             // Null follows the interface language.
@@ -258,6 +259,9 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["flatten_fill_sign"].as_bool() {
             self.flatten_fill_sign_on_save = on;
+        }
+        if let Some(on) = v["ask_to_lock_signatures"].as_bool() {
+            self.ask_to_lock_signatures = on;
         }
         if let Some(size) = v["fill_text_size"].as_f64().and_then(fill_sign::valid_text_size) {
             self.fill_text_size = size;

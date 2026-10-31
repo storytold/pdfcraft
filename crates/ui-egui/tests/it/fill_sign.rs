@@ -4,7 +4,7 @@ use egui::{Pos2, pos2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::fill_sign::{FillTool, SavedSig};
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool};
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool, SaveTarget};
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -1750,6 +1750,303 @@ fn photos_and_images_dropped_on_the_signature_pad_are_imported_not_opened() {
     assert!(h.state().toast.as_ref().unwrap().0.contains("Couldn't import"));
     assert_eq!(h.state().views.len(), tabs, "nothing opened behind the dialog");
     std::fs::remove_file(photo).unwrap();
+}
+
+/// #2149: the first save after Fill & Sign places a signature asks whether to lock it into the
+/// page. Lock and save flattens it; Keep editable keeps it a comment; Don't ask again becomes
+/// the preference; the Fill & Sign panel has the switch too, once, and the Sign menu no longer
+/// does (review on #2348).
+#[test]
+fn the_first_save_after_placing_a_signature_asks_to_lock_it() {
+    let out = std::env::temp_dir().join(format!("pdfcraft-lock-signature-{}.pdf", std::process::id()));
+    let mut h = harness();
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 300.0);
+    let signed = |h: &Harness<'static, PdfCraftApp>| {
+        h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().filter(|a| a.fill_sign).count()
+    };
+    assert_eq!(signed(&h), 1);
+    // Keep editable: saved, still a comment, and not asked again for this placement.
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks first");
+    h.run_steps(2);
+    h.get_by_label("Lock your signature into the page?");
+    h.get_by_label("Keep editable").click();
+    h.run_steps(3);
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty, "saved");
+    assert_eq!(signed(&h), 1, "still a removable comment");
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "no new signature: no question");
+    // A new signature asks again; Lock and save with Don't ask again flattens and remembers.
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 200.0);
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    h.run_steps(2);
+    h.get_by_label("Don't ask again").click();
+    h.run_steps(1);
+    h.get_by_label("Lock and save").click();
+    h.run_steps(3);
+    assert_eq!(signed(&h), 0, "locked into the page");
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+    assert!(h.state().flatten_fill_sign_on_save, "remembered as the preference");
+    // The switch is in the panel's Sign yourself section, once; the Sign menu over the page,
+    // where it was easy to miss, no longer has it.
+    h.state_mut().flatten_fill_sign_on_save = false;
+    h.get_by_label("Fill & Sign").click();
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign").click();
+    h.run_steps(2);
+    h.get_by_label("Use signature");
+    assert!(h.query_by_label("Lock into the page when saving").is_none(), "not in the Sign menu");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.query_by_label("Lock into the page when saving").is_none(), "the panel is closed");
+    h.state_mut().left = pdfcraft_ui_egui::LeftPanel::Tool("fill_sign");
+    h.state_mut().left_open = true;
+    h.run_steps(3);
+    h.get_by_label("Use signature");
+    assert_eq!(h.query_all_by_label("Lock into the page when saving").count(), 1, "once, in the panel");
+    h.get_by_label("Lock into the page when saving").click();
+    h.run_steps(2);
+    assert!(h.state().flatten_fill_sign_on_save);
+    let _ = std::fs::remove_file(&out);
+}
+
+/// #2348 review (benandez): right after a signature is placed, a notice offers to lock it into
+/// the page now. Lock now flattens it (undoable) without saving, so the save that follows doesn't
+/// ask; undoing the lock brings back both the notice and the question. Dismiss hides the notice
+/// until the next signature. A digitally signed document, or one whose saves lock anyway, gets no
+/// notice.
+#[test]
+fn placing_a_signature_offers_to_lock_it_now() {
+    const NOTICE: &str = "Signature added. Others can move it until it's locked.";
+    let out = std::env::temp_dir().join(format!("pdfcraft-lock-now-{}.pdf", std::process::id()));
+    let place = |h: &mut Harness<'static, PdfCraftApp>, y: f32| {
+        h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+        h.state_mut().execute("sign.fill.signature");
+        h.run_steps(2);
+        click(h, 40.0, y);
+        h.run_steps(2);
+    };
+    let marks = |h: &Harness<'static, PdfCraftApp>| {
+        h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().filter(|a| a.fill_sign).count()
+    };
+    let mut h = harness();
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    assert!(h.query_by_label(NOTICE).is_none(), "nothing placed yet");
+    place(&mut h, 300.0);
+    h.get_by_label(NOTICE);
+    h.get_by_label("Lock now").click();
+    h.run_steps(3);
+    assert_eq!(marks(&h), 0, "locked into the page");
+    assert!(h.query_by_label(NOTICE).is_none(), "nothing left to lock");
+    assert!(h.state().session.get(h.state().views[0].id).unwrap().dirty, "locked, not saved");
+    // Undo brings the movable signature back, with the notice and the save-time question.
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    assert_eq!(marks(&h), 1);
+    h.get_by_label(NOTICE);
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks again after undoing the lock");
+    h.run_steps(2);
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    // Locked again, the save doesn't ask.
+    h.get_by_label("Lock now").click();
+    h.run_steps(3);
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "already locked: no question");
+    // Dismiss hides it until the next signature.
+    place(&mut h, 200.0);
+    h.get_by_label(NOTICE);
+    h.get_by_label("Dismiss").click();
+    h.run_steps(2);
+    assert!(h.query_by_label(NOTICE).is_none(), "dismissed");
+    place(&mut h, 100.0);
+    h.get_by_label(NOTICE);
+    // Once saved, a signature kept as a comment is no longer just placed: no notice.
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks first");
+    h.run_steps(2);
+    h.get_by_label("Keep editable").click();
+    h.run_steps(3);
+    assert!(marks(&h) > 0, "still a comment");
+    assert!(h.query_by_label(NOTICE).is_none(), "saved: nothing just placed");
+    place(&mut h, 50.0);
+    h.get_by_label(NOTICE);
+    // Saves that lock anyway need no offer.
+    h.state_mut().flatten_fill_sign_on_save = true;
+    h.run_steps(2);
+    assert!(h.query_by_label(NOTICE).is_none(), "saving locks it anyway");
+    let _ = std::fs::remove_file(&out);
+
+    // Digitally signed: no notice, as locking would change the document after signing.
+    let mut doc = {
+        let mut h = harness();
+        let app = h.state_mut();
+        let id = app.views[0].id;
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+        let digital_id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
+        let opts = pdfcraft_engine::SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), ..Default::default() };
+        app.session.sign(id, &digital_id, opts).expect("signs")
+    };
+    let mut h = harness_bytes(&std::mem::take(&mut doc));
+    place(&mut h, 300.0);
+    assert_eq!(marks(&h), 1);
+    assert!(h.query_by_label(NOTICE).is_none(), "a signed document isn't offered the lock");
+}
+
+/// #2348 review: locking takes the placed signature out of the comments, so its selection goes
+/// too; a stale (page, index) would point at nothing, or at another comment.
+#[test]
+fn locking_a_signature_clears_the_comment_selection() {
+    let mut h = harness();
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 300.0);
+    h.run_steps(2);
+    assert!(h.state().views[0].comments.selected.is_some(), "the placed signature is selected");
+    h.get_by_label("Lock now").click();
+    h.run_steps(3);
+    assert!(h.state().views[0].comments.selected.is_none(), "nothing left to select");
+}
+
+/// #2348 review: when locking the signature fails (here the document's security allows comments
+/// but not changes), nothing is lost: the next save asks again, and "Don't ask again" isn't
+/// remembered.
+#[test]
+fn a_lock_that_fails_keeps_the_question() {
+    let out = std::env::temp_dir().join(format!("pdfcraft-lock-fails-{}.pdf", std::process::id()));
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(FIXTURE.to_vec())).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        // Everything but bit 4, modifying the document.
+        permissions: -1 ^ 8,
+        encrypt_metadata: true,
+        seed: [4; 32],
+    })
+    .unwrap();
+    let mut h = harness_bytes(&pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 300.0);
+    let signed = |h: &Harness<'static, PdfCraftApp>| {
+        h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().filter(|a| a.fill_sign).count()
+    };
+    assert_eq!(signed(&h), 1, "comments are allowed");
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks first");
+    h.run_steps(2);
+    h.get_by_label("Don't ask again").click();
+    h.run_steps(1);
+    h.get_by_label("Lock and save").click();
+    h.run_steps(3);
+    assert_eq!(signed(&h), 1, "changes aren't allowed: still a comment");
+    assert!(!h.state().flatten_fill_sign_on_save, "the failed answer isn't remembered");
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "the next save asks again");
+    h.run_steps(2);
+    h.get_by_label("Lock your signature into the page?");
+    let _ = std::fs::remove_file(&out);
+}
+
+/// #2348 review: the lock question stays out of the way where it must. Answering it on a file
+/// that changed on disk leaves the changed-on-disk question showing (it was closed with the lock
+/// question, so the save silently didn't happen); a signature placed and then undone asks
+/// nothing; and a digitally signed document isn't asked, since locking would change it after
+/// signing.
+#[test]
+fn the_lock_question_is_skipped_or_kept_where_it_must_be() {
+    let place = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+        h.state_mut().execute("sign.fill.signature");
+        h.run_steps(2);
+        click(h, 40.0, 300.0);
+    };
+    // A file that changed on disk.
+    let path = std::env::temp_dir().join(format!("pdfcraft-lock-changed-{}.pdf", std::process::id()));
+    std::fs::write(&path, FIXTURE).unwrap();
+    let mut h = harness_bytes(FIXTURE);
+    h.state_mut().close_tab(0);
+    h.state_mut().open_path(&path.to_string_lossy());
+    for _ in 0..100 {
+        if !h.state().views.is_empty() {
+            break;
+        }
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(3);
+    place(&mut h);
+    std::fs::write(&path, [FIXTURE, b"\n% rewritten elsewhere\n".as_slice()].concat()).unwrap();
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks first");
+    h.run_steps(2);
+    h.get_by_label("Keep editable").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::OverwriteChanged), "the changed-on-disk question shows");
+    let _ = std::fs::remove_file(&path);
+
+    // Placed, then undone: nothing to lock, so the save just saves.
+    let out = std::env::temp_dir().join(format!("pdfcraft-lock-undone-{}.pdf", std::process::id()));
+    let mut h = harness();
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    place(&mut h);
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "no question after the signature was undone");
+    let _ = std::fs::remove_file(&out);
+
+    // Digitally signed: never asked.
+    let mut doc = {
+        let mut h = harness();
+        let app = h.state_mut();
+        let id = app.views[0].id;
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+        let digital_id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
+        let opts = pdfcraft_engine::SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), ..Default::default() };
+        app.session.sign(id, &digital_id, opts).expect("signs")
+    };
+    let mut h = harness_bytes(&std::mem::take(&mut doc));
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    place(&mut h);
+    let id = h.state().views[0].id;
+    assert!(h.state().session.get(id).unwrap().is_signed());
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "a signed document isn't asked");
+    let _ = std::fs::remove_file(&out);
+}
+
+/// #2149: Cancel saves nothing, and Keep editable with Don't ask again turns the question off.
+#[test]
+fn cancelling_the_lock_question_saves_nothing() {
+    let out = std::env::temp_dir().join(format!("pdfcraft-lock-cancel-{}.pdf", std::process::id()));
+    let _ = std::fs::remove_file(&out);
+    let mut h = harness();
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 300.0);
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    h.run_steps(2);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(!out.exists() && h.state().session.get(h.state().views[0].id).unwrap().dirty, "nothing saved");
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asked again");
+    h.run_steps(2);
+    h.get_by_label("Don't ask again").click();
+    h.run_steps(1);
+    h.get_by_label("Keep editable").click();
+    h.run_steps(3);
+    assert!(out.exists() && !h.state().ask_to_lock_signatures);
+    let restored = {
+        let mut a = PdfCraftApp::new();
+        a.restore(&h.state().persist());
+        a.ask_to_lock_signatures
+    };
+    assert!(!restored, "kept with the settings");
+    let _ = std::fs::remove_file(&out);
 }
 
 /// Where a mode bar tab is, by its label.

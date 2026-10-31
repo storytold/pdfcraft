@@ -2546,6 +2546,16 @@ animation effects	Off	Joaktiv
 	field names can't contain a period: {name}	emrat e fushave nuk mund të përmbajnë pikë: {name}
 	two cells would both be named {name}	dy qeliza do të kishin të dyja emrin {name}
 	a field named {name} already exists	ekziston tashmë një fushë me emrin {name}
+	Lock your signature into the page?	Të kyçet nënshkrimi në faqe?
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	Një nënshkrim i vendosur është koment derisa të kyçet: kushdo me një redaktues PDF mund ta zhvendosë ose ta heqë. Kyçja i bën tekstin, shenjat dhe nënshkrimet e Plotëso dhe nënshkruaj pjesë të faqes.
+	Lock and save	Kyç dhe ruaj
+	Keep editable	Mbaje të redaktueshëm
+	Don't ask again	Mos pyet më
+	Lock into the page when saving	Kyç në faqe gjatë ruajtjes
+	Otherwise, ask on the first save after a signature is placed	Përndryshe, pyet në ruajtjen e parë pasi të vendoset një nënshkrim
+	Signature added. Others can move it until it's locked.	Nënshkrimi u shtua. Të tjerët mund ta zhvendosin derisa të kyçet.
+	Lock now	Kyç tani
+	Signature locked into the page.	Nënshkrimi u kyç në faqe.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Sot

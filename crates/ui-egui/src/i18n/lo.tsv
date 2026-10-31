@@ -2464,6 +2464,16 @@ animation effects	Off	ປິດ
 	No tools match your search.	ບໍ່ມີເຄື່ອງມືທີ່ກົງກັບການຄົ້ນຫາຂອງທ່ານ.
 	Expand all tools	ຂະຫຍາຍເຄື່ອງມືທັງໝົດ
 	Collapse all tools	ຫຍໍ້ເຄື່ອງມືທັງໝົດເຂົ້າ
+	Lock your signature into the page?	ລັອກລາຍເຊັນຂອງທ່ານເຂົ້າໃນໜ້າບໍ່?
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	ລາຍເຊັນທີ່ວາງໄວ້ເປັນຄຳເຫັນຈົນກວ່າຈະຖືກລັອກ: ທຸກຄົນທີ່ມີໂປຣແກຣມແກ້ໄຂ PDF ສາມາດຍ້າຍ ຫຼື ລຶບມັນອອກໄດ້. ການລັອກຈະເຮັດໃຫ້ຂໍ້ຄວາມ, ເຄື່ອງໝາຍ ແລະ ລາຍເຊັນຂອງ ຕື່ມຂໍ້ມູນ & ເຊັນ ກາຍເປັນສ່ວນໜຶ່ງຂອງໜ້າ.
+	Lock and save	ລັອກ ແລະ ບັນທຶກ
+	Keep editable	ໃຫ້ແກ້ໄຂໄດ້ຢູ່
+	Don't ask again	ບໍ່ຕ້ອງຖາມອີກ
+	Lock into the page when saving	ລັອກເຂົ້າໃນໜ້າເມື່ອບັນທຶກ
+	Otherwise, ask on the first save after a signature is placed	ຖ້າບໍ່ດັ່ງນັ້ນ, ຖາມເມື່ອບັນທຶກຄັ້ງທຳອິດຫຼັງຈາກວາງລາຍເຊັນ
+	Signature added. Others can move it until it's locked.	ເພີ່ມລາຍເຊັນແລ້ວ. ຄົນອື່ນສາມາດຍ້າຍມັນໄດ້ຈົນກວ່າຈະຖືກລັອກ.
+	Lock now	ລັອກດຽວນີ້
+	Signature locked into the page.	ລັອກລາຍເຊັນເຂົ້າໃນໜ້າແລ້ວ.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ມື້ນີ້

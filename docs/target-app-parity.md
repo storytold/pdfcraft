@@ -136,7 +136,7 @@ workflows, exchange edge cases and everything outside the mainstream slice are e
 | Print | 8% | 55% | Good on macOS and Linux; Windows prints since #847 (#756), not yet re-scored |
 | Highlight, sticky notes, text comments | 12% | 85% | All markup types, replies, properties |
 | Fill in forms | 10% | 85% | Every AcroForm field type, Acrobat's formatting and calculations |
-| Fill & Sign: typed, drawn or image signature | 10% | 85% | Fill & Sign tools; flatten on save |
+| Fill & Sign: typed, drawn or image signature | 10% | 85% | Fill & Sign tools; flatten on save (opt-in, and asked on the first save after signing) |
 | Rotate, delete, reorder and extract pages | 8% | 85% | Organize grid, drag reorder, thumbnails |
 | Combine files | 6% | 85% | Combine tab with bookmarks per file |
 | Fix a typo in existing text | 5% | 40% | Latin paragraphs only; font may be substituted |

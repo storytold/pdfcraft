@@ -2791,6 +2791,16 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	Lock your signature into the page?	अपने हस्ताक्षर को पृष्ठ में लॉक करें?
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	रखा गया हस्ताक्षर तब तक एक टिप्पणी है जब तक उसे लॉक न किया जाए: PDF संपादक वाला कोई भी व्यक्ति उसे हटा या खिसका सकता है। लॉक करने से आपके भरें व हस्ताक्षर करें के टेक्स्ट, चिह्न और हस्ताक्षर पृष्ठ का हिस्सा बन जाते हैं।
+	Lock and save	लॉक करें और सहेजें
+	Keep editable	संपादन योग्य रखें
+	Don't ask again	फिर से न पूछें
+	Lock into the page when saving	सहेजते समय पृष्ठ में लॉक करें
+	Otherwise, ask on the first save after a signature is placed	अन्यथा, हस्ताक्षर रखने के बाद पहली बार सहेजने पर पूछें
+	Signature added. Others can move it until it's locked.	हस्ताक्षर जोड़ा गया। लॉक होने तक दूसरे इसे खिसका सकते हैं।
+	Lock now	अभी लॉक करें
+	Signature locked into the page.	हस्ताक्षर पृष्ठ में लॉक कर दिया गया।
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज
