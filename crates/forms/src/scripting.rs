@@ -163,6 +163,17 @@ pub fn apply_script_changes(doc: &mut Document, changes: &[FieldChange], scripts
     Ok(())
 }
 
+/// Apply what the document-level scripts changed as the document opened (values, read-only,
+/// required, visibility). Calculations run again only when a value changed: hiding a field or
+/// setting a flag leaves every calculated value as it was saved.
+pub fn apply_open_script_changes(doc: &mut Document, changes: &[FieldChange], scripts: &mut dyn Scripts) -> Result<(), FormError> {
+    apply_changes(doc, changes, "")?;
+    if changes.iter().any(|c| c.value.is_some()) {
+        crate::recalculate_with(doc, scripts)?;
+    }
+    Ok(())
+}
+
 /// Document-level JavaScripts (the catalog's `/Names /JavaScript` tree), in name order: they
 /// define the functions field scripts call.
 pub fn document_scripts(doc: &Document) -> Vec<String> {

@@ -184,6 +184,35 @@ impl JsRunner {
     }
 }
 
+/// Run the document-level scripts as the document opens (ISO 32000-2 §12.6.4.17: "When the
+/// document is opened, all of the actions in this name tree shall be executed"), and apply to
+/// `work` the field changes they make: a form that hides its "your viewer may not be compatible"
+/// field from a document script shows without it. Returns the names of the fields changed,
+/// including fields a calculation the changes started rewrote; what the scripts printed, asked
+/// for or failed with goes to `out`.
+pub(crate) fn on_open(work: &mut pdfcraft_cos::Document, file_name: &str, out: &mut JsOutput) -> Result<Vec<String>, String> {
+    let mut runner = JsRunner::new(work, file_name);
+    if runner.doc_scripts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let fields = pdfcraft_forms::fields(work);
+    let states: Vec<_> = fields.iter().map(|f| field_state(work, f)).collect();
+    let o = pdfcraft_js::run("", &pdfcraft_js::Event::doc("Open"), &runner.doc, &states, &runner.doc_scripts, Limits::default());
+    out.absorb(&o);
+    let changes = changes(&states, &o.changed);
+    if changes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let applied = pdfcraft_forms::apply_open_script_changes(work, &changes, &mut runner).map_err(|e| e.to_string());
+    // What a calculation the changes started printed or failed with.
+    out.append(std::mem::take(&mut runner.output));
+    applied?;
+    // A value the scripts set reruns the calculations, which can change other fields too: name
+    // every field that differs from before opening, not only the ones the scripts touched.
+    let after: Vec<_> = pdfcraft_forms::fields(work).iter().map(|f| field_state(work, f)).collect();
+    Ok(self::changes(&states, &after).into_iter().map(|c| c.name).collect())
+}
+
 /// The Info dictionary as `this.info` keys (lower-case).
 fn info(cos: &pdfcraft_cos::Document) -> Vec<(String, String)> {
     let Some(d) = cos.trailer().get(b"Info").map(|i| cos.resolve(i)).and_then(|i| i.as_dict().cloned()) else { return Vec::new() };
@@ -214,8 +243,9 @@ impl Scripts for JsRunner {
         let o = pdfcraft_js::run_shared(script, &ev, &self.doc, std::sync::Arc::clone(&states), &self.doc_scripts, Limits::default());
         self.output.absorb(&o);
         if o.error.is_some() {
-            // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
-            return ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None };
+            // As in Acrobat, a failing script leaves the value alone (the error goes to the console);
+            // what it wrote to other fields before it failed stays written.
+            return ScriptResult { rc: true, value: value.to_string(), changes: changes(&states, &o.changed), message: None };
         }
         ScriptResult {
             rc: o.rc,
