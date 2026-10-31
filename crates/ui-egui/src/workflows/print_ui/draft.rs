@@ -19,6 +19,9 @@ pub enum Handling {
     Label,
 }
 
+/// The percent a custom scale can be (the dialog's field and a saved setting).
+pub const CUSTOM_SCALE: std::ops::RangeInclusive<f64> = 1.0..=1000.0;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrintDraft {
     pub printers: Vec<spool::Printer>,

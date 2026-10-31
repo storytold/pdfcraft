@@ -1,4 +1,5 @@
 use super::*;
+use pdfcraft_engine::print::names as print_names;
 
 /// [`PdfCraftApp::date_text`] for callers that already borrow other parts of the app.
 pub(crate) fn date_text(session: &Session, fmt: Option<&str>) -> Result<String, String> {
@@ -75,6 +76,17 @@ impl PdfCraftApp {
     /// Serialize the user's persistent state (recent files, theme). Local only.
     pub fn persist(&self) -> String {
         let trusted: Vec<String> = self.session.trusted_certificates().iter().map(pdfcraft_engine::sign::x509::to_pem).collect();
+        // The Print dialog's choices that describe how this computer prints (#2001), named as
+        // `doc_print` names them. Copies, pages, layout and orientation are one job's.
+        let print = serde_json::json!({
+            "duplex": print_names::duplex(self.print_draft.duplex),
+            "grayscale": self.print_draft.grayscale,
+            "collate": self.print_draft.collate,
+            "size": print_names::size_mode(self.print_draft.size),
+            "custom_scale": self.print_draft.custom_scale,
+            "comments_forms": print_names::content(self.print_draft.content),
+            "binding": print_names::binding(self.print_draft.binding),
+        });
         let mut v = serde_json::json!({
             "side_panels": self.side_panels.to_json(self.left_open),
             "docking_right": self.right,
@@ -148,6 +160,8 @@ impl PdfCraftApp {
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
+        // Also set outside json! above, which is at serde_json's macro recursion limit.
+        v["print"] = print;
         v.to_string()
     }
 
@@ -249,6 +263,33 @@ impl PdfCraftApp {
         }
         if let Some(closed) = v["right_panel_closed"].as_bool() {
             self.right_panel_closed = closed;
+        }
+        // The Print dialog's remembered choices (#2001). Settings are untrusted: an unknown name
+        // or a scale outside the dialog's range keeps the default. The scale is read before the
+        // size mode, which carries it.
+        let print = &v["print"];
+        let draft = &mut self.print_draft;
+        if let Some(duplex) = print["duplex"].as_str().and_then(print_names::parse_duplex) {
+            draft.duplex = duplex;
+        }
+        if let Some(on) = print["grayscale"].as_bool() {
+            draft.grayscale = on;
+        }
+        if let Some(on) = print["collate"].as_bool() {
+            draft.collate = on;
+        }
+        if let Some(scale) = print["custom_scale"].as_f64().filter(|s| print_ui::CUSTOM_SCALE.contains(s)) {
+            draft.custom_scale = scale;
+        }
+        if let Some(size) = print["size"].as_str().and_then(|name| print_names::parse_size_mode(name, draft.custom_scale)) {
+            draft.size = size;
+        }
+        if let Some(content) = print["comments_forms"].as_str().and_then(print_names::parse_content) {
+            draft.content = content;
+        }
+        // A booklet's binding side, as Acrobat keeps it (#2707).
+        if let Some(binding) = print["binding"].as_str().and_then(print_names::parse_binding) {
+            draft.binding = binding;
         }
         if let Some(defaults) = v["default_zoom"].as_str().and_then(|zoom| self.view_defaults.with_zoom(zoom)) {
             self.view_defaults = defaults;
