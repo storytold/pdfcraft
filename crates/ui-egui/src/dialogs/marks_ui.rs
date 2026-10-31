@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
 use pdfcraft_engine::{Backdrop, Background, DocId, Edit, FontFamily, HeaderFooter, MarkKind, Watermark};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons, widgets};
@@ -861,8 +862,15 @@ fn backdrop_options(ui: &mut egui::Ui, t: &Tokens, d: &mut MarksDraft, doc: &pdf
     }
 }
 
+/// Calculates the auto font size for a watermark to fit diagonally across the page.
+///
+/// Normalizes to Unicode NFC first so decomposed combining marks (e.g. Telex-typed Vietnamese)
+/// are measured identically to precomposed characters. The `0.55` factor is the upstream UI
+/// preview heuristic for average glyph advance width, kept to preserve UI preview performance
+/// and avoid layering violations between `ui-egui` and PDF font engines.
 pub fn watermark_auto_size(text: &str, w: f32, h: f32) -> f32 {
-    let chars = text.lines().map(|l| l.chars().count()).max().unwrap_or(1).max(1);
+    let normalized: String = text.nfc().collect();
+    let chars = normalized.lines().map(|l| l.chars().count()).max().unwrap_or(1).max(1);
     (w.hypot(h) * 0.5 / (chars as f32 * 0.55)).clamp(6.0, 80.0)
 }
 
@@ -1018,6 +1026,19 @@ mod tests {
         let ascii_size = watermark_auto_size("SECRETLY", 500.0, 700.0);
         let cyrillic_size = watermark_auto_size("СЕКРЕТНО", 500.0, 700.0);
         assert_eq!(ascii_size, cyrillic_size);
+
+        // Decomposed (NFD) Vietnamese combining marks must produce the exact same
+        // preview font size as precomposed (NFC) Vietnamese.
+        // "TIẾNG VIỆT":
+        // NFC: 'T', 'I', 'Ế' (\u{1EBE}), 'N', 'G', ' ', 'V', 'I', 'Ệ' (\u{1EC7}), 'T' (10 chars)
+        // NFD: 'T', 'I', 'E', '\u{0302}', '\u{0301}', 'N', 'G', ' ', 'V', 'I', 'E', '\u{0323}', 'T' (13 chars)
+        let nfc_text = "TI\u{1EBE}NG VI\u{1EC7}T";
+        let nfd_text = "TIE\u{0302}\u{0301}NG VIE\u{0323}T";
+        assert_ne!(nfc_text.chars().count(), nfd_text.chars().count(), "NFD has more raw chars");
+        let nfc_size = watermark_auto_size(nfc_text, 500.0, 700.0);
+        let nfd_size = watermark_auto_size(nfd_text, 500.0, 700.0);
+        assert_eq!(nfc_size, nfd_size, "NFD and NFC must measure identically after NFC normalization");
+
         // Multi-line watermarks measure the widest line, not total concatenated bytes.
         let multiline = watermark_auto_size("SECRETLY\nSHORT", 500.0, 700.0);
         assert_eq!(ascii_size, multiline);
