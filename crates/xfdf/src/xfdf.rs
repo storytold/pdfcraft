@@ -151,7 +151,7 @@ fn xfdf_fields(doc: &Document, out: &mut String) {
     }
     let mut root = Node::default();
     for f in pdfcraft_forms::fields(doc) {
-        if matches!(f.kind, FieldKind::PushButton | FieldKind::Signature) {
+        if !super::is_exportable_field(&f) {
             continue;
         }
         let mut node = &mut root;

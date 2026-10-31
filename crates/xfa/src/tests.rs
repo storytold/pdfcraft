@@ -3471,7 +3471,7 @@ fn imported_data_is_written_with_the_packets_own_prefix_and_never_leaves_it_unre
     assert!(xdp.contains("xmlns:n0=\"http://www.w3.org/2001/XMLSchema-instance\" n0:nil=\"true\""), "{xdp}");
     assert!(crate::data_of(&doc).is_some(), "the packet still parses");
     // Our own export, from a packet using another prefix, imports back.
-    let other = fields_template("<form><page1><pin>7</pin></page1></form>")
+    let other = fields_template("<form><page1><country>CA</country><pin>7</pin></page1></form>")
         .replace("xfa:datasets", "xd:datasets")
         .replace("xfa:data>", "xd:data>")
         .replace("xmlns:xfa=", "xmlns:xd=");
@@ -3479,7 +3479,8 @@ fn imported_data_is_written_with_the_packets_own_prefix_and_never_leaves_it_unre
     render_into(&mut doc2).unwrap();
     let exported = export_data(&doc2, true, "o.pdf").unwrap();
     import_data(&mut doc, &exported, Some("form"), None).unwrap();
-    assert_eq!(crate::data_of(&doc).unwrap().text_at(&som_to_path("form[0].page1[0].pin[0]")), Some("7"));
+    assert_eq!(crate::data_of(&doc).unwrap().text_at(&som_to_path("form[0].page1[0].country[0]")), Some("CA"));
+    assert_eq!(crate::data_of(&doc).unwrap().text_at(&som_to_path("form[0].page1[0].pin[0]")), Some(""), "passwords are not exported");
     // A picture into that other-prefix packet uses its prefix.
     let path = som_to_path("form[0].page1[0].photo[0]");
     write_data_image(&mut doc2, &path, "image/gif", TINY_GIF, None).unwrap();

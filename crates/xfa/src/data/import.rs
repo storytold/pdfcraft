@@ -1,8 +1,10 @@
 use super::build::{escape, fresh_datasets, xml_name};
-use super::merge::{Op, WRAP_CLOSE, WRAP_OPEN, qname, start_tag_end};
+use super::merge::{Op, WRAP_CLOSE, WRAP_OPEN, Within, merge_all, qname, start_tag_end};
+use super::passwords::password_data_wants;
+use super::path::parse_datasets_complete;
 use super::values::Want;
 use super::write::{DatasetsWrite, rewrite};
-use super::{DataPath, Document, MAX_DEPTH, MAX_NODES, ObjRef, Object, XFA_DATA_NS, XfaError};
+use super::{DataNode, DataPath, Document, MAX_DEPTH, MAX_NODES, ObjRef, Object, XFA_DATA_NS, XfaError};
 
 /// Data read from a file, held as a tree so it can be written into any packet with the
 /// prefix that packet uses, never as the file's own markup.
@@ -273,20 +275,53 @@ pub(super) fn datasets_packet(doc: &Document) -> Result<Option<String>, XfaError
 /// The data to export, as Acrobat's Export Data writes it: `xdp` false gives an XML document
 /// holding the data alone (the form's root data node at the root, or the data element when
 /// there are several); true gives an XDP holding the whole datasets and a reference to the
-/// PDF, named `pdf_name`. A document whose packets can't be read is an error, not empty data.
+/// PDF, named `pdf_name`. Typed password field values (`<passwordEdit/>` or `/Ff` bit 14) are
+/// cleared back to their template default (or empty) in the exported markup (#3945). A document
+/// whose packets can't be read is an error, not empty data.
 pub fn export_data(doc: &Document, xdp: bool, pdf_name: &str) -> Result<String, XfaError> {
-    if crate::read_packets(doc)?.is_none() {
-        return Err(XfaError::NotXfa);
-    }
-    let packet = datasets_packet(doc)?;
-    let (datasets, data) = match &packet {
-        Some(text) => match datasets_markup(text) {
-            Ok(Some(m)) => m,
-            Ok(None) => (fresh_datasets(""), String::new()),
-            Err(()) => return Err(XfaError::Malformed("the XFA data could not be read".into())),
-        },
+    let packets = crate::read_packets(doc)?.ok_or(XfaError::NotXfa)?;
+    // Normalize the same packet representation that will be exported before scanning it.
+    // Array packets may need the wrapper's namespace declarations or have several roots.
+    let (mut datasets, mut data) = match datasets_packet(doc)? {
+        Some(text) => datasets_markup(&text)
+            .map_err(|()| XfaError::Malformed("the XFA data could not be read".into()))?
+            .unwrap_or_else(|| (fresh_datasets(""), String::new())),
         None => (fresh_datasets(""), String::new()),
     };
+    if !data.is_empty() {
+        let parsed = export_datasets(&datasets)?;
+        // If a template exists, failing to read its password declarations is not an
+        // empty scan. Static forms without a template still use their AcroForm flags.
+        let template = if packets.xdp.trim().is_empty() {
+            None
+        } else {
+            let (template, _, complete) = crate::parse::parse_complete(&packets.xdp)
+                .or_else(|_| crate::parse::parse_complete(&format!("{WRAP_OPEN}{}{WRAP_CLOSE}", packets.xdp)))?;
+            if !complete {
+                return Err(XfaError::Malformed("the XFA password template scan was incomplete".into()));
+            }
+            Some(template)
+        };
+        let (wants, complete) = password_data_wants(doc, &parsed, template.as_ref());
+        if !complete {
+            return Err(XfaError::Malformed("the XFA password field scan was incomplete".into()));
+        }
+        if !wants.is_empty() {
+            let mut warnings = Vec::new();
+            let redacted = merge_all(&datasets, Within::Packet, &[Op::Values(&wants)], &mut warnings)
+                .ok_or_else(|| XfaError::Malformed("the XFA password values could not be cleared".into()))?;
+            // A successful leaf edit does not mean every requested value was replaced.
+            // Structured nodes and any other skipped writes must fail closed.
+            let checked = export_datasets(&redacted)?;
+            let (remaining, complete) = password_data_wants(doc, &checked, template.as_ref());
+            if !complete || !warnings.is_empty() || !remaining.is_empty() {
+                return Err(XfaError::Malformed("the XFA password values could not all be cleared".into()));
+            }
+            (datasets, data) = datasets_markup(&redacted)
+                .map_err(|()| XfaError::Malformed("the XFA data could not be read".into()))?
+                .ok_or_else(|| XfaError::Malformed("the XFA datasets are missing after clearing password values".into()))?;
+        }
+    }
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     if xdp {
         let (name, _) = escape(pdf_name);
@@ -298,6 +333,15 @@ pub fn export_data(doc: &Document, xdp: bool, pdf_name: &str) -> Result<String, 
         out.push('\n');
     }
     Ok(out)
+}
+
+/// Exports retain source markup, so a bounded, truncated model is not safe to export.
+fn export_datasets(text: &str) -> Result<DataNode, XfaError> {
+    let (data, complete) = parse_datasets_complete(text).ok_or_else(|| XfaError::Malformed("the XFA password data could not be read".into()))?;
+    if !complete {
+        return Err(XfaError::Malformed("the XFA password data scan was incomplete".into()));
+    }
+    Ok(data)
 }
 
 /// The `xfa:datasets` element of `text` as written, and the data alone (its one child, or the
