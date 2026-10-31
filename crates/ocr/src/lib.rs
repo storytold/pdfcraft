@@ -12,6 +12,9 @@
 
 use std::path::{Path, PathBuf};
 
+mod pitch;
+mod tiles;
+
 pub use pdfcraft_fonts::helvetica_width;
 
 /// The model files, as named in ATTRIBUTION.toml.
@@ -109,19 +112,24 @@ impl Line {
 /// A loaded recogniser. Loading takes a moment; keep one and reuse it.
 pub struct Ocr {
     engine: ocrs::OcrEngine,
+    /// The detection model's fixed input size, (width, height) pixels, when it declares one: a
+    /// page much larger than that is detected in tiles.
+    detector_input: Option<(u32, u32)>,
 }
 
 impl Ocr {
     pub fn load(models: &Models) -> Result<Ocr, OcrError> {
         let load = |p: &Path| rten::Model::load_file(p).map_err(|e| OcrError::Load(p.display().to_string(), e.to_string()));
+        let detection = load(&models.detection)?;
+        let detector_input = detector_input(&detection);
         let params = ocrs::OcrEngineParams {
-            detection_model: Some(load(&models.detection)?),
+            detection_model: Some(detection),
             recognition_model: Some(load(&models.recognition)?),
             alphabet: Some(ALPHABET.into()),
             ..Default::default()
         };
         let engine = ocrs::OcrEngine::new(params).map_err(|e| OcrError::Load("ocr engine".into(), e.to_string()))?;
-        Ok(Ocr { engine })
+        Ok(Ocr { engine, detector_input })
     }
 
     /// Load the models found by [`Models::find`].
@@ -135,7 +143,8 @@ impl Ocr {
             return Err(OcrError::EmptyImage);
         }
         // ocrs wants 1 or 3 channels.
-        let rgb: std::borrow::Cow<[u8]> = if pixels.len() == (width * height * 4) as usize {
+        let area = (width as usize).checked_mul(height as usize).ok_or(OcrError::EmptyImage)?;
+        let rgb: std::borrow::Cow<[u8]> = if Some(pixels.len()) == area.checked_mul(4) {
             pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into()
         } else {
             pixels.into()
@@ -143,7 +152,7 @@ impl Ocr {
         let err = |e: &dyn std::fmt::Display| OcrError::Recognize(e.to_string());
         let source = ocrs::ImageSource::from_bytes(&rgb, (width, height)).map_err(|e| err(&e))?;
         let input = self.engine.prepare_input(source).map_err(|e| err(&e))?;
-        let found = self.engine.detect_words(&input).map_err(|e| err(&e))?;
+        let found = self.detect_words(&rgb, width, height, &input)?;
         let lines = self.engine.find_text_lines(&input, &found);
         let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
         use ocrs::TextItem;
@@ -162,6 +171,53 @@ impl Ocr {
             })
             .filter(|l| !l.words.is_empty())
             .collect())
+    }
+}
+
+impl Ocr {
+    /// The words in a page, `rgb` (1 or 3 bytes per pixel) prepared as `page`. A page at least
+    /// twice the detector's input along an axis whose text is small once shrunk to that input
+    /// ([`pitch`]) is detected in overlapping tiles ([`tiles`]), each word kept by the tile whose
+    /// core holds its centre and moved back to page pixels.
+    fn detect_words(&self, rgb: &[u8], width: u32, height: u32, page: &ocrs::OcrInput) -> Result<Vec<rten_imageproc::RotatedRect>, OcrError> {
+        let err = |e: &dyn std::fmt::Display| OcrError::Recognize(e.to_string());
+        let tiles = self.detector_input.map(|input| tiles::tiles(width, height, input)).unwrap_or_default();
+        let area = (width as usize).checked_mul(height as usize).filter(|&a| a > 0);
+        let channels = area.and_then(|a| rgb.len().is_multiple_of(a).then(|| rgb.len() / a)).filter(|c| matches!(c, 1 | 3));
+        let (Some(channels), Some(input), true) = (channels, self.detector_input, tiles.len() > 1) else {
+            return self.engine.detect_words(page).map_err(|e| err(&e));
+        };
+        // Large print reads as well whole, at a quarter of the detection time.
+        if !pitch::lines(rgb, width, height, channels, input).wants_tiles() {
+            return self.engine.detect_words(page).map_err(|e| err(&e));
+        }
+        let mut words = Vec::new();
+        for tile in &tiles {
+            let pixels =
+                tiles::crop(rgb, width, channels, tile.crop).ok_or_else(|| OcrError::Recognize("a detection tile lies outside the page".into()))?;
+            let source = ocrs::ImageSource::from_bytes(&pixels, (tile.width(), tile.height())).map_err(|e| err(&e))?;
+            let input = self.engine.prepare_input(source).map_err(|e| err(&e))?;
+            let (dx, dy) = (tile.crop[0] as f32, tile.crop[1] as f32);
+            for word in self.engine.detect_words(&input).map_err(|e| err(&e))? {
+                let centre = word.center();
+                let (x, y) = (centre.x + dx, centre.y + dy);
+                if tile.owns(x, y) {
+                    words.push(rten_imageproc::RotatedRect::new(rten_imageproc::PointF::from_yx(y, x), word.up_axis(), word.width(), word.height()));
+                }
+            }
+        }
+        Ok(words)
+    }
+}
+
+/// The detection model's input size, (width, height) pixels, if its input is an NCHW image of a
+/// fixed size.
+fn detector_input(model: &rten::Model) -> Option<(u32, u32)> {
+    let id = *model.input_ids().first()?;
+    let shape = model.node_info(id)?.shape()?;
+    match shape.as_slice() {
+        [_, _, rten::Dimension::Fixed(h), rten::Dimension::Fixed(w)] => Some((u32::try_from(*w).ok()?, u32::try_from(*h).ok()?)),
+        _ => None,
     }
 }
 
@@ -443,9 +499,49 @@ mod tests {
         assert!(word.rect[0] >= 10.0 && word.rect[0] < 60.0, "{word:?}");
     }
 
+    /// A large page with small print: shrunk whole to the detector's input, its letters are too
+    /// small to find; in tiles they are found. The words come back in page pixels, once each,
+    /// also where they lie in the overlap of two tiles or across a cut.
+    #[test]
+    fn finds_small_print_on_a_large_page() {
+        let Some(models) = Models::find() else {
+            eprintln!("skipped: OCR models not installed");
+            return;
+        };
+        let ocr = Ocr::load(&models).unwrap();
+        assert_eq!(ocr.detector_input, Some((600, 800)), "the tiling rule assumes the ocrs detector");
+        let (w, h, dot) = (2480u32, 3508u32, DOT);
+        // An A4 page at 300 dpi is cut at x = 1240 and y = 1754, its tiles overlapping by 99 and
+        // 140 pixels around the cuts. The lines lie: in one tile only; across the vertical cut;
+        // half in the overlap left of it; across the horizontal cut.
+        let at = [(300, 400), (1170, 1000), (1100, 2500), (300, 1748)];
+        let px = test_image::hello_on(w, h, dot, &at);
+        let lines = ocr.recognize(&px, w, h).unwrap();
+        let words: Vec<&Word> = lines.iter().flat_map(|l| &l.words).collect();
+        // Two words per line, each once: none lost, none doubled where tiles overlap. The letters
+        // are tiny and blocky, so the text itself may be a letter off ("HFLLO").
+        assert_eq!(words.len(), 2 * at.len(), "{lines:?}");
+        for (x, y) in at {
+            let near = |w: &&&Word| (w.rect[0] - x as f32).abs() < 4.0 * dot as f32 && (w.rect[1] - y as f32).abs() < 4.0 * dot as f32;
+            assert_eq!(words.iter().filter(near).count(), 1, "no first word at ({x}, {y}): {lines:?}");
+        }
+        assert!(words.iter().any(|w| w.text == "HELLO"), "{lines:?}");
+    }
+
+    /// The letter size of [`finds_small_print_on_a_large_page`], in pixels per dot of a 5×7 letter.
+    const DOT: u32 = 2;
+
     mod test_image {
         /// "HELLO WORLD" drawn with blocky 5×7 letters, 4 pixels per dot, black on white.
         pub fn hello() -> (u32, u32, Vec<u8>) {
+            let (dot, x0, y0) = (4u32, 40u32, 40u32);
+            let (w, h) = (x0 * 2 + 11 * 6 * dot, y0 * 2 + 7 * dot);
+            (w, h, hello_on(w, h, dot, &[(x0, y0)]))
+        }
+
+        /// A white `w` × `h` page with "HELLO WORLD" at each of `at` (top left corner), `dot`
+        /// pixels per dot of the letters.
+        pub fn hello_on(w: u32, h: u32, dot: u32, at: &[(u32, u32)]) -> Vec<u8> {
             const GLYPHS: &[(char, [&str; 7])] = &[
                 ('H', ["X...X", "X...X", "X...X", "XXXXX", "X...X", "X...X", "X...X"]),
                 ('E', ["XXXXX", "X....", "X....", "XXXX.", "X....", "X....", "XXXXX"]),
@@ -456,10 +552,8 @@ mod tests {
                 ('D', ["XXXX.", "X...X", "X...X", "X...X", "X...X", "X...X", "XXXX."]),
             ];
             let text = "HELLO WORLD";
-            let (dot, x0, y0) = (4u32, 40u32, 40u32);
-            let (w, h) = (x0 * 2 + text.len() as u32 * 6 * dot, y0 * 2 + 7 * dot);
             let mut px = vec![255u8; (w * h * 4) as usize];
-            for (i, c) in text.chars().enumerate() {
+            for ((i, c), &(x0, y0)) in at.iter().flat_map(|p| text.chars().enumerate().map(move |c| (c, p))) {
                 let Some((_, rows)) = GLYPHS.iter().find(|g| g.0 == c) else { continue };
                 for (ry, row) in rows.iter().enumerate() {
                     for (rx, b) in row.bytes().enumerate() {
@@ -477,7 +571,7 @@ mod tests {
                     }
                 }
             }
-            (w, h, px)
+            px
         }
     }
 }
