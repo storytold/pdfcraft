@@ -467,6 +467,12 @@ fn app_creator<'a>(
                 &[("folder", &w.folder.display().to_string()), ("error", &w.error)],
             );
         }
+        // An update that failed after the last session closed (#5546). Only the Windows update
+        // helper records one, and only Windows builds take craft-update.
+        #[cfg(windows)]
+        if let Ok(paths) = craft_update::Paths::for_app(&pdfcraft_ui_egui::UPDATE_APP) {
+            notify_failed_update(&mut app, &paths);
+        }
         if create_images {
             if let Err(e) = app.begin_image_import_paths(&files) {
                 app.notify(e);
@@ -495,6 +501,19 @@ fn app_creator<'a>(
 fn notify_software_renderer(app: &mut PdfCraftApp, device_type: eframe::wgpu::DeviceType) {
     if device_type == eframe::wgpu::DeviceType::Cpu {
         app.notify_tr("PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.");
+    }
+}
+
+/// Tell the user why the last update didn't install. On Windows a helper installs it once the app
+/// has closed; when that fails, the helper starts the old copy again and leaves the reason for its
+/// next start. Read by nothing, it left the reporter of #5546 with the same update offered again
+/// and no reason.
+#[cfg(windows)]
+fn notify_failed_update(app: &mut PdfCraftApp, paths: &craft_update::Paths) {
+    if let Some(error) = craft_update::self_update::take_failure(paths) {
+        let error = error.trim();
+        log::warn!("the last update didn't install: {error}");
+        app.notify_fmt("The last update didn't install: {error}", &[("error", error)]);
     }
 }
 
