@@ -92,10 +92,12 @@ pub(crate) fn context_menu(
                 ui.close();
             }
             ui.separator();
-            // The engine's own check: a locked comment, or one with a locked reply, stays.
-            if ui.add_enabled(allowed && deletable(page, index), egui::Button::new(tl!("Delete"))).clicked() {
+            // The engine's own check: a locked comment, or one with a locked reply, stays. On a group
+            // subordinate, Delete takes just it, as Acrobat's does.
+            let (dpage, dindex) = view.comments.target().unwrap_or((page, index));
+            if ui.add_enabled(allowed && deletable(dpage, dindex), egui::Button::new(tl!("Delete"))).clicked() {
                 view.comments.selected = None;
-                action = Some(CanvasAction::Edit(Box::new(Edit::DeleteAnnotation { page, index })));
+                action = Some(CanvasAction::Edit(Box::new(Edit::DeleteAnnotation { page: dpage, index: dindex })));
                 ui.close();
             }
             if ui.add_enabled(allowed, egui::Button::new(tl!("Properties…"))).clicked() {

@@ -31,7 +31,9 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
         && let Some(p) = pointer.filter(|p| page_rect.contains(*p))
     {
         cv.context_at = Some((cx.page, cx.to_user(p)));
-        cv.selected = cx.hit(p).map(|a| (cx.page, a.index));
+        // On a group subordinate, its group (the primary), so the menu offers the comment's actions.
+        cv.selected = cx.click_hit(p).map(|a| (cx.page, a.index));
+        cv.member = cx.picked(p, cv.selected);
     }
     let gestures = Gestures { ui, resp, cx, pointer, origin, page_rect, pressed_here, over_page };
     match cx.tool {
@@ -91,7 +93,13 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
             return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Handle(x, y) }, Layer::Handle, icon));
         }
     }
-    let a = cx.hit(p).filter(|a| bodies && pick(a))?;
+    // A group subordinate (`/RT /Group`) stands for its primary (ISO 32000-2 §12.5.6.2): a click
+    // there selects the group. Only a click: a drag still moves what is under the pointer.
+    let (a, member) = match cx.hit(p) {
+        Some(a) => (a, false),
+        None => (cx.click_hit(p)?, true),
+    };
+    let a = Some(a).filter(|a| bodies && pick(a))?;
     // A click on a highlight over a link follows the link, so the link's hand and tip show there.
     if cx.tool == QuickTool::Select && a.subtype == "Highlight" && on_link(cx, p) {
         return None;
@@ -102,7 +110,7 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
     // page, over a form field; text markup lies on the text, under one.
     let layer = if a.fill_sign || !markup { Layer::Placed } else { Layer::Comment };
     // Text markup does not move: a click selects it, a drag across it selects the text.
-    Some(Hit { declines_drag: markup, ..Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer, icon) })
+    Some(Hit { declines_drag: markup || member, ..Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer, icon) })
 }
 
 /// Whether the comments take the press on this page (or, with no button down, would take one
@@ -257,6 +265,7 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
         match owner {
             Some((a, _)) => {
                 cv.selected = Some((cx.page, a.index));
+                cv.member = pointer.and_then(|p| cx.picked(p, cv.selected));
                 cv.reveal = true;
                 consumed = true;
             }
@@ -592,7 +601,7 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool
         }
     }
     if allowed
-        && let Some((page, index)) = cv.selected
+        && let Some((page, index)) = cv.target()
         && ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
     {
         cv.selected = None;

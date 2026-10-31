@@ -40,7 +40,9 @@ pub fn subtype_label(s: &str) -> &str {
 /// The comment type as the panel names it, telling callouts, clouds and replaced text apart by `/IT`.
 pub fn kind_label(a: &Annotation) -> &str {
     match a.intent.as_deref() {
-        Some("StrikeOutTextEdit") => "Replace text",
+        // Replace Text: the caret (`/IT /Replace`) is the group's primary; earlier builds made
+        // the strikeout primary.
+        Some("StrikeOutTextEdit" | "Replace") => "Replace text",
         Some("FreeTextCallout") => "Callout",
         Some("PolygonCloud") => "Cloud",
         Some("FreeTextTypeWriter") => "Typewriter",
@@ -95,10 +97,10 @@ pub fn count(info: &DocInfo) -> usize {
     info.annotations.iter().filter(|a| a.is_comment()).count()
 }
 
-/// The replies under the header's count, at any depth: not status changes, checkmarks or a
-/// Replace Text caret (grouped with its strikeout, not a reply to it).
+/// The replies under the header's count, at any depth: not status changes, checkmarks or group
+/// subordinates (`/RT /Group`, such as Replace Text's strikeout: part of the comment, not a reply).
 pub fn reply_count(info: &DocInfo) -> usize {
-    info.annotations.iter().filter(|a| a.is_reply() && a.state.is_none() && !a.grouped).count()
+    info.annotations.iter().filter(|a| a.is_reply() && a.state.is_none() && !a.is_group_member()).count()
 }
 
 fn matches(a: &Annotation, q: &str) -> bool {
@@ -181,11 +183,29 @@ pub(crate) fn show(
     // it. A status or checkmark stays with the annotation it was set on (its `/IRT` names it,
     // ISO 32000-2 §12.5.6.2): one set on a reply, at any depth, is that reply's and not the
     // comment's, so the card's badge and checkmark leave it out (comment_list reports it on the
-    // reply). Page badges count roots before filtering.
+    // reply). Page badges count roots before filtering. A group (`/RT /Group`, ISO 32000-2
+    // §12.5.6.2) is one comment, its primary's: a subordinate is no reply, and a reply to one
+    // (a status too) is the group's.
     let tops = pdfcraft_render::thread_tops(&info.annotations);
+    let primary_of: HashMap<(usize, usize), (usize, usize)> = if info.annotations.iter().any(Annotation::is_group_member) {
+        let all = &info.annotations;
+        all.iter()
+            .zip(pdfcraft_render::group_primaries(all))
+            .filter_map(|(a, p)| all.get(p?).map(|p| ((a.page, a.index), (p.page, p.index))))
+            .collect()
+    } else {
+        HashMap::new()
+    };
     for a in &info.annotations {
+        if a.is_group_member() {
+            continue;
+        }
         if let Some(parent) = a.parent {
-            let key = if a.state.is_none() { tops.get(&(a.page, a.index)).copied().unwrap_or(parent) } else { parent };
+            let key = if a.state.is_none() {
+                tops.get(&(a.page, a.index)).copied().unwrap_or(parent)
+            } else {
+                primary_of.get(&parent).copied().unwrap_or(parent)
+            };
             replies.entry(key).or_default().push(a);
         } else if a.is_comment() {
             let count = page_counts.entry(a.page).or_default();
