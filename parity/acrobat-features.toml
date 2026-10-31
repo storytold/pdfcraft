@@ -8640,8 +8640,11 @@ milestone = "M12"
 status = "shipped"
 commands = ["a11y.check"]
 tools = ["accessibility_check"]
-evidence = ["crates/automation/tests/it/automation.rs::accessibility_check_report_and_fixes_through_tools"]
-notes = "rule title: Info Title and DisplayDocTitle; Fix sets both"
+evidence = [
+    "crates/automation/tests/it/automation.rs::accessibility_check_report_and_fixes_through_tools",
+    "crates/a11y/src/tests.rs::a_title_stated_only_in_the_xmp_metadata_counts_as_a_title",
+]
+notes = "rule title: the Info Title or the XMP packet's dc:title (a PDF 2.0 file states only the latter, #3672), and DisplayDocTitle; Fix sets both"
 
 [[feature]]
 id = "a11y.rule-bookmarks"
