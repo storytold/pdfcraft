@@ -13,6 +13,7 @@
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
+> **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M2, #5329: non-embedded CJK CID fonts of every Adobe collection draw, with per-character fallback faces; estimates unchanged)
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M14 localization current state: Arabic logical catalog, explicit RTL label direction and mirrored stock chrome; native/browser RTL workflows unqualified. Native release Hans face via LXGW WenKai Lite; estimates unchanged)
@@ -212,6 +213,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-10-29 (M2, #5329):** Chinese and Korean text in a CID font the PDF doesn't embed (`STSong-Light` with `GBK-EUC-H`, as CNKI papers are written; `MSung-Light`; `HYSMyeongJo-Medium`) drew nothing, since only Adobe-Japan1 had a stand-in. The substitution chain (`pdfcraft_fonts::fallback`) now ranks the craft-fonts faces for every Adobe CJK collection by script, design and weight; the renderer draws with its stand-in (LXGW WenKai Lite for GB1, NanumGothic for Korea1, the nearest Japanese face for CNS1) and `doc_info` names that face. Characters a Type 0 substitute lacks draw in the next ranked face (vendored hayro-interpret patch 71) instead of `.notdef` or an unrelated glyph, so Cyrillic in an Identity-H font draws in the bundled Inter in every build. Song/Ming and Traditional Chinese faces, synthetic bold, web CJK faces and simple-font fallback remain. Estimates unchanged.
 
 - **2026-10-31 (M2, PR #4172 review):** Added same-machine pixel oracles for GBK Song, Hei, Kai and FangSong, including all four subset-prefixed Founder aliases. Reference PDFs use explicit Unicode mappings and independently selected installed faces; font data and rasters remain in memory. All eight cases ran; wrong-glyph and wrong-family production mutations each failed the new assertion and were restored. Validation: 422 renderer unit tests, renderer all-target Clippy with -D warnings, formatting, layers/assets/parity and renderer WASM checks passed; existing optional-patch/WASM warnings and parity notes remain. Estimates unchanged.
 
@@ -719,6 +722,8 @@ Newest first: the date, what moved, and the new overall estimate.
 - **2026-10-10 (UI docking):** Tools and Inspector can be regrouped, split beside the PDF, or floated inside the app window. Existing toggles reopen panels at their saved locations; UI commands arrange/reset panels, and preferences retain their layout. Read/full-screen modes preserve the focused document view. No milestone percentage change.
 
 ## Revision history
+
+**2026-10-29 · minor:** M2, #5329: non-embedded CID fonts of every Adobe CJK collection draw with a craft-fonts stand-in, and a Type 0 substitute's missing characters draw in further faces. Estimates unchanged.
 
 **2026-10-25 · minor:** M14 localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build has no Hans face. Estimates unchanged.
 

@@ -1,6 +1,7 @@
 //! The crate's integration tests, linked into one test binary.
 
 mod cid_fallback_query;
+mod further_faces;
 mod inline_image_ei;
 mod jbig2_invariants;
 mod knockout_backdrop;

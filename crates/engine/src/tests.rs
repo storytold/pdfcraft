@@ -583,7 +583,8 @@ fn edits_update_view_data_and_mark_dirty() {
 
 /// A font of an Adobe CJK collection that a PDF does not embed is drawn with an installed face on
 /// the viewer's pool only. An export of the same page, which can be saved, has nothing drawn with
-/// an installed font (AGENTS.md §1.2, §1.4). Skipped where no such face is installed.
+/// an installed font (AGENTS.md §1.2, §1.4): it draws what a render without installed fonts
+/// draws. Skipped where no such face is installed.
 #[test]
 fn installed_cjk_fonts_draw_in_the_viewer_but_not_in_an_export() {
     let content = "BT /F1 40 Tf 5 15 Td <7E419AD45B57> Tj ET";
@@ -631,9 +632,22 @@ trailer << /Root 1 0 R >>
         return;
     }
     assert!(inked(&viewer.rgba) > 300, "the viewer's pool draws it with the installed face ({} dark pixels)", inked(&viewer.rgba));
+    // Without installed fonts the page draws nothing, or (#5329) with craft-fonts the nearest Han
+    // script's face, which is no installed font; the export draws exactly that, and the viewer
+    // the installed Traditional Chinese face, which comes before a nearest-script face.
+    let without = pdfcraft_render::PageRenderer::new(doc.display.clone(), pdfcraft_render::RenderConfig::default())
+        .render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert!(without.error.is_none(), "{:?}", without.error);
+    assert!(viewer.rgba != without.rgba, "the viewer draws with the installed face");
     let png = export::Exporter::new(doc).png(0, 72.0).unwrap();
     let exported = image::load_from_memory(&png).unwrap().into_rgba8();
-    assert!(inked(exported.as_raw()) < 50, "an export draws nothing with an installed font ({} dark pixels)", inked(exported.as_raw()));
+    assert_eq!(
+        inked(exported.as_raw()),
+        inked(&without.rgba),
+        "an export draws nothing with an installed font ({} dark pixels, {} without installed fonts)",
+        inked(exported.as_raw()),
+        inked(&without.rgba)
+    );
 
     // Reload rebuilds the pool when retaining a view preference. That path must keep
     // the display-only fallback too; otherwise Chinese disappears after a file refresh.
