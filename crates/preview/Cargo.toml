@@ -21,7 +21,7 @@ dbg_macro = "warn"
 todo = "warn"
 
 [dependencies]
-pdfcraft-thumbnails = { workspace = true }
+pdfcraft-render = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

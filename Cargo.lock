@@ -4617,7 +4617,7 @@ dependencies = [
 name = "pdfcraft-preview"
 version = "0.16.1"
 dependencies = [
- "pdfcraft-thumbnails",
+ "pdfcraft-render",
  "windows",
  "windows-core",
 ]

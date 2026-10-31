@@ -108,7 +108,6 @@ pub const SIDEWAYS: &[(&str, &str)] = &[
     ("sign", "security"),
     ("ui-egui", "ui-common"),
     ("ui-egui", "platform"),
-    ("preview", "thumbnails"),
     ("automation", "platform"),
 ];
 
