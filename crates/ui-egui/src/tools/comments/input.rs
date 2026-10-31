@@ -267,6 +267,7 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
         && on_page
         && cx.allowed
         && let Some((a, _)) = owner
+        && !a.locked_contents
     {
         cv.selected = Some((cx.page, a.index));
         cv.composer = Some(Composer {

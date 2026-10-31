@@ -188,6 +188,8 @@ impl Automation {
                 "modified": c.modified,
                 "rect": crate::view_rect(&doc.info, c.page, c.shown_rect(doc.info.pages.get(c.page).map_or(0, |p| p.rotation))),
                 "color": c.color.map(hex),
+                "locked": c.locked,
+                "locked_contents": c.locked_contents,
             });
             // A line's ends, or the corners of connected lines, a polygon or a cloud, as
             // comment_edit's `points` takes them.
@@ -227,7 +229,6 @@ impl Automation {
             .map(|c| {
                 let mut v = view(c);
                 states(c, &mut v);
-                v["locked"] = json!(c.locked);
                 let thread = threads.get(&(c.page, c.index)).map(Vec::as_slice).unwrap_or(&[]);
                 v["replies"] = thread
                     .iter()

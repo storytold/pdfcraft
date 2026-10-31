@@ -2224,6 +2224,8 @@ fn nested_replies_stay_in_the_listing() {
     let root = list["comments"].as_array().unwrap().iter().find(|c| c["contents"] == "ROOT_NOTE").unwrap().clone();
     let replies: Vec<&str> = root["replies"].as_array().unwrap().iter().filter_map(|r| r["contents"].as_str()).collect();
     assert!(replies.contains(&"DIRECT_REPLY") && replies.contains(&"NESTED_REPLY"), "the nested reply is listed: {replies:?}");
+    assert_eq!(root["replies"][0]["locked_contents"].as_bool(), Some(false));
+    assert_eq!(root["replies"][0]["locked"].as_bool(), Some(false));
 }
 
 /// comment_delete on a reply deletes that reply and the replies to it, as the Comments panel's
@@ -9895,6 +9897,7 @@ fn deleting_one_radio_button_through_tools_keeps_the_group() {
     ok(&mut a, "edit_undo", json!({ "doc": doc }));
     assert_eq!(size(&mut a)["options"], json!(["S", "M", "L"]), "one undo step brings it back");
 }
+
 /// `/I` of the top-level field `name` in the saved file `path`.
 fn saved_selection_indices(path: &Path, name: &str) -> Option<Vec<i64>> {
     let d = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(path).unwrap())).unwrap();
@@ -9945,6 +9948,61 @@ fn clearing_a_kids_default_through_tools_does_not_bring_back_its_parents() {
     let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
     let city = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "address.city").unwrap().clone();
     assert!(city["value"].is_null() || city["value"] == "", "reset clears it rather than restoring the parent's Main St: {}", city["value"]);
+}
+
+/// #5216: comment_edit rejects content and appearance modifications on a LockedContents comment
+/// or reply while permitting movement.
+#[test]
+fn comment_edit_refuses_modifying_locked_contents_annotation() {
+    let dir = workdir("locked-contents-edit");
+    let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
+    objs.push(b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec());
+    objs.push(b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R 7 0 R] /Contents 5 0 R >>".to_vec());
+    // Root comment (unmarked, unlocked contents)
+    objs.push(b"<< /Type /Annot /Subtype /Text /Rect [20 20 40 40] /Contents (Root Note) /NM (root-1) >>".to_vec());
+    objs.push(b"<< /Length 0 >>\nstream\n\nendstream".to_vec());
+    // Reply with LockedContents (bit 10, value 512)
+    objs.push(b"<< /Type /Annot /Subtype /Text /Rect [20 20 40 40] /Contents (Locked Reply) /NM (reply-1) /IRT 4 0 R /F 512 >>".to_vec());
+    // Standalone comment with LockedContents (bit 10, value 512)
+    objs.push(b"<< /Type /Annot /Subtype /Text /Rect [50 50 70 70] /Contents (Locked Root) /NM (root-2) /F 512 >>".to_vec());
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("locked_contents.pdf"), out).unwrap();
+
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "locked_contents.pdf" }))["doc"].as_u64().unwrap();
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+
+    let root_1 = list["comments"].as_array().unwrap().iter().find(|c| c["contents"] == "Root Note").unwrap();
+    assert_eq!(root_1["locked_contents"], false);
+    let reply_1 = root_1["replies"].as_array().unwrap().iter().find(|r| r["contents"] == "Locked Reply").unwrap();
+    assert_eq!(reply_1["locked_contents"], true);
+
+    let root_2 = list["comments"].as_array().unwrap().iter().find(|c| c["contents"] == "Locked Root").unwrap();
+    assert_eq!(root_2["locked_contents"], true);
+
+    // Unmarked root comment allows text edit
+    assert!(a.call("comment_edit", &json!({ "doc": doc, "id": "root-1", "contents": "Updated Root" })).is_ok());
+
+    // LockedContents standalone root rejects text editing but permits moving
+    assert!(a.call("comment_edit", &json!({ "doc": doc, "id": "root-2", "contents": "New text" })).is_err());
+    assert!(a.call("comment_edit", &json!({ "doc": doc, "id": "root-2", "move": [10, 10] })).is_ok());
+
+    // LockedContents reply rejects text editing but permits moving
+    assert!(a.call("comment_edit", &json!({ "doc": doc, "id": "reply-1", "contents": "New reply text" })).is_err());
+    assert!(a.call("comment_edit", &json!({ "doc": doc, "id": "reply-1", "move": [10, 10] })).is_ok());
 }
 
 /// #2517, through the same tools as the report. One blank line is two paragraphs, and editing

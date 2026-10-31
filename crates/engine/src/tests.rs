@@ -4402,6 +4402,40 @@ fn comments_lock_take_checkmarks_hide_and_summarize() {
     assert_eq!(comment_summary("x", &[], SummarySort::Page), "Summary of Comments on x\n\nThis document has no comments.\n");
 }
 
+/// #5216: an annotation with LockedContents (bit 10, value 512) refuses SetAnnotationContents
+/// while allowing position changes (ISO 32000-2 Table 167).
+#[test]
+fn locked_contents_annotation_refuses_editing_contents_in_engine() {
+    let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
+    objs.push(b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec());
+    objs.push(b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] /Contents 5 0 R >>".to_vec());
+    objs.push(b"<< /Type /Annot /Subtype /Text /Rect [20 20 40 40] /Contents (Original) /F 512 >>".to_vec());
+    objs.push(b"<< /Length 0 >>\nstream\n\nendstream".to_vec());
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+
+    let mut s = Session::new();
+    let id = s.open("locked_contents.pdf", None, Arc::new(out), None).unwrap();
+    let annot = &s.get(id).unwrap().info.annotations[0];
+    assert!(annot.locked_contents);
+    assert!(!annot.locked);
+
+    assert!(s.apply(id, Edit::SetAnnotationContents { page: 0, index: 0, text: "Changed".into() }).is_err());
+    assert!(s.apply(id, Edit::MoveAnnotation { page: 0, index: 0, dx: 10.0, dy: 10.0 }).is_ok());
+}
+
 /// Replies thread by their `/IRT` reference, not `/NM`: PyMuPDF names the first comment on every
 /// page `fitz-A0`, which used to file every reply under page 1's comment. An `/IRT` to the
 /// annotation itself, or to a link (never listed as a comment), leaves it a comment of its own. Both readers (inspect on open, and the

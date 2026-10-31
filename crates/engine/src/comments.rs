@@ -20,6 +20,7 @@ pub(crate) fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render:
             state: s.state,
             quads: s.quads,
             locked: s.locked,
+            locked_contents: s.locked_contents,
             intent: s.intent,
             fill_sign: s.fill_sign,
             no_rotate: s.no_rotate,
