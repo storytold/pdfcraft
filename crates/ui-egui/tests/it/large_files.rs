@@ -147,6 +147,32 @@ fn saving_in_place_leaves_a_file_that_took_its_name() {
 }
 
 #[test]
+fn print_says_to_load_the_file_and_can_not_be_clicked() {
+    let file = Temp::new("print", &large());
+    let mut h = harness(true);
+    h.state_mut().open_path(&file.path);
+    h.run_steps(4);
+    assert!(on_disk(h.state()));
+    h.state_mut().open_print();
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("To print this large file").is_some());
+    let print =
+        h.query_by(|n| n.role() == egui::accesskit::Role::Button && matches!(n.label().as_deref(), Some("Print" | "Save as PDF")) && n.is_disabled());
+    assert!(print.is_some());
+}
+
+#[test]
+fn a_search_marks_nothing_it_can_not_apply() {
+    let file = Temp::new("redact", &large());
+    let mut h = harness(true);
+    h.state_mut().open_path(&file.path);
+    h.run_steps(4);
+    assert!(on_disk(h.state()));
+    h.state_mut().redact_search.text = "Page".into();
+    assert_eq!(h.state_mut().redact_search(), 0);
+}
+
+#[test]
 fn a_file_that_can_not_stay_on_disk_opens_as_before() {
     let mut damaged = large();
     let tail = damaged.windows(9).rposition(|w| w == b"startxref").unwrap();

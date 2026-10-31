@@ -322,10 +322,7 @@ impl PdfCraftApp {
             }
         }
         let n = edits.len();
-        if n > 0 {
-            self.apply_edit(Edit::Batch { label: "Mark for redaction".into(), edits });
-        }
-        n
+        if n > 0 && self.apply_edit(Edit::Batch { label: "Mark for redaction".into(), edits }) { n } else { 0 }
     }
 
     /// Mark the pages of the Redact pages draft.
