@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "name": "Document Properties: custom-validation",
+  "steps": [
+    {
+      "event": {"op": "open"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "click", "label": "Custom"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "type", "field": "Name:", "value": "Title"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "type", "field": "Value:", "value": "Not an accepted property"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "click", "label": "Add"},
+      "expect": {"error": "ambiguous or disabled action: Add", "properties_open": true, "document": {"title": "Original", "author": "Original author", "custom": {"Untouched": "Keep me"}, "display_title": false, "dirty": false, "undo": null, "redo": null, "pages": 2, "custom_count": 1}, "original_bytes": true}
+    },
+    {
+      "event": {"op": "type", "field": "Name:", "value": "Project"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "type", "field": "Value:", "value": "Accepted"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "click", "label": "Add"},
+      "expect": {"error": null, "draft": {"custom": {"Untouched": "Keep me", "Project": "Accepted"}}, "document": {"title": "Original", "author": "Original author", "custom": {"Untouched": "Keep me"}, "display_title": false, "dirty": false, "undo": null, "redo": null, "pages": 2, "custom_count": 1}, "original_bytes": true}
+    },
+    {
+      "event": {"op": "click", "label": "OK"},
+      "expect": {"error": null, "document": {"title": "Original", "custom": {"Untouched": "Keep me", "Project": "Accepted"}, "undo": "Change document properties", "custom_count": 2}}
+    },
+    {
+      "event": {"op": "save_reopen"},
+      "expect": {"error": null, "reopened": {"title": "Original", "custom": {"Untouched": "Keep me", "Project": "Accepted"}, "pages": 2, "custom_count": 2}}
+    }
+  ]
+}

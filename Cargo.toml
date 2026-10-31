@@ -12,6 +12,8 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/pdfcraft"
 
 [workspace.dependencies]
+# Small, revision-bound UI drafts; the existing engine remains the owner of PDF edits/history.
+edit-session = { git = "https://github.com/PerchAnton/edit-session", version = "=0.1.0-alpha.2", rev = "033f7c3a67b825b8f222288788cc61234c0c945d" }
 # Shared frontend components; engines remain independent of egui.
 craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["serde"] }
 # Quit the macOS way (#1136): ⌘Q asks about unsaved changes, and closing quits through `terminate:`.

@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "name": "Document Properties: no-op-preserves-redo",
+  "steps": [
+    {
+      "event": {"op": "external_edit_undo", "key": "Subject", "value": "Future"},
+      "expect": {"error": null, "document": {"title": "Original", "subject": null, "undo": null, "redo": "Change Subject"}}
+    },
+    {
+      "event": {"op": "open"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "type", "field": "Title", "value": "Transient"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "type", "field": "Title", "value": "  Original  "},
+      "expect": {"error": null, "draft": {"title": "  Original  "}, "document": {"title": "Original", "undo": null, "redo": "Change Subject"}}
+    },
+    {
+      "event": {"op": "click", "label": "Close"},
+      "expect": {"error": null, "properties_open": false, "draft": null, "document": {"title": "Original", "undo": null, "redo": "Change Subject"}}
+    },
+    {
+      "event": {"op": "redo"},
+      "expect": {"error": null, "document": {"subject": "Future"}}
+    }
+  ]
+}

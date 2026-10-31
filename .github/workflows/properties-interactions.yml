@@ -1,0 +1,58 @@
+name: Document Properties interactions
+
+on:
+  pull_request:
+  push:
+    branches: [main, 'feat/edit-session-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: properties-interactions-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scenarios:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_DEV_INCREMENTAL: 'false'
+      PDFCRAFT_SYSTEM_FONTS: 0
+      PDFCRAFT_LOCALE: en-US
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: PerchAnton/interaction-check
+          ref: 7722d66c0ede7855ff58d1df3d1632fd4e5e66a5
+          path: .interaction-check
+          persist-credentials: false
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev
+          rustup toolchain install 1.99.1 --profile minimal
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: properties-interactions
+      - name: Build the real UI adapter
+        run: cargo +1.99.1 build --locked -j 2 -p pdfcraft-ui-egui --example properties_scenarios
+      - name: Replay scenarios through interaction-check
+        run: |
+          mkdir -p log
+          python3 .interaction-check/interaction_check.py --timeout 30 \
+            --report log/properties-interactions.json --junit log/properties-interactions.xml \
+            tests/interactions/document-properties/*.json -- target/debug/examples/properties_scenarios
+      - name: Keep JSON and JUnit evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: properties-interactions
+          path: log/properties-interactions.*
+          if-no-files-found: ignore
