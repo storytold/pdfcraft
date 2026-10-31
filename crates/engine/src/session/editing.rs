@@ -2,9 +2,9 @@
 use super::check_refresh_panic;
 use super::{
     Arc, DocId, Document, Edit, EditCtx, EditError, Label, MAX_UNDO, ObjectKind, OnceLock, RenderPool, SaveOptions, Scope, Session,
-    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, check_permission, comment_list, display_bytes, guard, info_fields, inspect, js, keys_after, note_warnings,
-    render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state, undrawn_notices, uses_scripts,
-    write_incremental, xfa, xfa_sync_datasets,
+    XFA_REMOVED_PREFIX, XFA_SCRIPTS_OFF, check_permission, comment_list, display_bytes, display_config, guard, info_fields, inspect, js, keys_after,
+    note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state, undrawn_notices,
+    uses_scripts, write_incremental, xfa, xfa_sync_datasets,
 };
 use crate::{EditNotice, MarkKind};
 
@@ -375,7 +375,7 @@ impl Session {
         let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
         doc.display = display_bytes(Some(editor), &bytes);
         doc.signatures = Arc::new(signatures);
-        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
         Ok(())
     }
@@ -432,7 +432,7 @@ impl Session {
         let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
         doc.display = display_bytes(Some(editor), &bytes);
         doc.signatures = Arc::new(signatures);
-        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
         doc.fonts_stale = true;
         Ok(())
@@ -459,7 +459,7 @@ impl Session {
     /// After a refresh failed: draw the display bytes it left (the original, once released),
     /// so the page still shows a document.
     pub(super) fn show_released(doc: &mut Document) {
-        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
     }
 
     /// Rebuild working bytes, inspection and renderer from the current edit state.
@@ -516,7 +516,7 @@ impl Session {
         let signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
         doc.display = display_bytes(Some(editor), &bytes);
         doc.signatures = Arc::new(signatures);
-        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
         Ok(())
     }
