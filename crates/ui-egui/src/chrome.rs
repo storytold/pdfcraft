@@ -514,7 +514,13 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             app.run_command("print.dialog");
                         }
                         let tip = crate::commands::command_tip(ui.ctx(), tl!("Save ({key})"), "file.save");
-                        if icons::button(ui, "save", 32.0, false, &tip).clicked() {
+                        // Greyed out while there is nothing to save (#5307); ⌘S still saves.
+                        let may_save = !has_doc || app.active.is_some_and(|i| app.save_has_work(i));
+                        let mut save = ui.add_enabled_ui(may_save, |ui| icons::button(ui, "save", 32.0, false, &tip)).inner;
+                        if !may_save {
+                            save = save.on_disabled_hover_text(tl!("No changes to save"));
+                        }
+                        if save.clicked() {
                             app.run_command("file.save");
                         }
                         let tip = crate::commands::command_tip(ui.ctx(), tl!("Document properties ({key})"), "file.properties");
