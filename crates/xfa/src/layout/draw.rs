@@ -1,8 +1,8 @@
 use super::common::clean_name;
 use super::items::{Item, Rounded};
 use super::{
-    Arc, Border, Ctx, Draw, ExclGroup, Face, Font, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Presence, Rect, SomIndices, Stroke,
-    Subform, Value, XfaError, data_path, text,
+    Arc, Border, Ctx, Draw, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Presence, Rect, SomIndices,
+    Stroke, Subform, Value, XfaError, data_path, text,
 };
 
 impl Layouter<'_> {
@@ -225,6 +225,8 @@ impl Layouter<'_> {
         self.push_block(block)
     }
 
+    /// Draw a `draw` element (static text, an image, a line, a rectangle or an arc) in `rect`,
+    /// inside its border and margin.
     fn draw_draw(&mut self, d: &Draw, rect: Rect, ctx: &Ctx) -> Result<(), XfaError> {
         if let Some(b) = &d.common.border {
             self.draw_border(b, rect)?;
@@ -250,6 +252,10 @@ impl Layouter<'_> {
         }
     }
 
+    /// Draw exclusion group `g` in `rect`: its border, then each of its buttons as a radio button
+    /// of one group (the one its data picks chosen), laid out as the group's layout places them. A
+    /// group that must be answered makes each button required. `sib` is the group's index among
+    /// same-named siblings, for its SOM path.
     fn draw_group(&mut self, g: &ExclGroup, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if let Some(b) = &g.common.border {
             self.draw_border(b, rect)?;
@@ -294,6 +300,15 @@ impl Layouter<'_> {
                 let on = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| (i + 1).to_string());
                 let tip = f.tooltip.clone().or_else(|| g.tooltip.clone());
                 let chosen = selected.as_deref() == Some(on.as_str());
+                // A group that must be answered makes each of its buttons required, as the group
+                // field they make is.
+                let required;
+                let f = if g.required && !f.required {
+                    required = Field { required: true, ..f.clone() };
+                    &required
+                } else {
+                    f
+                };
                 self.draw_field(f, Rect::new(inner.x + r.x, inner.y + r.y, r.w, r.h), &ctx, Some((&group, &on, tip, chosen)), sibs.at(i))?;
             }
         }

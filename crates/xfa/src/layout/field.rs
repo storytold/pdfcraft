@@ -263,6 +263,7 @@ impl Layouter<'_> {
             action,
             items,
             no_scroll: f.no_scroll,
+            required: f.required,
         })))
     }
 }

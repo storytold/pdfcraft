@@ -449,6 +449,8 @@ pub struct ExclGroup {
     pub fields: Vec<Field>,
     pub tooltip: Option<String>,
     pub scripts: Vec<Script>,
+    /// One of the buttons must be chosen (`<validate nullTest="error">` on the group).
+    pub required: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -509,6 +511,8 @@ pub struct Field {
     /// The field doesn't scroll in the direction its text runs out (`hScrollPolicy="off"` for one
     /// line, `vScrollPolicy="off"` for several): it takes no more text than it shows.
     pub no_scroll: bool,
+    /// The field must be filled in (`<validate nullTest="error">`).
+    pub required: bool,
     pub caption: Option<Caption>,
     pub value: Value,
     /// Check buttons: the on value then the off value; choice lists: the items as shown.

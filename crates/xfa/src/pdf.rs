@@ -158,17 +158,62 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
     (out, names)
 }
 
+/// Required (`Ff` bit 2), which viewers outline when they highlight a form's fields, for widget
+/// `w` when it must be filled in. A radio button's flags are its group's (the group takes it,
+/// [`Emitter::radio_group`]), and a push button keeps no value (ISO 32000-2 §12.7.5.2.2), so
+/// there is nothing it could be required to hold.
+fn required_flag(w: &Widget) -> i64 {
+    if w.required && !matches!(w.kind, WidgetKind::Radio { .. } | WidgetKind::Button { .. }) { 1 << 1 } else { 0 }
+}
+
 impl Emitter<'_> {
     fn da(face: &Face) -> Vec<u8> {
         format!("/{} {} Tf {} rg", face.resource_name(), n(face.size), rgb(face.color)).into_bytes()
     }
 
-    fn populate_widget_kind(&mut self, w: &Widget, d: &mut Dict, mk: &mut Dict) -> (i64, bool, Option<String>) {
+    /// The field of radio group `group`, which button `w` is a kid of: the one an earlier button
+    /// made (required too when `w` must be chosen), or a new field of the form, with `w`'s text
+    /// look and the group's SOM path (the button's without its last step).
+    fn radio_group(&mut self, w: &Widget, group: &str) -> Result<ObjRef, XfaError> {
+        if let Some((p, _)) = self.radio_groups.get(group) {
+            let p = *p;
+            // A later button that must be chosen makes the group required too.
+            if w.required {
+                self.doc.update_dict(p, |g| {
+                    let ff = g.int(b"Ff").unwrap_or(0);
+                    g.set(b"Ff".to_vec(), Object::Int(ff | (1 << 1)));
+                })?;
+            }
+            return Ok(p);
+        }
+        let mut g = Dict::new();
+        g.set(b"FT".to_vec(), Object::name("Btn"));
+        let required = if w.required { 1 << 1 } else { 0 };
+        g.set(b"Ff".to_vec(), Object::Int((1 << 15) | (1 << 14) | required));
+        g.set(b"T".to_vec(), Object::String(PdfString::text(group)));
+        g.set(b"V".to_vec(), Object::name("Off"));
+        g.set(b"DA".to_vec(), Object::String(PdfString::literal(Self::da(&w.face))));
+        g.set(b"Kids".to_vec(), Object::Array(Vec::new()));
+        let group_som = w.som.rsplit_once('.').map(|(g, _)| g.to_string()).unwrap_or_else(|| w.som.clone());
+        g.set(SOM_KEY.to_vec(), Object::String(PdfString::text(&group_som)));
+        let p = self.doc.add(Object::Dict(g));
+        self.radio_groups.insert(group.to_string(), (p, Vec::new()));
+        self.fields.push(p);
+        self.field_count += 1;
+        Ok(p)
+    }
+
+    /// Fill in widget `w`'s field by its kind (field type, flags, value, appearance states, items,
+    /// action) in `d` and `mk`. Returns its field flags, whether it is a top-level field (not a kid
+    /// of its radio group's field, nor a signature field under the fields generated for its SOM
+    /// path), and for such a signature field the SOM path of the generated field above it.
+    fn populate_widget_kind(&mut self, w: &Widget, d: &mut Dict, mk: &mut Dict) -> Result<(i64, bool, Option<String>), XfaError> {
         let r = w.rect;
         let mut ff: i64 = 0;
         if w.read_only {
             ff |= 1;
         }
+        ff |= required_flag(w);
         let mut top_level = true;
         // The SOM path of the generated field above this one, for a signature field named by its
         // SOM path.
@@ -311,26 +356,7 @@ impl Emitter<'_> {
             }
             WidgetKind::Radio { group, on, .. } => {
                 top_level = false;
-                let parent = match self.radio_groups.get(group) {
-                    Some((p, _)) => *p,
-                    None => {
-                        let mut g = Dict::new();
-                        g.set(b"FT".to_vec(), Object::name("Btn"));
-                        g.set(b"Ff".to_vec(), Object::Int((1 << 15) | (1 << 14)));
-                        g.set(b"T".to_vec(), Object::String(PdfString::text(group)));
-                        g.set(b"V".to_vec(), Object::name("Off"));
-                        g.set(b"DA".to_vec(), Object::String(PdfString::literal(Self::da(&w.face))));
-                        g.set(b"Kids".to_vec(), Object::Array(Vec::new()));
-                        // The group's SOM path: the button's without its last step.
-                        let group_som = w.som.rsplit_once('.').map(|(g, _)| g.to_string()).unwrap_or_else(|| w.som.clone());
-                        g.set(SOM_KEY.to_vec(), Object::String(PdfString::text(&group_som)));
-                        let p = self.doc.add(Object::Dict(g));
-                        self.radio_groups.insert(group.clone(), (p, Vec::new()));
-                        self.fields.push(p);
-                        self.field_count += 1;
-                        p
-                    }
-                };
+                let parent = self.radio_group(w, group)?;
                 d.set(b"Parent".to_vec(), Object::Ref(parent));
                 // Appearance states are PDF names, so a space becomes an underscore. The datasets
                 // still hold the template's text (`/PCOn`); writing the name back would drop the selection.
@@ -356,7 +382,7 @@ impl Emitter<'_> {
                 write_button_action(w.action.as_ref(), d);
             }
         }
-        (ff, top_level, under)
+        Ok((ff, top_level, under))
     }
 
     /// Write laid-out widget `w` on `page` as an AcroForm widget annotation (and its field), with
@@ -391,7 +417,7 @@ impl Emitter<'_> {
         if matches!(w.kind, WidgetKind::CheckBox { round: true, .. } | WidgetKind::Radio { round: true, .. }) {
             d.set(ROUND_KEY.to_vec(), Object::Bool(true));
         }
-        let (ff, top_level, under) = self.populate_widget_kind(w, &mut d, &mut mk);
+        let (ff, top_level, under) = self.populate_widget_kind(w, &mut d, &mut mk)?;
         if !mk.is_empty() {
             d.set(b"MK".to_vec(), Object::Dict(mk));
         }

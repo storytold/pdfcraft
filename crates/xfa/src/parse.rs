@@ -547,9 +547,16 @@ fn parse_field(n: XmlNode, warnings: &mut Vec<String>) -> Field {
         calculate: child(n, "calculate").and_then(|c| child(c, "script")).map(|s| parse_script(s, "calculate")),
         validate: validate_el.and_then(|v| child(v, "script")).map(|s| parse_script(s, "validate")),
         validate_message,
+        required: must_be_filled(validate_el),
         numeric,
         display_picture: child(n, "format").and_then(|f| child(f, "picture")).map(text_of).map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
     }
+}
+
+/// Whether a `<validate>` element makes its object one that must be filled in: `nullTest="error"`
+/// (`warning` only recommends it, and `disabled`, the default, leaves it optional).
+fn must_be_filled(validate: Option<XmlNode>) -> bool {
+    validate.is_some_and(|v| v.attribute("nullTest").is_some_and(|t| t.trim() == "error"))
 }
 
 fn parse_script(s: XmlNode, activity: &str) -> Script {
@@ -618,6 +625,8 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
     PageSet { areas }
 }
 
+/// A `subform` element: its own attributes, its page set if it has one, and the nodes it holds,
+/// `depth` levels down (for the nesting limit).
 fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subform {
     let common = parse_common(n);
     let mut children_out = Vec::new();
@@ -650,6 +659,9 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Subfor
     }
 }
 
+/// The template object element `c` stands for (a subform, area, field, draw or exclusion group,
+/// with what it holds), or `None` for anything else and past [`MAX_DEPTH`] levels. What can't be
+/// read faithfully is noted in `warnings`.
 fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Option<Node> {
     if depth > MAX_DEPTH {
         return None;
@@ -674,6 +686,7 @@ fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Option<No
             fields: children(c, "field").map(|f| parse_field(f, warnings)).collect(),
             tooltip: child(c, "assist").and_then(|a| child(a, "toolTip")).map(text_of).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
             scripts: parse_events(c),
+            required: must_be_filled(child(c, "validate")),
         })),
         _ => return None,
     })
