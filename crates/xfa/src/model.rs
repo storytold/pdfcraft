@@ -139,6 +139,8 @@ pub struct Corner {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Border {
     pub presence: Presence,
+    /// XFA `break="open"` omits the edges at a page/content-area break; default is close.
+    pub break_open: bool,
     pub edges: [Edge; 4],
     pub corners: [Corner; 4],
     pub fill: Option<Color>,

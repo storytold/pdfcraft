@@ -31,8 +31,28 @@ that warning and keeps the existing layout and accepted widget values.
   container without a width is as wide as its content; flow across content areas and pages with
   page masters chosen by occurrence; a table's header row repeats after a break; presence
   `hidden` takes no space, `invisible` takes space; repeating subforms get their initial
-  instances, in flowed content and in a top-to-bottom container inside positioned content (a
-  table in an area) alike; fields that compute the page number or count on layout show the numbers.
+  instances, including zero for optional subforms. Absent instances occupy no space and do not
+  trigger page breaks; absent table headers are not repeated on continuation pages.
+  Unnamed containers retain their initial occurrence counts even with populated datasets.
+  This applies in flowed content and in a top-to-bottom container inside positioned content (a table in an area) alike. Intrinsic horizontal flow can split across
+  pages after a row is removed, including sections with `keep intact="contentArea"` or
+  `keep intact="pageArea"` hints. This matches observed reference-viewer behavior for growable
+  horizontal groups; it is not general keep-rule support. Fixed-height blocks still move
+  together when they fit in a fresh area. Breaks between whole horizontal leaves preserve enclosing
+  flowed borders, fills and repeated margins; oversized-leaf splits still omit those borders with
+  a warning. A horizontal group’s own border and nested decorations follow XFA’s
+  `break="close"` (default) or `break="open"` policy on each fragment, including rounded
+  corners, without moving the group whole or changing its page count. Fixed/positioned
+  oversized blocks retain their existing graphic clipping. Following fields, table rows and frame borders
+  retain their horizontal inset when flow moves to another content area. Repeated containers measure each
+  instance in its own data scope, including optional children and growing text fields.
+  Positioned children, area contents and page-master objects draw every instance at its own
+  measured size and template offset; copies can overlap, as positioned layout specifies.
+  Their containers include the largest instance extents. Repeated table cells consume separate
+  column spans and contribute their own heights; inferred equal-width columns count the live
+  cells in each row. Declared column widths remain authoritative. Column inference and empty
+  repeated containers consume bounded work; truncated positioned/cell repeats report a warning.
+  Fields that compute the page number or count on layout show the numbers.
 - **PDF** (`pdf::write_form`): pages with content streams in the standard 14 fonts (Arial and
   friends → Helvetica, Courier New → Courier, serif faces → Times; nothing is embedded), JPEG
   XObjects, and widgets: text (multi-line, max length, alignment), date (Acrobat's `AFDate`
@@ -58,8 +78,23 @@ that warning and keeps the existing layout and accepted widget values.
   filled there shows them here. The engine does both: values on open (recorded in the
   document's warnings), the packet after every form edit.
 
-Layout measures each container once per (node, width): width-less containers would otherwise
+Layout caches container measurements by node, width, inherited style and parent SOM scope:
+width-less containers would otherwise
 be measured exponentially often in their nesting. A measurement budget backs this up.
+
+Occurrence regression coverage (`occurrence_layout_tests`, plus the automation integration
+test `repeated_instances_survive_the_tool_lifecycle_in_every_layout`):
+
+| Path | Checked behavior |
+| --- | --- |
+| Positioned, areas, vertical/horizontal flow, tables and cells | Zero, one and multiple instances; blank/data merges; minimum/maximum counts; values and distinct SOM indices; fixed and intrinsic containers |
+| Positioned and areas | Largest instance first or last; maximum width/height; anchor offsets; hidden versus invisible presence |
+| Table cells | Separate column spans, per-instance data/height, inferred columns across different row instances, bounded allocation |
+| Page masters | Zero/one/multiple positioned instances with independent values |
+| Engine/tool lifecycle | Add from zero, fill three instances, enforce maximum, remove first/reindex, undo/redo, populated and empty save/reopen, re-add defaults; exact field metadata and rendered-pixel comparisons |
+| Failed engine edits | Field/import/click finalization failure, with and without script abandonment, across vertical, positioned, horizontal and table roots; bytes, geometry, history and scripts-off safety state |
+
+These synthetic checks cover occurrence handling, not general XFA fidelity or all binding modes.
 
 - **Scripts** (`script`): the live form as scripts see it (`form_tree`: the instance tree with
   values, presence and access, and the `ScriptEvent`s in document order, built within
@@ -113,8 +148,21 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   (reads give a sink that accepts writes), `execEvent`, or the change event per keystroke.
   Validate failures show their message and keep the value, as Acrobat does for scripts.
   A hidden instance of a repeating subform hides every instance (overrides apply to the template).
-  A repeating subform shows what its data holds once the data holds any instance, else its
-  `initial` count, and never fewer than one (`occur min="0"` still shows one row).
+  Occurrence counts follow XFA 3.3 chapter 7, “Repeating Elements using Occurrence Limits”:
+  blank forms use `initial`; data merges use the number of matching data nodes constrained by
+  `min` and `max`. With `min="0"`, no matching data means no instance. A detached template
+  keeps the instance manager available at zero without exposing phantom fields or running
+  their scripts. JavaScript and FormCalc can add the first instance, remove the last, and
+  re-add it; minimum and maximum constraints still apply. This covers the default binding
+  model; explicit/global/unbound binding semantics remain part of the data-binding gap above.
+  When a blank form creates more rows than its minimum, its initial group structure is recorded
+  before scripts run, including nested empty groups and master-page scopes. Later edits and
+  save/reopen use those groups; removing rows does not reapply `initial`. An empty data import
+  starts a new blank merge, while nonempty imported data continues to determine its own counts.
+  Initial binding is bounded and atomic. Ambiguous same-name definitions whose initial counts
+  cannot be represented by the current default binder, or group names the writer would change,
+  are rejected explicitly rather than silently changing rows. Forms already protected entirely
+  by their minimum counts do not acquire a data packet just by opening.
 - **Script limits.** Forms run their scripts on open without being asked, so the engine bounds
   each event: a script's effects (values set again on the same object merge, the last wins;
   10 000 effects, 100 message boxes, 1 000 console lines per script and per event), its loop
@@ -124,11 +172,29 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   print, save, open a link or move the focus; other events asking are noted in the console.
   All the scripts of one event (open, a change, a click) run on one thread, each in a fresh
   JavaScript context (or FormCalc interpreter) on a copy of the form as the engine holds it
-  then: scripts share nothing, a script that fails halfway leaves nothing behind, and what a
+  then: scripts share no JavaScript globals. An ordinary script exception retains its earlier
+  effects and reports the error; a fatal engine failure rejects the whole edit. What a
   script changed reaches the next one only through the engine, which applies the effects and
   keeps its live form up to date in place for values (rebuilding it only when the structure
   changed). A form with hundreds of calculations runs them all well within the open budget,
   where each used to pay for a thread of its own and a rebuild of the whole form.
+  Instance-effect replay caches counts and default descendant paths per manager within a
+  script batch. Removing a parent invalidates descendant managers (including shifted sibling
+  paths); writes creating data ancestors, resets and property changes invalidate cached
+  assumptions. Filling a field under an existing data parent keeps the cache. Repeated additions to one
+  unchanged manager do not rebuild unrelated form subtrees. Native replay checks the event
+  deadline, and native/WASM replay share a cumulative 2,000,000-unit work budget per event
+  (each snapshot construction once, actual manager-lookup node visits, invalidation scans,
+  and descendant data operations). Charges accumulate across script batches without charging
+  an already-built snapshot again.
+  Exceeding either limit returns an error: the engine discards the working edit/open-script
+  transaction and keeps the prior document, rather than publishing partial data or geometry.
+  Field changes and data imports propagate fatal replay/layout failures too, including after
+  earlier scripts or reset operations flushed changes. Ordinary validation warnings still
+  retain the entered value. If a script was abandoned before a later finalization failure,
+  scripting stays disabled for that open document and diagnostics remain available, without
+  committing PDF changes or an undo entry. Viewer requests from the rejected edit are discarded.
+  This bounds replay amplification; it is not a general JavaScript allocation budget.
   What open-time scripts change is noted in the document's XFA warnings. Known gaps: the
   engine's loop limit is per call frame, so loops inside nested calls can run far longer; such
   a script is abandoned after 1 s (3 s for a click) on its thread, which keeps running until the
@@ -159,7 +225,7 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   file's data is held as a tree and written with the packet's own namespace prefix, never as
   the file's markup, and every rewrite of the packet is parsed back before it is written; the
   engine then lays a dynamic form out again from it and runs its calculations.
-- Missing: `keep` constraints, `subformSet` relations, `rl-tb` is mirrored `lr-tb`, font
+- Missing: broader `keep` constraints (including `next`/`previous` and other layout modes), `subformSet` relations, `rl-tb` is mirrored `lr-tb`, font
   metrics are the approximate Helvetica ones, and line heights are 1.15 × size.
 - Acrobat cannot be an oracle here (clean-room rules): layout follows the specification, and
   fidelity has been checked by eye on real government forms, not pixel-compared.

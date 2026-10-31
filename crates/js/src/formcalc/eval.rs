@@ -2,7 +2,7 @@ use super::ast::{Expr, Stmt};
 use super::value::{Val, is_numeric_text, num_text};
 use super::{
     CALLS_TOO_DEEP, Flow, Func, HashMap, HashSet, Interp, LIST_TOO_LONG, LOOPED_TOO_MUCH, MAX_LIST, Message, MessageButtons, MessageIcon, R, Rc,
-    TOO_DEEP, XfaEffect, child_named, clip, descendants_named, instances, reset_names, resolve_som,
+    TOO_DEEP, XfaEffect, clip, descendants_named, instance_source, instances, reset_names, resolve_manager, resolve_som,
 };
 
 impl Interp<'_> {
@@ -304,6 +304,11 @@ impl Interp<'_> {
             Val::Xfa => match m.as_str() {
                 "resolvenode" | "resolvenodes" => {
                     let s = self.arg_str(args, 0)?;
+                    if m == "resolvenode"
+                        && let Some((p, n)) = resolve_manager(self.h, self.h.current, &s)
+                    {
+                        return Ok(Val::Im(p, n));
+                    }
                     let found = resolve_som(self.h, self.h.current, &s);
                     Ok(self.set_val(found, m == "resolvenodes"))
                 }
@@ -320,6 +325,11 @@ impl Interp<'_> {
             Val::Node(i) => match m.as_str() {
                 "resolvenode" | "resolvenodes" => {
                     let s = self.arg_str(args, 0)?;
+                    if m == "resolvenode"
+                        && let Some((p, n)) = resolve_manager(self.h, i, &s)
+                    {
+                        return Ok(Val::Im(p, n));
+                    }
                     let found = resolve_som(self.h, i, &s);
                     Ok(self.set_val(found, m == "resolvenodes"))
                 }
@@ -392,6 +402,7 @@ impl Interp<'_> {
         }
     }
 
+    /// Apply a FormCalc property assignment, including manager counts, through the shared host.
     fn assign_to(&mut self, target: Val, prop: &str, v: Val) -> R<()> {
         match target {
             Val::Node(i) => {
@@ -419,7 +430,7 @@ impl Interp<'_> {
                     other => {
                         // `page1.qty = 7`: the child object named by the last step takes the value.
                         if let Some(child) = other.strip_prefix('_') {
-                            if child_named(self.h, i, child).is_some() {
+                            if instance_source(self.h, i, child).is_some() {
                                 return self.assign_to(Val::Im(i, child.to_string()), "count", v);
                             }
                             return Ok(());

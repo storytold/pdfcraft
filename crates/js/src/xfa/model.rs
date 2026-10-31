@@ -46,7 +46,11 @@ pub struct XfaNode {
     pub occur_max: Option<usize>,
     /// This instance's index among its same-named siblings.
     pub index: usize,
+    /// Position of the definition among its template siblings.
+    pub template_order: usize,
     pub children: Vec<XfaNode>,
+    /// Dormant child definitions, available to instance managers but absent from the live DOM.
+    pub instance_templates: Vec<XfaNode>,
     /// Fields: the value shown in the field's display picture, what `formattedValue` reads;
     /// `None` when the picture doesn't change it (the raw value is read then).
     pub formatted: Option<String>,

@@ -213,6 +213,24 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- 2026-10-30 — M12 / #3941: integrate upstream `65ff3a00`; preserve viewer-only CJK font fallback and print/export isolation alongside XFA occurrence, border, persistence and rollback fixes. Both roadmap histories retained; estimates unchanged.
+
+- 2026-10-30 — M12 / #3941: preserve horizontal page breaks while drawing borders closed by default or open at continuation edges as specified; test nested decorations and relocate misplaced M12 revision notes. Estimates unchanged.
+
+- 2026-10-30 — M12 / #3941: audit occurrence handling across layout modes; draw and measure all positioned instances and repeated table cells, including their spans and inferred columns. Add cross-layout tool lifecycle, page-master, geometry and resource-limit regressions; expand failure/rollback coverage. Existing binding gaps and estimates unchanged.
+
+- 2026-10-30 — M12 / #3941: consolidate duplicate milestone entries, retaining upstream text-only tagging, limited form-field tagging, CLI layout and XFA improvements alongside our occurrence, rollback and pagination fixes. Remaining accessibility and XFA limitations stay explicit; estimates unchanged.
+
+- 2026-10-30 — M12 / #3941: integrate upstream `fa5f9f8c`, preserving the new rendering, security and XML-reader changes alongside zero-instance, rollback and horizontal-frame regressions. Keep both integration-test module sets. Estimates unchanged.
+
+- 2026-10-29 — M12 (#3941, #4744): integrate current upstream module splits, layout and security changes; preserve blank-merge initial groups atomically through edits, data import and save/reopen. Regression coverage includes minimum counts, removal, undo/redo and rollback; cloned defaults consume the script payload budget. Broader binding limitations and estimates unchanged.
+
+- 2026-10-22: M12 / PR #3941 review: separate published evidence from build downloads in attribution; retain remote-asset policy checks and test exclusion from build fetching. XFA behavior and estimates unchanged.
+
+- 2026-10-22: M12 / PR #3941: verified #4112 against its exact attachment on upstream and PR builds; published an original synthetic zero-row fixture, before/after screenshots and lifecycle reproduction steps. Remote assets are attributed; no compatibility scope or estimates changed.
+- 2026-10-22 — M12 (#3941): integrate upstream-checked dynamic JavaScript compilation and consolidated integration tests; preserve zero-instance and fatal-error rollback coverage. Estimates unchanged.
+- 2026-10-22 — M12 (#3941): integrate upstream XFA date formatting, visibility, sizing and text reflow with zero-instance support; retain ordinary script-error effects while fatal finalization failures roll back. Estimates unchanged.
+
 - **2026-10-31 (M2, PR #4172 review):** Added same-machine pixel oracles for GBK Song, Hei, Kai and FangSong, including all four subset-prefixed Founder aliases. Reference PDFs use explicit Unicode mappings and independently selected installed faces; font data and rasters remain in memory. All eight cases ran; wrong-glyph and wrong-family production mutations each failed the new assertion and were restored. Validation: 422 renderer unit tests, renderer all-target Clippy with -D warnings, formatting, layers/assets/parity and renderer WASM checks passed; existing optional-patch/WASM warnings and parity notes remain. Estimates unchanged.
 
 - **2026-10-31 (M2, PR #4172):** Integrated main fa5f9f8c, retaining both roadmap histories and raster regression groups. Restored display_config and thumbnail_config imports after the upstream explicit-import migration. Validation: 422 renderer unit tests, engine/UI all-target checks, scoped all-target Clippy with -D warnings, formatting, layers, assets, parity and renderer/engine WASM checks passed. Existing optional-patch/WASM warnings and parity notes remain; no full engine/UI runtime test rerun. Display-only font policy and estimates unchanged.
@@ -224,7 +242,6 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 
 - **2026-10-26 (M2, PR #4172):** Reconciled current main, preserving its Japanese serif/weight selection and both branches' progress records. Installed CJK viewer and preview fallback remains display-only; estimates unchanged.
-
 - **2026-10-29 (M7, #2517):** Widening a paragraph rejoins a wrap with the number of spaces that wrap consumed, including a typed run and none for a Chinese or Japanese word split. The count survives an incremental save and a full rewrite, and a width-only `text_edit` uses it. Estimates unchanged.
 - **2026-10-26 (M11, JBIG2 symbols):** Lossless JBIG2 now stores each distinct mark of a black-and-white image once, as a symbol, and places its exact copies, when that is smaller than the generic region: on six pages of rendered 300 dpi text 28% of the generic region's size and 17% of Group 4's, and the same bits back through two independent decoders (hayro-jbig2 and Poppler). Scans, whose letters are seldom identical, gain little until refinement coding; a dictionary shared between pages (`/JBIG2Globals`) is next. Estimates unchanged.
 - **2026-10-25 (M5, comment replies):** One reply can be deleted from the Comments panel without its thread. On the selected card each reply has its own "…" menu (Edit, Copy text, Delete); Delete takes that reply with its pop-up and the replies to it, as `comment_delete` already did headlessly, and the comment and its other replies stay. The card stays selected, and the panel's editor stays open, on what they were on though the delete moved it in `/Annots`. Undo and Redo close the editor, since either can move what it was open on. A locked reply can't be deleted. Estimates unchanged.
@@ -263,6 +280,13 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-22 (M14, macOS association recovery candidate):** Successful desktop open/save/sign can queue recovery of an existing per-file binding to the running PDFCraft bundle through NSWorkspace. Metadata-only watcher changes retain undo and avoid false overwrite prompts; real same-length/same-mtime edits remain protected. Rebased on 0.12.0 and reuses #3042's shared atomic metadata preservation; the bounded recovery parser does not narrow save limits. Prior native Preview TEST-signature and Finder workflows passed on macOS 27.0.1; other versions remain unqualified. Estimates unchanged.
 - **2026-10-13 (M7, free image rotation):** A selected page image has a rotate knob (Shift: 15 degree steps) and `image_edit` a `rotate_by` action; the angle is written as one undoable `cm`. Snapping to page edges while moving is in #1740; resize snapping is not done. Estimates unchanged.
 
+- 2026-10-21 — M12 (#3941): retain scripts-off runtime state and diagnostics after an abandoned XFA script followed by finalization failure; discard rejected-edit viewer requests while preserving document bytes and history.
+
+- 2026-10-21 — M12 (#3941 edge cases): zero-instance overflow headers stay absent; unnamed containers retain initial occurrences in layout and runtime; fatal field-change/import replay errors roll back the entire edit, including flushed prefixes.
+- 2026-10-21 — M12 (#3941 follow-up): repeated flowing subforms and growing fields measure their own indexed data; replay charges actual lookup visits and each rebuilt snapshot once; keep-rule notes distinguish the supported horizontal subset.
+- 2026-10-21 — M12 (#3941 review): repeated table rows measure optional cells per instance; instance-effect batches cache counts/defaults with bounded replay and rollback regressions. Documented dormant templates, invalidation rules and occurrence tests.
+
+- 2026-10-21 — M12: optional XFA subforms can have zero instances; retained managers add the first row and remove the last, with occurrence limits, undo/redo and save/reopen regressions. Other XFA fidelity gaps remain.
 - **2026-10-20 (M4, initial view):** Window and interface options read indirect boolean ViewerPreferences values. Synthetic regressions cover true/false, direct/indirect preference dictionaries and save/reopen; malformed entries retain false defaults. Estimates unchanged.
 - **2026-10-20 (M3, #3535):** Escape with a menu open closes the menu and keeps the text selection; the next Escape clears it, as before. One keypress used to do both. A synthetic UI regression checks it. Estimates unchanged.
 - **2026-10-16 (M3, close prompt keyboard):** The "Save changes?" prompt opens with Save chosen (Enter saves, as before) and the arrow keys and Tab / Shift+Tab move the choice to Cancel or Don't save, shown with a focus ring; Enter or Space press the chosen button and Escape still cancels. Before, Enter always saved whatever was Tab-focused. Estimates unchanged.
@@ -792,6 +816,14 @@ Newest first: the date, what moved, and the new overall estimate.
 
 - **2026-10-22 (PR #3227 integration):** M11: integrate upstream `80b7d215`; retain partial target-version compatibility and upstream content-boundary and image-size regression coverage. Scope and estimates unchanged.
 
+- 2026-10-29 — M12 / #3941 review follow-up: reject document evidence with Adobe provenance and licence expressions without identifiers; synthetic regression coverage, no XFA behavior change.
+
+- 2026-10-29 — M12 / #3941: resolve instance managers through their live owning container when unnamed wrappers share a SOM; preserve nested initial and empty groups after add, undo/redo and save/reopen. Lookup work remains budgeted.
+
+- 2026-10-30 — M12 / #3941: align growable horizontal keep-hint pagination with reference behavior reported in review and #5124; retain fixed-height placement. Correct field/table/frame horizontal origins across content areas; add geometry and edit/undo/save regressions. Public-form layout probes improve SV17 8→7, Labiola 5→4 and Swissmedic 18→17; broader fidelity remains incomplete.
+
+- 2026-10-30 — M12 / #3941: reproduce and fix disappearing parent borders/fills at horizontal leaf-boundary breaks; retain nested margins, column origins and oversized-content warnings. Synthetic geometry and rendered lifecycle regressions cover the fix.
+
 - **2026-10-23 (M2, PR #4172):** Combine thumbnails and accessibility figure previews use the viewer's display-only CJK fallback. Windows family matching includes FangSong and subset-prefixed Founder names. Export, print, OCR and automation remain off by default; estimates unchanged.
 
 - **2026-10-26 (M2, PR #4172 print-preview review):** Print-preview requests disable installed CJK fallback and use an isolated cache so preview font availability matches output. Viewer fallback survives switching in either direction. Synthetic GBK regressions cover inline and single-worker rendering, full pages and tiles; estimates unchanged.
@@ -805,3 +837,5 @@ PR #2133 retains document-local Pages sidebar focus for Ctrl/Cmd+A and Escape af
 ## Button export-value refresh (2026-10-30)
 
 PR #1952 retains per-widget checkbox/radio export-value editing in the split form-authoring and Prepare modules. Caption editing remains supported. Tests cover preserved appearances and selection, invalid/locked refusals, data-format round trips, and Apply/Cancel/Undo. Current-head hosted validation is pending; feature estimates are unchanged.
+
+- 2026-10-30 — M12 / #3941 CodeRabbit follow-up: reject empty, malformed and non-HTTPS published-evidence source URLs, with a failing-before-fix regression; no change to build downloads or XFA behavior.

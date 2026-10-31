@@ -81,6 +81,38 @@ pub(crate) fn instances(h: &XHost, parent: usize, name: &str) -> Vec<usize> {
         .unwrap_or_default()
 }
 
+/// A retained definition, live instance, or removed instance from which the manager
+/// can create a new row. Dormant definitions never participate in normal node lookup.
+pub(crate) fn instance_source(h: &XHost, parent: usize, name: &str) -> Option<usize> {
+    let p = h.nodes.get(parent)?;
+    p.instance_templates
+        .iter()
+        .chain(p.children.iter().filter(|&&i| h.nodes.get(i).is_some_and(|n| !n.gone)))
+        .chain(&p.children)
+        .copied()
+        .find(|&i| h.nodes.get(i).is_some_and(|n| n.name == name && n.repeatable))
+        .map(|i| h.nodes.get(i).and_then(|n| n.default_source).unwrap_or(i))
+}
+
+/// Resolve a manager without exposing its dormant template as a live form node.
+pub(crate) fn resolve_manager(h: &XHost, from: usize, expr: &str) -> Option<(usize, String)> {
+    let (prefix, leaf) = expr.trim().rsplit_once('.').map_or((None, expr.trim()), |(p, l)| (Some(p), l));
+    let name = leaf.strip_prefix('_')?;
+    if let Some(prefix) = prefix {
+        let parent = *resolve_som(h, from, prefix).first()?;
+        return instance_source(h, parent, name).map(|_| (parent, name.to_string()));
+    }
+    let mut at = Some(from);
+    for _ in 0..MAX_DEPTH {
+        let parent = at?;
+        if instance_source(h, parent, name).is_some() {
+            return Some((parent, name.to_string()));
+        }
+        at = h.nodes.get(parent).and_then(|n| n.parent);
+    }
+    None
+}
+
 /// Resolve a SOM expression from node `from`: `$`, `$form`, `$record`, `$host`, `xfa.form…`,
 /// `parent`, `..name` (descendant search), `name[n]`, `name[*]`, `_name`.
 pub(crate) fn resolve_som(h: &XHost, from: usize, expr: &str) -> Vec<usize> {
@@ -193,6 +225,7 @@ pub(crate) fn descendants_named(h: &XHost, from: usize, name: &str, depth: usize
     out
 }
 
+/// Read an XFA property or live child; underscore managers can resolve even at zero instances.
 /// A property read on a form node's Proxy: its value (and `formattedValue` as its picture shows
 /// it), attributes, relatives, methods, instance managers and children by name.
 fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -266,7 +299,7 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
         | "desc" => sink(ctx)?,
         other => {
             if let Some(child) = other.strip_prefix('_') {
-                let exists = child_named(&host(ctx)?.borrow(), idx, child).is_some();
+                let exists = instance_source(&host(ctx)?.borrow(), idx, child).is_some();
                 return if exists { instance_manager(ctx, idx, child) } else { Ok(JsValue::undefined()) };
             }
             let found = child_named(&host(ctx)?.borrow(), idx, other);
@@ -333,6 +366,12 @@ pub(super) fn resolver(ctx: &mut Context, from: usize, many: bool) -> JsResult<J
         let from = key.get(js_string!("from"), ctx)?.to_number(ctx)? as usize;
         let many = key.get(js_string!("many"), ctx)?.to_boolean();
         let expr = text(&arg(args, 0), ctx)?;
+        if !many {
+            let manager = resolve_manager(&host(ctx)?.borrow(), from, &expr);
+            if let Some((parent, name)) = manager {
+                return instance_manager(ctx, parent, &name);
+            }
+        }
         let found = resolve_som(&host(ctx)?.borrow(), from, &expr);
         if many {
             return list_object(ctx, &found);

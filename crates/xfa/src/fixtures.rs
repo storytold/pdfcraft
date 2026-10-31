@@ -711,6 +711,28 @@ pub fn signed_shell() -> Vec<u8> {
     assemble(objs)
 }
 
+/// Optional rows and controls outside them, for the complete zero-instance lifecycle.
+/// Synthetic XFA 3.3 occurrence example; no document-derived content.
+pub fn optional_rows(initial: usize) -> String {
+    format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+ <subform name="form" layout="tb" w="300pt">
+  <subform name="row" layout="tb" w="300pt"><occur min="0" initial="{initial}" max="2"/>
+   <field name="entry" w="200pt" h="20pt"><ui><textEdit/></ui><value><text>default</text></value></field>
+  </subform>
+  <field name="other" w="200pt" h="20pt"><ui><textEdit/></ui></field>
+  <field name="add" w="100pt" h="20pt"><ui><button/></ui><caption><value><text>Add row</text></value></caption>
+   <event activity="click"><script contentType="application/x-javascript">_row.addInstance(1);</script></event>
+  </field>
+  <field name="remove" w="100pt" h="20pt"><ui><button/></ui><caption><value><text>Remove row</text></value></caption>
+   <event activity="click"><script contentType="application/x-javascript">_row.removeInstance(_row.count - 1);</script></event>
+  </field>
+ </subform>
+</template></xdp:xdp>"#
+    )
+}
+
 /// A check box `kind` whose change script, once it is checked, opens the protected check box
 /// `leave` and shows the invisible field `details`, then fails on an object the form doesn't
 /// have (as scripts written for an earlier version of a form do).

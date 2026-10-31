@@ -1756,6 +1756,200 @@ mod session {
     }
 }
 
+mod xfa_zero_instances {
+    use crate::Limits;
+    use crate::formcalc::run_formcalc;
+    use crate::xfa::{XfaDoc, XfaEvent, XfaKind, XfaNode, run_xfa};
+
+    /// Build a manager with a retained default and no live row, capped by the supplied maximum.
+    fn form(max: usize) -> XfaNode {
+        XfaNode {
+            name: "form1".into(),
+            som: "form1[0]".into(),
+            kind: Some(XfaKind::Subform),
+            children: vec![XfaNode { name: "go".into(), som: "form1[0].go[0]".into(), kind: Some(XfaKind::Field), ..Default::default() }],
+            instance_templates: vec![XfaNode {
+                name: "row".into(),
+                som: "form1[0].row[0]".into(),
+                kind: Some(XfaKind::Subform),
+                repeatable: true,
+                occur_min: 0,
+                occur_max: Some(max),
+                children: vec![XfaNode {
+                    name: "what".into(),
+                    som: "form1[0].row[0].what[0]".into(),
+                    kind: Some(XfaKind::Field),
+                    value: "default".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// JavaScript sees no phantom row but can add, remove, and recreate one within occurrence limits.
+    #[test]
+    fn javascript_zero_instances_keep_only_the_manager_and_can_recreate_the_last_row() {
+        let event = XfaEvent { target: "form1[0].go[0]".into(), activity: "click".into(), ..Default::default() };
+        let script = r#"
+            var seen = [typeof row, this.parent.nodes.length, xfa.resolveNodes('row[*]').length,
+                        _row.count, _row.min, _row.max, xfa.resolveNode('_row').count];
+            var r = this.parent._row.addInstance(1);
+            seen.push(r.what.rawValue, r.index, _row.count);
+            r.what.rawValue = 'deleted';
+            _row.removeInstance(0);
+            seen.push(_row.count, xfa.resolveNode('row') === null);
+            r = xfa.resolveNode('form1._row').addInstance(1);
+            seen.push(r.what.rawValue, r.index);
+            _row.setInstances(9);
+            seen.push(_row.count);
+            _row.count = 0;
+            seen.push(_row.count);
+            seen.join('/');
+        "#;
+        let out = run_xfa(script, &event, &XfaDoc::default(), &form(1), Limits::default());
+        assert_eq!(out.error, None, "{out:?}");
+        assert_eq!(out.result.as_deref(), Some("undefined/1/0/0/0/1/0/default/0/1/0/true/default/0/1/0"));
+    }
+
+    /// A retained date default keeps upstream formattedValue semantics when cloned, while
+    /// editing the value clears the old display and recreation restores the template display.
+    #[test]
+    fn zero_instance_date_defaults_keep_their_formatted_value() {
+        let mut root = form(1);
+        let field = &mut root.instance_templates[0].children[0];
+        field.value = "2026-10-20".into();
+        field.formatted = Some("10/20/2026".into());
+        let event = XfaEvent { target: "form1[0].go[0]".into(), activity: "click".into(), ..Default::default() };
+        let js = r#"
+            var r = _row.addInstance(1);
+            var before = r.what.formattedValue;
+            r.what.rawValue = '2026-10-21';
+            var changed = r.what.formattedValue;
+            _row.removeInstance(0);
+            var restored = _row.addInstance(1).what.formattedValue;
+            before + '/' + changed + '/' + restored;
+        "#;
+        let fc = r#"
+            _row.addInstance(1)
+            var before = $.parent.row.what.formattedValue
+            $.parent.row.what.rawValue = "2026-10-21"
+            var changed = $.parent.row.what.formattedValue
+            _row.removeInstance(0)
+            var restored = _row.addInstance(1).what.formattedValue
+            Concat(before, "/", changed, "/", restored)
+        "#;
+        for out in [
+            run_xfa(js, &event, &XfaDoc::default(), &root, Limits::default()),
+            run_formcalc(fc, &event, &XfaDoc::default(), &root, Limits::default()),
+        ] {
+            assert_eq!(out.error, None, "{out:?}");
+            assert_eq!(out.result.as_deref(), Some("10/20/2026/2026-10-21/10/20/2026"));
+        }
+    }
+
+    /// FormCalc manager operations must match JavaScript at zero and at the maximum.
+    #[test]
+    fn formcalc_zero_instances_share_manager_limits_and_lifecycle() {
+        let event = XfaEvent { target: "form1[0].go[0]".into(), activity: "click".into(), ..Default::default() };
+        let script = r#"
+            var before = Concat(_row.count, "/", _row.min, "/", _row.max)
+            var value = $.parent._row.addInstance(1).what.rawValue
+            $.parent.row.what.rawValue = "deleted"
+            _row.setInstances(0)
+            var zero = _row.count
+            var restored = xfa.resolveNode("form1._row").addInstance(1).what.rawValue
+            _row.setInstances(10)
+            var capped = _row.count
+            _row.count = 0
+            Concat(before, "/", value, "/", zero, "/", restored, "/", capped, "/", _row.count)
+        "#;
+        let out = run_formcalc(script, &event, &XfaDoc::default(), &form(2), Limits::default());
+        assert_eq!(out.error, None, "{out:?}");
+        assert_eq!(out.result.as_deref(), Some("0/0/2/default/0/default/2/0"));
+    }
+
+    /// Recreating the last row must not resurrect values edited in its removed predecessor.
+    #[test]
+    fn zero_instances_readd_after_removing_an_existing_row_does_not_restore_edited_values() {
+        let mut root = form(1);
+        let mut row = root.instance_templates.pop().unwrap();
+        row.children[0].value = "old user value".into();
+        root.children.push(row);
+        let event = XfaEvent { target: "form1[0].go[0]".into(), activity: "click".into(), ..Default::default() };
+        let out = run_xfa(
+            "_row.removeInstance(0); var r = _row.addInstance(1); _row.count + '/' + (r.what.rawValue === null)",
+            &event,
+            &XfaDoc::default(),
+            &root,
+            Limits::default(),
+        );
+        assert_eq!(out.error, None, "{out:?}");
+        assert_eq!(out.result.as_deref(), Some("1/true"));
+    }
+    /// A newly created parent must retain managers for its own absent optional children.
+    #[test]
+    fn nested_zero_instance_definitions_survive_creating_the_parent() {
+        let mut root = form(1);
+        let mut nested = root.instance_templates[0].clone();
+        nested.name = "nested".into();
+        root.instance_templates[0].instance_templates.push(nested);
+        let event = XfaEvent { target: "form1[0].go[0]".into(), activity: "click".into(), ..Default::default() };
+        let out = run_xfa(
+            "var r = _row.addInstance(1); var before = r.nodes.length + '/' + r._nested.count; var n = r._nested.addInstance(1); before + '/' + n.what.rawValue + '/' + n.somExpression",
+            &event,
+            &XfaDoc::default(),
+            &root,
+            Limits::default(),
+        );
+        assert_eq!(out.error, None, "{out:?}");
+        assert_eq!(out.result.as_deref(), Some("1/0/default/form1[0].row[0].nested[0]"));
+    }
+    /// Recreation restores defaults in template order rather than appending after unrelated siblings.
+    #[test]
+    fn zero_instance_recreation_restores_template_defaults_and_sibling_order() {
+        let mut root = form(1);
+        root.children[0].template_order = 2;
+        root.instance_templates[0].template_order = 1;
+        root.children
+            .insert(0, XfaNode { name: "before".into(), som: "form1[0].before[0]".into(), kind: Some(XfaKind::Field), ..Default::default() });
+        let mut live = root.instance_templates[0].clone();
+        live.children[0].value = "user value".into();
+        root.children.insert(1, live);
+        let event = XfaEvent { target: "form1[0].go[0]".into(), activity: "click".into(), ..Default::default() };
+        let out = run_xfa(
+            "_row.removeInstance(0); var r = _row.addInstance(1); this.parent.nodes.item(1).name + '/' + r.what.rawValue + '/' + this.parent.nodes.length",
+            &event,
+            &XfaDoc::default(),
+            &root,
+            Limits::default(),
+        );
+        assert_eq!(out.error, None, "{out:?}");
+        assert_eq!(out.result.as_deref(), Some("row/default/3"));
+    }
+    /// Positive nested defaults remain valid clone sources after removing and recreating the child.
+    #[test]
+    fn nested_positive_optional_child_keeps_its_default_after_zero_and_recreation() {
+        let mut root = form(1);
+        let mut nested = root.instance_templates[0].clone();
+        nested.name = "nested".into();
+        nested.som = "form1[0].row[0].nested[0]".into();
+        // A positive initial child needs no duplicate dormant subtree in the input.
+        root.instance_templates[0].children.push(nested);
+        let event = XfaEvent { target: "form1[0].go[0]".into(), activity: "click".into(), ..Default::default() };
+        let out = run_xfa(
+            "var r = _row.addInstance(1); r.nested.what.rawValue = 'user'; r._nested.removeInstance(0); var n = r._nested.addInstance(1); n.what.rawValue + '/' + n.somExpression",
+            &event,
+            &XfaDoc::default(),
+            &root,
+            Limits::default(),
+        );
+        assert_eq!(out.error, None, "{out:?}");
+        assert_eq!(out.result.as_deref(), Some("default/form1[0].row[0].nested[0]"));
+    }
+}
+
 #[test]
 fn shared_field_snapshots_isolate_writes_errors_and_script_globals() {
     let initial = Arc::new(fields());

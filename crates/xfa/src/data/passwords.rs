@@ -110,11 +110,14 @@ fn password_dataset_wants(doc: &Document) -> Vec<Want> {
                         let sib = sibs.at(i);
                         match n {
                             Node::Subform(sf) => {
-                                let from_data = match &sf.common.name {
-                                    Some(name) if sf.occur.max != Some(1) => self.data.count(&data_path(self.tpl, parent_som), name),
-                                    _ => 0,
-                                };
-                                let instances = crate::layout::instance_count(&sf.occur, from_data).max(from_data);
+                                let from_data = sf
+                                    .common
+                                    .name
+                                    .as_ref()
+                                    .filter(|_| !self.data.children.is_empty())
+                                    .map(|name| self.data.count(&data_path(self.tpl, parent_som), name));
+                                // Clear even excess data groups that the layout does not instantiate.
+                                let instances = crate::layout::instance_count(&sf.occur, from_data).max(from_data.unwrap_or(0));
                                 for k in 0..instances {
                                     if k > 0 {
                                         if self.nodes >= crate::script::MAX_FORM_NODES {

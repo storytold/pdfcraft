@@ -18,7 +18,13 @@ pub(crate) struct HNode {
     pub(crate) occur_max: Option<usize>,
     pub(crate) index: usize,
     pub(crate) parent: Option<usize>,
+    pub(crate) template_order: usize,
     pub(crate) children: Vec<usize>,
+    pub(crate) instance_templates: Vec<usize>,
+    /// This node belongs to a dormant definition, not the live form.
+    pub(crate) dormant: bool,
+    /// Immutable dormant source retained across cloning, without duplicating its subtree.
+    pub(crate) default_source: Option<usize>,
     /// Removed by `removeInstance`: skipped everywhere.
     pub(crate) gone: bool,
     /// See [`XfaNode::formatted`]; dropped when a script sets the value, which it no longer shows.
@@ -45,7 +51,7 @@ pub(crate) struct XHost {
     clipped_values: usize,
     dropped_alerts: usize,
     dropped_console: usize,
-    /// Bytes of text kept in effects, console lines and values written, against [`MAX_PAYLOAD`].
+    /// Bytes of text kept in effects, console lines, values written and cloned defaults, against [`MAX_PAYLOAD`].
     kept: usize,
     dropped_bytes: usize,
 }
@@ -57,7 +63,8 @@ impl XHost {
         let form = XfaNode { name: "form".into(), kind: Some(XfaKind::Form), children: vec![root], ..Default::default() };
         let mut nodes = Vec::new();
         flatten(&form, None, &mut nodes, 0);
-        let current = nodes.iter().position(|n| n.som == target && n.kind != XfaKind::Form).unwrap_or(1.min(nodes.len().saturating_sub(1)));
+        let current =
+            nodes.iter().position(|n| n.som == target && n.kind != XfaKind::Form && !n.dormant).unwrap_or(1.min(nodes.len().saturating_sub(1)));
         XHost {
             nodes,
             effects: Vec::new(),
@@ -78,7 +85,7 @@ impl XHost {
     }
 
     /// Room for `bytes` more bytes of kept text: charged when there is, a drop counted when not.
-    fn room(&mut self, bytes: usize) -> bool {
+    pub(super) fn room(&mut self, bytes: usize) -> bool {
         match self.kept.checked_add(bytes).filter(|k| *k <= MAX_PAYLOAD) {
             Some(k) => {
                 self.kept = k;
@@ -249,9 +256,15 @@ pub(super) fn host(ctx: &Context) -> JsResult<&Shared> {
     ctx.get_data::<Shared>().ok_or_else(|| error("the XFA script host is not set up"))
 }
 
-/// The snapshot `n` and its descendants flattened into `out` under `parent` (to [`MAX_DEPTH`]
-/// and [`MAX_NODES`]): the index of `n`'s node, `None` past the limits.
+/// Flatten a live root into the host arena within [`MAX_DEPTH`] and [`MAX_NODES`], keeping
+/// dormant definitions separately addressable. Return the root index, or `None` past the limits.
 fn flatten(n: &XfaNode, parent: Option<usize>, out: &mut Vec<HNode>, depth: usize) -> Option<usize> {
+    flatten_definition(n, parent, out, depth, false)
+}
+
+/// Flatten a live node or a dormant default, propagating dormancy to descendants.
+/// Refuse nodes past depth or arena limits; earlier imported nodes remain in the arena.
+fn flatten_definition(n: &XfaNode, parent: Option<usize>, out: &mut Vec<HNode>, depth: usize, dormant: bool) -> Option<usize> {
     if depth > MAX_DEPTH || out.len() >= MAX_NODES {
         return None;
     }
@@ -268,19 +281,25 @@ fn flatten(n: &XfaNode, parent: Option<usize>, out: &mut Vec<HNode>, depth: usiz
         occur_min: n.occur_min,
         occur_max: n.occur_max,
         index: n.index,
+        template_order: n.template_order,
         parent,
         children: Vec::new(),
+        instance_templates: Vec::new(),
+        dormant,
+        default_source: None,
         gone: false,
         formatted: n.formatted.clone(),
     });
     let mut kids = Vec::new();
     for c in &n.children {
-        if let Some(ci) = flatten(c, Some(idx), out, depth + 1) {
+        if let Some(ci) = flatten_definition(c, Some(idx), out, depth + 1, dormant) {
             kids.push(ci);
         }
     }
+    let templates = n.instance_templates.iter().filter_map(|c| flatten_definition(c, Some(idx), out, depth + 1, true)).collect();
     if let Some(h) = out.get_mut(idx) {
         h.children = kids;
+        h.instance_templates = templates;
     }
     Some(idx)
 }

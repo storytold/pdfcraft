@@ -223,9 +223,9 @@ pub(crate) fn xfa_after_data_change(doc: &mut pdfcraft_cos::Document, cx: &mut E
             .unwrap_or_else(|m| Err(format!("laying the form out again failed unexpectedly ({m})")));
         cx.xfa_datasets = run.datasets;
         cx.xfa_ran_away |= run.ran_away;
-        if let Err(e) = r {
-            cx.xfa_out.errors.push(e);
-        }
+        // Fatal replay/layout failures must discard the whole import or image edit.
+        // Ordinary script and validation diagnostics are already recorded in xfa_out.
+        r.map_err(EditError::Invalid)?;
     }
     let taken = xfa_values_from_datasets(doc).map_err(EditError::Write)?;
     if !taken.is_empty() {

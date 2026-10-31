@@ -3744,6 +3744,50 @@ fn som_indices_count_earlier_same_named_siblings() {
     assert_eq!((0..=children.len()).map(|i| sibs.at(i)).collect::<Vec<_>>(), [0, 0, 1, 0, 2, 1, 0]);
 }
 
+/// Detached definitions retain manager metadata without contributing live fields or events.
+#[test]
+fn zero_instances_have_managers_but_no_live_nodes_or_events() {
+    let xml = r#"<template><subform name="form" layout="tb">
+      <subform name="optional"><occur min="0" initial="0" max="1"/>
+        <field name="value"><value><text>default</text></value>
+          <event activity="initialize"><script>xfa.host.messageBox("must not run")</script></event>
+          <calculate><script>1 + 1</script></calculate>
+        </field>
+        <subform name="nested"><occur min="0" initial="0" max="2"/>
+          <field name="inner"/>
+        </subform>
+      </subform>
+    </subform></template>"#;
+    let (tpl, _) = crate::parse(xml).unwrap();
+    let live = crate::form_tree(&tpl, None, &crate::Overrides::default());
+    assert!(!live.truncated);
+    assert!(live.events.is_empty(), "an absent instance cannot run scripts");
+    assert!(live.root.children.is_empty(), "templates are not live SOM nodes");
+    let template = &live.root.instance_templates[0];
+    assert_eq!((template.occur_min, template.occur_max), (0, Some(1)));
+    assert!(template.repeatable, "optional singleton has a manager too");
+    assert_eq!(template.children.len(), 1);
+    assert_eq!(template.children[0].value, "default");
+    assert_eq!(template.instance_templates[0].name, "nested");
+}
+
+/// Deep optional nesting must retain defaults with linear rather than exponential growth.
+#[test]
+fn zero_instances_nested_default_definitions_do_not_expand_exponentially() {
+    let mut xml = String::from("<field name=\"leaf\"><value><text>default</text></value></field>");
+    for i in 0..24 {
+        xml = format!(r#"<subform name="s{i}"><occur min="0" initial="1" max="2"/>{xml}</subform>"#);
+    }
+    let (tpl, _) = crate::parse(&format!("<template><subform name=\"form\">{xml}</subform></template>")).unwrap();
+    let live = crate::form_tree(&tpl, None, &crate::Overrides::default());
+    assert!(!live.truncated, "a modest template must not exhaust the runtime node budget");
+    /// Count both live and retained nodes to detect accidental duplication of default subtrees.
+    fn count(n: &crate::FormNode) -> usize {
+        1 + n.children.iter().chain(&n.instance_templates).map(count).sum::<usize>()
+    }
+    assert!(count(&live.root) < 1000);
+}
+
 /// A TIFF is drawn as viewers show it, turned by its Orientation tag: a 2 × 1 picture (red,
 /// blue) tagged 6 (turn 90° clockwise) is 1 × 2, red above blue, in layout and in the PDF.
 #[test]
