@@ -1,10 +1,10 @@
 use super::document::{field_object, get_field, get_nth_field_name, noop, num_fields, page_num_get, page_num_set, print, reset_form, submit_form};
 use super::format::{printd, printf, printx, scand};
-use super::host::{arg, function, host, s, text, text_line};
+use super::host::{arg, error, function, host, read, s, strings, text, text_line};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, Event, Panel, Request};
 use super::{
-    Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, Message, MessageButtons, MessageIcon, NativeFunction, ObjectInitializer,
-    js_string,
+    Arc, Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, Message, MessageButtons, MessageIcon, NativeFunction, ObjectInitializer,
+    Source, js_string,
 };
 
 // ── app, util, console ──────────────────────────────────────────────────────────────────────
@@ -143,6 +143,84 @@ fn console_clear(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     Ok(JsValue::undefined())
 }
 
+/// Recalculate fields in the document's `/CO` order against the writes already made by this
+/// script. A small depth cap stops calculate scripts from recursing forever.
+fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    const MAX_CALCULATE_DEPTH: usize = 8;
+    let calculations = {
+        let shared = host(ctx)?;
+        let mut h = shared.borrow_mut();
+        if h.calculate_depth >= MAX_CALCULATE_DEPTH {
+            return Err(error("calculateNow recursion limit exceeded"));
+        }
+        h.calculate_depth += 1;
+        h.calculations.clone()
+    };
+    let previous_event = match ctx.global_object().get(js_string!("event"), ctx) {
+        Ok(event) => event,
+        Err(error) => {
+            if let Ok(shared) = host(ctx) {
+                let mut h = shared.borrow_mut();
+                h.calculate_depth = h.calculate_depth.saturating_sub(1);
+            }
+            return Err(error);
+        }
+    };
+    let result = (|| {
+        for (name, script) in calculations {
+            let Some(field) = host(ctx)?.borrow().fields.iter().find(|f| f.name == name).cloned() else { continue };
+            if let Some(why) = super::run::refuse(&script) {
+                return Err(error(why));
+            }
+            let event = Event::field("Calculate", &name, &field.value.first().cloned().unwrap_or_default());
+            let object = event_object(ctx, &event);
+            ctx.global_object().set(js_string!("event"), object.clone(), true, ctx)?;
+            ctx.eval(Source::from_bytes(&script))?;
+            let rc = object.get(js_string!("rc"), ctx)?;
+            if !rc.to_boolean() {
+                continue;
+            }
+            let value = object.get(js_string!("value"), ctx)?;
+            let value = text(&value, ctx)?;
+            let shared = host(ctx)?;
+            let mut h = shared.borrow_mut();
+            if let Some((index, _)) = h.fields.iter().enumerate().find(|(_, f)| f.name == name) {
+                let target = Arc::make_mut(&mut h.fields).get_mut(index).ok_or_else(|| error("the field is no longer available"))?;
+                target.value = vec![value];
+                h.changed.insert(index);
+            }
+        }
+        Ok(JsValue::undefined())
+    })();
+    let restored = ctx.global_object().set(js_string!("event"), previous_event, true, ctx).map(|_| JsValue::undefined());
+    if let Ok(shared) = host(ctx) {
+        let mut h = shared.borrow_mut();
+        h.calculate_depth = h.calculate_depth.saturating_sub(1);
+    }
+    result.and(restored)
+}
+
+/// Acrobat's built-in calculation helper, used by the scripts written by its Calculate tab.
+fn af_simple_calculate(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let op = text(&arg(args, 0), ctx)?;
+    let names = strings(&arg(args, 1), ctx)?;
+    let mut values = Vec::new();
+    for name in names {
+        let field = read(ctx, &JsString::from(name))?;
+        values.extend(field.value.iter().map(|v| super::host::as_number(v).unwrap_or(0.0)));
+    }
+    let result = match op.as_str() {
+        "SUM" => values.iter().sum(),
+        "PRD" => values.iter().product(),
+        "AVG" if values.is_empty() => 0.0,
+        "AVG" => values.iter().sum::<f64>() / values.len() as f64,
+        "MIN" => values.iter().copied().reduce(f64::min).unwrap_or(0.0),
+        "MAX" => values.iter().copied().reduce(f64::max).unwrap_or(0.0),
+        _ => 0.0,
+    };
+    Ok(s(&if result.is_finite() { result.to_string() } else { "0".into() }))
+}
+
 fn timer(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     // Timers never fire in the sandbox; scripts get an object they can pass to clear*.
     Ok(ObjectInitializer::new(ctx).build().into())
@@ -181,14 +259,15 @@ const XFA_VERSION: f64 = 3.5;
 /// `documentFileName`, `info`, the XFA version), and the `app`, `util`, `console`, `display` and
 /// `color` objects.
 pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
-    let globals: [(&str, usize, NativeFunction); 9] = [
+    let globals: [(&str, usize, NativeFunction); 10] = [
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
         ("getNthFieldName", 1, NativeFunction::from_fn_ptr(get_nth_field_name)),
         ("resetForm", 1, NativeFunction::from_fn_ptr(reset_form)),
         ("print", 1, NativeFunction::from_fn_ptr(print)),
         ("submitForm", 1, NativeFunction::from_fn_ptr(submit_form)),
         ("mailDoc", 1, NativeFunction::from_fn_ptr(noop)),
-        ("calculateNow", 0, NativeFunction::from_fn_ptr(noop)),
+        ("calculateNow", 0, NativeFunction::from_fn_ptr(calculate_now)),
+        ("AFSimple_Calculate", 2, NativeFunction::from_fn_ptr(af_simple_calculate)),
         ("syncAnnotScan", 0, NativeFunction::from_fn_ptr(noop)),
         ("dirty", 0, NativeFunction::from_fn_ptr(noop)),
     ];

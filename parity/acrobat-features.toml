@@ -5248,8 +5248,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["tools.js_console"]
 tools = ["js_run"]
-evidence = ["crates/ui-egui/tests/it/javascript.rs::console_runs_scripts_against_the_document", "crates/automation/tests/it/automation.rs::javascript_through_tools"]
-notes = "\u2318J: run JavaScript against the document, with console output, results and errors."
+evidence = ["crates/ui-egui/tests/it/javascript.rs::console_runs_scripts_against_the_document", "crates/automation/tests/it/automation.rs::javascript_through_tools", "crates/engine/src/tests.rs::calculate_now_updates_live_fields_in_one_undo_step"]
+notes = "\u2318J: run JavaScript against the document, with console output, results and errors. calculateNow() runs calculated fields synchronously in /CO order against writes already made by the script."
 
 [[feature]]
 id = "form.js-debugger"
