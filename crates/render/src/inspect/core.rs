@@ -207,6 +207,10 @@ impl<'a> Inspector<'a> {
         if let Some(first) = catalog.get(b"Outlines").ok().and_then(|o| self.dict(o)).and_then(|d| d.get(b"First").ok()) {
             (info.outline, info.outline_more) = self.outline_window(first);
         }
+        info.uri_base = catalog.get(b"URI").ok().and_then(|o| self.dict(o)).and_then(|d| match d.get(b"Base").map(|o| self.resolve(o)) {
+            Ok(Object::String(bytes, _)) if bytes.len() <= crate::MAX_URI_BASE_BYTES => std::str::from_utf8(bytes).ok().map(str::to_owned),
+            _ => None,
+        });
         let mut text_budget = MAX_LINK_ATTACHMENT_TEXT_BYTES;
         self.annotations(info, &mut text_budget);
         self.transitions(info);
