@@ -142,6 +142,15 @@
 	Available	Kullanılabilir
 	Ready	Hazır
 	Search tools and commands…	Araçları ve komutları ara…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Eklenen metin
+	Link URL	Bağlantı URL'si
+	Search tools and commands	Araçları ve komutları ara
+	Text editing line	Metin düzenleme satırı
+	Text to place	Yerleştirilecek metin
+	Tooltip	İpucu
+	Words or phrases to redact	Karartılacak sözcükler veya ifadeler
 	No matching tools	Eşleşen araç yok
 	Tool	Araç
 	Command	Komut
@@ -492,6 +501,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	{names} alanlarını okur, onlar da bu alanı okur. Hiçbir sıra bir döngüyü düzeltemez: formüllerden birini değiştirin.
 	Not in order	Sırada değil
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF'te kayıtlı hesaplama sırasında yok: diğer PDF görüntüleyicileri bunu hesaplamayabilir.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Formda olmayan {name} alanını okur, bu yüzden oradan değer alamaz.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Komut dosyası, adlarını çalışırken oluşturduğu alanları da okur; bu okumalar denetlenemez.
+	Missing field	Eksik alan
+	Unchecked reads	Denetlenmeyen okumalar
+	{field} reads fields named as it runs	{field}, çalışırken adlandırılan alanları okuyor
+	Some names are built as it runs	Bazı adlar çalışırken oluşturuluyor
 	Back to Prepare a form	Form hazırla'ya geri dön
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Bu formdaki hiçbir alan henüz değerini hesaplamıyor. Bir alana özelliklerinin Hesapla sekmesinde bir hesaplama verin, burada görünür.
 	{names} and {last}	{names} ve {last}
@@ -548,6 +563,9 @@
 	Clean Up	Temizle
 	Color Images	Renkli Resimler
 	Grayscale Images	Gri Tonlamalı Resimler
+	Monochrome Images	Tek Renkli Resimler
+	CCITT Group 4	CCITT Grup 4
+	JBIG2 (lossless)	JBIG2 (kayıpsız)
 	Bicubic downsampling to	Şu değere bikübik alt örnekleme:
 	for images above	bundan büyük resimler için:
 	Compression	Sıkıştırma
@@ -571,6 +589,7 @@
 	Discard private data of other applications	Diğer uygulamaların özel verilerini at
 	Discard hidden text	Gizli metni at
 	Use Flate to encode streams that are not encoded	Kodlanmamış akışları kodlamak için Flate kullan
+	In streams that use LZW encoding, use Flate instead	LZW kodlamalı akışlarda bunun yerine Flate kullan
 	Remove invalid links and bookmarks	Geçersiz bağlantıları ve yer işaretlerini kaldır
 	Remove unreferenced named destinations	Referans verilmeyen adlandırılmış hedefleri kaldır
 	Compress document structure (object streams)	Belge yapısını sıkıştır (nesne akışları)
@@ -762,14 +781,9 @@
 	Copy Image in Original Format	Resmi Özgün Biçimde Kopyala
 	The image has been copied as a {ext} file	Resim {ext} dosyası olarak kopyalandı
 	The page has changed; select the image again	Sayfa değişti; resmi yeniden seçin
-	Check for updates	Güncellemeleri denetle
 	No check has run yet.	Henüz denetim yapılmadı.
-	Checking for a newer version…	Daha yeni bir sürüm denetleniyor…
 	PdfCraft {v} is available.	PdfCraft {v} kullanılabilir.
 	You have version {c}. Download the new version from its release page.	{c} sürümüne sahipsiniz. Yeni sürümü sürüm sayfasından indirin.
-	PdfCraft {c} is up to date.	PdfCraft {c} güncel.
-	Couldn't check for updates: {e}	Güncellemeler denetlenemedi: {e}
-	You have version {c}. All releases are listed at {page}.	{c} sürümüne sahipsiniz. Tüm sürümler {page} adresinde listelenmiştir.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	En son sürüm için GitHub'ı sorgular. Hiçbir şey otomatik olarak indirilmez veya kurulmaz.
 	Download	İndir
 	Later	Daha sonra
@@ -813,6 +827,14 @@
 	Applies to 1 page	1 sayfaya uygulanır
 	Applies to {n} pages	{n} sayfaya uygulanır
 	Replaces the existing one on those pages.	Bu sayfalardaki mevcut olanın yerini alır.
+	Checking pages…	Sayfalar denetleniyor…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Arka planı gizleyecek kendi beyaz dolgusu olan sayfa: {pages}. Değiştir
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Arka planı gizleyecek kendi beyaz dolgusu olan sayfalar: {pages}. Değiştir
+	Removing the background puts the page's own backdrop back.	Arka planı kaldırmak, sayfanın kendi beyaz dolgusunu geri getirir.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Resimle kaplı sayfa (tarama mı?): {pages}; arka plan orada görünmez.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Resimlerle kaplı sayfalar (tarama mı?): {pages}; arka plan orada görünmez.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Arka plan eklendikten sonra değişen sayfa, bu yüzden kendi beyaz dolgusu kapalı kalıyor: {pages}. Beyaz kâğıtta aynı görünür.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Arka plan eklendikten sonra değişen sayfalar, bu yüzden kendi beyaz dolguları kapalı kalıyor: {pages}. Beyaz kâğıtta aynı görünürler.
 	PDF or image	PDF veya resim
 	No file chosen	Dosya seçilmedi
 	Page number	Sayfa numarası
@@ -1936,6 +1958,10 @@
 	Perimeter	Çevre
 	Area	Alan
 	Drawing scale	Çizim ölçeği
+	Scale	Ölçek
+	Common scales	Yaygın ölçekler
+	Enter a scale such as 1:50.	1:50 gibi bir ölçek girin.
+	Applying a scale switches units to m / mm.	Ölçek uygulamak birimleri m / mm olarak değiştirir.
 	Snapping	Yakalama
 	Export measurements	Ölçümleri dışa aktar
 	Open a PDF to measure it.	Ölçmek için bir PDF açın.
@@ -2141,6 +2167,7 @@ signature pad	Type	Yaz
 certificate	Subject	Konu
 action wizard	Start	Başlat
 	Reopen the files that were open when PdfCraft last closed	PdfCraft en son kapatıldığında açık olan dosyaları yeniden aç
+	Restore the last view (page, zoom and page display) when a document is opened again	Bir belge yeniden açıldığında son görünümü (sayfa, yakınlaştırma ve sayfa görünümü) geri yükle
 	Add {what}	{what} ekle
 	Use {what}	{what} kullan
 	Place saved {what}	Kayıtlı {what} yerleştir
@@ -2318,6 +2345,8 @@ key	Space	Boşluk
 	Printer paper and scaling may differ. Check driver settings.	Yazıcı kâğıdı ve ölçekleme farklı olabilir. Sürücü ayarlarını kontrol edin.
 	Drawing scale changes. Use Actual size for full-scale plans.	Çizim ölçeği değişir. Tam ölçekli planlar için Gerçek boyutu kullanın.
 	Reload documents when their files change on disk	Diskteki dosyaları değiştiğinde belgeleri yeniden yükle
+	Don't show again	Bir daha gösterme
+	Show a notice when a document is secured	Bir belge güvenli olduğunda bildirim göster
 	Always use my default zoom and page layout	Her zaman varsayılan yakınlaştırmamı ve sayfa düzenimi kullan
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Bu dosya diskte değişti. Yeniden yükle yeni sürümü gösterir ve kaydedilmemiş değişikliklerinizi atar; Kaydet onu bu sürümle değiştirir.
 	Reload	Yeniden yükle
@@ -2375,6 +2404,11 @@ animation effects	Off	Kapalı
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} önce hesaplanıyor; okuduğu {fields} daha sonra hesaplanıyor.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} alan daha çok erken hesaplanıyor.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields}, PDF'te kayıtlı sırada yok; bu yüzden diğer PDF görüntüleyicileri hesaplamayabilir.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formül formda olmayan alanları okuyor
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field}, formda olmayan {fields} alanını okuyor.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} formül daha eksik alanları okuyor.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields}, bazı alan adlarını çalışırken oluşturuyor; bu okumalar denetlenmiyor.
+@plural	{fields} is missing|{fields} are missing	{fields} eksik
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} alan adı önceki dosyalarla çakışıyor ve yeniden adlandırılacak: {list}
 	Scan	Tara
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Beyaz bir kâğıda imzanızı atın ve parlak, eşit ışıkta fotoğrafını çekin (flaş kullanın). Fotoğrafı seçin veya buraya bırakın: PdfCraft imzayı bulur ve kâğıdı kaldırır.
@@ -2479,6 +2513,19 @@ animation effects	Off	Kapalı
 	Make properties default	Özellikleri varsayılan yap
 	Pages selected	Seçilen sayfalar
 	Page properties	Sayfa özellikleri
+	Create & Edit	Oluştur ve Düzenle
+	Review & Compare	İncele ve Karşılaştır
+	Forms & Signatures	Formlar ve İmzalar
+	Protect & Standardize	Koru ve Standartlaştır
+	Customize & Automate	Özelleştir ve Otomatikleştir
+	No tools match your search.	Aramanızla eşleşen araç yok.
+	Expand all tools	Tüm araçları genişlet
+	Collapse all tools	Tüm araçları daralt
+	Attach a file…	Dosya ekle…
+	Delete attachment	Eki sil
+	Attaching files is not available on the web yet	Dosya eklemek web'de henüz kullanılamıyor
+	Attach {name}	{name} ekle
+	Delete attachment {key}	{key} ekini sil
 	Font	Yazı tipi
 	Bulleted list	Madde işaretli liste
 	Numbered list	Numaralı liste
@@ -2513,3 +2560,19 @@ animation effects	Off	Kapalı
 	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
 	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
 	a field named {name} already exists	{name} adlı bir alan zaten var
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Bugün
+@plural	{n} reply|{n} replies	{n} yanıt
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Sayfa araçları
+	Insert pages from a file after the selection…	Seçimin ardından dosyadan sayfa ekle…
+	Rotate the selected pages counterclockwise	Seçili sayfaları saat yönünün tersine döndür
+	Rotate the selected pages clockwise	Seçili sayfaları saat yönünde döndür
+	Extract the selected pages…	Seçili sayfaları ayıkla…
+	Delete the selected pages	Seçili sayfaları sil
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Bu yanıtın seçenekleri
+	Export value	Dışa aktarma değeri

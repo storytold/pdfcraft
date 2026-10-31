@@ -11,7 +11,11 @@ workspace = true
 
 [dependencies]
 craft-ui = { workspace = true }
-# macOS: a window close quits through `terminate:` (the Touch Bar crash, #1136); elsewhere a no-op.
+# The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).
+craft-menu = { workspace = true }
+craft-keymap = { workspace = true }
+# Quit from the menus asks the window to close, so the unsaved-changes check runs; on macOS a window
+# close also quits through `terminate:` (the Touch Bar crash, #1136).
 craft-quit = { workspace = true, features = ["egui"] }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-engine = { workspace = true }
@@ -19,28 +23,32 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-platform = { workspace = true }
-egui = { workspace = true, features = ["bytemuck"] }
+egui = { workspace = true, features = ["bytemuck", "default_fonts", "monochrome_emoji_fonts"] }
 egui_extras = { workspace = true }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "persistence", "links"] }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "persistence", "links", "clipboard"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 # UTC/calendar display (combine modified-time stamp, the form date picker) goes through chrono
 # (no hand-rolled calendar code); std-only, so it stays wasm-safe.
 chrono = { workspace = true }
+# Monotonic deadlines for work that runs in `logic` with no UI pass (native and web).
+web-time = { workspace = true }
 # Hands rendered rasters to egui as its pixels, without copying; already in the tree through egui and wgpu.
 bytemuck = { version = "1", features = ["extern_crate_alloc"] }
 
 rfd = { workspace = true }
 png = "0.18"
-base64 = "0.22"
-# Right-to-left file names in the chrome (egui shapes but does not reorder); already in the tree.
+base64 = "0.23"
+# Unicode bidi paragraph segmentation for right-to-left comment wrapping; egui 0.37's epaint owns
+# display reordering. Already in the tree through egui’s epaint.
 unicode-bidi = "0.3"
 # Checks that an installed fallback font parses and has the glyphs, and reads the vertical metrics
 # that put fallback faces on the interface's baseline (#1676); the same skrifa egui uses.
 skrifa = "0.44"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-update = { workspace = true }
 # Control-channel tokens.
 getrandom = "0.4"
 # Create ▸ Clipboard (images; already in the tree through egui-winit).
@@ -79,8 +87,12 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "HtmlIFrameElement", "HtmlImageElement", "HtmlCollection", "Node", "EventTarget", "Navigator"] }
 
 [dev-dependencies]
+craft-update = { workspace = true }
 pdfcraft-xfa = { workspace = true }
 egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
+# Tests draw PdfCraft text without a system provider: the bundled and monochrome emoji faces must
+# be enabled on the test graph itself (a dependency's dev-features do not propagate).
+egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Glyph-coverage test of the interface fonts; the same skrifa pdfcraft-fonts already uses.
 skrifa = "0.44"
