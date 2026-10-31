@@ -24,6 +24,9 @@ pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) ->
     Ok(edit)
 }
 
+/// Why removing text that defines a clipping mask is unsafe.
+pub(super) const CLIPPING_TEXT_REASON: &str = "text used as a clipping path cannot be edited: its glyphs mask the artwork behind them";
+
 /// Refuses a rewrite that would remove text drawn as a clipping path (`4 Tr` to `7 Tr`). Such
 /// glyphs are not ink but a mask, and whatever is painted through them takes their shape.
 /// Removing the glyphs removes the mask, and the fill or image behind floods its own rectangle
@@ -33,9 +36,9 @@ pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) ->
 /// Every line the rewrite drops is checked, not only the one being replaced: a line's runs need
 /// not share a rendering mode (see [`TextLine::clips`]), and [`coincident_ops`] drops a whole
 /// overlapping line without regard to its mode -- so a mask could go with text that is ink.
-fn refuse_clipping_text(lines: &[TextLine], dropped: &std::collections::HashSet<usize>) -> Result<(), EditError> {
+pub(super) fn refuse_clipping_text(lines: &[TextLine], dropped: &std::collections::HashSet<usize>) -> Result<(), EditError> {
     if lines.iter().any(|l| l.clips && l.ops.iter().any(|op| dropped.contains(op))) {
-        return Err(EditError::Invalid("text used as a clipping path cannot be edited: its glyphs mask the artwork behind them".into()));
+        return Err(EditError::Invalid(CLIPPING_TEXT_REASON.into()));
     }
     Ok(())
 }
@@ -154,18 +157,145 @@ fn font_size_before(ops: &[Op], at: usize) -> Option<f64> {
 /// share box area when the leading is tighter than the font's ascent plus descent; its baseline
 /// is farther away, so it stays.
 pub(crate) fn coincident_ops(lines: &[TextLine], targets: &[&TextLine]) -> std::collections::HashSet<usize> {
-    let area = |r: [f64; 4]| ((r[2] - r[0]) * (r[3] - r[1])).max(0.0);
     let mut drop = std::collections::HashSet::new();
     for line in lines {
-        let copy = targets.iter().any(|target| {
-            let same_text = line.text.trim() == target.text.trim() || (line.origin.state.render_mode == 3) != (target.origin.state.render_mode == 3);
-            same_text && overlaps_half(line.rect, target.rect, area) && on_same_baseline(line, target)
-        });
+        let copy = targets.iter().any(|target| coincident_line(line, target));
         if copy {
             drop.extend(line.ops.iter().copied());
         }
     }
     drop
+}
+
+/// The exact copy predicate shared by rewrite drop sets and eligibility preflight.
+pub(super) fn coincident_line(line: &TextLine, target: &TextLine) -> bool {
+    let area = |r: [f64; 4]| ((r[2] - r[0]) * (r[3] - r[1])).max(0.0);
+    let same_text = line.text.trim() == target.text.trim() || (line.origin.state.render_mode == 3) != (target.origin.state.render_mode == 3);
+    same_text && overlaps_half(line.rect, target.rect, area) && on_same_baseline(line, target)
+}
+
+/// A balanced spatial tree of lines whose operators would remove a clipping run.
+/// Only finite, ordered boxes enter the tree; unusual boxes use the exact fallback.
+struct ClippingNode<'a> {
+    rect: [f64; 4],
+    lines: Vec<&'a TextLine>,
+    children: Option<(Box<Self>, Box<Self>)>,
+}
+
+impl<'a> ClippingNode<'a> {
+    /// Halving each level bounds depth by log2(MAX_LINES); storage is linear.
+    fn build(mut lines: Vec<&'a TextLine>) -> Option<Self> {
+        let mut rect = lines.first()?.rect;
+        for line in &lines {
+            rect = [rect[0].min(line.rect[0]), rect[1].min(line.rect[1]), rect[2].max(line.rect[2]), rect[3].max(line.rect[3])];
+        }
+        if lines.len() <= 8 {
+            return Some(Self { rect, lines, children: None });
+        }
+        let axis = usize::from(rect[3] - rect[1] > rect[2] - rect[0]);
+        lines.sort_unstable_by(|a, b| a.rect.get(axis).zip(b.rect.get(axis)).map_or(std::cmp::Ordering::Equal, |(a, b)| a.total_cmp(b)));
+        // The midpoint is always within this vector, and each child is strictly smaller.
+        let right = lines.split_off(lines.len() / 2);
+        let children = Some((Box::new(Self::build(lines)?), Box::new(Self::build(right)?)));
+        Some(Self { rect, lines: Vec::new(), children })
+    }
+
+    /// Conservative box pruning followed by the rewrite's exact predicate.
+    fn matches(&self, target: &TextLine, remaining: &mut usize) -> Result<bool, ()> {
+        *remaining = remaining.checked_sub(1).ok_or(())?;
+        if finite_box(target.rect)
+            && (self.rect[2] <= target.rect[0] || target.rect[2] <= self.rect[0] || self.rect[3] <= target.rect[1] || target.rect[3] <= self.rect[1])
+        {
+            return Ok(false);
+        }
+        for line in &self.lines {
+            *remaining = remaining.checked_sub(1).ok_or(())?;
+            if coincident_line(line, target) {
+                return Ok(true);
+            }
+        }
+        match &self.children {
+            Some((left, right)) => Ok(left.matches(target, remaining)? || right.matches(target, remaining)?),
+            None => Ok(false),
+        }
+    }
+}
+
+/// Whether a box can be safely pruned using ordinary interval intersection.
+fn finite_box(rect: [f64; 4]) -> bool {
+    rect.iter().all(|v| v.is_finite()) && rect[0] <= rect[2] && rect[1] <= rect[3]
+}
+
+pub(super) const CLIPPING_SCAN_LIMIT_REASON: &str = "text editing eligibility could not be determined safely: clipping comparison limit exceeded";
+
+/// One page's clipping hazard index. Shared operators are included, not only lines
+/// marked `clips`, so this answers exactly the rewrite's operator-intersection question.
+pub(super) struct ClippingIndex<'a> {
+    ops: std::collections::HashSet<usize>,
+    tree: Option<ClippingNode<'a>>,
+    unusual: Vec<&'a TextLine>,
+    pub(super) remaining: usize,
+}
+
+impl<'a> ClippingIndex<'a> {
+    /// Caps index allocations and node/predicate visits on hostile pages. Exhaustion is a
+    /// distinct conservative refusal; it never removes text from the extracted listing.
+    pub(super) fn new(lines: &'a [TextLine]) -> Self {
+        const MAX_LINES: usize = 65_536;
+        const MAX_OPS: usize = 262_144;
+        let mut index = Self { ops: Default::default(), tree: None, unusual: Vec::new(), remaining: 0 };
+        if !lines.iter().any(|line| line.clips) {
+            index.remaining = usize::MAX;
+            return index;
+        }
+        if lines.len() > MAX_LINES {
+            return index;
+        }
+        for op in lines.iter().filter(|line| line.clips).flat_map(|line| &line.ops) {
+            if index.ops.len() >= MAX_OPS {
+                return index;
+            }
+            index.ops.insert(*op);
+        }
+        let mut finite = Vec::new();
+        for line in lines.iter().filter(|line| line.ops.iter().any(|op| index.ops.contains(op))) {
+            if finite_box(line.rect) {
+                finite.push(line);
+            } else {
+                index.unusual.push(line);
+            }
+        }
+        index.tree = ClippingNode::build(finite);
+        index.remaining = lines.len().saturating_mul(128).clamp(1024, 1_000_000);
+        index
+    }
+
+    /// Returns a known refusal, or no clipping hazard. The page budget is shared
+    /// across paragraphs rather than allowing every paragraph its own full scan.
+    pub(super) fn refusal(&mut self, targets: &[&TextLine]) -> Option<&'static str> {
+        if targets.iter().any(|line| line.clips || line.ops.iter().any(|op| self.ops.contains(op))) {
+            return Some(CLIPPING_TEXT_REASON);
+        }
+        if self.remaining == 0 {
+            return Some(CLIPPING_SCAN_LIMIT_REASON);
+        }
+        for target in targets {
+            let found = self.tree.as_ref().map_or(Ok(false), |tree| tree.matches(target, &mut self.remaining));
+            match found {
+                Ok(true) => return Some(CLIPPING_TEXT_REASON),
+                Err(()) => return Some(CLIPPING_SCAN_LIMIT_REASON),
+                Ok(false) => {}
+            }
+            for line in &self.unusual {
+                let Some(remaining) = self.remaining.checked_sub(1) else { return Some(CLIPPING_SCAN_LIMIT_REASON) };
+                self.remaining = remaining;
+                if coincident_line(line, target) {
+                    return Some(CLIPPING_TEXT_REASON);
+                }
+            }
+        }
+        None
+    }
 }
 
 fn overlaps_half(a: [f64; 4], b: [f64; 4], area: impl Fn([f64; 4]) -> f64) -> bool {

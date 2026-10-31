@@ -1,12 +1,16 @@
 use super::interp::{Carry, interpret};
 use super::lines::{content_streams, page_dict, reading_lines, rewritten_contents, splice, text_lines};
-use super::rewrite::{LineEdit, coincident_ops, rewrite_block};
+use super::rewrite::{ClippingIndex, LineEdit, coincident_ops, rewrite_block};
 use super::{Document, EditError, HashMap, Object, Op, Pieces, TextLine, group_blocks, regions};
 
-/// An editable text region: adjacent runs on visual rows, followed by aligned rows.
+/// A text region: adjacent runs on visual rows, followed by aligned rows.
 /// A region may contain several source fonts, sizes, colours and weights.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextBlock {
+    /// A known reason this paragraph cannot be edited, populated by [`text_blocks`].
+    /// `None` means no preflight refusal, not a guarantee that every replacement is supported.
+    /// Read-only extraction retains all paragraphs and their original indexes.
+    pub non_editable_reason: Option<String>,
     /// The lines' text joined with spaces (lines that ended in a hyphen are joined directly).
     pub text: String,
     pub rect: [f64; 4],
@@ -249,10 +253,21 @@ pub fn block_overlapping(blocks: &[TextBlock], rect: [f64; 4]) -> Option<usize> 
     blocks.iter().enumerate().map(|(i, b)| (i, area(b))).filter(|(_, a)| *a > 0.0).max_by(|(_, a), (_, b)| a.total_cmp(b)).map(|(i, _)| i)
 }
 
-/// The paragraphs on a page (0-based).
+/// All paragraphs on a page (0-based), including those with a known editing refusal.
+/// Their text, grouping and indexes are unchanged; frontends should inspect
+/// [`TextBlock::non_editable_reason`] before offering an editor.
 pub fn text_blocks(doc: &Document, page: usize) -> Result<Vec<TextBlock>, EditError> {
     let lines = text_lines(doc, page)?;
-    Ok(group_blocks(&lines))
+    let mut blocks = group_blocks(&lines);
+    let mut clipping = ClippingIndex::new(&lines);
+    for block in &mut blocks {
+        let members: Vec<&TextLine> = block.lines.iter().filter_map(|i| lines.get(*i)).collect();
+        block.non_editable_reason = clipping
+            .refusal(&members)
+            .map(|reason| EditError::Invalid(reason.into()).to_string())
+            .or_else(|| members.iter().find_map(|line| line.unreadable_mode.clone()));
+    }
+    Ok(blocks)
 }
 
 /// Remove a paragraph's glyphs for a temporary editor background. Numeric TJ adjustments

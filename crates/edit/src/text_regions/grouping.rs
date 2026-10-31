@@ -345,6 +345,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
         });
         if !joins {
             blocks.push(TextBlock {
+                non_editable_reason: None,
                 text: String::new(),
                 editor_text: String::new(),
                 reflow_text: String::new(),

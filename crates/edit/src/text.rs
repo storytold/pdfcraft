@@ -147,8 +147,177 @@ impl TextLine {
 
 #[cfg(test)]
 mod tests {
+    use super::lines::reading_lines;
+    use super::rewrite::{CLIPPING_SCAN_LIMIT_REASON, CLIPPING_TEXT_REASON, ClippingIndex, coincident_line, refuse_clipping_text};
     use super::*;
 
+    /// A contributor-original single-font page, generated in memory.
+    fn eligibility_page(content: &str) -> Document {
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_owned(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_owned(),
+        ];
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, object) in objects.iter().enumerate() {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = bytes.len();
+        bytes.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
+        for offset in offsets {
+            bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(format!("trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+        Document::open(std::sync::Arc::new(bytes)).unwrap()
+    }
+
+    /// Independent line positions/operators keep performance tests free of grouping costs.
+    fn eligibility_lines(count: usize) -> Vec<TextLine> {
+        let doc = eligibility_page("BT /F1 12 Tf 40 60 Td (sample) Tj ET");
+        let template = text_lines(&doc, 0).unwrap().remove(0);
+        (0..count)
+            .map(|i| {
+                let mut line = template.clone();
+                let y = i as f64 * 30.0;
+                line.rect = [40.0, y, 90.0, y + 12.0];
+                line.origin.baseline = y;
+                line.ops = vec![i];
+                line
+            })
+            .collect()
+    }
+
+    /// One mask must not trigger one full-page copy search per ordinary paragraph.
+    #[test]
+    fn clipping_index_one_mask_work_is_linear() {
+        let work = |count| {
+            let mut lines = eligibility_lines(count);
+            lines[0].clips = true;
+            let mut index = ClippingIndex::new(&lines);
+            let before = index.remaining;
+            for line in &lines[1..] {
+                assert_eq!(index.refusal(&[line]), None);
+            }
+            before - index.remaining
+        };
+        let small = work(1024);
+        let large = work(2048);
+        assert!(small <= 1024 && large <= small * 2 + 2, "{small} -> {large}");
+    }
+
+    /// Spatial pruning also bounds work when a page has many noncoincident masks.
+    #[test]
+    fn clipping_index_many_separated_masks_uses_spatial_pruning() {
+        let mut lines = eligibility_lines(4096);
+        for (i, line) in lines.iter_mut().enumerate() {
+            line.clips = i % 2 == 0;
+        }
+        let mut index = ClippingIndex::new(&lines);
+        let before = index.remaining;
+        for line in lines.iter().filter(|line| !line.clips) {
+            assert_eq!(index.refusal(&[line]), None);
+        }
+        assert!(before - index.remaining < lines.len() * 32);
+    }
+
+    /// Compare with the original operator-set oracle, including invisible copies with
+    /// different text, shared operators, mixed modes and nonfinite geometry.
+    #[test]
+    fn clipping_index_agrees_with_rewrite_drop_sets() {
+        let mut lines = eligibility_lines(160);
+        for (i, line) in lines.iter_mut().enumerate() {
+            let y = (i % 20) as f64 * 30.0;
+            line.rect = [40.0, y, 90.0, y + 12.0];
+            line.origin.baseline = y + (i % 3) as f64;
+            line.text = format!("word {}", i % 7);
+            line.origin.state.render_mode = (i % 8) as i64;
+            line.clips = i % 11 == 0;
+            line.size = 8.0 + (i % 5) as f64;
+            if i % 13 == 0 {
+                line.ops.push(0);
+            }
+            if i % 17 == 0 {
+                line.rect[0] = f64::NAN;
+            }
+            if i % 19 == 0 {
+                line.rect[2] = f64::INFINITY;
+            }
+            if i % 23 == 0 {
+                line.rect.swap(0, 2);
+            }
+            if i % 29 == 0 {
+                line.origin.tm = [0.0, 1.0, -1.0, 0.0, 0.0, 0.0];
+            }
+        }
+        let mut index = ClippingIndex::new(&lines);
+        for targets in lines.chunks(2) {
+            let targets: Vec<_> = targets.iter().collect();
+            let mut drops = coincident_ops(&lines, &targets);
+            drops.extend(targets.iter().flat_map(|line| line.ops.iter().copied()));
+            let expected = refuse_clipping_text(&lines, &drops).err().map(|_| CLIPPING_TEXT_REASON);
+            assert_eq!(index.refusal(&targets), expected);
+        }
+        // A differently-worded invisible copy is still coincident with visible clipping text.
+        let mut lines = eligibility_lines(2);
+        lines[0].clips = true;
+        lines[1].rect = lines[0].rect;
+        lines[1].origin.baseline = lines[0].origin.baseline;
+        lines[1].origin.state.render_mode = 3;
+        lines[1].text = "different OCR text".into();
+        assert_eq!(ClippingIndex::new(&lines).refusal(&[&lines[1]]), Some(CLIPPING_TEXT_REASON));
+    }
+
+    /// A nonmask copy can indirectly drop a mask through a shared operator ID.
+    #[test]
+    fn clipping_index_includes_indirect_shared_operator_copies() {
+        let mut lines = eligibility_lines(3);
+        lines[0].clips = true;
+        lines[1].ops.push(0);
+        lines[2].rect = lines[1].rect;
+        lines[2].origin.baseline = lines[1].origin.baseline;
+        assert!(!coincident_line(&lines[0], &lines[2]));
+        assert!(coincident_line(&lines[1], &lines[2]));
+        let drops = coincident_ops(&lines, &[&lines[2]]);
+        assert!(refuse_clipping_text(&lines, &drops).is_err());
+        assert_eq!(ClippingIndex::new(&lines).refusal(&[&lines[2]]), Some(CLIPPING_TEXT_REASON));
+    }
+
+    /// A dense adversarial page cannot spend an unbounded amount of work proving safety.
+    #[test]
+    fn clipping_index_budget_exhaustion_is_explicit_and_conservative() {
+        let mut lines = eligibility_lines(100);
+        for (i, line) in lines.iter_mut().enumerate() {
+            line.rect = [40.0, 60.0, 90.0, 72.0];
+            line.origin.baseline = 60.0;
+            line.clips = i < 99;
+            line.text = format!("unique {i}");
+        }
+        let mut index = ClippingIndex::new(&lines);
+        index.remaining = 10;
+        assert_eq!(index.refusal(&[&lines[99]]), Some(CLIPPING_SCAN_LIMIT_REASON));
+        assert_eq!(index.remaining, 0);
+        assert_eq!(index.refusal(&[&lines[99]]), Some(CLIPPING_SCAN_LIMIT_REASON));
+        assert_eq!(index.refusal(&[&lines[0]]), Some(CLIPPING_TEXT_REASON));
+    }
+
+    /// The form-aware reading path must propagate every ActualText run's mask flag too.
+    #[test]
+    fn reading_lines_keeps_later_actual_text_clipping_runs() {
+        for mode in 4..=7 {
+            let doc = eligibility_page(&format!("/Span << /ActualText (logical) >> BDC BT /F1 12 Tf 40 60 Td (ink) Tj {mode} Tr (mask) Tj ET EMC"));
+            let (lines, truncated) = reading_lines(&doc, 0).unwrap();
+            assert!(!truncated);
+            assert_eq!(lines.len(), 1);
+            assert_eq!(lines[0].text, "logical");
+            assert!(lines[0].clips, "mode {mode}");
+        }
+    }
+
+    /// A synthetic paragraph for key matching and overlap tests.
     fn block(text: &str, rect: [f64; 4]) -> TextBlock {
         TextBlock {
             text: text.into(),
@@ -165,6 +334,7 @@ mod tests {
             reflow_text: text.into(),
             spans: Vec::new(),
             invisible: false,
+            non_editable_reason: None,
         }
     }
 
