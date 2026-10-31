@@ -204,6 +204,7 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     error(ui, &d.error);
     ui.horizontal(|ui| {
         if !app.digital_ids.is_empty() && widgets::pill_button(ui, tl!("Back"), false).clicked() {
+            d.new_id = NewIdDraft::default();
             d.step = SignStep::Choose;
             d.error = None;
         }
@@ -456,6 +457,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     error(ui, &d.error);
     ui.horizontal(|ui| {
         if widgets::pill_button(ui, tl!("Back"), false).clicked() {
+            zeroize::Zeroize::zeroize(&mut d.password);
             d.step = SignStep::Choose;
             d.error = None;
         }

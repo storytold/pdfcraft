@@ -4361,6 +4361,7 @@ dependencies = [
  "sha2 0.11.1",
  "stringprep",
  "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]
@@ -4641,6 +4642,7 @@ dependencies = [
  "sha2 0.11.1",
  "sha3",
  "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]
@@ -4697,6 +4699,7 @@ dependencies = [
  "web-time",
  "winsafe",
  "xattr",
+ "zeroize",
 ]
 
 [[package]]
