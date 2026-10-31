@@ -7128,6 +7128,9 @@ fn javascript_through_tools() {
     assert!(page_text(&mut a, doc)[0].contains("EUR 2.500,00"), "{:?}", page_text(&mut a, doc));
     let err = a.call("form_fill", &json!({ "doc": doc, "values": { "Qty": "0" } })).unwrap_err();
     assert!(err.to_string().contains("Order at least one"), "{err}");
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let qty = fields["fields"].as_array().unwrap().iter().find(|x| x["name"] == "Qty").unwrap();
+    assert_eq!(qty["value"], "2", "the rejected value is reported, not stored");
 
     let r = ok(
         &mut a,

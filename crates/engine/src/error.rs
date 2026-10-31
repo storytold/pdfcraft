@@ -78,3 +78,12 @@ impl From<pdfcraft_sign::SignError> for EditError {
         EditError::Sign(e.to_string())
     }
 }
+
+impl EditError {
+    /// A field's validate action refused the value it was given (ISO 32000-2 Table 199 `/V`).
+    /// The document is unchanged and the field keeps its value; an interface drops the typing
+    /// rather than holding the user in the field.
+    pub fn is_rejected_value(&self) -> bool {
+        matches!(self, EditError::Form(pdfcraft_forms::FormError::Rejected(_)))
+    }
+}

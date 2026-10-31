@@ -1497,7 +1497,7 @@ fn formats_validation_and_calculations_run_like_acrobat() {
     );
     assert_eq!(
         set_value(&mut doc, "Qty", &FieldValue::Text("120".into())),
-        Err(FormError::Invalid("Invalid value: must be greater than or equal to 1 and less than or equal to 99.".into()))
+        Err(FormError::Rejected("Invalid value: must be greater than or equal to 1 and less than or equal to 99.".into()))
     );
     assert_eq!(field(&fields(&doc), "Qty").value, ["2"]);
     // Dates: stored as typed, shown in the format; impossible dates are refused.
@@ -5484,4 +5484,56 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
         assert!(error.to_string().contains("locked"));
         assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
     }
+}
+
+/// A validate action (ISO 32000-2 Table 199 `/V`) that refuses a value is a rejection the
+/// caller can tell apart: the field keeps its value and the interface drops the typing. A
+/// keystroke refusal is not one: it is about the typing, which the user may want to fix.
+#[test]
+fn a_validate_refusal_is_a_rejection_and_a_keystroke_refusal_is_not() {
+    use crate::af::Validate;
+    struct Checks;
+    impl Scripts for Checks {
+        fn run(&mut self, event: FieldEvent, script: &str, _: &Field, value: &str, _: &[Field]) -> ScriptResult {
+            let (rc, message) = match (event, script) {
+                (FieldEvent::Validate, "short") => (value.chars().count() <= 3, Some("At most 3 characters".to_string())),
+                (FieldEvent::Validate, "never") => (false, None),
+                (FieldEvent::Keystroke, "digits") => (value.chars().all(|c| c.is_ascii_digit()), Some("Digits only".to_string())),
+                _ => (true, None),
+            };
+            ScriptResult { rc, value: value.to_string(), changes: Vec::new(), message: if rc { None } else { message } }
+        }
+    }
+    let mut doc = one_page();
+    for (i, name) in ["G_range", "H_short", "code", "never"].into_iter().enumerate() {
+        let y = 10.0 + 30.0 * i as f64;
+        add_field(&mut doc, 0, [10.0, y, 100.0, y + 20.0], &NewField::Text { multiline: false }, Some(name)).unwrap();
+    }
+    set_props(&mut doc, "G_range", &FieldProps { validate: Some(Validate::Range { min: Some(1.0), max: Some(100.0) }), ..FieldProps::default() })
+        .unwrap();
+    set_field_script(&mut doc, "H_short", "validate", Some("short")).unwrap();
+    set_field_script(&mut doc, "code", "keystroke", Some("digits")).unwrap();
+    set_field_script(&mut doc, "never", "validate", Some("never")).unwrap();
+    let set = |doc: &mut Document, name: &str, v: &str| set_value_with(doc, name, &FieldValue::Text(v.into()), &mut Checks);
+
+    assert_eq!(
+        set(&mut doc, "G_range", "150"),
+        Err(FormError::Rejected("Invalid value: must be greater than or equal to 1 and less than or equal to 100.".into()))
+    );
+    assert!(field(&fields(&doc), "G_range").value.is_empty(), "the field keeps its (blank) value");
+    assert_eq!(set(&mut doc, "G_range", "50"), Ok(()));
+    assert_eq!(field(&fields(&doc), "G_range").value, ["50"], "a value in range commits");
+    assert_eq!(
+        set(&mut doc, "G_range", "0"),
+        Err(FormError::Rejected("Invalid value: must be greater than or equal to 1 and less than or equal to 100.".into()))
+    );
+    assert_eq!(field(&fields(&doc), "G_range").value, ["50"], "and stays when the next one is refused");
+
+    assert_eq!(set(&mut doc, "H_short", "abcd"), Err(FormError::Rejected("At most 3 characters".into())), "the script's alert is the message");
+    assert!(field(&fields(&doc), "H_short").value.is_empty());
+    assert_eq!(set(&mut doc, "H_short", "abc"), Ok(()));
+    assert_eq!(set(&mut doc, "never", "x"), Err(FormError::Rejected("The value entered is not valid for the field [ never ]".into())), "no alert");
+
+    assert_eq!(set(&mut doc, "code", "x1"), Err(FormError::Invalid("Digits only".into())), "a keystroke refusal is not a rejected value");
+    assert_eq!(set(&mut doc, "code", "12"), Ok(()));
 }

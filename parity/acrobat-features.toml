@@ -4643,8 +4643,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
 tools = ["form_set_props", "form_fill"]
-evidence = ["crates/forms/src/af/tests.rs::validation_and_calculation", "crates/forms/src/tests.rs::formats_validation_and_calculations_run_like_acrobat", "crates/automation/tests/it/automation.rs::form_formats_and_calculations_through_tools"]
-notes = "AFRange_Validate with Acrobat's messages"
+evidence = ["crates/forms/src/af/tests.rs::validation_and_calculation", "crates/forms/src/tests.rs::formats_validation_and_calculations_run_like_acrobat", "crates/automation/tests/it/automation.rs::form_formats_and_calculations_through_tools", "crates/forms/src/tests.rs::a_validate_refusal_is_a_rejection_and_a_keystroke_refusal_is_not", "crates/ui-egui/tests/it/forms.rs::a_value_the_validate_action_rejects_reverts_and_tab_moves_on"]
+notes = "AFRange_Validate with Acrobat's messages. A value it (or a custom validate script setting event.rc false) rejects is not stored: the app shows the message, the field keeps its previous value and Tab or a click moves on, with no undo step; form_fill reports it as an error. Messages still show as a notice, not a modal dialog."
 
 [[feature]]
 id = "form.af-simple-calculate"
@@ -4679,8 +4679,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.prepare"]
 tools = ["form_set_script"]
-evidence = ["crates/engine/src/tests.rs::form_javascript_validates_calculates_and_formats", "crates/automation/tests/it/automation.rs::javascript_through_tools"]
-notes = "Custom keystroke (commit), validate, calculate and format scripts run in Acrobat's event order; AF calls still run natively."
+evidence = ["crates/engine/src/tests.rs::form_javascript_validates_calculates_and_formats", "crates/automation/tests/it/automation.rs::javascript_through_tools", "crates/ui-egui/tests/it/forms.rs::a_value_the_validate_action_rejects_reverts_and_tab_moves_on"]
+notes = "Custom keystroke (commit), validate, calculate and format scripts run in Acrobat's event order; AF calls still run natively. A validate script that sets event.rc false rejects the value: it is not stored, its alert is the message shown, and the field keeps its previous value."
 
 [[feature]]
 id = "form.calculation-order"
