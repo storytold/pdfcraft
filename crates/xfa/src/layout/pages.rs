@@ -67,10 +67,74 @@ impl Layouter<'_> {
 
     // ───────────────────────────────────────────────────────────────────────── pages
 
+    /// Find the `pageArea` index matching a `target` attribute (by `name` or `#id`, or the final
+    /// SOM segment), preferring an area whose `occur_max` is not yet exhausted.
+    pub(super) fn find_page_area(&self, target: &str) -> Option<usize> {
+        let raw = target.trim().trim_start_matches('#');
+        let leaf = raw.rsplit('.').next().unwrap_or(raw).split('[').next().unwrap_or(raw).trim().trim_start_matches('#');
+        if leaf.is_empty() {
+            return None;
+        }
+        let matches = |a: &PageArea| {
+            a.name.as_deref() == Some(leaf) || a.id.as_deref() == Some(leaf) || a.name.as_deref() == Some(raw) || a.id.as_deref() == Some(raw)
+        };
+        (0..self.areas.len()).find(|&i| {
+            let Some(area) = self.areas.get(i) else { return false };
+            matches(area) && area.occur_max.is_none_or(|m| self.uses.get(i).is_some_and(|u| *u < m))
+        })
+    }
+
+    /// Remember an explicit break target for later untargeted pages. A later explicit break
+    /// replaces it. An `overflow` target may hide it while that subform is open; it returns
+    /// afterwards unless a later explicit break replaced the overflow.
+    pub(super) fn select_break_area(&mut self, idx: usize) {
+        self.preferred_area = Some(idx);
+        self.preferred_epoch = self.preferred_epoch.saturating_add(1);
+    }
+
     pub(super) fn new_page(&mut self) -> Result<(), XfaError> {
-        let idx =
-            (0..self.areas.len()).find(|&i| self.areas[i].occur_max.is_none_or(|m| self.uses[i] < m)).unwrap_or(self.areas.len().saturating_sub(1));
+        let idx = self
+            .preferred_area
+            .filter(|&i| self.areas.get(i).is_some_and(|a| a.occur_max.is_none_or(|m| self.uses.get(i).is_some_and(|u| *u < m))))
+            .or_else(|| {
+                (0..self.areas.len())
+                    .find(|&i| self.areas.get(i).is_some_and(|a| a.occur_max.is_none_or(|m| self.uses.get(i).is_some_and(|u| *u < m))))
+            })
+            .unwrap_or(self.areas.len().saturating_sub(1));
         self.new_page_of(idx)
+    }
+
+    /// Replace the current page when nothing from the flow has been placed on it yet and a
+    /// subform's `breakBefore` targets a different `pageArea` `idx`.
+    pub(super) fn switch_empty_page(&mut self, idx: usize) -> Result<(), XfaError> {
+        if let Some(c) = &self.cur
+            && let Some(u) = self.uses.get_mut(c.area)
+        {
+            *u = u.saturating_sub(1);
+        }
+        if let Some(old) = self.pages.pop() {
+            self.items = self.items.saturating_sub(old.items.len());
+        }
+        self.fields = self.page_fields;
+        for (name, previous) in self.page_names.drain() {
+            if let Some(count) = previous {
+                self.names.insert(name, count);
+            } else {
+                self.names.remove(&name);
+            }
+        }
+        self.new_page_of(idx)?;
+        let (rect, y, _) = self.cursor();
+        let mut room = (rect.bottom() - y).max(0.0);
+        for i in 0..self.frames.len() {
+            let Some(mark) = self.flow_mark() else { break };
+            let Some(f) = self.frames.get_mut(i) else { break };
+            f.part = mark;
+            let top = f.margin.top.max(0.0).min(room);
+            room = (room - top).max(0.0);
+            self.advance(top);
+        }
+        Ok(())
     }
 
     /// Once the body has been laid out, give every page area that has been used fewer times than
@@ -87,6 +151,7 @@ impl Layouter<'_> {
 
     /// Start a page from page area `idx`.
     fn new_page_of(&mut self, idx: usize) -> Result<(), XfaError> {
+        let old_area = self.cursor().0;
         if self.pages.len() >= MAX_PAGES {
             return Err(XfaError::TooLarge(format!("the form lays out to more than {MAX_PAGES} pages")));
         }
@@ -100,6 +165,9 @@ impl Layouter<'_> {
         self.pages.push(Page { width: area.width, height: area.height, items: Vec::new() });
         let content = area.content.first().copied().unwrap_or(Rect::new(0.0, 0.0, area.width, area.height));
         self.cur = Some(Cursor { area: idx, content: 0, rect: content, y: content.y, placed: false });
+        self.refresh_frame_widths(old_area);
+        self.page_fields = self.fields;
+        self.page_names.clear();
         // Master page content: positioned draws and fields.
         let ctx = Ctx { font: Font::default(), para: Para::default(), som: area.name.clone().map(|n| format!("{n}[0]")).unwrap_or_default() };
         let page_rect = Rect::new(0.0, 0.0, area.width, area.height);
@@ -117,10 +185,27 @@ impl Layouter<'_> {
             && let Some(next) = area.content.get(c.content + 1).copied()
         {
             let i = c.content + 1;
+            let old_area = c.rect;
             self.cur = Some(Cursor { area: c.area, content: i, rect: next, y: next.y, placed: false });
+            self.refresh_frame_widths(old_area);
             return Ok(());
         }
         self.new_page()
+    }
+
+    /// Refresh outer frames before their children, preserving each parent's available width
+    /// and margins. A fixed-width frame keeps its position. Raw area moves (a split block) keep
+    /// their existing lost-border bookkeeping.
+    fn refresh_frame_widths(&mut self, old_area: Rect) {
+        let area = self.cursor().0;
+        if area == old_area {
+            return;
+        }
+        let mut available = (area.x, area.w);
+        for frame in &mut self.frames {
+            frame.fit_width(available);
+            available = frame.inner_width();
+        }
     }
 
     /// The current content area, how far down it the flow is, and whether anything has been
@@ -157,6 +242,10 @@ impl Layouter<'_> {
     /// otherwise run past its bottom, out of its border. `to_page` moves to a new page instead (a
     /// child's own page break), which breaks the subforms around it the same way.
     pub(super) fn break_frames(&mut self, need: f64, to_page: bool) -> Result<(), XfaError> {
+        self.break_frames_to(need, to_page, None)
+    }
+
+    pub(super) fn break_frames_to(&mut self, need: f64, to_page: bool, target_area: Option<usize>) -> Result<(), XfaError> {
         let (rect, mut y, _) = self.cursor();
         let page = self.pages.len().saturating_sub(1);
         let here: Vec<bool> = self.frames.iter().map(|f| self.on_area(&f.part)).collect();
@@ -169,7 +258,9 @@ impl Layouter<'_> {
                 f.parts.push((page, f.part.items, Rect::new(f.x, f.part.y, f.w, y - f.part.y)));
             }
         }
-        if to_page {
+        if let Some(idx) = target_area {
+            self.new_page_of(idx)?;
+        } else if to_page {
             self.new_page()?;
         } else {
             self.next_area()?;

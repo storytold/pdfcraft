@@ -428,6 +428,12 @@ pub struct Subform {
     /// `<breakBefore targetType="pageArea">`: start on a new page.
     pub break_before_page: bool,
     pub break_after_page: bool,
+    /// `<breakBefore target="…">` / `<break beforeTarget="…">`: named `pageArea` (or `#id`) to start on.
+    pub break_before_target: Option<String>,
+    /// `<breakAfter target="…">` / `<break afterTarget="…">`: named `pageArea` (or `#id`) to switch to after.
+    pub break_after_target: Option<String>,
+    /// `<overflow target="…">` / `<break overflowTarget="…">`: named `pageArea` (or `#id`) for overflow pages.
+    pub overflow_target: Option<String>,
     /// Tables: the width of each column.
     pub column_widths: Vec<f64>,
     /// `<overflow leader="…">`: the named child (a header row) is repeated after a page break.
@@ -718,6 +724,7 @@ pub struct PageSet {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PageArea {
     pub name: Option<String>,
+    pub id: Option<String>,
     pub width: f64,
     pub height: f64,
     /// Where flowed content goes, in order.

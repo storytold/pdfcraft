@@ -1,4 +1,4 @@
-use super::common::{clamp_opt, divide, is_row, moved, solid_extent, splittable};
+use super::common::{clamp_opt, divide, flows_as_subform, is_row, moved, solid_extent};
 use super::items::Item;
 use super::{Ctx, Frame, Layout, Layouter, MAX_DEPTH, Node, Rect, SomIndices, Subform, XfaError, data_path, instance_count};
 
@@ -154,8 +154,28 @@ impl Layouter<'_> {
         }
         let Node::Subform(sf) = node else { return Ok(()) };
         self.check_measures()?;
-        if sf.break_before_page && self.page_has_flow() {
-            self.break_frames(0.0, true)?;
+        let prev_rect = self.cursor().0;
+        let before_target = sf.break_before_target.as_deref().and_then(|t| self.find_page_area(t));
+        if let Some(idx) = before_target {
+            self.select_break_area(idx);
+        }
+        if sf.break_before_page {
+            if self.page_has_flow() {
+                self.break_frames_to(0.0, true, before_target)?;
+            } else if let Some(idx) = before_target
+                && self.cur.as_ref().is_some_and(|c| c.area != idx)
+            {
+                self.switch_empty_page(idx)?;
+            }
+        }
+        // Overflow steers pages created while this subform (and its descendants) are open.
+        // Putting the previous selection back afterwards keeps a later sibling's untargeted
+        // break off this master. A descendant's explicit break bumps `preferred_epoch` and stays.
+        let overflow_area = sf.overflow_target.as_deref().and_then(|t| self.find_page_area(t));
+        let preferred_before_overflow = self.preferred_area;
+        let epoch_at_overflow = self.preferred_epoch;
+        if let Some(idx) = overflow_area {
+            self.preferred_area = Some(idx);
         }
         // Data adds instances of a repeating subform (rows added in another viewer).
         let instances = self.instances(node, &ctx.som);
@@ -167,26 +187,42 @@ impl Layouter<'_> {
             self.check_measures()?;
             let ctx = ctx_parent.with_som(&sf.common, sib + i);
             let (rect, _, _) = self.cursor();
-            let (x, w) = avail.unwrap_or((rect.x, rect.w));
+            // When a break moved to a content area of a different width (such as switching from a
+            // portrait master to a landscape master), a width from the old content area no longer
+            // bounds this subform.
+            let (x, w) = match avail {
+                Some(av) if rect == prev_rect => av,
+                _ => self.frames.last().map_or((rect.x, rect.w), Frame::inner_width),
+            };
             let w = clamp_opt(sf.common.w.unwrap_or(w), sf.common.min_w, sf.common.max_w).min(w.max(1.0));
             if !matches!(sf.layout, Layout::Tb | Layout::Table) || sf.common.h.is_some() {
                 // Not splittable: one block.
-                let (_, h) = self.size_of(node, w, ctx_parent, depth);
-                self.flow_block(node, x, (w, h), ctx_parent, depth, sib + i)?;
+                let (cw, h) = self.size_of(node, w, ctx_parent, depth);
+                self.flow_block(node, x, (cw, h), ctx_parent, depth, sib + i)?;
                 continue;
             }
             let m = sf.common.margin;
             // Its border and fill go round what it takes from here, a part on each content area.
             let framed = match self.flow_mark() {
                 Some(part) => {
-                    self.frames.push(Frame { x, w, margin: m, border: sf.common.border.clone(), part, parts: Vec::new(), lost: false });
+                    self.frames.push(Frame {
+                        x,
+                        w,
+                        margin: m,
+                        border: sf.common.border.clone(),
+                        width_limits: sf.common.w.is_none().then_some((sf.common.min_w, sf.common.max_w)),
+                        part,
+                        parts: Vec::new(),
+                        lost: false,
+                    });
                     true
                 }
                 None => false,
             };
             self.advance(m.top);
-            let inner_x = x + m.left;
-            let inner_w = (w - m.horizontal()).max(1.0);
+            let mut cur_rect = rect;
+            let mut inner_x = x + m.left;
+            let mut inner_w = (w - m.horizontal()).max(1.0);
             match sf.layout {
                 Layout::Table => self.flow_table(sf, inner_x, inner_w, &ctx, depth)?,
                 _ => {
@@ -195,10 +231,15 @@ impl Layouter<'_> {
                         if !child.common().presence.occupies() {
                             continue;
                         }
+                        let (r, _, _) = self.cursor();
+                        if r != cur_rect && sf.common.w.is_none() {
+                            cur_rect = r;
+                            if framed && let Some(f) = self.frames.last() {
+                                (inner_x, inner_w) = f.inner_width();
+                            }
+                        }
                         let csib = sibs.at(ci);
-                        if let Node::Subform(_) = child
-                            && splittable(child)
-                        {
+                        if flows_as_subform(child) {
                             self.flow_subform(child, Some((inner_x, inner_w)), &ctx, depth + 1, csib)?;
                             continue;
                         }
@@ -212,8 +253,15 @@ impl Layouter<'_> {
                 self.finish_frame(frame)?;
             }
         }
+        if overflow_area.is_some() && self.preferred_epoch == epoch_at_overflow {
+            self.preferred_area = preferred_before_overflow;
+        }
         if sf.break_after_page {
-            self.break_frames(0.0, true)?;
+            let after_target = sf.break_after_target.as_deref().and_then(|t| self.find_page_area(t));
+            if let Some(idx) = after_target {
+                self.select_break_area(idx);
+            }
+            self.break_frames_to(0.0, true, after_target)?;
         }
         Ok(())
     }
@@ -264,9 +312,7 @@ impl Layouter<'_> {
                 }
                 continue;
             }
-            if splittable(child)
-                && let Node::Subform(_) = child
-            {
+            if flows_as_subform(child) {
                 self.flow_subform(child, Some((x, inner_w)), ctx, depth + 1, csib)?;
                 continue;
             }

@@ -4145,3 +4145,373 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
 }
+
+/// #3910: `<breakBefore target="…" targetType="pageArea"/>`, `<breakAfter target="…"/>` and
+/// `<break before="pageArea" beforeTarget="…"/>` switch to the named `pageArea` master (including
+/// landscape masters after unbounded portrait masters) and give sections on that master its full
+/// content-area width.
+#[test]
+fn named_page_area_breaks_switch_between_portrait_and_landscape_masters() {
+    let xml = r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+ <subform name="form1" layout="tb">
+  <pageSet>
+   <pageArea name="Page1" id="PA1">
+    <contentArea x="25mm" y="44.45mm" w="172.5mm" h="232.55mm"/>
+    <medium stock="a4" short="210mm" long="297mm"/>
+   </pageArea>
+   <pageArea name="Page2" id="PA2">
+    <contentArea x="25mm" y="31.75mm" w="172.5mm" h="245.25mm"/>
+    <medium stock="a4" short="210mm" long="297mm"/>
+   </pageArea>
+   <pageArea name="Page3" id="PA3">
+    <contentArea x="25mm" y="28.575mm" w="259.5mm" h="161.875mm"/>
+    <medium stock="a4" short="210mm" long="297mm" orientation="landscape"/>
+   </pageArea>
+  </pageSet>
+  <subform name="intro" layout="tb">
+   <field name="f1" w="150mm" h="20mm"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="wide_flow" layout="tb">
+   <breakBefore target="Page3" targetType="pageArea" startNew="1"/>
+   <field name="f_wide1" w="240mm" h="100mm"><ui><textEdit/></ui></field>
+   <field name="f_wide2" w="240mm" h="100mm"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="back_portrait" layout="tb">
+   <breakBefore target="Page2" targetType="pageArea" startNew="1"/>
+   <field name="f_p2" w="160mm" h="20mm"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="wide_positioned" w="250mm" h="50mm">
+   <break before="pageArea" beforeTarget="#PA3" after="pageArea" afterTarget="Page1"/>
+   <field name="f_pos" x="200mm" y="5mm" w="45mm" h="15mm"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="outro" layout="tb">
+   <field name="f_end" w="120mm" h="20mm"><ui><textEdit/></ui></field>
+  </subform>
+ </subform>
+</template>"##;
+    let form = layout_xml(xml).unwrap();
+    // Pages:
+    // 0: Page1 (portrait) — intro
+    // 1: Page3 (landscape) — wide_flow part 1 (f_wide1)
+    // 2: Page3 (landscape) — wide_flow overflow (f_wide2 stays on Page3)
+    // 3: Page2 (portrait) — back_portrait
+    // 4: Page3 (landscape) — wide_positioned (via #PA3)
+    // 5: Page1 (portrait) — outro (afterTarget="Page1")
+    assert_eq!(form.pages.len(), 6, "expected 6 pages, got {}", form.pages.len());
+    let is_landscape = |p: &Page| p.width > p.height && (p.width - 841.89).abs() < 1.0 && (p.height - 595.28).abs() < 1.0;
+    let is_portrait = |p: &Page| p.height > p.width && (p.width - 595.28).abs() < 1.0 && (p.height - 841.89).abs() < 1.0;
+    assert!(is_portrait(&form.pages[0]), "page 1 is Page1 portrait: {:?}", (form.pages[0].width, form.pages[0].height));
+    assert!(is_landscape(&form.pages[1]), "page 2 is Page3 landscape: {:?}", (form.pages[1].width, form.pages[1].height));
+    assert!(is_landscape(&form.pages[2]), "page 3 overflow stays on Page3 landscape: {:?}", (form.pages[2].width, form.pages[2].height));
+    assert!(is_portrait(&form.pages[3]), "page 4 switches to Page2 portrait: {:?}", (form.pages[3].width, form.pages[3].height));
+    assert!(is_landscape(&form.pages[4]), "page 5 positioned subform switches to #PA3 landscape");
+    assert!(is_portrait(&form.pages[5]), "page 6 afterTarget switches back to Page1 portrait");
+
+    // Wide fields on Page3 keep their full 240mm (~680.3pt) width rather than being clamped to
+    // Page1's 172.5mm (~489pt) portrait content area.
+    let widget_w = |page: usize, name: &str| -> f64 {
+        form.pages[page]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Item::Widget(w) if w.name == name => Some(w.rect.w),
+                _ => None,
+            })
+            .unwrap_or(0.0)
+    };
+    assert!(widget_w(1, "f_wide1") > 670.0, "f_wide1 width on landscape page: {}", widget_w(1, "f_wide1"));
+    assert!(widget_w(2, "f_wide2") > 670.0, "f_wide2 width on landscape overflow page: {}", widget_w(2, "f_wide2"));
+    let pos_right = form.pages[4]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Item::Widget(w) if w.name == "f_pos" => Some(w.rect.x + w.rect.w),
+            _ => None,
+        })
+        .unwrap_or(0.0);
+    assert!(pos_right > 600.0, "f_pos at x=200mm on landscape page is not clipped: {pos_right}");
+
+    // When the very first subform targets Page3, page 1 itself uses Page3 without an extra blank page,
+    // `<overflow target="…"/>` directs overflow pages to a named master, and `<breakAfter target="…"/>`
+    // switches the following page master.
+    let first_landscape = r##"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+ <subform name="form1" layout="tb">
+  <pageSet>
+   <pageArea name="Page1" id="PA1"><contentArea x="25mm" y="25mm" w="160mm" h="247mm"/><medium stock="a4" short="210mm" long="297mm"/></pageArea>
+   <pageArea name="Page3" id="PA3"><contentArea x="25mm" y="25mm" w="247mm" h="160mm"/><medium stock="a4" short="210mm" long="297mm" orientation="landscape"/></pageArea>
+  </pageSet>
+  <subform name="first" layout="tb">
+   <breakBefore target="#pageSet.Page3[0]" targetType="pageArea" startNew="1"/>
+   <overflow target="pageSet.#PA1"/>
+   <breakAfter target="Page3" targetType="pageArea"/>
+   <field name="f1" w="220mm" h="100mm"><ui><textEdit/></ui></field>
+   <field name="f2" w="150mm" h="100mm"><ui><textEdit/></ui></field>
+  </subform>
+  <subform name="after" layout="tb">
+   <field name="f3" w="220mm" h="20mm"><ui><textEdit/></ui></field>
+  </subform>
+ </subform>
+</template>"##;
+    let first_form = layout_xml(first_landscape).unwrap();
+    assert_eq!(first_form.pages.len(), 3);
+    assert!(is_landscape(&first_form.pages[0]), "first page switched to Page3 landscape");
+    assert!(is_portrait(&first_form.pages[1]), "overflow target switched page 2 to PA1 portrait");
+    assert!(is_landscape(&first_form.pages[2]), "breakAfter target switched page 3 back to Page3 landscape");
+}
+
+/// An `overflow` target applies while its subform is laid out (XFA 3.3, "Break on Overflow").
+/// It must not stay selected for a later sibling's untargeted break: that break keeps the
+/// previous master, which is the first eligible area or an explicit `breakBefore` /
+/// `breakAfter` target. A nested overflow ends with its subform, while an ancestor overflow
+/// that is still open keeps applying, and a descendant's explicit break still sticks.
+#[test]
+fn overflow_target_does_not_steer_a_later_untargeted_break() {
+    fn master(page: &Page) -> &'static str {
+        match (page.width.round() as i64, page.height.round() as i64) {
+            (200, 400) => "Body",
+            (180, 360) => "Overflow",
+            (150, 300) => "Special",
+            _ => "other",
+        }
+    }
+    let field = |name: &str, h: &str| format!(r#"<field name="{name}" w="40pt" h="{h}"><ui><textEdit/></ui></field>"#);
+    let kept = field("kept", "20pt");
+    let a = field("a", "80pt");
+    let b = field("b", "80pt");
+    let after = field("after", "20pt");
+    let inner = field("inner", "20pt");
+    let assert_layout = |label: &str, body: &str, masters: &[&str], fields: &[(&str, usize)]| {
+        let xml = format!(
+            r#"<template><subform layout="tb"><pageSet>
+ <pageArea name="Body"><contentArea x="10pt" y="10pt" w="100pt" h="100pt"/><medium short="200pt" long="400pt"/></pageArea>
+ <pageArea name="Overflow"><contentArea x="12pt" y="10pt" w="100pt" h="100pt"/><medium short="180pt" long="360pt"/></pageArea>
+ <pageArea name="Special"><contentArea x="14pt" y="10pt" w="100pt" h="100pt"/><medium short="150pt" long="300pt"/></pageArea>
+</pageSet>{body}</subform></template>"#
+        );
+        let form = layout_xml(&xml).unwrap();
+        let got: Vec<&str> = form.pages.iter().map(master).collect();
+        assert_eq!(got, masters, "{label}");
+        for (name, page) in fields {
+            let found = form.pages.iter().position(|p| widgets(p).iter().any(|w| w.name == *name));
+            assert_eq!(found, Some(*page), "{label}: {name}");
+        }
+        assert!(form.warnings.is_empty(), "{label}: {:?}", form.warnings);
+    };
+
+    // Nothing overflowed, so the target never applies. The sibling's plain page break stays on Body.
+    assert_layout(
+        "unused overflow target",
+        &format!(
+            r#"<subform name="ov" layout="tb"><overflow target="Overflow"/>{kept}</subform><subform name="next" layout="tb"><breakBefore targetType="pageArea"/>{after}</subform>"#
+        ),
+        &["Body", "Body"],
+        &[("kept", 0), ("after", 1)],
+    );
+    // The overflowing fragment uses Overflow. The sibling's untargeted break does not.
+    assert_layout(
+        "taken overflow target",
+        &format!(
+            r#"<subform name="ov" layout="tb"><overflow target="Overflow"/>{a}{b}</subform><subform name="next" layout="tb"><breakBefore targetType="pageArea"/>{after}</subform>"#
+        ),
+        &["Body", "Overflow", "Body"],
+        &[("a", 0), ("b", 1), ("after", 2)],
+    );
+    // This subform's own breakBefore is what later untargeted breaks keep.
+    assert_layout(
+        "breakBefore survives an unused overflow target",
+        &format!(
+            r#"<subform name="ov" layout="tb"><breakBefore target="Special"/><overflow target="Overflow"/>{kept}</subform><subform name="next" layout="tb"><breakBefore targetType="pageArea"/>{after}</subform>"#
+        ),
+        &["Special", "Special"],
+        &[("kept", 0), ("after", 1)],
+    );
+    assert_layout(
+        "breakBefore survives a taken overflow target",
+        &format!(
+            r#"<subform name="ov" layout="tb"><breakBefore target="Special"/><overflow target="Overflow"/>{a}{b}</subform><subform name="next" layout="tb"><breakBefore targetType="pageArea"/>{after}</subform>"#
+        ),
+        &["Special", "Overflow", "Special"],
+        &[("a", 0), ("b", 1), ("after", 2)],
+    );
+    // An untargeted breakAfter is not an overflow, so it must not adopt the overflow master.
+    assert_layout(
+        "untargeted breakAfter",
+        &format!(
+            r#"<subform name="ov" layout="tb"><overflow target="Overflow"/><breakAfter targetType="pageArea"/>{kept}</subform><subform name="next" layout="tb">{after}</subform>"#
+        ),
+        &["Body", "Body"],
+        &[("kept", 0), ("after", 1)],
+    );
+    // An explicit breakAfter still selects its own master after the overflow target is put back.
+    assert_layout(
+        "explicit breakAfter",
+        &format!(
+            r#"<subform name="ov" layout="tb"><overflow target="Overflow"/><breakAfter target="Special"/>{kept}</subform><subform name="next" layout="tb">{after}</subform>"#
+        ),
+        &["Body", "Special"],
+        &[("kept", 0), ("after", 1)],
+    );
+    // A descendant's explicit break sticks, including when it names the same master as the overflow.
+    assert_layout(
+        "descendant break names the overflow master",
+        &format!(
+            r#"<subform name="chapter" layout="tb"><overflow target="Overflow"/><subform name="section" layout="tb"><breakBefore target="Overflow"/>{inner}</subform></subform><subform name="next" layout="tb"><breakBefore targetType="pageArea"/>{after}</subform>"#
+        ),
+        &["Overflow", "Overflow"],
+        &[("inner", 0), ("after", 1)],
+    );
+    // The inner overflow ends with that subform. The outer one is still open, so the sibling uses it.
+    assert_layout(
+        "nested overflow yields to the ancestor",
+        &format!(
+            r#"<subform name="outer" layout="tb"><overflow target="Overflow"/><subform name="inner" layout="tb"><overflow target="Special"/>{kept}</subform><subform name="sib" layout="tb"><breakBefore targetType="pageArea"/>{after}</subform></subform>"#
+        ),
+        &["Body", "Overflow"],
+        &[("kept", 0), ("after", 1)],
+    );
+}
+
+/// A discarded page master must not consume field counts or names, even for a widget too
+/// small to be emitted. Earlier retained pages still own their counts and reservations.
+#[test]
+fn replacing_empty_page_restores_master_field_state() {
+    for prior_page in [false, true] {
+        let prior = if prior_page {
+            r#"<subform layout="tb"><breakAfter target="Discard"/><field name="body" w="20pt" h="20pt"><ui><textEdit/></ui></field></subform>"#
+        } else {
+            ""
+        };
+        let xml = format!(
+            r#"<template><subform layout="tb"><pageSet>
+ <pageArea name="Discard"><contentArea x="10pt" y="40pt" w="200pt" h="200pt"/>
+  <field name="shared" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+  <field name="shared" x="25pt" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+  <field name="tiny" w="20pt" h="0.5pt"><ui><textEdit/></ui></field>
+ </pageArea>
+ <pageArea name="Intermediate"><contentArea x="20pt" y="40pt" w="200pt" h="200pt"/>
+  <field name="shared" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+  <field name="tiny" w="20pt" h="0.5pt"><ui><textEdit/></ui></field>
+ </pageArea>
+ <pageArea name="Kept"><contentArea x="30pt" y="40pt" w="200pt" h="200pt"/>
+  <field name="shared" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+  <field name="tiny" x="25pt" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+ </pageArea>
+ </pageSet>{prior}
+ <subform layout="tb"><breakBefore target="Intermediate"/></subform>
+ <subform layout="tb"><breakBefore target="Kept"/><field name="last" w="20pt" h="20pt"><ui><textEdit/></ui></field></subform>
+ </subform></template>"#
+        );
+        let form = layout_xml(&xml).unwrap();
+        assert_eq!(form.pages.len(), if prior_page { 2 } else { 1 });
+        let actual_fields: usize = form.pages.iter().map(|p| widgets(p).len()).sum();
+        assert_eq!(form.fields, actual_fields, "discarded master fields must not remain counted");
+        let kept = widgets(form.pages.last().unwrap());
+        let names: Vec<&str> = kept.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names, if prior_page { vec!["shared_3", "tiny_2", "last"] } else { vec!["shared", "tiny", "last"] });
+        assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+    }
+}
+
+/// Updating frame geometry at a break must include ancestors whose final child crosses several
+/// differently-sized masters before returning, while fixed widths keep their original geometry.
+#[test]
+fn flowed_frame_tracks_every_named_master_including_final_child() {
+    for (limits, widths, x_positions) in [
+        ("", [100.0, 240.0, 140.0], [10.0, 30.0, 50.0]),
+        (r#"minW="120pt" maxW="200pt""#, [100.0, 200.0, 140.0], [10.0, 30.0, 50.0]),
+        (r#"w="80pt""#, [80.0; 3], [10.0; 3]),
+    ] {
+        let xml = format!(
+            r#"<template><subform layout="tb" {limits}>
+ <border><edge/><fill><color value="230,230,230"/></fill></border>
+ <pageSet>
+  <pageArea name="A"><contentArea x="10pt" y="10pt" w="100pt" h="200pt"/></pageArea>
+  <pageArea name="B"><contentArea x="30pt" y="10pt" w="240pt" h="200pt"/></pageArea>
+  <pageArea name="C"><contentArea x="50pt" y="10pt" w="140pt" h="200pt"/></pageArea>
+ </pageSet>
+ <field name="first" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+ <subform layout="tb">
+  <subform layout="tb"><breakBefore target="B"/><field name="second" w="20pt" h="20pt"><ui><textEdit/></ui></field></subform>
+  <subform layout="tb"><breakBefore target="C"/><field name="last" w="20pt" h="20pt"><ui><textEdit/></ui></field></subform>
+ </subform>
+ </subform></template>"#
+        );
+        let form = layout_xml(&xml).unwrap();
+        assert_eq!(form.pages.len(), 3);
+        for (i, page) in form.pages.iter().enumerate() {
+            let fills: Vec<Rect> = page.items.iter().filter_map(|it| if let Item::Fill { rect, .. } = it { Some(*rect) } else { None }).collect();
+            assert_eq!(fills, vec![Rect::new(x_positions[i], 10.0, widths[i], 20.0)], "page {i}, limits {limits}");
+            assert!(matches!(page.items.first(), Some(Item::Fill { .. })), "the fill stays below the widgets");
+        }
+        assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+    }
+}
+
+/// A final field can move to another content area on the same page without another child
+/// observing the changed cursor, and replacing the initial master must refresh open frames too.
+#[test]
+fn flowed_frame_tracks_content_areas_and_initial_master_replacement() {
+    for replace_initial in [false, true] {
+        let unused = if replace_initial { r#"<pageArea name="Unused"><contentArea x="5pt" y="5pt" w="50pt" h="100pt"/></pageArea>"# } else { "" };
+        let xml = format!(
+            r#"<template><subform layout="tb"><border><edge/><fill/></border><pageSet>{unused}
+ <pageArea name="Used">
+  <contentArea x="10pt" y="10pt" w="100pt" h="100pt"/>
+  <contentArea x="130pt" y="10pt" w="240pt" h="100pt"/>
+  <contentArea x="390pt" y="10pt" w="140pt" h="100pt"/>
+ </pageArea></pageSet>
+ <subform layout="tb"><breakBefore target="Used"/>
+  <field name="a" w="20pt" h="80pt"><ui><textEdit/></ui></field>
+  <field name="b" w="20pt" h="80pt"><ui><textEdit/></ui></field>
+  <field name="c" w="20pt" h="80pt"><ui><textEdit/></ui></field>
+ </subform></subform></template>"#
+        );
+        let form = layout_xml(&xml).unwrap();
+        assert_eq!(form.pages.len(), 1);
+        let fills: Vec<Rect> =
+            form.pages[0].items.iter().filter_map(|it| if let Item::Fill { rect, .. } = it { Some(*rect) } else { None }).collect();
+        assert_eq!(fills, vec![Rect::new(10.0, 10.0, 100.0, 80.0), Rect::new(130.0, 10.0, 240.0, 80.0), Rect::new(390.0, 10.0, 140.0, 80.0)]);
+        assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+    }
+}
+
+/// Restarting an auto-width child must keep the available width and inset supplied by an
+/// explicitly sized parent, even when the final child moves to a new content area.
+#[test]
+fn flowed_frame_keeps_fixed_parent_width_and_margins() {
+    let xml = r#"<template><subform layout="tb" w="80pt"><margin leftInset="5pt" rightInset="7pt"/>
+ <pageSet><pageArea>
+  <contentArea x="10pt" y="10pt" w="100pt" h="100pt"/>
+  <contentArea x="10pt" y="130pt" w="100pt" h="100pt"/>
+ </pageArea></pageSet>
+ <subform layout="tb"><border><edge/><fill/></border>
+  <field name="a" w="20pt" h="80pt"><ui><textEdit/></ui></field>
+  <field name="b" w="20pt" h="80pt"><ui><textEdit/></ui></field>
+ </subform></subform></template>"#;
+    let form = layout_xml(xml).unwrap();
+    assert_eq!(form.pages.len(), 1);
+    let fills: Vec<Rect> = form.pages[0].items.iter().filter_map(|it| if let Item::Fill { rect, .. } = it { Some(*rect) } else { None }).collect();
+    assert_eq!(fills, vec![Rect::new(15.0, 10.0, 68.0, 80.0), Rect::new(15.0, 130.0, 68.0, 80.0)]);
+    assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+}
+
+/// A positioned block uses raw area moves while it splits. The next flowed sibling still
+/// receives the new area's horizontal geometry, even though its enclosing border is lost.
+#[test]
+fn flowed_sibling_after_split_block_uses_current_area_width() {
+    let xml = r#"<template><subform layout="tb"><pageSet><pageArea>
+ <contentArea x="10pt" y="10pt" w="100pt" h="100pt"/>
+ <contentArea x="130pt" y="10pt" w="240pt" h="100pt"/>
+ </pageArea></pageSet>
+ <subform w="80pt" h="160pt">
+  <field name="a" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+  <field name="b" y="120pt" w="20pt" h="20pt"><ui><textEdit/></ui></field>
+ </subform>
+ <field name="after" w="200pt" h="20pt"><ui><textEdit/></ui></field>
+ </subform></template>"#;
+    let form = layout_xml(xml).unwrap();
+    assert_eq!(form.pages.len(), 1);
+    let after = widgets(&form.pages[0]).into_iter().find(|w| w.name == "after").unwrap();
+    assert_eq!((after.rect.x, after.rect.w), (130.0, 200.0));
+    assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+}
