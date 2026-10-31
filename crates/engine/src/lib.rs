@@ -70,6 +70,10 @@ pub use stamp_preview::{CommentLayer, StampPreview};
 pub use text_preview::{TextEditPreview, UnmarkedPages};
 
 pub use pdfcraft_organize::{BoxSpec, FieldConflicts, PageBox, SplitBy, Transition, TransitionSpec, mime_for_name, split_ranges};
+pub use pdfcraft_render::{
+    AttachmentSource, DocInfo, FieldKind as FieldInfoKind, OpenError, OutlineItem, PageInfo, RenderConfig, RenderPool, RenderRequest, RenderedPage,
+    RequestKind,
+};
 
 pub use pdfcraft_organize::LabelStyle;
 pub use pdfcraft_organize::Standard;

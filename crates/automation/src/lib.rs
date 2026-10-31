@@ -149,6 +149,16 @@ impl Automation {
         &self.session
     }
 
+    /// Access the session for native frontend operations not yet represented by a tool.
+    /// Derived render, text and listing caches are invalidated before mutable access.
+    pub fn session_mut(&mut self) -> &mut Session {
+        self.renderers.clear();
+        self.texts = TextCache::default();
+        self.listed.clear();
+        self.evicted.clear();
+        &mut self.session
+    }
+
     /// Save `bytes` that a caller writes on the session's behalf, such as `pdfcraft-cli run`
     /// saving a rendered page. With a root, it is confined like a tool's own output (a relative
     /// path resolves inside it). Written atomically either way (#2166), except to something
