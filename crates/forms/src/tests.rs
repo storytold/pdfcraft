@@ -5345,6 +5345,29 @@ fn sorting_keeps_which_of_two_items_with_one_export_value_is_selected() {
 }
 
 #[test]
+fn clearing_a_kids_length_limit_does_not_bring_back_its_parents() {
+    let mut doc = fixture();
+    let city = field(&fields(&doc), "address.city").clone();
+    let parent = doc.get(city.obj).as_dict().unwrap().reference(b"Parent").unwrap();
+    doc.update_dict(parent, |d| d.set(b"MaxLen".to_vec(), Object::Int(3))).unwrap();
+    set_props(&mut doc, "address.city", &FieldProps { max_len: Some(Some(8)), ..FieldProps::default() }).unwrap();
+    assert_eq!(field(&fields(&doc), "address.city").max_len, Some(8));
+    set_props(&mut doc, "address.city", &FieldProps { max_len: Some(None), ..FieldProps::default() }).unwrap();
+    let mut doc = reopen(&doc);
+    let f = field(&fields(&doc), "address.city").clone();
+    assert_eq!(f.max_len, None, "no limit, not the parent's 3");
+    let own = doc.get(f.obj).as_dict().and_then(|d| d.get(b"MaxLen")).and_then(Object::as_int);
+    assert_eq!(own, Some(0), "the kid holds an explicit unlimited of its own");
+    set_value(&mut doc, "address.city", &FieldValue::Text("Absalom".into())).unwrap();
+    assert_eq!(field(&fields(&reopen(&doc)), "address.city").value, ["Absalom"], "not cut to 3 characters");
+    // Without a parent limit, clearing still removes the key.
+    set_props(&mut doc, "name", &FieldProps { max_len: Some(Some(4)), ..FieldProps::default() }).unwrap();
+    set_props(&mut doc, "name", &FieldProps { max_len: Some(None), ..FieldProps::default() }).unwrap();
+    let name = field(&fields(&doc), "name").clone();
+    assert!(doc.get(name.obj).as_dict().unwrap().get(b"MaxLen").is_none());
+}
+
+#[test]
 fn clearing_a_kids_default_does_not_bring_back_its_parents() {
     let mut doc = fixture();
     let all = fields(&doc);
