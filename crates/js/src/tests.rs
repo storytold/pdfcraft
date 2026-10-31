@@ -1542,7 +1542,8 @@ $host.gotoURL("https://example.org")"#,
             "for i = 1 upto 100000 do Eval(\"1\") endfor",
             &ev,
             &doc,
-            form(),
+            std::sync::Arc::new(form()),
+            false,
             Limits { loop_iterations: u64::MAX, recursion: 32 },
             Some(std::time::Duration::ZERO),
         );
@@ -1660,10 +1661,51 @@ mod session {
             source: source.into(),
             formcalc,
             event: XfaEvent { activity: activity.into(), target: target.into(), ..Default::default() },
-            root: form(),
+            root: std::sync::Arc::new(form()),
             limits: Limits::default(),
             timeout: std::time::Duration::from_secs(3),
         }
+    }
+
+    /// The scripts of an event given the same form start from one flattened copy of it: the
+    /// second host shares the first one's text, and each host changes only its own copy.
+    #[test]
+    fn hosts_given_the_same_form_reuse_its_flattened_copy_and_change_only_their_own() {
+        let root = std::sync::Arc::new(form());
+        let doc = XfaDoc::default();
+        let mut first = crate::xfa::XHost::new(std::sync::Arc::clone(&root), true, "form1[0].page1[0].qty[0]", &doc);
+        let second = crate::xfa::XHost::new(std::sync::Arc::clone(&root), true, "form1[0].page1[0].qty[0]", &doc);
+        let shared = std::sync::Arc::clone(&first.nodes.get(1).expect("form1").som);
+        assert!(std::sync::Arc::ptr_eq(&shared, &second.nodes.get(1).expect("form1").som), "the second host starts from the first one's copy");
+        let qty = first.current;
+        let before = second.nodes.get(qty).map(|n| n.value.clone());
+        first.set_state(qty, XfaEffect::SetPresence { som: "form1[0].page1[0].qty[0]".into(), presence: "hidden".into() });
+        if let Some(n) = first.nodes.get_mut(qty) {
+            n.value = "99".into();
+        }
+        let third = crate::xfa::XHost::new(std::sync::Arc::clone(&root), true, "form1[0].page1[0].qty[0]", &doc);
+        for h in [&second, &third] {
+            assert_eq!(h.nodes.get(qty).map(|n| n.value.clone()), before);
+            assert_eq!(h.nodes.get(qty).map(|n| n.presence.to_string()).as_deref(), Some("visible"));
+        }
+        // Another form (a new `Arc`, even with the same content) is flattened again.
+        let other = crate::xfa::XHost::new(std::sync::Arc::new(form()), true, "form1[0].page1[0].qty[0]", &doc);
+        assert!(!std::sync::Arc::ptr_eq(&other.nodes.get(1).expect("form1").som, &shared));
+    }
+
+    /// One session given the same form for two scripts: what the first changed on its copy is
+    /// not in the second's.
+    #[test]
+    fn a_form_sent_again_does_not_carry_the_last_scripts_changes() {
+        let mut s = XfaSession::new(XfaDoc::default());
+        let root = std::sync::Arc::new(form());
+        let mut a = script("qty.rawValue = 10; details.presence = 'visible'; qty.rawValue", false, "form1[0].page1[0].total[0]", "calculate");
+        a.root = std::sync::Arc::clone(&root);
+        assert_eq!(s.run(a).result.as_deref(), Some("10"));
+        let mut b = script("qty.rawValue + ':' + details.presence", false, "form1[0].page1[0].total[0]", "calculate");
+        b.root = std::sync::Arc::clone(&root);
+        let o = s.run(b);
+        assert_eq!(o.result.as_deref(), Some("4:hidden"), "{o:?}");
     }
 
     /// JavaScript and FormCalc scripts run in turn in one session, each on the form the caller
@@ -1683,7 +1725,7 @@ mod session {
         let o = s.run(script("qty * price", true, "form1[0].page1[0].total[0]", "calculate"));
         assert_eq!(o.result.as_deref(), Some("10"), "{o:?}");
         let mut with = script("qty * price", true, "form1[0].page1[0].total[0]", "calculate");
-        with.root.children[0].children[0].value = "10".into();
+        std::sync::Arc::make_mut(&mut with.root).children[0].children[0].value = "10".into();
         assert_eq!(s.run(with).result.as_deref(), Some("25"));
         // Nor do variables, globals, prototype changes or kept objects.
         s.run(script("leak = 5; String.prototype.trim = function () { return 'P' }; kept = qty; 1", false, "form1[0].page1[0].qty[0]", "calculate"));

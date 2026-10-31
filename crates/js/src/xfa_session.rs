@@ -36,8 +36,10 @@ pub struct Script {
     pub source: String,
     pub formcalc: bool,
     pub event: XfaEvent,
-    /// The form as the caller holds it now.
-    pub root: XfaNode,
+    /// The form as the caller holds it now. Send the same `Arc` while the form is unchanged:
+    /// the next script then starts from the copy the last one was given, without flattening the
+    /// form again.
+    pub root: std::sync::Arc<XfaNode>,
     pub limits: Limits,
     pub timeout: std::time::Duration,
 }
@@ -58,13 +60,13 @@ fn run_script(s: Script, doc: &XfaDoc, started: &dyn Fn()) -> XfaOutcome {
     if s.formcalc {
         // FormCalc has no engine to start: its time (and its own deadline) begins at once.
         started();
-        return crate::formcalc::run_formcalc_at(&s.source, &s.event, doc, s.root, s.limits, Some(s.timeout));
+        return crate::formcalc::run_formcalc_at(&s.source, &s.event, doc, s.root, true, s.limits, Some(s.timeout));
     }
     if let Some(why) = crate::refuse(&s.source) {
         started();
         return XfaOutcome { error: Some(why), ..Default::default() };
     }
-    crate::xfa::run_here(&s.source, &s.event, doc, s.root, s.limits, started)
+    crate::xfa::run_here(&s.source, &s.event, doc, s.root, true, s.limits, started)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -234,6 +236,14 @@ mod native {
 
         pub fn run(&mut self, script: Script) -> XfaOutcome {
             run_script(script, &self.doc, &|| {})
+        }
+    }
+
+    impl Drop for XfaSession {
+        /// The scripts ran on this thread: the form they started from is let go of with the
+        /// event (on other targets it goes with the session's thread).
+        fn drop(&mut self) {
+            crate::xfa::forget_base();
         }
     }
 }

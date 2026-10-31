@@ -5485,3 +5485,23 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
         assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
     }
 }
+
+/// A reset of named fields costs the same per field however many are named: resetting 60,000
+/// fields by name is not 3.6 billion name comparisons.
+#[test]
+fn resetting_many_named_fields_is_not_quadratic() {
+    const N: usize = 60_000;
+    let kids: String = (0..N).map(|i| format!("{} 0 R ", i + 4)).collect();
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 3 0 R >>".into(),
+        "<< /Type /Pages /Kids [] /Count 0 >>".into(),
+        format!("<< /Fields [{kids}] >>"),
+    ];
+    objs.extend((0..N).map(|i| format!("<< /FT /Tx /T (f{i}) /V (a) /DV (a) >>")));
+    let mut doc = document(&objs);
+    let names: Vec<String> = (0..N).map(|i| format!("f{i}")).collect();
+    let started = std::time::Instant::now();
+    assert_eq!(reset(&mut doc, Some(&names)).unwrap(), 0);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
+    assert!(matches!(reset(&mut doc, Some(&["f0".to_string(), "nope".to_string()])), Err(FormError::NoSuchField(n)) if n == "nope"));
+}

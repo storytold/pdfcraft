@@ -631,13 +631,16 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
     if all.is_empty() {
         return Err(FormError::NoForm);
     }
+    // Names looked up through sets, so a long list of names costs no more per field.
+    let have: std::collections::HashSet<&str> = names.map(|_| all.iter().map(|f| f.name.as_str()).collect()).unwrap_or_default();
     if let Some(n) = names
-        && let Some(missing) = n.iter().find(|n| !all.iter().any(|f| &f.name == *n))
+        && let Some(missing) = n.iter().find(|n| !have.contains(n.as_str()))
     {
         return Err(FormError::NoSuchField(missing.clone()));
     }
+    let named: Option<std::collections::HashSet<&str>> = names.map(|n| n.iter().map(String::as_str).collect());
     let mut changed = 0;
-    for f in all.iter().filter(|f| names.is_none_or(|n| n.contains(&f.name))) {
+    for f in all.iter().filter(|f| named.as_ref().is_none_or(|n| n.contains(f.name.as_str()))) {
         if f.value == f.default {
             continue;
         }

@@ -311,6 +311,26 @@ fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Ve
                 continue;
             }
             let current: String = node.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
+            if w.picks && holds_picks(node) {
+                // A reset of a multi-select list's picks: one `value` per line, none for an
+                // empty value, unless the node already holds those.
+                let have: Vec<&str> = super::picks_of(node.children().filter(|c| c.is_element()).map(|c| c.text().unwrap_or(""))).collect();
+                let want: Vec<&str> = super::picks_of(w.text.lines()).collect();
+                if have == want {
+                    continue;
+                }
+                // The first pick's own tag, prefix included.
+                let tag = node.children().find(|c| c.is_element()).and_then(|c| qname(src, &c.range())).unwrap_or("value");
+                let inner: String = want.iter().map(|p| format!("<{tag}>{}</{tag}>", escape(p).0)).collect();
+                match replace_edit(src, node, &inner) {
+                    Some(e) => edits.push(e),
+                    None => skipped(warnings, STRUCTURED, &w.som),
+                }
+                if dropped {
+                    skipped(warnings, CONTROL, &w.som);
+                }
+                continue;
+            }
             if node.children().any(|c| c.is_element()) {
                 let all: String = node.descendants().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
                 // Ignore existing XML indentation, but not whitespace in the accepted value.
@@ -366,6 +386,13 @@ fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Ve
             None => warnings.push("Some XFA data nodes could not be added; their field values were not written".into()),
         }
     }
+}
+
+/// Whether `node` holds a multi-select list's picks: element children, all `value` elements
+/// (as [`DataNode::holds_picks`](super::DataNode::holds_picks) reads the parsed data).
+fn holds_picks(node: roxmltree::Node) -> bool {
+    let mut kids = node.children().filter(|c| c.is_element()).peekable();
+    kids.peek().is_some() && kids.all(|c| c.tag_name().name() == "value")
 }
 
 /// Merge `ops` into `text` in order. `None`: nothing changed (or nothing could be merged).
