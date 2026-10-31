@@ -83,6 +83,11 @@ impl PdfCraftApp {
             right_before_read: None,
             comments_panel_closed: false,
             right_panel_closed: false,
+            portfolio_initial: None,
+            portfolio_seen: None,
+            #[cfg(target_arch = "wasm32")]
+            web_reads: Default::default(),
+            portfolio_panel: None,
             quick_tool: QuickTool::Select,
             space_hand: None,
             full_screen_tool: None,
@@ -497,6 +502,7 @@ impl eframe::App for PdfCraftApp {
                 OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }
         }
+        self.present_portfolios();
         if let Some((_, id)) = self.active_ids() {
             let out = self.session.take_js_output(id);
             self.handle_js(id, out);

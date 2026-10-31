@@ -3444,11 +3444,11 @@ title = "View PDF Portfolios as a file list"
 area = "D"
 tier = "P2"
 milestone = "M12"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["doc_info"]
+evidence = ["crates/render/src/inspect/portfolio_tests.rs::a_portfolio_presents_the_attachment_its_d_names", "crates/ui-egui/tests/it/portfolio.rs::a_portfolio_opens_its_initial_document_and_shows_its_files_with_the_panel_closed", "crates/ui-egui/tests/it/portfolio.rs::a_portfolio_that_keeps_its_list_hidden_still_presents_its_initial_document", "crates/ui-egui/tests/it/portfolio.rs::a_portfolio_without_an_initial_document_shows_its_files_over_the_cover", "crates/ui-egui/tests/it/portfolio.rs::a_portfolio_inside_the_initial_document_waits_for_the_reader", "crates/automation/tests/it/portfolio_info.rs::doc_info_names_the_document_a_portfolio_presents_first"]
+notes = "A document with a /Collection (ISO 32000-2 §7.11.6) opens the PDF its /D names in a tab of its own, and the portfolio's tab shows its files in the Attachments panel even with the right panel closed (not with /View /H, which keeps the list for the reader to open), each PDF opening in a tab from there; doc_info reports the portfolio, its initial document and view. Not yet: the files in a details or tile view of their own with the /Schema columns, /Sort and thumbnails, /Folders, previewing a file inside the portfolio's window, and saving edits back into the portfolio"
 
 [[feature]]
 id = "organize.portfolio-extract"
