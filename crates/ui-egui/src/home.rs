@@ -156,9 +156,19 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             }
             let mut open = None;
             let mut remove = None;
+            #[cfg(not(target_arch = "wasm32"))]
+            let mut reveal = None;
             for r in &app.recent {
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &r.name));
+                #[cfg(not(target_arch = "wasm32"))]
+                resp.context_menu(|ui| {
+                    let label = if cfg!(target_os = "macos") { tl!("Reveal in Finder") } else { tl!("Reveal in File Explorer") };
+                    if ui.button(label).clicked() {
+                        reveal = Some(r.path.clone());
+                        ui.close();
+                    }
+                });
                 let press = theme::Press::track(ui, &resp);
                 // The row, not its response: the pointer stays "in" the row over its remove button.
                 let hovered = ui.rect_contains_pointer(rect);
@@ -208,6 +218,10 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             }
             if let Some(p) = open {
                 app.open_recent(&p);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(p) = reveal {
+                app.reveal_path(std::path::Path::new(&p));
             }
             if let Some(p) = remove {
                 app.recent.retain(|r| r.path != p);

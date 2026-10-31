@@ -8,6 +8,14 @@ pub(crate) enum Action {
 }
 
 impl crate::PdfCraftApp {
+    /// Reveal a local file without opening it or changing document/Recent state.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn reveal_path(&mut self, path: &std::path::Path) {
+        if let Err(e) = reveal(path) {
+            self.notify_error(e);
+        }
+    }
+
     pub(crate) fn tab_action(&mut self, action: Action) {
         match action {
             Action::Close(id) => {
@@ -35,10 +43,8 @@ impl crate::PdfCraftApp {
             }
             Action::Reveal(id) => {
                 #[cfg(not(target_arch = "wasm32"))]
-                if let Some(path) = self.session.get(id).and_then(|d| d.path.clone())
-                    && let Err(e) = reveal(std::path::Path::new(&path))
-                {
-                    self.notify_error(e);
+                if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
+                    self.reveal_path(std::path::Path::new(&path));
                 }
                 #[cfg(target_arch = "wasm32")]
                 let _ = id;
