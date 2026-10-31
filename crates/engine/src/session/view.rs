@@ -14,6 +14,13 @@ impl Session {
         self
     }
 
+    /// Open files of `size` and up from disk ([`crate::OpenContext::prepare_on_disk`]), in place
+    /// of [`crate::on_disk::ON_DISK_FROM`] (tests).
+    pub fn with_on_disk_from(mut self, size: u64) -> Self {
+        self.on_disk_from = Some(size);
+        self
+    }
+
     /// Multiply the time an XFA form's scripts may take by `factor` (tests): the 3 s the
     /// scripts of an opening or a change share, the 5 s of a click's, the 10 s the script
     /// engine has to start, and each script's own 1 s or 3 s. A test that checks what the
@@ -104,7 +111,7 @@ impl Session {
     pub fn find_urls(&self, id: DocId) -> Vec<(usize, Vec<[f64; 4]>, String)> {
         let Some(doc) = self.get(id) else { return Vec::new() };
         let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
-        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
+        let mut r = pdfcraft_render::PageRenderer::new(doc.source(), config);
         let mut out = Vec::new();
         for page in 0..doc.info.pages.len() {
             let res = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
@@ -246,7 +253,7 @@ impl Session {
             return false;
         }
         doc.config.hide_comments = hide;
-        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
+        doc.renderer = RenderPool::new(doc.shown(), render_threads(), display_config(&doc.config));
         doc.generation += 1;
         true
     }
@@ -259,7 +266,7 @@ impl Session {
             return false;
         }
         doc.config.reading_colors = colors;
-        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
+        doc.renderer = RenderPool::new(doc.shown(), render_threads(), display_config(&doc.config));
         doc.generation += 1;
         true
     }

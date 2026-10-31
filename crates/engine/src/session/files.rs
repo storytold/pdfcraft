@@ -93,9 +93,8 @@ impl Session {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let cos = match doc.editor.as_ref() {
             Some(e) => e.cos.clone(),
-            None => {
-                pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?
-            }
+            None => pdfcraft_cos::Document::open_with_password(doc.whole()?.clone(), doc.password.as_deref())
+                .map_err(|e| EditError::Write(e.to_string()))?,
         };
         // An XFA form's data is its datasets, as Acrobat exports it: XML or an XDP.
         let xfa = doc.info.xfa.is_some();
@@ -147,9 +146,8 @@ impl Session {
         }
         let mut cos = match doc.editor.as_ref() {
             Some(e) => e.cos.clone(),
-            None => {
-                pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?
-            }
+            None => pdfcraft_cos::Document::open_with_password(doc.whole()?.clone(), doc.password.as_deref())
+                .map_err(|e| EditError::Write(e.to_string()))?,
         };
         // #3046: the layers print as they are shown. Once the Layers panel (or a set-layer
         // action) has changed one, the print copy's default configuration says which are on, so a

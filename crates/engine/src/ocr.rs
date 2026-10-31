@@ -174,7 +174,7 @@ impl OcrJob {
 impl Session {
     /// Capture what recognising `pages` (0-based; empty = all) of document `id` needs.
     pub fn ocr_job(&self, id: DocId, pages: &[usize], settings: OcrSettings) -> Option<OcrJob> {
-        let doc = self.get(id)?;
+        let doc = self.get(id).filter(|d| d.on_disk.is_none())?;
         let all = doc.info.pages.len();
         let pages: Vec<usize> = if pages.is_empty() { (0..all).collect() } else { pages.iter().copied().filter(|p| *p < all).collect() };
         let native = (0..all)

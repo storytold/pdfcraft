@@ -11,7 +11,7 @@ use std::sync::{Condvar, Mutex, PoisonError, mpsc};
 
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 
-use crate::Document;
+use crate::{Document, EditError};
 
 /// At most this many pages are drawn at once by [`Exporter::images`].
 const MAX_IMAGE_WORKERS: usize = 8;
@@ -48,7 +48,7 @@ impl Drop for StopWorkers<'_> {
 pub struct Exporter {
     renderer: PageRenderer,
     /// What the renderer draws, for the extra renderers [`Exporter::images`] starts.
-    bytes: std::sync::Arc<Vec<u8>>,
+    bytes: pdfcraft_render::PdfSource,
     config: pdfcraft_render::RenderConfig,
     pages: usize,
     /// Each page's displayed size in points, for [`Exporter::dpi_used`].
@@ -58,7 +58,7 @@ pub struct Exporter {
 /// What an export needs from a document, as plain values that can move to a worker thread.
 #[derive(Clone)]
 pub struct ExportSource {
-    pub bytes: std::sync::Arc<Vec<u8>>,
+    pub bytes: pdfcraft_render::PdfSource,
     pub config: pdfcraft_render::RenderConfig,
     pub pages: usize,
     /// Each page's displayed size in points (after `/Rotate` and `/UserUnit`).
@@ -72,7 +72,7 @@ impl Document {
     /// do not enter image/text exports or Print as Image. Saving uses the working file.
     pub fn export_source(&self) -> ExportSource {
         ExportSource {
-            bytes: self.display.clone(),
+            bytes: self.shown(),
             config: self.config.clone(),
             pages: self.info.pages.len(),
             sizes: self.info.pages.iter().map(|p| (p.width, p.height)).collect(),
@@ -80,10 +80,20 @@ impl Document {
     }
 }
 
+impl ExportSource {
+    /// The bytes of the whole file, for what reads its objects and not its pages.
+    pub(crate) fn whole(&self) -> Result<std::sync::Arc<Vec<u8>>, String> {
+        match &self.bytes {
+            pdfcraft_render::PdfSource::Whole(bytes) => Ok(bytes.clone()),
+            pdfcraft_render::PdfSource::OnDisk(_) => Err(EditError::OnDisk.to_string()),
+        }
+    }
+}
+
 /// Export all images: the images `pages` (0-based) use, each once, skipping those under
 /// `min_side` pixels on their shorter side. JPEGs come out unchanged, other images as PNG.
 pub fn extract_images(src: &ExportSource, pages: &[usize], min_side: u32) -> Result<pdfcraft_create::ImageExport, String> {
-    let doc = pdfcraft_cos::Document::open_with_password(src.bytes.clone(), src.config.password.as_deref()).map_err(|e| e.to_string())?;
+    let doc = pdfcraft_cos::Document::open_with_password(src.whole()?, src.config.password.as_deref()).map_err(|e| e.to_string())?;
     Ok(pdfcraft_create::extract_images(&doc, pages, min_side))
 }
 

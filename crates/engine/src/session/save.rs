@@ -13,7 +13,7 @@ impl Session {
     /// break its signatures, so with no edits it keeps its bytes, damage and all.
     pub fn save_bytes(&self, id: DocId) -> Result<Arc<Vec<u8>>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
-        let Some(editor) = doc.editor.as_ref() else { return Ok(doc.bytes.clone()) };
+        let Some(editor) = doc.editor.as_ref() else { return doc.whole().cloned() };
         let on_saved = Arc::ptr_eq(editor.cos.bytes(), &editor.saved);
         if !editor.cos.is_modified() && on_saved && (!editor.cos.reconstructed() || doc.is_signed()) {
             return Ok(editor.saved.clone());
@@ -155,11 +155,18 @@ impl Session {
     /// so its tab and view stay with it. Undo history goes, as with Revert. The password it was
     /// opened with is tried; on any failure the document is left as it was.
     pub fn reload(&mut self, id: DocId, bytes: Arc<Vec<u8>>) -> Result<(), OpenError> {
-        let old = self.docs.iter().position(|d| d.id == id).ok_or_else(|| OpenError::Invalid("the document is not open".into()))?;
-        let doc = &self.docs[old];
-        let (name, path, generation) = (doc.name.clone(), doc.path.clone(), doc.generation);
+        let doc = self.get(id).ok_or_else(|| OpenError::Invalid("the document is not open".into()))?;
+        let (name, path) = (doc.name.clone(), doc.path.clone());
         let password = doc.editor.as_ref().and_then(|e| e.keys.reopen.clone()).or_else(|| doc.password.clone());
-        let new_id = self.open(name, path, bytes, password.as_deref())?;
+        let prepared = self.prepare_open(name, path, bytes, password.as_deref())?;
+        self.replace_with(id, prepared)
+    }
+
+    /// Put `prepared`, the same document read again, in the place of document `id`.
+    pub fn replace_with(&mut self, id: DocId, prepared: crate::PreparedDocument) -> Result<(), OpenError> {
+        let old = self.docs.iter().position(|d| d.id == id).ok_or_else(|| OpenError::Invalid("the document is not open".into()))?;
+        let generation = self.docs[old].generation;
+        let new_id = self.commit_open(prepared);
         let at = self.docs.iter().position(|d| d.id == new_id).ok_or_else(|| OpenError::Invalid("the new version was not kept".into()))?;
         let mut doc = self.docs.remove(at);
         doc.id = id;
@@ -170,7 +177,7 @@ impl Session {
         {
             doc.config.reading_colors = old.config.reading_colors;
             doc.config.hide_comments = old.config.hide_comments;
-            doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
+            doc.renderer = RenderPool::new(doc.shown(), render_threads(), display_config(&doc.config));
         }
         // Caches keyed by the edit generation (edit lines, images, measurements) must see a new
         // one; there is nothing new to autosave.

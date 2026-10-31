@@ -21,6 +21,9 @@ pub enum EditError {
     NoDocument,
     #[error("this document can't be edited: {0}")]
     ReadOnly(String),
+    /// The document is a file kept on disk, and this needs all of it in memory.
+    #[error("this large file is being read from disk; load it for editing first")]
+    OnDisk,
     #[error("the document's security settings don't allow {0}; open it with the owner password to make this change")]
     NotPermitted(&'static str),
     #[error("{0}")]

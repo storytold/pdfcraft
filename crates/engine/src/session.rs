@@ -45,4 +45,7 @@ pub struct Session {
     /// What the XFA scripts' time limits are multiplied by (`None`: 1); see
     /// [`Session::with_xfa_time_scale`].
     pub(crate) xfa_time_scale: Option<u32>,
+    /// Files from this size up open from disk (`None`: [`crate::on_disk::ON_DISK_FROM`]); see
+    /// [`Session::with_on_disk_from`].
+    pub(crate) on_disk_from: Option<u64>,
 }

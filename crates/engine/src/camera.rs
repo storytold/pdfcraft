@@ -99,7 +99,7 @@ impl Session {
         let info = doc.info.pages.get(page)?;
         let scale = (DETECT_SIDE / info.width.max(info.height).max(1.0)).clamp(0.05, MAX_SCALE);
         let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
-        let shot = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config).render(RenderRequest { page, scale, ..Default::default() });
+        let shot = pdfcraft_render::PageRenderer::new(doc.source(), config).render(RenderRequest { page, scale, ..Default::default() });
         if shot.error.is_some() {
             return None;
         }

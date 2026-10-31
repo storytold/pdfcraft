@@ -127,7 +127,7 @@ type Exclusions = HashMap<usize, HashSet<i32>>;
 /// expose: retain their page's MCID-tagged text instead of excluding an unrelated same-numbered
 /// span. Explicit Table/Code/Figure marked-content tags still work on those pages.
 fn exclusions(source: &ExportSource, options: Options) -> Result<(Exclusions, bool), String> {
-    let doc = pdfcraft_cos::Document::open_with_password(source.bytes.clone(), source.config.password.as_deref()).map_err(|e| e.to_string())?;
+    let doc = pdfcraft_cos::Document::open_with_password(source.whole()?, source.config.password.as_deref()).map_err(|e| e.to_string())?;
     let catalog = doc.root().and_then(|id| doc.get(id).as_dict().cloned()).unwrap_or_default();
     let Some(root) = catalog.get(b"StructTreeRoot").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()) else {
         return Ok((HashMap::new(), options.exclude_tables || options.exclude_code));
@@ -225,7 +225,12 @@ mod tests {
             bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
         }
         bytes.extend_from_slice(format!("trailer\n<< /Root 1 0 R /Size {} >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
-        ExportSource { bytes: std::sync::Arc::new(bytes), config: Default::default(), pages: bodies.len(), sizes: vec![(200.0, 300.0); bodies.len()] }
+        ExportSource {
+            bytes: std::sync::Arc::new(bytes).into(),
+            config: Default::default(),
+            pages: bodies.len(),
+            sizes: vec![(200.0, 300.0); bodies.len()],
+        }
     }
 
     const MARKED: &str = "BT /F1 12 Tf 10 270 Td (Body words) Tj ET
@@ -275,7 +280,7 @@ mod tests {
         assert_eq!(count(src.clone(), &[], Options::default(), |_| true).unwrap().total, Counts::default());
         assert!(count(src.clone(), &[2], Options::default(), |_| true).unwrap_err().contains("bounds"));
         assert!(count(src.clone(), &[0, 1], Options::default(), |done| done < 1).unwrap_err().contains("cancelled"));
-        let invalid = ExportSource { bytes: std::sync::Arc::new(b"not a PDF".to_vec()), ..src };
+        let invalid = ExportSource { bytes: std::sync::Arc::new(b"not a PDF".to_vec()).into(), ..src };
         assert!(count(invalid, &[0], Options::default(), |_| true).is_err());
     }
 
@@ -307,7 +312,7 @@ mod tests {
     fn word_count_retains_form_namespaces_and_reports_the_limitation() {
         let body = "/Span << /MCID 0 >> BDC BT /F1 12 Tf 10 220 Td (Page words) Tj ET EMC /Fm Do";
         let mut src = source(&[body], "/StructTreeRoot << /K << /S /Table /Pg 4 0 R /K 0 >> >>");
-        let mut doc = pdfcraft_cos::Document::open(src.bytes.clone()).unwrap();
+        let mut doc = pdfcraft_cos::Document::open(src.whole().unwrap()).unwrap();
         let page = ObjRef::new(4, 0);
         let mut resources = doc.get(page).as_dict().unwrap().get(b"Resources").unwrap().as_dict().unwrap().clone();
         let mut form = Dict::new();
@@ -325,7 +330,7 @@ mod tests {
         })
         .unwrap();
         doc.update_dict(ObjRef::new(2, 0), |d| d.set(b"Resources".to_vec(), resources)).unwrap();
-        src.bytes = std::sync::Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
+        src.bytes = std::sync::Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()).into();
         let report = count(src, &[0], Options { exclude_tables: true, ..Options::default() }, |_| true).unwrap();
         assert_eq!(report.total.words, 4, "the unrelated form's MCID must not be excluded");
         assert!(report.unclassified_structure);

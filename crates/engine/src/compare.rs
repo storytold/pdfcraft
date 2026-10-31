@@ -40,7 +40,7 @@ impl crate::Document {
     /// Every word of the document in reading order, with page and box.
     pub fn words(&self) -> Vec<pdfcraft_compare::Word> {
         let config = pdfcraft_render::RenderConfig { password: self.password.as_deref().map(Arc::from), ..Default::default() };
-        let mut r = pdfcraft_render::PageRenderer::new(self.bytes.clone(), config);
+        let mut r = pdfcraft_render::PageRenderer::new(self.source(), config);
         let mut out = Vec::new();
         for (page, info) in self.info.pages.iter().enumerate() {
             let res = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
@@ -70,7 +70,7 @@ impl Session {
         let b = self.get(new).ok_or(EditError::NoDocument)?;
         let renderer = |d: &crate::Document| {
             pdfcraft_render::PageRenderer::new(
-                d.bytes.clone(),
+                d.source(),
                 pdfcraft_render::RenderConfig { password: d.password.as_deref().map(Arc::from), ..Default::default() },
             )
         };

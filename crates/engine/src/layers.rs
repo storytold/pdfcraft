@@ -31,7 +31,7 @@ pub(crate) fn set_default_layer_state(cos: &mut pdfcraft_cos::Document, layers: 
 pub(crate) fn use_layer_choices(doc: &mut Document) {
     let overrides: Vec<(i32, i32, bool)> = doc.info.layers.iter().map(|l| (l.id.0 as i32, l.id.1 as i32, l.visible)).collect();
     doc.config.layers = Arc::new(overrides);
-    doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
+    doc.renderer = RenderPool::new(doc.shown(), render_threads(), display_config(&doc.config));
 }
 
 /// Apply a set-layer-visibility action to `layers`, one change at a time, so a toggle flips the

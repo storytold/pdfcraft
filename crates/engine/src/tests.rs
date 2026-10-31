@@ -7328,7 +7328,11 @@ fn comments_without_appearances_are_drawn_but_not_saved() {
     check(&s);
     let doc = s.get(id).unwrap();
     assert!(Arc::ptr_eq(&doc.bytes, &original), "the working file is the file as opened");
-    assert!(!Arc::ptr_eq(&doc.display, &doc.bytes) && Arc::ptr_eq(&doc.export_source().bytes, &doc.display), "page images show it too");
+    assert!(
+        !Arc::ptr_eq(&doc.display, &doc.bytes)
+            && matches!(&doc.export_source().bytes, pdfcraft_render::PdfSource::Whole(b) if Arc::ptr_eq(b, &doc.display)),
+        "page images show it too"
+    );
     // After an edit (a scoped refresh) they are still drawn, and Save writes no appearances.
     s.apply(id, rect_comment(0, [150.0, 270.0, 190.0, 290.0])).unwrap();
     check(&s);
