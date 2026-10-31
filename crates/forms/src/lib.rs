@@ -42,10 +42,11 @@ mod values;
 
 pub use appearances::{FieldAppearanceCache, declares_pdfa, need_appearances, undrawn_fields, with_field_appearances, with_field_appearances_cached};
 pub(crate) use read::page_refs;
+pub use read::selected_options;
 pub use read::{Fields, acroform, adopted_page_fields, fields, fields_with_adopted};
 #[cfg(test)]
 use read::{MAX_SCRIPT_BYTES, PageWalk, enumerate, form_reads};
-use read::{script, script_budget};
+use read::{first_by_export, script, script_budget};
 pub use tab_order::{TabOrder, move_in_tab_order, set_tab_order, tab_orders};
 #[cfg(test)]
 use values::has_password_flag;
@@ -159,6 +160,14 @@ pub struct Field {
     pub max_len: Option<usize>,
     /// Choice options: (export value, display text).
     pub options: Vec<(String, String)>,
+    /// Combo and list boxes: the selected options, as ascending positions in `options` (see
+    /// [`selected_options`]). Two options can share an export value, so `value` alone can't say
+    /// which of them is selected. Empty for other kinds.
+    pub selected: Vec<usize>,
+    /// A list box without MultiSelect whose `/V` is an array (a value of one option is a string,
+    /// ISO 32000-2 Table 233): `value` holds its first entry only, and picking that option again
+    /// writes the value as one string rather than leaving the array.
+    pub single_value_is_array: bool,
     /// Default appearance string (`/DA`, inherited from the form if absent).
     pub da: String,
     /// Quadding: 0 left, 1 centred, 2 right.
@@ -229,17 +238,63 @@ impl Field {
         }
     }
 
+    /// Combo and list boxes: this field's option positions `picked` as positions in `other`'s
+    /// options, in the same order. Same-name twins are one field (ISO 32000-2 §12.7.3.1) but can
+    /// list their options in different orders, and a value given by position is read in the first
+    /// twin's options. `None` when an option picked has no match in `other`.
+    pub fn positions_in(&self, other: &Field, picked: &[usize]) -> Option<Vec<usize>> {
+        option_positions_in(picked, &self.options, &other.options)
+    }
+
+    /// Combo and list boxes: the selected options in the order the value names them (`/V` keeps
+    /// the order they were picked in), so the last is the latest pick.
+    pub fn picked_in_order(&self) -> Vec<usize> {
+        let mut out: Vec<usize> = Vec::with_capacity(self.selected.len());
+        let mut taken: std::collections::HashSet<usize> = std::collections::HashSet::with_capacity(self.selected.len());
+        let mut unpicked = self.selected_by_export();
+        for v in &self.value {
+            if let Some(i) = unpicked.get_mut(v.as_str()).and_then(std::collections::VecDeque::pop_front) {
+                taken.insert(i);
+                out.push(i);
+            }
+        }
+        // Positions `/I` holds beyond what the value names (none while the two agree).
+        out.extend(self.selected.iter().copied().filter(|i| !taken.contains(i)));
+        out
+    }
+
     /// The value as one string: text, the state name, or the selected display texts.
     pub fn display_value(&self) -> String {
         match self.kind {
-            FieldKind::Combo | FieldKind::List => self
-                .value
-                .iter()
-                .map(|v| self.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone()))
-                .collect::<Vec<_>>()
-                .join(", "),
+            FieldKind::Combo | FieldKind::List => {
+                // Each value as the selected option it names (options can share an export
+                // value), in the value's order; past those, the first option exporting it.
+                let mut unpicked = self.selected_by_export();
+                let first = first_by_export(&self.options);
+                self.value
+                    .iter()
+                    .map(|v| {
+                        let i =
+                            unpicked.get_mut(v.as_str()).and_then(std::collections::VecDeque::pop_front).or_else(|| first.get(v.as_str()).copied());
+                        i.and_then(|i| self.options.get(i)).map_or(v.clone(), |(_, d)| d.clone())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
             _ => self.value.join(", "),
         }
+    }
+
+    /// The selected positions grouped by the export value of their option, each group
+    /// ascending, so a value takes the next selected option exporting it in one lookup.
+    fn selected_by_export(&self) -> std::collections::HashMap<&str, std::collections::VecDeque<usize>> {
+        let mut out: std::collections::HashMap<&str, std::collections::VecDeque<usize>> = std::collections::HashMap::new();
+        for &i in &self.selected {
+            if let Some((e, _)) = self.options.get(i) {
+                out.entry(e.as_str()).or_default().push_back(i);
+            }
+        }
+        out
     }
 }
 
@@ -253,6 +308,10 @@ pub enum FieldValue {
     Radio(Option<String>),
     /// Combo box or list box: export values (several only for multi-select lists).
     Choice(Vec<String>),
+    /// Combo box or list box: options by their zero-based position in `/Opt` (as `/I` numbers
+    /// them), which tells apart options that share an export value. Several only for
+    /// multi-select lists; `/V` takes them in this order.
+    ChoiceIndices(Vec<usize>),
 }
 
 // ── reading ─────────────────────────────────────────────────────────────────────────────────
@@ -305,4 +364,15 @@ fn name_obj(text: &str) -> Object {
 
 fn invalid<T>(m: impl Into<String>) -> Result<T, FormError> {
     Err(FormError::Invalid(m.into()))
+}
+
+/// The positions in `target` of the options at positions `picked` in `source`, in the same order:
+/// each goes to `target`'s first not yet taken option with the same export value and text, so two
+/// options sharing both stay apart. `None` when one has no such option in `target`.
+pub(crate) fn option_positions_in(picked: &[usize], source: &[(String, String)], target: &[(String, String)]) -> Option<Vec<usize>> {
+    let mut free: std::collections::HashMap<(&str, &str), std::collections::VecDeque<usize>> = std::collections::HashMap::new();
+    for (i, (e, d)) in target.iter().enumerate() {
+        free.entry((e.as_str(), d.as_str())).or_default().push_back(i);
+    }
+    picked.iter().map(|&p| source.get(p).and_then(|(e, d)| free.get_mut(&(e.as_str(), d.as_str()))).and_then(|q| q.pop_front())).collect()
 }

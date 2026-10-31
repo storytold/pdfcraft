@@ -201,6 +201,69 @@ fn values_of(doc: &Document, o: Option<&Object>) -> Vec<String> {
     }
 }
 
+/// A choice field's `/I` (ISO 32000-2 Table 234) as option positions, when it is usable: an array
+/// of integers "sorted in ascending order", each naming one of `count` options. `None` when it is
+/// absent or anything in it is not (a non-integer, a position out of range, out of order or
+/// repeated), so the field falls back to `/V`.
+pub(crate) fn listed_indices(doc: &Document, d: &Dict, count: usize) -> Option<Vec<usize>> {
+    let listed = doc.resolve(d.get(b"I")?);
+    let entries = listed.as_array()?;
+    // Strictly ascending positions below `count` number at most `count`.
+    if entries.len() > count {
+        return None;
+    }
+    let mut out: Vec<usize> = Vec::with_capacity(entries.len());
+    for e in entries {
+        let i = usize::try_from(doc.resolve(e).as_int()?).ok().filter(|&i| i < count)?;
+        if out.last().is_some_and(|&last| last >= i) {
+            return None;
+        }
+        out.push(i);
+    }
+    Some(out)
+}
+
+/// The options a choice field shows selected, as ascending positions in `options`, given its
+/// values (`/V`) and its usable `/I` ([`listed_indices`]).
+///
+/// `/I` decides when it names the same export values as `/V`: it "shall be used when two or more
+/// elements in the Opt array have different names but the same export value", and "if the items
+/// identified by this entry differ from those in the V entry …, the V entry shall be used" (ISO
+/// 32000-2 Table 234). Otherwise each value selects the first option with that export value, as
+/// the writer numbers `/I` when it is given only an export value, so a pick keeps showing the same
+/// option when `/I` is lost. A value no option exports selects nothing.
+pub fn selected_options(options: &[(String, String)], values: &[String], listed: Option<&[usize]>) -> Vec<usize> {
+    if let Some(listed) = listed {
+        // The same items, each as many times: `/V [(1) (1)]` names two items, which an `/I [1]`
+        // naming one doesn't, so `/V` decides then.
+        let mut named: Vec<&str> = values.iter().map(String::as_str).collect();
+        named.sort_unstable();
+        let exports: Option<Vec<&str>> = listed.iter().map(|&i| options.get(i).map(|(e, _)| e.as_str())).collect();
+        if let Some(mut exports) = exports {
+            exports.sort_unstable();
+            if exports == named {
+                return listed.to_vec();
+            }
+        }
+    }
+    let first = first_by_export(options);
+    let mut out: Vec<usize> = values.iter().filter_map(|v| first.get(v.as_str()).copied()).collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Each export value in `options` with the position of the first option exporting it, so
+/// matching values against options takes one pass over each rather than one over the options per
+/// value (a file can hold many of both).
+pub(crate) fn first_by_export(options: &[(String, String)]) -> std::collections::HashMap<&str, usize> {
+    let mut first: std::collections::HashMap<&str, usize> = std::collections::HashMap::with_capacity(options.len());
+    for (i, (e, _)) in options.iter().enumerate() {
+        first.entry(e.as_str()).or_insert(i);
+    }
+    first
+}
+
 fn nums(doc: &Document, o: Option<&Object>) -> Option<Vec<f64>> {
     let o = doc.resolve(o?);
     o.as_array()?.iter().map(|x| doc.resolve(x).as_f64()).collect()
@@ -544,16 +607,36 @@ fn walk(
             Object::Array(pair) if pair.len() >= 2 => Some((text_of(&doc.resolve(&pair[0]))?, text_of(&doc.resolve(&pair[1]))?)),
             other => text_of(other).map(|t| (t.clone(), t)),
         })
-        .collect();
+        .collect::<Vec<(String, String)>>();
+    let mut value = values_of(doc, inh.v.as_ref());
+    // A list box without MultiSelect selects one option: "if clear, at most one item shall be
+    // selected" (ISO 32000-2 Table 233). Given an array /V or /DV anyway, it holds the first
+    // value only, and shows and resets to it; the file keeps its entries until the field is filled.
+    let mut default = values_of(doc, inh.dv.as_ref());
+    let single = kind == FieldKind::List && ff & flags::MULTI_SELECT == 0;
+    let single_value_is_array = single && inh.v.as_ref().is_some_and(|v| doc.resolve(v).as_array().is_some());
+    if single {
+        value.truncate(1);
+        default.truncate(1);
+    }
+    let mut selected = match kind {
+        FieldKind::Combo | FieldKind::List => selected_options(&options, &value, listed_indices(doc, d, options.len()).as_deref()),
+        _ => Vec::new(),
+    };
+    if single {
+        selected.truncate(1);
+    }
     out.push(Field {
         name: inh.name.clone(),
         obj: r,
         kind,
-        value: values_of(doc, inh.v.as_ref()),
-        default: values_of(doc, inh.dv.as_ref()),
+        value,
+        default,
         flags: ff,
         max_len: inh.max_len,
         options,
+        selected,
+        single_value_is_array,
         da: inh.da.clone().unwrap_or_else(|| "/Helv 0 Tf 0 g".into()),
         quadding: inh.q.unwrap_or(0),
         tooltip: d.get(b"TU").and_then(|o| text_of(&doc.resolve(o))),

@@ -814,11 +814,15 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
             size = rows.size;
             let line = rows.row;
             let mut y = height - rows.inset;
-            for (export, display) in f.options.iter().skip(rows.top) {
+            // The field's own selection (its `/I`) when these are its values; values it doesn't
+            // hold yet select by export value alone.
+            let picked = if values == f.value.as_slice() { f.selected.clone() } else { crate::selected_options(&f.options, values, None) };
+            for (i, (_, display)) in f.options.iter().enumerate().skip(rows.top) {
                 if y - line < 0.0 {
                     break;
                 }
-                if values.contains(export) {
+                // Both sources list positions in ascending order.
+                if picked.binary_search(&i).is_ok() {
                     c.push_str(&format!("0.6 0.75 0.86 rg\n{} {} {} {} re f\n", n(bw), n(y - line), n(width - 2.0 * bw), n(line)));
                 }
                 show(&mut body, pad, y - line + size * 0.25, display);

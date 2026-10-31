@@ -73,6 +73,10 @@ pub struct FormView {
     /// The widget holding egui's keyboard focus for the focused check box or radio button, and
     /// whether it takes the arrows (radio buttons). The page keys still work around it.
     pub(crate) keys: Option<(egui::Id, bool)>,
+    /// The list box row clicked last, without Shift: (its field name, the row). A Shift-click picks
+    /// the rows from it to the one clicked; the field's value can't say which row came last when
+    /// rows share an export value, and `/I` lists them in ascending order.
+    pub(crate) list_anchor: Option<(String, usize)>,
 }
 
 /// A form message for the app to show, with document data kept separate so the visible
@@ -259,31 +263,50 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], allowed: b
             let zoom = (r.height() as f64) / height_pt;
             let y_pt = (p.y - r.min.y) as f64 / zoom;
             let rows = w.list.unwrap_or(form_appearance::ListRows { top: 0, inset: 2.0, row: 12.0 * 1.15, size: 12.0 });
-            let picked_indices: Vec<usize> = f.value.iter().filter_map(|v| f.options.iter().position(|(e, _)| e == v)).collect();
-            let top = form_appearance::ListRows::top_showing(rows.top, &picked_indices, rows.visible(height_pt), f.options.len());
+            let top = form_appearance::ListRows::top_showing(rows.top, &f.selected, rows.visible(height_pt), f.options.len());
             if let Some(opt_idx) = rows.option_at(top, y_pt).filter(|&i| i < f.options.len()) {
-                let export = &f.options[opt_idx].0;
                 let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                 let shift = ui.input(|i| i.modifiers.shift);
                 let multi = f.has(field_flags::MULTI_SELECT);
-                let new_value = if multi && ctrl {
-                    let mut picked = f.value.clone();
-                    if let Some(pos) = picked.iter().position(|x| x == export) {
+                // Options by position: two options can share an export value (ISO 32000-2
+                // Table 234, `/I`), and the click picks the row, not the first option with its value.
+                let in_order = f.picked_in_order();
+                let picked: Vec<usize> = if multi && ctrl {
+                    let mut picked = in_order.clone();
+                    if let Some(pos) = picked.iter().position(|&x| x == opt_idx) {
                         picked.remove(pos);
                     } else {
-                        picked.push(export.clone());
+                        picked.push(opt_idx);
                     }
-                    FieldValue::Choice(picked)
-                } else if multi && shift && !f.value.is_empty() {
-                    let anchor = f.value.last().and_then(|last| f.options.iter().position(|(e, _)| e == last)).unwrap_or(opt_idx);
+                    picked
+                } else if multi
+                    && shift
+                    && let Some(anchor) =
+                        view.forms.list_anchor.as_ref().filter(|(name, _)| *name == f.name).map(|(_, row)| *row).or_else(|| in_order.last().copied())
+                {
                     let (min, max) = (anchor.min(opt_idx), anchor.max(opt_idx));
-                    let picked = f.options[min..=max].iter().map(|(e, _)| e.clone()).collect();
-                    FieldValue::Choice(picked)
+                    (min..=max).collect()
                 } else {
-                    FieldValue::Choice(vec![export.clone()])
+                    vec![opt_idx]
                 };
-                if new_value != FieldValue::Choice(f.value.clone()) {
-                    view.pending_edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: new_value });
+                if !(multi && shift) {
+                    view.forms.list_anchor = Some((f.name.clone(), opt_idx));
+                }
+                // A single-select list holding an array is written as one value even when its shown
+                // row is clicked again.
+                if picked != in_order || f.single_value_is_array {
+                    // The edit names the field, and positions are read in the first field of that
+                    // name: a same-name twin listing its options in another order gives its own
+                    // picks as positions there. One option missing there goes by export value.
+                    let first = form.iter().find(|x| x.name == f.name).filter(|x| x.obj != f.obj);
+                    let value = match first {
+                        None => FieldValue::ChoiceIndices(picked),
+                        Some(first) => match f.positions_in(first, &picked) {
+                            Some(there) => FieldValue::ChoiceIndices(there),
+                            None => FieldValue::Choice(picked.iter().filter_map(|&i| f.options.get(i)).map(|(e, _)| e.clone()).collect()),
+                        },
+                    };
+                    view.pending_edit = Some(Edit::SetFieldValue { name: f.name.clone(), value });
                 }
             }
         }
@@ -597,19 +620,19 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, 
             let zoom = (xf.rect.width() / unrotated_w.max(1.0)) as f64;
             let rows = w.list.unwrap_or(form_appearance::ListRows { top: 0, inset: 2.0, row: 12.0 * 1.15, size: 12.0 });
             let height_pt = if matches!(w.rotation, 90 | 270) { (w.rect[2] - w.rect[0]).max(1.0) } else { (w.rect[3] - w.rect[1]).max(1.0) };
-            let picked_indices: Vec<usize> = f.value.iter().filter_map(|v| f.options.iter().position(|(e, _)| e == v)).collect();
-            let top = form_appearance::ListRows::top_showing(rows.top, &picked_indices, rows.visible(height_pt), f.options.len());
+            let top = form_appearance::ListRows::top_showing(rows.top, &f.selected, rows.visible(height_pt), f.options.len());
             let font_size = (rows.size * zoom).clamp(6.0, 64.0) as f32;
             let row_h = (rows.row * zoom) as f32;
             let inset = (rows.inset * zoom) as f32;
             let p = painter.with_clip_rect(r);
             let mut y = r.min.y + inset;
-            for (export, display) in f.options.iter().skip(top) {
+            for (i, (_, display)) in f.options.iter().enumerate().skip(top) {
                 if y + row_h > r.max.y {
                     break;
                 }
                 let row_rect = Rect::from_min_size(egui::pos2(r.min.x + 1.0, y), egui::vec2(r.width() - 2.0, row_h));
-                if f.value.contains(export) {
+                // By position: options can share an export value.
+                if f.selected.contains(&i) {
                     p.rect_filled(row_rect, CornerRadius::ZERO, Color32::from_rgb(0x99, 0xC0, 0xDC));
                 }
                 p.text(
@@ -924,11 +947,11 @@ pub(crate) fn overlay(
             } else if tab {
                 next = Some(!shift);
             } else if (up || down) && !f.options.is_empty() {
-                let current_idx = f.value.last().and_then(|v| f.options.iter().position(|(e, _)| e == v)).unwrap_or(0);
-                let next_idx = if up { current_idx.saturating_sub(1) } else { (current_idx + 1).min(f.options.len().saturating_sub(1)) };
+                let current_idx = f.picked_in_order().last().copied().unwrap_or(0);
+                let next_idx = if up { current_idx.saturating_sub(1) } else { current_idx.saturating_add(1).min(f.options.len().saturating_sub(1)) };
                 if next_idx != current_idx && next_idx < f.options.len() {
-                    let export = f.options[next_idx].0.clone();
-                    edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Choice(vec![export]) });
+                    // By position, so the arrows step through options that share an export value.
+                    edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::ChoiceIndices(vec![next_idx]) });
                 }
             }
             if clicked_outside() {

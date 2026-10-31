@@ -1,5 +1,5 @@
 use super::appearances::{declares_pdfa, need_appearances};
-use super::read::{acroform, field_flags, fields, page_refs};
+use super::read::{acroform, field_flags, fields, listed_indices, page_refs, selected_options};
 use super::{
     Dict, Document, Field, FieldEvent, FieldKind, FieldValue, FormError, NoScripts, ObjRef, Object, PdfString, Scripts, Widget, af, appearance,
     author, calc_order, flags, invalid, name_obj, scripting,
@@ -102,15 +102,21 @@ fn fill(doc: &mut Document, all: &[Field], named: &[usize], name: &str, value: &
     if !twins.is_empty() {
         let taken = fields(doc).into_iter().find(|x| x.obj == f.obj).map(|x| x.value).unwrap_or_default();
         for t in twins {
-            share_value(doc, f.obj, t, &taken, scripts)?;
+            share_value(doc, (f.obj, &f.options), t, &taken, scripts)?;
         }
     }
     Ok(())
 }
 
-/// Give `twin` the value `source` holds: its `/V` (and a choice's `/I`), drawn in the twin's own
-/// widgets.
-fn share_value(doc: &mut Document, source: ObjRef, twin: &Field, value: &[String], scripts: &mut dyn Scripts) -> Result<(), FormError> {
+/// Give `twin` the value `source` (a field and its options) holds: its `/V`, and a choice's `/I`
+/// mapped to the twin's own options, drawn in the twin's own widgets.
+fn share_value(
+    doc: &mut Document,
+    (source, source_options): (ObjRef, &[(String, String)]),
+    twin: &Field,
+    value: &[String],
+    scripts: &mut dyn Scripts,
+) -> Result<(), FormError> {
     match twin.kind {
         FieldKind::CheckBox => {
             let state = twin.widgets.iter().find_map(|w| w.on_state.clone()).unwrap_or_else(|| "Yes".into());
@@ -122,18 +128,37 @@ fn share_value(doc: &mut Document, source: ObjRef, twin: &Field, value: &[String
         }
         FieldKind::Text | FieldKind::Combo | FieldKind::List => {
             let src = doc.get(source).as_dict().cloned().unwrap_or_default();
+            // `/I` holds positions in the source's options: each goes to the twin's first unused option
+            // with the same export value and text, its options perhaps in another order. One with no
+            // match leaves the twin no `/I` (its `/V` picks), never part of one.
+            let positions = match twin.kind {
+                FieldKind::Combo | FieldKind::List => {
+                    listed_indices(doc, &src, source_options.len()).and_then(|picked| twin_positions(&picked, source_options, &twin.options))
+                }
+                _ => None,
+            };
             doc.update_dict(twin.obj, |d| {
-                for key in [&b"V"[..], b"I"] {
-                    match src.get(key) {
-                        Some(v) => d.set(key.to_vec(), v.clone()),
-                        None => {
-                            d.remove(key);
-                        }
+                match src.get(b"V") {
+                    Some(v) => d.set(b"V".to_vec(), v.clone()),
+                    None => {
+                        d.remove(b"V");
+                    }
+                }
+                match &positions {
+                    Some(p) => d.set(b"I".to_vec(), Object::Array(p.iter().map(|&i| Object::Int(i64::try_from(i).unwrap_or(i64::MAX))).collect())),
+                    None => {
+                        d.remove(b"I");
                     }
                 }
                 d.remove(b"RV");
             })?;
-            redraw(doc, twin, value, scripts)
+            // Drawn with the options that `/I` selects, not only the export values.
+            let mut shown = twin.clone();
+            shown.value = value.to_vec();
+            if matches!(twin.kind, FieldKind::Combo | FieldKind::List) {
+                shown.selected = selected_options(&twin.options, value, positions.as_deref());
+            }
+            redraw(doc, &shown, value, scripts)
         }
         FieldKind::PushButton | FieldKind::Signature => Ok(()),
     }
@@ -237,7 +262,7 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
                     }
                 }
                 FieldValue::Radio(None) => false,
-                FieldValue::Choice(_) => return invalid(format!("{:?} is a check box: use true or false", f.name)),
+                FieldValue::Choice(_) | FieldValue::ChoiceIndices(_) => return invalid(format!("{:?} is a check box: use true or false", f.name)),
             };
             set_states(doc, f, on.then_some(state.as_str()))
         }
@@ -262,37 +287,67 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             }
             set_states(doc, f, choice.as_deref())
         }
-        (FieldKind::Combo | FieldKind::List, FieldValue::Choice(_) | FieldValue::Text(_)) => {
-            let vals: Vec<String> = match value {
-                FieldValue::Choice(v) => v.clone(),
-                FieldValue::Text(t) if t.is_empty() => Vec::new(),
-                FieldValue::Text(t) => vec![t.clone()],
-                other => return invalid(format!("{:?} can't take {other:?}", f.name)),
+        (FieldKind::Combo | FieldKind::List, FieldValue::Choice(_) | FieldValue::Text(_) | FieldValue::ChoiceIndices(_)) => {
+            let count = match value {
+                FieldValue::Choice(v) => v.len(),
+                FieldValue::ChoiceIndices(v) => v.len(),
+                _ => 1,
             };
-            if vals.len() > 1 && !(f.kind == FieldKind::List && f.has(flags::MULTI_SELECT)) {
+            if count > 1 && !(f.kind == FieldKind::List && f.has(flags::MULTI_SELECT)) {
                 return invalid(format!("{:?} takes a single value", f.name));
             }
-            // Accept export values or display texts; free text only in editable combo boxes.
+            // Each value as its export value and, when it is one of the options, that option's
+            // position: two options can share an export value, and the position (`/I`) says
+            // which one is picked (ISO 32000-2 Table 234).
             let mut exports = Vec::new();
-            for v in &vals {
-                match f.options.iter().find(|(e, d)| e == v || d == v) {
-                    Some((e, _)) => exports.push(e.clone()),
-                    None if f.kind == FieldKind::Combo && f.has(flags::EDIT) => exports.push(v.clone()),
-                    None if f.options.is_empty() => exports.push(v.clone()),
-                    None => {
-                        let opts: Vec<&str> = f.options.iter().map(|(_, d)| d.as_str()).collect();
-                        return invalid(format!("{:?} has no option {v:?} (options: {})", f.name, opts.join(", ")));
+            let mut picked: Vec<usize> = Vec::new();
+            // Each option once in both `/V` and `/I`: a reader that finds them differ (a repeat in one)
+            // goes by the export values alone and may pick another option sharing one.
+            let mut seen = vec![false; f.options.len()];
+            match value {
+                FieldValue::ChoiceIndices(positions) => {
+                    for &i in positions {
+                        let Some((e, _)) = f.options.get(i) else {
+                            return invalid(format!("{:?} has no option {} (it has {})", f.name, i.saturating_add(1), f.options.len()));
+                        };
+                        if first_pick(&mut seen, i) {
+                            exports.push(e.clone());
+                            picked.push(i);
+                        }
+                    }
+                }
+                _ => {
+                    let vals: Vec<String> = match value {
+                        FieldValue::Choice(v) => v.clone(),
+                        FieldValue::Text(t) if t.is_empty() => Vec::new(),
+                        FieldValue::Text(t) => vec![t.clone()],
+                        other => return invalid(format!("{:?} can't take {other:?}", f.name)),
+                    };
+                    // Accept export values or display texts; free text only in editable combo boxes.
+                    for v in &vals {
+                        match f.options.iter().position(|(e, d)| e == v || d == v) {
+                            Some(i) => {
+                                if first_pick(&mut seen, i) {
+                                    exports.push(f.options.get(i).map(|(e, _)| e.clone()).unwrap_or_else(|| v.clone()));
+                                    picked.push(i);
+                                }
+                            }
+                            None if f.kind == FieldKind::Combo && f.has(flags::EDIT) => exports.push(v.clone()),
+                            None if f.options.is_empty() => exports.push(v.clone()),
+                            None => {
+                                let opts: Vec<&str> = f.options.iter().map(|(_, d)| d.as_str()).collect();
+                                return invalid(format!("{:?} has no option {v:?} (options: {})", f.name, opts.join(", ")));
+                            }
+                        }
                     }
                 }
             }
-            let mut indices: Vec<Object> =
-                exports.iter().filter_map(|e| f.options.iter().position(|(x, _)| x == e)).map(|i| Object::Int(i as i64)).collect();
-            // /I lists option indices in ascending order; /V keeps the caller's value order.
-            // Every entry above is an integer, so this sorts by its numeric option index.
-            indices.sort_unstable_by_key(Object::as_int);
+            // /I lists option indices in ascending order, each once; /V keeps the caller's order.
+            picked.sort_unstable();
+            picked.dedup();
+            let indices: Vec<Object> = picked.iter().map(|&i| Object::Int(i64::try_from(i).unwrap_or(i64::MAX))).collect();
             // A list box scrolls (`/TI`) so the picked options are among the rows it draws, as
             // in other viewers: a pick below the last visible row would otherwise not show (#1524).
-            let picked: Vec<usize> = indices.iter().filter_map(|i| i.as_int()).filter_map(|i| usize::try_from(i).ok()).collect();
             let top = list_scroll(f, &picked, f.options.len());
             // An empty value of its own keeps a parent field's /V from showing through.
             let shadow = exports.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");
@@ -317,7 +372,10 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
                 }
             })?;
             scroll_widgets(doc, f, &picked, f.options.len())?;
-            redraw(doc, f, &exports, scripts)
+            let mut shown = f.clone();
+            shown.value = exports.clone();
+            shown.selected = picked;
+            redraw(doc, &shown, &exports, scripts)
         }
         (FieldKind::PushButton, _) => invalid(format!("{:?} is a button; it has no value", f.name)),
         (FieldKind::Signature, _) => invalid(format!("{:?} is a signature field; sign it with Fill & Sign or a digital ID", f.name)),
@@ -656,4 +714,23 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
     }
     recalculate(doc)?;
     Ok(changed)
+}
+
+/// Marks option `i` picked; false when it already was, or there is no such option.
+fn first_pick(seen: &mut [bool], i: usize) -> bool {
+    match seen.get_mut(i) {
+        Some(taken) if !*taken => {
+            *taken = true;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The twin's positions for the source's picked positions `picked`, as
+/// [`crate::option_positions_in`] maps them, in ascending order, as `/I` lists them.
+fn twin_positions(picked: &[usize], source: &[(String, String)], twin: &[(String, String)]) -> Option<Vec<usize>> {
+    let mut out = crate::option_positions_in(picked, source, twin)?;
+    out.sort_unstable();
+    Some(out)
 }
