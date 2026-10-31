@@ -4511,7 +4511,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-ocr-worker"
-version = "0.14.0"
+version = "0.16.1"
 dependencies = [
  "js-sys",
  "pdfcraft-ocr",
