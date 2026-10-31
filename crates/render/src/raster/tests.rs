@@ -1518,6 +1518,10 @@ fn scale_is_clamped_for_huge_pages() {
     let s = effective_scale(14_400.0, 14_400.0, 4.0);
     assert!(14_400.0 * s <= MAX_SIDE + 0.5);
     assert!((14_400.0 * s).powi(2) <= MAX_PIXELS * 1.01);
+    for side in [1.0e30_f32, f32::MAX] {
+        let s = effective_scale(side, side, 1.0);
+        assert_eq!(device_pixels(side, s), 8_000, "side={side} must scale to area cap, not 1px");
+    }
 }
 
 #[test]

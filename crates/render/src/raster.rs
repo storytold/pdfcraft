@@ -322,7 +322,7 @@ impl AtomicRenderStats {
 pub fn effective_scale(width_pt: f32, height_pt: f32, scale: f32) -> f32 {
     let (w, h) = (width_pt.max(1.0), height_pt.max(1.0));
     let by_side = MAX_SIDE / w.max(h);
-    let by_area = (MAX_PIXELS / (w * h)).sqrt();
+    let by_area = (f64::from(MAX_PIXELS) / (f64::from(w) * f64::from(h))).sqrt() as f32;
     // The caps always win: a floor here once let a 934-million-point-wide page (a fuzzed file)
     // render 9 million pixels wide. Only guard against a zero or non-finite scale.
     let capped = scale.min(by_side).min(by_area);
