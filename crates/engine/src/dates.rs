@@ -46,6 +46,8 @@ pub struct DateLanguage {
     /// the language changes it: Czech `8. října`, Russian `8 октября`.
     pub months_with_day: Option<[&'static str; 12]>,
     pub months_short: [&'static str; 12],
+    /// The abbreviated month after a day number, where the language prefixes it (Hebrew: `8 באפר׳`).
+    pub months_short_with_day: Option<[&'static str; 12]>,
     pub days: [&'static str; 7],
     pub days_short: [&'static str; 7],
 }
@@ -70,6 +72,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
         months_with_day: None,
         months_short: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+        months_short_with_day: None,
         days: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
         days_short: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
     },
@@ -79,6 +82,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: CJK_MONTHS,
         months_with_day: None,
         months_short: CJK_MONTHS,
+        months_short_with_day: None,
         days: ["日曜日", "月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日"],
         days_short: ["日", "月", "火", "水", "木", "金", "土"],
     },
@@ -88,6 +92,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ZH_MONTHS,
         months_with_day: None,
         months_short: CJK_MONTHS,
+        months_short_with_day: None,
         days: ZH_DAYS,
         days_short: ["周日", "周一", "周二", "周三", "周四", "周五", "周六"],
     },
@@ -97,6 +102,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ZH_MONTHS,
         months_with_day: None,
         months_short: CJK_MONTHS,
+        months_short_with_day: None,
         days: ZH_DAYS,
         days_short: ["週日", "週一", "週二", "週三", "週四", "週五", "週六"],
     },
@@ -119,6 +125,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
             "prosince",
         ]),
         months_short: ["led", "úno", "bře", "dub", "kvě", "čvn", "čvc", "srp", "zář", "říj", "lis", "pro"],
+        months_short_with_day: None,
         days: ["neděle", "pondělí", "úterý", "středa", "čtvrtek", "pátek", "sobota"],
         days_short: ["ne", "po", "út", "st", "čt", "pá", "so"],
     },
@@ -128,6 +135,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"],
         months_with_day: None,
         months_short: ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"],
+        months_short_with_day: None,
         days: ["domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"],
         days_short: ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"],
     },
@@ -137,6 +145,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"],
         months_with_day: None,
         months_short: ["Jan.", "Feb.", "März", "Apr.", "Mai", "Juni", "Juli", "Aug.", "Sept.", "Okt.", "Nov.", "Dez."],
+        months_short_with_day: None,
         days: ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"],
         days_short: ["So.", "Mo.", "Di.", "Mi.", "Do.", "Fr.", "Sa."],
     },
@@ -146,6 +155,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"],
         months_with_day: None,
         months_short: ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sept", "oct", "nov", "dic"],
+        months_short_with_day: None,
         days: ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"],
         days_short: ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"],
     },
@@ -155,6 +165,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"],
         months_with_day: None,
         months_short: ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."],
+        months_short_with_day: None,
         days: ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"],
         days_short: ["dim.", "lun.", "mar.", "mer.", "jeu.", "ven.", "sam."],
     },
@@ -164,6 +175,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"],
         months_with_day: Some(["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]),
         months_short: ["янв.", "февр.", "март", "апр.", "май", "июнь", "июль", "авг.", "сент.", "окт.", "нояб.", "дек."],
+        months_short_with_day: None,
         days: ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"],
         days_short: ["вс", "пн", "вт", "ср", "чт", "пт", "сб"],
     },
@@ -173,6 +185,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["қаңтар", "ақпан", "наурыз", "сәуір", "мамыр", "маусым", "шілде", "тамыз", "қыркүйек", "қазан", "қараша", "желтоқсан"],
         months_with_day: None,
         months_short: ["қаң", "ақп", "нау", "сәу", "мам", "мау", "шіл", "там", "қыр", "қаз", "қар", "жел"],
+        months_short_with_day: None,
         days: ["жексенбі", "дүйсенбі", "сейсенбі", "сәрсенбі", "бейсенбі", "жұма", "сенбі"],
         days_short: ["жк", "дс", "сс", "ср", "бс", "жм", "сб"],
     },
@@ -182,6 +195,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["януари", "февруари", "март", "април", "май", "юни", "юли", "август", "септември", "октомври", "ноември", "декември"],
         months_with_day: None,
         months_short: ["яну", "фев", "март", "апр", "май", "юни", "юли", "авг", "сеп", "окт", "ное", "дек"],
+        months_short_with_day: None,
         days: ["неделя", "понеделник", "вторник", "сряда", "четвъртък", "петък", "събота"],
         days_short: ["нд", "пн", "вт", "ср", "чт", "пт", "сб"],
     },
@@ -191,6 +205,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["జనవరి", "ఫిబ్రవరి", "మార్చి", "ఏప్రిల్", "మే", "జూన్", "జులై", "ఆగస్టు", "సెప్టెంబర్", "అక్టోబర్", "నవంబర్", "డిసెంబర్"],
         months_with_day: None,
         months_short: ["జన", "ఫిబ్ర", "మార్చి", "ఏప్రి", "మే", "జూన్", "జులై", "ఆగ", "సెప్టెం", "అక్టో", "నవం", "డిసెం"],
+        months_short_with_day: None,
         days: ["ఆదివారం", "సోమవారం", "మంగళవారం", "బుధవారం", "గురువారం", "శుక్రవారం", "శనివారం"],
         days_short: ["ఆది", "సోమ", "మంగళ", "బుధ", "గురు", "శుక్ర", "శని"],
     },
@@ -213,6 +228,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         ],
         months_with_day: None,
         months_short: ["jan.", "febr.", "márc.", "ápr.", "máj.", "jún.", "júl.", "aug.", "szept.", "okt.", "nov.", "dec."],
+        months_short_with_day: None,
         days: ["vasárnap", "hétfő", "kedd", "szerda", "csütörtök", "péntek", "szombat"],
         days_short: ["V", "H", "K", "Sze", "Cs", "P", "Szo"],
     },
@@ -235,6 +251,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
             "грудня",
         ]),
         months_short: ["січ.", "лют.", "бер.", "квіт.", "трав.", "черв.", "лип.", "серп.", "вер.", "жовт.", "лист.", "груд."],
+        months_short_with_day: None,
         days: ["неділя", "понеділок", "вівторок", "середа", "четвер", "пʼятниця", "субота"],
         days_short: ["нд", "пн", "вт", "ср", "чт", "пт", "сб"],
     },
@@ -244,6 +261,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"],
         months_with_day: None,
         months_short: ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"],
+        months_short_with_day: None,
         days: ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"],
         days_short: ["dom", "lun", "mar", "mer", "gio", "ven", "sab"],
     },
@@ -254,6 +272,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: AR_MONTHS,
         months_with_day: None,
         months_short: AR_MONTHS,
+        months_short_with_day: None,
         days: AR_DAYS,
         days_short: AR_DAYS,
     },
@@ -264,6 +283,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: CKB_MONTHS,
         months_with_day: None,
         months_short: CKB_MONTHS,
+        months_short_with_day: None,
         days: CKB_DAYS,
         days_short: CKB_DAYS,
     },
@@ -275,6 +295,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["ژانویه", "فوریه", "مارس", "آوریل", "مه", "ژوئن", "ژوئیه", "اوت", "سپتامبر", "اکتبر", "نوامبر", "دسامبر"],
         months_with_day: None,
         months_short: ["ژانویه", "فوریه", "مارس", "آوریل", "مه", "ژوئن", "ژوئیه", "اوت", "سپتامبر", "اکتبر", "نوامبر", "دسامبر"],
+        months_short_with_day: None,
         days: ["یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنج‌شنبه", "جمعه", "شنبه"],
         days_short: ["یک", "دو", "سه", "چه", "پن", "جم", "شن"],
     },
@@ -283,8 +304,9 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         code: "he",
         name: "עברית",
         months: ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"],
-        months_with_day: None,
+        months_with_day: Some(["בינואר", "בפברואר", "במרץ", "באפריל", "במאי", "ביוני", "ביולי", "באוגוסט", "בספטמבר", "באוקטובר", "בנובמבר", "בדצמבר"]),
         months_short: ["ינו׳", "פבר׳", "מרץ", "אפר׳", "מאי", "יוני", "יולי", "אוג׳", "ספט׳", "אוק׳", "נוב׳", "דצמ׳"],
+        months_short_with_day: Some(["בינו׳", "בפבר׳", "במרץ", "באפר׳", "במאי", "ביוני", "ביולי", "באוג׳", "בספט׳", "באוק׳", "בנוב׳", "בדצמ׳"]),
         days: ["יום ראשון", "יום שני", "יום שלישי", "יום רביעי", "יום חמישי", "יום שישי", "שבת"],
         days_short: ["א׳", "ב׳", "ג׳", "ד׳", "ה׳", "ו׳", "ש׳"],
     },
@@ -307,6 +329,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
             "grudnia",
         ]),
         months_short: ["sty", "lut", "mar", "kwi", "maj", "cze", "lip", "sie", "wrz", "paź", "lis", "gru"],
+        months_short_with_day: None,
         days: ["niedziela", "poniedziałek", "wtorek", "środa", "czwartek", "piątek", "sobota"],
         days_short: ["niedz.", "pon.", "wt.", "śr.", "czw.", "pt.", "sob."],
     },
@@ -329,6 +352,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
             "decembra",
         ]),
         months_short: ["jan.", "feb.", "mar.", "apr.", "maj", "jun.", "jul.", "avg.", "sep.", "okt.", "nov.", "dec."],
+        months_short_with_day: None,
         days: ["nedelja", "ponedeljek", "torek", "sreda", "četrtek", "petek", "sobota"],
         days_short: ["ned.", "pon.", "tor.", "sre.", "čet.", "pet.", "sob."],
     },
@@ -364,6 +388,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
             "Δεκεμβρίου",
         ]),
         months_short: ["Ιαν", "Φεβ", "Μαρ", "Απρ", "Μάι", "Ιουν", "Ιουλ", "Αυγ", "Σεπ", "Οκτ", "Νοε", "Δεκ"],
+        months_short_with_day: None,
         days: ["Κυριακή", "Δευτέρα", "Τρίτη", "Τετάρτη", "Πέμπτη", "Παρασκευή", "Σάββατο"],
         days_short: ["Κυρ", "Δευ", "Τρί", "Τετ", "Πέμ", "Παρ", "Σάβ"],
     },
@@ -373,6 +398,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"],
         months_with_day: None,
         months_short: ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"],
+        months_short_with_day: None,
         days: ["Pazar", "Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi"],
         days_short: ["Paz", "Pzt", "Sal", "Çar", "Per", "Cum", "Cmt"],
     },
@@ -395,6 +421,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
             "gruodžio",
         ]),
         months_short: ["saus.", "vas.", "kov.", "bal.", "geg.", "birž.", "liep.", "rugpj.", "rugs.", "spal.", "lapkr.", "gruod."],
+        months_short_with_day: None,
         days: ["sekmadienis", "pirmadienis", "antradienis", "trečiadienis", "ketvirtadienis", "penktadienis", "šeštadienis"],
         days_short: ["sk", "pr", "an", "tr", "kt", "pn", "št"],
     },
@@ -406,6 +433,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"],
         months_with_day: None,
         months_short: ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"],
+        months_short_with_day: None,
         days: ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"],
         days_short: ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"],
     },
@@ -444,6 +472,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
             "tháng 12",
         ]),
         months_short: ["Thg 1", "Thg 2", "Thg 3", "Thg 4", "Thg 5", "Thg 6", "Thg 7", "Thg 8", "Thg 9", "Thg 10", "Thg 11", "Thg 12"],
+        months_short_with_day: None,
         days: ["Chủ Nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"],
         days_short: ["CN", "T2", "T3", "T4", "T5", "T6", "T7"],
     },
@@ -480,6 +509,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
             "joulukuuta",
         ]),
         months_short: ["tammi", "helmi", "maalis", "huhti", "touko", "kesä", "heinä", "elo", "syys", "loka", "marras", "joulu"],
+        months_short_with_day: None,
         days: ["sunnuntai", "maanantai", "tiistai", "keskiviikko", "torstai", "perjantai", "lauantai"],
         days_short: ["su", "ma", "ti", "ke", "to", "pe", "la"],
     },
@@ -489,6 +519,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["janar", "shkurt", "mars", "prill", "maj", "qershor", "korrik", "gusht", "shtator", "tetor", "nëntor", "dhjetor"],
         months_with_day: None,
         months_short: ["jan", "shk", "mar", "pri", "maj", "qer", "korr", "gush", "sht", "tet", "nën", "dhj"],
+        months_short_with_day: None,
         days: ["e diel", "e hënë", "e martë", "e mërkurë", "e enjte", "e premte", "e shtunë"],
         days_short: ["die", "hën", "mar", "mër", "enj", "pre", "sht"],
     },
@@ -498,6 +529,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"],
         months_with_day: None,
         months_short: ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."],
+        months_short_with_day: None,
         days: ["วันอาทิตย์", "วันจันทร์", "วันอังคาร", "วันพุธ", "วันพฤหัสบดี", "วันศุกร์", "วันเสาร์"],
         days_short: ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."],
     },
@@ -521,6 +553,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
             "de desembre",
         ]),
         months_short: ["gen.", "febr.", "març", "abr.", "maig", "juny", "jul.", "ag.", "set.", "oct.", "nov.", "des."],
+        months_short_with_day: None,
         days: ["diumenge", "dilluns", "dimarts", "dimecres", "dijous", "divendres", "dissabte"],
         days_short: ["dg.", "dl.", "dt.", "dx.", "dj.", "dv.", "ds."],
     },
@@ -544,6 +577,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         ],
         months_with_day: None,
         months_short: ["ian.", "feb.", "mar.", "apr.", "mai", "iun.", "iul.", "aug.", "sept.", "oct.", "nov.", "dec."],
+        months_short_with_day: None,
         days: ["duminică", "luni", "marți", "miercuri", "joi", "vineri", "sâmbătă"],
         days_short: ["dum.", "lun.", "mar.", "mie.", "joi", "vin.", "sâm."],
     },
@@ -553,6 +587,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["ມັງກອນ", "ກຸມພາ", "ມີນາ", "ເມສາ", "ພຶດສະພາ", "ມິຖຸນາ", "ກໍລະກົດ", "ສິງຫາ", "ກັນຍາ", "ຕຸລາ", "ພະຈິກ", "ທັນວາ"],
         months_with_day: None,
         months_short: ["ມ.ກ.", "ກ.ພ.", "ມ.ນ.", "ມ.ສ.", "ພ.ພ.", "ມິ.ຖ.", "ກ.ລ.", "ສ.ຫ.", "ກ.ຍ.", "ຕ.ລ.", "ພ.ຈ.", "ທ.ວ."],
+        months_short_with_day: None,
         days: ["ວັນອາທິດ", "ວັນຈັນ", "ວັນອັງຄານ", "ວັນພຸດ", "ວັນພະຫັດ", "ວັນສຸກ", "ວັນເສົາ"],
         days_short: ["ອາທິດ", "ຈັນ", "ອັງຄານ", "ພຸດ", "ພະຫັດ", "ສຸກ", "ເສົາ"],
     },
@@ -563,6 +598,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["जनवरी", "फ़रवरी", "मार्च", "अप्रैल", "मई", "जून", "जुलाई", "अगस्त", "सितंबर", "अक्तूबर", "नवंबर", "दिसंबर"],
         months_with_day: None,
         months_short: ["जन॰", "फ़र॰", "मार्च", "अप्रैल", "मई", "जून", "जुला॰", "अग॰", "सित॰", "अक्तू॰", "नव॰", "दिस॰"],
+        months_short_with_day: None,
         days: ["रविवार", "सोमवार", "मंगलवार", "बुधवार", "गुरुवार", "शुक्रवार", "शनिवार"],
         days_short: ["रवि", "सोम", "मंगल", "बुध", "गुरु", "शुक्र", "शनि"],
     },
@@ -573,6 +609,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"],
         months_with_day: None,
         months_short: ["1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"],
+        months_short_with_day: None,
         days: ["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"],
         days_short: ["일", "월", "화", "수", "목", "금", "토"],
     },
@@ -582,6 +619,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["januar", "februar", "mars", "april", "mai", "juni", "juli", "august", "september", "oktober", "november", "desember"],
         months_with_day: None,
         months_short: ["jan.", "feb.", "mar.", "apr.", "mai", "jun.", "jul.", "aug.", "sep.", "okt.", "nov.", "des."],
+        months_short_with_day: None,
         days: ["søndag", "mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag"],
         days_short: ["søn.", "man.", "tir.", "ons.", "tor.", "fre.", "lør."],
     },
@@ -670,7 +708,11 @@ pub fn format_day(fmt: &str, (y, m, d): (i64, u32, u32), lang: &DateLanguage) ->
             ('y', 4..) => out.push_str(&format!("{:04}", y.clamp(0, 9999))),
             ('y', _) => out.push_str(&format!("{:02}", y.rem_euclid(100))),
             ('m', 3..) => {
-                let names = if n >= 4 { lang.months_with_day.filter(|_| with_day).unwrap_or(lang.months) } else { lang.months_short };
+                let names = if n >= 4 {
+                    lang.months_with_day.filter(|_| with_day).unwrap_or(lang.months)
+                } else {
+                    lang.months_short_with_day.filter(|_| with_day).unwrap_or(lang.months_short)
+                };
                 match month.and_then(|i| names.get(i)) {
                     Some(name) => out.push_str(name),
                     None => out.push_str(&m.to_string()),
@@ -776,6 +818,16 @@ mod tests {
 
     fn in_lang(fmt: &str, code: &str) -> String {
         format_day(fmt, DAY, date_language(code).unwrap())
+    }
+
+    #[test]
+    fn hebrew_month_names_use_prefixed_forms_after_a_day() {
+        let lang = date_language("he").unwrap();
+        let day = (2026, 4, 8);
+        assert_eq!(format_day("d mmmm yyyy", day, lang), "8 באפריל 2026");
+        assert_eq!(format_day("d mmm yyyy", day, lang), "8 באפר׳ 2026");
+        assert_eq!(format_day("mmmm", day, lang), "אפריל");
+        assert_eq!(format_day("mmm", day, lang), "אפר׳");
     }
 
     #[test]
