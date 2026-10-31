@@ -5,6 +5,7 @@ use skrifa::instance::{LocationRef, Size};
 use skrifa::metrics::GlyphMetrics;
 use skrifa::outline::{DrawSettings, Engine, HintingInstance, HintingOptions, Target};
 use skrifa::raw::TableProvider;
+use skrifa::raw::model::pen::NullPen;
 use skrifa::raw::ps::cff::{CffFontRef, Subfont, charset::Charset, v1::Cff};
 use skrifa::raw::ps::string::Sid;
 use skrifa::raw::ps::type1::Type1Font;
@@ -119,6 +120,18 @@ impl CffFontBlob {
             .draw(subfont, glyph, &[], Some(UNITS_PER_EM), &mut path);
 
         path.take()
+    }
+
+    /// PdfCraft patch (see vendor/README.md hayro-interpret (67)): the glyph's own advance from
+    /// its charstring, in thousandths of an em like [`Self::outline_glyph`], or `None` when the
+    /// charstring can't be read or gives no usable width.
+    pub(crate) fn advance_width(&self, glyph: GlyphId) -> Option<f32> {
+        let subfont = self.subfont(glyph)?;
+        self.font()
+            .draw(subfont, glyph, &[], Some(UNITS_PER_EM), &mut NullPen)
+            .ok()
+            .flatten()
+            .filter(|width| width.is_finite() && *width > 0.0)
     }
 
     pub(crate) fn glyph_names(&self) -> Vec<(GlyphId, String)> {
