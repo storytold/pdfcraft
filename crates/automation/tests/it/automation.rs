@@ -4707,6 +4707,39 @@ fn adding_content_through_tools() {
     assert!(matches!(a.call("content_delete", &json!({ "doc": doc, "page": 1, "index": 5 })), Err(ToolError::Failed(_))));
 }
 
+/// Added text can be underlined, and it reads back (#4236).
+#[test]
+fn added_text_underline_through_tools() {
+    let dir = workdir("content-underline");
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 40, 20);
+        enc.set_color(png::ColorType::Rgb);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&[200u8; 2400]).unwrap();
+    }
+    std::fs::write(dir.join("logo.png"), png).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "Title", "at": [20, 20], "underline": true }));
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "Body", "at": [20, 60] }));
+    ok(&mut a, "page_add_image", json!({ "doc": doc, "page": 1, "path": "logo.png", "rect": [100, 200, 180, 240] }));
+    let flags = |a: &mut Automation| -> Vec<Option<bool>> {
+        let list = ok(a, "content_list", json!({ "doc": doc }));
+        list["items"].as_array().unwrap().iter().map(|i| i["underline"].as_bool()).collect()
+    };
+    assert_eq!(flags(&mut a), [Some(true), Some(false), None]);
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 1, "underline": false }));
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 2, "underline": true }));
+    assert_eq!(flags(&mut a), [Some(false), Some(true), None]);
+    assert!(
+        matches!(a.call("content_update", &json!({ "doc": doc, "page": 1, "index": 3, "underline": true })), Err(ToolError::InvalidArgs(_))),
+        "pictures aren't underlined"
+    );
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(flags(&mut a), [Some(false), Some(false), None]);
+}
+
 /// Edit ▸ Copy and Paste headlessly (#2636): an added text box or image, as it is, onto its own
 /// page beside it, onto a point, and into another document.
 #[test]

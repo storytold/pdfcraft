@@ -7540,6 +7540,175 @@ fn added_text_character_spacing_is_drawn_and_reopens() {
     assert_eq!(tc, [false, true], "{page:?}");
 }
 
+/// The (x, y, width, height) of every `re f` rectangle a content stream draws.
+fn rules(stream: &str) -> Vec<[f64; 4]> {
+    stream
+        .lines()
+        .filter_map(|l| l.strip_suffix(" re f"))
+        .filter_map(|l| {
+            let v: Vec<f64> = l.split(' ').filter_map(|x| x.parse().ok()).collect();
+            <[f64; 4]>::try_from(v).ok()
+        })
+        .collect()
+}
+
+/// Underlined added text (#4236) is a rule under each line in the text's colour, kept in
+/// `/PCAdded` so the item reopens underlined; an item written without it reads not underlined.
+#[test]
+fn added_text_underline_is_drawn_and_reopens() {
+    let mut doc = fixture();
+    let plain = AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "Approved\nSigned off".into(), size: 10.0, ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(plain.clone())).unwrap();
+    add_content(&mut doc, 0, &Content::Text(AddedText { underline: true, color: [1.0, 0.0, 0.0], ..plain.clone() })).unwrap();
+    let doc = reopen(&doc);
+    let flags: Vec<bool> = list_added(&doc).iter().map(|a| if let Content::Text(t) = &a.content { t.underline } else { false }).collect();
+    assert_eq!(flags, [false, true]);
+    let page = streams(&doc, 0);
+    let items: Vec<&String> = page.iter().filter(|s| s.contains("(Approved) Tj")).collect();
+    assert_eq!(items.len(), 2, "{page:?}");
+    assert!(rules(items[0]).is_empty(), "no rule without underline: {}", items[0]);
+    let under = rules(items[1]);
+    assert_eq!(under.len(), 2, "a rule per line: {}", items[1]);
+    // Each as wide as its line, from the box's left edge, under the baseline, and 6 % of the size thick.
+    let widths = [
+        added::text_width(&AddedText { text: "Approved".into(), ..plain.clone() }),
+        added::text_width(&AddedText { text: "Signed off".into(), ..plain.clone() }),
+    ];
+    for (rule, width) in under.iter().zip(widths) {
+        assert!((rule[0] - 72.0).abs() < 1e-6 && (rule[2] - width).abs() < 1e-6 && (rule[3] - 0.6).abs() < 1e-6, "{rule:?} for a line {width} wide");
+    }
+    // The first baseline is 0.95 em below the box's top; the rule sits beneath it, the next line 1.2 em lower.
+    assert!(under[0][1] < 700.0 - 9.5 && under[0][1] > 700.0 - 12.0, "{under:?}");
+    assert!((under[0][1] - under[1][1] - 12.0).abs() < 1e-6, "{under:?}");
+    assert!(items[1].contains("1 0 0 rg"), "in the text's colour: {}", items[1]);
+}
+
+/// The rule ends at the last letter: not at the spacing after it, not under trailing spaces.
+#[test]
+fn added_text_underline_stops_at_the_last_letter() {
+    let mut doc = fixture();
+    let text = AddedText {
+        rect: [72.0, 600.0, 400.0, 700.0],
+        text: "Approved  ".into(),
+        size: 10.0,
+        char_spacing: 2.0,
+        underline: true,
+        ..AddedText::default()
+    };
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    let page = streams(&reopen(&doc), 0);
+    let item = page.iter().find(|s| s.contains("(Approved")).unwrap();
+    let rule = rules(item);
+    let bare = added::text_width(&AddedText { text: "Approved".into(), ..text });
+    assert_eq!(rule.len(), 1, "{item}");
+    assert!((rule[0][2] - (bare - 2.0)).abs() < 1e-6, "{:?}: the letters and the spacing between them, {bare} - 2", rule[0]);
+}
+
+/// The rule runs under the letters only: not under a tab (or space) after the last one, and a line
+/// of white space alone has none. (Wrapping drops the white space that would start a line, so a
+/// rule never has to start later than the box's edge.)
+#[test]
+fn added_text_underline_skips_white_space_at_the_ends_of_a_line() {
+    let mut doc = fixture();
+    let text = AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "Hi\n\t\nHi\t".into(), size: 10.0, underline: true, ..AddedText::default() };
+    assert_eq!(added::lines(&text), ["Hi", "\t", "Hi\t"], "the lines as drawn");
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    let page = streams(&reopen(&doc), 0);
+    let item = page.iter().find(|s| s.contains("/PCFHelvetica") && s.contains("(Hi")).unwrap();
+    let under = rules(item);
+    assert_eq!(under.len(), 2, "no rule for the tab-only line: {item}");
+    let hi = added::text_width(&AddedText { text: "Hi".into(), ..text.clone() });
+    for rule in &under {
+        assert!((rule[0] - 72.0).abs() < 1e-6 && (rule[2] - hi).abs() < 1e-6, "as wide as \"Hi\", tab or not: {under:?}");
+    }
+}
+
+/// A justified line stretches its tabs as well as its spaces (WinAnsi writes a tab as a space, and
+/// the PDF's word spacing applies to it), so its rule still reaches the last letter, which sits
+/// at the box's edge.
+#[test]
+fn a_justified_underline_counts_tabs_as_the_spaces_they_are_drawn_as() {
+    let mut doc = fixture();
+    // One paragraph that wraps, so its first row is stretched to the box's width.
+    let text = AddedText {
+        rect: [72.0, 600.0, 140.0, 700.0],
+        text: "a\tb c a\tb c a\tb c a\tb c".into(),
+        size: 10.0,
+        align: Align::Justify,
+        underline: true,
+        ..AddedText::default()
+    };
+    let lines = added::lines(&text);
+    assert!(lines.len() >= 2 && lines[0].contains('\t'), "a tab in the stretched first row: {lines:?}");
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    let page = streams(&reopen(&doc), 0);
+    let item = page.iter().find(|s| s.contains("/PCFHelvetica")).unwrap();
+    let under = rules(item);
+    assert_eq!(under.len(), lines.len(), "{item}");
+    assert!((under[0][0] + under[0][2] - 140.0).abs() < 1e-6, "the first row's rule ends at its last letter, at the box's right edge: {under:?}");
+    // The word spacing shares the slack between its tabs and spaces: every one is a stretched space.
+    let width = added::text_width(&AddedText { text: lines[0].clone(), ..text });
+    let spaces = lines[0].chars().filter(|c| matches!(c, ' ' | '\t')).count();
+    let tw: f64 = item.split(" Tw ").next().unwrap().rsplit(' ').next().unwrap().parse().unwrap();
+    assert!((tw - (68.0 - width) / spaces as f64).abs() < 1e-6, "Tw {tw} for a row {width} wide with {spaces} spaces in a 68 box: {item}");
+}
+
+/// A character spacing so negative that the pen moves left still underlines the glyphs: from the
+/// leftmost to the rightmost reach, not from the start to a computed end left of it.
+#[test]
+fn a_negative_character_spacing_still_has_an_underline_under_its_glyphs() {
+    let mut doc = fixture();
+    let text =
+        AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "iiii".into(), size: 8.0, char_spacing: -3.0, underline: true, ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    let page = streams(&reopen(&doc), 0);
+    let item = page.iter().find(|s| s.contains("/PCFHelvetica")).unwrap();
+    let under = rules(item);
+    assert_eq!(under.len(), 1, "a rule, though the pen moves left: {item}");
+    // Each "i" is `w` wide and the pen steps `w - 3` (left): the glyphs reach from 3 steps left of
+    // the start to one glyph right of it.
+    let w = added::text_width(&AddedText { text: "i".into(), char_spacing: 0.0, ..text });
+    let left = 3.0 * (3.0 - w);
+    assert!((under[0][0] - (72.0 - left)).abs() < 1e-6 && (under[0][2] - (left + w)).abs() < 1e-6, "{under:?} for glyphs {w} wide");
+}
+
+/// Right-aligned, centred and justified text carry the rule where the text is, and an empty line
+/// has none.
+#[test]
+fn added_text_underline_follows_the_alignment() {
+    let mut doc = fixture();
+    let base = AddedText { rect: [100.0, 600.0, 300.0, 700.0], text: "Hi\n\nThere".into(), size: 10.0, underline: true, ..AddedText::default() };
+    for align in [Align::Left, Align::Center, Align::Right] {
+        add_content(&mut doc, 0, &Content::Text(AddedText { align, ..base.clone() })).unwrap();
+    }
+    let page = streams(&reopen(&doc), 0);
+    let items: Vec<&String> = page.iter().filter(|s| s.contains("(Hi) Tj") && s.contains("/PCFHelvetica")).collect();
+    assert_eq!(items.len(), 3, "{page:?}");
+    let hi = added::text_width(&AddedText { text: "Hi".into(), ..base.clone() });
+    let lefts: Vec<f64> = items.iter().map(|s| rules(s)[0][0]).collect();
+    assert!((lefts[0] - 100.0).abs() < 1e-6, "{lefts:?}");
+    assert!((lefts[1] - (100.0 + (200.0 - hi) / 2.0)).abs() < 1e-6, "{lefts:?}");
+    assert!((lefts[2] - (300.0 - hi)).abs() < 1e-6, "{lefts:?}");
+    assert!(items.iter().all(|s| rules(s).len() == 2), "two rules for three lines, the empty one has none");
+}
+
+/// Shaped (Arabic) lines are underlined too, from where the first glyph is to where the last ends.
+#[test]
+fn added_arabic_text_underline_is_drawn_when_the_font_is_built_in() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        eprintln!("skipping: built without a craft-fonts Arab face (set CRAFT_FONTS_DIR)");
+        return;
+    }
+    let mut doc = fixture();
+    let text = AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "مرحبا World".into(), size: 14.0, underline: true, ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(text)).unwrap();
+    let page = streams(&reopen(&doc), 0);
+    let item = page.iter().find(|s| s.contains("/PCAr")).unwrap();
+    let rule = rules(item);
+    assert_eq!(rule.len(), 1, "{item}");
+    assert!(rule[0][0] >= 72.0 - 1e-6 && rule[0][2] > 20.0 && rule[0][0] + rule[0][2] <= 400.0, "{:?}", rule[0]);
+}
+
 /// Spacing widens every measure the layout takes: the widest line and wrapping.
 #[test]
 fn added_text_character_spacing_widens_its_layout() {

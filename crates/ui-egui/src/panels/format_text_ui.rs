@@ -2,7 +2,7 @@
 //! alignment; bold, italic, underline, superscript and subscript; line and paragraph spacing;
 //! horizontal scale and character spacing. One panel serves a paragraph being edited (with the
 //! fonts already on its page and the spacing controls) and added text (the standard families,
-//! size, colour, style, alignment and character spacing). What PdfCraft can't apply yet (lists,
+//! size, colour, style with underline, alignment and character spacing). What PdfCraft can't apply yet (lists,
 //! superscript and subscript, paragraph spacing, or line spacing and scale for added text) is shown
 //! disabled and says so.
 //!
@@ -239,7 +239,11 @@ pub(crate) fn panel(
                     e.underline = !e.underline;
                 }
             }
-            None => planned(ui, "underline", tl!("Underline")),
+            None => {
+                if icons::button(ui, "underline", 30.0, look.underline, tl!("Underline")).clicked() {
+                    look.underline = !look.underline;
+                }
+            }
         }
         planned(ui, "superscript", tl!("Superscript"));
         planned(ui, "subscript", tl!("Subscript"));

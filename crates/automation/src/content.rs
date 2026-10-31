@@ -49,6 +49,9 @@ fn style(a: &Args, t: &mut AddedText) -> Result<()> {
     if let Some(i) = a.opt_bool("italic")? {
         t.italic = i;
     }
+    if let Some(u) = a.opt_bool("underline")? {
+        t.underline = u;
+    }
     if let Some(c) = a.opt_str("color")? {
         t.color = parse_color(c)?;
     }
@@ -122,6 +125,7 @@ impl Automation {
                         v["size"] = json!(t.size);
                         v["bold"] = json!(t.bold);
                         v["italic"] = json!(t.italic);
+                        v["underline"] = json!(t.underline);
                         v["char_spacing"] = json!(t.char_spacing);
                     }
                     AddedContent::Image(_) => v["type"] = json!("image"),
@@ -204,8 +208,8 @@ impl Automation {
                 if a.get("text").is_some() {
                     return Err(bad("images have no text"));
                 }
-                if ["font", "size", "bold", "italic", "color", "align", "aligns", "char_spacing"].iter().any(|k| a.get(k).is_some()) {
-                    return Err(bad("font, size, bold, italic, color, align, aligns and char_spacing apply to text"));
+                if ["font", "size", "bold", "italic", "underline", "color", "align", "aligns", "char_spacing"].iter().any(|k| a.get(k).is_some()) {
+                    return Err(bad("font, size, bold, italic, underline, color, align, aligns and char_spacing apply to text"));
                 }
                 if let Some(deg) = a.opt_int("rotate")? {
                     if deg.rem_euclid(90) != 0 {

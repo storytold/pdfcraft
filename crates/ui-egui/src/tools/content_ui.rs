@@ -781,7 +781,7 @@ fn aligned_galley(
 ) -> std::sync::Arc<egui::Galley> {
     use pdfcraft_engine::TextAlign;
     let job = |text: &str, align: TextAlign| {
-        let mut job = spaced_job(text, font, color, letter_spacing, wrap, egui::Align::Min);
+        let mut job = spaced_job(text, font, color, letter_spacing, style.underline, wrap, egui::Align::Min);
         job.justify = align == TextAlign::Justify;
         job
     };
@@ -815,7 +815,7 @@ fn aligned_galley(
         }
         start = end + 1;
     }
-    let whole = std::sync::Arc::new(spaced_job(text, font, color, letter_spacing, wrap, egui::Align::Min));
+    let whole = std::sync::Arc::new(spaced_job(text, font, color, letter_spacing, style.underline, wrap, egui::Align::Min));
     std::sync::Arc::new(egui::Galley::concat(whole, &galleys, ui.ctx().pixels_per_point()))
 }
 
@@ -1127,11 +1127,23 @@ pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::
 /// The editor's layout of added text with character spacing. The page puts the spacing after every
 /// character, the last of a line included (`latin_width`), while epaint puts it only between
 /// characters: the wrap width gives up one spacing so both break lines at the same place.
-fn spaced_job(text: &str, font: &egui::FontId, color: Color32, letter_spacing: f32, wrap_width: f32, halign: egui::Align) -> egui::text::LayoutJob {
-    let format = egui::TextFormat { font_id: font.clone(), color, extra_letter_spacing: letter_spacing, ..Default::default() };
+fn spaced_job(
+    text: &str,
+    font: &egui::FontId,
+    color: Color32,
+    letter_spacing: f32,
+    underline: bool,
+    wrap_width: f32,
+    halign: egui::Align,
+) -> egui::text::LayoutJob {
+    let underline = if underline { Stroke::new(1.0, color) } else { Stroke::NONE };
+    let format = egui::TextFormat { font_id: font.clone(), color, extra_letter_spacing: letter_spacing, underline, ..Default::default() };
     let mut job = egui::text::LayoutJob::single_section(text.to_owned(), format);
     job.wrap.max_width = (wrap_width - letter_spacing).max(0.0);
     job.halign = halign;
+    // As the text field's own layout does: the page counts trailing spaces when it aligns a line,
+    // so a centred or right-aligned line must too, or the editor shifts it.
+    job.keep_trailing_whitespace = true;
     job
 }
 
@@ -1222,7 +1234,7 @@ mod tests {
             let mut h = egui_kittest::Harness::new_ui_state(
                 move |ui, n: &mut usize| {
                     let font = egui::FontId::proportional(14.0);
-                    let job = spaced_job("AAAA BBBB", &font, Color32::BLACK, 10.0, wrap, egui::Align::Min);
+                    let job = spaced_job("AAAA BBBB", &font, Color32::BLACK, 10.0, false, wrap, egui::Align::Min);
                     *n = ui.fonts_mut(|f| f.layout_job(job)).rows.len();
                 },
                 n,
@@ -1239,7 +1251,7 @@ mod tests {
             let mut h = egui_kittest::Harness::new_ui_state(
                 |ui, w: &mut f32| {
                     let font = egui::FontId::proportional(14.0);
-                    let job = spaced_job("AAAA BBBB", &font, Color32::BLACK, 10.0, f32::INFINITY, egui::Align::Min);
+                    let job = spaced_job("AAAA BBBB", &font, Color32::BLACK, 10.0, false, f32::INFINITY, egui::Align::Min);
                     *w = ui.fonts_mut(|f| f.layout_job(job)).rect.width();
                 },
                 w,
@@ -1251,5 +1263,29 @@ mod tests {
         // Page width = width + 10 (spacing after the last character) > width + 5: the page wraps.
         assert_eq!(rows(width + 5.0), 2, "the saved text wraps here, so the editor must too");
         assert_eq!(rows(width + 10.0), 1, "and keeps the line when the spacing fits");
+    }
+
+    /// #4236: the editor counts the spaces ending a line, as the saved page does when it centres or
+    /// right-aligns it: "Hi  " is as wide as the page sees it, not as "Hi".
+    #[test]
+    fn editor_lines_keep_their_trailing_spaces_when_aligned() {
+        let width = |text: &'static str, halign: egui::Align| {
+            let mut w = 0.0;
+            let mut h = egui_kittest::Harness::new_ui_state(
+                move |ui, w: &mut f32| {
+                    let font = egui::FontId::proportional(14.0);
+                    let job = spaced_job(text, &font, Color32::BLACK, 0.0, true, 300.0, halign);
+                    *w = ui.fonts_mut(|f| f.layout_job(job)).rect.width();
+                },
+                w,
+            );
+            h.run();
+            w = *h.state();
+            w
+        };
+        let (bare, padded) = (width("Hi", egui::Align::Min), width("Hi  ", egui::Align::Min));
+        assert!(padded > bare + 1.0, "the spaces are part of the line: {bare} -> {padded}");
+        let job = spaced_job("Hi  ", &egui::FontId::proportional(14.0), Color32::BLACK, 0.0, true, 300.0, egui::Align::Center);
+        assert!(job.keep_trailing_whitespace);
     }
 }
