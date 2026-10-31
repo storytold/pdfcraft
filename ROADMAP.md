@@ -1,5 +1,6 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M6, PR #4166/#4088: integrate main f137a289 at 0.16.1; retain automatic-field Print suppression, explicit button/console printing and document-error provenance; 761 scoped tests and verification gates passed; 13-step CLI exercise and render inspection passed; existing warnings retained; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
@@ -13,6 +14,9 @@
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
+> **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M6, PR #4166/#4088: preserve automatic-field Print suppression, explicit script printing and document-error provenance on upstream 0.15; retain the integrated craft-libs revision; estimates unchanged)
+>
+>
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M14 localization current state: Arabic logical catalog, explicit RTL label direction and mirrored stock chrome; native/browser RTL workflows unqualified. Native release Hans face via LXGW WenKai Lite; estimates unchanged)
@@ -213,6 +217,10 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-10-31 (M6, PR #4166/#4088 integration):** Integrated main f137a289 (0.16.1), preserving upstream progress entries and automatic-field Print suppression with its console diagnostic. ShowPanel/SaveAs filtering, explicit button/console printing, field effects and document-error provenance remain intact, together with all three engine regressions and the headless automation regression. Manifests, lockfile and CI match incoming main. Windows x64 / Rust 1.95 validation: 761 engine/automation tests passed, zero failed and four existing ignored; formatting, scoped all-target Clippy with -D warnings, layers/assets/parity and the engine/automation WebAssembly check passed. A fresh CLI build and the 13-step synthetic form exercise passed; the inspected render shows Qty=4 and Total=8, and explicit button/console Print requests are retained. Main's 100 headless parity notices, five renderer WebAssembly warnings and three optional egui patch notices remain. Estimates unchanged.
+
+- **2026-10-29 (M6, PR #4166/#4088 integration):** Retained automatic-field Print suppression, ShowPanel/SaveAs filtering, explicit button/console printing and document-error provenance while integrating upstream 0.15. All three engine regressions and the headless regression remain in their current test modules, with matching parity evidence. Dependency manifests retain main's integrated craft-libs revision, which includes #366. Estimates unchanged.
+
 - **2026-10-31 (M2, PR #4172 review):** Added same-machine pixel oracles for GBK Song, Hei, Kai and FangSong, including all four subset-prefixed Founder aliases. Reference PDFs use explicit Unicode mappings and independently selected installed faces; font data and rasters remain in memory. All eight cases ran; wrong-glyph and wrong-family production mutations each failed the new assertion and were restored. Validation: 422 renderer unit tests, renderer all-target Clippy with -D warnings, formatting, layers/assets/parity and renderer WASM checks passed; existing optional-patch/WASM warnings and parity notes remain. Estimates unchanged.
 
 - **2026-10-31 (M2, PR #4172):** Integrated main fa5f9f8c, retaining both roadmap histories and raster regression groups. Restored display_config and thumbnail_config imports after the upstream explicit-import migration. Validation: 422 renderer unit tests, engine/UI all-target checks, scoped all-target Clippy with -D warnings, formatting, layers, assets, parity and renderer/engine WASM checks passed. Existing optional-patch/WASM warnings and parity notes remain; no full engine/UI runtime test rerun. Display-only font policy and estimates unchanged.
@@ -255,6 +263,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
   The regression checks two distinct appearances, inherited resources, print/reopen pixels and unchanged source data.
   Estimates unchanged.
 - **2026-10-21 (M3, window resize and move on Wayland):** With PdfCraft's own title bar on GNOME/Wayland, a second resize by a window edge, or a second move by the empty tab strip, works straight after the first; it waited for a click inside the window, because the compositor keeps the button's release from egui. A unit test covers the release given back; checked by hand in a test build. Estimates unchanged.
+- **2026-10-22 (M6, #4088):** Automatic AcroForm Keystroke, Validate, Calculate and Format scripts cannot open the print dialog; ignored requests are reported in the JavaScript console. Explicit button and console printing remain available, including when they trigger automatic calculations. Engine and headless automation regressions cover the boundary. Estimates unchanged.
+
 - **2026-10-24 (M5, move preview):** A comment being moved is drawn where it goes while it is dragged (a rectangle or oval showed only its blue frame): the comment is rendered alone once as the drag starts and laid over the page, which shows it where it was until the move is applied. Engine `Document::comment_layer`; synthetic engine and UI regressions. Estimates unchanged.
 - **2026-10-22 (M4, #3916 partial):** Document edits and Undo/Redo cancel an Organize page drag. Pointer-release regressions check exact page order and save/reopen.
 - **2026-10-22 (M10, #3752 paper):** CUPS jobs ask for the chosen paper in every size. The 13 sizes the Print dialog sent no paper for (A6, A0–A2, ARCH, ANSI C–E) use PWG 5101.1 names, checked against a synthetic PPD with `cupsfilter`, and `doc_print` to a printer sends the paper too. The macOS tray half (Auto Select instead of the PPD's default tray) is a craft-print change that needs a pin bump here. Estimates unchanged.
@@ -719,6 +729,10 @@ Newest first: the date, what moved, and the new overall estimate.
 - **2026-10-10 (UI docking):** Tools and Inspector can be regrouped, split beside the PDF, or floated inside the app window. Existing toggles reopen panels at their saved locations; UI commands arrange/reset panels, and preferences retain their layout. Read/full-screen modes preserve the focused document view. No milestone percentage change.
 
 ## Revision history
+
+**2026-10-31 · patch:** M6/PR #4166 integrated main f137a289 (0.16.1), preserving both roadmap histories. Automatic Keystroke, Validate, Calculate and Format scripts still suppress Print alongside ShowPanel/SaveAs; explicit button and console Print requests, field effects and document-error provenance are retained. The three engine regressions and headless automation regression remain in their current modules. Manifests, lockfile and CI match incoming main. Windows x64 / Rust 1.95 validation: 761 engine/automation tests passed, zero failed and four existing ignored; formatting, scoped all-target Clippy with -D warnings, layers/assets/parity and the engine/automation WebAssembly check passed. A fresh CLI build and the 13-step synthetic form exercise passed; the inspected render shows Qty=4 and Total=8, and explicit button/console Print requests are retained. Main's 100 headless parity notices, five renderer WebAssembly warnings and three optional egui patch notices remain. Estimates unchanged.
+
+**2026-10-29 · minor:** M6/PR #4166 refreshed against upstream 0.15. Automatic field scripts still suppress Print with a console diagnostic alongside ShowPanel/SaveAs filtering, and explicit button/console scripts retain their requests and document-error provenance. The three engine regressions, headless regression and parity evidence remain in the current modules. Dependency manifests retain main's integrated craft-libs revision, including #366. Estimates unchanged.
 
 **2026-10-25 · minor:** M14 localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build has no Hans face. Estimates unchanged.
 

@@ -81,6 +81,11 @@ family (`sign`, `sign_with_timestamp`, `timestamp_document`, `embed_ltv`).
 | `js` | The bridge to `pdfcraft-js`. `forms` never depends on `js` directly; the engine injects it, so a build without JavaScript is possible |
 | `xfa`, `ocr`, `compare`, `export` | Façades over the L3/L4 crates of the same names |
 
+AcroForm Keystroke, Validate, Calculate and Format scripts run automatically. Their Print,
+ShowPanel and SaveAs requests are ignored with a JavaScript console diagnostic; field values,
+alerts and other requests are retained. Explicit button and console scripts can still request
+printing (#4088).
+
 ## Not done here
 
 - **Rendering is still borrowed.** `pdfcraft-render` wraps `hayro` and inspects through `lopdf`
