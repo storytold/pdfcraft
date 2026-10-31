@@ -347,6 +347,49 @@ pub enum Edit {
     MarkTagArtifact {
         object: pdfcraft_cos::ObjRef,
     },
+    /// Tags panel ▸ New Tag: an empty tag of `kind` at `destination` (an untagged document gets
+    /// a tag tree first).
+    NewTag {
+        kind: String,
+        destination: a11y::Destination,
+    },
+    /// Tags panel ▸ Delete Tag. With `keep_contents` its children move up into its place;
+    /// otherwise everything below it leaves the tree and its content stays on the page, untagged.
+    DeleteTag {
+        object: pdfcraft_cos::ObjRef,
+        keep_contents: bool,
+    },
+    /// Tags panel ▸ drag a tag, or the Reading Order tool's order list: move a tag (with
+    /// everything below it) under any parent.
+    MoveTagTo {
+        object: pdfcraft_cos::ObjRef,
+        destination: a11y::Destination,
+    },
+    /// Tags panel ▸ Change Tag to Artifact: everything below the tag becomes an artifact and the
+    /// tag leaves the tree.
+    TagToArtifact {
+        object: pdfcraft_cos::ObjRef,
+    },
+    /// Reading Order tool, or Tags panel ▸ Create Tag from Selection: tag content of `page`
+    /// (0-based) as `kind`, optionally with alternate text, at `destination` (else next to the
+    /// tags of neighbouring content).
+    TagContent {
+        page: usize,
+        selection: a11y::Selection,
+        kind: String,
+        alt: Option<String>,
+        destination: Option<a11y::Destination>,
+    },
+    /// Reading Order tool ▸ Background/Artifact: content of `page` becomes an artifact.
+    ContentToArtifact {
+        page: usize,
+        selection: a11y::Selection,
+    },
+    /// Tags panel ▸ Tag Annotation: a tag for an annotation of `page`.
+    TagAnnotation {
+        page: usize,
+        annotation: pdfcraft_cos::ObjRef,
+    },
     /// Document JavaScripts: add, replace (`script`) or remove (`None`) the document-level
     /// script `name`.
     SetDocumentScript {

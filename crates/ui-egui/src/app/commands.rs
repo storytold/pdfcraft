@@ -164,6 +164,15 @@ impl PdfCraftApp {
             }
         }
     }
+    /// The tag selected in the Tags panel, as `(object number, generation)`.
+    pub fn selected_tag(&self) -> Option<(u32, u16)> {
+        self.tags_state.selected_tag().map(|r| (r.num, r.generation))
+    }
+
+    /// The content the Reading Order tool has selected: its page (0-based) and unit indices.
+    pub fn reading_order_selection(&self) -> (Option<usize>, Vec<usize>) {
+        (self.reading_order.page, self.reading_order.units.iter().copied().collect())
+    }
 
     /// Opens a right panel, or closes it with `None`, because the user chose to. Closing Comments
     /// keeps comment tools from reopening it; opening it again lets them (#225). A choice made in

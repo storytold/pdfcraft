@@ -2471,7 +2471,6 @@ animation effects	Off	Kapalı
 	Found {n} untagged content problems.	{n} etiketlenmemiş içerik sorunu bulundu.
 	Tag form fields	Form alanlarını etiketle
 	Mark as artifact	Yapıt olarak işaretle
-	Remove this leaf tag from reading order and mark its direct content as an artifact	Bu yaprak etiketini okuma sırasından kaldırın ve doğrudan içeriğini yapıt olarak işaretleyin
 	Mark content as artifact	İçeriği yapıt olarak işaretle
 	Word count	Sözcük sayısı
 	Current page only	Yalnızca geçerli sayfa
@@ -2574,3 +2573,15 @@ animation effects	Off	Kapalı
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Bu yanıtın seçenekleri
 	Export value	Dışa aktarma değeri
+	Highlight content	İçeriği vurgula
+	Mark everything in this tag as an artifact and remove the tag from reading order	Bu etiketteki her şeyi yapıt olarak işaretle ve etiketi okuma sırasından kaldır
+	Move into previous tag	Önceki etiketin içine taşı
+	Move out of parent tag	Üst etiketin dışına taşı
+	New tag	Yeni etiket
+	Delete tag	Etiketi sil
+	Remove tag, keep its contents	Etiketi kaldır, içeriğini koru
+	Draw a rectangle on the page or click content, then choose its tag.	Sayfada bir dikdörtgen çizin veya içeriğe tıklayın, ardından etiketini seçin.
+	Tag annotation	Açıklamayı etiketle
+	Untagged content	Etiketlenmemiş içerik
+	Annotation	Açıklama
+	Tag content as {type}	İçeriği {type} olarak etiketle

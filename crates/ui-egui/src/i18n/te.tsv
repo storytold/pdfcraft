@@ -2384,7 +2384,6 @@ animation effects	Off	ఆఫ్
 	Found {n} untagged content problems.	ట్యాగ్ చేయని కంటెంట్‌లో {n} సమస్యలు కనుగొనబడ్డాయి.
 	Tag form fields	ఫారమ్ ఫీల్డ్‌లకు ట్యాగ్‌లు జోడించు
 	Mark as artifact	ఆర్టిఫాక్ట్‌గా గుర్తించు
-	Remove this leaf tag from reading order and mark its direct content as an artifact	ఈ లీఫ్ ట్యాగ్‌ను పఠన క్రమం నుంచి తీసివేసి, దాని ప్రత్యక్ష కంటెంట్‌ను ఆర్టిఫాక్ట్‌గా గుర్తించండి
 	Mark content as artifact	కంటెంట్‌ను ఆర్టిఫాక్ట్‌గా గుర్తించు
 	Word count	పదాల లెక్క
 	Current page only	ప్రస్తుత పేజీ మాత్రమే
@@ -2487,3 +2486,15 @@ animation effects	Off	ఆఫ్
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ఈ ప్రత్యుత్తరం ఎంపికలు
 	Export value	ఎగుమతి విలువ
+	Highlight content	కంటెంట్‌ను హైలైట్ చేయి
+	Mark everything in this tag as an artifact and remove the tag from reading order	ఈ ట్యాగ్‌లోని ప్రతిదాన్నీ ఆర్టిఫాక్ట్‌గా గుర్తించి, ట్యాగ్‌ను పఠన క్రమం నుండి తీసివేయి
+	Move into previous tag	మునుపటి ట్యాగ్ లోపలికి తరలించు
+	Move out of parent tag	పేరెంట్ ట్యాగ్ బయటికి తరలించు
+	New tag	కొత్త ట్యాగ్
+	Delete tag	ట్యాగ్‌ను తొలగించు
+	Remove tag, keep its contents	ట్యాగ్‌ను తీసివేయి, దాని కంటెంట్‌ను ఉంచు
+	Draw a rectangle on the page or click content, then choose its tag.	పేజీపై దీర్ఘచతురస్రాన్ని గీయండి లేదా కంటెంట్‌ను క్లిక్ చేసి, ఆపై దాని ట్యాగ్‌ను ఎంచుకోండి.
+	Tag annotation	ఉల్లేఖనకు ట్యాగ్ చేయి
+	Untagged content	ట్యాగ్ చేయని కంటెంట్
+	Annotation	ఉల్లేఖన
+	Tag content as {type}	కంటెంట్‌ను {type}గా ట్యాగ్ చేయి

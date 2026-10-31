@@ -2481,7 +2481,6 @@ animation effects	Off	Ανενεργά
 	Found {n} untagged content problems.	Βρέθηκαν {n} προβλήματα μη επισημασμένου περιεχομένου.
 	Tag form fields	Επισήμανση πεδίων φόρμας
 	Mark as artifact	Σήμανση ως τεχνούργημα
-	Remove this leaf tag from reading order and mark its direct content as an artifact	Αφαιρέστε αυτήν την ετικέτα φύλλου από τη σειρά ανάγνωσης και σημειώστε το άμεσο περιεχόμενό της ως τεχνούργημα
 	Mark content as artifact	Σήμανση περιεχομένου ως τεχνούργημα
 	Word count	Καταμέτρηση λέξεων
 	Current page only	Μόνο η τρέχουσα σελίδα
@@ -2584,3 +2583,15 @@ animation effects	Off	Ανενεργά
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Επιλογές για αυτήν την απάντηση
 	Export value	Τιμή εξαγωγής
+	Highlight content	Επισήμανση περιεχομένου
+	Mark everything in this tag as an artifact and remove the tag from reading order	Σήμανση όλου του περιεχομένου αυτής της ετικέτας ως τεχνούργημα και αφαίρεση της ετικέτας από τη σειρά ανάγνωσης
+	Move into previous tag	Μετακίνηση μέσα στην προηγούμενη ετικέτα
+	Move out of parent tag	Μετακίνηση έξω από τη γονική ετικέτα
+	New tag	Νέα ετικέτα
+	Delete tag	Διαγραφή ετικέτας
+	Remove tag, keep its contents	Αφαίρεση ετικέτας με διατήρηση του περιεχομένου της
+	Draw a rectangle on the page or click content, then choose its tag.	Σχεδιάστε ένα ορθογώνιο στη σελίδα ή κάντε κλικ σε περιεχόμενο και, στη συνέχεια, επιλέξτε την ετικέτα του.
+	Tag annotation	Προσθήκη ετικέτας σε σχόλιο
+	Untagged content	Μη επισημασμένο περιεχόμενο
+	Annotation	Σχόλιο
+	Tag content as {type}	Προσθήκη ετικέτας {type} στο περιεχόμενο

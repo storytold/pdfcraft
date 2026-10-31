@@ -1172,6 +1172,72 @@ pub fn tools() -> Vec<ToolDef> {
                 "anchor_generation": { "type": "integer", "minimum": 0, "maximum": 65535 },
                 "placement": { "type": "string", "enum": ["before", "after"] },
             }), &["doc", "object", "generation", "anchor", "anchor_generation", "placement"])),
+        t("accessibility_page_content", "List page content for tagging", "The content of one page as the Reading Order tool sees it: units (a tagged or artifact marked-content sequence, or one object drawn outside both) in content order with unit index, kind (text, image, graphic), state (tagged with mcid and tag; orphan: an MCID no tag owns, untagged for readers; untagged; artifact; unaddressable: owned by an inline tag or several tags; form_structure: a form XObject with its own structure), rect (top-left-origin points), text and nested; and the annotations with the tag that owns each. only_untagged keeps what readers can't reach (Find untagged content). read_only says why the page's content can't be rewritten. Unit indices are valid until the next edit.")
+            .ro()
+            .cmd("a11y.reading_order")
+            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "only_untagged": { "type": "boolean" } }), &["doc", "page"])),
+        t("accessibility_reading_order", "Show reading order", "The numbered regions of a page in reading order (tag-tree order), as the Reading Order tool shows them: order, tag, type, rect (top-left-origin points), units, annotations and text; and how many units and annotations are untagged.")
+            .ro()
+            .cmd("a11y.reading_order")
+            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 } }), &["doc", "page"])),
+        t("accessibility_create_tag", "Tag page content", "Reading Order tool / Create Tag from Selection: tag the content units (indices from accessibility_page_content) or the content mostly inside rect (top-left-origin points) as type: P, H1-H6, Figure (with alt), Table (rows and cells from the layout), L (list items, with labels when a row starts with a bullet or number) or any standard or role-mapped type. Untagged content is wrapped in new marked content, artifacts become tagged content and tagged content moves to the new tag (a tag left empty is removed); the page draws exactly as before and the parent tree is kept valid. placement (before, after, into an anchor tag, or root, with index) says where the new tag goes; by default it goes next to the tags of neighbouring content. Returns the tags created and the page's reading order. Undoable.")
+            .cmd("a11y.reading_order")
+            .with(schema(json!({
+                "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "type": { "type": "string" },
+                "units": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+                "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
+                "alt": { "type": "string" },
+                "placement": { "type": "string", "enum": ["before", "after", "into", "root"] },
+                "anchor": { "type": "integer", "minimum": 1 }, "anchor_generation": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                "index": { "type": "integer", "minimum": 0 },
+            }), &["doc", "page", "type"])),
+        t("accessibility_mark_content_artifact", "Mark page content as artifact", "Reading Order tool ▸ Background/Artifact: the content units (indices from accessibility_page_content) or the content mostly inside rect (top-left-origin points) become artifacts. Tagged content leaves its tag (a tag left empty is removed) and the parent tree; the page draws exactly as before. Returns the page's reading order. Undoable.")
+            .cmd("a11y.reading_order")
+            .with(schema(json!({
+                "doc": doc(), "page": { "type": "integer", "minimum": 1 },
+                "units": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+                "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
+            }), &["doc", "page"])),
+        t("accessibility_new_tag", "New tag", "Tags panel ▸ New Tag: an empty tag of type (a standard type, or one the role map defines). placement before, after or into an anchor tag, or root, with index for into and root; by default it goes last into the document's single top-level tag. An untagged document gets a tag tree first. Returns the tag created. Undoable.")
+            .cmd("a11y.tags")
+            .with(schema(json!({
+                "doc": doc(), "type": { "type": "string" },
+                "placement": { "type": "string", "enum": ["before", "after", "into", "root"] },
+                "anchor": { "type": "integer", "minimum": 1 }, "anchor_generation": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                "index": { "type": "integer", "minimum": 0 },
+            }), &["doc", "type"])),
+        t("accessibility_delete_tag", "Delete tag", "Tags panel ▸ Delete Tag. By default the tag and everything below it leave the tag tree and their content stays on the page, untagged (find it with accessibility_page_content and tag it again); keep_contents: true moves its children (tags and content) up into its place instead. The parent tree is kept valid. Returns the tags. Undoable.")
+            .destructive()
+            .cmd("a11y.tags")
+            .with(schema(json!({
+                "doc": doc(), "object": { "type": "integer", "minimum": 1 }, "generation": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                "keep_contents": { "type": "boolean" },
+            }), &["doc", "object"])),
+        t("accessibility_move_tag_to", "Move tag under any parent", "Tags panel drag and drop: move a tag, with everything below it, before or after an anchor tag, into it (index: child position, default last) or to the root. Unlike accessibility_move_tag the parent may change; the tag keeps the page it was on, and tags can't move into themselves. Page content is unchanged. Returns the tags. Undoable.")
+            .cmd("a11y.tags")
+            .with(schema(json!({
+                "doc": doc(), "object": { "type": "integer", "minimum": 1 }, "generation": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                "placement": { "type": "string", "enum": ["before", "after", "into", "root"] },
+                "anchor": { "type": "integer", "minimum": 1 }, "anchor_generation": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                "index": { "type": "integer", "minimum": 0 },
+            }), &["doc", "object", "placement"])),
+        t("accessibility_tag_to_artifact", "Change tag to artifact", "Tags panel ▸ Change Tag to Artifact: every piece of marked content below the tag (its descendants' too, on any page, named property lists included) becomes an artifact and the tag leaves the tree. Refused for tags holding annotations, content inside form XObjects, or other tags' content nested inside. Returns the tags. Undoable.")
+            .cmd("a11y.tags")
+            .with(schema(json!({ "doc": doc(), "object": { "type": "integer", "minimum": 1 }, "generation": { "type": "integer", "minimum": 0, "maximum": 65535 } }), &["doc", "object"])),
+        t("accessibility_tag_annotation", "Tag annotation", "Tags panel ▸ Tag Annotation: give an untagged annotation of the page (object from accessibility_page_content) a Link, Form (widgets) or Annot tag with an object reference and its parent-tree entry, placed after the page's last tagged content. Returns the tag created. Undoable.")
+            .cmd("a11y.tags")
+            .with(schema(json!({
+                "doc": doc(), "page": { "type": "integer", "minimum": 1 },
+                "annotation": { "type": "integer", "minimum": 1 }, "annotation_generation": { "type": "integer", "minimum": 0, "maximum": 65535 },
+            }), &["doc", "page", "annotation"])),
+        t("accessibility_tag_at", "Find tag at a point", "The tag whose content is drawn at a point of a page (x, y in top-left-origin points), the smallest first: what selecting content on the page selects in the Tags panel.")
+            .ro()
+            .cmd("a11y.tags")
+            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "x": { "type": "number" }, "y": { "type": "number" } }), &["doc", "page", "x", "y"])),
+        t("accessibility_tag_boxes", "Highlight tag content", "Where a tag's content and its descendants' are drawn on a page (rects in top-left-origin points): what the Tags panel highlights for the selected tag.")
+            .ro()
+            .cmd("a11y.tags")
+            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "object": { "type": "integer", "minimum": 1 }, "generation": { "type": "integer", "minimum": 0, "maximum": 65535 } }), &["doc", "page", "object"])),
         t("form_merge_data", "Merge data files into spreadsheet", "Collect the field values of form data files (FDF, XFDF) or filled-in PDF forms into one CSV file at path: a column per field name, a row per file. Returns the row and column counts.")
             .cmd("form.merge_data")
             .with(schema(json!({ "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 }, "path": { "type": "string" } }), &["paths", "path"])),

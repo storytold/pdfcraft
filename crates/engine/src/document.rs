@@ -335,6 +335,32 @@ impl Document {
         self.editor.as_ref().map(|e| a11y::tag_content(&e.cos, object)).unwrap_or_else(|| Ok(Vec::new()))
     }
 
+    /// Reading Order tool: the content units, annotations and numbered regions of `page` (0-based).
+    pub fn page_tagging(&self, page: usize) -> Result<a11y::PageTagging, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        guard(|| a11y::page_tagging(&e.cos, page))
+            .map_err(|m| format!("reading the page's tags failed unexpectedly ({m})"))?
+            .map_err(|e| e.to_string())
+    }
+
+    /// Tags panel ▸ Highlight content: where a tag's content (and its descendants') is drawn on
+    /// `page`, in user space.
+    pub fn tag_boxes(&self, tag: pdfcraft_cos::ObjRef, page: usize) -> Vec<[f64; 4]> {
+        self.editor.as_ref().and_then(|e| guard(|| a11y::tag_boxes(&e.cos, tag, page)).ok()).unwrap_or_default()
+    }
+
+    /// The tag whose content is drawn at a point of `page` (user space), the smallest first.
+    pub fn tag_at(&self, page: usize, x: f64, y: f64) -> Option<pdfcraft_cos::ObjRef> {
+        self.editor.as_ref().and_then(|e| guard(|| a11y::tag_at(&e.cos, page, x, y)).ok().flatten())
+    }
+
+    /// Consistency problems of the tag tree (parent tree, `/P`, MCIDs, role map); empty when sound.
+    /// A check that fails unexpectedly says so, rather than passing for a sound tree.
+    pub fn structure_problems(&self) -> Vec<String> {
+        let Some(e) = self.editor.as_ref() else { return Vec::new() };
+        guard(|| a11y::structure_problems(&e.cos)).unwrap_or_else(|m| vec![format!("checking the tags failed unexpectedly ({m})")])
+    }
+
     /// The edit that fixes `rule`, for the rules with an automatic fix: the document language
     /// (`value` is the language), the title (`value` replaces it; else the current title or the
     /// file name) and the tab order.

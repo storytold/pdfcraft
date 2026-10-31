@@ -2345,7 +2345,6 @@ animation effects	Off	關
 	Found {n} untagged content problems.	發現 {n} 個未標記內容問題。
 	Tag form fields	標記表單欄位
 	Mark as artifact	標記為成品
-	Remove this leaf tag from reading order and mark its direct content as an artifact	從閱讀順序中移除此葉標記，並將其直接內容標記為成品
 	Mark content as artifact	將內容標記為成品
 	About	關於
 	Contributors	貢獻者
@@ -2528,3 +2527,15 @@ animation effects	Off	關
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	此回覆的選項
 	Export value	匯出值
+	Highlight content	醒目提示內容
+	Mark everything in this tag as an artifact and remove the tag from reading order	將此標記中的所有內容標記為成品，並從閱讀順序中移除該標記
+	Move into previous tag	移入上一個標記
+	Move out of parent tag	移出父標記
+	New tag	新增標記
+	Delete tag	刪除標記
+	Remove tag, keep its contents	移除標記，保留其內容
+	Draw a rectangle on the page or click content, then choose its tag.	在頁面上繪製矩形或按一下內容，然後選擇其標記。
+	Tag annotation	標記註解
+	Untagged content	未標記的內容
+	Annotation	註解
+	Tag content as {type}	將內容標記為 {type}

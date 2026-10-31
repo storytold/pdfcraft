@@ -134,6 +134,13 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::MoveTag { .. }
         | Edit::MarkDecorative { .. }
         | Edit::MarkTagArtifact { .. }
+        | Edit::NewTag { .. }
+        | Edit::DeleteTag { .. }
+        | Edit::MoveTagTo { .. }
+        | Edit::TagToArtifact { .. }
+        | Edit::TagContent { .. }
+        | Edit::ContentToArtifact { .. }
+        | Edit::TagAnnotation { .. }
         | Edit::AddOcrText { .. }
         | Edit::SetDocumentScript { .. }
         | Edit::SetFieldScript { .. }
@@ -572,6 +579,27 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::MarkTagArtifact { object } => {
             a11y::mark_tag_artifact(doc, *object).map_err(|e| EditError::Accessibility(e.to_string()))?;
+        }
+        Edit::NewTag { kind, destination } => {
+            a11y::new_tag(doc, kind, *destination).map_err(|e| EditError::Accessibility(e.to_string()))?;
+        }
+        Edit::DeleteTag { object, keep_contents } => {
+            a11y::delete_tag(doc, *object, *keep_contents).map_err(|e| EditError::Accessibility(e.to_string()))?;
+        }
+        Edit::MoveTagTo { object, destination } => {
+            a11y::move_tag_to(doc, *object, *destination).map_err(|e| EditError::Accessibility(e.to_string()))?;
+        }
+        Edit::TagToArtifact { object } => {
+            a11y::tag_to_artifact(doc, *object).map_err(|e| EditError::Accessibility(e.to_string()))?;
+        }
+        Edit::TagContent { page, selection, kind, alt, destination } => {
+            a11y::tag_selection(doc, *page, selection, kind, alt.as_deref(), *destination).map_err(|e| EditError::Accessibility(e.to_string()))?;
+        }
+        Edit::ContentToArtifact { page, selection } => {
+            a11y::content_to_artifact(doc, *page, selection).map_err(|e| EditError::Accessibility(e.to_string()))?;
+        }
+        Edit::TagAnnotation { page, annotation } => {
+            a11y::tag_annotation(doc, *page, *annotation, None).map_err(|e| EditError::Accessibility(e.to_string()))?;
         }
         Edit::AddHeaderFooter { pages, settings, replace } => {
             let date = cx.today;

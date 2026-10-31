@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 5218c2b171d9629ba30357f342f398d7f482dd6bd5151be617f33ee1e692905f # shrinks to spec = Spec { pages: [[Tagged { kind: 0, group: 0 }]], layout: 0, single_root: false, mcr: false, next_key: false, links: false }, steps = [Move { tag: 1, anchor: 12, how: 0 }]
+cc ed1e190e6d2044dde703054dfabe1415d11677f9c3212fd082082d2f7f52764a # shrinks to spec = Spec { pages: [[Tagged { kind: 0, group: 1 }]], layout: 0, single_root: false, mcr: false, next_key: false, links: false, inherit: true }, steps = [Move { tag: 11, anchor: 24, how: 0 }]
+cc f6fb58a147a1a6a0b9d8cfa6a26c3def502e36f06fd08f3516bb38dcff61433b # shrinks to spec = Spec { pages: [[Text, Image]], layout: 0, single_root: false, mcr: false, next_key: false, links: false, inherit: false }, steps = [Artifact { page: 0, picks: [13, 2] }]

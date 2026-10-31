@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (gap 11: the Tags panel's structural edits and the Reading Order tool ship; 40–70 h → 25–50 h) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
@@ -46,7 +47,7 @@ update the numbers.
 | 8 | Office export weak, Office import absent | file format | 55–100 | [file-format-parity.md](file-format-parity.md) |
 | 9 | No Preflight; PDF/A partial; PDF/X and PDF/UA absent | standards | 65–115 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 10 | Signatures: no PKCS #11, timestamp servers or online revocation | feature, hardware | 40–70 | [pdf-spec-parity.md](pdf-spec-parity.md) |
-| 11 | Accessibility: checker only, no tagging tools | feature | 40–70 | [target-app-parity.md](target-app-parity.md) |
+| 11 | Accessibility: no mixed-content auto-tag, table editor or Make Accessible | feature | 25–50 | [target-app-parity.md](target-app-parity.md) |
 | 12 | No measured fidelity harness against Acrobat | quality | (in 2) | [target-app-parity.md](target-app-parity.md) |
 | 13 | Performance budgets and lazy loading of very large files | performance | 25–45 | this file |
 | 14 | Arabic RTL unqualified end to end; no Hindi, Indonesian, Korean | localization | 25–45 | [localization-parity.md](localization-parity.md) |
@@ -223,20 +224,24 @@ update the numbers.
 - **Impact:** government and legal users sign with tokens and need B-LT/B-LTA.
 - **Estimate:** 40–70 h; tokens need hardware to test. **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
 
-### 11. Accessibility: only text-only automatic structure creation
+### 11. Accessibility: no mixed-content auto-tag, table editor or Make Accessible
 
-- **Missing:** apply auto-tag proposals to marked content and a valid parent tree, tag fields
-  into structure trees with unusual layouts (only a direct Document root with a direct
-  ParentTree Nums array is extended),
-  visual Tags, Order and Content panels, Reading Order tool, table editor, Make Accessible action,
-  Read Out Loud; full keyboard operation of PdfCraft itself and a screen-reader audit.
-- **Evidence:** all 32 checker rules, figure alt text, tag property and sibling order edits, and
-  a bounded auto-tag preview exist. Apply writes valid structure and parent-tree links for
-  text-only files; it refuses mixed content and existing tags;
-  `a11y.keyboard-only` (P0) planned, `a11y.app-screen-reader` partial.
-- **Impact:** most untagged files still need another editor to build their structure; PdfCraft itself is
-  not yet usable without a mouse.
-- **Estimate:** 40–70 h. **Doc:** [target-app-parity.md](target-app-parity.md).
+- **Missing:** automatic tagging of mixed content (Apply still refuses it and existing tags), tag
+  fields into structure trees with unusual layouts (`Tag form fields` extends only a direct
+  Document root with a direct ParentTree Nums array), the table editor, artifact types, a
+  document-wide Order panel, the Make Accessible action, Read Out Loud; full keyboard operation
+  of PdfCraft itself and a screen-reader audit.
+- **Evidence:** all 32 checker rules, figure alt text and a bounded auto-tag preview exist, and
+  Apply writes valid structure for text-only files. The Tags panel adds, deletes, moves (drag and
+  drop, across parents), retypes and turns whole subtrees into artifacts, highlights a tag's
+  content and selects a tag from the page; the Reading Order tool tags any selected content as P,
+  H1–H6, Figure, Table, List or artifact and reorders the numbered regions. Both keep `/P`, the
+  parent tree (flat or `/Kids`, direct or indirect arrays), MCIDs and the role map consistent on
+  every edit, refuse what they can't do safely, and are covered by property tests over random
+  edit sequences; `a11y.keyboard-only` (P0) planned, `a11y.app-screen-reader` partial.
+- **Impact:** untagged and badly tagged files can be fixed by hand in PdfCraft, but not tagged in
+  one step; PdfCraft itself is not yet usable without a mouse.
+- **Estimate:** 25–50 h. **Doc:** [target-app-parity.md](target-app-parity.md).
 
 ### 12. No measured fidelity harness against Acrobat
 
@@ -419,6 +424,7 @@ update the numbers.
 | 2026-10-15 | minor | Gap 21: the side-by-side view had already shipped; the Compare panel filters text changes and visual differences. Estimate 10–20 h → 8–16 h |
 | 2026-10-20 | minor | Gap 6 #3673: Character encoding accepts Identity-H/V with Adobe CJK collections, or a predefined non-Identity CMap; negative and indirect-reference regressions and a read-only automation test passed after failing before the fix. Per-glyph validation and embedded-font extraction remain separate. Scores and estimates unchanged. |
 | 2026-10-17 | minor | Gap 6: the redaction audit counts a cover over one word of a long line instead of a clean bill (#2662, fixed by #2698). Estimates unchanged. |
+| 2026-10-16 | minor | Gap 11: the Tags panel adds, deletes, moves (across parents, by drag and drop), retypes and turns subtrees into artifacts with highlight both ways, and the Reading Order tool tags selected content and reorders regions, all keeping the parent tree consistent in any layout. Mixed-content auto-tag, the table editor and Make Accessible remain; 40–70 h → 25–50 h. |
 | 2026-10-15 | minor | Gap 12: the text oracle scores reading order as well as word F1, which is a bag of words and cannot see order; the first measurement separated 18 improvements from 6 regressions in a change F1 called unchanged on 26 of 29 files. Estimates unchanged. |
 | 2026-10-14 | minor | M1: raw-deflate fallback preserves decoding-limit errors in strict and tolerant decoding; synthetic filter and COS stream regressions. Estimates unchanged. |
 | 2026-10-15 | patch | Gap 24: record localization and installers as partial (unusable Chinese, Telugu and Arabic; unsigned Linux packages) |

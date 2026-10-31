@@ -146,6 +146,12 @@ pub const EDIT_LABELS: &[&str] = &[
     "Flatten Fill & Sign",
     "Protect with password",
     "Remove security",
+    "Mark content as artifact",
+    "New tag",
+    "Delete tag",
+    "Remove tag, keep its contents",
+    "Tag content as {type}",
+    "Tag annotation",
 ];
 
 /// The names of the batches built below L7, which an interface shows in the same places as
@@ -239,7 +245,13 @@ impl Edit {
             Edit::SetTagProperty { .. } => Label::of("Change tag properties"),
             Edit::MoveTag { .. } => Label::of("Move object"),
             Edit::MarkDecorative { .. } => Label::of("Mark figure as decorative"),
-            Edit::MarkTagArtifact { .. } => Label::of("Mark content as artifact"),
+            Edit::MarkTagArtifact { .. } | Edit::TagToArtifact { .. } | Edit::ContentToArtifact { .. } => Label::of("Mark content as artifact"),
+            Edit::NewTag { .. } => Label::of("New tag"),
+            Edit::DeleteTag { keep_contents: false, .. } => Label::of("Delete tag"),
+            Edit::DeleteTag { keep_contents: true, .. } => Label::of("Remove tag, keep its contents"),
+            Edit::MoveTagTo { .. } => Label::of("Move object"),
+            Edit::TagContent { kind, .. } => Label::with("Tag content as {type}", kind.as_str()),
+            Edit::TagAnnotation { .. } => Label::of("Tag annotation"),
             Edit::AddOcrText { .. } => Label::of("Recognize text"),
             Edit::ApplyScriptChanges { .. } => Label::of("Run JavaScript"),
             Edit::XfaEvent { .. } => Label::of("Run form script"),

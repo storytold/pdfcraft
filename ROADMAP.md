@@ -1,5 +1,6 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (M12/gap 11: the Tags panel's structural edits and the Reading Order tool ship; gap 11 40–70 h → 25–50 h) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
@@ -110,6 +111,7 @@ and add a line to the [progress log](#progress-log); when a gap closes, remove i
 |---|---|---|
 | **Feature breadth** | **≈ 67%** tier-weighted (57.0% unweighted: 423 shipped + 75 partial of 808; P0 94.2%) | measured, `parity/acrobat-features.toml` |
 | Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.3% unweighted; P0 95.3%) | measured ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
+| **Feature breadth** | **≈ 67%** tier-weighted (57.9% unweighted: 427 shipped + 81 partial of 808; P0 94.2%) | measured, `parity/acrobat-features.toml` |
 | **Ready for real work**, full Acrobat Pro | **≈ 50%** (45–53%) | estimated, weighted sum over [dimensions](#by-dimension) |
 | **Ready for real work**, mainstream practitioner | **≈ 55%** (50–60%) | estimated ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, essentials user | **≈ 66%** (60–70%) | estimated ([method](docs/target-app-parity.md#essentials-user)) |
@@ -166,7 +168,7 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 | J Create and export | 39.7% | 25% | 55–100 |
 | K Optimize and standards | 35.3% | 20% | 65–115 |
 | L Print | 39.7% | 35% | 30–55 |
-| M Accessibility | 63.1% | 30% | 40–70 |
+| M Accessibility | 75.4% | 40% | 25–50 |
 | N Automation, preferences, misc | 30.0% | 35% | 25–45 |
 
 What's strong and missing in each: [target-app-parity.md](docs/target-app-parity.md#by-feature-area).
@@ -208,7 +210,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 4 | OCR languages and Office export/import (M10) | 95–175 |
 | 5 | Preflight and PDF/A/X/UA (M11) | 65–115 |
 | 6 | Signatures for institutions: PKCS #11, timestamp servers, online LTV (M9) | 40–70 |
-| 7 | Accessibility tagging (M12) | 40–70 |
+| 7 | Accessibility tagging (M12) | 25–50 |
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
@@ -351,6 +353,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-16 (M14, localization):** Czech goes from menus-and-dialogs to the whole surface: 2,674 entries after adding the ~220 keys the other catalogs had -- the sentences the engine words (signature details, accessibility findings and report, PDF/A problems, pages to print, history labels), the date picker's weekday heads, the certificate viewer's fields and shared buttons. "Tag" is *tag* throughout (the Tags panel said *značky*, which is also a redaction mark), and "{n} tags" no longer reads "1 značek". Two new catalog tests. Estimates unchanged.
 - **2026-10-16 (M5, #2583, #1869):** A sticky note on a page with `/Rotate` is drawn upright, with its top-left where it was placed. Notes are saved with the NoRotate flag, and the renderer now honours it: the appearance is turned against the page's rotation about the upper-left corner of `/Rect`, which stays put (ISO 32000-2 §12.5.3; vendored hayro-interpret patch 37). Attachment icons follow the same rule. Selection, hover, the edit composer, the Comments panel's flash and the `comment_list` and `doc_info` rectangles use the drawn box, and `comment_add` anchors an icon's displayed top-left at `at`. Estimates unchanged.
 - **2026-10-16 (M11, #1201):** Optimize decodes a JPEG with its colour transform: an Adobe APP14 marker's flag, else the filter's `/ColorTransform` (ISO 32000-2 §7.4.8). An RGB JPEG stored untransformed (`/ColorTransform 0`, no marker) used to be converted from YCbCr anyway and came out in other colours, recompressed or merged from strips; it now keeps them. A JPEG whose marker and `/ColorTransform` disagree, or whose components are named R, G and B without `/ColorTransform 0`, is left as it is, since readers differ on it. Estimates unchanged.
+- **2026-10-16 (M12, gap 11):** The Tags panel gets New Tag, Delete Tag (or remove a tag keeping its contents), moving tags across parents by drag and drop or with buttons, Change Tag to Artifact for whole subtrees, Highlight content, and a click on page content selecting its tag. Accessibility ▸ Fix reading order is the Reading Order tool: the page's tagged content as numbered regions in tag order and its untagged content in another colour; a rectangle or a click selects content, which becomes P, H1–H6, Figure (with alternate text), Table, List or an artifact, and the order list reorders regions. A new `a11y` tagging engine reads and extends any parent-tree layout in place, splices marked content into page content without re-serializing it, and refuses what it can't do safely; 11 headless tools, kittest UI tests and property tests over random edit sequences. `a11y.tags-panel`, `a11y.reading-order-tool` and `a11y.create-tag-from-selection` shipped. Gap 11 40–70 h → 25–50 h.
 - **2026-10-15 (M2, gap 12):** `cargo xtask text-oracle` scores reading order as well as word F1: the longest common subsequence of the two word sequences over the longer one. F1 is a bag of words and cannot see order at all -- measuring #2431, a change that moves text and nothing else, it called 26 of the 29 files whose output changed identical, where the order score separated 18 improvements from 6 regressions. Reports, does not gate; a disagreement with Poppler, not a verdict. Estimates unchanged.
 - **2026-10-15 (M2, #2305 follow-up):** WinAnsiEncoding 0xA0 and 0xAD and MacRomanEncoding 0xCA extract as the ordinary space and hyphen Annex D.2 names them, in the vendored hayro tables (patch 30) as well as `crates/fonts`, so search, copy and redaction see characters that were hidden behind U+00A0 and U+00AD. Across the pdf.js corpus the soft hyphens we extract fall 117 to 13 and the non-breaking spaces 30 to 26; the rest come from `/ToUnicode`. An explicit `/Differences` name keeps its glyph list value, as pdftotext does. Estimates unchanged.
 - **2026-10-15 (M12, XFA, #2574):** A `pageArea` with no `<occur>` repeats without limit instead of taking a subform's default of one use, so a later page area with `occur max="1"` is no longer drawn (with a copy of its fields) over every body page. A page area's `occur min` is honoured too: one the body never reached gets the pages it still needs after the body (the once-only closing page of a form, with its button, comes last). Acrobat Pro also puts that page last, and when printing keeps it but leaves it blank (`relevant="-print"` on the page area), which PdfCraft does not do yet; both re-observed on a synthetic fixture, see the 2026-10-19 line. Synthetic regression tests. Estimates unchanged.

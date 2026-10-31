@@ -2473,7 +2473,6 @@ animation effects	Off	Өшірулі
 	Found {n} untagged content problems.	Тегтелмеген мазмұнға қатысты {n} мәселе табылды.
 	Tag form fields	Пішін өрістерін тегтеу
 	Mark as artifact	Артефакт ретінде белгілеу
-	Remove this leaf tag from reading order and mark its direct content as an artifact	Осы жапырақ тегін оқу ретінен алып тастап, оның тікелей мазмұнын артефакт ретінде белгілеңіз
 	Mark content as artifact	Мазмұнды артефакт ретінде белгілеу
 	Word count	Сөздер саны
 	Current page only	Тек ағымдағы бет
@@ -2576,3 +2575,15 @@ animation effects	Off	Өшірулі
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Осы жауаптың параметрлері
 	Export value	Экспорт мәні
+	Highlight content	Мазмұнды бөлектеу
+	Mark everything in this tag as an artifact and remove the tag from reading order	Осы тегтегі барлық мазмұнды артефакт ретінде белгілеу және тегті оқу ретінен алып тастау
+	Move into previous tag	Алдыңғы тегтің ішіне жылжыту
+	Move out of parent tag	Ата-аналық тегтен шығару
+	New tag	Жаңа тег
+	Delete tag	Тегті жою
+	Remove tag, keep its contents	Тегті алып тастау, мазмұнын сақтау
+	Draw a rectangle on the page or click content, then choose its tag.	Бетте тіктөртбұрыш сызыңыз немесе мазмұнды басыңыз, содан кейін оның тегін таңдаңыз.
+	Tag annotation	Белгілеуді тегтеу
+	Untagged content	Тегтелмеген мазмұн
+	Annotation	Белгілеу
+	Tag content as {type}	Мазмұнды {type} ретінде тегтеу

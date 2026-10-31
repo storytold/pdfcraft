@@ -2847,3 +2847,15 @@ theme	Appearance	Teema
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tämän vastauksen asetukset
+	Highlight content	Korosta sisältö
+	Mark everything in this tag as an artifact and remove the tag from reading order	Merkitse kaikki tämän tagin sisältö artefaktiksi ja poista tagi lukujärjestyksestä
+	Move into previous tag	Siirrä edelliseen tagiin
+	Move out of parent tag	Siirrä pois ylätagista
+	New tag	Uusi tagi
+	Delete tag	Poista tagi
+	Remove tag, keep its contents	Poista tagi ja säilytä sen sisältö
+	Draw a rectangle on the page or click content, then choose its tag.	Piirrä sivulle suorakulmio tai napsauta sisältöä ja valitse sitten sen tagi.
+	Tag annotation	Tagaa merkintä
+	Untagged content	Tagaamaton sisältö
+	Annotation	Merkintä
+	Tag content as {type}	Tagaa sisältö tyypiksi {type}

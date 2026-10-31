@@ -2475,7 +2475,6 @@ animation effects	Off	Désactivés
 	Found {n} untagged content problems.	{n} problèmes de contenu non balisé trouvés.
 	Tag form fields	Baliser les champs de formulaire
 	Mark as artifact	Marquer comme artefact
-	Remove this leaf tag from reading order and mark its direct content as an artifact	Retirez cette balise feuille de l’ordre de lecture et marquez son contenu direct comme artefact
 	Mark content as artifact	Marquer le contenu comme artefact
 	Word count	Nombre de mots
 	Current page only	Page actuelle uniquement
@@ -2844,3 +2843,15 @@ certificate	Version	Version
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Options de cette réponse
 	Export value	Valeur d’exportation
+	Highlight content	Mettre en évidence le contenu
+	Mark everything in this tag as an artifact and remove the tag from reading order	Marquer tout le contenu de cette balise comme artefact et retirer la balise de l'ordre de lecture
+	Move into previous tag	Déplacer dans la balise précédente
+	Move out of parent tag	Sortir de la balise parente
+	New tag	Nouvelle balise
+	Delete tag	Supprimer la balise
+	Remove tag, keep its contents	Retirer la balise en conservant son contenu
+	Draw a rectangle on the page or click content, then choose its tag.	Tracez un rectangle sur la page ou cliquez sur un contenu, puis choisissez sa balise.
+	Tag annotation	Baliser l'annotation
+	Untagged content	Contenu non balisé
+	Annotation	Annotation
+	Tag content as {type}	Baliser le contenu comme {type}

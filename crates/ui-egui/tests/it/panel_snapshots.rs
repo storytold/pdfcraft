@@ -164,7 +164,7 @@ fn check(h: &Harness<'static, PdfCraftApp>, name: &str) -> Result<(), String> {
 }
 
 /// Every panel, in the order of the rail.
-const ALL: [RightPanel; 11] = [
+const ALL: [RightPanel; 12] = [
     RightPanel::Comments,
     RightPanel::Bookmarks,
     RightPanel::Pages,
@@ -174,6 +174,7 @@ const ALL: [RightPanel; 11] = [
     RightPanel::Signatures,
     RightPanel::Accessibility,
     RightPanel::Tags,
+    RightPanel::ReadingOrder,
     RightPanel::Search,
     RightPanel::Compare,
 ];
@@ -225,6 +226,7 @@ fn open(p: RightPanel) -> (Harness<'static, PdfCraftApp>, &'static str) {
             h.run_steps(3);
             return (h, "compare");
         }
+        RightPanel::ReadingOrder => "reading-order",
     };
     (harness(name), name)
 }

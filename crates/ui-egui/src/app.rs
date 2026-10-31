@@ -196,6 +196,7 @@ impl PdfCraftApp {
             doc_js: Default::default(),
             a11y: a11y_ui::A11yState::default(),
             tags_state: Default::default(),
+            reading_order: Default::default(),
             a11y_skipped: Default::default(),
             alt_draft: Default::default(),
             os_key_store_ids: false,

@@ -2489,7 +2489,6 @@ animation effects	Off	Desativados
 	Found {n} untagged content problems.	Foram encontrados {n} problemas de conteúdo sem marcação.
 	Tag form fields	Marcar campos de formulário
 	Mark as artifact	Marcar como artefato
-	Remove this leaf tag from reading order and mark its direct content as an artifact	Remova esta tag folha da ordem de leitura e marque seu conteúdo direto como artefato
 	Mark content as artifact	Marcar conteúdo como artefato
 	Word count	Contagem de palavras
 	Current page only	Somente a página atual
@@ -2520,6 +2519,7 @@ animation effects	Off	Desativados
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Use quando uma impressora omite texto, sombreamento ou transparência. A impressão deixa de ser texto pesquisável; com Imprimir em tons de cinza, as imagens ficam cinza.
 	Crop Image	Cortar imagem
 	Remove Crop	Remover corte
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Remover esta tag folha da ordem de leitura e marcar seu conteúdo direto como artefato
 	Trim the picture with its handles; Enter or Done applies	Corte a imagem com as alças; Enter ou Concluído aplica
 	Redaction mark appearance	Aparência da marca de redação
 	Outline colour:	Cor do contorno:
@@ -2863,3 +2863,15 @@ theme	Appearance	Aparência
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opções desta resposta
 	Export value	Valor de exportação
+	Highlight content	Realçar conteúdo
+	Mark everything in this tag as an artifact and remove the tag from reading order	Marcar todo o conteúdo desta tag como artefato e remover a tag da ordem de leitura
+	Move into previous tag	Mover para dentro da tag anterior
+	Move out of parent tag	Mover para fora da tag superior
+	New tag	Nova tag
+	Delete tag	Excluir tag
+	Remove tag, keep its contents	Remover tag, mantendo seu conteúdo
+	Draw a rectangle on the page or click content, then choose its tag.	Desenhe um retângulo na página ou clique no conteúdo e escolha a tag dele.
+	Tag annotation	Marcar anotação com tag
+	Untagged content	Conteúdo sem marcação
+	Annotation	Anotação
+	Tag content as {type}	Marcar conteúdo como {type}

@@ -4239,6 +4239,7 @@ dependencies = [
  "pdfcraft-filters",
  "pdfcraft-fonts",
  "pdfcraft-model",
+ "proptest",
  "thiserror 2.0.21",
 ]
 
@@ -4271,6 +4272,7 @@ dependencies = [
  "base64 0.23.1",
  "flate2",
  "image",
+ "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-engine",
  "pdfcraft-fonts",

@@ -2725,7 +2725,6 @@ key	Space	Tarpas
 	Found {n} untagged content problems.	Rasta nepažymėto turinio problemų: {n}.
 	Tag form fields	Žymėti formos laukus
 	Mark as artifact	Pažymėti kaip artefaktą
-	Remove this leaf tag from reading order and mark its direct content as an artifact	Pašalinkite šią lapo žymą iš skaitymo tvarkos ir pažymėkite jos tiesioginį turinį kaip artefaktą
 	Mark content as artifact	Pažymėti turinį kaip artefaktą
 	Word count	Žodžių skaičius
 	Current page only	Tik dabartinis puslapis
@@ -2756,6 +2755,7 @@ key	Space	Tarpas
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Naudokite, kai spausdintuvas praleidžia tekstą, šešėliavimą ar skaidrumą. Atspaudas nebėra ieškomas tekstas; spausdinant pilkais atspalviais vaizdai yra pilki.
 	Crop Image	Apkarpyti vaizdą
 	Remove Crop	Pašalinti apkarpymą
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Pašalinkite šią lapo žymą iš skaitymo tvarkos ir pažymėkite jos tiesioginį turinį kaip artefaktą
 	Trim the picture with its handles; Enter or Done applies	Apkarpykite paveikslėlį rankenėlėmis; Enter arba Atlikta pritaiko
 	Redaction mark appearance	Užtamsinimo žymės išvaizda
 	Outline colour:	Kontūro spalva:
@@ -2839,3 +2839,15 @@ theme	Appearance	Išvaizda
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Šio atsakymo parinktys
 	Export value	Eksporto reikšmė
+	Highlight content	Paryškinti turinį
+	Mark everything in this tag as an artifact and remove the tag from reading order	Pažymėti visą šios žymos turinį kaip artefaktą ir pašalinti žymą iš skaitymo tvarkos
+	Move into previous tag	Perkelti į ankstesnę žymą
+	Move out of parent tag	Perkelti iš pirminės žymos
+	New tag	Nauja žyma
+	Delete tag	Ištrinti žymą
+	Remove tag, keep its contents	Pašalinti žymą, paliekant jos turinį
+	Draw a rectangle on the page or click content, then choose its tag.	Nubrėžkite stačiakampį puslapyje arba spustelėkite turinį, tada pasirinkite jo žymą.
+	Tag annotation	Pažymėti anotaciją
+	Untagged content	Nepažymėtas turinys
+	Annotation	Anotacija
+	Tag content as {type}	Pažymėti turinį kaip {type}
