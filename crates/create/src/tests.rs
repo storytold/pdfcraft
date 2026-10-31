@@ -825,6 +825,41 @@ fn soft_masks_of_another_size_and_stencil_and_colour_key_masks_become_alpha() {
 }
 
 #[test]
+fn a_soft_mask_shaped_across_its_image_is_scaled_without_a_huge_buffer() {
+    // A 1×N image with an N×1 soft mask: each is small, but scaling the mask's height first would
+    // need an N × N buffer of floats (16 TB for N = 1,000,000) before narrowing it.
+    const N: usize = 1_000_000;
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let m = doc.add(Object::Stream(Stream::from_raw(image_dict(N as i64, 1, "DeviceGray", 8), vec![0; N])));
+        let mut d = image_dict(1, N as i64, "DeviceGray", 8);
+        d.set(b"SMask".to_vec(), Object::Ref(m));
+        Stream::from_raw(d, vec![10; N])
+    });
+    let a = alphas(&exported_rgba(&doc).1);
+    assert_eq!(a.len(), N);
+    assert!(a.iter().all(|&v| v == 0), "a fully transparent soft mask stays transparent");
+
+    // The same shape as a stencil /Mask, every sample 1 (hidden).
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let mut md = Dict::new();
+        md.set(b"Type".to_vec(), Object::name("XObject"));
+        md.set(b"Subtype".to_vec(), Object::name("Image"));
+        md.set(b"Width".to_vec(), Object::Int(N as i64));
+        md.set(b"Height".to_vec(), Object::Int(1));
+        md.set(b"ImageMask".to_vec(), Object::Bool(true));
+        let m = doc.add(Object::Stream(Stream::from_raw(md, vec![0xff; N / 8])));
+        let mut d = image_dict(1, N as i64, "DeviceGray", 8);
+        d.set(b"Mask".to_vec(), Object::Ref(m));
+        Stream::from_raw(d, vec![10; N])
+    });
+    let a = alphas(&exported_rgba(&doc).1);
+    assert_eq!(a.len(), N);
+    assert!(a.iter().all(|&v| v == 0), "a stencil mask hiding every pixel still hides them");
+}
+
+#[test]
 fn damaged_masks_and_sizes_never_panic() {
     for (w, h, mw, mh, data) in [(4, 2, -3, 1, vec![]), (4, 2, i64::MAX, 2, vec![0; 8]), (-4, 2, 4, 2, vec![0; 8]), (4, 2, 4, 2, vec![])] {
         let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
