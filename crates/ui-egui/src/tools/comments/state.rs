@@ -189,15 +189,21 @@ impl CommentView {
     /// Takes back the last point of a polygon, cloud or connected lines being drawn; the first
     /// point's removal cancels the drawing. Returns whether there was such a drawing.
     pub fn undo_point(&mut self) -> bool {
-        let Some(Gesture::Draw { tool, points, .. }) = self.gesture.as_mut() else { return false };
-        if !tool.clicks_points() {
+        if !self.has_point_to_undo() {
             return false;
         }
+        let Some(Gesture::Draw { points, .. }) = self.gesture.as_mut() else { return false };
         points.pop();
         if points.is_empty() {
             self.gesture = None;
         }
         true
+    }
+
+    /// Whether a polygon, cloud or connected lines is being drawn, so [`Self::undo_point`] has a
+    /// point to take back.
+    pub fn has_point_to_undo(&self) -> bool {
+        matches!(&self.gesture, Some(Gesture::Draw { tool, .. }) if tool.clicks_points())
     }
 
     /// Open the inline editor on comment (page, index) with `text`. It takes the keyboard once,

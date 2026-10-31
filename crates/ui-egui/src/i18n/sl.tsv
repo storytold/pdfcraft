@@ -2580,6 +2580,9 @@ animation effects	Off	Izklopljeni
 	Extract the selected pages…	Izvleci izbrane strani…
 	Delete the selected pages	Izbriši izbrane strani
 
+# Undo and Redo buttons in the mode bar (#4050): the command's name and its shortcut, as Save ({key}) (AI-assisted, not separately native-reviewed)
+	Undo ({key})	Razveljavi ({key})
+	Redo ({key})	Ponovi ({key})
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti tega odgovora
 	Export value	Izvozna vrednost

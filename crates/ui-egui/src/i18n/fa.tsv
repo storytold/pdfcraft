@@ -2814,5 +2814,8 @@ theme	Appearance	ظاهر
 	a field named {name} already exists	فیلدی با نام {name} از قبل وجود دارد
 	Today	امروز
 
+# Undo and Redo buttons (#4050) (AI-assisted, not separately native-reviewed)
+	Undo ({key})	واگرد ({key})
+	Redo ({key})	ازنو ({key})
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	گزینه‌های این پاسخ

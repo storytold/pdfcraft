@@ -692,3 +692,55 @@ fn ctrl_tab_steps_through_the_tabs_in_order_and_wraps_around() {
         assert!(!doc.dirty, "switching tabs changes no document");
     }
 }
+
+/// #4050: Undo and Redo buttons in the mode bar, beside Save and Print. They are greyed out with
+/// nothing to undo or redo, undo and redo the document's last change when clicked, and say
+/// their shortcut. They are there on Home too, greyed out.
+#[test]
+fn undo_and_redo_buttons_in_the_mode_bar() {
+    let mut h = harness();
+    let id = h.state().views[0].id;
+    let rotation = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.pages[0].rotation;
+    let (undo, redo) = ("Undo (Ctrl+Z)", "Redo (Ctrl+Shift+Z)");
+    use egui_kittest::kittest::NodeT;
+    let off = |h: &Harness<'static, PdfCraftApp>, label: &str| h.get_by_label(label).accesskit_node().is_disabled();
+    assert!(off(&h, undo) && off(&h, redo), "nothing to undo or redo yet");
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    h.run_steps(2);
+    assert_eq!(rotation(&h), 90);
+    assert!(!off(&h, undo) && off(&h, redo));
+    h.get_by_label(undo).click();
+    h.run_steps(2);
+    assert_eq!(rotation(&h), 0, "Undo took the rotation back");
+    assert!(off(&h, undo) && !off(&h, redo));
+    h.get_by_label(redo).click();
+    h.run_steps(2);
+    assert_eq!(rotation(&h), 90, "Redo put it back");
+    // Home: no document to act on.
+    h.state_mut().set_option("home", "").unwrap();
+    h.run_steps(2);
+    assert!(off(&h, undo) && off(&h, redo));
+}
+
+/// With Undo and Redo in the mode bar, the narrowest window (820 pt) still keeps the search
+/// field clear of the mode tabs, in English and in German's longer words: the field takes the
+/// room the tabs leave.
+#[test]
+fn the_search_field_leaves_the_mode_tabs_clear_in_the_narrowest_window() {
+    for (lang, sign, search, undo) in
+        [("en", "E-Sign", "Find tools and commands", "Undo ("), ("de", "E-Signatur", "Werkzeuge und Befehle suchen", "Rückgängig (")]
+    {
+        let mut h = Harness::builder().with_size(egui::vec2(820.0, 520.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", lang).unwrap();
+            app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
+            app
+        });
+        h.run_steps(4);
+        let tab = h.get_by_label(sign).rect();
+        let field = h.get_by_label(search).rect();
+        let undo = h.get_by_label_contains(undo).rect();
+        assert!(field.left() >= tab.right(), "{lang}: the search field {field:?} runs over {sign} {tab:?}");
+        assert!(field.right() <= undo.left(), "{lang}: the search field {field:?} runs under Undo {undo:?}");
+    }
+}

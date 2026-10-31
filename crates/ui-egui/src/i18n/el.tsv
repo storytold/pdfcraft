@@ -2581,6 +2581,9 @@ animation effects	Off	Ανενεργά
 	Extract the selected pages…	Εξαγωγή των επιλεγμένων σελίδων…
 	Delete the selected pages	Διαγραφή των επιλεγμένων σελίδων
 
+# Undo and Redo buttons in the mode bar (#4050): the command's name and its shortcut, as Save ({key}) (AI-assisted, not separately native-reviewed)
+	Undo ({key})	Αναίρεση ({key})
+	Redo ({key})	Επανάληψη ({key})
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Επιλογές για αυτήν την απάντηση
 	Export value	Τιμή εξαγωγής

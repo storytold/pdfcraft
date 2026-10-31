@@ -79,6 +79,13 @@ impl PdfCraftApp {
     /// Whether a registered command can run now. The engine judges the document (security,
     /// contents, undo history); view state it can't see is checked here.
     pub(crate) fn command_enabled(&self, spec: &CommandSpec) -> bool {
+        // While a polygon, cloud or run of connected lines is being drawn, Undo takes back its
+        // last point (see `undo`), with or without earlier edits to undo.
+        if spec.needs == commands::Needs::Undo
+            && self.active_ids().is_some_and(|(i, _)| self.views.get(i).is_some_and(|v| v.comments.has_point_to_undo()))
+        {
+            return true;
+        }
         // Undo and Redo act on the Combine files list while its tab shows.
         if self.combine_showing() && matches!(spec.needs, commands::Needs::Undo | commands::Needs::Redo) {
             return self.combine_can_undo(spec.needs == commands::Needs::Undo);

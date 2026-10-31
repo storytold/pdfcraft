@@ -2484,6 +2484,9 @@ animation effects	Off	ఆఫ్
 	Extract the selected pages…	ఎంచుకున్న పేజీలను సంగ్రహించు…
 	Delete the selected pages	ఎంచుకున్న పేజీలను తొలగించు
 
+# Undo and Redo buttons in the mode bar (#4050): the command's name and its shortcut, as Save ({key}) (AI-assisted, not separately native-reviewed)
+	Undo ({key})	రద్దు చేయి ({key})
+	Redo ({key})	మళ్లీ చేయి ({key})
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ఈ ప్రత్యుత్తరం ఎంపికలు
 	Export value	ఎగుమతి విలువ

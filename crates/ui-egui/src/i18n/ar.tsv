@@ -2851,6 +2851,9 @@ certificate	Version	الإصدار
 	Extract the selected pages…	استخراج الصفحات المحددة…
 	Delete the selected pages	حذف الصفحات المحددة
 
+# Undo and Redo buttons in the mode bar (#4050): the command's name and its shortcut, as Save ({key}) (AI-assisted, not separately native-reviewed)
+	Undo ({key})	تراجع ({key})
+	Redo ({key})	إعادة ({key})
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	خيارات هذا الرد
 	Export value	قيمة التصدير
