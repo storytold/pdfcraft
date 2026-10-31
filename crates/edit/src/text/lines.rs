@@ -118,6 +118,39 @@ pub(crate) fn splice(pieces: &Pieces, ops: &[Op], mut edit: impl FnMut(usize) ->
     pieces.splice(edits)
 }
 
+/// Splice rewritten paragraph `block_ops` at `at` while replacing `partial_patches` in place
+/// and dropping `drop` operators. When `split` is `true`, sibling operators at `at` are emitted
+/// before the closing `ET` in `block_ops`.
+pub(crate) fn splice_rewrite(
+    pieces: &Pieces,
+    ops: &[Op],
+    drop: &std::collections::HashSet<usize>,
+    mut partial_patches: HashMap<usize, Op>,
+    at: usize,
+    split: bool,
+    mut block_ops: Vec<Op>,
+) -> Vec<Vec<u8>> {
+    splice(pieces, ops, |i| {
+        let mut insert = Vec::new();
+        let keep = if let Some(patched) = partial_patches.remove(&i) {
+            insert.push(patched);
+            false
+        } else {
+            !drop.contains(&i)
+        };
+        if i == at {
+            if split {
+                insert.extend(std::mem::take(&mut block_ops));
+            } else {
+                let mut b = std::mem::take(&mut block_ops);
+                b.extend(insert);
+                insert = b;
+            }
+        }
+        (insert, keep)
+    })
+}
+
 /// The page's `/Contents` after a [`splice`]: pieces whose bytes changed become new streams
 /// (keeping their dictionaries), the others stay as they were.
 pub(crate) fn rewritten_contents(doc: &mut Document, streams: &[(Object, Vec<u8>)], new: Vec<Vec<u8>>) -> Object {
@@ -232,6 +265,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                             && same_paint(l, &s.state)
                     }))
                 && near
+                && lines.last().is_none_or(|l| !l.ops.contains(&s.op))
                 // An OCR layer is one text object over the whole scan: its words continue a line
                 // only across a word space, not across a table cell or a tab stop.
                 && (s.state.render_mode != 3 || gap < pen.size * 0.6)
@@ -249,6 +283,9 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
             l.runs.push((s.text.clone(), l.ink.len(), spaced));
             l.ops.push(s.op);
             l.ops.extend(s.extra_ops.iter().copied());
+            if let Some(slice) = s.tj_slice() {
+                l.slices.push(slice);
+            }
             l.decodable &= s.decodable;
             l.visual_order |= s.visual_order;
             l.actual_text |= s.actual_text;
@@ -258,6 +295,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
             }
             // Spaces may use a separate subset font; they do not change the visible style.
         } else {
+            let slices = s.tj_slice().into_iter().collect();
             lines.push(TextLine {
                 text: s.text.clone(),
                 rect: s.rect,
@@ -278,6 +316,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 logical_order: s.logical_order,
                 actual_text: s.actual_text,
                 clips: s.state.render_mode >= 4,
+                slices,
                 unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
                 runs: vec![(s.text.clone(), s.ink.len(), false)],
                 soft_break: s.soft_break,
@@ -353,6 +392,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
                         && same_paint(l, &s.state)
                 }))
             && pen.continues(&s, if bt == s.bt { 3.0 } else { 1.5 }).0
+            && lines.last().is_none_or(|l| !l.ops.contains(&s.op))
     });
     if joins && let Some(l) = lines.last_mut() {
         let gap = last.map_or(0.0, |pen| pen.continues(&s, 0.0).1);
@@ -367,6 +407,9 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
         l.runs.push((s.text.clone(), l.ink.len(), spaced));
         l.ops.push(s.op);
         l.ops.extend(s.extra_ops.iter().copied());
+        if let Some(slice) = s.tj_slice() {
+            l.slices.push(slice);
+        }
         l.decodable &= s.decodable;
         l.visual_order |= s.visual_order;
         l.actual_text |= s.actual_text;
@@ -375,6 +418,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             l.unreadable_mode = s.state.unreadable.as_deref().map(str::to_owned);
         }
     } else {
+        let slices = s.tj_slice().into_iter().collect();
         lines.push(TextLine {
             text: s.text.clone(),
             rect: s.rect,
@@ -395,6 +439,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             logical_order: s.logical_order,
             actual_text: s.actual_text,
             clips: s.state.render_mode >= 4,
+            slices,
             unreadable_mode: s.state.unreadable.as_deref().map(str::to_owned),
             runs: vec![(s.text.clone(), s.ink.len(), false)],
             soft_break: s.soft_break,

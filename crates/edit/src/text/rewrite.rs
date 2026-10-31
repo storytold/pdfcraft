@@ -3,11 +3,11 @@ use super::fallback::{
     Encoder, MAX_TYPE3_GLYPHS, Type3Fallback, drop_unused_fallback_fonts, needs_type3, no_japanese_font, source_encodes, source_family,
     source_program_completes, source_show, source_space, source_width, type3_encode, type3_font,
 };
-use super::interp::{Carry, Origin, TextState, interpret};
-use super::lines::{content_streams, page_dict, rewritten_contents, splice, text_lines};
+use super::interp::{Carry, Origin, Shown, TextState, interpret, line_owns_shown, patch_tj_slices, patch_tj_subarray, tj_operands};
+use super::lines::{content_streams, page_dict, rewritten_contents, splice, splice_rewrite, text_lines};
 use super::{
-    Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, PdfString, Pieces, TextLine, TextSession, alignment_frame, group_blocks,
-    is_centred, parse, rewrite_styled_block,
+    Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, PdfString, Pieces, TextLine, TextSession, TjSlice, alignment_frame,
+    group_blocks, is_centred, parse, rewrite_styled_block,
 };
 
 /// What replacing a line did.
@@ -31,10 +31,10 @@ pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) ->
 /// `clear_block` already refuses these for the same reason.
 ///
 /// Every line the rewrite drops is checked, not only the one being replaced: a line's runs need
-/// not share a rendering mode (see [`TextLine::clips`]), and [`coincident_ops`] drops a whole
+/// not share a rendering mode (see [`TextLine::clips`]), and [`dropped_lines`] drops a whole
 /// overlapping line without regard to its mode -- so a mask could go with text that is ink.
-fn refuse_clipping_text(lines: &[TextLine], dropped: &std::collections::HashSet<usize>) -> Result<(), EditError> {
-    if lines.iter().any(|l| l.clips && l.ops.iter().any(|op| dropped.contains(op))) {
+fn refuse_clipping_text(dropped_lines: &[&TextLine]) -> Result<(), EditError> {
+    if dropped_lines.iter().any(|l| l.clips) {
         return Err(EditError::Invalid("text used as a clipping path cannot be edited: its glyphs mask the artwork behind them".into()));
     }
     Ok(())
@@ -44,20 +44,21 @@ fn refuse_clipping_text(lines: &[TextLine], dropped: &std::collections::HashSet<
 pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usize, text: &str, max_glyphs: usize) -> Result<LineEdit, EditError> {
     let text = text.replace(['\n', '\r'], " ");
     let lines = text_lines(doc, page)?;
-    let target = lines.get(line).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no line {}", page + 1, line + 1)))?;
-    target.ensure_editable()?;
-    // Copies of the line drawn on the same baseline go with it, so the replacement is all that
-    // shows. Which operators go is settled here, before any font is generated, so that a refusal
-    // leaves the document untouched.
-    let mut drops = coincident_ops(&lines, &[&target]);
-    drops.extend(target.ops.iter().copied());
-    refuse_clipping_text(&lines, &drops)?;
+    let target_ref = lines.get(line).ok_or_else(|| EditError::Invalid(format!("page {} has no line {}", page + 1, line + 1)))?;
+    target_ref.ensure_editable()?;
+    let dropped_list = dropped_lines(&lines, &[target_ref]);
+    refuse_clipping_text(&dropped_list)?;
     let p = page_dict(doc, page)?;
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
+    // Copies of the line drawn on the same baseline go with it, so the replacement is all that
+    // shows. Which operators go is settled here, before any font is generated, so that a refusal
+    // leaves the document untouched.
+    let (drops, mut partial_patches) = drop_and_patch(&lines, &[target_ref], &ops);
+    let target = target_ref.clone();
     let first = target.ops.first().copied().filter(|i| *i < ops.len()).ok_or_else(|| EditError::Invalid("the page's content changed".into()))?;
     // The line's own font, when it can show every character.
     let font = fonts_res.get(target.font.as_bytes()).and_then(|f| doc.resolve(f).as_dict().cloned()).map(|d| Metrics::from_dict(doc, &d));
@@ -78,15 +79,14 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
         }
         _ => {}
     }
-    match reused {
-        Some(metrics) => replacement.extend(source_show(
-            metrics,
-            &shown,
-            target.origin.state.font.as_ref().map_or(target.size, |(_, size)| *size),
-            source_space(doc, &fonts_res, metrics),
-            target.origin.state.char_spacing,
-            target.origin.state.word_spacing,
-        )?),
+    let new_adj = match reused {
+        Some(metrics) => {
+            let size = target.origin.state.font.as_ref().map_or(target.size, |(_, size)| *size);
+            let space = source_space(doc, &fonts_res, metrics);
+            let adv = source_width(metrics, &shown, size, space, target.origin.state.char_spacing, target.origin.state.word_spacing);
+            replacement.extend(source_show(metrics, &shown, size, space, target.origin.state.char_spacing, target.origin.state.word_spacing)?);
+            if size != 0.0 { -1000.0 * adv / size } else { 0.0 }
+        }
         None => {
             let fallback_shown = crate::bidi::to_visual(&text);
             if needs_type3(&text) {
@@ -100,6 +100,11 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
                 }
                 replacement.push(Op::new("Tf", vec![Object::name(&target.font), pdfcraft_content::num(size)]));
                 substituted = Some(format!("{} Type3", fallback.family));
+                let adv: f64 = fallback_shown
+                    .chars()
+                    .map(|c| fallback.widths.iter().find(|(ch, _)| *ch == c).map_or(0.0, |(_, w)| *w) * size + target.origin.state.char_spacing)
+                    .sum();
+                if size != 0.0 { -1000.0 * adv / size } else { 0.0 }
             } else {
                 let win = pdfcraft_fonts::win_ansi(&fallback_shown);
                 // WinAnsi turns what it can't show into '?'; refuse rather than print the wrong thing.
@@ -122,11 +127,48 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
                 f.set(b"BaseFont".to_vec(), Object::name(base));
                 f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
                 fonts_res.set(substitute_name.into_bytes(), Object::Dict(f));
+                let face = family.std14(target.bold, target.italic);
+                let adv = face.text_width(&fallback_shown, size)
+                    + fallback_shown.chars().count() as f64 * target.origin.state.char_spacing
+                    + fallback_shown.matches(' ').count() as f64 * target.origin.state.word_spacing;
+                if size != 0.0 { -1000.0 * adv / size } else { 0.0 }
             }
         }
+    };
+    if let Some(target_slice) = target.slices.iter().find(|s| s.op == first)
+        && let Some(arr) = ops[first].operands.last().and_then(Object::as_array)
+    {
+        let other_slices: Vec<&TjSlice> =
+            dropped_list.iter().flat_map(|l| &l.slices).filter(|s| s.op == first && s.range != target_slice.range).collect();
+        let prefix = patch_tj_subarray(arr, 0..target_slice.range.start, &other_slices);
+        let mut suffix = patch_tj_subarray(arr, target_slice.range.end..arr.len(), &other_slices);
+        let mut wrapped = Vec::new();
+        if !prefix.is_empty() {
+            wrapped.push(Op::new("TJ", vec![Object::Array(prefix)]));
+        }
+        wrapped.append(&mut replacement);
+        // Restore the original pen advance even for the final cell: later shows in
+        // this text object can be positioned relative to it without resetting Tm.
+        let delta = target_slice.adjustment - new_adj;
+        if delta.is_finite() && delta != 0.0 {
+            suffix.insert(0, pdfcraft_content::num(delta));
+        }
+        if !suffix.is_empty() {
+            wrapped.push(Op::new("TJ", vec![Object::Array(suffix)]));
+        }
+        replacement = wrapped;
+        partial_patches.remove(&first);
     }
     // Rebuild: the line's first operator becomes the replacement, its others go.
-    let new_data = splice(&pieces, &ops, |i| if i == first { (std::mem::take(&mut replacement), false) } else { (Vec::new(), !drops.contains(&i)) });
+    let new_data = splice(&pieces, &ops, |i| {
+        if i == first {
+            (std::mem::take(&mut replacement), false)
+        } else if let Some(patched) = partial_patches.remove(&i) {
+            (vec![patched], false)
+        } else {
+            (Vec::new(), !drops.contains(&i))
+        }
+    });
     let contents = rewritten_contents(doc, &streams, new_data);
     let page_ref = p.obj;
     if substituted.is_some() {
@@ -146,26 +188,43 @@ fn font_size_before(ops: &[Op], at: usize) -> Option<f64> {
     ops[..at].iter().rev().find(|o| o.is("Tf")).and_then(|o| o.num(1))
 }
 
-/// Operators of every line that is another drawing of one of `targets` (fake bold, an invisible
-/// text layer). A surviving copy would show the old text under the replacement.
-///
-/// A copy overlaps a target by more than half the smaller box and sits on the same baseline
-/// (within the tolerance that joins showing operators onto one line). A neighbouring line can
-/// share box area when the leading is tighter than the font's ascent plus descent; its baseline
-/// is farther away, so it stays.
-pub(crate) fn coincident_ops(lines: &[TextLine], targets: &[&TextLine]) -> std::collections::HashSet<usize> {
+/// Every line in `lines` that is one of `targets` or another drawing of one on the same baseline
+/// (fake bold, an invisible text layer). A surviving copy would show the old text under the replacement.
+pub(crate) fn dropped_lines<'a>(lines: &'a [TextLine], targets: &[&'a TextLine]) -> Vec<&'a TextLine> {
     let area = |r: [f64; 4]| ((r[2] - r[0]) * (r[3] - r[1])).max(0.0);
+    lines
+        .iter()
+        .filter(|line| {
+            targets.iter().any(|target| {
+                std::ptr::eq(*line, *target)
+                    || ((line.text.trim() == target.text.trim() || (line.origin.state.render_mode == 3) != (target.origin.state.render_mode == 3))
+                        && overlaps_half(line.rect, target.rect, area)
+                        && on_same_baseline(line, target))
+            })
+        })
+        .collect()
+}
+
+/// Operators to drop outright and operators to patch in place when columns of a
+/// `TJ` array with column jumps are being removed (#3744).
+pub(crate) fn drop_and_patch(all_lines: &[TextLine], members: &[&TextLine], ops: &[Op]) -> (std::collections::HashSet<usize>, HashMap<usize, Op>) {
+    let dropped = dropped_lines(all_lines, members);
     let mut drop = std::collections::HashSet::new();
-    for line in lines {
-        let copy = targets.iter().any(|target| {
-            let same_text = line.text.trim() == target.text.trim() || (line.origin.state.render_mode == 3) != (target.origin.state.render_mode == 3);
-            same_text && overlaps_half(line.rect, target.rect, area) && on_same_baseline(line, target)
-        });
-        if copy {
-            drop.extend(line.ops.iter().copied());
+    let mut partial_patches = HashMap::new();
+    for &op_idx in dropped.iter().flat_map(|l| &l.ops) {
+        if partial_patches.contains_key(&op_idx) {
+            continue;
         }
+        let slices: Vec<&TjSlice> = dropped.iter().flat_map(|l| &l.slices).filter(|s| s.op == op_idx).collect();
+        if let Some(op) = ops.get(op_idx)
+            && let Some(patched) = patch_tj_slices(op, &slices)
+        {
+            partial_patches.insert(op_idx, patched);
+            continue;
+        }
+        drop.insert(op_idx);
     }
-    drop
+    (drop, partial_patches)
 }
 
 fn overlaps_half(a: [f64; 4], b: [f64; 4], area: impl Fn([f64; 4]) -> f64) -> bool {
@@ -810,9 +869,7 @@ pub(crate) fn rewrite_block_from(
     };
     let members: Vec<&TextLine> = b.lines.iter().map(|i| &lines[*i]).collect();
     // One clipping run is enough: rewriting the paragraph would drop its mask with the rest.
-    let mut dropped = coincident_ops(&lines, &members);
-    dropped.extend(members.iter().flat_map(|l| l.ops.iter().copied()));
-    refuse_clipping_text(&lines, &dropped)?;
+    refuse_clipping_text(&dropped_lines(&lines, &members))?;
     let first = members.first().copied().ok_or_else(|| EditError::Invalid("the paragraph has no source runs".into()))?;
     members.iter().try_for_each(|line| line.ensure_editable())?;
     let p = page_dict(doc, page)?;
@@ -904,6 +961,7 @@ pub(crate) fn rewrite_block_from(
         &mut fonts_res,
     )?;
     let lead = line_lead(&b, &lines, style, &LeadScale { k, size, old_size, leading: o_state.leading });
+    let (dropped, partial_patches) = drop_and_patch(&lines, &members, &ops);
     let start = last.ops.first().copied().unwrap_or(emit.bt_op);
     let split = shows_before_paragraph(&ops, emit.bt_op, start, &dropped);
     // What the text after the paragraph expects, and what is in force where the paragraph is
@@ -941,10 +999,7 @@ pub(crate) fn rewrite_block_from(
         block_ops.push(Op::new("Tm", emit.tlm.iter().map(|v| n(*v)).collect()));
     }
     let at = if split { start } else { emit.bt_op };
-    let new_data = splice(&pieces, &ops, |i| {
-        let insert = if i == at { std::mem::take(&mut block_ops) } else { Vec::new() };
-        (insert, !dropped.contains(&i))
-    });
+    let new_data = splice_rewrite(&pieces, &ops, &dropped, partial_patches, at, split, block_ops);
     let contents = rewritten_contents(doc, &streams, new_data);
     let new_font = !reuse;
     if new_font {
@@ -1097,12 +1152,14 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
     let lines = text_lines(doc, page)?;
     let blocks = group_blocks(&lines);
     let mut selected = std::collections::BTreeSet::new();
+    let mut selected_lines = Vec::new();
     for index in indexes {
         let b = blocks.get(*index).ok_or_else(|| EditError::Invalid("a selected paragraph no longer exists".into()))?;
         for line in &b.lines {
             let l = lines.get(*line).ok_or_else(|| EditError::Invalid("a selected text line no longer exists".into()))?;
             l.ensure_editable()?;
             selected.extend(l.ops.iter().copied());
+            selected_lines.push(l);
         }
     }
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
@@ -1114,7 +1171,7 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
     // Keep full precision: a tiny rounded text-space change can be magnified by a CTM,
     // and restoring rise/spacing must not alter following unselected text.
     let n = Object::Real;
-    for s in shown.into_iter().filter(|s| selected.contains(&s.op)) {
+    let move_params = |s: &Shown| -> Result<(f64, f64, f64), EditError> {
         if !(0..=3).contains(&s.state.render_mode) {
             return Err(EditError::Invalid("text used as a clipping path cannot be moved in a group".into()));
         }
@@ -1141,7 +1198,57 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
         if ![shift, rise, dx, dy].iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
             return Err(EditError::Invalid("the paragraph move is too large".into()));
         }
-        let original = ops.get(s.op).ok_or_else(|| EditError::Invalid("a selected text operation is missing".into()))?;
+        Ok((shift, rise, dy))
+    };
+    let mut by_op: std::collections::BTreeMap<usize, Vec<Shown>> = std::collections::BTreeMap::new();
+    for s in shown.into_iter().filter(|s| selected.contains(&s.op)) {
+        by_op.entry(s.op).or_default().push(s);
+    }
+    for (op_idx, runs) in by_op {
+        let original = ops.get(op_idx).ok_or_else(|| EditError::Invalid("a selected text operation is missing".into()))?;
+        if runs.iter().any(|s| s.slice.is_some()) && original.is("TJ") {
+            let arr =
+                original.operands.last().and_then(Object::as_array).ok_or_else(|| EditError::Invalid("a text operation has no array".into()))?;
+            let mut replacement = Vec::new();
+            let first_start = runs.first().and_then(|r| r.slice.as_ref().map(|s| s.start)).unwrap_or(0);
+            if first_start > 0 {
+                replacement.push(Op::new("TJ", vec![Object::Array(tj_operands(arr, 0..first_start)?.to_vec())]));
+            }
+            for (idx_m, s) in runs.iter().enumerate() {
+                let seg = s.slice.as_ref().ok_or_else(|| EditError::Invalid("a selected text operation cannot be moved".into()))?;
+                let next_start = runs.get(idx_m.saturating_add(1)).and_then(|next| next.slice.as_ref().map(|r| r.start)).unwrap_or(arr.len());
+                // interpret emits ascending, disjoint ranges from this same final TJ array.
+                // Check both ranges even for an unselected cell: overlaps or reversed runs
+                // must return an error before any content is written to the document.
+                let cell = tj_operands(arr, seg.clone())?;
+                let gap = tj_operands(arr, seg.end..next_start)?;
+                if selected_lines.iter().any(|l| line_owns_shown(l, s)) {
+                    let (shift, rise, dy) = move_params(s)?;
+                    if dy != 0.0 {
+                        replacement.push(Op::new("Ts", vec![n(rise)]));
+                    }
+                    if shift != 0.0 {
+                        replacement.push(Op::new("TJ", vec![Object::Array(vec![n(shift)])]));
+                    }
+                    replacement.push(Op::new("TJ", vec![Object::Array(cell.to_vec())]));
+                    if shift != 0.0 {
+                        replacement.push(Op::new("TJ", vec![Object::Array(vec![n(-shift)])]));
+                    }
+                    if dy != 0.0 {
+                        replacement.push(Op::new("Ts", vec![n(s.state.rise)]));
+                    }
+                    if !gap.is_empty() {
+                        replacement.push(Op::new("TJ", vec![Object::Array(gap.to_vec())]));
+                    }
+                } else {
+                    replacement.push(Op::new("TJ", vec![Object::Array(tj_operands(arr, seg.start..next_start)?.to_vec())]));
+                }
+            }
+            patches.insert(op_idx, replacement);
+            continue;
+        }
+        let s = runs.first().ok_or_else(|| EditError::Invalid("a selected text operation cannot be moved".into()))?;
+        let (shift, rise, dy) = move_params(s)?;
         let mut replacement = Vec::new();
         let show = if original.is("'") || original.is("\"") {
             if original.is("\"") {
@@ -1172,7 +1279,7 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
         if dy != 0.0 {
             replacement.push(Op::new("Ts", vec![n(s.state.rise)]));
         }
-        patches.insert(s.op, replacement);
+        patches.insert(op_idx, replacement);
     }
     if patches.len() != selected.len() {
         return Err(EditError::Invalid("a selected text operation cannot be moved".into()));

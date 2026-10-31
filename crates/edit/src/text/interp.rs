@@ -1,6 +1,6 @@
 use super::fallback::is_type3_fallback;
 use super::rewrite::vertical_advance;
-use super::{Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, Rc};
+use super::{Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, Rc, TextLine, TjSlice};
 
 /// Text and graphics state captured for rewriting.
 #[derive(Clone, Debug, PartialEq)]
@@ -309,6 +309,7 @@ pub(super) struct Shown {
     /// `/PCSoft` with no `/N` (a file saved before this was tracked, or by another writer),
     /// matching the single space a rejoin always used before #2529.
     pub(super) soft_gap: usize,
+    pub(super) slice: Option<std::ops::Range<usize>>,
 }
 
 impl Shown {
@@ -325,6 +326,54 @@ impl Shown {
         let (start, across) = to_frame(dir, (self.start_x, self.baseline));
         (dir, start, to_frame(dir, (self.end_x, self.end_y)).0, across)
     }
+
+    /// The `TJ` operand slice and equivalent thousandths-of-an-em adjustment for this segment.
+    pub(super) fn tj_slice(&self) -> Option<TjSlice> {
+        let range = self.slice.clone()?;
+        let denom = self.state.size * self.state.scale;
+        let adjustment = if denom != 0.0 { -1000.0 * self.advance / denom } else { 0.0 };
+        adjustment.is_finite().then_some(TjSlice { op: self.op, range, adjustment })
+    }
+}
+
+/// Whether `line` owns the interpreted run `s` (matching its `TJ` operand slice when segmented).
+pub(super) fn line_owns_shown(line: &TextLine, s: &Shown) -> bool {
+    if line.slices.iter().any(|ts| ts.op == s.op) {
+        s.slice.as_ref().is_some_and(|slice| line.slices.iter().any(|ts| ts.op == s.op && ts.range == *slice))
+    } else {
+        line.ops.contains(&s.op)
+    }
+}
+
+/// Rewrite a subrange of a `TJ` operand array by replacing each matched slice with its advance adjustment.
+pub(super) fn patch_tj_subarray(pieces: &[Object], range: std::ops::Range<usize>, slices: &[&TjSlice]) -> Vec<Object> {
+    let mut out = Vec::new();
+    let mut idx = range.start;
+    while idx < range.end {
+        let Some(piece) = pieces.get(idx) else { break };
+        if let Some(s) = slices.iter().find(|s| s.range.start == idx && s.range.end <= range.end) {
+            out.push(pdfcraft_content::num(s.adjustment));
+            idx = s.range.end.max(idx.saturating_add(1));
+        } else {
+            out.push(piece.clone());
+            idx = idx.saturating_add(1);
+        }
+    }
+    out
+}
+
+/// Read a document-derived `TJ` range without trusting its bounds or ordering.
+pub(super) fn tj_operands(pieces: &[Object], range: std::ops::Range<usize>) -> Result<&[Object], EditError> {
+    pieces.get(range).ok_or_else(|| EditError::Invalid("a text operation has an invalid array range".into()))
+}
+
+/// Patch a `TJ` operator in place by replacing `slices` with numeric advance adjustments.
+pub(super) fn patch_tj_slices(op: &Op, slices: &[&TjSlice]) -> Option<Op> {
+    if !op.is("TJ") || slices.is_empty() {
+        return None;
+    }
+    let pieces = op.operands.last()?.as_array()?;
+    Some(Op::new("TJ", vec![Object::Array(patch_tj_subarray(pieces, 0..pieces.len(), slices))]))
 }
 
 /// Where the previous run of a line ended: its text object, baseline direction, offset across
@@ -380,7 +429,7 @@ fn tj_tracking(pieces: &[Object], metrics: &Metrics, size: f64, scale: f64) -> f
             for (code, len) in metrics.codes(&s.bytes) {
                 let blank = metrics.is_space(code, len) || metrics.text_of(code).is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
                 if previous && !blank {
-                    gaps.push(gap);
+                    gaps.push(gap * (size * scale).signum());
                 }
                 previous = !blank;
                 gap = 0.0;
@@ -389,7 +438,96 @@ fn tj_tracking(pieces: &[Object], metrics: &Metrics, size: f64, scale: f64) -> f
             gap += -n / 1000.0 * size * scale;
         }
     }
-    typical_tracking(&mut gaps, size * scale.abs() * 0.5)
+    typical_tracking(&mut gaps, (size * scale).abs() * 0.5)
+}
+
+/// Horizontal advance of a single encoded glyph in text space (`((w0 * Tfs + Tc + Tw) * Th)`).
+fn glyph_advance(m: &Metrics, code: u32, len: usize, ts: &Ts) -> f64 {
+    let w = m.width(code) * ts.size + ts.char_spacing + if m.is_space(code, len) { ts.word_spacing } else { 0.0 };
+    w * ts.scale
+}
+
+/// Total horizontal advance of a slice of `TJ` or `Tj` operands in text space.
+fn pieces_advance(pieces: &[Object], m: &Metrics, ts: &Ts) -> f64 {
+    let mut x = 0.0;
+    for p in pieces {
+        match p {
+            Object::String(s) => {
+                for (code, len) in m.codes(&s.bytes) {
+                    x += glyph_advance(m, code, len, ts);
+                }
+            }
+            other => {
+                if let Some(n) = other.as_f64() {
+                    x += -n / 1000.0 * ts.size * ts.scale;
+                }
+            }
+        }
+    }
+    x
+}
+
+/// Reach in font-size `em`s beyond which an intra-`BT` horizontal gap starts a new cell.
+fn column_reach(ts: &Ts) -> f64 {
+    if ts.render_mode == 3 { 0.6 } else { 3.0 }
+}
+
+/// Whether a `TJ` gap `dx` (already scaled by `ts.size * ts.scale`) exceeds the intra-`BT`
+/// line-join threshold of [`Pen::continues`].
+fn is_column_jump(dx: f64, tracking: f64, ts: &Ts) -> bool {
+    let em = ts.size.abs();
+    let step = dx * (ts.size * ts.scale).signum();
+    em.is_finite() && ts.scale.is_finite() && em > 0.0 && ts.scale != 0.0 && (step - tracking >= em * column_reach(ts) || step <= -em)
+}
+
+/// Non-overlapping index ranges of `pieces` for each column run inside a `TJ` array.
+/// Runs separated by at least the intra-`BT` line join threshold (`3 em`, or `0.6 em` for
+/// invisible OCR text, or `-1 em` backwards) split into separate runs so table columns
+/// emitted in a single `TJ` operator become independent cells (#3744).
+fn tj_segments(pieces: &[Object], m: &Metrics, ts: &Ts, tracking: f64) -> Vec<std::ops::Range<usize>> {
+    let mut segments: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut current: Option<std::ops::Range<usize>> = None;
+    let mut gap_dx = 0.0;
+    for (idx, p) in pieces.iter().enumerate() {
+        match p {
+            Object::String(s) => {
+                let mut str_dx = 0.0;
+                let mut has_ink = false;
+                for (code, len) in m.codes(&s.bytes) {
+                    let shown = m.text_of(code);
+                    let blank = m.is_space(code, len) || shown.as_deref().is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
+                    if !blank {
+                        has_ink = true;
+                    }
+                    str_dx += glyph_advance(m, code, len, ts);
+                }
+                if has_ink {
+                    if let Some(range) = &mut current {
+                        if is_column_jump(gap_dx, tracking, ts) {
+                            segments.push(range.clone());
+                            *range = idx..idx + 1;
+                        } else {
+                            range.end = idx + 1;
+                        }
+                    } else {
+                        current = Some(idx..idx + 1);
+                    }
+                    gap_dx = 0.0;
+                } else {
+                    gap_dx += str_dx;
+                }
+            }
+            other => {
+                if let Some(n) = other.as_f64() {
+                    gap_dx += -n / 1000.0 * ts.size * ts.scale;
+                }
+            }
+        }
+    }
+    if let Some(range) = current {
+        segments.push(range);
+    }
+    segments
 }
 
 fn positioned_tracking(shown: &mut [Shown]) {
@@ -519,10 +657,17 @@ impl MarkedContent {
             let tail = shown.split_off(start.min(shown.len()));
             let mut items = tail.into_iter();
             if let Some(mut first) = items.next() {
+                first.slice = None;
                 for item in items {
                     first.glyph_count = first.glyph_count.saturating_add(item.glyph_count);
-                    first.extra_ops.push(item.op);
-                    first.extra_ops.extend(item.extra_ops);
+                    if item.op != first.op && !first.extra_ops.contains(&item.op) {
+                        first.extra_ops.push(item.op);
+                    }
+                    for op in item.extra_ops {
+                        if op != first.op && !first.extra_ops.contains(&op) {
+                            first.extra_ops.push(op);
+                        }
+                    }
                     first.rect = [
                         first.rect[0].min(item.rect[0]),
                         first.rect[1].min(item.rect[1]),
@@ -562,15 +707,27 @@ struct TextRunState<'a> {
     soft_gap: usize,
 }
 
+fn planned_tj_runs(op: &Op, pieces: &[Object], m: &Metrics, ts: &Ts, tracking: f64) -> Vec<(std::ops::Range<usize>, Option<std::ops::Range<usize>>)> {
+    // Column splitting is horizontal only. Vertical TJ numbers advance the y pen
+    // without Tz, and remain in the upstream vertical geometry/preview path below.
+    let segments = if op.is("TJ") && ts.vertical.is_none() { tj_segments(pieces, m, ts, tracking) } else { Vec::new() };
+    let is_col_jump = |dx: f64| is_column_jump(dx, tracking, ts);
+    if segments.len() >= 2 {
+        segments.into_iter().map(|r| (r.clone(), Some(r))).collect()
+    } else if let Some(seg) = segments.first().filter(|s| {
+        is_col_jump(pieces_advance(pieces.get(..s.start).unwrap_or_default(), m, ts))
+            || is_col_jump(pieces_advance(pieces.get(s.end..).unwrap_or_default(), m, ts))
+    }) {
+        vec![(seg.clone(), Some(seg.clone()))]
+    } else {
+        vec![(0..pieces.len(), None)]
+    }
+}
+
 fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), EditError> {
     let ts = &mut *state.ts;
     let tm = &mut *state.tm;
     let tlm = &mut *state.tlm;
-    let at_bt = state.at_bt;
-    let bt = state.bt;
-    let marked = state.marked;
-    let carry = &mut *state.carry;
-    let out = &mut *state.out;
     if matches!(op.op.as_slice(), b"'" | b"\"") {
         if op.is("\"") {
             ts.word_spacing = op.num(0).unwrap_or(ts.word_spacing);
@@ -591,6 +748,40 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     };
     // Tc is already included in the pen advance; TJ may encode tracking instead.
     let tracking = if op.is("TJ") { tj_tracking(&pieces, &m, ts.size, ts.scale) } else { 0.0 };
+    let runs = planned_tj_runs(op, &pieces, &m, ts, tracking);
+    let mut cursor = 0usize;
+    for (seg, slice) in runs {
+        let lead_dx = pieces_advance(pieces.get(cursor..seg.start).unwrap_or_default(), &m, state.ts);
+        if lead_dx != 0.0 {
+            *state.tm = Matrix([1.0, 0.0, 0.0, 1.0, lead_dx, 0.0]).then(state.tm);
+        }
+        cursor = seg.end;
+        show_text_segment(i, &name, &m, pieces.get(seg).unwrap_or_default(), slice, tracking, state)?;
+    }
+    let tail_dx = pieces_advance(pieces.get(cursor..).unwrap_or_default(), &m, state.ts);
+    if tail_dx != 0.0 {
+        *state.tm = Matrix([1.0, 0.0, 0.0, 1.0, tail_dx, 0.0]).then(state.tm);
+    }
+    Ok(())
+}
+
+fn show_text_segment(
+    i: usize,
+    name: &[u8],
+    m: &Metrics,
+    pieces: &[Object],
+    slice: Option<std::ops::Range<usize>>,
+    tracking: f64,
+    state: &mut TextRunState<'_>,
+) -> Result<(), EditError> {
+    let ts = &mut *state.ts;
+    let tm = &mut *state.tm;
+    let tlm = &mut *state.tlm;
+    let at_bt = state.at_bt;
+    let bt = state.bt;
+    let marked = state.marked;
+    let carry = &mut *state.carry;
+    let out = &mut *state.out;
     let trm0 = tm.then(&ts.ctm);
     let start = trm0.apply(0.0, ts.rise);
     let mut text = String::new();
@@ -605,7 +796,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     let mut words: Vec<(f64, f64)> = Vec::new();
     let mut in_word = false;
     let mut glyph_count = 0_usize;
-    for p in &pieces {
+    for p in pieces {
         match p {
             Object::String(s) => {
                 for (code, len) in m.codes(&s.bytes) {
@@ -648,8 +839,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                         }
                     }
                     in_word = !blank;
-                    let w = m.width(code) * ts.size + ts.char_spacing + if m.is_space(code, len) { ts.word_spacing } else { 0.0 };
-                    x_text += w * ts.scale;
+                    x_text += glyph_advance(m, code, len, ts);
                 }
             }
             other => {
@@ -718,6 +908,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     out.push(Shown {
         op: i,
         extra_ops: Vec::new(),
+        slice,
         glyph_count,
         // Vertical text: the TJ adjustment that undoes the run is n = -1000 y / size; the
         // preview divides by size × `Tz`, so `Tz` is put back here.
@@ -744,7 +935,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         end_x: end.0,
         end_y: end.1,
         bt,
-        font: name,
+        font: name.to_vec(),
         base_font: m.base_font.clone(),
         face: ts.face.clone(),
         size: if size_user > 0.0 { size_user } else { ts.size },

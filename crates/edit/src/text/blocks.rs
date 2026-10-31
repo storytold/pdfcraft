@@ -1,7 +1,7 @@
-use super::interp::{Carry, interpret};
+use super::interp::{Carry, Shown, interpret, line_owns_shown, patch_tj_slices};
 use super::lines::{content_streams, page_dict, reading_lines, rewritten_contents, splice, text_lines};
-use super::rewrite::{LineEdit, coincident_ops, rewrite_block};
-use super::{Document, EditError, HashMap, Object, Op, Pieces, TextLine, group_blocks, regions};
+use super::rewrite::{LineEdit, dropped_lines, rewrite_block};
+use super::{Document, EditError, HashMap, Object, Op, Pieces, TextLine, TjSlice, group_blocks, regions};
 
 /// An editable text region: adjacent runs on visual rows, followed by aligned rows.
 /// A region may contain several source fonts, sizes, colours and weights.
@@ -264,8 +264,7 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
     let target = blocks.get(block).ok_or_else(|| EditError::Invalid("the paragraph no longer exists".into()))?;
     let targets: Vec<&TextLine> = target.lines.iter().filter_map(|i| lines.get(*i)).collect();
     targets.iter().try_for_each(|line| line.ensure_editable())?;
-    let mut drops = coincident_ops(&lines, &targets);
-    drops.extend(target.lines.iter().filter_map(|i| lines.get(*i)).flat_map(|l| l.ops.iter().copied()));
+    let dropped = dropped_lines(&lines, &targets);
     let p = page_dict(doc, page)?;
     let res = p.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let streams = content_streams(doc, &p.dict)?;
@@ -273,17 +272,37 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
     let ops = pieces.parse().ops;
     let shown = interpret(doc, &ops, &res, &mut HashMap::new(), &mut Carry::new(), None, None)?;
     let mut patches = HashMap::new();
-    for s in shown.into_iter().filter(|s| drops.contains(&s.op)) {
-        if s.state.render_mode >= 4 {
-            return Err(EditError::Invalid("text used as a clipping path cannot be previewed for editing".into()));
+    let mut by_op: HashMap<usize, Vec<Shown>> = HashMap::new();
+    for s in shown {
+        by_op.entry(s.op).or_default().push(s);
+    }
+    for (op_idx, runs) in by_op {
+        let dropped_runs: Vec<&Shown> = runs.iter().filter(|s| dropped.iter().any(|l| line_owns_shown(l, s))).collect();
+        if dropped_runs.is_empty() {
+            continue;
         }
-        let denominator = s.state.size * s.state.scale;
-        let adjustment = if denominator != 0.0 { -1000.0 * s.advance / denominator } else { 0.0 };
-        if !adjustment.is_finite() || (denominator == 0.0 && s.advance != 0.0) {
-            return Err(EditError::Invalid("the paragraph's text advance cannot be previewed".into()));
+        let mut last_adj = 0.0;
+        for s in &dropped_runs {
+            if s.state.render_mode >= 4 {
+                return Err(EditError::Invalid("text used as a clipping path cannot be previewed for editing".into()));
+            }
+            let denominator = s.state.size * s.state.scale;
+            let adjustment = if denominator != 0.0 { -1000.0 * s.advance / denominator } else { 0.0 };
+            if !adjustment.is_finite() || (denominator == 0.0 && s.advance != 0.0) {
+                return Err(EditError::Invalid("the paragraph's text advance cannot be previewed".into()));
+            }
+            last_adj = adjustment;
+        }
+        let slices: Vec<TjSlice> = dropped_runs.iter().filter_map(|s| s.tj_slice()).collect();
+        let slice_refs: Vec<&TjSlice> = slices.iter().collect();
+        if let Some(op) = ops.get(op_idx)
+            && let Some(patched) = patch_tj_slices(op, &slice_refs)
+        {
+            patches.insert(op_idx, vec![patched]);
+            continue;
         }
         let mut replacement = Vec::new();
-        if let Some(op) = ops.get(s.op) {
+        if let Some(op) = ops.get(op_idx) {
             if op.is("\"") {
                 replacement.push(Op::new("Tw", vec![op.operands.first().cloned().unwrap_or(Object::Int(0))]));
                 replacement.push(Op::new("Tc", vec![op.operands.get(1).cloned().unwrap_or(Object::Int(0))]));
@@ -292,8 +311,8 @@ pub fn clear_block(doc: &mut Document, page: usize, block: usize) -> Result<(), 
                 replacement.push(Op::new("T*", vec![]));
             }
         }
-        replacement.push(Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(adjustment)])]));
-        patches.insert(s.op, replacement);
+        replacement.push(Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(last_adj)])]));
+        patches.insert(op_idx, replacement);
     }
     let data = splice(&pieces, &ops, |i| patches.remove(&i).map_or((Vec::new(), true), |v| (v, false)));
     let contents = rewritten_contents(doc, &streams, data);
