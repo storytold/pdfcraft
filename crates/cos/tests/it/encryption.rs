@@ -582,6 +582,28 @@ fn a_crypt_filter_selected_by_reference_is_used() {
     }
 }
 
+/// A reference to a stream that takes `follows` references to read cold, this one included: its
+/// nine filters are all read, the last leading to the next stream.
+fn spends(doc: &mut Document, follows: usize) -> Object {
+    let left = follows - 1;
+    let mut filters: Vec<Object> = (0..left.min(8)).map(|i| Object::Ref(doc.add(Object::Int(i as i64)))).collect();
+    if left > 8 {
+        filters.push(spends(doc, left - 8));
+    }
+    let mut dict = pdfcraft_cos::Dict::new();
+    dict.set(b"Filter".to_vec(), Object::Array(filters));
+    Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(dict, Vec::new()))))
+}
+
+/// Gives the content stream a `/Type` that takes `follows` references to read, ahead of its filter.
+fn spend_first(doc: &mut Document, follows: usize) {
+    let spent = spends(doc, follows);
+    let contents = contents_of(doc);
+    let Object::Stream(mut s) = doc.get(contents).as_ref().clone() else { panic!("no content stream") };
+    s.dict.set(b"Type".to_vec(), spent);
+    doc.set(contents, Object::Stream(s));
+}
+
 /// Past what one read may follow a reference reads as absent, and a crypt filter with no `/Name` is
 /// `/Identity`. Together those would read this stream's ciphertext as data, so what can't be told
 /// is the document's own filter, as a `/Filter` that can't be read is.
@@ -590,20 +612,7 @@ fn a_crypt_filter_past_what_a_read_may_follow_is_the_documents_own() {
     let mut doc = Document::open(Arc::new(protect(Algorithm::Aes128, "", "owner", -1))).unwrap();
     let selected = selector(&mut doc, 1, "StdCF").unwrap();
     select(&mut doc, selected);
-    // Streams each ahead of the next, whose nine filters by reference are all read: the first of
-    // them, read cold, spends all that one read may follow.
-    let mut spends = doc.add(Object::Int(0));
-    for _ in 0..4 {
-        let mut filters: Vec<Object> = (0..8).map(|i| Object::Ref(doc.add(Object::Int(i)))).collect();
-        filters.push(Object::Ref(spends));
-        let mut dict = pdfcraft_cos::Dict::new();
-        dict.set(b"Filter".to_vec(), Object::Array(filters));
-        spends = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(dict, Vec::new())));
-    }
-    let contents = contents_of(&doc);
-    let Object::Stream(mut s) = doc.get(contents).as_ref().clone() else { panic!("no content stream") };
-    s.dict.set(b"Type".to_vec(), Object::Ref(spends));
-    doc.set(contents, Object::Stream(s));
+    spend_first(&mut doc, 40);
     let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
     assert!(!holds(&saved, "Secret page"), "saved encrypted");
     let back = Document::open(Arc::new(saved)).unwrap();
@@ -611,6 +620,18 @@ fn a_crypt_filter_past_what_a_read_may_follow_is_the_documents_own() {
     let full = write_full(&back, &SaveOptions::default()).unwrap();
     assert!(!holds(&full, "Secret page"), "renumbered, encrypted");
     assert_eq!(raw_content(&Document::open(Arc::new(full)).unwrap()), SECRET, "renumbered");
+}
+
+/// A read that takes all it may follow has refused nothing: a crypt filter with no `/Name` after it
+/// is still `/Identity`, and the stream is in the clear.
+#[test]
+fn a_crypt_filter_with_no_name_after_all_a_read_may_follow_is_identity() {
+    let mut doc = Document::open(Arc::new(protect(Algorithm::Aes128, "", "owner", -1))).unwrap();
+    select(&mut doc, (Object::name("Crypt"), Object::Dict(pdfcraft_cos::Dict::new())));
+    spend_first(&mut doc, 32);
+    let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    assert!(holds(&saved, "Secret page"), "written as the stream asks");
+    assert_eq!(raw_content(&Document::open(Arc::new(saved)).unwrap()), SECRET);
 }
 
 /// `/Identity` selected by reference keeps a stream in the clear in a document that encrypts the

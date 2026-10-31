@@ -27,6 +27,8 @@ std::thread_local! {
     static SCOPES: Cell<u32> = const { Cell::new(0) };
     /// The references followed in the outermost of them.
     static FOLLOWED: Cell<u32> = const { Cell::new(0) };
+    /// The references refused in the outermost of them, past [`MAX_FOLLOWED`].
+    static REFUSED: Cell<u32> = const { Cell::new(0) };
 }
 
 /// One read or write of an object, with everything it loads on the way: what [`MAX_FOLLOWED`] counts.
@@ -36,6 +38,7 @@ impl FollowScope {
     pub(crate) fn enter() -> Self {
         if SCOPES.replace(SCOPES.get().saturating_add(1)) == 0 {
             FOLLOWED.set(0);
+            REFUSED.set(0);
         }
         FollowScope
     }
@@ -51,6 +54,7 @@ impl Drop for FollowScope {
 /// [`FollowScope`], which is what starts the count again.
 pub(crate) fn following<T>(spent: T, f: impl FnOnce() -> T) -> T {
     if FOLLOWED.get() >= MAX_FOLLOWED {
+        REFUSED.set(REFUSED.get().saturating_add(1));
         return spent;
     }
     FOLLOWED.set(FOLLOWED.get() + 1);
@@ -132,9 +136,11 @@ fn is_crypt(doc: &Document, f: &Object) -> bool {
 /// The crypt filter a stream names in its `/Filter` chain (`/Crypt` + `/DecodeParms /Name`), each
 /// given directly or by reference, in an array or not. A chain longer than any decoder takes names
 /// none: nothing can read that stream anyway, and every stream of a file can share one long array.
-/// A `/Name` that reads as absent means `/Identity`, unless reading it ran past [`MAX_FOLLOWED`]:
-/// that says nothing about the stream, so it names none, and the document's own filter is used.
+/// A `/Name` that reads as absent means `/Identity`, unless a reference on the way to it was refused
+/// (see [`MAX_FOLLOWED`]): that says nothing about the stream, so it names none, and the document's
+/// own filter is used.
 fn named_crypt_filter(doc: &Document, dict: &Dict) -> Option<Vec<u8>> {
+    let refused = REFUSED.get();
     let filter = followed(doc, dict.get(b"Filter")?);
     let i = match &*filter {
         Object::Array(a) if a.len() <= MAX_CHAIN + 1 => a.iter().position(|f| is_crypt(doc, f))?,
@@ -151,7 +157,7 @@ fn named_crypt_filter(doc: &Document, dict: &Dict) -> Option<Vec<u8>> {
     match name.as_deref().and_then(Object::as_name) {
         Some(name) => Some(name.to_vec()),
         // /Identity here would read ciphertext as data, and write the stream in the clear.
-        None if FOLLOWED.get() >= MAX_FOLLOWED => None,
+        None if REFUSED.get() > refused => None,
         None => Some(b"Identity".to_vec()),
     }
 }
