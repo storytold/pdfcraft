@@ -3447,6 +3447,51 @@ fn indexed_thin_rules_keep_their_samples_for_both_palette_orders_and_decodes() {
     }
 }
 
+/// An image past what the JBIG2 decoder takes on a side stays as it is: JBIG2 can state the size,
+/// but such a stream reads as nothing here, and storing it lost the picture. At 65,535 on a side,
+/// the same bars do become JBIG2, so the fixture does reach that choice.
+#[test]
+fn an_image_too_large_for_the_jbig2_decoder_stays_as_it_is() {
+    for (w, h, stored) in
+        [(65_535u32, 16u32, &b"JBIG2Decode"[..]), (16, 65_535, b"JBIG2Decode"), (65_536, 16, b"FlateDecode"), (16, 65_536, b"FlateDecode")]
+    {
+        let stride = (w as usize).div_ceil(8);
+        let mut data = vec![0xFF; stride * h as usize];
+        // Dark bars of irregular lengths across the long side, which Flate shrinks less than JBIG2.
+        let mut state = 0x1234_5678u32;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state as usize
+        };
+        let long = w.max(h) as usize;
+        let mut at = 10;
+        while at + 60 < long {
+            let len = 5 + next() % 50;
+            for along in at..at + len {
+                for across in 0..12 {
+                    let (x, y) = if w > h { (along, across) } else { (across, along) };
+                    data[y * stride + x / 8] &= !(0x80 >> (x % 8));
+                }
+            }
+            at += len + 5 + next() % 50;
+        }
+        let mut doc = Document::new_empty();
+        let image = mono_image(&mut doc, w, h, &data, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+        page(&mut doc, &[("Im", image)], &format!("q {w} 0 0 {h} 0 0 cm /Im Do Q"));
+        let before = stream(&doc, image).raw.clone();
+        let settings =
+            Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, downsample: false, ..MonoSettings::REDUCE }, ..Settings::default() };
+        optimize(&mut doc, &settings).unwrap();
+        let s = stream(&doc, image);
+        assert_eq!(s.dict.name(b"Filter"), Some(stored), "{w} × {h}");
+        if stored == b"FlateDecode" {
+            assert_eq!(s.raw, before, "{w} × {h}");
+        }
+    }
+}
+
 /// White margins must not hide a small screened photograph from the tone guard.
 #[test]
 fn mixed_text_and_small_halftone_regions_keep_their_tones_with_wide_white_margins() {
