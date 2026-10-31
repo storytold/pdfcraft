@@ -20,6 +20,7 @@ use crate::model::{
 };
 use crate::text::{self, Block, Face, Span};
 
+mod borders;
 mod common;
 mod draw;
 mod field;
@@ -28,6 +29,7 @@ mod items;
 mod measure;
 mod pages;
 
+use borders::BlockBorder;
 use common::collect_values;
 pub(crate) use common::date_pattern;
 pub use common::formatted_value;
@@ -81,13 +83,14 @@ impl Ctx {
     }
 }
 
-/// (address of a subform or area in the template, available width bits, depth).
-type MeasureKey = (usize, u64, usize);
+/// (address of a subform or area in the template, available width bits, depth, own instance index).
+type MeasureKey = (usize, u64, usize, usize);
 
 /// A cached size, with the inherited text defaults it was measured with.
 struct Measured {
     font: Font,
     para: Para,
+    parent_som: String,
     size: (f64, f64),
 }
 
@@ -152,17 +155,18 @@ struct Layouter<'t> {
     /// The fields and draws of the block being placed: (first item, one past the last, top,
     /// bottom) on the last page. A page break keeps each whole (see `split_block`).
     leaves: Vec<(usize, usize, f64, f64)>,
+    /// Border item ranges while drawing a block that may split. Preserve their semantics
+    /// until pagination, instead of cutting the already-expanded edge lines individually.
+    block_borders: Option<Vec<BlockBorder>>,
     /// The flowed subforms being laid out, outermost first: a break between their children
     /// closes their parts on one content area and opens new ones on the next.
     frames: Vec<Frame>,
 }
 
-/// How many instances of a repeating subform to lay out: what the data holds once it holds
-/// any (rows added or removed), else the template's initial count; never below one, never
-/// above the maximum.
-pub fn instance_count(occur: &Occur, from_data: usize) -> usize {
-    let n = if from_data > 0 { from_data } else { occur.initial };
-    n.min(occur.max.unwrap_or(usize::MAX)).clamp(1, MAX_INSTANCES)
+/// XFA 3.3 §7, “Repeating Elements using Occurrence Limits”: `initial` applies to a blank
+/// merge (`None`); a data merge uses its matching records, including zero, and `min`/`max`.
+pub fn instance_count(occur: &Occur, from_data: Option<usize>) -> usize {
+    from_data.unwrap_or(occur.initial).max(occur.min).min(occur.max.unwrap_or(usize::MAX)).min(MAX_INSTANCES)
 }
 
 /// Lay a template out, with the values and repeat counts of `data` (the `xfa:data` element).
@@ -200,6 +204,7 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         measured: RefCell::new(HashMap::new()),
         measures: Cell::new(0),
         leaves: Vec::new(),
+        block_borders: None,
         frames: Vec::new(),
     };
     let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new() };

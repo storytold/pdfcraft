@@ -149,6 +149,14 @@ pub fn layout_xml(xml: &str) -> Result<Form, XfaError> {
 /// The XFA packets stay, so Adobe's viewers keep rendering it their way. Widget appearances are
 /// left for the forms layer to generate.
 pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
+    let mut staged = doc.clone();
+    let report = render_into_staged(&mut staged)?;
+    *doc = staged;
+    Ok(report)
+}
+
+/// Initial binding and page generation publish together, or leave the source untouched.
+fn render_into_staged(doc: &mut Document) -> Result<Report, XfaError> {
     if !is_dynamic(doc) {
         return Err(XfaError::NotXfa);
     }
@@ -164,6 +172,7 @@ pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
     if form.pages.is_empty() {
         return Err(XfaError::Malformed("the template laid out to no pages".into()));
     }
+    data::preserve_initial_instances(doc, &tpl)?;
     let written = pdf::write_form(doc, &form)?;
     let mut warnings = form.warnings;
     warnings.extend(written.warnings);
@@ -176,3 +185,9 @@ pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod zero_instances_tests;
+
+#[cfg(test)]
+mod occurrence_layout_tests;

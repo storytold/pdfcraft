@@ -1,6 +1,6 @@
 use super::host::{HNode, XHost, host};
 use super::model::{MAX_ADDED, MAX_DEPTH, MAX_NODES, XfaEffect};
-use super::nodes::{instances, node_object};
+use super::nodes::{instance_source, instances, node_object};
 use super::{Attribute, Context, JsArray, JsObject, JsResult, JsValue, NativeFunction, ObjectInitializer, arg, function, js_string, s, text};
 
 pub(super) fn list_object(ctx: &mut Context, items: &[usize]) -> JsResult<JsValue> {
@@ -32,7 +32,7 @@ pub(super) fn instance_manager(ctx: &mut Context, parent: usize, name: &str) -> 
     let (count, min, max) = {
         let h = host(ctx)?.borrow();
         let live = instances(&h, parent, name);
-        let first = live.first().and_then(|i| h.nodes.get(*i));
+        let first = instance_source(&h, parent, name).and_then(|i| h.nodes.get(i));
         (live.len(), first.map_or(0, |n| n.occur_min), first.and_then(|n| n.occur_max))
     };
     let key = ObjectInitializer::new(ctx)
@@ -113,7 +113,7 @@ fn renumber(h: &mut XHost, idx: usize, depth: usize) {
     let (parent_som, name, index, kids) = {
         let Some(n) = h.nodes.get(idx) else { return };
         let parent_som = n.parent.and_then(|p| h.nodes.get(p)).map(|p| p.som.clone()).unwrap_or_default();
-        (parent_som, n.name.clone(), n.index, n.children.clone())
+        (parent_som, n.name.clone(), n.index, n.children.iter().chain(&n.instance_templates).copied().collect::<Vec<_>>())
     };
     let som = child_som(parent_som, &name, index);
     if let Some(n) = h.nodes.get_mut(idx) {
@@ -135,19 +135,32 @@ fn child_som(parent_som: String, name: &str, index: usize) -> String {
     }
 }
 
-/// A copy of `src`'s subtree (values cleared) under `parent`, returning the copy's index.
-fn clone_subtree(h: &mut XHost, src: usize, parent: Option<usize>, depth: usize) -> Option<usize> {
+/// Copy a subtree under `parent`. Dormant definitions keep template defaults; copies of
+/// live or removed instances clear user values. Dormant nested definitions stay separate.
+fn clone_subtree(h: &mut XHost, src: usize, parent: Option<usize>, depth: usize, preserve_values: bool, dormant: bool) -> Option<usize> {
     if depth > MAX_DEPTH || h.nodes.len() >= MAX_NODES {
         return None;
     }
-    let (template, kids) = {
+    // Default values and their formatted display are copied into the snapshot, even for
+    // dormant descendants. Charge before allocating either string, like a scripted write.
+    // Failed partial clones retain their charge as work already spent, but no arena nodes.
+    let bytes = if preserve_values {
+        let n = h.nodes.get(src)?;
+        n.value.len().saturating_add(n.formatted.as_ref().map_or(0, String::len))
+    } else {
+        0
+    };
+    if !h.room(bytes) {
+        return None;
+    }
+    let (template, kids, templates) = {
         let n = h.nodes.get(src)?;
         (
             HNode {
                 name: n.name.clone(),
                 som: String::new(),
                 kind: n.kind,
-                value: String::new(),
+                value: if preserve_values { n.value.clone() } else { String::new() },
                 numeric: n.numeric,
                 presence: n.presence.clone(),
                 access: n.access.clone(),
@@ -155,30 +168,37 @@ fn clone_subtree(h: &mut XHost, src: usize, parent: Option<usize>, depth: usize)
                 occur_min: n.occur_min,
                 occur_max: n.occur_max,
                 index: n.index,
+                template_order: n.template_order,
                 parent,
                 children: Vec::new(),
+                instance_templates: Vec::new(),
+                dormant,
+                default_source: if n.dormant { Some(src) } else { n.default_source },
                 gone: false,
-                // The copy holds no value, so nothing is shown in its picture either.
-                formatted: None,
+                // A template clone retains its default value and matching display together.
+                // A blank live-row clone must not retain its source's formatted value.
+                formatted: if preserve_values { n.formatted.clone() } else { None },
             },
             n.children.clone(),
+            n.instance_templates.clone(),
         )
     };
     let idx = h.nodes.len();
     h.nodes.push(template);
     let mut copied = Vec::new();
     for k in kids {
-        // Nested repeating subforms copy their first instance only.
-        let skip = h.nodes.get(k).is_some_and(|c| c.gone || c.repeatable && c.index > 0);
+        // Live rows retain the existing first-instance cloning policy; a dormant
+        // definition already contains precisely its initial nested instances.
+        let skip = h.nodes.get(k).is_some_and(|c| c.gone || !preserve_values && c.repeatable && c.index > 0);
         if skip {
             continue;
         }
-        if let Some(ci) = clone_subtree(h, k, Some(idx), depth + 1) {
-            copied.push(ci);
-        }
+        copied.push(clone_subtree(h, k, Some(idx), depth + 1, preserve_values, dormant)?);
     }
+    let copied_templates = templates.into_iter().map(|k| clone_subtree(h, k, Some(idx), depth + 1, true, true)).collect::<Option<Vec<_>>>()?;
     if let Some(n) = h.nodes.get_mut(idx) {
         n.children = copied;
+        n.instance_templates = copied_templates;
     }
     Some(idx)
 }
@@ -200,7 +220,7 @@ impl XHost {
     pub(crate) fn add_instance(&mut self, parent: usize, name: &str) -> Option<usize> {
         let h = self;
         let live = instances(h, parent, name);
-        let &first = live.first()?;
+        let first = instance_source(h, parent, name)?;
         let (repeatable, max) = h.nodes.get(first).map(|n| (n.repeatable, n.occur_max)).unwrap_or((false, Some(1)));
         if !repeatable || max.is_some_and(|m| live.len() >= m) || h.added >= MAX_ADDED || h.nodes.len() >= MAX_NODES {
             return None;
@@ -212,14 +232,27 @@ impl XHost {
         if !h.reserve(&XfaEffect::AddInstance { som: String::new() }, som.len()) {
             return None;
         }
-        let new = clone_subtree(h, first, Some(parent), 0)?;
-        let last = live.last().copied().unwrap_or(first);
+        let preserve_values = h.nodes.get(first).is_some_and(|n| n.dormant);
+        let original_len = h.nodes.len();
+        let Some(new) = clone_subtree(h, first, Some(parent), 0, preserve_values, false) else {
+            // No partial row and no unattached copied nodes survive a resource limit.
+            h.nodes.truncate(original_len);
+            return None;
+        };
+        let last = live.last().copied();
         if let Some(n) = h.nodes.get_mut(new) {
             n.index = live.len();
         }
-        // Keep instances together: right after the last one.
-        if let Some(p) = h.nodes.get_mut(parent) {
-            let pos = p.children.iter().position(|&c| c == last).map_or(p.children.len(), |i| i + 1);
+        // Keep instances together, or place a first instance at its definition's position.
+        let order = h.nodes.get(first).map_or(0, |n| n.template_order);
+        let pos = h.nodes.get(parent).map(|p| {
+            last.and_then(|last| p.children.iter().position(|&c| c == last).map(|i| i + 1))
+                .or_else(|| p.children.iter().position(|&c| h.nodes.get(c).is_some_and(|n| !n.gone && n.template_order > order)))
+                .unwrap_or(p.children.len())
+        });
+        if let Some(pos) = pos
+            && let Some(p) = h.nodes.get_mut(parent)
+        {
             p.children.insert(pos, new);
         }
         renumber(h, new, 0);
@@ -250,13 +283,12 @@ impl XHost {
         }
     }
 
-    /// Remove instance `i` of the subform `name` under `parent` (never below the minimum, or
-    /// below one).
+    /// Remove instance `i` of the subform `name` under `parent`, never below its minimum.
     pub(crate) fn remove_instance(&mut self, parent: usize, name: &str, i: usize) {
         let h = self;
         let live = instances(h, parent, name);
         let Some(&gone) = live.get(i) else { return };
-        let min = h.nodes.get(gone).map_or(0, |n| n.occur_min).max(1);
+        let min = h.nodes.get(gone).map_or(0, |n| n.occur_min);
         if live.len() <= min {
             return;
         }

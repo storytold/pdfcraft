@@ -18,6 +18,7 @@ use crate::packets::{Encoding, encode};
 mod build;
 mod dates;
 mod import;
+mod initial;
 mod merge;
 mod passwords;
 mod path;
@@ -33,6 +34,7 @@ pub use dates::{iso_to_pattern, pattern_to_iso};
 #[cfg(test)]
 pub(crate) use import::MAX_IMPORT_BYTES;
 pub use import::{DataImport, ImportNode, export_data, import_data, parse_data_file, write_data_image};
+pub(crate) use initial::preserve_initial_instances;
 pub use passwords::{clear_password_values, has_password_values};
 pub(crate) use path::template_field;
 pub use path::{data_path, parse_datasets, som_to_path};

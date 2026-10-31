@@ -28,6 +28,9 @@ const MAX_ERRORS_PER_EVENT: usize = 100;
 /// the calculations every change runs) is held tighter than a click.
 const OPEN_BUDGET_MS: u64 = 3_000;
 const EVENT_BUDGET_MS: u64 = 5_000;
+/// Cumulative host-side replay work per event, on native and WASM. Charges full
+/// snapshot scans, cache invalidation scans, and emitted descendant data operations.
+const MAX_EFFECT_WORK: usize = pdfcraft_xfa::MAX_FORM_NODES * 10;
 
 /// Engine limits for one script: initialize, calculate and validate scripts run without the
 /// user asking (on open, on every change), so they get fewer loop iterations than a click.
@@ -134,7 +137,8 @@ pub(crate) struct XfaRun<'a> {
     pub time_scale: u32,
 }
 
-/// The live form node `n`, with its descendants, as the script engine's snapshot of it.
+/// Copy the live tree and detached definitions into the script-host snapshot, including
+/// each field's formatted display value.
 fn to_js(n: &FormNode) -> XfaNode {
     XfaNode {
         name: n.name.clone(),
@@ -154,24 +158,87 @@ fn to_js(n: &FormNode) -> XfaNode {
         occur_min: n.occur_min,
         occur_max: n.occur_max,
         index: n.index,
+        template_order: n.template_order,
         children: n.children.iter().map(to_js).collect(),
+        instance_templates: n.instance_templates.iter().map(to_js).collect(),
         formatted: n.display_picture.as_deref().and_then(|p| pdfcraft_xfa::formatted_value(p, &n.value)),
     }
 }
 
-fn find_container<'a>(n: &'a FormNode, som: &str, depth: usize) -> Option<&'a FormNode> {
+/// Find the live owner of a row, not just the first container with its parent's SOM.
+/// Unnamed wrappers share that SOM. Inspect retained definitions for ownership, but
+/// never descend into them; all inspected candidates spend the replay work budget.
+fn find_container<'a>(n: &'a FormNode, som: &str, name: &str, depth: usize, visited: &mut usize) -> Option<&'a FormNode> {
+    *visited = visited.saturating_add(1);
     if depth > 64 {
         return None;
     }
-    if n.som == som && n.kind != Some(NodeKind::Field) {
+    if n.som == som
+        && n.kind != Some(NodeKind::Field)
+        && n.children.iter().chain(&n.instance_templates).any(|child| {
+            *visited = visited.saturating_add(1);
+            child.name == name && child.kind == Some(NodeKind::Subform)
+        })
+    {
         return Some(n);
     }
-    n.children.iter().find_map(|c| find_container(c, som, depth + 1))
+    n.children.iter().find_map(|c| find_container(c, som, name, depth + 1, visited))
 }
 
-fn count_instances(root: &FormNode, parent_som: &str, name: &str) -> usize {
-    let parent = if parent_som.is_empty() { Some(root) } else { find_container(root, parent_som, 0) };
-    parent.map_or(0, |p| p.children.iter().filter(|c| c.name == name).count())
+/// Counts and default descendant SOM suffixes for one manager during an effect batch.
+/// Suffixes are rebased for each new row, so the cached definition holds no user values.
+struct InstanceState {
+    count: usize,
+    seeds: Vec<String>,
+}
+
+impl InstanceState {
+    /// Read a manager once from the current tree. Only live descendants of its retained
+    /// definition seed data; dormant children must stay absent. Traversal is bounded.
+    fn read(root: &FormNode, parent_som: &str, name: &str, work: &mut usize) -> Result<Self, String> {
+        let parent = find_container(root, parent_som, name, 0, work);
+        let count = parent.map_or(0, |p| {
+            *work = work.saturating_add(p.children.len());
+            p.children.iter().filter(|c| c.name == name).count()
+        });
+        let mut state = Self { count, seeds: Vec::new() };
+        let Some(source) = parent.and_then(|p| {
+            p.instance_templates.iter().find(|n| {
+                *work = work.saturating_add(1);
+                n.name == name
+            })
+        }) else {
+            return Ok(state);
+        };
+        let mut pending = source.children.iter().map(|n| (n, 1usize)).collect::<Vec<_>>();
+        let mut visited = 0;
+        while let Some((node, depth)) = pending.pop() {
+            visited += 1;
+            *work = work.saturating_add(1);
+            if depth > 64 || visited > pdfcraft_xfa::MAX_FORM_NODES {
+                return Err("The added XFA instance exceeds the supported structure limits".into());
+            }
+            if node.kind == Some(NodeKind::Subform)
+                && !node.name.is_empty()
+                && node.name != "#subform"
+                && let Some(suffix) = node.som.strip_prefix(&source.som)
+            {
+                state.seeds.push(suffix.to_string());
+            }
+            pending.extend(node.children.iter().map(|n| (n, depth + 1)));
+        }
+        Ok(state)
+    }
+}
+
+/// Size of a bounded form snapshot, including definitions retained for managers. This
+/// accounts for rebuilding even when unrelated subtrees contain no fields. Manager
+/// lookups count only the nodes they actually visit.
+fn form_nodes(node: &FormNode, depth: usize) -> usize {
+    if depth > 64 {
+        return pdfcraft_xfa::MAX_FORM_NODES;
+    }
+    node.children.iter().chain(&node.instance_templates).fold(1usize, |n, c| n.saturating_add(form_nodes(c, depth + 1)))
 }
 
 /// An instance SOM (`…table[0].row[2]`) split into its parent's data path (areas left out,
@@ -270,6 +337,13 @@ struct Runner<'a, 'b> {
     fields: Option<HashMap<String, FieldInfo>>,
     /// The live form as last built; dropped when a script changed the form.
     cached: Option<LiveForm>,
+    /// Rebuilt nodes not yet charged to structural replay. Accumulate across invalidations
+    /// so a snapshot is charged once even if several scripts rebuild before a manager lookup.
+    pending_snapshot_work: usize,
+    /// Remaining replay work across all scripts of this event (not reset per batch).
+    effect_work: usize,
+    #[cfg(test)]
+    live_builds: usize,
     /// The script engine for this event: one thread for all its scripts, each run in a fresh
     /// context on the form as it is then (`cached`, kept up to date in place for values and
     /// rebuilt when the structure changed).
@@ -278,6 +352,7 @@ struct Runner<'a, 'b> {
 }
 
 impl<'a, 'b> Runner<'a, 'b> {
+    /// Begin an event with private data/override state and cumulative script and replay budgets.
     fn new(doc: &'a mut pdfcraft_cos::Document, tpl: &'a Template, run: &'a mut XfaRun<'b>, budget_ms: u64) -> Self {
         let data = pdfcraft_xfa::data_of(doc);
         let ov = pdfcraft_xfa::overrides(doc);
@@ -302,6 +377,13 @@ impl<'a, 'b> Runner<'a, 'b> {
             by_path: None,
             fields: None,
             cached: None,
+            pending_snapshot_work: 0,
+            #[cfg(not(test))]
+            effect_work: MAX_EFFECT_WORK,
+            #[cfg(test)]
+            effect_work: test_faults::effect_work_limit(),
+            #[cfg(test)]
+            live_builds: 0,
             session: None,
             changes: Changes::default(),
         }
@@ -336,8 +418,13 @@ impl<'a, 'b> Runner<'a, 'b> {
         }
     }
 
+    /// Rebuild an invalidated snapshot lazily and record its size for replay-work accounting.
     fn live(&mut self) -> &LiveForm {
         if self.cached.is_none() {
+            #[cfg(test)]
+            {
+                self.live_builds += 1;
+            }
             let live = pdfcraft_xfa::form_tree(self.tpl, self.data.as_ref(), &self.ov);
             if live.truncated && !self.truncated_warned {
                 self.truncated_warned = true;
@@ -346,6 +433,7 @@ impl<'a, 'b> Runner<'a, 'b> {
                     pdfcraft_xfa::MAX_FORM_NODES
                 ));
             }
+            self.pending_snapshot_work = self.pending_snapshot_work.saturating_add(form_nodes(&live.root, 0));
             self.cached = Some(live);
         }
         self.cached.get_or_insert_with(Default::default)
@@ -522,6 +610,11 @@ impl<'a, 'b> Runner<'a, 'b> {
         self.relayouts += 1;
         self.flush()?;
         let report = pdfcraft_xfa::rerender(self.doc, self.tpl).map_err(|e| e.to_string())?;
+        // An empty import can materialize initial groups during layout. Subsequent scripts
+        // must see those groups, not the pre-binding empty tree.
+        if self.data.as_ref().is_none_or(|data| data.children.is_empty()) {
+            self.data = pdfcraft_xfa::data_of(self.doc);
+        }
         self.console(report.warnings);
         crate::xfa_redraw(self.doc)?;
         self.console(crate::undrawn_field_warnings(self.doc));
@@ -566,25 +659,25 @@ impl<'a, 'b> Runner<'a, 'b> {
         Ok(())
     }
 
+    /// Charge cumulative host work and the event deadline. Returning an error aborts
+    /// the enclosing engine edit/open transaction; callers must not publish partial state.
+    fn effect_charge(&mut self, work: usize) -> Result<(), String> {
+        if self.clock.spent() {
+            return Err("The XFA event exceeded its time limit while applying script changes".into());
+        }
+        self.effect_work = self.effect_work.checked_sub(work).ok_or("The XFA event exceeded its instance-processing work limit")?;
+        Ok(())
+    }
+
     /// Apply what a script of `ev` did. Returns whether the form has to be laid out again.
+    /// Counts/defaults are cached per manager until a change can invalidate them. A
+    /// removed parent invalidates all descendant managers, including shifted siblings;
+    /// their next use reads the updated tree. Unrelated managers retain their counts.
     fn apply_effects(&mut self, ev: &ScriptEvent, effects: &[XfaEffect]) -> Result<bool, String> {
         let mut relayout = false;
-        // Instances of each repeating subform before the script ran, as the effects leave them.
-        let mut counts: HashMap<(String, String), usize> = HashMap::new();
-        {
-            // A copy of the shared reference: `live()` borrows `self` mutably.
-            let tpl = self.tpl;
-            let live = self.live();
-            for e in effects {
-                if let XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } = e
-                    && let Some((_, parent_som, name, _)) = split_instance(tpl, som)
-                {
-                    let have = count_instances(&live.root, &parent_som, &name);
-                    counts.entry((parent_som, name)).or_insert(have);
-                }
-            }
-        }
+        let mut instances: HashMap<(String, String), InstanceState> = HashMap::new();
         for e in effects {
+            self.effect_charge(1)?;
             // Only a click script may print, save, open links or move the focus (not the
             // calculations a click sets off, nor anything run on open or on a change).
             if let Some(what) = click_only(e)
@@ -596,9 +689,18 @@ impl<'a, 'b> Runner<'a, 'b> {
             }
             match e {
                 XfaEffect::SetValue { som, value } => {
+                    // Updating a field in an existing data parent cannot change manager
+                    // counts. Keep the cache for the common add-row-then-fill sequence;
+                    // creating missing ancestors requires a fresh structural snapshot.
+                    let path = pdfcraft_xfa::data_path(self.tpl, som);
+                    let parent_exists = path.split_last().is_some_and(|(_, parent)| self.data.as_ref().and_then(|d| d.get(parent)).is_some());
+                    if !parent_exists {
+                        instances.clear();
+                    }
                     self.set_value(som, value);
                 }
                 XfaEffect::SetPresence { som, presence } => {
+                    instances.clear();
                     if self.ov.presence.insert(som.clone(), presence.clone()).as_ref() != Some(presence) {
                         self.ov_dirty = true;
                         self.changes.visibility += 1;
@@ -607,6 +709,7 @@ impl<'a, 'b> Runner<'a, 'b> {
                     }
                 }
                 XfaEffect::SetAccess { som, access } => {
+                    instances.clear();
                     if self.ov.access.insert(som.clone(), access.clone()).as_ref() != Some(access) {
                         self.ov_dirty = true;
                         self.changes.visibility += 1;
@@ -616,24 +719,51 @@ impl<'a, 'b> Runner<'a, 'b> {
                 }
                 XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } => {
                     let Some((parent, parent_som, name, index)) = split_instance(self.tpl, som) else { continue };
-                    let key = (parent_som, name.clone());
-                    let have = counts.get(&key).copied().unwrap_or(0);
+                    let key = (parent_som.clone(), name.clone());
+                    if !instances.contains_key(&key) {
+                        self.live();
+                        // Charge rebuilt snapshots once, then only the nodes visited by
+                        // this lookup. Each snapshot and lookup is independently bounded.
+                        let rebuilt = std::mem::take(&mut self.pending_snapshot_work);
+                        self.effect_charge(rebuilt)?;
+                        let mut lookup_work = 0;
+                        let state = InstanceState::read(&self.live().root, &parent_som, &name, &mut lookup_work)?;
+                        self.effect_charge(lookup_work)?;
+                        instances.insert(key.clone(), state);
+                    }
+                    let Some(state) = instances.get_mut(&key) else { continue };
+                    let have = state.count;
                     if matches!(e, XfaEffect::AddInstance { .. }) {
-                        counts.insert(key, have + 1);
-                        self.data_op(pdfcraft_xfa::DataOp::Instances { parent, name, count: (index + 1).max(have + 1) });
+                        self.effect_charge(state.seeds.len())?;
+                        let count = index.saturating_add(1).max(have.saturating_add(1));
+                        self.data_op(pdfcraft_xfa::DataOp::Instances { parent, name, count });
+                        for suffix in &state.seeds {
+                            let mut path = pdfcraft_xfa::data_path(self.tpl, &format!("{som}{suffix}"));
+                            if let Some((name, index)) = path.pop() {
+                                self.data_op(pdfcraft_xfa::DataOp::Instances { parent: path, name, count: index.saturating_add(1) });
+                            }
+                        }
+                        state.count = count;
                     } else {
-                        // The data holds every shown instance before one is taken out.
-                        counts.insert(key, have.saturating_sub(1));
+                        // Materialize initial rows before removing one; a blank dataset
+                        // does not yet contain every row shown by the template.
                         self.data_op(pdfcraft_xfa::DataOp::Instances { parent: parent.clone(), name: name.clone(), count: have });
                         let mut path = parent;
-                        path.push((name, index));
+                        path.push((name.clone(), index));
                         self.data_op(pdfcraft_xfa::DataOp::Remove(path));
+                        state.count = have.saturating_sub(usize::from(index < have));
+                        self.effect_charge(instances.len())?;
+                        let prefix = if parent_som.is_empty() { format!("{name}[") } else { format!("{parent_som}.{name}[") };
+                        instances.retain(|(p, _), _| !p.starts_with(&prefix));
                     }
                     self.changes.rows += 1;
                     relayout = true;
                 }
                 XfaEffect::MessageBox(m) => self.alert(m.clone()),
-                XfaEffect::ResetData(names) => self.reset(names)?,
+                XfaEffect::ResetData(names) => {
+                    instances.clear();
+                    self.reset(names)?;
+                }
                 XfaEffect::Print => self.run.out.requests.push(Request::Print),
                 XfaEffect::SaveAs => self.run.out.requests.push(Request::SaveAs),
                 XfaEffect::LaunchUrl(u) => self.run.out.requests.push(Request::LaunchUrl(u.clone())),
@@ -648,6 +778,7 @@ impl<'a, 'b> Runner<'a, 'b> {
                 XfaEffect::Relayout => relayout = true,
             }
         }
+        self.effect_charge(0)?;
         Ok(relayout)
     }
 
@@ -723,6 +854,14 @@ impl<'a, 'b> Runner<'a, 'b> {
             self.relayouts = 0;
             self.relayouts_skipped = false;
             self.relayout()?;
+        }
+        #[cfg(test)]
+        if let Some(abandoned) = test_faults::take_finish_failure() {
+            self.run.ran_away |= abandoned;
+            if abandoned {
+                self.error("Injected script abandonment before finalization".into());
+            }
+            return Err("Injected XFA final flush failure".into());
         }
         self.flush()?;
         self.session = None;
@@ -937,9 +1076,134 @@ pub(crate) fn mark_script_buttons(doc: &pdfcraft_cos::Document, fields: &mut [pd
     }
 }
 
+/// Scoped finalization faults avoid timing-dependent tests and abandoned worker threads.
+#[cfg(test)]
+pub(crate) mod test_faults {
+    use std::cell::Cell;
+
+    thread_local! {
+        static FINISH_FAILURE: Cell<Option<bool>> = const { Cell::new(None) };
+        static EFFECT_WORK: Cell<usize> = const { Cell::new(super::MAX_EFFECT_WORK) };
+    }
+
+    /// Keep budget-exhaustion fixtures small enough that wall-clock limits do not race
+    /// their work limit when the full suite runs concurrently. Production limits are unchanged.
+    pub(crate) struct WorkLimit(usize);
+
+    impl Drop for WorkLimit {
+        fn drop(&mut self) {
+            EFFECT_WORK.with(|v| v.set(self.0));
+        }
+    }
+
+    pub(crate) fn limit_effect_work(limit: usize) -> WorkLimit {
+        WorkLimit(EFFECT_WORK.with(|v| v.replace(limit)))
+    }
+
+    pub(super) fn effect_work_limit() -> usize {
+        EFFECT_WORK.with(Cell::get)
+    }
+
+    /// Inject one finalization failure on this test thread; optionally model an abandoned
+    /// script. Restore the previous setting even if the test panics.
+    pub(crate) fn with_finish_failure<T>(abandoned: bool, action: impl FnOnce() -> T) -> T {
+        struct Restore(Option<bool>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                FINISH_FAILURE.with(|v| v.set(self.0));
+            }
+        }
+        let _restore = Restore(FINISH_FAILURE.with(|v| v.replace(Some(abandoned))));
+        let result = action();
+        assert!(FINISH_FAILURE.with(|v| v.get().is_none()), "the test must reach finalization");
+        result
+    }
+
+    /// Consume the fault once, without affecting other tests or subsequent edits.
+    pub(super) fn take_finish_failure() -> Option<bool> {
+        FINISH_FAILURE.with(Cell::take)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A deterministic rebuild count catches amplification without a flaky timing limit.
+    #[test]
+    fn instance_effect_batch_reuses_live_form() {
+        let xml = pdfcraft_xfa::fixtures::optional_rows(0).replace(r#"max="2""#, r#"max="-1""#).replace(
+            "<field name=\"other\"",
+            &format!("<subform name=\"unrelated\">{}</subform><field name=\"other\"", "<field name=\"unused\"/>".repeat(3000)),
+        );
+        for fill in [false, true] {
+            let (tpl, _) = pdfcraft_xfa::parse(&xml).unwrap();
+            let mut doc = pdfcraft_cos::Document::open(Arc::new(pdfcraft_xfa::fixtures::shell(&xml))).unwrap();
+            let mut out = JsOutput::default();
+            let mut run = XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, time_scale: 1 };
+            let mut runner = Runner::new(&mut doc, &tpl, &mut run, 60_000);
+            let effects: Vec<_> = (0..200)
+                .flat_map(|i| {
+                    let som = format!("form[0].row[{i}]");
+                    let mut effects = vec![XfaEffect::AddInstance { som: som.clone() }];
+                    if fill {
+                        effects.push(XfaEffect::SetValue { som: format!("{som}.entry[0]"), value: "filled".into() });
+                    }
+                    effects
+                })
+                .collect();
+            let ev = ScriptEvent { som: "form[0].add[0]".into(), activity: "click".into(), script: String::new(), formcalc: false, message: None };
+            let start = std::time::Instant::now();
+            runner.apply_effects(&ev, &effects).unwrap();
+            eprintln!("200 additions (fill={fill}) beside 3000 unrelated fields: {:?}; {} live builds", start.elapsed(), runner.live_builds);
+            assert_eq!(runner.data.as_ref().unwrap().count(&pdfcraft_xfa::som_to_path("form[0]"), "row"), 200);
+            assert_eq!(runner.live_builds, 1, "one batch must not rebuild the unrelated subtree for every row");
+            if fill {
+                assert_eq!(runner.data.as_ref().unwrap().text_at(&pdfcraft_xfa::som_to_path("form[0].row[199].entry[0]")), Some("filled"));
+            }
+        }
+    }
+
+    /// Many small scripts can consult the same manager in a large document without
+    /// paying twice for every unrelated node. A reduced budget keeps the fixture small.
+    #[test]
+    fn instance_work_counts_rebuilds_once_across_script_batches() {
+        let xml = pdfcraft_xfa::fixtures::optional_rows(0).replace(r#"max="2""#, r#"max="-1""#).replace(
+            "<field name=\"other\"",
+            &format!("<subform name=\"unrelated\">{}</subform><field name=\"other\"", "<field name=\"unused\"/>".repeat(3000)),
+        );
+        let (tpl, _) = pdfcraft_xfa::parse(&xml).unwrap();
+        let mut doc = pdfcraft_cos::Document::open(Arc::new(pdfcraft_xfa::fixtures::shell(&xml))).unwrap();
+        let mut out = JsOutput::default();
+        let mut run = XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, time_scale: 1 };
+        let mut runner = Runner::new(&mut doc, &tpl, &mut run, 60_000);
+        runner.effect_work = 40_000;
+        runner.live(); // A script obtains its snapshot before replaying its effects.
+        let ev = ScriptEvent { som: "form[0].add[0]".into(), activity: "click".into(), script: String::new(), formcalc: false, message: None };
+        for i in 0..12 {
+            runner.apply_effects(&ev, &[XfaEffect::AddInstance { som: format!("form[0].row[{i}]") }]).unwrap();
+        }
+        assert_eq!(runner.data.as_ref().unwrap().count(&pdfcraft_xfa::som_to_path("form[0]"), "row"), 12);
+        assert_eq!(runner.live_builds, 12);
+        assert!(runner.effect_work < 4000, "rebuilding must still consume the cumulative budget");
+    }
+
+    /// Host replay checks the native event deadline even when no new script starts.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn effect_replay_checks_the_deadline_before_mutating_data() {
+        let xml = pdfcraft_xfa::fixtures::optional_rows(0);
+        let (tpl, _) = pdfcraft_xfa::parse(&xml).unwrap();
+        let mut doc = pdfcraft_cos::Document::open(Arc::new(pdfcraft_xfa::fixtures::shell(&xml))).unwrap();
+        let mut out = JsOutput::default();
+        let mut run = XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, time_scale: 1 };
+        let mut runner = Runner::new(&mut doc, &tpl, &mut run, 0);
+        let ev = ScriptEvent { som: "form[0].add[0]".into(), activity: "click".into(), script: String::new(), formcalc: false, message: None };
+        let error = runner.apply_effects(&ev, &[XfaEffect::AddInstance { som: "form[0].row[0]".into() }]).unwrap_err();
+        assert!(error.contains("time limit"));
+        assert!(runner.pending.is_empty());
+        assert_eq!(runner.changes.rows, 0);
+    }
 
     #[test]
     fn script_names_match_indexed_som_paths() {

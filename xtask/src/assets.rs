@@ -2,7 +2,9 @@
 //!
 //! `ATTRIBUTION.toml` lists every asset: committed or vendored files (`[[asset]]`), files that
 //! Cargo dependencies compile into PdfCraft (`[[bundled]]`), and files xtask downloads at build
-//! time (`[[fetched]]`). This gate fails when:
+//! time (`[[fetched]]`), and remote published evidence (`[[evidence]]`, never downloaded by
+//! builds). Both remote sections require the same licence, provenance and hash metadata.
+//! This gate fails when:
 //! - an asset-like file in the repository has no entry, or its SHA-256 is missing or differs
 //!   (translation catalogs are project files and carry none);
 //! - a licence is not on the allowlist, or a declared licence file is missing;
@@ -69,7 +71,10 @@ pub struct Manifest {
     #[serde(default)]
     pub bundled: Vec<Bundled>,
     #[serde(default)]
-    pub fetched: Vec<Fetched>,
+    pub fetched: Vec<RemoteAsset>,
+    /// Published screenshots and fixtures, attributed but never fetched by build commands.
+    #[serde(default)]
+    pub evidence: Vec<RemoteAsset>,
     #[serde(default)]
     pub build_input: Vec<BuildInput>,
 }
@@ -135,9 +140,11 @@ pub struct Bundled {
     pub adobe_data: bool,
 }
 
+/// Shared metadata for build downloads and evidence hosted outside the repository.
+/// Their manifest sections determine whether build commands may download them.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Fetched {
+pub struct RemoteAsset {
     pub file: String,
     pub url: String,
     pub title: String,
@@ -187,10 +194,11 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     if problems.is_empty() {
         println!(
-            "assets: ok ({} repository assets, {} bundled by dependencies, {} fetched at build time)",
+            "assets: ok ({} repository assets, {} bundled by dependencies, {} fetched at build time, {} published evidence assets)",
             manifest.asset.len(),
             manifest.bundled.len(),
-            manifest.fetched.len()
+            manifest.fetched.len(),
+            manifest.evidence.len()
         );
         Ok(())
     } else {
@@ -245,13 +253,16 @@ fn mentions_adobe(s: &str) -> bool {
 pub fn check(root: &Path, m: &Manifest, repo_files: &[String], lock: &BTreeSet<(String, String)>) -> Vec<String> {
     let mut problems = Vec::new();
     let mut seen = BTreeSet::new();
-    // Kinds that may never come from Adobe (AGENTS.md §1.1): visual design, and UI translations
+    // Kinds that may never come from Adobe (AGENTS.md §1.1): visual design, sample documents, and UI translations
     // (which must be clean-room, never taken from a product's string tables).
-    let visual = |kind: &str| matches!(kind, "icon" | "image" | "font" | "logo" | "cursor" | "video" | "translation");
+    let visual = |kind: &str| matches!(kind, "icon" | "image" | "font" | "logo" | "cursor" | "video" | "translation" | "document");
     // Typefaces under the SIL Open Font License are allowed whoever designed them (AGENTS.md §1.1).
     let ofl_font =
         |kind: &str, licence: &str| kind == "font" && licence_ids(licence).next().is_some() && licence_ids(licence).all(|id| id == "OFL-1.1");
     let licence_ok = |what: &str, licence: &str, problems: &mut Vec<String>| {
+        if licence_ids(licence).next().is_none() {
+            problems.push(format!("{what}: licence must contain at least one allowed identifier (AGENTS.md §1.2)"));
+        }
         for id in licence_ids(licence) {
             if !ALLOWED_LICENCES.contains(&id) {
                 problems.push(format!("{what}: licence `{id}` is not on the allowlist (AGENTS.md §1.2)"));
@@ -310,7 +321,7 @@ pub fn check(root: &Path, m: &Manifest, repo_files: &[String], lock: &BTreeSet<(
             problems.push(format!("{what}: sha256 must be 64 hex digits"));
         }
     }
-    for f in &m.fetched {
+    for f in m.fetched.iter().chain(&m.evidence) {
         licence_ok(&f.file, &f.licence, &mut problems);
         if visual(&f.kind) && !ofl_font(&f.kind, &f.licence) && (mentions_adobe(&f.author) || mentions_adobe(&f.source) || mentions_adobe(&f.title)) {
             problems.push(format!("{}: {} from Adobe is forbidden (AGENTS.md §1.1)", f.file, f.kind));
@@ -320,6 +331,16 @@ pub fn check(root: &Path, m: &Manifest, repo_files: &[String], lock: &BTreeSet<(
         }
         if !f.url.starts_with("https://") || !f.licence_url.starts_with("https://") {
             problems.push(format!("{}: URLs must be https", f.file));
+        }
+    }
+    for f in &m.evidence {
+        // URL parsing alone normalizes embedded whitespace; it would still be copied
+        // verbatim into attribution. Revision pinning remains part of provenance review.
+        let valid_source = f.source.starts_with("https://")
+            && !f.source.chars().any(|c| c.is_whitespace() || c.is_control())
+            && url::Url::parse(&f.source).is_ok_and(|u| u.scheme() == "https" && u.has_host());
+        if !valid_source {
+            problems.push(format!("{}: source must be a valid HTTPS URL (AGENTS.md §1.3)", f.file));
         }
     }
     for b in &m.build_input {
@@ -440,6 +461,15 @@ pub fn render_markdown(m: &Manifest) -> String {
     for f in &m.fetched {
         let _ = writeln!(s, "| `{}` | {} | {} | {} | {} | {} |", f.file, esc(&f.title), esc(&f.author), f.licence, esc(&f.source), esc(&f.usage));
     }
+    if !m.evidence.is_empty() {
+        s.push_str(&format!(
+            "\n## Published evidence ({})\n\nRemote screenshots and fixtures used for review or documentation. These are not build inputs and are never downloaded by build commands. Their URLs, licences and SHA-256 records are in `ATTRIBUTION.toml`.\n\n| File | Title | Author | Licence | Source | Used for |\n|---|---|---|---|---|---|\n",
+            m.evidence.len()
+        ));
+        for f in &m.evidence {
+            let _ = writeln!(s, "| `{}` | {} | {} | {} | {} | {} |", f.file, esc(&f.title), esc(&f.author), f.licence, esc(&f.source), esc(&f.usage));
+        }
+    }
     s.push_str(&format!(
         "\n## Optional build inputs ({})\n\nNot in this repository and never downloaded by it: compiled in only when the build sets the option (official releases do). Each input attributes its own files.\n\n| Input | Option | Title | Author | Licence | Source | Attribution | Used for |\n|---|---|---|---|---|---|---|---|\n",
         m.build_input.len()
@@ -464,6 +494,155 @@ pub fn render_markdown(m: &Manifest) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Published PR evidence must not become a build download or inflate its attribution count.
+    #[test]
+    fn pr_evidence_is_not_a_build_download() {
+        let m = load(&root()).unwrap();
+        assert!(!m.fetched.iter().any(|f| f.file.starts_with("pr-3941/")));
+        let markdown = render_markdown(&m);
+        let heading = format!("## Published evidence ({})", m.evidence.len());
+        let (downloads, evidence) = markdown.split_once(&heading).unwrap();
+        assert!(downloads.contains(&format!("## Downloaded at build time ({})", m.fetched.len())));
+        assert!(!downloads.contains("pr-3941/"));
+        for file in ["before.png", "after.png", "zero-instances.pdf"] {
+            assert!(evidence.contains(&format!("pr-3941/{file}")));
+        }
+    }
+
+    /// A standalone evidence record exercises the same remote metadata policy as downloads.
+    fn evidence_manifest() -> Manifest {
+        Manifest {
+            evidence: vec![RemoteAsset {
+                file: "evidence-test.png".into(),
+                url: "https://example.org/evidence-test.png".into(),
+                title: "Synthetic evidence".into(),
+                author: "Contributor".into(),
+                source: "https://example.org/source/v1".into(),
+                licence: "MIT".into(),
+                licence_url: "https://example.org/LICENSE".into(),
+                licence_sha256: "0".repeat(64),
+                kind: "image".into(),
+                usage: "Review only".into(),
+                sha256: "0".repeat(64),
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn evidence_retains_remote_asset_policy_checks() {
+        assert!(check(&root(), &evidence_manifest(), &[], &lock(&[])).is_empty());
+        for field in ["licence", "author", "source", "title", "url", "licence_url", "sha256", "licence_sha256"] {
+            let mut m = evidence_manifest();
+            let e = m.evidence.first_mut().unwrap();
+            let expected = match field {
+                "licence" => {
+                    e.licence = "LicenseRef-Proprietary".into();
+                    "licence"
+                }
+                "author" | "source" | "title" => {
+                    match field {
+                        "author" => e.author = "Adobe".into(),
+                        "source" => e.source = "https://adobe.com/source".into(),
+                        _ => e.title = "Adobe artwork".into(),
+                    }
+                    "from Adobe is forbidden"
+                }
+                "url" => {
+                    e.url = "http://example.org/image.png".into();
+                    "URLs must be https"
+                }
+                "licence_url" => {
+                    e.licence_url = "LICENSE".into();
+                    "URLs must be https"
+                }
+                "sha256" => {
+                    e.sha256.clear();
+                    "sha256"
+                }
+                _ => {
+                    e.licence_sha256.clear();
+                    "sha256"
+                }
+            };
+            let problems = check(&root(), &m, &[], &lock(&[]));
+            assert!(problems.iter().any(|p| p.contains(expected)), "{field}: {problems:?}");
+        }
+    }
+
+    #[test]
+    fn evidence_requires_a_licence_identifier() {
+        for licence in ["", " \t\n", "()", "OR AND WITH"] {
+            let mut m = evidence_manifest();
+            m.evidence[0].licence = licence.into();
+            let problems = check(&root(), &m, &[], &lock(&[]));
+            assert!(problems.iter().any(|p| p.contains("licence must contain")), "{licence:?}: {problems:?}");
+        }
+        for licence in ["MIT", "MIT OR Apache-2.0", "(MIT AND Apache-2.0)"] {
+            let mut m = evidence_manifest();
+            m.evidence[0].licence = licence.into();
+            assert!(check(&root(), &m, &[], &lock(&[])).is_empty(), "{licence}");
+        }
+    }
+
+    #[test]
+    fn evidence_requires_a_valid_https_source_url() {
+        for source in [
+            "",
+            " ",
+            "source/v1",
+            "http://example.org/source/v1",
+            "https://",
+            "https:///",
+            "https://example.org:invalid/source/v1",
+            "https://exa mple.org/source/v1",
+            "https://example.org/source/\nv1",
+        ] {
+            let mut m = evidence_manifest();
+            m.evidence[0].source = source.into();
+            let problems = check(&root(), &m, &[], &lock(&[]));
+            assert!(problems.iter().any(|p| p.contains("source must be a valid HTTPS URL")), "{source:?}: {problems:?}");
+        }
+        for source in ["https://example.org/source/v1", "https://example.org/commit/0123456789abcdef0123456789abcdef01234567"] {
+            let mut m = evidence_manifest();
+            m.evidence[0].source = source.into();
+            assert!(check(&root(), &m, &[], &lock(&[])).is_empty(), "{source}");
+        }
+    }
+
+    #[test]
+    fn document_evidence_rejects_adobe_provenance() {
+        for field in ["none", "author", "source", "title"] {
+            let mut m = evidence_manifest();
+            let e = &mut m.evidence[0];
+            e.kind = "document".into();
+            e.file = "synthetic.pdf".into();
+            e.url = "https://example.org/synthetic.pdf".into();
+            match field {
+                "author" => e.author = "Adobe".into(),
+                "source" => e.source = "https://adobe.com/sample".into(),
+                "title" => e.title = "Adobe sample document".into(),
+                _ => {}
+            }
+            let problems = check(&root(), &m, &[], &lock(&[]));
+            if field == "none" {
+                assert!(problems.is_empty(), "{problems:?}");
+                continue;
+            }
+            assert!(problems.iter().any(|p| p.contains("document from Adobe is forbidden")), "{field}: {problems:?}");
+        }
+    }
+
+    #[test]
+    fn build_fetch_excludes_evidence_even_with_a_matching_kind() {
+        let mut m = evidence_manifest();
+        let e = m.evidence.first_mut().unwrap();
+        e.kind = "font".into();
+        // If evidence leaks into fetch_all, fail locally without making a network request.
+        e.url = "file:///nonexistent-pdfcraft-evidence-test".into();
+        assert!(fetch_all(&m, &root().join("target"), "font").unwrap().is_empty());
+    }
 
     /// The release packages ship assets/models as fetched (#103): every model is credited there.
     #[test]

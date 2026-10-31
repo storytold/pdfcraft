@@ -325,24 +325,38 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
     ];
     let mut defined: Vec<String> = RESERVED.iter().map(ToString::to_string).collect();
     for scope in scopes {
-        let kids: Vec<(usize, String, bool)> = {
+        let (kids, managers): (Vec<(usize, String)>, Vec<String>) = {
             let h = host(ctx)?.borrow();
             h.nodes
                 .get(scope)
-                .map(|n| n.children.iter().filter_map(|&c| h.nodes.get(c).map(|k| (c, k.name.clone(), k.repeatable && !k.gone))).collect())
+                .map(|n| {
+                    let kids = n.children.iter().filter_map(|&c| h.nodes.get(c).filter(|k| !k.gone).map(|k| (c, k.name.clone()))).collect();
+                    let managers = n
+                        .children
+                        .iter()
+                        .chain(&n.instance_templates)
+                        .filter_map(|&c| h.nodes.get(c).filter(|k| k.repeatable).map(|k| k.name.clone()))
+                        .collect();
+                    (kids, managers)
+                })
                 .unwrap_or_default()
         };
-        for (c, name, repeatable) in kids {
+        for (c, name) in kids {
             if !is_identifier(&name) || defined.contains(&name) {
                 continue;
             }
             let obj = node_object(ctx, c)?;
             ctx.register_global_property(JsString::from(name.as_str()), obj, rw)?;
-            if repeatable {
-                let im = instance_manager(ctx, scope, &name)?;
-                ctx.register_global_property(JsString::from(format!("_{name}").as_str()), im, rw)?;
-            }
             defined.push(name);
+        }
+        for name in managers {
+            let key = format!("_{name}");
+            if !is_identifier(&key) || defined.contains(&key) {
+                continue;
+            }
+            let im = instance_manager(ctx, scope, &name)?;
+            ctx.register_global_property(JsString::from(key.as_str()), im, rw)?;
+            defined.push(key);
         }
     }
     Ok(())

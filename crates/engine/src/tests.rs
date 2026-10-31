@@ -6684,6 +6684,37 @@ fn an_xfa_script_that_fails_partway_keeps_what_it_changed_before_the_error() {
     s.apply(id, Edit::SetFieldValue { name: "leave".into(), value: FieldValue::Check(true) }).expect("can be checked now");
 }
 
+/// Upstream keeps effects preceding an ordinary script exception; a subsequent fatal
+/// finalization error must still reject the complete edit and leave history untouched.
+#[test]
+fn xfa_partial_script_error_then_fatal_failure_rolls_back() {
+    let template = pdfcraft_xfa::fixtures::partly_failing_script_template();
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("partial-fatal.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    s.take_js_output(id);
+    let before = s.save_bytes(id).unwrap();
+    let fields = format!("{:?}", s.get(id).unwrap().form);
+    let generation = s.get(id).unwrap().edit_generation();
+    let edit = || Edit::SetFieldValue { name: "kind".into(), value: FieldValue::Check(true) };
+    let error = crate::xfa::test_faults::with_finish_failure(false, || s.apply(id, edit())).unwrap_err();
+    assert!(error.to_string().contains("Injected XFA final flush failure"));
+    assert!(s.save_bytes(id).unwrap() == before);
+    let doc = s.get(id).unwrap();
+    assert_eq!(format!("{:?}", doc.form), fields);
+    assert_eq!(doc.edit_generation(), generation);
+    assert!(!doc.dirty);
+    assert!(doc.can_undo().is_none());
+    assert!(doc.can_redo().is_none());
+    assert!(!doc.xfa_scripts_off());
+    assert!(s.take_js_output(id).is_empty());
+    // Without a fatal failure, upstream's partial-script behavior still applies.
+    s.apply(id, edit()).unwrap();
+    assert!(s.take_js_output(id).errors.iter().any(|e| e.contains("change")));
+    assert!(s.get(id).unwrap().form.iter().any(|f| f.name == "details"));
+    s.undo(id).unwrap();
+    assert_eq!(format!("{:?}", s.get(id).unwrap().form), fields);
+}
+
 /// A scripted form end to end: initialize and calculate on open, recalculation after a change,
 /// a failing validation's message, buttons that add and remove rows and show messages, a check
 /// box that shows a subform (undoable), FormCalc, and a save and reopen that keep it all.
@@ -8533,6 +8564,542 @@ fn undo_never_makes_an_unsaved_document_clean() {
     s.apply(new, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
     s.undo(new).unwrap();
     assert!(!s.get(new).unwrap().dirty, "once saved, undo back to the saved state is clean");
+}
+
+/// Original blank form for #4744: the two initial rows have no field defaults that could
+/// accidentally create their data groups. A driver may write only the first row on open.
+fn xfa_initial_rows_template(min: usize, initialize: bool) -> String {
+    let event = if initialize {
+        r#"<event activity="initialize"><script contentType="application/x-javascript">xfa.resolveNode("form.rep[0].k").rawValue = "first";</script></event>"#
+    } else {
+        ""
+    };
+    let count = if initialize {
+        r#"<field name="cnt" w="100pt" h="20pt"><ui><textEdit/></ui><calculate><script contentType="application/x-javascript">String(_rep.count);</script></calculate></field>"#
+    } else {
+        ""
+    };
+    format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+ <subform name="form" layout="tb" w="300pt">
+  <subform name="rep" layout="tb" w="300pt"><occur min="{min}" initial="2" max="2"/>
+   <field name="k" w="200pt" h="20pt"><ui><textEdit/></ui></field>
+  </subform>
+  <field name="other" w="200pt" h="20pt"><ui><textEdit/></ui>{event}</field>
+  {count}
+  <field name="remove" w="100pt" h="20pt"><ui><button/></ui><caption><value><text>Remove</text></value></caption>
+   <event activity="click"><script contentType="application/x-javascript">if (_rep.count &gt; _rep.min) _rep.removeInstance(_rep.count - 1);</script></event>
+  </field>
+ </subform>
+</template></xdp:xdp>"#
+    )
+}
+
+/// Both the drawn fields and a newly rebuilt script tree must retain the actual rows.
+fn assert_xfa_initial_rows(s: &Session, id: DocId, expected: usize) {
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.form.iter().filter(|f| f.name == "k" || f.name.starts_with("k_")).count(), expected);
+    let cos = &doc.editor.as_ref().unwrap().cos;
+    let tpl = pdfcraft_xfa::template_of(cos).unwrap();
+    let data = pdfcraft_xfa::data_of(cos);
+    let live = pdfcraft_xfa::form_tree(&tpl, data.as_ref(), &pdfcraft_xfa::overrides(cos));
+    assert_eq!(live.root.children.iter().filter(|n| n.name == "rep").count(), expected);
+    assert!(!live.truncated);
+}
+
+/// #4744: a partial initialization write cannot reduce either the required minimum or the
+/// copies established by a blank merge. Later events and save/reopen keep the same count.
+#[test]
+fn a_script_writing_the_first_of_min_instances_keeps_the_others() {
+    for min in [2, 1] {
+        let tpl = xfa_initial_rows_template(min, true);
+        let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+        let id = s.open("initial-script.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
+        assert_xfa_initial_rows(&s, id, 2);
+        assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "cnt").unwrap().value, ["2"]);
+        assert!(s.take_js_output(id).errors.is_empty());
+        s.apply(id, Edit::SetFieldValue { name: "other".into(), value: FieldValue::Text("later event".into()) }).unwrap();
+        assert_xfa_initial_rows(&s, id, 2);
+        assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "cnt").unwrap().value, ["2"]);
+        assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "k").unwrap().value, ["first"]);
+        assert!(s.take_js_output(id).errors.is_empty());
+        let saved = s.save_bytes(id).unwrap();
+        let reopened = s.open("initial-script-saved.pdf", None, saved, None).unwrap();
+        assert_xfa_initial_rows(&s, reopened, 2);
+        assert_eq!(s.get(reopened).unwrap().form.iter().find(|f| f.name == "cnt").unwrap().value, ["2"]);
+        assert!(s.take_js_output(reopened).errors.is_empty());
+    }
+}
+
+/// Blank rows belong to the form even before any value exists. Editing an unrelated field
+/// preserves them with scripts enabled or disabled, and saving records their empty groups.
+#[test]
+fn xfa_unrelated_edit_preserves_blank_initial_instances() {
+    for scripts in [true, false] {
+        let tpl = xfa_initial_rows_template(0, false);
+        let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+        s.set_javascript(scripts);
+        let id = s.open("initial-blank.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
+        assert_xfa_initial_rows(&s, id, 2);
+        s.apply(id, Edit::SetFieldValue { name: "other".into(), value: FieldValue::Text("unrelated".into()) }).unwrap();
+        assert_xfa_initial_rows(&s, id, 2);
+        assert!(s.take_js_output(id).errors.is_empty());
+        let saved = s.save_bytes(id).unwrap();
+        let cos = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+        let data = pdfcraft_xfa::data_of(&cos).unwrap();
+        assert_eq!(data.count(&pdfcraft_xfa::som_to_path("form[0]"), "rep"), 2);
+        let reopened = s.open("initial-blank-saved.pdf", None, saved, None).unwrap();
+        assert_xfa_initial_rows(&s, reopened, 2);
+    }
+}
+
+/// Initial counts apply once: an explicit removal to zero or to min must survive relayout,
+/// undo/redo and reopening rather than being replenished from the template's initial value.
+#[test]
+fn xfa_initial_instance_removal_is_not_recreated_by_undo_redo_or_reopen() {
+    for min in [0, 1] {
+        let tpl = xfa_initial_rows_template(min, false);
+        let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+        let id = s.open("initial-remove.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
+        for expected in (min..2).rev() {
+            assert_eq!(s.run_javascript(id, "", Some("remove")).unwrap().error, None);
+            assert_xfa_initial_rows(&s, id, expected);
+            s.undo(id).unwrap();
+            assert_xfa_initial_rows(&s, id, expected + 1);
+            s.redo(id).unwrap();
+            assert_xfa_initial_rows(&s, id, expected);
+        }
+        s.apply(id, Edit::SetFieldValue { name: "other".into(), value: FieldValue::Text("after removal".into()) }).unwrap();
+        assert_xfa_initial_rows(&s, id, min);
+        assert!(s.take_js_output(id).errors.is_empty());
+        let saved = s.save_bytes(id).unwrap();
+        let reopened = s.open("initial-remove-saved.pdf", None, saved.clone(), None).unwrap();
+        assert_xfa_initial_rows(&s, reopened, min);
+        // Cached PDF pages cannot conceal a return to initial counts on fresh layout.
+        let mut cos = pdfcraft_cos::Document::open(saved).unwrap();
+        let tpl = pdfcraft_xfa::template_of(&cos).unwrap();
+        assert_eq!(pdfcraft_xfa::rerender(&mut cos, &tpl).unwrap().fields, min + 2);
+    }
+}
+
+/// Empty imported data starts a fresh blank merge, while a nonempty data document uses
+/// its own occurrence counts. Calculations after relayout must see the same instance tree.
+#[test]
+fn xfa_empty_data_import_preserves_initial_rows_but_nonempty_import_uses_data() {
+    let count = r#"<field name="cnt" w="100pt" h="20pt"><ui><textEdit/></ui><calculate><script contentType="application/x-javascript">String(_rep.count);</script></calculate></field>"#;
+    let tpl = xfa_initial_rows_template(0, false).replace(" </subform>\n</template>", &format!("{count} </subform>\n</template>"));
+    for (xml, expected) in [(r#"<xfa:data xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/>"#, 2), ("<form><other>imported</other></form>", 0)] {
+        let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+        let id = s.open("initial-import.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
+        assert_xfa_initial_rows(&s, id, 2);
+        s.apply(id, Edit::ImportData { name: "data.xml".into(), bytes: Arc::new(xml.as_bytes().to_vec()) }).unwrap();
+        assert_xfa_initial_rows(&s, id, expected);
+        assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "cnt").unwrap().value, [expected.to_string()]);
+        assert!(s.take_js_output(id).errors.is_empty());
+        s.undo(id).unwrap();
+        assert_xfa_initial_rows(&s, id, 2);
+        s.redo(id).unwrap();
+        assert_xfa_initial_rows(&s, id, expected);
+        s.apply(id, Edit::SetFieldValue { name: "other".into(), value: FieldValue::Text("after import".into()) }).unwrap();
+        assert_xfa_initial_rows(&s, id, expected);
+        let saved = s.save_bytes(id).unwrap();
+        let reopened = s.open("initial-import-saved.pdf", None, saved, None).unwrap();
+        assert_xfa_initial_rows(&s, reopened, expected);
+        assert!(s.take_js_output(reopened).errors.is_empty());
+    }
+}
+
+/// XFA 3.3 chapter 7: an optional subform can have no instances. Its manager must
+/// still create the first instance, and a deleted last row must not return on reopen.
+#[test]
+fn xfa_zero_instances_add_remove_undo_and_reopen() {
+    let tpl = pdfcraft_xfa::fixtures::scripted_template()
+        .replace(r#"<occur min="1" max="-1"/>"#, r#"<occur min="0" initial="0" max="2"/>"#)
+        .replace("if (table._row.count > 1)", "if (table._row.count > 0)");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("optional.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
+    let rows = |s: &Session, id| s.get(id).unwrap().form.iter().filter(|f| f.name == "item" || f.name.starts_with("item_")).count();
+    let click = |s: &mut Session, id, button| {
+        let out = s.run_javascript(id, "", Some(button)).unwrap();
+        assert_eq!(out.error, None, "{out:?}");
+        assert!(s.take_js_output(id).errors.is_empty());
+    };
+    assert_eq!(rows(&s, id), 0, "optional rows must not appear on open");
+    click(&mut s, id, "addRow");
+    assert_eq!(rows(&s, id), 1, "the manager survives without an instance");
+    s.apply(id, Edit::SetFieldValue { name: "item".into(), value: FieldValue::Text("kept by undo".into()) }).unwrap();
+    click(&mut s, id, "removeRow");
+    assert_eq!(rows(&s, id), 0, "the last optional row is removable");
+    s.undo(id).unwrap();
+    assert_eq!(rows(&s, id), 1);
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "item").unwrap().value, vec!["kept by undo"]);
+    s.redo(id).unwrap();
+    assert_eq!(rows(&s, id), 0);
+    let bytes = s.save_bytes(id).unwrap();
+    let cos = pdfcraft_cos::Document::open(bytes.clone()).unwrap();
+    let data = pdfcraft_xfa::data_of(&cos).unwrap();
+    assert_eq!(data.count(&pdfcraft_xfa::som_to_path("form1[0].page1[0].table[0]"), "row"), 0);
+    let reopened = s.open("optional-again.pdf", None, bytes, None).unwrap();
+    assert_eq!(rows(&s, reopened), 0);
+    click(&mut s, reopened, "addRow");
+    assert_eq!(rows(&s, reopened), 1);
+    click(&mut s, reopened, "addRow");
+    click(&mut s, reopened, "addRow");
+    assert_eq!(rows(&s, reopened), 2, "the maximum still applies");
+}
+
+/// Removing all initial rows must survive both cached reopen and fresh template layout.
+#[test]
+fn xfa_zero_instances_stay_zero_after_removing_initial_rows_and_reopening() {
+    for initial in [0, 1, 2] {
+        let mut s = Session::new();
+        let id =
+            s.open("optional.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::optional_rows(initial))), None).unwrap();
+        let rows = |s: &Session, id| s.get(id).unwrap().form.iter().filter(|f| f.name.starts_with("entry")).count();
+        assert_eq!(rows(&s, id), initial);
+        // First transition from a blank form to data must preserve other initial rows.
+        s.apply(id, Edit::SetFieldValue { name: "other".into(), value: FieldValue::Text("outside the rows".into()) }).unwrap();
+        assert_eq!(rows(&s, id), initial);
+        let bytes = s.save_bytes(id).unwrap();
+        let id = s.open("before-remove.pdf", None, bytes, None).unwrap();
+        for _ in 0..initial {
+            assert_eq!(s.run_javascript(id, "", Some("remove")).unwrap().error, None);
+        }
+        assert_eq!(rows(&s, id), 0);
+        let bytes = s.save_bytes(id).unwrap();
+        // Reopen through fresh XFA layout too, rather than trusting cached generated widgets.
+        let mut cos = pdfcraft_cos::Document::open(bytes.clone()).unwrap();
+        let template = pdfcraft_xfa::template_of(&cos).unwrap();
+        let report = pdfcraft_xfa::rerender(&mut cos, &template).unwrap();
+        assert_eq!(report.fields, 3);
+        let id = s.open("after-remove.pdf", None, bytes, None).unwrap();
+        assert_eq!(rows(&s, id), 0);
+        assert_eq!(s.run_javascript(id, "", Some("add")).unwrap().error, None);
+        assert_eq!(rows(&s, id), 1);
+        assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "entry").unwrap().value, vec!["default"]);
+    }
+}
+
+/// Writing the first dataset must preserve initial rows whose fields have no values.
+#[test]
+fn xfa_zero_instances_blank_initial_rows_survive_first_edit() {
+    let tpl = pdfcraft_xfa::fixtures::optional_rows(2).replace("<value><text>default</text></value>", "");
+    let mut s = Session::new();
+    let id = s.open("initial-blank.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "other".into(), value: FieldValue::Text("first data".into()) }).unwrap();
+    let mut cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+    let template = pdfcraft_xfa::template_of(&cos).unwrap();
+    let report = pdfcraft_xfa::rerender(&mut cos, &template).unwrap();
+    assert_eq!(report.fields, 5, "creating the first dataset must not erase empty initial rows");
+}
+
+/// Adding a parent must seed initial nested and empty subforms, including after undo and reopen.
+#[test]
+fn xfa_zero_instances_added_parent_preserves_nested_initial_instances() {
+    for nested_initial in [0, 1] {
+        let tpl = pdfcraft_xfa::fixtures::optional_rows(0)
+            .replace(r#"<field name="entry""#, r#"<subform name="inner" layout="tb"><occur min="0" initial="1" max="2"/><field name="entry""#)
+            .replace("</value></field>", "</value></field><subform name=\"empty\"><occur min=\"0\" initial=\"2\" max=\"2\"/></subform></subform>");
+        let tpl = if nested_initial == 0 {
+            tpl.replace(r#"initial="1""#, r#"initial="0""#).replace("_row.addInstance(1);", "_row.addInstance(1)._inner.addInstance(1);")
+        } else {
+            tpl
+        };
+        let mut s = Session::new();
+        let id = s.open("nested-optional.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
+        let entries = |s: &Session, id| s.get(id).unwrap().form.iter().filter(|f| f.name.starts_with("entry")).count();
+        assert_eq!(entries(&s, id), 0);
+        assert_eq!(s.run_javascript(id, "", Some("add")).unwrap().error, None);
+        assert_eq!(entries(&s, id), 1, "adding the parent must retain its nested initial instance");
+        assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "entry").unwrap().value, vec!["default"]);
+        let bytes = s.save_bytes(id).unwrap();
+        let cos = pdfcraft_cos::Document::open(bytes.clone()).unwrap();
+        let data = pdfcraft_xfa::data_of(&cos).unwrap();
+        let parent = pdfcraft_xfa::som_to_path("form[0].row[0]");
+        assert_eq!(data.count(&parent, "inner"), 1);
+        assert_eq!(data.count(&pdfcraft_xfa::som_to_path("form[0].row[0].inner[0]"), "empty"), 2, "empty nested instances also persist");
+        let reopened = s.open("nested-reopened.pdf", None, bytes, None).unwrap();
+        assert_eq!(entries(&s, reopened), 1);
+        assert_eq!(s.run_javascript(id, "", Some("remove")).unwrap().error, None);
+        assert_eq!(entries(&s, id), 0);
+        assert_eq!(s.run_javascript(id, "", Some("add")).unwrap().error, None);
+        assert_eq!(entries(&s, id), 1);
+        s.undo(id).unwrap();
+        assert_eq!(entries(&s, id), 0);
+        s.redo(id).unwrap();
+        assert_eq!(entries(&s, id), 1);
+    }
+}
+
+/// Unnamed wrappers share their parent's SOM but own separate retained row definitions.
+/// Adding through their manager must persist nested defaults, including empty groups.
+#[test]
+fn xfa_unnamed_wrappers_preserve_added_rows_nested_initial_instances() {
+    for named_root in [true, false] {
+        let mut tpl = pdfcraft_xfa::fixtures::optional_rows(0)
+            .replace(r#"<field name="entry""#, r#"<subform name="inner" layout="tb"><occur min="0" initial="1" max="2"/><field name="entry""#)
+            .replace("</value></field>", "</value></field><subform name=\"empty\"><occur min=\"0\" initial=\"2\" max=\"2\"/></subform></subform>")
+            .replace(r#"  <subform name="row""#, r#"  <subform layout="tb"><subform layout="tb"><subform name="row""#)
+            .replace(" </subform>\n</template>", " </subform></subform></subform>\n</template>");
+        if !named_root {
+            tpl = tpl.replace(r#"name="form" "#, "");
+        }
+        let mut s = Session::new().with_xfa_time_scale(100);
+        let id = s.open("unnamed-wrapper.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
+        let assert_rows = |s: &Session, id, expected| {
+            let doc = s.get(id).unwrap();
+            assert_eq!(doc.form.iter().filter(|f| f.name.starts_with("entry")).count(), expected);
+            if expected > 0 {
+                let data = pdfcraft_xfa::data_of(&doc.editor.as_ref().unwrap().cos).unwrap();
+                for i in 0..expected {
+                    let row = format!("{}row[{i}]", if named_root { "form[0]." } else { "" });
+                    assert_eq!(data.count(&pdfcraft_xfa::som_to_path(&row), "inner"), 1);
+                    assert_eq!(data.count(&pdfcraft_xfa::som_to_path(&format!("{row}.inner[0]")), "empty"), 2);
+                }
+            }
+        };
+        assert_rows(&s, id, 0);
+        for expected in [1, 2] {
+            assert_eq!(s.run_javascript(id, "", Some("add")).unwrap().error, None);
+            assert_rows(&s, id, expected);
+        }
+        assert_eq!(s.run_javascript(id, "", Some("remove")).unwrap().error, None);
+        assert_rows(&s, id, 1);
+        s.undo(id).unwrap();
+        assert_rows(&s, id, 2);
+        s.redo(id).unwrap();
+        assert_rows(&s, id, 1);
+        let bytes = s.save_bytes(id).unwrap();
+        let reopened = s.open("unnamed-wrapper-reopened.pdf", None, bytes, None).unwrap();
+        assert_rows(&s, reopened, 1);
+        assert_eq!(s.run_javascript(reopened, "", Some("add")).unwrap().error, None);
+        assert_rows(&s, reopened, 2);
+    }
+}
+
+/// A removed parent shifts SOM indices: cached child managers must follow the new
+/// parent, and a newly added sibling must start from its own template defaults.
+#[test]
+fn xfa_instance_batch_tracks_shifted_parents_and_nested_counts() {
+    let script = r#"var a = _row.addInstance(1); a._inner.addInstance(1);
+        var b = _row.addInstance(1); b._inner.addInstance(1); b._inner.addInstance(1);
+        _row.removeInstance(0);
+        b._inner.removeInstance(0); b._inner.addInstance(1); b._inner.removeInstance(1);
+        _row.addInstance(1)._inner.addInstance(1);
+        b.inner.entry.rawValue = 'kept';"#;
+    let tpl = pdfcraft_xfa::fixtures::optional_rows(0)
+        .replace(r#"<field name="entry""#, r#"<subform name="inner" layout="tb"><occur min="0" initial="1" max="3"/><field name="entry""#)
+        .replace("</value></field>", "</value></field></subform>")
+        .replace("_row.addInstance(1);", script);
+    let mut s = Session::new();
+    let id = s.open("nested-batch.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
+    let out = s.run_javascript(id, "", Some("add")).unwrap();
+    assert_eq!(out.error, None, "{out:?}");
+    let bytes = s.save_bytes(id).unwrap();
+    let mut cos = pdfcraft_cos::Document::open(bytes.clone()).unwrap();
+    let data = pdfcraft_xfa::data_of(&cos).unwrap();
+    assert_eq!(data.count(&pdfcraft_xfa::som_to_path("form[0]"), "row"), 2);
+    for index in 0..2 {
+        assert_eq!(data.count(&pdfcraft_xfa::som_to_path(&format!("form[0].row[{index}]")), "inner"), 2);
+    }
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].row[0].inner[0].entry[0]")), Some("kept"));
+    let template = pdfcraft_xfa::template_of(&cos).unwrap();
+    assert_eq!(pdfcraft_xfa::rerender(&mut cos, &template).unwrap().fields, 7);
+    let reopened = s.open("nested-batch-reopened.pdf", None, bytes, None).unwrap();
+    assert_eq!(s.get(reopened).unwrap().form.iter().filter(|f| f.name.starts_with("entry")).count(), 4);
+    s.undo(id).unwrap();
+    assert!(!s.get(id).unwrap().form.iter().any(|f| f.name.starts_with("entry")));
+    s.redo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().filter(|f| f.name.starts_with("entry")).count(), 4);
+}
+
+/// Expensive replay fails the entire engine edit, including earlier value changes,
+/// without changing saved bytes, widgets, or the existing undo history.
+#[test]
+fn xfa_instance_work_exhaustion_preserves_the_document() {
+    let _budget = crate::xfa::test_faults::limit_effect_work(20_000);
+    let tpl = pdfcraft_xfa::fixtures::optional_rows(0)
+        .replace(r#"max="2""#, r#"max="-1""#)
+        .replace(
+            "_row.addInstance(1);",
+            "for (var i=0; i&lt;40; i++) { _row.addInstance(1); other.rawValue = String(i); other.presence = i % 2 ? 'visible' : 'invisible'; }",
+        )
+        .replace(
+            r#"<field name="other""#,
+            &format!(r#"<subform name="unrelated" presence="hidden">{}</subform><field name="other""#, r#"<field name="unused"/>"#.repeat(600)),
+        );
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("bounded-batch.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "other".into(), value: FieldValue::Text("before".into()) }).unwrap();
+    let before = s.save_bytes(id).unwrap();
+    let undo = s.get(id).unwrap().can_undo().map(str::to_string);
+    let err = s.run_javascript(id, "", Some("add")).unwrap_err().to_string();
+    assert!(err.contains("instance-processing work limit"), "{err}");
+    assert!(s.save_bytes(id).unwrap() == before, "a rejected batch must leave saved bytes unchanged");
+    assert_eq!(s.get(id).unwrap().can_undo(), undo.as_deref());
+    assert!(!s.get(id).unwrap().form.iter().any(|f| f.name.starts_with("entry")));
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "other").unwrap().value, ["before"]);
+}
+
+/// Field-change replay must reject the whole edit even after earlier scripts or reset
+/// have flushed structural, value and property changes into the working document.
+#[test]
+fn xfa_field_change_work_exhaustion_rolls_back_flushed_changes() {
+    let _budget = crate::xfa::test_faults::limit_effect_work(20_000);
+    for reset in [false, true] {
+        let prefix = "_row.addInstance(1); add.presence = 'invisible'; remove.access = 'readOnly';";
+        let expensive = "for (var i=0; i&lt;40; i++) { _row.addInstance(1); other.presence = i % 2 ? 'visible' : 'invisible'; }";
+        let events = if reset {
+            format!(
+                r#"<event activity="exit"><script contentType="application/x-javascript">{prefix} xfa.host.resetData("other"); {expensive}</script></event>"#
+            )
+        } else {
+            format!(
+                r#"<event activity="change"><script contentType="application/x-javascript">{prefix}</script></event>
+                <event activity="exit"><script contentType="application/x-javascript">{expensive}</script></event>"#
+            )
+        };
+        let tpl = pdfcraft_xfa::fixtures::optional_rows(0)
+            .replace(r#"max="2""#, r#"max="-1""#)
+            .replace(r#"<field name="other" w="200pt" h="20pt"><ui><textEdit/></ui></field>"#,
+                &format!(r#"<subform name="unrelated" presence="hidden">{}</subform><field name="other" w="200pt" h="20pt"><ui><textEdit/></ui>{events}</field>"#, r#"<field name="unused"/>"#.repeat(600)));
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("field-rollback.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
+        // Preserve both an existing undo entry and redo entry on rejection.
+        s.run_javascript(id, "", Some("add")).unwrap();
+        s.run_javascript(id, "", Some("add")).unwrap();
+        s.undo(id).unwrap();
+        let before = s.save_bytes(id).unwrap();
+        let generation = s.get(id).unwrap().edit_generation();
+        let dirty = s.get(id).unwrap().dirty;
+        let old_value = s.get(id).unwrap().form.iter().find(|f| f.name == "other").unwrap().value.clone();
+        let undo = s.get(id).unwrap().can_undo().map(str::to_string);
+        let redo = s.get(id).unwrap().can_redo().map(str::to_string);
+        let result = s.apply(id, Edit::SetFieldValue { name: "other".into(), value: FieldValue::Text("edited".into()) });
+        assert!(result.is_err(), "reset={reset}: the field-change caller must reject failed replay");
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("instance-processing work limit"), "{error}");
+        assert!(s.save_bytes(id).unwrap() == before, "reset={reset}: flushed changes must not be published");
+        assert_eq!(s.get(id).unwrap().edit_generation(), generation);
+        assert_eq!(s.get(id).unwrap().dirty, dirty);
+        assert_eq!(s.get(id).unwrap().can_undo(), undo.as_deref());
+        assert_eq!(s.get(id).unwrap().can_redo(), redo.as_deref());
+        assert_eq!(s.get(id).unwrap().form.iter().filter(|f| f.name.starts_with("entry")).count(), 1);
+        assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "other").unwrap().value, old_value);
+    }
+}
+
+/// Calculations following XML import reject the imported data and any flushed prefix
+/// when replay exceeds its budget.
+#[test]
+fn xfa_import_work_exhaustion_rolls_back_imported_data() {
+    let _budget = crate::xfa::test_faults::limit_effect_work(20_000);
+    let script = r#"if (other.rawValue == 'trigger') {
+        _row.addInstance(1); remove.access = 'readOnly'; xfa.host.resetData("add");
+        for (var i=0; i&lt;40; i++) { _row.addInstance(1); other.presence = i % 2 ? 'visible' : 'invisible'; }
+    }"#;
+    let tpl = pdfcraft_xfa::fixtures::optional_rows(0).replace(r#"max="2""#, r#"max="-1""#).replace(
+        r#"<field name="other" w="200pt" h="20pt"><ui><textEdit/></ui></field>"#,
+        &format!(
+            r#"<subform name="unrelated" presence="hidden">{}</subform><field name="other" w="200pt" h="20pt"><ui><textEdit/></ui>
+                <event activity="calculate"><script contentType="application/x-javascript">{script}</script></event></field>"#,
+            r#"<field name="unused"/>"#.repeat(600)
+        ),
+    );
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("import-rollback.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
+    let before = s.save_bytes(id).unwrap();
+    let generation = s.get(id).unwrap().edit_generation();
+    let dirty = s.get(id).unwrap().dirty;
+    let result = s.apply(id, Edit::ImportData { name: "data.xml".into(), bytes: Arc::new(b"<form><other>trigger</other></form>".to_vec()) });
+    assert!(result.is_err(), "an import must reject failed calculation replay");
+    let error = result.unwrap_err().to_string();
+    assert!(error.contains("instance-processing work limit"), "{error}");
+    assert!(s.save_bytes(id).unwrap() == before);
+    assert_eq!(s.get(id).unwrap().edit_generation(), generation);
+    assert_eq!(s.get(id).unwrap().dirty, dirty);
+    assert!(s.get(id).unwrap().can_undo().is_none());
+    assert!(!s.get(id).unwrap().form.iter().any(|f| f.name.starts_with("entry")));
+}
+
+/// A finalization failure must roll back real script changes but retain the runtime
+/// circuit breaker after abandonment. Fault injection avoids leaving a runaway thread.
+#[test]
+fn xfa_post_abandon_failure_preserves_safety_state_and_rolls_back() {
+    for abandoned in [true, false] {
+        for (path, layout) in ["field", "import", "click"].into_iter().flat_map(|p| ["tb", "position", "lr-tb", "rl-tb", "table"].map(|l| (p, l))) {
+            let effects = r#"_row.addInstance(1); other.rawValue = "changed"; remove.access = "readOnly";
+                xfa.host.messageBox("before failure"); console.println("before failure");"#;
+            let mut tpl = pdfcraft_xfa::fixtures::optional_rows(1)
+                .replace(r#"max="2""#, r#"max="-1""#)
+                .replace(r#"<subform name="form" layout="tb""#, &format!(r#"<subform name="form" layout="{layout}""#));
+            if path == "click" {
+                tpl = tpl.replace("_row.addInstance(1);", &format!(r#"{effects} xfa.host.print(); xfa.host.setFocus("other");"#));
+            } else {
+                let event = if path == "field" {
+                    format!(r#"<event activity="exit"><script contentType="application/x-javascript">{effects}</script></event>"#)
+                } else {
+                    format!(
+                        r#"<calculate><script contentType="application/x-javascript">if (other.rawValue == "trigger") {{ {effects} }}</script></calculate>"#
+                    )
+                };
+                tpl = tpl.replace(
+                    r#"<field name="other" w="200pt" h="20pt"><ui><textEdit/></ui></field>"#,
+                    &format!(r#"<field name="other" w="200pt" h="20pt"><ui><textEdit/></ui>{event}</field>"#),
+                );
+            }
+            let mut s = Session::new().with_clock(|| 1_700_000_000);
+            let id = s.open("post-abandon.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).unwrap();
+            // Imports start clean; the other paths preserve populated undo and redo stacks.
+            if path != "import" {
+                for value in ["first", "second"] {
+                    s.apply(id, Edit::SetFieldValue { name: "entry".into(), value: FieldValue::Text(value.into()) }).unwrap();
+                }
+                s.undo(id).unwrap();
+            }
+            s.take_js_output(id);
+            let before = s.save_bytes(id).unwrap();
+            let doc = s.get(id).unwrap();
+            let generation = doc.edit_generation();
+            let dirty = doc.dirty;
+            let fields = format!("{:?}", doc.form);
+            let undo = doc.can_undo().map(str::to_string);
+            let redo = doc.can_redo().map(str::to_string);
+            let edit = match path {
+                "field" => Edit::SetFieldValue { name: "other".into(), value: FieldValue::Text("trigger".into()) },
+                "import" => Edit::ImportData {
+                    name: "data.xml".into(),
+                    bytes: Arc::new(b"<form><row><entry>imported</entry></row><other>trigger</other></form>".to_vec()),
+                },
+                _ => Edit::XfaEvent { som: "form[0].add[0]".into(), activity: "click".into() },
+            };
+            let error = crate::xfa::test_faults::with_finish_failure(abandoned, || s.apply(id, edit)).unwrap_err();
+            assert!(error.to_string().contains("Injected XFA final flush failure"), "{path}: {error}");
+            assert!(s.save_bytes(id).unwrap() == before, "{path}: file changes must roll back");
+            let doc = s.get(id).unwrap();
+            assert_eq!(format!("{:?}", doc.form), fields);
+            assert_eq!(doc.edit_generation(), generation);
+            assert_eq!(doc.dirty, dirty);
+            assert_eq!(doc.can_undo(), undo.as_deref());
+            assert_eq!(doc.can_redo(), redo.as_deref());
+            assert_eq!(doc.xfa_scripts_off(), abandoned, "{path}");
+            assert_eq!(doc.xfa_template.is_none(), abandoned, "{path}");
+            let out = s.take_js_output(id);
+            assert!(out.requests.is_empty(), "{path}: requests from a rejected edit must not escape");
+            if abandoned {
+                assert!(out.errors.iter().any(|e| e.contains("Injected script abandonment")));
+                assert_eq!(out.errors.iter().filter(|e| e.as_str() == XFA_SCRIPTS_OFF).count(), 1);
+                assert!(out.alerts.iter().any(|a| a.text == "before failure"));
+                assert!(out.console.iter().any(|c| c == "before failure"));
+                // Another edit succeeds without running the form's scripts again.
+                s.apply(id, Edit::SetFieldValue { name: "other".into(), value: FieldValue::Text("trigger".into()) }).unwrap();
+                assert!(s.take_js_output(id).is_empty());
+                assert_eq!(s.get(id).unwrap().form.iter().filter(|f| f.name.starts_with("entry")).count(), 1);
+                assert!(s.get(id).unwrap().xfa_scripts_off());
+            }
+        }
+    }
 }
 
 #[test]

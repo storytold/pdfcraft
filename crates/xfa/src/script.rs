@@ -46,7 +46,11 @@ pub struct FormNode {
     pub occur_min: usize,
     pub occur_max: Option<usize>,
     pub index: usize,
+    /// Position of the declaration among its template siblings (independent of instance index).
+    pub template_order: usize,
     pub children: Vec<FormNode>,
+    /// Default child subform definitions retained solely for instance managers, not live nodes.
+    pub instance_templates: Vec<FormNode>,
     /// Fields: the display picture (see [`Field::display_picture`]), for `formattedValue`.
     pub display_picture: Option<String>,
 }
@@ -180,6 +184,7 @@ struct Walker<'a> {
     /// Objects built so far.
     nodes: usize,
     truncated: bool,
+    template_mode: bool,
 }
 
 impl Walker<'_> {
@@ -193,11 +198,15 @@ impl Walker<'_> {
         true
     }
 
+    /// Collect live-instance events within the event cap; dormant defaults must never run scripts.
     /// Record the scripts of the object at `som` as events: each non-empty event script, then its
     /// calculate and validate scripts (the validate one with `message`). Once [`MAX_EVENTS`] events
     /// or [`MAX_EVENT_SCRIPT_BYTES`] of their scripts are recorded, nothing more is and the form is
     /// marked truncated.
     fn push_events(&mut self, som: &str, scripts: &[Script], calculate: Option<&Script>, validate: Option<&Script>, message: Option<&str>) {
+        if self.template_mode {
+            return;
+        }
         if self.events.len() >= MAX_EVENTS {
             self.truncated = true;
             return;
@@ -267,7 +276,9 @@ impl Walker<'_> {
             occur_min: 1,
             occur_max: Some(1),
             index,
+            template_order: 0,
             children: Vec::new(),
+            instance_templates: Vec::new(),
             display_picture: f.display_picture.clone(),
         }
     }
@@ -289,13 +300,13 @@ impl Walker<'_> {
         }
     }
 
-    /// The live nodes of `nodes`, the children of `parent_som`, with their scripts recorded: one per
-    /// instance of a repeating subform (what the data holds, else its initial count). Nothing past
-    /// [`MAX_DEPTH`] is built, and building stops once the object budget is spent.
-    fn children(&mut self, nodes: &[Node], parent_som: &str, depth: usize) -> Vec<FormNode> {
+    /// Build live children and detached defaults separately within the shared node/depth budget.
+    /// Nested positive defaults are already clone sources and must not be duplicated exponentially.
+    fn children(&mut self, nodes: &[Node], parent_som: &str, depth: usize) -> (Vec<FormNode>, Vec<FormNode>) {
         let mut out = Vec::new();
+        let mut templates = Vec::new();
         if depth > MAX_DEPTH {
-            return out;
+            return (out, templates);
         }
         let sibs = SomIndices::of(nodes);
         for (i, n) in nodes.iter().enumerate() {
@@ -303,23 +314,40 @@ impl Walker<'_> {
                 break;
             }
             let sib = sibs.at(i);
+            let first_child = out.len();
             match n {
                 Node::Subform(sf) => {
-                    let from_data = match (&sf.common.name, self.data) {
-                        (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
-                        _ => 0,
-                    };
+                    let from_data = self
+                        .data
+                        .filter(|d| !d.children.is_empty())
+                        .and_then(|d| sf.common.name.as_ref().map(|name| d.count(&data_path(self.tpl, parent_som), name)));
                     let instances = crate::layout::instance_count(&sf.occur, from_data);
-                    for k in 0..instances {
+                    // Keep default definitions independently of live instances, so removing
+                    // the last row and adding again in the same event restores defaults.
+                    let manageable = sf.occur.max != Some(1) || sf.occur.min == 0;
+                    // Inside a definition, positive child instances already are immutable
+                    // defaults. The script host retains those as clone sources; duplicating
+                    // a backup at each level would expand nested optional forms exponentially.
+                    let keep_definition = sf.occur.min == 0 && (!self.template_mode || instances == 0);
+                    for k in 0..instances.saturating_add(usize::from(keep_definition)) {
                         // The first instance was counted above.
                         if k > 0 && !self.take() {
                             break;
                         }
-                        let index = sib + k;
+                        let definition = k == instances;
+                        let index = if definition { sib } else { sib + k };
                         let som = child_som(parent_som, sf.common.name.as_deref(), index);
+                        let saved_data = self.data;
+                        let saved_mode = self.template_mode;
+                        if definition {
+                            self.data = None;
+                            self.template_mode = true;
+                        }
                         self.push_events(&som, &sf.scripts, None, None, None);
-                        let children = self.children(&sf.children, &som, depth + 1);
-                        out.push(FormNode {
+                        let (children, instance_templates) = self.children(&sf.children, &som, depth + 1);
+                        self.data = saved_data;
+                        self.template_mode = saved_mode;
+                        let node = FormNode {
                             name: sf.common.name.clone().unwrap_or_else(|| "#subform".into()),
                             som: som.clone(),
                             kind: Some(NodeKind::Subform),
@@ -327,22 +355,30 @@ impl Walker<'_> {
                             numeric: false,
                             presence: self.presence(sf.common.name.as_deref(), &som, sf.common.presence),
                             access: "open".into(),
-                            repeatable: sf.occur.max != Some(1),
+                            repeatable: manageable,
                             occur_min: sf.occur.min,
                             occur_max: sf.occur.max,
                             index,
+                            template_order: i,
                             children,
+                            instance_templates,
                             display_picture: None,
-                        });
+                        };
+                        if definition {
+                            templates.push(node);
+                        } else {
+                            out.push(node);
+                        }
                     }
                 }
                 Node::Area(a) => {
                     let som = child_som(parent_som, a.common.name.as_deref(), sib);
-                    let children = self.children(&a.children, &som, depth + 1);
+                    let (children, instance_templates) = self.children(&a.children, &som, depth + 1);
                     out.push(FormNode {
                         name: a.common.name.clone().unwrap_or_else(|| "#area".into()),
                         som: som.clone(),
                         kind: Some(NodeKind::Area),
+                        instance_templates,
                         presence: self.presence(a.common.name.as_deref(), &som, a.common.presence),
                         access: "open".into(),
                         occur_min: 1,
@@ -397,8 +433,11 @@ impl Walker<'_> {
                     });
                 }
             }
+            for child in out.iter_mut().skip(first_child) {
+                child.template_order = i;
+            }
         }
-        out
+        (out, templates)
     }
 }
 
@@ -406,9 +445,9 @@ impl Walker<'_> {
 /// from the template and `ov`) and every scripted event, in document order, within
 /// [`MAX_FORM_NODES`] objects.
 pub fn form_tree(tpl: &Template, data: Option<&DataNode>, ov: &Overrides) -> LiveForm {
-    let mut w = Walker { tpl, data, ov, events: Vec::new(), script_bytes: 0, nodes: 0, truncated: false };
+    let mut w = Walker { tpl, data, ov, events: Vec::new(), script_bytes: 0, nodes: 0, truncated: false, template_mode: false };
     let root = Node::Subform(Box::new(tpl.root.clone()));
-    let mut nodes = w.children(std::slice::from_ref(&root), "", 0);
+    let (mut nodes, _) = w.children(std::slice::from_ref(&root), "", 0);
     let mut root_node = nodes.pop().unwrap_or_default();
     // Page masters' fields (Print and Save buttons, page numbers) belong to the layout model
     // in XFA; they hang off the root here, under their page area's name, as the layouter
@@ -416,14 +455,15 @@ pub fn form_tree(tpl: &Template, data: Option<&DataNode>, ov: &Overrides) -> Liv
     if let Some(ps) = &tpl.root.page_set {
         for (i, area) in ps.areas.iter().enumerate() {
             let som = area.name.clone().map(|n| format!("{n}[0]")).unwrap_or_else(|| format!("#pageArea[{i}]"));
-            let children = w.children(&area.items, &som, 1);
-            if children.is_empty() {
+            let (children, instance_templates) = w.children(&area.items, &som, 1);
+            if children.is_empty() && instance_templates.is_empty() {
                 continue;
             }
             root_node.children.push(FormNode {
                 name: area.name.clone().unwrap_or_else(|| "#pageArea".into()),
                 som,
                 kind: Some(NodeKind::Area),
+                instance_templates,
                 presence: "visible".into(),
                 access: "open".into(),
                 occur_min: 1,
@@ -578,6 +618,14 @@ pub fn fields_by_som(doc: &Document) -> HashMap<String, String> {
 /// Lay the form out again from its template, data and overrides, replacing the pages and the
 /// generated fields (a script added a row or hid a subform).
 pub fn rerender(doc: &mut Document, tpl: &Template) -> Result<Report, XfaError> {
+    let mut staged = doc.clone();
+    let report = rerender_staged(&mut staged, tpl)?;
+    *doc = staged;
+    Ok(report)
+}
+
+/// An empty data import is a new blank merge; preserve its initial groups atomically too.
+fn rerender_staged(doc: &mut Document, tpl: &Template) -> Result<Report, XfaError> {
     let packets = crate::read_packets(doc)?.ok_or(XfaError::NotXfa)?;
     let data = parse_datasets(&packets.xdp);
     let ov = overrides(doc);
@@ -597,6 +645,7 @@ pub fn rerender(doc: &mut Document, tpl: &Template) -> Result<Report, XfaError> 
         .filter_map(Object::as_ref)
         .filter(|r| doc.get(*r).as_dict().is_some_and(|d| d.contains(crate::pdf::SOM_KEY) || d.contains(crate::pdf::NODE_KEY)))
         .collect();
+    crate::data::preserve_initial_instances(doc, tpl)?;
     let written = crate::pdf::write_form(doc, &form)?;
     if !generated.is_empty()
         && let Some((acro_ref, mut acro)) = acroform(doc)

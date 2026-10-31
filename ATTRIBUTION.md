@@ -338,6 +338,16 @@ Fonts are fetched by `cargo xtask demo-pdf` into `target/demo-fonts/`, OCR model
 | `text-detection.onnx` | Ocrs text detection model | Robert Knight (ocrs-models; trained on HierText, CC-BY-SA-4.0) | CC-BY-SA-4.0 | https://github.com/robertknight/ocrs/blob/0c826441362a701c55560fefc17bf356b6d1037e/ocrs/examples/download-models.sh (author-published ONNX models; model card: https://huggingface.co/robertknight/ocrs/blob/df0edd170279ab971b53e094c627255a87e1a503/README.md, cc-by-sa-4.0) | Scan & OCR: finds words on page images (cargo xtask models) |
 | `text-recognition.onnx` | Ocrs text recognition model | Robert Knight (ocrs-models; trained on HierText, CC-BY-SA-4.0) | CC-BY-SA-4.0 | https://github.com/robertknight/ocrs/blob/0c826441362a701c55560fefc17bf356b6d1037e/ocrs/examples/download-models.sh (author-published ONNX models; model card: https://huggingface.co/robertknight/ocrs/blob/df0edd170279ab971b53e094c627255a87e1a503/README.md, cc-by-sa-4.0) | Scan & OCR: reads the words it finds (cargo xtask models) |
 
+## Published evidence (3)
+
+Remote screenshots and fixtures used for review or documentation. These are not build inputs and are never downloaded by build commands. Their URLs, licences and SHA-256 records are in `ATTRIBUTION.toml`.
+
+| File | Title | Author | Licence | Source | Used for |
+|---|---|---|---|---|---|
+| `pr-3941/after.png` | PdfCraft zero-instance XFA: after | PdfCraft contributors (@nnamdiarimah, generated with Codex) | MIT OR Apache-2.0 | https://github.com/storytold/pdfcraft/pull/3941/commits/fdd1b20d888230e038c052934b63c41b8f0c0021 | Remote PR #3941 evidence only; not a build input. Original synthetic XFA, PdfCraft UI and project fonts; no private document content. |
+| `pr-3941/zero-instances.pdf` | Original zero-instance XFA demonstration | PdfCraft contributors (@nnamdiarimah, generated with Codex) | MIT OR Apache-2.0 | https://github.com/storytold/pdfcraft/pull/3941/commits/fdd1b20d888230e038c052934b63c41b8f0c0021 | Remote PR #3941 evidence only; not a build input. Original synthetic XFA, PdfCraft UI and project fonts; no private document content. |
+| `pr-3941/before.png` | PdfCraft zero-instance XFA: upstream before | PdfCraft contributors (@nnamdiarimah, generated with Codex) | MIT OR Apache-2.0 | https://github.com/storytold/pdfcraft/tree/3e968c8aa24adfb729c6d45a3c98abf5fed07027 | Remote PR #3941 evidence only; not a build input. Original synthetic XFA, PdfCraft UI and project fonts; no private document content. |
+
 ## Optional build inputs (1)
 
 Not in this repository and never downloaded by it: compiled in only when the build sets the option (official releases do). Each input attributes its own files.

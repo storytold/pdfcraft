@@ -17,12 +17,14 @@ impl Layouter<'_> {
         }
         let ctx = ctx.with_som(&row.common, sib);
         let inner = rect.inset(&row.common.margin);
+        for child in row.children.iter().filter(|k| k.common().presence.occupies()) {
+            self.warn_truncated(child, &ctx.som, self.instances(child, &ctx.som));
+        }
         let (cells, _) = self.cells(row, cols, inner.w, &ctx, depth);
-        let sibs = SomIndices::of(&row.children);
-        for (i, r) in cells {
+        for (i, index, r) in cells {
             if let Some(k) = row.children.get(i) {
                 // Cells stretch to the row height.
-                self.draw_node(k, Rect::new(inner.x + r.x, inner.y, r.w, inner.h), &ctx, depth + 1, sibs.at(i))?;
+                self.draw_node(k, Rect::new(inner.x + r.x, inner.y, r.w, inner.h), &ctx, depth + 1, index)?;
             }
         }
         Ok(())
@@ -33,9 +35,17 @@ impl Layouter<'_> {
         if !c.presence.occupies() {
             return Ok(());
         }
-        let (w, h) = self.size_of(k, (inner.w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1);
-        let (x, y) = c.top_left(w, h);
-        self.draw_node(k, Rect::new(inner.x + x, inner.y + y, w, h), ctx, depth + 1, sib)
+        // Positioned instances keep the template's offset (they can overlap), but
+        // each has its own data, dimensions and SOM identity, just as flowed ones do.
+        let instances = self.instances(k, &ctx.som);
+        self.warn_truncated(k, &ctx.som, instances);
+        for instance in 0..instances {
+            let index = sib + instance;
+            let (w, h) = self.size_of(k, (inner.w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1, index);
+            let (x, y) = c.top_left(w, h);
+            self.draw_node(k, Rect::new(inner.x + x, inner.y + y, w, h), ctx, depth + 1, index)?;
+        }
+        Ok(())
     }
 
     pub(super) fn draw_node(&mut self, node: &Node, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
@@ -43,7 +53,7 @@ impl Layouter<'_> {
             return Ok(());
         }
         let c = node.common();
-        if c.presence == Presence::Invisible {
+        if c.presence == Presence::Invisible || self.instances(node, &ctx.som) == 0 {
             return Ok(());
         }
         match node {
@@ -92,13 +102,13 @@ impl Layouter<'_> {
                     Layout::Tb => {
                         let mut y = inner.y;
                         for (i, k) in s.children.iter().enumerate() {
-                            if !k.common().presence.occupies() {
+                            if !k.common().presence.occupies() || self.instances(k, &ctx.som) == 0 {
                                 continue;
                             }
-                            let (w, h) = self.size_of(k, inner.w, &ctx, depth + 1);
                             // A repeating subform here (a table in an area of a positioned page,
                             // say) gets its instances, as in a flowed one, one under another.
                             for instance in 0..self.instances(k, &ctx.som) {
+                                let (w, h) = self.size_of(k, inner.w, &ctx, depth + 1, sibs.at(i) + instance);
                                 self.draw_node(k, Rect::new(inner.x, y, w, h), &ctx, depth + 1, sibs.at(i) + instance)?;
                                 y += h;
                             }
@@ -116,28 +126,32 @@ impl Layouter<'_> {
                         }
                     }
                     Layout::Table => {
-                        let cols = self.columns(s, inner.w);
+                        let cols = self.columns(s, inner.w, &ctx);
                         let mut y = inner.y;
                         for (i, k) in s.children.iter().enumerate() {
-                            if !k.common().presence.occupies() {
+                            if !k.common().presence.occupies() || self.instances(k, &ctx.som) == 0 {
                                 continue;
                             }
                             let csib = sibs.at(i);
                             if let Node::Subform(r) = k
                                 && r.layout == Layout::Row
                             {
-                                let h = self.row_height(r, &cols, inner.w, &ctx, depth + 1);
-                                self.draw_row(r, &cols, Rect::new(inner.x, y, inner.w, h), &ctx, depth + 1, csib)?;
-                                y += h;
+                                for instance in 0..self.instances(k, &ctx.som) {
+                                    let h = self.row_height(r, &cols, inner.w, &ctx, depth + 1, csib + instance);
+                                    self.draw_row(r, &cols, Rect::new(inner.x, y, inner.w, h), &ctx, depth + 1, csib + instance)?;
+                                    y += h;
+                                }
                             } else {
-                                let (w, h) = self.size_of(k, inner.w, &ctx, depth + 1);
-                                self.draw_node(k, Rect::new(inner.x, y, w, h), &ctx, depth + 1, csib)?;
-                                y += h;
+                                for instance in 0..self.instances(k, &ctx.som) {
+                                    let (w, h) = self.size_of(k, inner.w, &ctx, depth + 1, csib + instance);
+                                    self.draw_node(k, Rect::new(inner.x, y, w, h), &ctx, depth + 1, csib + instance)?;
+                                    y += h;
+                                }
                             }
                         }
                     }
                     Layout::Row => {
-                        let cols = self.columns(s, inner.w);
+                        let cols = self.columns(s, inner.w, &ctx);
                         self.draw_row(s, &cols, rect, parent_ctx, depth, sib)?;
                     }
                 }
@@ -148,33 +162,35 @@ impl Layouter<'_> {
 
     /// Draw border `b` around `rect`: its fill, then each shown edge as a line inside the box, or
     /// the whole box as one rounded shape when its corners are rounded.
-    pub(super) fn draw_border(&mut self, b: &Border, rect: Rect) -> Result<(), XfaError> {
-        let vis = b.visible_edges();
+    pub(super) fn draw_border_fragment(&mut self, b: &Border, rect: Rect, open_top: bool, open_bottom: bool) -> Result<(), XfaError> {
+        let mut vis = b.visible_edges();
         // Rounded corners: the box is one shape, filled and edged along its curves, when its
         // edges are all alike (all shown and the same, or all hidden). Edges that differ keep
         // square corners.
-        let radii = b.radii(rect.w, rect.h);
+        let mut radii = b.radii(rect.w, rect.h);
         let alike = b.edges.iter().all(|e| *e == b.edges[0]);
         if radii.iter().any(|r| *r > 0.0) && (vis == [true; 4] && alike || vis == [false; 4]) {
+            if open_top {
+                radii[0] = 0.0;
+                radii[1] = 0.0;
+            }
+            if open_bottom {
+                radii[2] = 0.0;
+                radii[3] = 0.0;
+            }
             let e = b.edges[0];
             let edge = vis[0].then(|| {
                 let color = if e.stroke == Stroke::Relief { [0.55, 0.55, 0.55] } else { e.color.0 };
                 (e.thickness.clamp(0.1, 20.0), color, matches!(e.stroke, Stroke::Dashed | Stroke::Dotted))
             });
-            let shape = Rounded {
-                rect,
-                radii,
-                inverted: b.corners.map(|c| c.inverted),
-                fill: b.fill().map(|f| f.0),
-                edge,
-                open_top: false,
-                open_bottom: false,
-            };
+            let shape = Rounded { rect, radii, inverted: b.corners.map(|c| c.inverted), fill: b.fill().map(|f| f.0), edge, open_top, open_bottom };
             return self.push(Item::Rounded(Box::new(shape)));
         }
         if let Some(fill) = b.fill() {
             self.push(Item::Fill { rect, color: fill.0 })?;
         }
+        vis[0] &= !open_top;
+        vis[2] &= !open_bottom;
         let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right(), rect.bottom());
         // Top, right, bottom, left; lines sit inside the box.
         let segs = [((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x0, y1), (x1, y1)), ((x0, y0), (x0, y1))];
@@ -245,7 +261,8 @@ impl Layouter<'_> {
                 };
                 self.push(Item::Line { from, to, width: edge.thickness.clamp(0.1, 20.0), color: edge.color.0, dashed: edge.stroke == Stroke::Dashed })
             }
-            Value::Rectangle(b) => self.draw_border(b, inner),
+            // A rectangle value is a graphic, not the object's enclosing border.
+            Value::Rectangle(b) => self.draw_border_fragment(b, inner, false, false),
             Value::Empty => Ok(()),
         }
     }
@@ -261,6 +278,7 @@ impl Layouter<'_> {
         let inner = rect.inset(&g.common.margin);
         let group = self.unique_name(g.common.name.as_deref().unwrap_or("group"));
         let nodes: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
+        let sibs = SomIndices::of(&nodes);
         let placed: Vec<(usize, Rect)> = match g.layout {
             Layout::Tb => {
                 let mut y = 0.0;
@@ -269,7 +287,7 @@ impl Layouter<'_> {
                     if !k.common().presence.occupies() {
                         continue;
                     }
-                    let (w, h) = self.size_of(k, inner.w, &ctx, depth + 1);
+                    let (w, h) = self.size_of(k, inner.w, &ctx, depth + 1, sibs.at(i));
                     out.push((i, Rect::new(0.0, y, w, h)));
                     y += h;
                 }
@@ -281,14 +299,13 @@ impl Layouter<'_> {
                 .filter(|(_, k)| k.common().presence.occupies())
                 .map(|(i, k)| {
                     let c = k.common();
-                    let (w, h) = self.size_of(k, (inner.w - c.x.unwrap_or(0.0)).max(1.0), &ctx, depth + 1);
+                    let (w, h) = self.size_of(k, (inner.w - c.x.unwrap_or(0.0)).max(1.0), &ctx, depth + 1, sibs.at(i));
                     let (x, y) = c.top_left(w, h);
                     (i, Rect::new(x, y, w, h))
                 })
                 .collect(),
             _ => self.pack(&nodes, inner.w, &ctx, depth).0,
         };
-        let sibs = SomIndices::of(&nodes);
         for (i, r) in placed {
             if let Some(f) = g.fields.get(i) {
                 let on = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| (i + 1).to_string());

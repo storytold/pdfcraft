@@ -3,8 +3,8 @@ use super::CLOCK_EVERY;
 use super::ast::{Expr, Idx};
 use super::value::{Val, num_text, parse_num};
 use super::{
-    HNode, HashSet, Interp, LIST_TOO_LONG, MAX_LIST, MAX_PARSE_DEPTH, MAX_STEPS, R, RAN_TOO_LONG, child_named, descendants_named, instances,
-    resolve_som,
+    HNode, HashSet, Interp, LIST_TOO_LONG, MAX_LIST, MAX_PARSE_DEPTH, MAX_STEPS, R, RAN_TOO_LONG, descendants_named, instance_source, instances,
+    resolve_manager, resolve_som,
 };
 
 impl Interp<'_> {
@@ -200,9 +200,7 @@ impl Interp<'_> {
             _ => {
                 if let Some(child) = name.strip_prefix('_') {
                     // The instance manager of `child`, looked for like a name.
-                    let found = resolve_som(self.h, self.h.current, child);
-                    let Some(&first) = found.first() else { return Err(format!("unknown instance manager _{child}")) };
-                    let parent = self.node(first).and_then(|n| n.parent).ok_or_else(|| format!("unknown instance manager _{child}"))?;
+                    let (parent, _) = resolve_manager(self.h, self.h.current, name).ok_or_else(|| format!("unknown instance manager _{child}"))?;
                     return Ok(Val::Im(parent, child.to_string()));
                 }
                 let found = resolve_som(self.h, self.h.current, name);
@@ -280,9 +278,9 @@ impl Interp<'_> {
             }),
             Val::Im(parent, child) => Ok(match name.to_ascii_lowercase().as_str() {
                 "count" => Val::Num(instances(self.h, parent, &child).len() as f64),
-                "min" => Val::Num(instances(self.h, parent, &child).first().and_then(|i| self.node(*i)).map_or(0.0, |n| n.occur_min as f64)),
+                "min" => Val::Num(instance_source(self.h, parent, &child).and_then(|i| self.h.nodes.get(i)).map_or(0.0, |n| n.occur_min as f64)),
                 "max" => Val::Num(
-                    instances(self.h, parent, &child).first().and_then(|i| self.node(*i)).and_then(|n| n.occur_max).map_or(-1.0, |m| m as f64),
+                    instance_source(self.h, parent, &child).and_then(|i| self.h.nodes.get(i)).and_then(|n| n.occur_max).map_or(-1.0, |m| m as f64),
                 ),
                 "classname" => Val::Str("instanceManager".into()),
                 _ => Val::Sink,
@@ -307,6 +305,7 @@ impl Interp<'_> {
         self.charge(1)
     }
 
+    /// Read a live node property or child, keeping detached manager definitions out of node lists.
     /// Property `name` of form object `i` as FormCalc reads it: its value, attributes,
     /// relatives and children by name.
     fn node_member(&mut self, i: usize, name: &str) -> R<Val> {
@@ -341,7 +340,7 @@ impl Interp<'_> {
             | "calculate" | "traversal" | "extras" | "desc" => Val::Sink,
             other => {
                 if let Some(child) = other.strip_prefix('_') {
-                    return Ok(if child_named(self.h, i, child).is_some() { Val::Im(i, child.to_string()) } else { Val::Null });
+                    return Ok(if instance_source(self.h, i, child).is_some() { Val::Im(i, child.to_string()) } else { Val::Null });
                 }
                 let found = instances(self.h, i, other);
                 match found.as_slice() {
