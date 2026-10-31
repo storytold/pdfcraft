@@ -170,6 +170,12 @@ impl PdfCraftApp {
         if shortcut {
             self.request_quit(ctx);
         }
+        self.hold_close_for_unsaved(ctx);
+    }
+
+    /// The window's close: held back with the "save changes?" question while something is
+    /// unsaved. Also run after a frame whose logic panicked before `guard_quit` (#3914).
+    pub(crate) fn hold_close_for_unsaved(&mut self, ctx: &egui::Context) {
         self.sync_unsaved_flag();
         if !ctx.input(|i| i.viewport().close_requested()) {
             return;
