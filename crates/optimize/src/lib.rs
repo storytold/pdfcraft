@@ -10,10 +10,11 @@
 //!   A new image replaces the old one only if it is smaller. The colour and grey settings leave
 //!   alone images they can't decode faithfully (CMYK and other colour spaces, masks, decode arrays
 //!   other than the default, JPEG 2000, JBIG2, CCITT, other than 8 bits, JPEGs whose Adobe marker
-//!   and `/ColorTransform` disagree). Black-and-white images (1-bit, image masks and CCITT fax,
+//!   and `/ColorTransform` disagree). Black-and-white images (1-bit, image masks, CCITT fax and JBIG2,
 //!   Group 3 among them; and eight-bit grey and RGB of only black and white, and indexed images
 //!   that use only palette entries 0 and 1, packed to one bit) above a threshold are averaged down to a
-//!   target resolution, halftones and dithers aside, and are stored as CCITT Group 4 or lossless JBIG2, or 1-bit
+//!   target resolution when grey, image masks or indexed, halftones and dithers aside (see the README), and
+//!   are stored as CCITT Group 4 or lossless JBIG2, or 1-bit
 //!   Flate once resampled or packed, when that is smaller.
 //! - **Discard objects:** page thumbnails, alternate images, document tags (structure tree),
 //!   print settings.
@@ -278,6 +279,8 @@ pub struct Report {
     pub images: usize,
     pub images_resampled: usize,
     pub images_recompressed: usize,
+    /// JBIG2 images left as they are: decoding them all would take more than one run may spend.
+    pub images_refused: usize,
     /// Encoded image bytes before and after (images that changed).
     pub image_bytes_before: usize,
     pub image_bytes_after: usize,

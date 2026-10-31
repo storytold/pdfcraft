@@ -70,6 +70,10 @@ pub enum RedactError {
     /// could not be shown complete.
     #[error("the document's objects nest too deeply to remove hidden information completely; the operation was refused")]
     TooDeep,
+    /// Past what one redaction may decode an image can't be cleared, and removing it whole would
+    /// take what no mark covers with it, unreported.
+    #[error("the images under these marks are more than one redaction can decode, so nothing was changed; redact fewer pages at a time")]
+    ImagesPastAllowance,
     #[error(transparent)]
     Edit(#[from] pdfcraft_edit::EditError),
     #[error(transparent)]
@@ -377,6 +381,12 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
 
 /// [`apply`] without the copy: an error can leave `doc` part redacted.
 fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, RedactError> {
+    let images = pdfcraft_cos::ImageBudget::new(doc);
+    apply_within(doc, pages, images)
+}
+
+/// [`apply_to`], its images decoded within `images`.
+fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_cos::ImageBudget) -> Result<Report, RedactError> {
     let (all_marks, unreadable) = marks_checked(doc);
     // A mark with no readable area is not applied, and applying the others would look complete:
     // refuse before anything changes. Only the pages being applied count.
@@ -419,12 +429,16 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
         retired_properties: Vec::new(),
         widget_owner,
         removed_everywhere: HashSet::new(),
+        images,
     };
     for &(pi, page_marks) in &groups {
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
         let rects: Vec<[f64; 4]> = page_marks.iter().flat_map(|m| m.rects.iter().copied()).collect();
         redact_page_content(doc, &mut applying, pi, &page, &rects)?;
         remove_page_annotations(doc, &mut applying, &page, &rects, page_marks)?;
+    }
+    if applying.images.refused() > 0 {
+        return Err(RedactError::ImagesPastAllowance);
     }
     let Applying { mut report, doomed_fields, doomed_xobjects, retired_properties, mut removed_everywhere, .. } = applying;
 
@@ -522,7 +536,9 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
             list.iter().zip(data).filter(|(o, _)| !o.as_ref().is_some_and(|r| report.overlays.contains(&r))).map(|(_, d)| d).collect();
         let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
         let mut scratch = Report::default();
-        let mut scope = Scope::new(&rects, Mode::Verify, &mut scratch, budget);
+        // Verifying doesn't decode images: what clearing left is read as the page draws it.
+        let mut images = pdfcraft_cos::ImageBudget::with_work(0);
+        let mut scope = Scope::new(&rects, Mode::Verify, &mut scratch, budget, &mut images);
         residue += process(doc, &mut scope, &original, &resources, pdfcraft_content::Matrix::IDENTITY).residue;
     }
     if residue > 0 {
@@ -542,6 +558,8 @@ struct Applying {
     retired_properties: Vec<Object>,
     widget_owner: Vec<(ObjRef, ObjRef)>,
     removed_everywhere: HashSet<ObjRef>,
+    /// What clearing images may spend, across the run's pages.
+    images: pdfcraft_cos::ImageBudget,
 }
 
 /// Step 1 for one page: rewrites its content so nothing readable stays under a mark, and cleans the tags it no longer shows.
@@ -552,13 +570,13 @@ fn redact_page_content(
     page: &pdfcraft_model::Page,
     rects: &[[f64; 4]],
 ) -> Result<(), RedactError> {
-    let Applying { report, doomed_xobjects, retired_properties, .. } = applying;
+    let Applying { report, doomed_xobjects, retired_properties, images, .. } = applying;
     // 1. Content.
     let mut budget = pdfcraft_cos::DecodeBudget::page();
     let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;
     let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let out = {
-        let mut scope = Scope::new(rects, Mode::Apply, report, budget);
+        let mut scope = Scope::new(rects, Mode::Apply, report, budget, images);
         process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY)
     };
     // Fail closed: the interpreter lays vertical-writing text out horizontally, so it cannot
