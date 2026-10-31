@@ -200,8 +200,14 @@ fn order(fmt: &str) -> Vec<Part> {
 }
 
 /// Parse typed text against a date/time format (AFDate_KeystrokeEx's leniency: any
-/// separators, month names, two-digit years). `None` when it isn't a valid date.
+/// separators, month names, two-digit years, read as 1950 to 2049). `None` when it isn't a
+/// valid date.
 pub fn parse_date(text: &str, fmt: &str) -> Option<DateTime> {
+    parse_date_split(text, fmt, 50)
+}
+
+/// [`parse_date`] with a two-digit year below `century_split` read as 20xx and the rest as 19xx.
+pub(super) fn parse_date_split(text: &str, fmt: &str, century_split: i32) -> Option<DateTime> {
     let t = text.trim();
     if t.is_empty() {
         return None;
@@ -303,7 +309,7 @@ pub fn parse_date(text: &str, fmt: &str) -> Option<DateTime> {
             'd' => dt.d = take(&mut nums, &mut tail)?,
             'y' => {
                 let y = i32::try_from(take(&mut nums, &mut tail)?).ok()?;
-                dt.y = if y < 100 { if y < 50 { 2000 + y } else { 1900 + y } } else { y };
+                dt.y = if y < 100 { if y < century_split { 2000 + y } else { 1900 + y } } else { y };
                 have_y = true;
             }
             // Times may be left out; a number that is there must be readable.

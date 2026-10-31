@@ -123,10 +123,13 @@ pub struct FieldProps {
     pub rotation: Option<(usize, i64)>,
 }
 
+/// A [`FormError::Invalid`] with message `m`.
 fn invalid<T>(m: impl Into<String>) -> Result<T, FormError> {
     Err(FormError::Invalid(m.into()))
 }
 
+/// Put `value` into field `f` as its kind takes one (a text value through the field's Keystroke
+/// and Validate events and its scripts first), and redraw the field.
 fn rgb(c: [f64; 3]) -> Object {
     Object::Array(c.iter().map(|v| Object::Real(*v)).collect())
 }

@@ -20,6 +20,7 @@ mod script;
 #[cfg(test)]
 use calc::{Notation, eval_notation, notation_name, notation_tokens, unique};
 pub use calc::{calculate, calculation_reads, notation_js, reads_built_names, rename_in_calculation};
+use format::parse_date_split;
 pub use format::{DATE_PRESETS, DateTime, TIME_PRESETS, format_date, format_value, js_number, keystroke, make_number, parse_date, validate};
 use script::{Arg, call};
 pub use script::{NOTATION_NOT_STORABLE, calculate_js, format_js, notation_storable, parse_calculate, parse_format, parse_validate, validate_js};
@@ -72,6 +73,7 @@ impl CalcOp {
         }
     }
 
+    /// How the operation is named in a list of them (`sum (+)`, `average`).
     pub fn label(self) -> &'static str {
         match self {
             CalcOp::Sum => "sum (+)",
@@ -106,6 +108,13 @@ pub struct Actions {
     pub unsupported: Vec<&'static str>,
     /// Those scripts' JavaScript, run through [`crate::Scripts`].
     pub scripts: Scripts,
+    /// A date field PdfCraft laid out for an XFA form (`/PCXfaDate true`): text its format doesn't
+    /// read is kept and shown as typed rather than refused, as an XFA form keeps it.
+    pub xfa_date: bool,
+    /// Such a field's edit pattern (its `AFDate_KeystrokeEx`) when it differs from the display
+    /// pattern [`Actions::format`] names: the value is typed and kept in this one, and shown in
+    /// that one.
+    pub edit_date: Option<String>,
 }
 
 /// Field scripts that aren't AF calls, by event.
@@ -117,10 +126,68 @@ pub struct Scripts {
     pub calculate: Option<String>,
 }
 
+/// The century split of a two-digit year in an XFA picture clause (XFA 3.3, Picture Clause
+/// Reference): `00` to `29` are 2000 to 2029 and `30` to `99` are 1930 to 1999.
+const XFA_CENTURY_SPLIT: i32 = 30;
+
 impl Actions {
+    /// Whether the field has no format, validation or calculation PdfCraft recognises.
     pub fn is_empty(&self) -> bool {
         self.format == Format::None && self.validate == Validate::None && self.calculate == Calculate::None
     }
+
+    /// The Keystroke event on commit ([`keystroke`]); an XFA date field checks the text against its
+    /// edit pattern and keeps what that doesn't read, as typed.
+    pub fn keystroke(&self, field: &str, value: &str) -> Result<String, String> {
+        let edit = self.edit_pattern().map(|p| Format::Date(p.to_string()));
+        match keystroke(edit.as_ref().unwrap_or(&self.format), field, value) {
+            Err(_) if self.xfa_date => Ok(value.to_string()),
+            checked => checked,
+        }
+    }
+
+    /// What the Format event shows for `value` ([`format_value`]). An XFA date field shows a date
+    /// only for a value that is one, in its edit pattern (written in the display pattern, a
+    /// two-digit year read as XFA reads it, [`XFA_CENTURY_SPLIT`]) or as an ISO date (`2026-10-18`
+    /// or `20261018`); anything else, which its format would read loosely, shows as typed.
+    pub fn format_value(&self, value: &str) -> String {
+        match (&self.format, self.edit_pattern()) {
+            (Format::Date(fmt), Some(edit)) => {
+                let t = value.trim();
+                match parse_date_split(t, edit, XFA_CENTURY_SPLIT).filter(|dt| format_date(*dt, edit).eq_ignore_ascii_case(t)) {
+                    // Typed as it shows: kept as it is, its case too.
+                    Some(_) if edit == fmt => value.to_string(),
+                    Some(dt) => format_date(dt, fmt),
+                    None => iso_date(t).map_or_else(|| value.to_string(), |dt| format_date(dt, fmt)),
+                }
+            }
+            (f, _) => format_value(f, value),
+        }
+    }
+
+    /// An XFA date field's edit pattern: [`Actions::edit_date`], else its display pattern.
+    fn edit_pattern(&self) -> Option<&str> {
+        match &self.format {
+            Format::Date(fmt) if self.xfa_date => Some(self.edit_date.as_deref().unwrap_or(fmt)),
+            _ => None,
+        }
+    }
+}
+
+/// The pattern an `AFDate_KeystrokeEx("…")` keystroke script checks dates against.
+pub fn parse_date_keystroke(js: &str) -> Option<String> {
+    call(js, "AFDate_KeystrokeEx")?.first().and_then(Arg::string)
+}
+
+/// `text` as an ISO 8601 calendar date, `yyyy-mm-dd` or `yyyymmdd` (digits only, a real day).
+fn iso_date(text: &str) -> Option<DateTime> {
+    let b = text.as_bytes();
+    let fmt = match b.len() {
+        10 if b.iter().enumerate().all(|(i, c)| if i == 4 || i == 7 { *c == b'-' } else { c.is_ascii_digit() }) => "yyyy-mm-dd",
+        8 if b.iter().all(u8::is_ascii_digit) => "yyyymmdd",
+        _ => return None,
+    };
+    parse_date(text, fmt).filter(|dt| format_date(*dt, fmt) == text)
 }
 
 #[cfg(test)]

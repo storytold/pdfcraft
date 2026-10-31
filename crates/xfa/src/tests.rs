@@ -3078,6 +3078,163 @@ fn a_zero_caption_reserve_sizes_the_caption_as_none_does() {
     assert!((x_of("withZero") - x_of("without")).abs() < 0.01, "as without a reserve: {} {}", x_of("withZero"), x_of("without"));
 }
 
+/// A date field is shown through its display picture and typed in its edit picture's pattern: its
+/// format action takes the display picture's letters (weekday and month names included), its
+/// keystroke action the edit picture's; without a display picture both take the edit pattern.
+#[test]
+fn date_fields_are_shown_through_their_display_picture() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="plain" w="2in" h="0.3in"><ui><dateTimeEdit/></ui><value><date/></value><format><picture>date{YYYYMMDD}</picture></format></field>
+ <field name="long" w="3in" h="0.3in"><ui><dateTimeEdit/></ui><value><date/></value><format><picture>date{EEEE, MMMM D, YYYY}</picture></format></field>
+ <field name="both" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYYMMDD}|date{DDMMMYY}</picture></ui><value><date/></value><format><picture>date{YYYYMMMDD}</picture></format></field>
+ <field name="none" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date/></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let form = layout_xml(xdp).unwrap();
+    let w = widgets(&form.pages[0]);
+    let shown = |n: &str| w.iter().find(|w| w.name == n).unwrap().display_date.clone();
+    assert_eq!(shown("plain").as_deref(), Some("yyyymmdd"));
+    assert_eq!(shown("long").as_deref(), Some("dddd, mmmm d, yyyy"));
+    assert_eq!(shown("both").as_deref(), Some("yyyymmmdd"));
+    assert_eq!(shown("none"), None);
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let fields = pdfcraft_forms_free_fields(&doc);
+    let action = |n: &str, k: &[u8]| {
+        let d = fields.iter().find(|(name, _)| name == n).map(|(_, d)| d.clone()).unwrap();
+        let aa = doc.resolve(d.get(b"AA").unwrap()).as_dict().unwrap().clone();
+        let a = doc.resolve(aa.get(k).unwrap()).as_dict().unwrap().clone();
+        doc.resolve(a.get(b"JS").unwrap()).as_string().unwrap().to_text()
+    };
+    assert_eq!(action("plain", b"F"), r#"AFDate_FormatEx("yyyymmdd");"#);
+    assert_eq!(action("plain", b"K"), r#"AFDate_KeystrokeEx("yyyy-mm-dd");"#, "typed in the default edit pattern");
+    assert_eq!(action("long", b"F"), r#"AFDate_FormatEx("dddd, mmmm d, yyyy");"#);
+    assert_eq!(
+        (action("both", b"F"), action("both", b"K")),
+        (r#"AFDate_FormatEx("yyyymmmdd");"#.to_string(), r#"AFDate_KeystrokeEx("yyyymmdd");"#.to_string())
+    );
+    assert_eq!(action("none", b"F"), r#"AFDate_FormatEx("dd/mm/yyyy");"#);
+}
+
+/// A date field with a format action but no keystroke action (as another tool may lay one out)
+/// keeps its data in the format action's pattern: the date it shows is written to the datasets as
+/// ISO and read back in that pattern, rather than kept as text.
+#[test]
+fn a_date_field_without_a_keystroke_action_keeps_its_data_in_the_format_pattern() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="when" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date/></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let mut fields = field_data(&doc);
+    let when = fields.iter().find(|f| f.name == "when").map(|f| f.obj).unwrap();
+    doc.update_dict(when, |d| {
+        let Some(Object::Dict(aa)) = d.get_mut(b"AA") else { panic!("the layout gives a date field its actions") };
+        assert!(aa.remove(b"K").is_some(), "a keystroke action to take away");
+        assert!(aa.get(b"F").is_some(), "the format action stays");
+    })
+    .unwrap();
+    for f in &mut fields {
+        if f.name == "when" {
+            f.data = FieldData::Text("18/10/2016".into());
+        }
+    }
+    let w = write_datasets(&mut doc, &fields).unwrap();
+    assert!(w.written && w.warnings.is_empty(), "{w:?}");
+    let p = read_packets(&doc).unwrap().unwrap();
+    let data = parse_datasets(&p.xdp).unwrap();
+    assert_eq!(data.text_at(&som_to_path("form[0].when[0]")), Some("2016-10-18"));
+    let values = read_values(&doc, &fields);
+    assert!(values.contains(&("when".to_string(), FieldData::Text("18/10/2016".into()))), "{values:?}");
+}
+
+/// Taking the XFA out makes each date field one a static form keeps working: held and typed as
+/// it shows, as another viewer checks typing against the keystroke pattern but reads the value
+/// again in the format's. Its keystroke takes the format's pattern and its value (held in the
+/// edit pattern) is written in it; the report counts the fields changed.
+#[test]
+fn taking_the_xfa_out_types_dates_as_they_show() {
+    use crate::pdf::strip;
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="dayFirst" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date>2016-10-18</date></value><format><picture>date{MM/DD/YYYY}</picture></format></field>
+ <field name="same" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date>2016-10-18</date></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let r = strip(&mut doc).unwrap();
+    assert_eq!(r.date_fields, 1, "{r:?}");
+    assert!(r.notes().iter().any(|n| n.contains("1 date field(s)")), "{:?}", r.notes());
+    let fields = pdfcraft_forms_free_fields(&doc);
+    let field = |n: &str| fields.iter().find(|(name, _)| name == n).map(|(_, d)| d.clone()).unwrap();
+    let action = |n: &str, k: &[u8]| {
+        let aa = doc.resolve(field(n).get(b"AA").unwrap()).as_dict().unwrap().clone();
+        let a = doc.resolve(aa.get(k).unwrap()).as_dict().unwrap().clone();
+        doc.resolve(a.get(b"JS").unwrap()).as_string().unwrap().to_text()
+    };
+    let value = |n: &str| doc.resolve(field(n).get(b"V").unwrap()).as_string().unwrap().to_text();
+    assert_eq!(action("dayFirst", b"K"), r#"AFDate_KeystrokeEx("mm/dd/yyyy");"#);
+    assert_eq!(action("dayFirst", b"F"), r#"AFDate_FormatEx("mm/dd/yyyy");"#);
+    assert_eq!(value("dayFirst"), "10/18/2016");
+    assert!(!field("dayFirst").contains(DATE_KEY), "the private mark goes as before");
+    // Typed and shown alike: the layout already holds its value in that pattern.
+    assert_eq!((action("same", b"K"), value("same")), (r#"AFDate_KeystrokeEx("dd/mm/yyyy");"#.to_string(), "18/10/2016".to_string()));
+}
+
+/// A template's default date is canonical: ISO (`2016-10-11`, October 11) or its basic form. The
+/// layout holds it in the field's edit pattern, as it holds the data's dates and typed ones, so
+/// an edit pattern laid out like ISO with day and month swapped (`yyyy-dd-mm`) doesn't read it
+/// as November 10, before or after the XFA is taken out.
+#[test]
+fn template_default_dates_are_held_in_the_edit_pattern() {
+    use crate::pdf::strip;
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="swapped" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{YYYY-DD-MM}</picture></ui><value><date>2016-10-11</date></value><format><picture>date{MM/DD/YYYY}</picture></format></field>
+ <field name="basic" w="2in" h="0.3in"><ui><dateTimeEdit/><picture>date{DD/MM/YYYY}</picture></ui><value><date>20161011</date></value></field>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let form = layout_xml(xdp).unwrap();
+    let w = widgets(&form.pages[0]);
+    let held = |n: &str| w.iter().find(|w| w.name == n).unwrap().value.clone();
+    assert_eq!(held("swapped").as_deref(), Some("2016-11-10"), "October 11 in yyyy-dd-mm");
+    assert_eq!(held("basic").as_deref(), Some("11/10/2016"));
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    strip(&mut doc).unwrap();
+    let fields = pdfcraft_forms_free_fields(&doc);
+    let value = |n: &str, key: &[u8]| {
+        let d = fields.iter().find(|(name, _)| name == n).map(|(_, d)| d.clone()).unwrap();
+        doc.resolve(d.get(key).unwrap()).as_string().unwrap().to_text()
+    };
+    assert_eq!(value("swapped", b"V"), "10/11/2016", "still October 11 once static");
+    assert_eq!(value("swapped", b"DV"), "10/11/2016", "and so is its default");
+}
+
 /// The terminal fields by full name, down the field tree.
 fn full_names(doc: &Document) -> Vec<(String, Dict)> {
     let root = doc.get(doc.root().unwrap());

@@ -315,6 +315,8 @@ fn a_calculation_reads_each_named_field_once() {
     assert_eq!(calculation_reads("AFSimple_Calculate(\"SUM\", \"a, b\");"), ["a", "b"]);
 }
 
+/// Number formats show separators, decimals, currency and negatives as AFNumber_Format does,
+/// and the keystroke check stores the number.
 #[test]
 fn numbers_format_like_acrobat() {
     let n = |d, s, ng, c: &str, p| Format::Number { decimals: d, sep: s, neg: ng, currency: c.into(), prepend: p };
@@ -335,6 +337,58 @@ fn numbers_format_like_acrobat() {
     assert_eq!(keystroke(&Format::None, "Name", " \t"), Ok(" \t".into()));
 }
 
+/// A date field laid out for an XFA form keeps text its pattern doesn't read, as typed, and
+/// shows a date only for a value that is one: in the pattern already, or an ISO date. Another
+/// viewer keeps and shows such text the same way on a synthetic form; an ordinary date field
+/// still refuses it.
+#[test]
+fn xfa_date_fields_keep_and_show_what_their_pattern_does_not_read() {
+    let xfa = |fmt: &str| Actions { format: Format::Date(fmt.into()), xfa_date: true, ..Actions::default() };
+    let plain = |fmt: &str| Actions { format: Format::Date(fmt.into()), ..Actions::default() };
+    for (fmt, typed) in [("yyyy-mm-dd", "10/18/2016"), ("mm/dd/yyyy", "xyz"), ("yyyymmdd", "10/18/2016")] {
+        assert_eq!(xfa(fmt).keystroke("Date", typed), Ok(typed.to_string()), "{typed} in {fmt}");
+        assert!(plain(fmt).keystroke("Date", typed).is_err(), "an ordinary date field refuses {typed}");
+    }
+    assert_eq!(xfa("mm/dd/yyyy").keystroke("Date", "  pending  "), Ok("  pending  ".to_string()), "spaces and all");
+    // Shown: in the pattern, as it is; an ISO date, in the pattern; anything else as typed,
+    // where an ordinary field's looser reading would show a date the value doesn't hold.
+    let ymd = xfa("yyyymmdd");
+    assert_eq!(ymd.format_value("20161018"), "20161018");
+    assert_eq!(ymd.format_value("2016-10-18"), "20161018");
+    assert_eq!(ymd.format_value("26 10 18"), "26 10 18");
+    assert_ne!(plain("yyyymmdd").format_value("26 10 18"), "26 10 18", "read loosely as a date");
+    let mdy = xfa("mm/dd/yyyy");
+    assert_eq!(mdy.format_value("2016-10-18"), "10/18/2016");
+    assert_eq!(mdy.format_value("20161018"), "10/18/2016");
+    assert_eq!(mdy.format_value("10/18/2016"), "10/18/2016");
+    assert_eq!(mdy.format_value("xyz"), "xyz");
+    assert_eq!(mdy.format_value("2016-02-30"), "2016-02-30", "not a real day: as typed");
+    assert_eq!(xfa("ddmmmyy").format_value("18OCT16"), "18OCT16", "in the pattern, its case kept");
+    // Typed in an edit pattern unlike the display pattern: read with the one, shown in the other.
+    let swapped = Actions { edit_date: Some("dd/mm/yyyy".into()), ..xfa("mm/dd/yyyy") };
+    assert_eq!(swapped.format_value("18/10/2016"), "10/18/2016");
+    assert_eq!(swapped.format_value("10/11/2016"), "11/10/2016", "10 November");
+    assert_eq!(swapped.format_value("10/18/2016"), "10/18/2016", "not a day-first date: as typed");
+    assert_eq!(swapped.format_value("2016-10-18"), "10/18/2016");
+    assert_eq!(swapped.keystroke("Date", " 18/10/2016 "), Ok("18/10/2016".to_string()), "checked against the edit pattern");
+    assert_eq!(swapped.keystroke("Date", "10/18/2016"), Ok("10/18/2016".to_string()));
+}
+
+/// An XFA date field reads a two-digit year in its edit pattern as XFA picture clauses do, with
+/// the century split at 30 (`00` to `29` are 2000 to 2029, `30` to `99` are 1930 to 1999), when
+/// it shows the date through its display pattern. An ordinary date field keeps AFDate's split at 50.
+#[test]
+fn an_xfa_date_field_splits_a_two_digit_years_century_at_30() {
+    let shown = Actions { format: Format::Date("mmmm d, yyyy".into()), xfa_date: true, edit_date: Some("ddmmmyy".into()), ..Actions::default() };
+    for (typed, date) in
+        [("18OCT29", "October 18, 2029"), ("18OCT30", "October 18, 1930"), ("18OCT49", "October 18, 1949"), ("18OCT50", "October 18, 1950")]
+    {
+        assert_eq!(shown.format_value(typed), date, "{typed}");
+    }
+    assert_eq!(format_value(&Format::Date("mmmm d, yyyy".into()), "10/18/45"), "October 18, 2045", "an ordinary date field");
+}
+
+/// Date, time and mask formats show values in their pattern and refuse what doesn't fit.
 #[test]
 fn dates_times_and_masks() {
     let d = Format::Date("mm/dd/yyyy".into());
