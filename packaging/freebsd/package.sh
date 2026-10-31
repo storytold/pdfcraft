@@ -43,7 +43,7 @@ esac
 # Only binaries for this machine run here (the --version check at the end); a FreeBSD target built
 # on another OS never does.
 HOST_ARCH="$(release_arch "$(uname -m)" 2>/dev/null)" || HOST_ARCH="$(uname -m)"
-if [ -n "${CARGO_BUILD_TARGET:-}" ] && [ "$(uname -s)" != FreeBSD ]; then
+if [[ -n "${CARGO_BUILD_TARGET-}" && "$(uname -s)" != "FreeBSD" ]]; then
   HOST_ARCH="$(uname -s) $HOST_ARCH"
 fi
 BASENAME="pdfcraft-$VERSION-freebsd-$ARCH"
