@@ -43,7 +43,7 @@ pub(crate) struct Type0Font {
     /// a `ToUnicode` `CMap` (code-indexed).
     to_unicode_is_cid_indexed: bool,
     /// PdfCraft patch: whether the CIDs belong to an Adobe character collection (Japan1, GB1,
-    /// CNS1, Korea1), whose glyph numbering no substitute other than a CID-keyed CFF font shares.
+    /// CNS1, Korea1, KR), whose glyph numbering no substitute other than a CID-keyed CFF font shares.
     adobe_collection: bool,
     /// PdfCraft patch: `/ToUnicode /Identity-H` (a name, not a CMap stream), which CAD exporters
     /// such as WSCAD write for fonts whose two-byte codes are UTF-16 code units. Acrobat shows
@@ -165,9 +165,8 @@ impl Type0Font {
             }
         }
 
-        let adobe_collection = character_collection
-            .as_ref()
-            .is_some_and(|cc| cc.family.ucs2_cmap().is_some());
+        // Adobe-KR has no predefined UCS2 CMap, so it counts by registry and ordering.
+        let adobe_collection = is_adobe_cjk(character_collection.as_ref());
 
         let postscript_name = dict
             .get::<Name<'_>>(BASE_FONT)

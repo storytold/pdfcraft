@@ -171,6 +171,10 @@ standard query. PdfCraft's substitution chain defers the same name hints, so `do
 face drawn. Covered by `cid_fallback_query::{a_cjk_font_whose_name_hints_at_a_standard_family_asks_for_a_fallback,
 a_hinted_cjk_font_without_a_stand_in_keeps_the_hinted_font}` (`cargo test -p pdfcraft-render --test it`)
 and `raster::tests::a_cjk_font_hinting_at_a_standard_family_draws_with_its_stand_in` (craft-fonts).
+The same test of the collection (`is_adobe_cjk`) decides which CIDs no non-CID-keyed substitute
+shares: an Adobe-KR font without `/ToUnicode` (Adobe-KR has no predefined UCS2 CMap) drew the
+substitute's glyph at the CID's index and draws `.notdef` like the other Adobe CJK collections;
+covered by `cid_fallback_query::an_adobe_kr_cid_without_unicode_is_not_drawn_as_the_substitutes_glyph`.
 
 ## KenM76 integration patches
 

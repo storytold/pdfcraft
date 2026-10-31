@@ -171,3 +171,41 @@ fn pdf(objects: &[String]) -> Vec<u8> {
 fn stream(dict: &str, body: &str) -> String {
     format!("<< {dict} /Length {} >>\nstream\n{body}\nendstream", body.len())
 }
+
+/// A page showing the two-byte code `code` (hex, Identity-H) at 40 pt in a non-embedded Type 0
+/// font of the collection `Adobe-<ordering>`, without `/ToUnicode` or a font descriptor.
+fn identity_coded(ordering: &str, code: &str) -> Vec<u8> {
+    pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 80 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        stream("", &format!("BT /F1 40 Tf 10 15 Td <{code}> Tj ET")),
+        "<< /Type /Font /Subtype /Type0 /BaseFont /CraftKR-W3 /Encoding /Identity-H /DescendantFonts [6 0 R] >>".into(),
+        format!(
+            "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /CraftKR-W3 /CIDSystemInfo << /Registry (Adobe) /Ordering ({ordering}) /Supplement 0 >> >>"
+        ),
+    ])
+}
+
+/// An Adobe-KR font without `/ToUnicode` has no Unicode to look a character up by, and Adobe-KR
+/// has no predefined UCS2 CMap, so its CIDs counted as no Adobe collection's: the substitute drew
+/// its own glyph at the CID's index, an unrelated glyph. It draws `.notdef`, as the other Adobe
+/// CJK collections do. Adobe-Identity, whose CIDs a substitute may share, still draws by index.
+#[test]
+fn an_adobe_kr_cid_without_unicode_is_not_drawn_as_the_substitutes_glyph() {
+    let draw = |bytes: Vec<u8>| {
+        let pdf = Pdf::new(bytes).unwrap();
+        let pages = pdf.pages();
+        let cache = RenderCache::new();
+        render(pages.first().unwrap(), &cache, &InterpreterSettings::default(), &RenderSettings::default()).data_as_u8_slice().to_vec()
+    };
+    let inked = |rgba: &[u8]| rgba.as_chunks::<4>().0.iter().filter(|p| p[3] >= 128).count();
+    let identity = draw(identity_coded("Identity", "0024"));
+    assert!(
+        identity != draw(identity_coded("Identity", "0000")),
+        "control: Adobe-Identity draws the substitute's glyph 36 ({} inked)",
+        inked(&identity)
+    );
+    let kr = draw(identity_coded("KR", "0024"));
+    assert!(kr == draw(identity_coded("KR", "0000")), "Adobe-KR CID 36 draws .notdef, not the substitute's glyph 36 ({} inked)", inked(&kr));
+}
