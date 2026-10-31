@@ -1,5 +1,5 @@
 use super::reader::find;
-use super::state::{LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, objstm_member, owned_bytes};
+use super::state::{CACHE_INSERTS, LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, objstm_member, owned_bytes};
 use super::xref::{Revision, XrefEntry};
 use super::{Arc, CosError, Cow, Dict, Document, Lexer, MAX_DECODED, ObjRef, Object, Stream, is_whitespace, parse_indirect_shared};
 
@@ -318,6 +318,7 @@ impl Document {
         // The editing cache is bounded like the scan reader's: re-parsing a file-backed view
         // is cheap, and returned objects outlive eviction.
         self.cache.lock().map_err(|_| CosError::Poisoned)?.insert(num, obj.clone());
+        CACHE_INSERTS.with(|c| c.set(c.get().wrapping_add(1)));
         self.evict_editor_cache_if_over_budget(num, &obj)?;
         Ok(obj)
     }
@@ -444,7 +445,7 @@ impl Document {
         let mut document = self.clone();
         document.cache = Arc::default();
         document.objstms = Arc::default();
-        ObjectReader { document, decoded_count: 0 }
+        ObjectReader { document, decoded_count: 0, counted_objects: 0, counted_bytes: 0 }
     }
 
     fn load(&self, num: u32, depth: u32) -> Result<Object, CosError> {
