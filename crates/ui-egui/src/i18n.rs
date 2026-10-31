@@ -159,7 +159,7 @@ fn plural_sl(n: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 35] = [
+pub static LANGUAGES: [LangInfo; 36] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("i18n/ja.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
@@ -242,6 +242,9 @@ pub static LANGUAGES: [LangInfo; 35] = [
     LangInfo { code: "pl", name: "Polski", source: include_str!("i18n/pl.tsv"), plural: plural_polish, rtl: false, catalog: OnceLock::new() },
     // Slovene; every `sl-*` locale (`sl-SI`) resolves here. Four plural forms (one, two, few, other).
     LangInfo { code: "sl", name: "Slovenščina", source: include_str!("i18n/sl.tsv"), plural: plural_sl, rtl: false, catalog: OnceLock::new() },
+    // Bosnian (Latin script, Ijekavian); every `bs-*` locale (`bs-BA`, `bs_BA.UTF-8`, `bs-Latn-BA`)
+    // resolves here. Three plural forms (one, few, other), the Russian rule for whole counts.
+    LangInfo { code: "bs", name: "Bosanski", source: include_str!("i18n/bs.tsv"), plural: plural_russian, rtl: false, catalog: OnceLock::new() },
     LangInfo {
         code: "el", name: "Ελληνικά", source: include_str!("i18n/el.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new()
     },
@@ -401,6 +404,7 @@ impl Lang {
             "fa" => "Persian",
             "pl" => "Polish",
             "sl" => "Slovenian",
+            "bs" => "Bosnian",
             "el" => "Greek",
             "tr" => "Turkish",
             "lt" => "Lithuanian",
