@@ -689,11 +689,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
             }
             MarkKind::Watermark => {
                 let text = if wm.text.trim().is_empty() { "CONFIDENTIAL" } else { wm.text.trim() };
-                let size = if fit {
-                    (r.width().hypot(r.height()) * 0.5 / (text.len().max(1) as f32 * 0.55)).clamp(6.0, 80.0)
-                } else {
-                    (wm.font_size as f32 * s).max(5.0)
-                };
+                let size = if fit { watermark_auto_size(text, r.width(), r.height()) } else { (wm.font_size as f32 * s).max(5.0) };
                 let galley = p.layout_no_wrap(text.to_string(), egui::FontId::proportional(size), rgb32(wm.color).gamma_multiply(wm.opacity as f32));
                 let angle = -(wm.rotation as f32).to_radians();
                 let half = galley.size() / 2.0;
@@ -865,6 +861,11 @@ fn backdrop_options(ui: &mut egui::Ui, t: &Tokens, d: &mut MarksDraft, doc: &pdf
     }
 }
 
+pub fn watermark_auto_size(text: &str, w: f32, h: f32) -> f32 {
+    let chars = text.lines().map(|l| l.chars().count()).max().unwrap_or(1).max(1);
+    (w.hypot(h) * 0.5 / (chars as f32 * 0.55)).clamp(6.0, 80.0)
+}
+
 /// The edit the dialog's OK makes.
 pub fn edit(d: &MarksDraft, kind: MarkKind, count: usize) -> Edit {
     let pages = d.range.pages(count);
@@ -1007,5 +1008,18 @@ mod tests {
             Edit::AddWatermark { settings, .. } => assert_eq!(settings.offset, [-72.0, 36.0]),
             other => panic!("expected AddWatermark, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn watermark_auto_size_measures_unicode_characters_not_bytes() {
+        // "СЕКРЕТНО" has 8 Cyrillic characters (16 UTF-8 bytes).
+        // "SECRETLY" has 8 ASCII characters (8 UTF-8 bytes).
+        // Both must produce the exact same preview font size.
+        let ascii_size = watermark_auto_size("SECRETLY", 500.0, 700.0);
+        let cyrillic_size = watermark_auto_size("СЕКРЕТНО", 500.0, 700.0);
+        assert_eq!(ascii_size, cyrillic_size);
+        // Multi-line watermarks measure the widest line, not total concatenated bytes.
+        let multiline = watermark_auto_size("SECRETLY\nSHORT", 500.0, 700.0);
+        assert_eq!(ascii_size, multiline);
     }
 }
