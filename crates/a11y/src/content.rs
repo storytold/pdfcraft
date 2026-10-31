@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use pdfcraft_cos::{Dict, Document, ObjRef, Object};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object};
 use pdfcraft_model::Page;
 
 use crate::{Finding, Rule};
@@ -20,6 +20,8 @@ pub(crate) struct Scan {
     pub untagged: BTreeMap<usize, usize>,
     /// Page → fonts used.
     pub fonts: BTreeMap<usize, BTreeSet<ObjRef>>,
+    /// Pages read only in part: content or forms past the page's decode budget are missing.
+    pub incomplete: BTreeSet<usize>,
 }
 
 const MAX_FORM_DEPTH: usize = 12;
@@ -30,30 +32,15 @@ impl Scan {
         for &p in list {
             let Some(page) = pages.get(p) else { continue };
             let res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
-            let data = page_content(doc, &page.dict);
-            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new() };
+            let mut budget = DecodeBudget::page();
+            let data = crate::alt::page_content_within(doc, &page.dict, &mut budget);
+            if budget.remaining() == 0 {
+                s.incomplete.insert(p);
+            }
+            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget };
             w.content(&data, &res, false, 0);
         }
         s
-    }
-}
-
-fn page_content(doc: &Document, page: &Dict) -> Vec<u8> {
-    let Some(c) = page.get(b"Contents") else { return Vec::new() };
-    match &*doc.resolve(c) {
-        Object::Stream(s) => s.decoded().unwrap_or_default(),
-        Object::Array(a) => a
-            .iter()
-            .flat_map(|x| match &*doc.resolve(x) {
-                Object::Stream(s) => {
-                    let mut v = s.decoded().unwrap_or_default();
-                    v.push(b' ');
-                    v
-                }
-                _ => Vec::new(),
-            })
-            .collect(),
-        _ => Vec::new(),
     }
 }
 
@@ -62,6 +49,17 @@ struct Walk<'a> {
     scan: &'a mut Scan,
     page: usize,
     forms: HashSet<ObjRef>,
+    /// Decoded bytes and form entries left for this page.
+    budget: DecodeBudget,
+}
+
+fn bdc_marks(doc: &Document, op: &pdfcraft_content::Op, props: &Dict) -> bool {
+    op.name(0) == Some(b"Artifact")
+        || match op.operands.get(1) {
+            Some(Object::Dict(d)) => d.contains(b"MCID"),
+            Some(Object::Name(n)) => props.get(n).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().map(|d| d.contains(b"MCID"))).unwrap_or(false),
+            _ => false,
+        }
 }
 
 impl Walk<'_> {
@@ -79,17 +77,7 @@ impl Walk<'_> {
             let inside = covered || stack.last().copied().unwrap_or(false);
             match op.op.as_slice() {
                 b"BMC" => stack.push(inside || op.name(0) == Some(b"Artifact")),
-                b"BDC" => {
-                    let marks = op.name(0) == Some(b"Artifact")
-                        || match op.operands.get(1) {
-                            Some(Object::Dict(d)) => d.contains(b"MCID"),
-                            Some(Object::Name(n)) => {
-                                props.get(n).map(|x| self.doc.resolve(x)).and_then(|x| x.as_dict().map(|d| d.contains(b"MCID"))).unwrap_or(false)
-                            }
-                            _ => false,
-                        };
-                    stack.push(inside || marks);
-                }
+                b"BDC" => stack.push(inside || bdc_marks(self.doc, &op, &props)),
                 b"EMC" => {
                     stack.pop();
                 }
@@ -116,14 +104,27 @@ impl Walk<'_> {
                             self.scan.has_images = true;
                             untagged += usize::from(!inside);
                         }
-                        Some(b"Form") if depth < MAX_FORM_DEPTH && self.forms.insert(r) => {
+                        Some(b"Form") if depth < MAX_FORM_DEPTH && !self.forms.contains(&r) => {
+                            if !self.budget.enter_form() {
+                                self.scan.incomplete.insert(self.page);
+                                continue;
+                            }
+                            let data = match self.budget.decode(x) {
+                                Ok(data) => data,
+                                Err(_) => {
+                                    if self.budget.exhausted() {
+                                        self.scan.incomplete.insert(self.page);
+                                    }
+                                    continue;
+                                }
+                            };
+                            self.forms.insert(r);
                             let inner = x
                                 .dict
                                 .get(b"Resources")
                                 .map(|o| self.doc.resolve(o))
                                 .and_then(|o| o.as_dict().cloned())
                                 .unwrap_or_else(|| res.clone());
-                            let data = x.decoded().unwrap_or_default();
                             self.content(&data, &inner, inside, depth + 1);
                             self.forms.remove(&r);
                         }

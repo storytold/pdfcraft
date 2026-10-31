@@ -16,7 +16,7 @@
 //! Positions compare lexicographically in paint order.
 
 use pdfcraft_content::{Matrix, Op, Pieces, parse};
-use pdfcraft_cos::{Dict, Document, Object};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, Object};
 
 use crate::AuditError;
 
@@ -109,6 +109,9 @@ struct Walker<'a> {
     pieces: &'a Pieces,
     out: Vec<FilledRect>,
     ops_seen: usize,
+    /// Decoded bytes and form entries left for the page, its forms included: spending either
+    /// fails the audit.
+    budget: DecodeBudget,
 }
 
 impl<'a> Walker<'a> {
@@ -144,10 +147,11 @@ impl<'a> Walker<'a> {
             match op.op.as_slice() {
                 b"q" => stack.push(gs.clone()),
                 b"Q" => {
+                    // The current path is not graphics state (ISO 32000-2 §8.4.1): `re Q f` still
+                    // fills the rectangle, whose corners are already in user space.
                     if let Some(g) = stack.pop() {
                         *gs = g;
                     }
-                    path = Path::Empty;
                 }
                 b"cm" => {
                     let before = gs.ctm;
@@ -258,7 +262,7 @@ impl<'a> Walker<'a> {
         let resolved = self.doc.resolve(entry);
         let Object::Stream(stream) = &*resolved else { return Ok(()) };
         let dict = &stream.dict;
-        if dict.name(b"Subtype") != Some(b"Form") {
+        if crate::subtype(self.doc, dict)?.as_deref() != Some(b"Form") {
             return Ok(());
         }
         let matrix = dict
@@ -271,8 +275,11 @@ impl<'a> Walker<'a> {
             })
             .unwrap_or(Matrix::IDENTITY);
         let sub_resources = dict.get(b"Resources").map(|o| self.doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+        if !self.budget.enter_form() {
+            return Err(AuditError::TooManyForms);
+        }
         // A form stream that cannot be decoded fails the audit: it might hide a cover.
-        let data = stream.decoded_strict()?;
+        let data = self.budget.decode_strict(stream)?;
         let ops = parse(&data).ops;
         // The XObject matrix maps form space into the user space active at `Do`.
         let mut sub_gs = gs.clone();
@@ -304,7 +311,8 @@ fn ext_alpha(doc: &Document, resources: &Dict, name: &[u8]) -> f64 {
 /// Every opaque filled rectangle drawn by a page's content (and its form XObjects), with paint
 /// positions. A page's content streams are walked once, joined, with one graphics state, so
 /// state set in an earlier stream is still in force in the later ones. Any content stream that
-/// cannot be decoded is an audit failure, never an empty result.
+/// cannot be decoded, or content and forms that decode or enter past one page's [`DecodeBudget`]
+/// in all, is an audit failure, never an empty result.
 pub fn filled_rects(doc: &Document, page: &Dict) -> Result<Vec<FilledRect>, AuditError> {
     let resources = page.get(b"Resources").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
     let contents: Vec<Object> = match page.get(b"Contents") {
@@ -314,15 +322,16 @@ pub fn filled_rects(doc: &Document, page: &Dict) -> Result<Vec<FilledRect>, Audi
             _ => vec![c.clone()],
         },
     };
+    let mut budget = DecodeBudget::page();
     let mut streams = Vec::with_capacity(contents.len());
     for c in &contents {
         if let Object::Stream(s) = &*doc.resolve(c) {
-            streams.push(s.decoded_strict()?);
+            streams.push(budget.decode_strict(s)?);
         }
     }
     let pieces = Pieces::join(&streams);
     let parsed = pieces.parse();
-    let mut w = Walker { doc, pieces: &pieces, out: Vec::new(), ops_seen: 0 };
+    let mut w = Walker { doc, pieces: &pieces, out: Vec::new(), ops_seen: 0, budget };
     let mut gs = Gs::default();
     let mut stack = Vec::new();
     w.walk_ops(&parsed.ops, &mut gs, &mut stack, &resources, 0, None)?;

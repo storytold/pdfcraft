@@ -681,6 +681,18 @@ pub fn check(doc: &Document, options: &Options) -> Report {
                 }
             }
         }
+        // A page read only in part may hold what the scan didn't find: text that makes the
+        // document more than images, untagged content, or a font without Unicode mappings.
+        let unsure = !scan.incomplete.is_empty()
+            && match rule {
+                Rule::ImageOnly => !scan.has_text,
+                Rule::TaggedContent | Rule::CharacterEncoding => findings.is_empty(),
+                _ => false,
+            };
+        if unsure {
+            results.push(RuleResult { rule, status: Status::Manual, findings: Vec::new() });
+            continue;
+        }
         if total > MAX_FINDINGS {
             let more = total - MAX_FINDINGS;
             findings.truncate(MAX_FINDINGS);

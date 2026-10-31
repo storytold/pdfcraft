@@ -214,14 +214,14 @@ impl Walker<'_> {
                         self.geometry.truncated = true;
                         break;
                     }
-                    // An undecodable part is skipped; the rest of the page still snaps.
+                    // An undecodable part is skipped; the parts before it still snap.
                     match s.decoded_within(remaining) {
                         Ok(data) => {
                             joined.extend(data);
                             // A space, as the renderer joins pieces: a trailing comment runs on.
                             joined.push(b' ');
                         }
-                        Err(_) => self.geometry.unreadable = self.geometry.unreadable.saturating_add(1),
+                        Err(_) => self.decode_failed(remaining),
                     }
                 }
             }
@@ -236,10 +236,16 @@ impl Walker<'_> {
         match stream.decoded_within(remaining) {
             Ok(data) => self.ops(&data, resources, initial, depth),
             Err(_) => {
-                self.geometry.unreadable = self.geometry.unreadable.saturating_add(1);
+                self.decode_failed(remaining);
                 Ok(())
             }
         }
+    }
+    /// A tolerant decode fails on an unsupported filter or once it has produced `remaining` bytes,
+    /// so a failure uses up the byte budget: repeating a failing stream cannot repeat that work.
+    fn decode_failed(&mut self, remaining: usize) {
+        self.geometry.unreadable = self.geometry.unreadable.saturating_add(1);
+        self.bytes = self.bytes.saturating_add(remaining);
     }
     fn ops(&mut self, data: &[u8], resources: &Dict, initial: Matrix, depth: usize) -> Result<()> {
         self.bytes = self.bytes.saturating_add(data.len());
@@ -250,6 +256,8 @@ impl Walker<'_> {
         let mut current = None;
         let mut closures = Vec::new();
         let mut path = Geometry::default();
+        // Read on the first `Do` and kept: resolving a direct dictionary copies it.
+        let mut xobjects = None;
         let point = |m: Matrix, x: f64, y: f64| {
             let (x, y) = m.apply(x, y);
             [x, y]
@@ -384,7 +392,11 @@ impl Walker<'_> {
                 }
                 "Do" => {
                     if let Some(name) = op.name(0) {
-                        let xobjects = resources.get(b"XObject").map(|o| self.doc.resolve(o));
+                        let xobjects = xobjects.get_or_insert_with(|| {
+                            #[cfg(test)]
+                            XOBJECT_DICT_READS.with(|n| n.set(n.get() + 1));
+                            resources.get(b"XObject").map(|o| self.doc.resolve(o))
+                        });
                         if let Some(o) = xobjects.as_ref().and_then(|o| o.as_dict()).and_then(|d| d.get(name)) {
                             let r = o.as_ref();
                             if r.is_some_and(|r| self.seen.contains(&r)) {
@@ -420,6 +432,12 @@ impl Walker<'_> {
         Ok(())
     }
 }
+#[cfg(test)]
+thread_local! {
+    /// Times a content stream's `/XObject` resources were read.
+    pub(crate) static XOBJECT_DICT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub fn geometry(doc: &Document, page_index: usize) -> Result<Geometry> {
     let p = crate::page(doc, page_index)?;
     let resources = p.dict.get(b"Resources").map(|o| doc.resolve(o));

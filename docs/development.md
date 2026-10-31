@@ -12,11 +12,14 @@ cargo build --profile low-disk -p pdfcraft-cli
 cargo test --profile low-disk -p pdfcraft-cos --lib
 ```
 
-The profile inherits the normal development settings, including debug assertions and overflow
-checks. It uses line-table-only debug information for workspace code, which keeps file and line
-numbers in backtraces but omits local-variable and parameter details, and it disables incremental
-compilation for this profile only. Ordinary `cargo build`, `cargo test`, and release builds keep
-their existing profiles.
+The profile inherits the normal development settings, including debug assertions, overflow
+checks and line-table-only debug information, and disables incremental compilation for this
+profile only. Ordinary `cargo build` and `cargo test` keep incremental compilation.
+
+The development profile itself keeps only line tables for workspace code and no debug information
+for dependencies. Backtraces show file and line numbers but no local variables or parameters; for
+full debug information in workspace code (for a debugger), build with
+`CARGO_PROFILE_DEV_DEBUG=true`.
 
 Cargo stores custom-profile artifacts separately under `target/low-disk`. Switching between the
 normal and low-disk profiles can therefore leave both sets of artifacts on disk. To remove only
@@ -24,6 +27,24 @@ the low-disk artifacts, run `cargo clean --profile low-disk`.
 
 Building PdfCraft requires Rust 1.95 or later: the UI crate and its `egui` and `craft-ui`
 dependencies need it, and the workspace `rust-version` states the same minimum.
+
+## Annotation tool pin
+
+The annotation quick bar's **Keep tool selected** pin is a shared preference, stored as the
+boolean `comment_tool_pinned`. It survives application restarts, including when switched off.
+Startup uses Select; the remembered pin applies when an annotation tool is picked. Older settings
+without the key keep the default one-shot behavior. Non-boolean values are ignored, preserving
+the current choice and the other valid settings.
+
+The existing opt-in UI control channel uses the same preference:
+
+```sh
+pdfcraft-cli ui --control /path/to/control.json set key=comment-tool-pinned value=true
+pdfcraft-cli ui --control /path/to/control.json state
+```
+
+`ui.state.comment_tool_pinned` reports the boolean. `ui.set` accepts `true` or `false` and refuses
+other values before changing the preference. This changes interface settings only.
 
 ## Interface appearance
 

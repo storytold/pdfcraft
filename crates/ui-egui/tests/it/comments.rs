@@ -1,9 +1,10 @@
 //! Commenting in the real shell (egui_kittest): tools, gestures, selection, the composer and
 //! the Comments panel.
 
+use egui::accesskit::Role;
 use egui::{Pos2, pos2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_render::Annotation;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
 
@@ -40,18 +41,8 @@ fn harness_with_bytes(bytes: Vec<u8>, setup: impl FnOnce(&mut PdfCraftApp) + 'st
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     h
-}
-
-fn settle(h: &mut Harness<'static, PdfCraftApp>) {
-    for _ in 0..200 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
 }
 
 /// A point on page 1 in PDF user space → screen (no rotation; MediaBox 300×200).
@@ -146,7 +137,7 @@ fn sidebar_comment_centres_the_annotation_at_high_zoom() {
             && let Ok(dir) = std::env::var("PDFCRAFT_SHOTS")
         {
             let _gpu = crate::gpu();
-            settle(&mut h);
+            crate::support::settle(&mut h);
             h.render().unwrap().save(format!("{dir}/comment-centred.png")).unwrap();
         }
     }
@@ -552,7 +543,7 @@ fn selected_text_replace_action_opens_replacement_composer() {
     h.run_steps(3);
     h.get_by_label("Replace text").click();
     h.run_steps(2);
-    h.get_by_label("Replacement text");
+    h.get_by_role_and_label(Role::MultilineTextInput, "Replacement text");
     assert!(h.state().views[0].selected_text().is_none());
 }
 
@@ -675,6 +666,115 @@ fn sticky_note_composer_posts_and_returns_to_select() {
     assert_eq!(comments(&h).len(), 1);
 }
 
+/// #2583: a sticky note is saved NoRotate, so on a turned page its icon is drawn upright from
+/// where it was placed (right and down), not where its `/Rect` lies as displayed. The Select tool
+/// picks it where it is drawn.
+#[test]
+fn a_sticky_note_on_a_turned_page_is_picked_where_it_is_drawn() {
+    let mut h = harness(|app| {
+        app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+        app.set_option("quick", "note").unwrap();
+    });
+    crate::support::settle(&mut h);
+    let page = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+    // Screen pixels per point of the displayed page (300 × 200 pt turned to 200 × 300).
+    let k = page.width() / 200.0;
+    let placed = page.left_top() + egui::vec2(100.0 * k, 60.0 * k);
+    click(&mut h, placed);
+    field(&h, "Add a comment").type_text("Turned");
+    h.run_steps(2);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+    crate::support::settle(&mut h);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    assert_eq!((c[0].subtype.as_str(), c[0].no_rotate), ("Text", true));
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    // Where the note's /Rect lies as displayed, left of where it was placed: nothing.
+    click(&mut h, placed + egui::vec2(-10.0 * k, 10.0 * k));
+    assert_eq!(h.state().views[0].comments.selected, None);
+    // On the icon, drawn right and down from where it was placed.
+    click(&mut h, placed + egui::vec2(10.0 * k, 10.0 * k));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+}
+
+/// The composer leaves with its comment when the page scrolls it out of the document, and comes
+/// back with the draft (#4021). It used to be pushed back into the window, over the mode bar and
+/// the toolbar, while its comment was out of sight.
+#[test]
+fn the_composer_hides_while_its_comment_is_scrolled_away() {
+    let mut h = harness(|app| app.set_option("quick", "note").unwrap());
+    click_pt(&mut h, (250.0, 180.0));
+    field(&h, "Add a comment").type_text("Draft");
+    h.run_steps(2);
+    let editors = |h: &Harness<'static, PdfCraftApp>| -> Vec<egui::Rect> {
+        h.query_all_by(|n| n.role() == egui::accesskit::Role::MultilineTextInput).map(|n| n.rect()).collect()
+    };
+    let viewport = h.state().views[0].viewport_rect();
+    assert!(editors(&h).iter().any(|r| viewport.contains(r.center())), "the composer opens in the document");
+    // The page scrolled up: it still shows, the comment near its top doesn't.
+    h.state_mut().views[0].goto = Some((0, 0.4));
+    h.run_steps(4);
+    assert!(h.state().views[0].page_screen_rect(0).is_some_and(|r| r.bottom() > viewport.top()), "page 1 still shows");
+    assert!(at(&h, 250.0, 180.0).y < viewport.top(), "the comment is scrolled away");
+    let shown = editors(&h);
+    assert!(shown.is_empty(), "the composer stays with its comment, not over the toolbar: {shown:?} (document {viewport:?})");
+    // Back again, the draft is still there.
+    h.state_mut().views[0].goto = Some((0, 0.0));
+    h.run_steps(4);
+    assert!(editors(&h).iter().any(|r| viewport.contains(r.center())), "the composer is back");
+    assert_eq!(h.state().views[0].comments.composer.as_ref().map(|c| c.text.as_str()), Some("Draft"));
+}
+
+/// Editing a large comment whose top-right corner is scrolled away still shows the composer
+/// while the rest of the comment is on screen, so it can be posted or cancelled (#4095).
+#[test]
+fn the_edit_composer_shows_while_part_of_its_comment_is_on_screen() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (20.0, 190.0), (280.0, 10.0));
+    // What "Edit text…" opens: the composer anchored at the comment's top-right corner.
+    h.state_mut().views[0].comments.composer = Some(pdfcraft_ui_egui::comments::Composer {
+        page: 0,
+        at: [280.0, 190.0],
+        kind: pdfcraft_ui_egui::comments::ComposerKind::Edit(0),
+        text: String::new(),
+        focus: true,
+    });
+    h.run_steps(2);
+    let viewport = h.state().views[0].viewport_rect();
+    h.state_mut().views[0].goto = Some((0, 0.4));
+    h.run_steps(4);
+    assert!(at(&h, 280.0, 190.0).y < viewport.top(), "the comment's top-right corner is scrolled away");
+    assert!(at(&h, 280.0, 10.0).y > viewport.top(), "part of the comment is still on screen");
+    let editors: Vec<_> = h.query_all_by(|n| n.role() == egui::accesskit::Role::MultilineTextInput).map(|n| n.rect()).collect();
+    assert!(editors.iter().any(|r| viewport.contains(r.center())), "the editor is drawn: {editors:?} (document {viewport:?})");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(h.state().views[0].comments.composer.is_none(), "Cancel closes it");
+}
+
+/// With its whole page scrolled off the screen the composer keeps its draft, and the editor takes
+/// the keyboard again when the page comes back (#4021).
+#[test]
+fn the_composer_takes_the_keyboard_back_after_its_page_was_off_screen() {
+    let mut h = harness(|app| app.set_option("quick", "note").unwrap());
+    click_pt(&mut h, (250.0, 180.0));
+    field(&h, "Add a comment").type_text("Draft");
+    h.run_steps(2);
+    let editor_focused =
+        |h: &Harness<'static, PdfCraftApp>| h.query_all_by(|n| n.role() == egui::accesskit::Role::MultilineTextInput).any(|n| n.is_focused());
+    assert!(editor_focused(&h), "the new note's editor has the keyboard");
+    let viewport = h.state().views[0].viewport_rect();
+    h.state_mut().views[0].goto = Some((1, 0.6));
+    h.run_steps(4);
+    assert!(h.state().views[0].page_screen_rect(0).is_none_or(|r| r.bottom() < viewport.top()), "page 1 is off the screen");
+    assert!(!editor_focused(&h), "nothing to type into while the page is away");
+    h.state_mut().views[0].goto = Some((0, 0.0));
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].comments.composer.as_ref().map(|c| c.text.as_str()), Some("Draft"));
+    assert!(editor_focused(&h), "the editor has the keyboard again");
+}
+
 /// The rectangle of the comment whose text starts with `text`.
 fn rect_of(h: &Harness<'static, PdfCraftApp>, text: &str) -> [f32; 4] {
     let c = comments(h);
@@ -754,7 +854,7 @@ fn a_dragged_text_box_follows_a_rotated_view() {
         }
         h.state_mut().set_option("zoom", "150").unwrap();
         h.run_steps(3);
-        settle(&mut h);
+        crate::support::settle(&mut h);
         let screen = |h: &Harness<'static, PdfCraftApp>, x: f32, y: f32| {
             let r = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
             let (u, v) = (x / 300.0, (200.0 - y) / 200.0);
@@ -860,6 +960,82 @@ fn line_ends_are_dragged_to_change_length_and_angle() {
     assert!((p[1][0] - 200.0).abs() < 1.0 && (p[1][1] - 160.0).abs() < 1.0, "{p:?}");
 }
 
+/// The arrow keys move the selected comment a screen pixel, ⌘/Ctrl or Shift and an arrow ten,
+/// instead of scrolling or turning the page; each press is one undo step. Without a selection
+/// the arrows scroll and turn pages as before.
+#[test]
+fn arrow_keys_nudge_the_selected_comment() {
+    use egui::{Key, Modifiers};
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    click_pt(&mut h, (90.0, 70.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    // One screen pixel in user space, at this zoom.
+    let pixel = 300.0 / h.state().views[0].page_screen_rect(0).unwrap().width();
+    let before = comments(&h)[0].rect;
+    h.key_press(Key::ArrowRight);
+    h.run_steps(3);
+    let r = comments(&h)[0].rect;
+    assert!((r[0] - before[0] - pixel).abs() < 0.01 && (r[1] - before[1]).abs() < 0.01, "one pixel right: {r:?} from {before:?}");
+    assert_eq!(h.state().views[0].current, 0, "the page didn't turn");
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Move comment"));
+    // ⌘/Ctrl and Shift: ten pixels (down on screen is down in user space here).
+    h.key_press_modifiers(Modifiers::COMMAND, Key::ArrowDown);
+    h.run_steps(3);
+    let r2 = comments(&h)[0].rect;
+    assert!((r[1] - r2[1] - 10.0 * pixel).abs() < 0.01 && (r2[0] - r[0]).abs() < 0.01, "ten pixels down: {r2:?} from {r:?}");
+    h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowLeft);
+    h.run_steps(3);
+    let r3 = comments(&h)[0].rect;
+    assert!((r2[0] - r3[0] - 10.0 * pixel).abs() < 0.01, "ten pixels left: {r3:?} from {r2:?}");
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert!((comments(&h)[0].rect[0] - r2[0]).abs() < 0.01, "each press is one undo step");
+    // Nothing selected: → turns the page again.
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.selected, None);
+    let rect = comments(&h)[0].rect;
+    h.key_press(Key::ArrowRight);
+    h.run_steps(3);
+    assert_eq!(comments(&h)[0].rect, rect, "the comment stays");
+    assert_eq!(h.state().views[0].current, 1, "and the view goes to the next page");
+}
+
+/// #3632: with a comment selected, Alt+← / Alt+→ still go back and forward through the view
+/// history instead of nudging it (egui's key patterns let an extra Alt through).
+#[test]
+fn alt_arrows_navigate_instead_of_nudging_the_selected_comment() {
+    use egui::{Key, Modifiers};
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    click_pt(&mut h, (90.0, 70.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    let before = comments(&h)[0].rect;
+    // A followed link's jump to page 2 and back, as `go_to_dest` makes it.
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(2);
+    h.state_mut().views[0].go_to_page(0);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "still selected, so a nudge could take the keys");
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowLeft);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 1, "Alt+← went back");
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowRight);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 0, "Alt+→ went forward");
+    assert_eq!(comments(&h)[0].rect, before, "the comment didn't move");
+    let id = h.state().views[0].id;
+    assert_ne!(h.state().session.get(id).unwrap().can_undo(), Some("Move comment"), "nothing was nudged");
+    // A plain arrow still nudges it.
+    h.key_press(Key::ArrowRight);
+    h.run_steps(3);
+    assert!(comments(&h)[0].rect[0] > before[0], "→ nudged it");
+}
+
 #[test]
 fn a_shape_just_drawn_resizes_from_its_handles_without_the_select_tool() {
     // #2338: the new shape showed its handles, but only the Select tool answered them.
@@ -909,7 +1085,7 @@ fn the_panel_posts_comments_and_replies() {
 
 /// The side panel's width as egui keeps it from one frame to the next.
 fn panel_width(h: &Harness<'static, PdfCraftApp>) -> f32 {
-    h.ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new("pdfcraft-inspector-body"))).expect("the inspector body is shown").width()
+    h.ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique("pdfcraft-inspector-body"))).expect("the inspector body is shown").width()
 }
 
 #[test]
@@ -1085,8 +1261,9 @@ fn the_panel_filters_and_sorts() {
     assert_eq!(h.query_all_by_label("Oval").count(), ovals + 1, "a group header was added");
 }
 
-// Contributor-original PDF. Two roots deliberately share /NM. Their replies are on
-// another page, with dates opposite to source order. An unnamed root has no thread.
+// Contributor-original PDF. Two roots deliberately share /NM; the replies (on another page,
+// with dates opposite to source order) point at the first by reference. Nothing replies to the
+// unnamed root.
 const REVIEW_FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
@@ -1107,7 +1284,7 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 #[test]
-fn the_panel_preserves_global_threads_source_order_and_unfiltered_page_counts() {
+fn the_panel_preserves_threads_source_order_and_unfiltered_page_counts() {
     let mut h = harness_with_bytes(REVIEW_FIXTURE.to_vec(), |app| {
         app.set_option("panel", "comments").unwrap();
         app.views[0].comments.search = Some("needle".into());
@@ -1129,14 +1306,16 @@ fn the_panel_preserves_global_threads_source_order_and_unfiltered_page_counts() 
 
     h.state_mut().views[0].comments.hidden_authors.clear();
     h.run_steps(2);
-    h.get_by_label("Duplicate root");
-    assert_eq!(h.query_all_by_label("Needle first reply").count(), 2, "duplicate names share the same global thread");
+    // The replies point at the first root: sharing its /NM doesn't give the other its thread
+    // (or a search match on that thread).
+    assert_eq!(h.query_all_by_label("Duplicate root").count(), 0);
+    assert_eq!(h.query_all_by_label("Needle first reply").count(), 1);
     h.state_mut().views[0].comments.search = Some("status-only token".into());
     h.state_mut().views[0].comments.hidden_statuses.push("Rejected".into());
     h.state_mut().views[0].comments.hidden_checks.push("Checked".into());
     h.run_steps(2);
     h.get_by_label("First root");
-    h.get_by_label("Duplicate root");
+    assert_eq!(h.query_all_by_label("Duplicate root").count(), 0);
 
     h.state_mut().views[0].comments.hidden_statuses.push("Accepted".into());
     h.run_steps(2);
@@ -1150,7 +1329,331 @@ fn the_panel_preserves_global_threads_source_order_and_unfiltered_page_counts() 
     h.state_mut().views[0].comments.hidden_checks.clear();
     h.run_steps(2);
     h.get_by_label("Unnamed root");
-    assert_eq!(h.query_all_by_label("Needle first reply").count(), 0, "an unnamed root has no replies");
+    assert_eq!(h.query_all_by_label("Needle first reply").count(), 0, "nothing replies to the unnamed root");
+}
+
+// Contributor-original PDF, shaped like PyMuPDF output: every page's first comment is named
+// `fitz-A0`, so only the `/IRT` reference tells which comment a reply belongs to.
+const PER_PAGE_NAMES: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [6 0 R 7 0 R 8 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (fitz-A0) /T (Alpha) /Contents (Cover note) >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (fitz-A0) /T (Beta) /Contents (Second page note) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (fitz-A1) /IRT 6 0 R /T (Gamma) /Contents (Reply on page two) >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (fitz-A2) /IRT 6 0 R /T (Beta) /Contents (Answer on page two) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+#[test]
+fn replies_follow_irt_references_when_names_repeat_on_every_page() {
+    let h = harness_with_bytes(PER_PAGE_NAMES.to_vec(), |app| app.set_option("panel", "comments").unwrap());
+    let reply = h.get_by_label("Reply on page two");
+    assert!(reply.rect().top() > h.get_by_label("Second page note").rect().top(), "the reply sits under page 2's comment");
+    assert!(h.get_by_label("Page 2").rect().top() < reply.rect().top(), "not under page 1's comment, which shares the /NM");
+    h.get_by_label("Answer on page two");
+    // The header counts the two comments, not their replies (Acrobat says 2, not 4), and gives
+    // the replies in small text under it.
+    assert_eq!(h.query_all_by_label("4").count(), 0);
+    h.get_by_label("2 replies");
+}
+
+// Contributor-original PDF: a comment whose wrong reply (with a pop-up) comes before it in
+// `/Annots` and has an answer of its own, a locked right reply and an Accepted status. `/F 128`
+// is the Locked flag.
+const REPLY_THREAD: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 9 0 R 4 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (note) /T (Ben) /Contents (The comment) >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (wrong) /IRT 4 0 R /T (Cat) /Contents (Wrong reply) /Popup 9 0 R >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (right) /IRT 4 0 R /T (Dan) /Contents (Right reply) /F 128 >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (answer) /IRT 5 0 R /T (Eve) /Contents (Answer to the wrong reply) >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /IRT 4 0 R /StateModel /Review /State /Accepted /T (Ben) /Contents (Accepted set by Ben) >> endobj
+9 0 obj << /Type /Annot /Subtype /Popup /Rect [60 100 160 160] /Parent 5 0 R >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// The "…" of the reply row that shows `text`: the last one above it (it sits on the row's
+/// author line).
+fn reply_options<'a>(h: &'a Harness<'static, PdfCraftApp>, text: &str) -> egui_kittest::Node<'a> {
+    let y = h.get_by_label(text).rect().top();
+    h.query_all_by_label("Options for this reply")
+        .filter(|b| b.rect().top() <= y)
+        .max_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .expect("a reply menu")
+}
+
+/// One reply is deleted from its own "…" menu, with the answer to it and its pop-up: the comment,
+/// its other reply and its status stay, and the card stays selected though the comment moved up
+/// in `/Annots`. One undo brings the reply back. A locked reply can't be deleted, and Edit
+/// changes the reply's text, not the comment's.
+#[test]
+fn one_reply_is_deleted_from_its_menu_and_the_thread_stays() {
+    let mut h = harness_with_bytes(REPLY_THREAD.to_vec(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.views[0].comments.selected = Some((0, 2));
+    });
+    let texts = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> { comments(h).iter().filter_map(|a| a.contents.clone()).collect() };
+    let all = ["Wrong reply", "The comment", "Right reply", "Answer to the wrong reply", "Accepted set by Ben"];
+    assert_eq!(texts(&h), all);
+    assert_eq!(h.query_all_by_label("Options for this reply").count(), 3, "each reply has one; the status is a badge");
+
+    reply_options(&h, "Wrong reply").click();
+    h.run_steps(2);
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["The comment", "Right reply", "Accepted set by Ben"], "the reply took its answer along");
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().info.annotations[0].index, 0, "its pop-up went too");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the card stays selected where the comment now is");
+    assert_eq!(h.query_all_by_label("Wrong reply").count(), 0);
+    assert_eq!(h.query_all_by_label("Answer to the wrong reply").count(), 0);
+    h.get_by_label("Right reply");
+    h.get_by_label("Accepted");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Delete comment"), "one undo step");
+
+    // Copy text copies the reply's text.
+    reply_options(&h, "Right reply").click();
+    h.run_steps(2);
+    h.get_by_label("Copy text").click();
+    let mut copied = false;
+    for _ in 0..4 {
+        h.step();
+        copied |= h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "Right reply"));
+    }
+    assert!(copied, "the reply's text is copied");
+    h.run_steps(2);
+
+    // The locked reply's Delete is greyed out; its text can still be edited (ISO 32000-2
+    // Table 167: Locked doesn't restrict the contents).
+    reply_options(&h, "Right reply").click();
+    h.run_steps(2);
+    assert!(h.get_by_label("Delete").accesskit_node().is_disabled(), "a locked reply isn't deleted");
+    h.query_all_by_label("Edit").last().expect("the reply menu's Edit, after the toolbar tab").click();
+    h.run_steps(2);
+    let editor = h.query_all_by(|n| n.role() == Role::MultilineTextInput && n.placeholder() != Some("Add a reply")).next().expect("reply editor");
+    editor.click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("Right reply, reworded".into()));
+    h.run_steps(2);
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["The comment", "Right reply, reworded", "Accepted set by Ben"]);
+
+    // The locked reply keeps its comment too: deleting the comment would take it along.
+    h.get_by_label("More").click();
+    h.run_steps(2);
+    assert!(h.get_by_label("Delete").accesskit_node().is_disabled(), "the comment of a locked reply isn't deleted");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+
+    h.state_mut().undo();
+    h.run_steps(2);
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(texts(&h), all, "undo brings the reply and its answer back");
+    h.get_by_label("Wrong reply");
+}
+
+// Contributor-original PDF: a comment and its replies A, B and C, in that `/Annots` order.
+const THREE_REPLIES: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (note) /T (Ben) /Contents (The comment) >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (a) /IRT 4 0 R /T (Cat) /Contents (Reply A) >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (b) /IRT 4 0 R /T (Dan) /Contents (Reply B) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (c) /IRT 4 0 R /T (Eve) /Contents (Reply C) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// Opens the inline editor on the reply that shows `text`, from its "…" menu, and types `draft`
+/// into it without saving.
+fn draft_reply(h: &mut Harness<'static, PdfCraftApp>, text: &str, draft: &str) {
+    reply_options(h, text).click();
+    h.run_steps(2);
+    h.query_all_by_label("Edit").last().expect("the reply menu's Edit, after the toolbar tab").click();
+    h.run_steps(2);
+    let editor = h.query_all_by(|n| n.role() == Role::MultilineTextInput && n.placeholder() != Some("Add a reply")).next().expect("reply editor");
+    editor.click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text(draft.into()));
+    h.run_steps(2);
+}
+
+/// A reply's inline editor, left open with a draft, closes on Undo and on Redo. Either can put
+/// a reply back in its place or take one away, and the editor would have saved the draft over
+/// whichever reply took that place: reply A after delete → Undo, reply C after Redo.
+#[test]
+fn undo_and_redo_close_a_reply_editor_left_open() {
+    let mut h = harness_with_bytes(THREE_REPLIES.to_vec(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.views[0].comments.selected = Some((0, 0));
+    });
+    let texts = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> { comments(h).iter().filter_map(|a| a.contents.clone()).collect() };
+    let all = ["The comment", "Reply A", "Reply B", "Reply C"];
+    assert_eq!(texts(&h), all);
+
+    draft_reply(&mut h, "Reply B", "B's draft");
+    reply_options(&h, "Reply A").click();
+    h.run_steps(2);
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["The comment", "Reply B", "Reply C"]);
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 1, "B's draft".to_string())), "the editor follows B up");
+
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(texts(&h), all, "undo puts A back where B's editor now points");
+    assert_eq!(h.state().views[0].comments.editing, None, "the editor closes on undo");
+    assert_eq!(h.query_all_by_label("Save").count(), 0, "no draft is left to save over A");
+
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.run_steps(2);
+    draft_reply(&mut h, "Reply B", "B's draft");
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 2, "B's draft".to_string())));
+    h.state_mut().redo();
+    h.run_steps(3);
+    assert_eq!(texts(&h), ["The comment", "Reply B", "Reply C"], "redo deletes A again, and C takes B's place");
+    assert_eq!(h.state().views[0].comments.editing, None, "the editor closes on redo");
+    assert_eq!(h.query_all_by_label("Save").count(), 0, "no draft is left to save over C");
+}
+
+#[test]
+fn the_header_names_no_replies_when_there_are_none() {
+    let h = harness_with_bytes(PER_PAGE_NAMES.to_vec(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.views[0].comments.search = Some("cover".into());
+    });
+    h.get_by_label("Cover note");
+    h.get_by_label("2 replies"); // The header counts the document, not the search.
+    let h = harness_with_bytes(SINGLE_COMMENT.to_vec(), |app| app.set_option("panel", "comments").unwrap());
+    h.get_by_label("Only note");
+    assert_eq!(h.query_all_by_label_contains("repl").count(), 0, "no \"0 replies\" line");
+}
+
+// Contributor-original PDF: one comment, no replies.
+const SINGLE_COMMENT: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /NM (only) /T (Alpha) /Contents (Only note) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+// Contributor-original PDF. Page 1: an unnamed comment with a reply and a reply to that reply,
+// a Replace Text strikeout with its grouped caret, and a hidden status whose comment no page
+// lists. Page 2: an `/IRT` to the annotation itself, to an annotation no page lists (object 11),
+// to a pop-up, to a link and to a form field, and two annotations whose `/IRT`s point at each other.
+const THREAD_EDGES: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 19 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [10 0 R 12 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 20 0 R 21 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /T (Alpha) /Contents (Unnamed parent) >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /IRT 5 0 R /T (Beta) /Contents (Direct reply) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /IRT 6 0 R /T (Gamma) /Contents (Reply to the reply) >> endobj
+8 0 obj << /Type /Annot /Subtype /StrikeOut /Rect [60 100 160 112] /IT /StrikeOutTextEdit /T (Alpha) /Contents (Struck words) >> endobj
+9 0 obj << /Type /Annot /Subtype /Caret /Rect [158 96 166 104] /IRT 8 0 R /RT /Group /T (Alpha) /Contents (Replacement words) >> endobj
+10 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /IRT 10 0 R /T (Delta) /Contents (Points at itself) >> endobj
+11 0 obj << /Type /Annot /Subtype /Text /Rect [20 120 40 140] /T (Nobody) /Contents (Listed on no page) >> endobj
+12 0 obj << /Type /Annot /Subtype /Text /Rect [20 120 40 140] /IRT 11 0 R /T (Delta) /Contents (Points at an unlisted note) >> endobj
+13 0 obj << /Type /Annot /Subtype /Popup /Rect [120 100 280 180] >> endobj
+14 0 obj << /Type /Annot /Subtype /Text /Rect [20 80 40 100] /IRT 13 0 R /T (Delta) /Contents (Points at a pop-up) >> endobj
+15 0 obj << /Type /Annot /Subtype /Link /Rect [200 20 260 40] /Border [0 0 0] /Dest [3 0 R /Fit] >> endobj
+16 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (field) /Rect [200 60 260 80] >> endobj
+17 0 obj << /Type /Annot /Subtype /Text /Rect [20 50 40 70] /IRT 15 0 R /T (Delta) /Contents (Points at a link) >> endobj
+18 0 obj << /Type /Annot /Subtype /Text /Rect [20 20 40 40] /IRT 16 0 R /T (Delta) /Contents (Points at a form field) >> endobj
+19 0 obj << /Type /Annot /Subtype /Text /Rect [240 20 260 40] /F 30 /IRT 11 0 R /T (Delta) /StateModel /Review /State /Accepted /Contents (Stray status) >> endobj
+20 0 obj << /Type /Annot /Subtype /Text /Rect [60 20 80 40] /IRT 21 0 R /T (Delta) /Contents (Loop one) >> endobj
+21 0 obj << /Type /Annot /Subtype /Text /Rect [90 20 110 40] /IRT 20 0 R /T (Delta) /Contents (Loop two) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+#[test]
+fn replies_that_lead_nowhere_stay_comments_and_deeper_replies_join_their_thread() {
+    let mut h = harness_with_bytes(THREAD_EDGES.to_vec(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.set_option("quick", "select").unwrap();
+    });
+    // An `/IRT` that reaches no listed comment leaves its annotation a comment of its own,
+    // rather than a reply shown nowhere.
+    // Links, form widgets and pop-ups are never parents: neither reader lists them as comments.
+    for orphan in
+        ["Points at itself", "Points at an unlisted note", "Points at a pop-up", "Points at a link", "Points at a form field", "Loop one", "Loop two"]
+    {
+        assert!(h.get_by_label(orphan).rect().top() > h.get_by_label("Page 2").rect().top(), "{orphan}");
+    }
+    // A reply to a reply joins the thread of the comment it starts from, also when that comment
+    // has no /NM.
+    let (parent, direct, deeper) = (h.get_by_label("Unnamed parent"), h.get_by_label("Direct reply"), h.get_by_label("Reply to the reply"));
+    assert!(parent.rect().top() < direct.rect().top() && direct.rect().top() < deeper.rect().top());
+    assert!(deeper.rect().top() < h.get_by_label("Struck words").rect().top(), "under its own thread");
+    // Comments: the unnamed parent, the strikeout and the seven on page 2. Replies: the two
+    // replies, not the Replace Text caret grouped with its strikeout.
+    h.get_by_label("9");
+    h.get_by_label("2 replies");
+    // A status whose comment no page lists is not a comment: no card, and nothing to pick on the
+    // page where it sits.
+    assert_eq!(h.query_all_by_label("Stray status").count(), 0);
+    click_pt(&mut h, (250.0, 30.0));
+    assert_eq!(h.state().views[0].comments.selected, None);
+}
+
+/// The arrow keys move a comment, not a reply: also not a reply to a comment with no `/NM`.
+#[test]
+fn arrow_keys_leave_a_reply_to_an_unnamed_comment_where_it_is() {
+    let mut h = harness_with_bytes(THREAD_EDGES.to_vec(), |app| app.set_option("quick", "select").unwrap());
+    let rect = |h: &Harness<'static, PdfCraftApp>, text: &str| comments(h).into_iter().find(|a| a.contents.as_deref() == Some(text)).unwrap().rect;
+    let (reply, parent) = (rect(&h, "Direct reply"), rect(&h, "Unnamed parent"));
+    h.state_mut().views[0].comments.selected = Some((0, 1));
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    assert_eq!(rect(&h, "Direct reply"), reply, "the reply stays");
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    assert_ne!(rect(&h, "Unnamed parent"), parent, "its comment moves");
+}
+
+// Contributor-original PDF: a comment, a reply, and a checkmark and a status set on the reply.
+const CHECKED_REPLY: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [100 100 120 120] /T (Alpha) /Contents (Unchecked comment) >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [100 60 120 80] /IRT 4 0 R /T (Beta) /Contents (Checked reply) >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [100 60 120 80] /IRT 5 0 R /T (Beta) /StateModel /Marked /State /Marked >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [100 60 120 80] /IRT 5 0 R /T (Beta) /StateModel /Review /State /Accepted >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// A checkmark or status belongs to the annotation its `/IRT` names (ISO 32000-2 §12.5.6.2): one
+/// set on a reply doesn't mark the comment, on its card or in the page's menu.
+#[test]
+fn a_checkmark_on_a_reply_does_not_mark_its_comment() {
+    let mut h = harness_with_bytes(CHECKED_REPLY.to_vec(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.set_option("quick", "select").unwrap();
+    });
+    click_pt(&mut h, (110.0, 110.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is selected");
+    h.get_by_label("Checked reply");
+    h.get_by_label("Mark with checkmark"); // The card's checkmark.
+    assert_eq!(h.query_all_by_label("Accepted").count(), 0, "no status badge");
+    let p = at(&h, 110.0, 110.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    h.get_by_label("Copy text"); // The page's menu is open.
+    assert_eq!(h.query_all_by_label("Remove checkmark").count(), 0);
+    assert_eq!(h.query_all_by_label("Mark with checkmark").count(), 2, "the card and the page's menu");
 }
 
 #[test]
@@ -1263,6 +1766,47 @@ fn page_groups_collapse_and_expand() {
     h.get_by_label("Expand all pages").click();
     h.run_steps(3);
     assert!(shown(&h, "First page note") && shown(&h, "Second page note"), "every page is open again");
+}
+
+/// Flatten comments is in the page's right-click menu and in the Comments panel's "…" menu: the
+/// comments go into the page, one undo step brings them back.
+#[test]
+fn flatten_comments_from_the_page_menu_and_the_panel_menu() {
+    let mut h = harness(|app| {
+        app.set_option("panel", "comments").unwrap();
+        app.set_option("quick", "select").unwrap();
+    });
+    let shape = pdfcraft_engine::Shape::Rectangle { rect: [20.0, 20.0, 80.0, 60.0] };
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        style: pdfcraft_engine::Style::default_for(&shape),
+        shape,
+        contents: "Reviewed".into(),
+        author: "Tester".into(),
+    }));
+    h.state_mut().views[0].comments.selected = None;
+    crate::support::settle(&mut h);
+    assert_eq!(comments(&h).len(), 1);
+
+    // Right-click on the page, away from the comment.
+    let p = at(&h, 200.0, 150.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    h.get_by_label("Flatten comments").click();
+    h.run_steps(4);
+    assert!(comments(&h).is_empty(), "the comment went into the page");
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1, "one undo step brings it back");
+
+    h.get_by_label("More options").click();
+    h.run_steps(2);
+    h.get_by_label("Flatten comments").click();
+    h.run_steps(4);
+    assert!(comments(&h).is_empty(), "the panel's menu flattens too");
 }
 
 #[test]
@@ -1726,7 +2270,7 @@ fn attachment_harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     h
 }
 
@@ -1915,7 +2459,7 @@ fn hovering_a_comment_shows_its_author_and_text() {
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     assert!(h.query_by_label_contains("Check this figure").is_none(), "no popup before hovering");
     let p = at(&h, 100.0, 85.0);
     h.hover_at(p);
@@ -1945,7 +2489,7 @@ fn preference_hides_author_only_highlight_hover_previews() {
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
 
     let p = at(&h, 100.0, 85.0);
     // By default, author-only hover is shown.
@@ -1988,11 +2532,14 @@ fn markup_hover_harness(pdf: Vec<u8>, view_rotation: u16) -> Harness<'static, Pd
         app.open_bytes("markup.pdf", None, pdf).expect("opens synthetic markup");
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "none").unwrap();
+        // Small enough to show the whole page in every rotation: a point hovered below the window
+        // is not over the page.
+        app.set_option("zoom", "100").unwrap();
         app.views[0].rotation = view_rotation;
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     h
 }
 
@@ -2009,7 +2556,9 @@ fn hover_markup_at(h: &mut Harness<'static, PdfCraftApp>, x: f32, y: f32) {
             pw: page.width,
             ph: page.height,
         };
-        xf.user_rect(info, 0, [x, y, x, y]).center()
+        let p = xf.user_rect(info, 0, [x, y, x, y]).center();
+        assert!(v.viewport_rect().contains(p), "user point ({x}, {y}) is on screen, at {p:?}");
+        p
     };
     h.hover_at(p);
     h.run_steps(3);
@@ -2326,4 +2875,173 @@ fn selected_text_edit_action_replaces_the_source_word_and_undo_restores_it() {
     assert!(h.state_mut().execute("edit.undo"));
     h.run_steps(3);
     assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].editor_text, "The quick brown fox");
+}
+
+/// Moving a rectangle or an oval showed only its blue frame going while the shape stayed where
+/// it was until release. Now the comment itself is drawn where it goes (the page beneath shows it
+/// where it was until the move is applied), and the pointer frames change nothing.
+#[test]
+fn a_moved_comment_is_drawn_where_it_goes_before_release() {
+    let _gpu = crate::gpu();
+    let mut h = harness(|_| {});
+    let id = h.state().views[0].id;
+    for shape in
+        [pdfcraft_engine::Shape::Rectangle { rect: [30.0, 30.0, 70.0, 70.0] }, pdfcraft_engine::Shape::Oval { rect: [230.0, 30.0, 270.0, 70.0] }]
+    {
+        let style = pdfcraft_engine::Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width: 2.0, fill: Some([1.0, 0.0, 0.0]) };
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            page: 0,
+            shape,
+            style,
+            contents: String::new(),
+            author: "Tester".into(),
+        })));
+    }
+    h.state_mut().views[0].comments.selected = None;
+    crate::support::settle(&mut h);
+    let red = |v: [u8; 4]| v[0] > 200 && v[1] < 80 && v[2] < 80;
+    for ((x, y), (tx, ty)) in [((50.0, 50.0), (150.0, 120.0)), ((250.0, 50.0), (200.0, 150.0))] {
+        let generation = h.state().session.get(id).unwrap().edit_generation();
+        let (from, to) = (at(&h, x, y), at(&h, tx, ty));
+        // Beside the pointer, whose arrow is drawn over the page.
+        let (was, goes) = (at(&h, x - 10.0, y - 10.0), at(&h, tx - 10.0, ty - 10.0));
+        let px = |pixels: &image::RgbaImage, p: Pos2| pixels.get_pixel(p.x.round() as u32, p.y.round() as u32).0;
+        h.hover_at(from);
+        h.run_steps(1);
+        h.drag_at(from);
+        h.run_steps(1);
+        for k in 1..=4 {
+            h.hover_at(from + (to - from) * (k as f32 / 4.0));
+            h.run_steps(1);
+        }
+        let mut shown = false;
+        for _ in 0..100 {
+            h.run_steps(2);
+            let pixels = h.render().unwrap();
+            if red(px(&pixels, goes)) {
+                shown = true;
+                assert!(red(px(&pixels, was)), "the page still shows it where it was");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(shown, "the comment at ({x}, {y}) is drawn under the pointer before release");
+        assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation, "pointer frames never edit the document");
+        h.drop_at(to);
+        h.run_steps(3);
+        let doc = h.state().session.get(id).unwrap();
+        assert_eq!(doc.can_undo(), Some("Move comment"));
+        crate::support::settle(&mut h);
+        let pixels = h.render().unwrap();
+        assert!(!red(px(&pixels, was)), "once applied it is gone from where it was");
+        assert!(red(px(&pixels, goes)), "and shown where it went");
+    }
+}
+
+/// Fill & Sign's typed text (a Typewriter FreeText) is drawn where it goes while it is dragged
+/// too, not only its frame (#4619).
+#[test]
+fn moved_fill_and_sign_text_is_drawn_where_it_goes_before_release() {
+    let _gpu = crate::gpu();
+    let mut h = harness(|_| {});
+    h.state_mut().execute("sign.fill.text");
+    click_pt(&mut h, (40.0, 150.0));
+    h.event(egui::Event::Text("WWWWWW".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let a = comments(&h).into_iter().find(|a| a.contents.as_deref() == Some("WWWWWW")).expect("the typed text");
+    assert!(a.fill_sign && a.subtype == "FreeText", "{a:?}");
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.state_mut().views[0].comments.selected = None;
+    crate::support::settle(&mut h);
+    let (x, y) = ((a.rect[0] + a.rect[2]) / 2.0, (a.rect[1] + a.rect[3]) / 2.0);
+    let (dx, dy) = (120.0, -60.0);
+    let (from, to) = (at(&h, x, y), at(&h, x + dx, y + dy));
+    // Ink in the left of the box where it goes, inside its frame and away from the pointer, which
+    // is drawn over the page.
+    let goes = egui::Rect::from_two_pos(at(&h, a.rect[0] + dx, a.rect[1] + dy), at(&h, a.rect[2] + dx, a.rect[3] + dy)).shrink(3.0);
+    let inked = |pixels: &image::RgbaImage| {
+        (goes.left() as u32..(to.x - 12.0) as u32)
+            .any(|px| (goes.top() as u32..goes.bottom() as u32).any(|py| pixels.get_pixel(px, py).0[..3].iter().all(|c| *c < 100)))
+    };
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + (to - from) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    let mut shown = false;
+    for _ in 0..100 {
+        h.run_steps(2);
+        if inked(&h.render().unwrap()) {
+            shown = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(shown, "the typed text is drawn under the pointer before release");
+    h.drop_at(to);
+    h.run_steps(3);
+}
+
+/// A comment kept upright on a turned page (NoRotate on a /Rotate 90 page) is drawn where it goes
+/// while it is dragged too: its layer is cut from the box it is drawn in, not from its /Rect.
+#[test]
+fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
+    let _gpu = crate::gpu();
+    let pdf = String::from_utf8_lossy(TEXT_FIXTURE)
+        .replace("/Contents 5 0 R /Resources", "/Contents 5 0 R /Rotate 90 /Annots [8 0 R] /Resources")
+        .replace(
+            "trailer",
+            "8 0 obj << /Type /Annot /Subtype /Square /Rect [40 60 160 90] /F 20 /C [1 0 0] /IC [1 0 0] /BS << /W 2 >> >> endobj\ntrailer",
+        )
+        .into_bytes();
+    let mut h = harness_with_bytes(pdf, |_| {});
+    crate::support::settle(&mut h);
+    let id = h.state().views[0].id;
+    let drawn = {
+        let app = h.state();
+        let v = &app.views[0];
+        let info = &app.session.get(v.id).unwrap().info;
+        let a = info.annotations.iter().find(|a| a.subtype == "Square").expect("the square");
+        assert!(a.no_rotate, "kept upright");
+        let page = &info.pages[0];
+        let xf =
+            pdfcraft_ui_egui::canvas::PageXform { rect: v.page_screen_rect(0).expect("on screen"), rot: v.rotation, pw: page.width, ph: page.height };
+        xf.user_rect(info, 0, a.shown_rect(page.rotation))
+    };
+    let red = |v: [u8; 4]| v[0] > 200 && v[1] < 80 && v[2] < 80;
+    let px = |pixels: &image::RgbaImage, p: Pos2| pixels.get_pixel(p.x.round() as u32, p.y.round() as u32).0;
+    // Beside the pointer, which is drawn over the page.
+    let (from, delta) = (drawn.center(), egui::vec2(160.0, 120.0));
+    let was = pos2(drawn.left() + 6.0, drawn.center().y);
+    let goes = was + delta;
+    assert!(red(px(&h.render().unwrap(), was)), "drawn in its upright box");
+    let generation = h.state().session.get(id).unwrap().edit_generation();
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + delta * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    let mut shown = false;
+    for _ in 0..100 {
+        h.run_steps(2);
+        let pixels = h.render().unwrap();
+        if red(px(&pixels, goes)) {
+            shown = true;
+            assert!(red(px(&pixels, was)), "the page still shows it where it was");
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(shown, "the upright comment is drawn under the pointer before release");
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation, "pointer frames never edit the document");
+    h.drop_at(from + delta);
+    h.run_steps(3);
 }

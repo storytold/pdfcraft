@@ -528,6 +528,29 @@ fn custom_document_properties_are_listed_set_removed_and_their_names_checked() {
     assert!(custom_info(&doc).is_empty());
 }
 
+/// An `/Info` dictionary written directly in the trailer: a cleared entry is removed, and the
+/// other entries are kept.
+#[test]
+fn document_info_entries_are_cleared_from_an_info_dictionary_in_the_trailer() {
+    let b = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>".into(),
+            body("X"),
+        ],
+        "/Root 1 0 R /Info << /Title (Report) /Project (Apollo) /Revision (7) >>",
+    );
+    let mut doc = open(b);
+    set_info(&mut doc, "Missing", "").unwrap();
+    assert!(matches!(doc.trailer().get(b"Info"), Some(Object::Dict(_))), "clearing an absent entry changes nothing");
+    set_info(&mut doc, "Project", "").unwrap();
+    set_info(&mut doc, "Title", "").unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(custom_info(&doc), [("Revision".to_string(), "7".to_string())]);
+    assert_eq!(info(&doc, "Title"), None);
+}
+
 /// Padding is not part of a custom value, in any mix of NULs and whitespace, a value that is only
 /// padding is not listed, and such entries don't count towards the 256 listed: a real property
 /// after 300 blank ones is still there.
@@ -626,6 +649,43 @@ fn document_info_edits_update_the_xmp_packet() {
     // Stored unfiltered, still typed as metadata.
     let dict = xmp_stream(&doc).unwrap().dict;
     assert_eq!((dict.name(b"Type"), dict.name(b"Subtype"), dict.get(b"Filter")), (Some(&b"Metadata"[..]), Some(&b"XML"[..]), None));
+}
+
+/// A file that states its title, author and so on only in XMP (PDF 2.0 deprecates `/Info`) shows
+/// them in Document Properties (#2373); `/Info` wins where it has a value.
+#[test]
+fn document_info_falls_back_to_the_xmp_packet() {
+    let xmp = LIBREOFFICE_XMP
+        .replace(
+            "<rdf:li xml:lang=\"x-default\">Untitled 1</rdf:li>",
+            "<rdf:li xml:lang=\"de\">Bericht</rdf:li><rdf:li xml:lang=\"x-default\">Report &amp; &#x201C;notes&#8221;</rdf:li>",
+        )
+        .replace("<rdf:li>Old Author</rdf:li>", "<rdf:li>Ada</rdf:li>\n<rdf:li>Grace</rdf:li>")
+        .replace("<pdf:Producer>Writer 1.0</pdf:Producer>", "<pdf:Producer>Writer 1.0</pdf:Producer><pdf:Keywords/>");
+    let mut doc = doc_with_xmp(xmp.as_bytes());
+    // Both: /Info's own values, XMP for what /Info lacks.
+    assert_eq!(info(&doc, "Title").as_deref(), Some("Untitled 1"));
+    assert_eq!(info(&doc, "Subject").as_deref(), Some("Old subject"));
+    // XMP only.
+    doc.trailer_mut().remove(b"Info");
+    let doc = full_roundtrip(&doc);
+    assert_eq!(info(&doc, "Title").as_deref(), Some("Report & \u{201C}notes\u{201D}"));
+    assert_eq!(info(&doc, "Author").as_deref(), Some("Ada; Grace"));
+    assert_eq!(info(&doc, "Subject").as_deref(), Some("Old subject"));
+    assert_eq!(info(&doc, "Producer").as_deref(), Some("Writer 1.0"));
+    assert_eq!(info(&doc, "Keywords"), None, "an empty property is no value");
+    assert_eq!(info(&doc, "Rating"), None, "no XMP counterpart");
+    // The attribute form, and a packet that isn't UTF-8 is not read.
+    let attrs = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+                 <rdf:Description rdf:about=\"\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\" pdf:Keywords='a, b &amp; c'/></rdf:RDF></x:xmpmeta>";
+    let mut doc = doc_with_xmp(attrs.as_bytes());
+    doc.trailer_mut().remove(b"Info");
+    assert_eq!(info(&doc, "Keywords").as_deref(), Some("a, b & c"));
+    let mut latin1 = LIBREOFFICE_XMP.as_bytes().to_vec();
+    latin1.extend_from_slice(b"<!-- \xE9 -->");
+    let mut doc = doc_with_xmp(&latin1);
+    doc.trailer_mut().remove(b"Info");
+    assert_eq!(info(&doc, "Subject"), None);
 }
 
 #[test]
@@ -931,9 +991,111 @@ fn links_are_rewired_to_copied_pages_or_dropped() {
     assert!(!link.contains(b"Dest") && !link.contains(b"A"));
 }
 
-/// A widget annotation that is its own form field (no `/Parent`).
-fn own_field(doc: &Document, r: ObjRef) -> bool {
-    doc.get(r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget") && !d.contains(b"Parent"))
+/// Issue #1810: a widget that is its own field was shared between both copies of a repeated
+/// page, so only the last page could identify it (its `/P`), and per-page annotation edits were
+/// impossible. Each copy must get its own widget sharing one parent field (name and value).
+#[test]
+fn repeated_page_splits_a_combined_field_widget() {
+    let out = full_roundtrip(&extract_pages(&doc_a(), &[1, 1]).unwrap());
+    let ps = pages(&out).unwrap();
+    let widget = |i: usize| -> ObjRef {
+        let list = page_dict(&out, i).get(b"Annots").map(|a| out.resolve(a).as_array().cloned().unwrap_or_default()).unwrap_or_default();
+        list.iter()
+            .filter_map(|a| a.as_ref())
+            .find(|r| out.get(*r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget")))
+            .expect("a widget annotation")
+    };
+    let (w1, w2) = (widget(0), widget(1));
+    assert_ne!(w1, w2, "each copy of the page has its own widget");
+    for (i, w) in [(0, w1), (1, w2)] {
+        let d = out.get(w).as_dict().unwrap().clone();
+        for key in [b"T".as_slice(), b"V", b"FT"] {
+            assert!(!d.contains(key), "a widget inherits field entries: {key:?}");
+        }
+        assert_eq!(d.reference(b"P"), Some(ps[i].obj), "/P names the page holding the widget");
+        let parent = d.reference(b"Parent").expect("the widget has a parent field");
+        let f = out.get(parent).as_dict().unwrap().clone();
+        assert_eq!(f.get(b"T").and_then(|v| v.as_string()).map(|s| s.to_text()).as_deref(), Some("name"));
+        assert_eq!(f.get(b"V").and_then(|v| v.as_string()).map(|s| s.to_text()).as_deref(), Some("Ada"));
+        let kids: Vec<ObjRef> =
+            f.get(b"Kids").and_then(|k| out.resolve(k).as_array().cloned()).unwrap_or_default().iter().filter_map(|k| k.as_ref()).collect();
+        assert!(kids.contains(&w1) && kids.contains(&w2), "one field holds both widgets: {kids:?}");
+        let fields: Vec<ObjRef> = catalog(&out)
+            .get(b"AcroForm")
+            .map(|f| out.resolve(f))
+            .and_then(|f| f.as_dict().cloned())
+            .and_then(|f| f.get(b"Fields").map(|x| out.resolve(x)))
+            .and_then(|f| f.as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|f| f.as_ref())
+            .collect();
+        assert_eq!(fields, [parent], "the parent is the one top-level field");
+    }
+}
+
+#[test]
+fn splitting_a_combined_widget_keeps_annotation_actions_and_field_triggers() {
+    let mut src = doc_a();
+    let page = pages(&src).unwrap()[1].obj;
+    let list = page_dict(&src, 1).get(b"Annots").and_then(|a| a.as_array()).cloned().unwrap();
+    let widget =
+        list.iter().filter_map(Object::as_ref).find(|r| src.get(*r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget"))).unwrap();
+    let mut action = Dict::new();
+    action.set(b"S".to_vec(), Object::name("GoTo"));
+    action.set(b"D".to_vec(), Object::Array(vec![Object::Ref(page), Object::name("Fit")]));
+    let mut named = Dict::new();
+    named.set(b"S".to_vec(), Object::name("Named"));
+    named.set(b"N".to_vec(), Object::name("NextPage"));
+    let mut aa = Dict::new();
+    aa.set(b"E".to_vec(), Object::Dict(named.clone()));
+    aa.set(b"K".to_vec(), Object::Dict(named));
+    let aa = src.add(Object::Dict(aa));
+    src.update_dict(widget, |d| {
+        d.set(b"A".to_vec(), Object::Dict(action));
+        d.set(b"AA".to_vec(), Object::Ref(aa));
+    })
+    .unwrap();
+    let out = full_roundtrip(&extract_pages(&src, &[1, 1]).unwrap());
+    let ps = pages(&out).unwrap();
+    for i in 0..2 {
+        let w = annots(&out, i).into_iter().find(|d| d.name(b"Subtype") == Some(b"Widget")).unwrap();
+        let action = out.resolve(w.get(b"A").expect("the widget keeps its action"));
+        let dest = action.as_dict().unwrap().get(b"D").and_then(|a| a.as_array()).unwrap()[0].as_ref().unwrap();
+        assert!(ps.iter().any(|p| p.obj == dest), "the action targets a copied page");
+        let waa = out.resolve(w.get(b"AA").expect("widget triggers"));
+        assert!(waa.as_dict().unwrap().contains(b"E"));
+        assert!(!waa.as_dict().unwrap().contains(b"K"));
+        let parent = out.get(w.reference(b"Parent").unwrap()).as_dict().unwrap().clone();
+        assert!(!parent.contains(b"A"));
+        let faa = out.resolve(parent.get(b"AA").expect("field triggers"));
+        assert!(faa.as_dict().unwrap().contains(b"K"));
+        assert!(!faa.as_dict().unwrap().contains(b"E"));
+    }
+}
+
+#[test]
+fn splitting_a_combined_widget_keeps_its_annotation_only_keys() {
+    let mut src = doc_a();
+    let list = page_dict(&src, 1).get(b"Annots").and_then(|a| a.as_array()).cloned().unwrap();
+    let widget =
+        list.iter().filter_map(Object::as_ref).find(|r| src.get(*r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget"))).unwrap();
+    src.update_dict(widget, |d| {
+        d.set(b"Contents".to_vec(), Object::String(PdfString::text("alt text")));
+        d.set(b"BM".to_vec(), Object::name("Multiply"));
+        d.set(b"Lang".to_vec(), Object::String(PdfString::text("en-US")));
+        d.set(b"AF".to_vec(), Object::Array(Vec::new()));
+    })
+    .unwrap();
+    let out = full_roundtrip(&extract_pages(&src, &[1, 1]).unwrap());
+    for i in 0..2 {
+        let w = annots(&out, i).into_iter().find(|d| d.name(b"Subtype") == Some(b"Widget")).unwrap();
+        let parent = out.get(w.reference(b"Parent").unwrap()).as_dict().unwrap().clone();
+        for key in [b"Contents".as_slice(), b"BM", b"Lang", b"AF"] {
+            assert!(w.contains(key), "the widget keeps {key:?}");
+            assert!(!parent.contains(key), "the parent field does not take {key:?}");
+        }
+    }
 }
 
 #[test]
@@ -949,15 +1111,11 @@ fn repeated_page_gets_independent_annotations() {
         assert!(!refs[i].is_empty());
         assert_eq!(refs[i].len(), refs[i + 1].len());
         for (a, b) in refs[i].iter().zip(&refs[i + 1]) {
-            // A widget that is its own field stays one object on both pages, so the field stays
-            // one (#790); every other annotation is copied.
-            if !own_field(&out, *a) {
-                assert_ne!(a, b, "each copy of the page has its own annotation objects");
-            }
+            assert_ne!(a, b, "each copy of the page has its own annotation objects");
         }
     }
     for (i, list) in refs.iter().enumerate() {
-        for a in list.iter().filter(|a| !own_field(&out, **a)) {
+        for a in list.iter() {
             assert_eq!(out.get(*a).as_dict().unwrap().reference(b"P"), Some(ps[i].obj), "/P names the page holding the copy");
         }
     }
@@ -978,7 +1136,32 @@ fn form_fields_come_along_and_are_registered() {
     assert_eq!(fields.len(), 1);
     let field = out.resolve(&fields[0]).as_dict().cloned().unwrap();
     assert_eq!(field.get(b"V").and_then(|v| v.as_string()).map(|s| s.to_text()).as_deref(), Some("Ada"));
-    assert_eq!(field.reference(b"P"), Some(pages(&out).unwrap()[0].obj));
+    // The widget child, not the field, names the page (#1810).
+    let kid =
+        field.get(b"Kids").map(|k| out.resolve(k)).and_then(|k| k.as_array().cloned()).and_then(|k| k.first().and_then(|k| k.as_ref())).unwrap();
+    assert_eq!(out.get(kid).as_dict().unwrap().reference(b"P"), Some(pages(&out).unwrap()[0].obj));
+}
+
+/// #4020: Extract keeps the bookmarks that go to the pages it copies, mapped to the copies. One whose
+/// page was left out goes, unless a bookmark under it stays.
+#[test]
+fn extract_keeps_the_bookmarks_of_the_pages_it_copies() {
+    let mut src = doc_a();
+    crate::add_bookmark(&mut src, &[], 0, "One", 0).unwrap();
+    crate::add_bookmark(&mut src, &[], 1, "Two", 1).unwrap();
+    crate::add_bookmark(&mut src, &[1], 0, "Two.a", 2).unwrap();
+    crate::add_bookmark(&mut src, &[], 2, "Three", 2).unwrap();
+    let marks = |d: &Document| -> Vec<(String, usize, Option<usize>)> { bookmarks(d).into_iter().map(|b| (b.title, b.path.len(), b.page)).collect() };
+    let s = |t: &str| t.to_string();
+
+    let all = full_roundtrip(&extract_pages(&src, &[0, 1, 2]).unwrap());
+    assert_eq!(marks(&all), [(s("One"), 1, Some(0)), (s("Two"), 1, Some(1)), (s("Two.a"), 2, Some(2)), (s("Three"), 1, Some(2))]);
+
+    let last = full_roundtrip(&extract_pages(&src, &[2]).unwrap());
+    assert_eq!(marks(&last), [(s("Two"), 1, None), (s("Two.a"), 2, Some(0)), (s("Three"), 1, Some(0))], "One's page was left out");
+
+    let none = full_roundtrip(&extract_pages(&doc_a(), &[0]).unwrap());
+    assert!(!none.get(none.root().unwrap()).as_dict().unwrap().contains(b"Outlines"), "no bookmarks, no outline");
 }
 
 #[test]
@@ -1565,6 +1748,18 @@ fn bookmarks_add_rename_move_delete() {
     assert_eq!(crate::move_bookmark(&mut d, &[0], &[2], 9).unwrap(), vec![1, 1]);
     assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Results[Table,Figure 1]"]);
     assert_eq!(crate::move_bookmark(&mut d, &[1], &[1, 0], 0), Err(crate::OutlineError::IntoItself));
+    // Into a bookmark with no children yet (Indent): it opens, so the moved one shows.
+    assert_eq!(crate::move_bookmark(&mut d, &[1, 1], &[0], 0).unwrap(), vec![0, 0]);
+    let intro = crate::bookmarks(&d)[0].obj;
+    assert_eq!(count_of(&d, intro), Some(1));
+    // Reordering inside a closed parent leaves it closed.
+    crate::add_bookmark(&mut d, &[0], 1, "Second", 0).unwrap();
+    crate::set_bookmark_open(&mut d, &[0], false).unwrap();
+    crate::move_bookmark(&mut d, &[0, 1], &[0], 0).unwrap();
+    assert_eq!(count_of(&d, intro), Some(-2));
+    crate::delete_bookmark(&mut d, &[0, 0]).unwrap();
+    crate::move_bookmark(&mut d, &[0, 0], &[1], 9).unwrap();
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Results[Table,Figure 1]"]);
     crate::delete_bookmark(&mut d, &[1, 0]).unwrap();
     assert_eq!(titles(&crate::bookmarks(&d)), ["Intro", "Results[Figure 1]"]);
 
@@ -1594,7 +1789,7 @@ fn bookmarks_add_rename_move_delete() {
 fn a_bookmark_tree_nests_entries_by_level_under_a_new_first_bookmark() {
     let mut d = doc_a();
     crate::add_bookmark(&mut d, &[], 0, "Existing", 0).unwrap();
-    let e = |level, title: &str, page, element| crate::OutlineEntry { level, title: title.into(), page, element };
+    let e = |level, title: &str, page, element| crate::OutlineEntry { level, title: title.into(), page, element, top: None };
     let se = ObjRef::new(4242, 0);
     let entries = [e(1, "One", 0, Some(se)), e(3, "Deep", 1, None), e(2, "Two", 1, None), e(1, "Next", 2, None)];
     assert_eq!(crate::add_bookmark_tree(&mut d, "Untitled", &entries).unwrap(), vec![0]);
@@ -1692,7 +1887,7 @@ fn outline_with(items: &[&str]) -> Document {
         format!("<< /Type /Outlines /First 5 0 R /Count {} >>", items.len()),
         "<< /Type /Page /Parent 2 0 R >>".into(),
     ];
-    b.extend(items.iter().map(|s| s.to_string()));
+    b.extend(items.iter().map(ToString::to_string));
     open(build(&b, "/Root 1 0 R"))
 }
 
@@ -2230,6 +2425,125 @@ fn initial_view_round_trips_and_keeps_scripts() {
     crate::set_initial_view(&mut doc, &crate::InitialView { layout: Layout::SinglePage, ..Default::default() }).unwrap();
     assert!(doc.get(root).as_dict().unwrap().get(b"OpenAction").and_then(|o| o.as_dict()).is_some_and(|d| d.name(b"S") == Some(b"JavaScript")));
     assert!(crate::set_initial_view(&mut doc, &crate::InitialView { page: 9, ..Default::default() }).is_err());
+}
+
+#[test]
+fn an_unchanged_opening_destination_keeps_its_position_and_name() {
+    use crate::view::{Magnification, Navigation};
+    let page2 = Object::Ref(pdfcraft_cos::ObjRef::new(5, 0));
+    let xyz = Object::Array(vec![page2.clone(), Object::name("XYZ"), Object::Int(100), Object::Int(500), Object::Int(2)]);
+    let mut named = pdfcraft_cos::Dict::new();
+    named.set(b"S".to_vec(), Object::name("GoTo"));
+    named.set(b"D".to_vec(), Object::name("there"));
+    let mut dests = pdfcraft_cos::Dict::new();
+    dests.set(b"there".to_vec(), Object::Array(vec![page2, Object::name("Fit")]));
+    let mut prefs = pdfcraft_cos::Dict::new();
+    prefs.set(b"NonFullScreenPageMode".to_vec(), Object::name("UseOutlines"));
+    for action in [xyz, Object::Dict(named)] {
+        let mut doc = open(fixture());
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            c.set(b"OpenAction".to_vec(), action.clone());
+            c.set(b"Dests".to_vec(), Object::Dict(dests.clone()));
+            c.set(b"PageMode".to_vec(), Object::name("FullScreen"));
+            c.set(b"ViewerPreferences".to_vec(), Object::Dict(prefs.clone()));
+        })
+        .unwrap();
+        // Another option changes: the opening action is written back as it was, and so is the
+        // full-screen panel, which the dialog doesn't edit.
+        let v = crate::initial_view(&doc);
+        assert_eq!(v.non_full_screen, Navigation::Bookmarks);
+        crate::set_initial_view(&mut doc, &crate::InitialView { hide_toolbar: true, ..v.clone() }).unwrap();
+        let catalog = doc.get(root).as_dict().cloned().unwrap();
+        assert_eq!(catalog.get(b"OpenAction"), Some(&action));
+        let doc = save_and_reopen(&doc);
+        assert_eq!(crate::initial_view(&doc), crate::InitialView { hide_toolbar: true, ..v.clone() });
+        // A changed magnification writes a destination of its own.
+        let mut doc = doc;
+        crate::set_initial_view(&mut doc, &crate::InitialView { magnification: Magnification::FitWidth, ..v }).unwrap();
+        let catalog = doc.get(root).as_dict().cloned().unwrap();
+        assert_ne!(catalog.get(b"OpenAction"), Some(&action));
+        assert_eq!(crate::initial_view(&doc).magnification, Magnification::FitWidth);
+    }
+}
+
+/// A document whose `/OpenAction` is `action`, with the named destination `there` (page 3 at
+/// 200%) in the catalog `/Dests` and `here` (page 1, fit) in a `/Names /Dests` tree.
+fn doc_opening_at(action: Object) -> Document {
+    let page1 = Object::Ref(pdfcraft_cos::ObjRef::new(4, 0));
+    let page3 = Object::Ref(pdfcraft_cos::ObjRef::new(6, 0));
+    let mut dests = pdfcraft_cos::Dict::new();
+    dests.set(b"there".to_vec(), Object::Array(vec![page3, Object::name("XYZ"), Object::Null, Object::Null, Object::Int(2)]));
+    let mut tree = pdfcraft_cos::Dict::new();
+    tree.set(b"Names".to_vec(), Object::Array(vec![Object::String(PdfString::text("here")), Object::Array(vec![page1, Object::name("Fit")])]));
+    let mut names = pdfcraft_cos::Dict::new();
+    names.set(b"Dests".to_vec(), Object::Dict(tree));
+    let mut doc = open(fixture());
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| {
+        c.set(b"OpenAction".to_vec(), action);
+        c.set(b"Dests".to_vec(), Object::Dict(dests));
+        c.set(b"Names".to_vec(), Object::Dict(names));
+    })
+    .unwrap();
+    doc
+}
+
+fn open_action(doc: &Document) -> Option<Object> {
+    doc.get(doc.root().unwrap()).as_dict().and_then(|c| c.get(b"OpenAction").cloned())
+}
+
+/// ISO 32000-2 §12.3.2.4: a named destination stands for the explicit one it names. Choosing
+/// page 1 in Document Properties on a document that opens at a named destination elsewhere
+/// writes a destination to page 1; it used to read the name as page 1 and change nothing.
+#[test]
+fn choosing_page_one_replaces_a_named_opening_destination() {
+    use crate::view::Magnification;
+    let page1 = Object::Ref(pdfcraft_cos::ObjRef::new(4, 0));
+    let mut goto = pdfcraft_cos::Dict::new();
+    goto.set(b"S".to_vec(), Object::name("GoTo"));
+    goto.set(b"D".to_vec(), Object::name("there"));
+    for action in [Object::Dict(goto), Object::name("there"), Object::String(PdfString::text("there"))] {
+        let mut doc = doc_opening_at(action.clone());
+        // The dialog shows where the document really opens.
+        let v = crate::initial_view(&doc);
+        assert_eq!((v.page, v.magnification), (2, Magnification::Percent(200.0)), "{action:?}");
+        // Page 1 at the same magnification: an explicit destination to page 1.
+        crate::set_initial_view(&mut doc, &crate::InitialView { page: 0, ..v.clone() }).unwrap();
+        let written = Object::Array(vec![page1.clone(), Object::name("XYZ"), Object::Null, Object::Null, Object::Real(2.0)]);
+        assert_eq!(open_action(&doc), Some(written), "{action:?}");
+        let reopened = save_and_reopen(&doc);
+        assert_eq!(crate::initial_view(&reopened), crate::InitialView { page: 0, ..v.clone() }, "{action:?}");
+        // Page 1 at the default magnification: no opening action, so the first page opens.
+        let mut doc = doc_opening_at(action.clone());
+        crate::set_initial_view(&mut doc, &crate::InitialView { page: 0, magnification: Magnification::Default, ..v }).unwrap();
+        assert_eq!(open_action(&doc), None, "{action:?}");
+        assert_eq!(crate::initial_view(&save_and_reopen(&doc)).page, 0, "{action:?}");
+    }
+}
+
+/// A named opening destination that already goes to the chosen page and magnification is kept,
+/// and so is one that names nothing (it reads as page 1) until another page is chosen.
+#[test]
+fn a_named_opening_destination_is_kept_while_it_still_holds() {
+    use crate::view::Magnification;
+    let page2 = Object::Ref(pdfcraft_cos::ObjRef::new(5, 0));
+    for (action, magnification) in
+        [(Object::String(PdfString::text("here")), Magnification::FitPage), (Object::name("nowhere"), Magnification::Default)]
+    {
+        let mut doc = doc_opening_at(action.clone());
+        let v = crate::initial_view(&doc);
+        assert_eq!((v.page, v.magnification), (0, magnification), "{action:?}");
+        crate::set_initial_view(&mut doc, &crate::InitialView { hide_toolbar: true, ..v.clone() }).unwrap();
+        assert_eq!(open_action(&doc), Some(action.clone()), "{action:?}");
+        crate::set_initial_view(&mut doc, &crate::InitialView { page: 1, ..v.clone() }).unwrap();
+        let kind = if magnification == Magnification::FitPage { "Fit" } else { "XYZ" };
+        assert_eq!(
+            open_action(&doc).as_ref().and_then(Object::as_array).map(|a| (a.first().cloned(), a.get(1).cloned())),
+            Some((Some(page2.clone()), Some(Object::name(kind)))),
+            "{action:?}"
+        );
+    }
 }
 
 // ── Split / Extract keep only the resources the part draws (#204) ──────────────────────────────
@@ -2850,8 +3164,9 @@ fn import_renames_a_field_colliding_with_another_incoming_field() {
     assert_eq!(form_field_names(&dst), ["Other", "Text1", "Text1-1"]);
 }
 
-/// A page listed twice shows its widget on both copies — also when the field was renamed: both
-/// pages' widgets belong to the one renamed field, and no second Text1 appears.
+/// A page listed twice shows its widget on both copies — also when the field was renamed: each
+/// copy has its own widget, both widgets belong to the one renamed field (#1810), and no second
+/// Text1 appears.
 #[test]
 fn a_repeated_page_joins_the_renamed_field() {
     let mut dst = doc_with_field("Text1");
@@ -2868,10 +3183,14 @@ fn a_repeated_page_joins_the_renamed_field() {
         .and_then(|l| l.as_array().cloned())
         .unwrap();
     let renamed = fields[1].clone();
+    let mut widgets = Vec::new();
     for page in [1, 2] {
         let list = page_dict(&dst, page).get(b"Annots").map(|a| dst.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap();
-        assert!(list.contains(&renamed), "page {page}'s widget belongs to the renamed field");
+        let widget = list.iter().find_map(|a| a.as_ref()).expect("a widget on the page");
+        widgets.push(widget);
+        assert_eq!(dst.get(widget).as_dict().unwrap().reference(b"Parent"), renamed.as_ref(), "page {page}'s widget belongs to the renamed field");
     }
+    assert_ne!(widgets[0], widgets[1], "each copy has its own widget");
 }
 
 /// Combining forms keeps same-named fields separate — the second file's colliding field is
@@ -3040,6 +3359,87 @@ fn a_refused_import_takes_back_what_it_added_wherever_it_is_numbered() {
     assert!(run.is_ok(), "a refused import must leave the document as it was, without panicking");
 }
 
+/// What Edit ▸ Attach file added survives Combine files (upstream's writer), names
+/// with accents included, and the combined document takes more attachments and deletions.
+#[test]
+fn attachments_added_in_the_app_survive_combine_and_more_can_be_attached() {
+    let embedded = |doc: &Document, key: &str| -> (Vec<u8>, Option<String>) {
+        let names = doc.resolve(catalog(doc).get(b"Names").unwrap()).as_dict().cloned().unwrap();
+        let tree = doc.resolve(names.get(b"EmbeddedFiles").unwrap()).as_dict().cloned().unwrap();
+        let pairs = tree.get(b"Names").and_then(|n| n.as_array()).cloned().unwrap();
+        let at = pairs.chunks(2).position(|p| p[0].as_string().unwrap().to_text() == key).unwrap_or_else(|| panic!("no attachment {key}"));
+        let spec = doc.resolve(&pairs[at * 2 + 1]).as_dict().cloned().unwrap();
+        let desc = spec.get(b"Desc").and_then(Object::as_string).map(|s| s.to_text());
+        let ef = spec.get(b"EF").and_then(Object::as_dict).unwrap().get(b"F").cloned().unwrap();
+        let Object::Stream(stream) = doc.resolve(&ef).as_ref().clone() else { panic!("the embedded file is a stream") };
+        (stream.decoded().unwrap(), desc)
+    };
+    let mut a = Document::open(Arc::new(fixture())).unwrap();
+    add_attachment(&mut a, "invoice.csv", b"a,b", Some("March"), Some("text/csv"), None).unwrap();
+    add_attachment(&mut a, "año.txt", b"uno", None, None, None).unwrap();
+    let mut b = Document::open(Arc::new(fixture())).unwrap();
+    add_attachment(&mut b, "invoice.csv", b"x,y", None, None, None).unwrap();
+    add_attachment(&mut b, "año.txt", b"dos", None, None, None).unwrap();
+    let a = save_and_reopen(&a);
+    let b = save_and_reopen(&b);
+    let mut out = full_roundtrip(&combine(&[("A", &a), ("B", &b)]).unwrap());
+    // Both files' attachments, the second copies numbered as text (not bytes glued onto UTF-16).
+    assert_eq!(attachment_keys(&out), ["invoice.csv", "invoice.csv (2)", "año.txt", "año.txt (2)"]);
+    assert_eq!(embedded(&out, "invoice.csv"), (b"a,b".to_vec(), Some("March".into())));
+    assert_eq!(embedded(&out, "invoice.csv (2)"), (b"x,y".to_vec(), None));
+    assert_eq!(embedded(&out, "año.txt (2)").0, b"dos");
+    // The combined document goes on taking attachments, and losing them, like any other.
+    assert_eq!(add_attachment(&mut out, "invoice.csv", b"z", None, None, None).unwrap(), "invoice.csv (3)");
+    delete_attachment(&mut out, "invoice.csv (2)").unwrap();
+    let out = full_roundtrip(&out);
+    assert_eq!(attachment_keys(&out), ["invoice.csv", "invoice.csv (3)", "año.txt", "año.txt (2)"]);
+    assert_eq!(embedded(&out, "invoice.csv (3)").0, b"z");
+}
+
+#[test]
+fn attachments_are_added_listed_and_deleted() {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    assert!(attachment_keys(&doc).is_empty());
+    // A path loses its folder; the key is the file name.
+    let key = add_attachment(&mut doc, "/Users/eva/Desktop/invoice.csv", b"a,b\n1,2\n", Some("March"), Some("text/csv"), Some("D:20261012120000Z"))
+        .unwrap();
+    assert_eq!(key, "invoice.csv");
+    // The same name again is kept apart.
+    assert_eq!(add_attachment(&mut doc, "invoice.csv", b"x", None, None, None).unwrap(), "invoice.csv (2)");
+    assert_eq!(add_attachment(&mut doc, "  ", b"x", None, None, None), Err(OrganizeError::Invalid("the attachment needs a file name".into())));
+    let doc = save_and_reopen(&doc);
+    assert_eq!(attachment_keys(&doc), ["invoice.csv", "invoice.csv (2)"]);
+    // What was written: a Filespec with the embedded stream, its size and type, and the description.
+    let root = doc.root().unwrap();
+    let names = doc.get(root).as_dict().unwrap().get(b"Names").cloned().unwrap();
+    let tree = doc.resolve(&names).as_dict().unwrap().get(b"EmbeddedFiles").cloned().unwrap();
+    let tree = doc.resolve(&tree);
+    let pairs = tree.as_dict().unwrap().get(b"Names").cloned().unwrap();
+    let pairs = doc.resolve(&pairs).as_array().cloned().unwrap();
+    assert_eq!(pairs.len(), 4);
+    let spec = doc.resolve(&pairs[1]);
+    let spec = spec.as_dict().unwrap();
+    assert_eq!(spec.get(b"Type"), Some(&Object::name("Filespec")));
+    assert_eq!(spec.get(b"UF").and_then(Object::as_string).map(PdfString::to_text).as_deref(), Some("invoice.csv"));
+    assert_eq!(spec.get(b"Desc").and_then(Object::as_string).map(PdfString::to_text).as_deref(), Some("March"));
+    let ef = spec.get(b"EF").and_then(Object::as_dict).unwrap().get(b"F").cloned().unwrap();
+    let ef = doc.resolve(&ef);
+    let Object::Stream(stream) = ef.as_ref() else { panic!("the embedded file is a stream") };
+    assert_eq!(stream.dict.get(b"Subtype"), Some(&Object::Name(b"text/csv".to_vec())));
+    let params = stream.dict.get(b"Params").and_then(Object::as_dict).unwrap();
+    assert_eq!(params.get(b"Size"), Some(&Object::Int(8)));
+    assert_eq!(stream.decoded().unwrap(), b"a,b\n1,2\n");
+    // Deleting: the one named goes, the other stays; the last one takes the tree with it.
+    let mut doc = doc;
+    delete_attachment(&mut doc, "invoice.csv").unwrap();
+    assert_eq!(attachment_keys(&doc), ["invoice.csv (2)"]);
+    assert_eq!(delete_attachment(&mut doc, "invoice.csv"), Err(OrganizeError::Invalid("there is no attachment named invoice.csv".into())));
+    delete_attachment(&mut doc, "invoice.csv (2)").unwrap();
+    let doc = save_and_reopen(&doc);
+    assert!(attachment_keys(&doc).is_empty());
+    assert!(doc.get(doc.root().unwrap()).as_dict().unwrap().get(b"Names").is_none());
+}
+
 #[test]
 fn rotate_repeated_indices_accumulate_from_the_current_page_value() {
     for level in 0..3 {
@@ -3131,4 +3531,285 @@ fn page_walk_skips_repeated_and_cyclic_kids_without_copying_attributes() {
     assert_eq!(media_box, Some(vec![0, 0, 500, 500]), "own MediaBox kept over the root's");
     assert!(walk.next().is_none());
     assert_eq!(labels(&doc), ["Page 1", "Page 2", "Page 3"]);
+}
+
+/// A one-page document whose page carries `annots` (object bodies 5…), with `extra` bodies after them.
+fn page_with_annots(annots: &[String], extra: &[String], catalog_extra: &str) -> Document {
+    let n = annots.len();
+    let refs: String = (0..n).map(|i| format!("{} 0 R ", i + 5)).collect();
+    let mut b: Vec<String> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R {catalog_extra} >>"),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Annots [{refs}] >>"),
+        body("P1"),
+    ];
+    b.extend(annots.iter().cloned());
+    b.extend(extra.iter().cloned());
+    open(build(&b, "/Root 1 0 R"))
+}
+
+#[test]
+fn registering_many_imported_fields_is_linear() {
+    let n = 2_000;
+    let widgets: Vec<String> = (0..n).map(|i| format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (f{i}) /Rect [0 0 10 10] >>")).collect();
+    let src = page_with_annots(&widgets, &[], "");
+    take_work();
+    let out = extract_pages(&src, &[0]).unwrap();
+    let work = take_work();
+    assert!(work <= 4 * n, "{work} steps registering {n} fields");
+    let form = out.resolve(catalog(&out).get(b"AcroForm").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(form.get(b"Fields").and_then(|f| f.as_array()).map(Vec::len), Some(n));
+}
+
+#[test]
+fn renaming_many_same_named_fields_resumes_the_suffix_search() {
+    let n = 2_000;
+    let widgets: Vec<String> = (0..n).map(|_| "<< /Type /Annot /Subtype /Widget /FT /Tx /T (x) /Rect [0 0 10 10] >>".to_string()).collect();
+    let src = page_with_annots(&widgets, &[], "");
+    take_work();
+    let renames = combine_field_conflicts(&[&src]).remove(0);
+    let work = take_work();
+    assert!(work <= 4 * n, "{work} suffix attempts for {n} fields");
+    // Still the first free variant, in order.
+    assert_eq!(renames.len(), n - 1);
+    assert_eq!(renames.first(), Some(&("x".to_string(), "x-1".to_string())));
+    assert_eq!(renames.last(), Some(&("x".to_string(), format!("x-{}", n - 1))));
+}
+
+#[test]
+fn annotation_actions_share_the_objects_they_copy() {
+    // Fifty links whose URI actions all point at one string object.
+    let n = 50;
+    let links: Vec<String> =
+        (0..n).map(|_| format!("<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI {} 0 R >> >>", n + 5)).collect();
+    let src = page_with_annots(&links, &["(https://example.com/shared)".into()], "");
+    let out = extract_pages(&src, &[0]).unwrap();
+    let copies = out
+        .object_numbers()
+        .into_iter()
+        .filter(|&o| out.get(ObjRef::new(o, out.generation(o))).as_string().is_some_and(|s| s.bytes == b"https://example.com/shared"))
+        .count();
+    assert_eq!(copies, 1, "the shared URI is copied once, not once per action");
+}
+
+#[test]
+fn name_trees_with_shared_kids_are_walked_once_per_node() {
+    // Each level lists the next one twice: 2^depth paths through `depth` nodes.
+    let depth = 10;
+    let first = 6; // after the catalog, pages, page, content and the link
+    let mut extra = Vec::new();
+    for tree in 0..2 {
+        let base = first + tree * (depth + 1);
+        for level in 0..depth {
+            let next = base + level + 1;
+            extra.push(format!("<< /Kids [{next} 0 R {next} 0 R] >>"));
+        }
+        extra.push(if tree == 0 {
+            "<< /Names [(a.txt) << /Type /Filespec /F (a.txt) >>] >>".into()
+        } else {
+            "<< /Names [(other) [3 0 R /Fit]] >>".into()
+        });
+    }
+    let link = "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest (missing) >>".to_string();
+    let catalog_extra = format!("/Names << /EmbeddedFiles {first} 0 R /Dests {} 0 R >>", first + depth + 1);
+    let src = page_with_annots(&[link], &extra, &catalog_extra);
+    take_work();
+    let out = combine(&[("a", &src)]).unwrap();
+    let work = take_work();
+    assert!(work <= 8 * (depth + 1), "{work} name-tree nodes visited");
+    let names = out.resolve(catalog(&out).get(b"Names").unwrap()).as_dict().cloned().unwrap();
+    let tree = out.resolve(names.get(b"EmbeddedFiles").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(tree.get(b"Names").and_then(|n| n.as_array()).map(Vec::len), Some(2), "one attachment, listed once");
+}
+
+#[test]
+fn a_form_drawing_itself_repeatedly_is_analysed_once() {
+    let form = "/F Do /F Do /F Do /F Do";
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /F 5 0 R /Unused 6 0 R >> >> >>".into(),
+        "<< /Length 5 >>\nstream\n/F Do\nendstream".into(),
+        format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /XObject << /F 5 0 R >> >> /Length {} >>\nstream\n{form}\nendstream",
+            form.len()
+        ),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 0 >>\nstream\n\nendstream".into(),
+    ];
+    let src = open(build(&b, "/Root 1 0 R"));
+    take_work();
+    let out = extract_pages(&src, &[0]).unwrap();
+    let work = take_work();
+    assert!(work <= 4, "{work} form analyses");
+    let page = out.get(pages(&out).unwrap()[0].obj).as_dict().cloned().unwrap();
+    let res = out.resolve(page.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let x = out.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    assert!(x.contains(b"F") && !x.contains(b"Unused"), "pruning still keeps what is drawn and drops the rest");
+}
+
+/// One page whose /Contents names the same 1 MiB stream 300 times (a few kilobytes on disk).
+fn repeated_contents() -> Document {
+    use pdfcraft_cos::{Dict, Stream};
+    let mut doc = Document::new_empty();
+    let stream = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+    let pages = doc.add(Object::Null);
+    let page: Dict = [
+        (b"Type".to_vec(), Object::Name(b"Page".to_vec())),
+        (b"Parent".to_vec(), Object::Ref(pages)),
+        (b"MediaBox".to_vec(), Object::Array([0, 0, 200, 300].map(Object::from).to_vec())),
+        (b"Contents".to_vec(), Object::Array(vec![Object::Ref(stream); 300])),
+    ]
+    .into_iter()
+    .collect();
+    let page = doc.add(page);
+    let tree: Dict = [
+        (b"Type".to_vec(), Object::Name(b"Pages".to_vec())),
+        (b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)])),
+        (b"Count".to_vec(), Object::Int(1)),
+    ]
+    .into_iter()
+    .collect();
+    doc.set(pages, Object::Dict(tree));
+    let catalog: Dict = [(b"Type".to_vec(), Object::Name(b"Catalog".to_vec())), (b"Pages".to_vec(), Object::Ref(pages))].into_iter().collect();
+    let catalog = doc.add(catalog);
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    doc
+}
+
+#[test]
+fn repeated_content_references_share_one_decode_budget() {
+    let src = repeated_contents();
+    let mut dst = Document::new_empty();
+    if let Ok((form, _)) = page_as_form(&mut dst, &src, 0) {
+        let Object::Stream(s) = &*dst.get(form) else { panic!("not a stream") };
+        let len = s.decoded().unwrap().len();
+        assert!(len <= pdfcraft_cos::MAX_PAGE_DECODED + 300, "{len} bytes");
+    }
+}
+
+/// #3193: the bookmark list reads a bookmark's colour and style as the inspector does (ISO
+/// 32000-2 §12.3.3, Tables 151 and 152): `/C` within 0–1, black and malformed values as none,
+/// `/F` bit 1 italic and bit 2 bold, through indirect values too.
+#[test]
+fn bookmarks_report_their_colour_and_style() {
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Outlines /First 5 0 R /Last 10 0 R /Count 6 >>".into(),
+    ];
+    objs.push("<< /Title (Plain) /Parent 4 0 R /Next 6 0 R /Dest [3 0 R /Fit] >>".into()); // 5
+    objs.push("<< /Title (Red bold) /Parent 4 0 R /Prev 5 0 R /Next 7 0 R /Dest [3 0 R /Fit] /C [1 0 0] /F 2 >>".into()); // 6
+    objs.push("<< /Title (Indirect) /Parent 4 0 R /Prev 6 0 R /Next 8 0 R /Dest [3 0 R /Fit] /C 11 0 R /F 12 0 R >>".into()); // 7
+    objs.push("<< /Title (Black) /Parent 4 0 R /Prev 7 0 R /Next 9 0 R /Dest [3 0 R /Fit] /C [0 0 0] /F 1 >>".into()); // 8
+    objs.push("<< /Title (Bright) /Parent 4 0 R /Prev 8 0 R /Next 10 0 R /Dest [3 0 R /Fit] /C [2 -1 0.5] >>".into()); // 9
+    objs.push("<< /Title (Short) /Parent 4 0 R /Prev 9 0 R /Dest [3 0 R /Fit] /C [1 0] /F 4 >>".into()); // 10
+    objs.push("[0 0.5 0]".into()); // 11
+    objs.push("3".into()); // 12
+    let doc = open(build(&objs, "/Root 1 0 R"));
+    let got: Vec<(String, Option<[f32; 3]>, bool, bool)> = bookmarks(&doc).into_iter().map(|b| (b.title, b.color, b.italic, b.bold)).collect();
+    assert_eq!(
+        got,
+        [
+            ("Plain".into(), None, false, false),
+            ("Red bold".into(), Some([1.0, 0.0, 0.0]), false, true),
+            ("Indirect".into(), Some([0.0, 0.5, 0.0]), true, true),
+            ("Black".into(), None, true, false),
+            ("Bright".into(), Some([1.0, 0.0, 0.5]), false, false),
+            ("Short".into(), None, false, false),
+        ]
+    );
+}
+
+/// #3193: setting a bookmark's style and colour writes what ISO 32000-2 §12.3.3 asks for: bold is
+/// `/F 2` and bold italic `/F 3` (Table 152), and neither removes `/F`, whose default is 0; a
+/// style change leaves `/C` alone and a colour change leaves `/F`; black, the default (Table 151),
+/// removes `/C`. Bits the table doesn't define are kept, and a colour outside 0–1 is refused.
+#[test]
+fn bookmark_style_and_colour_are_set_as_the_table_says() {
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Outlines /First 5 0 R /Last 6 0 R /Count 2 >>".into(),
+    ];
+    objs.push("<< /Title (Plain) /Parent 4 0 R /Next 6 0 R /Dest [3 0 R /Fit] >>".into()); // 5
+    objs.push("<< /Title (Odd bits) /Parent 4 0 R /Prev 5 0 R /Dest [3 0 R /Fit] /F 4 /C [1 0 0] >>".into()); // 6
+    let mut doc = open(build(&objs, "/Root 1 0 R"));
+    let raw = |doc: &Document, n: u32, key: &[u8]| doc.get(ObjRef { num: n, generation: 0 }).as_dict().and_then(|d| d.get(key).cloned());
+    crate::set_bookmark_style(&mut doc, &[0], Some(true), None).unwrap();
+    assert_eq!(raw(&doc, 5, b"F"), Some(Object::Int(2)), "bold");
+    crate::set_bookmark_style(&mut doc, &[0], None, Some(true)).unwrap();
+    assert_eq!(raw(&doc, 5, b"F"), Some(Object::Int(3)), "bold italic");
+    crate::set_bookmark_color(&mut doc, &[0], Some([0.0, 0.5, 0.0])).unwrap();
+    assert_eq!(raw(&doc, 5, b"C"), Some(Object::Array(vec![Object::Real(0.0), Object::Real(0.5), Object::Real(0.0)])));
+    assert_eq!(raw(&doc, 5, b"F"), Some(Object::Int(3)), "a colour change keeps the style");
+    crate::set_bookmark_style(&mut doc, &[0], Some(false), Some(false)).unwrap();
+    assert_eq!(raw(&doc, 5, b"F"), None, "regular removes /F");
+    assert!(raw(&doc, 5, b"C").is_some(), "a style change keeps the colour");
+    crate::set_bookmark_color(&mut doc, &[0], Some([0.0; 3])).unwrap();
+    assert_eq!(raw(&doc, 5, b"C"), None, "black removes /C");
+
+    crate::set_bookmark_style(&mut doc, &[1], Some(true), None).unwrap();
+    assert_eq!(raw(&doc, 6, b"F"), Some(Object::Int(6)), "bold beside a bit the table doesn't define");
+    crate::set_bookmark_style(&mut doc, &[1], Some(false), Some(false)).unwrap();
+    assert_eq!(raw(&doc, 6, b"F"), Some(Object::Int(4)), "that bit stays");
+    crate::set_bookmark_color(&mut doc, &[1], None).unwrap();
+    assert_eq!(raw(&doc, 6, b"C"), None, "no colour is black");
+    for bad in [[1.5, 0.0, 0.0], [0.0, -0.1, 0.0], [f64::NAN, 0.0, 0.0]] {
+        assert_eq!(crate::set_bookmark_color(&mut doc, &[1], Some(bad)), Err(crate::OutlineError::BadColor), "{bad:?}");
+    }
+    assert_eq!(crate::set_bookmark_style(&mut doc, &[7], Some(true), None), Err(crate::OutlineError::NoSuchBookmark(vec![7])));
+
+    crate::set_bookmark_style(&mut doc, &[0], Some(true), Some(true)).unwrap();
+    crate::set_bookmark_color(&mut doc, &[0], Some([0.0, 0.0, 1.0])).unwrap();
+    let saved = open(write_full(&doc, &SaveOptions::default()).unwrap());
+    let got: Vec<_> = bookmarks(&saved).into_iter().map(|b| (b.color, b.bold, b.italic)).collect();
+    assert_eq!(got, [(Some([0.0, 0.0, 1.0]), true, true), (None, false, false)]);
+}
+
+/// #3502: a `/Contents` array's pieces are joined with a space, as the renderer joins them, so a
+/// `%` comment at the end of a piece without a line break continues through the first line of the
+/// next piece in both resource pruning (`extract_pages`) and `page_as_form`.
+#[test]
+fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
+    let build_doc = |first_piece: &str| {
+        let b: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),                                        // 1
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),        // 2
+            "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] /Resources 6 0 R >>".into(), // 3
+            raw(first_piece),                                                                  // 4
+            raw("/ImHidden Do\n/ImShown Do"),                                                  // 5
+            "<< /XObject << /ImHidden 7 0 R /ImShown 8 0 R >> >>".into(),                      // 6
+            image(1, 1, 1),                                                                    // 7
+            image(1, 1, 1),                                                                    // 8
+        ];
+        open(build(&b, "/Root 1 0 R"))
+    };
+
+    // Without a trailing newline in piece 1, `% comment` swallows `/ImHidden Do` on the first
+    // line of piece 2; only `/ImShown` is drawn.
+    let commented = build_doc("q Q % comment without newline");
+    let extracted = full_roundtrip(&extract_pages(&commented, &[0]).unwrap());
+    assert_eq!(xobject_names(&extracted, 0), [b"ImShown".to_vec()], "commented-out Do across piece boundary is pruned");
+
+    let mut form_dst = Document::new_empty();
+    let (form_ref, _) = crate::page_as_form(&mut form_dst, &commented, 0).unwrap();
+    let Object::Stream(form_stream) = &*form_dst.get(form_ref) else { panic!("form stream") };
+    let form_bytes = form_stream.decoded().unwrap();
+    let drawn: Vec<Vec<u8>> = pdfcraft_content::parse(&form_bytes)
+        .ops
+        .into_iter()
+        .filter(|op| op.op == b"Do")
+        .filter_map(|op| op.operands.first().and_then(Object::as_name).map(|n| n.to_vec()))
+        .collect();
+    assert_eq!(drawn, [b"ImShown".to_vec()], "page_as_form keeps the first line of piece 2 inside the comment");
+
+    // Control: when piece 1 ends the comment with a newline, `/ImHidden Do` on piece 2's first
+    // line is a real operator and stays in both the extracted page and the form XObject.
+    let newline_ended = build_doc("q Q % comment with newline\n");
+    let extracted_ctrl = full_roundtrip(&extract_pages(&newline_ended, &[0]).unwrap());
+    let mut ctrl_names = xobject_names(&extracted_ctrl, 0);
+    ctrl_names.sort();
+    assert_eq!(ctrl_names, [b"ImHidden".to_vec(), b"ImShown".to_vec()]);
 }

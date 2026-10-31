@@ -1,5 +1,51 @@
 use super::*;
 
+thread_local! {
+    /// Bytes the lexer read before an operand failed, on this thread.
+    pub(crate) static RESCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+thread_local! {
+    /// Pieces [`Pieces::splice`] looked at while copying, on this thread.
+    pub(crate) static PIECE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[test]
+fn splicing_visits_each_piece_a_few_times() {
+    let n = 5_000;
+    let pieces: Vec<String> = (0..n).map(|i| format!("({i}) Tj")).collect();
+    let joined = Pieces::join(&pieces);
+    let parsed = joined.parse();
+    let edits: Vec<_> = parsed.ops.iter().map(|op| (op.span.clone(), b"(x) Tj".to_vec())).collect();
+    assert_eq!(edits.len(), n);
+    PIECE_VISITS.with(|c| c.set(0));
+    let out = joined.splice(edits);
+    let visits = PIECE_VISITS.with(|c| c.get());
+    assert!(visits <= 4 * n, "{visits} piece visits for {n} pieces");
+    assert!(out.iter().all(|p| p == b"(x) Tj"));
+    // A replacement spanning two pieces stays whole in the first and leaves the rest of the second.
+    let two = Pieces::join(&["q (a)", "Tj Q"]);
+    let tj = two.parse().ops.into_iter().find(|o| o.is("Tj")).map(|o| o.span).unwrap_or_default();
+    assert_eq!(two.splice([(tj, b"(b) Tj".to_vec())]), [b"q (b) Tj".to_vec(), b" Q".to_vec()]);
+}
+
+#[test]
+fn a_long_unreadable_number_is_read_once() {
+    for junk in ["+", "5"] {
+        let n = 20_000;
+        let src = format!("{}{} 1 0 0 1 0 0 cm", junk.repeat(n), if junk == "5" { "x" } else { "" });
+        RESCANNED.with(|c| c.set(0));
+        let p = parse(src.as_bytes());
+        let rescanned = RESCANNED.with(|c| c.get());
+        assert!(rescanned <= 2 * n, "{rescanned} bytes read for a {n}-byte token");
+        assert_eq!(p.ops.last().and_then(|o| o.nums::<6>()), Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
+    }
+    // A short damaged number still recovers byte by byte.
+    let p = parse(b"-+5 0 Td");
+    assert_eq!((p.ops.len(), p.skipped), (1, 1));
+    assert_eq!(p.ops[0].nums::<2>(), Some([5.0, 0.0]));
+}
+
 #[test]
 fn operators_keep_operands_and_spans() {
     let src = b"q 1 0 0 1 72 720 cm BT /F1 12 Tf (Hello \\(world\\)) Tj [(A) -120 (B)] TJ ET Q";
@@ -157,6 +203,9 @@ fn filtered_unknown_and_damaged_inline_images_end_where_the_renderer_ends_them()
         let parsed = parse(src);
         assert_eq!(parsed.ops[0].inline.as_ref().unwrap().1, b"abc");
         assert_eq!(parsed.ambiguous_images, ambiguous);
+        let mut reader = ops(src);
+        reader.by_ref().for_each(drop);
+        assert_eq!(reader.ambiguous_images(), ambiguous, "the streaming reader counts it too");
     }
 }
 

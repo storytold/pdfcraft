@@ -6,10 +6,11 @@ not fresh measurements on upstream main. No private document is needed for the b
 
 ## Architecture
 
-- `crates/ui-egui/src/forms_ui.rs` queues `Edit::SetFieldValue` for a text commit or checkbox
+- `crates/ui-egui/src/tools/forms_ui.rs` queues `Edit::SetFieldValue` for a text commit or checkbox
   toggle. `crates/automation/src/forms.rs::form_fill` uses the same edit API.
-- `crates/engine/src/lib.rs::Session::apply` runs edits on a copy, preserving rollback and undo.
-  `run_edit` calls `pdfcraft_forms::set_value_with` with an engine `JsRunner`.
+- `crates/engine/src/session.rs::Session::apply` runs edits on a copy, preserving rollback and
+  undo. `run_edit` (`crates/engine/src/edit.rs`) calls `pdfcraft_forms::set_value_with` with an
+  engine `JsRunner`.
 - `crates/forms/src/lib.rs` validates and writes the edited value, then runs one calculation
   pass. `/CO` precedes calculated fields omitted from `/CO`. Each script sees prior writes.
   There is no dependency graph or dependency-based filtering: dynamic references and script
@@ -265,6 +266,8 @@ checks, not hosted CI or a new performance speedup claim.
 
 ## Revision history
 
+- 2026-10-25: point the architecture notes at `session.rs` and `edit.rs`, where `Session::apply`
+  and `run_edit` moved when the engine's `lib.rs` was split.
 - 2026-10-19: refresh PR #3318 onto upstream `e397efa8`, retain upstream roadmap additions
   and all performance changes, and repeat focused, scoped, benchmark and headless validation.
 

@@ -9,21 +9,19 @@ use pdfcraft_engine::field_table::TableColumn;
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool};
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+    harness_with("form.pdf", include_bytes!("../data/form.pdf").to_vec())
+}
+
+fn harness_with(name: &'static str, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
         cc.egui_ctx.options_mut(|options| options.warn_on_id_clash = true);
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app.open_bytes(name, None, bytes).unwrap();
         app.set_option("zoom", "150").unwrap();
         app
     });
-    for _ in 0..60 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     h
 }
 
@@ -156,6 +154,40 @@ fn arrow_keys_nudge_the_selected_field_instead_of_turning_the_page() {
     assert!(near(back[0], up[0] - 1.0) && near(back[1], up[1] - 1.0), "{up:?} → {back:?}");
     assert!(h.state().views[0].prepare.selected.is_some(), "it stays selected for the next nudge");
     assert_eq!(h.state().views[0].current, 0, "the arrows moved the field, not the page");
+}
+
+/// #3632: Alt+← / Alt+→ go back and forward through the view history with a field selected, and
+/// leave the field where it is, even when Alt is let go in the same frame as the arrow, so the
+/// frame has no modifiers and only the press carries Alt.
+#[test]
+fn alt_arrows_navigate_instead_of_nudging_the_selected_field() {
+    let mut h = harness();
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::InsertBlankPage { at: 1, width: 612.0, height: 792.0 }));
+    h.run_steps(2);
+    h.state_mut().execute("form.add.text");
+    h.run_steps(1);
+    let p = at(&h, 40.0, 250.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(4);
+    let name = h.state().views[0].prepare.selected.clone().expect("the placed field is selected").0;
+    let before = rect_of(&h, &name);
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(2);
+    h.state_mut().views[0].go_to_page(0);
+    h.run_steps(2);
+    assert!(h.state().views[0].prepare.selected.is_some(), "still selected, so a nudge could take the keys");
+    let arrow = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    h.event(arrow(egui::Key::ArrowLeft, egui::Modifiers::ALT));
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 1, "an Alt+← press went back");
+    h.event(arrow(egui::Key::ArrowRight, egui::Modifiers::ALT));
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 0, "an Alt+→ press went forward");
+    assert_eq!(rect_of(&h, &name), before, "the field didn't move");
 }
 
 #[test]
@@ -712,6 +744,197 @@ fn actions_tab_adds_and_removes_actions() {
     );
 }
 
+#[test]
+fn actions_tab_edits_the_script_of_an_existing_action() {
+    use pdfcraft_engine::{FieldAction, FieldTrigger};
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    let script = "if (event.value > 10) {\n  app.alert('Too many');\n}";
+    let actions = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().field_actions("city")
+    };
+    let open = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.state_mut().open_field_props("city", 0);
+        h.run_steps(2);
+        h.get_by_label("Actions").click();
+        h.run_steps(2);
+    };
+    // A script on Mouse Up and a link on Blur, saved with the field.
+    open(&mut h);
+    for (trigger, kind, text) in [(FieldTrigger::MouseUp, 0, script), (FieldTrigger::OnBlur, 1, "https://example.org")] {
+        let d = h.state_mut().field_props.as_mut().unwrap();
+        d.new_action = pdfcraft_ui_egui::prepare::ActionDraft { trigger, kind, text: text.into() };
+        h.run_steps(3);
+        h.get_by_label("Add").click();
+        h.run_steps(2);
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let saved = actions(&h);
+    // Edit shows the script exactly as stored; Discard leaves everything as it was.
+    open(&mut h);
+    h.get_all_by_label("Edit").last().unwrap().click();
+    h.run_steps(2);
+    h.get_by_label("Edit Action");
+    assert_eq!(h.state().field_props.as_ref().unwrap().new_action.text, script);
+    h.state_mut().field_props.as_mut().unwrap().new_action.text = "app.alert('changed');".into();
+    h.run_steps(2);
+    h.get_by_label("Discard").click();
+    h.run_steps(2);
+    h.get_by_label("Add an Action");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(actions(&h), saved);
+    // Update replaces that script only: same trigger, the link untouched.
+    open(&mut h);
+    h.get_all_by_label("Edit").last().unwrap().click();
+    h.run_steps(2);
+    h.state_mut().field_props.as_mut().unwrap().new_action.text = "app.alert('changed');".into();
+    h.run_steps(2);
+    h.get_by_label("Update").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(
+        actions(&h),
+        [
+            (FieldTrigger::MouseUp, FieldAction::JavaScript("app.alert('changed');".into())),
+            (FieldTrigger::OnBlur, FieldAction::Uri("https://example.org".into()))
+        ]
+    );
+}
+
+/// One page with a push button "go": Mouse Up runs a script with a link chained after it, On Blur
+/// runs another script.
+fn chained_action_fixture() -> Vec<u8> {
+    pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (go) /Rect [20 300 100 320] /P 3 0 R /A 5 0 R /AA << /Bl << /S /JavaScript /JS (this.dirty = true;) >> >> >>",
+        "<< /S /JavaScript /JS (app.alert\\(1\\);) /Next 6 0 R >>",
+        "<< /S /URI /URI (https://example.org) >>",
+    ])
+}
+
+/// A PDF of `objs`, numbered from 1, with the first as its catalog.
+fn pdf_of(objs: &[&str]) -> Vec<u8> {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// Two one-button radio groups placed apart on page 1: "Group1" (export `A`) and "Group2" (`B`).
+fn two_radio_groups_fixture() -> Vec<u8> {
+    let widget = |parent: u32, x: u32, state: &str| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent {parent} 0 R /Rect [{x} 300 {} 314] /P 3 0 R /AS /Off /AP << /N << /{state} 8 0 R /Off 8 0 R >> >> >>",
+            x + 14
+        )
+    };
+    let (a, b) = (widget(4, 40, "A"), widget(6, 120, "B"));
+    pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 7 0 R] >>",
+        "<< /FT /Btn /Ff 49152 /T (Group1) /Kids [5 0 R] >>",
+        &a,
+        "<< /FT /Btn /Ff 49152 /T (Group2) /Kids [7 0 R] >>",
+        &b,
+        "<< /Length 3 >>\nstream\n0 g\nendstream",
+    ])
+}
+
+/// #4949: renaming a radio button to another group's name moves it into that group, after the
+/// group's own buttons. The moved button stays the selected one, so a nudge moves it and not the
+/// group's first button, and undo and redo take the rename and the nudge back and forth.
+#[test]
+fn a_radio_button_joining_a_group_by_name_stays_selected() {
+    let mut h = harness_with("radios.pdf", two_radio_groups_fixture());
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    let rects = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let form = &s.session.get(s.views[0].id).unwrap().form;
+        form.iter().flat_map(|f| f.widgets.iter().map(|w| w.rect)).collect::<Vec<_>>()
+    };
+    let start = rects(&h);
+    h.state_mut().open_field_props("Group2", 0);
+    h.run_steps(2);
+    h.state_mut().field_props.as_mut().expect("open").name = "Group1".into();
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(names(&h), ["Group1"]);
+    assert_eq!(h.state().views[0].prepare.selected, Some(("Group1".to_string(), 1)), "the moved button");
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(2);
+    let nudged = rects(&h);
+    assert_eq!(nudged[0], start[0], "the group's own button stays");
+    assert!((nudged[1][0] - start[1][0] - 1.0).abs() < 0.01, "{:?} → {:?}", start[1], nudged[1]);
+    h.state_mut().execute("edit.undo");
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert_eq!(names(&h), ["Group1", "Group2"]);
+    assert_eq!(rects(&h), start);
+    h.state_mut().execute("edit.redo");
+    h.state_mut().execute("edit.redo");
+    h.run_steps(2);
+    assert_eq!(names(&h), ["Group1"]);
+    assert_eq!(rects(&h), nudged);
+}
+
+#[test]
+fn actions_tab_shows_a_chain_and_keeps_it_when_the_first_action_is_replaced() {
+    use egui_kittest::kittest::NodeT;
+    use pdfcraft_engine::FieldTrigger;
+    let mut h = harness_with("chain.pdf", chained_action_fixture());
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    let open = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.state_mut().open_field_props("go", 0);
+        h.run_steps(2);
+        h.get_by_label("Actions").click();
+        h.run_steps(2);
+    };
+    open(&mut h);
+    h.get_by_label("Run a JavaScript, then 1 more action");
+    // The menu bar's Edit menu and the Edit tab come first; the rows' follow (Mouse Up, On Blur).
+    assert_eq!(h.get_all_by_label("Edit").count(), 4);
+    h.get_all_by_label("Edit").nth(2).unwrap().click();
+    h.run_steps(2);
+    assert_eq!(h.state().field_props.as_ref().unwrap().editing, Some(FieldTrigger::MouseUp));
+    // While one script is open, no other Edit can overwrite it.
+    assert!(h.get_all_by_label("Edit").skip(2).all(|n| n.accesskit_node().is_disabled()));
+    h.get_by_label("Discard").click();
+    h.run_steps(2);
+    assert!(h.get_all_by_label("Edit").skip(2).all(|n| !n.accesskit_node().is_disabled()));
+    // Replace the Mouse Up script with a link: the chained link stays after it.
+    {
+        let d = h.state_mut().field_props.as_mut().unwrap();
+        d.actions.retain(|(t, _)| *t != FieldTrigger::MouseUp);
+        d.new_action = pdfcraft_ui_egui::prepare::ActionDraft { trigger: FieldTrigger::MouseUp, kind: 1, text: "https://example.com".into() };
+    }
+    h.run_steps(3);
+    h.get_by_label("Add").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    open(&mut h);
+    h.get_by_label("Open a web link: https://example.com, then 1 more action");
+}
+
 /// Text field table: pick the tool and drag out an area in the empty lower part of page 1, 200 by
 /// 120 points from (40, 240) as displayed. The table's window opens for it.
 fn draw_table(h: &mut Harness<'static, PdfCraftApp>) {
@@ -902,9 +1125,7 @@ fn escape_in_a_name_field_leaves_the_field_not_the_table() {
     let mut h = harness();
     draw_table(&mut h);
     // The app's own text boxes (zoom, page number) are inputs too: take the one in the window.
-    let window = h.get_by_label("Text Field Table").rect();
-    let field =
-        h.query_all(by().role(Role::TextInput)).map(|n| n.rect()).find(|r| window.contains(r.center())).expect("the first column's name field");
+    let field = h.get_by_role_and_label(Role::TextInput, "Column 1").rect();
     h.hover_at(field.center());
     h.drag_at(field.center());
     h.run_steps(1);
@@ -1091,4 +1312,253 @@ fn a_loop_has_its_own_card_that_opens_the_formula() {
     h.run_steps(3);
     let draft = h.state().field_props.as_ref().map(|d| (d.field.clone(), d.tab));
     assert_eq!(draft, Some(("a".to_owned(), FieldTab::Calculate)));
+}
+
+/// A radio group `shirt` of three buttons, S, M and L, with L chosen, while preparing the form.
+fn radio_group_harness() -> Harness<'static, PdfCraftApp> {
+    let mut h = harness();
+    for (x, export) in [(20.0, "S"), (60.0, "M"), (100.0, "L")] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
+            page: 0,
+            rect: [x, 300.0, x + 14.0, 314.0],
+            kind: pdfcraft_engine::NewField::Radio { group: Some("shirt".into()), export: export.into() },
+            name: Some("shirt".into()),
+        });
+    }
+    h.state_mut()
+        .apply_edit(pdfcraft_engine::Edit::SetFieldValue { name: "shirt".into(), value: pdfcraft_engine::FieldValue::Radio(Some("L".into())) });
+    assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(3);
+    h
+}
+
+fn buttons(h: &Harness<'static, PdfCraftApp>) -> (Vec<String>, Vec<String>) {
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let f = doc.form.iter().find(|f| f.name == "shirt").expect("the group is still there");
+    (f.widgets.iter().filter_map(|w| w.on_state.clone()).collect(), f.value.clone())
+}
+
+/// #4609: Delete removes the one radio button clicked, not its whole group, as in Acrobat.
+#[test]
+fn deleting_one_radio_button_keeps_the_rest_of_its_group() {
+    let mut h = radio_group_harness();
+    assert_eq!(buttons(&h).0, ["S", "M", "L"]);
+    let p = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == "shirt").unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 1).expect("on screen").center()
+    };
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].prepare.selected, Some(("shirt".into(), 1)), "the middle button is selected");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(buttons(&h), (vec!["S".into(), "L".into()], vec!["L".into()]), "only M is gone; L stays chosen");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Delete field"));
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert_eq!(buttons(&h).0, ["S", "M", "L"]);
+}
+
+/// Two buttons of one group selected together both go, whichever was selected first.
+#[test]
+fn deleting_two_radio_buttons_of_a_group_at_once() {
+    let mut h = radio_group_harness();
+    {
+        let p = &mut h.state_mut().views[0].prepare;
+        p.selected = Some(("shirt".into(), 0));
+        p.also = vec![("shirt".into(), 2)];
+    }
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(buttons(&h), (vec!["M".into()], vec![]), "M is left, and nothing is chosen");
+    // Selecting every button deletes the group.
+    {
+        let p = &mut h.state_mut().views[0].prepare;
+        p.selected = Some(("shirt".into(), 0));
+    }
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert!(!names(&h).iter().any(|n| n == "shirt"));
+}
+
+/// Two calculated fields that share a name (a malformed form) each show their own formula: the
+/// first dup sums src, the second x.
+#[test]
+fn fields_sharing_a_name_each_show_their_own_formula() {
+    let widget = |name: &str, y: u32, reads: &str| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /Rect [50 {y} 250 {}] /P 3 0 R /AA << /C << /S /JavaScript /JS (AFSimple_Calculate\\(\"SUM\", \"{reads}\"\\);) >> >> >>",
+            y + 20
+        )
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R 7 0 R 8 0 R] /DA (/Helv 0 Tf 0 g) /CO [6 0 R 7 0 R 5 0 R] >>".into(),
+        widget("dup", 700, "x"),
+        widget("dup", 660, "src"),
+        widget("src", 620, "x"),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (x) /Rect [50 580 250 600] /P 3 0 R /V (3) >>".into(),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("dup.pdf", None, bytes.clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    h.get_by_label("Calculation order").click();
+    h.run_steps(3);
+    for (row, formula) in [("1. dup", "= sum(src)"), ("3. dup", "= sum(x)")] {
+        h.get_by_label_contains(row).hover();
+        h.run_steps(30);
+        assert!(h.query_by_label_contains(formula).is_some(), "{row} shows {formula}");
+    }
+}
+
+/// Field Properties refuses a notation it couldn't store as written, and stays open with what was
+/// typed into it: the field keeps its formula and nothing in the dialog is lost. Once the notation
+/// is fixed, OK applies it and closes.
+#[test]
+fn a_notation_that_cannot_be_stored_keeps_field_properties_open() {
+    use pdfcraft_engine::form_scripts::Calculate;
+    use pdfcraft_engine::{Edit, FieldProps, NewField};
+    let mut h = harness();
+    for (i, name) in ["qty", "sub"].into_iter().enumerate() {
+        let y = 200.0 + 30.0 * i as f64;
+        let kind = NewField::Text { multiline: false };
+        h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
+    }
+    let props = Box::new(FieldProps { calculate: Some(Calculate::Notation("qty * 2".into())), ..Default::default() });
+    h.state_mut().apply_edit(Edit::SetFieldProps { name: "sub".into(), props });
+    let formula = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "sub").unwrap().actions.calculate.clone()
+    };
+    h.state_mut().open_field_props("sub", 0);
+    h.run_steps(3);
+    let d = h.state_mut().field_props.as_mut().expect("Field Properties is open");
+    d.calculate = Calculate::Notation("qty EVCALC 2".into());
+    d.tooltip = "Subtotal".into();
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let kept = h.state().field_props.as_ref().map(|d| (d.calculate.clone(), d.tooltip.clone()));
+    assert_eq!(kept, Some((Calculate::Notation("qty EVCALC 2".into()), "Subtotal".to_owned())), "the dialog stays open as typed");
+    assert_eq!(formula(&h), Calculate::Notation("qty * 2".into()), "the field keeps its formula");
+    h.state_mut().field_props.as_mut().expect("still open").calculate = Calculate::Notation("qty * 3".into());
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state().field_props.is_none(), "applied and closed");
+    assert_eq!(formula(&h), Calculate::Notation("qty * 3".into()));
+}
+
+/// A formula that reads a field the form doesn't have gets a card of its own, in place of "every
+/// field calculates after the fields it reads", and its link opens that formula. A script that
+/// builds the names it reads gets a note.
+#[test]
+fn a_formula_reading_a_missing_field_has_its_own_card() {
+    use pdfcraft_engine::form_scripts::Calculate;
+    use pdfcraft_engine::{Edit, FieldProps, NewField};
+    use pdfcraft_ui_egui::prepare::FieldTab;
+    let mut h = harness();
+    for (i, name) in ["qty", "discount", "sub", "rows"].into_iter().enumerate() {
+        let y = 200.0 + 30.0 * i as f64;
+        let kind = NewField::Text { multiline: false };
+        h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
+    }
+    let props = Box::new(FieldProps { calculate: Some(Calculate::Notation("qty - discount".into())), ..Default::default() });
+    h.state_mut().apply_edit(Edit::SetFieldProps { name: "sub".into(), props });
+    let script = Some("event.value = getField(\"row\" + 1).value;".to_owned());
+    h.state_mut().apply_edit(Edit::SetFieldScript { name: "rows".into(), event: "calculate".into(), script });
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    h.get_by_label("Calculation order").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Every field calculates after the fields it reads.").is_some(), "nothing is missing yet");
+    assert!(h.query_by_label("rows builds some field names as it runs, so those reads aren't checked.").is_some());
+    h.state_mut().apply_edit(Edit::DeleteField { name: "discount".into() });
+    h.run_steps(3);
+    assert!(h.query_by_label("1 formula reads a field the form doesn't have").is_some());
+    assert!(h.query_by_label("sub reads discount, which the form doesn't have.").is_some());
+    assert!(h.query_by_label("Every field calculates after the fields it reads.").is_none(), "no all-clear while a formula is broken");
+    // Reordered, the order can be undone from the missing-field card; the all-clear still stays away.
+    h.state_mut().apply_edit(Edit::SetCalculationOrder { names: vec!["rows".into(), "sub".into()] });
+    h.run_steps(3);
+    assert!(h.query_by_label("Every field calculates after the fields it reads.").is_none(), "still no all-clear");
+    h.get_by_label("Undo").click();
+    h.run_steps(3);
+    let order: Vec<String> = {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().calculation_order().fields.into_iter().map(|f| f.name).collect()
+    };
+    assert_eq!(order, ["sub", "rows"], "Undo put the order back");
+    h.get_by_label("Edit sub's formula").click();
+    h.run_steps(3);
+    let draft = h.state().field_props.as_ref().map(|d| (d.field.clone(), d.tab));
+    assert_eq!(draft, Some(("sub".to_owned(), FieldTab::Calculate)));
+}
+
+#[test]
+fn button_export_properties_apply_cancel_and_undo() {
+    fn retype(h: &mut Harness<'static, PdfCraftApp>, value: &str) {
+        use egui::accesskit::Role;
+        h.get_by_role_and_label(Role::TextInput, "Export value").click();
+        h.run_steps(1);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_role_and_label(Role::TextInput, "Export value").type_text(value);
+        h.run_steps(2);
+    }
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("agree", 0);
+    h.run_steps(2);
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    let original = h.state().field_props.as_ref().unwrap().export_value.clone();
+    retype(&mut h, "Accepted");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    h.state_mut().open_field_props("agree", 0);
+    h.run_steps(2);
+    assert_eq!(h.state().field_props.as_ref().unwrap().export_value, original);
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    retype(&mut h, "Accepted");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    {
+        let s = h.state();
+        let f = s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "agree").unwrap();
+        assert_eq!(f.export_of(0), Some("Accepted"));
+    }
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    {
+        let s = h.state();
+        let f = s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "agree").unwrap();
+        assert_eq!(f.export_of(0), Some(original.as_str()));
+    }
 }

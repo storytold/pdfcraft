@@ -18,7 +18,7 @@
 //! drops them.
 
 use pdfcraft_content::{Matrix, Op, parse, serialize_ops};
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 
 use crate::images::{components, content_bytes, decodable, page_resources, pixels, resample};
 use crate::{OptimizeError, Report, Stage};
@@ -176,7 +176,7 @@ fn merge(doc: &Document, run: &[Fragment], n: usize) -> Option<(Vec<u8>, u32, u3
         }
         let obj = doc.get(f.image);
         let Object::Stream(s) = &*obj else { return None };
-        let px = pixels(s, n)?;
+        let px = pixels(doc, s, n)?;
         let px = if (f.width, f.height) == (width, r1 - r0) { px } else { resample(&px, n, f.width, f.height, width, r1 - r0)? };
         out.get_mut(r0 as usize * row..r1 as usize * row)?.copy_from_slice(px.get(..(r1 - r0) as usize * row)?);
     }
@@ -232,7 +232,9 @@ fn add_xobject(doc: &mut Document, page: ObjRef, name: &[u8], image: ObjRef) -> 
 /// Merge the fragment runs of one page; returns how many fragments were merged.
 fn merge_page(doc: &mut Document, page: ObjRef, report: &mut Report, progress: &mut dyn FnMut(Stage) -> bool) -> Result<usize, OptimizeError> {
     let Some(contents) = doc.get(page).as_dict().and_then(|d| d.get(b"Contents").cloned()) else { return Ok(0) };
-    let parsed = parse(&content_bytes(doc, &contents));
+    // A page whose content isn't all known is left alone: rewriting it would drop the rest.
+    let Some(data) = content_bytes(doc, &contents, &mut DecodeBudget::page()) else { return Ok(0) };
+    let parsed = parse(&data);
     if parsed.skipped > 0 {
         return Ok(0);
     }

@@ -8,7 +8,7 @@ use crate::x509::Certificate;
 use crate::{SignError, Time};
 
 /// A DER size cap: real CRLs and OCSP responses are far smaller.
-const MAX_EVIDENCE: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_EVIDENCE: usize = 2 * 1024 * 1024;
 
 const ID_PKIX_OCSP_BASIC: &str = "1.3.6.1.5.5.7.48.1.1";
 const EKU_OCSP_SIGNING: &str = "1.3.6.1.5.5.7.3.9";

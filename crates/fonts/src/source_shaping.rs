@@ -9,11 +9,6 @@ pub struct ShapedGlyph {
     pub id: GlyphId,
     pub position: [f64; 2],
     pub text: String,
-    /// Logical UTF-8 cluster, including marks that share this glyph's caret interval.
-    pub cluster: std::ops::Range<usize>,
-    /// Pen position and advance in em units, before applying glyph offsets.
-    pub pen: f64,
-    pub advance: f64,
 }
 #[derive(Clone, Debug)]
 pub struct ShapedRun {
@@ -70,9 +65,6 @@ pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
                 id: GlyphId::new(g.glyph_id),
                 position: [x + f64::from(p.x_offset) / em, f64::from(p.y_offset) / em],
                 text: logical,
-                cluster: run.start.saturating_add(start)..run.start.saturating_add(end),
-                pen: x,
-                advance: f64::from(p.x_advance) / em,
             });
             x += f64::from(p.x_advance) / em;
         }

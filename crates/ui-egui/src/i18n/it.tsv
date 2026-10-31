@@ -181,6 +181,15 @@
 	Available	Disponibile
 	Ready	Pronto
 	Search tools and commands…	Cerca strumenti e comandi…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Testo aggiunto
+	Link URL	URL del collegamento
+	Search tools and commands	Cerca strumenti e comandi
+	Text editing line	Riga di modifica del testo
+	Text to place	Testo da posizionare
+	Tooltip	Descrizione comando
+	Words or phrases to redact	Parole o frasi da oscurare
 	No matching tools	Nessuno strumento corrispondente
 	Tool	Strumento
 	Command	Comando
@@ -529,6 +538,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Legge {names}, che a loro volta lo leggono. Nessun ordine può correggere un ciclo: modifica una delle formule.
 	Not in order	Fuori ordine
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Manca nell'ordine di calcolo salvato nel PDF: altri visualizzatori PDF potrebbero non calcolarlo.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Legge {name}, che non esiste nel modulo, quindi da lì non riceve alcun valore.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Il suo script legge anche campi i cui nomi costruisce durante l'esecuzione, quindi queste letture non possono essere verificate.
+	Missing field	Campo mancante
+	Unchecked reads	Letture non verificate
+	{field} reads fields named as it runs	{field} legge campi nominati durante l'esecuzione
+	Some names are built as it runs	Alcuni nomi vengono costruiti durante l'esecuzione
 	Back to Prepare a form	Torna a Prepara un modulo
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Nessun campo di questo modulo calcola ancora il proprio valore. Assegna un calcolo a un campo nella scheda Calcolo delle sue proprietà e comparirà qui.
 	{names} and {last}	{names} e {last}
@@ -585,6 +600,9 @@
 	Clean Up	Pulizia
 	Color Images	Immagini a colori
 	Grayscale Images	Immagini in scala di grigi
+	Monochrome Images	Immagini monocromatiche
+	CCITT Group 4	CCITT gruppo 4
+	JBIG2 (lossless)	JBIG2 (senza perdita)
 	Bicubic downsampling to	Sottocampionamento bicubico a
 	for images above	per immagini oltre
 	Compression	Compressione
@@ -608,6 +626,7 @@
 	Discard private data of other applications	Elimina dati privati di altre applicazioni
 	Discard hidden text	Elimina testo nascosto
 	Use Flate to encode streams that are not encoded	Usa Flate per codificare i flussi non codificati
+	In streams that use LZW encoding, use Flate instead	Nei flussi con codifica LZW, usa Flate
 	Remove invalid links and bookmarks	Rimuovi collegamenti e segnalibri non validi
 	Remove unreferenced named destinations	Rimuovi destinazioni con nome non referenziate
 	Compress document structure (object streams)	Comprimi struttura del documento (flussi di oggetti)
@@ -853,6 +872,14 @@
 	Applies to 1 page	Si applica a 1 pagina
 	Applies to {n} pages	Si applica a {n} pagine
 	Replaces the existing one on those pages.	Sostituisce l'elemento esistente su quelle pagine.
+	Checking pages…	Verifica delle pagine…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	La pagina {pages} ha un proprio riempimento bianco, che nasconderebbe lo sfondo. Sostituiscilo
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Le pagine {pages} hanno un proprio riempimento bianco, che nasconderebbe lo sfondo. Sostituiscilo
+	Removing the background puts the page's own backdrop back.	Rimuovendo lo sfondo, il riempimento bianco della pagina viene ripristinato.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Un'immagine copre la pagina {pages} (una scansione?), quindi lì lo sfondo non sarà visibile.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Delle immagini coprono le pagine {pages} (scansioni?), quindi lì lo sfondo non sarà visibile.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	La pagina {pages} è cambiata dopo l'aggiunta dello sfondo, quindi il suo riempimento bianco resta disattivato. Su carta bianca appare uguale.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Le pagine {pages} sono cambiate dopo l'aggiunta dello sfondo, quindi i loro riempimenti bianchi restano disattivati. Su carta bianca appaiono uguali.
 	PDF or image	PDF o immagine
 	No file chosen	Nessun file scelto
 	Page number	Numero di pagina
@@ -2047,6 +2074,10 @@
 	Perimeter	Perimetro
 	Area	Area
 	Drawing scale	Scala del disegno
+	Scale	Scala
+	Common scales	Scale comuni
+	Enter a scale such as 1:50.	Inserisci una scala come 1:50.
+	Applying a scale switches units to m / mm.	Applicando una scala le unità passano a m / mm.
 	Snapping	Aggancio
 	Export measurements	Esporta misure
 	Open a PDF to measure it.	Apri un PDF per misurarlo.
@@ -2208,6 +2239,7 @@
 	Remove saved {what}	Rimuovi l'elemento salvato: {what}
 	Remove {name} from Recent	Rimuovi {name} dai recenti
 	Reopen the files that were open when PdfCraft last closed	Riapri i file aperti alla chiusura precedente di PdfCraft
+	Restore the last view (page, zoom and page display) when a document is opened again	Ripristina l’ultima vista (pagina, zoom e visualizzazione delle pagine) quando un documento viene riaperto
 	Reset page size	Ripristina dimensione pagine
 	Reset to printer defaults	Ripristina le impostazioni predefinite della stampante
 	Reverse closed arrow	Freccia chiusa inversa
@@ -2328,6 +2360,8 @@ key	Space	Spazio
 	Printer paper and scaling may differ. Check driver settings.	Carta e scala della stampante possono differire. Controlla le impostazioni del driver.
 	Drawing scale changes. Use Actual size for full-scale plans.	La scala del disegno cambia. Usa Dimensioni effettive per le planimetrie in scala.
 	Reload documents when their files change on disk	Ricarica i documenti quando i loro file cambiano sul disco
+	Don't show again	Non mostrare più
+	Show a notice when a document is secured	Mostra un avviso quando un documento è protetto
 	Always use my default zoom and page layout	Usa sempre il mio ingrandimento e layout di pagina predefiniti
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Questo file è cambiato sul disco. Ricarica mostra la nuova versione e scarta le modifiche non salvate; Salva la sostituisce con questa versione.
 	Reload	Ricarica
@@ -2397,6 +2431,11 @@ animation effects	Off	Disattivati
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} viene calcolato prima di {fields}, che legge.|{field} viene calcolato prima di {fields}, che legge.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Ancora {n} campo viene calcolato troppo presto.|Altri {n} campi vengono calcolati troppo presto.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} manca nell'ordine salvato nel PDF, quindi altri visualizzatori PDF potrebbero non calcolarlo.|{fields} mancano nell'ordine salvato nel PDF, quindi altri visualizzatori PDF potrebbero non calcolarli.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formula legge un campo che non esiste nel modulo|{n} formule leggono campi che non esistono nel modulo
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} legge {fields}, che non esiste nel modulo.|{field} legge {fields}, che non esistono nel modulo.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Ancora {n} formula legge un campo mancante.|Altre {n} formule leggono campi mancanti.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} costruisce alcuni nomi di campo durante l'esecuzione, quindi queste letture non vengono verificate.|{fields} costruiscono alcuni nomi di campo durante l'esecuzione, quindi queste letture non vengono verificate.
+@plural	{fields} is missing|{fields} are missing	{fields} manca|{fields} mancano
 	Scan	Scansiona
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Firma un foglio di carta bianca e fotografalo con una luce intensa e uniforme (usa il flash). Scegli la foto o trascinala qui: PdfCraft trova la firma e rimuove la carta.
 	Choose photo…	Scegli foto…
@@ -2693,6 +2732,19 @@ certificate	Key usage	Utilizzo chiave
 certificate	Self-signed	Autofirmato
 certificate	SHA-1 digest	Impronta SHA-1
 certificate	SHA-256 digest	Impronta SHA-256
+	Create & Edit	Crea e modifica
+	Review & Compare	Revisione e confronto
+	Forms & Signatures	Moduli e firme
+	Protect & Standardize	Proteggi e standardizza
+	Customize & Automate	Personalizza e automatizza
+	No tools match your search.	Nessuno strumento corrisponde alla ricerca.
+	Expand all tools	Espandi tutti gli strumenti
+	Collapse all tools	Comprimi tutti gli strumenti
+	Attach a file…	Allega un file…
+	Delete attachment	Elimina allegato
+	Attaching files is not available on the web yet	Allegare file non è ancora disponibile sul web
+	Attach {name}	Allega {name}
+	Delete attachment {key}	Elimina allegato {key}
 	Font	Carattere
 	Bulleted list	Elenco puntato
 	Numbered list	Elenco numerato
@@ -2747,3 +2799,19 @@ certificate	SHA-256 digest	Impronta SHA-256
 	field names can't contain a period: {name}	i nomi dei campi non possono contenere un punto: {name}
 	two cells would both be named {name}	due celle si chiamerebbero entrambe {name}
 	a field named {name} already exists	esiste già un campo chiamato {name}
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Oggi
+@plural	{n} reply|{n} replies	{n} risposta|{n} risposte
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Strumenti pagina
+	Insert pages from a file after the selection…	Inserisci pagine da un file dopo la selezione…
+	Rotate the selected pages counterclockwise	Ruota le pagine selezionate in senso antiorario
+	Rotate the selected pages clockwise	Ruota le pagine selezionate in senso orario
+	Extract the selected pages…	Estrai le pagine selezionate…
+	Delete the selected pages	Elimina le pagine selezionate
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Opzioni per questa risposta
+	Export value	Valore di esportazione

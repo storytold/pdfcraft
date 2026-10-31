@@ -52,6 +52,12 @@ impl Op {
     pub fn name(&self, i: usize) -> Option<&[u8]> {
         self.operands.get(i).and_then(Object::as_name)
     }
+
+    /// The last operand as a name: the one `Do` and the other one-operand operators act on, since
+    /// the renderer takes operands from the end and ignores any surplus before them.
+    pub fn last_name(&self) -> Option<&[u8]> {
+        self.operands.last().and_then(Object::as_name)
+    }
 }
 
 /// A parsed stream.
@@ -78,103 +84,172 @@ fn is_delim(b: u8) -> bool {
     matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%')
 }
 
+/// Longest unreadable number token retried from its next byte. Real numbers are far shorter.
+const MAX_RETRIED_TOKEN: usize = 64;
+
 /// Parse a (decoded) content stream.
 pub fn parse(data: &[u8]) -> Parsed {
     parse_pieces(data, &[])
 }
 
+/// The operators of a (decoded) content stream, read one at a time, as [`parse`] reads them. A
+/// caller that stops early or keeps only a summary never holds every operator of the stream.
+pub fn ops(data: &[u8]) -> Ops<'_> {
+    Ops::new(data, &[])
+}
+
 /// Parse `data`, recording which of the piece boundaries `ends` (as in [`Pieces`]) a comment
 /// crosses.
 fn parse_pieces(data: &[u8], ends: &[usize]) -> Parsed {
-    let mut out = Parsed { comment_edges: vec![(false, false); ends.len()], ..Parsed::default() };
-    let mut boundary = 0;
-    let mut lx = Lexer::new(data, 0);
-    let mut operands: Vec<Object> = Vec::new();
-    let mut start: Option<usize> = None;
-    loop {
-        let trivia = lx.pos;
-        lx.skip_ws();
-        // Only the whitespace the lexer skips here holds top-level comments: a `%` inside a
-        // string, a name, an array or dictionary operand or inline image data is not one.
-        if boundary < ends.len() {
-            comment_edges(data, trivia..lx.pos, ends, &mut boundary, &mut out.comment_edges);
+    let mut reader = Ops::new(data, ends);
+    let ops = reader.by_ref().collect();
+    Parsed { ops, skipped: reader.skipped, ambiguous_images: reader.ambiguous_images, comment_edges: reader.comment_edges }
+}
+
+/// The iterator [`ops`] returns.
+pub struct Ops<'a> {
+    data: &'a [u8],
+    lx: Lexer<'a>,
+    operands: Vec<Object>,
+    start: Option<usize>,
+    skipped: usize,
+    ambiguous_images: usize,
+    ends: &'a [usize],
+    boundary: usize,
+    comment_edges: Vec<(bool, bool)>,
+}
+
+impl<'a> Ops<'a> {
+    fn new(data: &'a [u8], ends: &'a [usize]) -> Self {
+        Ops {
+            data,
+            lx: Lexer::new(data, 0),
+            operands: Vec::new(),
+            start: None,
+            skipped: 0,
+            ambiguous_images: 0,
+            ends,
+            boundary: 0,
+            comment_edges: vec![(false, false); ends.len()],
         }
-        let Some(&b) = data.get(lx.pos) else { break };
-        let at = lx.pos;
-        let operand_start = matches!(b, b'/' | b'(' | b'<' | b'[' | b'+' | b'-' | b'.') || b.is_ascii_digit();
-        if operand_start {
-            match lx.object() {
-                Ok(o) => {
-                    start.get_or_insert(at);
-                    operands.push(o);
-                }
-                Err(_) if b == b'(' => {
-                    // An unterminated string runs to the end of the stream.
-                    out.skipped += data.len() - at;
-                    lx.pos = data.len();
-                }
-                Err(_) => {
-                    // Skip the offending byte and carry on.
-                    lx.pos = at + 1;
-                    out.skipped += 1;
-                }
+    }
+
+    /// Bytes read so far that could not be read as operands or operators.
+    pub fn skipped(&self) -> usize {
+        self.skipped
+    }
+
+    /// Inline images read so far whose end is this parser's guess (as in
+    /// [`Parsed::ambiguous_images`]).
+    pub fn ambiguous_images(&self) -> usize {
+        self.ambiguous_images
+    }
+}
+
+impl Iterator for Ops<'_> {
+    type Item = Op;
+
+    fn next(&mut self) -> Option<Op> {
+        let Ops { data, lx, operands, start, skipped, ambiguous_images, ends, boundary, comment_edges: edges } = self;
+        let (data, ends): (&[u8], &[usize]) = (data, ends);
+        loop {
+            let trivia = lx.pos;
+            lx.skip_ws();
+            // Only the whitespace the lexer skips here holds top-level comments: a `%` inside a
+            // string, a name, an array or dictionary operand or inline image data is not one.
+            if *boundary < ends.len() {
+                comment_edges(data, trivia..lx.pos, ends, boundary, edges);
             }
-            continue;
-        }
-        if is_delim(b) {
-            // A stray `)`, `>`, `]`, `{`, `}`.
-            lx.pos += 1;
-            out.skipped += 1;
-            continue;
-        }
-        let kw = lx.token();
-        if kw.is_empty() {
-            lx.pos = at + 1;
-            out.skipped += 1;
-            continue;
-        }
-        match kw {
-            b"true" => {
-                start.get_or_insert(at);
-                operands.push(Object::Bool(true));
-            }
-            b"false" => {
-                start.get_or_insert(at);
-                operands.push(Object::Bool(false));
-            }
-            b"null" => {
-                start.get_or_insert(at);
-                operands.push(Object::Null);
-            }
-            b"BI" => {
-                let image = inline_image(data, at, lx.pos);
-                out.ambiguous_images += usize::from(image.ambiguous);
-                let end = image.end;
-                lx.pos = end;
-                match image.image {
-                    Some((dict, img)) => {
-                        out.ops.push(Op {
-                            op: b"BI".to_vec(),
-                            operands: Vec::new(),
-                            inline: Some((dict, img)),
-                            span: start.take().unwrap_or(at)..end,
-                        });
-                    }
-                    None => {
-                        out.skipped += end.saturating_sub(at);
-                        start = None;
-                    }
-                }
+            let Some(&b) = data.get(lx.pos) else {
+                // Operands left without an operator.
+                *skipped += operands.len();
                 operands.clear();
+                return None;
+            };
+            let at = lx.pos;
+            let operand_start = matches!(b, b'/' | b'(' | b'<' | b'[' | b'+' | b'-' | b'.') || b.is_ascii_digit();
+            if operand_start {
+                match lx.object() {
+                    Ok(o) => {
+                        start.get_or_insert(at);
+                        operands.push(o);
+                    }
+                    Err(_) if b == b'(' => {
+                        // An unterminated string runs to the end of the stream.
+                        *skipped += data.len() - at;
+                        lx.pos = data.len();
+                    }
+                    Err(_) => {
+                        let read = lx.pos.saturating_sub(at);
+                        #[cfg(test)]
+                        tests::RESCANNED.with(|c| c.set(c.get() + read));
+                        let number = matches!(b, b'+' | b'-' | b'.') || b.is_ascii_digit();
+                        if number && read > MAX_RETRIED_TOKEN {
+                            // A long unreadable number is skipped whole: retrying from each of its
+                            // bytes would read the rest of it again every time.
+                            *skipped += read;
+                        } else {
+                            // Skip the offending byte and carry on.
+                            lx.pos = at + 1;
+                            *skipped += 1;
+                        }
+                    }
+                }
+                continue;
             }
-            _ => {
-                let s = start.take().unwrap_or(at);
-                out.ops.push(Op { op: kw.to_vec(), operands: std::mem::take(&mut operands), inline: None, span: s..lx.pos });
+            if is_delim(b) {
+                // A stray `)`, `>`, `]`, `{`, `}`.
+                lx.pos += 1;
+                *skipped += 1;
+                continue;
+            }
+            let kw = lx.token();
+            if kw.is_empty() {
+                lx.pos = at + 1;
+                *skipped += 1;
+                continue;
+            }
+            match kw {
+                b"true" => {
+                    start.get_or_insert(at);
+                    operands.push(Object::Bool(true));
+                }
+                b"false" => {
+                    start.get_or_insert(at);
+                    operands.push(Object::Bool(false));
+                }
+                b"null" => {
+                    start.get_or_insert(at);
+                    operands.push(Object::Null);
+                }
+                b"BI" => {
+                    let image = inline_image(data, at, lx.pos);
+                    *ambiguous_images += usize::from(image.ambiguous);
+                    let end = image.end;
+                    lx.pos = end;
+                    operands.clear();
+                    match image.image {
+                        Some((dict, img)) => {
+                            return Some(Op {
+                                op: b"BI".to_vec(),
+                                operands: Vec::new(),
+                                inline: Some((dict, img)),
+                                span: start.take().unwrap_or(at)..end,
+                            });
+                        }
+                        None => {
+                            *skipped += end.saturating_sub(at);
+                            *start = None;
+                        }
+                    }
+                }
+                _ => {
+                    let s = start.take().unwrap_or(at);
+                    return Some(Op { op: kw.to_vec(), operands: std::mem::take(operands), inline: None, span: s..lx.pos });
+                }
             }
         }
     }
-    out.skipped += operands.len();
-    out
 }
 
 /// Record the piece boundaries crossed by the comments in `trivia` (skipped whitespace and
@@ -567,9 +642,20 @@ impl Pieces {
     /// for byte. Returns every piece's new bytes (unchanged pieces come back equal).
     pub fn splice(&self, edits: impl IntoIterator<Item = (std::ops::Range<usize>, Vec<u8>)>) -> Vec<Vec<u8>> {
         let mut out: Vec<Vec<u8>> = (0..self.len()).map(|i| Vec::with_capacity(self.range(i).len())).collect();
+        // Only the pieces from the one holding `from` up to `to`: one call per edit must not
+        // visit every piece.
         let copy = |out: &mut Vec<Vec<u8>>, from: usize, to: usize| {
-            for (i, piece) in out.iter_mut().enumerate() {
+            if from >= to {
+                return;
+            }
+            let first = self.piece_of(from);
+            for (i, piece) in out.iter_mut().enumerate().skip(first) {
+                #[cfg(test)]
+                tests::PIECE_VISITS.with(|c| c.set(c.get() + 1));
                 let r = self.range(i);
+                if r.start >= to {
+                    break;
+                }
                 let (a, b) = (from.max(r.start), to.min(r.end));
                 if a < b {
                     piece.extend_from_slice(self.data.get(a..b).unwrap_or_default());

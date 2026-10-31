@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 use pdfcraft_cos::{Dict, Document, Object, PdfString};
 
 use crate::data::{DataNode, data_path, parse_datasets};
-use crate::model::*;
+use crate::model::{Access, Field, Node, Presence, Script, SomIndices, Template};
 use crate::{Report, XfaError};
 
 /// Private key on the AcroForm: presence scripts set, by SOM path.
@@ -15,6 +15,9 @@ pub const OVERRIDES_KEY: &[u8] = b"PCXfaOverrides";
 
 const MAX_DEPTH: usize = 64;
 const MAX_EVENTS: usize = 20_000;
+/// Most bytes of script the events hold together: each instance of a repeated subform holds its
+/// own copy, so a long script repeated many times stops here (as much as the XFA packets hold).
+pub(crate) const MAX_EVENT_SCRIPT_BYTES: usize = 64 << 20;
 /// Most objects of the live form built (the scripting engine's snapshot holds as many):
 /// nested repeating subforms multiply, so the walk stops here and says so.
 pub const MAX_FORM_NODES: usize = 200_000;
@@ -67,8 +70,8 @@ pub struct LiveForm {
     pub root: FormNode,
     /// Every scripted event, in document order.
     pub events: Vec<ScriptEvent>,
-    /// The form was larger than [`MAX_FORM_NODES`] objects (or [`MAX_EVENTS`] events): what
-    /// is past that was left out.
+    /// The form was larger than [`MAX_FORM_NODES`] objects (or [`MAX_EVENTS`] events, or
+    /// [`MAX_EVENT_SCRIPT_BYTES`] of their scripts): what is past that was left out.
     pub truncated: bool,
 }
 
@@ -172,6 +175,8 @@ struct Walker<'a> {
     data: Option<&'a DataNode>,
     ov: &'a Overrides,
     events: Vec<ScriptEvent>,
+    /// Bytes of script the events hold.
+    script_bytes: usize,
     /// Objects built so far.
     nodes: usize,
     truncated: bool,
@@ -190,43 +195,34 @@ impl Walker<'_> {
 
     /// Record the scripts of the object at `som` as events: each non-empty event script, then its
     /// calculate and validate scripts (the validate one with `message`). Once [`MAX_EVENTS`] events
-    /// are recorded, nothing more is and the form is marked truncated.
+    /// or [`MAX_EVENT_SCRIPT_BYTES`] of their scripts are recorded, nothing more is and the form is
+    /// marked truncated.
     fn push_events(&mut self, som: &str, scripts: &[Script], calculate: Option<&Script>, validate: Option<&Script>, message: Option<&str>) {
         if self.events.len() >= MAX_EVENTS {
             self.truncated = true;
             return;
         }
-        for s in scripts {
+        let all = scripts
+            .iter()
+            .map(|s| (s, s.activity.as_str(), None))
+            .chain(calculate.map(|c| (c, "calculate", None)))
+            .chain(validate.map(|v| (v, "validate", message)));
+        for (s, activity, message) in all {
             if s.text.trim().is_empty() {
                 continue;
             }
+            match self.script_bytes.checked_add(s.text.len()).filter(|n| *n <= MAX_EVENT_SCRIPT_BYTES) {
+                Some(n) => self.script_bytes = n,
+                None => {
+                    self.truncated = true;
+                    return;
+                }
+            }
             self.events.push(ScriptEvent {
                 som: som.to_string(),
-                activity: s.activity.clone(),
+                activity: activity.to_string(),
                 script: s.text.clone(),
                 formcalc: s.formcalc,
-                message: None,
-            });
-        }
-        if let Some(c) = calculate
-            && !c.text.trim().is_empty()
-        {
-            self.events.push(ScriptEvent {
-                som: som.to_string(),
-                activity: "calculate".into(),
-                script: c.text.clone(),
-                formcalc: c.formcalc,
-                message: None,
-            });
-        }
-        if let Some(v) = validate
-            && !v.text.trim().is_empty()
-        {
-            self.events.push(ScriptEvent {
-                som: som.to_string(),
-                activity: "validate".into(),
-                script: v.text.clone(),
-                formcalc: v.formcalc,
                 message: message.map(str::to_string),
             });
         }
@@ -410,7 +406,7 @@ impl Walker<'_> {
 /// from the template and `ov`) and every scripted event, in document order, within
 /// [`MAX_FORM_NODES`] objects.
 pub fn form_tree(tpl: &Template, data: Option<&DataNode>, ov: &Overrides) -> LiveForm {
-    let mut w = Walker { tpl, data, ov, events: Vec::new(), nodes: 0, truncated: false };
+    let mut w = Walker { tpl, data, ov, events: Vec::new(), script_bytes: 0, nodes: 0, truncated: false };
     let root = Node::Subform(Box::new(tpl.root.clone()));
     let mut nodes = w.children(std::slice::from_ref(&root), "", 0);
     let mut root_node = nodes.pop().unwrap_or_default();
@@ -590,21 +586,66 @@ pub fn rerender(doc: &mut Document, tpl: &Template) -> Result<Report, XfaError> 
     if form.pages.is_empty() {
         return Err(XfaError::Malformed("the template laid out to no pages".into()));
     }
-    // The AcroForm keeps only the fields PdfCraft did not generate.
+    // The fields an earlier pass generated give way to the new layout's, after it is written: it
+    // keeps a signature one of them holds. The AcroForm keeps every field PdfCraft did not generate.
     let Some(root) = doc.root() else { return Err(XfaError::NotXfa) };
-    if let Some((acro_ref, mut acro)) = acroform(doc) {
-        let fields = acro.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
-        let kept: Vec<Object> =
-            fields.into_iter().filter(|f| f.as_ref().is_none_or(|r| doc.get(r).as_dict().is_none_or(|d| !d.contains(crate::pdf::SOM_KEY)))).collect();
+    let top = |doc: &Document| -> Vec<Object> {
+        acroform(doc).and_then(|(_, acro)| acro.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned())).unwrap_or_default()
+    };
+    let generated: std::collections::HashSet<pdfcraft_cos::ObjRef> = top(doc)
+        .iter()
+        .filter_map(Object::as_ref)
+        .filter(|r| doc.get(*r).as_dict().is_some_and(|d| d.contains(crate::pdf::SOM_KEY) || d.contains(crate::pdf::NODE_KEY)))
+        .collect();
+    let written = crate::pdf::write_form(doc, &form)?;
+    if !generated.is_empty()
+        && let Some((acro_ref, mut acro)) = acroform(doc)
+    {
+        let kept: Vec<Object> = top(doc).into_iter().filter(|f| f.as_ref().is_none_or(|r| !generated.contains(&r))).collect();
         acro.set(b"Fields".to_vec(), Object::Array(kept));
         match acro_ref {
             Some(r) => doc.set(r, Object::Dict(acro)),
             None => doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(acro)))?,
         }
+        // A generated field edited in this overlay is freed with its appearance and widget kids,
+        // so a replaced password widget's value or masked appearance cannot stay in the overlay.
+        // Signature fields, and the fields that name them by their SOM path, stay: the new
+        // layout's signature field took their value and appearance.
+        let free_ap = |doc: &mut Document, d: &Dict| {
+            if let Some(ap) = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned())
+                && let Some(n) = ap.get(b"N").and_then(Object::as_ref)
+                && doc.is_edited(n.num)
+            {
+                doc.free(n);
+            }
+        };
+        let signature = |d: &Dict| d.name(b"FT") == Some(b"Sig".as_slice()) || d.contains(crate::pdf::NODE_KEY);
+        for r in generated {
+            let Some(d) = doc.get(r).as_dict().cloned().filter(|d| !signature(d)) else { continue };
+            free_ap(doc, &d);
+            if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
+                for k in kids.iter().filter_map(Object::as_ref) {
+                    if let Some(kd) = doc.get(k).as_dict().cloned() {
+                        if signature(&kd) {
+                            continue;
+                        }
+                        free_ap(doc, &kd);
+                    }
+                    if doc.is_edited(k.num) {
+                        doc.free(k);
+                    }
+                }
+            }
+            if doc.is_edited(r.num) {
+                doc.free(r);
+            }
+        }
     }
-    let written = crate::pdf::write_form(doc, &form)?;
     let mut warnings = form.warnings;
     warnings.extend(written.warnings);
+    if written.usage_rights {
+        warnings.push(crate::pdf::USAGE_RIGHTS_REMOVED.into());
+    }
     warnings.dedup();
     Ok(Report { pages: written.pages, fields: written.fields, template_bytes: packets.xdp.len(), warnings })
 }

@@ -85,6 +85,68 @@ fn xobject(doc: &Document, owner: &Dict, name: &[u8]) -> ObjRef {
     objects.as_dict().unwrap().get(name).unwrap().as_ref().unwrap()
 }
 
+/// Printing keeps occupied page resource names and distinct annotation appearances intact,
+/// whether the page resources are direct or inherited from the page tree.
+#[test]
+fn annotation_appearances_do_not_replace_page_xobjects() {
+    for inherited in [false, true] {
+        let (mut doc, ap, widget) = widget_fixture(Some(Object::name("Form")), None);
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        let mut xobjects = Dict::new();
+        for (name, color) in [("PCPrA0", "1 0 0"), ("PCPrA1", "0 0 1"), ("PCPrA3", "1 0 0")] {
+            let dict = Dict::from_iter([
+                (b"Type".to_vec(), Object::name("XObject")),
+                (b"Subtype".to_vec(), Object::name("Form")),
+                (b"BBox".to_vec(), numbers(&[0.0, 0.0, 10.0, 10.0])),
+            ]);
+            let form = doc.add(Object::Stream(Stream::flate(dict, format!("{color} rg 0 0 10 10 re f").as_bytes())));
+            xobjects.set(name.as_bytes().to_vec(), Object::Ref(form));
+        }
+        let xobjects = doc.add(Object::Dict(xobjects));
+        let resources = doc.add(Object::Dict(Dict::from_iter([(b"XObject".to_vec(), Object::Ref(xobjects))])));
+        let contents = doc.add(Object::Stream(Stream::flate(
+            Dict::new(),
+            b"q 1 0 0 1 60 20 cm /PCPrA0 Do Q\nq 1 0 0 1 70 20 cm /PCPrA1 Do Q\nq 1 0 0 1 80 20 cm /PCPrA3 Do Q",
+        )));
+        let second_ap = doc.add(Object::Stream(Stream::flate(doc.get(ap).as_dict().unwrap().clone(), b"/Ink cs 1 1 0 scn 0 0 20 10 re f")));
+        let mut second_widget = doc.get(widget).as_dict().unwrap().clone();
+        second_widget.set(b"Rect".to_vec(), numbers(&[10.0, 50.0, 50.0, 70.0]));
+        second_widget.set(b"AP".to_vec(), Object::Dict(Dict::from_iter([(b"N".to_vec(), Object::Ref(second_ap))])));
+        let second_widget = doc.add(Object::Dict(second_widget));
+        doc.update_dict(page, |d| {
+            d.set(b"Resources".to_vec(), Object::Ref(resources));
+            d.set(b"Contents".to_vec(), Object::Ref(contents));
+            d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(widget), Object::Ref(second_widget)]));
+        })
+        .unwrap();
+        if inherited {
+            let parent = doc.get(page).as_dict().unwrap().reference(b"Parent").unwrap();
+            doc.update_dict(parent, |d| d.set(b"Resources".to_vec(), Object::Ref(resources))).unwrap();
+            doc.update_dict(page, |d| {
+                d.remove(b"Resources");
+            })
+            .unwrap();
+        }
+        let before = saved(&doc);
+        let source = render(before.clone());
+        for (x, color) in [(65, [255, 0, 0, 255]), (75, [0, 0, 255, 255]), (85, [255, 0, 0, 255])] {
+            assert_eq!(pixel(&source, x, 75), color, "source page artwork");
+        }
+        for (y, color) in [(40, [255, 255, 0, 255]), (70, [0, 255, 0, 255])] {
+            assert_eq!(pixel(&source, 30, y), color, "source widget appearance");
+        }
+        let printed = render(impose(&doc, &print_settings(Content::Document)).unwrap());
+        for (x, color) in [(65, [255, 0, 0, 255]), (75, [0, 0, 255, 255]), (85, [255, 0, 0, 255])] {
+            assert_eq!(pixel(&printed, x, 75), color, "printed page artwork, inherited={inherited}");
+        }
+        for (y, color) in [(40, [255, 255, 0, 255]), (70, [0, 255, 0, 255])] {
+            assert_eq!(pixel(&printed, 30, y), color, "printed widget appearance, inherited={inherited}");
+        }
+        assert_eq!(printed.rgba, source.rgba, "printing must retain page artwork and both appearances, inherited={inherited}");
+        assert_eq!(saved(&doc), before, "printing must leave the source resources unchanged");
+    }
+}
+
 #[test]
 fn missing_subtype_appearance_survives_vector_print() {
     let (control, _, _) = widget_fixture(Some(Object::name("Form")), None);
@@ -147,7 +209,8 @@ fn promotion_preserves_streams_and_explicit_subtypes() {
     for subtype in [None, Some(Object::name("Form")), Some(Object::name("Image")), Some(Object::Null), Some(Object::Int(7))] {
         let (mut doc, ap, _) = widget_fixture(subtype.clone(), Some([2.0, 0.0, 0.0, 3.0, 5.0, 7.0]));
         let original = doc.get(ap);
-        let form = page_form(&mut doc, 0, Content::Document, &mut std::collections::HashMap::new()).unwrap();
+        let pages = pdfcraft_model::pages(&doc);
+        let form = page_form(&mut doc, &pages, 0, Content::Document, &mut std::collections::HashMap::new()).unwrap();
         assert_eq!(doc.get(ap), original, "original in the print clone");
         let promoted = xobject(&doc, doc.get(form).as_dict().unwrap(), b"PCPrA0");
         if subtype.is_some() {

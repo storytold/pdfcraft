@@ -184,6 +184,15 @@
 	Available	使用可能
 	Ready	使用可能
 	Search tools and commands…	ツールとコマンドを検索…
+
+# Accessible names for inputs that have no visible label.
+	Added text	追加したテキスト
+	Link URL	リンクの URL
+	Search tools and commands	ツールとコマンドを検索
+	Text editing line	テキスト編集行
+	Text to place	配置するテキスト
+	Tooltip	ツールチップ
+	Words or phrases to redact	墨消しする単語または語句
 	No matching tools	該当するツールがありません
 	Tool	ツール
 	Command	コマンド
@@ -532,6 +541,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	{names} を読み取り、それらがこのフィールドを読み返します。循環はどの順序でも直せません。いずれかの数式を変更してください。
 	Not in order	順序にない
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF に保存された計算順序にありません。ほかの PDF ビューアーでは計算されない可能性があります。
+	Reads {name}, which the form doesn't have, so it gets no value there.	フォームにない {name} を読み取るため、そこからは値を得られません。
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	スクリプトが実行中に名前を組み立てるフィールドも読み取るため、それらの読み取りは確認できません。
+	Missing field	フィールドがない
+	Unchecked reads	未確認の読み取り
+	{field} reads fields named as it runs	{field} は実行中に名前が決まるフィールドを読み取ります
+	Some names are built as it runs	一部の名前は実行中に組み立てられます
 	Back to Prepare a form	「フォームを作成」に戻る
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	このフォームには値を計算するフィールドがまだありません。フィールドのプロパティの［計算］タブで計算を設定すると、ここに表示されます。
 	{names} and {last}	{names}、{last}
@@ -588,6 +603,9 @@
 	Clean Up	クリーンアップ
 	Color Images	カラー画像
 	Grayscale Images	グレースケール画像
+	Monochrome Images	白黒画像
+	CCITT Group 4	CCITT グループ 4
+	JBIG2 (lossless)	JBIG2（可逆）
 	Bicubic downsampling to	バイキュービック法でダウンサンプル:
 	for images above	対象画像の解像度:
 	Compression	圧縮
@@ -611,6 +629,7 @@
 	Discard private data of other applications	他のアプリケーションのプライベートデータを破棄
 	Discard hidden text	非表示テキストを破棄
 	Use Flate to encode streams that are not encoded	未エンコードのストリームを Flate でエンコード
+	In streams that use LZW encoding, use Flate instead	LZW エンコードのストリームを Flate でエンコード
 	Remove invalid links and bookmarks	無効なリンクとしおりを削除
 	Remove unreferenced named destinations	参照されていない名前付き移動先を削除
 	Compress document structure (object streams)	文書構造を圧縮（オブジェクトストリーム）
@@ -857,6 +876,14 @@
 	Applies to 1 page	1 ページに適用
 	Applies to {n} pages	{n} ページに適用
 	Replaces the existing one on those pages.	対象ページの既存の項目を置き換えます。
+	Checking pages…	ページを確認しています…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	{pages} ページには独自の白い塗りがあり、背景が隠れてしまいます。置き換える
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	{pages} ページに独自の白い塗りがあり、背景が隠れてしまいます。置き換える
+	Removing the background puts the page's own backdrop back.	背景を削除すると、ページ独自の白い塗りが元に戻ります。
+	A picture covers page {pages} (a scan?), so the background won't show there.	{pages} ページは画像（スキャン？）で覆われているため、背景は表示されません。
+	Pictures cover pages {pages} (scans?), so the background won't show there.	{pages} ページが画像（スキャン？）で覆われているため、そこでは背景は表示されません。
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	背景を追加した後に {pages} ページが変更されたため、そのページ独自の白い塗りはオフのままです。白い紙では見た目は変わりません。
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	背景を追加した後に {pages} ページが変更されたため、それらのページ独自の白い塗りはオフのままです。白い紙では見た目は変わりません。
 	PDF or image	PDF または画像
 	No file chosen	ファイルが選択されていません
 	Page number	ページ番号
@@ -2054,6 +2081,10 @@
 	Perimeter	周長
 	Area	面積
 	Drawing scale	図面の縮尺
+	Scale	縮尺
+	Common scales	よく使う縮尺
+	Enter a scale such as 1:50.	1:50 のように縮尺を入力してください。
+	Applying a scale switches units to m / mm.	縮尺を適用すると、単位が m / mm に切り替わります。
 	Snapping	スナップ
 	Export measurements	測定結果を書き出す
 	Open a PDF to measure it.	測定するPDFを開いてください。
@@ -2106,6 +2137,7 @@
 	Go to page…	ページへ移動…
 	For page sizes and margins.	ページサイズと余白に使います。
 	Reopen the files that were open when PdfCraft last closed	前回 PdfCraft を閉じたときに開いていたファイルを再度開く
+	Restore the last view (page, zoom and page display) when a document is opened again	文書を再び開くときに最後の表示（ページ、ズーム、ページ表示）を復元する
 	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	PDF テキスト用フォントでは「{c}」（{code}）を表示できません。対応している文字を使用してください。
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	標準フォントでは「{c}」（{code}）を表示できません。現在、テキストとして追加できるのは西ヨーロッパの文字のみです。
 	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	このフィールドのフォントでは「{c}」（{code}）を表示できないため、PdfCraft では ? と表示されます。値は保存され、他の PDF ビューアーではこの値からフィールドが再描画されます。
@@ -2319,6 +2351,8 @@ key	Space	スペース
 	Printer paper and scaling may differ. Check driver settings.	プリンターの用紙や倍率は異なる場合があります。ドライバーの設定を確認してください。
 	Drawing scale changes. Use Actual size for full-scale plans.	図面の縮尺が変わります。原寸で印刷するには「実際のサイズ」を使用してください。
 	Reload documents when their files change on disk	ディスク上のファイルが変更されたら文書を再読み込みする
+	Don't show again	今後表示しない
+	Show a notice when a document is secured	文書が保護されているときに通知を表示する
 	Always use my default zoom and page layout	常に既定のズームとページレイアウトを使用する
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	このファイルはディスク上で変更されました。「再読み込み」は新しい版を表示して未保存の変更を破棄し、「保存」はこの版で置き換えます。
 	Reload	再読み込み
@@ -2388,6 +2422,11 @@ animation effects	Off	オフ
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} は、読み取る {fields} より先に計算されます。
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	さらに {n} 個のフィールドが早すぎます。
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} は PDF に保存された順序にないため、他の PDF ビューアーでは計算されない場合があります。
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} 個の数式がフォームにないフィールドを読み取ります
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} はフォームにない {fields} を読み取ります。
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	ほかに {n} 個の数式が存在しないフィールドを読み取ります。
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} は一部のフィールド名を実行中に組み立てるため、それらの読み取りは確認されません。
+@plural	{fields} is missing|{fields} are missing	{fields} がありません
 	Scan	スキャン
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	白い紙に署名し、明るく均一な光の下で写真を撮ってください（フラッシュを使用）。写真を選択するか、ここにドロップしてください。PdfCraft が署名を見つけ、紙の部分を取り除きます。
 	Choose photo…	写真を選択…
@@ -2481,6 +2520,19 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
+	Create & Edit	作成と編集
+	Review & Compare	レビューと比較
+	Forms & Signatures	フォームと署名
+	Protect & Standardize	保護と標準化
+	Customize & Automate	カスタマイズと自動化
+	No tools match your search.	検索に一致するツールはありません。
+	Expand all tools	すべてのツールを展開
+	Collapse all tools	すべてのツールを折りたたむ
+	Attach a file…	ファイルを添付…
+	Delete attachment	添付ファイルを削除
+	Attaching files is not available on the web yet	Web 版ではまだファイルを添付できません
+	Attach {name}	{name} を添付
+	Delete attachment {key}	添付ファイル {key} を削除
 	Font	フォント
 	Bulleted list	箇条書き
 	Numbered list	番号付きリスト
@@ -2515,3 +2567,19 @@ animation effects	Off	オフ
 	field names can't contain a period: {name}	フィールド名にピリオドは使えません: {name}
 	two cells would both be named {name}	2 つのセルが同じ名前 {name} になります
 	a field named {name} already exists	{name} という名前のフィールドは既にあります
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	今日
+@plural	{n} reply|{n} replies	{n} 件の返信
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	ページツール
+	Insert pages from a file after the selection…	選択範囲の後にファイルからページを挿入…
+	Rotate the selected pages counterclockwise	選択したページを反時計回りに回転
+	Rotate the selected pages clockwise	選択したページを時計回りに回転
+	Extract the selected pages…	選択したページを抽出…
+	Delete the selected pages	選択したページを削除
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	この返信のオプション
+	Export value	書き出し値

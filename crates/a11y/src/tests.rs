@@ -367,6 +367,103 @@ fn reachable_tag_properties_round_trip_and_reject_unrelated_objects() {
     assert!(matches!(set_tag_property(&mut doc, pdfcraft_cos::ObjRef::new(4, 1), TagProperty::Title, Some("No")), Err(TagError::NotATag(_))));
 }
 
+/// A table (object 4) with a header cell (6) and a data cell (7); `th` is the header cell's
+/// dictionary and `extra` more objects from 8 on, of which the Document element (3) lists `kids`
+/// after the table. The role map maps /MyTable to /Table.
+fn table_doc(th: &str, extra: &[&str], kids: &str) -> Document {
+    let mut objs = vec![
+        "<< /Type /Catalog /StructTreeRoot 2 0 R >>".to_string(),
+        "<< /Type /StructTreeRoot /K 3 0 R /RoleMap << /MyTable /Table >> >>".to_string(),
+        format!("<< /S /Document /K [4 0 R {kids}] >>"),
+        "<< /S /Table /K [5 0 R] >>".to_string(),
+        "<< /S /TR /K [6 0 R 7 0 R] >>".to_string(),
+        th.to_string(),
+        "<< /S /TD >>".to_string(),
+    ];
+    objs.extend(extra.iter().map(ToString::to_string));
+    pdf(&objs, "")
+}
+
+/// The attribute objects of tag `r`'s /A entry as written (one object or an array).
+fn attributes(doc: &Document, r: pdfcraft_cos::ObjRef) -> Option<pdfcraft_cos::Object> {
+    doc.get(r).as_dict()?.get(b"A").cloned()
+}
+
+#[test]
+fn a_table_summary_is_a_table_attribute() {
+    let mut doc = table_doc("<< /S /TH >>", &["<< /S /MyTable >>"], "8 0 R");
+    let (table, th) = (pdfcraft_cos::ObjRef::new(4, 0), pdfcraft_cos::ObjRef::new(6, 0));
+    set_tag_property(&mut doc, table, TagProperty::Summary, Some("Opening hours by day")).unwrap();
+    let a = attributes(&doc, table).unwrap();
+    let a = a.as_dict().unwrap();
+    assert_eq!(a.name(b"O"), Some(&b"Table"[..]));
+    assert_eq!(
+        a.get(b"Summary").and_then(pdfcraft_cos::Object::as_string).map(pdfcraft_cos::PdfString::to_text).as_deref(),
+        Some("Opening hours by day")
+    );
+    assert_eq!(tags(&doc).iter().find(|t| t.object == table).unwrap().summary.as_deref(), Some("Opening hours by day"));
+    // Only a table takes one (after the role map: /MyTable is a table).
+    assert!(matches!(set_tag_property(&mut doc, th, TagProperty::Summary, Some("No")), Err(TagError::WrongTagType(..))));
+    set_tag_property(&mut doc, pdfcraft_cos::ObjRef::new(8, 0), TagProperty::Summary, Some("Mapped")).unwrap();
+    // Cleared, the attribute object has nothing left and goes.
+    set_tag_property(&mut doc, table, TagProperty::Summary, None).unwrap();
+    assert_eq!(attributes(&doc, table), None);
+}
+
+#[test]
+fn a_header_cell_scope_keeps_its_other_attributes() {
+    // The cell's /A holds a layout attribute object, then a table one with a revision number.
+    let mut doc = table_doc("<< /S /TH /A [ << /O /Layout /Placement /Block >> << /O /Table /ColSpan 2 >> 1 ] >>", &[], "");
+    let th = pdfcraft_cos::ObjRef::new(6, 0);
+    set_tag_property(&mut doc, th, TagProperty::Scope, Some("Column")).unwrap();
+    let Some(pdfcraft_cos::Object::Array(items)) = attributes(&doc, th) else { panic!("{:?}", attributes(&doc, th)) };
+    assert_eq!(items.len(), 3, "{items:?}");
+    assert_eq!(items[0].as_dict().and_then(|d| d.name(b"O")), Some(&b"Layout"[..]));
+    let table = items[1].as_dict().unwrap();
+    assert_eq!((table.int(b"ColSpan"), table.name(b"Scope")), (Some(2), Some(&b"Column"[..])));
+    assert_eq!(items[2].as_int(), Some(1), "the revision number stays with its object");
+    assert_eq!(tags(&doc).iter().find(|t| t.object == th).unwrap().scope.as_deref(), Some("Column"));
+    // Cleared, the span stays.
+    set_tag_property(&mut doc, th, TagProperty::Scope, None).unwrap();
+    let Some(pdfcraft_cos::Object::Array(items)) = attributes(&doc, th) else { panic!() };
+    assert_eq!(items[1].as_dict().map(|d| (d.int(b"ColSpan"), d.contains(b"Scope"))), Some((Some(2), false)));
+    // A scope is Row, Column or Both, and only header cells have one.
+    for bad in ["row", "Sideways", " Both"] {
+        assert!(matches!(set_tag_property(&mut doc, th, TagProperty::Scope, Some(bad)), Err(TagError::InvalidScope)), "{bad}");
+    }
+    assert!(matches!(set_tag_property(&mut doc, pdfcraft_cos::ObjRef::new(7, 0), TagProperty::Scope, Some("Row")), Err(TagError::WrongTagType(..))));
+}
+
+/// With two Table attribute objects, the one holding the value is the one set and cleared
+/// (#4130 review): a value in the second isn't left behind or shadowed.
+#[test]
+fn the_table_attribute_object_holding_a_value_is_the_one_edited() {
+    let mut doc = table_doc("<< /S /TH /A [ << /O /Table /ColSpan 2 >> << /O /Table /Scope /Row >> ] >>", &[], "");
+    let th = pdfcraft_cos::ObjRef::new(6, 0);
+    let scopes = |doc: &Document| -> Vec<Option<Vec<u8>>> {
+        let Some(pdfcraft_cos::Object::Array(items)) = attributes(doc, th) else { return vec![] };
+        items.iter().map(|i| i.as_dict().and_then(|d| d.name(b"Scope")).map(<[u8]>::to_vec)).collect()
+    };
+    set_tag_property(&mut doc, th, TagProperty::Scope, Some("Column")).unwrap();
+    assert_eq!(scopes(&doc), [None, Some(b"Column".to_vec())]);
+    assert_eq!(tags(&doc).iter().find(|t| t.object == th).unwrap().scope.as_deref(), Some("Column"));
+    set_tag_property(&mut doc, th, TagProperty::Scope, None).unwrap();
+    assert_eq!(scopes(&doc), [None], "the second object had only the scope: {:?}", attributes(&doc, th));
+    assert_eq!(tags(&doc).iter().find(|t| t.object == th).unwrap().scope, None);
+}
+
+#[test]
+fn a_shared_attribute_object_is_not_changed_for_other_tags() {
+    // Both cells point at attribute object 8.
+    let mut doc = table_doc("<< /S /TH /A 8 0 R >>", &["<< /O /Table /Scope /Row >>"], "");
+    doc.update_dict(pdfcraft_cos::ObjRef::new(7, 0), |d| d.set(b"A".to_vec(), pdfcraft_cos::Object::Ref(pdfcraft_cos::ObjRef::new(8, 0)))).unwrap();
+    set_tag_property(&mut doc, pdfcraft_cos::ObjRef::new(6, 0), TagProperty::Scope, Some("Both")).unwrap();
+    assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(8, 0)).as_dict().and_then(|d| d.name(b"Scope")), Some(&b"Row"[..]));
+    let a = attributes(&doc, pdfcraft_cos::ObjRef::new(6, 0)).unwrap();
+    assert_eq!(a.as_dict().and_then(|d| d.name(b"Scope")), Some(&b"Both"[..]), "the cell's own copy: {a:?}");
+    assert_eq!(attributes(&doc, pdfcraft_cos::ObjRef::new(7, 0)), Some(pdfcraft_cos::Object::Ref(pdfcraft_cos::ObjRef::new(8, 0))));
+}
+
 #[test]
 fn tag_hierarchy_keeps_indirect_parent_through_inline_tags() {
     let doc = structure_doc(&["<< /S /Document /K 4 0 R >>".into(), "<< /S /Sect /K << /S /Div /K 5 0 R >> >>".into(), "<< /S /Figure >>".into()]);
@@ -1138,6 +1235,19 @@ fn headings_drawn_glyph_by_glyph_keep_their_words() {
     );
 }
 
+/// Inside a text object `q`/`Q` save and restore the text matrices (ISO 32000-2 §9.4.1, as
+/// corrected by the PDF Association's errata, issue 368), as the renderer does: a word whose
+/// glyphs continue after a `Q` stays one word.
+#[test]
+fn q_inside_a_text_object_restores_the_text_matrices() {
+    let doc = heading_page(&[
+        "BT /F1 20 Tf 72 700 Td (Chap) Tj q 0 -100 Td Q (ter One) Tj ET".into(),
+        "BT /F1 20 Tf 72 650 Td (Chap) Tj q 1 0 0 1 300 300 Tm Q (ter Two) Tj ET".into(),
+    ]);
+    let titles: Vec<String> = headings(&doc).into_iter().map(|h| h.title).collect();
+    assert_eq!(titles, ["Chapter One", "Chapter Two"]);
+}
+
 #[test]
 fn an_untagged_document_has_no_headings() {
     let mut objs = headings_doc();
@@ -1251,4 +1361,76 @@ fn horizontally_scaled_wrapped_heading_keeps_a_space_between_lines() {
     let doc = heading_page(&["BT /F1 20 Tf 400 Tz 72 700 Td (I) Tj 0 -30 Td (Overview) Tj ET".into()]);
     let titles: Vec<String> = headings(&doc).into_iter().map(|h| h.title).collect();
     assert_eq!(titles, ["I Overview"]);
+}
+
+#[test]
+fn repeated_content_references_share_one_decode_budget() {
+    use pdfcraft_cos::{Dict, MAX_PAGE_DECODED, Object, Stream};
+    let mut doc = Document::new_empty();
+    let stream = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+    let page: Dict = [(b"Contents".to_vec(), Object::Array(vec![Object::Ref(stream); 300]))].into_iter().collect();
+    let data = crate::alt::page_content(&doc, &page);
+    assert!(data.len() <= MAX_PAGE_DECODED + 300, "{} bytes", data.len());
+}
+
+/// A figure whose marked content goes on in a stream past the page's decode budget is refused,
+/// not removed with that content still pointing at it.
+#[test]
+fn marking_decorative_refuses_content_past_the_decode_budget() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let mut doc = figures_doc();
+    let filler = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+    let last = doc.add(Stream::from_raw(Dict::new(), b"/Figure << /MCID 0 >> BDC 0 0 5 5 re f EMC".to_vec()));
+    let mut contents = vec![Object::Ref(ObjRef::new(4, 0))];
+    contents.extend(std::iter::repeat_n(Object::Ref(filler), 256));
+    contents.push(Object::Ref(last));
+    doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(contents))).unwrap();
+    assert!(mark_decorative(&mut doc, ObjRef::new(7, 0)).is_err());
+    assert_eq!(figures(&doc).len(), 2, "the figure stays");
+}
+
+/// Text past the page's decode budget is unread, so a page that shows images and no text so far
+/// can't be called image-only, nor its content all tagged.
+#[test]
+fn content_past_the_decode_budget_needs_a_manual_check() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /XObject << /Im 5 0 R >> /Font << /F1 6 0 R >> >> >>"
+                .into(),
+            stream("/Artifact BMC q 200 0 0 200 0 0 cm /Im Do Q EMC"),
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream"
+                .into(),
+            FONT.into(),
+        ],
+        "",
+    );
+    let filler = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+    let text = doc.add(Stream::from_raw(Dict::new(), b"BT /F1 12 Tf 10 10 Td (Hello) Tj ET".to_vec()));
+    let mut contents = vec![Object::Ref(ObjRef::new(4, 0))];
+    contents.extend(std::iter::repeat_n(Object::Ref(filler), 256));
+    contents.push(Object::Ref(text));
+    doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(contents))).unwrap();
+    let report = check(&doc, &Options::default());
+    assert_eq!(status(&report, Rule::ImageOnly), Status::Manual);
+    assert_eq!(status(&report, Rule::TaggedContent), Status::Manual);
+}
+
+/// Marking a tag as an artifact replaces the page's content with what it decoded, so content past
+/// the page's decode budget is refused rather than dropped from the page.
+#[test]
+fn marking_a_tag_artifact_refuses_content_past_the_decode_budget() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let mut doc = figures_doc();
+    let filler = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+    let last = doc.add(Stream::from_raw(Dict::new(), b"0 0 5 5 re f".to_vec()));
+    let mut contents = vec![Object::Ref(ObjRef::new(4, 0))];
+    contents.extend(std::iter::repeat_n(Object::Ref(filler), 256));
+    contents.push(Object::Ref(last));
+    let contents = Object::Array(contents);
+    doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), contents.clone())).unwrap();
+    assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::TooLarge));
+    assert_eq!(doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents"), Some(&contents), "the page keeps its content");
 }

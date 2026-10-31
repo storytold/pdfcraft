@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use pdfcraft_content::Matrix;
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, PdfString, Stream};
 
 /// A Figure element (after the role map).
 #[derive(Clone, Debug, PartialEq)]
@@ -23,6 +23,8 @@ pub enum AltError {
     Untagged,
     #[error("object {0} is not a figure")]
     NotAFigure(u32),
+    #[error("the page has more content than can be edited")]
+    TooLarge,
     #[error("{0}")]
     Cos(#[from] pdfcraft_cos::CosError),
 }
@@ -48,6 +50,8 @@ pub enum ArtifactError {
     AmbiguousParent,
     #[error("couldn't update the parent tree: {0}")]
     ParentTree(String),
+    #[error("the page has more content than can be edited")]
+    TooLarge,
     #[error(transparent)]
     Cos(#[from] pdfcraft_cos::CosError),
 }
@@ -157,22 +161,19 @@ fn bdc_mcid(doc: &Document, props: &Dict, op: &pdfcraft_content::Op) -> Option<i
 }
 
 pub(crate) fn page_content(doc: &Document, page: &Dict) -> Vec<u8> {
+    page_content_within(doc, page, &mut DecodeBudget::page())
+}
+
+/// The page's content streams, decoded against `budget` and joined with a space. Streams that
+/// don't decode, or arrive after the budget is spent, are left out.
+pub(crate) fn page_content_within(doc: &Document, page: &Dict, budget: &mut DecodeBudget) -> Vec<u8> {
     let Some(c) = page.get(b"Contents") else { return Vec::new() };
-    match &*doc.resolve(c) {
-        Object::Stream(s) => s.decoded().unwrap_or_default(),
-        Object::Array(a) => a
-            .iter()
-            .flat_map(|x| match &*doc.resolve(x) {
-                Object::Stream(s) => {
-                    let mut v = s.decoded().unwrap_or_default();
-                    v.push(b' ');
-                    v
-                }
-                _ => Vec::new(),
-            })
-            .collect(),
-        _ => Vec::new(),
+    let mut out = Vec::new();
+    for data in budget.decode_contents(doc, c).into_iter().flatten() {
+        out.extend_from_slice(&data);
+        out.push(b' ');
     }
+    out
 }
 
 fn union(a: Option<[f64; 4]>, b: [f64; 4]) -> [f64; 4] {
@@ -208,6 +209,25 @@ fn close(marks: &mut Vec<Mark>, matching: &mut usize, out: &mut HashMap<i64, [f6
         *e = union(Some(*e), b);
     }
     draw(marks, b);
+}
+
+/// The page-space box a `Do` operator paints: a form's transformed `/BBox`, or the unit square for an image.
+/// `None` when the operand is not a resolvable XObject or the form's box is malformed.
+fn xobject_bbox(doc: &Document, xobjects: &Dict, op: &pdfcraft_content::Op, top: &Matrix) -> Option<[f64; 4]> {
+    let r = op.name(0).and_then(|n| xobjects.get(n)).and_then(Object::as_ref)?;
+    Some(match &*doc.get(r) {
+        Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form") => {
+            let bb: Vec<f64> =
+                s.dict.get(b"BBox").and_then(|b| b.as_array().map(|a| a.iter().filter_map(Object::as_f64).collect())).unwrap_or_default();
+            let m = Matrix::from_operands(s.dict.get(b"Matrix").and_then(|m| m.as_array()).map(Vec::as_slice).unwrap_or(&[]))
+                .unwrap_or(Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
+            match bb[..] {
+                [a, b, c, d] => m.then(top).bbox([a, b, c, d]),
+                _ => return None,
+            }
+        }
+        _ => top.bbox([0.0, 0.0, 1.0, 1.0]),
+    })
 }
 
 /// Where each of the marked content `ids` is drawn on a page (images, forms and paths), in one pass
@@ -273,20 +293,7 @@ pub(crate) fn content_bboxes(doc: &Document, page: &Dict, ids: &HashSet<i64>) ->
                 path.clear();
             }
             b"Do" if inside => {
-                let Some(r) = op.name(0).and_then(|n| xobjects.get(n)).and_then(Object::as_ref) else { continue };
-                let unit = match &*doc.get(r) {
-                    Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form") => {
-                        let bb: Vec<f64> =
-                            s.dict.get(b"BBox").and_then(|b| b.as_array().map(|a| a.iter().filter_map(Object::as_f64).collect())).unwrap_or_default();
-                        let m = Matrix::from_operands(s.dict.get(b"Matrix").and_then(|m| m.as_array()).map(Vec::as_slice).unwrap_or(&[]))
-                            .unwrap_or(Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
-                        match bb[..] {
-                            [a, b, c, d] => m.then(&top).bbox([a, b, c, d]),
-                            _ => continue,
-                        }
-                    }
-                    _ => top.bbox([0.0, 0.0, 1.0, 1.0]),
-                };
+                let Some(unit) = xobject_bbox(doc, &xobjects, &op, &top) else { continue };
                 draw(&mut marks, unit);
             }
             b"BI" if inside => draw(&mut marks, top.bbox([0.0, 0.0, 1.0, 1.0])),
@@ -375,9 +382,19 @@ fn artifact_marked_content(doc: &mut Document, page: &pdfcraft_model::Page, ids:
     let Some(entries) = content_entries(doc, &page.dict) else { return Ok(false) };
     let props = page_properties(doc, &page.dict);
     let mut streams: Vec<Option<(Stream, Vec<u8>)>> = Vec::with_capacity(entries.len());
+    let mut budget = DecodeBudget::page();
     for entry in &entries {
         match &*doc.resolve(entry) {
-            Object::Stream(s) => streams.push(Some((s.clone(), s.decoded().unwrap_or_default()))),
+            Object::Stream(s) => {
+                let data = match budget.decode(s) {
+                    Ok(data) => data,
+                    // Content past the budget may hold more of the figure: editing the rest
+                    // would leave that part marked as a figure the tree no longer has.
+                    Err(_) if budget.exhausted() => return Err(AltError::TooLarge),
+                    Err(_) => Vec::new(),
+                };
+                streams.push(Some((s.clone(), data)));
+            }
             _ => streams.push(None),
         }
     }
@@ -474,7 +491,23 @@ pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), Artifact
     let pages = pdfcraft_model::pages(doc);
     let page_ref = element.page.ok_or(ArtifactError::NoPage)?;
     let page = pages.iter().find(|page| page.obj == page_ref).ok_or(ArtifactError::NoPage)?;
-    let mut ops = pdfcraft_content::parse(&page_content(doc, &page.dict)).ops;
+    let mut content = Vec::new();
+    if let Some(c) = page.dict.get(b"Contents") {
+        let mut budget = DecodeBudget::page();
+        for data in budget.decode_contents(doc, c) {
+            match data {
+                Ok(data) => {
+                    content.extend_from_slice(&data);
+                    content.push(b' ');
+                }
+                // The page's /Contents is replaced with what was decoded: content past the
+                // budget would be dropped from the page.
+                Err(_) if budget.exhausted() => return Err(ArtifactError::TooLarge),
+                Err(_) => {}
+            }
+        }
+    }
+    let mut ops = pdfcraft_content::parse(&content).ops;
     let mut found = HashSet::new();
     for op in &mut ops {
         let id = (op.op == b"BDC")
