@@ -73,7 +73,6 @@ pub(crate) fn validate(args: &[String]) -> Result<(), CliError> {
     }
 }
 
-
 /// Child-process body for `check`: prints one JSON line.
 pub(crate) fn check_one(args: &[String]) -> Result<(), CliError> {
     validate_options("check-one", args, CHECK_ONE_OPTIONS)?;

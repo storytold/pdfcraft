@@ -73,8 +73,8 @@ mod app;
 mod hooks;
 mod persist;
 mod platform;
-mod structure_ui;
 mod state;
+mod structure_ui;
 mod tools;
 mod workflows;
 
