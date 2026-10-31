@@ -154,6 +154,9 @@ fn continued_from(blocks: &[Block]) -> Vec<Option<usize>> {
         .iter()
         .enumerate()
         .map(|(bi, b)| {
+            if b.rotation.abs() > 0.1 {
+                return None;
+            }
             let k = by_end.partition_point(|(end, _)| *end < b.rect[0] - INLINE_GAP * b.size);
             by_end
                 .get(k..)
@@ -162,7 +165,10 @@ fn continued_from(blocks: &[Block]) -> Vec<Option<usize>> {
                 .take_while(|(end, _)| *end <= b.rect[0] + 1.0)
                 .take(CONTINUATION_PROBE)
                 .filter_map(|(_, ai)| blocks.get(*ai).filter(|_| *ai != bi).map(|a| (*ai, a)))
-                .filter(|(_, a)| a.rect[3].min(b.rect[3]) - a.rect[1].max(b.rect[1]) > 0.5 * (a.rect[3] - a.rect[1]).min(b.rect[3] - b.rect[1]))
+                .filter(|(_, a)| {
+                    a.rotation.abs() <= 0.1
+                        && a.rect[3].min(b.rect[3]) - a.rect[1].max(b.rect[1]) > 0.5 * (a.rect[3] - a.rect[1]).min(b.rect[3] - b.rect[1])
+                })
                 .min_by(|(_, a), (_, c)| (a.rect[2] - b.rect[0]).abs().total_cmp(&(c.rect[2] - b.rect[0]).abs()))
                 .map(|(ai, _)| ai)
         })
@@ -441,6 +447,114 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
     (out, consumed)
 }
 
+/// The dominant text rotation on `page` (in degrees, counterclockwise), weighted by character
+/// count, or `0.0` when the page's text is upright.
+fn page_rotation(page: &Page) -> f64 {
+    let mut by: Vec<(i64, f64, usize)> = Vec::new();
+    for b in &page.blocks {
+        if !b.rotation.is_finite() {
+            continue;
+        }
+        let k = b.rotation.round() as i64;
+        if let Some(e) = by.iter_mut().find(|e| e.0 == k) {
+            e.2 = e.2.saturating_add(b.text.len());
+        } else {
+            by.push((k, b.rotation, b.text.len()));
+        }
+    }
+    by.into_iter().max_by_key(|e| e.2).filter(|e| e.1.abs() > 0.1).map_or(0.0, |e| e.1)
+}
+
+/// Transform `rect` (`[x0, y0, x1, y1]`, `y` up) into the reading frame of text turned by
+/// `rotation` degrees counterclockwise (`[along0, across0, along1, across1]`). For upright text
+/// (`0°`), this is `rect` itself; for text turned 90° clockwise (`-90°`), `across` decreases from
+/// right to left so lines read in their natural order (#3657).
+fn in_reading_frame(rect: [f64; 4], rotation: f64) -> [f64; 4] {
+    if rotation.abs() <= 0.1 || !rotation.is_finite() {
+        return rect;
+    }
+    let (sin, cos) = rotation.to_radians().sin_cos();
+    let corners = [(rect[0], rect[1]), (rect[2], rect[1]), (rect[0], rect[3]), (rect[2], rect[3])];
+    let mut out = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    for (x, y) in corners {
+        let along = x * cos + y * sin;
+        let across = y * cos - x * sin;
+        out = [out[0].min(along), out[1].min(across), out[2].max(along), out[3].max(across)];
+    }
+    out
+}
+
+/// Put a page's items (`(rect, line_height, item)`) into reading order (#3657):
+/// - coordinates are projected into the page's reading frame so turned text reads from first line
+///   to last line rather than left-to-right across vertical lines;
+/// - a column continues across a paragraph gap (up to 3.5 line heights below the previous item)
+///   before jumping to the top of the next column on its right, unless an unread item sits above
+///   the continuation in its own horizontal span, sits to its left, or continues the previous
+///   item on the same line.
+pub(crate) fn reading_order<T>(page: &Page, parts: Vec<([f64; 4], f64, T)>) -> Vec<T> {
+    let rot = page_rotation(page);
+    let mut parts: Vec<([f64; 4], f64, T)> = parts.into_iter().map(|(r, h, item)| (in_reading_frame(r, rot), h.clamp(1.0, 200.0), item)).collect();
+    if parts.len() <= 1 {
+        return parts.into_iter().map(|x| x.2).collect();
+    }
+    const MAX_COLUMN_ORDER: usize = 2000;
+    if parts.len() > MAX_COLUMN_ORDER {
+        parts.sort_by(|a, b| b.0[3].total_cmp(&a.0[3]).then(a.0[0].total_cmp(&b.0[0])));
+        return parts.into_iter().map(|x| x.2).collect();
+    }
+    let beside_left = |cb: &[f64; 4], lb: &[f64; 4]| {
+        let v = lb[3].min(cb[3]) - lb[1].max(cb[1]);
+        lb[2] <= cb[0] + COL_TOL && v > 0.5 * (lb[3] - lb[1]).min(cb[3] - cb[1])
+    };
+    let inline_after = |pb: &[f64; 4], ph: f64, rb: &[f64; 4]| {
+        let v = rb[3].min(pb[3]) - rb[1].max(pb[1]);
+        rb[0] >= pb[2] - 1.0 && rb[0] <= pb[2] + INLINE_GAP * ph && v > 0.5 * (rb[3] - rb[1]).min(pb[3] - pb[1])
+    };
+    let mut remaining: Vec<usize> = (0..parts.len()).collect();
+    let mut order: Vec<usize> = Vec::with_capacity(parts.len());
+    while let Some(&top) = remaining.iter().max_by(|&&a, &&b| parts[a].0[3].total_cmp(&parts[b].0[3]).then(parts[b].0[0].total_cmp(&parts[a].0[0]))) {
+        let next_in_column = order.last().and_then(|&prev| {
+            let (pb, ph) = (parts[prev].0, parts[prev].1);
+            if remaining.iter().any(|&r| inline_after(&pb, ph, &parts[r].0)) {
+                return None;
+            }
+            let tol = ph * 0.5;
+            let c = remaining
+                .iter()
+                .copied()
+                .filter(|&c| {
+                    let cb = parts[c].0;
+                    let overlap = cb[2].min(pb[2]) - cb[0].max(pb[0]);
+                    let minw = (cb[2] - cb[0]).min(pb[2] - pb[0]).max(1.0);
+                    cb[3] <= pb[1] + tol && pb[1] - cb[3] <= ph * 3.5 && overlap > minw * 0.3
+                })
+                .max_by(|&a, &b| parts[a].0[3].total_cmp(&parts[b].0[3]).then(parts[b].0[0].total_cmp(&parts[a].0[0])))?;
+            let cb = parts[c].0;
+            let blocked = remaining.iter().any(|&r| {
+                if r == c {
+                    return false;
+                }
+                let rb = parts[r].0;
+                (rb[3] > cb[3] + tol && rb[2].min(cb[2]) > rb[0].max(cb[0])) || beside_left(&cb, &rb)
+            });
+            (!blocked).then_some(c)
+        });
+        let pick = next_in_column.unwrap_or_else(|| {
+            let tb = parts[top].0;
+            remaining
+                .iter()
+                .copied()
+                .filter(|&c| beside_left(&tb, &parts[c].0))
+                .min_by(|&a, &b| parts[a].0[0].total_cmp(&parts[b].0[0]).then(parts[b].0[3].total_cmp(&parts[a].0[3])))
+                .unwrap_or(top)
+        });
+        remaining.retain(|&r| r != pick);
+        order.push(pick);
+    }
+    let mut slots: Vec<Option<T>> = parts.into_iter().map(|(_, _, item)| Some(item)).collect();
+    order.into_iter().filter_map(|i| slots.get_mut(i).and_then(Option::take)).collect()
+}
+
 pub(crate) fn items(pages: &[Page]) -> Vec<Item<'_>> {
     let body = body_size(pages);
     let mut out = Vec::new();
@@ -449,20 +563,19 @@ pub(crate) fn items(pages: &[Page]) -> Vec<Item<'_>> {
             out.push(Item::PageBreak);
         }
         let (tables, consumed) = tables(&p.blocks);
-        // Blocks and images by their top edge, top to bottom.
         // A paragraph sits where its first run does: its other runs follow along the same line.
-        let mut parts: Vec<(f64, f64, Item)> = paragraphs(&p.blocks, &consumed)
+        let mut parts: Vec<([f64; 4], f64, Item)> = paragraphs(&p.blocks, &consumed)
             .into_iter()
             .filter_map(|runs| {
                 let first = runs.first()?.block;
+                let x1 = runs.iter().map(|r| r.block.rect[2]).fold(first.rect[2], f64::max);
                 let lvl = para_level(&runs, body);
-                Some((first.rect[3], first.rect[0], Item::Para(runs, lvl)))
+                Some(([first.rect[0], first.rect[1], x1, first.rect[3]], first.size, Item::Para(runs, lvl)))
             })
             .collect();
-        parts.extend(tables.into_iter().map(|t| (t.rect[3], t.rect[0], Item::Table(t))));
-        parts.extend(p.images.iter().map(|im| (im.rect[3], im.rect[0], Item::Img(im))));
-        parts.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.total_cmp(&b.1)));
-        out.extend(parts.into_iter().map(|x| x.2));
+        parts.extend(tables.into_iter().map(|t| (t.rect, body, Item::Table(t))));
+        parts.extend(p.images.iter().map(|im| (im.rect, (im.rect[3] - im.rect[1]).max(body), Item::Img(im))));
+        out.extend(reading_order(p, parts));
     }
     out
 }
