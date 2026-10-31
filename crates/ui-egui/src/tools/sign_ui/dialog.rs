@@ -166,12 +166,16 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             let l = ui.label(tl!("Country/Region"));
             ui.add(crate::widgets::line(&mut n.country).hint_text("US").char_limit(2).desired_width(60.0)).labelled_by(l.id);
             ui.end_row();
-            ui.label(tl!("Key Algorithm"));
-            craft_ui::ComboBox::from_id_salt("key-alg").selected_text(KEY_ALGORITHMS[n.key].0).show_ui(ui, |ui| {
-                for (i, (label, _)) in KEY_ALGORITHMS.iter().enumerate() {
-                    ui.selectable_value(&mut n.key, i, *label);
-                }
-            });
+            let l = ui.label(tl!("Key Algorithm"));
+            craft_ui::ComboBox::from_id_salt("key-alg")
+                .selected_text(KEY_ALGORITHMS[n.key].0)
+                .show_ui(ui, |ui| {
+                    for (i, (label, _)) in KEY_ALGORITHMS.iter().enumerate() {
+                        ui.selectable_value(&mut n.key, i, *label);
+                    }
+                })
+                .response
+                .labelled_by(l.id);
             ui.end_row();
             let l = ui.label(tl!("Password"));
             ui.add(crate::widgets::line(&mut n.password).password(true).desired_width(200.0)).labelled_by(l.id);
