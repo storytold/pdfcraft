@@ -23,6 +23,10 @@ its undo/redo history.
 
 `Content` is `Json(Value)` or `Png { data, width, height }`. Errors are `UnknownTool`, `InvalidArgs` (the call didn't match the schema) or `Failed` (a readable message for the agent).
 
+`printer_options` returns `printer`, `count` and `options`. Failed or partial reads also
+include a `diagnostic` string; available options are retained. Only an empty list without
+a diagnostic means the read succeeded with no settings. No printer job is submitted.
+
 ## Conventions
 
 - Tool names are `snake_case` (`page_rotate`): MCP clients reject dots. `ToolDef::command` links a tool to the registry id it automates (`page.rotate`), and `command_list` reports the link.

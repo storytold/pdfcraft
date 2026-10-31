@@ -580,7 +580,7 @@ pub fn tools() -> Vec<ToolDef> {
         .ro()
         .with(schema(json!({ "doc": doc() }), &["doc"])),
         t("printers", "List printers", "The printers the system's print spooler knows (CUPS on macOS and Linux), with the default marked.").ro().with(schema(json!({}), &[])),
-        t("printer_options", "List printer options", "A printer driver's own job options (CUPS: from its PPD), such as the paper tray, paper type or finishing: key, label, group, default and choices. Pass chosen values to doc_print as options. Empty on Windows, where the driver's preferences window holds them.")
+        t("printer_options", "List printer options", "A printer driver's own job options (CUPS: from its PPD), such as the paper tray, paper type or finishing: key, label, group, default and choices. Pass chosen values to doc_print as options. An optional diagnostic explains failed or partial reads; an empty options list alone does not mean retrieval succeeded. Empty on Windows, where the driver's preferences window holds them.")
             .ro()
             .with(schema(json!({ "printer": { "type": "string" } }), &["printer"])),
         t(
