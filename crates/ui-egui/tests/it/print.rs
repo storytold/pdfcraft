@@ -921,7 +921,8 @@ fn type3_pages_go_to_windows_printers_as_images_and_the_dialog_says_so() {
         app
     });
     h.run_steps(4);
-    h.state_mut().printer_source = Some(std::sync::Arc::new(|| vec![Printer { name: "Office".into(), default: true, two_sided: Some(true) }]));
+    h.state_mut().printer_source =
+        Some(std::sync::Arc::new(|| vec![Printer { name: "Office".into(), default: true, two_sided: Some(true), description: String::new() }]));
     assert!(h.state_mut().execute("print.dialog"));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while h.state().print_draft.printers_loading && std::time::Instant::now() < deadline {
