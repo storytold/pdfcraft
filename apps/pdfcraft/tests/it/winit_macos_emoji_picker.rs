@@ -1,7 +1,11 @@
-//! vendor/winit patch (8) (vendor/README.md).
+//! Provenance-only: reads the retained `vendor/` copy, not the resolved dependency, so it is
+//! not runtime coverage. `vendor_graph.rs` checks the resolved graph identity.
+//! Retained vendor provenance for winit patch (8) (vendor/README.md); `vendor_graph.rs` checks the resolved graph.
 
+/// Regression test: the vendored winit commits text inserted outside a key press and leaves `selectedRange`
+/// unmarked.
 #[test]
-fn winit_commits_macos_text_inserted_outside_a_key_press() {
+fn vendor_provenance_winit_macos_text_inserted_outside_a_key_press() {
     // The macOS emoji picker inserts its text with `insertText` outside any key press and without
     // a composition. winit 0.30.13 reports `insertText` only as part of a key press or a
     // composition, so an emoji picked into a PdfCraft text field was dropped. vendor/winit commits

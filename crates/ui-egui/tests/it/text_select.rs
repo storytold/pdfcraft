@@ -189,6 +189,7 @@ fn copied(h: &Harness<'static, PdfCraftApp>, want: &str) -> bool {
     h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == want))
 }
 
+/// Check that both the Edit menu and the context menu copy the selected page text.
 #[test]
 fn selected_text_copy_edit_and_context_menus() {
     use egui_kittest::kittest::Queryable;
@@ -197,11 +198,8 @@ fn selected_text_copy_edit_and_context_menus() {
     click(&mut h, at);
     h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
     h.run_steps(2); // Hide floating Copy so this test can only reach menu entries.
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
-    h.get_by_label("Edit ⏵").hover();
-    h.run_steps(3);
-    h.get_by_label_contains("Copy").click();
+    crate::support::open_menu(&mut h, "Edit");
+    crate::support::menu_row(&h, "Copy").click();
     let mut did_copy = false;
     for _ in 0..4 {
         h.step();
@@ -228,15 +226,13 @@ fn selected_text_copy_edit_and_context_menus() {
 
 #[test]
 fn escape_closes_an_open_menu_before_it_clears_the_selection() {
-    // #3535: one Escape closed the main menu and dropped the selection with it.
-    use egui_kittest::kittest::Queryable;
+    // #3535: one Escape closed the menu and dropped the selection with it.
     let (mut h, at) = harness(|_| {});
     click(&mut h, at);
     click(&mut h, at);
     h.run_steps(2);
     assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick"));
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
+    crate::support::open_menu(&mut h, "View");
     assert!(egui::Popup::is_any_open(&h.ctx), "the menu is open");
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
@@ -336,6 +332,7 @@ fn selected_text_copy_preserves_unicode_and_page_clipboard() {
     assert_eq!(h.state().page_clipboard.as_ref().map(|c| c.pages.clone()), Some(vec![0]));
 }
 
+/// Check that a focused search input owns Copy and the selected page text does not also consume it.
 #[test]
 fn selected_text_copy_keeps_focused_input_clipboard_ownership() {
     let (mut h, at) = harness(|_| {});
@@ -344,7 +341,7 @@ fn selected_text_copy_keeps_focused_input_clipboard_ownership() {
     h.state_mut().views[0].open_find();
     h.state_mut().views[0].find.as_mut().unwrap().query = "widget café".into();
     h.run_steps(3);
-    h.ctx.memory_mut(|m| m.request_focus(egui::Id::new("find-input")));
+    h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("find-input")));
     h.run_steps(2);
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
     h.run_steps(2);
@@ -394,7 +391,13 @@ fn press_and_move(h: &mut Harness<'static, PdfCraftApp>, from: Pos2, to: Pos2) {
 
 /// One wheel event, with time to scroll (egui spreads a wheel line over a few frames).
 fn wheel(h: &mut Harness<'static, PdfCraftApp>, unit: MouseWheelUnit, dy: f32) {
-    h.event(Event::MouseWheel { unit, delta: egui::vec2(0.0, dy), phase: TouchPhase::Move, modifiers: Modifiers::NONE });
+    h.event(Event::MouseWheel {
+        unit,
+        delta: egui::vec2(0.0, dy),
+        phase: TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
     h.run_steps(10);
 }
 
