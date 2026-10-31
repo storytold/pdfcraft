@@ -2791,6 +2791,21 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	By the standard device formulas; profiles are not applied.	मानक डिवाइस सूत्रों के अनुसार; प्रोफ़ाइल लागू नहीं की जातीं।
+	CMYK	CMYK
+	Comments and form fields	टिप्पणियाँ और फ़ॉर्म फ़ील्ड
+	Convert colours	रंग रूपांतरित करें
+	Convert colours…	रंग रूपांतरित करें…
+	Convert to	इसमें रूपांतरित करें
+	Converted {c} colours and {i} pictures on {p} pages	{p} पृष्ठों पर {c} रंग और {i} चित्र रूपांतरित किए गए
+	Grayscale	ग्रेस्केल
+	Nothing on those pages needed converting	इन पृष्ठों पर रूपांतरित करने के लिए कुछ नहीं था
+	Pictures too	चित्र भी
+	Preserve black	काला बनाए रखें
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	शुद्ध काला मिश्रण के बजाय 100% K या ग्रे 0 रहता है
+	re-encoded in the target space; JPEGs stay JPEG	लक्ष्य स्पेस में दोबारा एन्कोड; JPEG, JPEG ही रहते हैं
+	their appearances as well as the page	पृष्ठ के साथ उनके स्वरूप भी
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज

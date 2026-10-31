@@ -2829,6 +2829,21 @@ theme	Appearance	Teema
 	field names can't contain a period: {name}	kenttien nimissä ei voi olla pistettä: {name}
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
+	By the standard device formulas; profiles are not applied.	Laitteiden vakiokaavoilla; profiileja ei käytetä.
+	CMYK	CMYK
+	Comments and form fields	Kommentit ja lomakekentät
+	Convert colours	Muunna värit
+	Convert colours…	Muunna värit…
+	Convert to	Muunna muotoon
+	Converted {c} colours and {i} pictures on {p} pages	Muunnettu {c} väriä ja {i} kuvaa {p} sivulla
+	Grayscale	Harmaasävy
+	Nothing on those pages needed converting	Näillä sivuilla ei ollut muunnettavaa
+	Pictures too	Myös kuvat
+	Preserve black	Säilytä musta
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	puhdas musta pysyy 100 % K:na tai harmaana 0:na sekoituksen sijaan
+	re-encoded in the target space; JPEGs stay JPEG	koodattu uudelleen kohdeavaruuteen; JPEG-kuvat pysyvät JPEG-muodossa
+	their appearances as well as the page	niiden ulkoasut sivun lisäksi
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään

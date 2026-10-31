@@ -2526,6 +2526,21 @@ animation effects	Off	Ανενεργά
 	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
 	Pages selected	Επιλεγμένες σελίδες
 	Page properties	Ιδιότητες σελίδας
+	By the standard device formulas; profiles are not applied.	Με τους τυπικούς τύπους συσκευών· δεν εφαρμόζονται προφίλ.
+	CMYK	CMYK
+	Comments and form fields	Σχόλια και πεδία φόρμας
+	Convert colours	Μετατροπή χρωμάτων
+	Convert colours…	Μετατροπή χρωμάτων…
+	Convert to	Μετατροπή σε
+	Converted {c} colours and {i} pictures on {p} pages	Μετατράπηκαν {c} χρώματα και {i} εικόνες σε {p} σελίδες
+	Grayscale	Κλίμακα του γκρι
+	Nothing on those pages needed converting	Τίποτα σε αυτές τις σελίδες δεν χρειαζόταν μετατροπή
+	Pictures too	Και οι εικόνες
+	Preserve black	Διατήρηση του μαύρου
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	το καθαρό μαύρο μένει 100% K ή γκρι 0 αντί για μείγμα
+	re-encoded in the target space; JPEGs stay JPEG	επανακωδικοποιούνται στον χώρο προορισμού· τα JPEG μένουν JPEG
+	their appearances as well as the page	η εμφάνισή τους καθώς και η σελίδα
 	Create & Edit	Δημιουργία και επεξεργασία
 	Review & Compare	Αναθεώρηση και σύγκριση
 	Forms & Signatures	Φόρμες και υπογραφές

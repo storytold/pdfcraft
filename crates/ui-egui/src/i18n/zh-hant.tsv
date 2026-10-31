@@ -2470,6 +2470,21 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+	By the standard device formulas; profiles are not applied.	依標準裝置公式轉換;不套用描述檔。
+	CMYK	CMYK
+	Comments and form fields	註解和表單欄位
+	Convert colours	轉換顏色
+	Convert colours…	轉換顏色…
+	Convert to	轉換為
+	Converted {c} colours and {i} pictures on {p} pages	已在 {p} 頁上轉換 {c} 種顏色和 {i} 張圖片
+	Grayscale	灰階
+	Nothing on those pages needed converting	這些頁面上沒有需要轉換的內容
+	Pictures too	圖片也一起
+	Preserve black	保留黑色
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	純黑保持為 100% K 或灰階 0,而非混合色
+	re-encoded in the target space; JPEGs stay JPEG	在目標色彩空間中重新編碼;JPEG 仍為 JPEG
+	their appearances as well as the page	連同其外觀和頁面
 	Create & Edit	建立與編輯
 	Review & Compare	審閱與比較
 	Forms & Signatures	表單與簽名

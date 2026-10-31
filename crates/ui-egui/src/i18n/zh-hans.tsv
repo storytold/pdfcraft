@@ -2484,6 +2484,21 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+	By the standard device formulas; profiles are not applied.	按标准设备公式转换;不应用配置文件。
+	CMYK	CMYK
+	Comments and form fields	注释和表单字段
+	Convert colours	转换颜色
+	Convert colours…	转换颜色…
+	Convert to	转换为
+	Converted {c} colours and {i} pictures on {p} pages	已在 {p} 页上转换 {c} 种颜色和 {i} 张图片
+	Grayscale	灰度
+	Nothing on those pages needed converting	这些页面上没有需要转换的内容
+	Pictures too	图片也一起
+	Preserve black	保留黑色
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	纯黑保持为 100% K 或灰度 0,而不是混合色
+	re-encoded in the target space; JPEGs stay JPEG	在目标颜色空间中重新编码;JPEG 仍为 JPEG
+	their appearances as well as the page	连同其外观和页面
 	Create & Edit	创建和编辑
 	Review & Compare	审阅和比较
 	Forms & Signatures	表单和签名

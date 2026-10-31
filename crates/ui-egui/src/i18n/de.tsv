@@ -2521,6 +2521,21 @@ animation effects	Off	Aus
 	Make properties default	Eigenschaften als Standard festlegen
 	Pages selected	Ausgewählte Seiten
 	Page properties	Seiteneigenschaften
+	By the standard device formulas; profiles are not applied.	Nach den Standard-Geräteformeln; Profile werden nicht angewendet.
+	CMYK	CMYK
+	Comments and form fields	Kommentare und Formularfelder
+	Convert colours	Farben konvertieren
+	Convert colours…	Farben konvertieren…
+	Convert to	Konvertieren in
+	Converted {c} colours and {i} pictures on {p} pages	{c} Farben und {i} Bilder auf {p} Seiten konvertiert
+	Grayscale	Graustufen
+	Nothing on those pages needed converting	Auf diesen Seiten war nichts zu konvertieren
+	Pictures too	Auch Bilder
+	Preserve black	Schwarz beibehalten
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	reines Schwarz bleibt 100 % K oder Grau 0 statt einer Mischung
+	re-encoded in the target space; JPEGs stay JPEG	im Zielfarbraum neu kodiert; JPEGs bleiben JPEG
+	their appearances as well as the page	ihre Darstellungen sowie die Seite
 	Create & Edit	Erstellen & Bearbeiten
 	Review & Compare	Prüfen & Vergleichen
 	Forms & Signatures	Formulare & Signaturen

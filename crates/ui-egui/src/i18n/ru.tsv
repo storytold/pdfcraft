@@ -2433,6 +2433,21 @@ animation effects	Off	Выкл
 	Make properties default	Сделать свойства стандартными
 	Pages selected	Выделенные страницы
 	Page properties	Свойства страницы
+	By the standard device formulas; profiles are not applied.	По стандартным формулам устройств; профили не применяются.
+	CMYK	CMYK
+	Comments and form fields	Комментарии и поля форм
+	Convert colours	Преобразовать цвета
+	Convert colours…	Преобразовать цвета…
+	Convert to	Преобразовать в
+	Converted {c} colours and {i} pictures on {p} pages	Преобразовано цветов: {c}, изображений: {i} на страницах: {p}
+	Grayscale	Оттенки серого
+	Nothing on those pages needed converting	На этих страницах нечего было преобразовывать
+	Pictures too	Изображения тоже
+	Preserve black	Сохранять чёрный
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	чистый чёрный остаётся 100% K или серым 0, а не смесью
+	re-encoded in the target space; JPEGs stay JPEG	перекодируются в целевое пространство; JPEG остаются JPEG
+	their appearances as well as the page	их внешний вид, а также страница
 	Create & Edit	Создание и редактирование
 	Review & Compare	Рецензирование и сравнение
 	Forms & Signatures	Формы и подписи

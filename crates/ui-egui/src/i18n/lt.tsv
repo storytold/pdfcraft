@@ -2786,6 +2786,21 @@ key	Space	Tarpas
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
+	By the standard device formulas; profiles are not applied.	Pagal standartines įrenginių formules; profiliai netaikomi.
+	CMYK	CMYK
+	Comments and form fields	Komentarai ir formos laukai
+	Convert colours	Konvertuoti spalvas
+	Convert colours…	Konvertuoti spalvas…
+	Convert to	Konvertuoti į
+	Converted {c} colours and {i} pictures on {p} pages	Konvertuota {c} spalvų ir {i} paveikslėlių {p} puslapiuose
+	Grayscale	Pilki atspalviai
+	Nothing on those pages needed converting	Šiuose puslapiuose nebuvo ko konvertuoti
+	Pictures too	Ir paveikslėliai
+	Preserve black	Išlaikyti juodą
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	gryna juoda lieka 100 % K arba pilka 0, o ne mišinys
+	re-encoded in the target space; JPEGs stay JPEG	perkoduoti tiksliojoje erdvėje; JPEG lieka JPEG
+	their appearances as well as the page	jų išvaizda ir puslapis
 	Attach a file…	Pridėti failą…
 	Delete attachment	Ištrinti priedą
 	Attaching files is not available on the web yet	Failų pridėjimas žiniatinklyje dar negalimas

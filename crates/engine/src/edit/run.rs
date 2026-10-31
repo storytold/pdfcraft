@@ -84,6 +84,11 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
                 Err(EditError::NotPermitted("changing security"))
             }
         }
+        // Converting the appearances of comments and form fields changes them too, which
+        // content changes alone do not allow.
+        Edit::ConvertColours { settings, .. } if settings.annotations && !(p.modify() && p.annotate()) => {
+            Err(EditError::NotPermitted(if p.modify() { "comments" } else { "changes to the document" }))
+        }
         // Converting to PDF/A takes the encryption off (PDF/A forbids it), so on an encrypted
         // document it is a change of security (#3921).
         Edit::ConvertPdfA { .. } => {
@@ -127,6 +132,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::SetInitialView(_)
         | Edit::AddAttachment { .. }
         | Edit::DeleteAttachment { .. }
+        | Edit::ConvertColours { .. }
         | Edit::AutoTagText
         | Edit::SetAltText { .. }
         | Edit::AutoTagFormFields
@@ -360,6 +366,20 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::add_attachment(doc, name, bytes, description.as_deref(), mime.as_deref(), cx.date.as_deref())?;
         }
         Edit::DeleteAttachment { key } => pdfcraft_organize::delete_attachment(doc, key)?,
+        Edit::ConvertColours { pages, settings } => {
+            let mut recolour = |doc: &pdfcraft_cos::Document, s: &pdfcraft_cos::Stream, t: pdfcraft_edit::ColourTarget| {
+                let target = match t {
+                    pdfcraft_edit::ColourTarget::Gray => pdfcraft_optimize::ImageTarget::Gray,
+                    pdfcraft_edit::ColourTarget::Rgb => pdfcraft_optimize::ImageTarget::Rgb,
+                    pdfcraft_edit::ColourTarget::Cmyk => pdfcraft_optimize::ImageTarget::Cmyk,
+                };
+                pdfcraft_optimize::recolour_image(doc, s, target)
+            };
+            let done = pdfcraft_edit::convert_colours(doc, pages, settings, &mut recolour)?;
+            if done.colours == 0 && done.images == 0 {
+                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("nothing on those pages needed converting".into())));
+            }
+        }
         Edit::ReplaceText { page, quads, text, author, strike, caret } => {
             // One `/NM` each: the caret replies to the strikeout, and XFDF names that reply by
             // the strikeout's `/NM` (#2666).

@@ -2820,6 +2820,21 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	By the standard device formulas; profiles are not applied.	Segons les fórmules estàndard del dispositiu; no s'apliquen perfils.
+	CMYK	CMYK
+	Comments and form fields	Comentaris i camps de formulari
+	Convert colours	Converteix els colors
+	Convert colours…	Converteix els colors…
+	Convert to	Converteix a
+	Converted {c} colours and {i} pictures on {p} pages	S'han convertit {c} colors i {i} imatges en {p} pàgines
+	Grayscale	Escala de grisos
+	Nothing on those pages needed converting	No hi havia res a convertir en aquestes pàgines
+	Pictures too	També les imatges
+	Preserve black	Conserva el negre
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	el negre pur es manté al 100 % K o gris 0 en lloc d'una barreja
+	re-encoded in the target space; JPEGs stay JPEG	es recodifiquen a l'espai de destinació; els JPEG continuen sent JPEG
+	their appearances as well as the page	tant les seves aparences com la pàgina
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui

@@ -86,6 +86,34 @@ fn spool_job(a: &Args, printer: &str, title: String, duplex: Option<spool::Duple
 }
 
 impl Automation {
+    /// Print production ▸ Convert colours: every colour on the pages in gray, rgb or cmyk.
+    pub(crate) fn convert_colours(&mut self, a: &Args) -> Result<Value> {
+        let n = self.doc(a)?.info.pages.len();
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..n).collect(),
+        };
+        let target = match a.opt_str("to")?.unwrap_or("gray") {
+            "gray" | "grayscale" => pdfcraft_engine::ColourTarget::Gray,
+            "rgb" => pdfcraft_engine::ColourTarget::Rgb,
+            "cmyk" => pdfcraft_engine::ColourTarget::Cmyk,
+            other => return Err(ToolError::InvalidArgs(format!("unknown target {other:?} (gray, rgb, cmyk)"))),
+        };
+        let settings = pdfcraft_engine::ConvertColours {
+            target,
+            preserve_black: a.opt_bool("preserve_black")?.unwrap_or(true),
+            images: a.opt_bool("images")?.unwrap_or(true),
+            annotations: a.opt_bool("annotations")?.unwrap_or(false),
+        };
+        let id = self.doc(a)?.id;
+        let found = self.session.count_colours(id, &pages, &settings);
+        if found.colours == 0 && found.images == 0 {
+            return Ok(json!({ "colours": 0, "images": 0, "pages": 0 }));
+        }
+        let r = self.apply(a, pdfcraft_engine::Edit::ConvertColours { pages, settings })?;
+        Ok(json!({ "colours": found.colours, "images": found.images, "pages": found.pages, "undo": r["undo"] }))
+    }
+
     /// `printers`: the system's printers, the default marked, and each one's two-sided support
     /// where the spooler reports it.
     pub(crate) fn printers(&self) -> Result<Value> {

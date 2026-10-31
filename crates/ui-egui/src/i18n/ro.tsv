@@ -2820,6 +2820,21 @@ theme	Appearance	Aspect
 	field names can't contain a period: {name}	numele câmpurilor nu pot conține punct: {name}
 	two cells would both be named {name}	două celule s-ar numi amândouă {name}
 	a field named {name} already exists	există deja un câmp numit {name}
+	By the standard device formulas; profiles are not applied.	După formulele standard ale dispozitivelor; profilurile nu se aplică.
+	CMYK	CMYK
+	Comments and form fields	Comentarii și câmpuri de formular
+	Convert colours	Conversie culori
+	Convert colours…	Conversie culori…
+	Convert to	Conversie în
+	Converted {c} colours and {i} pictures on {p} pages	S-au convertit {c} culori și {i} imagini pe {p} pagini
+	Grayscale	Tonuri de gri
+	Nothing on those pages needed converting	Nimic de convertit pe aceste pagini
+	Pictures too	Și imaginile
+	Preserve black	Păstrare negru
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	negrul pur rămâne 100% K sau gri 0, în loc de amestec
+	re-encoded in the target space; JPEGs stay JPEG	recodate în spațiul țintă; JPEG-urile rămân JPEG
+	their appearances as well as the page	aspectul lor, nu doar pagina
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi
