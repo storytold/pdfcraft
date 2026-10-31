@@ -185,3 +185,7 @@ PIN to that selection; card changes require refresh and clear the input. Legacy
 `list` and `find_with_pin` calls keep their certificate-selection semantics. Token
 serials are provider-reported identifiers, not hardware attestation. Decryption
 discovery skips unavailable modules and readers while retaining healthy cards.
+
+Token decryption requires a nonblank reported serial before helper dispatch and
+backend authentication. Empty and whitespace-only serials return `TokenChanged`,
+including for PIN-pad operations. Public certificate discovery is still available.

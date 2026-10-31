@@ -122,6 +122,8 @@ fn execute(request: Request, pin: Option<&str>) -> Result<Zeroizing<Vec<u8>>, Si
             id.key.sign(alg, &message).map(Zeroizing::new)
         }
         Request::Decrypt { identity, ciphertext } => {
+            // Also reject direct worker requests before discovering or authenticating a card.
+            super::require_token_serial(&identity.serial)?;
             let mut matching = backend::decryption_identities()?
                 .into_iter()
                 .filter(|id| id.certificate().raw == identity.certificate && id.token_serial() == identity.serial);

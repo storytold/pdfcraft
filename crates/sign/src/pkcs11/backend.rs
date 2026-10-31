@@ -398,6 +398,7 @@ impl RsaDecryptionIdentity {
     /// Decrypt one RSA PKCS #1 v1.5 CMS content key on the card. The PIN is borrowed for
     /// this operation only. Removal, replacement, and authentication errors never retry.
     pub fn decrypt_key(&self, encrypted: &[u8], pin: Option<&str>) -> Result<Zeroizing<Vec<u8>>, SignError> {
+        super::require_token_serial(&self.serial)?;
         let crate::PublicKey::Rsa { n, .. } = &self.certificate.public_key else {
             return Err(SignError::Unsupported("recipient decryption requires an RSA key".into()));
         };

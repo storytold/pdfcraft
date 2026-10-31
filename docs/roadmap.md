@@ -254,6 +254,8 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 
 ## Revision history
 
+**2026-10-30 · minor:** PR #5492: reject missing decryption serials before PIN dispatch or token authentication; retain public certificate discovery. Hardware qualification and estimates unchanged.
+
 **2026-10-30 · minor:** PR #5492: card-opening Cancel acts on release and defers ready results during a held press; test fixtures find Python through PATH. Estimates unchanged.
 
 **2026-10-30 · minor:** PR #5492 review: retain selected-card binding and certificate credentials across signing, cancellation, redaction and printing; handle explicit Crypt streams, optional lengths and unavailable readers. Broader hardware qualification remains; estimates unchanged.

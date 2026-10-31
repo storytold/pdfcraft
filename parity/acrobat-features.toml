@@ -274,7 +274,7 @@ milestone = "M8"
 status = "partial"
 commands = ["file.open"]
 tools = ["doc_open_token", "encryption_token_ids"]
-evidence = ["crates/ui-egui/tests/it/certificate_security.rs::certificate_open_dialog_uses_softhsm_and_clears_pin_after_each_attempt", "crates/automation/tests/it/certificate_security.rs::certificate_tools_round_trip_through_softhsm", "crates/ui-egui/src/certificate_ui/open.rs::ready_open_result_respects_cancel_and_escape", "crates/render/tests/it/explicit_crypt.rs::authenticated_explicit_crypt_is_consumed_once_before_flate"]
+evidence = ["crates/ui-egui/tests/it/certificate_security.rs::certificate_open_dialog_uses_softhsm_and_clears_pin_after_each_attempt", "crates/automation/tests/it/certificate_security.rs::certificate_tools_round_trip_through_softhsm", "crates/ui-egui/src/certificate_ui/open.rs::ready_open_result_respects_cancel_and_escape", "crates/render/tests/it/explicit_crypt.rs::authenticated_explicit_crypt_is_consumed_once_before_flate", "crates/sign/src/pkcs11.rs::decryption_rejects_missing_serial_before_dispatch", "apps/pdfcraft-cli/tests/it/pkcs11_worker.rs::worker_rejects_missing_decryption_serial_before_provider_access"]
 notes = "Linux desktop card prompt and CLI/MCP opening for the single DefaultCryptFilter s5 AES-128/256 profile with RSA key transport. SoftHSM UI tests cover an explicit wrong-PIN attempt, cleared input, and a successful retry. PIN editor state is masked; replacing a card requires a fresh selection. Provider calls run in bounded worker processes. The contributor reports successful physical-card signing and encrypted PDF opening through a reader PIN pad (2026-10-30); card, reader and module details were not recorded. Broader hardware qualification and other profiles remain unfinished."
 
 [[feature]]
