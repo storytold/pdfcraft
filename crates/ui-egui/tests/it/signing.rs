@@ -541,6 +541,10 @@ fn the_signature_labels_follow_the_interface_language() {
     let cert = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap().certificate;
     let note = "The labels are in English: the signature's font can't draw them in this language.";
     for (code, labels, in_english) in [("de", ["(Digital", "(Grund:", "(Datum:"], false), ("zh-hans", ["(Digitally", "(Reason:", "(Date:"], true)] {
+        // Only the Chinese case needs a face that draws Chinese; German still runs without one.
+        if in_english && crate::support::skip_without_glyphs("the_signature_labels_follow_the_interface_language", code, "") {
+            continue;
+        }
         let dir = dir().join(code);
         std::fs::create_dir_all(&dir).unwrap();
         let mut h = harness(dir.clone());

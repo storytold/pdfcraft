@@ -103,3 +103,12 @@ pub fn skip_without_glyphs(name: &str, language: &str, text: &str) -> bool {
     eprintln!("skipping {name}: no interface font draws {missing:?} (set CRAFT_FONTS_DIR to a craft-fonts checkout with a face for it)");
     true
 }
+
+/// No interface font draws a private-use plane-16 character, so the skip path is taken without
+/// craft-fonts or system faces; plain Latin text is always drawn and never skips.
+#[test]
+fn skip_without_glyphs_skips_only_for_undrawable_text() {
+    let required = std::env::var("CRAFT_FONTS_REQUIRED").as_deref() == Ok("1");
+    assert_eq!(skip_without_glyphs("test", "en", "\u{10FFFD}"), !required);
+    assert!(!skip_without_glyphs("test", "en", "Hello"));
+}
