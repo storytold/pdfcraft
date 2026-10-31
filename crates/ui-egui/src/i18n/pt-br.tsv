@@ -2681,7 +2681,7 @@ animation effects	Off	Desativados
 	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	O DigestInfo da assinatura RSA não tem o parâmetro NULL (assinantes mais antigos o incluem); mesmo assim, ele foi lido.
 	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	O certificado de {} não permite essa quantidade de certificados de AC abaixo dele (comprimento do caminho), então não é usado para atestar a validade de {}.
 	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	O certificado de {} não é um certificado de AC autorizado a emitir certificados, então não é usado para atestar a validade de {}.
-	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	O certificado de {} tem extensões críticas que o PdfCraft não reconhece, por isso não é usado para atestar {}.
 	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	O certificado de {} não era válido no momento da assinatura, então não é usado para atestar a validade de {}.
 	The checker found problems which may prevent the document from being fully accessible.	A verificação encontrou problemas que podem impedir que o documento seja totalmente acessível.
 	The document has been altered or corrupted since the signature was applied.	O documento foi alterado ou corrompido desde que a assinatura foi aplicada.
@@ -2728,7 +2728,7 @@ animation effects	Off	Desativados
 	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	A identidade do signatário é desconhecida porque não foi incluída na sua lista de certificados confiáveis e nenhum dos certificados na cadeia acima dela é confiável.
 	The signer's identity is valid.	A identidade do signatário é válida.
 	The timestamp authority's certificate was not valid at the time of timestamping.	O certificado da autoridade de carimbo de data e hora não era válido no momento da emissão do carimbo.
-	The timestamp authority's certificate is not issued for time stamping.	The timestamp authority's certificate is not issued for time stamping.
+	The timestamp authority's certificate is not issued for time stamping.	O certificado da autoridade de carimbo de data/hora não foi emitido para carimbo de data/hora.
 	The timestamp contents are not hexadecimal.	O conteúdo do carimbo de data e hora não está em hexadecimal.
 	The timestamp has no valid byte range.	O carimbo de data e hora não tem um intervalo de bytes válido.
 	The timestamp token could not be read ({}).	Não foi possível ler o token de carimbo de data e hora ({}).
@@ -2816,11 +2816,11 @@ certificate	Validity starts	Início da validade
 certificate	Version	Versão
 theme	Appearance	Aparência
 # Untranslated: English text until a translator fills these in.
-	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	The signature's signed attributes have no content type, which CMS requires; it was read anyway.
-	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.
-	The signature's signed attributes have no message digest, so the signature does not cover the document.	The signature's signed attributes have no message digest, so the signature does not cover the document.
-	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	The signature's signed attributes name a content type other than data, so it is not a signature of the document.
-	Remove {standard} identification	Remove {standard} identification
+	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	Os atributos assinados da assinatura não têm tipo de conteúdo, que o CMS exige; mesmo assim foram lidos.
+	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	Esta assinatura usa uma chave RSA menor que 2048 bits, que já não é considerada forte o suficiente para assinaturas. Ela ainda é validada, mas não se deve confiar nela.
+	The signature's signed attributes have no message digest, so the signature does not cover the document.	Os atributos assinados da assinatura não têm resumo de mensagem, por isso a assinatura não cobre o documento.
+	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	Os atributos assinados da assinatura indicam um tipo de conteúdo diferente de dados, por isso não é uma assinatura do documento.
+	Remove {standard} identification	Remover a identificação de {standard}
 
 # Prepare a form ▸ Text field table
 	Add text field table	Adicionar tabela de campos de texto
