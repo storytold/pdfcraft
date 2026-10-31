@@ -77,7 +77,8 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
         return None;
     }
     let (w, h) = (s.dict.int(b"Width")?, s.dict.int(b"Height")?);
-    if w <= 0 || h <= 0 || (w as u64) * (h as u64) > MAX_PIXELS {
+    // Checked: two dimensions of 2^32 or more would overflow the product.
+    if w <= 0 || h <= 0 || (w as u64).checked_mul(h as u64).is_none_or(|n| n > MAX_PIXELS) {
         return None;
     }
     let (w, h) = (w as usize, h as usize);
