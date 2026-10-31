@@ -30,6 +30,8 @@ const STRIP_BUTTON: f32 = 28.0;
 /// Draw the window's tab strip: home and open controls, shrinkable and scrollable document tabs with drag
 /// reordering, and platform window controls.
 pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    // A pinned file opened since the last frame joins the pinned tabs (#2926).
+    app.pinned_tabs_first();
     let t = Tokens::get(ui.ctx());
     // macOS: the strip is the 28 pt title bar, so the traffic lights are centred in it; tabs and
     // buttons shrink to keep a margin above and below.
@@ -131,13 +133,15 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 let Some(name) = crate::canvas::tab_label(app, i) else { continue };
                                 let dirty = doc.dirty;
                                 // A tab showing the document's title names its file on hover.
+                                // A pinned tab (#2926) shows a pin where the others show a page.
+                                let pinned = app.tab_pinned(app.views[i].id);
                                 let file = (name != doc.name).then_some(doc.name.as_str());
                                 let response = tab(
                                     ui,
                                     TabSpec {
                                         id: ui.scope_id().with(("document-tab", app.views[i].id)),
                                         theme: &t,
-                                        icon: "file-text",
+                                        icon: if pinned { "pin" } else { "file-text" },
                                         name: &name,
                                         file,
                                         dirty,
@@ -171,6 +175,18 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     if ui.add_enabled(reveal, egui::Button::new(label)).clicked() {
                                         action = Some(crate::tab_context::Action::Reveal(id));
                                         ui.close();
+                                    }
+                                    // Only a document with a file can be opened again at the next start.
+                                    if doc.path.is_some() {
+                                        let (label, pin) = if pinned {
+                                            (tl!("Unpin Tab"), crate::tab_context::Action::Unpin(id))
+                                        } else {
+                                            (tl!("Pin Tab"), crate::tab_context::Action::Pin(id))
+                                        };
+                                        if ui.button(label).clicked() {
+                                            action = Some(pin);
+                                            ui.close();
+                                        }
                                     }
                                 });
                                 if response.clicked() {
