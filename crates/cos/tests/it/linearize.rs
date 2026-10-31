@@ -400,108 +400,62 @@ fn the_parameter_dictionary_and_both_sections_follow_annex_f() {
             assert_eq!(page_refs.len(), 3);
             assert_eq!(int(&lin, b"O"), u64::from(page_refs[0].num), "/O is the first page");
 
-            // Two sections: the first-page one is newest (startxref names it), its /Prev names
-            // the main one, which /T points at (a table: just in front of its entry for object 0).
-            let revisions = doc.revisions();
-            assert_eq!(revisions.len(), 2);
-            let (main, first) = (revisions[0].xref_offset, revisions[1].xref_offset);
-            assert!(revisions.iter().all(|r| r.is_stream == streams), "{revisions:?}");
-            assert!((at as u64) < first && first < 1024, "the first-page section follows the dictionary");
-            let t = int(&lin, b"T");
-            let prev = String::from_utf8_lossy(&bytes[first as usize..])
-                .split("/Prev ")
-                .nth(1)
-                .unwrap()
-                .split(|c: char| !c.is_ascii_digit())
-                .next()
-                .unwrap()
-                .parse::<u64>()
-                .unwrap();
-            assert_eq!(prev, main);
-            assert!(bytes.ends_with(format!("startxref\n{first}\n%%EOF\n").as_bytes()));
-            assert!(String::from_utf8_lossy(&bytes[..main as usize]).contains("startxref\n0\n%%EOF\n"), "the first-page startxref is a dummy");
-            if streams {
-                assert_eq!(t, main, "/T names the main cross-reference stream");
-                let xref_dict = |at: u64| match parse_indirect(&bytes, at as usize, &|_| None).unwrap().1 {
-                    Object::Stream(s) => s.dict,
-                    other => panic!("a cross-reference stream: {other:?}"),
-                };
-                let (first_dict, main_dict) = (xref_dict(first), xref_dict(main));
-                assert_eq!(first_dict.name(b"Type"), Some(b"XRef".as_slice()));
-                let index: Vec<i64> = first_dict.get(b"Index").unwrap().as_array().unwrap().iter().map(|v| v.as_int().unwrap()).collect();
-                assert_eq!(index, vec![i64::from(lin_num), first_dict.int(b"Size").unwrap() - i64::from(lin_num)], "objects from the dictionary on");
-                assert!(first_dict.get(b"Root").is_some() && first_dict.get(b"ID").is_some(), "the first-page section is the trailer");
-                assert_eq!(main_dict.name(b"Type"), Some(b"XRef".as_slice()));
-                assert_eq!(main_dict.int(b"Size"), Some(i64::from(lin_num)), "the main section holds the objects before the dictionary");
-                assert!(main_dict.get(b"Prev").is_none());
-            } else {
-                assert!(bytes[t as usize].is_ascii_whitespace());
-                assert_eq!(&bytes[t as usize + 1..t as usize + 19], b"0000000000 65535 f");
-                assert!(t > main && t < main + 16);
-                let first_section = String::from_utf8_lossy(&bytes[first as usize..first as usize + 40]).into_owned();
-                assert!(first_section.starts_with(&format!("xref\n{lin_num} ")), "{first_section}");
-                assert!(String::from_utf8_lossy(&bytes[main as usize..]).contains(&format!("trailer\n<</Size {lin_num}>>")));
-            }
-
-            // The primary hint stream sits right before the first page; /E ends the first page.
-            let h = lin.get(b"H").unwrap().as_array().unwrap();
-            assert_eq!(h.len(), 2, "no overflow hint stream");
-            let (h0, h1) = (h[0].as_int().unwrap() as u64, h[1].as_int().unwrap() as u64);
-            assert!(matches!(parse_indirect(&bytes, h0 as usize, &|_| None).unwrap().1, Object::Stream(_)));
-            assert_eq!(h0 + h1, offset(&doc, page_refs[0].num), "the first page follows the hint stream");
-            let hint = hints(&bytes, &doc, 3);
-            let e = int(&lin, b"E");
-            assert_eq!(e, offset(&doc, page_refs[0].num) + hint.pages[0].length, "/E ends the first page section");
-
-            // Everything the first page needs comes before /E, object streams included; nothing
-            // of the other pages does.
-            for num in used_by(&doc, page_refs[0]) {
-                assert!(offset(&doc, num) < e, "object {num} of page 1 is in the first page section");
-            }
-            for page in &page_refs[1..] {
-                assert!(offset(&doc, page.num) >= e);
-            }
-            // Bookmarks come with the first page only when the document opens showing them.
-            let outlines = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Outlines").unwrap();
-            assert_eq!(offset(&doc, outlines.num) < e, mode.is_some(), "{mode:?}");
-
-            // Pages and the catalog are never packed; with object streams other objects are.
-            for r in page_refs.iter().chain([&doc.root().unwrap()]) {
-                assert_eq!(container(&doc, r.num), r.num, "object {} is not packed", r.num);
-            }
-            assert_eq!(packed(&doc).is_empty(), !streams);
-            assert_eq!(String::from_utf8_lossy(&bytes).contains("/ObjStm"), streams);
+            sections_follow_annex_f(&bytes, &doc, &lin, at, lin_num, streams);
+            first_page_section_follows_annex_f(&bytes, &doc, &lin, &page_refs, mode, streams);
         }
     }
 }
 
-/// The two cross-reference sections: the first-page one newest, its trailer's `/Prev` naming the
-/// main one, which `/T` points just in front of.
-fn sections_follow_annex_f(bytes: &[u8], doc: &Document, lin: &Dict, at: usize, lin_num: u32) {
-    // Two sections: the first-page one is newest (startxref names it), its trailer's /Prev
-    // names the main one, whose entry for object 0 /T points just in front of.
+/// The two cross-reference sections: the first-page one newest, its `/Prev` naming the main one,
+/// which `/T` points at; tables or, with `streams`, cross-reference streams.
+fn sections_follow_annex_f(bytes: &[u8], doc: &Document, lin: &Dict, at: usize, lin_num: u32, streams: bool) {
+    // Two sections: the first-page one is newest (startxref names it), its /Prev names
+    // the main one, which /T points at (a table: just in front of its entry for object 0).
     let revisions = doc.revisions();
     assert_eq!(revisions.len(), 2);
     let (main, first) = (revisions[0].xref_offset, revisions[1].xref_offset);
-    assert!(!revisions[0].is_stream && !revisions[1].is_stream);
-    assert!((at as u64) < first && first < 1024, "the first-page table follows the dictionary");
+    assert!(revisions.iter().all(|r| r.is_stream == streams), "{revisions:?}");
+    assert!((at as u64) < first && first < 1024, "the first-page section follows the dictionary");
     let t = int(lin, b"T");
-    assert!(bytes[t as usize].is_ascii_whitespace());
-    assert_eq!(&bytes[t as usize + 1..t as usize + 19], b"0000000000 65535 f");
-    assert!(t > main && t < main + 16);
-    let first_trailer = &bytes[first as usize..];
-    let prev = String::from_utf8_lossy(first_trailer).split("/Prev ").nth(1).unwrap().split_whitespace().next().unwrap().parse::<u64>().unwrap();
+    let prev = String::from_utf8_lossy(&bytes[first as usize..])
+        .split("/Prev ")
+        .nth(1)
+        .unwrap()
+        .split(|c: char| !c.is_ascii_digit())
+        .next()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
     assert_eq!(prev, main);
     assert!(bytes.ends_with(format!("startxref\n{first}\n%%EOF\n").as_bytes()));
-    let first_section = String::from_utf8_lossy(&bytes[first as usize..first as usize + 40]).into_owned();
-    assert!(first_section.starts_with(&format!("xref\n{lin_num} ")), "{first_section}");
-    assert!(String::from_utf8_lossy(&bytes[..main as usize]).contains("startxref\n0\n%%EOF\n"), "the first-page trailer's startxref is a dummy");
-    assert!(String::from_utf8_lossy(&bytes[main as usize..]).contains(&format!("trailer\n<</Size {lin_num}>>")));
+    assert!(String::from_utf8_lossy(&bytes[..main as usize]).contains("startxref\n0\n%%EOF\n"), "the first-page startxref is a dummy");
+    if streams {
+        assert_eq!(t, main, "/T names the main cross-reference stream");
+        let xref_dict = |at: u64| match parse_indirect(bytes, at as usize, &|_| None).unwrap().1 {
+            Object::Stream(s) => s.dict,
+            other => panic!("a cross-reference stream: {other:?}"),
+        };
+        let (first_dict, main_dict) = (xref_dict(first), xref_dict(main));
+        assert_eq!(first_dict.name(b"Type"), Some(b"XRef".as_slice()));
+        let index: Vec<i64> = first_dict.get(b"Index").unwrap().as_array().unwrap().iter().map(|v| v.as_int().unwrap()).collect();
+        assert_eq!(index, vec![i64::from(lin_num), first_dict.int(b"Size").unwrap() - i64::from(lin_num)], "objects from the dictionary on");
+        assert!(first_dict.get(b"Root").is_some() && first_dict.get(b"ID").is_some(), "the first-page section is the trailer");
+        assert_eq!(main_dict.name(b"Type"), Some(b"XRef".as_slice()));
+        assert_eq!(main_dict.int(b"Size"), Some(i64::from(lin_num)), "the main section holds the objects before the dictionary");
+        assert!(main_dict.get(b"Prev").is_none());
+    } else {
+        assert!(bytes[t as usize].is_ascii_whitespace());
+        assert_eq!(&bytes[t as usize + 1..t as usize + 19], b"0000000000 65535 f");
+        assert!(t > main && t < main + 16);
+        let first_section = String::from_utf8_lossy(&bytes[first as usize..first as usize + 40]).into_owned();
+        assert!(first_section.starts_with(&format!("xref\n{lin_num} ")), "{first_section}");
+        assert!(String::from_utf8_lossy(&bytes[main as usize..]).contains(&format!("trailer\n<</Size {lin_num}>>")));
+    }
 }
 
-/// The hint stream right before the first page, `/E` at the end of the first page's section, and
-/// in that section all the first page needs and nothing of the others.
-fn first_page_section_follows_annex_f(bytes: &[u8], doc: &Document, lin: &Dict, page_refs: &[ObjRef], mode: Option<&str>) {
+/// The hint stream right before the first page, `/E` at the end of the first page's section, in
+/// that section all the first page needs and nothing of the others, and what object streams pack.
+fn first_page_section_follows_annex_f(bytes: &[u8], doc: &Document, lin: &Dict, page_refs: &[ObjRef], mode: Option<&str>, streams: bool) {
     // The primary hint stream sits right before the first page; /E ends the first page.
     let h = lin.get(b"H").unwrap().as_array().unwrap();
     assert_eq!(h.len(), 2, "no overflow hint stream");
@@ -512,7 +466,8 @@ fn first_page_section_follows_annex_f(bytes: &[u8], doc: &Document, lin: &Dict, 
     let e = int(lin, b"E");
     assert_eq!(e, offset(doc, page_refs[0].num) + hint.pages[0].length, "/E ends the first page section");
 
-    // Everything the first page needs comes before /E; nothing of the other pages does.
+    // Everything the first page needs comes before /E, object streams included; nothing
+    // of the other pages does.
     for num in used_by(doc, page_refs[0]) {
         assert!(offset(doc, num) < e, "object {num} of page 1 is in the first page section");
     }
@@ -522,6 +477,13 @@ fn first_page_section_follows_annex_f(bytes: &[u8], doc: &Document, lin: &Dict, 
     // Bookmarks come with the first page only when the document opens showing them.
     let outlines = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Outlines").unwrap();
     assert_eq!(offset(doc, outlines.num) < e, mode.is_some(), "{mode:?}");
+
+    // Pages and the catalog are never packed; with object streams other objects are.
+    for r in page_refs.iter().chain([&doc.root().unwrap()]) {
+        assert_eq!(container(doc, r.num), r.num, "object {} is not packed", r.num);
+    }
+    assert_eq!(packed(doc).is_empty(), !streams);
+    assert_eq!(String::from_utf8_lossy(bytes).contains("/ObjStm"), streams);
 }
 
 #[test]
