@@ -185,6 +185,8 @@ pub(crate) struct EditCtx {
     /// The overlay streams the edit's applied redactions added, which alone the renderer's check
     /// leaves out.
     pub(crate) redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
+    /// Live optional-content layer overrides `(num, gen, visible)` active in the session.
+    pub(crate) layers: Arc<Vec<(i32, i32, bool)>>,
 }
 
 impl EditCtx {
@@ -214,6 +216,7 @@ impl EditCtx {
             rng: getrandom::fill,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
+            layers: Arc::new(Vec::new()),
         }
     }
 
@@ -526,7 +529,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::stamp(doc, *page, "OCR", pdfcraft_ocr::text_layer(words))?;
         }
         Edit::EditPageImage { page, index, change } => {
-            let img = pdfcraft_edit::page_images(doc, *page)?
+            let img = pdfcraft_edit::page_images_with_layers(doc, *page, &cx.layers)?
                 .into_iter()
                 .nth(*index)
                 .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1))))?;
@@ -557,9 +560,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 ImageEdit::Crop(keep) => pdfcraft_edit::ImageChange::Crop(*keep),
                 ImageEdit::Delete => pdfcraft_edit::ImageChange::Delete,
             };
-            pdfcraft_edit::change_image(doc, *page, *index, &c)?;
+            pdfcraft_edit::change_image_with_layers(doc, *page, *index, &c, &cx.layers)?;
         }
-        Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
+        Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects_with_layers(doc, *page, objects, *offset, &cx.layers)?,
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
         }

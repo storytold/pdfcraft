@@ -98,6 +98,183 @@ fn xobjects(doc: &Document, page: &Dict) -> Dict {
         .unwrap_or_default()
 }
 
+/// The page's `/Resources /Properties` dictionary, resolved when present.
+fn properties(doc: &Document, page: &Dict) -> Dict {
+    page.get(b"Resources")
+        .map(|r| doc.resolve(r))
+        .and_then(|r| r.as_dict().and_then(|d| d.get(b"Properties").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned())))
+        .unwrap_or_default()
+}
+
+/// Optional-content visibility evaluated against the document's default configuration (`/OCProperties /D`).
+#[derive(Default)]
+struct DefaultOc {
+    ocgs: std::collections::HashSet<ObjRef>,
+    hidden: std::collections::HashSet<ObjRef>,
+}
+
+impl DefaultOc {
+    /// Reads the default optional-content configuration (`/OCProperties /D`) from the catalog.
+    fn from_doc(doc: &Document) -> Self {
+        let Some(cat) = doc.root().and_then(|r| doc.dict(&Object::Ref(r))) else { return Self::default() };
+        let Some(oc) = cat.get(b"OCProperties").and_then(|o| doc.dict(o)) else { return Self::default() };
+        let Some(d) = oc.get(b"D").and_then(|o| doc.dict(o)) else { return Self::default() };
+        let refs = |dict: &Dict, key: &[u8]| -> std::collections::HashSet<ObjRef> {
+            dict.get(key).and_then(|v| doc.resolve(v).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
+        };
+        let mut ocgs = refs(&oc, b"OCGs");
+        let (on, off) = (refs(&d, b"ON"), refs(&d, b"OFF"));
+        let base_off = d.get(b"BaseState").map(|b| doc.resolve(b)).and_then(|b| b.as_name().map(|n| n == b"OFF")).unwrap_or(false);
+        let mut hidden = std::collections::HashSet::new();
+        for &r in &ocgs {
+            let is_off = if off.contains(&r) {
+                true
+            } else if on.contains(&r) {
+                false
+            } else {
+                base_off
+            };
+            if is_off {
+                hidden.insert(r);
+            }
+        }
+        for r in off {
+            if ocgs.contains(&r) || doc.get(r).as_dict().is_some_and(|g| g.name(b"Type") == Some(b"OCG")) {
+                ocgs.insert(r);
+                hidden.insert(r);
+            }
+        }
+        Self { ocgs, hidden }
+    }
+
+    /// Reads the default optional-content configuration from `doc` and applies live layer overrides `(num, gen, visible)`.
+    fn from_doc_with_layers(doc: &Document, layers: &[(i32, i32, bool)]) -> Self {
+        let mut oc = Self::from_doc(doc);
+        for &(num, generation, visible) in layers {
+            if let (Ok(num), Ok(generation)) = (u32::try_from(num), u16::try_from(generation)) {
+                let r = ObjRef::new(num, generation);
+                oc.ocgs.insert(r);
+                if visible {
+                    oc.hidden.remove(&r);
+                } else {
+                    oc.hidden.insert(r);
+                }
+            }
+        }
+        oc
+    }
+
+    /// Whether `r` is an optional-content group in the document.
+    fn is_ocg(&self, doc: &Document, r: ObjRef) -> bool {
+        self.ocgs.contains(&r) || doc.get(r).as_dict().is_some_and(|d| d.name(b"Type") == Some(b"OCG"))
+    }
+
+    /// Whether the optional-content group or membership dictionary `obj` is off in the default configuration.
+    fn is_hidden(&self, doc: &Document, obj: &Object) -> bool {
+        if self.ocgs.is_empty() && self.hidden.is_empty() {
+            return false;
+        }
+        if let Some(r) = obj.as_ref()
+            && self.hidden.contains(&r)
+        {
+            return true;
+        }
+        let resolved = doc.resolve(obj);
+        let Some(d) = resolved.as_dict() else { return false };
+        if d.name(b"Type") != Some(b"OCMD") {
+            return false;
+        }
+        if let Some(ve) = d.get(b"VE")
+            && let Some(visible) = self.eval_ve(doc, ve, 0, &mut std::collections::HashSet::new(), &mut 4096)
+        {
+            return !visible;
+        }
+        let groups: Vec<ObjRef> = match d.get(b"OCGs").map(|g| (*doc.resolve(g)).clone()) {
+            Some(Object::Array(a)) => a.iter().filter_map(Object::as_ref).filter(|r| self.is_ocg(doc, *r)).collect(),
+            Some(_) => d.get(b"OCGs").and_then(Object::as_ref).filter(|r| self.is_ocg(doc, *r)).into_iter().collect(),
+            None => Vec::new(),
+        };
+        if groups.is_empty() {
+            return false;
+        }
+        let any_on = groups.iter().any(|g| !self.hidden.contains(g));
+        let all_on = groups.iter().all(|g| !self.hidden.contains(g));
+        let policy = d.get(b"P").map(|p| doc.resolve(p)).and_then(|p| p.as_name().map(<[u8]>::to_vec));
+        match policy.as_deref() {
+            Some(b"AllOn") => !all_on,
+            Some(b"AnyOff") => all_on,
+            Some(b"AllOff") => any_on,
+            _ => !any_on,
+        }
+    }
+
+    /// Evaluates a `/VE` visibility expression (ISO 32000-2 §8.11.2.2); returns `None` if malformed.
+    fn eval_ve(&self, doc: &Document, expr: &Object, depth: usize, path: &mut std::collections::HashSet<ObjRef>, budget: &mut usize) -> Option<bool> {
+        if depth > 40 || *budget == 0 {
+            return None;
+        }
+        *budget -= 1;
+        let reference = expr.as_ref();
+        if let Some(r) = reference
+            && !path.insert(r)
+        {
+            return None;
+        }
+        let resolved = doc.resolve(expr);
+        let result = match &*resolved {
+            Object::Dict(d) if d.name(b"Type") == Some(b"OCG") => reference.filter(|r| self.ocgs.contains(r)).map(|r| !self.hidden.contains(&r)),
+            Object::Array(items) if (2..=4097).contains(&items.len()) => {
+                let Some(Object::Name(op)) = items.first() else { return None };
+                match op.as_slice() {
+                    b"And" => {
+                        let mut visible = true;
+                        for item in items.iter().skip(1) {
+                            visible &= self.eval_ve(doc, item, depth + 1, path, budget)?;
+                        }
+                        Some(visible)
+                    }
+                    b"Or" => {
+                        let mut visible = false;
+                        for item in items.iter().skip(1) {
+                            visible |= self.eval_ve(doc, item, depth + 1, path, budget)?;
+                        }
+                        Some(visible)
+                    }
+                    b"Not" if items.len() == 2 => Some(!self.eval_ve(doc, items.get(1)?, depth + 1, path, budget)?),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some(r) = reference {
+            path.remove(&r);
+        }
+        result
+    }
+
+    /// Updates the marked-content visibility stack for `BMC`, `BDC` and `EMC`.
+    fn step_marked(&self, doc: &Document, op: &Op, props: &Dict, stack: &mut Vec<bool>) {
+        match op.op.as_slice() {
+            b"BMC" => stack.push(stack.last().copied().unwrap_or(false)),
+            b"BDC" => {
+                let parent = stack.last().copied().unwrap_or(false);
+                let tag = op.operands.len().checked_sub(2).and_then(|i| op.operands.get(i)).and_then(Object::as_name);
+                let this = tag == Some(b"OC".as_slice())
+                    && match op.operands.last() {
+                        Some(Object::Name(n)) => props.get(n).is_some_and(|o| self.is_hidden(doc, o)),
+                        Some(inline) => self.is_hidden(doc, inline),
+                        None => false,
+                    };
+                stack.push(parent || this);
+            }
+            b"EMC" => {
+                stack.pop();
+            }
+            _ => {}
+        }
+    }
+}
+
 fn intersection(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
     let r = [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])];
     (r.iter().all(|v| v.is_finite()) && r[2] > r[0] && r[3] > r[1]).then_some(r)
@@ -220,20 +397,35 @@ impl ImageState {
 /// The images and Form artwork page `page` (0-based) draws, in drawing order.
 /// Forms stay intact: no traversal or rewriting of their internal objects is needed.
 pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditError> {
+    page_images_with_layers(doc, page, &[])
+}
+
+/// [`page_images`] evaluated with live layer overrides `(num, gen, visible)` on top of `/OCProperties /D`.
+pub fn page_images_with_layers(doc: &Document, page: usize, layers: &[(i32, i32, bool)]) -> Result<Vec<PageImage>, EditError> {
     let p = page_of(doc, page)?;
     let xo = xobjects(doc, &p.dict);
+    let props = properties(doc, &p.dict);
+    let oc = DefaultOc::from_doc_with_layers(doc, layers);
+    let mut oc_stack: Vec<bool> = Vec::new();
     let mut out = Vec::new();
     // The streams are one stream in pieces, so the graphics state and operators carry over.
     let mut state = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
     let pieces = joined(&content_streams(doc, &p.dict)?);
     for (i, op) in pieces.parse().ops.iter().enumerate() {
         state.apply(op)?;
+        oc.step_marked(doc, op, &props, &mut oc_stack);
         let ctm = state.placement.matrix;
         if op.is("Do") {
+            if oc_stack.last().copied().unwrap_or(false) {
+                continue;
+            }
             let Some(name) = op.name(0) else { continue };
             let Some(resource) = xo.get(name) else { continue };
             let obj = doc.resolve(resource);
             let Object::Stream(s) = &*obj else { continue };
+            if s.dict.get(b"OC").is_some_and(|entry| oc.is_hidden(doc, entry)) {
+                continue;
+            }
             let is_form = s.dict.name(b"Subtype") == Some(b"Form");
             let (matrix, bounds) = if is_form {
                 let Some(bounds) = s.dict.get(b"BBox").map(|v| doc.resolve(v)).and_then(|v| {
@@ -306,6 +498,7 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
     struct Forms {
         path: Vec<ObjRef>,
         budget: crate::text::FormBudget,
+        oc: DefaultOc,
     }
     fn walk(
         doc: &Document,
@@ -317,23 +510,32 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
         out: &mut Vec<PageImage>,
     ) -> Result<(), EditError> {
         let xo = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+        let props = resources.get(b"Properties").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()).unwrap_or_default();
+        let mut oc_stack: Vec<bool> = Vec::new();
         for (i, op) in ops.iter().enumerate() {
             st.apply(op)?;
+            forms.oc.step_marked(doc, op, &props, &mut oc_stack);
             let ctm = st.placement.matrix;
             if op.is("Do") {
+                if oc_stack.last().copied().unwrap_or(false) {
+                    continue;
+                }
                 let Some(name) = op.name(0) else { continue };
+                let Some(resource) = xo.get(name) else { continue };
+                let obj = doc.resolve(resource);
+                let Object::Stream(s) = &*obj else { continue };
+                if s.dict.get(b"OC").is_some_and(|entry| forms.oc.is_hidden(doc, entry)) {
+                    continue;
+                }
                 if let Some(form) = crate::text::form_call(doc, resources, name, ctm, &forms.path, &mut forms.budget) {
                     if let Some(r) = form.obj {
                         forms.path.push(r);
                     }
-                    let bounds =
-                        xo.get(name).map(|o| doc.resolve(o)).and_then(|o| o.as_dict().and_then(|d| d.get(b"BBox")).map(|b| doc.resolve(b))).and_then(
-                            |b| {
-                                let a = b.as_array()?;
-                                let [x0, y0, x1, y1] = a.as_slice() else { return None };
-                                Some(form.ctm.bbox([x0.as_f64()?, y0.as_f64()?, x1.as_f64()?, y1.as_f64()?]))
-                            },
-                        );
+                    let bounds = s.dict.get(b"BBox").map(|b| doc.resolve(b)).and_then(|b| {
+                        let a = b.as_array()?;
+                        let [x0, y0, x1, y1] = a.as_slice() else { return None };
+                        Some(form.ctm.bbox([x0.as_f64()?, y0.as_f64()?, x1.as_f64()?, y1.as_f64()?]))
+                    });
                     let clip = bounds.map_or(st.placement.clip, |b| intersection(st.placement.clip, b).unwrap_or([0.0; 4]));
                     let mut inner = ImageState::new(form.ctm, clip, st.placement.clips.clone());
                     let piece = stream(op);
@@ -343,9 +545,7 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
                     }
                     continue;
                 }
-                let Some(r) = xo.get(name).and_then(Object::as_ref) else { continue };
-                let obj = doc.get(r);
-                let Object::Stream(s) = &*obj else { continue };
+                let Some(r) = resource.as_ref() else { continue };
                 if s.dict.name(b"Subtype") != Some(b"Image") {
                     continue;
                 }
@@ -377,7 +577,7 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
     let mut st = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
     let mut decode = pdfcraft_cos::DecodeBudget::page();
     let pieces = joined(&crate::text::content_streams_within(doc, &p.dict, &mut decode)?);
-    let mut forms = Forms { path: Vec::new(), budget: crate::text::FormBudget::new(decode) };
+    let mut forms = Forms { path: Vec::new(), budget: crate::text::FormBudget::new(decode), oc: DefaultOc::from_doc(doc) };
     walk(doc, &pieces.parse().ops, &res, &mut st, &|op| pieces.piece_of(op.span.start), &mut forms, &mut out)?;
     Ok(out)
 }
@@ -475,7 +675,18 @@ fn clip_matrix(draw: Matrix, cm: Matrix, t: Matrix) -> Option<Matrix> {
 
 /// Change image `index` (from [`page_images`]) on `page`.
 pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &ImageChange) -> Result<(), EditError> {
-    let images = page_images(doc, page)?;
+    change_image_with_layers(doc, page, index, change, &[])
+}
+
+/// [`change_image`] evaluated with live layer overrides `(num, gen, visible)` on top of `/OCProperties /D`.
+pub fn change_image_with_layers(
+    doc: &mut Document,
+    page: usize,
+    index: usize,
+    change: &ImageChange,
+    layers: &[(i32, i32, bool)],
+) -> Result<(), EditError> {
+    let images = page_images_with_layers(doc, page, layers)?;
     let img = images.get(index).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1)))?;
     let p = page_of(doc, page)?;
     let all = content_streams(doc, &p.dict)?;
@@ -524,10 +735,11 @@ pub(crate) fn selectable_images(
     doc: &Document,
     page: usize,
     excluded: &std::collections::BTreeSet<ObjRef>,
+    layers: &[(i32, i32, bool)],
 ) -> Result<Vec<(usize, PageImage)>, EditError> {
     let p = page_of(doc, page)?;
     let all = content_streams(doc, &p.dict)?;
-    Ok(page_images(doc, page)?
+    Ok(page_images_with_layers(doc, page, layers)?
         .into_iter()
         .enumerate()
         .filter(|(_, image)| !all.get(image.stream).and_then(|(o, _)| o.as_ref()).is_some_and(|r| excluded.contains(&r)))
@@ -754,11 +966,22 @@ fn crop_image(
 
 /// Plan all transforms before changing a stream; indexes refer to the original inventory.
 /// Splice only the chosen Do operators and preserve all other bytes and stream dictionaries.
+#[cfg(test)]
 pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize], offset: [f64; 2]) -> Result<(), EditError> {
+    translate_images_with_layers(doc, page, indexes, offset, &[])
+}
+
+pub(crate) fn translate_images_with_layers(
+    doc: &mut Document,
+    page: usize,
+    indexes: &[usize],
+    offset: [f64; 2],
+    layers: &[(i32, i32, bool)],
+) -> Result<(), EditError> {
     if indexes.is_empty() {
         return Ok(());
     }
-    let images = page_images(doc, page)?;
+    let images = page_images_with_layers(doc, page, layers)?;
     let p = page_of(doc, page)?;
     let all = content_streams(doc, &p.dict)?;
     let mut plans = std::collections::BTreeMap::new();
@@ -840,4 +1063,119 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
     let contents = crate::text::rewritten_contents(doc, &all, data);
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use crate::objects::{ObjectKind, editable_objects};
+
+    fn build_pdf(objects: &[String]) -> Document {
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, obj) in objects.iter().enumerate() {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj\n{obj}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = bytes.len();
+        bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+        for off in offsets {
+            bytes.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+        Document::open(Arc::new(bytes)).expect("valid synthetic PDF")
+    }
+
+    fn stream_obj(dict: &str, body: &str) -> String {
+        format!("<< {dict} /Length {} >>\nstream\n{body}\nendstream", body.len())
+    }
+
+    fn layered_image_doc(d_config: &str, bdc_wrap: bool, xobject_oc: &str, extra_obj: Option<&str>) -> Document {
+        let draw = if bdc_wrap { "/OC /L1 BDC q 100 0 0 80 100 500 cm /Im0 Do Q EMC" } else { "q 100 0 0 80 100 500 cm /Im0 Do Q" };
+        let content = format!("BT /F1 14 Tf 100 700 Td (Visible title) Tj ET\n{draw}");
+        let prop_target = if extra_obj.is_some() { "8 0 R" } else { "5 0 R" };
+        let mut objs = vec![
+            format!("<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D << {d_config} >> >> >>"),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R \
+                 /Resources << /Font << /F1 6 0 R >> /XObject << /Im0 7 0 R >> /Properties << /L1 {prop_target} >> >> >>"
+            ),
+            stream_obj("", &content),
+            "<< /Type /OCG /Name (Layer 1) >>".into(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+            stream_obj(
+                &format!("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 {xobject_oc}"),
+                "\x00\x00\x00",
+            ),
+        ];
+        if let Some(extra) = extra_obj {
+            objs.push(extra.into());
+        }
+        build_pdf(&objs)
+    }
+
+    #[test]
+    fn hidden_layer_images_are_not_listed_hit_or_exported() {
+        // 1. Marked-content /OC /L1 BDC … EMC with /L1 OFF: hidden.
+        let bdc_off = layered_image_doc("/OFF [5 0 R] /Order [5 0 R]", true, "", None);
+        assert!(page_images(&bdc_off, 0).unwrap().is_empty(), "BDC off layer must list no image");
+        assert!(reading_images(&bdc_off, 0).unwrap().is_empty(), "BDC off layer must export no image");
+        let objs = editable_objects(&bdc_off, 0).unwrap();
+        assert!(objs.iter().all(|o| o.target.kind != ObjectKind::Image), "object_list must only have text: {objs:?}");
+
+        // 2. XObject /OC 5 0 R with 5 0 R OFF (and with /BaseState /OFF): hidden.
+        for cfg in ["/OFF [5 0 R] /Order [5 0 R]", "/BaseState /OFF /Order [5 0 R]"] {
+            let xobj_off = layered_image_doc(cfg, false, "/OC 5 0 R", None);
+            assert!(page_images(&xobj_off, 0).unwrap().is_empty(), "XObject /OC off ({cfg}) must list no image");
+            assert!(reading_images(&xobj_off, 0).unwrap().is_empty(), "XObject /OC off ({cfg}) must export no image");
+            let objs = editable_objects(&xobj_off, 0).unwrap();
+            assert!(objs.iter().all(|o| o.target.kind != ObjectKind::Image), "object_list must only have text: {objs:?}");
+        }
+
+        // 3. Marked-content /OC /L1 BDC … EMC with /L1 ON: listed and hit.
+        let bdc_on = layered_image_doc("/ON [5 0 R] /Order [5 0 R]", true, "", None);
+        let imgs = page_images(&bdc_on, 0).unwrap();
+        assert_eq!(imgs.len(), 1, "BDC on layer must list the image");
+        assert!(imgs[0].contains([150.0, 540.0]), "BDC on layer image must hit inside its box");
+        assert_eq!(reading_images(&bdc_on, 0).unwrap().len(), 1);
+
+        // 4. XObject /OC 5 0 R with 5 0 R ON: listed and hit.
+        let xobj_on = layered_image_doc("/BaseState /OFF /ON [5 0 R] /Order [5 0 R]", false, "/OC 5 0 R", None);
+        let imgs = page_images(&xobj_on, 0).unwrap();
+        assert_eq!(imgs.len(), 1, "XObject /OC on layer must list the image");
+        assert!(imgs[0].contains([150.0, 540.0]), "XObject /OC on layer image must hit inside its box");
+        assert_eq!(reading_images(&xobj_on, 0).unwrap().len(), 1);
+
+        // 5. OCMD membership policies and /VE visibility expressions.
+        let ocmd_all_off = layered_image_doc("/ON [5 0 R]", false, "/OC 8 0 R", Some("<< /Type /OCMD /OCGs [5 0 R] /P /AllOff >>"));
+        assert!(page_images(&ocmd_all_off, 0).unwrap().is_empty(), "OCMD /AllOff with ON group is hidden");
+        let ocmd_ve_not = layered_image_doc("/ON [5 0 R]", true, "", Some("<< /Type /OCMD /OCGs [5 0 R] /VE [/Not 5 0 R] >>"));
+        assert!(page_images(&ocmd_ve_not, 0).unwrap().is_empty(), "OCMD /VE [/Not 5 0 R] with ON group is hidden");
+
+        // 6. Editing a visible image after a hidden image still targets the visible image's operator.
+        let mut two_imgs = build_pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D << /OFF [5 0 R] >> >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R \
+             /Resources << /XObject << /Im0 6 0 R /Im1 7 0 R >> /Properties << /L1 5 0 R >> >> >>"
+                .into(),
+            stream_obj("", "/OC /L1 BDC q 50 0 0 50 10 10 cm /Im0 Do Q EMC q 60 0 0 40 200 300 cm /Im1 Do Q"),
+            "<< /Type /OCG /Name (Hidden) >>".into(),
+            stream_obj("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", "\x00\x00\x00"),
+            stream_obj("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", "\x7f\x7f\x7f"),
+        ]);
+        let listed = page_images(&two_imgs, 0).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "Im1");
+        change_image(&mut two_imgs, 0, 0, &ImageChange::Delete).unwrap();
+        assert!(page_images(&two_imgs, 0).unwrap().is_empty(), "deleting index 0 removes the visible image");
+        // Revealing the hidden layer via live layer overrides exposes Im0 for listing and editing.
+        let revealed = page_images_with_layers(&two_imgs, 0, &[(5, 0, true)]).unwrap();
+        assert_eq!(revealed.len(), 1);
+        assert_eq!(revealed[0].name, "Im0");
+        change_image_with_layers(&mut two_imgs, 0, 0, &ImageChange::Delete, &[(5, 0, true)]).unwrap();
+        assert!(page_images_with_layers(&two_imgs, 0, &[(5, 0, true)]).unwrap().is_empty());
+    }
 }
