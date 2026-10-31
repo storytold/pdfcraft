@@ -302,6 +302,12 @@ impl PdfCraftApp {
                     v.set_cover(!v.cover);
                 }
             }
+            "view.layout.rtl" => {
+                if let Some(i) = active {
+                    let v = &mut self.views[i];
+                    v.set_rtl_pages(!v.rtl_pages);
+                }
+            }
             "view.fit_width_scrolling" | "view.fit_one_page" => {
                 use crate::canvas::{Fit, PageLayout};
                 // Fit one full page shows a single page on its own; fit width scrolls it.

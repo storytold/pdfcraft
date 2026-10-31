@@ -180,6 +180,12 @@ impl DocView {
         }
     }
 
+    /// → goes forward, except in right-to-left two-page view, where the next page is to the left (#2339).
+    pub(crate) fn horizontal_arrow_goes_forward(&self, right: bool) -> bool {
+        let rtl = self.rtl_pages && self.layout == PageLayout::TwoUp;
+        if right { !rtl } else { rtl }
+    }
+
     /// Next page (`true`) or previous page. In two-page view this moves a whole spread: the other
     /// page of the spread is already on screen, so stepping to it wouldn't move the view (#70).
     pub fn step_page(&mut self, forward: bool) {
@@ -411,10 +417,18 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     // ⌘Page Down / ⌘Page Up, or plain Page Down / Page Up in single-page view.
     let command = ctx.input(|i| i.modifiers.command);
     let scrolls = view.continuous;
-    if key(Key::ArrowRight) || (key(Key::PageDown) && (command || !scrolls)) {
+    // With right-to-left page order the next page is the one to the left, so the arrows swap (#2339).
+    // Page Up and Page Down stay in document order.
+    if key(Key::ArrowRight) {
+        view.step_page(view.horizontal_arrow_goes_forward(true));
+    }
+    if key(Key::PageDown) && (command || !scrolls) {
         view.step_page(true);
     }
-    if key(Key::ArrowLeft) || (key(Key::PageUp) && (command || !scrolls)) {
+    if key(Key::ArrowLeft) {
+        view.step_page(view.horizontal_arrow_goes_forward(false));
+    }
+    if key(Key::PageUp) && (command || !scrolls) {
         view.step_page(false);
     }
     // ↓ / ↑ scroll a line, and Page Down / Page Up a screen where the pages scroll. In

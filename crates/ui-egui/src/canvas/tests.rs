@@ -1617,6 +1617,110 @@ fn notches_turn_pages_and_stop_at_the_ends() {
 }
 
 #[test]
+fn right_to_left_two_page_view_puts_the_earlier_page_on_the_right() {
+    let info = pdfcraft_render::DocInfo {
+        pages: (0..4)
+            .map(|_| pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 })
+            .collect(),
+        ..Default::default()
+    };
+    let mut v = view(4, PageLayout::TwoUp, false);
+    v.zoom = 1.0;
+    let ltr = v.layout(&info, 1200.0, 1.0);
+    assert!(ltr[0].left() < ltr[1].left(), "left to right: {ltr:?}");
+    v.set_rtl_pages(true);
+    let rtl = v.layout(&info, 1200.0, 1.0);
+    assert!(rtl[0].left() > rtl[1].left(), "the first page is on the right: {rtl:?}");
+    assert!(rtl[2].left() > rtl[3].left(), "the next spread does the same: {rtl:?}");
+    assert!((rtl[0].width() - ltr[0].width()).abs() < 0.1);
+    assert!(!v.horizontal_arrow_goes_forward(true), "→ is previous when the next page is to the left");
+    assert!(v.horizontal_arrow_goes_forward(false), "← is next");
+    v.step_page(v.horizontal_arrow_goes_forward(false));
+    assert_eq!(v.current, 2, "← moved to the next spread");
+    v.step_page(false);
+    assert_eq!(v.current, 0, "a document-order step back is what Page Up does");
+}
+
+/// Pages in one spread can have different widths. The earlier page stays on the right and keeps
+/// its own width; the later page is not stretched to match it.
+#[test]
+fn right_to_left_two_page_view_keeps_each_page_width() {
+    let page = |width: f32| pdfcraft_render::PageInfo { width, height: 400.0, label: String::new(), crop: [0.0, 0.0, width, 400.0], rotation: 0 };
+    let info = pdfcraft_render::DocInfo { pages: vec![page(200.0), page(400.0)], ..Default::default() };
+    let mut v = view(2, PageLayout::TwoUp, false);
+    v.zoom = 1.0;
+    let ltr = v.layout(&info, 1200.0, 1.0);
+    v.set_rtl_pages(true);
+    let rtl = v.layout(&info, 1200.0, 1.0);
+    assert!((rtl[0].width() - ltr[0].width()).abs() < 0.1, "the earlier page keeps its width");
+    assert!((rtl[1].width() - ltr[1].width()).abs() < 0.1, "the later page keeps its width");
+    assert!(rtl[0].width() < rtl[1].width());
+    assert!(rtl[0].left() >= rtl[1].left() + rtl[1].width(), "the narrower earlier page is on the right: {rtl:?}");
+}
+
+#[test]
+fn replacing_the_document_keeps_right_to_left_page_order() {
+    let info = pdfcraft_render::DocInfo {
+        pages: (0..4)
+            .map(|_| pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 })
+            .collect(),
+        ..Default::default()
+    };
+    let mut v = view(4, PageLayout::TwoUp, false);
+    v.set_rtl_pages(true);
+    v.set_cover(true);
+    v.document_replaced(&info);
+    assert!(v.rtl_pages, "replacing the file switched the spread back to left to right");
+    assert!(v.cover);
+    assert_eq!(v.page_input, "1", "the page box names the right-hand page");
+    let rtl = v.layout(&info, 1200.0, 1.0);
+    assert!(rtl[1].left() > rtl[2].left(), "under the cover, the earlier page stays on the right: {rtl:?}");
+}
+
+#[test]
+fn arabic_comment_hover_uses_the_bidi_path() {
+    let lines = crate::bidi::wrap("Author\nواحد اثنين", |_| true);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].text, "Author");
+    assert!(!lines[0].rtl);
+    assert_eq!(lines[1].text, "واحد اثنين", "epaint reorders; the hover must not pre-reverse");
+    assert!(lines[1].rtl);
+    let mixed = "Note: واحد اثنين";
+    assert!(super::comment_hover_uses_bidi(mixed), "a Latin label in front of Arabic still uses the bidi hover");
+    assert!(!super::comment_hover_uses_bidi("Hello"));
+    let mixed_lines = crate::bidi::wrap(mixed, |_| true);
+    assert!(mixed_lines.iter().any(|line| line.text.contains("واحد") && line.text.contains("اثنين")));
+}
+
+/// Pure Arabic in a comment hover stays in typing order and is marked right to left.
+/// epaint reorders it once. The earlier check lived under this name when the string was
+/// pre-reversed for an older egui.
+#[test]
+fn arabic_comment_hover_reads_right_to_left() {
+    let lines = crate::bidi::wrap("Author\nواحد اثنين", |_| true);
+    assert_eq!(lines[1].text, "واحد اثنين");
+    assert!(lines[1].rtl);
+    assert!(!super::comment_hover_uses_bidi("Hello"));
+    assert!(super::comment_hover_uses_bidi("واحد اثنين"));
+}
+
+/// A Latin label in front of Arabic keeps the paragraph left to right, and the words stay in
+/// typing order. A plain label would skip the bidi wrap; pre-reversing the Arabic would show
+/// the words backwards once epaint reorders them.
+#[test]
+fn a_latin_note_with_arabic_is_not_painted_as_stored() {
+    let text = "Note: واحد اثنين";
+    let lines = crate::bidi::wrap(text, |_| true);
+    let shown = lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>().join("\n");
+    assert!(lines.iter().all(|line| !line.rtl), "the paragraph starts with Latin, so its direction flag stays left to right");
+    assert_eq!(shown, text, "the hover keeps typing order for epaint: {shown:?}");
+    let first = shown.find("واحد").expect("the first Arabic word");
+    let second = shown.find("اثنين").expect("the second Arabic word");
+    assert!(first < second, "typing order stays واحد then اثنين: {shown:?}");
+    assert!(super::comment_hover_uses_bidi(text), "a mixed line was sent to a plain label");
+}
+
+#[test]
 fn notches_turn_two_page_spreads() {
     // Two-page view, shown one spread at a time (not continuous): a notch turns a whole
     // spread at once, not a single page (#752).

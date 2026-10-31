@@ -105,6 +105,11 @@ fn title_format(item: &OutlineItem, depth: usize, t: &Tokens) -> egui::TextForma
     egui::TextFormat { font_id, color, italics: item.italic, ..Default::default() }
 }
 
+/// Whether a bookmark title's paragraph reads right to left. The title itself stays in typing order.
+fn bookmark_reads_right_to_left(title: &str) -> bool {
+    crate::bidi::wrap(title, |_| true).first().is_some_and(|line| line.rtl)
+}
+
 /// Draw one bookmark row with expansion, inline rename and the editable context menu.
 pub(super) fn outline_item(
     ui: &mut egui::Ui,
@@ -172,6 +177,11 @@ pub(super) fn outline_item(
         let label_w = label_galley.as_ref().map_or(0.0, |g| g.size().x);
         let wrap_w = (ui.available_width() - indent - 20.0 - label_w - 12.0).max(60.0);
         let mut job = egui::text::LayoutJob::single_section(item.title.clone(), title_format(item, depth, t));
+        // Keep the stored typing order. epaint reorders a right-to-left title; pre-reversing it
+        // would reverse it a second time (egui 0.37).
+        if bookmark_reads_right_to_left(&item.title) {
+            job.direction = egui::epaint::text::TextDirection::RightToLeft;
+        }
         job.wrap.max_width = wrap_w;
         let galley = ui.fonts_mut(|f| f.layout_job(job));
         let h = (galley.size().y + 12.0).max(28.0);
@@ -313,7 +323,7 @@ mod label_column {
 
 #[cfg(test)]
 mod bookmark_filter {
-    use super::{outline_matches, title_format};
+    use super::{bookmark_reads_right_to_left, outline_matches, title_format};
     use crate::theme::{self, Tokens};
     use pdfcraft_render::OutlineItem;
 
@@ -346,6 +356,26 @@ mod bookmark_filter {
             italic: false,
             bold: false,
         }
+    }
+
+    /// The name this check had before egui 0.37. The title stays in typing order; epaint
+    /// reorders it. Handing the shaper the reversed string would show the words backwards.
+    #[test]
+    fn arabic_bookmark_titles_are_shown_in_reading_order() {
+        assert_eq!(crate::bidi::wrap("واحد اثنين", |_| true)[0].text, "واحد اثنين");
+        assert!(bookmark_reads_right_to_left("واحد اثنين"));
+        assert!(!bookmark_reads_right_to_left("Chapter 1"));
+    }
+
+    /// Arabic titles stay in typing order and are marked right to left, so epaint reorders them
+    /// once. Pre-reversing the string would show the words backwards on egui 0.37.
+    #[test]
+    fn arabic_bookmark_titles_keep_logical_order_and_read_right_to_left() {
+        assert!(bookmark_reads_right_to_left("واحد اثنين"));
+        assert!(!bookmark_reads_right_to_left("Chapter 1"));
+        let lines = crate::bidi::wrap("واحد اثنين", |_| true);
+        assert_eq!(lines[0].text, "واحد اثنين");
+        assert!(lines[0].rtl);
     }
 
     /// Turkish dotted and dotless i match in any case, as in Find (#892).

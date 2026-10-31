@@ -178,6 +178,17 @@ impl PdfCraftApp {
                 }
                 v.set_cover(on);
             }
+            ("rtl-pages", Some(v)) => {
+                let on = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("rtl-pages must be on or off".into()),
+                };
+                if on && !v.cover_applies() {
+                    return Err("switch to two-page view first to put pages in right-to-left order".into());
+                }
+                v.set_rtl_pages(on);
+            }
             ("default-layout", _) => {
                 let (layout, continuous) =
                     canvas::parse_display_token(value).ok_or("default-layout must be single, continuous, two-up or two-page")?;
