@@ -2520,6 +2520,11 @@ animation effects	Off	オフ
 	Make properties default	プロパティをデフォルトに設定
 	Pages selected	選択したページ
 	Page properties	ページのプロパティ
+	Print area…	範囲を印刷…
+	Save as image…	画像として保存…
+	Save as image	画像として保存
+	Selected area (page {page}, {size})	選択範囲（{page} ページ、{size}）
+	The selected area is no longer on a page of this document.	選択範囲はもうこの文書のページ上にありません。
 	Create & Edit	作成と編集
 	Review & Compare	レビューと比較
 	Forms & Signatures	フォームと署名

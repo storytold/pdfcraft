@@ -200,8 +200,18 @@ impl Automation {
         } else {
             None
         };
-        let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new() };
         let sizes: Vec<(f64, f64)> = self.doc(a)?.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
+        // Print a selected area: points from the top-left of the displayed page, as other tools
+        // take rectangles; the print crate takes it y up.
+        let area = match crate::content::rect_arg(a, "area")? {
+            None => None,
+            Some(r) => {
+                let [page] = pages.as_slice() else { return Err(bad("area prints one page: give pages as a single page")) };
+                let h = sizes.get(*page).map_or(0.0, |s| s.1);
+                Some([r[0].min(r[2]), h - r[1].max(r[3]), r[0].max(r[2]), h - r[1].min(r[3])])
+            }
+        };
+        let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new(), area };
         let sheets = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?.len();
         let bytes = self.session.print_pdf(id, &settings).map_err(failed)?;
         let mut out = json!({ "sheets": sheets, "pages": settings.pages.len(), "bytes": bytes.len() });

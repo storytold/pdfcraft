@@ -2520,6 +2520,11 @@ animation effects	Off	Désactivés
 	Make properties default	Définir comme propriétés par défaut
 	Pages selected	Pages sélectionnées
 	Page properties	Propriétés de la page
+	Print area…	Imprimer la zone…
+	Save as image…	Enregistrer comme image…
+	Save as image	Enregistrer comme image
+	Selected area (page {page}, {size})	Zone sélectionnée (page {page}, {size})
+	The selected area is no longer on a page of this document.	La zone sélectionnée n'est plus sur une page de ce document.
 	Create & Edit	Créer et modifier
 	Review & Compare	Réviser et comparer
 	Forms & Signatures	Formulaires et signatures

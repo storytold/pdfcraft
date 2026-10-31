@@ -9284,6 +9284,35 @@ fn a_root_less_write_output_is_atomic_too() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `doc_print` prints a selected area (Acrobat's "print selected area"): one page's rectangle,
+/// in points from the top-left, at actual size on its own sheet; several pages, an empty area or
+/// a layout that isn't a size choice are refused.
+#[test]
+fn doc_print_a_selected_area() {
+    let dir = workdir("print-area");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(
+        &mut a,
+        "doc_print",
+        json!({ "doc": doc, "pages": "1", "area": [36, 36, 236, 136], "layout": "actual", "paper": "Letter", "path": "area.pdf" }),
+    );
+    assert_eq!((r["sheets"].as_u64(), r["pages"].as_u64()), (Some(1), Some(1)));
+    let out = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("area.pdf")).unwrap())).unwrap();
+    assert_eq!(pdfcraft_model::pages(&out).len(), 1);
+    for (args, why) in [
+        (json!({ "doc": doc, "pages": "1-2", "area": [36, 36, 236, 136], "path": "x.pdf" }), "one page"),
+        (json!({ "doc": doc, "pages": "1", "area": [36, 36, 36.5, 136], "path": "x.pdf" }), "empty"),
+        (json!({ "doc": doc, "pages": "1", "area": [36, 36, 236], "path": "x.pdf" }), "4 numbers"),
+        (json!({ "doc": doc, "pages": "1", "area": [36, 36, 236, 136], "layout": "multiple", "per_sheet": 2, "path": "x.pdf" }), "Fit"),
+    ] {
+        match a.call("doc_print", &args) {
+            Err(ToolError::InvalidArgs(m)) => assert!(m.contains(why), "{why}: {m}"),
+            other => panic!("{why}: {other:?}"),
+        }
+    }
+}
+
 #[test]
 fn attaching_and_deleting_files_through_the_tools() {
     let dir = workdir("attach");

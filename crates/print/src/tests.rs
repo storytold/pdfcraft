@@ -863,6 +863,47 @@ fn imposed_pages_preserve_large_user_unit_matrices() {
     }
 }
 
+#[test]
+fn a_selected_area_prints_alone_fitted_or_at_actual_size() {
+    // Page 1 is 200×300; the area is its 100×50 block whose corner is at (40, 200).
+    let area = [40.0, 200.0, 140.0, 250.0];
+    let fit = layout(&[(200.0, 300.0), (200.0, 300.0)], &Settings { area: Some(area), ..settings(vec![0], Layout::Size(SizeMode::Fit)) }).unwrap();
+    assert_eq!(fit.len(), 1);
+    let pl = fit[0].placed[0];
+    assert_eq!(pl.clip, area, "clipped to the area");
+    // A landscape area on Auto takes a landscape sheet and fills its width inside the margin.
+    assert_eq!(fit[0].size, (792.0, 612.0));
+    let s = pl.matrix.0[0];
+    assert!(close(s, (792.0 - 2.0 * MARGIN) / 100.0), "{s}");
+    // The area's own corner lands where a page of its size would: centred on the sheet.
+    let (x, y) = (pl.matrix.0[0] * area[0] + pl.matrix.0[4], pl.matrix.0[3] * area[1] + pl.matrix.0[5]);
+    assert!(close(x, (792.0 - 100.0 * s) / 2.0) && close(y, (612.0 - 50.0 * s) / 2.0), "{x} {y}");
+    let actual = layout(&[(200.0, 300.0)], &Settings { area: Some(area), ..settings(vec![0], Layout::Size(SizeMode::Actual)) }).unwrap();
+    assert_eq!(actual[0].placed[0].matrix.0[0], 1.0, "100%");
+    // An area outside the page is cut to it; an empty one, several pages or another layout are refused.
+    let cut = layout(&[(200.0, 300.0)], &Settings { area: Some([150.0, 250.0, 400.0, 900.0]), ..settings(vec![0], Layout::Size(SizeMode::Actual)) })
+        .unwrap();
+    assert_eq!(cut[0].placed[0].clip, [150.0, 250.0, 200.0, 300.0]);
+    for (pages, area, layout_) in [
+        (vec![0], [10.0, 10.0, 10.5, 40.0], Layout::Size(SizeMode::Fit)),
+        (vec![0, 1], area, Layout::Size(SizeMode::Fit)),
+        (vec![0], [f64::NAN, 0.0, 50.0, 50.0], Layout::Size(SizeMode::Fit)),
+        (vec![0], area, Layout::Multiple { cols: 2, rows: 1, per_sheet: 2, order: PageOrder::Horizontal, border: false, auto_rotate: true }),
+        (vec![0], area, Layout::Booklet { subset: BookletSubset::BothSides, binding: Binding::Left }),
+        (vec![0], area, Layout::Poster { scale: 200.0, overlap: 18.0, cut_marks: true }),
+        (vec![0], area, Layout::Label { flip: false }),
+    ] {
+        assert!(matches!(
+            layout(&[(200.0, 300.0), (200.0, 300.0)], &Settings { area: Some(area), ..settings(pages, layout_) }),
+            Err(PrintError::Invalid(_))
+        ));
+    }
+    // The print-ready PDF has one sheet with only that area.
+    let bytes = impose(&fixture(1), &Settings { area: Some(area), ..settings(vec![0], Layout::Size(SizeMode::Actual)) }).unwrap();
+    let out = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(pdfcraft_model::pages(&out).len(), 1);
+}
+
 /// `output_within` (#1818): the bounded wait every platform's `lpoptions` call goes through.
 #[cfg(not(target_arch = "wasm32"))]
 mod bounded_commands {

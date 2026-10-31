@@ -64,6 +64,8 @@ mod widgets;
 use pdfcraft_engine::{DocId, Session};
 
 pub use canvas::{DocView, RasterMemory};
+#[doc(hidden)]
+pub use editing::download_mime_type;
 pub use editing::{CloseRequest, SaveTarget};
 pub use files::{ExtractDraft, FilePurpose, FileRequest, RotateDraft, SplitDraft, SplitMode, SplitPlan};
 pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore};
@@ -528,6 +530,8 @@ pub struct PdfCraftApp {
     /// The last snapshot (width, height, RGBA); `system_clipboard` also puts it on the
     /// system clipboard (tests turn that off).
     pub last_snapshot: Option<(u32, u32, pdfcraft_render::Pixels)>,
+    /// What `last_snapshot` was taken of: (document, page, rectangle in page view points).
+    last_snapshot_of: Option<(DocId, usize, [f32; 4])>,
     /// The last image copied with Copy Image (width, height, straight RGBA), also put on the
     /// system clipboard when `system_clipboard` is on.
     pub last_copied_image: Option<(u32, u32, Vec<u8>)>,

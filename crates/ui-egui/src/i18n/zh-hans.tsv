@@ -2484,6 +2484,11 @@ animation effects	Off	关
 	Make properties default	将属性设为默认
 	Pages selected	选定的页面
 	Page properties	页面属性
+	Print area…	打印区域…
+	Save as image…	另存为图像…
+	Save as image	另存为图像
+	Selected area (page {page}, {size})	所选区域（第 {page} 页，{size}）
+	The selected area is no longer on a page of this document.	所选区域已不在此文档的任何页面上。
 	Create & Edit	创建和编辑
 	Review & Compare	审阅和比较
 	Forms & Signatures	表单和签名

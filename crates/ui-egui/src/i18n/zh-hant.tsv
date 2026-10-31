@@ -2470,6 +2470,11 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+	Print area…	列印區域…
+	Save as image…	另存為圖片…
+	Save as image	另存為圖片
+	Selected area (page {page}, {size})	所選區域（第 {page} 頁，{size}）
+	The selected area is no longer on a page of this document.	所選區域已不在此文件的任何頁面上。
 	Create & Edit	建立與編輯
 	Review & Compare	審閱與比較
 	Forms & Signatures	表單與簽名

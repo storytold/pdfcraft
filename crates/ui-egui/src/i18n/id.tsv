@@ -2792,6 +2792,11 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	Print area…	Area cetak…
+	Save as image	Simpan sebagai gambar
+	Save as image…	Simpan sebagai gambar…
+	Selected area (page {page}, {size})	Area terpilih (halaman {page}, {size})
+	The selected area is no longer on a page of this document.	Area terpilih tidak lagi berada di halaman dokumen ini.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini

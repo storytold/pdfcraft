@@ -144,11 +144,29 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
     if !(paper.0 >= 72.0 && paper.1 >= 72.0 && paper.0.is_finite() && paper.1.is_finite()) {
         return Err(PrintError::Invalid("invalid paper size".into()));
     }
+    // A selected area: one page, within it, printed as if it were a page of that size.
+    let area = match settings.area {
+        None => None,
+        Some(_) if !matches!(settings.layout, Layout::Size(_)) => {
+            return Err(PrintError::Invalid("an area prints with Fit, Actual size, Shrink or a custom scale".into()));
+        }
+        Some(a) => {
+            let refused = || PrintError::Invalid("the selected area is empty or not on one page".into());
+            let [p] = pages.as_slice() else { return Err(refused()) };
+            let d = sizes.get(*p).copied().ok_or_else(refused)?;
+            // Cut to the page; NaN falls to the page's edge, and what is left must be a point wide.
+            let [x0, y0, x1, y1] = [a[0].min(a[2]).max(0.0), a[1].min(a[3]).max(0.0), a[0].max(a[2]).min(d.0), a[1].max(a[3]).min(d.1)];
+            if !(x1 - x0 >= 1.0 && y1 - y0 >= 1.0) || [x0, y0, x1, y1].iter().any(|v| !v.is_finite()) {
+                return Err(refused());
+            }
+            Some([x0, y0, x1, y1])
+        }
+    };
     let mut sheets = Vec::new();
     match settings.layout {
         Layout::Size(mode) => {
             for &p in &pages {
-                let d = sizes[p];
+                let d = area.map_or(sizes[p], |a| (a[2] - a[0], a[3] - a[1]));
                 let size = oriented(paper, settings.orientation, d.0 > d.1);
                 let fit = fit_scale(d, (size.0 - 2.0 * MARGIN, size.1 - 2.0 * MARGIN));
                 let s = match mode {
@@ -158,7 +176,13 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                     SizeMode::Custom(pct) if pct.is_finite() && pct > 0.0 => pct / 100.0,
                     SizeMode::Custom(_) => return Err(PrintError::Invalid("the scale must be more than 0%".into())),
                 };
-                sheets.push(Sheet { size, placed: vec![place_in(p, d, [0.0, 0.0, size.0, size.1], s, false)], ..Sheet::default() });
+                let sheet = [0.0, 0.0, size.0, size.1];
+                // An area is placed as a page of its size would be, and clipped to it.
+                let placed = match area {
+                    Some(a) => place_crop(p, a, sheet, s, 0),
+                    None => place_in(p, d, sheet, s, false),
+                };
+                sheets.push(Sheet { size, placed: vec![placed], ..Sheet::default() });
             }
         }
         Layout::Label { flip } => {

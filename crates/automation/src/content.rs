@@ -21,7 +21,7 @@ fn to_view(r: [f64; 4], ph: f64) -> [f64; 4] {
     [r[0], ph - r[3], r[2], ph - r[1]]
 }
 
-fn rect_arg(a: &Args, key: &str) -> Result<Option<[f64; 4]>> {
+pub(crate) fn rect_arg(a: &Args, key: &str) -> Result<Option<[f64; 4]>> {
     a.get(key)
         .map(|v| {
             let r: Vec<f64> = v.as_array().map(|x| x.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
