@@ -9928,8 +9928,8 @@ milestone = "M14"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/view.rs::default_page_display_is_used_for_new_documents", "crates/ui-egui/tests/it/view.rs::default_zoom_is_used_for_new_documents", "crates/ui-egui/tests/it/view.rs::preferences_set_the_default_zoom", "crates/ui-egui/tests/it/view.rs::always_use_my_default_zoom_and_page_layout_ignores_what_the_pdf_asks_for"]
-notes = "Preferences ▸ Documents and view: Default page display and Default zoom (Fit to width, Zoom to page level or a percentage) for every new tab; a PDF that asks for a layout or zoom gets it, unless Always use my default zoom and page layout is on. Missing: Acrobat's resolution, rendering and page-content options"
+evidence = ["crates/ui-egui/tests/it/view.rs::default_page_display_is_used_for_new_documents", "crates/ui-egui/tests/it/view.rs::default_zoom_is_used_for_new_documents", "crates/ui-egui/tests/it/view.rs::preferences_set_the_default_zoom", "crates/ui-egui/tests/it/view.rs::always_use_my_default_zoom_and_page_layout_ignores_what_the_pdf_asks_for", "crates/ui-egui/tests/it/open_action.rs::the_default_panel_preference_picks_the_panel_a_document_opens_with"]
+notes = "Preferences ▸ Documents and view: Default page display and Default zoom (Fit to width, Zoom to page level or a percentage) for every new tab; a PDF that asks for a layout or zoom gets it, unless Always use my default zoom and page layout is on. Default panel (Automatic, None, Pages, Bookmarks or Comments; #1495) picks the right panel a newly opened document shows: Automatic keeps an open panel or shows Comments when the document has comments, else its Bookmarks; a chosen panel replaces the one open (the right panel is shared by the tabs and restored from the last session); a PDF that names a panel (Initial View), Read mode and a right panel the user closed still win. Missing: Acrobat's resolution, rendering and page-content options"
 
 [[feature]]
 id = "misc.prefs-documents"

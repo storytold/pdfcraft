@@ -54,6 +54,49 @@ pub enum RightPanel {
     Compare,
 }
 
+/// Preferences ▸ Default panel: the right panel a newly opened document shows (#1495), unless the
+/// document names one itself (Initial View) or the user closed the right panel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DefaultPanel {
+    /// Comments when the document has any, else Bookmarks when it has any, else none (Acrobat).
+    #[default]
+    Auto,
+    None,
+    Pages,
+    Bookmarks,
+    Comments,
+}
+
+impl DefaultPanel {
+    pub const ALL: [Self; 5] = [Self::Auto, Self::None, Self::Pages, Self::Bookmarks, Self::Comments];
+
+    /// The settings-file and `--default-panel` word.
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::None => "none",
+            Self::Pages => "pages",
+            Self::Bookmarks => "bookmarks",
+            Self::Comments => "comments",
+        }
+    }
+
+    pub fn from_token(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.token() == s)
+    }
+
+    /// The Preferences label (English; the catalogs translate it).
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Automatic",
+            Self::None => "None",
+            Self::Pages => "Pages",
+            Self::Bookmarks => "Bookmarks",
+            Self::Comments => "Comments",
+        }
+    }
+}
+
 /// Quick-action bar tools (the vertical floating strip).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuickTool {

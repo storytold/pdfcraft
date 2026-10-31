@@ -94,6 +94,7 @@ impl PdfCraftApp {
             "default_layout": canvas::display_token(self.view_defaults.layout, self.view_defaults.continuous),
             "default_zoom": self.view_defaults.zoom_name(),
             "always_default_view": self.always_default_view,
+            "default_panel": self.default_panel.token(),
             "highlight_fields": self.view_defaults.highlight_fields,
             "units": self.units,
             "language": self.language,
@@ -233,6 +234,9 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["always_default_view"].as_bool() {
             self.always_default_view = on;
+        }
+        if let Some(panel) = v["default_panel"].as_str().and_then(DefaultPanel::from_token) {
+            self.default_panel = panel;
         }
         if let Some(paper) = v
             .get("print_paper")

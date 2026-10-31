@@ -201,6 +201,9 @@ impl PdfCraftApp {
                     _ => return Err("always-default-view must be on or off".into()),
                 };
             }
+            ("default-panel", _) => {
+                self.default_panel = DefaultPanel::from_token(value).ok_or("default-panel must be auto, none, pages, bookmarks or comments")?;
+            }
             ("tools-side", _) => {
                 self.side_panels.tools_side = match value {
                     "left" => side_panels::ToolsSide::Left,

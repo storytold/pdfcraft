@@ -189,3 +189,54 @@ fn a_full_screen_document_with_an_outline_shows_it_only_when_it_asks_to() {
     let h = harness("/Outlines 9 0 R");
     assert_eq!(h.state().right, Some(RightPanel::Bookmarks));
 }
+
+/// Preferences ▸ Default panel (#1495): the right panel a document opens with, unless the
+/// document names one or the user closed the right panel; kept across a restart.
+#[test]
+fn the_default_panel_preference_picks_the_panel_a_document_opens_with() {
+    use RightPanel::{Bookmarks, Comments, Pages};
+    let open = |panel: &str, catalog: &str| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("default-panel", panel).unwrap();
+        app.open_bytes("open.pdf", None, fixture(catalog)).expect("opens");
+        app.right
+    };
+    // Automatic: the document's bookmarks, as before.
+    assert_eq!(open("auto", "/Outlines 9 0 R"), Some(Bookmarks));
+    assert_eq!(open("auto", ""), None);
+    // A chosen panel replaces the automatic choice.
+    assert_eq!(open("pages", "/Outlines 9 0 R"), Some(Pages));
+    assert_eq!(open("none", "/Outlines 9 0 R"), None);
+    assert_eq!(open("comments", ""), Some(Comments));
+    // A document that names a panel still opens with it.
+    assert_eq!(open("pages", "/Outlines 9 0 R /PageMode /UseOutlines"), Some(Bookmarks));
+    assert_eq!(open("none", "/PageMode /UseThumbs"), Some(Pages));
+    // The right panel is shared by the tabs and comes back from the last session: Automatic
+    // leaves an open one alone, a chosen panel replaces it.
+    let reopen = |panel: &str| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("default-panel", panel).unwrap();
+        app.right = Some(Comments);
+        app.open_bytes("open.pdf", None, fixture("/Outlines 9 0 R")).expect("opens");
+        app.right
+    };
+    assert_eq!(reopen("auto"), Some(Comments));
+    assert_eq!(reopen("pages"), Some(Pages));
+    assert_eq!(reopen("none"), None);
+    // A right panel the user closed stays closed.
+    let mut app = PdfCraftApp::new();
+    app.set_option("default-panel", "pages").unwrap();
+    app.right_panel_closed = true;
+    app.open_bytes("open.pdf", None, fixture("")).expect("opens");
+    assert_eq!(app.right, None);
+    // Kept across a restart; a bad word leaves it alone and a settings file without it is Automatic.
+    let mut restarted = PdfCraftApp::new();
+    restarted.restore(&app.persist());
+    assert_eq!(restarted.default_panel, pdfcraft_ui_egui::DefaultPanel::Pages);
+    restarted.restore(r#"{"default_panel":"left"}"#);
+    assert_eq!(restarted.default_panel, pdfcraft_ui_egui::DefaultPanel::Pages);
+    let mut legacy = PdfCraftApp::new();
+    legacy.restore("{}");
+    assert_eq!(legacy.default_panel, pdfcraft_ui_egui::DefaultPanel::Auto);
+    assert!(PdfCraftApp::new().set_option("default-panel", "left").is_err());
+}
