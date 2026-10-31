@@ -2740,7 +2740,7 @@ status = "shipped"
 commands = ["page.insert_blank"]
 tools = ["page_insert_blank"]
 evidence = ["crates/organize/src/tests.rs::inserts_blank_page", "crates/ui-egui/tests/it/editing.rs::insert_blank_page_after_selection", "crates/engine/src/tests.rs::insert_blank_between_pages_keeps_both_neighbours"]
-notes = ""
+notes = "Inserts a page with an empty /Resources at the chosen position; the tool takes the neighbouring page's size by default (Letter for an empty file) and accepts 1 to 14,400 points on a side. The cited tests check page order and the neighbours."
 
 [[feature]]
 id = "organize.insert-from-file"
@@ -3088,7 +3088,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/organize/src/tests.rs::links_are_rewired_to_copied_pages_or_dropped", "crates/organize/src/tests.rs::named_destinations_are_resolved_to_the_copies"]
-notes = ""
+notes = "Copied pages' link and GoTo destinations are pointed at the copies. A link to a page that was not copied loses its destination instead of dangling, and named destinations are resolved against the source name tree and become explicit ones. Other action types (URI, Launch, JavaScript) are copied as they are. Tests cover one GoTo and one named destination."
 
 [[feature]]
 id = "organize.preserve-fields"
@@ -3100,7 +3100,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/organize/src/tests.rs::form_fields_come_along_and_are_registered"]
-notes = ""
+notes = "Copied widgets keep their field hierarchy and the top-level fields are added to the destination /AcroForm's /Fields. Only /Fields is written: a new /AcroForm gets nothing else (no /DR, /DA, /NeedAppearances or /CO calculation order), and /XFA is not handled. A colliding name is renamed (Name-1, Name-2) for Combine and Insert from File and merged for Duplicate, Replace, Extract and Split. The cited test checks one text field's value and parent."
 
 [[feature]]
 id = "organize.preserve-layers"
@@ -3112,7 +3112,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/organize/src/tests.rs::layers_are_registered_with_their_default_state"]
-notes = ""
+notes = "Layers (optional content groups) that copied pages use are added to the destination's /OCProperties. Its /OCGs array receives the copied groups, and its default /D configuration receives /ON or /OFF (from the source's /D /OFF) and /Order. Extracting pages that use none adds none. Each layer is appended flat to /Order, so the source's layer-panel nesting is not kept; other configurations, radio-button groups (/RBGroups), locking and the base state are not carried. The cited test covers one hidden layer."
 
 [[feature]]
 id = "organize.preserve-inherited"
@@ -3124,7 +3124,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/organize/src/tests.rs::inherited_attributes_travel_with_copied_pages"]
-notes = ""
+notes = "Attributes pages inherit from the page tree (the cited test checks rotation, MediaBox and resources) are copied onto the page, so it looks the same outside its tree; resources split between the page and the tree travel together (#1628). Other inheritable keys are not tested one by one."
 
 [[feature]]
 id = "organize.preserve-attachments"
@@ -3136,7 +3136,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/organize/src/tests.rs::combine_nests_source_bookmarks_and_keeps_attachments"]
-notes = ""
+notes = "Combine keeps the source documents' embedded files in one EmbeddedFiles tree and disambiguates a repeated name (notes.txt, notes.txt (2)); a file split around another is attached once. Only Combine is tested for attachments; whether Insert from File and Extract Pages carry them is not covered by a test."
 
 [[feature]]
 id = "organize.field-name-conflicts"
@@ -3292,7 +3292,7 @@ status = "shipped"
 commands = []
 tools = ["bookmark_rename"]
 evidence = ["crates/ui-egui/tests/it/bookmarks.rs::new_rename_reorder_indent_delete_and_undo", "crates/ui-egui/tests/it/bookmarks.rs::escape_cancels_a_rename", "crates/organize/src/tests.rs::bookmarks_add_rename_move_delete", "crates/organize/src/tests.rs::bookmark_edits_keep_unknown_keys_and_touch_few_objects"]
-notes = ""
+notes = "Changes /Title only: colour, style, actions and unknown keys stay, and only that object is rewritten (tested). In the Bookmarks panel (Escape cancels) and as the bookmark_rename tool, undoable."
 
 [[feature]]
 id = "organize.bookmark-delete"
@@ -3304,7 +3304,7 @@ status = "shipped"
 commands = []
 tools = ["bookmark_delete"]
 evidence = ["crates/ui-egui/tests/it/bookmarks.rs::new_rename_reorder_indent_delete_and_undo", "crates/organize/src/tests.rs::bookmarks_add_rename_move_delete", "crates/engine/src/tests.rs::bookmark_edits_show_in_the_viewer_undo_and_save"]
-notes = ""
+notes = "Removes the bookmark and everything under it, relinks its siblings and recomputes /Count. An incremental save leaves the removed items in the file as unreferenced objects; only a full rewrite drops them. There is no option to delete a bookmark and keep its children."
 
 [[feature]]
 id = "organize.bookmark-move"
@@ -3316,7 +3316,7 @@ status = "shipped"
 commands = []
 tools = ["bookmark_move"]
 evidence = ["crates/ui-egui/tests/it/bookmarks.rs::new_rename_reorder_indent_delete_and_undo", "crates/organize/src/tests.rs::bookmarks_add_rename_move_delete", "crates/engine/src/tests.rs::bookmark_edits_show_in_the_viewer_undo_and_save", "crates/automation/tests/it/automation.rs::bookmarks_through_tools"]
-notes = ""
+notes = "Moves a bookmark to a position under a parent by path, relinking /Parent, /Prev, /Next, /First and /Last and recounting. The cited UI test covers reordering and indenting through the panel and the tool test the tool; whether dragging with the pointer is tested is not established here."
 
 [[feature]]
 id = "organize.bookmark-set-destination"
@@ -3328,7 +3328,7 @@ status = "shipped"
 commands = []
 tools = ["bookmark_set_page"]
 evidence = ["crates/organize/src/tests.rs::bookmarks_add_rename_move_delete", "crates/engine/src/tests.rs::bookmark_edits_show_in_the_viewer_undo_and_save", "crates/automation/tests/it/automation.rs::bookmarks_through_tools"]
-notes = ""
+notes = "Points the bookmark at a page, as a GoTo with /XYZ null null null (the reader's zoom and position are kept), and removes a competing /A action. A position or zoom cannot be set on an existing bookmark (a new bookmark can take a position); an existing bookmark's other destination types and named destinations are replaced, not edited. The automation tool sets the page only."
 
 [[feature]]
 id = "organize.bookmark-appearance"
@@ -3644,7 +3644,7 @@ status = "shipped"
 commands = ["comment.underline"]
 tools = ["comment_add"]
 evidence = ["crates/annot/src/tests.rs::every_tool_creates_a_drawable_comment", "crates/ui-egui/tests/it/comments.rs::a_selection_made_first_is_marked_when_a_tool_is_picked"]
-notes = ""
+notes = "A TextMarkup annotation over the selected text quads, with a drawn appearance: a line near the bottom of each quad (0.5 to 3 pt thick, 7% of the quad's height) in the default blue. The cited tests are generic ones (every tool makes a drawable comment); none checks the line's position on a rendered page. Squiggly is a separate tool."
 
 [[feature]]
 id = "comment.strikeout"
@@ -3656,7 +3656,7 @@ status = "shipped"
 commands = ["comment.strikeout"]
 tools = ["comment_add"]
 evidence = ["crates/ui-egui/tests/it/comments.rs::a_selection_made_first_is_marked_when_a_tool_is_picked", "crates/annot/src/tests.rs::every_tool_creates_a_drawable_comment"]
-notes = ""
+notes = "A TextMarkup annotation over the selected text quads, with a line through each quad at 42% of its height, in the default red. The cited tests are generic ones (every tool makes a drawable comment); none checks the line's position on a rendered page. Strike-through that replaces text is a separate path with its own /IT."
 
 [[feature]]
 id = "comment.squiggly"
@@ -6969,7 +6969,7 @@ status = "shipped"
 commands = ["create.blank"]
 tools = ["doc_create"]
 evidence = ["crates/ui-egui/tests/it/create.rs::opening_images_and_text_converts_them_to_new_pdfs", "crates/create/src/tests.rs::blank_documents", "crates/automation/tests/it/automation.rs::creating_and_reducing_through_tools"]
-notes = ""
+notes = "A document of 1 to 10,000 empty pages, each 3 to 14,400 points on a side; the tool defaults to Letter. The cited test checks three pages and two refused cases (a 1 pt side and zero pages)."
 
 [[feature]]
 id = "create.from-html"
@@ -7469,7 +7469,7 @@ status = "shipped"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
 evidence = ["crates/optimize/tests/optimize.rs::images_are_measured_where_drawn_and_downsampled"]
-notes = ""
+notes = "Removes /Thumb from every page when the setting is on (the default) and counts them; the cited test asserts the count on a document with two. Only pages are looked at; a /Thumb elsewhere stays."
 
 [[feature]]
 id = "optimize.discard-tags"
@@ -7481,7 +7481,7 @@ status = "shipped"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
 evidence = ["crates/optimize/tests/optimize.rs::discards_and_clean_up", "crates/ui-egui/tests/it/create.rs::the_pdf_optimizer_dialog_saves_an_optimized_copy"]
-notes = ""
+notes = "Removes the catalog's /StructTreeRoot and /MarkInfo and each page's /StructParents, and is off by default. A document with no /StructTreeRoot is left as it is: its /MarkInfo and page /StructParents stay. Marked-content ids in page content are not touched. Cited tests check that the tree is gone; they do not check what a tagged-PDF checker or screen reader makes of the result."
 
 [[feature]]
 id = "optimize.discard-bookmarks"
@@ -7493,7 +7493,7 @@ status = "shipped"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
 evidence = ["crates/redact/src/tests.rs::hidden_information_is_counted_and_removed", "crates/automation/tests/it/automation.rs::optimizing_through_tools"]
-notes = ""
+notes = "Runs through Remove Hidden Information's Bookmarks category: removes the catalog's /Outlines and a PageMode of UseOutlines. Cited tests cover the category with the other hidden-information ones, not a document where only bookmarks are discarded."
 
 [[feature]]
 id = "optimize.discard-search-index"
@@ -7517,7 +7517,7 @@ status = "shipped"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
 evidence = ["crates/optimize/tests/optimize.rs::discards_and_clean_up"]
-notes = ""
+notes = "Removes these ViewerPreferences keys: PrintScaling, Duplex, PickTrayByPDFSize, PrintPageRange, NumCopies, PrintArea, PrintClip. Other preferences stay. Off by default. A print-related setting stored elsewhere is not touched."
 
 [[feature]]
 id = "optimize.discard-alternate-images"
@@ -7529,7 +7529,7 @@ status = "shipped"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
 evidence = ["crates/optimize/tests/optimize.rs::images_are_measured_where_drawn_and_downsampled"]
-notes = ""
+notes = "Removes /Alternates from every image XObject (on by default) and counts them in the report. None of the cited tests exercises it: no test builds an image with /Alternates, so the removal is untested."
 
 [[feature]]
 id = "optimize.discard-form-actions"
@@ -7553,7 +7553,7 @@ status = "shipped"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
 evidence = ["crates/redact/src/tests.rs::hidden_information_is_counted_and_removed", "crates/automation/tests/it/automation.rs::optimizing_through_tools"]
-notes = ""
+notes = "Runs through Remove Hidden Information's Form fields category: fields without an appearance get one drawn first, then widgets are flattened into page content and /AcroForm is removed. The result is a one-way change: the fields and their values are no longer stored as fields. Cited tests cover the category together with others, not the flatten on its own with the appearance fallback."
 
 [[feature]]
 id = "optimize.discard-comments"
@@ -7565,7 +7565,7 @@ status = "shipped"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
 evidence = ["crates/redact/src/tests.rs::hidden_information_is_counted_and_removed", "crates/automation/tests/it/automation.rs::optimizing_through_tools"]
-notes = ""
+notes = "Runs through Remove Hidden Information's Comments category: removes markup annotations and their pop-ups, and drops the structure-tree references to them. File attachment annotations belong to Attachments and redaction marks are kept. Acrobat's option is titled comments, forms and multimedia; forms go through Flatten form fields, and no multimedia (rich media, sound, movie) handling exists here."
 
 [[feature]]
 id = "optimize.discard-metadata"
@@ -7577,7 +7577,7 @@ status = "shipped"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
 evidence = ["crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/ui-egui/tests/it/create.rs::the_pdf_optimizer_dialog_saves_an_optimized_copy"]
-notes = ""
+notes = "Runs through Remove Hidden Information's Metadata category: removes the trailer's /Info and the /Metadata (XMP) streams of objects reachable from the catalog that own one; an unreachable object that owns either is not covered. Cited tests check the optimizer path, not each owner of XMP (image, font, form). The document gets a full rewrite, so the file's earlier revisions are not kept."
 
 [[feature]]
 id = "optimize.discard-attachments"
@@ -7589,7 +7589,7 @@ status = "shipped"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
 evidence = ["crates/redact/src/tests.rs::hidden_information_is_counted_and_removed", "crates/automation/tests/it/automation.rs::optimizing_through_tools"]
-notes = ""
+notes = "Runs through Remove Hidden Information's Attachments category: removes the EmbeddedFiles name tree, associated files (/AF) and file attachment annotations. Tests cover it together with the other hidden-information categories, not on its own."
 
 [[feature]]
 id = "optimize.discard-private-data"
@@ -7601,7 +7601,7 @@ status = "shipped"
 commands = ["optimize.advanced"]
 tools = ["doc_optimize"]
 evidence = ["crates/redact/src/tests.rs::hidden_information_is_counted_and_removed", "crates/automation/tests/it/automation.rs::optimizing_through_tools"]
-notes = ""
+notes = "Runs through Remove Hidden Information's Private data category: removes /PieceInfo from the objects reachable from the catalog that own it, the catalog and pages included; an unreachable object keeps its /PieceInfo. Other producers' private keys that are not /PieceInfo stay."
 
 [[feature]]
 id = "optimize.discard-external-refs"
