@@ -6029,6 +6029,8 @@ fn an_xfa_form_without_a_template_opens_with_its_placeholder_and_a_warning() {
     assert!(doc.info.warnings.iter().any(|w| w.contains("could not be laid out") && w.contains("no template")), "{:?}", doc.info.warnings);
 }
 
+/// A dynamic form opens laid out with the values its datasets hold, and with the rows its data
+/// adds to a repeating table row.
 #[test]
 fn dynamic_xfa_forms_open_with_the_values_and_rows_of_their_data() {
     let data = "<form><head><familyName>Kaur</familyName><born>2001-02-03</born><answer>Y</answer></head><table><row><what0>a</what0></row><row><what0>b</what0></row><row><what0>c</what0></row></table></form>";
@@ -6042,6 +6044,29 @@ fn dynamic_xfa_forms_open_with_the_values_and_rows_of_their_data() {
     assert_eq!(value("answer"), vec!["Y".to_string()]);
     assert_eq!(value("what0_3"), vec!["c".to_string()], "three rows from the data: {:?}", doc.form.iter().map(|f| &f.name).collect::<Vec<_>>());
     assert!(!doc.dirty);
+}
+
+/// A dynamic form a viewer saved with its pages drawn holds only its signature box, so it opened as
+/// a picture with nothing to fill in. When its configuration says it must be rendered dynamically
+/// it is laid out from its template on opening, and its text field can be filled; once signed, it
+/// opens as saved, its pages and signature untouched.
+#[test]
+fn a_form_saved_with_its_pages_that_requires_dynamic_rendering_is_laid_out_unless_signed() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let unsigned = Arc::new(pdfcraft_xfa::fixtures::saved_with_pages_shell("required", false));
+    let id = s.open("saved.pdf", None, unsigned, None).expect("opens");
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.xfa, Some(pdfcraft_render::Xfa::Dynamic));
+    assert!(doc.xfa.is_some(), "laid out from the template");
+    let name = doc.form.iter().find(|f| f.name.contains("name")).map(|f| f.name.clone()).expect("the template's text field");
+    s.apply(id, Edit::SetFieldValue { name: name.clone(), value: FieldValue::Text("Ada".into()) }).expect("fills");
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == name).map(|f| f.value.clone()), Some(vec!["Ada".to_string()]));
+    let signed = Arc::new(pdfcraft_xfa::fixtures::saved_with_pages_shell("required", true));
+    let id = s.open("signed.pdf", None, signed.clone(), None).expect("opens");
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.xfa, Some(pdfcraft_render::Xfa::Static), "signed: as saved");
+    assert!(doc.xfa.is_none(), "nothing was laid out");
+    assert_eq!(doc.bytes[..], signed[..], "no revision was appended on open");
 }
 
 /// #3180: an XFA form with no fields whose configuration says `dynamicRender` is `forbidden` is a
@@ -9408,4 +9433,42 @@ fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes()
     black(&s, rewritten);
     s.apply(rewritten, Edit::RemoveMarks { kind: MarkKind::Background }).unwrap();
     black(&s, rewritten);
+}
+
+/// A form saved with its pages whose signature box sits deeper than the 32 nested fields looked
+/// through counts as signed, as the xfa crate counts it, so it is left as saved rather than laid
+/// out again over a signature that may be there; nested less deep, unsigned, it is laid out.
+#[test]
+fn a_saved_form_too_deep_to_read_through_is_left_as_saved() {
+    let xfa = |depth: usize| {
+        let mut s = Session::new();
+        let id = s.open("deep.pdf", None, Arc::new(pdfcraft_xfa::fixtures::deep_saved_with_pages_shell(depth)), None).expect("opens");
+        s.get(id).unwrap().info.xfa
+    };
+    assert_eq!(xfa(5), Some(pdfcraft_render::Xfa::Dynamic), "nested, unsigned: laid out");
+    assert_eq!(xfa(40), Some(pdfcraft_render::Xfa::Static), "too deep to tell: left as saved");
+}
+
+/// The renderer's inspection and the xfa crate each decide whether a form saved with its pages
+/// is laid out again from its template, each walking the field tree for a signature in its own
+/// way (the renderer reads the file through lopdf, the xfa crate through cos). They agree on every
+/// such form: required or not, signed or not, and a signature box nested from shallow to past
+/// the depth either looks through.
+#[test]
+fn the_renderer_and_the_xfa_crate_agree_on_which_saved_forms_are_laid_out() {
+    let mut forms: Vec<(String, Vec<u8>)> = Vec::new();
+    for render in ["required", "forbidden", ""] {
+        for signed in [false, true] {
+            forms.push((format!("{render:?}, signed {signed}"), pdfcraft_xfa::fixtures::saved_with_pages_shell(render, signed)));
+        }
+    }
+    for depth in [1, 5, 30, 31, 32, 33, 34, 40] {
+        forms.push((format!("nested {depth} deep"), pdfcraft_xfa::fixtures::deep_saved_with_pages_shell(depth)));
+    }
+    for (what, bytes) in forms {
+        let bytes = Arc::new(bytes);
+        let info = pdfcraft_render::inspect(bytes.clone(), None).expect("inspects");
+        let cos = pdfcraft_cos::Document::open(bytes).expect("opens");
+        assert_eq!(info.xfa == Some(pdfcraft_render::Xfa::Dynamic), pdfcraft_xfa::is_dynamic(&cos), "{what}");
+    }
 }

@@ -138,6 +138,10 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   only their data is read and written. A form with no fields is also static when its `config`
   packet says `<dynamicRender>forbidden</dynamicRender>` (Designer's static PDF form): its pages
   are the form and are not laid out again (#3180). Without that, no fields means dynamic.
+  The other way round, a form with fields is dynamic when its `config` packet says
+  `<dynamicRender>required</dynamicRender>`: a viewer saved it with its pages drawn and only its
+  signature boxes as fields, so its other fields live in the template. Once one of those boxes
+  is signed it stays as saved, since laying it out would change the pages the signature covers.
 - **Flattening and converting.** `strip` takes the XFA out of a document: the packets,
   `/NeedsRendering`, the layout mark, the overrides and the private keys on the fields. The
   engine calls it after flattening an XFA form's fields (so Adobe's viewers show the baked

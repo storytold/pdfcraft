@@ -8,6 +8,10 @@ use crate::XfaError;
 /// Most decoded packet bytes read in total.
 const MAX_XDP: usize = 64 << 20;
 
+/// Most XML nodes read when the XDP is parsed for its configuration, as many as the template
+/// parser allows.
+const MAX_XDP_NODES: u32 = 2_000_000;
+
 /// What was found in the XFA entry.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Packets {
@@ -95,6 +99,70 @@ fn to_text(bytes: &[u8]) -> String {
         [0, b'<', ..] => lossy16(bytes, u16::from_be_bytes),
         _ => String::from_utf8_lossy(bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)).into_owned(),
     }
+}
+
+/// Whether the XDP's configuration packet asks for dynamic rendering: `required` at
+/// `config/acrobat/acrobat7/dynamicRender` (Designer writes it for a dynamic form). The packet is
+/// the `config` child of the `xdp` root (a whole-XDP stream, or an array's packets read in order
+/// between its preamble and postamble), or the document itself when it is a bare `config` packet.
+/// An element of that name anywhere else (a data node, inside the template) is not it. XML that
+/// doesn't parse, or has a DTD, asks for nothing.
+pub(crate) fn requires_dynamic_render(xdp: &str) -> bool {
+    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_XDP_NODES, ..Default::default() };
+    let Ok(doc) = roxmltree::Document::parse_with_options(xdp, opts) else { return false };
+    let root = doc.root_element();
+    /// `n`'s first child element named `name` (any namespace).
+    fn child<'a, 'i>(n: roxmltree::Node<'a, 'i>, name: &str) -> Option<roxmltree::Node<'a, 'i>> {
+        n.children().find(|c| c.is_element() && c.tag_name().name() == name)
+    }
+    let config = match root.tag_name().name() {
+        "config" => Some(root),
+        "xdp" => child(root, "config"),
+        _ => None,
+    };
+    config
+        .and_then(|c| child(c, "acrobat"))
+        .and_then(|a| child(a, "acrobat7"))
+        .and_then(|a| child(a, "dynamicRender"))
+        .and_then(|d| d.text())
+        .is_some_and(|t| t.trim() == "required")
+}
+
+/// Whether the AcroForm holds a signed signature field (`/FT /Sig` with a value), looked for at
+/// most 32 levels deep and among at most 10 000 fields. A form whose fields go past either limit
+/// counts as signed: what wasn't looked at may be, and laying a signed form out would change
+/// what was signed.
+pub(crate) fn has_signature(doc: &Document) -> bool {
+    let Some(root) = doc.root() else { return false };
+    let catalog = doc.get(root);
+    let Some(acro) = catalog.as_dict().and_then(|c| c.get(b"AcroForm")).map(|a| doc.resolve(a)) else { return false };
+    let Some(fields) = acro.as_dict().and_then(|a| a.get(b"Fields")).map(|f| doc.resolve(f)) else { return false };
+    let Some(fields) = fields.as_array() else { return false };
+    // (field, inherited field type, depth)
+    let mut todo: Vec<(Object, bool, usize)> = fields.iter().map(|f| (f.clone(), false, 0)).collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut budget = 10_000usize;
+    while let Some((f, sig_above, depth)) = todo.pop() {
+        if budget == 0 || depth > 32 {
+            return true;
+        }
+        if f.as_ref().is_some_and(|r| !seen.insert(r)) {
+            continue;
+        }
+        budget -= 1;
+        let f = doc.resolve(&f);
+        let Some(d) = f.as_dict() else { continue };
+        let sig = d.name(b"FT").map_or(sig_above, |t| t == b"Sig");
+        if sig && d.get(b"V").is_some_and(|v| !matches!(&*doc.resolve(v), Object::Null)) {
+            return true;
+        }
+        if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k))
+            && let Some(kids) = kids.as_array()
+        {
+            todo.extend(kids.iter().map(|k| (k.clone(), sig, depth + 1)));
+        }
+    }
+    false
 }
 
 /// Read the XFA packets, if the document has any.
