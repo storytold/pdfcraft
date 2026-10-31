@@ -131,3 +131,92 @@ fn f4_toggles_the_side_panel_and_shift_f4_the_tools_panel() {
     h.run_steps(3);
     h.get_by_label("Expand all tools");
 }
+
+/// The header is a drag handle, separate from the Bookmarks button in the rail.
+fn navigation_title(h: &Harness<'static, PdfCraftApp>) -> egui::Rect {
+    h.get_all_by_label("Bookmarks")
+        .map(|node| node.rect())
+        .find(|rect| rect.width() > 60.0 && rect.height() < 40.0)
+        .expect("navigation header label exists")
+}
+
+fn drag_navigation_title(h: &mut Harness<'static, PdfCraftApp>, horizontal: f32) {
+    let start = navigation_title(h).center();
+    h.hover_at(start);
+    h.run_steps(1);
+    h.drag_at(start);
+    h.run_steps(1);
+    for step in 1..=6 {
+        h.hover_at(start + egui::vec2(horizontal * step as f32 / 6.0, 0.0));
+        h.run_steps(1);
+    }
+    h.drop_at(start + egui::vec2(horizontal, 0.0));
+    h.run_steps(4);
+}
+
+/// Regression #5351: dragging the header moves the navigation rail and panel.
+/// Short drags keep their side, while meaningful drags persist across restarts.
+#[test]
+fn dragging_navigation_header_changes_side_and_preserves_it() {
+    let mut h = harness(|app| app.set_option("panel", "bookmarks").unwrap());
+    assert!(h.state().side_panels.side_on_right);
+    let tools_side = h.state().side_panels.tools_side;
+
+    drag_navigation_title(&mut h, -30.0);
+    assert!(h.state().side_panels.side_on_right, "short drags must not redock");
+
+    drag_navigation_title(&mut h, -240.0);
+    assert!(!h.state().side_panels.side_on_right, "drag left should redock");
+    let (left_rail, left_panel, left_tools) = (rail(&h), side(&h), tools(&h));
+    assert!(left_rail.right() <= left_panel.left(), "rail and panel on left: {left_rail:?} {left_panel:?}");
+    assert!(left_panel.left() - left_rail.right() <= 6.0, "rail must remain adjacent to navigation: {left_rail:?} {left_panel:?}");
+    assert!(left_panel.right() <= left_tools.left(), "tools must not split navigation from its rail: {left_panel:?} {left_tools:?}");
+    assert!(left_panel.left() < WIDTH / 2.0, "panel moved left: {left_panel:?}");
+    assert_eq!(h.state().side_panels.tools_side, tools_side);
+
+    let saved = h.state().persist();
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&saved);
+    assert!(!restored.side_panels.side_on_right, "left-side placement persisted");
+
+    drag_navigation_title(&mut h, 240.0);
+    assert!(h.state().side_panels.side_on_right, "drag right should redock");
+    let (right_rail, right_panel) = (rail(&h), side(&h));
+    assert!(right_panel.right() < right_rail.left(), "panel and rail on right: {right_panel:?} {right_rail:?}");
+    assert!(right_panel.left() > WIDTH / 2.0, "panel moved right: {right_panel:?}");
+    assert_eq!(h.state().side_panels.tools_side, tools_side);
+}
+
+/// The release event can cross the docking threshold without a preceding move event.
+#[test]
+fn navigation_drag_uses_release_position_to_choose_side() {
+    let mut h = harness(|app| app.set_option("panel", "bookmarks").unwrap());
+    let start = navigation_title(&h).center();
+    h.hover_at(start);
+    h.run_steps(1);
+    h.drag_at(start);
+    h.run_steps(1);
+    h.hover_at(start - egui::vec2(100.0, 0.0));
+    h.run_steps(1);
+    assert!(h.state().side_panels.side_on_right);
+    // The last move is delivered by the button release, not by hover_at.
+    h.drop_at(start - egui::vec2(240.0, 0.0));
+    h.run_steps(4);
+    assert!(!h.state().side_panels.side_on_right);
+}
+
+/// Moving navigation to the left must not change the independently configured Tools edge.
+#[test]
+fn left_navigation_does_not_move_right_docked_tools() {
+    let h = harness(|app| {
+        app.set_option("tools-side", "right").unwrap();
+        app.set_option("panel", "bookmarks").unwrap();
+        app.side_panels.side_on_right = false;
+    });
+    let (navigation_rail, navigation_panel, tools_panel) = (rail(&h), side(&h), tools(&h));
+    assert!(navigation_rail.right() <= navigation_panel.left());
+    assert!(navigation_panel.left() - navigation_rail.right() <= 6.0);
+    assert!(navigation_panel.right() < WIDTH / 2.0);
+    assert!(tools_panel.left() > WIDTH / 2.0);
+    assert!(h.state().side_panels.tools_on_right());
+}

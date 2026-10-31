@@ -1,9 +1,8 @@
 //! The side panels around the page: the Tools pane, the rail and the open side panel
 //! ([`crate::RightPanel`]), drawn with craft-ui task panes ([`craft_ui::panes`]).
 //!
-//! On the right, outermost first: the rail, the Tools pane when Preferences ▸ Tools panel side is
-//! Right, then the side panel, then the page. Panes are docked only; their widths are resizable
-//! and saved with the preferences.
+//! The rail and navigation panel can be placed together on either edge; the Tools pane has
+//! its own side preference. Panes are docked only; widths and positions are saved.
 
 use std::ops::RangeInclusive;
 
@@ -67,11 +66,13 @@ pub struct SidePanels {
     pub tools_side: ToolsSide,
     pub tools_width: f32,
     pub side_width: f32,
+    /// The navigation/Inspector pane can dock on either side (#5351).
+    pub side_on_right: bool,
 }
 
 impl Default for SidePanels {
     fn default() -> Self {
-        Self { tools_side: ToolsSide::Left, tools_width: TOOLS_WIDTH, side_width: SIDE_WIDTH }
+        Self { tools_side: ToolsSide::Left, tools_width: TOOLS_WIDTH, side_width: SIDE_WIDTH, side_on_right: true }
     }
 }
 
@@ -126,6 +127,7 @@ impl SidePanels {
             "tools_open": tools_open,
             "tools_width": self.tools_width,
             "side_width": self.side_width,
+            "side_on_right": self.side_on_right,
         })
     }
 }
@@ -148,6 +150,10 @@ pub fn restore(saved: &Value) -> Restored {
         }
         if let Some(width) = value.get("side_width").and_then(Value::as_f64).and_then(|w| clamp_width(Pane::Side, w)) {
             panels.side_width = width;
+        }
+        // Old saved layouts have no side_on_right and keep the right-hand default.
+        if let Some(right) = value.get("side_on_right").and_then(Value::as_bool) {
+            panels.side_on_right = right;
         }
         return Restored { panels, tools_open: value.get("tools_open").and_then(Value::as_bool), side_closed: false };
     }
@@ -199,8 +205,9 @@ fn find(node: &Value, panel: &str, depth: usize) -> Option<Found> {
     let split = node.get("Split")?;
     for (key, second) in [("first", false), ("second", true)] {
         if let Some(mut found) = split.get(key).and_then(|child| find(child, panel, depth + 1)) {
-            // A panel sharing its group was placed by its group, not by a split.
-            if found.alone && found.split.is_none() {
+            // Shared tab groups still have a parent edge. Their split width is
+            // not the width of any individual pane in that group.
+            if found.split.is_none() {
                 let horizontal = split.get("axis").and_then(Value::as_str) == Some("Horizontal");
                 found.split = Some(Split { horizontal, second, size: fixed_size(split.get("size"), second) });
             }
@@ -224,24 +231,29 @@ fn floating_contains(old: &Value, panel: &str) -> bool {
     })
 }
 
-/// A panel of the old layout: on the right edge, open, and its width where the layout stated it
-/// in points. A floating or tabbed panel counts as on the left, as the old Tools side reading did.
-fn old_panel(old: &Value, panel: &str) -> (bool, bool, Option<f64>) {
+/// A panel of the old layout: its explicit edge (when known), open state and
+/// individual width. A shared tab group's split width is not an individual pane width.
+fn old_panel(old: &Value, panel: &str, preserve_shared_edge: bool) -> (Option<bool>, bool, Option<f64>) {
     let root = old.get("layout").and_then(|l| l.get("root"));
     if let Some(found) = root.and_then(|root| find(root, panel, 0)) {
         return match found.split {
-            Some(split) if split.horizontal => (split.second, true, split.size),
-            _ => (false, true, None),
+            Some(split) if split.horizontal && (found.alone || preserve_shared_edge) => {
+                (Some(split.second), true, if found.alone { split.size } else { None })
+            }
+            _ => (None, true, None),
         };
     }
     if floating_contains(old, panel) {
-        return (false, true, None);
+        return (None, true, None);
     }
-    let Some(place) = hidden_place(old, panel) else { return (false, false, None) };
-    let right = place.get("placement").and_then(|p| p.get("Split")).and_then(Value::as_str) == Some("Right");
-    let left = place.get("placement").and_then(|p| p.get("Split")).and_then(Value::as_str) == Some("Left");
-    let size = if right || left { fixed_size(place.get("size"), right) } else { None };
-    (right, false, size)
+    let Some(place) = hidden_place(old, panel) else { return (None, false, None) };
+    let edge = match place.get("placement").and_then(|p| p.get("Split")).and_then(Value::as_str) {
+        Some("Right") => Some(true),
+        Some("Left") => Some(false),
+        _ => None,
+    };
+    let size = edge.and_then(|right| fixed_size(place.get("size"), right));
+    (edge, false, size)
 }
 
 /// Reads the old docking layout (craft-ui's `Workspace`) as plain JSON. `None` when it has no
@@ -249,9 +261,13 @@ fn old_panel(old: &Value, panel: &str) -> (bool, bool, Option<f64>) {
 fn migrate(old: &Value) -> Option<Restored> {
     find(old.get("layout")?.get("root")?, "canvas", 0)?;
     let mut panels = SidePanels::default();
-    let (tools_right, tools_open, tools_width) = old_panel(old, "tools");
-    let (_, side_open, side_width) = old_panel(old, "inspector");
-    if tools_right {
+    let (tools_right, tools_open, tools_width) = old_panel(old, "tools", false);
+    let (side_right, side_open, side_width) = old_panel(old, "inspector", true);
+    // An unknown, floating or unsupported placement keeps the default side.
+    if let Some(right) = side_right {
+        panels.side_on_right = right;
+    }
+    if tools_right == Some(true) {
         panels.tools_side = ToolsSide::Right;
     }
     if let Some(width) = tools_width.and_then(|w| clamp_width(Pane::Tools, w)) {
@@ -273,10 +289,11 @@ pub fn state(app: &PdfCraftApp) -> Value {
         "side_open": app.right.is_some(),
         "side_panel": app.right.map(|r| format!("{r:?}")),
         "side_width": panels.side_width,
+        "side_on_right": panels.side_on_right,
     })
 }
 
-/// `ui.panel {panel, open?, width?}` and `ui.dock.reset` (`reset`).
+/// `ui.panel {panel, open?, width?, side?}` and `ui.dock.reset` (`reset`).
 pub fn command(app: &mut PdfCraftApp, reset: bool, params: &Value) -> Result<Value, String> {
     if reset {
         app.side_panels = SidePanels::default();
@@ -293,8 +310,17 @@ pub fn command(app: &mut PdfCraftApp, reset: bool, params: &Value) -> Result<Val
         None | Some(Value::Null) => None,
         Some(value) => Some(value.as_f64().and_then(|w| clamp_width(pane, w)).ok_or("width must be a finite number")?),
     };
+    let side = match params.get("side") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) if pane == Pane::Side && value == "left" => Some(false),
+        Some(Value::String(value)) if pane == Pane::Side && value == "right" => Some(true),
+        _ => return Err("side is only valid for the navigation pane and must be left or right".into()),
+    };
     if let Some(width) = width {
         app.side_panels.set_width(pane, width);
+    }
+    if let Some(right) = side {
+        app.side_panels.side_on_right = right;
     }
     match (pane, open) {
         (Pane::Tools, Some(open)) => app.left_open = open,
@@ -349,7 +375,7 @@ impl PaneContent<Pane> for Content<'_> {
 fn state_of(panels: &SidePanels, pane: Pane) -> PaneState {
     let edge = match pane {
         Pane::Tools => panels.tools_edge(),
-        Pane::Side => Edge::End,
+        Pane::Side => if panels.side_on_right { Edge::End } else { Edge::Start },
     };
     PaneState::docked(edge, panels.width(pane))
 }
@@ -357,12 +383,19 @@ fn state_of(panels: &SidePanels, pane: Pane) -> PaneState {
 /// The panes that show this frame, outermost first on a shared edge.
 fn open_panes(app: &PdfCraftApp) -> Vec<Pane> {
     let mut open = Vec::new();
+    // The rail sits outside PaneHost. With both panes on the left, navigation
+    // must sit next to its rail rather than behind the Tools pane (#5351).
+    let navigation_open = app.active.is_some() && app.right.is_some();
+    let navigation_outer_left = navigation_open && !app.side_panels.side_on_right && !app.side_panels.tools_on_right();
+    if navigation_outer_left {
+        open.push(Pane::Side);
+    }
     // Read mode hides the tools, not the navigation panes.
     if app.left_open && app.mode != Mode::Read {
         open.push(Pane::Tools);
     }
     // Home and Combine files have no side panel; the choice is kept for the next document.
-    if app.active.is_some() && app.right.is_some() {
+    if navigation_open && !navigation_outer_left {
         open.push(Pane::Side);
     }
     open
@@ -373,7 +406,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if let Some(panel) = app.right {
         app.last_right = panel;
     }
-    // The rail first: it is the outermost panel on the right.
+    // Draw the rail first on its selected side, outside the navigation panel.
     if app.active.is_some() {
         crate::chrome::right_rail(app, ui);
     }
@@ -388,7 +421,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let labels = PaneLabels { resize: crate::i18n::t("Resize panels").to_owned(), ..PaneLabels::default() };
     let panels = app.side_panels;
-    // Columns: both panes may share the right edge, Tools outermost, as `open` lists them.
+    // Columns: tools and navigation may share either edge; use the order in `open`.
     let output = PaneHost::new(egui::Id::unique("pdfcraft-side-panels"))
         .policy(SidePolicy::Columns)
         .f6(false)
@@ -434,7 +467,7 @@ mod tests {
     #[test]
     fn docked_default_keeps_widths() {
         let restored = restore(&docked(300.0, 400.0));
-        assert_eq!(restored.panels, SidePanels { tools_side: ToolsSide::Left, tools_width: 300.0, side_width: 400.0 });
+        assert_eq!(restored.panels, SidePanels { tools_side: ToolsSide::Left, tools_width: 300.0, side_width: 400.0, side_on_right: true });
         assert_eq!((restored.tools_open, restored.side_closed), (Some(true), false));
     }
 
@@ -461,7 +494,7 @@ mod tests {
             json!([]),
         );
         let restored = restore(&old);
-        assert_eq!(restored.panels, SidePanels { tools_side: ToolsSide::Left, tools_width: TOOLS_WIDTH, side_width: 360.0 });
+        assert_eq!(restored.panels, SidePanels { tools_side: ToolsSide::Left, tools_width: TOOLS_WIDTH, side_width: 360.0, side_on_right: true });
         assert_eq!((restored.tools_open, restored.side_closed), (Some(true), false));
     }
 
@@ -485,7 +518,7 @@ mod tests {
             ]),
         );
         let restored = restore(&old);
-        assert_eq!(restored.panels, SidePanels { tools_side: ToolsSide::Right, tools_width: 250.0, side_width: 380.0 });
+        assert_eq!(restored.panels, SidePanels { tools_side: ToolsSide::Right, tools_width: 250.0, side_width: 380.0, side_on_right: true });
         assert_eq!((restored.tools_open, restored.side_closed), (Some(false), true));
     }
 
@@ -504,7 +537,7 @@ mod tests {
         }
         // Non-finite and out-of-range widths fall back or clamp; an unknown side keeps Left.
         let restored = restore(&json!({"side_panels": {"version": 1, "tools_side": "up", "tools_width": 9000.0, "side_width": "x"}}));
-        assert_eq!(restored.panels, SidePanels { tools_side: ToolsSide::Left, tools_width: 520.0, side_width: SIDE_WIDTH });
+        assert_eq!(restored.panels, SidePanels { tools_side: ToolsSide::Left, tools_width: 520.0, side_width: SIDE_WIDTH, side_on_right: true });
         // Deep trees are cut off rather than walked.
         let mut deep = tabs(&["tools"]);
         for _ in 0..200 {
@@ -514,8 +547,90 @@ mod tests {
     }
 
     #[test]
+    fn navigation_pane_side_survives_save_and_restore() {
+        let mut panels = SidePanels::default();
+        assert!(panels.side_on_right);
+        panels.side_on_right = false;
+        let saved = panels.to_json(true);
+        assert_eq!(saved["side_on_right"], false);
+        let restored = restore(&json!({"side_panels": saved}));
+        assert_eq!(restored.panels, panels);
+        // Existing v1 preferences must retain their original right-hand placement.
+        let legacy = restore(&json!({"side_panels": {"version": 1, "side_width": 320.0}}));
+        assert!(legacy.panels.side_on_right);
+    }
+
+    #[test]
+    fn migrating_a_left_docked_inspector_keeps_its_side() {
+        let old = workspace(
+            split(
+                json!({"FixedFirst": 360.0}),
+                tabs(&["inspector"]),
+                tabs(&["canvas"]),
+            ),
+            json!([]),
+            json!([]),
+        );
+        let restored = restore(&old);
+        assert!(!restored.panels.side_on_right);
+        assert_eq!(restored.panels.side_width, 360.0);
+        assert!(!restored.side_closed);
+    }
+
+    #[test]
+    fn migrating_without_an_inspector_placement_keeps_the_default_side() {
+        let old = workspace(tabs(&["canvas"]), json!([]), json!([]));
+        let restored = restore(&old);
+        assert!(restored.panels.side_on_right);
+        assert!(restored.side_closed);
+    }
+
+    #[test]
+    fn shared_inspector_group_keeps_right_edge_without_copying_split_width() {
+        // A shared tab group knows its parent's side, but neither pane owns its width.
+        let old = workspace(
+            split(json!({"FixedSecond": 390.0}), tabs(&["canvas"]), tabs(&["inspector", "tools"])),
+            json!([]),
+            json!([]),
+        );
+        let restored = restore(&old);
+        assert!(restored.panels.side_on_right);
+        assert_eq!(restored.panels.side_width, SIDE_WIDTH);
+        assert_eq!(restored.panels.tools_side, ToolsSide::Left);
+        assert_eq!(restored.panels.tools_width, TOOLS_WIDTH);
+        assert_eq!((restored.tools_open, restored.side_closed), (Some(true), false));
+    }
+
+    #[test]
+    fn shared_inspector_group_keeps_left_edge_without_copying_split_width() {
+        let old = workspace(
+            split(json!({"FixedFirst": 380.0}), tabs(&["inspector", "tools"]), tabs(&["canvas"])),
+            json!([]),
+            json!([]),
+        );
+        let restored = restore(&old);
+        assert!(!restored.panels.side_on_right);
+        assert_eq!(restored.panels.side_width, SIDE_WIDTH);
+        assert_eq!(restored.panels.tools_side, ToolsSide::Left);
+        assert_eq!(restored.panels.tools_width, TOOLS_WIDTH);
+    }
+
+    #[test]
+    fn hidden_inspector_without_explicit_edge_uses_right_default() {
+        let old = workspace(
+            tabs(&["canvas"]),
+            json!([]),
+            json!([["inspector", {"placement": {"Tab": "canvas"}, "size": {"FixedSecond": 380.0}}]]),
+        );
+        let restored = restore(&old);
+        assert!(restored.panels.side_on_right);
+        assert_eq!(restored.panels.side_width, SIDE_WIDTH);
+        assert!(restored.side_closed);
+    }
+
+    #[test]
     fn saved_value_round_trips() {
-        let panels = SidePanels { tools_side: ToolsSide::Right, tools_width: 300.0, side_width: 410.0 };
+        let panels = SidePanels { tools_side: ToolsSide::Right, tools_width: 300.0, side_width: 410.0, side_on_right: true };
         let restored = restore(&json!({ "side_panels": panels.to_json(false) }));
         assert_eq!(restored, Restored { panels, tools_open: Some(false), side_closed: false });
     }

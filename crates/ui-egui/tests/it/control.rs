@@ -1604,6 +1604,11 @@ fn ui_panel_opens_closes_and_sizes_panes_and_survives_restore() {
     h.run_steps(3);
     let state = ok(&mut h, &c, "ui.panel", json!({"panel":"side", "width": 401.6}));
     assert_eq!(state["side_panels"]["side_width"], 401.6f32 as f64);
+    // The same public control path moves the inspector AND rail; the preference persists.
+    let state = ok(&mut h, &c, "ui.panel", json!({"panel":"side", "side":"left"}));
+    assert_eq!(state["side_panels"]["side_on_right"], false);
+    h.run_steps(3);
+    assert!(!h.state().side_panels.side_on_right);
     // Widths are clamped to the panel's limits.
     let state = ok(&mut h, &c, "ui.panel", json!({"panel":"tools", "width": 9000}));
     assert_eq!(state["side_panels"]["tools_width"], 520.0);
@@ -1626,7 +1631,7 @@ fn ui_panel_opens_closes_and_sizes_panes_and_survives_restore() {
     let state = ok(&mut reloaded, &client, "ui.state", json!({}))["side_panels"].clone();
     assert_eq!(
         state,
-        json!({"tools_side":"left", "tools_open":false, "tools_width":300.0, "side_open":true, "side_panel":"Bookmarks", "side_width":401.6f32 as f64})
+        json!({"tools_side":"left", "tools_open":false, "tools_width":300.0, "side_open":true, "side_panel":"Bookmarks", "side_width":401.6f32 as f64, "side_on_right":false})
     );
     // The ui.command form and the reset command.
     ok(&mut reloaded, &client, "ui.command", json!({"id":"ui.panel", "params":{"panel":"tools", "open":true}}));
@@ -1636,6 +1641,7 @@ fn ui_panel_opens_closes_and_sizes_panes_and_survives_restore() {
     ok(&mut reloaded, &client, "ui.command", json!({"id":"ui.dock.reset"}));
     let state = ok(&mut reloaded, &client, "ui.state", json!({}))["side_panels"].clone();
     assert_eq!((state["tools_side"].clone(), state["tools_width"].clone(), state["side_width"].clone()), (json!("left"), json!(272.0), json!(330.0)));
+    assert_eq!(state["side_on_right"], true, "reset restores right-side navigation");
     assert_eq!(ok(&mut reloaded, &client, "ui.state", json!({}))["documents"][0]["pages"], 5);
 }
 
@@ -1650,6 +1656,8 @@ fn invalid_panel_requests_change_nothing() {
         json!({"panel":"tools", "open":"yes"}),
         json!({"panel":"tools", "width":"wide"}),
         json!({"panel":"side", "width": 300, "open": 1}),
+        json!({"panel":"side", "side":"up"}),
+        json!({"panel":"tools", "side":"left"}),
     ] {
         assert!(call(&mut h, &c, "ui.panel", params).is_err());
         let state = ok(&mut h, &c, "ui.state", json!({}));
