@@ -372,6 +372,15 @@ impl Document {
         self.signatures.iter().any(|s| s.signed)
     }
 
+    /// Whether the file as last opened or saved is linearized (Fast Web View, ISO 32000-2
+    /// Annex F), as Document Properties shows it. Edits count once saved: an incremental Save
+    /// of a linearized file leaves it [`pdfcraft_cos::Linearization::Stale`] (the update is
+    /// appended after the first page's data), and only a linearized save makes it fast again.
+    /// `None` when the document could not be read for editing.
+    pub fn linearization(&self) -> Option<pdfcraft_cos::Linearization> {
+        self.editor.as_ref().map(|e| e.saved_linearization)
+    }
+
     /// Whether comments are hidden (Comments ▸ Hide all comments).
     pub fn comments_hidden(&self) -> bool {
         self.config.hide_comments

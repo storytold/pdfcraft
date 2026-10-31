@@ -108,6 +108,8 @@ pub(crate) struct Editor {
     pub(crate) saved: Arc<Vec<u8>>,
     /// Passwords that open [`Self::saved`].
     pub(crate) saved_keys: Keys,
+    /// Whether [`Self::saved`] is linearized (Fast Web View), read when it was opened or saved.
+    pub(crate) saved_linearization: pdfcraft_cos::Linearization,
     /// [`Self::saved`] was never written where the document belongs: a new document (combine,
     /// extract, create) or one restored from recovery. It stays unsaved until a save, whatever
     /// undo brings back, or closing it would lose the whole document without asking.

@@ -2584,3 +2584,11 @@ animation effects	Off	Ανενεργά
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Επιλογές για αυτήν την απάντηση
 	Export value	Τιμή εξαγωγής
+# Fast Web View (linearized saving)
+	Saving	Ρυθμίσεις αποθήκευσης
+	Save As optimizes for Fast Web View	Η «Αποθήκευση ως» βελτιστοποιεί για γρήγορη προβολή στο web
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	Η «Αποθήκευση ως» γράφει ένα γραμμικοποιημένο αρχείο, του οποίου η πρώτη σελίδα εμφανίζεται πριν ολοκληρωθεί η λήψη του υπόλοιπου. Η «Αποθήκευση» προσθέτει τις αλλαγές στο τέλος του αρχείου, οπότε η γρήγορη προβολή στο web απενεργοποιείται.
+	Fast Web View	Γρήγορη προβολή στο web
+	Saved {name}, optimized for Fast Web View	Αποθηκεύτηκε το {name}, βελτιστοποιημένο για γρήγορη προβολή στο web
+	Saved {name} without Fast Web View: {e}	Αποθηκεύτηκε το {name} χωρίς γρήγορη προβολή στο web: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	Αποθηκεύτηκε το {name}. Η γρήγορη προβολή στο web είναι ανενεργή: η «Αποθήκευση» προσθέτει τις αλλαγές στο τέλος του αρχείου.

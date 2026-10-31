@@ -313,6 +313,9 @@ pub struct PdfCraftApp {
     ui_scale_applied: Option<f32>,
     /// Preferences: bake Fill & Sign marks into the page when saving. Off, so a normal save stays editable.
     pub flatten_fill_sign_on_save: bool,
+    /// Preferences: Save As writes the file linearized for Fast Web View (a full rewrite, ISO
+    /// 32000-2 Annex F). Off, so Save As writes what Save writes unless asked.
+    pub save_as_fast_web_view: bool,
     /// Point size for new Fill & Sign text and dates, kept across launches.
     pub fill_text_size: f64,
     /// Colour for new Fill & Sign text and dates, kept across launches.

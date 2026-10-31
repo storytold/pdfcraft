@@ -2579,3 +2579,11 @@ animation effects	Off	Aus
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Optionen für diese Antwort
 	Export value	Exportwert
+# Fast Web View (linearized saving)
+	Saving	Speichern
+	Save As optimizes for Fast Web View	„Speichern unter“ optimiert für schnelle Webanzeige
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	„Speichern unter“ schreibt eine linearisierte Datei, deren erste Seite erscheint, bevor der Rest heruntergeladen ist. „Speichern“ hängt Änderungen an das Dateiende an und schaltet die schnelle Webanzeige damit aus.
+	Fast Web View	Schnelle Webanzeige
+	Saved {name}, optimized for Fast Web View	{name} gespeichert, optimiert für schnelle Webanzeige
+	Saved {name} without Fast Web View: {e}	{name} ohne schnelle Webanzeige gespeichert: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	{name} gespeichert. Die schnelle Webanzeige ist aus: „Speichern“ hängt die Änderungen an das Dateiende an.

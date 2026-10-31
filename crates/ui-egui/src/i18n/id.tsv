@@ -2810,3 +2810,6 @@ theme	Appearance	Tampilan
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsi untuk balasan ini
+	Saving	Penyimpanan
+	Save As optimizes for Fast Web View	Simpan Sebagai mengoptimalkan untuk Tampilan Web Cepat
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	Simpan Sebagai menulis file terlinearisasi yang halaman pertamanya tampil sebelum sisanya selesai diunduh. Simpan menambahkan perubahan ke akhir file, sehingga Tampilan Web Cepat nonaktif.

@@ -6799,6 +6799,64 @@ fn leaving_organize_goes_back_to_the_workspace_panel() {
     assert_eq!(h.state().left, LeftPanel::AllTools);
 }
 
+/// "Save As optimizes for Fast Web View" (Preferences ▸ Saving): off by default, Save As then
+/// writes what Save writes; on, Save As writes the file linearized (ISO 32000-2 Annex F) and says
+/// so. A later Save appends the changes after the first page's data, which ends Fast Web View,
+/// and the notice says that too. The preference is kept across launches.
+#[test]
+fn save_as_optimizes_for_fast_web_view_when_the_preference_is_on() {
+    use pdfcraft_cos::Linearization;
+    use pdfcraft_ui_egui::SaveTarget;
+    let dir = std::env::temp_dir().join(format!("pdfcraft-fast-web-view-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let on_disk = |path: &std::path::Path| pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(path).unwrap())).unwrap().linearization();
+    let toast = |app: &PdfCraftApp| app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    assert!(!app.save_as_fast_web_view, "off by default");
+    app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
+    let id = app.views[0].id;
+    let plain = dir.join("plain.pdf");
+    app.save_override = Some(plain.to_string_lossy().into_owned());
+    assert!(app.save_active(SaveTarget::As));
+    assert_eq!(on_disk(&plain), Linearization::No);
+    assert_eq!(toast(&app), "Saved plain.pdf");
+
+    app.set_option("fast-web-view", "true").unwrap();
+    assert!(app.set_option("fast-web-view", "yes").is_err());
+    let fast = dir.join("fast.pdf");
+    app.save_override = Some(fast.to_string_lossy().into_owned());
+    assert!(app.save_active(SaveTarget::As));
+    assert_eq!(on_disk(&fast), Linearization::Yes);
+    assert_eq!(toast(&app), "Saved fast.pdf, optimized for Fast Web View");
+    assert_eq!(app.session.get(id).unwrap().linearization(), Some(Linearization::Yes), "Document Properties follows the saved file");
+
+    app.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![1], degrees: 90 }).unwrap();
+    assert!(app.save_active(SaveTarget::InPlace));
+    assert!(matches!(on_disk(&fast), Linearization::Stale(_)));
+    assert_eq!(toast(&app), "Saved fast.pdf. Fast Web View is off: Save adds the changes to the end of the file.");
+    assert!(!app.session.get(id).unwrap().linearization().is_some_and(Linearization::is_fast_web_view));
+
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&app.persist());
+    assert!(restored.save_as_fast_web_view);
+
+    // A Fast Web View file saved as a copy with the option off: written in full, nothing appended.
+    let again = dir.join("again.pdf");
+    app.save_override = Some(again.to_string_lossy().into_owned());
+    assert!(app.save_active(SaveTarget::As));
+    assert_eq!(on_disk(&again), Linearization::Yes);
+    app.set_option("fast-web-view", "false").unwrap();
+    let copy = dir.join("copy.pdf");
+    app.save_override = Some(copy.to_string_lossy().into_owned());
+    assert!(app.save_active(SaveTarget::As));
+    assert_eq!(on_disk(&copy), Linearization::No);
+    assert_eq!(toast(&app), "Saved copy.pdf");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The Read mode command (not the mode bar) applies a paragraph still open in the editor, as
 /// putting the Edit text tool down does; left open, it would stay drawn in Read mode with no tool.
 #[test]

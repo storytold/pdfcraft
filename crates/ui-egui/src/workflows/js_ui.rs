@@ -533,6 +533,14 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         egui::RichText::new(tl!("Text, marks and signatures become part of the page. Other comments stay editable.")).small().color(t.text_muted),
     );
     ui.add_space(8.0);
+    ui.label(egui::RichText::new(tl!("Saving")).font(theme::semibold(13.0)));
+    ui.add(widgets::checkbox(&mut app.save_as_fast_web_view, tl!("Save As optimizes for Fast Web View")));
+    ui.label(
+        egui::RichText::new(tl!("Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off."))
+            .small()
+            .color(t.text_muted),
+    );
+    ui.add_space(8.0);
     date_format(ui, app, t);
     ui.add_space(8.0);
     ui.label(egui::RichText::new("JavaScript").font(theme::semibold(13.0)));

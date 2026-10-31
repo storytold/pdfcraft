@@ -19,7 +19,6 @@ mod reader;
 mod state;
 mod xref;
 
-#[cfg(test)]
 pub(crate) use reader::find;
 #[cfg(test)]
 use reader::rfind;

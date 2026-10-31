@@ -2583,3 +2583,11 @@ animation effects	Off	Izklopljeni
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti tega odgovora
 	Export value	Izvozna vrednost
+# Fast Web View (linearized saving)
+	Saving	Shranjevanje
+	Save As optimizes for Fast Web View	Shrani kot optimizira za hiter spletni ogled
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	Shrani kot zapiše linearizirano datoteko, katere prva stran se prikaže, preden se prenese preostanek. Shrani doda spremembe na konec datoteke, kar izklopi hiter spletni ogled.
+	Fast Web View	Hiter spletni ogled
+	Saved {name}, optimized for Fast Web View	Shranjeno: {name}, optimizirano za hiter spletni ogled
+	Saved {name} without Fast Web View: {e}	Shranjeno brez hitrega spletnega ogleda: {name} ({e})
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	Shranjeno: {name}. Hiter spletni ogled je izklopljen: Shrani doda spremembe na konec datoteke.

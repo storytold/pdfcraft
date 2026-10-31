@@ -2885,3 +2885,11 @@ certificate	Version	Verze
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti této odpovědi
 	Export value	Exportní hodnota
+# Fast Web View (linearized saving)
+	Saving	Ukládání
+	Save As optimizes for Fast Web View	Uložit jako optimalizuje pro rychlé zobrazení na webu
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	Uložit jako zapíše linearizovaný soubor, jehož první stránka se zobrazí dřív, než se stáhne zbytek. Uložit přidává změny na konec souboru, čímž rychlé zobrazení na webu vypne.
+	Fast Web View	Rychlé zobrazení na webu
+	Saved {name}, optimized for Fast Web View	Uloženo: {name}, optimalizováno pro rychlé zobrazení na webu
+	Saved {name} without Fast Web View: {e}	Uloženo bez rychlého zobrazení na webu: {name} ({e})
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	Uloženo: {name}. Rychlé zobrazení na webu je vypnuté: Uložit přidává změny na konec souboru.

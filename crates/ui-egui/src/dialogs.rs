@@ -839,6 +839,9 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                     });
                     ui.end_row();
                 }
+                // Linearized (ISO 32000-2 Annex F) as last opened or saved: a Save that
+                // appends a revision turns it off, so it sits with the revisions.
+                row(ui, "Fast Web View", doc.linearization().map(|l| yes(l.is_fast_web_view())).unwrap_or_default());
                 // Reading Options: binding and language.
                 if let Some((_, v)) = app.view_draft.as_mut() {
                     let editable = doc.allows_modification();

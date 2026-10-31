@@ -9284,6 +9284,45 @@ fn a_root_less_write_output_is_atomic_too() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Save As optimized for Fast Web View through `doc_save` (ISO 32000-2 Annex F): the file on disk
+/// is linearized, `doc_info` says so, every page renders as before once reopened, and an
+/// incremental save afterwards turns Fast Web View off with the reason.
+#[test]
+fn a_fast_web_view_save_is_linearized_renders_the_same_and_an_update_turns_it_off() {
+    use pdfcraft_cos::Linearization;
+    let dir = workdir("fast-web-view");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!((info["fast_web_view"].clone(), info["linearization_stale"].clone()), (json!(false), Value::Null));
+    let before: Vec<_> = (1..=3).map(|p| a.render_pixels(doc, p, 1.0).unwrap()).collect();
+
+    assert!(matches!(err(&mut a, "doc_save", json!({ "doc": doc, "path": "fast.pdf", "fast_web_view": true, "full": false })), ToolError::Failed(_)));
+    let saved = ok(&mut a, "doc_save", json!({ "doc": doc, "path": "fast.pdf", "fast_web_view": true }));
+    assert_eq!(saved["incremental"], json!(false));
+    assert_eq!(saved["fast_web_view"]["pages_given_inherited_attributes"], json!(3), "every page inherited the tree's /MediaBox");
+    assert_eq!(saved["fast_web_view"]["pages_given_type"], json!(0));
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc }))["fast_web_view"], json!(true));
+    let on_disk = std::sync::Arc::new(std::fs::read(dir.join("fast.pdf")).unwrap());
+    assert_eq!(pdfcraft_cos::Document::open(on_disk).unwrap().linearization(), Linearization::Yes);
+
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "fast.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": reopened }))["fast_web_view"], json!(true));
+    for (page, (width, height, pixels)) in (1..=3).zip(&before) {
+        let (w, h, after) = a.render_pixels(reopened, page, 1.0).unwrap();
+        assert_eq!((w, h), (*width, *height));
+        assert!(after.as_ref() == pixels.as_ref(), "page {page} renders the same");
+    }
+    assert_eq!(page_text(&mut a, reopened), vec!["Page 1", "Page 2", "Page 3"]);
+
+    ok(&mut a, "page_rotate", json!({ "doc": reopened, "pages": [2], "degrees": 90 }));
+    assert_eq!(ok(&mut a, "doc_save", json!({ "doc": reopened }))["incremental"], json!(true));
+    let info = ok(&mut a, "doc_info", json!({ "doc": reopened }));
+    assert_eq!(info["fast_web_view"], json!(false));
+    assert!(info["linearization_stale"].as_str().unwrap().contains("changed after it was linearized"), "{info}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn attaching_and_deleting_files_through_the_tools() {
     let dir = workdir("attach");

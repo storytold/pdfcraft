@@ -2901,3 +2901,11 @@ theme	Appearance	Aspecto
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opciones de esta respuesta
 	Export value	Valor de exportación
+# Fast Web View (linearized saving)
+	Saving	Guardado
+	Save As optimizes for Fast Web View	Guardar como optimiza para la vista web rápida
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	Guardar como escribe un archivo linealizado cuya primera página se muestra antes de que termine de descargarse el resto. Guardar añade los cambios al final del archivo, lo que desactiva la vista web rápida.
+	Fast Web View	Vista web rápida
+	Saved {name}, optimized for Fast Web View	{name} guardado y optimizado para la vista web rápida
+	Saved {name} without Fast Web View: {e}	{name} guardado sin vista web rápida: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	{name} guardado. La vista web rápida está desactivada: Guardar añade los cambios al final del archivo.

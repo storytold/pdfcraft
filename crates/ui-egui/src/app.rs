@@ -103,6 +103,7 @@ impl PdfCraftApp {
             system_text_scale: 1.0,
             ui_scale_applied: None,
             flatten_fill_sign_on_save: false,
+            save_as_fast_web_view: false,
             fill_text_size: fill_sign::TEXT_SIZE,
             fill_text_color: [0.0; 3],
             dialog: None,

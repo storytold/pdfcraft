@@ -273,12 +273,14 @@ impl Session {
             Ok(Ok(cos)) => {
                 let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned) };
                 let saved = cos.bytes().clone();
+                let saved_linearization = cos.linearization();
                 (
                     Some(Editor {
                         cos,
                         saved,
                         saved_keys: keys.clone(),
                         unsaved_file: false,
+                        saved_linearization,
                         undo: Vec::new(),
                         redo: Vec::new(),
                         keys,

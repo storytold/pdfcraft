@@ -2342,6 +2342,26 @@ fn arrow_keys_follow_the_scroll_speed_preference() {
     assert!(fast * 3 < normal * 2 && normal * 3 < slow * 2, "presses to page 2: slow {slow}, normal {normal}, fast {fast}");
 }
 
+/// Document Properties ▸ Advanced says whether the file is linearized (Fast Web View).
+#[test]
+fn document_properties_say_whether_the_file_is_optimized_for_fast_web_view() {
+    let mut h = harness();
+    h.state_mut().dialog = Some(Dialog::Properties(pdfcraft_ui_egui::PropsTab::Advanced));
+    h.run_steps(3);
+    h.get_by_label("Fast Web View");
+    let ordinary = h.query_all_by_label("Yes").count();
+    {
+        let s = h.state_mut();
+        let doc = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(3))).unwrap();
+        let bytes = pdfcraft_cos::write_linearized(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap().bytes;
+        s.open_bytes("fast.pdf", None, bytes).unwrap();
+        s.dialog = Some(Dialog::Properties(pdfcraft_ui_egui::PropsTab::Advanced));
+    }
+    h.run_steps(3);
+    h.get_by_label("Fast Web View");
+    assert_eq!(h.query_all_by_label("Yes").count(), ordinary + 1, "the linearized file says Yes");
+}
+
 /// #2665: next to a very wide page the normal pages sit far to its right, outside the window.
 /// Going to one changed the page counter but kept the horizontal scroll, so it stayed out of
 /// sight; as in Acrobat, it is brought into view.

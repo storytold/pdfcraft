@@ -7,15 +7,17 @@
 //!
 //! Done: every cross-reference form (tables, streams, hybrid `/XRefStm`), object streams, repair
 //! by scanning, encryption on load and save (R2–R6, crypt filters, `/EFF`), incremental writing,
-//! and full saves that pack objects into compressed object streams with a cross-reference stream.
-//! Not yet: streaming very large files within a memory budget (`ByteSource`,
-//! `core.lazy-loading`), and linearized output (`core.linearization`, M11). See the README.
+//! full saves that pack objects into compressed object streams with a cross-reference stream, and
+//! linearized (Fast Web View) saves with hint tables, and telling whether a file is linearized
+//! (`core.linearization`, Annex F). Not yet: streaming very large files within a memory budget
+//! (`ByteSource`, `core.lazy-loading`). See the README.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod budget;
 mod bytes;
 mod document;
+mod linearize;
 mod object;
 pub mod page_labels;
 mod parser;
@@ -25,6 +27,7 @@ mod writer;
 pub use budget::{DecodeBudget, MAX_PAGE_DECODED, MAX_PAGE_FORMS};
 pub use bytes::Bytes;
 pub use document::{Document, ReadState, Revision, SourceIdentity, XrefEntry};
+pub use linearize::{Linearization, Linearized, StaleReason, write_linearized};
 pub use object::{Dict, MAX_DECODED, Name, ObjRef, Object, PdfString, Stream};
 pub use parser::{Lexer, is_whitespace, parse_indirect};
 pub use pdfcraft_crypt::{
@@ -54,4 +57,6 @@ pub enum CosError {
     Poisoned,
     #[error("this document was opened read-only with a decode limit and cannot be saved")]
     ReadOnlyLimit,
+    #[error("cannot save optimized for Fast Web View: {0}")]
+    Linearize(String),
 }

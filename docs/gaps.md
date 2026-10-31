@@ -1,5 +1,7 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (gap 22: linearized output packs object streams; estimate unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 22: linearized save (Fast Web View) shipped, `core.linearization`; gap 22 20–35 h → 15–28 h) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
@@ -57,7 +59,7 @@ update the numbers.
 | 19 | Preferences mostly missing | UI/UX | 15–25 | [ui-parity.md](ui-parity.md) |
 | 20 | Scanners, GPU page rendering, pen pressure, Read Out Loud | hardware | 25–50 | [hardware-parity.md](hardware-parity.md) |
 | 21 | Compare: filters by Acrobat's finer kinds of change, page ranges, scanned documents | feature | 8–16 | [target-app-parity.md](target-app-parity.md) |
-| 22 | PDF 2.0 extras, linearization, Arlington validation | spec | 20–35 | [pdf-spec-parity.md](pdf-spec-parity.md) |
+| 22 | PDF 2.0 extras, Arlington validation | spec | 15–28 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 23 | Local AI provider (summarize, ask, alt text, redaction suggestions) | AI | 20–40 | [target-app-parity.md](target-app-parity.md) |
 | 24 | Checklist not diffed against Acrobat's own menus | measurement | 4–8 | [target-app-parity.md](target-app-parity.md) |
 
@@ -386,12 +388,13 @@ update the numbers.
   offset, page ranges, scanned documents.
 - **Estimate:** 8–16 h. **Doc:** [target-app-parity.md](target-app-parity.md).
 
-### 22. PDF 2.0 extras, linearization, Arlington validation
+### 22. PDF 2.0 extras, Arlington validation
 
 - **Missing:** UTF-8 text strings, associated files (`/AF`), document parts, structure namespaces;
-  linearized save (Fast Web View); deterministic save; structural validation against the Arlington
-  model.
-- **Estimate:** 20–35 h. **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
+  deterministic save; structural validation against the Arlington model. Linearized save (Fast Web
+  View, Annex F) shipped as `core.linearization`, with object streams since 2026-10-16; what it still
+  lacks (optional hint tables, progressive loading of linearized files) is in its checklist notes.
+- **Estimate:** 15–28 h. **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
 
 ### 23. Local AI provider
 
@@ -419,6 +422,8 @@ update the numbers.
 | 2026-10-15 | minor | Gap 21: the side-by-side view had already shipped; the Compare panel filters text changes and visual differences. Estimate 10–20 h → 8–16 h |
 | 2026-10-20 | minor | Gap 6 #3673: Character encoding accepts Identity-H/V with Adobe CJK collections, or a predefined non-Identity CMap; negative and indirect-reference regressions and a read-only automation test passed after failing before the fix. Per-glyph validation and embedded-font extraction remain separate. Scores and estimates unchanged. |
 | 2026-10-17 | minor | Gap 6: the redaction audit counts a cover over one word of a long line instead of a clean bill (#2662, fixed by #2698). Estimates unchanged. |
+| 2026-10-16 | minor | Gap 22: linearized output packs object streams with cross-reference streams (`core.linearization`), so that is no longer missing; estimate unchanged |
+| 2026-10-15 | minor | Gap 22: linearized save (Fast Web View, ISO 32000-2 Annex F) shipped as `core.linearization`, so the gap is PDF 2.0 extras and Arlington validation; estimate 20–35 h → 15–28 h |
 | 2026-10-15 | minor | Gap 12: the text oracle scores reading order as well as word F1, which is a bag of words and cannot see order; the first measurement separated 18 improvements from 6 regressions in a change F1 called unchanged on 26 of 29 files. Estimates unchanged. |
 | 2026-10-14 | minor | M1: raw-deflate fallback preserves decoding-limit errors in strict and tolerant decoding; synthetic filter and COS stream regressions. Estimates unchanged. |
 | 2026-10-15 | patch | Gap 24: record localization and installers as partial (unusable Chinese, Telugu and Arabic; unsigned Linux packages) |

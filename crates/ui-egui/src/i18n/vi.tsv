@@ -2845,3 +2845,11 @@ key	Space	Space
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất
+# Fast Web View (linearized saving)
+	Saving	Lưu tệp
+	Save As optimizes for Fast Web View	Lưu thành sẽ tối ưu hóa để xem nhanh trên web
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	Lưu thành ghi một tệp đã tuyến tính hóa, có trang đầu hiện ra trước khi phần còn lại tải xong. Lưu thêm các thay đổi vào cuối tệp, khiến tính năng xem nhanh trên web bị tắt.
+	Fast Web View	Xem nhanh trên web
+	Saved {name}, optimized for Fast Web View	Đã lưu {name}, đã tối ưu hóa để xem nhanh trên web
+	Saved {name} without Fast Web View: {e}	Đã lưu {name} nhưng không có xem nhanh trên web: {e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	Đã lưu {name}. Xem nhanh trên web đã tắt: Lưu thêm các thay đổi vào cuối tệp.

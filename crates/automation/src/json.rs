@@ -290,6 +290,13 @@ pub(crate) fn info(d: &Document) -> Value {
         "document": summary(d),
         "pdf_version": i.pdf_version,
         "file_size": i.file_size,
+        // Linearized (ISO 32000-2 Annex F) as last opened or saved; a stale linearization (the
+        // file was updated incrementally since) is not Fast Web View, and says why.
+        "fast_web_view": d.linearization().map(pdfcraft_cos::Linearization::is_fast_web_view),
+        "linearization_stale": match d.linearization() {
+            Some(pdfcraft_cos::Linearization::Stale(why)) => Some(why.to_string()),
+            _ => None,
+        },
         "title": i.title, "author": i.author, "subject": i.subject, "keywords": i.keywords,
         // Custom document properties (Document Properties ▸ Custom): /Info entries beyond the
         // ones the spec names, set and cleared with doc_set_info.

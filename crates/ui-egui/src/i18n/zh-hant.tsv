@@ -2528,3 +2528,11 @@ animation effects	Off	關
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	此回覆的選項
 	Export value	匯出值
+# Fast Web View (linearized saving)
+	Saving	儲存設定
+	Save As optimizes for Fast Web View	「另存新檔」時針對快速 Web 檢視最佳化
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	「另存新檔」會寫入線性化檔案，其第一頁可在其餘部分下載完成前顯示。「儲存」會將變更附加到檔案結尾，因而關閉快速 Web 檢視。
+	Fast Web View	快速 Web 檢視
+	Saved {name}, optimized for Fast Web View	已儲存{name}，並已針對快速 Web 檢視最佳化
+	Saved {name} without Fast Web View: {e}	已儲存{name}，但未啟用快速 Web 檢視：{e}
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	已儲存{name}。快速 Web 檢視已關閉：「儲存」會將變更附加到檔案結尾。
