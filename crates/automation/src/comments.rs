@@ -627,6 +627,16 @@ impl Automation {
         Ok(json!({ "hidden": hidden }))
     }
 
+    pub(crate) fn comments_hide_types(&mut self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let names = a.strs("types")?;
+        let types = pdfcraft_render::normalize_hidden_comment_types(&names).map_err(|e| ToolError::InvalidArgs(e.into()))?;
+        if self.session.set_hidden_comment_types(id, &types) {
+            self.renderers.remove(&id);
+        }
+        Ok(json!({ "types": types }))
+    }
+
     pub(crate) fn comments_summarize(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, stem) = (doc.id, std::path::Path::new(&doc.name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());

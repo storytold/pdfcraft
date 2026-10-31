@@ -4236,8 +4236,11 @@ fn reload_keeps_reading_colours_and_hidden_comments() {
 
     let (mut s, id) = session_with(1);
     assert!(s.set_hide_comments(id, true));
+    assert!(s.set_hidden_comment_types(id, &["Circle".into(), "Note".into()]));
+    assert!(!s.set_hidden_comment_types(id, &["Oval".into(), "Note".into()]), "the same types, spelled the panel's way");
     s.reload(id, Arc::new(fixture(2))).unwrap();
     assert!(s.get(id).unwrap().comments_hidden(), "hidden comments stay hidden");
+    assert_eq!(s.get(id).unwrap().hidden_comment_types(), &["Note".to_string(), "Oval".to_string()][..]);
     assert_eq!(s.reading_colors(id), Some(ReadingColors::default()));
     assert!(dark_share(&s, id) < 0.1);
 }

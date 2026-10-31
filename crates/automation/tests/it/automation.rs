@@ -9050,6 +9050,72 @@ fn layers_and_hidden_comments_change_what_page_render_draws() {
     assert_eq!(list["documents"][0]["dirty"], json!(false), "a view setting leaves the document clean: {list}");
 }
 
+/// A rectangle and an oval. Hiding one type leaves the other, and does not change the file.
+fn typed_comments_pdf() -> Vec<u8> {
+    let green = b"0 1 0 rg 0 0 30 30 re f\n";
+    let red = b"1 0 0 rg 0 0 30 30 re f\n";
+    let form = |body: &[u8]| {
+        let mut o = format!("<< /Type /XObject /Subtype /Form /BBox [0 0 30 30] /Length {} >>\nstream\n", body.len()).into_bytes();
+        o.extend_from_slice(body);
+        o.extend_from_slice(b"endstream");
+        o
+    };
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 120 100] /Annots [4 0 R 6 0 R] >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Square /Rect [10 60 40 90] /AP << /N 5 0 R >> >>".to_vec(),
+        form(green),
+        b"<< /Type /Annot /Subtype /Circle /Rect [50 60 80 90] /AP << /N 7 0 R >> >>".to_vec(),
+        form(red),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn hiding_a_comment_type_changes_what_page_render_draws() {
+    let dir = workdir("hide-comment-type");
+    std::fs::write(dir.join("comments.pdf"), typed_comments_pdf()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "comments.pdf" }))["doc"].as_u64().unwrap();
+    let at = |a: &mut Automation, x: u32, y: u32| {
+        let (w, _, px) = a.render_pixels(doc, 1, 1.0).unwrap();
+        let i = ((y * w + x) * 4) as usize;
+        [px.as_ref()[i], px.as_ref()[i + 1], px.as_ref()[i + 2]]
+    };
+    assert_eq!([at(&mut a, 25, 25), at(&mut a, 65, 25)], [[0, 255, 0], [255, 0, 0]]);
+
+    let hidden = ok(&mut a, "comments_hide_types", json!({ "doc": doc, "types": ["circle", "Square"] }));
+    assert_eq!(hidden["types"], json!(["Oval", "Rectangle"]));
+    assert_eq!([at(&mut a, 25, 25), at(&mut a, 65, 25)], [[255, 255, 255], [255, 255, 255]]);
+
+    ok(&mut a, "comments_hide_types", json!({ "doc": doc, "types": ["Oval"] }));
+    assert_eq!([at(&mut a, 25, 25), at(&mut a, 65, 25)], [[0, 255, 0], [255, 255, 255]], "only the oval stays hidden");
+
+    ok(&mut a, "comments_hide_types", json!({ "doc": doc, "types": [] }));
+    assert_eq!([at(&mut a, 25, 25), at(&mut a, 65, 25)], [[0, 255, 0], [255, 0, 0]]);
+
+    for types in [json!([""]), json!(["Widget"]), json!(["link"]), json!(["Popup"])] {
+        assert!(matches!(a.call("comments_hide_types", &json!({ "doc": doc, "types": types })), Err(ToolError::InvalidArgs(_))));
+    }
+    let list = ok(&mut a, "doc_list", json!({}));
+    assert_eq!(list["documents"][0]["dirty"], json!(false), "a view setting leaves the document clean");
+}
+
 /// The `view_reading_colors` tool changes what `page_render` draws — text and background remap,
 /// images never do — without touching the file, and its errors name what's wrong (#897).
 #[test]

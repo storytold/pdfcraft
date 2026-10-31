@@ -143,7 +143,8 @@ pub struct CommentView {
     pub add_box: String,
     /// The Comments panel's search query (`None`: search closed).
     pub search: Option<String>,
-    /// Comment types, authors and statuses hidden by the panel's filter.
+    /// Comment types, authors and statuses hidden by the panel's filter. A hidden type is also
+    /// left off the page (the others filter the list only).
     pub hidden_types: Vec<String>,
     pub hidden_authors: Vec<String>,
     pub hidden_statuses: Vec<String>,
@@ -319,6 +320,8 @@ pub(crate) struct PageCx<'a> {
     pub allowed: bool,
     /// Comments are hidden (Hide all comments): nothing to select.
     pub hidden: bool,
+    /// Types the panel's filter hid (`Oval`, `Callout`, …): those comments are not selectable.
+    pub hidden_types: &'a [String],
 }
 
 impl PageCx<'_> {
@@ -343,9 +346,16 @@ impl PageCx<'_> {
         self.xf.user_rect(self.info, self.page, a.shown_rect(self.rotation()))
     }
 
-    /// Top-level comments on this page, in paint order.
+    /// Top-level comments on this page, in paint order. A type the filter hid is not among them,
+    /// so it cannot be hovered or selected.
     pub(super) fn comments(&self) -> impl Iterator<Item = &Annotation> {
-        self.info.annotations.iter().filter(move |a| !self.hidden && a.page == self.page && a.is_comment() && a.subtype != "Popup")
+        self.info.annotations.iter().filter(move |a| {
+            !self.hidden
+                && a.page == self.page
+                && a.is_comment()
+                && a.subtype != "Popup"
+                && !self.hidden_types.iter().any(|t| t == crate::comments_panel::kind_label(a))
+        })
     }
 
     /// Where a comment is on screen: one rectangle, or one per marked line for text markup.

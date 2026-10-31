@@ -68,6 +68,10 @@ pub struct RenderConfig {
     pub layers: Arc<Vec<(i32, i32, bool)>>,
     /// View ▸ Hide all comments: markup annotations aren't drawn (fields and links still are).
     pub hide_comments: bool,
+    /// Comment types hidden by the viewer's filter (the Comments panel's type names: `Oval`,
+    /// `Callout`, `Replace text`). Empty shows every type. Fields and links still draw.
+    /// [`crate::normalize_hidden_comment_types`] is the accepted spelling.
+    pub hidden_comment_types: Arc<Vec<String>>,
     /// Refuse a whole-page raster that would be reduced by the renderer's hard size caps.
     /// Tiled requests remain available for pages that exceed those caps. Both modes refuse
     /// a raster whose rounded integer dimensions exceed the final pixel-allocation budget.
@@ -105,6 +109,7 @@ impl RenderConfig {
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),
             hide_comments: self.hide_comments,
+            hidden_comment_types: Arc::new(crate::comment_hide::comment_hide_rules(&self.hidden_comment_types)),
             font_resolver: Arc::new(move |query| {
                 japanese_fallback(query).or_else(|| system_fonts.then(|| system_fallback(query)).flatten()).or_else(|| standard(query))
             }),

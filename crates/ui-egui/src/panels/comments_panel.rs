@@ -622,7 +622,8 @@ fn legible(c: Color32, t: &Tokens) -> Color32 {
 
 /// The Comments panel header's filter and sort controls (Acrobat: filter funnel and "…").
 /// The header's "…" (sort, hide all, summary, data exchange) and filter menus; returns a
-/// command to run.
+/// command to run. Unchecking a type hides that type on the page as well as in the list.
+/// Author, status, colour and checkmark filters still affect the list only.
 pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocView, hidden: bool) -> Option<&'static str> {
     let mut command = None;
     let cv = &mut view.comments;

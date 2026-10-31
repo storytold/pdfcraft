@@ -1133,7 +1133,9 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     let PageSlot { i, xf, .. } = *slot;
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     let cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    let hidden_types = view.comments.hidden_types.clone();
+    let pcx =
+        comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, hidden_types: &hidden_types, redact_mark };
     let (lines, images) =
         if matches!(tool, QuickTool::AddText | QuickTool::EditText) && can_modify { edit_inventory(view, doc, i) } else { Default::default() };
     let field_tool = match tool {
@@ -1696,7 +1698,9 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     let painter = ui.painter();
     let tool_cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    let hidden_types = view.comments.hidden_types.clone();
+    let pcx =
+        comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, hidden_types: &hidden_types, redact_mark };
     if tool == QuickTool::Select && !input.consumed {
         crate::image_pick::page_input(resp, &xf, i, info, doc, pointer, view);
     }
@@ -1877,7 +1881,9 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     // A cancelled press takes nothing until the button is up.
     let input = if view.press_cancelled { PageInput { consumed: true, area_tool: false } } else { page_tool_input(ui, view, frame, &slot) };
     let painter = ui.painter();
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    let hidden_types = view.comments.hidden_types.clone();
+    let pcx =
+        comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, hidden_types: &hidden_types, redact_mark };
     let preview_target = (matches!(tool, QuickTool::Select | QuickTool::Fill(_)) && !comments_hidden).then_some(view.comments.selected).flatten();
     view.signature_drag.prepare(ui.ctx(), doc, preview_target, scale);
     view.signature_drag.paint(painter, &pcx, &view.comments, view.pending_edit.as_ref());

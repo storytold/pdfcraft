@@ -4122,9 +4122,9 @@ tier = "P1"
 milestone = "M5"
 status = "partial"
 commands = ["comment.hide_all"]
-tools = ["comments_hide"]
-evidence = ["crates/engine/src/tests.rs::comments_lock_take_checkmarks_hide_and_summarize", "crates/ui-egui/tests/it/comments.rs::comments_take_checkmarks_lock_hide_and_summarize", "crates/automation/tests/it/automation.rs::comment_checkmarks_locks_hiding_and_summaries_through_tools"]
-notes = "hide/show all comments (fields and links still draw); per-type hiding not yet"
+tools = ["comments_hide", "comments_hide_types"]
+evidence = ["crates/engine/src/tests.rs::comments_lock_take_checkmarks_hide_and_summarize", "crates/ui-egui/tests/it/comments.rs::comments_take_checkmarks_lock_hide_and_summarize", "crates/automation/tests/it/automation.rs::comment_checkmarks_locks_hiding_and_summaries_through_tools", "crates/render/src/raster/tests.rs::hiding_one_comment_type_leaves_the_others", "crates/automation/tests/it/automation.rs::hiding_a_comment_type_changes_what_page_render_draws"]
+notes = "hide/show all comments, and hide one type from the Comments panel filter (fields and links still draw; a callout stays when text boxes are hidden, and the other way round). Author, status, colour and checkmark filters still affect the list only. Pop-ups not yet."
 
 [[feature]]
 id = "comment.popups"

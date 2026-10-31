@@ -251,6 +251,22 @@ impl Session {
         true
     }
 
+    /// Hide comments of these types on the page (the Comments panel's type filter). Names are the
+    /// panel's (`Oval`, `Callout`) or the PDF subtype (`Circle`, `FreeText`); an empty list shows
+    /// every type. Fields and links still draw. The file doesn't change. Returns whether the
+    /// set changed. A name that isn't a comment type, or more than 64 names, changes nothing.
+    pub fn set_hidden_comment_types(&mut self, id: DocId, types: &[String]) -> bool {
+        let Ok(next) = pdfcraft_render::normalize_hidden_comment_types(types) else { return false };
+        let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) else { return false };
+        if doc.config.hidden_comment_types.as_slice() == next.as_slice() {
+            return false;
+        }
+        doc.config.hidden_comment_types = Arc::new(next);
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
+        doc.generation += 1;
+        true
+    }
+
     /// Set the document's reading colours (Acrobat's Replace Document Colors). Returns whether
     /// anything changed; callers must drop cached rasters and text for the document.
     pub fn set_reading_colors(&mut self, id: DocId, colors: ReadingColors) -> bool {
