@@ -22,5 +22,6 @@ thiserror.workspace = true
 
 [dev-dependencies]
 pdfcraft-render = { workspace = true }
+pdfcraft-oracle = { workspace = true }
 tempfile = "3.27"
 rten-imageproc = { version = "0.26.0", default-features = false }

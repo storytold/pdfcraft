@@ -6,10 +6,11 @@
 //! take the fill colour of the text that shows them. `d0` is the other width operator, for a
 //! glyph procedure that sets its own colour; nothing here does.
 //!
-//! Glyph space is 1000 units per em, and [`Type3Metrics::cap_height`] (else the ascent, else one
-//! pixel) is the em. [`Type3Glyph::baseline`] is a y in the prototype bitmap, y down. The bitmap's
-//! left edge is x = 0 and that baseline is y = 0 after the flip into PDF's y-up glyph space, so a
-//! font size equal to the em, in user units, draws one prototype pixel as one user unit.
+//! Glyph space is 1000 units per em, and [`em_pixels`] (cap height, else the ascent, else one
+//! pixel) is the em. The page writer uses that same value for `Tf`. [`Type3Glyph::baseline`] is a
+//! y in the prototype bitmap, y down. The bitmap's left edge is x = 0 and that baseline is y = 0
+//! after the flip into PDF's y-up glyph space, so a font size equal to the em, in user units,
+//! draws one prototype pixel as one user unit.
 //! [`baseline_in_prototype`] turns a page baseline into that bitmap y.
 //!
 //! Codes run from 1. The encoding names them `/g1`, `/g2`, …. `/ToUnicode` maps each code to the
@@ -99,7 +100,10 @@ fn type3_err(detail: impl Into<String>) -> OcrError {
     OcrError::Type3(detail.into())
 }
 
-fn em_pixels(metrics: &Type3Metrics) -> Result<f64, OcrError> {
+/// The em in prototype pixels. [`synthesize_type3`] maps outlines with it, and the ClearScan
+/// page sets the font size to this times the user units per pixel. A second copy of the
+/// fallback would scale the outlines off the scan.
+pub(crate) fn em_pixels(metrics: &Type3Metrics) -> Result<f64, OcrError> {
     check_metric("ascent", metrics.ascent)?;
     check_metric("cap height", metrics.cap_height)?;
     check_metric("x-height", metrics.x_height)?;
@@ -257,7 +261,7 @@ fn push_op(body: &mut String, numbers: &[f64], operator: &str) {
         if i > 0 {
             body.push(' ');
         }
-        body.push_str(&pdf_num(*number));
+        body.push_str(&crate::pdf_num(*number));
     }
     body.push(' ');
     body.push_str(operator);
@@ -291,22 +295,14 @@ fn outward(bounds: [f64; 4]) -> [f64; 4] {
 }
 
 fn d1(width: f64, bbox: [f64; 4]) -> String {
-    format!("{} 0 {} {} {} {} d1\n", pdf_num(width), pdf_num(bbox[0]), pdf_num(bbox[1]), pdf_num(bbox[2]), pdf_num(bbox[3]))
-}
-
-/// A PDF real: no exponent, and a magnitude below the print precision is zero.
-fn pdf_num(value: f64) -> String {
-    let value = if value.abs() < 5.0e-5 { 0.0 } else { value };
-    let mut text = format!("{value:.4}");
-    if text.contains('.') {
-        while text.ends_with('0') {
-            text.pop();
-        }
-        if text.ends_with('.') {
-            text.pop();
-        }
-    }
-    if text == "-0" || text.is_empty() { "0".into() } else { text }
+    format!(
+        "{} 0 {} {} {} {} d1\n",
+        crate::pdf_num(width),
+        crate::pdf_num(bbox[0]),
+        crate::pdf_num(bbox[1]),
+        crate::pdf_num(bbox[2]),
+        crate::pdf_num(bbox[3])
+    )
 }
 
 fn write_font(doc: &mut Document, glyphs: &[BuiltGlyph], metrics: &Type3Metrics, em: f64) -> Type3Font {
@@ -431,6 +427,15 @@ mod tests {
 
     fn body_metrics() -> Type3Metrics {
         Type3Metrics { ascent: 8.0, cap_height: 6.0, x_height: 3.0, descent: 2.0 }
+    }
+
+    #[test]
+    fn the_em_is_the_cap_height_then_the_ascent_then_one_pixel() {
+        let body = body_metrics();
+        assert_eq!(em_pixels(&body).expect("cap"), 6.0);
+        assert_eq!(em_pixels(&Type3Metrics { cap_height: 0.0, ..body }).expect("ascent"), 8.0);
+        assert_eq!(em_pixels(&Type3Metrics { cap_height: 0.0, ascent: 0.0, ..body }).expect("pixel"), 1.0);
+        assert!(em_pixels(&Type3Metrics { x_height: f64::NAN, ..body }).is_err());
     }
 
     fn font_of(doc: &Document) -> pdfcraft_cos::Dict {

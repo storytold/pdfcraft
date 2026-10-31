@@ -4505,6 +4505,7 @@ dependencies = [
  "ocrs",
  "pdfcraft-cos",
  "pdfcraft-fonts",
+ "pdfcraft-oracle",
  "pdfcraft-render",
  "rten",
  "rten-imageproc",

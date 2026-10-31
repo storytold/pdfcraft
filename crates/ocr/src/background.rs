@@ -751,7 +751,7 @@ fn push_text(out: &mut String, layer: &ClearScanLayer<'_>) {
             out.push('/');
             out.push_str(layer.font_name);
             out.push(' ');
-            out.push_str(&pdf_num(glyph.size));
+            out.push_str(&crate::pdf_num(glyph.size));
             out.push_str(" Tf\n");
             current = Some(glyph.size);
         }
@@ -768,22 +768,8 @@ fn push_numbers(out: &mut String, numbers: &[f64]) {
         if index > 0 {
             out.push(' ');
         }
-        out.push_str(&pdf_num(*number));
+        out.push_str(&crate::pdf_num(*number));
     }
-}
-
-fn pdf_num(value: f64) -> String {
-    let value = if value.abs() < 5.0e-5 { 0.0 } else { value };
-    let mut text = format!("{value:.4}");
-    if text.contains('.') {
-        while text.ends_with('0') {
-            text.pop();
-        }
-        if text.ends_with('.') {
-            text.pop();
-        }
-    }
-    if text == "-0" || text.is_empty() { "0".into() } else { text }
 }
 
 #[cfg(test)]

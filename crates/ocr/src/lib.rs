@@ -21,9 +21,10 @@
 //! [`background`](mod@background) then paints those glyphs out of the scan — the paper colour
 //! around each one, so the fuzzy ink cannot halo the vectors — and writes the cleaned raster
 //! under a content stream that shows the Type 3 text.
+//! [`clearscan`](mod@clearscan) runs those stages on one raster and returns the one-page PDF.
 //! See [`preprocess`](mod@preprocess), [`annotations`](mod@annotations), [`components`](mod@components),
-//! [`align`](mod@align), [`cluster`](mod@cluster), [`vectorize`](mod@vectorize), [`type3`](mod@type3)
-//! and [`background`](mod@background).
+//! [`align`](mod@align), [`cluster`](mod@cluster), [`vectorize`](mod@vectorize), [`type3`](mod@type3),
+//! [`background`](mod@background) and [`clearscan`](mod@clearscan).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -31,6 +32,7 @@ pub mod align;
 pub mod annotations;
 pub mod background;
 pub mod binarize;
+pub mod clearscan;
 pub mod cluster;
 pub mod components;
 pub mod deskew;
@@ -89,6 +91,9 @@ pub enum OcrError {
     /// The cleaned background could not be built or written. The message names the limit.
     #[error("background: {0}")]
     Background(String),
+    /// The ClearScan page could not be built. The message names the limit or the bad input.
+    #[error("ClearScan: {0}")]
+    ClearScan(String),
 }
 
 /// Where the two model files are.
@@ -252,6 +257,24 @@ fn num(v: f64) -> String {
     if s == "-0" { "0".into() } else { s.into() }
 }
 
+/// A PDF real for ClearScan's own content: no exponent, trailing zeros dropped, and a magnitude
+/// below the print precision written as zero. Type 3 charprocs, the background content stream,
+/// and the multi-font page stream all go through this so a coordinate is spelled one way.
+/// [`num`] is the invisible text layer's formatter and uses a tighter zero.
+pub(crate) fn pdf_num(value: f64) -> String {
+    let value = if value.abs() < 5.0e-5 { 0.0 } else { value };
+    let mut text = format!("{value:.4}");
+    if text.contains('.') {
+        while text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
+    }
+    if text == "-0" || text.is_empty() { "0".into() } else { text }
+}
+
 /// Page content that writes `words` as invisible text in `/PCHelv` (standard Helvetica,
 /// WinAnsiEncoding), each word stretched to its box so selection and search highlight the
 /// right place. Marked content `/OCR` so it can be told apart from the page's own text.
@@ -286,6 +309,16 @@ pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pdf_reals_drop_noise_and_trailing_zeros() {
+        assert_eq!(pdf_num(0.0), "0");
+        assert_eq!(pdf_num(-1.0e-5), "0");
+        assert_eq!(pdf_num(1.0), "1");
+        assert_eq!(pdf_num(1.5), "1.5");
+        assert_eq!(pdf_num(-2.25), "-2.25");
+        assert_eq!(pdf_num(0.0001), "0.0001");
+    }
 
     #[test]
     fn places_words_through_the_mapping() {
