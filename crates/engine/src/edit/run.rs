@@ -116,6 +116,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::RemoveLinks { .. }
         | Edit::AddLinks { .. }
         | Edit::Sanitize
+        | Edit::SanitizeSigned(_)
         | Edit::XfaToStatic
         | Edit::SetFieldProps { .. }
         | Edit::DeleteField { .. }
@@ -247,6 +248,16 @@ impl EditCtx {
             b & 0xffff_ffff_ffff
         );
         pdfcraft_annot::Meta { date: self.date.clone(), id }
+    }
+}
+
+/// Whether `edit` (or a batch inside it) sanitizes with the signatures removed or flattened:
+/// the one full rewrite allowed on a signed document, asked for knowing it (#4622).
+pub(crate) fn unsigns(edit: &Edit) -> bool {
+    match edit {
+        Edit::SanitizeSigned(_) => true,
+        Edit::Batch { edits, .. } => edits.iter().any(unsigns),
+        _ => false,
     }
 }
 
@@ -708,6 +719,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::Sanitize => {
             pdfcraft_redact::sanitize::sanitize(doc)?;
+        }
+        Edit::SanitizeSigned(how) => {
+            pdfcraft_redact::sanitize::sanitize_signed(doc, *how)?;
         }
         Edit::Flatten { comments, fields } => {
             // An XFA form's fields baked into the pages: the XFA goes too, or Adobe's viewers

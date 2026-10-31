@@ -2575,6 +2575,12 @@ animation effects	Off	オフ
 	Extract the selected pages…	選択したページを抽出…
 	Delete the selected pages	選択したページを削除
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	文書の機密情報と署名を削除
+	Sanitize document and flatten signatures	文書の機密情報を削除して署名を平坦化
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	署名の見た目だけをページの内容として残す（表示されている名前や日付は見えたまま）
+	Remove the digital signatures: their fields, how they look on the page and their validation data	デジタル署名を削除する：署名フィールド、ページ上の外観、検証データ
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	この文書にはデジタル署名があります。機密情報の削除はファイル全体を書き直すため署名が無効になります。署名を削除する場合にのみ実行できます。
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	この返信のオプション
 	Export value	書き出し値

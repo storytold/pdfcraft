@@ -2484,6 +2484,12 @@ animation effects	Off	ఆఫ్
 	Extract the selected pages…	ఎంచుకున్న పేజీలను సంగ్రహించు…
 	Delete the selected pages	ఎంచుకున్న పేజీలను తొలగించు
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	పత్రాన్ని శుభ్రపరచి సంతకాలను తీసివేయి
+	Sanitize document and flatten signatures	పత్రాన్ని శుభ్రపరచి సంతకాలను చదునుచేయి
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	సంతకాల రూపాన్ని మాత్రమే పేజీ కంటెంట్‌గా ఉంచు (అవి చూపే పేరు లేదా తేదీ కనిపిస్తూనే ఉంటుంది)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	డిజిటల్ సంతకాలను తీసివేయి: వాటి ఫీల్డ్‌లు, పేజీలో అవి కనిపించే విధానం మరియు వాటి ధ్రువీకరణ డేటా
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	ఈ పత్రం డిజిటల్‌గా సంతకం చేయబడింది. శుభ్రపరచడం మొత్తం ఫైల్‌ను మళ్లీ వ్రాస్తుంది, ఇది సంతకాలను చెల్లనివిగా చేస్తుంది, కాబట్టి అది వాటిని తీసివేసి మాత్రమే కొనసాగగలదు.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ఈ ప్రత్యుత్తరం ఎంపికలు
 	Export value	ఎగుమతి విలువ

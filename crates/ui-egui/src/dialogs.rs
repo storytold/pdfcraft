@@ -298,7 +298,8 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             return false;
         }
         Dialog::Sanitize => {
-            let (ok, cancel) = crate::redact_ui::sanitize_body(ui, &t);
+            let signed = app.active_ids().and_then(|(_, id)| app.session.get(id)).is_some_and(|d| d.is_signed());
+            let (ok, cancel) = crate::redact_ui::sanitize_body(ui, &t, signed, &mut app.sanitize_signatures);
             if ok {
                 req.redact_now = Some(dialog);
             }
@@ -1713,7 +1714,12 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
                 }
             }
         }
-        Some(Dialog::Sanitize) if app.apply_edit(Edit::Sanitize) => {
+        Some(Dialog::Sanitize)
+            if app.apply_edit(match app.sanitize_signatures {
+                Some(how) if app.active_ids().and_then(|(_, id)| app.session.get(id)).is_some_and(|d| d.is_signed()) => Edit::SanitizeSigned(how),
+                _ => Edit::Sanitize,
+            }) =>
+        {
             app.notify_tr("Document sanitized. Save to finish: saving rewrites the whole file.");
         }
         Some(Dialog::RedactApply) => {

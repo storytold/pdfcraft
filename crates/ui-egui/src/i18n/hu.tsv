@@ -2574,6 +2574,12 @@ animation effects	Off	Ki
 	Extract the selected pages…	A kijelölt oldalak kibontása…
 	Delete the selected pages	A kijelölt oldalak törlése
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	Dokumentum megtisztítása és az aláírások eltávolítása
+	Sanitize document and flatten signatures	Dokumentum megtisztítása és az aláírások egyesítése
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	Csak az aláírások megjelenésének megtartása oldaltartalomként (a bennük látható név vagy dátum látható marad)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	A digitális aláírások eltávolítása: a mezőik, az oldalon látható megjelenésük és az ellenőrzési adataik
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	Ez a dokumentum digitálisan alá van írva. A megtisztítás az egész fájlt újraírja, ami érvényteleníti az aláírásokat, így csak nélkülük folytatható.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	A válasz beállításai
 	Export value	Exportérték

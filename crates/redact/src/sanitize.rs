@@ -677,6 +677,153 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     Ok(done)
 }
 
+/// What Sanitize does with a signed document's signatures, which its rewrite would invalidate
+/// (#4622). Refusing, the default, is the caller's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Signatures {
+    /// [`sanitize_removing_signatures`]: gone, look and all.
+    Remove,
+    /// [`sanitize_flattening_signatures`]: their look stays as page content.
+    Flatten,
+}
+
+/// [`sanitize_removing_signatures`] or [`sanitize_flattening_signatures`], as `how` says.
+pub fn sanitize_signed(doc: &mut Document, how: Signatures) -> Result<(Vec<(Hidden, usize)>, usize), RedactError> {
+    match how {
+        Signatures::Remove => sanitize_removing_signatures(doc),
+        Signatures::Flatten => sanitize_flattening_signatures(doc),
+    }
+}
+
+/// Refuse destructive signature sanitization when a dynamic XFA form cannot be safely
+/// represented by the static page content available to this build.
+fn reject_unsupported_xfa(doc: &Document) -> Result<(), RedactError> {
+    if pdfcraft_xfa::xfa_shape(doc).is_some_and(|shape| !shape.strippable()) {
+        return Err(RedactError::Edit(pdfcraft_edit::EditError::Invalid("signed XFA form cannot be sanitized safely".to_owned())));
+    }
+    Ok(())
+}
+
+/// Sanitize Document for a signed file, with its signatures removed (#4622): [`remove_signatures`],
+/// then [`sanitize`]. The signatures can't survive a sanitized rewrite, and their certificates,
+/// names and timestamps are hidden information too. Returns what [`sanitize`] removed and how
+/// many signature fields and widgets went. Signed or not, valid or not, every one goes.
+pub fn sanitize_removing_signatures(doc: &mut Document) -> Result<(Vec<(Hidden, usize)>, usize), RedactError> {
+    reject_unsupported_xfa(doc)?;
+    let signatures = remove_signatures(doc)?;
+    Ok((sanitize(doc)?, signatures))
+}
+
+/// Sanitize Document for a signed file, keeping how its signatures look (#4622): [`sanitize`]
+/// flattens each signature field's appearance onto the page like any other field's, and the
+/// signature dictionary (the certificates, the signer's name, the timestamp) goes with the form,
+/// reachable from nothing once `/Perms` is gone too.
+/// Signature widgets the form doesn't list, `/Perms`, `/DSS` and `/SigFlags` go as with
+/// [`remove_signatures`]. Whatever the appearance itself shows (a name, a date) stays on the page.
+/// Returns what [`sanitize`] removed and how many signature fields were flattened.
+pub fn sanitize_flattening_signatures(doc: &mut Document) -> Result<(Vec<(Hidden, usize)>, usize), RedactError> {
+    reject_unsupported_xfa(doc)?;
+    let mut flattened = 0usize;
+    let mut keep = std::collections::HashSet::new();
+    for f in pdfcraft_forms::fields(doc).into_iter().filter(|f| f.kind == pdfcraft_forms::FieldKind::Signature) {
+        keep.extend(f.widgets.iter().map(|w| w.obj));
+        flattened = flattened.saturating_add(1);
+    }
+    drop_signature_data(doc, &keep)?;
+    Ok((sanitize(doc)?, flattened))
+}
+
+/// Remove every signature field (signed or empty, document timestamps included) with its widgets
+/// and their appearance, any signature widget a page lists that the form doesn't, and the
+/// catalog's `/Perms` (DocMDP, UR3) and `/DSS`, and the form's `/SigFlags`. Returns how many
+/// fields and widgets went.
+pub fn remove_signatures(doc: &mut Document) -> Result<usize, RedactError> {
+    let mut removed = 0usize;
+    let mut gone = std::collections::HashSet::new();
+    for f in pdfcraft_forms::fields(doc).into_iter().filter(|f| f.kind == pdfcraft_forms::FieldKind::Signature) {
+        gone.insert(f.obj);
+        gone.extend(f.widgets.iter().map(|w| w.obj));
+        pdfcraft_forms::delete_field_object(doc, f.obj)?;
+        removed = removed.saturating_add(1);
+    }
+    // A tagged PDF's structure tree still points at the removed widgets (`/OBJR`), which would
+    // keep them, and their signature dictionaries, in the full rewrite.
+    crate::tags::drop_object_refs(doc, &gone)?;
+    Ok(removed.saturating_add(drop_signature_data(doc, &std::collections::HashSet::new())?))
+}
+
+/// What goes with the signatures however they are handled: signature widgets a page lists that
+/// the form adopts no field for, the catalog's `/Perms` and `/DSS`, and the form's `/SigFlags`.
+/// Widgets in `keep` stay (the fields being flattened). The next save is a full rewrite. Returns
+/// how many widgets went.
+fn drop_signature_data(doc: &mut Document, keep: &std::collections::HashSet<ObjRef>) -> Result<usize, RedactError> {
+    let mut removed = 0usize;
+    let mut gone = std::collections::HashSet::new();
+    for p in pdfcraft_model::pages(doc) {
+        let list = annots_of(doc, &p.dict);
+        let (mut kept, mut dropped) = (Vec::new(), Vec::new());
+        for a in list.iter().cloned() {
+            if a.as_ref().is_some_and(|r| keep.contains(&r)) || !is_signature_widget(doc, &a)? {
+                kept.push(a);
+            } else {
+                dropped.push(a);
+            }
+        }
+        gone.extend(dropped.iter().filter_map(Object::as_ref));
+        if kept.len() != list.len() {
+            removed = removed.saturating_add(list.len() - kept.len());
+            doc.update_dict(p.obj, |d| d.set(b"Annots".to_vec(), Object::Array(kept)))?;
+        }
+    }
+    // Their `/OBJR` entries in a tagged PDF's structure tree go too (see `remove_signatures`).
+    crate::tags::drop_object_refs(doc, &gone)?;
+    if let Some((root, cat)) = catalog(doc) {
+        if cat.contains(b"Perms") || cat.contains(b"DSS") {
+            doc.update_dict(root, |d| {
+                d.remove(b"Perms");
+                d.remove(b"DSS");
+            })?;
+        }
+        match cat.get(b"AcroForm") {
+            Some(Object::Ref(af)) if doc.get(*af).as_dict().is_some_and(|d| d.contains(b"SigFlags")) => {
+                let af = *af;
+                doc.update_dict(af, |d| {
+                    d.remove(b"SigFlags");
+                })?;
+            }
+            Some(Object::Dict(af)) if af.contains(b"SigFlags") => {
+                let mut af = af.clone();
+                af.remove(b"SigFlags");
+                doc.update_dict(root, |d| d.set(b"AcroForm".to_vec(), Object::Dict(af)))?;
+            }
+            _ => {}
+        }
+    }
+    doc.require_full_save();
+    Ok(removed)
+}
+
+/// Whether `a` is a widget of a signature field: its own `/FT`, or the nearest one up its
+/// `/Parent` chain, is `/Sig` (a cycle ends the walk). A chain deeper than the walk goes is an
+/// error, not a guess: kept, such a widget would carry its signature into the rewrite.
+fn is_signature_widget(doc: &Document, a: &Object) -> Result<bool, RedactError> {
+    let Some(d) = doc.resolve(a).as_dict().cloned() else { return Ok(false) };
+    if d.get(b"Subtype").and_then(Object::as_name) != Some(b"Widget".as_slice()) {
+        return Ok(false);
+    }
+    let mut node = d;
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..64 {
+        if let Some(ft) = node.get(b"FT").map(|o| doc.resolve(o)) {
+            return Ok(ft.as_name() == Some(b"Sig".as_slice()));
+        }
+        let Some(parent) = node.reference(b"Parent").filter(|r| seen.insert(*r)) else { return Ok(false) };
+        let Some(next) = doc.get(parent).as_dict().cloned() else { return Ok(false) };
+        node = next;
+    }
+    Err(RedactError::TooDeep)
+}
+
 /// Sanitize Document: remove every category of hidden information.
 pub fn sanitize(doc: &mut Document) -> Result<Vec<(Hidden, usize)>, RedactError> {
     match remove_hidden(doc, &HIDDEN) {

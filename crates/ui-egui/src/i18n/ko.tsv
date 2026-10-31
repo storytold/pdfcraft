@@ -2807,5 +2807,11 @@ theme	Appearance	모양
 	Extract the selected pages…	선택한 페이지 추출…
 	Delete the selected pages	선택한 페이지 삭제
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	문서 정리 및 서명 제거
+	Sanitize document and flatten signatures	문서 정리 및 서명 병합
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	서명의 모양만 페이지 내용으로 유지(서명에 표시된 이름이나 날짜는 계속 보임)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	디지털 서명 제거: 서명 필드, 페이지에 표시되는 모양 및 유효성 검사 데이터
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	이 문서는 디지털 서명되어 있습니다. 정리하면 파일 전체를 다시 쓰므로 서명이 무효화됩니다. 따라서 서명 없이만 진행할 수 있습니다.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	이 답글의 옵션

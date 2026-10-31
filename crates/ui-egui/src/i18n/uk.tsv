@@ -2597,6 +2597,12 @@ animation effects	Off	Вимкнено
 	Extract the selected pages…	Витягнути вибрані сторінки…
 	Delete the selected pages	Видалити вибрані сторінки
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	Очистити документ від конфіденційних даних і видалити підписи
+	Sanitize document and flatten signatures	Очистити документ від конфіденційних даних і звести підписи
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	Залишити лише вигляд підписів як вміст сторінки (показані в них ім'я чи дата залишаються видимими)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	Видалити цифрові підписи: їхні поля, їхній вигляд на сторінці та дані їх перевірки
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	Цей документ підписано цифровим підписом. Очищення перезаписує весь файл, що робить підписи недійсними, тому продовжити можна лише без них.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметри цієї відповіді
 	Export value	Значення експорту

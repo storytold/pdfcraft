@@ -2671,6 +2671,12 @@ animation effects	Off	Wyłączone
 	Extract the selected pages…	Wyodrębnij zaznaczone strony…
 	Delete the selected pages	Usuń zaznaczone strony
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	Oczyść dokument i usuń podpisy
+	Sanitize document and flatten signatures	Oczyść dokument i spłaszcz podpisy
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	Zachowaj tylko wygląd podpisów jako zawartość strony (widoczne w nich imię lub data pozostają widoczne)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	Usuń podpisy cyfrowe: ich pola, ich wygląd na stronie i ich dane weryfikacyjne
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	Ten dokument jest podpisany cyfrowo. Oczyszczanie zapisuje cały plik od nowa, co unieważnia podpisy, więc może być wykonane tylko bez nich.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcje tej odpowiedzi
 	Export value	Wartość eksportowa

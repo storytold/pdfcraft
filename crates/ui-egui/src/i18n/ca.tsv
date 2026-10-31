@@ -2836,5 +2836,11 @@ theme	Appearance	Aspecte
 	Extract the selected pages…	Extreu les pàgines seleccionades…
 	Delete the selected pages	Suprimeix les pàgines seleccionades
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	Neteja el document i elimina les signatures
+	Sanitize document and flatten signatures	Neteja el document i aplana les signatures
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	Conserva només l'aspecte de les signatures, com a contingut de la pàgina (el nom o la data que mostren continuen visibles)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	Elimina les signatures digitals: els seus camps, com es veuen a la pàgina i les dades de validació
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	Aquest document està signat digitalment. Netejar-lo reescriu tot el fitxer, cosa que invalida les signatures, de manera que només pot continuar sense elles.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcions d'aquesta resposta

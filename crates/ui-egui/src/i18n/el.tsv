@@ -2581,6 +2581,12 @@ animation effects	Off	Ανενεργά
 	Extract the selected pages…	Εξαγωγή των επιλεγμένων σελίδων…
 	Delete the selected pages	Διαγραφή των επιλεγμένων σελίδων
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	Εκκαθάριση κρυφών δεδομένων εγγράφου και αφαίρεση υπογραφών
+	Sanitize document and flatten signatures	Εκκαθάριση κρυφών δεδομένων εγγράφου και ισοπέδωση υπογραφών
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	Διατήρηση μόνο της εμφάνισης των υπογραφών, ως περιεχόμενο σελίδας (ένα όνομα ή μια ημερομηνία που δείχνουν παραμένει ορατό)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	Αφαίρεση των ψηφιακών υπογραφών: τα πεδία τους, η εμφάνισή τους στη σελίδα και τα δεδομένα επικύρωσής τους
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	Αυτό το έγγραφο είναι ψηφιακά υπογεγραμμένο. Η εκκαθάριση ξαναγράφει ολόκληρο το αρχείο, κάτι που ακυρώνει τις υπογραφές, οπότε μπορεί να προχωρήσει μόνο χωρίς αυτές.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Επιλογές για αυτήν την απάντηση
 	Export value	Τιμή εξαγωγής

@@ -2756,6 +2756,12 @@ certificate	Version	وەشان
 	Extract the selected pages…	پەڕە هەڵبژێردراوەکان دەربهێنە…
 	Delete the selected pages	پەڕە هەڵبژێردراوەکان بسڕەوە
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	پاککردنەوەی بەڵگەنامە و لابردنی واژۆکان
+	Sanitize document and flatten signatures	پاکژکردنی بەڵگەنامە و تەختکردنی واژۆکان
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	تەنها شێوەی واژۆکان وەک ناوەڕۆکی پەڕە بهێڵەوە (ناو یان بەروارێک کە پیشانی دەدەن دیار دەمێنێت)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	لابردنی واژۆ دیجیتاڵییەکان: خانەکانیان، شێوەیان لەسەر پەڕە و زانیاری پشتڕاستکردنەوەیان
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	ئەم بەڵگەنامەیە بە دیجیتاڵی واژۆ کراوە. پاککردنەوە هەموو فایلەکە دەنووسێتەوە، کە واژۆکان نادروست دەکات، بۆیە تەنها بەبێ ئەوان دەتوانێت بەردەوام بێت.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	هەڵبژاردەکانی ئەم وەڵامە
 # Untranslated: English text until a translator fills these in.

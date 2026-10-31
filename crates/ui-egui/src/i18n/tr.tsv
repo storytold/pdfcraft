@@ -2571,6 +2571,12 @@ animation effects	Off	Kapalı
 	Extract the selected pages…	Seçili sayfaları ayıkla…
 	Delete the selected pages	Seçili sayfaları sil
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	Belgeyi temizle ve imzaları kaldır
+	Sanitize document and flatten signatures	Belgeyi temizle ve imzaları düzleştir
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	İmzaların yalnızca görünümünü sayfa içeriği olarak koru (gösterdikleri ad veya tarih görünür kalır)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	Dijital imzaları kaldır: alanlarını, sayfadaki görünümlerini ve doğrulama verilerini
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	Bu belge dijital olarak imzalanmış. Temizleme tüm dosyayı yeniden yazar ve bu imzaları geçersiz kılar; bu yüzden yalnızca imzalar olmadan devam edebilir.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Bu yanıtın seçenekleri
 	Export value	Dışa aktarma değeri

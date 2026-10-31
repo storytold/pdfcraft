@@ -5900,8 +5900,8 @@ milestone = "M8"
 status = "shipped"
 commands = ["redact.sanitize"]
 tools = ["doc_remove_hidden"]
-evidence = ["crates/redact/src/tests.rs::hidden_information_is_counted_and_removed", "crates/ui-egui/tests/it/redact.rs::removing_hidden_information_and_sanitizing", "crates/automation/tests/it/automation.rs::removing_hidden_information_through_tools"]
-notes = "every category, then a full rewrite on save"
+evidence = ["crates/redact/src/tests.rs::hidden_information_is_counted_and_removed", "crates/ui-egui/tests/it/redact.rs::removing_hidden_information_and_sanitizing", "crates/automation/tests/it/automation.rs::removing_hidden_information_through_tools", "crates/redact/src/tests.rs::sanitizing_with_signatures_removed_leaves_no_signature_and_no_signer_on_the_page", "crates/redact/src/tests.rs::sanitizing_with_signatures_flattened_keeps_their_look_and_drops_the_signature", "crates/engine/src/tests.rs::sanitizing_a_signed_document_can_remove_or_flatten_its_signatures", "crates/automation/tests/it/automation.rs::sanitizing_a_signed_document_through_tools_removes_its_signatures_when_asked", "crates/ui-egui/tests/it/signing.rs::sanitizing_a_signed_document_asks_to_remove_its_signatures"]
+notes = "every category, then a full rewrite on save. A signed document is refused unless its signatures are given up (dialog choice, doc_remove_hidden signatures: remove or flatten, #4622): every signature field with its widgets and appearance, /Perms, /DSS and /SigFlags go, valid or not; flatten keeps each signature's look as page content (a name or date it shows stays). Not yet: a summary of the signatures before they go"
 
 [[feature]]
 id = "protect.audit-faux-redactions"

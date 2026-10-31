@@ -2727,6 +2727,12 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Extract the selected pages…	แยกหน้าที่เลือกออก…
 	Delete the selected pages	ลบหน้าที่เลือก
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	ล้างข้อมูลแฝงในเอกสารและลบลายเซ็น
+	Sanitize document and flatten signatures	ล้างข้อมูลแฝงในเอกสารและแปลงลายเซ็นเป็นเนื้อหา
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	เก็บไว้เฉพาะลักษณะของลายเซ็นเป็นเนื้อหาของหน้า (ชื่อหรือวันที่ที่แสดงยังคงมองเห็นได้)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	ลบลายเซ็นดิจิทัล: ฟิลด์ของลายเซ็น ลักษณะที่ปรากฏบนหน้า และข้อมูลการตรวจสอบ
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	เอกสารนี้มีลายเซ็นดิจิทัล การล้างข้อมูลจะเขียนไฟล์ทั้งหมดใหม่ ซึ่งทำให้ลายเซ็นใช้ไม่ได้ จึงทำได้เฉพาะเมื่อลบลายเซ็นออก
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ตัวเลือกของการตอบกลับนี้
 # Untranslated: English text until a translator fills these in.

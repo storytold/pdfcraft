@@ -2525,6 +2525,12 @@ animation effects	Off	關
 	Extract the selected pages…	擷取所選頁面…
 	Delete the selected pages	刪除所選頁面
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	清理文件並移除簽章
+	Sanitize document and flatten signatures	清理文件並平面化簽章
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	僅將簽章的外觀保留為頁面內容（其中顯示的姓名或日期仍可見）
+	Remove the digital signatures: their fields, how they look on the page and their validation data	移除數位簽章：簽章欄位、在頁面上的外觀及其驗證資料
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	此文件已進行數位簽章。清理會重寫整個檔案，使簽章失效，因此只能在移除簽章後進行。
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	此回覆的選項
 	Export value	匯出值

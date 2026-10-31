@@ -3285,3 +3285,217 @@ fn a_reply_on_another_page_to_a_removed_popup_goes_too() {
         assert!(!bytes.windows(gone.len()).any(|w| w == gone), "{} survived", String::from_utf8_lossy(gone));
     }
 }
+
+/// A signed field (with an appearance naming the signer), a signature widget the form doesn't
+/// list, a text field, `/Perms`, `/DSS` (with a certificate, hex-encoded so only its decoded
+/// bytes say [`CERT`]) and `/SigFlags`.
+fn signed_form() -> Document {
+    let ap = |text: &str| {
+        stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 160 40] /Resources << /Font << /F1 11 0 R >> >>",
+            format!("BT /F1 12 Tf 10 10 Td ({text}) Tj ET").as_bytes(),
+        )
+    };
+    pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R /Perms << /DocMDP 7 0 R >> /DSS << /Certs [15 0 R] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [5 0 R 8 0 R 10 0 R] /Contents 12 0 R /Resources << /Font << /F1 11 0 R >> >> >>".to_vec(),
+        b"<< /Fields [5 0 R 10 0 R] /SigFlags 3 /DA (/Helv 0 Tf 0 g) >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature1) /V 7 0 R /Rect [20 20 180 60] /P 3 0 R /AP << /N 6 0 R >> >>".to_vec(),
+        ap("SIGNER"),
+        b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /Name (Ada Signer) /ByteRange [0 0 0 0] /Contents <00> >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /Parent 9 0 R /Rect [20 100 180 140] /P 3 0 R /AP << /N 6 0 R >> >>".to_vec(),
+        // Unlisted, and its parents loop (9 → 14 → 9): the form adopts no field for it, but the
+        // parent says /Sig.
+        b"<< /FT /Sig /Kids [8 0 R] /Parent 14 0 R /TU (Unlisted) >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (KEEP) /Rect [20 200 180 240] /P 3 0 R /AP << /N 13 0 R >> >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        stream("", b"BT /F1 10 Tf 10 280 Td (Page) Tj ET"),
+        ap("KEEP"),
+        b"<< /Parent 9 0 R >>".to_vec(),
+        stream("/Filter /ASCIIHexDecode", CERT.iter().map(|b| format!("{b:02X}")).collect::<String>().as_bytes()),
+    ])
+}
+
+/// What [`signed_form`]'s certificate decodes to.
+const CERT: &[u8] = b"CERT-DER-SIGNER-0001";
+
+/// Whether `bytes`, reopened, still hold `needle` in an object or a decoded stream (#4622: the
+/// check reads what a reader would, not just the raw bytes).
+fn decoded_anywhere(bytes: &[u8], needle: &[u8]) -> bool {
+    let has = |b: &[u8]| b.windows(needle.len()).any(|w| w == needle);
+    let doc = Document::open(Arc::new(bytes.to_vec())).unwrap();
+    has(bytes)
+        || doc.scan_objects().any(|(_, o)| match &*o {
+            Object::Stream(s) => s.decoded().is_ok_and(|d| has(&d)),
+            Object::String(t) => has(&t.bytes),
+            _ => false,
+        })
+}
+
+#[test]
+fn sanitizing_with_signatures_removed_leaves_no_signature_and_no_signer_on_the_page() {
+    use crate::sanitize::{Signatures, remove_signatures, sanitize_signed};
+
+    let mut doc = signed_form();
+    let (_, removed) = sanitize_signed(&mut doc, Signatures::Remove).unwrap();
+    assert_eq!(removed, 2, "the listed field and the widget the form doesn't list");
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let text: Vec<String> = pdfcraft_edit::text_lines(&saved, 0).unwrap().into_iter().map(|l| l.text).collect();
+    // The text field is flattened as Sanitize always does; the signature's appearance is gone.
+    let page = pdfcraft_model::pages(&saved)[0].dict.clone();
+    let xobjects = page
+        .get(b"Resources")
+        .and_then(|r| saved.resolve(r).as_dict().cloned())
+        .and_then(|r| r.get(b"XObject").and_then(|x| saved.resolve(x).as_dict().cloned()));
+    assert_eq!(xobjects.map(|x| x.len()), Some(1), "only the text field is flattened onto the page");
+    assert!(!text.iter().any(|t| t.contains("SIGNER")), "{text:?}");
+    let root = saved.get(saved.root().unwrap()).as_dict().unwrap().clone();
+    assert!(!root.contains(b"Perms") && !root.contains(b"DSS") && !root.contains(b"AcroForm"), "{root:?}");
+    let bytes = write_full(&saved, &SaveOptions::default()).unwrap();
+    assert!(bytes.windows(4).any(|w| w == b"KEEP"), "the text field's appearance stays");
+    for gone in [b"SIGNER".as_slice(), b"Ada Signer", b"/ByteRange", b"/SigFlags", b"Unlisted"] {
+        assert!(!bytes.windows(gone.len()).any(|w| w == gone), "{} is still in the file", String::from_utf8_lossy(gone));
+    }
+    assert!(!decoded_anywhere(&bytes, CERT), "the /DSS certificate is gone");
+
+    // On its own, it keeps the other fields and their form.
+    let mut doc = signed_form();
+    assert_eq!(remove_signatures(&mut doc).unwrap(), 2);
+    let fields = pdfcraft_forms::fields(&doc);
+    assert_eq!(fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["name"]);
+    let af = doc.get(ObjRef::new(4, 0)).as_dict().unwrap().clone();
+    assert!(!af.contains(b"SigFlags") && af.contains(b"Fields"));
+    let page = pdfcraft_model::pages(&doc)[0].dict.clone();
+    assert_eq!(annots_of(&doc, &page).len(), 1, "only the text field's widget is left");
+    assert_eq!(remove_signatures(&mut doc).unwrap(), 0, "nothing left the second time");
+}
+
+/// #4650 review: in a tagged PDF the structure tree points at the signature widgets (`/OBJR`).
+/// Removing the signatures drops those references too, or the full rewrite keeps the widget and,
+/// through its `/V`, the signature dictionary with the signer's name.
+#[test]
+fn removed_signatures_leave_the_structure_tree_and_the_saved_file() {
+    use crate::sanitize::{Signatures, sanitize_signed};
+
+    let tagged = || {
+        let mut doc = signed_form();
+        let objr = |n: u32| {
+            let mut d = Dict::new();
+            d.set(b"Type".to_vec(), Object::name("OBJR"));
+            d.set(b"Obj".to_vec(), Object::Ref(ObjRef::new(n, 0)));
+            Object::Dict(d)
+        };
+        let mut elem = Dict::new();
+        elem.set(b"Type".to_vec(), Object::name("StructElem"));
+        elem.set(b"S".to_vec(), Object::name("Form"));
+        elem.set(b"K".to_vec(), Object::Array(vec![objr(5), objr(8)]));
+        let elem = doc.add(Object::Dict(elem));
+        let mut root = Dict::new();
+        root.set(b"Type".to_vec(), Object::name("StructTreeRoot"));
+        root.set(b"K".to_vec(), Object::Ref(elem));
+        let root = doc.add(Object::Dict(root));
+        let cat = doc.root().unwrap();
+        doc.update_dict(cat, |d| d.set(b"StructTreeRoot".to_vec(), Object::Ref(root))).unwrap();
+        doc
+    };
+    for how in [Signatures::Remove, Signatures::Flatten] {
+        let mut doc = tagged();
+        sanitize_signed(&mut doc, how).unwrap();
+        let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+        for gone in [b"Ada Signer".as_slice(), b"/ByteRange", b"/OBJR"] {
+            assert!(!bytes.windows(gone.len()).any(|w| w == gone), "{how:?}: {} is still in the file", String::from_utf8_lossy(gone));
+        }
+    }
+}
+
+/// CodeRabbit on #4650: a signature widget whose `/Parent` chain is deeper than the walk goes
+/// is refused, not kept with its signature for the rewrite.
+#[test]
+fn a_signature_widget_too_deep_to_tell_is_refused() {
+    use crate::sanitize::{Signatures, sanitize_signed};
+
+    let mut doc = signed_form();
+    let mut top = Dict::new();
+    top.set(b"FT".to_vec(), Object::name("Sig"));
+    let mut parent = doc.add(Object::Dict(top));
+    for _ in 0..100 {
+        let mut d = Dict::new();
+        d.set(b"Parent".to_vec(), Object::Ref(parent));
+        parent = doc.add(Object::Dict(d));
+    }
+    let mut w = Dict::new();
+    w.set(b"Type".to_vec(), Object::name("Annot"));
+    w.set(b"Subtype".to_vec(), Object::name("Widget"));
+    w.set(b"Parent".to_vec(), Object::Ref(parent));
+    let w = doc.add(Object::Dict(w));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        if let Some(Object::Array(a)) = d.get_mut(b"Annots") {
+            a.push(Object::Ref(w));
+        }
+    })
+    .unwrap();
+    for how in [Signatures::Remove, Signatures::Flatten] {
+        let out = sanitize_signed(&mut doc.clone(), how);
+        assert!(matches!(out, Err(RedactError::TooDeep)), "{how:?}: {out:?}");
+    }
+}
+
+/// #4622: a signed XFA form that taking the XFA out would leave blank (a dynamic form never laid
+/// out) is refused for both choices, and the document is left exactly as it was.
+#[test]
+fn a_signed_dynamic_xfa_form_is_refused_and_left_untouched() {
+    use crate::sanitize::{Signatures, sanitize_signed};
+
+    let mut doc = Document::open(Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(1)))).unwrap();
+    assert!(pdfcraft_xfa::xfa_shape(&doc).is_some_and(|shape| !shape.strippable()));
+    let cat = doc.root().unwrap();
+    doc.update_dict(cat, |d| d.set(b"Perms".to_vec(), Object::Dict(Dict::new()))).unwrap();
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    for how in [Signatures::Remove, Signatures::Flatten] {
+        let mut tried = doc.clone();
+        let out = sanitize_signed(&mut tried, how);
+        assert!(matches!(out, Err(RedactError::Edit(_))), "{how:?}: {out:?}");
+        assert_eq!(write_full(&tried, &SaveOptions::default()).unwrap(), before, "{how:?} changed the document");
+    }
+}
+
+#[test]
+fn a_signature_widget_whose_parents_loop_is_left_alone() {
+    // 5 → 6 → 5: no /FT anywhere, so not a signature widget; the walk ends.
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [5 0 R] >>".to_vec(),
+        b"<< >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /Parent 6 0 R /Rect [0 0 10 10] >>".to_vec(),
+        b"<< /Parent 5 0 R >>".to_vec(),
+    ]);
+    assert_eq!(crate::sanitize::remove_signatures(&mut doc).unwrap(), 0);
+}
+
+#[test]
+fn sanitizing_with_signatures_flattened_keeps_their_look_and_drops_the_signature() {
+    use crate::sanitize::{Signatures, sanitize_signed};
+
+    let mut doc = signed_form();
+    let (_, flattened) = sanitize_signed(&mut doc, Signatures::Flatten).unwrap();
+    assert_eq!(flattened, 1, "the listed signature field");
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let page = pdfcraft_model::pages(&saved)[0].dict.clone();
+    assert!(annots_of(&saved, &page).is_empty(), "every widget is page content now, or gone");
+    let xobjects = page
+        .get(b"Resources")
+        .and_then(|r| saved.resolve(r).as_dict().cloned())
+        .and_then(|r| r.get(b"XObject").and_then(|x| saved.resolve(x).as_dict().cloned()));
+    assert_eq!(xobjects.map(|x| x.len()), Some(2), "the signature's look and the text field's; the unlisted widget goes");
+    let root = saved.get(saved.root().unwrap()).as_dict().unwrap().clone();
+    assert!(!root.contains(b"Perms") && !root.contains(b"DSS") && !root.contains(b"AcroForm"), "{root:?}");
+    let bytes = write_full(&saved, &SaveOptions::default()).unwrap();
+    assert!(bytes.windows(6).any(|w| w == b"SIGNER"), "the appearance stays as page content");
+    for gone in [b"Ada Signer".as_slice(), b"/ByteRange", b"/SigFlags", b"Unlisted", b"/Sig "] {
+        assert!(!bytes.windows(gone.len()).any(|w| w == gone), "{} is still in the file", String::from_utf8_lossy(gone));
+    }
+    assert!(!decoded_anywhere(&bytes, CERT), "the /DSS certificate is gone");
+}

@@ -2807,6 +2807,12 @@ certificate	SHA-256 digest	Impronta SHA-256
 	Extract the selected pages…	Estrai le pagine selezionate…
 	Delete the selected pages	Elimina le pagine selezionate
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	Ripulisci il documento e rimuovi le firme
+	Sanitize document and flatten signatures	Ripulisci il documento e appiattisci le firme
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	Mantieni solo l'aspetto delle firme, come contenuto della pagina (un nome o una data mostrati restano visibili)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	Rimuovi le firme digitali: i loro campi, il loro aspetto nella pagina e i loro dati di convalida
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	Questo documento è firmato digitalmente. La pulizia riscrive l'intero file, invalidando le firme, quindi può procedere solo senza di esse.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opzioni per questa risposta
 	Export value	Valore di esportazione
