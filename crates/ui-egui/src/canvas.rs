@@ -2334,9 +2334,10 @@ struct Wheel {
     paging_owns_vertical: bool,
 }
 
-/// Point input bypasses egui smoothing for 1:1 motion. Line input keeps egui's configured, smoothed
-/// base and adds only the accelerated surplus. While point suppression is active, line and page
-/// input are reconstructed so current coarse events survive without exposing an older eased tail.
+/// Point input, and touchpad motion sent as fractions of a line (#3234), bypass egui smoothing for
+/// 1:1 motion. Wheel notches keep egui's configured, smoothed base and add only the accelerated
+/// surplus. While point suppression is active, line and page input are reconstructed so current
+/// coarse events survive without exposing an older eased tail.
 fn read_wheel(ui: &mut egui::Ui, view: &mut DocView, avail: Rect, single_paging: bool, edge_turned: bool) -> Wheel {
     let now = ui.input(|i| i.time);
     let input = if ui.rect_contains_pointer(avail) {

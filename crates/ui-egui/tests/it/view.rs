@@ -646,6 +646,33 @@ fn rapid_wheel_notches_accelerate_and_follow_touchpad_input() {
     assert!(delayed_page.abs() < 2.0, "the reconstructed page has no delayed easing copy: moved {delayed_page}");
 }
 
+/// #3234, #3665: a Windows precision touchpad (and X11 smooth scrolling) sends fractions of a
+/// line about once a frame, inertia included. The page moves by their line distance as they
+/// arrive, like pixel deltas: not multiplied as a fast wheel spin, and with no eased tail left
+/// to drift on after the fingers stop.
+#[test]
+fn touchpad_line_fractions_scroll_one_to_one() {
+    use pdfcraft_ui_egui::scroll_speed::ScrollSpeed;
+
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "300")]);
+    h.state_mut().set_option("animation_effects", "off").unwrap();
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    let base = ScrollSpeed::default().line_points();
+    let mut moved = 0.0;
+    for _ in 0..30 {
+        h.event(wheel(MouseWheelUnit::Line, -0.2, TouchPhase::Move));
+        moved += scroll_over(&mut h, 1);
+    }
+    // The page is drawn a frame behind its scroll.
+    moved += scroll_over(&mut h, 2);
+    let want = 30.0 * 0.2 * base;
+    assert!((moved - want).abs() < 0.05 * want, "a touchpad stream moves its own distance: moved {moved}, want {want}");
+    let tail = scroll_over(&mut h, 30);
+    assert!(tail.abs() < 1.0, "nothing drifts on after the last event: moved {tail}");
+}
+
 #[test]
 fn changing_continuous_layout_resets_wheel_acceleration() {
     use pdfcraft_ui_egui::scroll_speed::ScrollSpeed;
