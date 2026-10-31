@@ -201,6 +201,16 @@
 	Prepare for distribution…	Für Weitergabe vorbereiten…
 	Optimize scanned documents…	Gescannte Dokumente optimieren…
 	Compare files…	Dateien vergleichen…
+	Validate structure…	Struktur prüfen…
+	Validate structure	Struktur prüfen
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	{objects} Objekte anhand des Arlington PDF Model für PDF {version} geprüft.
+	No errors: the structure follows the Arlington PDF Model.	Keine Fehler: Die Struktur folgt dem Arlington PDF Model.
+	No errors in the rules that were evaluated.	Keine Fehler in den ausgewerteten Regeln.
+	Errors	Fehler
+	Information	Informationen
+	Not evaluated: {list}	Nicht ausgewertet: {list}
+	Only the first {n} of each kind are listed.	Nur die ersten {n} jeder Art werden aufgeführt.
+	The document has more objects than one check covers; the rest was not checked.	Das Dokument hat mehr Objekte, als eine Prüfung abdeckt; der Rest wurde nicht geprüft.
 	Detect form fields	Formularfelder erkennen
 	Merge data files into spreadsheet…	Datendateien in Tabelle zusammenführen…
 	Flatten form fields	Formularfelder reduzieren

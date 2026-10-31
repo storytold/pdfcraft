@@ -1373,6 +1373,15 @@
 	Compare	Bandingkan
 	Compare files	Bandingkan file
 	Compare files…	Bandingkan file…
+	Validate structure…	Validasi struktur…
+	Validate structure	Validasi struktur
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	{objects} objek diperiksa terhadap Model PDF Arlington untuk PDF {version}.
+	No errors: the structure follows the Arlington PDF Model.	Tidak ada galat: struktur mengikuti Model PDF Arlington.
+	No errors in the rules that were evaluated.	Tidak ada galat pada aturan yang dievaluasi.
+	Errors	Galat
+	Not evaluated: {list}	Tidak dievaluasi: {list}
+	Only the first {n} of each kind are listed.	Hanya {n} pertama dari setiap jenis yang dicantumkan.
+	The document has more objects than one check covers; the rest was not checked.	Dokumen memiliki lebih banyak objek daripada yang dicakup satu pemeriksaan; sisanya tidak diperiksa.
 	Compress a PDF	Kompres PDF
 	Console	Konsol
 	Convert colors	Konversi warna

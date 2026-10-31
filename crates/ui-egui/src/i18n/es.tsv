@@ -224,6 +224,35 @@
 	Prepare for distribution…	Preparar para distribución…
 	Optimize scanned documents…	Optimizar documentos escaneados…
 	Compare files…	Comparar archivos…
+	Validate structure…	Validar estructura…
+	Validate structure	Validar estructura
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	Se han comprobado {objects} objetos con el Arlington PDF Model para PDF {version}.
+	No errors: the structure follows the Arlington PDF Model.	Sin errores: la estructura sigue el Arlington PDF Model.
+	No errors in the rules that were evaluated.	No hay errores en las reglas evaluadas.
+	Errors	Errores
+	Information	Información
+	Not evaluated: {list}	Sin evaluar: {list}
+	Only the first {n} of each kind are listed.	Solo se muestran los {n} primeros de cada tipo.
+	The document has more objects than one check covers; the rest was not checked.	El documento tiene más objetos de los que abarca una comprobación; el resto no se ha comprobado.
+# What Validate structure reports (arlington::WORDINGS).
+	{type} lacks the required entry {key}	A {type} le falta la entrada obligatoria {key}
+	{key} in {type} is {found}, but must be {expected}	{key} en {type} es {found}, pero debe ser {expected}
+	{key} in {type} is {value}, which is not one of {allowed}	{key} en {type} es {value}, que no es uno de {allowed}
+	{key} in {type} is {value}, which breaks the rule {rule}	{key} en {type} es {value}, que incumple la regla {rule}
+	{key} in {type} must be {expected} when {rule}	{key} en {type} debe ser {expected} cuando {rule}
+	{key} in {type} must be an indirect reference	{key} en {type} debe ser una referencia indirecta
+	{key} in {type} must be a direct object, not a reference	{key} en {type} debe ser un objeto directo, no una referencia
+	{key} in {type} is from PDF {since}, later than the file's PDF {version}	{key} en {type} es de PDF {since}, posterior al PDF {version} del archivo
+	{key} in {type} is deprecated since PDF {since}	{key} en {type} está obsoleto desde PDF {since}
+	The value {value} of {key} in {type} is from PDF {since}, later than the file's PDF {version}	El valor {value} de {key} en {type} es de PDF {since}, posterior al PDF {version} del archivo
+	The value {value} of {key} in {type} is deprecated since PDF {since}	El valor {value} de {key} en {type} está obsoleto desde PDF {since}
+	{key} in {type} is a {found}, which is from PDF {since}, later than the file's PDF {version}	{key} en {type} es un {found}, que es de PDF {since}, posterior al PDF {version} del archivo
+	{key} in {type} breaks the rule {rule}	{key} en {type} incumple la regla {rule}
+	{type} has {count} elements, more than the {max} it allows	{type} tiene {count} elementos, más de los {max} que admite
+	{type} has {count} elements, but they come in sets of {n}	{type} tiene {count} elementos, pero van en grupos de {n}
+	{key} in {type} refers to object {object}, which doesn't exist	{key} en {type} remite al objeto {object}, que no existe
+	{key} in {type} matches none of the types it may have ({candidates})	{key} en {type} no encaja con ninguno de los tipos que puede tener ({candidates})
+	{key} is not an entry of {type} in the model	{key} no es una entrada de {type} en el modelo
 	Detect form fields	Detectar campos de formulario
 	Merge data files into spreadsheet…	Combinar archivos de datos en una hoja de cálculo…
 	Flatten form fields	Acoplar campos de formulario
@@ -2793,7 +2822,6 @@ certificate	SHA-256 digest	Huella SHA-256
 	Cut and stack needs Two-sided: Off. Print single-sided sheets.	Cortar y apilar necesita «A doble cara: Desactivado». Imprime hojas a una cara.
 	Error	Error
 	Warning	Advertencia
-	Information	Información
 	Success	Correcto
 #
 # Asking for something, and choosing it.

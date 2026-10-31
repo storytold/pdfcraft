@@ -30,6 +30,7 @@ pdfcraft-ocr = { workspace = true }
 pdfcraft-js = { workspace = true }
 pdfcraft-compare = { workspace = true }
 pdfcraft-preflight = { workspace = true }
+pdfcraft-arlington = { workspace = true }
 pdfcraft-export = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-create = { workspace = true }

@@ -30,6 +30,8 @@ mod printing;
 mod reading;
 mod redact;
 mod signing;
+mod structure;
+pub use structure::report_json as structure_report_json;
 mod text_cache;
 mod tools;
 

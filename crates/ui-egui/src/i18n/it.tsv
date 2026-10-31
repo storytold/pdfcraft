@@ -225,6 +225,16 @@
 	Prepare for distribution…	Prepara per la distribuzione…
 	Optimize scanned documents…	Ottimizza documenti acquisiti…
 	Compare files…	Confronta file…
+	Validate structure…	Convalida struttura…
+	Validate structure	Convalida struttura
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	Controllati {objects} oggetti rispetto all'Arlington PDF Model per PDF {version}.
+	No errors: the structure follows the Arlington PDF Model.	Nessun errore: la struttura segue l'Arlington PDF Model.
+	No errors in the rules that were evaluated.	Nessun errore nelle regole valutate.
+	Errors	Errori
+	Information	Informazioni
+	Not evaluated: {list}	Non valutato: {list}
+	Only the first {n} of each kind are listed.	Sono elencati solo i primi {n} di ogni tipo.
+	The document has more objects than one check covers; the rest was not checked.	Il documento ha più oggetti di quanti ne copra un controllo; il resto non è stato controllato.
 	Detect form fields	Rileva campi modulo
 	Merge data files into spreadsheet…	Unisci file di dati in un foglio di calcolo…
 	Flatten form fields	Appiattisci campi modulo

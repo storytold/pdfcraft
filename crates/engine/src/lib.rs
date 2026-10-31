@@ -50,6 +50,7 @@ pub mod signature_image;
 pub mod signature_scan;
 mod sources;
 mod stamp_preview;
+pub mod structure;
 #[cfg(test)]
 mod test_hooks;
 pub mod text_fonts;

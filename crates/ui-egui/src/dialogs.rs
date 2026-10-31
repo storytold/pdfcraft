@@ -251,6 +251,10 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             }
             return false;
         }
+        Dialog::Structure => {
+            req.close = crate::structure_ui::body(ui, app, &t);
+            return false;
+        }
         Dialog::CertificateViewer => {
             if !dialog_certificate_viewer(ui, app, req) {
                 return false;

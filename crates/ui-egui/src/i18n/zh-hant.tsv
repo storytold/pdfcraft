@@ -1157,6 +1157,16 @@
 	Check for accessibility	偵測無障礙支援
 	Clear redaction marks	清除遮蔽標記
 	Compare files…	比較檔案…
+	Validate structure…	驗證結構…
+	Validate structure	驗證結構
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	已依 PDF {version} 的 Arlington PDF Model 檢驗 {objects} 個物件。
+	No errors: the structure follows the Arlington PDF Model.	沒有錯誤：結構符合 Arlington PDF Model。
+	No errors in the rules that were evaluated.	已評估的規則中沒有錯誤。
+	Errors	錯誤
+	Information	資訊
+	Not evaluated: {list}	未評估：{list}
+	Only the first {n} of each kind are listed.	每類僅列出前 {n} 項。
+	The document has more objects than one check covers; the rest was not checked.	文件的物件數超過單次檢驗的上限；其餘部分未檢驗。
 	Create links from URLs	從網址建立連結
 	Detect form fields	偵測表單欄位
 	Draw a cloud	繪製雲形

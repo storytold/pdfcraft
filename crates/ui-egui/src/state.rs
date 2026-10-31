@@ -186,6 +186,8 @@ pub enum Dialog {
     AuditSpace,
     /// Signatures ▸ Show certificate.
     CertificateViewer,
+    /// Standards ▸ Validate structure.
+    Structure,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
