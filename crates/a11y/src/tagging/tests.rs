@@ -1071,11 +1071,7 @@ fn build(spec: &Spec) -> Document {
             match item {
                 Item::Tagged { kind, group } => {
                     let mcid = owners.len();
-                    let (s, body) = match kind {
-                        1 => ("Figure", format!("q 40 0 0 20 20 {y} cm /Im Do Q")),
-                        2 => ("H1", format!("BT /F1 16 Tf 20 {y} Td (Head {p}.{i}) Tj ET")),
-                        _ => ("P", format!("BT /F1 10 Tf 20 {y} Td (Para {p}.{i}) Tj ET")),
-                    };
+                    let (s, body) = tagged_item(*kind, p, i, y);
                     ops.push(format!("/{s} << /MCID {mcid} >> BDC {body} EMC"));
                     let section = (*group != 0).then(|| {
                         let slot = (if spec.inherit { p } else { 0 }, *group);
@@ -1124,13 +1120,7 @@ fn build(spec: &Spec) -> Document {
         for i in (p..spec.fields.len()).step_by(n) {
             let y = 40 + 20 * (i / n);
             let field = radio.map_or_else(|| format!("/FT /Tx /T (field {i})"), |r| format!("/Parent {r} 0 R"));
-            let key = match spec.fields[i] {
-                Field::Untagged => String::new(),
-                Field::Stale => format!("/StructParent {}", 1000 + i),
-                Field::Unlinked if i % 2 == 1 => format!("/StructParent {}", 2000 + i),
-                Field::Unlinked => String::new(),
-                Field::Tagged => format!("/StructParent {}", n + i),
-            };
+            let key = widget_key(&spec.fields[i], i, n);
             let widget = add(&mut objects, format!("<< /Type /Annot /Subtype /Widget {field} /Rect [150 {y} 280 {}] /P {page} 0 R {key} >>", y + 15));
             if matches!(spec.fields[i], Field::Unlinked | Field::Tagged) {
                 // An object reference as the lone /K, or in an array.
@@ -1178,6 +1168,26 @@ fn build(spec: &Spec) -> Document {
     objects[root as usize - 1] = format!("<< /Type /StructTreeRoot /K {k} /ParentTree {parent_tree} {next} >>");
     objects[0] = format!("<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot {root} 0 R {form} >>");
     pdf(&objects)
+}
+
+/// The tag and content of item `i` of page `p`, drawn at `y`: a figure, a heading or a paragraph.
+fn tagged_item(kind: u8, p: usize, i: usize, y: i32) -> (&'static str, String) {
+    match kind {
+        1 => ("Figure", format!("q 40 0 0 20 20 {y} cm /Im Do Q")),
+        2 => ("H1", format!("BT /F1 16 Tf 20 {y} Td (Head {p}.{i}) Tj ET")),
+        _ => ("P", format!("BT /F1 10 Tf 20 {y} Td (Para {p}.{i}) Tj ET")),
+    }
+}
+
+/// The `/StructParent` entry of field `i`'s widget, with `n` pages before the widgets' keys.
+fn widget_key(field: &Field, i: usize, n: usize) -> String {
+    match field {
+        Field::Untagged => String::new(),
+        Field::Stale => format!("/StructParent {}", 1000 + i),
+        Field::Unlinked if i % 2 == 1 => format!("/StructParent {}", 2000 + i),
+        Field::Unlinked => String::new(),
+        Field::Tagged => format!("/StructParent {}", n + i),
+    }
 }
 
 /// `spec`'s parent tree: page `p`'s key to the tags that own its content, and each tagged
