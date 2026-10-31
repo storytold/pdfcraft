@@ -150,12 +150,14 @@ pub enum Edit {
     /// `rect` is a point: the stamp is centred there at its natural size (at most 200 pt).
     /// Any other `rect` is a box: the picture is scaled to fit inside it, keeping its shape,
     /// and centred in it (#4077).
+    /// `line` is a text line under the picture, already filled in ([`Session::stamp_line`](crate::Session::stamp_line)).
     AddCustomStamp {
         page: usize,
         rect: [f64; 4],
         name: String,
         file: MarkFile,
         author: String,
+        line: Option<String>,
     },
     /// Delete the comment at `index` in the page's `/Annots`, with its pop-up and replies.
     DeleteAnnotation {

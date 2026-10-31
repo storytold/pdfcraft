@@ -793,6 +793,8 @@
 	initials	inicjały
 	signature	podpis
 	Create Custom Stamp	Utwórz własny stempel
+	Add a line filled in when the stamp is placed	Dodaj wiersz wypełniany przy umieszczaniu stempla
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} i {time} zostaną zastąpione Twoim imieniem, datą i godziną.
 	From {file}	Z {file}
 	Category:	Kategoria:
 	e.g. My stamps	np. Moje stemple

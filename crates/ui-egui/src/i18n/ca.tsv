@@ -2815,6 +2815,8 @@ theme	Appearance	Aspecte
 	field names can't contain a period: {name}	els noms dels camps no poden contenir cap punt: {name}
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
+	Add a line filled in when the stamp is placed	Afegeix una línia que s'emplena en col·locar el segell
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} i {time} es converteixen en el vostre nom, la data i l'hora.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui

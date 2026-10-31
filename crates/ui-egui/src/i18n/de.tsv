@@ -778,6 +778,8 @@
 	initials	Initialen
 	signature	Unterschrift
 	Create Custom Stamp	Eigenen Stempel erstellen
+	Add a line filled in when the stamp is placed	Eine Zeile hinzufügen, die beim Platzieren des Stempels ausgefüllt wird
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} und {time} werden zu Ihrem Namen, dem Datum und der Uhrzeit.
 	From {file}	Aus {file}
 	Category:	Kategorie:
 	e.g. My stamps	z. B. Meine Stempel

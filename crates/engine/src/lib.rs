@@ -166,5 +166,8 @@ fn display_config(config: &pdfcraft_render::RenderConfig) -> pdfcraft_render::Re
     config.clone().on_screen()
 }
 
+/// How long a custom stamp's text line may be, in characters (#1741).
+pub const MAX_STAMP_LINE: usize = 200;
+
 #[cfg(test)]
 mod tests;

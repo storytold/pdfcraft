@@ -62,20 +62,54 @@ impl Session {
         return None;
     }
 
-    /// Today's date in local time: (year, month, day). With an injected clock (tests) the clock
-    /// is taken as local time.
     /// A dynamic stamp's second line: "By Ada at 2:14 pm, Oct 02, 2026" (local time).
     pub fn stamp_by_line(&self, author: &str) -> String {
+        let (date, time) = self.stamp_date_time();
+        let who = if author.trim().is_empty() { String::new() } else { format!("By {} ", author.trim()) };
+        format!("{who}at {time}, {date}")
+    }
+
+    /// A custom stamp's text line (#1741): `template` with `{name}` (the author), `{date}`
+    /// ("Oct 02, 2026") and `{time}` ("2:14 pm") filled in now, in local time, as the dynamic
+    /// stamps' "By" line has them. Cut to [`MAX_STAMP_LINE`](crate::MAX_STAMP_LINE) characters.
+    pub fn stamp_line(&self, template: &str, author: &str) -> String {
+        let (date, time) = self.stamp_date_time();
+        // One pass over the template, so a placeholder the author's name happens to contain
+        // (`Ada {date}`) stays as written rather than being filled in too.
+        let mut filled = String::new();
+        let mut rest = template.trim();
+        while let Some(c) = rest.chars().next() {
+            if let Some(after) = rest.strip_prefix("{name}") {
+                filled.push_str(author.trim());
+                rest = after;
+            } else if let Some(after) = rest.strip_prefix("{date}") {
+                filled.push_str(&date);
+                rest = after;
+            } else if let Some(after) = rest.strip_prefix("{time}") {
+                filled.push_str(&time);
+                rest = after;
+            } else {
+                filled.push(c);
+                rest = rest.get(c.len_utf8()..).unwrap_or_default();
+            }
+        }
+        filled.chars().take(crate::MAX_STAMP_LINE).collect()
+    }
+
+    /// Now, as the stamps write it: ("Oct 02, 2026", "2:14 pm"), local time.
+    fn stamp_date_time(&self) -> (String, String) {
         let offset = self.local_offset();
         let d = self.now().map(|t| pdfcraft_cos::pdf_date(t + offset)).unwrap_or_default();
         let num = |a: usize, b: usize| d.get(a..b).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
         let (y, mo, day, hh, mm) = (num(2, 6), num(6, 8), num(8, 10), num(10, 12), num(12, 14));
         const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
         let h12 = if hh % 12 == 0 { 12 } else { hh % 12 };
-        let who = if author.trim().is_empty() { String::new() } else { format!("By {} ", author.trim()) };
-        format!("{who}at {h12}:{mm:02} {}, {} {day:02}, {y}", if hh < 12 { "am" } else { "pm" }, MONTHS[(mo.clamp(1, 12) - 1) as usize])
+        let month = MONTHS.get(mo.clamp(1, 12) as usize - 1).copied().unwrap_or("Jan");
+        (format!("{month} {day:02}, {y}"), format!("{h12}:{mm:02} {}", if hh < 12 { "am" } else { "pm" }))
     }
 
+    /// Today's date in local time: (year, month, day). With an injected clock (tests) the clock
+    /// is taken as local time.
     pub fn today(&self) -> (i64, u32, u32) {
         let offset = self.local_offset();
         self.now().map(|t| pdfcraft_cos::pdf_date(t + offset)).as_deref().and_then(parse_ymd).unwrap_or((1970, 1, 1))

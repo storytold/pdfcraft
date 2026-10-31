@@ -2845,3 +2845,7 @@ key	Space	Space
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất
+
+# AI-assisted additions for dynamic lines on custom stamps (#1741) (2026-10-16); not reviewed by a native speaker.
+	Add a line filled in when the stamp is placed	Thêm một dòng được điền khi đặt con dấu
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} và {time} sẽ thành tên của bạn, ngày và giờ.

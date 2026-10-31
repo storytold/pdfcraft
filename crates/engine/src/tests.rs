@@ -73,6 +73,7 @@ fn custom_image_stamp_keeps_displayed_orientation_on_rotated_pages() {
                     name: "Original quadrants".into(),
                     file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
                     author: "Test".into(),
+                    line: None,
                 },
             )
             .unwrap();
@@ -408,6 +409,7 @@ fn explicit_image_stamps_keep_displayed_orientation_on_rotated_pages() {
                     name: "Original quadrants".into(),
                     file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
                     author: "Test".into(),
+                    line: None,
                 },
             )
             .unwrap();
@@ -460,6 +462,7 @@ fn pdf_page_stamps_keep_displayed_orientation_on_rotated_pages() {
                     name: "Half red".into(),
                     file: MarkFile { name: "half.pdf".into(), bytes: bytes.clone(), page: 0 },
                     author: "Test".into(),
+                    line: None,
                 },
             )
             .unwrap();
@@ -489,6 +492,7 @@ fn pdf_page_stamps_fit_inside_an_explicit_box() {
         name: "Diagram".into(),
         file: MarkFile { name: "diagram.pdf".into(), bytes: bytes.clone(), page: 0 },
         author: "Test".into(),
+        line: None,
     };
     session.apply(id, stamp([56.0, 400.0, 539.0, 700.0])).unwrap();
     assert_eq!(session.get(id).unwrap().info.annotations[0].rect, [56.0, 429.25, 539.0, 670.75]);
@@ -8463,7 +8467,8 @@ fn a_phone_photo_used_as_a_custom_stamp_is_embedded_upright() {
     // A click places the stamp at its natural size: 30 x 20 pt as stored, 20 x 30 pt upright.
     // Named "Signature" so `signature_image` finds its picture.
     let file = MarkFile { name: "photo.jpg".into(), bytes: Arc::new(phone_jpeg()), page: 0 };
-    let stamp = Edit::AddCustomStamp { page: 0, rect: [100.0, 100.0, 100.0, 100.0], name: "Signature".into(), file, author: "Ada".into() };
+    let stamp =
+        Edit::AddCustomStamp { page: 0, rect: [100.0, 100.0, 100.0, 100.0], name: "Signature".into(), file, author: "Ada".into(), line: None };
     session.apply(id, stamp).unwrap();
     let cos = &session.get(id).unwrap().editor.as_ref().unwrap().cos;
     let picture = pdfcraft_annot::signature_image(cos, 0, 0).unwrap().unwrap();
@@ -9408,4 +9413,90 @@ fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes()
     black(&s, rewritten);
     s.apply(rewritten, Edit::RemoveMarks { kind: MarkKind::Background }).unwrap();
     black(&s, rewritten);
+}
+
+/// A custom stamp's line template (#1741) fills in the author, date and time as the dynamic
+/// stamps write them, and the "By" line itself is unchanged.
+#[test]
+fn stamp_lines_fill_in_the_name_date_and_time() {
+    let s = Session::new().with_clock(|| 1_700_000_000);
+    assert_eq!(s.stamp_line("Received {date} {time} by {name}", " Ada "), "Received Nov 14, 2023 10:13 pm by Ada");
+    // Review on #2345 (gabglus): placeholders inside the author's name are kept as written.
+    assert_eq!(s.stamp_line("By {name} — {date} {time}", "Ada {date} {time}"), "By Ada {date} {time} — Nov 14, 2023 10:13 pm");
+    assert_eq!(s.stamp_line("{name}{name}", "{name}"), "{name}{name}");
+    assert_eq!(s.stamp_by_line("Ada"), "By Ada at 10:13 pm, Nov 14, 2023");
+    assert_eq!(s.stamp_by_line(""), "at 10:13 pm, Nov 14, 2023");
+    assert_eq!(s.stamp_line(&"{date}".repeat(100), "Ada").chars().count(), MAX_STAMP_LINE);
+}
+
+/// A custom stamp's line keeps Western European letters (#1741): the appearance holds them as
+/// WinAnsi bytes. A lossy UTF-8 round trip once turned them into replacement characters.
+#[test]
+fn a_custom_stamp_line_keeps_accented_letters() {
+    let image = image::RgbaImage::from_pixel(80, 40, image::Rgba([20, 120, 220, 255]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let (mut session, id) = session_with(1);
+    let edit = Edit::AddCustomStamp {
+        page: 0,
+        rect: [100.0, 100.0, 100.0, 100.0],
+        name: "Logo".into(),
+        file: MarkFile { name: "logo.png".into(), bytes: Arc::new(png.into_inner()), page: 0 },
+        author: "Zoë".into(),
+        line: Some(session.stamp_line("Reçu à Zürich par {name}", "Zoë")),
+    };
+    session.apply(id, edit).unwrap();
+    let saved = session.save_bytes(id).unwrap();
+    let doc = pdfcraft_cos::Document::open(saved).unwrap();
+    const WANT: &[u8] = b"(Re\xe7u \xe0 Z\xfcrich par Zo\xeb)";
+    let found = doc.scan_objects().any(|(_, o)| match o.as_ref() {
+        pdfcraft_cos::Object::Stream(st) => st.decoded().is_ok_and(|b| b.windows(WANT.len()).any(|w| w == WANT)),
+        _ => false,
+    });
+    assert!(found, "the line's letters are WinAnsi bytes in the appearance");
+}
+
+/// A custom stamp with a line keeps its picture's shape over the line on a turned page: it is
+/// laid out in the displayed box, then turned into `/Rect`. Laid out in user space, a quarter
+/// turn squashed the picture into a narrow strip and stretched the band.
+#[test]
+fn a_lined_custom_stamp_keeps_its_layout_on_turned_pages() {
+    let colours = [[240, 20, 20, 255], [20, 180, 20, 255], [20, 20, 240, 255], [230, 180, 20, 255]];
+    let image = image::RgbaImage::from_fn(80, 40, |x, y| image::Rgba(colours[usize::from(y >= 20) * 2 + usize::from(x >= 40)]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let bytes = Arc::new(png.into_inner());
+    // A short line: the stamp is the picture's 80 pt wide, 40 / 0.78 pt tall with its band.
+    let (w, h) = pdfcraft_annot::custom_stamp_size((80.0, 40.0), Some("OK"));
+    assert_eq!(w, 80.0);
+    let top = 100.0 - h / 2.0;
+    for degrees in [0, 90, 180, 270] {
+        let (mut session, id) = session_with(1);
+        session.apply(id, Edit::RotatePages { pages: vec![0], degrees }).unwrap();
+        let at = session.get(id).unwrap().info.pages[0].view_to_user(100.0, 100.0).map(f64::from);
+        let edit = Edit::AddCustomStamp {
+            page: 0,
+            rect: [at[0], at[1], at[0], at[1]],
+            name: "Quadrants".into(),
+            file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
+            author: "Test".into(),
+            line: Some("OK".into()),
+        };
+        session.apply(id, edit).unwrap();
+        let doc = session.get(id).unwrap();
+        let mut renderer = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
+        let rendered = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        assert!(rendered.error.is_none(), "{:?}", rendered.error);
+        let pixel = |x: f64, y: f64| {
+            let offset = ((y as u32 * rendered.width + x as u32) * 4) as usize;
+            rendered.rgba[offset..offset + 4].to_vec()
+        };
+        // The picture fills the top 80 x 40 pt of the displayed box, its quadrants in place.
+        let points = [(70.0, top + 5.0), (130.0, top + 5.0), (70.0, top + 35.0), (130.0, top + 35.0)];
+        for ((x, y), colour) in points.into_iter().zip(colours) {
+            assert_eq!(pixel(x, y), colour, "page rotation {degrees}; displayed point ({x}, {y})");
+        }
+        // The band under it holds no picture.
+        assert_eq!(pixel(64.0, top + h - 3.0), [255, 255, 255, 255], "page rotation {degrees}: the band");
+    }
 }

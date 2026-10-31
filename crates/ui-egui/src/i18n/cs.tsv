@@ -880,6 +880,8 @@ key	Space	Mezerník
 	initials	iniciály
 	signature	podpis
 	Create Custom Stamp	Vytvořit vlastní razítko
+	Add a line filled in when the stamp is placed	Přidat řádek vyplněný při umístění razítka
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} a {time} se nahradí vaším jménem, datem a časem.
 	From {file}	Ze souboru {file}
 	Category:	Kategorie:
 	e.g. My stamps	např. Moje razítka

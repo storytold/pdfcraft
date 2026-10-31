@@ -757,6 +757,8 @@
 	initials	инициалдар
 	signature	қолтаңба
 	Create Custom Stamp	Өзіндік мөр жасау
+	Add a line filled in when the stamp is placed	Мөр қойылғанда толтырылатын жол қосу
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} және {time} сіздің атыңызға, күнге және уақытқа айналады.
 	From {file}	{file} файлынан
 	Category:	Санаты:
 	e.g. My stamps	мысалы, Менің мөрлерім

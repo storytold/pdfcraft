@@ -325,9 +325,12 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::AddAnnotation(a) => {
             pdfcraft_annot::add_annotation(doc, a, &cx.meta())?;
         }
-        Edit::AddCustomStamp { page, rect, name, file, author } => {
+        Edit::AddCustomStamp { page, rect, name, file, author, line } => {
             let src = mark_source(doc, file)?;
-            let (sw, sh) = (src.size.0.max(1.0), src.size.1.max(1.0));
+            let line = line.as_deref().map(str::trim).filter(|l| !l.is_empty()).map(|l| l.chars().take(crate::MAX_STAMP_LINE).collect::<String>());
+            let picture = (src.size.0.max(1.0), src.size.1.max(1.0));
+            // A text line adds its band under the picture, and widens the stamp to fit (#1741).
+            let (sw, sh) = pdfcraft_annot::custom_stamp_size(picture, line.as_deref());
             let natural = rect[2] == rect[0] && rect[3] == rect[1];
             let rotation = pdfcraft_organize::page_rotation(doc, *page)?;
             // The picture as displayed: a quarter turn swaps its sides in user space.
@@ -339,7 +342,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             } else {
                 fit_picture(*rect, dw, dh)
             };
-            let shape = Shape::CustomStamp { rect, name: name.clone(), picture: src.xobject, image: src.image, size: (sw, sh) };
+            let shape = Shape::CustomStamp { rect, name: name.clone(), picture: src.xobject, image: src.image, size: picture, line };
             let style = pdfcraft_annot::Style::default_for(&shape);
             let new = NewAnnotation { page: *page, shape, style, contents: name.clone(), author: author.clone() };
             let index = pdfcraft_annot::add_annotation(doc, &new, &cx.meta())?;

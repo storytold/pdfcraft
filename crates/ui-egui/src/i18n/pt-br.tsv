@@ -418,6 +418,8 @@
 	initials	iniciais
 	signature	assinatura
 	Create Custom Stamp	Criar carimbo personalizado
+	Add a line filled in when the stamp is placed	Adicionar uma linha preenchida quando o carimbo for colocado
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} e {time} se tornam seu nome, a data e a hora.
 	From {file}	De {file}
 	Category:	Categoria:
 	e.g. My stamps	ex.: Meus carimbos

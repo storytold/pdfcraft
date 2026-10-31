@@ -2459,6 +2459,8 @@ animation effects	Off	ປິດ
 	No tools match your search.	ບໍ່ມີເຄື່ອງມືທີ່ກົງກັບການຄົ້ນຫາຂອງທ່ານ.
 	Expand all tools	ຂະຫຍາຍເຄື່ອງມືທັງໝົດ
 	Collapse all tools	ຫຍໍ້ເຄື່ອງມືທັງໝົດເຂົ້າ
+	Add a line filled in when the stamp is placed	ເພີ່ມແຖວທີ່ຈະຖືກຕື່ມເມື່ອວາງກາປະທັບ
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} ແລະ {time} ຈະກາຍເປັນຊື່ຂອງທ່ານ, ວັນທີ ແລະ ເວລາ.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ມື້ນີ້

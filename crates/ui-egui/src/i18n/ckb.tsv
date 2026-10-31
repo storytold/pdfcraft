@@ -2743,6 +2743,8 @@ certificate	Version	وەشان
 	No tools match your search.	هیچ ئامرازێک لەگەڵ گەڕانەکەت ناگونجێت.
 	Expand all tools	فراوانکردنی هەموو ئامرازەکان
 	Collapse all tools	کۆکردنەوەی هەموو ئامرازەکان
+	Add a line filled in when the stamp is placed	هێڵێک زیاد بکە کە لە کاتی دانانی مۆرەکەدا پڕ دەکرێتەوە
+	{name}, {date} and {time} become your name, the date and the time.	{name}، {date} و {time} دەبنە ناوت، بەروار و کات.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	ئەمڕۆ

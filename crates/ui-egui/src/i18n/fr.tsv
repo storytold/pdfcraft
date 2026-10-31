@@ -774,6 +774,8 @@
 	initials	initiales
 	signature	signature
 	Create Custom Stamp	Créer un tampon personnalisé
+	Add a line filled in when the stamp is placed	Ajouter une ligne remplie au moment de poser le tampon
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} et {time} deviennent votre nom, la date et l’heure.
 	From {file}	Depuis {file}
 	Category:	Catégorie :
 	e.g. My stamps	p. ex. Mes tampons

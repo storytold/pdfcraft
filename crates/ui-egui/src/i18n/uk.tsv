@@ -798,6 +798,8 @@
 	initials	ініціали
 	signature	підпис
 	Create Custom Stamp	Створити власний штамп
+	Add a line filled in when the stamp is placed	Додати рядок, що заповнюється під час розміщення штампа
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} і {time} стають вашим ім’ям, датою та часом.
 	From {file}	Із {file}
 	Category:	Категорія:
 	e.g. My stamps	наприклад Мої штампи

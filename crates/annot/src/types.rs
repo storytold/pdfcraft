@@ -391,13 +391,17 @@ pub enum Shape {
         contours: Vec<Vec<[f64; 2]>>,
     },
     /// A custom stamp: a picture already in the document (an image XObject, or a form XObject
-    /// whose `/Matrix` maps it to `size` points) filling `rect`, named `name`.
+    /// whose `/Matrix` maps it to `size` points) filling `rect`, named `name`. With `line`, a
+    /// line of text under the picture (#1741): a dynamic stamp's name, date and time, filled in
+    /// when it was placed; the picture then fills the rectangle above it
+    /// ([`CUSTOM_LINE_BAND`](crate::CUSTOM_LINE_BAND)).
     CustomStamp {
         rect: [f64; 4],
         name: String,
         picture: ObjRef,
         image: bool,
         size: (f64, f64),
+        line: Option<String>,
     },
     /// A redaction mark (§12.5.6.23) over quadrilaterals (text) or one rectangle as a quad
     /// (areas, pages). `overlay` is the text shown on the box once applied, drawn with `look`.

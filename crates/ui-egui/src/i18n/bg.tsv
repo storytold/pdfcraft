@@ -463,6 +463,8 @@
 	initials	инициали
 	signature	подпис
 	Create Custom Stamp	Създаване на персонализиран печат
+	Add a line filled in when the stamp is placed	Добавяне на ред, попълван при поставяне на печата
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date} и {time} стават вашето име, датата и часът.
 	From {file}	От {file}
 	Category:	Категория:
 	e.g. My stamps	напр. Моите печати

@@ -845,6 +845,8 @@ struct PageEnv<'a> {
     comments_hidden: bool,
     content_h: f32,
     content_w: f32,
+    /// The custom stamp's line, filled in now (#1741).
+    custom_line: &'a Option<String>,
     custom_stamp: &'a Option<crate::stamps_ui::CustomStamp>,
     date_text: &'a Result<String, String>,
     doc: &'a pdfcraft_engine::Document,
@@ -1110,6 +1112,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         can_fill,
         can_modify,
         comments_hidden,
+        custom_line,
         custom_stamp,
         date_text,
         doc,
@@ -1212,6 +1215,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
                 name: cs.name.clone(),
                 file: pdfcraft_engine::MarkFile { name: cs.file.clone(), bytes: cs.data.clone(), page: cs.page },
                 author: author.clone(),
+                line: custom_line.clone(),
             });
             frame.out.stamp_placed = true;
         }
@@ -3149,6 +3153,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         QuickTool::CustomStamp(i) => app.custom_stamps.get(i).cloned(),
         _ => None,
     };
+    let custom_line = custom_stamp.as_ref().and_then(|cs| cs.line.as_deref()).map(|t| app.session.stamp_line(t, &author));
     let mut open_props: Option<(usize, usize)> = None;
     // The table being set up in its window, shown on its own document's page.
     let table_preview = app.field_table_draft.as_mut().filter(|d| d.doc == view.id).and_then(|d| Some(d.preview(info.pages.get(d.page)?, &form)));
@@ -3187,6 +3192,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         comments_hidden,
         content_h,
         content_w,
+        custom_line: &custom_line,
         custom_stamp: &custom_stamp,
         date_text: &date_text,
         doc,

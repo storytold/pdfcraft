@@ -235,6 +235,7 @@ impl SignatureImage {
                 name: if initials { "Initials" } else { "Signature" }.into(),
                 file: MarkFile { name: "signature.png".into(), bytes: self.bytes.clone(), page: 0 },
                 author: author.into(),
+                line: None,
             }],
         })
     }

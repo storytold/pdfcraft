@@ -4195,8 +4195,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["comment.stamp"]
 tools = ["comment_add"]
-evidence = ["crates/annot/src/tests.rs::stamps_draw_their_label_and_by_line", "crates/ui-egui/tests/it/stamps.rs::choosing_and_placing_stamps", "crates/automation/tests/it/automation.rs::stamps_through_tools", "crates/engine/src/tests.rs::rubber_stamps_point_left_as_displayed_on_rotated_pages"]
-notes = "Approved, Confidential, Received, Reviewed, Revised with a By author at time, date line (local time). The label is turned with the page's /Rotate so it reads upright as displayed (#1398)"
+evidence = ["crates/annot/src/tests.rs::stamps_draw_their_label_and_by_line", "crates/ui-egui/tests/it/stamps.rs::choosing_and_placing_stamps", "crates/automation/tests/it/automation.rs::stamps_through_tools", "crates/engine/src/tests.rs::rubber_stamps_point_left_as_displayed_on_rotated_pages", "crates/engine/src/tests.rs::stamp_lines_fill_in_the_name_date_and_time", "crates/automation/tests/it/automation.rs::a_custom_stamp_line_is_filled_in_when_placed", "crates/ui-egui/tests/it/stamps.rs::a_dynamic_custom_stamp_keeps_its_line_and_fills_it_in_when_placed"]
+notes = "Approved, Confidential, Received, Reviewed, Revised with a By author at time, date line (local time). The label is turned with the page's /Rotate so it reads upright as displayed (#1398). A custom stamp (image or PDF page) can carry a line under its picture, a template with {name}, {date} and {time} filled in when it is placed and fixed afterwards (#1741; Create Custom Stamp, and stamp_custom's line). Not yet: Acrobat's dynamic stamps from PDF stamp files with form fields and JavaScript, date formats other than the built-in one, and text outside WinAnsi in the line (drawn in Helvetica, so it shows as ?)"
 
 [[feature]]
 id = "comment.stamps-custom"

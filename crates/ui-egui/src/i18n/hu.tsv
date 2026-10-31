@@ -771,6 +771,8 @@
 	initials	monogram
 	signature	aláírás
 	Create Custom Stamp	Egyéni bélyegző létrehozása
+	Add a line filled in when the stamp is placed	A bélyegző elhelyezésekor kitöltött sor hozzáadása
+	{name}, {date} and {time} become your name, the date and the time.	A {name}, a {date} és a {time} helyére a neve, a dátum és az időpont kerül.
 	From {file}	Ebből: {file}
 	Category:	Kategória:
 	e.g. My stamps	pl. Saját bélyegzők

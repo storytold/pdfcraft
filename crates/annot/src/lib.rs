@@ -27,7 +27,7 @@ mod types;
 
 #[cfg(test)]
 use create::num_array;
-pub use create::{add_annotation, callout_attach, orient_image_stamp};
+pub use create::{CUSTOM_LINE_BAND, CUSTOM_LINE_TEXT, add_annotation, callout_attach, custom_stamp_size, orient_image_stamp};
 pub use draw::{AppearanceCache, set_appearance, with_missing_appearances, with_missing_appearances_cached};
 pub use info::{Props, Summary, is_comment_subtype, props, set_info, summaries};
 #[cfg(test)]

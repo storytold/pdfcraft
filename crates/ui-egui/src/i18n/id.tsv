@@ -2787,6 +2787,8 @@ theme	Appearance	Tampilan
 	field names can't contain a period: {name}	nama kolom tidak boleh berisi titik: {name}
 	two cells would both be named {name}	dua sel akan sama-sama bernama {name}
 	a field named {name} already exists	kolom bernama {name} sudah ada
+	Add a line filled in when the stamp is placed	Tambahkan baris yang diisi saat stempel ditempatkan
+	{name}, {date} and {time} become your name, the date and the time.	{name}, {date}, dan {time} menjadi nama Anda, tanggal, dan waktu.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini

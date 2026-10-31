@@ -801,6 +801,8 @@
 	initials	イニシャル
 	signature	署名
 	Create Custom Stamp	カスタムスタンプを作成
+	Add a line filled in when the stamp is placed	スタンプを配置したときに埋められる行を追加
+	{name}, {date} and {time} become your name, the date and the time.	{name}、{date}、{time} はあなたの名前、日付、時刻になります。
 	From {file}	元ファイル: {file}
 	Category:	カテゴリ:
 	e.g. My stamps	例: マイスタンプ
