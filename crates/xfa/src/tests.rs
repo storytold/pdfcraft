@@ -4145,3 +4145,45 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     let packets = read_packets(&doc).unwrap().unwrap();
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
 }
+
+/// A flowed subform in a table cell is as tall as its content even when it gives a height, as
+/// other viewers lay out a public form's per-child section (a `tb` subform with `h="186mm"` in a
+/// row); a positioned cell, and a flowed subform outside a table, keep their heights.
+#[test]
+fn a_flowed_subform_in_a_table_cell_is_as_tall_as_its_content() {
+    let after_y = |cell: &str| {
+        let body = format!(
+            r#"<subform name="t" layout="table" columnWidths="5in"><subform name="r" layout="row">{cell}</subform></subform>
+<field name="after" w="2in" h="0.3in"><ui><textEdit/></ui></field>"#
+        );
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        widgets(&form.pages[0]).iter().find(|w| w.name == "after").map(|w| w.rect.y).unwrap()
+    };
+    let fields = r#"<field name="a" w="2in" h="0.3in"><ui><textEdit/></ui></field><field name="b" w="2in" h="0.3in"><ui><textEdit/></ui></field>"#;
+    // The table starts at 0.5in (36pt); its content is two 0.3in fields (43.2pt).
+    let flowed = after_y(&format!(r#"<subform name="c" layout="tb" w="5in" h="5in">{fields}</subform>"#));
+    assert!((flowed - (36.0 + 43.2)).abs() < 0.5, "flowed cell: the next object at {flowed}");
+    let positioned = after_y(r#"<subform name="c" w="5in" h="5in"><field name="a" w="2in" h="0.3in"><ui><textEdit/></ui></field></subform>"#);
+    assert!((positioned - (36.0 + 360.0)).abs() < 0.5, "positioned cell keeps h: {positioned}");
+    let outside = {
+        let body = format!(
+            r#"<subform name="c" layout="tb" w="5in" h="5in">{fields}</subform><field name="after" w="2in" h="0.3in"><ui><textEdit/></ui></field>"#
+        );
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        widgets(&form.pages[0]).iter().find(|w| w.name == "after").map(|w| w.rect.y).unwrap()
+    };
+    assert!((outside - (36.0 + 360.0)).abs() < 0.5, "a flowed subform outside a table keeps h: {outside}");
+    // Measured at the column's width, where it is drawn, not its own: in a 1in column, two 0.8in
+    // fields of a 5in-wide lr-tb cell go on two lines (43.2pt), not one.
+    let narrow = {
+        let two =
+            r#"<field name="a" w="0.8in" h="0.3in"><ui><textEdit/></ui></field><field name="b" w="0.8in" h="0.3in"><ui><textEdit/></ui></field>"#;
+        let body = format!(
+            r#"<subform name="t" layout="table" columnWidths="1in"><subform name="r" layout="row"><subform name="c" layout="lr-tb" w="5in" h="5in">{two}</subform></subform></subform>
+<field name="after" w="2in" h="0.3in"><ui><textEdit/></ui></field>"#
+        );
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        widgets(&form.pages[0]).iter().find(|w| w.name == "after").map(|w| w.rect.y).unwrap()
+    };
+    assert!((narrow - (36.0 + 43.2)).abs() < 0.5, "measured at the column's width: the next object at {narrow}");
+}
