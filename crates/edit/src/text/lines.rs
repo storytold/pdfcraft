@@ -91,6 +91,32 @@ pub(crate) fn content_streams_within(doc: &Document, page: &Dict, budget: &mut D
     Ok(out)
 }
 
+/// What a text-showing operator does besides showing text (ISO 32000-2 §9.4.3, Table 107): `'`
+/// moves to the next line (`T*`), and `"` first sets the word and character spacing (`aw Tw`,
+/// `ac Tc`). Text after it relies on both, so a dropped `'` or `"` leaves these in its place.
+pub(crate) fn show_side_effects(op: &Op) -> Vec<Op> {
+    let mut out = Vec::new();
+    if op.is("\"") {
+        out.extend(op.num(0).map(|aw| Op::new("Tw", vec![pdfcraft_content::num(aw)])));
+        out.extend(op.num(1).map(|ac| Op::new("Tc", vec![pdfcraft_content::num(ac)])));
+    }
+    if op.is("'") || op.is("\"") {
+        out.push(Op::new("T*", vec![]));
+    }
+    out
+}
+
+/// For a paragraph or region rewrite: what dropped operator `i` must leave behind
+/// ([`show_side_effects`]), so the text after it keeps its line and spacing. `split_at` is the
+/// operator the text object was split at: the rewrite's `Tm` and state there already include
+/// that operator's effects.
+pub(crate) fn dropped_side_effects(ops: &[Op], i: usize, keep: bool, split_at: Option<usize>) -> Vec<Op> {
+    if keep || split_at == Some(i) {
+        return Vec::new();
+    }
+    ops.get(i).map(show_side_effects).unwrap_or_default()
+}
+
 /// Rewrite a page's content (its streams joined, see [`Pieces`]): `edit(i)` gives the operators
 /// to insert before operator `i` of `ops` (parsed from the joined pieces) and whether to keep it.
 /// Everything else is copied byte for byte. A page's streams are one stream in pieces, split

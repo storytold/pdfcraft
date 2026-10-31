@@ -797,7 +797,9 @@ fn push_row_break_marker(block_ops: &mut Vec<Op>, row_soft: &[bool], row_gap: &[
 /// [`splice`] with the rewritten rows spliced in at `at`, and (when `marker` names one) a `/P`
 /// marker opened at its start and closed at its `next` line or, when nothing follows, after the
 /// paragraph's own last `ET` (appended past the stream's last operator when that close is at or
-/// beyond `ops.len()`, since `splice`'s callback never visits that index).
+/// beyond `ops.len()`, since `splice`'s callback never visits that index). A dropped `'` or `"`
+/// leaves its line move and spacing ([`crate::text::dropped_side_effects`]; `split_at` is where
+/// the text object was split).
 fn splice_with_marker(
     pieces: &Pieces,
     ops: &[Op],
@@ -805,6 +807,7 @@ fn splice_with_marker(
     at: usize,
     mut block_ops: Vec<Op>,
     drop: &std::collections::HashSet<usize>,
+    split_at: Option<usize>,
 ) -> Vec<Vec<u8>> {
     let data = splice(pieces, ops, |i| {
         let mut insert = Vec::new();
@@ -822,7 +825,10 @@ fn splice_with_marker(
         if i == at {
             insert.append(&mut block_ops);
         }
-        (insert, !drop.contains(&i))
+        // A dropped `'` or `"` leaves its line move and spacing behind.
+        let keep = !drop.contains(&i);
+        insert.extend(crate::text::dropped_side_effects(ops, i, keep, split_at));
+        (insert, keep)
     });
     if !marker.is_some_and(|(_, next, close)| next.is_none() && close >= ops.len()) {
         return data;
@@ -1183,7 +1189,7 @@ pub(crate) fn rewrite_styled_block(
     // safe. The close is not part of `block_ops`: that vector can end inside a text object
     // when the rewrite splits one, and a kept row's operators come later in the stream.
     let marker = if marked { None } else { paragraph_marker(block, lines, &ops) };
-    let data = splice_with_marker(&pieces, &ops, marker, at, block_ops, &drop);
+    let data = splice_with_marker(&pieces, &ops, marker, at, block_ops, &drop, split.then_some(start));
     let contents = rewritten_contents(doc, &streams, data);
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     doc.update_dict(p.obj, |d| {
