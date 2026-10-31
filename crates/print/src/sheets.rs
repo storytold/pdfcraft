@@ -83,8 +83,22 @@ pub fn matching_paper(size: (f64, f64)) -> Option<usize> {
     PAPERS.iter().position(|(_, p)| (p.0 - size.0).abs() <= 0.5 && (p.1 - size.1).abs() <= 0.5)
 }
 
-/// The unprintable margin assumed around the sheet for Fit, Multiple and Booklet.
+/// The unprintable margin assumed around the sheet: [`Settings::margin`] unless another is chosen,
+/// and always around a poster's tiles, whose cut marks are drawn in it.
 pub const MARGIN: f64 = 18.0;
+
+/// [`Settings::margin`] when it is usable: a number of points, 0 or more, that leaves room on
+/// the paper both ways.
+fn sheet_margin(settings: &Settings) -> Result<f64, PrintError> {
+    let m = settings.margin;
+    if !(m.is_finite() && m >= 0.0) {
+        return Err(PrintError::Invalid("the margin must be 0 or more".into()));
+    }
+    if 2.0 * m >= settings.paper.0.min(settings.paper.1) {
+        return Err(PrintError::Invalid("the margins leave no room on the paper".into()));
+    }
+    Ok(m)
+}
 
 /// One page as placed on a sheet: the source page, the matrix from its *display space* to the
 /// sheet, and the visible part of it in display space (clipping).
@@ -134,6 +148,14 @@ fn fit_scale((dw, dh): (f64, f64), (cw, ch): (f64, f64)) -> f64 {
     if dw <= 0.0 || dh <= 0.0 { 1.0 } else { (cw / dw).min(ch / dh) }
 }
 
+/// The part of page `p` its [`Settings::crops`] entry keeps, cut to the page and at least a point
+/// each way; `None` keeps the whole page.
+fn crop_rect(settings: &Settings, p: usize, (w, h): (f64, f64)) -> Option<[f64; 4]> {
+    let c = settings.crops.get(p).copied().flatten()?;
+    let r = [c.rect[0].max(0.0), c.rect[1].max(0.0), c.rect[2].min(w), c.rect[3].min(h)];
+    (r[2] - r[0] > 1.0 && r[3] - r[1] > 1.0).then_some(r)
+}
+
 /// Lay out the sheets for `settings` given each source page's display size.
 pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, PrintError> {
     let pages: Vec<usize> = settings.pages.iter().copied().filter(|p| *p < sizes.len()).collect();
@@ -147,10 +169,14 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
     let mut sheets = Vec::new();
     match settings.layout {
         Layout::Size(mode) => {
+            // Only fitting reads the margin: actual size and a custom scale centre the page as it is.
+            let m = if matches!(mode, SizeMode::Fit | SizeMode::Shrink) { sheet_margin(settings)? } else { MARGIN };
             for &p in &pages {
-                let d = sizes[p];
+                // A crop (Print ▸ Current view, #5097) prints as though it were the whole page.
+                let rect = crop_rect(settings, p, sizes[p]).unwrap_or([0.0, 0.0, sizes[p].0, sizes[p].1]);
+                let d = (rect[2] - rect[0], rect[3] - rect[1]);
                 let size = oriented(paper, settings.orientation, d.0 > d.1);
-                let fit = fit_scale(d, (size.0 - 2.0 * MARGIN, size.1 - 2.0 * MARGIN));
+                let fit = fit_scale(d, (size.0 - 2.0 * m, size.1 - 2.0 * m));
                 let s = match mode {
                     SizeMode::Fit => fit,
                     SizeMode::Actual => 1.0,
@@ -158,7 +184,7 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                     SizeMode::Custom(pct) if pct.is_finite() && pct > 0.0 => pct / 100.0,
                     SizeMode::Custom(_) => return Err(PrintError::Invalid("the scale must be more than 0%".into())),
                 };
-                sheets.push(Sheet { size, placed: vec![place_in(p, d, [0.0, 0.0, size.0, size.1], s, false)], ..Sheet::default() });
+                sheets.push(Sheet { size, placed: vec![place_crop(p, rect, [0.0, 0.0, size.0, size.1], s, 0)], ..Sheet::default() });
             }
         }
         Layout::Label { flip } => {
@@ -187,7 +213,8 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
             };
             let size = oriented(paper, settings.orientation, sheet_landscape);
             let gap = 6.0;
-            let (aw, ah) = (size.0 - 2.0 * MARGIN, size.1 - 2.0 * MARGIN);
+            let m = sheet_margin(settings)?;
+            let (aw, ah) = (size.0 - 2.0 * m, size.1 - 2.0 * m);
             let (cw, ch) = ((aw - gap * (gc - 1) as f64) / gc as f64, (ah - gap * (gr - 1) as f64) / gr as f64);
             if cw <= 0.0 || ch <= 0.0 {
                 return Err(PrintError::Invalid("the page grid does not fit on the paper".into()));
@@ -199,12 +226,12 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                     // Marks align across every sheet, including unoccupied cells. Cut in the
                     // middle of each gutter; marks stay in the printable area, clear of cells.
                     for col in 1..gc {
-                        let x = MARGIN + col as f64 * (cw + gap) - gap / 2.0;
-                        sheet.lines.extend([[x, MARGIN, x, MARGIN + 8.0], [x, size.1 - MARGIN - 8.0, x, size.1 - MARGIN]]);
+                        let x = m + col as f64 * (cw + gap) - gap / 2.0;
+                        sheet.lines.extend([[x, m, x, m + 8.0], [x, size.1 - m - 8.0, x, size.1 - m]]);
                     }
                     for row in 1..gr {
-                        let y = size.1 - MARGIN - row as f64 * (ch + gap) + gap / 2.0;
-                        sheet.lines.extend([[MARGIN, y, MARGIN + 8.0, y], [size.0 - MARGIN - 8.0, y, size.0 - MARGIN, y]]);
+                        let y = size.1 - m - row as f64 * (ch + gap) + gap / 2.0;
+                        sheet.lines.extend([[m, y, m + 8.0, y], [size.0 - m - 8.0, y, size.0 - m, y]]);
                     }
                 }
                 for k in 0..per_sheet {
@@ -223,8 +250,8 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                         PageOrder::Vertical => (k / gr, k % gr),
                         PageOrder::VerticalReversed => (gc - 1 - k / gr, k % gr),
                     };
-                    let x0 = MARGIN + col as f64 * (cw + gap);
-                    let y1 = size.1 - MARGIN - row as f64 * (ch + gap);
+                    let x0 = m + col as f64 * (cw + gap);
+                    let y1 = size.1 - m - row as f64 * (ch + gap);
                     let cell = [x0, y1 - ch, x0 + cw, y1];
                     let d = sizes.get(p).copied().ok_or_else(|| PrintError::Invalid("page size is missing".into()))?;
                     if !(d.0.is_finite() && d.1.is_finite() && d.0 > 0.0 && d.1 > 0.0) {
@@ -250,8 +277,9 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
             let n4 = pages.len().div_ceil(4) * 4;
             let at = |i: usize| pages.get(i).copied();
             let size = oriented(paper, Orientation::Landscape, true);
-            let half = (size.0 - 2.0 * MARGIN) / 2.0;
-            let cells = [[MARGIN, MARGIN, MARGIN + half, size.1 - MARGIN], [MARGIN + half, MARGIN, size.0 - MARGIN, size.1 - MARGIN]];
+            let m = sheet_margin(settings)?;
+            let half = (size.0 - 2.0 * m) / 2.0;
+            let cells = [[m, m, m + half, size.1 - m], [m + half, m, size.0 - m, size.1 - m]];
             for k in 0..n4 / 4 {
                 let front = (at(n4 - 1 - 2 * k), at(2 * k));
                 let back = (at(2 * k + 1), at(n4 - 2 - 2 * k));
@@ -332,10 +360,7 @@ fn layout_labels(sizes: &[(f64, f64)], pages: &[usize], paper: (f64, f64), orien
         .map(|&p| {
             let d = sizes[p];
             let crop = settings.crops.get(p).copied().flatten();
-            let rect = crop
-                .map(|c| [c.rect[0].max(0.0), c.rect[1].max(0.0), c.rect[2].min(d.0), c.rect[3].min(d.1)])
-                .filter(|r| r[2] - r[0] > 1.0 && r[3] - r[1] > 1.0)
-                .unwrap_or([0.0, 0.0, d.0, d.1]);
+            let rect = crop_rect(settings, p, d).unwrap_or([0.0, 0.0, d.0, d.1]);
             let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
             let turn = (w > h) != (cell[2] - cell[0] > cell[3] - cell[1]);
             let mut quarter = match (turn, crop.is_some_and(|c| c.text_up)) {

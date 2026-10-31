@@ -307,8 +307,27 @@ impl Automation {
     }
 
     pub(crate) fn sign_trust(&mut self, a: &Args) -> Result<Value> {
+        let verify_at = match a.opt_str("verify_at")? {
+            None => None,
+            Some(k) => Some(sign::VerificationTime::from_key(k).ok_or_else(|| bad("verify_at must be signing, secure or current"))?),
+        };
         let mut certs: Vec<Certificate> =
             if a.opt_bool("clear")?.unwrap_or(false) { Vec::new() } else { self.session.trusted_certificates().to_vec() };
+        // #2613: stop trusting certificates by the SHA-256 the list reports, before any are added.
+        let remove: Vec<String> = match a.get("remove") {
+            None => Vec::new(),
+            Some(v) => v
+                .as_array()
+                .ok_or_else(|| bad("remove must be an array"))?
+                .iter()
+                .map(|f| {
+                    f.as_str().and_then(sha256_hex).ok_or_else(|| bad("remove must be SHA-256 fingerprints (64 hex digits) from the trusted list"))
+                })
+                .collect::<Result<_>>()?,
+        };
+        let before = certs.len();
+        certs.retain(|c| sha256_hex(&c.fingerprint()).is_none_or(|f| !remove.contains(&f)));
+        let removed = before - certs.len();
         let paths: Vec<String> = match a.get("paths") {
             None => Vec::new(),
             Some(v) => v
@@ -334,7 +353,21 @@ impl Automation {
                 }
             }
         }
+        if let Some(at) = verify_at {
+            self.session.set_verification_time(at);
+        }
         self.session.set_trusted_certificates(certs);
-        Ok(json!({ "trusted": self.session.trusted_certificates().iter().map(cert_json).collect::<Vec<_>>() }))
+        Ok(json!({
+            "trusted": self.session.trusted_certificates().iter().map(cert_json).collect::<Vec<_>>(),
+            "removed": removed,
+            "verify_at": self.session.verification_time().key(),
+        }))
     }
+}
+
+/// A SHA-256 fingerprint as 64 uppercase hex digits, however it is spaced or cased
+/// (`AB CD ...` as `sha256` reports it, `ab:cd:...`); `None` for anything else.
+fn sha256_hex(text: &str) -> Option<String> {
+    let digits: String = text.chars().filter(|c| !matches!(c, ' ' | ':')).collect();
+    (digits.len() == 64 && digits.chars().all(|c| c.is_ascii_hexdigit())).then(|| digits.to_ascii_uppercase())
 }

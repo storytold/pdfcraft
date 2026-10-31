@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, vec2};
 use pdfcraft_engine::sign::{self, Appearance, AppearanceLabels, Certificate, DigitalId, Name, PrivateKey};
-use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatus};
+use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatus, VerificationTime};
 
 use crate::canvas::{DocView, PageXform, Snapshot, SnapshotKind};
 use crate::fill_sign::SavedSig;
@@ -564,6 +564,13 @@ impl PdfCraftApp {
         self.apply_trusted_certificates(certs);
     }
 
+    /// Stop trusting a certificate (Preferences ▸ Trusted certificates, or the Certificate
+    /// Viewer's Trust tab; #2613), revalidating: what it anchored shows an unknown identity again.
+    pub fn untrust_certificate(&mut self, cert: &Certificate) {
+        let certs = self.session.trusted_certificates().iter().filter(|c| c.raw != cert.raw).cloned().collect();
+        self.apply_trusted_certificates(certs);
+    }
+
     /// Replace the trust store and redraw from the rebuilt display copy. One helper
     /// so no caller can revalidate without invalidating: trust changes verdicts,
     /// verdicts choose what the display copy shows, and the old rasters would
@@ -571,6 +578,14 @@ impl PdfCraftApp {
     /// Trust alone is not an edit: nothing becomes dirty.
     pub fn apply_trusted_certificates(&mut self, certs: Vec<Certificate>) {
         self.session.set_trusted_certificates(certs);
+        for view in &mut self.views {
+            view.invalidate_content();
+        }
+    }
+
+    /// Check signers' certificates at `at`, revalidating and redrawing as a trust change does.
+    pub fn apply_verification_time(&mut self, at: VerificationTime) {
+        self.session.set_verification_time(at);
         for view in &mut self.views {
             view.invalidate_content();
         }
@@ -665,6 +680,69 @@ impl PdfCraftApp {
             }
             Err(e) => self.notify_fmt("Couldn't open the signed version: {e}", &[("e", &e.to_string())]),
         }
+    }
+
+    /// Open the signed version beside the current document and compare the two, the signed
+    /// version as the older (Compare signed version to current version).
+    pub fn compare_signed_version(&mut self, len: usize, revision: usize) {
+        let Some((_, current)) = self.active_ids() else { return };
+        self.view_signed_version(len, revision);
+        // No new tab became active: opening it failed, and that was already said.
+        let Some((_, old)) = self.active_ids().filter(|(_, id)| *id != current) else { return };
+        self.active = self.views.iter().position(|v| v.id == current);
+        self.compare_old = Some(old);
+        self.run_compare();
+    }
+}
+
+/// Preferences ▸ Trusted certificates (#2613): the certificates signatures are validated
+/// against, each with Remove, so one trusted by mistake can be taken back.
+pub(crate) fn trusted_certificates_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
+    ui.label(egui::RichText::new(tl!("Trusted certificates")).font(theme::semibold(13.0)));
+    let trusted = app.session.trusted_certificates().to_vec();
+    if trusted.is_empty() {
+        ui.label(egui::RichText::new(tl!("None yet. Trust a signer from the Signatures panel to add one.")).small().color(t.text_muted));
+        return;
+    }
+    let mut remove = None;
+    egui::Grid::new("trusted-certificates").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+        for (i, c) in trusted.iter().enumerate() {
+            ui.vertical(|ui| {
+                ui.label(c.display_name());
+                let issued = crate::i18n::fmt(
+                    tl!("Issued by {issuer}, valid to {date}"),
+                    &[("issuer", &c.issuer.display()), ("date", &c.not_after.to_string())],
+                );
+                ui.label(egui::RichText::new(issued).small().color(t.text_muted));
+            });
+            if ui.button(tl!("Remove")).clicked() {
+                remove = Some(i);
+            }
+            ui.end_row();
+        }
+    });
+    if let Some(c) = remove.and_then(|i| trusted.get(i)) {
+        app.untrust_certificate(c);
+    }
+}
+
+/// Preferences ▸ Signature verification: when signers' certificates are checked (Acrobat:
+/// Verify signatures using).
+pub(crate) fn verification_time_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
+    ui.label(egui::RichText::new(tl!("Signature verification")).font(theme::semibold(13.0)));
+    ui.label(tl!("Verify signatures using"));
+    let current = app.session.verification_time();
+    let mut chosen = current;
+    widgets::radio_value(ui, &mut chosen, VerificationTime::Signing, tl!("The time the signature was created"));
+    widgets::radio_value(ui, &mut chosen, VerificationTime::Secure, tl!("The secure time of a trusted timestamp, else the current time"));
+    widgets::radio_value(ui, &mut chosen, VerificationTime::Current, tl!("The current time"));
+    ui.label(
+        egui::RichText::new(tl!("The time the signature was created comes from a trusted timestamp when there is one, else from the signer's own clock. The current time shows a certificate that has expired since signing."))
+            .small()
+            .color(t.text_muted),
+    );
+    if chosen != current {
+        app.apply_verification_time(chosen);
     }
 }
 
@@ -899,5 +977,114 @@ mod tests {
         assert_eq!(bar(&[signature(Some(2), Unknown), signature(None, Valid)]), Some(("triangle-alert", "At least one signature has problems.")));
         assert_eq!(bar(&[signature(None, Valid)]), Some(("circle-check", "Signed and all signatures are valid.")));
         assert_eq!(bar(&[SignatureInfo { signed: false, ..signature(None, Invalid) }]), None);
+    }
+
+    /// A self-signed P-256 certificate for `name`.
+    fn certificate(name: &str) -> Certificate {
+        let key = PrivateKey::generate_p256().unwrap();
+        Certificate::self_signed(&Name::build(name, "", "", "", ""), &key, sign::Time::from_unix(0), 1, &[1]).unwrap()
+    }
+
+    /// #2613: Preferences lists the trusted certificates, Remove stops trusting that one alone,
+    /// and with none left the section says how to add one.
+    #[test]
+    fn preferences_remove_one_trusted_certificate() {
+        use egui_kittest::kittest::Queryable;
+        let (ada, grace) = (certificate("Ada Lovelace"), certificate("Grace Hopper"));
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.trust_certificate(ada);
+        app.trust_certificate(grace.clone());
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(640.0, 400.0)).build_ui_state(
+            move |ui, app: &mut PdfCraftApp| {
+                // The semibold heading's font takes effect from the next frame.
+                if !fonts {
+                    ui.ctx().set_fonts(theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                let t = Tokens::get(ui.ctx());
+                trusted_certificates_section(ui, app, &t);
+            },
+            app,
+        );
+        h.run();
+        assert!(h.query_by_label("Ada Lovelace").is_some() && h.query_by_label("Grace Hopper").is_some());
+        h.get_all_by_label("Remove").next().unwrap().click();
+        h.run();
+        let left = h.state().session.trusted_certificates().to_vec();
+        assert!(left.len() == 1 && left[0].raw == grace.raw, "only Ada's row was removed");
+        assert!(h.query_by_label("Ada Lovelace").is_none());
+        h.get_by_label("Remove").click();
+        h.run();
+        assert!(h.state().session.trusted_certificates().is_empty());
+        assert!(h.query_by_label_contains("None yet").is_some());
+    }
+
+    /// Preferences ▸ Verify signatures using reaches the session and survives a restart; a saved
+    /// value this build doesn't know leaves the default.
+    #[test]
+    fn the_verification_time_choice_is_applied_and_kept() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(640.0, 400.0)).build_ui_state(
+            move |ui, app: &mut PdfCraftApp| {
+                if !fonts {
+                    ui.ctx().set_fonts(theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                let t = Tokens::get(ui.ctx());
+                verification_time_section(ui, app, &t);
+            },
+            app,
+        );
+        h.run();
+        assert_eq!(h.state().session.verification_time(), VerificationTime::Signing);
+        h.get_by_label("The current time").click();
+        h.run();
+        assert_eq!(h.state().session.verification_time(), VerificationTime::Current);
+        let saved = h.state().persist();
+        let mut fresh = PdfCraftApp::new();
+        fresh.restore(&saved);
+        assert_eq!(fresh.session.verification_time(), VerificationTime::Current);
+        let mut odd = PdfCraftApp::new();
+        odd.restore(r#"{"verification_time": "tomorrow"}"#);
+        assert_eq!(odd.session.verification_time(), VerificationTime::Signing);
+    }
+
+    /// #2613: the Certificate Viewer's Trust tab offers Remove for a certificate in the trusted
+    /// list, and Add for one that isn't.
+    #[test]
+    fn the_certificate_viewer_removes_a_trusted_certificate() {
+        use egui_kittest::kittest::Queryable;
+        let ada = certificate("Ada Lovelace");
+        let viewer = CertViewer { chain: vec![ada.clone()], selected: 0, tab: CertTab::Trust };
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(760.0, 500.0)).build_ui_state(
+            move |ui, (v, trusted, asked): &mut (CertViewer, Vec<Certificate>, Option<CertAction>)| {
+                if !fonts {
+                    ui.ctx().set_fonts(theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                let t = Tokens::get(ui.ctx());
+                if let (_, Some(action)) = cert_viewer(ui, v, trusted, &t) {
+                    *asked = Some(action);
+                }
+            },
+            (viewer, vec![ada.clone()], None),
+        );
+        h.run();
+        assert!(h.query_by_label("Add to Trusted Certificates").is_none());
+        h.get_by_label("Remove from Trusted Certificates").click();
+        h.run();
+        assert!(matches!(&h.state().2, Some(CertAction::Untrust(c)) if c.raw == ada.raw));
+        h.state_mut().1.clear();
+        h.run();
+        assert!(h.query_by_label("Remove from Trusted Certificates").is_none() && h.query_by_label("Add to Trusted Certificates").is_some());
     }
 }

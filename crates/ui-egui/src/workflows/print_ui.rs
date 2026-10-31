@@ -133,7 +133,7 @@ impl Drop for WakeOnExit {
 
 impl PdfCraftApp {
     pub fn open_print(&mut self) {
-        let Some((i, _)) = self.active_ids() else { return };
+        let Some((i, id)) = self.active_ids() else { return };
         let (printers, printers_loading) = match self.printer_source.clone() {
             // The list from the last time the dialog opened, until the fresh one arrives.
             #[cfg(not(target_arch = "wasm32"))]
@@ -146,6 +146,9 @@ impl PdfCraftApp {
         let default = default_printer(&printers);
         let current = self.views[i].current;
         let selected: Vec<usize> = self.views[i].selected.iter().copied().collect();
+        let size = self.session.get(id).and_then(|d| d.info.pages.get(current).map(|p| (f64::from(p.width), f64::from(p.height))));
+        let shown = self.views[i].page_xform(current).zip(size);
+        let view = shown.and_then(|(xf, size)| visible_part(&xf, self.views[i].viewport_rect(), size)).map(|rect| (current, rect));
         let keep = std::mem::take(&mut self.print_draft);
         // The printer picked last time, Save as PDF included, while it is still listed (#3537).
         let picked = keep.printer_picked && offered(keep.printer.as_deref(), &printers);
@@ -155,6 +158,7 @@ impl PdfCraftApp {
         let which = match (selected.is_empty(), keep.which) {
             (false, _) => Which::Selected,
             (true, Which::Selected) => Which::All,
+            (true, Which::View) if view.is_none() => Which::Current,
             (true, other) => other,
         };
         self.print_draft = PrintDraft {
@@ -166,6 +170,7 @@ impl PdfCraftApp {
             units: self.units,
             printer,
             current_page: current,
+            view,
             sheet: 0,
             selected,
             which,
@@ -357,6 +362,10 @@ impl PdfCraftApp {
         }
         let printer = job.printer.as_str();
         let (label, fraction) = match job.sheets {
+            // Every sheet is with the spooler, which can take a while yet to close the job (#3159).
+            Some((sent, sheets)) if sheets > 0 && sent >= sheets => {
+                (crate::i18n::fmt(tl!("Waiting for {printer} to accept the job…"), &[("printer", printer)]), 1.0)
+            }
             Some((sent, sheets)) if sheets > 0 => {
                 // The sheet on its way: one past those sent, until the last is.
                 let sheet = sent.saturating_add(1).min(sheets).to_string();
@@ -586,6 +595,23 @@ pub(crate) const PREVIEW_MAX_SIDE: f32 = 4096.0;
 /// next and the previous one; a neighbour that doesn't fit isn't rendered ahead.
 pub(crate) const PREVIEW_BYTES: f64 = 128.0 * 1024.0 * 1024.0;
 
+/// Print ▸ Current view (#5097): the part of the page `xf` draws that `viewport` shows, in the
+/// print layout's display space (points up from the page's bottom-left corner); `None` unless
+/// more than a point of it shows each way. The view's rotation is undone, so the part prints
+/// as the page reads.
+fn visible_part(xf: &crate::canvas::PageXform, viewport: Rect, (w, h): (f64, f64)) -> Option<[f64; 4]> {
+    let shown = xf.rect.intersect(viewport);
+    if !shown.is_positive() {
+        return None;
+    }
+    let (a, b) = (xf.screen_to_norm(shown.min), xf.screen_to_norm(shown.max));
+    let (u0, u1) = (f64::from(a.0.min(b.0).clamp(0.0, 1.0)), f64::from(a.0.max(b.0).clamp(0.0, 1.0)));
+    let (v0, v1) = (f64::from(a.1.min(b.1).clamp(0.0, 1.0)), f64::from(a.1.max(b.1).clamp(0.0, 1.0)));
+    // The view measures down from the top; the print layout measures up from the bottom.
+    let rect = [u0 * w, (1.0 - v1) * h, u1 * w, (1.0 - v0) * h];
+    (rect[2] - rect[0] > 1.0 && rect[3] - rect[1] > 1.0).then_some(rect)
+}
+
 /// Pages on the current sheet and its neighbours, each with the device pixels per point that
 /// fill the preview pane (so the picture is not a stretched thumbnail), nearest sheet first and
 /// within [`PREVIEW_MAX_SIDE`] (and `max_side`, the GPU's texture limit) and [`PREVIEW_BYTES`].
@@ -634,6 +660,7 @@ pub(crate) fn preview_rasters(d: &PrintDraft, sizes: &[(f64, f64)], labels: &[St
 
 #[cfg(test)]
 mod tests {
+    use super::draft::Margins;
     use super::*;
 
     #[test]
@@ -687,6 +714,61 @@ mod tests {
         assert!(cut.settings(4, &[]).is_err());
     }
 
+    /// #5097: Current view prints the part of the page in view, at Size. Another handling takes
+    /// the whole current page instead, and Label's printed areas never reach Size.
+    #[test]
+    fn the_current_view_prints_the_part_of_the_page_in_view() {
+        let shown = [10.0, 20.0, 110.0, 220.0];
+        let mut d = PrintDraft { which: Which::View, view: Some((1, shown)), ..PrintDraft::default() };
+        let s = d.settings(3, &[]).unwrap();
+        assert_eq!(s.pages, vec![1]);
+        let rects: Vec<_> = s.crops.iter().map(|c| c.map(|c| c.rect)).collect();
+        assert_eq!(rects, [None, Some(shown), None]);
+        d.set_handling(Handling::Poster);
+        assert_eq!(d.which, Which::Current);
+        let label_area = Some(print::Crop { rect: [0.0, 0.0, 50.0, 50.0], text_up: true });
+        assert!(PrintDraft { crops: vec![label_area], ..PrintDraft::default() }.settings(1, &[]).unwrap().crops.is_empty());
+        let label = PrintDraft { handling: Handling::Label, crops: vec![label_area], ..PrintDraft::default() };
+        assert_eq!(label.settings(1, &[]).unwrap().crops, [label_area]);
+        // Nothing in view, or another handling set behind the dialog's back: refused, not printed whole.
+        assert!(PrintDraft { which: Which::View, ..PrintDraft::default() }.settings(1, &[]).is_err());
+        let multiple = PrintDraft { which: Which::View, view: Some((0, shown)), handling: Handling::Multiple, ..PrintDraft::default() };
+        assert!(multiple.settings(1, &[]).is_err());
+    }
+
+    /// #5097: the part of a page the window shows, measured up from the page's bottom-left corner
+    /// with the view's rotation undone; nothing when under a point of it shows.
+    #[test]
+    fn the_visible_part_is_measured_as_the_page_reads() {
+        use crate::canvas::PageXform;
+        let near = |got: Option<[f64; 4]>, want: [f64; 4]| got.is_some_and(|g| g.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-3));
+        // A 200 × 300 page drawn at 2× from (100, 50); the window ends at (300, 350): the page's
+        // left half (x 0-100) and top half (150 points down from the top) show.
+        let xf = PageXform { rect: Rect::from_min_size(pos2(100.0, 50.0), vec2(400.0, 600.0)), rot: 0, pw: 200.0, ph: 300.0 };
+        let got = visible_part(&xf, Rect::from_min_max(pos2(0.0, 0.0), pos2(300.0, 350.0)), (200.0, 300.0));
+        assert!(near(got, [0.0, 150.0, 100.0, 300.0]), "{got:?}");
+        // Turned a quarter clockwise by the view, the page's bottom lies to the left: the left
+        // third of its 600 × 400 rectangle is the bottom 100 points.
+        let turned = PageXform { rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 400.0)), rot: 90, pw: 200.0, ph: 300.0 };
+        let got = visible_part(&turned, Rect::from_min_max(pos2(0.0, 0.0), pos2(200.0, 400.0)), (200.0, 300.0));
+        assert!(near(got, [0.0, 0.0, 200.0, 100.0]), "{got:?}");
+        // Off the window, or a pixel (half a point) of it: nothing to print.
+        assert_eq!(visible_part(&xf, Rect::from_min_max(pos2(600.0, 0.0), pos2(900.0, 900.0)), (200.0, 300.0)), None);
+        assert_eq!(visible_part(&xf, Rect::from_min_max(pos2(0.0, 0.0), pos2(101.0, 900.0)), (200.0, 300.0)), None);
+    }
+
+    /// #4674: the Margins choice reaches the print settings in points; untouched it keeps the
+    /// 18 pt every print had before.
+    #[test]
+    fn the_margins_choice_reaches_the_print_settings() {
+        let margin = |margins, custom_margin| PrintDraft { margins, custom_margin, ..PrintDraft::default() }.settings(1, &[]).map(|s| s.margin);
+        assert_eq!(PrintDraft::default().settings(1, &[]).map(|s| s.margin), Ok(print::MARGIN));
+        assert_eq!(margin(Margins::Narrow, 50.0), Ok(9.0));
+        assert_eq!(margin(Margins::Zero, 50.0), Ok(0.0));
+        assert_eq!(margin(Margins::Custom, 50.0), Ok(50.0));
+        assert_eq!(margin(Margins::Default, 50.0), Ok(print::MARGIN), "a custom width is kept only for Custom");
+    }
+
     /// A job being spooled holds the progress card, counting its sheets as the spooler reports
     /// them; the card goes when the job ends and its answer arrives as a notice. A card another
     /// long job is showing is left alone.
@@ -707,7 +789,11 @@ mod tests {
         assert_eq!(shown.label, "Sending sheet 2 of 3 to Office…");
         assert!((shown.fraction - 1.0 / 3.0).abs() < 1e-4 && !shown.cancellable, "{shown:?}");
 
+        // #3159: with every sheet sent the card says what it is waiting for, not "sheet 3 of 3".
         tx.send(JobNews::Sent(3, 3)).unwrap();
+        app.poll_print();
+        let shown = app.progress_notice.clone().unwrap();
+        assert_eq!((shown.label.as_str(), shown.fraction), ("Waiting for Office to accept the job…", 1.0));
         tx.send(JobNews::Done(Ok(String::new()))).unwrap();
         app.poll_print();
         assert!(app.progress_notice.is_none() && app.print_tasks.jobs.is_empty());

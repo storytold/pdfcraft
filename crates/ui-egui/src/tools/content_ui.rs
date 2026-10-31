@@ -1010,17 +1010,23 @@ impl crate::PdfCraftApp {
         }
     }
 
-    /// Whether ⌘V / Ctrl+V was let go this frame. egui-winit swallows that press (with a Paste
-    /// event only if the clipboard holds text), while a plain V press always comes through: a
-    /// release of V with no press of V since the last one is the shortcut, even when ⌘ or Ctrl
-    /// was let go first. Read every frame, dialogs or not, so a press is never missed.
+    /// Whether ⌘V / Ctrl+V was given this frame. egui-winit swallows that press and sends a
+    /// Paste event when the clipboard holds text, or a PasteImage event when it holds only a
+    /// picture (a screenshot); then it swallows the release too. A backend that sends neither
+    /// still lets the release of V through: a release of V with no press of V since the last
+    /// one is the shortcut, even when ⌘ or Ctrl was let go first. Read every frame, dialogs or
+    /// not, so a press is never missed.
     pub(crate) fn paste_key_released(&mut self, ctx: &egui::Context) -> bool {
         let mut released = false;
         ctx.input(|inp| {
             for e in &inp.events {
-                if let egui::Event::Key { key: egui::Key::V, pressed, .. } = e {
-                    released |= !*pressed && !self.v_pressed;
-                    self.v_pressed = *pressed;
+                match e {
+                    egui::Event::Key { key: egui::Key::V, pressed, .. } => {
+                        released |= !*pressed && !self.v_pressed;
+                        self.v_pressed = *pressed;
+                    }
+                    egui::Event::PasteImage(_) => released = true,
+                    _ => {}
                 }
             }
         });
@@ -1036,11 +1042,19 @@ impl crate::PdfCraftApp {
         if !pasted || !free || view.organize || view.forms.focus.is_some() || self.is_preparing() {
             return;
         }
-        let clip = match self.clipboard_override.clone() {
-            Some(c) => Some(c),
+        // egui-winit already read it; a second read fails on Wayland with no X11 (Flatpak on GNOME).
+        let event =
+            ctx.input(|inp| inp.events.iter().rev().find_map(|e| if let egui::Event::PasteImage(img) = e { Some(img.clone()) } else { None }));
+        let clip = match (self.clipboard_override.clone(), event) {
+            (Some(c), _) => Some(c),
+            (None, Some(img)) => Some(crate::create_ui::Clip::Image {
+                width: img.width(),
+                height: img.height(),
+                rgba: img.pixels.iter().flat_map(|p| p.to_srgba_unmultiplied()).collect(),
+            }),
             #[cfg(not(target_arch = "wasm32"))]
-            None if self.system_clipboard => crate::create_ui::read_clipboard(),
-            None => None,
+            (None, None) if self.system_clipboard => crate::create_ui::read_clipboard(),
+            (None, None) => None,
         };
         let Some(crate::create_ui::Clip::Image { width, height, rgba }) = clip else { return };
         match crate::create_ui::png_from_rgba(width, height, &rgba) {

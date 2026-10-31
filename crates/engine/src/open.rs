@@ -7,7 +7,7 @@ use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
 
 use crate::history::{Editor, Keys, TextBlocksCache};
 use crate::{
-    AppearanceCache, DocId, Document, Session, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config, guard, info_fields, js,
+    AppearanceCache, DocId, Document, Session, Trust, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config, guard, info_fields, js,
     note_warnings, recovered_render_password, render_threads, same_pages, signatures_of, xfa, xfa_layout, xfa_values_from_datasets,
 };
 
@@ -16,7 +16,7 @@ use crate::{
 pub struct OpenContext {
     now: Option<i64>,
     js_off: bool,
-    trust: Arc<TrustStore>,
+    trust: Arc<Trust>,
     xfa_time_scale: u32,
 }
 
@@ -232,7 +232,7 @@ impl Session {
         let (bytes, info, cos) = match cos {
             Ok(Ok(cos)) if !info.pages.is_empty() && pdfcraft_organize::page_count(&cos).unwrap_or(0) == 0 => {
                 let mut work = cos.clone();
-                let signed = || pdfcraft_sign::pdf::list(&cos, &bytes, &context.trust).iter().any(|s| s.signed);
+                let signed = || pdfcraft_sign::pdf::list(&cos, &bytes, &context.trust.store).iter().any(|s| s.signed);
                 let rebuilt = match pdfcraft_organize::recover_page_tree(&mut work) {
                     Ok(n) if n > 0 && !signed() => rebase(&work).ok().filter(|(_, i, _)| same_pages(&i.pages, &info.pages)),
                     _ => None,
@@ -266,7 +266,7 @@ impl Session {
     }
 
     /// The last step of opening: build the document record and register it.
-    fn build_document(trust: &Arc<TrustStore>, data: DocumentOpenData<'_>) -> Document {
+    fn build_document(trust: &Arc<Trust>, data: DocumentOpenData<'_>) -> Document {
         let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa } = data;
         let config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
         let (mut editor, read_only_reason) = match cos {

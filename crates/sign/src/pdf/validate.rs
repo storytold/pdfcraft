@@ -1,9 +1,16 @@
 use super::changes::classify_changes;
 use super::listing::{DigestCache, list, nums, sig_fields, text};
-use super::types::{Detail, Fill, Modification, Status, TrustStore};
+use super::types::{Detail, Fill, Modification, Status, TrustStore, VerificationTime};
 use super::{
     Certificate, Dict, DigestAlg, Document, HashSet, ObjRef, Object, SignError, SignatureInfo, SignedData, Time, build_chain, build_chain_noted,
 };
+
+/// The verification time and the clock it may need.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Verify {
+    pub(super) at: VerificationTime,
+    pub(super) now: Option<Time>,
+}
 
 struct SignatureValidation<'a> {
     doc: &'a Document,
@@ -11,6 +18,7 @@ struct SignatureValidation<'a> {
     trust: &'a TrustStore,
     info: &'a mut SignatureInfo,
     cache: &'a DigestCache,
+    verify: Verify,
 }
 
 struct VerifiedSignature<'a> {
@@ -51,7 +59,15 @@ fn docmdp(doc: &Document, v: &Dict) -> Option<u8> {
         .map(|r| r.get(b"TransformParams").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().and_then(|p| p.int(b"P"))).unwrap_or(2).clamp(1, 3) as u8)
 }
 
-pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, info: &mut SignatureInfo, cache: &DigestCache) {
+pub(super) fn validate_into(
+    doc: &Document,
+    bytes: &[u8],
+    trust: &TrustStore,
+    v: &Dict,
+    info: &mut SignatureInfo,
+    cache: &DigestCache,
+    verify: Verify,
+) {
     // A document timestamp can also be the value of a signature field (Documenso writes
     // `Timestamp_1` that way). Its `/Contents` is a bare RFC 3161 token, not a signature over the
     // document, so it must not be read as one.
@@ -98,7 +114,7 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
         info.details.push(Detail::of("PdfCraft can't check this signature yet: {}.", Fill::Reason(why.to_owned())));
     };
     if info.sub_filter.as_deref() == Some("adbe.x509.rsa_sha1") {
-        return validate_x509_rsa_sha1(SignatureValidation { doc, bytes, trust, info, cache }, v, (l0, o1, covered), &contents);
+        return validate_x509_rsa_sha1(SignatureValidation { doc, bytes, trust, info, cache, verify }, v, (l0, o1, covered), &contents);
     }
     let sd = match SignedData::parse(&contents) {
         Ok(sd) => sd,
@@ -209,7 +225,7 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
         }
     }
     finish_validation(
-        SignatureValidation { doc, bytes, trust, info, cache },
+        SignatureValidation { doc, bytes, trust, info, cache, verify },
         VerifiedSignature { covered, certificate: cert, embedded: &sd.certificates, cms_time: s.signing_time, unverified_time },
     );
 }
@@ -217,14 +233,26 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
 /// The verdict once the signature value has been checked: chain and trust, the signing time
 /// against the certificate's validity, and what later revisions changed.
 fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignature<'_>) {
-    let SignatureValidation { doc, bytes, trust, info, cache } = context;
+    let SignatureValidation { doc, bytes, trust, info, cache, verify } = context;
     let VerifiedSignature { covered, certificate: cert, embedded, cms_time, unverified_time } = verified;
     info.signing_time = cms_time.or_else(|| info.date.as_deref().and_then(Time::from_pdf));
     let mut pool = embedded.to_vec();
     pool.extend(trust.certs.iter().cloned());
-    // The time the chain is judged at: trusted timestamp, else the signer's claimed time.
-    let at = info.timestamp_time.or(info.signing_time);
-    let (chain, refused) = build_chain_noted(&cert, &pool, at);
+    // The time the chain is judged at: the current time when the preference asks for it, else
+    // the trusted timestamp, else the signer's claimed time.
+    let now = match verify.at {
+        VerificationTime::Signing => None,
+        VerificationTime::Secure => verify.now.filter(|_| info.timestamp_time.is_none()),
+        VerificationTime::Current => verify.now,
+    };
+    let at = now.or(info.timestamp_time).or(info.signing_time);
+    let (chain, mut refused) = build_chain_noted(&cert, &pool, at);
+    if now.is_some()
+        && let Some(d) = refused.as_mut()
+        && d.pattern == "The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}."
+    {
+        *d = Detail::of("The certificate of {} is not valid at the current time, so it is not used to vouch for {}.", d.fill.clone());
+    }
     let chain: Vec<Certificate> = chain.into_iter().cloned().collect();
     let trusted = chain.iter().any(|c| trust.trusts(c));
     info.chain = chain;
@@ -281,10 +309,14 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
         }
         problems = true;
     }
-    if let Some(t) = info.timestamp_time.or(info.signing_time)
+    if let Some(t) = at
         && !cert.valid_at(t)
     {
-        info.details.push(Detail::plain("The signer's certificate was not valid at the time of signing."));
+        info.details.push(if now.is_some() {
+            Detail::plain("The signer's certificate is not valid at the current time.")
+        } else {
+            Detail::plain("The signer's certificate was not valid at the time of signing.")
+        });
         // A verified revocation already made the signature invalid; keep it that way.
         if !problems && !revoked {
             info.status = Status::Unknown;
@@ -320,10 +352,23 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
         info.details
             .push(Detail::of("The embedded timestamp token is valid and its authority is trusted; trusted time is {}.", Fill::Value(t.to_string())));
     } else if let Some(t) = unverified_time {
-        info.details.push(Detail::of(
-            "The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.",
-            Fill::Value(t.to_string()),
-        ));
+        let time = Fill::Value(t.to_string());
+        info.details.push(if now.is_some() {
+            Detail::of("The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so it is not used.", time)
+        } else {
+            Detail::of(
+                "The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.",
+                time,
+            )
+        });
+    }
+    if let Some(t) = now {
+        let time = Fill::Value(t.to_string());
+        info.details.push(if verify.at == VerificationTime::Secure {
+            Detail::of("There is no trusted timestamp, so the signer's certificate was checked at the current time, {}.", time)
+        } else {
+            Detail::of("The signer's certificate was checked at the current time, {}.", time)
+        });
     }
 }
 
@@ -600,7 +645,7 @@ pub(crate) fn signature_contents(doc: &Document) -> Vec<Vec<u8>> {
 /// signature as a DER OCTET STRING over the SHA-1 digest of the byte ranges, and `/Cert` holds the
 /// signer's certificate (then any others) as DER byte strings.
 fn validate_x509_rsa_sha1(context: SignatureValidation<'_>, v: &Dict, (l0, o1, covered): (usize, usize, usize), contents: &[u8]) {
-    let SignatureValidation { doc, bytes, trust, info, cache } = context;
+    let SignatureValidation { doc, bytes, trust, info, cache, verify } = context;
     let fail = |info: &mut SignatureInfo, why: Detail| {
         info.status = Status::Invalid;
         info.details.push(why);
@@ -648,7 +693,7 @@ fn validate_x509_rsa_sha1(context: SignatureValidation<'_>, v: &Dict, (l0, o1, c
     info.details.push(Detail::plain("The signature uses the legacy adbe.x509.rsa_sha1 format."));
     info.details.extend(DigestAlg::Sha1.weakness().map(Detail::plain));
     finish_validation(
-        SignatureValidation { doc, bytes, trust, info, cache },
+        SignatureValidation { doc, bytes, trust, info, cache, verify },
         VerifiedSignature { covered, certificate: cert, embedded: &certs, cms_time: None, unverified_time: None },
     );
 }

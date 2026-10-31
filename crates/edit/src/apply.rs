@@ -1,5 +1,5 @@
 use super::marks::{
-    Background, Context, HeaderFooter, MarkKind, Watermark, add_picture_resource, bates_start, expand, matrix_number, n, picture, rgb, shrink_matrix,
+    Background, Context, HeaderFooter, MarkKind, Watermark, add_picture_resource, expand, first_bates, matrix_number, n, picture, rgb, shrink_matrix,
 };
 use super::place::{
     END, Isolation, add_page_resources, add_resources, begin, check, check_on_top, contents, free_font_name, isolation, page_fonts, page_list, place,
@@ -36,7 +36,7 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
         )));
     }
     // The same goes for Bates numbers: the last selected page must still fit in a u64.
-    let bates0 = hf.text.iter().find_map(|t| bates_start(t)).unwrap_or(1);
+    let bates0 = first_bates(hf);
     if bates0.checked_add(pages.len().saturating_sub(1) as u64).is_none() {
         return Err(EditError::Invalid(format!(
             "the Bates start number {bates0} leaves no room for {} pages (Bates numbers stop at {})",

@@ -114,6 +114,22 @@ fn tokens_expand() {
 }
 
 #[test]
+fn header_footer_text_numbers_a_page_as_adding_does() {
+    let c = cx();
+    let mut hf = HeaderFooter { start_number: 5, ..Default::default() };
+    hf.text[4] = "<<Bates Number#6#100#ABC#>>".into();
+    assert_eq!(header_footer_text(&hf, "<<Page 1 of n>> <<m/d/yyyy>>", 2, 9, &c), "Page 7 of 9 10/1/2026");
+    assert_eq!(header_footer_text(&hf, &hf.text[4], 2, 9, &c), "ABC000102");
+    hf.text[4] = "<<Bates Number#4#1##>>".into();
+    assert_eq!(header_footer_text(&hf, &hf.text[4], 0, 1, &c), "0001");
+    // Saturates at the limits instead of overflowing.
+    hf.start_number = u32::MAX;
+    hf.text[4] = format!("<<Bates Number#6#{}##>>", u64::MAX);
+    assert_eq!(header_footer_text(&hf, "<<1>>", 3, 9, &c), u32::MAX.to_string());
+    assert_eq!(header_footer_text(&hf, &hf.text[4], 3, 9, &c), u64::MAX.to_string());
+}
+
+#[test]
 fn header_and_footer_are_drawn_in_display_space_and_wrap_the_original_content() {
     let mut doc = fixture();
     let hf = HeaderFooter {

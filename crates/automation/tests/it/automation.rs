@@ -6361,6 +6361,46 @@ fn verify_signature_revisions_and_bundle(a: &mut Automation, doc: u64, dir: &Pat
     std::fs::write(dir.join("ada.p7b"), der::seq(&[&der::oid(cms::SIGNED_DATA), &der::explicit(0, &sd)])).unwrap();
     assert_eq!(ok(a, "sign_trust", json!({ "paths": ["ada.p7b"] }))["trusted"].as_array().unwrap().len(), 1);
     assert_eq!(ok(a, "sign_list", json!({ "doc": doc }))["signatures"][0]["status"], "valid");
+    // #2613: one certificate stops being trusted by the sha256 the list reports, in any spelling;
+    // the signature it anchored is unknown again, and a removal that matches nothing removes nothing.
+    let sha = ok(a, "sign_trust", json!({}))["trusted"][0]["sha256"].as_str().unwrap().to_string();
+    assert!(matches!(a.call("sign_trust", &json!({ "remove": ["AB CD"] })), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(a.call("sign_trust", &json!({ "remove": sha })), Err(ToolError::InvalidArgs(_))), "a list, not one string");
+    let r = ok(a, "sign_trust", json!({ "remove": [sha.replace(' ', ":").to_lowercase()] }));
+    assert_eq!((r["trusted"].as_array().map(Vec::len), r["removed"].as_u64()), (Some(0), Some(1)));
+    assert_eq!(ok(a, "sign_list", json!({ "doc": doc }))["signatures"][0]["status"], "unknown");
+    assert_eq!(ok(a, "sign_trust", json!({ "remove": [sha] }))["removed"], 0);
+}
+
+/// sign_trust `verify_at`: a signature made in 2023 with a one-year ID is valid at its signing
+/// time and not at the current time, 2027.
+#[test]
+fn sign_trust_verify_at_checks_signers_at_the_current_time() {
+    let dir = workdir("verify-at");
+    let mut a = auto(&dir);
+    ok(&mut a, "sign_id_create", json!({ "name": "Ada Lovelace", "key": "p256", "password": "secret12", "path": "ada.p12", "years": 1 }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "sign_document", json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "out": "signed.pdf" }));
+    let mut b = Automation::new().with_root(&dir).unwrap().with_clock(|| 1_800_000_000);
+    let doc = ok(&mut b, "doc_open", json!({ "path": "signed.pdf" }))["doc"].as_u64().unwrap();
+    let t = ok(&mut b, "sign_trust", json!({ "paths": ["ada.p12"], "password": "secret12" }));
+    assert_eq!(t["verify_at"], "signing");
+    let signature = |b: &mut Automation| ok(b, "sign_list", json!({ "doc": doc }))["signatures"][0].clone();
+    assert_eq!(signature(&mut b)["status"], "valid");
+    assert_eq!(ok(&mut b, "sign_trust", json!({ "verify_at": "current" }))["verify_at"], "current");
+    let s = signature(&mut b);
+    let details = s["details"].as_array().unwrap();
+    assert_eq!(s["status"], "unknown", "{details:?}");
+    assert!(details.iter().any(|d| d.as_str().unwrap().contains("not valid at the current time")), "{details:?}");
+    // A wrong value changes nothing.
+    assert!(matches!(b.call("sign_trust", &json!({ "verify_at": "tomorrow" })), Err(ToolError::InvalidArgs(_))));
+    assert_eq!(ok(&mut b, "sign_trust", json!({}))["verify_at"], "current");
+    ok(&mut b, "sign_trust", json!({ "verify_at": "signing" }));
+    assert_eq!(signature(&mut b)["status"], "valid");
+    // A clock set after the document opened revalidates it too.
+    ok(&mut b, "sign_trust", json!({ "verify_at": "current" }));
+    let mut b = b.with_clock(|| 1_700_000_100);
+    assert_eq!(signature(&mut b)["status"], "valid");
 }
 
 /// The decoded text of every visible signature appearance (Helvetica forms) in a signed file.
@@ -9264,6 +9304,71 @@ fn doc_print_as_image() {
         Err(ToolError::InvalidArgs(m)) => assert!(m.contains("dpi"), "{m}"),
         other => panic!("{other:?}"),
     }
+}
+
+/// #4674: `doc_print`'s margin is the space Fit keeps inside the paper's edges (18 pt unless
+/// given); one below 0, one that leaves no room on the paper, or a word, is refused.
+#[test]
+fn doc_print_keeps_the_margin_asked_for() {
+    let dir = workdir("print-margin");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // The first sheet's content opens with the page's placement: `q a b c d e f cm`.
+    let placement = |path: &str| -> Vec<f64> {
+        let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join(path)).unwrap())).unwrap();
+        let page = pdfcraft_model::pages(&saved).remove(0);
+        let contents = pdfcraft_cos::DecodeBudget::page().decode_contents(&saved, page.dict.get(b"Contents").unwrap());
+        let data: Vec<u8> = contents.into_iter().flat_map(Result::unwrap).collect();
+        String::from_utf8_lossy(&data).split_whitespace().skip(1).take(6).map(|n| n.parse().unwrap()).collect()
+    };
+    // A 200 × 300 page on Letter: min(576 / 200, 756 / 300) by default, min(612 / 200, 792 / 300) with none.
+    for (margin, scale, bottom) in [(None, 2.52, 18.0), (Some(0.0), 2.64, 0.0), (Some(9.0), 2.58, 9.0)] {
+        let mut args = json!({ "doc": doc, "pages": "1", "path": "fit.pdf" });
+        if let Some(m) = margin {
+            args["margin"] = json!(m);
+        }
+        ok(&mut a, "doc_print", args);
+        let m = placement("fit.pdf");
+        assert!((m[0] - scale).abs() < 1e-6 && (m[5] - bottom).abs() < 1e-6, "{margin:?}: {m:?}");
+    }
+    for margin in [json!(-1), json!(306), json!("wide")] {
+        let refused = a.call("doc_print", &json!({ "doc": doc, "margin": margin, "path": "x.pdf" }));
+        assert!(matches!(refused, Err(ToolError::InvalidArgs(_))), "{margin}: {refused:?}");
+    }
+    assert!(!dir.join("x.pdf").exists());
+}
+
+/// Print ▸ Current view (#5097): `region` prints that part of each page as though it were the
+/// page. It is measured from the top-left, as other tools take rectangles, and needs a Size
+/// layout and some of the page.
+#[test]
+fn doc_print_prints_only_the_region_asked_for() {
+    let dir = workdir("print-region");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // The top half of the 200 × 300 page, 200 × 150, on landscape Letter: min(756 / 200, 576 / 150).
+    ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "region": [200, 150, 0, 0], "path": "top.pdf" }));
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("top.pdf")).unwrap())).unwrap();
+    let page = pdfcraft_model::pages(&saved).remove(0);
+    let contents = pdfcraft_cos::DecodeBudget::page().decode_contents(&saved, page.dict.get(b"Contents").unwrap());
+    let data: Vec<u8> = contents.into_iter().flat_map(Result::unwrap).collect();
+    let m: Vec<f64> = String::from_utf8_lossy(&data).split_whitespace().skip(1).take(6).map(|n| n.parse().unwrap()).collect();
+    // Centred, so the half's bottom-left corner (0, 150) lands at (18, 22.5).
+    assert!((m[0] - 3.78).abs() < 1e-6 && (m[4] - 18.0).abs() < 1e-6 && (m[5] - (22.5 - 3.78 * 150.0)).abs() < 1e-6, "{m:?}");
+    for args in [
+        json!({ "region": [0, 0, 200, 150], "layout": "multiple" }),
+        json!({ "region": [250, 0, 400, 150] }),
+        json!({ "region": [0, 0, 200, 0.5] }),
+        json!({ "region": [0, 0, 200] }),
+        json!({ "region": "top" }),
+    ] {
+        let mut args = args;
+        args["doc"] = json!(doc);
+        args["path"] = json!("x.pdf");
+        let refused = a.call("doc_print", &args);
+        assert!(matches!(refused, Err(ToolError::InvalidArgs(_))), "{args}: {refused:?}");
+    }
+    assert!(!dir.join("x.pdf").exists());
 }
 
 /// Without a root, `write_output` still writes through a staging file (#2166): the folder is

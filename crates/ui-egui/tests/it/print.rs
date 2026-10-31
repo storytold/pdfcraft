@@ -94,6 +94,62 @@ fn current_print_page_saves_the_viewed_page_when_labels_restart() {
     }
 }
 
+/// Print ▸ Current view (#5097): zoomed in, the dialog offers the part of the page in the window,
+/// and Save as PDF clips the sheet to that part and fits it to the paper.
+#[test]
+fn current_view_prints_the_part_of_the_page_in_the_window() {
+    let mut h = harness();
+    h.state_mut().set_option("zoom", "800").unwrap();
+    h.run_steps(4);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::RadioButton, "Current view").click();
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.which, pdfcraft_ui_egui::PrintWhich::View);
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        let _gpu = crate::gpu();
+        h.render().unwrap().save(format!("{dir}/print-current-view.png")).unwrap();
+    }
+    let (page, [x0, y0, x1, y1]) = h.state().print_draft.view.expect("some of the page is in the window");
+    let view = &h.state().views[0];
+    let shown = &h.state().session.get(view.id).unwrap().info.pages[page];
+    let (w, ht) = (f64::from(shown.width), f64::from(shown.height));
+    // What the canvas shows: the page's rectangle on screen cut by the window, in points up from
+    // the page's bottom-left corner.
+    let (r, window) = (view.page_screen_rect(page).unwrap(), view.viewport_rect());
+    let (sx, sy) = (w / f64::from(r.width()), ht / f64::from(r.height()));
+    let want = [
+        f64::from(window.min.x.max(r.min.x) - r.min.x) * sx,
+        ht - f64::from(window.max.y.min(r.max.y) - r.min.y) * sy,
+        f64::from(window.max.x.min(r.max.x) - r.min.x) * sx,
+        ht - f64::from(window.min.y.max(r.min.y) - r.min.y) * sy,
+    ];
+    assert!([x0, y0, x1, y1].iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01), "{:?} for {want:?}", [x0, y0, x1, y1]);
+    // At 800% that is well under half the page each way.
+    assert!(x1 - x0 < w / 2.0 && y1 - y0 < ht / 2.0, "{:?} of {w} × {ht}", [x0, y0, x1, y1]);
+    let out = std::env::temp_dir().join(format!("pdfcraft-print-view-{}.pdf", std::process::id()));
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().print_draft.printer = None;
+    h.run_steps(1);
+    h.get_by_label("Save as PDF").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(&out).unwrap())).unwrap();
+    std::fs::remove_file(out).unwrap();
+    let sheet = pdfcraft_model::pages(&saved).remove(0);
+    let contents = pdfcraft_cos::DecodeBudget::page().decode_contents(&saved, sheet.dict.get(b"Contents").unwrap());
+    let data: Vec<u8> = contents.into_iter().flat_map(Result::unwrap).collect();
+    // `q a b c d e f cm x y w h re W n …`: the placement, then the clip in the page's display space.
+    let n: Vec<f64> = String::from_utf8_lossy(&data).split_whitespace().filter_map(|t| t.parse().ok()).take(10).collect();
+    let (cw, ch) = (x1 - x0, y1 - y0);
+    let clip = [x0, y0, cw, ch];
+    assert!(n[6..10].iter().zip(clip).all(|(a, b)| (a - b).abs() < 1e-3), "clip {:?}, view {clip:?}", &n[6..10]);
+    // Fitted inside Letter's 18 pt margins, turned to suit the part's shape.
+    let (pw, ph) = if cw > ch { (792.0, 612.0) } else { (612.0, 792.0) };
+    let fit = ((pw - 36.0) / cw).min((ph - 36.0) / ch);
+    assert!((n[0] - fit).abs() < 1e-3, "scale {} for {fit}", n[0]);
+}
+
 #[test]
 fn print_dialog_lays_out_sheets_and_saves_a_pdf() {
     let mut h = harness();

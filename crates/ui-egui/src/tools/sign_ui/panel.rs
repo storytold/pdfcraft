@@ -61,6 +61,11 @@ pub enum PanelAction {
         len: usize,
         revision: usize,
     },
+    /// Compare signed version to current version.
+    CompareSigned {
+        len: usize,
+        revision: usize,
+    },
     Sign(String),
     ExportCertificate(Box<Certificate>),
     /// Certificate Viewer for the signer's chain (signer first).
@@ -195,6 +200,9 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expan
                 if ui.button(tl!("View signed version")).clicked() {
                     action = Some(PanelAction::ViewSigned { len: s.signed_len, revision: s.revision });
                 }
+                if ui.button(tl!("Compare signed version to current version")).clicked() {
+                    action = Some(PanelAction::CompareSigned { len: s.signed_len, revision: s.revision });
+                }
                 if let Some(c) = &s.certificate
                     && ui.button(tl!("Show certificate…")).clicked()
                 {
@@ -251,6 +259,7 @@ fn key_usage(bits: u16) -> String {
 /// What the viewer asks for.
 pub(crate) enum CertAction {
     Trust(Box<Certificate>),
+    Untrust(Box<Certificate>),
     Export(Box<Certificate>),
 }
 
@@ -337,6 +346,9 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
                     ui.add_space(8.0);
                     if !is_trusted && widgets::pill_button(ui, tl!("Add to Trusted Certificates"), false).clicked() {
                         action = Some(CertAction::Trust(Box::new(c.clone())));
+                    }
+                    if is_trusted && widgets::pill_button(ui, tl!("Remove from Trusted Certificates"), false).clicked() {
+                        action = Some(CertAction::Untrust(Box::new(c.clone())));
                     }
                 }
             }
