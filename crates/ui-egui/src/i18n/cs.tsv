@@ -2869,6 +2869,7 @@ certificate	Version	Verze
 	field names can't contain a period: {name}	názvy polí nesmějí obsahovat tečku: {name}
 	two cells would both be named {name}	dvě buňky by se jmenovaly {name}
 	a field named {name} already exists	pole s názvem {name} už existuje
+	Show form field reminder	Zobrazovat připomenutí polí formuláře
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Dnes

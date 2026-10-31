@@ -67,6 +67,13 @@ impl PdfCraftApp {
             ("default-mode", _) => {
                 self.default_mode = Mode::parse(value).ok_or("default-mode must be all, read, edit, convert or sign")?;
             }
+            ("form-reminder", _) => {
+                self.show_form_field_reminder = match value {
+                    "on" | "true" => true,
+                    "off" | "false" => false,
+                    _ => return Err("form-reminder must be on or off".to_string()),
+                };
+            }
             ("date-format", _) => self.session.set_date_format(value)?,
             ("date-language", _) => self.session.set_date_language(Some(value).filter(|v| *v != "auto"))?,
             ("tool", _) => {

@@ -143,6 +143,7 @@ impl PdfCraftApp {
         v["redact_prefs"] = self.redact_defaults.to_json();
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
+        v["show_form_field_reminder"] = serde_json::Value::Bool(self.show_form_field_reminder);
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
@@ -243,6 +244,9 @@ impl PdfCraftApp {
         }
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;
+        }
+        if let Some(show) = v["show_form_field_reminder"].as_bool() {
+            self.show_form_field_reminder = show;
         }
         if let Some(closed) = v["comments_panel_closed"].as_bool() {
             self.comments_panel_closed = closed;

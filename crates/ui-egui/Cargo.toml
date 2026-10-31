@@ -88,6 +88,7 @@ web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlE
 
 [dev-dependencies]
 craft-update = { workspace = true }
+pdfcraft-testkit = { workspace = true }
 pdfcraft-xfa = { workspace = true }
 egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
 # Tests draw PdfCraft text without a system provider: the bundled and monochrome emoji faces must

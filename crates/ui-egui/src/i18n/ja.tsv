@@ -2562,6 +2562,7 @@ animation effects	Off	オフ
 	field names can't contain a period: {name}	フィールド名にピリオドは使えません: {name}
 	two cells would both be named {name}	2 つのセルが同じ名前 {name} になります
 	a field named {name} already exists	{name} という名前のフィールドは既にあります
+	Show form field reminder	フォームフィールドの案内を表示
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今日

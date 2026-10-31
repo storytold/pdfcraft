@@ -62,7 +62,8 @@ impl PdfCraftApp {
         }
     }
 
-    /// Construct an application with the default session, panels, theme and control state.
+    /// Construct an application with the default session, panels, theme, control state
+    /// and enabled ordinary form reminders.
     pub fn new() -> Self {
         Self {
             session: Session::new(),
@@ -72,6 +73,7 @@ impl PdfCraftApp {
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,
             view_defaults: Default::default(),
+            show_form_field_reminder: true,
             units: Default::default(),
             date_format_draft: None,
             mode_override: None,
