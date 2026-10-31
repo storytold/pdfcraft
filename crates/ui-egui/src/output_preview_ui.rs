@@ -259,7 +259,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, op: &mut OutputPreview, curre
             // The switch carries the ink's name; the name beside it is painted, not a second
             // label for the same ink.
             let switch = ui.add(crate::widgets::checkbox_without_text(&mut on));
-            switch.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, &name));
+            switch.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, &name));
             if switch.changed() {
                 if on {
                     op.hidden.remove(&name);
