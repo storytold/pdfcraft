@@ -125,11 +125,22 @@ impl Edge {
     }
 }
 
-/// A box border: four edges (top, right, bottom, left) and a fill.
+/// One corner of a border: how far it rounds the box (`radius`), and whether the curve goes
+/// into the box (`inverted`) rather than around it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Corner {
+    pub presence: Presence,
+    pub radius: f64,
+    pub inverted: bool,
+}
+
+/// A box border: four edges (top, right, bottom, left), four corners (top-left, top-right,
+/// bottom-right, bottom-left) and a fill.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Border {
     pub presence: Presence,
     pub edges: [Edge; 4],
+    pub corners: [Corner; 4],
     pub fill: Option<Color>,
 }
 
@@ -143,6 +154,15 @@ impl Border {
 
     pub fn fill(&self) -> Option<Color> {
         if self.presence == Presence::Visible { self.fill } else { None }
+    }
+
+    /// How far each corner (top-left, top-right, bottom-right, bottom-left) rounds a box `w` by
+    /// `h`: its radius when the corner is shown, no more than half the box's shorter side, and 0
+    /// for a hidden corner or a hidden border.
+    pub fn radii(&self, w: f64, h: f64) -> [f64; 4] {
+        let most = (w.min(h) / 2.0).max(0.0);
+        let shown = self.presence == Presence::Visible;
+        self.corners.map(|c| if shown && c.presence == Presence::Visible && c.radius.is_finite() { c.radius.clamp(0.0, most) } else { 0.0 })
     }
 }
 
@@ -486,6 +506,9 @@ pub struct Field {
     pub check_size: Option<f64>,
     pub check_round: bool,
     pub multiline: bool,
+    /// The field doesn't scroll in the direction its text runs out (`hScrollPolicy="off"` for one
+    /// line, `vScrollPolicy="off"` for several): it takes no more text than it shows.
+    pub no_scroll: bool,
     pub caption: Option<Caption>,
     pub value: Value,
     /// Check buttons: the on value then the off value; choice lists: the items as shown.
@@ -581,7 +604,7 @@ pub enum Value {
         slope_up: bool,
         edge: Edge,
     },
-    Rectangle(Border),
+    Rectangle(Box<Border>),
 }
 
 impl Value {
@@ -633,6 +656,9 @@ pub struct Run {
     pub h_scale: Option<f64>,
     /// A floating field embedded in the text (`xfa:embed="#id"`), shown by its value.
     pub embed: Option<String>,
+    /// Where the text links to (`<a href="…">`), as the template writes it: shared by every run
+    /// of the link's text, not copied.
+    pub link: Option<std::sync::Arc<str>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

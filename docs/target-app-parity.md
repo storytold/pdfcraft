@@ -1,7 +1,9 @@
 # PdfCraft parity with Adobe Acrobat Pro
 
 > **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (area M re-measured after the Tags panel and Reading Order tool: 42 shipped, 8 partial, 75.4%; remaining 25–50 h) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (M12 #3673: Character encoding CJK mapping routes corrected; scores and estimates unchanged)
+> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-26 · **Change:** minor (K Optimize and standards no longer lists monochrome downsampling as missing; scores and estimates unchanged)
+> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-26 · **Change:** minor (`optimize.mono-compression` partial (CCITT Group 4): K Optimize and standards 15 shipped and 11 partial of 58, 35.3%; breadth 57.0% unweighted (423 + 75 of 808), mainstream 63.3% (292 + 45 of 497); estimates unchanged)
+> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (localization current state: Arabic logical catalog, explicit RTL direction and mirrored stock chrome; native/browser RTL workflows unqualified. Native release Hans face via LXGW WenKai Lite. Scores and estimates unchanged)
 
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (localization ≈59% → ≈68%; weighted readiness 49.25 → 49.7 ≈ 50%) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
@@ -21,9 +23,10 @@ Approved Trust List) are out of scope: 23 such features are tracked as `na` in
 | | Value | Kind |
 |---|---|---|
 | **Feature breadth**, tier-weighted | **≈ 67%** | measured (checklist; weights below) |
+| Feature breadth, unweighted | 57.0% (423 shipped + 75 partial of 808) | measured (`cargo xtask parity` arithmetic) |
 | Feature breadth, unweighted | 57.9% (427 shipped + 81 partial of 808) | measured (`cargo xtask parity` arithmetic) |
 | Must-have (P0) features | 94.2% (226 + 23 partial of 252) | measured |
-| Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.2% unweighted: 292 + 44 partial of 497; P0 95.3%) | measured ([split below](#mainstream-practitioner-vs-full-acrobat-pro)) |
+| Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.3% unweighted: 292 + 45 partial of 497; P0 95.3%) | measured ([split below](#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, full Acrobat Pro | **≈ 50%** (range 45–53%) | estimated (weighted sum over dimensions, [below](#by-dimension)) |
 | **Ready for real work**, mainstream practitioner | **≈ 55%** (range 50–60%) | estimated ([split below](#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, essentials user | **≈ 66%** (range 60–70%) | estimated ([below](#essentials-user)) |
@@ -95,8 +98,8 @@ platforms 5%, hardware 4%, ecosystem 1%, AI 1%:
 History: the first version of this file subtracted 9 points from the area figure for cross-cutting
 shortfalls (40%); the second look found that a double count (Windows printing, encrypted-output
 interop and Chinese glyphs were already scored in their areas) and used a 2-point deduction (47%);
-this version replaces the deduction with the standard's weighted sum over dimensions (49%). Method
-aligned with the standard, no new evidence. Multiplicative discounts are used only for the
+this version replaces the deduction with the weighted sum over dimensions (49%), with no new
+evidence. Multiplicative discounts are used only for the
 mainstream and essentials numbers.
 
 ## Mainstream practitioner vs full Acrobat Pro
@@ -106,7 +109,8 @@ Splitting it (measured from `parity/acrobat-features.toml`):
 
 | Slice | Features | Shipped | Partial | Unweighted | Tier-weighted | P0 |
 |---|---|---|---|---|---|---|
-| Mainstream: view, comment (without measuring), edit, organize, forms (without XFA and JavaScript tooling), protect and redact, OCR, create and export, compress (Reduce File Size, Optimizer), print (without print production) | 497 | 292 | 44 | 63.2% | ≈ 70% | 95.3% (193) |
+| Mainstream: view, comment (without measuring), edit, organize, forms (without XFA and JavaScript tooling), protect and redact, OCR, create and export, compress (Reduce File Size, Optimizer), print (without print production) | 497 | 292 | 45 | 63.3% | ≈ 70% | 95.3% (193) |
+| All | 808 | 423 | 75 | 57.0% | ≈ 67% | 94.2% (252) |
 | Specialist: core internals, digital-signature PKI, accessibility remediation, automation and preferences, Preflight and PDF/A/X/UA, print production, measuring, XFA and JavaScript tooling | 311 | 135 | 37 | 49.4% | ≈ 63% | 90.7% (59) |
 | All | 808 | 427 | 81 | 57.9% | ≈ 67% | 94.2% (252) |
 
@@ -184,7 +188,7 @@ features total and are shown for orientation; the others add to it.
 | File formats and conversion | ≈ 40% | 12% | 120–220 | within features | PDF read/write strong, encrypted output included (#774 fixed); export Word is layout-poor (#773); no Excel/PowerPoint export, no Office/HTML/PostScript import | [file-format-parity.md](file-format-parity.md) |
 | PDF specification and standards | ≈ 60% | 8% | 150–260 | within features | ISO 32000 syntax, encryption, annotations and AcroForm strong; rendering and fonts borrowed from `hayro`; PDF 2.0 extras, linearization, public-key security absent; PDF/A partial, PDF/X/UA none | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | Hardware | ≈ 35% | 4% | 25–50 | additional | Page raster is CPU only (Acrobat has GPU rendering); Windows CNG and macOS Keychain keys sign, no PKCS #11; no scanners; web printing goes through the browser's print dialog as pictures, not vectors | [hardware-parity.md](hardware-parity.md) |
-| Localization | ≈ 68% over the 12 key languages | 5% | 35–60 | additional | 22 catalogs + English (23 interface languages); Chinese UI shows tofu in releases (#826, #688); Arabic not mirrored; no Hindi, Indonesian, Korean | [localization-parity.md](localization-parity.md) |
+| Localization | ≈ 68% over the 12 key languages | 5% | 35–60 | additional | 22 catalogs + English (23 interface languages); native craft-fonts builds embed a Simplified Chinese face (LXGW WenKai Lite) but the web build has none; Arabic labels stay logical with explicit RTL direction and mirrored stock chrome, while native/browser/IME workflows are unqualified; no Hindi, Indonesian, Korean | [localization-parity.md](localization-parity.md) |
 | Performance | ≈ 40% | 6% | 25–45 | additional | 500-page smooth scrolling and large-file memory work (#307) done; no performance budgets (`misc.performance-budgets`), no lazy loading of GB files; blurry text at 1080p/1440p (#730) | [gaps.md](gaps.md) |
 | Stability | ≈ 50% | 8% | 45–80 | additional | Never-crash rules and nightly fuzzing; 245 open issues on 2026-10-10, many of them `fix(...)` reports of wrong results in shipped features (the #799–#821 batch is fixed) | [gaps.md](gaps.md) |
 | Platforms | ≈ 70% | 5% | 15–30 | additional | macOS (signed, notarized), Windows x64/x86/ARM64 (signed), Linux (AppImage, deb, rpm, Flatpak), FreeBSD, web (WASM). Acrobat has no Linux, FreeBSD or full web editor; we lack web OCR and web recovery | [hardware-parity.md](hardware-parity.md) |
@@ -209,9 +213,10 @@ full parity in that area.
 | H Digital signatures | 45 | 23 | 10 | 62.2% | 45% | 40–70 | PAdES B-B signing and validation (PKCS #12, macOS Keychain, Windows store with PIN prompts), certification, encrypted documents, certificate usage checks; B-T, LTV, OCSP/CRL with caller-supplied evidence. Missing: PKCS #11 and smart cards outside Windows, timestamp-server preferences, online revocation fetching, FieldMDP and field locking, OS trust store, EU Trusted Lists, compare signed version |
 | I Scan and OCR | 26 | 5 | 2 | 23.1% | 15% | 40–75 | Searchable image (ocrs, Latin script without accents) on pages, ranges and many files. Missing: every other language (#744 Dutch; accents, CJK, Cyrillic, Arabic), editable-text output, deskew, rotation, despeckle, camera images beyond straightening (found or placed corners): orientation, clean-up, MRC compression, scanners |
 | J Create and export | 34 | 12 | 3 | 39.7% | 25% | 55–100 | Create from images, multipage TIFF, text, clipboard, blank, many files at once; export PNG/JPEG/TIFF, text, RTF; Word and HTML partial. Missing: Office/HTML/web/PostScript to PDF, Excel and PowerPoint export, Word layout fidelity (#773), SVG/XML/EPS/PS/JPEG 2000 export, accessible text |
-| K Optimize and standards | 58 | 15 | 10 | 34.5% | 20% | 65–115 | Reduce File Size and the Optimizer (images, discards, clean-up, space audit); PDF/A-2b/3b verify and convert (partial). Missing: Preflight (profiles, fixups, reports), PDF/A-1/4 and a/u levels, PDF/X, PDF/UA, PDF/E, PDF/VT, transparency flattening, font unembedding, monochrome JBIG2/CCITT |
+| K Optimize and standards | 58 | 15 | 11 | 35.3% | 20% | 65–115 | Reduce File Size and the Optimizer (images, CCITT and lossless JBIG2 monochrome compression, discards, clean-up, space audit); PDF/A-2b/3b verify and convert (partial). Missing: Preflight (profiles, fixups, reports), PDF/A-1/4 and a/u levels, PDF/X, PDF/UA, PDF/E, PDF/VT, transparency flattening, font unembedding, lossy/refinement JBIG2 |
 | L Print | 39 | 15 | 1 | 39.7% | 35% | 30–55 | Acrobat's sizing, n-up, booklet, poster, comments & forms, preview, print-ready PDF, CUPS on macOS/Linux, the Windows spooler (#756) and the browser's print dialog on the web. Missing: print as image, PostScript, all print-production tools (output preview, separations, ink manager, printer marks, colour conversion) |
 | N Automation, preferences, misc | 75 | 20 | 5 | 30.0% | 35% | 25–45 | CLI, MCP, UI control channel, 141 automation tools, Action Wizard (run, create), compare (text, visual, report, side by side, Text/Visual filter). Missing: most Preferences pages, Acrobat's finer compare filters, Action Wizard management, custom commands, AI providers, rich media/3D, hosted web app |
+| **All** | **808** | **423** | **75** | **57.0%** | **≈ 49%** | **610–1,100** | Plus 175–325 h of cross-cutting work (dimension table) |
 | M Accessibility | 61 | 42 | 8 | 75.4% | 40% | 25–50 | Accessibility Checker (all 32 rules, report, fixes), alternate text, title and language, text-only auto-tag; the Tags panel (new, delete, move across parents, subtree artifacts, highlight both ways) and the Reading Order tool (tag selected content, reorder regions). Missing: mixed-content autotag, table editor, artifact types, Make Accessible, Read Out Loud, full keyboard operation of the app, screen-reader audit |
 | **All** | **808** | **427** | **81** | **57.9%** | **≈ 49%** | **610–1,100** | Plus 175–325 h of cross-cutting work (dimension table) |
 
@@ -250,7 +255,7 @@ stage set to pre-alpha; see the revision history.)
 | Beta requirement | Hours |
 |---|---|
 | An interop suite that opens our outputs in other readers (encrypted output already opens in Acrobat, #774, #836; hours not re-estimated) | 8–15 |
-| Rendering: a fidelity harness against Acrobat captures (local, clean-room) and fixing what it finds; settle the renderer (own M2 devices, or #841's proposal); Chinese UI faces in releases | 80–140 |
+| Rendering: a fidelity harness against Acrobat captures (local, clean-room) and fixing what it finds; settle the renderer (own M2 devices, or #841's proposal); a Chinese web UI face | 80–140 |
 | Editing existing text robust on real files: subset fonts, CJK, RTL, rotated text | 70–120 |
 | Printing on Windows and the web | 15–30 |
 | OCR in the major languages (accents, Cyrillic, CJK), deskew and rotation | 35–60 |
@@ -295,13 +300,16 @@ licensed OCR or AI model.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | K Optimize and standards no longer lists monochrome downsampling as missing (black-and-white images above 450 ppi are averaged down to 300). Scores and estimates unchanged. |
+| 2026-10-26 | minor | `optimize.mono-compression` became partial (CCITT Group 4), counted on the table's own measurement: K Optimize and standards 15 shipped and 11 partial of 58 (35.3%), no longer listing CCITT as missing; breadth 57.0% unweighted (423 + 75 of 808), mainstream 63.3% (292 + 45 of 497). Estimates unchanged. |
+| 2026-10-25 | minor | Localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build has no Hans face. Scores and estimates unchanged. |
 | 2026-10-20 | minor | M12 #3673: the Character encoding rule accepts Identity-H/V fonts with Adobe CJK collections, or a predefined non-Identity CMap, while rejecting unknown names and foreign registries. Synthetic checker and read-only automation regressions passed after failing before the fix; per-glyph mapping validation and embedded-font extraction remain separate. Breadth, readiness and hours unchanged. |
 | 2026-10-16 | minor | Area M re-measured with `cargo xtask parity`: the Tags panel, the Reading Order tool and Create Tag from Selection shipped (42 shipped, 8 partial, 75.4%); accessibility tagging's remaining work 35–60 h → 20–40 h. The unweighted breadth moves 56.9% → 57.9% (Specialist slice 46.9% → 49.4%); other rows not re-measured. |
 | 2026-10-12 | minor | Exclusive image crops resize with their pixels across nested states, intervening operators and content streams; shared clips remain fixed. Synthetic engine/tool regressions and private image save/reopen checks; estimates unchanged. |
 | 2026-10-11 | minor | Web printing shipped (gap 4): Hardware, Platforms and L Print text updated. Text only: scores, readiness and hours not re-judged |
 | 2026-10-11 | minor | Contributor fork: document-font selection and subset completion, CFF, style ranges, contextual/bidi save/reopen and all-page Chinese keyboard acceptance; curve/hole hit testing (shared clips stay fixed, as on main). Scope remains bounded; percentages unchanged |
 | 2026-10-11 | minor | Synced with closed issues: encrypted output opens in Acrobat (#774, #836), Windows prints (#756, #847), column select (#740), 1:1 touchpad scrolling (#759), same-page multi-object move (#844), #825 and the #799–#821 fix batch. Text only: scores, readiness and hours not re-judged |
-| 2026-10-10 | minor | Readiness table: hours to ≈ 95% per audience (full 780–1,400, mainstream 500–900, essentials 180–330). Full number restated as the standard's additive weighted sum over dimensions with written weights: 47% → 49%. Method aligned with the standard, no new evidence |
+| 2026-10-10 | minor | Readiness table: hours to ≈ 95% per audience (full 780–1,400, mainstream 500–900, essentials 180–330). Full number restated as the additive weighted sum over dimensions with written weights: 47% → 49%. No new evidence |
 | 2026-10-10 | minor | Added the essentials-user score (≈ 66%): weighted depth of 13 everyday features, discounted for launch, discoverability and opening others' files |
 | 2026-10-10 | minor | Consistency check across apps: re-judged the convert-and-share gate row with the shared rule (blocking only when the workflow can't be completed at all; lossy exchange and missing sub-cases are beta items). Encrypted output (#774) and Office→PDF are sub-cases, Word export is lossy not absent → partial, not blocking; stage pre-alpha → **alpha**. Numbers unchanged |
 | 2026-10-10 | minor | Second look requested by the owner after practitioners praised PdfCraft: user sentiment gathered (stars, downloads, 23 praising issues, switching reports, issue themes); checklist split into mainstream (497) and specialist (311) features; the 9-point cross-cutting deduction removed as a double count (Windows printing, interop and glyphs were already scored in their areas). Ready for real work 40% → 47%; mainstream practitioner ≈ 55% added. Core-workflow alpha gate applied: convert and share fails → stage alpha → **pre-alpha**, ≈ 40–70 h from alpha |
