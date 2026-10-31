@@ -125,3 +125,75 @@ pub fn set_page_box(doc: &mut Document, pages: &[usize], which: PageBox, spec: B
     }
     Ok(())
 }
+
+/// Most columns, or rows, [`split_pages`] cuts a page into.
+pub const MAX_SPLIT: u32 = 10;
+
+/// Most pages one [`split_pages`] may add, so a request can't grow a document without bound.
+pub const MAX_SPLIT_PAGES: usize = 10_000;
+
+/// Split Pages (#517): each of `pages` (0-based) becomes `columns × rows` pages, one per cell of
+/// what it shows (its crop box), for scanned book spreads or sheets holding several pages. The
+/// parts follow in reading order as the page is shown: rows from the top, each from the left,
+/// with `/Rotate` taken into account. Each part is a copy of the page (as Duplicate Pages makes
+/// it, with its own comments and widgets) whose crop box is its cell, so nothing is resampled and
+/// the content outside the cell stays in the file. Nothing changes when any page would split into
+/// parts smaller than a point.
+pub fn split_pages(doc: &mut Document, pages: &[usize], columns: u32, rows: u32) -> Result<(), OrganizeError> {
+    if !(1..=MAX_SPLIT).contains(&columns) || !(1..=MAX_SPLIT).contains(&rows) {
+        return Err(OrganizeError::Invalid(format!("columns and rows must be from 1 to {MAX_SPLIT}")));
+    }
+    // At most MAX_SPLIT² = 100.
+    let cells = (columns * rows) as usize;
+    if cells < 2 {
+        return Err(OrganizeError::Invalid("splitting a page needs at least two parts".into()));
+    }
+    let all = walk(doc)?;
+    check(pages, all.len())?;
+    let mut order = pages.to_vec();
+    order.sort_unstable();
+    order.dedup();
+    if order.len().saturating_mul(cells - 1) > MAX_SPLIT_PAGES {
+        return Err(OrganizeError::Invalid(format!("splitting would add more than {MAX_SPLIT_PAGES} pages")));
+    }
+    let boxes = page_boxes(doc)?;
+    // Plan every page first so a failure changes nothing.
+    let mut plan = Vec::with_capacity(order.len());
+    for &i in &order {
+        let (Some(b), Some((page, inherited))) = (boxes.get(i), all.get(i)) else { return Err(OrganizeError::NoSuchPage(i)) };
+        let rotate = doc.get(*page).as_dict().and_then(|d| d.get(b"Rotate").cloned()).or_else(|| inherited.get(b"Rotate").cloned());
+        let rotate = rotate.and_then(|r| doc.resolve(&r).as_f64()).filter(|r| r.is_finite()).map_or(0, |r| (r / 90.0).round().rem_euclid(4.0) as u8);
+        let parts: Vec<[f64; 4]> =
+            (0..rows).flat_map(|r| (0..columns).map(move |c| (c, r))).map(|(c, r)| cell(b[1], rotate, (c, r), (columns, rows))).collect();
+        if parts.iter().any(|p| p[2] - p[0] < 1.0 || p[3] - p[1] < 1.0) {
+            return Err(OrganizeError::InvalidBox(format!("page {} is too small to split into {columns} × {rows}", i + 1)));
+        }
+        plan.push((i, *page, parts));
+    }
+    let src = doc.clone();
+    // The last page first, so the earlier ones keep their places in `src`'s order.
+    for (i, page, parts) in plan.into_iter().rev() {
+        let copies = crate::import_pages(doc, &src, &vec![i; cells - 1], i + 1)?;
+        for (r, part) in std::iter::once(page).chain(copies).zip(parts) {
+            doc.update_dict(r, |d| d.set(b"CropBox".to_vec(), Object::Array(part.iter().map(|v| Object::Real(*v)).collect())))?;
+        }
+    }
+    Ok(())
+}
+
+/// Cell (`column`, `row`) of `crop` cut into `columns × rows` as the page is shown, turned
+/// `rotate` quarter turns clockwise (`/Rotate`), as a rectangle in default user space.
+fn cell(crop: [f64; 4], rotate: u8, (column, row): (u32, u32), (columns, rows): (u32, u32)) -> [f64; 4] {
+    let (w, h) = (crop[2] - crop[0], crop[3] - crop[1]);
+    // A point of the shown page, `u` across from the left and `v` down from the top (0 to 1).
+    let user = |u: f64, v: f64| match rotate {
+        1 => [crop[0] + v * w, crop[1] + u * h],
+        2 => [crop[2] - u * w, crop[1] + v * h],
+        3 => [crop[2] - v * w, crop[3] - u * h],
+        _ => [crop[0] + u * w, crop[3] - v * h],
+    };
+    let (cols, rows) = (f64::from(columns), f64::from(rows));
+    let a = user(f64::from(column) / cols, f64::from(row) / rows);
+    let b = user(f64::from(column + 1) / cols, f64::from(row + 1) / rows);
+    [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]
+}

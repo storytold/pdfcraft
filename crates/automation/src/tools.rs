@@ -953,6 +953,11 @@ pub fn tools() -> Vec<ToolDef> {
         t("page_duplicate", "Duplicate pages", "Insert copies of pages so the first copy becomes page `at`, or after the last of them when `at` is left out (fonts and images are shared, not copied). Undoable.")
             .cmd("page.duplicate")
             .with(schema(json!({ "doc": doc(), "pages": pages("to duplicate"), "at": { "type": "integer", "minimum": 1 } }), &["doc", "pages"])),
+        t("page_split", "Split pages", "Split each page into columns × rows pages, one per cell of what it shows, for scanned book spreads or sheets that hold several pages. The parts follow in reading order as the page is shown (rows from the top, each from the left; /Rotate is taken into account) and take the original page's place. Each part is a copy of the page cropped to its cell (nothing is resampled; the rest of the page stays in the file, hidden by the crop box). columns defaults to 2 and rows to 1, each at most 10; at most 10,000 pages may be added. Undoable.")
+            .with(schema(
+                json!({ "doc": doc(), "pages": pages("to split"), "columns": { "type": "integer", "minimum": 1, "maximum": pdfcraft_engine::MAX_SPLIT }, "rows": { "type": "integer", "minimum": 1, "maximum": pdfcraft_engine::MAX_SPLIT } }),
+                &["doc", "pages"],
+            )),
         t(
             "page_transition_set",
             "Set page transitions",

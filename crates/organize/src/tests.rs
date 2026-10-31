@@ -3813,3 +3813,63 @@ fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
     ctrl_names.sort();
     assert_eq!(ctrl_names, [b"ImHidden".to_vec(), b"ImShown".to_vec()]);
 }
+
+#[test]
+fn split_pages_cut_each_page_into_its_cells_in_reading_order() {
+    let mut doc = open(fixture());
+    // Page 3 (500×500) is shown upright; pages 1–2 (300×400) inherit /Rotate 90 from the tree.
+    let third = walk(&doc).unwrap()[2].0;
+    doc.update_dict(third, |d| d.set(b"Rotate".to_vec(), Object::Int(0))).unwrap();
+    split_pages(&mut doc, &[2, 0], 2, 1).unwrap();
+    split_pages(&mut doc, &[4], 1, 2).unwrap();
+    let doc = open(write_incremental(&doc, &SaveOptions::default()).unwrap());
+    let b = page_boxes(&doc).unwrap();
+    assert_eq!(b.len(), 6, "two pages split in two, then one more");
+    // Turned a quarter clockwise, the page's bottom shows on the left: the left half comes first.
+    assert_eq!(b[0][1], [0.0, 0.0, 300.0, 200.0]);
+    assert_eq!(b[1][1], [0.0, 200.0, 300.0, 400.0]);
+    assert_eq!(b[2][1], [0.0, 0.0, 300.0, 400.0], "page 2 is untouched");
+    assert_eq!(b[3][1], [0.0, 0.0, 250.0, 500.0], "upright: the left half first");
+    // The right half of page 3, split again into rows: the top first.
+    assert_eq!(b[4][1], [250.0, 250.0, 500.0, 500.0]);
+    assert_eq!(b[5][1], [250.0, 0.0, 500.0, 250.0]);
+    assert!(b.iter().all(|p| p[0] == b[0][0] || p[0] == [0.0, 0.0, 500.0, 500.0]), "media boxes are kept");
+    // Every part is a page object of its own, showing the page's content.
+    let pages = walk(&doc).unwrap();
+    let mut refs: Vec<_> = pages.iter().map(|(r, _)| *r).collect();
+    refs.dedup();
+    assert_eq!(refs.len(), 6);
+    let contents = |i: usize| doc.get(pages[i].0).as_dict().and_then(|d| d.get(b"Contents").cloned()).map(|c| doc.resolve(&c).clone());
+    assert_eq!(contents(0), contents(1), "both halves show page 1");
+
+    // A crop box already set is what gets split; the order is the shown one for every turn.
+    for (rotate, first) in [(0, [10.0, 205.0, 150.0, 400.0]), (180, [150.0, 10.0, 290.0, 205.0]), (270, [150.0, 205.0, 290.0, 400.0])] {
+        let mut doc = open(fixture());
+        let first_page = walk(&doc).unwrap()[0].0;
+        doc.update_dict(first_page, |d| d.set(b"Rotate".to_vec(), Object::Int(rotate))).unwrap();
+        set_page_box(&mut doc, &[0], PageBox::Crop, BoxSpec::Rect([10.0, 10.0, 290.0, 400.0])).unwrap();
+        split_pages(&mut doc, &[0], 2, 2).unwrap();
+        assert_eq!(page_boxes(&doc).unwrap()[0][1], first, "/Rotate {rotate}");
+    }
+}
+
+#[test]
+fn split_pages_refuse_what_they_cannot_do_and_change_nothing() {
+    let mut doc = open(fixture());
+    let before = page_boxes(&doc).unwrap();
+    for (columns, rows) in [(1, 1), (0, 2), (2, 0), (MAX_SPLIT + 1, 1), (1, MAX_SPLIT + 1)] {
+        assert!(matches!(split_pages(&mut doc, &[0], columns, rows), Err(OrganizeError::Invalid(_))), "{columns} × {rows}");
+    }
+    assert_eq!(split_pages(&mut doc, &[0, 3], 2, 1), Err(OrganizeError::NoSuchPage(3)));
+    assert_eq!(page_boxes(&doc).unwrap(), before);
+    assert_eq!(walk(&doc).unwrap().len(), 3);
+    // A part under a point on page 1: nothing changes, not even on page 2, which could be split
+    // (and comes first, as pages are split from the last).
+    let first = walk(&doc).unwrap()[0].0;
+    doc.update_dict(first, |d| d.set(b"CropBox".to_vec(), Object::Array(vec![0.into(), 0.into(), Object::Real(5.0), Object::Real(400.0)]))).unwrap();
+    let before = page_boxes(&doc).unwrap();
+    assert!(matches!(split_pages(&mut doc, &[0, 1], 1, MAX_SPLIT), Err(OrganizeError::InvalidBox(_))));
+    assert_eq!(page_boxes(&doc).unwrap(), before);
+    assert_eq!(split_pages(&mut doc, &[], 2, 1), Ok(()), "no pages, nothing to do");
+    assert_eq!(page_boxes(&doc).unwrap(), before);
+}

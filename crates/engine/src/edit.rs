@@ -44,6 +44,13 @@ pub enum Edit {
         pages: Vec<usize>,
         at: Option<usize>,
     },
+    /// Split Pages: each of `pages` becomes `columns × rows` pages, one per cell of what it shows,
+    /// in reading order (see [`pdfcraft_organize::split_pages`]).
+    SplitPages {
+        pages: Vec<usize>,
+        columns: u32,
+        rows: u32,
+    },
     /// Replace Pages: the content of `pages` is replaced by `src_pages` of another PDF; the
     /// pages' links, comments and bookmarks stay.
     ReplacePages {

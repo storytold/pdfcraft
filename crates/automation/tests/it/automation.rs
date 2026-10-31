@@ -10190,3 +10190,28 @@ fn simple_rule_scan_drawn(content: &[u8]) -> Vec<u8> {
     }
     write_full(&doc, &SaveOptions::default()).unwrap()
 }
+
+#[test]
+fn splitting_pages_through_tools() {
+    let dir = workdir("split");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // Page 2 (200×300, its text at the left) into two columns: the left half first.
+    let r = ok(&mut a, "page_split", json!({ "doc": doc, "pages": [2] }));
+    assert_eq!(r["pages"], 4);
+    assert_eq!(r["page_sizes"], json!([[200.0, 300.0], [100.0, 300.0], [100.0, 300.0], [200.0, 300.0]]));
+    assert_eq!(page_text(&mut a, doc), ["Page 1", "Page 2", "", "Page 3"]);
+    // Rows, from the top: the text (at y = 150 to 170) is in the middle third.
+    let r = ok(&mut a, "page_split", json!({ "doc": doc, "pages": [1], "columns": 1, "rows": 3 }));
+    assert_eq!(r["page_sizes"][0], json!([200.0, 100.0]));
+    assert_eq!(page_text(&mut a, doc)[..3], ["", "Page 1", ""]);
+    // Undo puts the page back whole.
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(page_text(&mut a, doc), ["Page 1", "Page 2", "", "Page 3"]);
+    for args in
+        [json!({ "doc": doc, "pages": [1], "columns": 0 }), json!({ "doc": doc, "pages": [1], "rows": 11 }), json!({ "doc": doc, "pages": [9] })]
+    {
+        assert!(matches!(a.call("page_split", &args), Err(ToolError::InvalidArgs(_))), "{args}");
+    }
+    assert!(matches!(a.call("page_split", &json!({ "doc": doc, "pages": [1], "columns": 1 })), Err(ToolError::Failed(_))), "one part is no split");
+}

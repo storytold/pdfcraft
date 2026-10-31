@@ -69,7 +69,9 @@ pub use signature_scan::{PhotoRect, ScanError, SignaturePhoto, Turn};
 pub use stamp_preview::{CommentLayer, StampPreview};
 pub use text_preview::{TextEditPreview, UnmarkedPages};
 
-pub use pdfcraft_organize::{BoxSpec, FieldConflicts, PageBox, SplitBy, Transition, TransitionSpec, mime_for_name, split_ranges};
+pub use pdfcraft_organize::{
+    BoxSpec, FieldConflicts, MAX_SPLIT, MAX_SPLIT_PAGES, PageBox, SplitBy, Transition, TransitionSpec, mime_for_name, split_ranges,
+};
 
 pub use pdfcraft_organize::LabelStyle;
 pub use pdfcraft_organize::Standard;

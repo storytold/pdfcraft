@@ -2863,6 +2863,17 @@ evidence = ["crates/ui-egui/tests/it/pageboxes.rs::duplicate_pages_copies_the_cu
 notes = "copies share fonts and images with the originals; Ctrl-drag (Option on macOS) in the page grid drops the copies at the gap instead of moving the pages, with a \"+\" badge and the copies selected (#2997); page_duplicate takes `at` for where the first copy goes (left out: after the last of them)"
 
 [[feature]]
+id = "organize.split-pages-into-parts"
+title = "Split pages into parts (columns × rows)"
+area = "D"
+tier = "P3"
+milestone = "M4"
+status = "partial"
+tools = ["page_split"]
+evidence = ["crates/organize/src/tests.rs::split_pages_cut_each_page_into_its_cells_in_reading_order", "crates/organize/src/tests.rs::split_pages_refuse_what_they_cannot_do_and_change_nothing", "crates/automation/tests/it/automation.rs::splitting_pages_through_tools"]
+notes = "Each chosen page becomes columns × rows pages (up to 10 × 10), one per cell of its crop box, in reading order as the page is shown (/Rotate taken into account), for scanned book spreads and sheets holding several pages (#517). Each part is a copy of the page (with its own comments and widgets, as Duplicate Pages makes them) cropped to its cell: nothing is resampled, and the content outside the cell stays in the file behind the crop box. One undo step; a refused split changes nothing. Headless only so far (page_split): not yet a dialog in Organize Pages, cut lines dragged from the rulers, uneven cut positions, right-to-left order for spreads, or removing the content outside each part. Acrobat has no such command; this is beyond it"
+
+[[feature]]
 id = "organize.reverse-pages"
 title = "Reverse page order"
 area = "D"

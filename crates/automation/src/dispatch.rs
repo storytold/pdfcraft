@@ -279,6 +279,22 @@ impl Automation {
                 let at = self.opt_position(&a, "at")?;
                 self.apply(&a, Edit::DuplicatePages { pages, at })?
             }
+            "page_split" => {
+                let pages = self.pages(&a, "pages")?;
+                let count = |key: &str, default: u32| -> Result<u32> {
+                    match a.opt_int(key)? {
+                        None => Ok(default),
+                        Some(n) => u32::try_from(n)
+                            .ok()
+                            .filter(|n| (1..=pdfcraft_engine::MAX_SPLIT).contains(n))
+                            .ok_or_else(|| ToolError::InvalidArgs(format!("{key} must be from 1 to {}", pdfcraft_engine::MAX_SPLIT))),
+                    }
+                };
+                let (columns, rows) = (count("columns", 2)?, count("rows", 1)?);
+                let mut out = self.apply(&a, Edit::SplitPages { pages, columns, rows })?;
+                out["page_sizes"] = json!(self.doc(&a)?.info.pages.iter().map(|p| [p.width, p.height]).collect::<Vec<_>>());
+                out
+            }
             "page_set_box" => self.page_set_box(&a)?,
             "page_transition_set" => self.page_transition_set(&a)?,
             "doc_create" => self.doc_create(&a)?,
