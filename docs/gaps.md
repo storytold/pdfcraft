@@ -310,16 +310,17 @@ update the numbers.
   Saving still peaks at three copies (the saved file is assembled in memory beside the working
   one), and display appearances for comments without one add a copy. A 100,000-page file (28 MB)
   opens at 403 MiB in 5.5 s and each edit re-inspects it for ≈ 5 s.
-- **Done:** a clean, unencrypted PDF of 1 GiB or more opens from disk (`OnDiskFile`,
-  `crates/cos/src/on_disk.rs`). A file that size is that size because of its stream bodies, so
-  everything else stays in memory as one buffer the parsers read as usual, and a body is read when
-  it is wanted (hayro-syntax patch 34). The renderer decision is not needed: any renderer needs
+- **Done:** a clean, unencrypted PDF of 1 GiB or more opens from disk when stream bodies make up
+  most of it (`OnDiskFile`, `crates/cos/src/on_disk.rs`), and one that is mostly structure is read
+  whole. Everything except those bodies stays in memory as one buffer the parsers read as usual,
+  and a body is read when it is wanted (hayro-syntax patch 34). The renderer decision is not needed: any renderer needs
   the same one callback. Measured 2026-10-31 on a synthetic 2 GiB image file with one update
   (release build, Linux, file in the OS cache, three pages at 0.25 scale): 76 MiB peak and 0.01 s to
   open, against 2,134 MiB and 2.20 s read whole, with the same pixels.
 - **Left:** editing a file that stayed on disk (Load to edit reads it whole, and the budget is then
   one copy of the file to view and two to edit), encrypted files (`cos` decrypts stream bodies as it
-  loads them, and permissions come from the editor), a global memory budget.
+  loads them, and permissions come from the editor), a global memory budget. On Windows the open
+  handle makes `MoveFileEx` over such a file fail; renaming, deleting and `ReplaceFile` work.
 - **Estimate:** 25–45 h. **Doc:** this file.
 
 ### 14. Arabic RTL unqualified end to end; no Hindi, Indonesian, Korean
