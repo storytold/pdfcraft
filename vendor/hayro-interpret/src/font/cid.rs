@@ -86,7 +86,9 @@ impl Type0Font {
                     if let Some((standard, _)) = select_standard_font(dict, &font_descriptor) {
                         (FontQuery::Standard(standard), true)
                     } else {
-                        let mut query = FallbackFontQuery::new(dict);
+                        // PdfCraft patch: the style comes from the descendant's descriptor.
+                        let mut query =
+                            FallbackFontQuery::with_descriptor(dict, Some(font_descriptor.clone()));
                         query.character_collection = character_collection.clone();
 
                         warn!(
@@ -618,6 +620,12 @@ fn read_widths2(arr: &Array<'_>) -> Option<HashMap<u32, [f32; 3]>> {
             let mut iter = range.iter::<f32>();
 
             while let Some(w) = iter.next() {
+                // PdfCraft patch: as in `read_widths`, checked before the run's metrics are
+                // read. Without it, a run starting at 4294967295 overflowed `first` and
+                // discarded the whole /W2 table.
+                if first > MAX_CID {
+                    break;
+                }
                 let v1 = iter.next()?;
                 let v2 = iter.next()?;
                 map.insert(first, [w, v1, v2]);
@@ -667,5 +675,26 @@ fn read_encoding(object: &Object<'_>, cmap_resolver: &CMapResolverFn) -> Option<
             CMap::parse(&decoded, move |n| (resolver)(n))
         }
         _ => None,
+    }
+}
+
+/// PdfCraft patch test (ported from craft-libs): a /W2 run whose first CID is past `MAX_CID`
+/// is skipped and the rest of the table kept.
+#[cfg(test)]
+mod tests {
+    use super::read_widths2;
+    use hayro_syntax::object::{Array, FromBytes};
+
+    #[test]
+    fn w2_run_past_the_largest_cid_keeps_the_rest_of_the_table() {
+        let arr =
+            Array::from_bytes(b"[4294967295 [1000 500] 10 [900 450 860] 20 30 800 400 870]")
+                .unwrap();
+        let map = read_widths2(&arr).unwrap();
+
+        assert_eq!(map.get(&4_294_967_295), None);
+        assert_eq!(map.get(&10), Some(&[900.0, 450.0, 860.0]));
+        assert_eq!(map.get(&25), Some(&[800.0, 400.0, 870.0]));
+        assert_eq!(map.len(), 12);
     }
 }
