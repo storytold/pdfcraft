@@ -187,7 +187,12 @@ impl Automation {
             .map(|ch| json!({ "kind": ch.kind.label().to_lowercase(), "old": side(&ch.old), "new": side(&ch.new) }))
             .collect();
         let visual: Vec<Value> = if a.opt_bool("visual")?.unwrap_or(false) {
-            self.session.compare_visual(old, new, 72.0).map_err(failed)?.iter().map(|(p, r)| json!({ "page": p + 1, "rect": r2(r) })).collect()
+            let mut out = Vec::new();
+            for (p, r) in self.session.compare_visual(old, new, 72.0).map_err(failed)? {
+                let kind = self.session.visual_kind(old, new, p, r).map_err(failed)?;
+                out.push(json!({ "page": p + 1, "rect": r2(&r), "kind": kind.label() }));
+            }
+            out
         } else {
             Vec::new()
         };

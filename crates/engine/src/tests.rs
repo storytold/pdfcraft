@@ -5678,8 +5678,11 @@ fn comparing_two_versions_of_a_document() {
     let vis = s.compare_visual(old, new, 72.0).unwrap();
     assert!(!vis.is_empty() && vis.iter().all(|(p, r)| *p == 0 && r[3] > 600.0), "{vis:?}");
     assert!(s.compare_visual(old, old, 72.0).unwrap().is_empty());
+    // Plain text drawing is neither a comment nor a picture, until a comment sits on it.
+    assert!(vis.iter().all(|(p, r)| s.visual_kind(old, new, *p, *r).unwrap() == compare::VisualKind::Other));
 
     assert_eq!(s.mark_differences(old, new).unwrap(), 2);
+    assert!(vis.iter().any(|(p, r)| s.visual_kind(old, new, *p, *r).unwrap() == compare::VisualKind::Annotation));
     let d = s.get(new).unwrap();
     assert_eq!(d.can_undo(), Some("Mark differences"));
     let marks: Vec<_> = d.info.annotations.iter().filter(|a| a.author.as_deref() == Some("Compare")).collect();
