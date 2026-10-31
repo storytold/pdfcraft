@@ -1118,8 +1118,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.full_screen"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/commands.rs::full_screen_toggles_by_shortcut_and_command_and_escape_leaves", "crates/ui-egui/tests/it/view.rs::full_screen_shows_one_fitted_page_and_clicks_turn_it", "crates/ui-egui/tests/it/view.rs::full_screen_keeps_two_page_view_as_spreads"]
-notes = "Acrobat's Full Screen Mode (#1459): the page on black and nothing else, one page at a time fitted to the screen (one spread when two-page view was on, #1353), from the current page; a click, Space, Enter, \u2192 or Page Down go forward, a shift-click, Backspace, \u2190 or Page Up back, Home/End to the ends; Esc or \u2318L bring the display from before back at the page reached. Links still open on click. Missing: the cursor is not hidden, no transitions, auto-advance or loop (view.full-screen-presentation), and no full-screen preferences such as the background colour"
+evidence = ["crates/ui-egui/tests/it/commands.rs::full_screen_toggles_by_shortcut_and_command_and_escape_leaves", "crates/ui-egui/tests/it/view.rs::full_screen_shows_one_fitted_page_and_clicks_turn_it", "crates/ui-egui/tests/it/view.rs::full_screen_keeps_two_page_view_as_spreads", "crates/ui-egui/tests/it/view.rs::full_screen_right_click_goes_back_a_page", "crates/ui-egui/tests/it/view.rs::full_screen_shift_enter_goes_back_a_page", "crates/ui-egui/tests/it/view.rs::full_screen_hides_a_still_pointer"]
+notes = "Acrobat's Full Screen Mode (#1459): the page on black and nothing else, one page at a time fitted to the screen (one spread when two-page view was on, #1353), from the current page; a click, Space, Enter, \u2192 or Page Down go forward, a shift-click, a right-click (no context menu in full screen), Shift+Enter, Backspace, \u2190 or Page Up back, Home/End to the ends; Esc or \u2318L bring the display from before back at the page reached. Links still open on click. The pointer hides after three still seconds. Transitions and display times: view.full-screen-presentation. Missing: loop after the last page, and full-screen preferences such as the background colour"
 
 [[feature]]
 id = "view.full-screen-presentation"
@@ -1130,8 +1130,8 @@ milestone = "M12"
 status = "partial"
 commands = ["view.full_screen"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/view.rs::full_screen_shows_one_fitted_page_and_clicks_turn_it"]
-notes = "Click to advance (and shift-click back) ships with view.full-screen; auto-advance every N seconds, loop after the last page, page transitions and the full-screen preferences are not done"
+evidence = ["crates/ui-egui/tests/it/view.rs::full_screen_shows_one_fitted_page_and_clicks_turn_it", "crates/ui-egui/tests/it/view.rs::full_screen_plays_a_page_transition_and_honours_the_display_time", "crates/ui-egui/tests/it/view.rs::full_screen_turns_at_once_without_animations_or_in_spreads", "crates/ui-egui/tests/it/view.rs::full_screen_hides_a_still_pointer"]
+notes = "Click to advance (and shift-click back) ships with view.full-screen. A page's /Trans plays when it comes into view (ISO 32000-2 \u00a712.4.4, Table 164; single-page view, no view rotation; the outgoing page is held until the incoming one has rendered; the Animation effects preference turns them off), a page's /Dur advances to the next page once it is up (not past the last), and the pointer hides after three still seconds. Not done: full-screen preferences that override the document (advance every N seconds, loop after the last page, a default transition, ignoring the document's transitions, the pointer setting), and transitions between two-page spreads"
 
 [[feature]]
 id = "view.reflow"
@@ -3232,7 +3232,7 @@ status = "partial"
 commands = []
 tools = ["doc_info", "page_transition_set"]
 evidence = ["crates/render/src/inspect/tests.rs::page_transitions_and_display_times_are_read", "crates/automation/tests/it/automation.rs::doc_info_lists_page_transitions_and_display_times", "crates/organize/src/tests.rs::page_transitions_are_set_removed_and_checked", "crates/automation/tests/it/automation.rs::page_transitions_are_set_and_removed_through_the_tools"]
-notes = "Read and set, not played: each page's /Trans (style, duration, dimension, motion, direction, Fly scale and backdrop) and /Dur display time are read with the spec's defaults and listed by doc_info (DocInfo::transitions); page_transition_set (Edit::SetTransition, one undo step) writes or removes them on chosen pages with the values checked first. Not yet: playing them in full screen, auto-advancing on /Dur, and the Page Transitions dialog"
+notes = "Read, set and played: each page's /Trans (style, duration, dimension, motion, direction, Fly scale and backdrop) and /Dur display time are read with the spec's defaults and listed by doc_info (DocInfo::transitions); page_transition_set (Edit::SetTransition, one undo step) writes or removes them on chosen pages with the values checked first. Full screen plays them and advances on /Dur (view.full-screen-presentation). Not yet: the Page Transitions dialog"
 
 [[feature]]
 id = "organize.page-tab-order"

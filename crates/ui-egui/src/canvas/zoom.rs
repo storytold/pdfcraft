@@ -35,12 +35,14 @@ impl DocView {
         self.continuous = false;
         self.fit = Fit::Page;
         self.selection = None;
+        self.presenter = Default::default();
         self.goto = Some((self.current, 0.0));
     }
 
     /// Leave full screen: the display from before it comes back, at the page reached meanwhile.
     pub fn leave_presentation(&mut self) {
         let Some(saved) = self.presentation.take() else { return };
+        self.presenter = Default::default();
         self.layout = saved.layout;
         self.continuous = saved.continuous;
         self.cover = saved.cover;
@@ -63,6 +65,12 @@ impl DocView {
     /// Whether the view is in full screen's one-page-at-a-time display.
     pub fn presenting(&self) -> bool {
         self.presentation.is_some()
+    }
+
+    /// Whether full screen is playing a page transition (or holding the page before it until the
+    /// next one has rendered).
+    pub fn presenting_a_transition(&self) -> bool {
+        self.presenter.turning()
     }
 
     /// Switch the base page display (Single or Two-page), leaving continuous scrolling as it is.

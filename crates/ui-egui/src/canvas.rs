@@ -30,6 +30,7 @@ mod organize;
 pub(super) mod page_cursor;
 pub(super) mod page_pointer;
 pub(super) mod page_router;
+mod presenter;
 pub mod scroll_speed;
 mod selection;
 pub(super) mod signature_drag;
@@ -322,6 +323,8 @@ pub struct DocView {
     /// Full screen (Acrobat's Full Screen Mode): the display saved on entering it, while the view
     /// shows one page or spread at a time, fitted to the screen. `None` outside full screen.
     presentation: Option<SavedDisplay>,
+    /// Full screen's transitions, display times and pointer (see [`presenter`]).
+    pub(crate) presenter: presenter::Presenter,
     pages: HashMap<usize, PageTex>,
     /// Pages the renderer could not draw, with the reason (never re-requested).
     errors: HashMap<usize, String>,
@@ -636,6 +639,7 @@ impl DocView {
             flash: None,
             compare_marks: Vec::new(),
             presentation: None,
+            presenter: Default::default(),
             pages: HashMap::new(),
             errors: HashMap::new(),
             waiting_since: HashMap::new(),
@@ -795,6 +799,8 @@ impl DocView {
         fresh.cover = self.cover;
         // Still presenting, with the display to go back to on leaving.
         fresh.presentation = self.presentation.take();
+        // A new document: none of the old one's transition, page or timer carries over.
+        fresh.presenter = Default::default();
         fresh.back = std::mem::take(&mut self.back);
         fresh.forward = std::mem::take(&mut self.forward);
         fresh.find = self.find.take();
@@ -856,6 +862,8 @@ struct PageEnv<'a> {
     glide: Vec2,
     hand: bool,
     info: &'a DocInfo,
+    /// The Animation effects preference as it applies now (full screen's transitions follow it).
+    animates: bool,
     initials: &'a Option<crate::fill_sign::SavedSig>,
     key_scroll: f32,
     middle_gesture: bool,
@@ -903,6 +911,9 @@ struct PageOut {
     open_signature: bool,
     open_table: Option<(usize, [f64; 4])>,
     primary_down: bool,
+    /// The pointer is over a link, comment, field or what is placed on the page: a click there is
+    /// for it, and turns no page in full screen.
+    on_object: bool,
     refused: Option<String>,
     stamp_placed: bool,
 }
@@ -1974,6 +1985,7 @@ fn draw_pages(
         y_shift,
         ..
     } = *env;
+    let animates = env.animates;
     // egui's drag responses accept every pointer button. Keep a wheel gesture from also
     // selecting text, drawing a mark, or panning with the Hand tool.
     if middle_gesture {
@@ -2073,6 +2085,7 @@ fn draw_pages(
         open_signature,
         open_table,
         primary_down: _,
+        on_object: _,
         refused,
         stamp_placed,
     } = page_out;
@@ -2082,8 +2095,20 @@ fn draw_pages(
         let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
         crate::calc_order_ui::paint_trace(ui, painter, visible, &view.calc_order, generation, selected);
     }
+    // Full screen plays transitions over the page just drawn, and keeps time (#379).
+    let mut hide_pointer = false;
+    if view.presentation.is_some() {
+        let now = ui.input(|i| i.time);
+        hide_pointer = presenter::frame(view, info, painter, ui.ctx(), now, animates, pointer);
+    }
+    // Read before the claims are spent below, and before the pointer hides, which claims the top layer.
+    let on_object = view.cursor.over_object(tool);
+    // A still pointer hides over a link too, and its tip with it: the top layer, which every tool reaches.
+    if hide_pointer {
+        view.cursor.claim(Layer::Drag, egui::CursorIcon::None);
+    }
     // The pages' one cursor, from the claim on the highest layer the tool reaches, and the tip.
-    let hover_text = pointer.filter(|_| unobstructed).zip(view.cursor.resolve(ui.ctx(), tool));
+    let hover_text = pointer.filter(|_| unobstructed && !hide_pointer).zip(view.cursor.resolve(ui.ctx(), tool));
     // ScrollArea ignores the wheel while any widget is dragged, so a text-selection drag
     // scrolls the page itself (#721). After the page loop, so it keeps scrolling once the
     // pointer leaves the selection's page for the gap or the next page; over the whole
@@ -2126,7 +2151,8 @@ fn draw_pages(
     if view.continuous {
         view.current = current;
     }
-    resp.context_menu(|ui| {
+    let presenting = view.presentation.is_some();
+    page_context_menu(&resp, presenting, |ui| {
         // Preparing a form: the selected field's menu.
         if preparing && let Some((name, wi)) = view.prepare.selected.clone() {
             // Several fields: Align, Center, Distribute, Set Fields to Same Size.
@@ -2249,6 +2275,7 @@ fn draw_pages(
         open_signature,
         open_table,
         primary_down: ptr.primary_down,
+        on_object,
         refused,
         stamp_placed,
     };
@@ -2750,12 +2777,14 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
 /// Full screen: the click turns the page unless it did something else first. It waits out the
 /// double-click time: turning on the first click's release sent a double-click's second click,
 /// meant to select a word, to the next page (review on #2070). A selection cancels it, and so do a
-/// link followed meanwhile and leaving full screen; a double-click elsewhere still turns once.
+/// click on a link, field or comment (`clicked_object`) and leaving full screen: the pointer stays
+/// active "so that you can click links and open notes" (*Adobe Acrobat Help*, 2019, p. 65), and
+/// fields to fill. A double-click elsewhere still turns once.
 /// `click` is `Some(back)` on the frame of a click, `back` when it was a shift-click.
-fn schedule_presentation_turn(ui: &egui::Ui, view: &mut DocView, click: Option<bool>, link_followed: bool) {
+fn schedule_presentation_turn(ui: &egui::Ui, view: &mut DocView, click: Option<bool>, clicked_object: bool) {
     let now = ui.input(|i| i.time);
     if let Some(back) = click
-        && !link_followed
+        && !clicked_object
         && view.selection.is_none()
         && view.clicks < 2
     {
@@ -2763,7 +2792,7 @@ fn schedule_presentation_turn(ui: &egui::Ui, view: &mut DocView, click: Option<b
         view.present_turn = Some((now + delay, !back));
     }
     if let Some((due, forward)) = view.present_turn {
-        if link_followed || view.selection.is_some() || view.presentation.is_none() {
+        if clicked_object || view.selection.is_some() || view.presentation.is_none() {
             view.present_turn = None;
         } else if now >= due {
             view.present_turn = None;
@@ -2844,11 +2873,25 @@ fn shown_row(view: &DocView, rects: &[Rect]) -> Vec<usize> {
     }
 }
 
+/// The pages' context menu, except in full screen, where a right-click turns back a page instead
+/// ([`presentation_click_state`]).
+fn page_context_menu(resp: &egui::Response, presenting: bool, add: impl FnOnce(&mut egui::Ui)) {
+    if !presenting {
+        resp.context_menu(add);
+    }
+}
+
 /// Full screen: a click on the document goes forward a page and a shift-click back, as in
 /// Acrobat, unless the click did something else (a link, a word selected). Decided once the pages
 /// have had the click. `Some(back)` on the frame of a click, `back` when it was a shift-click.
 fn presentation_click_state(ui: &egui::Ui, view: &DocView, navigation_rect: Rect, enabled: bool) -> Option<bool> {
-    let clicked = view.presentation.is_some() && enabled && presentation_click(ui, navigation_rect);
+    let presenting = view.presentation.is_some() && enabled;
+    // A right-click goes back a page, as a left click goes forward (*Adobe Acrobat Help*, 2019,
+    // "Full Screen preferences", p. 69).
+    if presenting && ui.rect_contains_pointer(navigation_rect) && ui.input(|i| i.pointer.secondary_clicked()) {
+        return Some(true);
+    }
+    let clicked = presenting && presentation_click(ui, navigation_rect);
     // Shift as held now, or as the click's own event carried it (a synthetic click).
     clicked.then(|| {
         ui.input(|i| {
@@ -3174,6 +3217,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let env = PageEnv {
         added: &added,
         allowed,
+        animates,
         author: &author,
         auto_delta,
         avail,
@@ -3246,6 +3290,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         open_signature,
         open_table,
         primary_down,
+        on_object,
         mut refused,
         stamp_placed,
     } = page_out;
@@ -3319,7 +3364,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(comments::CanvasAction::CopyImageFile(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::CopyFile(p, i)),
         None => {}
     }
-    schedule_presentation_turn(ui, view, present, clicked_link.is_some());
+    schedule_presentation_turn(ui, view, present, clicked_link.is_some() || on_object && present.is_some());
     let remote_open = follow_link(app, index, clicked_link);
     if tool == QuickTool::Crop && cropped {
         tool = QuickTool::Select;

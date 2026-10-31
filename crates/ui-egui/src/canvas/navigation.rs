@@ -391,25 +391,35 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
             view.find = None;
         }
     }
-    if key(Key::Home) {
+    // First and last page: Home and End, or Shift+Ctrl+Page Up / Up Arrow and Shift+Ctrl+Page Down /
+    // Down Arrow (*Adobe Acrobat Help*, 2019, "Keys for navigating a PDF", p. 83). These take the
+    // key from the page turning and scrolling below.
+    let (command, shift) = ctx.input(|i| (i.modifiers.command, i.modifiers.shift));
+    let to_end = command && shift && (key(Key::PageDown) || key(Key::ArrowDown));
+    let to_start = command && shift && (key(Key::PageUp) || key(Key::ArrowUp));
+    if key(Key::Home) || to_start {
         view.go_to_page(0);
     }
-    if key(Key::End) {
+    if key(Key::End) || to_end {
         view.go_to_page(usize::MAX);
     }
-    // Full screen: Space and Enter go forward a page and Backspace back, as in Acrobat (the
-    // arrows and Page Up / Page Down already turn pages where nothing scrolls, below).
+    if to_end || to_start {
+        return;
+    }
+    // Full screen: Space and Enter go forward a page, and Shift+Enter and Backspace back
+    // (*Adobe Acrobat Help*, 2019, "Read a document in Full Screen mode", p. 66: "To go to the
+    // previous page, press Shift+Enter"). The arrows and Page Up / Page Down already turn pages
+    // where nothing scrolls, below.
     if view.presentation.is_some() {
-        if key(Key::Space) || key(Key::Enter) {
+        if key(Key::Space) || (key(Key::Enter) && !shift) {
             view.step_page(true);
         }
-        if key(Key::Backspace) {
+        if key(Key::Backspace) || (key(Key::Enter) && shift) {
             view.step_page(false);
         }
     }
     // As in Acrobat: → / ← go to the next / previous page in every layout (#185), and so do
     // ⌘Page Down / ⌘Page Up, or plain Page Down / Page Up in single-page view.
-    let command = ctx.input(|i| i.modifiers.command);
     let scrolls = view.continuous;
     if key(Key::ArrowRight) || (key(Key::PageDown) && (command || !scrolls)) {
         view.step_page(true);
