@@ -29,7 +29,7 @@ mod runlength;
 use std::borrow::Cow;
 
 pub use ccitt::{CcittParams, MAX_CCITT_COLUMNS, MAX_G4_COLUMNS, decode_ccitt, encode_g4};
-pub use jbig2::{MAX_JBIG2_COLUMNS, MAX_JBIG2_PIXELS, decode_jbig2, encode_jbig2, encode_jbig2_generic};
+pub use jbig2::{MAX_JBIG2_COLUMNS, MAX_JBIG2_PIXELS, decode_jbig2, decode_jbig2_within, encode_jbig2, encode_jbig2_generic};
 
 /// A PDF stream filter, identified by its `/Filter` name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

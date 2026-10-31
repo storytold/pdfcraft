@@ -7,7 +7,7 @@
 mod decode;
 mod symbols;
 
-pub use decode::{MAX_JBIG2_PIXELS, decode_jbig2};
+pub use decode::{MAX_JBIG2_PIXELS, decode_jbig2, decode_jbig2_within};
 
 use crate::FilterError;
 use crate::mq::{Context, MqEncoder};

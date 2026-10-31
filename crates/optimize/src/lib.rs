@@ -279,6 +279,8 @@ pub struct Report {
     pub images: usize,
     pub images_resampled: usize,
     pub images_recompressed: usize,
+    /// JBIG2 images left as they are: decoding them all would take more than one run may spend.
+    pub images_refused: usize,
     /// Encoded image bytes before and after (images that changed).
     pub image_bytes_before: usize,
     pub image_bytes_after: usize,

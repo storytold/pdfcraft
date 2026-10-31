@@ -294,6 +294,14 @@ impl Document {
     /// more than `max` bytes. A JBIG2 image's `/JBIG2Globals` are another stream, shared between
     /// images, and are decoded within [`MAX_JBIG2_GLOBALS`] whatever `max` is.
     pub fn decoded_image_within(&self, s: &Stream, max: usize) -> Result<Vec<u8>, CosError> {
+        let mut unbounded = u64::MAX;
+        self.decoded_image_spending(s, max, &mut unbounded)
+    }
+
+    /// [`Document::decoded_image_within`], a JBIG2 image spending from `work`, what an operation
+    /// may still do across its images ([`ImageBudget`](crate::ImageBudget)). With nothing left a
+    /// JBIG2 image is refused before its globals are read.
+    pub(crate) fn decoded_image_spending(&self, s: &Stream, max: usize, work: &mut u64) -> Result<Vec<u8>, CosError> {
         let max = max.min(MAX_DECODED);
         let s = &*self.with_direct_parms(s);
         let filter = |e: pdfcraft_filters::FilterError| CosError::Filter(e.to_string());
@@ -310,8 +318,10 @@ impl Document {
             let (Some(columns), Some(height)) = (s.dict.int(b"Width").and_then(|w| u32::try_from(w).ok()), height) else {
                 return Err(CosError::Filter("a JBIG2 image's /Width or /Height isn't a size".into()));
             };
-            let globals = self.jbig2_globals(s)?;
-            return pdfcraft_filters::decode_jbig2(&undo(before)?, globals.as_deref().map(Vec::as_slice), columns, height, max).map_err(filter);
+            // Nothing to read for what can't be decoded: the images of a file share its globals.
+            let globals = if *work == 0 { None } else { self.jbig2_globals(s)? };
+            let data = if *work == 0 { Cow::Borrowed(&[][..]) } else { undo(before)? };
+            return pdfcraft_filters::decode_jbig2_within(&data, globals.as_deref().map(Vec::as_slice), columns, height, max, work).map_err(filter);
         }
         let Some(p) = self.fax_params(s) else { return s.decoded_within(max) };
         // As many rows as the image has: a /Rows below /Height would cut the picture short, and

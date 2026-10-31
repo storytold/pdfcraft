@@ -2233,3 +2233,45 @@ fn jbig2_globals_are_decoded_within_a_limit_of_their_own() {
         assert!(why.contains("the JBIG2 globals can't be read") && why.contains(&format!("limit of {LIMIT} bytes")), "{why}");
     }
 }
+
+/// One allowance for all the images of an export: an image past it is left out, saying so.
+#[test]
+fn jbig2_images_past_the_exports_allowance_are_left_out_with_the_reason() {
+    use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
+    let mut dict = Dict::new();
+    dict.set(b"Subtype".to_vec(), Object::name("Image"));
+    dict.set(b"Width".to_vec(), Object::Int(16));
+    dict.set(b"Height".to_vec(), Object::Int(2));
+    dict.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    dict.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+    let image = Stream::from_raw(dict, pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap());
+    let mut cost = ImageBudget::with_work(u64::MAX);
+    cost.decode(&Document::new_empty(), &image, 1 << 20).unwrap();
+    let cost = u64::MAX - cost.work_left();
+
+    let pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF".to_vec();
+    let mut doc = Document::open(std::sync::Arc::new(pdf)).unwrap();
+    let (a, b) = (doc.add(Object::Stream(image.clone())), doc.add(Object::Stream(image)));
+    let mut xobjects = Dict::new();
+    xobjects.set(b"A".to_vec(), Object::Ref(a));
+    xobjects.set(b"B".to_vec(), Object::Ref(b));
+    let mut resources = Dict::new();
+    resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+    let page = pdfcraft_model::pages(&doc).swap_remove(0).obj;
+    doc.update_dict(page, |p| p.set(b"Resources".to_vec(), Object::Dict(resources))).unwrap();
+
+    let export = crate::extract::extract_images_within(&doc, &[0], 1, &mut ImageBudget::with_work(cost), usize::MAX);
+    assert_eq!(export.images.len(), 1);
+    assert_eq!(export.skipped.len(), 1);
+    assert!(export.skipped[0].2.contains("more JBIG2 decoding than"), "{:?}", export.skipped);
+    // What an export holds is bounded too: the files are all in memory until it ends.
+    let export = crate::extract::extract_images_within(&doc, &[0], 1, &mut ImageBudget::with_work(u64::MAX), 1);
+    assert_eq!(export.images.len(), 1, "the first goes past it");
+    assert_eq!(export.skipped.len(), 1);
+    assert!(export.skipped[0].2.contains("than one export can hold"), "{:?}", export.skipped);
+    // A file of many images shares one allowance too, image by image.
+    let mut budget = ImageBudget::with_work(cost);
+    assert!(crate::extract::image_file_within(&doc, a, &mut budget).is_ok());
+    assert!(crate::extract::image_file_within(&doc, b, &mut budget).is_err());
+}

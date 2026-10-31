@@ -195,8 +195,34 @@ impl<'a> Image<'a> {
     /// This is useful in case you want to convert multiple JBIG2 images,
     /// as it allows `hayro-jbig2` to reuse allocations during decoding.
     pub fn decode_with<D: Decoder>(&self, decoder: &mut D, ctx: &mut DecoderContext) -> Result<()> {
-        decode_segments(&self.segments, self.height_from_stripes, ctx)?;
+        let mut work_left = bitmap::MAX_WORK;
+        decode_segments(&self.segments, self.height_from_stripes, ctx, &mut work_left)?;
         emit_bitmap(&ctx.page_bitmap, decoder);
+
+        Ok(())
+    }
+
+    /// PdfCraft patch: [`Image::decode`], spending from `work`, what decoding may still cost
+    /// across a run of images. An image spends what it took, failing or not, starting with its
+    /// page's pixels, which whoever asked for them will go through, and its segments, so images
+    /// that decode nothing add up too. On top of that, it takes at most [`bitmap::MAX_WORK`]
+    /// whatever `work` says. One that `work` can't pay for spends all of it, so a run ends rather
+    /// than trying every image it has left. Reading the stream comes before this and is charged
+    /// by [`charge_reading`].
+    pub fn decode_within<D: Decoder>(&self, decoder: &mut D, work: &mut u64) -> Result<()> {
+        let start = bitmap::decode_work(self.width, self.height).saturating_add(self.segments.len() as u64);
+        if charge_work(work, start).is_err() {
+            *work = 0;
+            bail!(OverflowError::DecodingWork);
+        }
+        let allowed = bitmap::MAX_WORK.min(*work);
+        let mut left = allowed;
+        let mut ctx = DecoderContext::default();
+        let decoded = decode_segments(&self.segments, self.height_from_stripes, &mut ctx, &mut left);
+        let refused = decoded == Err(OverflowError::DecodingWork.into());
+        *work = if refused && allowed < bitmap::MAX_WORK { 0 } else { *work - (allowed - left) };
+        decoded?;
+        emit_bitmap(&ctx.page_bitmap, &mut *decoder);
 
         Ok(())
     }
@@ -259,10 +285,26 @@ fn emit_bitmap<D: Decoder>(bitmap: &Bitmap, decoder: &mut D) {
     }
 }
 
-/// PdfCraft patch: count `work` more decoding work, refusing past [`bitmap::MAX_WORK`] before what
-/// asks for it is decoded.
+/// PdfCraft patch: count `work` more decoding work, refusing past what is `left` of
+/// [`bitmap::MAX_WORK`] or a run's allowance before what asks for it is decoded.
 fn charge_work(left: &mut u64, work: u64) -> Result<()> {
     *left = left.checked_sub(work).ok_or(OverflowError::DecodingWork)?;
+    Ok(())
+}
+
+/// PdfCraft patch: the steps of reading a byte of a stream or its globals: parsing and sorting
+/// segments, and building their tables, measured at about 3 a byte at the worst.
+const READ_WORK: u64 = 4;
+
+/// PdfCraft patch: charge `work`, what a run of images may still cost, for reading `bytes` of a stream
+/// and its globals. This comes before anything is parsed, as it counts whether or not they turn out
+/// to decode: an image that fails has still cost its reading, and it is read again for each use. What
+/// `work` can't pay for spends all of it.
+pub fn charge_reading(work: &mut u64, bytes: usize) -> Result<()> {
+    if charge_work(work, (bytes as u64).saturating_mul(READ_WORK)).is_err() {
+        *work = 0;
+        bail!(OverflowError::DecodingWork);
+    }
     Ok(())
 }
 
@@ -275,6 +317,7 @@ fn decode_segments(
     segments: &[segment::Segment<'_>],
     height_from_stripes: Option<u32>,
     decoder_ctx: &mut DecoderContext,
+    work_left: &mut u64,
 ) -> Result<()> {
     // Find and parse page information segment first.
     if let Some(page_info) = segments
@@ -295,7 +338,6 @@ fn decode_segments(
     let page_bitmap = &mut decoder_ctx.page_bitmap;
     let page_state = &mut decoder_ctx.page_state;
     let scratch_buffers = &mut decoder_ctx.scratch_buffers;
-    let mut work_left = bitmap::MAX_WORK;
 
     // Process all segments.
     for seg in segments {
@@ -308,7 +350,7 @@ fn decode_segments(
             SegmentType::ImmediateGenericRegion | SegmentType::ImmediateLosslessGenericRegion => {
                 let had_unknown_length = seg.header.data_length.is_none();
                 let header = generic::parse(&mut reader, had_unknown_length)?;
-                charge_work(&mut work_left, region_work(&header.region_info))?;
+                charge_work(work_left, region_work(&header.region_info))?;
 
                 if page_state.can_decode_directly(page_bitmap, &header.region_info, false) {
                     generic::decode_into(&header, page_bitmap, scratch_buffers)?;
@@ -326,13 +368,13 @@ fn decode_segments(
             SegmentType::IntermediateGenericRegion => {
                 // Intermediate segments cannot have unknown length.
                 let header = generic::parse(&mut reader, false)?;
-                charge_work(&mut work_left, region_work(&header.region_info))?;
+                charge_work(work_left, region_work(&header.region_info))?;
                 let region = generic::decode(&header, scratch_buffers)?;
                 page_state.store_region(seg.header.segment_number, region.bitmap)?;
             }
             SegmentType::PatternDictionary => {
                 let header = pattern::parse(&mut reader)?;
-                charge_work(&mut work_left, header.work())?;
+                charge_work(work_left, header.work())?;
                 let dictionary = pattern::decode(&header, scratch_buffers, page_state.retained_room())?;
                 page_state.store_pattern_dictionary(seg.header.segment_number, dictionary)?;
             }
@@ -341,7 +383,7 @@ fn decode_segments(
                 // (6.5.5, step 1)
                 // Collect references to avoid cloning; symbols are only cloned if re-exported.
                 let input_symbols = page_state.referred_symbols(&seg.header.referred_to_segments)?;
-                charge_work(&mut work_left, input_symbols.len() as u64)?;
+                charge_work(work_left, input_symbols.len() as u64)?;
 
                 // Collect Huffman tables from referred table segments.
                 let referred_tables: Vec<HuffmanTable> = seg
@@ -368,14 +410,14 @@ fn decode_segments(
                     &page_state.standard_tables,
                     retained_contexts,
                     page_state.retained_room(),
-                    &mut work_left,
+                    work_left,
                 )?;
                 page_state.store_symbol_dictionary(seg.header.segment_number, dictionary)?;
             }
             SegmentType::ImmediateTextRegion | SegmentType::ImmediateLosslessTextRegion => {
                 // Collect symbols from referred symbol dictionaries (SBSYMS).
                 let symbols = page_state.referred_symbols(&seg.header.referred_to_segments)?;
-                charge_work(&mut work_left, symbols.len() as u64)?;
+                charge_work(work_left, symbols.len() as u64)?;
 
                 // Collect Huffman tables from referred table segments.
                 // "These user-supplied Huffman decoding tables may be supplied either
@@ -389,10 +431,10 @@ fn decode_segments(
                     .collect();
 
                 let header = text::parse(&mut reader, symbols.len() as u32)?;
-                charge_work(&mut work_left, bitmap::copy_work(header.region_info.width, header.region_info.height))?;
+                charge_work(work_left, bitmap::copy_work(header.region_info.width, header.region_info.height))?;
                 if header.flags.use_huffman {
                     // Its symbol ID table has a line for each symbol.
-                    charge_work(&mut work_left, (symbols.len() as u64).saturating_mul(bitmap::HUFFMAN_LINE_WORK))?;
+                    charge_work(work_left, (symbols.len() as u64).saturating_mul(bitmap::HUFFMAN_LINE_WORK))?;
                 }
 
                 if page_state.can_decode_directly(
@@ -407,7 +449,7 @@ fn decode_segments(
                         &page_state.standard_tables,
                         page_bitmap,
                         scratch_buffers,
-                        &mut work_left,
+                        work_left,
                     )?;
                 } else {
                     let region = text::decode(
@@ -416,7 +458,7 @@ fn decode_segments(
                         &referred_tables,
                         &page_state.standard_tables,
                         scratch_buffers,
-                        &mut work_left,
+                        work_left,
                     )?;
                     page_bitmap.combine(
                         &region.bitmap,
@@ -430,7 +472,7 @@ fn decode_segments(
             SegmentType::IntermediateTextRegion => {
                 // Collect symbols from referred symbol dictionaries (SBSYMS).
                 let symbols = page_state.referred_symbols(&seg.header.referred_to_segments)?;
-                charge_work(&mut work_left, symbols.len() as u64)?;
+                charge_work(work_left, symbols.len() as u64)?;
 
                 // Collect Huffman tables from referred table segments.
                 let referred_tables: Vec<HuffmanTable> = seg
@@ -442,10 +484,10 @@ fn decode_segments(
                     .collect();
 
                 let header = text::parse(&mut reader, symbols.len() as u32)?;
-                charge_work(&mut work_left, bitmap::copy_work(header.region_info.width, header.region_info.height))?;
+                charge_work(work_left, bitmap::copy_work(header.region_info.width, header.region_info.height))?;
                 if header.flags.use_huffman {
                     // Its symbol ID table has a line for each symbol.
-                    charge_work(&mut work_left, (symbols.len() as u64).saturating_mul(bitmap::HUFFMAN_LINE_WORK))?;
+                    charge_work(work_left, (symbols.len() as u64).saturating_mul(bitmap::HUFFMAN_LINE_WORK))?;
                 }
                 let region = text::decode(
                     &header,
@@ -453,7 +495,7 @@ fn decode_segments(
                     &referred_tables,
                     &page_state.standard_tables,
                     scratch_buffers,
-                    &mut work_left,
+                    work_left,
                 )?;
                 page_state.store_region(seg.header.segment_number, region.bitmap)?;
             }
@@ -466,7 +508,7 @@ fn decode_segments(
                     .ok_or(SegmentError::MissingPatternDictionary)?;
 
                 let header = halftone::parse(&mut reader)?;
-                charge_work(&mut work_left, halftone::work(&header, pattern_dict))?;
+                charge_work(work_left, halftone::work(&header, pattern_dict))?;
 
                 if page_state.can_decode_directly(
                     page_bitmap,
@@ -494,7 +536,7 @@ fn decode_segments(
                     .ok_or(SegmentError::MissingPatternDictionary)?;
 
                 let header = halftone::parse(&mut reader)?;
-                charge_work(&mut work_left, halftone::work(&header, pattern_dict))?;
+                charge_work(work_left, halftone::work(&header, pattern_dict))?;
                 let region = halftone::decode(&header, pattern_dict, scratch_buffers)?;
                 page_state.store_region(seg.header.segment_number, region.bitmap)?;
             }
@@ -508,7 +550,7 @@ fn decode_segments(
                     .unwrap_or(page_bitmap);
 
                 let header = generic_refinement::parse(&mut reader)?;
-                charge_work(&mut work_left, region_work(&header.region_info))?;
+                charge_work(work_left, region_work(&header.region_info))?;
                 let region = generic_refinement::decode(&header, reference, scratch_buffers)?;
                 page_state.store_region(seg.header.segment_number, region.bitmap)?;
             }
@@ -526,7 +568,7 @@ fn decode_segments(
                     .and_then(|&num| page_state.get_referred_segment(num));
 
                 let header = generic_refinement::parse(&mut reader)?;
-                charge_work(&mut work_left, region_work(&header.region_info))?;
+                charge_work(work_left, region_work(&header.region_info))?;
 
                 if let Some(referred_segment) = referred_segment
                     && page_state.can_decode_directly(page_bitmap, &header.region_info, false)

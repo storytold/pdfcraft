@@ -52,7 +52,8 @@ fn under(doc: &mut Document, page: usize, rects: &[[f64; 4]]) -> usize {
     let (_, data) = page_streams_within(doc, &p.dict, page, &mut budget).unwrap();
     let res = p.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let mut rep = Report::default();
-    let mut scope = Scope::new(rects, Mode::Verify, &mut rep, budget);
+    let mut images = pdfcraft_cos::ImageBudget::with_work(0);
+    let mut scope = Scope::new(rects, Mode::Verify, &mut rep, budget, &mut images);
     process(doc, &mut scope, &data, &res, pdfcraft_content::Matrix::IDENTITY).residue
 }
 
@@ -744,6 +745,24 @@ fn jbig2_globals(secret: &[u8]) -> Vec<u8> {
     g.extend_from_slice(&[0, 0, 0, 1]);
     g.extend_from_slice(secret);
     g
+}
+
+/// An image the run's allowance can't decode can't be cleared, so it is removed whole, like any
+/// other image that can't be read: what a mark covers never stays.
+#[test]
+fn a_jbig2_image_past_the_runs_allowance_is_removed_whole() {
+    let mut dict = Dict::new();
+    dict.set(b"Width".to_vec(), Object::Int(16));
+    dict.set(b"Height".to_vec(), Object::Int(2));
+    dict.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    dict.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+    let image = Stream::from_raw(dict, pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap());
+    let doc = Document::new_empty();
+    let half = [[0.0, 0.0, 0.5, 1.0]];
+    let clear = |work| crate::image::clear(&doc, &image, &pdfcraft_content::Matrix::IDENTITY, &half, &mut pdfcraft_cos::ImageBudget::with_work(work));
+    assert!(matches!(clear(u64::MAX), Ok(Some(_))), "cleared in a copy");
+    assert!(matches!(clear(0), Err(())), "removed whole");
 }
 
 /// A JBIG2 image (a scan the optimizer stored as JBIG2) has its covered pixels cleared in a copy,

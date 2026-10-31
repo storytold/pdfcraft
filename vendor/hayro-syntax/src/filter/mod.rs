@@ -9,6 +9,10 @@ mod dct;
 #[cfg(feature = "images")]
 mod jbig2;
 #[cfg(feature = "images")]
+pub use jbig2::MAX_PAGE_JBIG2_WORK;
+#[cfg(all(feature = "images", feature = "std"))]
+pub use jbig2::set_page_jbig2_work;
+#[cfg(feature = "images")]
 mod jpx;
 mod lzw_flate;
 mod run_length;

@@ -23,9 +23,26 @@ pub const MAX_JBIG2_PIXELS: u64 = 1 << 28;
 /// [`MAX_JBIG2_PIXELS`] ([`FilterError::Unsupported`], or `Corrupt` from the decoder, which has the
 /// same cap and can refuse the page first).
 pub fn decode_jbig2(data: &[u8], globals: Option<&[u8]>, columns: u32, rows: u32, max: usize) -> Result<Vec<u8>, FilterError> {
+    let mut unbounded = u64::MAX;
+    decode_jbig2_within(data, globals, columns, rows, max, &mut unbounded)
+}
+
+/// [`decode_jbig2`], spending from `work`: what decoding may still cost across a run of images, in
+/// the decoder's count of steps. Reading `data` and `globals` is charged first
+/// ([`hayro_jbig2::charge_reading`]), so an image that turns out not to decode has paid for that,
+/// then what decoding takes ([`hayro_jbig2::Image::decode_within`]). An image takes at most what
+/// one decode may on top of its reading and its page, whatever `work` allows, and one that `work`
+/// can't pay for spends all of it. With nothing left an image isn't read at all, so the images after
+/// that one cost nothing but this check, however large their globals.
+pub fn decode_jbig2_within(data: &[u8], globals: Option<&[u8]>, columns: u32, rows: u32, max: usize, work: &mut u64) -> Result<Vec<u8>, FilterError> {
     if rows == 0 {
         return Ok(Vec::new());
     }
+    let spent = || FilterError::Unsupported("more JBIG2 decoding than one operation may do".into());
+    if *work == 0 {
+        return Err(spent());
+    }
+    hayro_jbig2::charge_reading(work, data.len().saturating_add(globals.map_or(0, <[u8]>::len))).map_err(|_| spent())?;
     let corrupt = |detail: String| FilterError::Corrupt { filter: "JBIG2Decode", detail };
     let image = hayro_jbig2::Image::new_embedded(data, globals).map_err(|e| corrupt(e.to_string()))?;
     let (width, height) = (image.width(), image.height());
@@ -41,7 +58,7 @@ pub fn decode_jbig2(data: &[u8], globals: Option<&[u8]>, columns: u32, rows: u32
         return Err(FilterError::LimitExceeded(max));
     }
     let mut out = Rows::new(width, height, false);
-    image.decode(&mut out).map_err(|e| corrupt(e.to_string()))?;
+    image.decode_within(&mut out, work).map_err(|e| corrupt(e.to_string()))?;
     Ok(out.out)
 }
 
@@ -121,6 +138,45 @@ mod tests {
         let symbols = encode_jbig2(&marks, w, h).unwrap();
         assert!(symbols.len() < encode_jbig2_generic(&marks, w, h).unwrap().len(), "symbol coded");
         assert_eq!(decode_jbig2(&symbols, None, w, h, usize::MAX).unwrap(), marks);
+    }
+
+    /// What a page costs is the same however much a run has left. Given exactly that it decodes,
+    /// and less stops it: spending all that's left, and what comes after isn't read. A page that
+    /// fails still spends what it took.
+    #[test]
+    fn a_run_of_images_spends_its_allowance_down_to_the_step() {
+        let (w, h) = (203u32, 41u32);
+        let data = encode_jbig2_generic(&noise(w, h), w, h).unwrap();
+        let whole = decode_jbig2(&data, None, w, h, usize::MAX).unwrap();
+        let mut work = u64::MAX;
+        assert_eq!(decode_jbig2_within(&data, None, w, h, usize::MAX, &mut work).unwrap(), whole);
+        let cost = u64::MAX - work;
+        assert!(cost >= u64::from(w) * u64::from(h), "a pixel at a time: {cost}");
+        let mut work = cost;
+        assert_eq!(decode_jbig2_within(&data, None, w, h, usize::MAX, &mut work).unwrap(), whole, "exactly enough");
+        assert_eq!(work, 0);
+        let mut work = cost + 7;
+        decode_jbig2_within(&data, None, w, h, usize::MAX, &mut work).unwrap();
+        assert_eq!(work, 7, "only what it took");
+        let mut work = cost - 1;
+        assert!(matches!(decode_jbig2_within(&data, None, w, h, usize::MAX, &mut work), Err(FilterError::Corrupt { .. })), "a step short");
+        assert_eq!(work, 0, "spends all that was left");
+        // Nothing left: not read at all, so this garbage isn't reported as garbage.
+        assert!(matches!(decode_jbig2_within(b"garbage", None, w, h, usize::MAX, &mut work), Err(FilterError::Unsupported(_))));
+        // Too little even for its page.
+        let mut work = 3;
+        assert!(decode_jbig2_within(&data, None, w, h, usize::MAX, &mut work).is_err());
+        assert_eq!(work, 0);
+        // A region that can't be read after the one that can: the page fails having spent the
+        // first, and the segment it fails on, and that isn't being out of allowance.
+        let bad_region = [0, 0, 0, 9, 38, 0, 1, 0, 0, 0, 1, 0xFF];
+        let mut work = u64::MAX;
+        assert!(decode_jbig2_within(&[&data[..], &bad_region].concat(), None, w, h, usize::MAX, &mut work).is_err());
+        assert_eq!(u64::MAX - work, cost + 1 + 4 * bad_region.len() as u64, "the first region, a segment more, and reading it");
+        // Not a stream at all: it pays for being read, and globals count with it.
+        let mut work = u64::MAX;
+        assert!(matches!(decode_jbig2_within(b"garbage", Some(b"globals"), w, h, usize::MAX, &mut work), Err(FilterError::Corrupt { .. })));
+        assert_eq!(u64::MAX - work, 4 * 14);
     }
 
     /// The page has to be the image's size, and is bounded before it is decoded, being decoded

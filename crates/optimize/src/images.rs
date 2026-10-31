@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use pdfcraft_content::{Matrix, Pieces};
-use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ImageBudget, ObjRef, Object, Stream};
 
 use crate::{Compression, ImageSettings, MonoCompression, MonoSettings, OptimizeError, Report, Settings, Stage};
 
@@ -799,7 +799,7 @@ type Pixel = fn(&[u8]) -> Option<bool>;
 ///   - an indexed image of 2, 4 or 8 bits that uses only palette entries 0 and 1, which stay 0 and
 ///     1 at one bit, whatever their colours, so the colour space stays. A decode array other than
 ///     the default stops it: in index units it would mean something else at one bit.
-fn one_bit(doc: &Document, s: &Stream, pack: bool, defaults: bool) -> Option<(Vec<u8>, u32, u32, Option<Dict>)> {
+fn one_bit(doc: &Document, s: &Stream, pack: bool, defaults: bool, budget: &mut ImageBudget) -> Option<(Vec<u8>, u32, u32, Option<Dict>)> {
     let d = &s.dict;
     // Through u32 first, as everywhere here, so the product can't overflow.
     let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
@@ -820,7 +820,7 @@ fn one_bit(doc: &Document, s: &Stream, pack: bool, defaults: bool) -> Option<(Ve
             _ => allowance(len, h)?,
         };
         count_decoded(u64::from(w) * u64::from(h));
-        let mut data = doc.decoded_image_within(s, max).ok()?;
+        let mut data = budget.decode(doc, s, max).ok()?;
         if data.len() < len {
             return None;
         }
@@ -1088,7 +1088,7 @@ fn downsample_bits_checked(data: &[u8], w: u32, h: u32, nw: u32, nh: u32, dark_i
 /// The samples keep their meaning, so the colour space, decode array and `/Mask` stay, but for
 /// black-and-white RGB, which becomes grey with one decode pair, and an indexed image's default
 /// decode array, which goes as the default at one bit.
-fn mono(doc: &Document, s: &Stream, ppi: f64, defaults: bool, settings: &MonoSettings) -> Option<(Stream, bool)> {
+fn mono(doc: &Document, s: &Stream, ppi: f64, defaults: bool, settings: &MonoSettings, budget: &mut ImageBudget) -> Option<(Stream, bool)> {
     let d = &s.dict;
     let downsample = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0 && !d.contains(b"SMask");
     let retain = settings.compression == MonoCompression::Retain;
@@ -1105,7 +1105,7 @@ fn mono(doc: &Document, s: &Stream, ppi: f64, defaults: bool, settings: &MonoSet
     if only_to_resample && !downsample {
         return None;
     }
-    let (data, w, h, packed) = one_bit(doc, s, !retain, defaults)?;
+    let (data, w, h, packed) = one_bit(doc, s, !retain, defaults, budget)?;
     let packed_from_more = packed.is_some();
     let k = settings.target_ppi / ppi;
     // `downsample_bits` keeps a counter for each column: no more columns than a fax row may have,
@@ -1179,6 +1179,19 @@ pub(crate) fn run(
     report: &mut Report,
     progress: &mut dyn FnMut(Stage) -> bool,
 ) -> Result<(), OptimizeError> {
+    let mut budget = ImageBudget::new(doc);
+    run_within(doc, pages, settings, report, progress, &mut budget)
+}
+
+/// [`run`] within `budget`. An image past it stays as it is, and is counted in the report.
+fn run_within(
+    doc: &mut Document,
+    pages: &[ObjRef],
+    settings: &Settings,
+    report: &mut Report,
+    progress: &mut dyn FnMut(Stage) -> bool,
+    budget: &mut ImageBudget,
+) -> Result<(), OptimizeError> {
     let (ppi, mut defaults, read) = walk_pages(doc, pages);
     // Black-and-white RGB becomes grey, which default colour spaces would draw otherwise, and an
     // indexed image's palette says which of its samples a resampled one keeps, which they may
@@ -1209,7 +1222,7 @@ pub(crate) fn run(
         // Packed from more bits a sample, it is lossless at one bit, but the grey or colour
         // settings can make it smaller still (below).
         let packed_from_more = s.dict.int(b"BitsPerComponent").is_some_and(|b| b > 1);
-        let (packed, mono) = match mono(doc, s, ppi, defaults.contains(&r.num), &settings.mono) {
+        let (packed, mono) = match mono(doc, s, ppi, defaults.contains(&r.num), &settings.mono, budget) {
             Some(m) if packed_from_more => (Some(m), None),
             m => (None, m),
         };
@@ -1266,6 +1279,7 @@ pub(crate) fn run(
             doc.set(mr, Object::Stream(m));
         }
     }
+    report.images_refused = budget.refused();
     if !progress(Stage::Images { done: total, total }) {
         return Err(OptimizeError::Cancelled);
     }
@@ -1329,7 +1343,7 @@ mod dimension_tests {
         let settings = MonoSettings { compression: MonoCompression::CcittG4, ..MonoSettings::REDUCE };
         let decoded = |s: &Stream, settings: &MonoSettings| {
             DECODED_PIXELS.with(|c| c.set(0));
-            mono(&Document::new_empty(), s, 300.0, false, settings);
+            mono(&Document::new_empty(), s, 300.0, false, settings, &mut ImageBudget::with_work(u64::MAX));
             DECODED_PIXELS.with(|c| c.get())
         };
         let alone = image(Object::name("JBIG2Decode"), coded.clone());
@@ -1338,6 +1352,51 @@ mod dimension_tests {
         assert!(decoded(&behind, &settings) > 0, "behind another filter it can be stored again");
         let jbig2 = MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE };
         assert!(decoded(&alone, &jbig2) > 0, "stored as JBIG2 its symbols may come out smaller");
+    }
+
+    /// A run has one allowance for all its JBIG2 images. Those past it stay as they are, and the
+    /// report says how many: a file of thousands of them can't hold a run for hours.
+    #[test]
+    fn jbig2_images_past_the_runs_allowance_stay_as_they_are() {
+        let coded = pdfcraft_filters::encode_jbig2_generic(&[0xF0; 4], 16, 2).unwrap();
+        let mut dict = Dict::new();
+        dict.set(b"Type".to_vec(), Object::name("XObject"));
+        dict.set(b"Subtype".to_vec(), Object::name("Image"));
+        dict.set(b"Width".to_vec(), Object::Int(16));
+        dict.set(b"Height".to_vec(), Object::Int(2));
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+        dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        dict.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+        let image = Stream::from_raw(dict, coded);
+        let mut cost = ImageBudget::with_work(u64::MAX);
+        cost.decode(&Document::new_empty(), &image, 1 << 20).unwrap();
+        let cost = u64::MAX - cost.work_left();
+
+        let mut doc = Document::new_empty();
+        let refs = [doc.add(Object::Stream(image.clone())), doc.add(Object::Stream(image.clone())), doc.add(Object::Stream(image.clone()))];
+        let mut xobjects = Dict::new();
+        for (i, r) in refs.iter().enumerate() {
+            xobjects.set(format!("I{i}").into_bytes(), Object::Ref(*r));
+        }
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        // Drawn small enough, at 720 ppi, for the settings to resample all three.
+        let content = doc.add(Object::Stream(Stream::flate(Dict::new(), b"q 1.6 0 0 .2 0 0 cm /I0 Do /I1 Do /I2 Do Q")));
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+        page.set(b"Contents".to_vec(), Object::Ref(content));
+        let page = doc.add(Object::Dict(page));
+
+        let settings = Settings { mono: MonoSettings { compression: MonoCompression::CcittG4, ..MonoSettings::REDUCE }, ..Settings::default() };
+        let mut report = Report::default();
+        let mut budget = ImageBudget::with_work(2 * cost);
+        run_within(&mut doc, &[page], &settings, &mut report, &mut |_| true, &mut budget).unwrap();
+        assert_eq!(report.images_refused, 1);
+        assert_eq!(budget.work_left(), 0, "two decoded and the third refused");
+        assert_eq!(report.images_resampled, 2);
+        let changed = refs.iter().filter(|r| matches!(&*doc.get(**r), Object::Stream(s) if *s != image)).count();
+        assert_eq!(changed, 2, "the third is as it was");
     }
 
     #[test]

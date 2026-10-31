@@ -93,5 +93,6 @@ recognisable in a diff and byte-stable when re-serialized.
 - Image codecs. `pdfcraft-filters` carries the non-image filters and CCITT fax and JBIG2 decoding
   (`Document::decoded_image`, a JBIG2 image's `/JBIG2Globals` within `MAX_JBIG2_GLOBALS`, 32 MiB,
   their filters undone once a document for the images that share them, up to 64 MiB kept, while
-  their segments are decoded for every image);
+  their segments are decoded for every image, and `ImageBudget` for an operation over many images,
+  which share one allowance of JBIG2 decoding and are refused past it);
   DCT and JPX are still decoded through the bootstrap renderer (`core.image-filters`, M2.6).

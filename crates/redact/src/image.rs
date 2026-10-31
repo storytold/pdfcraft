@@ -7,7 +7,7 @@
 //! caller removes the whole image instead; that is fail-closed.
 
 use pdfcraft_content::{Matrix, overlaps};
-use pdfcraft_cos::{Document, Object, Stream};
+use pdfcraft_cos::{Document, ImageBudget, Object, Stream};
 
 /// Most pixels an image may have to be cleared in place (larger ones are removed).
 const MAX_PIXELS: u64 = 64 << 20;
@@ -38,11 +38,11 @@ fn components(doc: &Document, s: &Stream) -> Option<usize> {
 /// `Ok(Some(copy))` with the covered pixels cleared, `Ok(None)` when no pixel intersects,
 /// `Err(())` when the image can't be cleared (the caller removes it).
 #[allow(clippy::result_unit_err)]
-pub(crate) fn clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]) -> Result<Option<Stream>, ()> {
-    decode_and_clear(doc, s, ctm, rects).ok_or(())
+pub(crate) fn clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], budget: &mut ImageBudget) -> Result<Option<Stream>, ()> {
+    decode_and_clear(doc, s, ctm, rects, budget).ok_or(())
 }
 
-fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]) -> Option<Option<Stream>> {
+fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], budget: &mut ImageBudget) -> Option<Option<Stream>> {
     // Separate masks can retain the original image data.
     if s.dict.contains(b"SMask") || s.dict.contains(b"Mask") {
         return None;
@@ -111,7 +111,7 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     // alone would skip such a predictor, and the cleared bytes would then miss the covered pixels),
     // and refuses a JBIG2 page of another size than the image: the renderer draws the whole page
     // into the image, so the rows cleared wouldn't be the ones a mark covers on screen.
-    let mut data = doc.decoded_image_within(s, allowance).ok()?;
+    let mut data = budget.decode(doc, s, allowance).ok()?;
     if data.len() < bytes {
         return None;
     }

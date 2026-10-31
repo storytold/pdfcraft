@@ -8200,6 +8200,13 @@ fn copy_image_reads_the_globals_of_a_jbig2_picture() {
     let (w, h, rgba) = d.page_image_rgba(0, 0).unwrap();
     assert_eq!((w, h), (16, 2));
     assert!(rgba.chunks(4).all(|p| p == [0, 0, 0, 255]), "the page's default pixel, from the globals");
+    // An Office export shares one allowance across its pictures. One past it is left out, and the
+    // export says the page is missing something, as for a picture past its bytes.
+    let (pages, truncated) = d.export_pages_within(true, 1 << 20, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
+    assert_eq!((pages[0].images.len(), truncated.len()), (1, 0));
+    let (pages, truncated) = d.export_pages_within(true, 1 << 20, &mut pdfcraft_cos::ImageBudget::with_work(0));
+    assert!(pages[0].images.is_empty());
+    assert_eq!(truncated, [0]);
 }
 
 /// Copy Image takes a JBIG2 picture as its pixels and as a PNG file, behind another filter

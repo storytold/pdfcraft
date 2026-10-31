@@ -120,6 +120,10 @@ pub struct InterpreterSettings {
     /// costs a decode and a resample each for pixels nobody can see. Never set it for a final
     /// render (tiles, whole pages, print, export).
     pub preview: bool,
+    /// PdfCraft patch (73): the steps of JBIG2 decoding a page's images may take between them
+    /// ([`hayro_syntax::MAX_PAGE_JBIG2_WORK`] by default). Images past it aren't drawn, each with
+    /// [`InterpreterWarning::ImageDecodeFailure`].
+    pub jbig2_work: u64,
 }
 
 impl Default for InterpreterSettings {
@@ -142,6 +146,7 @@ impl Default for InterpreterSettings {
             ocg_overrides: Arc::new(Vec::new()),
             cancelled: None,
             preview: false,
+            jbig2_work: hayro_syntax::MAX_PAGE_JBIG2_WORK,
         }
     }
 }

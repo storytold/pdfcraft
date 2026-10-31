@@ -6,7 +6,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream, serialize}
 
 mod extract;
 mod upright_image;
-pub use extract::{ExtractedImage, ImageExport, extract_images, image_file};
+pub use extract::{ExtractedImage, ImageExport, extract_images, image_file, image_file_within};
 use pdfcraft_fonts::{literal, win_ansi, wrap};
 
 #[derive(Debug, thiserror::Error, PartialEq)]

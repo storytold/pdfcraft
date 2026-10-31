@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use pdfcraft_content::{Matrix, Op, Pieces, contains, num, overlaps, serialize_ops, string};
-use pdfcraft_cos::{CosError, DecodeBudget, Dict, Document, MAX_PAGE_FORMS, ObjRef, Object, Stream};
+use pdfcraft_cos::{CosError, DecodeBudget, Dict, Document, ImageBudget, MAX_PAGE_FORMS, ObjRef, Object, Stream};
 
 use crate::{RedactError, Report, image, page_streams, tags};
 use pdfcraft_fonts::pdf::Metrics;
@@ -105,6 +105,8 @@ pub(crate) struct Scope<'a> {
     pub rects: &'a [[f64; 4]],
     pub mode: Mode,
     pub report: &'a mut Report,
+    /// What the images it clears may spend, shared by all the pages of a run.
+    pub images: &'a mut ImageBudget,
     /// Sanitize: remove hidden text (invisible render modes, or wholly outside this page box).
     pub hidden_text: Option<[f64; 4]>,
     /// Sanitize: optional content groups that are off; content marked with them is removed.
@@ -134,11 +136,12 @@ pub(crate) struct Scope<'a> {
 impl<'a> Scope<'a> {
     /// A scope whose form walk spends `budget`, what is left of the page's allowance after its
     /// content streams were decoded.
-    pub fn new(rects: &'a [[f64; 4]], mode: Mode, report: &'a mut Report, budget: DecodeBudget) -> Self {
+    pub fn new(rects: &'a [[f64; 4]], mode: Mode, report: &'a mut Report, budget: DecodeBudget, images: &'a mut ImageBudget) -> Self {
         Scope {
             rects,
             mode,
             report,
+            images,
             hidden_text: None,
             hidden_layers: HashSet::new(),
             layers_enabled: false,
@@ -750,7 +753,7 @@ fn xobject(
                 out.doomed.push(r);
                 return Some(None);
             }
-            match image::clear(doc, s, &gs.ctm, scope.rects) {
+            match image::clear(doc, s, &gs.ctm, scope.rects, &mut *scope.images) {
                 Ok(None) => None,
                 Ok(Some(new)) => {
                     let nr = doc.add(Object::Stream(new));
