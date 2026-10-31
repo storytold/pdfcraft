@@ -565,6 +565,30 @@ pub fn date_alternatives_template() -> String {
     .to_string()
 }
 
+/// Two signature boxes: `sign`, whose preSign script shows a notice, fills `when` and locks it, and
+/// whose postSign script fills `after`; and `plain`, with no signing scripts.
+pub fn signing_events_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb" w="7.5in">
+  <field name="when" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="after" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="sign" w="3in" h="1in"><ui><signature/></ui>
+   <event activity="preSign"><script contentType="application/x-javascript">xfa.host.messageBox("Signing notice"); when.rawValue = "signed"; when.access = "readOnly";</script></event>
+   <event activity="postSign"><script contentType="application/x-javascript">after.rawValue = "done";</script></event>
+  </field>
+  <field name="plain" w="3in" h="1in"><ui><signature/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
 /// A form of `sections` sections of `rows` rows, each row with a calculated total (half in
 /// JavaScript, half in FormCalc) and a section sum over its rows: 2 × sections × rows + sections
 /// calculate scripts, every one reading values the earlier ones settled.

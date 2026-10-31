@@ -454,6 +454,9 @@ pub struct PdfCraftApp {
     pub summary_sort: pdfcraft_engine::SummarySort,
     /// The signing dialogs' state.
     pub sign_draft: Option<SignDraft>,
+    /// A dynamic form's preSign step, run when signing a field began: the document and its undo
+    /// depth after the step. Taken back if signing ends without a signature.
+    pub(crate) presign: Option<(DocId, usize)>,
     /// Digital ID files the user has created or added.
     pub digital_ids: Vec<DigitalIdEntry>,
     /// Signatures panel: expanded entries (field names).

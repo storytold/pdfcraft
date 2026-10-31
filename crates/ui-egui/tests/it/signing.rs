@@ -364,6 +364,7 @@ const WITH_FIELD: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
+/// Clicking an empty signature field opens Sign for that field, and signing fills it.
 #[test]
 fn clicking_an_empty_signature_field_signs_it() {
     let dir = dir().join("field");
@@ -448,6 +449,92 @@ fn a_signature_badge_says_its_verdict_with_any_tool() {
     assert_eq!(hover(&mut h, stamp, p + egui::vec2(1.0, 0.0)), (egui::CursorIcon::Crosshair, true), "so does a stamp, beside its crosshair");
 }
 
+/// Signing a dynamic form's signature box in the app runs its XFA preSign script as signing begins,
+/// so its notice and the value it sets show before the signer confirms, and that value is in the
+/// signed file; its postSign script runs once signed, its change left to save.
+#[test]
+fn signing_an_xfa_box_runs_its_signing_scripts_in_the_app() {
+    let dir = dir().join("xfa-events");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = harness(dir.clone());
+    let bytes = pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::signing_events_template());
+    h.state_mut().open_bytes("events.pdf", None, bytes).unwrap();
+    h.state_mut().active = Some(1);
+    crate::support::settle(&mut h);
+    let named = |h: &Harness<'static, PdfCraftApp>, n: &str| {
+        let s = h.state();
+        s.session.get(s.views[1].id).unwrap().form.iter().find(|f| f.name == n || f.name.ends_with(&format!(".{n}[0]"))).cloned().unwrap()
+    };
+    let p = {
+        let s = h.state();
+        let doc = s.session.get(s.views[1].id).unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[1], &doc.info, &named(&h, "sign"), 0).expect("on screen").center()
+    };
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Sign));
+    assert!(h.query_by_label_contains("Signing notice").is_some(), "the preSign script's notice shows before signing");
+    assert_eq!(named(&h, "when").value, ["signed"], "and what it set, under the dialog");
+    let entry = {
+        let id = pdfcraft_engine::sign::pkcs12::open(
+            &std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap(),
+            "test",
+        )
+        .unwrap();
+        h.state_mut().add_digital_id(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12"), &id.certificate)
+    };
+    {
+        let d = h.state_mut().sign_draft.as_mut().unwrap();
+        d.selected = Some(entry);
+        d.step = SignStep::SignAs;
+        d.password = "test".into();
+    }
+    h.run_steps(2);
+    support::outside_menus(&h, "Sign").click();
+    h.run_steps(6);
+    // The signed file holds the preSign script's value; the postSign one waits to be saved.
+    let signed = std::fs::read(dir.join("contract_signed.pdf")).unwrap();
+    let mut s = pdfcraft_engine::Session::new();
+    let id = s.open("signed.pdf", None, std::sync::Arc::new(signed), None).unwrap();
+    let value =
+        |n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n || f.name.ends_with(&format!(".{n}[0]"))).map(|f| f.value.clone()).unwrap();
+    assert_eq!(value("when"), ["signed"]);
+    assert!(value("after").is_empty());
+    assert_eq!(named(&h, "after").value, ["done"]);
+    let st = h.state();
+    assert!(st.session.get(st.views[1].id).unwrap().dirty, "the postSign change is not saved yet");
+}
+
+/// Signing a dynamic form's box and then cancelling takes back what its preSign script changed.
+#[test]
+fn cancelling_signing_takes_back_the_presign_scripts_changes() {
+    let dir = dir().join("xfa-events-cancel");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = harness(dir.clone());
+    let bytes = pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::signing_events_template());
+    h.state_mut().open_bytes("events.pdf", None, bytes).unwrap();
+    h.state_mut().active = Some(1);
+    crate::support::settle(&mut h);
+    let named = |h: &Harness<'static, PdfCraftApp>, n: &str| {
+        let s = h.state();
+        s.session.get(s.views[1].id).unwrap().form.iter().find(|f| f.name == n || f.name.ends_with(&format!(".{n}[0]"))).cloned().unwrap()
+    };
+    let sign = named(&h, "sign").name;
+    h.state_mut().start_signing(0, None, Some(sign), None);
+    h.run_steps(2);
+    assert_eq!(named(&h, "when").value, ["signed"]);
+    h.state_mut().dialog = None;
+    h.state_mut().sign_draft = None;
+    h.run_steps(3);
+    assert!(named(&h, "when").value.is_empty(), "taken back");
+    assert!(!named(&h, "when").read_only(), "and unlocked again");
+}
+
+/// A digital signature can show the Fill & Sign signature or an image where the name would be.
 #[test]
 fn the_fill_and_sign_signature_or_an_image_shows_in_a_digital_signature() {
     use pdfcraft_ui_egui::SignGraphic;

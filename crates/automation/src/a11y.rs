@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use crate::{Args, Automation, Result, ToolError, child, failed, unused, write_atomic};
 
 mod documents;
-mod form_tools;
+pub(crate) mod form_tools;
 mod ocr;
 
 fn status_id(s: Status) -> &'static str {

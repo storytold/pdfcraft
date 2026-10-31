@@ -356,6 +356,7 @@ pub struct UnlockPrompt {
 }
 
 impl UnlockPrompt {
+    /// Ask for document `doc`'s permissions password, then run command `then`, if any.
     pub(crate) fn new(doc: &pdfcraft_engine::Document, then: Option<&'static str>) -> Self {
         Self { doc: doc.id, name: doc.name.clone(), input: String::new(), error: None, then }
     }

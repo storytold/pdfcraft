@@ -6141,6 +6141,7 @@ fn object_has_name(obj: &pdfcraft_cos::Object, name: &[u8]) -> bool {
     }
 }
 
+/// Polygons, polylines and other drawing comments are added and listed through the tools.
 #[test]
 fn drawing_comments_through_tools() {
     let dir = workdir("drawing");
@@ -6185,6 +6186,8 @@ fn drawing_comments_through_tools() {
     assert!(matches!(png[0], Content::Png { .. }));
 }
 
+/// A visible signature drawn from an image, typed text or strokes through sign_document; bad
+/// graphics are refused before anything is written.
 #[test]
 fn signing_with_an_image_typed_or_drawn_graphic_through_tools() {
     let dir = workdir("signing-graphic");
@@ -6254,6 +6257,111 @@ fn signing_with_an_image_typed_or_drawn_graphic_through_tools() {
     assert!(inked(60, 110), "the strokes are drawn");
 }
 
+/// Signing a dynamic form's signature box through sign_document runs its XFA signing scripts only
+/// when asked (run_form_scripts): preSign first, so what it changes is signed, listed field by field,
+/// and postSign after, left as unsaved changes; the result carries their messages. Not asked, they
+/// don't run and the result says the box has them; a box without them reports nothing.
+#[test]
+fn signing_an_xfa_box_runs_its_signing_scripts_through_tools() {
+    let dir = workdir("xfa-sign-events");
+    std::fs::write(dir.join("form.pdf"), pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::signing_events_template())).unwrap();
+    let mut a = auto(&dir);
+    ok(&mut a, "sign_id_create", json!({ "name": "Ada Lovelace", "key": "p256", "password": "secret12", "path": "ada.p12" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let name = |n: &str| {
+        fields["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|f| f["name"].as_str())
+            .find(|f| *f == n || f.ends_with(&format!(".{n}[0]")))
+            .unwrap()
+            .to_string()
+    };
+    // Not asked: the scripts don't run, and the result says the box has them.
+    let r = ok(&mut a, "sign_document", json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "field": name("sign"), "out": "unasked.pdf" }));
+    assert_eq!(r["form_scripts"]["skipped"], json!(true), "{r}");
+    let unasked = ok(&mut a, "doc_open", json!({ "path": "unasked.pdf" }))["doc"].as_u64().unwrap();
+    let unasked = ok(&mut a, "form_fields", json!({ "doc": unasked }));
+    assert!(
+        unasked["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["name"].as_str().is_some_and(|n| n == "when" || n.ends_with(".when[0]")) && f["value"].is_null()),
+        "{unasked}"
+    );
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    // A bad argument is refused before the preSign scripts run.
+    let bad = a.call(
+        "sign_document",
+        &json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "field": name("sign"), "out": "bad.pdf", "run_form_scripts": true, "reason": 5 }),
+    );
+    assert!(matches!(bad, Err(ToolError::InvalidArgs(_))), "{bad:?}");
+    let now = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert!(
+        now["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["name"].as_str().is_some_and(|n| n == "when" || n.ends_with(".when[0]")) && f["value"].is_null()),
+        "{now}"
+    );
+    // A signed file that can't be written (`out` is a folder): not signed, and what preSign did
+    // is taken back.
+    std::fs::create_dir_all(dir.join("taken")).unwrap();
+    let failed = a.call(
+        "sign_document",
+        &json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "field": name("sign"), "out": "taken", "run_form_scripts": true }),
+    );
+    assert!(failed.is_err(), "{failed:?}");
+    let now = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert!(
+        now["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["name"].as_str().is_some_and(|n| n == "when" || n.ends_with(".when[0]")) && f["value"].is_null()),
+        "{now}"
+    );
+    let r = ok(
+        &mut a,
+        "sign_document",
+        json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "field": name("sign"), "out": "signed.pdf", "run_form_scripts": true }),
+    );
+    let scripts = &r["form_scripts"];
+    let changed = scripts["changed"].as_array().unwrap();
+    assert_eq!(changed.len(), 1, "only what preSign changed: {r}");
+    assert_eq!((&changed[0]["after"], &changed[0]["read_only"]), (&json!(["signed"]), &json!(true)), "{r}");
+    assert_eq!((scripts["before_signing"].as_bool(), scripts["after_signing"].as_bool()), (Some(true), Some(true)), "{r}");
+    assert_eq!(scripts["alerts"], json!([{ "message": "Signing notice", "title": null, "icon": "error", "buttons": "ok" }]), "{r}");
+    assert_eq!(scripts["unsaved_changes"], json!(true), "the postSign change isn't in the signed file: {r}");
+    // The signed file holds what the preSign script did, not what the postSign one did.
+    let signed = ok(&mut a, "doc_open", json!({ "path": "signed.pdf" }))["doc"].as_u64().unwrap();
+    let values = ok(&mut a, "form_fields", json!({ "doc": signed }));
+    let value = |n: &str| {
+        values["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"].as_str().is_some_and(|f| f == n || f.ends_with(&format!(".{n}[0]"))))
+            .map(|f| f["value"].clone())
+    };
+    assert_eq!(value("when"), Some(json!("signed")), "{values}");
+    assert_eq!(value("after"), Some(json!(null)), "{values}");
+    let list = ok(&mut a, "sign_list", json!({ "doc": signed }));
+    assert!(list["signatures"].as_array().unwrap().iter().any(|s| s["signed"] == true && s["status"] == "unknown"), "intact: {list}");
+    // A box without signing scripts: nothing reported.
+    let r = ok(
+        &mut a,
+        "sign_document",
+        json!({ "doc": signed, "id": "ada.p12", "password": "secret12", "field": name("plain"), "out": "both.pdf", "run_form_scripts": true }),
+    );
+    assert!(r.get("form_scripts").is_none(), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Signing a laid-out XFA form's signature box through the tools signs the field named by its
 /// SOM path, which is how another viewer, laying the form out again, finds the signature; the
 /// signed file reopens with the signature intact and on that field.
@@ -6276,6 +6384,8 @@ fn a_dynamic_xfa_forms_signature_box_is_signed_under_its_som_path() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Digital IDs are created and opened, documents signed with them and their signatures validated,
+/// all through the tools.
 #[test]
 fn digital_ids_signing_and_validation_through_tools() {
     let dir = workdir("signing");

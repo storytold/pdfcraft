@@ -5860,6 +5860,8 @@ fn round_xfa_check_buttons_open_drawn_round() {
     }
 }
 
+/// A dynamic XFA form with usage rights is saved without them once laid out, as the layout voids
+/// them, with a note saying so.
 #[test]
 fn a_dynamic_xfa_form_is_saved_without_the_usage_rights_its_layout_voided() {
     let xdp = pdfcraft_xfa::fixtures::template(3);
@@ -5886,6 +5888,8 @@ fn a_dynamic_xfa_form_is_saved_without_the_usage_rights_its_layout_voided() {
     }
 }
 
+/// A dynamic XFA form is laid out from its template on opening, takes values and saves them as an
+/// incremental revision.
 #[test]
 fn dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally() {
     let original = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(3)));
@@ -5925,6 +5929,40 @@ fn dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally() {
     assert_eq!(d2.form.iter().find(|f| f.name == "answer").unwrap().value, vec!["N".to_string()]);
 }
 
+/// A signature box's XFA preSign script runs as one undoable step, showing its notice and
+/// changing the form; its postSign script runs too; a box without them runs nothing and changes
+/// nothing.
+#[test]
+fn xfa_signing_scripts_run_before_and_after_signing() {
+    use crate::js::SignEvent;
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::signing_events_template()));
+    let mut s = Session::new();
+    let id = s.open("signing.pdf", None, bytes, None).expect("opens");
+    let field =
+        |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n || f.name.ends_with(&format!(".{n}[0]"))).cloned().unwrap();
+    let sign = field(&s, "sign").name;
+    let plain = field(&s, "plain").name;
+    assert!(s.run_sign_event(id, &sign, SignEvent::Before).unwrap(), "it has a preSign script");
+    assert_eq!(field(&s, "when").value, ["signed"]);
+    assert!(field(&s, "when").read_only(), "and it locks the field");
+    assert_eq!(s.take_js_output(id).alerts, [crate::js::Message::plain("Signing notice")]);
+    assert!(s.run_sign_event(id, &sign, SignEvent::After).unwrap());
+    assert_eq!(field(&s, "after").value, ["done"]);
+    // Each one is an undo step of its own.
+    s.undo(id).unwrap();
+    assert!(field(&s, "after").value.is_empty());
+    assert_eq!(field(&s, "when").value, ["signed"]);
+    // No signing scripts: nothing runs, nothing to undo.
+    let label = s.get(id).unwrap().undo_label().cloned();
+    assert!(!s.run_sign_event(id, &plain, SignEvent::Before).unwrap());
+    assert!(!s.run_sign_event(id, "no such field", SignEvent::Before).unwrap());
+    assert_eq!(s.get(id).unwrap().undo_label().cloned(), label);
+    // Nor with JavaScript off.
+    s.set_javascript(false);
+    assert!(!s.run_sign_event(id, &sign, SignEvent::Before).unwrap());
+}
+
+/// A signature box the file already holds a signature for is drawn with that signature's picture.
 #[test]
 fn a_signed_xfa_signature_box_shows_the_picture_the_file_holds() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
