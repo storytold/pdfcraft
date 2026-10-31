@@ -64,6 +64,12 @@ mod widgets;
 use pdfcraft_engine::{DocId, Session};
 
 pub use canvas::{DocView, RasterMemory};
+
+/// Smallest window the shell is laid out for, in egui points (logical pixels, so the OS scale
+/// factor is already applied: 480 points are 600 px at 125 % and 720 px at 150 %). 480 is half of a
+/// 1440-wide screen at 150 % scaling, the tightest common half-screen split on Windows; the mode
+/// bar, tab strip and notice bars adapt below the old 820 minimum (#1913).
+pub const MIN_WINDOW_SIZE: [f32; 2] = [480.0, 520.0];
 pub use editing::{CloseRequest, SaveTarget};
 pub use files::{ExtractDraft, FilePurpose, FileRequest, RotateDraft, SplitDraft, SplitMode, SplitPlan};
 pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore};

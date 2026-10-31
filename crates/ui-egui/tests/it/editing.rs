@@ -5232,7 +5232,9 @@ fn a_quick_flick_on_either_edge_rewraps_the_paragraph() {
     assert_eq!(text, ["Page", "1"], "narrowed from the right edge");
     // Flick the right edge outward, past the box and its handle: back onto one line.
     let b = block(&h);
-    let edge = screen(b.rect[2], grip_y(&b)) + egui::vec2(2.0, 0.0);
+    // 1 px outside the box: the grab zone's outer limit sits near 2 px, where a pixel of page
+    // scale (the canvas width depends on the rail) decides whether the press lands on the handle.
+    let edge = screen(b.rect[2], grip_y(&b)) + egui::vec2(1.0, 0.0);
     flick(&mut h, edge, edge + egui::vec2(80.0 * k, 0.0));
     let text: Vec<String> = lines(&h).iter().map(|l| l.text.clone()).collect();
     assert_eq!(text, ["Page 1"], "widened by a fast drag that left the handle at once");
