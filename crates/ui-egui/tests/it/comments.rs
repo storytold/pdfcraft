@@ -3093,7 +3093,7 @@ trailer << /Root 1 0 R >>
 
 /// A double-click on a sticky note opens its pop-up window on the page, where its text is read
 /// and edited; the title bar drags it (saved as the pop-up's place, one undo step); × closes it
-/// (comment.popups, comment.connector-lines).
+/// (comment.popups).
 #[test]
 fn a_double_click_opens_a_notes_pop_up_which_drags_and_closes() {
     // Frames a sixtieth apart, so two clicks land within egui's double-click time.
@@ -3187,4 +3187,69 @@ fn a_pop_up_lists_its_replies_by_reference_when_names_repeat() {
         assert_eq!(shown.len(), 1, "{text:?} shows in one window: {shown:?}");
         assert!(shown.iter().all(|c| second.contains(*c)), "{text:?} is in the second note's window");
     }
+}
+
+// Contributor-original PDF: one blue note with its pop-up open beside it.
+const BLUE_NOTE_WITH_OPEN_POP_UP: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Text /Rect [20 160 40 180] /C [0 0 1] /T (Alpha) /Contents (A note) /Popup 5 0 R /Open true >> endobj
+5 0 obj << /Type /Annot /Subtype /Popup /Rect [120 20 260 120] /Parent 4 0 R /Open true >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// The line segments of colour `color` the last frame painted.
+fn line_segments(h: &Harness<'static, PdfCraftApp>, color: egui::Color32) -> Vec<[Pos2; 2]> {
+    fn walk(shape: &egui::Shape, color: egui::Color32, out: &mut Vec<[Pos2; 2]>) {
+        match shape {
+            egui::Shape::LineSegment { points, stroke } if stroke.color == color => out.push(*points),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, color, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &h.output().shapes {
+        walk(&clipped.shape, color, &mut out);
+    }
+    out
+}
+
+/// A comment's connector line (comment.connector-lines): in the comment's colour, from the
+/// edge of the comment nearest its open pop-up to the edge of the window nearest that point,
+/// shown while the pointer is on the comment or on the window or the comment is selected, and
+/// not otherwise.
+#[test]
+fn a_connector_line_joins_a_comment_to_its_open_pop_up_while_the_pointer_is_on_either() {
+    let mut h = harness_with_bytes(BLUE_NOTE_WITH_OPEN_POP_UP.to_vec(), |_| {});
+    let blue = egui::Color32::from_rgb(0, 0, 255);
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the pop-up is open");
+    let mark = egui::Rect::from_two_pos(at(&h, 20.0, 180.0), at(&h, 40.0, 160.0));
+    let on_edge = |r: egui::Rect, p: Pos2| {
+        r.expand(1.0).contains(p) && [p.x - r.left(), r.right() - p.x, p.y - r.top(), r.bottom() - p.y].iter().any(|d| d.abs() < 1.0)
+    };
+
+    // Away from both: no line.
+    h.hover_at(at(&h, 280.0, 190.0));
+    h.run_steps(2);
+    assert!(line_segments(&h, blue).is_empty(), "no line with the pointer elsewhere");
+
+    // On the note or on its window: one line, from the note's edge to the window's.
+    for (what, pointer) in [("the note", mark.center()), ("the window", window.center())] {
+        h.hover_at(pointer);
+        h.run_steps(2);
+        let lines = line_segments(&h, blue);
+        assert_eq!(lines.len(), 1, "one line with the pointer on {what}: {lines:?}");
+        let [from, to] = lines[0];
+        assert!(on_edge(mark, from), "starts on the note's edge {mark:?}: {from:?}");
+        assert!(on_edge(window, to), "ends on the window's edge {window:?}: {to:?}");
+        // The nearest points: the note's lower right corner, the window's upper left one.
+        assert!(from.distance(mark.right_bottom()) < 1.0 && to.distance(window.left_top()) < 1.0, "{from:?} -> {to:?}");
+    }
+
+    // Selected, the note keeps its line with the pointer elsewhere.
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.hover_at(at(&h, 280.0, 190.0));
+    h.run_steps(2);
+    assert_eq!(line_segments(&h, blue).len(), 1, "a selected comment shows its line");
 }
