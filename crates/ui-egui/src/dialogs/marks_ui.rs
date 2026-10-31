@@ -257,10 +257,12 @@ const DATE_FORMATS: [&str; 11] = [
 const BOX_NAMES: [&str; 6] =
     ["Left Header Text", "Center Header Text", "Right Header Text", "Left Footer Text", "Center Footer Text", "Right Footer Text"];
 
+/// The mark's colour is sRGB (written to the PDF as DeviceRGB), so it is edited as sRGB, not as
+/// linear light.
 fn color_button(ui: &mut egui::Ui, c: &mut [f64; 3]) {
-    let mut f = c.map(|v| v as f32);
-    if egui::color_picker::color_edit_button_rgb(ui, &mut f).changed() {
-        *c = f.map(f64::from);
+    let mut srgb = rgb32(*c);
+    if egui::color_picker::color_edit_button_srgba(ui, &mut srgb, egui::color_picker::Alpha::Opaque).changed() {
+        *c = [srgb.r(), srgb.g(), srgb.b()].map(|v| f64::from(v) / 255.0);
     }
 }
 
@@ -884,6 +886,30 @@ pub fn edit(d: &MarksDraft, kind: MarkKind, count: usize) -> Edit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #5213: a mark's colour is sRGB (written as DeviceRGB), so the button shows it as is and
+    /// an untouched button leaves it alone.
+    #[test]
+    fn colour_button_shows_the_colour_it_applies() {
+        let ctx = egui::Context::default();
+        let mut c = [0.5, 0.5, 0.5];
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| color_button(ui, &mut c));
+        out.textures_delta.clear();
+        fn fills(s: &egui::Shape, out: &mut Vec<Color32>) {
+            match s {
+                egui::Shape::Rect(r) => out.push(r.fill),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| fills(s, out)),
+                _ => {}
+            }
+        }
+        let mut painted = Vec::new();
+        out.shapes.iter().for_each(|s| fills(&s.shape, &mut painted));
+        let fills = painted;
+        let grey = Color32::from_rgb(188, 188, 188);
+        assert!(!fills.contains(&grey), "swatch painted as if the colour were linear: {fills:?}");
+        assert!(fills.contains(&rgb32(c)), "swatch {:?} not among {fills:?}", rgb32(c));
+        assert_eq!(c, [0.5, 0.5, 0.5]);
+    }
 
     #[test]
     fn text_applying_would_refuse_is_caught_in_the_dialog() {
