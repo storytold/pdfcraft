@@ -220,13 +220,13 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
     let SignatureValidation { doc, bytes, trust, info, cache } = context;
     let VerifiedSignature { covered, certificate: cert, embedded, cms_time, unverified_time } = verified;
     info.signing_time = cms_time.or_else(|| info.date.as_deref().and_then(Time::from_pdf));
-    let mut pool = embedded.to_vec();
-    pool.extend(trust.certs.iter().cloned());
     // The time the chain is judged at: trusted timestamp, else the signer's claimed time.
     let at = info.timestamp_time.or(info.signing_time);
-    let (chain, refused) = build_chain_noted(&cert, &pool, at);
+    let (chain, refused) = build_chain_noted(&cert, embedded.iter().chain(trust.anchors()), at);
     let chain: Vec<Certificate> = chain.into_iter().cloned().collect();
-    let trusted = chain.iter().any(|c| trust.trusts(c));
+    // The first trusted certificate going up the chain, and what makes it trusted.
+    let anchor = chain.iter().find_map(|c| trust.source_of(c).map(|s| (c.display_name(), s)));
+    let trusted = anchor.is_some();
     info.chain = chain;
     info.certificate = Some(cert.clone());
     if let Some(why) = refused
@@ -307,6 +307,10 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
         }
     } else {
         info.details.push(Detail::plain("The signer's identity is valid."));
+        // Which list vouched, when one did: the user's own list is the plain case and says nothing.
+        if let Some((root, TrustSource::List(list))) = anchor {
+            info.details.push(Detail::of("Its certificate chains to {} in the trust list “{}”.", Fill::Names(root, list)));
+        }
         if !problems && !revoked {
             info.status = Status::Valid;
         }

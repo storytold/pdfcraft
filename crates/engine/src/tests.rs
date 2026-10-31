@@ -4429,6 +4429,31 @@ fn reading_colors_set_and_invalidated() {
 }
 
 #[test]
+fn several_trust_changes_revalidate_the_open_documents_once() {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let cert = sign::pkcs12::open(&p12, "test").unwrap().certificate;
+    let mut s = Session::default();
+    // Each setter changes one thing and revalidates.
+    s.set_trusted_certificates(vec![cert.clone()]);
+    s.set_trusted_certificates(Vec::new());
+    assert_eq!(s.revalidations, 2);
+    // One `update_trust` changes any number of things and revalidates once.
+    let list = sign::trust::TrustList::from_bytes("Test list", &cert.raw).unwrap();
+    s.update_trust(|trust| {
+        trust.certs = vec![cert.clone()];
+        trust.add_list(list.clone());
+    });
+    assert_eq!(s.revalidations, 3);
+    assert_eq!((s.trusted_certificates().len(), s.trust_lists().len()), (1, 1));
+    // A list loaded again under its name replaces itself; removing it by that name takes it back.
+    s.add_trust_list(list);
+    assert_eq!(s.trust_lists().len(), 1);
+    s.remove_trust_list("Test list");
+    assert!(s.trust_lists().is_empty());
+    assert_eq!(s.revalidations, 5);
+}
+
+#[test]
 fn signing_saving_trusting_and_commenting_afterwards() {
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
     let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
