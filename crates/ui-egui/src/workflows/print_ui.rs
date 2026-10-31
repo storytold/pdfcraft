@@ -145,6 +145,8 @@ impl PdfCraftApp {
         };
         let default = default_printer(&printers);
         let current = self.views[i].current;
+        let current_view = self.views[i].visible_print_crop(current).map(|crop| (current, crop));
+        let current_view_captured = current_view.is_some();
         let selected: Vec<usize> = self.views[i].selected.iter().copied().collect();
         let keep = std::mem::take(&mut self.print_draft);
         // The printer picked last time, Save as PDF included, while it is still listed (#3537).
@@ -166,6 +168,8 @@ impl PdfCraftApp {
             units: self.units,
             printer,
             current_page: current,
+            current_view,
+            current_view_captured,
             sheet: 0,
             selected,
             which,
@@ -738,6 +742,15 @@ mod tests {
         }
         let typed = PrintDraft { which: Which::Range, range: "1".into(), ..PrintDraft::default() };
         assert_eq!(typed.settings(5, &labels).map(|s| s.pages), Ok(vec![3]));
+    }
+
+    #[test]
+    fn current_view_settings_keep_the_captured_display_rectangle() {
+        let crop = print::Crop { rect: [12.0, 24.0, 120.0, 180.0], text_up: false };
+        let draft = PrintDraft { which: Which::CurrentView, current_page: 2, current_view: Some((2, crop)), ..PrintDraft::default() };
+        let settings = draft.settings(3, &[]).expect("valid view");
+        assert_eq!(settings.pages, [2]);
+        assert_eq!(settings.layout, Layout::View { rect: crop.rect });
     }
 
     #[test]

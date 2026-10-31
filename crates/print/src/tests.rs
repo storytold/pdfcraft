@@ -80,6 +80,34 @@ fn page_selection() {
     assert_eq!(select_listed(5, &[], Subset::All, false), Err(PrintError::NoPages));
 }
 
+#[test]
+fn current_view_clips_display_coordinates_after_crop_and_rotation_without_changing_source() {
+    let mut doc = fixture(3);
+    let pages = pdfcraft_model::pages(&doc);
+    let page = pages.get(2).expect("third fixture page");
+    doc.update_dict(page.obj, |dict| {
+        dict.set(b"MediaBox".to_vec(), Object::Array([0, 0, 300, 400].into_iter().map(Object::Int).collect()));
+        dict.set(b"CropBox".to_vec(), Object::Array([20, 30, 180, 270].into_iter().map(Object::Int).collect()));
+        dict.set(b"Rotate".to_vec(), Object::Int(90));
+    })
+    .expect("fixture page dictionary");
+    let page_size = pdfcraft_model::pages(&doc).get(2).expect("third fixture page").display_size(&doc);
+    assert_eq!(page_size, (240.0, 160.0), "CropBox dimensions are displayed after /Rotate");
+    let before = write_full(&doc, &SaveOptions::default()).expect("source serialization");
+    let rect = [10.0, 20.0, 100.0, 120.0];
+    let settings = settings(vec![2], Layout::View { rect });
+    let sheets = layout(&[(200.0, 300.0), (200.0, 300.0), page_size], &settings).expect("valid viewport");
+    let placement = sheets.first().and_then(|s| s.placed.first()).expect("one placed page");
+    assert_eq!(placement.page, 2);
+    assert_eq!(placement.clip, [10.0, 20.0, 100.0, 120.0]);
+    assert_eq!(placement.matrix.0[0], placement.matrix.0[3]);
+    assert_ne!(placement.matrix.0[4], 0.0, "crop origin is translated onto the sheet");
+    let output = impose(&doc, &settings).expect("print-ready PDF");
+    let printed = Document::open(Arc::new(output)).expect("open print output");
+    assert_eq!(pdfcraft_model::pages(&printed).len(), 1);
+    assert_eq!(write_full(&doc, &SaveOptions::default()).expect("source serialization"), before, "printing leaves the source unchanged");
+}
+
 /// Every mistake a person can make about what to print says itself out of a wording on the list
 /// and the numbers apart from it, and says itself in English exactly as the error prints itself.
 #[test]

@@ -4660,6 +4660,14 @@ fn printing_through_tools() {
     assert_eq!(ok(&mut a, "doc_info", json!({ "doc": printed }))["document"]["pages"].as_u64(), Some(n.div_ceil(4)));
     let r = ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "1", "layout": "poster", "scale": 400, "path": "poster.pdf" }));
     assert!(r["sheets"].as_u64().unwrap() > 1);
+    let view = ok(&mut a, "doc_print", json!({ "doc": doc, "layout": "view", "view_page": 1, "view_rect": [20, 30, 100, 110], "path": "view.pdf" }));
+    assert_eq!(view["sheets"].as_u64(), Some(1));
+    let view_doc = ok(&mut a, "doc_open", json!({ "path": "view.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": view_doc }))["document"]["pages"].as_u64(), Some(1));
+    assert!(matches!(
+        a.call("doc_print", &json!({ "doc": doc, "layout": "view", "view_page": 1, "path": "invalid.pdf" })),
+        Err(ToolError::InvalidArgs(_))
+    ));
     assert!(matches!(a.call("doc_print", &json!({ "doc": doc })), Err(ToolError::InvalidArgs(_))));
     assert!(matches!(a.call("doc_print", &json!({ "doc": doc, "pages": "99", "path": "x.pdf" })), Err(ToolError::InvalidArgs(_))));
 }

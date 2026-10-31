@@ -1817,6 +1817,17 @@ fn a_null_xyz_coordinate_keeps_the_readers_place_on_the_new_page() {
 }
 
 #[test]
+fn print_view_crop_uses_visible_page_intersection_and_display_coordinates() {
+    let mut v = view(1, PageLayout::Single, true);
+    v.viewport_screen = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+    v.screen_xforms = vec![(0, PageXform { rect: Rect::from_min_size(pos2(-50.0, -25.0), vec2(200.0, 200.0)), rot: 0, pw: 200.0, ph: 200.0 })];
+    assert_eq!(v.visible_print_crop(0).map(|c| c.rect), Some([50.0, 25.0, 150.0, 125.0]));
+
+    v.screen_xforms = vec![(0, PageXform { rect: Rect::from_min_size(pos2(-50.0, -25.0), vec2(200.0, 100.0)), rot: 90, pw: 100.0, ph: 200.0 })];
+    assert_eq!(v.visible_print_crop(0).map(|c| c.rect), Some([25.0, 50.0, 100.0, 150.0]));
+}
+
+#[test]
 fn destinations_set_the_zoom_mode_and_the_point_to_show() {
     let info = pdfcraft_render::DocInfo {
         pages: (0..3)

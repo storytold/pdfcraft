@@ -161,6 +161,24 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
                 sheets.push(Sheet { size, placed: vec![place_in(p, d, [0.0, 0.0, size.0, size.1], s, false)], ..Sheet::default() });
             }
         }
+        Layout::View { rect: crop } => {
+            if pages.len() != 1 {
+                return Err(PrintError::Invalid("current view needs exactly one page".into()));
+            }
+            let p = pages[0];
+            let d = sizes[p];
+            if !crop.iter().all(|v| v.is_finite()) {
+                return Err(PrintError::Invalid("current view rectangle must contain finite coordinates".into()));
+            }
+            let rect = [crop[0].max(0.0), crop[1].max(0.0), crop[2].min(d.0), crop[3].min(d.1)];
+            let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
+            if w <= 1.0 || h <= 1.0 {
+                return Err(PrintError::Invalid("current view rectangle must overlap the page by more than one point".into()));
+            }
+            let size = oriented(paper, settings.orientation, w > h);
+            let scale = fit_scale((w, h), (size.0 - 2.0 * MARGIN, size.1 - 2.0 * MARGIN));
+            sheets.push(Sheet { size, placed: vec![place_crop(p, rect, [0.0, 0.0, size.0, size.1], scale, 0)], ..Sheet::default() });
+        }
         Layout::Label { flip } => {
             sheets.extend(layout_labels(sizes, &pages, paper, settings.orientation, settings, flip));
         }
