@@ -7,7 +7,7 @@ thread_local! {
     /// Indirect `/Length` values resolved during the current outermost load: a damaged file
     /// retries a parse several ways, and each retry would resolve the same lengths again
     /// (exponential in the chain of streams whose lengths point at further streams).
-    pub(super) static LENGTHS: std::cell::RefCell<HashMap<u32, Option<i64>>> = std::cell::RefCell::new(HashMap::new());
+    pub(super) static LENGTHS: std::cell::RefCell<HashMap<ObjRef, Option<i64>>> = std::cell::RefCell::new(HashMap::new());
 }
 
 /// Marks an object as being loaded on this thread. Loading can re-enter (indirect stream
@@ -133,7 +133,7 @@ impl ObjectReader {
     }
 
     pub(crate) fn try_get(&mut self, reference: ObjRef) -> Result<Arc<Object>, CosError> {
-        let object = self.document.try_get(reference.num);
+        let object = self.document.try_get_reference(reference);
         // A missed eviction here only costs a re-parse, so never fail the read on a poisoned
         // lock. The editing-cache evictors propagate instead; they guard user edits.
         if let Ok(mut streams) = self.document.objstms.lock() {

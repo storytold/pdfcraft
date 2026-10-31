@@ -32,10 +32,23 @@ pub mod export;
 pub mod field_table;
 mod fill_sign;
 mod history;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod hot_folder;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod hot_folder_analysis;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod hot_folder_output;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod hot_folder_preprocess;
+#[cfg(not(target_arch = "wasm32"))]
+mod hot_folder_schedule;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod hot_folder_sources;
 pub mod js;
 mod layers;
 pub mod links;
 pub mod ocr;
+mod ocr_pdf;
 mod open;
 pub mod optimizer;
 mod page_filter;

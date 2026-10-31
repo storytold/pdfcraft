@@ -21,6 +21,8 @@ jobs:
   lint:
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
     uses: storytold/craft-common-actions/.github/workflows/packaging-lint.yml@main
+    with:
+      extra-checks-script: packaging/lint-hot-folder.sh
 
   windows-install-policy:
     timeout-minutes: 10

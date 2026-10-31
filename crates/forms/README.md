@@ -114,6 +114,10 @@ execution and FDF/XFDF exchange are integrated through the engine; this crate pr
 field actions and native AF rules. `/MK /R` rotation (0, 90, 180, 270) is drawn into the
 appearance.
 
+Scanned checkbox captions may include a leading recognized square (for example `□Haupt`).
+Detection accepts that caption only when the word begins within the matching box, extends
+to its right and shares its line; ordinary overlapping text is still excluded.
+
 ## Button export values
 
 `FieldProps::export_value` edits a zero-based widget's `/Opt` value while preserving appearance names, `/AP`, `/AS`, `/V` and `/DV`. Widgets sharing an on-state remain consistent. Export-only changes do not regenerate appearances. Invalid indices, empty/Off values and ambiguous/conflicting mappings are rejected. `Field::export_values` resolves selected states for data export.
