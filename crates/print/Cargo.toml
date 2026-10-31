@@ -17,3 +17,5 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 pdfcraft-render = { workspace = true }
+# Reads the renamed programs back with a parser that isn't ours.
+skrifa = "0.44"
