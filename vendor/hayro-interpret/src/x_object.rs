@@ -524,6 +524,16 @@ impl<'a> ImageXObject<'a> {
             if let Some((space, key)) = default {
                 default_space = Some(key);
                 Some(space)
+            } else if cs_obj
+                .as_ref()
+                .is_some_and(|c| crate::color::is_malformed_indexed(c, cache))
+            {
+                // PdfCraft patch (60): an Indexed space that ISO 32000-2 §8.6.6.3 rules out
+                // (a short lookup table, an unusable `hival`) leaves no colour for some or all
+                // samples. The image is not drawn, and the caller is told, rather than falling
+                // back to DeviceGray and painting its indices as near-black.
+                warning_sink(InterpreterWarning::MalformedIndexedImage);
+                return None;
             } else {
                 cs_obj
                     .clone()

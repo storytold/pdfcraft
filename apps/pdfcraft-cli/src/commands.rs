@@ -407,6 +407,9 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
                 let _ =
                     writeln!(std::io::stderr().lock(), "warning: page {page}: a colour that could not be computed was painted in a fallback colour");
             }
+            pdfcraft_render::RenderWarning::MalformedIndexedImage => {
+                let _ = writeln!(std::io::stderr().lock(), "warning: page {page}: an image with a malformed Indexed colour table was not drawn");
+            }
         }
     }
     Ok(())
