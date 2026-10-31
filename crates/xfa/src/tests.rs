@@ -2783,8 +2783,12 @@ fn the_form_packet_restores_the_presence_and_access_the_form_was_saved_with() {
     assert_eq!(locked, [true, true, false, false]);
 }
 
+/// A subform without a height, flowed or positioned, is as tall as what it holds, whatever its
+/// `minH`: readers don't stretch it. Four public immigration forms end their first page with
+/// a positioned section at `minH="58.274mm"` holding about 80pt, then an office-use box; read
+/// as 165pt, the section pushed the box onto a page of its own.
 #[test]
-fn a_flowed_subform_is_as_tall_as_its_content_whatever_its_minimum_height() {
+fn a_subform_is_as_tall_as_its_content_whatever_its_minimum_height() {
     // A bar with a stale 3in `minH` holds one 0.2in line; the row after it follows directly.
     let body = |bar: &str| {
         format!(
@@ -2798,8 +2802,46 @@ fn a_flowed_subform_is_as_tall_as_its_content_whatever_its_minimum_height() {
     };
     let flowed = top(r#"layout="lr-tb""#);
     assert!((top(r#"layout="tb""#) - flowed).abs() < 0.01);
-    // A positioned subform keeps its minimum: nothing else says how tall it is.
-    assert!((top("") - flowed - (216.0 - 14.4)).abs() < 0.01, "{} against {flowed}", top(""));
+    assert!((top("") - flowed).abs() < 0.01, "positioned: {} against {flowed}", top(""));
+}
+
+/// The cases around a positioned subform's `minH`: a `minH` below the content, content taller
+/// than `minH`, a fixed `h`, and hidden children (which take no room). A table row, which no
+/// form we test gives a `minH` without an `h`, keeps its `minH` as XFA 3.3 p. 719 says.
+#[test]
+fn a_positioned_subform_takes_its_content_height_and_a_row_keeps_its_minimum() {
+    // The field after a positioned 7.5in-wide bar starts where the bar ends.
+    let after = |bar_attrs: &str, content: &str| {
+        let body = format!(
+            r#"<subform name="body" layout="lr-tb" w="7.5in"><subform name="bar" w="7.5in" {bar_attrs}>{content}</subform><field name="who" w="3in" h="0.4in"><ui><textEdit/></ui></field></subform>"#
+        );
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        widgets(&form.pages[0])[0].rect.y
+    };
+    let line = |h: &str| format!(r#"<draw w="7.5in" h="{h}"><value><text>Line</text></value></draw>"#);
+    let bare = after("", &line("0.2in"));
+    let inch = 72.0;
+    // A `minH` below the content, and content taller than the `minH`: the content's height.
+    assert!((after(r#"minH="0.1in""#, &line("0.2in")) - bare).abs() < 0.01);
+    assert!((after(r#"minH="0.1in""#, &line("1in")) - after("", &line("1in"))).abs() < 0.01);
+    assert!(after("", &line("1in")) - bare > 0.7 * inch, "taller content pushes the field down");
+    // A fixed `h` is the height, whatever the content.
+    assert!((after(r#"h="2in""#, &line("0.2in")) - after(r#"h="2in""#, &line("1in"))).abs() < 0.01);
+    assert!(after(r#"h="2in""#, &line("0.2in")) - bare > 1.7 * inch, "h=2in, not the 0.2in content");
+    // A hidden child takes no room.
+    let hidden = format!(r#"{}<draw w="7.5in" h="2in" presence="hidden"><value><text>Hidden</text></value></draw>"#, line("0.2in"));
+    assert!((after(r#"minH="3in""#, &hidden) - bare).abs() < 0.01, "{} against {bare}", after(r#"minH="3in""#, &hidden));
+
+    // A table row keeps its `minH`: one holding a 0.2in cell with `minH="3in"` is 3in tall.
+    let after_table = |row_min_h: &str| {
+        let body = format!(
+            r#"<subform name="body" layout="tb" w="7.5in"><subform name="grid" layout="table" columnWidths="2in"><subform name="row" layout="row" {row_min_h}><draw h="0.2in"><value><text>One</text></value></draw></subform></subform><field name="who" w="3in" h="0.4in"><ui><textEdit/></ui></field></subform>"#
+        );
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        widgets(&form.pages[0])[0].rect.y
+    };
+    let grown = after_table(r#"minH="3in""#) - after_table("");
+    assert!((grown - 2.8 * inch).abs() < 0.01, "the row grew by {grown}pt");
 }
 
 #[test]

@@ -105,10 +105,10 @@ impl Layouter<'_> {
                 content + c.margin.vertical()
             }
         };
-        // A flowed subform is as tall as what it holds: other viewers do not stretch one to
-        // the `minH` a designer left on it.
+        // A subform without a height is as tall as what it holds: other viewers do not stretch
+        // one, flowed or positioned, to the `minH` a designer left on it.
         let min_h = match node {
-            Node::Subform(s) if c.h.is_none() && s.layout != Layout::Positioned => None,
+            Node::Subform(_) if c.h.is_none() => None,
             _ => c.min_h,
         };
         (w, clamp_opt(h, min_h, c.max_h))
