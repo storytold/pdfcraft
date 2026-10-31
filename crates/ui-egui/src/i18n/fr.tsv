@@ -1936,6 +1936,7 @@
 	Rotate image	Pivoter l'image
 	Flip image	Retourner l'image
 	Delete image	Supprimer l'image
+	Ungroup artwork	Dissocier l’illustration
 	Add header & footer	Ajouter un en-tête et un pied de page
 	Update header & footer	Mettre à jour l'en-tête et le pied de page
 	Update watermark	Mettre à jour le filigrane
@@ -2511,6 +2512,7 @@ animation effects	Off	Désactivés
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	À utiliser quand une imprimante saute du texte, des dégradés ou de la transparence. L'impression n'est plus du texte consultable ; avec l'impression en niveaux de gris, les images sont grises.
 	Crop Image	Recadrer l'image
 	Remove Crop	Supprimer le recadrage
+	Ungroup	Dissocier
 	Trim the picture with its handles; Enter or Done applies	Recadrez l'image avec ses poignées ; Entrée ou Terminé applique
 	Redaction mark appearance	Apparence de la marque de biffure
 	Outline colour:	Couleur du contour :

@@ -2005,6 +2005,7 @@
 	Rotate image	旋轉圖片
 	Flip image	翻轉圖片
 	Delete image	刪除圖片
+	Ungroup artwork	取消群組圖稿
 	Add header & footer	新增頁首與頁尾
 	Update header & footer	更新頁首與頁尾
 	Update watermark	更新浮水印
@@ -2461,6 +2462,7 @@ animation effects	Off	關
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	當印表機漏印文字、漸層或透明效果時使用。列印結果不再是可搜尋的文字；搭配灰階列印時影像為灰色。
 	Crop Image	裁切影像
 	Remove Crop	移除裁切
+	Ungroup	取消群組
 	Trim the picture with its handles; Enter or Done applies	用控點裁切圖片;按 Enter 或「完成」套用
 	Redaction mark appearance	塗黑標記外觀
 	Outline colour:	輪廓色彩:

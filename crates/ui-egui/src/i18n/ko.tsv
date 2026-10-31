@@ -2814,3 +2814,6 @@ theme	Appearance	모양
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	이 답글의 옵션
+
+# AI-assisted addition for ungrouping Form artwork (#3067); not reviewed by a native speaker.
+	Ungroup	그룹 해제

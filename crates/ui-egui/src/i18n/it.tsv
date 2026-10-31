@@ -2011,6 +2011,7 @@
 	Rotate image	Ruota immagine
 	Flip image	Capovolgi immagine
 	Delete image	Elimina immagine
+	Ungroup artwork	Separa grafica
 	Add header & footer	Aggiungi intestazione e piè di pagina
 	Update header & footer	Aggiorna intestazione e piè di pagina
 	Update watermark	Aggiorna filigrana
@@ -2520,6 +2521,7 @@ animation effects	Off	Disattivati
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Usalo quando una stampante salta testo, sfumature o trasparenze. La stampa non è più testo ricercabile; con Stampa in scala di grigi le immagini sono grigie.
 	Crop Image	Ritaglia immagine
 	Remove Crop	Rimuovi ritaglio
+	Ungroup	Separa
 	Trim the picture with its handles; Enter or Done applies	Ritaglia l'immagine con le maniglie; Invio o Fatto applica
 	Redaction mark appearance	Aspetto del segno di redazione
 	Outline colour:	Colore contorno:

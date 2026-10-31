@@ -2006,6 +2006,7 @@
 	Rotate image	Повернуть изображение
 	Flip image	Отразить изображение
 	Delete image	Удалить изображение
+	Ungroup artwork	Разгруппировать графику
 	Add header & footer	Добавить колонтитулы
 	Update header & footer	Обновить колонтитулы
 	Update watermark	Обновить водяной знак
@@ -2424,6 +2425,7 @@ animation effects	Off	Выкл
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Используйте, когда принтер пропускает текст, заливки или прозрачность. Отпечаток больше не текст с поиском; при печати в оттенках серого изображения серые.
 	Crop Image	Обрезать изображение
 	Remove Crop	Убрать обрезку
+	Ungroup	Разгруппировать
 	Trim the picture with its handles; Enter or Done applies	Обрежьте изображение за маркеры; Enter или «Готово» применяет
 	Redaction mark appearance	Вид метки скрытия
 	Outline colour:	Цвет контура:

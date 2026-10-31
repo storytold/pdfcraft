@@ -556,6 +556,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 }
                 ImageEdit::Crop(keep) => pdfcraft_edit::ImageChange::Crop(*keep),
                 ImageEdit::Delete => pdfcraft_edit::ImageChange::Delete,
+                ImageEdit::Ungroup => pdfcraft_edit::ImageChange::Ungroup,
             };
             pdfcraft_edit::change_image(doc, *page, *index, &c)?;
         }

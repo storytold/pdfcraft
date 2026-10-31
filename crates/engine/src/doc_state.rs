@@ -20,6 +20,9 @@ pub enum ImageEdit {
         bytes: Arc<Vec<u8>>,
     },
     Delete,
+    /// Grouped Form artwork: draw its content in place, so its text and pictures can be edited
+    /// one by one (#2964).
+    Ungroup,
 }
 
 /// Forms ▸ Merge data files into spreadsheet: the field values of each file (FDF, XFDF or a

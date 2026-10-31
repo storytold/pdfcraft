@@ -2018,6 +2018,7 @@
 	Rotate image	画像を回転
 	Flip image	画像を反転
 	Delete image	画像を削除
+	Ungroup artwork	アートワークのグループ解除
 	Add header & footer	ヘッダーとフッターを追加
 	Update header & footer	ヘッダーとフッターを更新
 	Update watermark	透かしを更新
@@ -2511,6 +2512,7 @@ animation effects	Off	オフ
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	プリンターが文字、グラデーション、透明部分を印刷しないときに使います。印刷物は検索できる文字ではなくなります。グレースケール印刷と併用すると画像はグレーになります。
 	Crop Image	画像を切り抜き
 	Remove Crop	切り抜きを解除
+	Ungroup	グループ解除
 	Trim the picture with its handles; Enter or Done applies	ハンドルで画像を切り抜きます。Enter または完了で適用
 	Redaction mark appearance	墨消しマークの外観
 	Outline colour:	枠線の色:

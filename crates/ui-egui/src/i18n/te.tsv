@@ -1925,6 +1925,7 @@ action wizard	Start	ప్రారంభించు
 	Rotate image	చిత్రాన్ని తిప్పు
 	Flip image	చిత్రాన్ని తిరగేయి
 	Delete image	చిత్రాన్ని తొలగించు
+	Ungroup artwork	కళాకృతి సమూహాన్ని విడదీయండి
 	Add header & footer	హెడర్ & ఫుటర్ జోడించు
 	Update header & footer	హెడర్ & ఫుటర్‌ను అప్‌డేట్ చేయి
 	Update watermark	వాటర్‌మార్క్‌ను అప్‌డేట్ చేయి
@@ -2420,6 +2421,7 @@ animation effects	Off	ఆఫ్
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	ప్రింటర్ వచనం, షేడింగ్ లేదా పారదర్శకతను వదిలేసినప్పుడు దీన్ని వాడండి. ముద్రణ ఇక శోధించగల వచనం కాదు; బూడిద రంగులో ముద్రించినప్పుడు చిత్రాలు బూడిద రంగులో ఉంటాయి.
 	Crop Image	చిత్రాన్ని కత్తిరించు
 	Remove Crop	కత్తిరింపును తీసివేయి
+	Ungroup	సమూహాన్ని విడదీయండి
 	Trim the picture with its handles; Enter or Done applies	హ్యాండిల్‌లతో చిత్రాన్ని కత్తిరించండి; Enter లేదా పూర్తయింది వర్తింపజేస్తుంది
 	Redaction mark appearance	రెడాక్షన్ గుర్తు రూపం
 	Outline colour:	అంచు రంగు:

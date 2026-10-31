@@ -1899,6 +1899,7 @@
 	Rotate image	Resmi döndür
 	Flip image	Resmi çevir
 	Delete image	Resmi sil
+	Ungroup artwork	Çizimin grubunu çöz
 	Add header & footer	Üstbilgi ve altbilgi ekle
 	Update header & footer	Üstbilgi ve altbilgiyi güncelle
 	Update watermark	Filigranı güncelle
@@ -2507,6 +2508,7 @@ animation effects	Off	Kapalı
 	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Yazıcı metni, gölgelendirmeyi veya saydamlığı atladığında kullanın. Çıktı artık aranabilir metin değildir; gri tonlamalı yazdırmayla resimler gri olur.
 	Crop Image	Resmi kırp
 	Remove Crop	Kırpmayı kaldır
+	Ungroup	Grubu çöz
 	Trim the picture with its handles; Enter or Done applies	Resmi tutamaçlarıyla kırpın; Enter veya Bitti uygular
 	Redaction mark appearance	Karartma işareti görünümü
 	Outline colour:	Kenar rengi:
