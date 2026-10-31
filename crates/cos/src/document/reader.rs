@@ -619,10 +619,28 @@ impl Document {
         // Offsets of objects that may be cross-reference streams: their dictionaries are the
         // trailers of files that have no `trailer` keyword (§7.5.8).
         let mut xref_streams = Vec::new();
-        for (num, offset, generation, body) in object_headers(&data) {
+        // Objects whose bytes (the last object of a number wins, as in `entries`) could hold an
+        // `/ObjStm` type; the others are not parsed for the object-stream check below.
+        let mut candidates: HashSet<u32> = HashSet::new();
+        let headers = object_headers(&data);
+        // Where `/XRef` occurs in the file, found in one pass.
+        let mut xref_marks = Vec::new();
+        let mut mark_from = 0;
+        while let Some(p) = find(&data, b"/XRef", mark_from, data.len()) {
+            xref_marks.push(p);
+            mark_from = p + 1;
+        }
+        for &(num, offset, generation, body) in &headers {
             entries.insert(num, XrefEntry::InFile { offset, generation });
             objstms.push(num);
-            if find(&data, b"/XRef", body, body.saturating_add(1024)).is_some()
+            if may_be_object_stream(&data, body) {
+                candidates.insert(num);
+            } else {
+                candidates.remove(&num);
+            }
+            // `/XRef` within the 1024 bytes after the header (the first one that is there).
+            let first = xref_marks.partition_point(|&p| p < body);
+            if xref_marks.get(first).is_some_and(|&p| p + 5 <= body.saturating_add(1024).min(data.len()))
                 && let Ok(at) = usize::try_from(offset)
             {
                 xref_streams.push(at);
@@ -635,7 +653,8 @@ impl Document {
         self.cache.lock().map_err(|_| CosError::Poisoned)?.clear();
         // Objects inside object streams.
         for num in objstms {
-            if let Ok(o) = self.try_get(num)
+            if candidates.contains(&num)
+                && let Ok(o) = self.try_get(num)
                 && let Object::Stream(s) = &*o
                 && s.dict.name(b"Type") == Some(b"ObjStm")
                 && let Ok(stm) = self.objstm(num)
@@ -732,6 +751,109 @@ fn shifted_subsection_end(data: &[u8], at: usize) -> Option<u32> {
     }
 }
 
+/// Longest dictionary [`may_be_object_stream`] reads before it gives up and says "maybe".
+const DICTIONARY_SCAN_LIMIT: usize = 1 << 20;
+
+/// Where the dictionary that starts at `data[from..]` (after `N G obj`) ends, reading it as the
+/// parser does: strings, hex strings, comments, names and nested dictionaries. `Some(None)`: the
+/// object is not a dictionary, so it is never a stream. `None`: the end is not certain (no end
+/// within the limit, a hex string with a bad digit, a `>>` inside an array); the caller must
+/// then treat the object as a possible object stream.
+fn dictionary_end(data: &[u8], from: usize) -> Option<Option<usize>> {
+    let limit = data.len().min(from.saturating_add(DICTIONARY_SCAN_LIMIT));
+    let mut i = from;
+    while i < limit && (is_whitespace(data[i]) || data[i] == b'%') {
+        if data[i] == b'%' {
+            while i < limit && !matches!(data[i], b'\n' | b'\r') {
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    if data.get(i..i + 2) != Some(b"<<") {
+        return if i < limit { Some(None) } else { None };
+    }
+    i += 2;
+    let (mut dicts, mut arrays) = (1usize, 0usize);
+    while i < limit {
+        match data[i] {
+            b'(' => {
+                let mut depth = 1usize;
+                i += 1;
+                while i < limit && depth > 0 {
+                    match data[i] {
+                        b'\\' => i += 1,
+                        b'(' => depth += 1,
+                        b')' => depth -= 1,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                if depth > 0 {
+                    return None;
+                }
+            }
+            b'<' if data.get(i + 1) == Some(&b'<') => {
+                dicts += 1;
+                i += 2;
+            }
+            b'<' => {
+                i += 1;
+                while i < limit && data[i] != b'>' {
+                    if !data[i].is_ascii_hexdigit() && !is_whitespace(data[i]) {
+                        return None;
+                    }
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'>' if data.get(i + 1) == Some(&b'>') => {
+                if arrays > 0 {
+                    return None;
+                }
+                dicts -= 1;
+                i += 2;
+                if dicts == 0 {
+                    return Some(Some(i));
+                }
+            }
+            b'%' => {
+                while i < limit && !matches!(data[i], b'\n' | b'\r') {
+                    i += 1;
+                }
+            }
+            b'[' => {
+                arrays += 1;
+                i += 1;
+            }
+            b']' => {
+                arrays = arrays.saturating_sub(1);
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Whether the object whose body starts at `data[from..]` could be an object stream: its
+/// dictionary holds `ObjStm`, or a `#` (a name may hide its letters as `#xx`, as in
+/// `/Obj#53tm`). Only the dictionary is searched, not the data of a stream. Where the
+/// dictionary ends is read by [`dictionary_end`], so text inside a string (an object header, a
+/// `stream` keyword) is not taken for syntax; when that is not certain the object counts as a
+/// candidate, so a doubtful object is parsed as it always was.
+pub(super) fn may_be_object_stream(data: &[u8], from: usize) -> bool {
+    match dictionary_end(data, from) {
+        Some(None) => false,
+        None => true,
+        Some(Some(end)) => {
+            let dict = &data[from..end];
+            dict.contains(&b'#') || find(dict, b"ObjStm", 0, dict.len()).is_some()
+        }
+    }
+}
+
 /// Every `N G obj` header in `data`, in file order, as (number, offset, generation, position
 /// after `obj`).
 fn object_headers(data: &[u8]) -> Vec<(u32, u64, u16, usize)> {
@@ -808,7 +930,33 @@ pub(crate) fn find(hay: &[u8], needle: &[u8], from: usize, to: usize) -> Option<
     if from >= to || needle.is_empty() || to - from < needle.len() {
         return None;
     }
-    hay[from..to].windows(needle.len()).position(|w| w == needle).map(|p| p + from)
+    let hay = &hay[from..to];
+    // Look for the needle's rarest byte first, a plain byte scan, and compare the rest only there.
+    const COMMON: &[u8] = b" etaoinsrhldcumfpgwybvkxjqz";
+    let (k, rare) =
+        needle.iter().copied().enumerate().max_by_key(|&(_, b)| COMMON.iter().position(|&c| c == b).unwrap_or(COMMON.len())).unwrap_or((0, 0));
+    let mut i = k;
+    while let Some(p) = hay.get(i..).and_then(|rest| position_of(rest, rare)) {
+        let start = i + p - k;
+        if hay.get(start..start + needle.len()) == Some(needle) {
+            return Some(start + from);
+        }
+        i += p + 1;
+    }
+    None
+}
+
+/// The first position of `byte` in `hay`. Whole 32-byte blocks are tested without branching, which
+/// the compiler turns into vector compares; only a block that holds the byte is searched.
+fn position_of(hay: &[u8], byte: u8) -> Option<usize> {
+    const BLOCK: usize = 32;
+    let (blocks, rest) = hay.as_chunks::<BLOCK>();
+    for (i, block) in blocks.iter().enumerate() {
+        if block.iter().fold(false, |any, &b| any | (b == byte)) {
+            return block.iter().position(|&b| b == byte).map(|p| i * BLOCK + p);
+        }
+    }
+    rest.iter().position(|&b| b == byte).map(|p| blocks.len() * BLOCK + p)
 }
 
 pub(super) fn rfind(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
