@@ -301,47 +301,58 @@ fn the_parameter_dictionary_and_both_sections_follow_annex_f() {
         assert_eq!(page_refs.len(), 3);
         assert_eq!(int(&lin, b"O"), u64::from(page_refs[0].num), "/O is the first page");
 
-        // Two sections: the first-page one is newest (startxref names it), its trailer's /Prev
-        // names the main one, whose entry for object 0 /T points just in front of.
-        let revisions = doc.revisions();
-        assert_eq!(revisions.len(), 2);
-        let (main, first) = (revisions[0].xref_offset, revisions[1].xref_offset);
-        assert!(!revisions[0].is_stream && !revisions[1].is_stream);
-        assert!((at as u64) < first && first < 1024, "the first-page table follows the dictionary");
-        let t = int(&lin, b"T");
-        assert!(bytes[t as usize].is_ascii_whitespace());
-        assert_eq!(&bytes[t as usize + 1..t as usize + 19], b"0000000000 65535 f");
-        assert!(t > main && t < main + 16);
-        let first_trailer = &bytes[first as usize..];
-        let prev = String::from_utf8_lossy(first_trailer).split("/Prev ").nth(1).unwrap().split_whitespace().next().unwrap().parse::<u64>().unwrap();
-        assert_eq!(prev, main);
-        assert!(bytes.ends_with(format!("startxref\n{first}\n%%EOF\n").as_bytes()));
-        let first_section = String::from_utf8_lossy(&bytes[first as usize..first as usize + 40]).into_owned();
-        assert!(first_section.starts_with(&format!("xref\n{lin_num} ")), "{first_section}");
-        assert!(String::from_utf8_lossy(&bytes[..main as usize]).contains("startxref\n0\n%%EOF\n"), "the first-page trailer's startxref is a dummy");
-        assert!(String::from_utf8_lossy(&bytes[main as usize..]).contains(&format!("trailer\n<</Size {lin_num}>>")));
-
-        // The primary hint stream sits right before the first page; /E ends the first page.
-        let h = lin.get(b"H").unwrap().as_array().unwrap();
-        assert_eq!(h.len(), 2, "no overflow hint stream");
-        let (h0, h1) = (h[0].as_int().unwrap() as u64, h[1].as_int().unwrap() as u64);
-        assert!(matches!(parse_indirect(&bytes, h0 as usize, &|_| None).unwrap().1, Object::Stream(_)));
-        assert_eq!(h0 + h1, offset(&doc, page_refs[0].num), "the first page follows the hint stream");
-        let hint = hints(&bytes, &doc, 3);
-        let e = int(&lin, b"E");
-        assert_eq!(e, offset(&doc, page_refs[0].num) + hint.pages[0].length, "/E ends the first page section");
-
-        // Everything the first page needs comes before /E; nothing of the other pages does.
-        for num in used_by(&doc, page_refs[0]) {
-            assert!(offset(&doc, num) < e, "object {num} of page 1 is in the first page section");
-        }
-        for page in &page_refs[1..] {
-            assert!(offset(&doc, page.num) >= e);
-        }
-        // Bookmarks come with the first page only when the document opens showing them.
-        let outlines = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Outlines").unwrap();
-        assert_eq!(offset(&doc, outlines.num) < e, mode.is_some(), "{mode:?}");
+        sections_follow_annex_f(&bytes, &doc, &lin, at, lin_num);
+        first_page_section_follows_annex_f(&bytes, &doc, &lin, &page_refs, mode);
     }
+}
+
+/// The two cross-reference sections: the first-page one newest, its trailer's `/Prev` naming the
+/// main one, which `/T` points just in front of.
+fn sections_follow_annex_f(bytes: &[u8], doc: &Document, lin: &Dict, at: usize, lin_num: u32) {
+    // Two sections: the first-page one is newest (startxref names it), its trailer's /Prev
+    // names the main one, whose entry for object 0 /T points just in front of.
+    let revisions = doc.revisions();
+    assert_eq!(revisions.len(), 2);
+    let (main, first) = (revisions[0].xref_offset, revisions[1].xref_offset);
+    assert!(!revisions[0].is_stream && !revisions[1].is_stream);
+    assert!((at as u64) < first && first < 1024, "the first-page table follows the dictionary");
+    let t = int(lin, b"T");
+    assert!(bytes[t as usize].is_ascii_whitespace());
+    assert_eq!(&bytes[t as usize + 1..t as usize + 19], b"0000000000 65535 f");
+    assert!(t > main && t < main + 16);
+    let first_trailer = &bytes[first as usize..];
+    let prev = String::from_utf8_lossy(first_trailer).split("/Prev ").nth(1).unwrap().split_whitespace().next().unwrap().parse::<u64>().unwrap();
+    assert_eq!(prev, main);
+    assert!(bytes.ends_with(format!("startxref\n{first}\n%%EOF\n").as_bytes()));
+    let first_section = String::from_utf8_lossy(&bytes[first as usize..first as usize + 40]).into_owned();
+    assert!(first_section.starts_with(&format!("xref\n{lin_num} ")), "{first_section}");
+    assert!(String::from_utf8_lossy(&bytes[..main as usize]).contains("startxref\n0\n%%EOF\n"), "the first-page trailer's startxref is a dummy");
+    assert!(String::from_utf8_lossy(&bytes[main as usize..]).contains(&format!("trailer\n<</Size {lin_num}>>")));
+}
+
+/// The hint stream right before the first page, `/E` at the end of the first page's section, and
+/// in that section all the first page needs and nothing of the others.
+fn first_page_section_follows_annex_f(bytes: &[u8], doc: &Document, lin: &Dict, page_refs: &[ObjRef], mode: Option<&str>) {
+    // The primary hint stream sits right before the first page; /E ends the first page.
+    let h = lin.get(b"H").unwrap().as_array().unwrap();
+    assert_eq!(h.len(), 2, "no overflow hint stream");
+    let (h0, h1) = (h[0].as_int().unwrap() as u64, h[1].as_int().unwrap() as u64);
+    assert!(matches!(parse_indirect(bytes, h0 as usize, &|_| None).unwrap().1, Object::Stream(_)));
+    assert_eq!(h0 + h1, offset(doc, page_refs[0].num), "the first page follows the hint stream");
+    let hint = hints(bytes, doc, 3);
+    let e = int(lin, b"E");
+    assert_eq!(e, offset(doc, page_refs[0].num) + hint.pages[0].length, "/E ends the first page section");
+
+    // Everything the first page needs comes before /E; nothing of the other pages does.
+    for num in used_by(doc, page_refs[0]) {
+        assert!(offset(doc, num) < e, "object {num} of page 1 is in the first page section");
+    }
+    for page in &page_refs[1..] {
+        assert!(offset(doc, page.num) >= e);
+    }
+    // Bookmarks come with the first page only when the document opens showing them.
+    let outlines = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Outlines").unwrap();
+    assert_eq!(offset(doc, outlines.num) < e, mode.is_some(), "{mode:?}");
 }
 
 #[test]
