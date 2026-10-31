@@ -3,18 +3,6 @@ use super::look::{BorderStyle, da_string, patch_da, patch_widget_look, redraw_wi
 use super::tree::{ancestor_sets, attach, check_place, child_named, clash, detach, ensure_form, inherited, name_parts, own_inherited};
 use super::{Dict, Document, Field, FieldKind, FieldProps, FormError, MIN_FIELD_SIDE, ObjRef, Object, PdfString, fields, flags, invalid};
 
-/// Swap width and height, keeping the center. `None` when that is not a usable widget.
-fn swapped_around_center(r: [f64; 4]) -> Option<[f64; 4]> {
-    if !r.iter().all(|v| v.is_finite()) {
-        return None;
-    }
-    let (x0, y0, x1, y1) = (r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3]));
-    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-    let (nw, nh) = (y1 - y0, x1 - x0);
-    let out = [cx - nw / 2.0, cy - nh / 2.0, cx + nw / 2.0, cy + nh / 2.0];
-    (out.iter().all(|v| v.is_finite()) && out[2] - out[0] >= MIN_FIELD_SIDE && out[3] - out[1] >= MIN_FIELD_SIDE).then_some(out)
-}
-
 /// Re-point a choice field's `/I`, positions in `/Opt`, at the new list `exports` after `/Opt` was
 /// replaced (ISO 32000-2 §12.7.5.4): the positions of the selected `values` still offered. `kept`
 /// are the old `/I` positions carried into the new list, which tell apart options sharing an
@@ -139,21 +127,8 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         }
     }
     // Validated before anything is written, so a refused rotation leaves the document unchanged.
-    // `Some(Some(rect))`: the widget's axis changes and it gets the swapped rectangle.
-    let mut rotated_rect: Option<Option<[f64; 4]>> = None;
-    if let Some((wi, rot)) = props.rotation {
-        if !matches!(rot, 0 | 90 | 180 | 270) {
-            return invalid("rotation must be 0, 90, 180 or 270 degrees");
-        }
-        let Some(w) = f.widgets.get(wi) else {
-            return invalid(format!("{name} has no widget {}", wi.saturating_add(1)));
-        };
-        let axis_change = (w.rotation % 180 == 0) != (rot % 180 == 0);
-        rotated_rect = Some(None);
-        if axis_change && props.rect.is_none() {
-            let Some(rect) = swapped_around_center(w.rect) else { return invalid("the field is too small") };
-            rotated_rect = Some(Some(rect));
-        }
+    if let Some(rotation) = props.rotation {
+        check_rotation(&f, name, rotation)?;
     }
     // A locked field only takes unlocking (Acrobat greys its properties out).
     if f.locked() && props.locked != Some(false) && *props != (FieldProps { locked: props.locked, ..FieldProps::default() }) {
@@ -363,7 +338,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
             }
         })?;
     }
-    let only = apply_late_widget_props(doc, &f, props, &new_da, rotated_rect)?;
+    let only = apply_late_widget_props(doc, &f, props, &new_da)?;
     scroll_list(doc, f.obj, list_picked)?;
     redraw_or_join(doc, &f, name, &new_name, join.as_ref(), only)?;
     if props.calculate.is_some() {
@@ -528,13 +503,19 @@ fn scroll_list(doc: &mut Document, field: ObjRef, list_picked: Option<(Vec<usize
     Ok(())
 }
 
-fn apply_late_widget_props(
-    doc: &mut Document,
-    f: &Field,
-    props: &FieldProps,
-    new_da: &str,
-    rotated_rect: Option<Option<[f64; 4]>>,
-) -> Result<Option<usize>, FormError> {
+/// Whether `set_props` can turn widget `wi` of `f` to `rot`: 0, 90, 180 or 270 degrees, of a
+/// widget the field has.
+fn check_rotation(f: &Field, name: &str, (wi, rot): (usize, i64)) -> Result<(), FormError> {
+    if !matches!(rot, 0 | 90 | 180 | 270) {
+        return invalid("rotation must be 0, 90, 180 or 270 degrees");
+    }
+    if f.widgets.get(wi).is_none() {
+        return invalid(format!("{name} has no widget {}", wi.saturating_add(1)));
+    }
+    Ok(())
+}
+
+fn apply_late_widget_props(doc: &mut Document, f: &Field, props: &FieldProps, new_da: &str) -> Result<Option<usize>, FormError> {
     // A complete look replaces widget /DA overrides. Partial changes were patched above
     // against each override, including size-only changes that keep its font and colour.
     if props.look.is_some() {
@@ -548,12 +529,11 @@ fn apply_late_widget_props(
             }
         }
     }
-    if let (Some((wi, rot)), Some(swapped)) = (props.rotation, rotated_rect)
+    // Only `/MK /R` changes: the widget stays where it is on the page, and the redraw below lays
+    // its content out along the turned direction inside the same rectangle.
+    if let Some((wi, rot)) = props.rotation
         && let Some(w) = f.widgets.get(wi)
     {
-        if let Some(rect) = swapped {
-            doc.update_dict(w.obj, |d| d.set(b"Rect".to_vec(), Object::Array(rect.iter().map(|v| Object::Real(*v)).collect())))?;
-        }
         let mut mk = doc.get(w.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned())).flatten().unwrap_or_default();
         if rot == 0 {
             mk.remove(b"R");

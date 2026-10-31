@@ -4226,12 +4226,8 @@ fn rotating_a_field_through_tools() {
     ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "City", "rotation": 90 }));
     let (rot, turned) = rect_of(&mut a);
     assert_eq!(rot, 90);
-    let (bw, bh) = (before[2] - before[0], before[3] - before[1]);
-    let (tw, th) = (turned[2] - turned[0], turned[3] - turned[1]);
-    assert!((tw - bh).abs() < 0.2 && (th - bw).abs() < 0.2, "swapped {before:?} -> {turned:?}");
-    let center = |r: &[f64]| ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
-    let (bc, tc) = (center(&before), center(&turned));
-    assert!((bc.0 - tc.0).abs() < 0.2 && (bc.1 - tc.1).abs() < 0.2, "center moved {bc:?} -> {tc:?}");
+    // The field stays where it is; only its content turns (#4296).
+    assert!(turned.iter().zip(&before).all(|(t, b)| (t - b).abs() < 0.2), "the field moved: {before:?} -> {turned:?}");
     assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Change field properties");
     let (rot, back) = rect_of(&mut a);
     assert_eq!((rot, back), (0, before));
