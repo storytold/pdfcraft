@@ -64,6 +64,10 @@ pub struct LineEditor {
     pub overflow: bool,
     /// The initial source container width in screen pixels.
     max_width: f32,
+    /// Expanded single-row bidi draft width and translation, in PDF user units.
+    draft_layout: Option<(f64, [f64; 2])>,
+    /// Reuse the PDF measurement until the draft, formatting or source changes.
+    growth_measurement: Option<DraftMeasurement>,
     /// Current screen-space size. Recomputed from the current page transform before painting.
     size: f32,
     /// Take the keyboard focus on the next frame.
@@ -214,7 +218,29 @@ impl Default for Extras {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct DraftMeasurement {
+    generation: u64,
+    text: String,
+    style: pdfcraft_engine::BlockStyle,
+    rect: Option<[f64; 4]>,
+}
+
 impl LineEditor {
+    fn measured_growth(&mut self, doc: &pdfcraft_engine::Document, width: f64) -> Option<[f64; 4]> {
+        let mut style = self.style();
+        // Let Apply lay out the draft in the page's available container. Its actual
+        // bounds include source spacing and scale, independently of the interface face.
+        style.width = Some(width);
+        style.offset = None;
+        let generation = doc.edit_generation();
+        if self.growth_measurement.as_ref().is_none_or(|m| m.generation != generation || m.text != self.text || m.style != style) {
+            let rect = doc.text_edit_layout(self.page, self.block, &self.text, &style).ok().and_then(|layout| layout.draft_rect);
+            self.growth_measurement = Some(DraftMeasurement { generation, text: self.text.clone(), style, rect });
+        }
+        self.growth_measurement.as_ref().and_then(|m| m.rect)
+    }
+
     /// What Format text's font list shows: the chosen page font, a standard family picked
     /// instead, or the paragraph's own font (its `/BaseFont` without the subset tag).
     pub(crate) fn font_shown(&self, sources: &[(String, String)]) -> String {
@@ -248,6 +274,12 @@ impl LineEditor {
         self.family_chosen = true;
     }
 
+    fn grows_as_single_row(&self) -> bool {
+        !self.text.contains('\n')
+            && ((!self.multiline && self.source.as_ref().is_some_and(|(block, _)| block.rows.len() == 1 || block.invisible))
+                || self.original.contains('\n'))
+    }
+
     pub(crate) fn has_changes(&self) -> bool {
         self.changes_with(&self.text)
     }
@@ -271,6 +303,8 @@ impl LineEditor {
     pub fn style(&self) -> pdfcraft_engine::BlockStyle {
         let (l, o) = (&self.look, &self.look0);
         let mut style = pdfcraft_engine::BlockStyle {
+            width: self.draft_layout.map(|(width, _)| width),
+            offset: self.draft_layout.map(|(_, offset)| offset),
             resource: self.font_resource.clone(),
             family: (l.family != o.family || self.family_chosen || l.bold != o.bold || l.italic != o.italic).then_some((l.family, l.bold, l.italic)),
             size: (l.size != o.size).then_some(l.size),
@@ -319,6 +353,7 @@ impl LineEditor {
     pub fn applied(&mut self) {
         self.font_resource = None;
         self.family_chosen = false;
+        self.draft_layout = None;
         self.look0 = self.look.clone();
         self.extras0 = self.extras;
         self.original = self.text.clone();
@@ -337,6 +372,7 @@ impl LineEditor {
     /// Adopt the rewritten paragraph's current geometry before the next overlay frame.
     pub(crate) fn refresh_source(&mut self, block: &pdfcraft_engine::TextBlock, lines: Vec<pdfcraft_engine::TextLine>) {
         self.source_rect = block.rect.map(|v| v as f32);
+        self.draft_layout = None;
         self.multiline = block.rows.len() > 1;
         self.source = Some((block.clone(), lines));
         let before = std::mem::replace(&mut self.text, block.editor_text.clone());
@@ -465,35 +501,61 @@ fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
     [u[0].min(v[0]) as f64, u[1].min(v[1]) as f64, u[0].max(v[0]) as f64, u[1].max(v[1]) as f64]
 }
 
-/// Open `block` on `page` in the inline editor. The box's geometry and source are read from the
-/// `lines` handed in, so callers pass the document's current inventory.
-fn open_editor(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], boxes: &[Rect], block: usize, view: &mut DocView) {
-    let PageToolContext { ui, xf, doc, page, .. } = cx;
-    view.pending_text_open = None;
-    let (Some(l), Some(b)) = (lines.get(block), boxes.get(block)) else { return };
-    view.image_selection = None;
-    let source_lines = doc.text_lines(page);
+/// A unique logical byte range, counting overlapping occurrences as ambiguous too.
+pub(crate) fn unique_selection_range(text: &str, selected: &str) -> Option<std::ops::Range<usize>> {
+    if selected.is_empty() {
+        return None;
+    }
+    let at = text.find(selected)?;
+    (text.rfind(selected) == Some(at)).then_some(at..at.saturating_add(selected.len()))
+}
+
+/// Open the paragraph editor from the edit tool or selection toolbar. Typing replaces the
+/// selected word in the logical buffer; applying rewrites the actual page content.
+pub(crate) fn open_block(
+    ctx: &egui::Context,
+    doc: &pdfcraft_engine::Document,
+    view: &mut DocView,
+    page: usize,
+    block: usize,
+    selected: Option<&str>,
+) -> bool {
+    if !doc.allows_modification() || view.line_editor.as_ref().is_some_and(LineEditor::has_changes) {
+        return false;
+    }
+    let Some(xf) = view.page_xform(page) else { return false };
+    let blocks = doc.text_blocks(page);
+    let Some(l) = blocks.get(block) else { return false };
+    let rect = xf.user_rect(&doc.info, page, l.rect.map(|v| v as f32)).expand(2.0);
     let text = l.editor_text.clone();
-    // Screen pixels per point, from the box's width.
-    let scale = (b.width() - 4.0) / ((l.rect[2] - l.rect[0]).max(1.0) as f32);
-    // How far the editor box may grow: a single-line paragraph's rewrite grows to the
-    // page's right edge, a multi-line paragraph rewraps to its own width.
+    let selection = selected.and_then(|s| unique_selection_range(&text, s));
+    if selected.is_some() && selection.is_none() {
+        return false;
+    }
+    let scale = (rect.width() - 4.0).max(1.0) / ((l.rect[2] - l.rect[0]).max(1.0) as f32);
     let right = xf.rect.right().min(view.viewport_rect().right()) - 6.0;
-    let max_width = if l.rows.len() == 1 { (right - b.left()).max(b.width()) } else { b.width() };
+    let max_width = if l.rows.len() == 1 { (right - rect.left()).max(rect.width()) } else { rect.width() };
+    // The native input is shared across tabs. Its current history belongs to the
+    // previous editor until claim_typing saves it; install the initial selection
+    // only after that handoff in overlay.
+    view.pending_text_open = None;
+    view.image_selection = None;
     view.line_editor = Some(LineEditor {
-        selection: None,
+        selection,
         font_resource: None,
         page,
         block,
         text: text.clone(),
         original: text,
-        rect: *b,
+        rect,
         source_rect: l.rect.map(|v| v as f32),
         multiline: l.rows.len() > 1,
-        source: Some((l.clone(), source_lines)),
-        fonts: install_source_fonts(ui.ctx(), doc, page),
+        source: Some((l.clone(), doc.text_lines(page))),
+        fonts: install_source_fonts(ctx, doc, page),
         overflow: false,
         max_width,
+        draft_layout: None,
+        growth_measurement: None,
         size: (l.size as f32 * scale).clamp(8.0, 72.0),
         focus: true,
         had_focus: false,
@@ -504,6 +566,7 @@ fn open_editor(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], bo
         extras0: Extras::default(),
         typing_from: None,
     });
+    true
 }
 
 /// Lines and their screen boxes for a page; hover outlines, click opens the editor. Returns
@@ -534,7 +597,9 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
         // The edit may have regrouped the page: open the paragraph that was clicked, wherever it
         // is now, and none if it was merged into another (#2516).
         match key.find(lines, 0) {
-            Some(block) => open_editor(cx, lines, &boxes, block, view),
+            Some(block) => {
+                open_block(ui.ctx(), doc, view, page, block, None);
+            }
             None => view.pending_text_open = None,
         }
     }
@@ -645,13 +710,13 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
             view.pending_text_open = lines.get(hit).map(|l| (page, pdfcraft_engine::BlockKey::of(l)));
             return true;
         }
-        open_editor(cx, lines, &boxes, hit, view);
+        open_block(ui.ctx(), doc, view, page, hit, None);
     }
     true
 }
 
 /// The inline editor; returns the edit once the text is applied.
-pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -> Option<Edit> {
+pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, doc: &pdfcraft_engine::Document) -> Option<Edit> {
     let view_id = view.id;
     // Clicks outside the document (the Format text panel) keep the paragraph open, as does the
     // keyboard moving there. Where the click landed is `interact_pos`: `latest_pos` is gone on the
@@ -701,7 +766,25 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     let smallest =
         ed.source.as_ref().and_then(|(block, lines)| block.lines.iter().filter_map(|i| lines.get(*i)).map(|l| l.size as f32).reduce(f32::min));
     let font = editor_font(&ed.look, smallest.map_or(ed.size, |s| (s * scale * 0.5).clamp(1.0, 300.0).min(ed.size)));
+    // The smaller native font bounds egui's caret only. The mapped RTL editor paints
+    // and measures at the paragraph's visible size, independently of that caret bound.
+    let bidi_font = FontId::proportional(ed.size);
     let text_color = color32(ed.look.color);
+    let bidi_field = crate::bidi::has_rtl(&ed.text) || crate::bidi::has_rtl(&ed.original);
+    let rtl_field =
+        unicode_bidi::get_base_direction(if ed.text.is_empty() { ed.original.as_str() } else { ed.text.as_str() }) == unicode_bidi::Direction::Rtl;
+    // The bidi editor paints with the interface face, not the source subset's fitted
+    // advances. Measure that same face even before typing, so a short source word is
+    // not split. RTL fields grow toward the left, retaining the source's right edge.
+    let growing_bidi = bidi_field && ed.grows_as_single_row();
+    let source_screen_rect = ed.rect;
+    let grow_width = |text: &str, rtl: bool| {
+        let natural = ctx.fonts_mut(|fonts| fonts.layout_no_wrap(text.to_owned(), bidi_font.clone(), text_color).size().x);
+        let available = if rtl { source_screen_rect.right() - xf.rect.left() } else { xf.rect.right() - source_screen_rect.left() };
+        (natural.ceil() + 1.0).max(source_screen_rect.width()).min(available.max(source_screen_rect.width()))
+    };
+    let bidi_width = growing_bidi.then(|| grow_width(&ed.text, rtl_field));
+    let editor_pos = Pos2::new(if rtl_field { ed.rect.right() - bidi_width.unwrap_or(ed.rect.width()) } else { ed.rect.left() }, ed.rect.top());
     let block = ed.block;
     let mut done = None;
     let mut reveal = false;
@@ -713,7 +796,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     egui::Area::new(egui::Id::unique("edit-text-line"))
         .order(egui::Order::Foreground)
         .fade_in(false)
-        .fixed_pos(Pos2::new(ed.rect.left(), ed.rect.top()))
+        .fixed_pos(editor_pos)
         .constrain_to(viewport)
         .constrain(false)
         .show(ctx, |ui| {
@@ -723,7 +806,9 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             // source width, and the visible frame grows/shrinks vertically with their rows.
             // An OCR phrase (several stretched words on one scanned line) also grows rightwards.
             let single_run = ed.source.as_ref().is_some_and(|(block, _)| block.rows.len() == 1 || block.invisible);
-            let width = if !ed.multiline && single_run && !ed.text.contains('\n') && ed.has_changes() {
+            let width = if let Some(width) = bidi_width {
+                width
+            } else if !ed.multiline && single_run && !ed.text.contains('\n') && ed.has_changes() {
                 let job = editor_job(ui, ed, &ed.text, scale, f32::INFINITY);
                 let natural = ui.fonts_mut(|f| f.layout_job(job)).size().x;
                 natural.max(ed.size * 0.4).min((xf.rect.right() - ed.rect.left() - 36.0 * scale).max(ed.rect.width()))
@@ -731,9 +816,13 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 ed.rect.width().max(1.0)
             };
             ui.set_width(width);
-            let measured = editor_galley(ui, ed, &ed.text, scale, width);
+            let measured = if bidi_field {
+                ui.fonts_mut(|fonts| fonts.layout(ed.text.clone(), bidi_font.clone(), text_color, width))
+            } else {
+                editor_galley(ui, ed, &ed.text, scale, width)
+            };
             ed.overflow = ed.has_changes() && (measured.rect.width() > ed.rect.width() + 1.5 || measured.rect.height() > ed.rect.height() + 1.5);
-            let visible = Rect::from_min_size(ed.rect.min, measured.rect.size().max(egui::vec2(1.0, 1.0)));
+            let visible = Rect::from_min_size(editor_pos, measured.rect.size().max(egui::vec2(1.0, 1.0)));
             // Unsupported source programs use an interface fallback whose glyph advances
             // can differ from the PDF's. Keep every visible row inside the growing frame.
             let live = draft_rect.map_or(visible, |bounds| bounds.union(visible));
@@ -768,15 +857,29 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 let rows = 1;
                 let snapshot = ed.clone();
                 let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
-                    let galley = editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width);
+                    let galley = if bidi_field {
+                        ui.fonts_mut(|fonts| fonts.layout(text.as_str().to_owned(), bidi_font.clone(), text_color, wrap_width))
+                    } else {
+                        editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width)
+                    };
                     if snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
                 };
                 let before = ed.text.clone();
                 let input = input_id();
                 ed.claim_typing(ui.ctx(), view_id);
+                // Claiming this document resets a shared native input's history. Install
+                // the toolbar selection afterwards, before TextEdit can collapse it.
+                if ed.focus
+                    && !outside
+                    && !hold
+                    && let Some(range) = &ed.selection
+                {
+                    reselect(ui.ctx(), input, &ed.text, range);
+                    ui.memory_mut(|memory| memory.request_focus(input));
+                }
                 let output = egui::TextEdit::multiline(&mut ed.text)
                     .id(input)
-                    .font(font.clone())
+                    .font(if bidi_field { bidi_font.clone() } else { font.clone() })
                     .margin(egui::Margin::ZERO)
                     .layouter(&mut layouter)
                     .text_color(text_color)
@@ -828,6 +931,20 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     if let Some((galley, pos)) = look {
         view.text_background.remember(&xf, page, block, galley, pos, text_color);
     }
+    // Apply's container uses PDF advances rather than the interface face. Recompute
+    // after this frame's typing, including typing followed immediately by click-away.
+    ed.draft_layout = if (crate::bidi::has_rtl(&ed.text) || crate::bidi::has_rtl(&ed.original)) && ed.grows_as_single_row() && ed.has_changes() {
+        let rtl = unicode_bidi::get_base_direction(ed.text.as_str()) == unicode_bidi::Direction::Rtl;
+        let source_width = f64::from((ed.source_rect[2] - ed.source_rect[0]).abs());
+        let available = if rtl { source_screen_rect.right() - xf.rect.left() } else { xf.rect.right() - source_screen_rect.left() };
+        let width = f64::from(available / scale).max(source_width).clamp(1.0, 14_400.0);
+        ed.measured_growth(doc, width).and_then(|bounds| {
+            let offset = if rtl { f64::from(ed.source_rect[2]) - bounds[2] } else { f64::from(ed.source_rect[0]) - bounds[0] };
+            (bounds[2] - bounds[0] > source_width + 0.5).then_some((width, [offset, 0.0]))
+        })
+    } else {
+        None
+    };
     match done {
         Some(apply) => {
             let ed = view.line_editor.take()?;
@@ -1024,6 +1141,8 @@ C", &picked
             fonts: BTreeMap::new(),
             overflow: false,
             max_width: 400.0,
+            draft_layout: None,
+            growth_measurement: None,
             size: block.size as f32,
             focus: true,
             had_focus: false,

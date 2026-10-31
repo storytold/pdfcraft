@@ -2821,6 +2821,10 @@ theme	Appearance	Aspecte
 	two cells would both be named {name}	dues cel·les es dirien {name}
 	a field named {name} already exists	ja existeix un camp anomenat {name}
 
+# Review-suggestion captions reuse this catalog's existing translations.
+review-suggestion	Replace text	Substitueix el text
+review-suggestion	Replacement text	Text de substitució
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui
 

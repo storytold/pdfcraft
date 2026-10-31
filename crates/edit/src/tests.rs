@@ -7495,6 +7495,80 @@ fn reading_keeps_dotted_leader_entries_whole_and_in_order() {
     );
 }
 
+#[test]
+fn arabic_fallback_keeps_a_latin_row_in_its_source_font() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        eprintln!("skipping Arabic fallback: built without craft-fonts");
+        return;
+    }
+    let mut doc = text_page("BT /F1 12 Tf 14 TL 72 700 Td (Latin source) Tj T* (Placeholder) Tj ET");
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().len(), 1);
+    text::rewrite_block(&mut doc, 0, 0, Some("Latin source\nمرحبا"), &text::BlockStyle { color: Some([0.1, 0.2, 0.3]), ..Default::default() })
+        .unwrap();
+    let saved = reopen(&doc);
+    let lines = text::text_lines(&saved, 0).unwrap();
+    let latin = lines.iter().find(|line| line.text == "Latin source").expect("the Latin row survives");
+    assert_eq!(latin.font, "F1", "Arabic fallback must not replace a Latin-only source segment");
+    assert!(lines.iter().any(|line| line.text == "مرحبا"), "{lines:?}");
+}
+
+#[test]
+fn arabic_fallback_keeps_distinct_latin_subset_encodings() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let content = "BT /F1 12 Tf 14 TL 72 700 Td (ab) Tj T* /F2 12 Tf (c) Tj T* /F1 12 Tf (bb) Tj ET";
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+        &stream("", content),
+        "<< /Type /Font /Subtype /TrueType /BaseFont /ABCDEF+Inter /FirstChar 97 /LastChar 98 /Widths [500 500] /Encoding /WinAnsiEncoding >>",
+        "<< /Type /Font /Subtype /TrueType /BaseFont /GHIJKL+Inter /FirstChar 99 /LastChar 99 /Widths [500] /Encoding /WinAnsiEncoding >>",
+    ]);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "ab\nc\nbb");
+    text::rewrite_block(&mut doc, 0, 0, Some("abc\nمرحبا"), &BlockStyle { color: Some([0.1, 0.2, 0.3]), ..Default::default() }).unwrap();
+    let saved = reopen(&doc);
+    let lines = text::text_lines(&saved, 0).unwrap();
+    assert_eq!(lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>(), ["abc", "مرحبا"]);
+    assert_eq!(lines[0].font, "F1");
+}
+
+#[test]
+fn arabic_fallback_keeps_negative_spacing_on_a_non_arabic_shaped_row() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut source = text_page("");
+    let page = pdfcraft_model::pages(&source)[0].clone();
+    let mut fonts = Dict::new();
+    let resource =
+        pdfcraft_fonts::embedding::embed(&mut source, &mut fonts, include_bytes!("../../../assets/fonts/Inter-Regular.ttf"), "Inter").unwrap();
+    let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(&source, &source.dict(fonts.get(resource.as_bytes()).unwrap()).unwrap());
+    let hex = |text: &str| metrics.encode(text).unwrap().iter().map(|b| format!("{b:02X}")).collect::<String>();
+    let content = format!("BT /{resource} 12 Tf 14 TL -1 Tc 72 700 Td <{}> Tj T* 0 Tc <{}> Tj ET", hex("Cafe"), hex("Placeholder"));
+    let stream = source.add(Object::Stream(Stream::flate(Dict::new(), content.as_bytes())));
+    let mut resources = Dict::new();
+    resources.set(b"Font".to_vec(), Object::Dict(fonts));
+    source
+        .update_dict(page.obj, |d| {
+            d.set(b"Contents".to_vec(), Object::Ref(stream));
+            d.set(b"Resources".to_vec(), Object::Dict(resources));
+        })
+        .unwrap();
+    let latin_rect = |draft: &str| {
+        let mut doc = source.clone();
+        text::rewrite_block(&mut doc, 0, 0, Some(draft), &text::BlockStyle { color: Some([0.1, 0.2, 0.3]), ..Default::default() }).unwrap();
+        text::text_lines(&reopen(&doc), 0).unwrap().into_iter().find(|line| line.text == "Cafe\u{0301}").unwrap().rect
+    };
+    let expected = latin_rect("Cafe\u{0301}\nPlaceholder");
+    let mixed = latin_rect("Cafe\u{0301}\nمرحبا");
+    assert!(
+        ((mixed[2] - mixed[0]) - (expected[2] - expected[0])).abs() < 0.001,
+        "a separate Arabic row must not change Latin spacing: {mixed:?} != {expected:?}"
+    );
+}
+
 /// Text set larger than the widest page PDF allows (14 400 pt) panicked when its paragraph was given
 /// a width: the width is clamped between the font size and 14 400 pt, and `f64::clamp` panics when
 /// its minimum is the larger. The width is now capped at 14 400 pt whatever the font size: from the
@@ -8575,4 +8649,17 @@ fn styled_existing_justification_is_refused_instead_of_silently_left_aligning() 
     assert!(error.to_string().contains("justification"));
     assert_eq!(page_content_bytes(&doc, 0), before);
     assert_eq!(page_content_bytes(&reopen(&doc), 0), before);
+}
+
+#[test]
+fn backwards_rtl_pen_keeps_logical_order_after_save_and_reopen() {
+    for content in ["BT /F1 12 Tf -8 Tc 200 700 Td (AB) Tj ET", "BT /F1 12 Tf 200 700 Td [(A) 1000 (B) 1000] TJ ET"] {
+        let doc = arabic_ligature_page(content, false);
+        for current in [&doc, &reopen(&doc)] {
+            let lines = text::text_lines(current, 0).unwrap();
+            assert_eq!(lines.len(), 1);
+            assert_eq!(lines[0].text, "\u{0633}\u{0645}", "a backwards pen already carries logical order");
+            assert_eq!(text::text_blocks(current, 0).unwrap()[0].editor_text, lines[0].text);
+        }
+    }
 }

@@ -2829,6 +2829,10 @@ theme	Appearance	Išvaizda
 	the first row number can be at most {max}	pirmosios eilutės numeris gali būti ne didesnis nei {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	sritis, tarpai ir stulpelių pločiai turi būti skaičiai, tarpai – 0 arba daugiau, o kiekvienas plotis – daugiau nei 0
 
+# Review-suggestion captions reuse this catalog's existing translations.
+review-suggestion	Replace text	Pakeisti tekstą
+review-suggestion	Replacement text	Pakaitinis tekstas
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Šiandien
 @plural	{n} reply|{n} replies	{n} atsakymas|{n} atsakymai|{n} atsakymų

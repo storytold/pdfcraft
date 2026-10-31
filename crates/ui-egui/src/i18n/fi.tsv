@@ -2830,6 +2830,10 @@ theme	Appearance	Teema
 	two cells would both be named {name}	kahdella solulla olisi sama nimi {name}
 	a field named {name} already exists	kenttä nimeltä {name} on jo olemassa
 
+# Review-suggestion captions reuse this catalog's existing translations.
+review-suggestion	Replace text	Korvaa tekstiä
+review-suggestion	Replacement text	Korvaava teksti
+
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään
 

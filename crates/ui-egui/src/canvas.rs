@@ -2730,7 +2730,7 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
     if let Some(e) = comments::composer(ui.ctx(), view, info, prefs) {
         view.pending_edit = Some(e);
     }
-    if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info) {
+    if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info, doc) {
         view.pending_edit = Some(e);
     }
     let text_box = crate::forms_ui::text_box(doc, view, form);
@@ -3260,7 +3260,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.viewport_screen = out.inner_rect;
     view.auto_scroll.paint(ui, avail);
     if unobstructed && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect) {
-        copy_selected |= selection_actions(ui, avail, view, info, prefs, allowed && !comments_hidden, can_copy);
+        copy_selected |= selection_actions(ui, avail, view, doc, prefs, allowed && !comments_hidden, can_copy);
     }
 
     // Collect all main-page demand, including cached surfaces, for byte admission later.

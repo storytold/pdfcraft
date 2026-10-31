@@ -543,9 +543,8 @@ impl Automation {
                 // reflow rejoins soft wraps while retaining typed newlines and spaces.
                 let text = match a.opt_str("text")? {
                     Some(text) => text.to_owned(),
-                    None if a.get("aligns").is_some() => block.editor_text,
-                    None if width.is_some() => block.reflow_text.clone(),
-                    None => block.text,
+                    None if width.is_some() && a.get("aligns").is_none() => block.reflow_text,
+                    None => block.editor_text,
                 };
                 let mut style = pdfcraft_engine::BlockStyle {
                     ranges: parse_style_ranges(a.get("ranges"))?,
@@ -595,8 +594,12 @@ impl Automation {
                 // neighbour that overlaps the old box (overlaid text, a text layer) must not take
                 // its number, and neither must a paragraph the edit merged it into: rewriting that
                 // one by this number would drop the neighbour's text.
-                let edited = block_overlapping(&after, moved)
-                    .filter(|&i| !wanted.is_empty() && after.get(i).is_some_and(|b| b.text.split_whitespace().collect::<String>() == wanted));
+                let edited = block_overlapping(&after, moved).filter(|&i| {
+                    !wanted.is_empty()
+                        && after.get(i).is_some_and(|b| {
+                            b.text.split_whitespace().collect::<String>() == wanted || b.editor_text.split_whitespace().collect::<String>() == wanted
+                        })
+                });
                 if let Some(b) = edited.and_then(|i| after.get(i)) {
                     out["paragraph"] = json!({ "lines": b.lines.len(), "font": b.base_font });
                     if copy {

@@ -191,6 +191,7 @@ fn on_same_baseline(line: &TextLine, target: &TextLine) -> bool {
 }
 
 /// Rewrite paragraph `block` with new text (or its own) and formatting, rewrapped to its width.
+/// An offset-only edit with unchanged editor text moves the source operators without rewrapping.
 pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option<&str>, style: &BlockStyle) -> Result<LineEdit, EditError> {
     let edit = rewrite_block_with_limit(doc, page, block, text, style, MAX_TYPE3_GLYPHS)?;
     drop_unused_fallback_fonts(doc, page);
@@ -791,6 +792,19 @@ pub(crate) fn rewrite_block_from(
 ) -> Result<LineEdit, EditError> {
     let blocks = group_blocks(&lines);
     let b = blocks.get(block).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;
+    // An offset-only edit moves the source operators. Passing the authoritative
+    // editor buffer must not turn a move into a rewrite with new paragraph markers:
+    // those markers would hide regrouping from automation's stale-number guard.
+    if let Some(offset) = style.offset
+        && *style == (BlockStyle { offset: Some(offset), ..Default::default() })
+        && text.is_none_or(|text| text == b.editor_text)
+    {
+        if !offset.iter().all(|value| value.is_finite()) {
+            return Err(EditError::Invalid("the paragraph can't be moved that far".into()));
+        }
+        translate_blocks(doc, page, &[block], offset)?;
+        return Ok(LineEdit { substituted: None });
+    }
     // Existing PDF paragraphs do not yet persist selected-row alignment intent. Refuse
     // that operation before writing anything; whole-paragraph `align` remains supported.
     if style.aligns.iter().any(Option::is_some) {
