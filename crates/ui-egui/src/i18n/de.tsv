@@ -157,6 +157,15 @@
 	Available	Verfügbar
 	Ready	Bereit
 	Search tools and commands…	Tools und Befehle suchen…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Hinzugefügter Text
+	Link URL	URL des Links
+	Search tools and commands	Tools und Befehle suchen
+	Text editing line	Textbearbeitungszeile
+	Text to place	Einzufügender Text
+	Tooltip	Tooltip
+	Words or phrases to redact	Zu schwärzende Wörter oder Ausdrücke
 	No matching tools	Keine passenden Werkzeuge
 	Tool	Werkzeug
 	Command	Befehl
@@ -505,6 +514,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Liest {names}, die es wieder lesen. Keine Reihenfolge kann eine Schleife beheben: Ändere eine der Formeln.
 	Not in order	Nicht in der Reihenfolge
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Fehlt in der im PDF gespeicherten Berechnungsreihenfolge: Andere PDF-Viewer berechnen es womöglich nicht.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Liest {name}, das es im Formular nicht gibt, und erhält dort deshalb keinen Wert.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Sein Skript liest auch Felder, deren Namen es erst beim Ausführen bildet. Diese Lesezugriffe lassen sich nicht prüfen.
+	Missing field	Feld fehlt
+	Unchecked reads	Ungeprüfte Lesezugriffe
+	{field} reads fields named as it runs	{field} liest Felder, deren Namen erst beim Ausführen entstehen
+	Some names are built as it runs	Manche Namen entstehen erst beim Ausführen
 	Back to Prepare a form	Zurück zu „Formular vorbereiten“
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Noch berechnet kein Feld dieses Formulars seinen Wert. Gib einem Feld auf dem Tab „Berechnen“ seiner Eigenschaften eine Berechnung, dann erscheint es hier.
 	{names} and {last}	{names} und {last}
@@ -561,6 +576,9 @@
 	Clean Up	Aufräumen
 	Color Images	Farbbilder
 	Grayscale Images	Graustufenbilder
+	Monochrome Images	Monochrome Bilder
+	CCITT Group 4	CCITT Gruppe 4
+	JBIG2 (lossless)	JBIG2 (verlustfrei)
 	Bicubic downsampling to	Bikubische Neuberechnung auf
 	for images above	für Bilder über
 	Compression	Komprimierung
@@ -584,6 +602,7 @@
 	Discard private data of other applications	Private Daten anderer Anwendungen verwerfen
 	Discard hidden text	Ausgeblendeten Text verwerfen
 	Use Flate to encode streams that are not encoded	Nicht codierte Streams mit Flate codieren
+	In streams that use LZW encoding, use Flate instead	In LZW-codierten Streams stattdessen Flate verwenden
 	Remove invalid links and bookmarks	Ungültige Links und Lesezeichen entfernen
 	Remove unreferenced named destinations	Nicht referenzierte benannte Ziele entfernen
 	Compress document structure (object streams)	Dokumentstruktur komprimieren (Objekt-Streams)
@@ -782,14 +801,9 @@
 	Copy Image in Original Format	Bild im Originalformat kopieren
 	The image has been copied as a {ext} file	Das Bild wurde als {ext}-Datei kopiert
 	The page has changed; select the image again	Die Seite hat sich geändert; wählen Sie das Bild erneut aus
-	Check for updates	Nach Updates suchen
 	No check has run yet.	Es wurde noch nicht gesucht.
-	Checking for a newer version…	Suche nach einer neueren Version…
 	PdfCraft {v} is available.	PdfCraft {v} ist verfügbar.
 	You have version {c}. Download the new version from its release page.	Du hast Version {c}. Lade die neue Version von ihrer Release-Seite herunter.
-	PdfCraft {c} is up to date.	PdfCraft {c} ist auf dem neuesten Stand.
-	Couldn't check for updates: {e}	Updates konnten nicht gesucht werden: {e}
-	You have version {c}. All releases are listed at {page}.	Du hast Version {c}. Alle Releases findest du unter {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Fragt GitHub nach dem neuesten Release. Es wird nichts automatisch heruntergeladen oder installiert.
 	Download	Herunterladen
 	Later	Später
@@ -834,6 +848,14 @@
 	Applies to 1 page	Gilt für 1 Seite
 	Applies to {n} pages	Gilt für {n} Seiten
 	Replaces the existing one on those pages.	Ersetzt das Vorhandene auf diesen Seiten.
+	Checking pages…	Seiten werden geprüft…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Seite {pages} hat eine eigene weiße Fläche, die den Hintergrund verdecken würde. Ersetzen
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Die Seiten {pages} haben eine eigene weiße Fläche, die den Hintergrund verdecken würde. Ersetzen
+	Removing the background puts the page's own backdrop back.	Wird der Hintergrund entfernt, kehrt die eigene weiße Fläche der Seite zurück.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Ein Bild bedeckt Seite {pages} (ein Scan?), daher ist der Hintergrund dort nicht zu sehen.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Bilder bedecken die Seiten {pages} (Scans?), daher ist der Hintergrund dort nicht zu sehen.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Seite {pages} wurde nach dem Hinzufügen des Hintergrunds geändert, daher bleibt ihre eigene weiße Fläche ausgeschaltet. Auf weißem Papier sieht sie gleich aus.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Seiten {pages} wurden nach dem Hinzufügen des Hintergrunds geändert, daher bleiben ihre eigenen weißen Flächen ausgeschaltet. Auf weißem Papier sehen sie gleich aus.
 	PDF or image	PDF oder Bild
 	No file chosen	Keine Datei ausgewählt
 	Page number	Seitenzahl
@@ -1976,6 +1998,10 @@
 	Perimeter	Umfang
 	Area	Fläche
 	Drawing scale	Zeichnungsmaßstab
+	Scale	Maßstab
+	Common scales	Gängige Maßstäbe
+	Enter a scale such as 1:50.	Geben Sie einen Maßstab wie 1:50 ein.
+	Applying a scale switches units to m / mm.	Beim Anwenden eines Maßstabs werden die Einheiten auf m / mm umgestellt.
 	Snapping	Einrasten
 	Export measurements	Messungen exportieren
 	Open a PDF to measure it.	Öffne ein PDF, um es zu messen.
@@ -2186,6 +2212,7 @@ signature pad	Type	Tippen
 certificate	Subject	Zertifikatsinhaber
 action wizard	Start	Starten
 	Reopen the files that were open when PdfCraft last closed	Beim Start die Dateien wieder öffnen, die beim letzten Beenden von PdfCraft geöffnet waren
+	Restore the last view (page, zoom and page display) when a document is opened again	Beim erneuten Öffnen eines Dokuments die letzte Ansicht (Seite, Zoom und Seitenanzeige) wiederherstellen
 
 # Labels that reach tl!() through a variable (Fill & Sign buttons, link prompts, notices, history labels, checker and certificate rows)
 	Add {what}	{what} hinzufügen
@@ -2324,6 +2351,8 @@ key	Space	Leertaste
 	Printer paper and scaling may differ. Check driver settings.	Druckerpapier und Skalierung können abweichen. Treibereinstellungen prüfen.
 	Drawing scale changes. Use Actual size for full-scale plans.	Der Zeichnungsmaßstab ändert sich. Für maßstabsgetreue Pläne Tatsächliche Größe verwenden.
 	Reload documents when their files change on disk	Dokumente neu laden, wenn sich ihre Dateien auf dem Datenträger ändern
+	Don't show again	Nicht mehr anzeigen
+	Show a notice when a document is secured	Hinweis anzeigen, wenn ein Dokument geschützt ist
 	Always use my default zoom and page layout	Immer meinen Standardzoom und mein Standard-Seitenlayout verwenden
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Diese Datei wurde auf dem Datenträger geändert. „Neu laden“ zeigt die neue Version und verwirft Ihre ungespeicherten Änderungen; „Speichern“ ersetzt sie durch diese Version.
 	Reload	Neu laden
@@ -2389,6 +2418,11 @@ animation effects	Off	Aus
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} wird vor {fields} berechnet, das es liest.|{field} wird vor {fields} berechnet, die es liest.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} weiteres Feld wird zu früh berechnet.|{n} weitere Felder werden zu früh berechnet.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} fehlt in der im PDF gespeicherten Reihenfolge, daher berechnen andere PDF-Viewer es womöglich nicht.|{fields} fehlen in der im PDF gespeicherten Reihenfolge, daher berechnen andere PDF-Viewer sie womöglich nicht.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} Formel liest ein Feld, das es im Formular nicht gibt|{n} Formeln lesen Felder, die es im Formular nicht gibt
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} liest {fields}, das es im Formular nicht gibt.|{field} liest {fields}, die es im Formular nicht gibt.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} weitere Formel liest ein fehlendes Feld.|{n} weitere Formeln lesen fehlende Felder.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} bildet manche Feldnamen erst beim Ausführen, daher werden diese Lesezugriffe nicht geprüft.|{fields} bilden manche Feldnamen erst beim Ausführen, daher werden diese Lesezugriffe nicht geprüft.
+@plural	{fields} is missing|{fields} are missing	{fields} fehlt|{fields} fehlen
 	Scan	Scannen
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Unterschreiben Sie auf einem weißen Blatt Papier und fotografieren Sie es bei hellem, gleichmäßigem Licht (mit Blitz). Wählen Sie das Foto aus oder ziehen Sie es hierher: PdfCraft findet die Unterschrift und entfernt das Papier.
 	Choose photo…	Foto auswählen…
@@ -2483,6 +2517,19 @@ animation effects	Off	Aus
 	Make properties default	Eigenschaften als Standard festlegen
 	Pages selected	Ausgewählte Seiten
 	Page properties	Seiteneigenschaften
+	Create & Edit	Erstellen & Bearbeiten
+	Review & Compare	Prüfen & Vergleichen
+	Forms & Signatures	Formulare & Signaturen
+	Protect & Standardize	Schützen & Standardisieren
+	Customize & Automate	Anpassen & Automatisieren
+	No tools match your search.	Keine Werkzeuge entsprechen Ihrer Suche.
+	Expand all tools	Alle Werkzeuge ausklappen
+	Collapse all tools	Alle Werkzeuge einklappen
+	Attach a file…	Datei anhängen…
+	Delete attachment	Anhang löschen
+	Attaching files is not available on the web yet	Dateien anhängen ist im Web noch nicht verfügbar
+	Attach {name}	{name} anhängen
+	Delete attachment {key}	Anhang {key} löschen
 	Font	Schrift
 	Bulleted list	Aufzählung
 	Numbered list	Nummerierte Liste
@@ -2517,3 +2564,19 @@ animation effects	Off	Aus
 	field names can't contain a period: {name}	Feldnamen dürfen keinen Punkt enthalten: {name}
 	two cells would both be named {name}	zwei Zellen hätten beide den Namen {name}
 	a field named {name} already exists	ein Feld namens {name} ist bereits vorhanden
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Heute
+@plural	{n} reply|{n} replies	{n} Antwort|{n} Antworten
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Seitenwerkzeuge
+	Insert pages from a file after the selection…	Seiten aus einer Datei nach der Auswahl einfügen…
+	Rotate the selected pages counterclockwise	Ausgewählte Seiten gegen den Uhrzeigersinn drehen
+	Rotate the selected pages clockwise	Ausgewählte Seiten im Uhrzeigersinn drehen
+	Extract the selected pages…	Ausgewählte Seiten extrahieren…
+	Delete the selected pages	Ausgewählte Seiten löschen
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Optionen für diese Antwort
+	Export value	Exportwert

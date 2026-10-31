@@ -19,9 +19,15 @@ type Command = fn(&[String]) -> anyhow::Result<()>;
 const COMMANDS: &[(&str, &str, Command)] = &[
     ("version", "Print the workspace version, or `version set X.Y.Z[-pre]` to change it and refresh Cargo.lock", version_cmd),
     ("layers", "Enforce the crate dependency layering (plan/architecture.md §3)", gates::layers),
-    ("wasm", "cargo check --target wasm32-unknown-unknown for every crate below L8", gates::wasm),
+    ("wasm", "cargo check --target wasm32-unknown-unknown for every crate below L8, in one call", gates::wasm),
     ("deny", "Dependency licences, bans, sources and advisories (deny.toml; needs cargo-deny)", gates::deny),
-    ("ci", "fmt --check, clippy -D warnings, test, layers, wasm, assets, deny, parity (stops at first failure)", gates::ci),
+    (
+        "ci",
+        "fmt --check, clippy -D warnings, the CLI without default features, test, i18n-report, layers, wasm, assets, deny, parity (stops at first failure)",
+        gates::ci,
+    ),
+    ("test", "Workspace tests: cargo nextest (cargo test when it is missing), then doctests", gates::test),
+    ("i18n-report", "Print the strings each interface language lacks (counts and a few keys); never fails", gates::i18n_report),
     ("assets", "Enforce the asset policy (AGENTS.md §1) against ATTRIBUTION.toml; --write regenerates ATTRIBUTION.md", assets::run),
     ("corpus", "Fetch the pinned pdf.js test corpus into corpus/ (git-ignored) and verify it; --update-pin re-records the pin", gates::corpus),
     ("check", "Robustness sweep over corpus/ with pdfcraft-cli; fails on crashes or regressions vs xtask/baselines", gates::check),

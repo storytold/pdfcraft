@@ -341,12 +341,10 @@
 	Check Again	Sjekk igjen
 	Check again	Sjekk igjen
 	Check box is checked by default	Avkrysningsboksen er avkrysset som standard
-	Check for updates	Se etter oppdateringer
 	Check spelling	Stavekontroll
 	Check the pages	Kontroller sidene
 	Check the pages of {name}: {why}	Kontroller sidene i {name}: {why}
 	Checking Options ({on} of 32 in all categories)	Kontrollalternativer ({on} av 32 i alle kategorier)
-	Checking for a newer version…	Ser etter en nyere versjon…
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Velg et PNG- eller JPEG-bilde (opptil 4 MiB). Gjennomsiktighet bevares.
 	Choose a folder for the exported files	Velg en mappe for de eksporterte filene
 	Choose a folder for the extracted pages	Velg en mappe for de uttrukne sidene
@@ -406,7 +404,6 @@
 	Copies:	Antall kopier:
 	Copy selected text	Kopier merket tekst
 	Copy text	Kopier tekst
-	Couldn't check for updates: {e}	Kunne ikke se etter oppdateringer: {e}
 	Couldn't open the printer's preferences: {e}	Kunne ikke åpne skriverinnstillingene: {e}
 	Counterclockwise 90 degrees	90 grader mot klokka
 	Country/Region	Land/region
@@ -868,7 +865,6 @@
 	Patterns (graphics objects)	Mønstre (grafikkobjekter)
 	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft ble ikke avsluttet normalt. Disse dokumentene hadde endringer som ble autolagret:
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft fungerer uten nett. Ingen telemetri, ingen konto og ingen skybehandling med mindre du legger til en leverandør.
-	PdfCraft {c} is up to date.	PdfCraft {c} er oppdatert.
 	PdfCraft {v} is available.	PdfCraft {v} er tilgjengelig.
 	Percentage	Prosent
 	Permissions password	Tillatelsespassord
@@ -933,6 +929,8 @@
 	Redaction code:	Sladdekode:
 	Reload	Last inn på nytt
 	Reload documents when their files change on disk	Last inn dokumenter på nytt når filene endres på disk
+	Don't show again	Ikke vis igjen
+	Show a notice when a document is secured	Vis et varsel når et dokument er sikret
 	Remove checkmark	Fjern hake
 	Remove invalid links and bookmarks	Fjern ugyldige lenker og bokmerker
 	Remove page	Fjern side
@@ -953,6 +951,14 @@
 	Replacement text	Erstatningstekst
 	Replacement: pages of {name}	Erstatning: sider fra {name}
 	Replaces the existing one on those pages.	Erstatter den eksisterende på disse sidene.
+	Checking pages…	Kontrollerer sidene…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Side {pages} maler sin egen hvite flate, som ville skjult bakgrunnen. Erstatt den
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Sidene {pages} maler sine egne hvite flater, som ville skjult bakgrunnen. Erstatt dem
+	Removing the background puts the page's own backdrop back.	Når bakgrunnen fjernes, kommer sidens egen hvite flate tilbake.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Et bilde dekker side {pages} (en skanning?), så bakgrunnen vises ikke der.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Bilder dekker sidene {pages} (skanninger?), så bakgrunnen vises ikke der.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Side {pages} ble endret etter at bakgrunnen ble lagt til, så sidens egen hvite flate forblir slått av. På hvitt papir ser den lik ut.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Sidene {pages} ble endret etter at bakgrunnen ble lagt til, så sidenes egne hvite flater forblir slått av. På hvitt papir ser de like ut.
 	Report	Rapport
 	Report…	Rapport…
 	Requires user to enter a password for:	Krever at brukeren skriver inn et passord for:
@@ -1018,6 +1024,15 @@
 	Scroll tabs right	Rull faner til høyre
 	Search comments	Søk i kommentarer
 	Search tools and commands…	Søk etter verktøy og kommandoer…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Lagt til tekst
+	Link URL	URL for lenken
+	Search tools and commands	Søk etter verktøy og kommandoer
+	Text editing line	Tekstredigeringslinje
+	Text to place	Tekst som skal plasseres
+	Tooltip	Verktøytips
+	Words or phrases to redact	Ord eller fraser som skal sladdes
 	Searchable Image (Exact)	Søkbart bilde (eksakt)
 	Searching… {s} of {p} pages	Søker… {s} av {p} sider
 	Searching… {s}/{p}	Søker… {s}/{p}
@@ -1228,6 +1243,7 @@
 	Update	Oppdater
 	Use 72 DPI (one point per pixel)	Bruk 72 DPI (ett punkt per piksel)
 	Use Flate to encode streams that are not encoded	Bruk Flate til å kode strømmer som ikke er kodet
+	In streams that use LZW encoding, use Flate instead	Bruk Flate i stedet for LZW i strømmer som er LZW-kodet
 	Use a Digital ID from a file	Bruk en digital ID fra en fil
 	Use custom DPI	Bruk egendefinert DPI
 	Use each image's embedded DPI; use 72 DPI when it is absent.	Bruk hvert bildes innebygde DPI; bruk 72 DPI når den mangler.
@@ -1269,7 +1285,6 @@
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA-skjema: feltene og XFA-dataene holdes i takt, så andre visere viser det du fyller inn.
 	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Du er i ferd med å bruke 1 sladdemarkering. Tekst, bilder og tegninger under markeringene, og kommentarer og skjemafelt som overlapper dem, fjernes permanent.
 	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Du er i ferd med å bruke {n} sladdemarkeringer. Tekst, bilder og tegninger under markeringene, og kommentarer og skjemafelt som overlapper dem, fjernes permanent.
-	You have version {c}. All releases are listed at {page}.	Du har versjon {c}. Alle utgivelser er listet på {page}.
 	You have version {c}. Download the new version from its release page.	Du har versjon {c}. Last ned den nye versjonen fra utgivelsessiden.
 	Your changes will be lost if you don't save them.	Endringene dine går tapt hvis du ikke lagrer dem.
 	ZIP	ZIP
@@ -1401,6 +1416,10 @@
 	Draw freehand	Tegn på frihånd
 	Drawing	Tegning
 	Drawing scale	Tegneskala
+	Scale	Målestokk
+	Common scales	Vanlige målestokker
+	Enter a scale such as 1:50.	Skriv inn en målestokk, for eksempel 1:50.
+	Applying a scale switches units to m / mm.	Når du bruker en målestokk, byttes enhetene til m / mm.
 	Drop-down list	Nedtrekksliste
 	Duplicate pages	Dupliser sider
 	Edit a PDF	Rediger en PDF
@@ -2044,6 +2063,9 @@
 	Formulas and similar non-text elements need alternate text. Add alternate text to them.	Formler og lignende elementer som ikke er tekst, trenger alternativ tekst. Legg til alternativ tekst på dem.
 	Gray	Grå
 	Grayscale Images	Gråtonebilder
+	Monochrome Images	Svart-hvitt-bilder
+	CCITT Group 4	CCITT gruppe 4
+	JBIG2 (lossless)	JBIG2 (tapsfri)
 	Green	Grønn
 	Green on black	Grønn på svart
 	H / Space (hold)	H / Mellomrom (hold)
@@ -2607,6 +2629,14 @@
 	Make properties default	Bruk egenskapene som standard
 	Pages selected	Valgte sider
 	Page properties	Sideegenskaper
+	Create & Edit	Opprett og rediger
+	Review & Compare	Gjennomgå og sammenlign
+	Forms & Signatures	Skjemaer og signaturer
+	Protect & Standardize	Beskytt og standardiser
+	Customize & Automate	Tilpass og automatiser
+	No tools match your search.	Ingen verktøy samsvarer med søket.
+	Expand all tools	Utvid alle verktøy
+	Collapse all tools	Fold sammen alle verktøy
 	Cut Image	Klipp ut bilde
 	Redact Image	Sladd bilde
 	Create Link…	Opprett lenke…
@@ -2694,3 +2724,33 @@ key	Space	Mellomrom
 # Page gaps (AI-assisted, not separately native-reviewed)
 	Show gaps between pages	Vis mellomrom mellom sidene
 	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skjul mellomrommene slik at sidekantene møtes. Margene inne i PDF-en endres ikke.
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	I dag
+
+# AI-assisted additions for restoring the last view (#1767) (2026-10-22); not reviewed by a native speaker.
+	Restore the last view (page, zoom and page display) when a document is opened again	Gjenopprett den siste visningen (side, zoom og sidevisning) når et dokument åpnes igjen
+@plural	{n} reply|{n} replies	{n} svar|{n} svar
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Sideverktøy
+	Insert pages from a file after the selection…	Sett inn sider fra en fil etter utvalget…
+	Rotate the selected pages counterclockwise	Roter de valgte sidene mot klokken
+	Rotate the selected pages clockwise	Roter de valgte sidene med klokken
+	Extract the selected pages…	Trekk ut de valgte sidene…
+	Delete the selected pages	Slett de valgte sidene
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Alternativer for dette svaret
+# Untranslated: English text until a translator fills these in.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Reads {name}, which the form doesn't have, so it gets no value there.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.
+	Missing field	Missing field
+	Unchecked reads	Unchecked reads
+	{field} reads fields named as it runs	{field} reads fields named as it runs
+	Some names are built as it runs	Some names are built as it runs
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} more formula reads a missing field.|{n} more formulas read missing fields.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.
+@plural	{fields} is missing|{fields} are missing	{fields} is missing|{fields} are missing

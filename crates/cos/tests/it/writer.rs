@@ -228,6 +228,63 @@ fn incremental_save_keeps_a_trailer_only_edit() {
     assert_qpdf_clean(&saved);
 }
 
+/// What one edit added and a later one unlinked (a deleted comment, a cleared redaction mark) is
+/// not written: the file never held it, and writing it would keep what was removed. Additions the
+/// update still refers to, from the trailer or a changed object and through other additions, are.
+#[test]
+fn incremental_save_leaves_out_additions_nothing_refers_to() {
+    let mut doc = Document::open(Arc::new(classic_table())).unwrap();
+    let text = |s: &str| Object::String(pdfcraft_cos::PdfString::literal(s.as_bytes().to_vec()));
+    let dict = |entries: &[(&str, Object)]| {
+        let mut d = Dict::new();
+        entries.iter().for_each(|(k, v)| d.set(k.as_bytes().to_vec(), v.clone()));
+        Object::Dict(d)
+    };
+    let page_obj = ObjRef::new(3, 0);
+    let leaf = doc.add(text("kept leaf"));
+    let kept = doc.add(dict(&[("Leaf", Object::Ref(leaf))]));
+    doc.update_dict(page_obj, |d| d.set(b"PieceInfo".to_vec(), Object::Ref(kept))).unwrap();
+    let by_trailer = doc.add(text("kept by the trailer"));
+    doc.trailer_mut().set(b"Custom".to_vec(), Object::Ref(by_trailer));
+    // Linked from the page and unlinked again, as clearing a mark does.
+    let dropped_leaf = doc.add(text("dropped leaf"));
+    let dropped = doc.add(dict(&[("Leaf", Object::Ref(dropped_leaf))]));
+    doc.update_dict(page_obj, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(dropped)]))).unwrap();
+    doc.update_dict(page_obj, |d| {
+        d.remove(b"Annots");
+    })
+    .unwrap();
+    // Unlinked additions that refer to each other.
+    let first = doc.add(Object::Null);
+    let second = doc.add(dict(&[("Next", Object::Ref(first)), ("Note", text("dropped cycle"))]));
+    doc.set(first, dict(&[("Next", Object::Ref(second))]));
+
+    // Off by default: a writer may add what only it finds again, by scanning.
+    let kept_all = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    assert!(kept_all.windows(12).any(|w| w == b"dropped leaf"));
+    let saved = write_incremental(&doc, &SaveOptions { drop_unlinked: true, ..SaveOptions::default() }).unwrap();
+    let holds = |s: &str| saved.windows(s.len()).any(|w| w == s.as_bytes());
+    assert!(holds("kept leaf") && holds("kept by the trailer"));
+    assert!(!holds("dropped leaf") && !holds("dropped cycle"), "unlinked additions are written");
+    let back = Document::open(Arc::new(saved.clone())).unwrap();
+    assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
+    assert_eq!(back.get(leaf).as_string().map(|s| s.bytes.as_slice()), Some(b"kept leaf".as_slice()));
+    for gone in [dropped, dropped_leaf, first, second] {
+        assert_eq!(*back.get(gone), Object::Null);
+    }
+    assert!(!page(&back).contains(b"Annots"));
+    assert_qpdf_clean(&saved);
+
+    // Freed beforehand, they are written the same way without the option, and what is added
+    // after that, nothing referring to it either (a document timestamp), is kept.
+    let mut freed = doc.clone();
+    freed.free_unlinked_additions();
+    assert_eq!(write_incremental(&freed, &SaveOptions::default()).unwrap(), saved, "the same objects, freed the same way");
+    freed.add(text("added after"));
+    let stamped = write_incremental(&freed, &SaveOptions::default()).unwrap();
+    assert!(stamped.windows(11).any(|w| w == b"added after") && !stamped.windows(12).any(|w| w == b"dropped leaf"));
+}
+
 #[test]
 fn qpdf_accepts_object_stream_output() {
     let qpdf = pdfcraft_oracle::or_skip!(pdfcraft_oracle::qpdf());
