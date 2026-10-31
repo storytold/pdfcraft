@@ -11,6 +11,8 @@
 //! 1. Add `xx.tsv` next to `ja.tsv` (copy its header; translate from the *meaning* of the English
 //!    text, clean-room, see `ja.tsv`).
 //! 2. Add one row to [`LANGUAGES`] (code, native name, catalog, plural rule).
+//! 3. Add its BCP 47 code to `CFBundleLocalizations` in `packaging/macos/Info.plist.in`, so
+//!    AppKit's native file panels can select it too (checked by `tests/it/macos_localizations.rs`).
 //!
 //! That is all: the Preferences dropdown, the system-locale match and the catalog tests (parse,
 //! placeholders, plural forms) pick it up from the registry.
