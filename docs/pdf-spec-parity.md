@@ -2,7 +2,7 @@
 
 > Integration update 2026-10-30: lossless JBIG2 generic and exact-copy symbol coding are included; no lossy substitution. Combined tests passed at bdf5620; the subsequent review fixes require fresh CI.
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (§7.4: redaction decodes CCITT fax images, Group 3 on bytes aside; earlier, §7.4: CCITT decoding in `pdfcraft-filters`) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (PDF/UA-1 verification checks the font conditions of ISO 14289-1 7.21) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How much of ISO 32000-2 (PDF 2.0) and the PDF subset standards PdfCraft implements, set against
 what Acrobat Pro implements. This is PdfCraft's equivalent of a "geometry" or "codec" checklist:
@@ -122,11 +122,11 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | PDF/A-2a/b/u, PDF/A-3a/b/u | verify, convert | **partial**: 2b and 3b structural rules and conversion (sRGB intent; not CMYK) | |
 | PDF/A-4, 4e, 4f | verify, convert | none | |
 | PDF/X-1a, X-3, X-4 (ISO 15930) | verify, convert | none | |
-| PDF/UA-1, PDF/UA-2 (ISO 14289) | verify (Preflight), checker | Accessibility Checker (32 rules, Acrobat's own), no PDF/UA verification | |
+| PDF/UA-1, PDF/UA-2 (ISO 14289) | verify (Preflight), checker | **partial**: Verify PDF/UA reports every Matterhorn Protocol 1.1 condition (83 of 87 machine ones checked, the 7.21 font conditions included, human ones listed for review); PDF/UA-2 identification, PDF 2.0 and the conditions it keeps. Accessibility Checker (32 rules) | `optimize.pdfua-validate` |
 | PDF/E, PDF/VT | verify, convert | none | |
 | Preflight (profiles, fixups, reports) | hundreds of profiles | none | |
 | Factur-X / ZUGFeRD (e-invoice in PDF/A-3) | Preflight checks | none | |
-| **All subset standards** | | | **65–115** (gap 9) |
+| **All subset standards** | | | **60–110** (gap 9) |
 
 ## Revision history
 
@@ -135,6 +135,8 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | 2026-10-26 | minor | §7.4: redaction clears pixels in CCITT fax images through the CCITT decoder, instead of removing them whole (Group 4 and Group 3 off bytes; Group 3 on bytes is still removed whole, as the bootstrap renderer may draw it as other rows than the decoder reads) |
 | 2026-10-26 | minor | §7.4: CCITT decoding (`hayro-ccitt`) in `pdfcraft-filters`, for export and the Optimizer |
 | 2026-10-26 | minor | §7.4: CCITT Group 4 encoding (`fax`) in the Optimizer |
+| 2026-10-16 | minor | PDF/UA-1 verification checks the font conditions (ISO 14289-1 7.21: CMaps, CIDFonts, embedded programs, ToUnicode, .notdef) and 17-003 |
+| 2026-10-15 | minor | PDF/UA-1 verification against the Matterhorn Protocol 1.1 (partial), PDF/UA-2 in part |
 | 2026-10-14 | minor | §12.4.4: `/Trans` and `/Dur` read into `DocInfo::transitions` and reported by `doc_info` |
 | 2026-10-11 | minor | §7.6.4: encrypted files we write open in Acrobat (#774, fixed by #836) |
 | 2026-10-10 | major | Created from the code, `vendor/README.md` and `parity/acrobat-features.toml`, against ISO 32000-2 and Acrobat Pro 26.002.21931's documented capabilities |

@@ -723,6 +723,7 @@ impl Automation {
             "comment_set_status" => self.comment_set_status(&a)?,
             "sign_list" => self.sign_list(&a)?,
             "accessibility_check" => self.a11y_check(&a)?,
+            "pdfua_verify" => self.a11y_pdfua_verify(&a)?,
             "accessibility_find_untagged" => self.a11y_find_untagged(&a)?,
             "accessibility_autotag_preview" => self.accessibility_autotag_preview(&a)?,
             "accessibility_autotag_apply" => self.accessibility_autotag_apply(&a)?,

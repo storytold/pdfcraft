@@ -286,7 +286,7 @@ const MAX_CMAP_ENTRIES: usize = 1 << 20;
 const MAX_CMAP_RANGES: usize = 1 << 16;
 /// Largest decoded Encoding or ToUnicode CMap stream read; real CMaps stay well under it, and a larger
 /// one is not decoded at all.
-const MAX_CMAP_BYTES: usize = 16 << 20;
+pub const MAX_CMAP_BYTES: usize = 16 << 20;
 
 /// Code → Unicode of a font. Explicit mappings and sequential ranges are kept as declared, so a range
 /// costs one record however many codes it covers; where two overlap, the one declared later wins.
@@ -803,7 +803,11 @@ impl Metrics {
         out
     }
 
-    fn cid(&self, code: u32) -> u32 {
+    /// The CID of a composite font's `code`: through the `cidrange`/`cidchar` mappings of an
+    /// embedded CMap (CID 0 for a code they leave out), else the code itself, as Identity-H and
+    /// Identity-V map it. A predefined CMap other than those two is not read, so its codes come
+    /// back unchanged too.
+    pub fn cid(&self, code: u32) -> u32 {
         if self.cid_map.is_empty() {
             return code;
         }
@@ -919,6 +923,108 @@ impl Metrics {
         }
         Some(out)
     }
+}
+
+impl Metrics {
+    /// The lowest code whose `/ToUnicode` value contains the UTF-16 code unit `unit`, in any
+    /// `bfchar` or `bfrange` entry the map declares (a later entry overriding it or not). The
+    /// encoding's own meanings are not looked at.
+    pub fn to_unicode_code_with(&self, unit: u16) -> Option<u32> {
+        let target = char::from_u32(u32::from(unit));
+        let explicit = self.unicode.explicit.iter().filter(|(_, (_, text))| target.is_some_and(|t| text.contains(t))).map(|(code, _)| *code).min();
+        let ranged = self
+            .unicode
+            .ranges
+            .iter()
+            .filter_map(|r| {
+                let (last, fixed) = r.units.split_last()?;
+                if fixed.contains(&unit) {
+                    return Some(r.lo);
+                }
+                // The last unit steps from `last` by one a code, wrapping as `text_at` does.
+                let offset = u32::from(unit.wrapping_sub(*last));
+                (offset <= r.hi.saturating_sub(r.lo)).then(|| r.lo.saturating_add(offset))
+            })
+            .min();
+        explicit.into_iter().chain(ranged).min()
+    }
+}
+
+/// One of the single-byte encodings Annex D of ISO 32000-1 tabulates by glyph name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BaseEncoding {
+    Standard,
+    WinAnsi,
+    MacRoman,
+}
+
+impl BaseEncoding {
+    /// The encoding a font dictionary's `/Encoding` or `/BaseEncoding` name selects, of these three.
+    pub fn from_name(name: &[u8]) -> Option<Self> {
+        match name {
+            b"StandardEncoding" => Some(BaseEncoding::Standard),
+            b"WinAnsiEncoding" => Some(BaseEncoding::WinAnsi),
+            b"MacRomanEncoding" => Some(BaseEncoding::MacRoman),
+            _ => None,
+        }
+    }
+
+    /// The glyph name this encoding gives `code` (Annex D.2), when it gives one.
+    pub fn glyph_name(self, code: u8) -> Option<&'static str> {
+        let table = match self {
+            BaseEncoding::Standard => &crate::encodings::STANDARD,
+            BaseEncoding::WinAnsi => &crate::encodings::WIN_ANSI,
+            BaseEncoding::MacRoman => &crate::encodings::MAC_ROMAN,
+        };
+        let unicode = *table.get(usize::from(code))?;
+        // The tables hold each code's character and the Latin set gives each character one
+        // name, so the name is the one whose character this is.
+        crate::encodings::NAMES.iter().find(|(_, u)| *u == unicode && unicode != 0).map(|(name, _)| *name)
+    }
+
+    /// The code this encoding gives glyph `name`, the lowest when it gives several.
+    pub fn code_of(self, name: &str) -> Option<u8> {
+        (0..=255u8).find(|&code| self.glyph_name(code) == Some(name))
+    }
+}
+
+/// Whether `name` is a glyph name of the Adobe standard Latin character set (ISO 32000-1 D.2).
+pub fn latin_glyph(name: &str) -> bool {
+    crate::encodings::NAMES.binary_search_by(|(n, _)| (*n).cmp(name)).is_ok()
+}
+
+/// What an embedded CMap's program says of itself (ISO 32000-1 §9.7.5.3): its writing mode
+/// (`/WMode n def`) and the CMaps it builds on (`/Name usecmap`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CmapProgram {
+    pub wmode: Option<i64>,
+    /// The names of the CMaps it uses, without their `/`; at most [`MAX_USED_CMAPS`].
+    pub uses: Vec<Vec<u8>>,
+}
+
+/// CMaps a CMap program may name with `usecmap` that are kept; one is what the operator allows.
+pub const MAX_USED_CMAPS: usize = 16;
+
+/// Reads `data`, an embedded CMap's program, for its [`CmapProgram`].
+pub fn cmap_program(data: &[u8]) -> CmapProgram {
+    let mut out = CmapProgram::default();
+    let (mut before, mut last): (Option<Tok>, Option<Tok>) = (None, None);
+    for t in Lexer::new(data) {
+        match (&before, &last, &t) {
+            (Some(Tok::Word(b"/WMode")), Some(Tok::Word(n)), Tok::Word(b"def")) if out.wmode.is_none() => {
+                out.wmode = std::str::from_utf8(n).ok().and_then(|n| n.parse().ok());
+            }
+            (_, Some(Tok::Word(name)), Tok::Word(b"usecmap")) if out.uses.len() < MAX_USED_CMAPS => {
+                if let Some(name) = name.strip_prefix(b"/") {
+                    out.uses.push(name.to_vec());
+                }
+            }
+            _ => {}
+        }
+        before = last;
+        last = Some(t);
+    }
+    out
 }
 
 /// Most UTF-16 units kept from one ToUnicode destination: the CMap format allows destinations of up
@@ -1334,7 +1440,7 @@ mod tests;
 
 #[cfg(test)]
 mod encoding_tests {
-    use pdfcraft_cos::{Dict, Document, Object};
+    use pdfcraft_cos::{Dict, Document, Object, Stream};
 
     use super::*;
 
@@ -1489,6 +1595,64 @@ mod encoding_tests {
         let m = Metrics::from_dict(&doc, &d);
         assert_eq!(m.text_of(0x61).as_deref(), Some("a"));
         assert_eq!(m.decode(b"abc"), "abc");
+    }
+
+    /// The Annex D.2 base encodings name each code's glyph, the alias codes included.
+    #[test]
+    fn base_encodings_name_their_glyphs() {
+        assert_eq!(BaseEncoding::WinAnsi.glyph_name(0x41), Some("A"));
+        assert_eq!(BaseEncoding::WinAnsi.glyph_name(0x80), Some("Euro"));
+        assert_eq!(BaseEncoding::WinAnsi.glyph_name(0xA0), Some("space"), "WinAnsi 0xA0 is space again");
+        assert_eq!(BaseEncoding::WinAnsi.glyph_name(0x81), None, "undefined");
+        assert_eq!(BaseEncoding::Standard.glyph_name(0x27), Some("quoteright"));
+        assert_eq!(BaseEncoding::Standard.glyph_name(0xE9), Some("Oslash"));
+        assert_eq!(BaseEncoding::MacRoman.glyph_name(0xCA), Some("space"));
+        assert_eq!(BaseEncoding::MacRoman.code_of("eacute"), Some(0x8E));
+        assert_eq!(BaseEncoding::MacRoman.code_of("space"), Some(0x20), "the lowest of two codes");
+        assert_eq!(BaseEncoding::from_name(b"MacExpertEncoding"), None, "no table for it");
+        assert!(latin_glyph("Aacute") && latin_glyph("Euro") && !latin_glyph("alpha") && !latin_glyph("uni0041"));
+    }
+
+    #[test]
+    fn a_cmap_program_says_its_writing_mode_and_the_cmaps_it_uses() {
+        let program = cmap_program(b"/CIDInit /ProcSet findresource begin /WMode 1 def % /WMode 0 def\n/UniJIS-UCS2-H usecmap /Other usecmap");
+        assert_eq!(program, CmapProgram { wmode: Some(1), uses: vec![b"UniJIS-UCS2-H".to_vec(), b"Other".to_vec()] });
+        assert_eq!(cmap_program(b"begincmap endcmap"), CmapProgram::default());
+        // A writing mode that isn't a number is no writing mode; a usecmap without a name names none.
+        assert_eq!(cmap_program(b"/WMode /One def (x) usecmap usecmap"), CmapProgram::default());
+        let many = "/A usecmap ".repeat(MAX_USED_CMAPS * 2);
+        assert_eq!(cmap_program(many.as_bytes()).uses.len(), MAX_USED_CMAPS);
+    }
+
+    /// The code whose ToUnicode value holds a unit: in an explicit entry, a range's fixed units,
+    /// or the unit a range steps through, where it wraps as decoding does.
+    #[test]
+    fn to_unicode_values_are_found_by_unit() {
+        let font = |entries: Vec<(&str, Object)>| {
+            let mut d = Dict::new();
+            d.set(b"Type".to_vec(), Object::name("Font"));
+            d.set(b"Subtype".to_vec(), Object::name("Type1"));
+            for (k, v) in entries {
+                d.set(k.as_bytes().to_vec(), v);
+            }
+            d
+        };
+        let with = |map: &[u8]| {
+            let mut doc = Document::new_empty();
+            let unicode = doc.add(Object::Stream(Stream::flate(Dict::new(), map)));
+            Metrics::from_dict(&doc, &font(vec![("ToUnicode", Object::Ref(unicode))]))
+        };
+        let m = with(b"2 beginbfchar <41> <0000> <42> <FEFF0042> endbfchar 1 beginbfrange <30> <39> <FFF7> endbfrange");
+        assert_eq!(m.to_unicode_code_with(0), Some(0x39), "0x39 steps FFF7 on to 0000, below 0x41");
+        assert_eq!(m.to_unicode_code_with(0xFEFF), Some(0x42));
+        assert_eq!(m.to_unicode_code_with(0xFFFE), Some(0x37));
+        assert_eq!(m.to_unicode_code_with(0x0041), None);
+        let m = with(b"1 beginbfrange <0100> <0110> <FFFE0041> endbfrange");
+        assert_eq!(m.to_unicode_code_with(0xFFFE), Some(0x100), "a fixed unit is in every code of the range");
+        assert_eq!(with(b"").to_unicode_code_with(0), None);
+        // The encoding's meanings aren't ToUnicode values.
+        let doc = Document::new_empty();
+        assert_eq!(Metrics::from_dict(&doc, &font(vec![("Encoding", Object::name("WinAnsiEncoding"))])).to_unicode_code_with(0x41), None);
     }
 
     #[test]

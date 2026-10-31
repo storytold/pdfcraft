@@ -45,6 +45,7 @@ mod menus;
 pub mod marks {
     pub use crate::marks_ui::{MarksDraft, PageRange, Subset};
 }
+pub use a11y_ui::Profile as A11yProfile;
 pub use create_ui::Clip;
 pub use link_ui::LinkDraft;
 pub use optimize_ui::{OptimizeDraft, OptimizeTab};

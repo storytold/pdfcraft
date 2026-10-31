@@ -1414,6 +1414,8 @@ theme	Appearance	Giao diện
 	Change signature	Đổi chữ ký
 	Check for accessibility	Kiểm tra trợ năng
 	Check for accessibility…	Kiểm tra trợ năng…
+	Verify PDF/UA	Xác minh PDF/UA
+	Not checked	Chưa kiểm tra
 	Checkbox	Hộp kiểm
 	Checkmark	Dấu kiểm
 	Clear form	Xóa dữ liệu biểu mẫu
@@ -1705,6 +1707,96 @@ theme	Appearance	Giao diện
 	Font {} on page {p} doesn't map its characters to Unicode	Phông chữ {} trên trang {p} không ánh xạ các ký tự của nó sang Unicode
 	Form field on page {p} isn't tagged	Trường biểu mẫu trên trang {p} chưa được gắn thẻ
 	H{n} follows an H{d}; headings should not skip levels	H{n} theo sau H{d}; các đề mục không nên bỏ qua cấp
+	The catalog has no metadata stream (XMP)	Danh mục không có luồng siêu dữ liệu (XMP)
+	The metadata doesn't identify the file as PDF/UA (pdfuaid:part)	Siêu dữ liệu không xác định tệp là PDF/UA (pdfuaid:part)
+	The metadata identifies the file as PDF/UA-{n}, not PDF/UA-{want}	Siêu dữ liệu xác định tệp là PDF/UA-{n}, không phải PDF/UA-{want}
+	The metadata has no PDF/UA revision year (pdfuaid:rev)	Siêu dữ liệu không có năm phiên bản PDF/UA (pdfuaid:rev)
+	The file is PDF {v}, not PDF 2.0	Tệp là PDF {v}, không phải PDF 2.0
+	The metadata has no title (dc:title)	Siêu dữ liệu không có tiêu đề (dc:title)
+	The viewer preferences have no DisplayDocTitle entry	Tùy chọn trình xem không có mục DisplayDocTitle
+	DisplayDocTitle isn't true: the window shows the file name	DisplayDocTitle không phải true: cửa sổ hiển thị tên tệp
+	MarkInfo Suspects is true: the tags are marked as unreliable	MarkInfo Suspects là true: các thẻ bị đánh dấu là không đáng tin cậy
+	The document sets no language (Lang), and neither do its tags	Tài liệu không đặt ngôn ngữ (Lang), các thẻ của nó cũng vậy
+	The bookmarks have no language: the document sets none (Lang)	Các dấu trang không có ngôn ngữ: tài liệu không đặt ngôn ngữ nào (Lang)
+	The metadata has no language: the document sets none (Lang) and the metadata no xml:lang	Siêu dữ liệu không có ngôn ngữ: tài liệu không đặt ngôn ngữ nào (Lang) và siêu dữ liệu không có xml:lang
+	The document's language (Lang) {} isn't a language tag	Ngôn ngữ của tài liệu (Lang) {} không phải là thẻ ngôn ngữ
+	Standard structure type {} is remapped to {to}	Kiểu cấu trúc chuẩn {} bị ánh xạ lại thành {to}
+	Role map entry {} leads round in a circle	Mục {} của bảng ánh xạ vai trò dẫn thành vòng tròn
+	Structure type {} doesn't map to a standard type	Kiểu cấu trúc {} không ánh xạ sang một kiểu chuẩn
+	The document uses both H and numbered headings (H1–H6)	Tài liệu dùng cả H lẫn các đề mục có đánh số (H1–H6)
+	its alternate text, actual text or expansion has no language (Lang)	văn bản thay thế, văn bản thực hoặc phần mở rộng của nó không có ngôn ngữ (Lang)
+	no language (Lang) on it, above it or on the document	không có ngôn ngữ (Lang) trên nó, phía trên nó hay trên tài liệu
+	its language (Lang) isn't a language tag	ngôn ngữ (Lang) của nó không phải là thẻ ngôn ngữ
+	more than one H heading in it	chứa nhiều hơn một đề mục H
+	not in a TOC	không nằm trong TOC
+	not allowed directly in a TOC	không được nằm trực tiếp trong TOC
+	not in a Ruby	không nằm trong Ruby
+	not in a Warichu	không nằm trong Warichu
+	not in a Table	không nằm trong Table
+	not allowed directly inside {in}	không được nằm trực tiếp trong {in}
+	a second {} in its table	{} thứ hai trong bảng của nó
+	rows both directly in it and in THead, TBody or TFoot	có hàng nằm trực tiếp trong nó và cả trong THead, TBody hoặc TFoot
+	not the first or last child of its table	không phải là phần tử con đầu tiên hay cuối cùng của bảng
+	not the first child of its list	không phải là phần tử con đầu tiên của danh sách
+	a header cell with no Scope, in a table that doesn't use Headers	ô tiêu đề không có Scope, trong một bảng không dùng Headers
+	no ID	không có ID
+	its ID is another Note's too	ID của nó cũng là ID của một Note khác
+	Page {p} has annotations but no tab order (Tabs)	Trang {p} có chú thích nhưng không có thứ tự tab (Tabs)
+	Page {p} has annotations and tabs in {} order, not structure order (S)	Trang {p} có chú thích và chuyển tab theo thứ tự {}, không theo thứ tự cấu trúc (S)
+	File attachment annotation on page {p}: its file specification lacks F or UF	Chú thích tệp đính kèm trên trang {p}: đặc tả tệp của nó thiếu F hoặc UF
+	Page {p} has a trap network annotation (TrapNet)	Trang {p} có chú thích mạng bẫy màu (TrapNet)
+	Printer's mark annotation on page {p} is in the structure tree	Chú thích dấu in trên trang {p} nằm trong cây cấu trúc
+	{} annotation on page {p} is in a {ty} tag, not {want}	Chú thích {} trên trang {p} nằm trong thẻ {ty}, không phải {want}
+	Field "{}" on page {p} has no description (TU), and its tag no alternate text	Trường "{}" trên trang {p} không có mô tả (TU), và thẻ của nó không có văn bản thay thế
+	Field "{}" on page {p}: its description has no language (Lang)	Trường "{}" trên trang {p}: mô tả của nó không có ngôn ngữ (Lang)
+	Link annotation on page {p} has no description (Contents)	Chú thích liên kết trên trang {p} không có mô tả (Contents)
+	{} annotation on page {p}: its description has no language (Lang)	Chú thích {} trên trang {p}: mô tả của nó không có ngôn ngữ (Lang)
+	{} annotation on page {p} has no description (Contents), and its tag no alternate text	Chú thích {} trên trang {p} không có mô tả (Contents), và thẻ của nó không có văn bản thay thế
+	Page {p}: {n} artifact inside tagged content	Trang {p}: {n} phần giả lập nằm trong nội dung đã gắn thẻ
+	Page {p}: {n} artifacts inside tagged content	Trang {p}: {n} phần giả lập nằm trong nội dung đã gắn thẻ
+	Page {p}: {n} tagged content item inside an artifact	Trang {p}: {n} mục nội dung đã gắn thẻ nằm trong một phần giả lập
+	Page {p}: {n} tagged content items inside an artifact	Trang {p}: {n} mục nội dung đã gắn thẻ nằm trong một phần giả lập
+	A form XObject with marked content (MCIDs) is drawn {n} times	Một XObject biểu mẫu có nội dung được đánh dấu (MCID) được vẽ {n} lần
+	Font {} on page {p} isn't embedded	Phông chữ {} trên trang {p} chưa được nhúng
+	Font (unnamed) on page {p} isn't embedded	Phông chữ (không tên) trên trang {p} chưa được nhúng
+	Font {} on page {p}: its CMap and CIDFont name different registries (CIDSystemInfo Registry)	Phông chữ {} trên trang {p}: CMap và CIDFont của nó ghi các registry khác nhau (CIDSystemInfo Registry)
+	Font {} on page {p}: its CMap and CIDFont name different orderings (CIDSystemInfo Ordering)	Phông chữ {} trên trang {p}: CMap và CIDFont của nó ghi các ordering khác nhau (CIDSystemInfo Ordering)
+	Font {} on page {p}: its CIDFont's Supplement is higher than its CMap's	Phông chữ {} trên trang {p}: Supplement của CIDFont cao hơn của CMap
+	Font {} on page {p}: its CIDToGIDMap is neither a stream nor Identity	Phông chữ {} trên trang {p}: CIDToGIDMap của nó không phải là luồng cũng không phải Identity
+	Font {} on page {p} has no CIDToGIDMap	Phông chữ {} trên trang {p} không có CIDToGIDMap
+	Font {} on page {p}: its CMap {cmap} is neither predefined nor embedded	Phông chữ {} trên trang {p}: CMap {cmap} của nó không được định nghĩa sẵn cũng không được nhúng
+	Font {} on page {p} has no CMap (Encoding)	Phông chữ {} trên trang {p} không có CMap (Encoding)
+	Font {} on page {p}: its CMap's WMode differs from the one in the CMap stream	Phông chữ {} trên trang {p}: WMode của CMap khác với WMode trong luồng CMap
+	Font {} on page {p}: its CMap uses CMap {cmap}, which isn't predefined	Phông chữ {} trên trang {p}: CMap của nó dùng CMap {cmap}, vốn không được định nghĩa sẵn
+	Font {} on page {p}: its CMap uses an embedded CMap, not a predefined one	Phông chữ {} trên trang {p}: CMap của nó dùng một CMap được nhúng, không phải CMap định nghĩa sẵn
+	Font {} on page {p} draws a glyph its font program lacks (code {code})	Phông chữ {} trên trang {p} vẽ một glyph mà chương trình phông chữ không có (mã {code})
+	Font {} on page {p}: its CharSet leaves out glyph {glyph}, which the font program has	Phông chữ {} trên trang {p}: CharSet của nó bỏ sót glyph {glyph}, mà chương trình phông chữ có
+	Font {} on page {p}: its CharSet lists glyph {glyph}, which the font program lacks	Phông chữ {} trên trang {p}: CharSet của nó liệt kê glyph {glyph}, mà chương trình phông chữ không có
+	Font {} on page {p}: its CIDSet leaves out CID {cid}, which the font program has	Phông chữ {} trên trang {p}: CIDSet của nó bỏ sót CID {cid}, mà chương trình phông chữ có
+	Font {} on page {p}: its CIDSet lists CID {cid}, which the font program lacks	Phông chữ {} trên trang {p}: CIDSet của nó liệt kê CID {cid}, mà chương trình phông chữ không có
+	Font {} on page {p}: code {code} is {w} wide in the font dictionary but {fw} in the font program	Phông chữ {} trên trang {p}: mã {code} rộng {w} trong từ điển phông chữ nhưng {fw} trong chương trình phông chữ
+	Font {} on page {p}: its TrueType program has no Unicode (3,1) or Mac Roman (1,0) cmap	Phông chữ {} trên trang {p}: chương trình TrueType của nó không có cmap Unicode (3,1) hay Mac Roman (1,0)
+	Font {} on page {p}: no Unicode or Mac Roman cmap of its program finds glyph {glyph} (code {code})	Phông chữ {} trên trang {p}: không cmap Unicode hay Mac Roman nào của chương trình tìm thấy glyph {glyph} (mã {code})
+	Font {} on page {p} is a non-symbolic TrueType font with no Encoding	Phông chữ {} trên trang {p} là phông TrueType không ký hiệu nhưng không có Encoding
+	Font {} on page {p}: its Encoding dictionary has no BaseEncoding	Phông chữ {} trên trang {p}: từ điển Encoding của nó không có BaseEncoding
+	Font {} on page {p}: its encoding {enc} is neither MacRomanEncoding nor WinAnsiEncoding	Phông chữ {} trên trang {p}: bảng mã {enc} của nó không phải MacRomanEncoding cũng không phải WinAnsiEncoding
+	Font {} on page {p}: its Differences name glyph {glyph}, which isn't in the Adobe Glyph List	Phông chữ {} trên trang {p}: Differences của nó đặt tên glyph {glyph}, vốn không có trong Adobe Glyph List
+	Font {} on page {p} has Differences, but its program has no Unicode (3,1) cmap	Phông chữ {} trên trang {p} có Differences, nhưng chương trình của nó không có cmap Unicode (3,1)
+	Font {} on page {p} is a symbolic TrueType font with an Encoding entry	Phông chữ {} trên trang {p} là phông TrueType ký hiệu có mục Encoding
+	Font {} on page {p}: its TrueType program has no cmap	Phông chữ {} trên trang {p}: chương trình TrueType của nó không có cmap
+	Font {} on page {p}: its TrueType program has several cmaps but no Symbol (3,0) one	Phông chữ {} trên trang {p}: chương trình TrueType của nó có nhiều cmap nhưng không có cmap Symbol (3,0)
+	Font {} on page {p} has no ToUnicode map, and no exception lets it go without one	Phông chữ {} trên trang {p} không có bảng ToUnicode, và không ngoại lệ nào cho phép thiếu bảng đó
+	Font {} on page {p}: its ToUnicode map maps code {code} to U+0000	Phông chữ {} trên trang {p}: bảng ToUnicode của nó ánh xạ mã {code} sang U+0000
+	Font {} on page {p}: its ToUnicode map maps code {code} to {u}	Phông chữ {} trên trang {p}: bảng ToUnicode của nó ánh xạ mã {code} sang {u}
+	Font {} on page {p} draws the .notdef glyph (code {code})	Phông chữ {} trên trang {p} vẽ glyph .notdef (mã {code})
+	Font {} on page {p}: code {code} in a formula can't be mapped to Unicode	Phông chữ {} trên trang {p}: mã {code} trong một công thức không thể ánh xạ sang Unicode
+	The default optional content configuration (D) has no Name	Cấu hình nội dung tùy chọn mặc định (D) không có Name
+	An optional content configuration has an AS entry	Một cấu hình nội dung tùy chọn có mục AS
+	Optional content configuration {n} has no Name	Cấu hình nội dung tùy chọn {n} không có Name
+	The XFA form requires dynamic rendering (dynamicRender)	Biểu mẫu XFA yêu cầu hiển thị động (dynamicRender)
+	The file is encrypted but its encryption dictionary has no permissions (P)	Tệp được mã hóa nhưng từ điển mã hóa của nó không có quyền (P)
+	The file has a reference XObject (Ref)	Tệp có một XObject tham chiếu (Ref)
+	Embedded file "{}": its file specification lacks F or UF	Tệp nhúng "{}": đặc tả tệp của nó thiếu F hoặc UF
 	Inserted text	Văn bản được chèn
 	Key Agreement	Thỏa thuận khóa
 	Key Encipherment	Mã hóa khóa

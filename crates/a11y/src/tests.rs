@@ -5,7 +5,7 @@ use pdfcraft_cos::{Document, Object};
 use super::*;
 
 /// A PDF from object bodies (object n = bodies[n - 1]) and extra trailer entries.
-fn pdf(bodies: &[String], trailer: &str) -> Document {
+pub(crate) fn pdf(bodies: &[String], trailer: &str) -> Document {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, b) in bodies.iter().enumerate() {
@@ -21,7 +21,7 @@ fn pdf(bodies: &[String], trailer: &str) -> Document {
     Document::open(Arc::new(out)).unwrap()
 }
 
-fn stream(data: &str) -> String {
+pub(crate) fn stream(data: &str) -> String {
     format!("<< /Length {} >>\nstream\n{data}\nendstream", data.len())
 }
 
@@ -1300,7 +1300,7 @@ fn sentences(source: &str) -> Vec<String> {
 #[test]
 fn wordings_are_complete() {
     let mut missing = Vec::new();
-    for source in [include_str!("content.rs"), include_str!("structure.rs")] {
+    for source in [include_str!("content.rs"), include_str!("structure.rs"), include_str!("pdfua/checks.rs"), include_str!("pdfua/fonts.rs")] {
         for sentence in sentences(source) {
             if !WORDINGS.contains(&sentence.as_str()) {
                 missing.push(sentence);

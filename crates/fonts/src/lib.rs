@@ -1,9 +1,10 @@
 //! pdfcraft-fonts — font metrics and encodings for generated appearances (L2).
 //!
 //! Standard-14 advance widths are exact (`Std14`, ISO 32000-2 Annex D). What remains approximate
-//! is everything that needs a font *program*: this crate reads font dictionaries, never embedded
-//! programs, so it has no glyph outlines for document fonts and cannot subset or re-embed. That
-//! is phase F 4.2 in docs/plan/execution-plan.md.
+//! is everything that needs a font *program*: this crate reads font dictionaries, and reads an
+//! embedded program only for what it holds (`program`: glyph names, CIDs, widths, cmaps, for
+//! verifying a dictionary against it), so it has no glyph outlines for document fonts and cannot
+//! subset or re-embed. That is phase F 4.2 in docs/plan/execution-plan.md.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -14,6 +15,7 @@ pub mod embedding;
 mod encodings;
 pub mod fallback;
 pub mod pdf;
+pub mod program;
 mod script;
 mod shaping;
 pub mod source_shaping;
