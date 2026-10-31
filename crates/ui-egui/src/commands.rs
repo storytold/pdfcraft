@@ -7,6 +7,7 @@
 use pdfcraft_engine::Edit;
 use pdfcraft_engine::commands::{self, COMMANDS, CommandSpec, Shortcut};
 
+use crate::tab_cycle::TabKey;
 use crate::{
     Dialog, Mode, PdfCraftApp, PropsTab, RightPanel, SaveTarget,
     theme::{ThemeKind, ThemePreference},
@@ -107,6 +108,16 @@ impl PdfCraftApp {
     /// Last-resort guard (AGENTS.md §4): a command that panics is reported and the app, with its
     /// open documents, keeps running. Edits are applied to a copy, so the document is unchanged.
     pub fn execute(&mut self, id: &str) -> bool {
+        self.execute_with_tab_cycle_hold(id, false)
+    }
+
+    /// Run a command with the modifier state of the frame that dispatched it. Direct command
+    /// calls are one-shot cycles; shortcuts can keep the recent-tab order fixed while Ctrl is held.
+    fn execute_with_tab_cycle_hold(&mut self, id: &str, ctrl_held: bool) -> bool {
+        if self.tab_cycle == crate::tab_cycle::TabCycle::Recent && matches!(id, "view.next_tab" | "view.previous_tab") {
+            let (shown, open) = (self.front_tab(), self.tab_keys());
+            self.recent_tabs.note(shown, &open, ctrl_held);
+        }
         match pdfcraft_engine::guard(|| self.execute_unguarded(id)) {
             Ok(done) => done,
             Err(m) => {
@@ -778,6 +789,19 @@ impl PdfCraftApp {
     /// end (#1542). The Combine files tab, when open, comes after the documents. From Home the
     /// next tab is the first and the previous one the last.
     fn step_tab(&mut self, forward: bool) {
+        if self.tab_cycle == crate::tab_cycle::TabCycle::Recent {
+            let (shown, open) = (self.front_tab(), self.tab_keys());
+            match self.recent_tabs.step(shown, &open, forward) {
+                Some(TabKey::Doc(id)) => {
+                    if let Some(i) = self.views.iter().position(|v| v.id == id) {
+                        self.active = Some(i);
+                    }
+                }
+                Some(TabKey::Combine) => self.open_combine_tab(),
+                None => {}
+            }
+            return;
+        }
         let count = self.views.len() + usize::from(self.combine_tab.open);
         let current = if self.combine_showing() { Some(self.views.len()) } else { self.active };
         let Some(next) = tab_after(current, count, forward) else { return };
@@ -786,6 +810,26 @@ impl PdfCraftApp {
         } else {
             self.open_combine_tab();
         }
+    }
+
+    /// The open tabs in their order on screen: the documents, then Combine files when open.
+    fn tab_keys(&self) -> Vec<TabKey> {
+        self.views.iter().map(|v| TabKey::Doc(v.id)).chain(self.combine_tab.open.then_some(TabKey::Combine)).collect()
+    }
+
+    /// The tab showing; `None` is Home.
+    fn front_tab(&self) -> Option<TabKey> {
+        if self.combine_showing() {
+            return Some(TabKey::Combine);
+        }
+        self.active.and_then(|i| self.views.get(i)).map(|v| TabKey::Doc(v.id))
+    }
+
+    /// Keep the tabs most recently shown first, for Next tab and Previous tab in that order
+    /// (#2063). Ctrl held keeps a cycle going (⌃ on macOS, where ⌃Tab is the shortcut).
+    pub(crate) fn note_shown_tab(&mut self, ctx: &egui::Context) {
+        let (shown, open, held) = (self.front_tab(), self.tab_keys(), ctx.input(|i| i.modifiers.ctrl));
+        self.recent_tabs.note(shown, &open, held);
     }
 
     /// Run the registered keyboard shortcuts (more specific combinations first).
@@ -846,7 +890,7 @@ impl PdfCraftApp {
             // `file.close` command.
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         } else {
-            self.execute(id);
+            self.execute_with_tab_cycle_hold(id, ctx.input(|i| i.modifiers.ctrl));
         }
     }
 }

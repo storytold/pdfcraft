@@ -2562,5 +2562,9 @@ animation effects	Off	Joaktiv
 	Extract the selected pages…	Nxirr faqet e përzgjedhura…
 	Delete the selected pages	Fshi faqet e përzgjedhura
 
+# Ctrl+Tab: most recently used order (#2063) (AI-assisted, not separately native-reviewed)
+	Next tab and Previous tab	Skeda tjetër dhe skeda e mëparshme
+	In tab order	Sipas renditjes së skedave
+	Most recently used first	Më të përdorurat së fundi të parat
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsionet për këtë përgjigje

@@ -505,6 +505,18 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             widgets::radio_value(ui, &mut app.scroll_speed, speed, tl_ctx!("scroll speed", speed.label()));
         }
     });
+    // The order Next tab and Previous tab follow (#2063); tab order stays the default.
+    ui.horizontal(|ui| {
+        ui.label(tl!("Next tab and Previous tab"));
+        for cycle in crate::tab_cycle::TabCycle::ALL {
+            // Literals here, so the translation report finds them.
+            let label = match cycle {
+                crate::tab_cycle::TabCycle::Tabs => tl!("In tab order"),
+                crate::tab_cycle::TabCycle::Recent => tl!("Most recently used first"),
+            };
+            widgets::radio_value(ui, &mut app.tab_cycle, cycle, label);
+        }
+    });
     // Whether anything animates, the wheel's scrolling and zooming included; left alone it
     // follows the system's animation setting.
     ui.horizontal(|ui| {

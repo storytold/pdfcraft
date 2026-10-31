@@ -2756,6 +2756,10 @@ certificate	Version	وەشان
 	Extract the selected pages…	پەڕە هەڵبژێردراوەکان دەربهێنە…
 	Delete the selected pages	پەڕە هەڵبژێردراوەکان بسڕەوە
 
+# Ctrl+Tab: most recently used order (#2063) (AI-assisted, not separately native-reviewed)
+	Next tab and Previous tab	تابی دواتر و تابی پێشوو
+	In tab order	بە ڕیزبەندی تابەکان
+	Most recently used first	تازەترین بەکارهاتوو یەکەم
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	هەڵبژاردەکانی ئەم وەڵامە
 # Untranslated: English text until a translator fills these in.

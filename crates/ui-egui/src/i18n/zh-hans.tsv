@@ -2539,6 +2539,10 @@ animation effects	Off	关
 	Extract the selected pages…	提取所选页面…
 	Delete the selected pages	删除所选页面
 
+# Ctrl+Tab: most recently used order (#2063) (AI-assisted, not separately native-reviewed)
+	Next tab and Previous tab	下一个标签页和上一个标签页
+	In tab order	按标签页顺序
+	Most recently used first	最近使用的优先
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	此回复的选项
 	Export value	导出值

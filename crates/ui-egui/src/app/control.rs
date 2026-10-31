@@ -35,6 +35,9 @@ impl PdfCraftApp {
             ("scroll_speed", _) => {
                 self.scroll_speed = scroll_speed::ScrollSpeed::parse(value).ok_or("scroll_speed must be slow, normal, or fast")?;
             }
+            ("tab_cycle", _) => {
+                self.tab_cycle = tab_cycle::TabCycle::parse(value).ok_or("tab_cycle must be tabs or recent")?;
+            }
             ("animation_effects", _) => {
                 self.animation_effects = motion::AnimationEffects::parse(value).ok_or("animation_effects must be system, on, or off")?;
             }

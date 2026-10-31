@@ -2484,6 +2484,10 @@ animation effects	Off	ఆఫ్
 	Extract the selected pages…	ఎంచుకున్న పేజీలను సంగ్రహించు…
 	Delete the selected pages	ఎంచుకున్న పేజీలను తొలగించు
 
+# Ctrl+Tab: most recently used order (#2063) (AI-assisted, not separately native-reviewed)
+	Next tab and Previous tab	తదుపరి ట్యాబ్ మరియు మునుపటి ట్యాబ్
+	In tab order	ట్యాబ్ క్రమంలో
+	Most recently used first	ఇటీవల ఉపయోగించినవి ముందు
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ఈ ప్రత్యుత్తరం ఎంపికలు
 	Export value	ఎగుమతి విలువ

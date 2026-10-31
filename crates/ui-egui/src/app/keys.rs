@@ -3,6 +3,9 @@ use super::*;
 impl PdfCraftApp {
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
         use egui::Key;
+        // Every frame, modal or not: a tab shown by a click or a newly opened file is the most
+        // recent one, and a Ctrl+Tab cycle ends when Ctrl is let go.
+        self.note_shown_tab(ctx);
         let pasted = self.paste_key_released(ctx);
         // "Save changes?" is modal: its keys are its own (⌘D is Don't save there, not Document
         // properties; Escape cancels it rather than clearing a selection), and nothing may run

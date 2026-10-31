@@ -2576,6 +2576,10 @@ animation effects	Off	Aus
 	Extract the selected pages…	Ausgewählte Seiten extrahieren…
 	Delete the selected pages	Ausgewählte Seiten löschen
 
+# Ctrl+Tab: most recently used order (#2063) (AI-assisted, not separately native-reviewed)
+	Next tab and Previous tab	Nächster und vorheriger Tab
+	In tab order	In Tab-Reihenfolge
+	Most recently used first	Zuletzt verwendete zuerst
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Optionen für diese Antwort
 	Export value	Exportwert

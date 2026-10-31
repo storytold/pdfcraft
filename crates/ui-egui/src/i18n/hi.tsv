@@ -2807,5 +2807,9 @@ theme	Appearance	स्वरूप
 	Extract the selected pages…	चयनित पृष्ठ निकालें…
 	Delete the selected pages	चयनित पृष्ठ हटाएँ
 
+# Ctrl+Tab: most recently used order (#2063) (AI-assisted, not separately native-reviewed)
+	Next tab and Previous tab	अगला टैब और पिछला टैब
+	In tab order	टैब के क्रम में
+	Most recently used first	सबसे हाल में उपयोग किए गए पहले
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	इस जवाब के विकल्प

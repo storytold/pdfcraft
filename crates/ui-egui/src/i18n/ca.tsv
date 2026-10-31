@@ -2836,5 +2836,9 @@ theme	Appearance	Aspecte
 	Extract the selected pages…	Extreu les pàgines seleccionades…
 	Delete the selected pages	Suprimeix les pàgines seleccionades
 
+# Ctrl+Tab: most recently used order (#2063) (AI-assisted, not separately native-reviewed)
+	Next tab and Previous tab	Pestanya següent i pestanya anterior
+	In tab order	En l'ordre de les pestanyes
+	Most recently used first	Les usades més recentment primer
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcions d'aquesta resposta

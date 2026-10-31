@@ -2573,6 +2573,10 @@ animation effects	Off	Өшірулі
 	Extract the selected pages…	Таңдалған беттерді шығарып алу…
 	Delete the selected pages	Таңдалған беттерді жою
 
+# Ctrl+Tab: most recently used order (#2063) (AI-assisted, not separately native-reviewed)
+	Next tab and Previous tab	Келесі және алдыңғы қойынды
+	In tab order	Қойындылар ретімен
+	Most recently used first	Соңғы қолданылғандары алдымен
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Осы жауаптың параметрлері
 	Export value	Экспорт мәні
