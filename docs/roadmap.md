@@ -1,5 +1,11 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M10/M13, #3919 partial: align worker recovery with moved workflow modules and batched image export. Preserve native failure tests. Estimates unchanged.)
+
+> **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M10/M13, #3919 partial: align worker recovery with current main. Preserve upstream behavior and native failure tests. Estimates unchanged.)
+
+#3919 partial: Export reports worker panics and launch failures. Existing Action Wizard runs report worker panics and launch failures while keeping completed files.
+
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
@@ -290,6 +296,11 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | patch | M10/M13, #3919 partial: align moved workflow modules and batched image export; verification pending. Estimates unchanged. |
+| 2026-10-25 | minor | M10/M13, #3919 partial: align worker recovery with current main. Preserve upstream behavior and native failure tests. Estimates unchanged. |
+| 2026-10-24 | minor | M10/M13, #3919 partial: align worker recovery with current main. Preserve M4 Organize drag cancellation and native failure tests. Estimates unchanged. |
+| 2026-10-23 | minor | M10/M13, #3919 partial: align worker recovery with current main and migrated test references. Preserve M14 #3558 recovery metadata. Estimates unchanged. |
+| 2026-10-22 | minor | M10/M13, #3919 partial: Export and Action Wizard report worker panics and launch failures. Action Wizard keeps completed files. Estimates unchanged. |
 | 2026-10-31 | patch | M2, PR #4172: eight GBK font/alias cases compare exact pixels with independent installed-face and explicit-Unicode references; wrong-glyph and wrong-family negative controls fail. Estimates unchanged. |
 | 2026-10-31 | patch | M2, PR #4172: integrate main fa5f9f8c, preserve both raster test groups and restore explicit display_config imports; display-only CJK policy and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
