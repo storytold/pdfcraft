@@ -716,7 +716,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("link_delete", "Delete a link", "Delete one link (page, index from link_list). Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 } }), &["doc", "page", "index"])),
-        t("links_from_urls", "Create links from URLs", "Find web addresses (http://, https://, www.) in the text of every page and make them clickable links. Returns the URLs. Undoable.")
+        t("links_from_urls", "Create links from URLs", "Find web addresses (http://, https://, www.) in the text of every page and make them clickable links, leaving out text on a layer the viewer hides (layer_set). Returns the URLs. Undoable.")
             .cmd("edit.links_from_urls")
             .with(schema(json!({ "doc": doc() }), &["doc"])),
         t("links_remove", "Remove all links", "Remove every link in the document (or on the given pages). Undoable.")

@@ -2098,8 +2098,9 @@ fn addresses_written_as_page_text_are_listed_with_text_links() {
     assert!(r[0] > 100.0 && r[0] < 140.0 && r[1] < 92.0 && r[3] > 80.0, "{r:?}");
 }
 
-/// An address on a layer the viewer hides is not a text link: link_list reads the page text
-/// with the layers as layer_set left them.
+/// An address on a layer the viewer hides is not a text link, and Create links from URLs makes
+/// no link there: link_list and links_from_urls read the page text with the layers as layer_set
+/// left them (ISO 32000-2 §8.11.3.1: hidden optional content "shall not be drawn").
 #[test]
 fn text_links_leave_out_addresses_on_hidden_layers() {
     let dir = workdir("text-links-layers");
@@ -2135,8 +2136,13 @@ fn text_links_leave_out_addresses_on_hidden_layers() {
     assert_eq!(urls(&mut a), ["https://example.com/shown", "https://example.com/layered"]);
     ok(&mut a, "layer_set", json!({ "doc": doc, "layer": "Addresses", "visible": false }));
     assert_eq!(urls(&mut a), ["https://example.com/shown"]);
+    let created = ok(&mut a, "links_from_urls", json!({ "doc": doc }));
+    assert_eq!(created["created"], json!(["https://example.com/shown"]), "no link over the hidden address: {created}");
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
     ok(&mut a, "layer_set", json!({ "doc": doc, "layer": "Addresses", "visible": true }));
     assert_eq!(urls(&mut a), ["https://example.com/shown", "https://example.com/layered"]);
+    let created = ok(&mut a, "links_from_urls", json!({ "doc": doc }));
+    assert_eq!(created["created"], json!(["https://example.com/shown", "https://example.com/layered"]), "{created}");
 }
 
 #[test]

@@ -2285,8 +2285,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.links_from_urls"]
 tools = ["links_from_urls"]
-evidence = ["crates/engine/src/tests.rs::links_from_urls_and_link_edits", "crates/automation/tests/it/automation.rs::links_through_tools", "crates/annot/src/tests.rs::urls_are_found_in_text"]
-notes = "http(s):// and www. addresses; already-linked text skipped"
+evidence = ["crates/engine/src/tests.rs::links_from_urls_and_link_edits", "crates/automation/tests/it/automation.rs::links_through_tools", "crates/annot/src/tests.rs::urls_are_found_in_text", "crates/automation/tests/it/automation.rs::text_links_leave_out_addresses_on_hidden_layers"]
+notes = "http(s):// and www. addresses; already-linked text and text on a hidden layer skipped"
 
 [[feature]]
 id = "edit.remove-all-links"
