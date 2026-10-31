@@ -403,11 +403,13 @@ pub(crate) fn panel(
         state.new_kind = "P".into();
     }
     ui.horizontal_wrapped(|ui| {
-        craft_ui::ComboBox::from_id_salt("tags-new-kind").selected_text(state.new_kind.as_str()).width(90.0).show_ui(ui, |ui| {
+        let kind_box = craft_ui::ComboBox::from_id_salt("tags-new-kind").selected_text(state.new_kind.as_str()).width(90.0).show_ui(ui, |ui| {
             for kind in NEW_KINDS {
                 ui.selectable_value(&mut state.new_kind, (*kind).to_owned(), *kind);
             }
         });
+        // The box shows only the type: a screen reader hears what it is for.
+        kind_box.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tl!("Type of the new tag")));
         create = ui.add_enabled(can_edit && !dirty, egui::Button::new(tl!("New tag"))).clicked();
         delete = ui.add_enabled(can_edit && !dirty, egui::Button::new(tl!("Delete tag"))).clicked();
         unwrap = ui.add_enabled(can_edit && !dirty, egui::Button::new(tl!("Remove tag, keep its contents"))).clicked();
