@@ -180,7 +180,7 @@ impl Default for Settings {
 }
 
 /// Common paper sizes (points, portrait).
-pub const PAPERS: [(&str, (f64, f64)); 21] = [
+pub const PAPERS: [(&str, (f64, f64)); 22] = [
     ("US Letter", (612.0, 792.0)),
     ("US Legal", (612.0, 1008.0)),
     ("Tabloid", (792.0, 1224.0)),
@@ -202,6 +202,7 @@ pub const PAPERS: [(&str, (f64, f64)); 21] = [
     ("A0", (2383.94, 3370.39)),
     ("4 x 6 in label (101.6 x 152.4 mm)", (288.0, 432.0)),
     ("US #10 Envelope (4.125 x 9.5 in)", (297.0, 684.0)),
+    ("F4 (210 x 330 mm)", (595.28, 935.43)),
 ];
 
 /// `PAPERS` index of the 4 × 6 in shipping label.
@@ -223,10 +224,12 @@ pub fn cups_media(index: usize) -> Option<&'static str> {
         "A4" => "A4",
         "A5" => "A5",
         "A6" => "iso_a6_105x148mm",
+        "F4 (210 x 330 mm)" => "iso_f4_210x330mm",
         "ARCH A (9 x 12 in)" => "na_arch-a_9x12in",
         "ARCH B (12 x 18 in)" => "na_arch-b_12x18in",
         "ARCH C (18 x 24 in)" => "na_arch-c_18x24in",
         "ARCH D (24 x 36 in)" => "na_arch-d_24x36in",
+        
         "ARCH E1 (30 x 42 in)" => "na_wide-format_30x42in",
         "ARCH E (36 x 48 in)" => "na_arch-e_36x48in",
         "ANSI C (17 x 22 in)" => "na_c_17x22in",

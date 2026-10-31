@@ -747,6 +747,7 @@ fn every_paper_reaches_the_spooler_by_a_name_of_its_size() {
             ("A0", "iso_a0_841x1189mm"),
             ("4 x 6 in label (101.6 x 152.4 mm)", "w288h432"),
             ("US #10 Envelope (4.125 x 9.5 in)", "Env10"),
+            ("F4 (210 x 330 mm)", "iso_f4_210x330mm"),
         ]
     );
 }
