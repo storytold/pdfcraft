@@ -205,7 +205,12 @@ impl<'a> Tlv<'a> {
 
     /// A non-negative INTEGER that fits in a u64.
     pub fn u64(&self) -> Result<u64, SignError> {
-        if self.tag != tag::INTEGER || self.value.is_empty() || self.value.len() > 9 || self.value[0] & 0x80 != 0 {
+        if self.tag != tag::INTEGER
+            || self.value.is_empty()
+            || self.value.len() > 9
+            || self.value[0] & 0x80 != 0
+            || (self.value.len() == 9 && self.value[0] != 0)
+        {
             return Err(bad("expected a small non-negative INTEGER"));
         }
         Ok(self.value.iter().fold(0u64, |acc, b| (acc << 8) | *b as u64))
@@ -548,6 +553,14 @@ pub fn algorithm(oid_s: &str, params: Option<&[u8]>) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn u64_rejects_nine_bytes_with_nonzero_lead() {
+        let big = Tlv::parse_all(&[0x02, 0x09, 0x01, 0, 0, 0, 0, 0, 0, 0, 5]).unwrap();
+        assert!(big.u64().is_err());
+        let ok = Tlv::parse_all(&[0x02, 0x09, 0x00, 0x80, 0, 0, 0, 0, 0, 0, 0]).unwrap();
+        assert_eq!(ok.u64().unwrap(), 0x8000_0000_0000_0000);
+    }
 
     #[test]
     fn round_trips() {
