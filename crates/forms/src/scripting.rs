@@ -169,6 +169,9 @@ pub fn document_scripts(doc: &Document) -> Vec<String> {
     document_scripts_named(doc).into_iter().map(|(_, js)| js).collect()
 }
 
+/// Most `/Kids` entries the document JavaScript name tree walk reads in all.
+const MAX_QUEUED_KIDS: usize = 1 << 20;
+
 /// [`document_scripts`] with their names.
 pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
     let Some(root) = doc.root() else { return Vec::new() };
@@ -177,41 +180,70 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
     let Some(tree) = names.as_dict().and_then(|n| n.get(b"JavaScript")).cloned() else { return Vec::new() };
     let mut out: Vec<(String, String)> = Vec::new();
     let mut scripts = crate::script_budget();
-    // Kids stay unresolved on the stack, and each node is read once: a node listed many times,
-    // or among its own kids, must not multiply the work.
+    // Kids are indirect references (ISO 32000-2 §7.9.6), queued unresolved, each the first time
+    // it is listed: a node listed many times, or among its own kids, must not multiply the work,
+    // and the stack holds only references (a direct object there would be copied whole, once
+    // for every node listing it). Only the root may be direct. Nodes are told apart by object
+    // number, as `Document::get` finds them, so `5 0 R` and `5 1 R` are one node.
+    let mut seen: HashSet<u32> = tree.as_ref().map(|r| r.num).into_iter().collect();
+    // The `/Names` arrays read, by object number: nodes sharing one would otherwise each list
+    // all its scripts again.
+    let mut names_read: HashSet<u32> = HashSet::new();
     let mut stack = vec![tree];
-    let mut seen: HashSet<ObjRef> = HashSet::new();
     let mut visited = 0;
+    // Every `/Kids` entry read, over the whole walk. Nodes sharing one long `/Kids` array would
+    // otherwise read all of it once per node.
+    let mut queued = 0usize;
     while let Some(raw) = stack.pop() {
-        if let Object::Ref(r) = raw
-            && !seen.insert(r)
-        {
-            continue;
-        }
         visited += 1;
         if visited > 10_000 {
             break;
         }
         let node = doc.resolve(&raw);
         let Some(d) = node.as_dict() else { continue };
-        if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
-            stack.extend(kids);
+        if let Some(kids) = d.get(b"Kids") {
+            in_array(doc, kids, |kids| {
+                // Past the limit nothing more is read, but the nodes already queued still are.
+                // Pushed in reverse, so the kids are read in the order listed.
+                let room = MAX_QUEUED_KIDS.saturating_sub(queued);
+                queued = queued.saturating_add(kids.len().min(room));
+                let new: Vec<ObjRef> = kids.iter().take(room).filter_map(Object::as_ref).filter(|r| seen.insert(r.num)).collect();
+                stack.extend(new.into_iter().rev().map(Object::Ref));
+            });
         }
-        if let Some(pairs) = d.get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_array().cloned()) {
-            for pair in pairs.chunks(2) {
-                let [k, v] = pair else { continue };
-                let key = match &*doc.resolve(k) {
-                    Object::String(s) => s.to_text(),
-                    _ => continue,
-                };
-                if let Some(js) = crate::script(doc, v, &mut scripts) {
-                    out.push((key, js));
+        if let Some(pairs) = d.get(b"Names")
+            && pairs.as_ref().is_none_or(|r| names_read.insert(r.num))
+        {
+            in_array(doc, pairs, |pairs| {
+                for pair in pairs.chunks(2) {
+                    let [k, v] = pair else { continue };
+                    let key = match &*doc.resolve(k) {
+                        Object::String(s) => s.to_text(),
+                        _ => continue,
+                    };
+                    if let Some(js) = crate::script(doc, v, &mut scripts) {
+                        out.push((key, js));
+                    }
                 }
-            }
+            });
         }
     }
     out.sort();
     out
+}
+
+/// Call `f` on the array `o` is, or refers to, read in place: resolving a direct array would
+/// copy it.
+fn in_array(doc: &Document, o: &Object, f: impl FnOnce(&[Object])) {
+    match o {
+        Object::Ref(r) => {
+            if let Some(a) = doc.get(*r).as_array() {
+                f(a);
+            }
+        }
+        Object::Array(a) => f(a),
+        _ => {}
+    }
 }
 
 /// Add (or replace) a document-level JavaScript named `name`.
