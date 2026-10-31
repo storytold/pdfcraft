@@ -180,6 +180,15 @@
 	Available	Dostępne
 	Ready	Gotowe
 	Search tools and commands…	Szukaj narzędzi i poleceń…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Dodany tekst
+	Link URL	Adres URL łącza
+	Search tools and commands	Szukaj narzędzi i poleceń
+	Text editing line	Wiersz edycji tekstu
+	Text to place	Tekst do umieszczenia
+	Tooltip	Podpowiedź
+	Words or phrases to redact	Słowa lub frazy do utajenia
 	No matching tools	Brak pasujących narzędzi
 	Tool	Narzędzie
 	Command	Polecenie
@@ -537,6 +546,12 @@
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Odczytuje {names}, które z kolei odczytują je. Żadna kolejność nie naprawi pętli: zmień jedną z formuł.
 	Not in order	Poza kolejnością
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Brakuje go w kolejności obliczeń zapisanej w pliku PDF: inne przeglądarki PDF mogą go nie obliczać.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Odczytuje {name}, którego nie ma w formularzu, więc nie dostaje stamtąd żadnej wartości.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Jego skrypt odczytuje też pola, których nazwy tworzy w trakcie działania, więc tych odczytów nie da się sprawdzić.
+	Missing field	Brak pola
+	Unchecked reads	Niesprawdzone odczyty
+	{field} reads fields named as it runs	{field} odczytuje pola nazywane w trakcie działania
+	Some names are built as it runs	Niektóre nazwy powstają w trakcie działania
 	Back to Prepare a form	Wróć do „Przygotuj formularz”
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Żadne pole tego formularza nie oblicza jeszcze swojej wartości. Nadaj polu obliczenie na karcie Obliczenia w jego właściwościach, a pojawi się tutaj.
 	{names} and {last}	{names} i {last}
@@ -593,6 +608,9 @@
 	Clean Up	Porządkowanie
 	Color Images	Obrazy kolorowe
 	Grayscale Images	Obrazy w skali szarości
+	Monochrome Images	Obrazy monochromatyczne
+	CCITT Group 4	CCITT grupa 4
+	JBIG2 (lossless)	JBIG2 (bezstratna)
 	Bicubic downsampling to	Zmniejsz rozdzielczość metodą dwusześcienną do
 	for images above	dla obrazów powyżej
 	Compression	Kompresja
@@ -616,6 +634,7 @@
 	Discard private data of other applications	Usuń prywatne dane innych aplikacji
 	Discard hidden text	Usuń ukryty tekst
 	Use Flate to encode streams that are not encoded	Zakoduj nieskompresowane strumienie metodą Flate
+	In streams that use LZW encoding, use Flate instead	Zakoduj strumienie LZW metodą Flate
 	Remove invalid links and bookmarks	Usuń nieprawidłowe łącza i zakładki
 	Remove unreferenced named destinations	Usuń nieużywane nazwane miejsca docelowe
 	Compress document structure (object streams)	Kompresuj strukturę dokumentu (strumienie obiektów)
@@ -807,14 +826,9 @@
 	Copy Image in Original Format	Kopiuj obraz w oryginalnym formacie
 	The image has been copied as a {ext} file	Obraz został skopiowany jako plik {ext}
 	The page has changed; select the image again	Strona się zmieniła; zaznacz obraz ponownie
-	Check for updates	Sprawdź aktualizacje
 	No check has run yet.	Nie sprawdzono jeszcze aktualizacji.
-	Checking for a newer version…	Sprawdzanie dostępności nowszej wersji…
 	PdfCraft {v} is available.	PdfCraft {v} jest dostępny.
 	You have version {c}. Download the new version from its release page.	Masz wersję {c}. Pobierz nową wersję ze strony wydania.
-	PdfCraft {c} is up to date.	PdfCraft {c} jest aktualny.
-	Couldn't check for updates: {e}	Nie można sprawdzić aktualizacji: {e}
-	You have version {c}. All releases are listed at {page}.	Masz wersję {c}. Wszystkie wydania są dostępne na {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Sprawdza najnowsze wydanie na GitHubie. Nic nie jest pobierane ani instalowane automatycznie.
 	Download	Pobierz
 	Later	Później
@@ -858,6 +872,14 @@
 	Applies to 1 page	Dotyczy 1 strony
 	Applies to {n} pages	Liczba objętych stron: {n}
 	Replaces the existing one on those pages.	Zastępuje istniejący element na tych stronach.
+	Checking pages…	Sprawdzanie stron…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Strona z własnym białym wypełnieniem, które zasłoniłoby tło: {pages}. Zastąp
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Strony z własnym białym wypełnieniem, które zasłoniłoby tło: {pages}. Zastąp
+	Removing the background puts the page's own backdrop back.	Usunięcie tła przywraca własne białe wypełnienie strony.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Strona zakryta obrazem (skan?): {pages}; tło nie będzie tam widoczne.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Strony zakryte obrazami (skany?): {pages}; tło nie będzie tam widoczne.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Strona zmieniona po dodaniu tła, więc jej własne białe wypełnienie pozostaje wyłączone: {pages}. Na białym papierze wygląda tak samo.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Strony zmienione po dodaniu tła, więc ich własne białe wypełnienia pozostają wyłączone: {pages}. Na białym papierze wyglądają tak samo.
 	PDF or image	PDF lub obraz
 	No file chosen	Nie wybrano pliku
 	Page number	Numer strony
@@ -2044,6 +2066,10 @@
 	Perimeter	Obwód
 	Area	Pole powierzchni
 	Drawing scale	Skala rysunku
+	Scale	Skala
+	Common scales	Popularne skale
+	Enter a scale such as 1:50.	Wpisz skalę, na przykład 1:50.
+	Applying a scale switches units to m / mm.	Zastosowanie skali zmienia jednostki na m / mm.
 	Snapping	Przyciąganie
 	Export measurements	Eksportuj pomiary
 	Open a PDF to measure it.	Otwórz PDF, aby wykonać pomiar.
@@ -2095,6 +2121,7 @@
 	Couldn't import the signature image: {e}	Nie można zaimportować obrazu podpisu: {e}
 	Go to page…	Przejdź do strony…
 	Reopen the files that were open when PdfCraft last closed	Otwórz ponownie pliki otwarte przy ostatnim zamknięciu PdfCraft
+	Restore the last view (page, zoom and page display) when a document is opened again	Przywracaj ostatni widok (stronę, powiększenie i układ stron) przy ponownym otwarciu dokumentu
 	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	Czcionki tekstu PDF nie obsługują znaku „{c}” ({code}). Wybierz obsługiwany tekst.
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Standardowe czcionki nie obsługują znaku „{c}” ({code}). Na razie można dodawać tylko tekst ze znakami zachodnioeuropejskimi.
 	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	Czcionka tego pola nie obsługuje znaku „{c}” ({code}), więc PdfCraft wyświetla w jego miejscu ?. Wartość została zapisana, a inne przeglądarki PDF odrysują pole na jej podstawie.
@@ -2309,6 +2336,8 @@ key	Space	Spacja
 	These objects could not be moved. Select them again and try a smaller move.	Nie udało się przenieść tych obiektów. Zaznacz je ponownie i spróbuj mniejszego przesunięcia.
 	This page contains objects that cannot be selected together.	Ta strona zawiera obiekty, których nie można zaznaczyć razem.
 	Reload documents when their files change on disk	Wczytuj ponownie dokumenty, gdy ich pliki zmienią się na dysku
+	Don't show again	Nie pokazuj ponownie
+	Show a notice when a document is secured	Pokazuj powiadomienie, gdy dokument jest zabezpieczony
 	Always use my default zoom and page layout	Zawsze używaj mojego domyślnego powiększenia i układu stron
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ten plik zmienił się na dysku. Wczytaj ponownie pokazuje nową wersję i odrzuca niezapisane zmiany; Zapisz zastępuje ją tą wersją.
 	Reload	Wczytaj ponownie
@@ -2366,6 +2395,11 @@ animation effects	Off	Wyłączone
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} jest obliczane przed {fields}, które odczytuje.|{field} jest obliczane przed {fields}, które odczytuje.|{field} jest obliczane przed {fields}, które odczytuje.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	Jeszcze {n} pole jest obliczane za wcześnie.|Jeszcze {n} pola są obliczane za wcześnie.|Jeszcze {n} pól jest obliczanych za wcześnie.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	W kolejności zapisanej w pliku PDF brakuje {fields}, więc inne przeglądarki PDF mogą go nie obliczać.|W kolejności zapisanej w pliku PDF brakuje {fields}, więc inne przeglądarki PDF mogą ich nie obliczać.|W kolejności zapisanej w pliku PDF brakuje {fields}, więc inne przeglądarki PDF mogą ich nie obliczać.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formuła odczytuje pole, którego nie ma w formularzu|{n} formuły odczytują pola, których nie ma w formularzu|{n} formuł odczytuje pola, których nie ma w formularzu
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} odczytuje {fields}, którego nie ma w formularzu.|{field} odczytuje {fields}, których nie ma w formularzu.|{field} odczytuje {fields}, których nie ma w formularzu.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Jeszcze {n} formuła odczytuje brakujące pole.|Jeszcze {n} formuły odczytują brakujące pola.|Jeszcze {n} formuł odczytuje brakujące pola.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} tworzy część nazw pól w trakcie działania, więc te odczyty nie są sprawdzane.|{fields} tworzą część nazw pól w trakcie działania, więc te odczyty nie są sprawdzane.|{fields} tworzą część nazw pól w trakcie działania, więc te odczyty nie są sprawdzane.
+@plural	{fields} is missing|{fields} are missing	Brak {fields}|Brak {fields}|Brak {fields}
 	Scan	Skanuj
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Podpisz się na białej kartce i zrób jej zdjęcie przy jasnym, równomiernym świetle (użyj lampy błyskowej). Wybierz zdjęcie lub upuść je tutaj: PdfCraft znajdzie podpis i usunie papier.
 	Choose photo…	Wybierz zdjęcie…
@@ -2467,6 +2501,19 @@ animation effects	Off	Wyłączone
 	Make properties default	Ustaw właściwości jako domyślne
 	Pages selected	Zaznaczone strony
 	Page properties	Właściwości strony
+	Create & Edit	Tworzenie i edycja
+	Review & Compare	Recenzja i porównanie
+	Forms & Signatures	Formularze i podpisy
+	Protect & Standardize	Ochrona i standaryzacja
+	Customize & Automate	Dostosowanie i automatyzacja
+	No tools match your search.	Żadne narzędzie nie pasuje do wyszukiwania.
+	Expand all tools	Rozwiń wszystkie narzędzia
+	Collapse all tools	Zwiń wszystkie narzędzia
+	Attach a file…	Dołącz plik…
+	Delete attachment	Usuń załącznik
+	Attaching files is not available on the web yet	Dołączanie plików nie jest jeszcze dostępne w wersji webowej
+	Attach {name}	Dołącz {name}
+	Delete attachment {key}	Usuń załącznik {key}
 	Font	Czcionka
 	Bulleted list	Lista punktowana
 	Numbered list	Lista numerowana
@@ -2621,3 +2668,19 @@ animation effects	Off	Wyłączone
 	field names can't contain a period: {name}	nazwy pól nie mogą zawierać kropki: {name}
 	two cells would both be named {name}	dwie komórki miałyby nazwę {name}
 	a field named {name} already exists	pole o nazwie {name} już istnieje
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Dzisiaj
+@plural	{n} reply|{n} replies	{n} odpowiedź|{n} odpowiedzi|{n} odpowiedzi
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Narzędzia stron
+	Insert pages from a file after the selection…	Wstaw strony z pliku po zaznaczeniu…
+	Rotate the selected pages counterclockwise	Obróć zaznaczone strony w lewo
+	Rotate the selected pages clockwise	Obróć zaznaczone strony w prawo
+	Extract the selected pages…	Wyodrębnij zaznaczone strony…
+	Delete the selected pages	Usuń zaznaczone strony
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Opcje tej odpowiedzi
+	Export value	Wartość eksportowa
