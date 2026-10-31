@@ -824,14 +824,9 @@
 	Copy Image in Original Format	画像を元の形式でコピー
 	The image has been copied as a {ext} file	画像を {ext} ファイルとしてコピーしました
 	The page has changed; select the image again	ページが変更されました。画像をもう一度選択してください
-	Check for updates	アップデートを確認
 	No check has run yet.	まだ確認していません。
-	Checking for a newer version…	新しいバージョンを確認中…
 	PdfCraft {v} is available.	PdfCraft {v} が利用できます。
 	You have version {c}. Download the new version from its release page.	現在のバージョンは {c} です。リリースページから新しいバージョンをダウンロードしてください。
-	PdfCraft {c} is up to date.	PdfCraft {c} は最新です。
-	Couldn't check for updates: {e}	アップデートを確認できませんでした: {e}
-	You have version {c}. All releases are listed at {page}.	現在のバージョンは {c} です。すべてのリリースは {page} に掲載されています。
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	GitHub で最新リリースを確認します。自動でダウンロードやインストールは行いません。
 	Download	ダウンロード
 	Later	後で

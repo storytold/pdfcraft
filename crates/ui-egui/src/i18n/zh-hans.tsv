@@ -492,14 +492,9 @@
 	Copy Image in Original Format	以原始格式复制图像
 	The image has been copied as a {ext} file	图像已复制为 {ext} 文件
 	The page has changed; select the image again	页面已更改；请重新选择图像
-	Check for updates	检查更新
 	No check has run yet.	尚未运行检查。
-	Checking for a newer version…	正在检查新版本…
 	PdfCraft {v} is available.	PdfCraft {v} 可用。
 	You have version {c}. Download the new version from its release page.	当前版本为 {c}。请从其发布页面下载新版本。
-	PdfCraft {c} is up to date.	PdfCraft {c} 已是最新。
-	Couldn't check for updates: {e}	无法检查更新：{e}
-	You have version {c}. All releases are listed at {page}.	当前版本为 {c}。所有版本列在 {page}。
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	向 GitHub 查询最新版本。不会自动下载或安装任何内容。
 	Download	下载
 	Later	稍后

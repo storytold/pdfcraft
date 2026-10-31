@@ -1,5 +1,13 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
+> **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
+> **Last reviewed:** 2026-10-27 · **Last updated:** 2026-10-27 · **Change:** patch (M2, PR #4172: integrate main 1dd2737b; preserve viewer-only CJK fallback and regression coverage across engine, renderer and Combine module splits; estimates unchanged)
+> **Last reviewed:** 2026-10-27 · **Last updated:** 2026-10-27 · **Change:** patch (M2, PR #4172: integrate main 9a9813bf and migrate viewer-only CJK configuration to the split engine modules; estimates unchanged)
+> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: document installed-font helpers and regression contracts; behavior and estimates unchanged)
+> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: print-preview font policy matches output, with isolated caches and GBK switching regressions; estimates unchanged)
+> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: reconcile current main and retain Japanese serif/weight selection alongside display-only CJK fallback; estimates unchanged)
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M5: one reply in the Comments panel is edited, copied or deleted from its own "…" menu; estimates unchanged)
@@ -13,24 +21,29 @@
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M6: the calculation order flags a formula that reads a field the form doesn't have and a script that builds the names it reads; the tools show each formula; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M7, #2636 partial: pasting added text boxes and images in the engine and through `content_copy`; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M11: image optimization accounts for page-local UserUnit; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-23 | **Last updated:** 2026-10-23 | **Change:** minor (M10: Word table cells use the widths of their own grid columns; estimates unchanged)
 > **Last reviewed:** 2026-10-23 | **Last updated:** 2026-10-23 | **Change:** minor (M10: table spans retain text from covered slots in Office exports; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M10: image export preserves soft-mask Decode opacity ranges; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M10: vector printing preserves existing page XObjects when adding annotation appearances; estimates unchanged)
+>
+> **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M2, PR #4172: CJK fallback in Combine thumbnails and figure previews; FangSong and subset-prefixed Founder family matching; estimates unchanged)
+>
+> **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (M14, #3558: rebase guarded macOS per-file association recovery onto current main; estimates unchanged)
+> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (M12 #3673: Character encoding accepts Identity-H/V with Adobe CJK collections; estimates unchanged)
 > **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (M7 #2517: a partial rewrite inside one text object closes its marker before the next paragraph; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M7 #2517: a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-
+>
 > **Last reviewed:** 2026-10-20 | **Last updated:** 2026-10-20 | **Change:** minor (M10, #3532 partial: vector printing retains existing appearances with absent Subtype; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (M4: initial-view options resolve indirect boolean preferences; estimates unchanged)
 > **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (M3, #3808: the Pages inspector has an independent 50–150% thumbnail size slider and buttons; selection and current-page following are retained, with headless ui.set coverage. Estimates unchanged.)
-
+>
 > **Last reviewed:** 2026-10-20 | **Last updated:** 2026-10-20 | **Change:** minor (M2, #3574: named form properties retain page origin and own dictionary boundaries; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (M3, #3541/#3620: comment hover follows individual marked lines and original annotation paint order; estimates unchanged)
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** patch (PR #3348 review: retain short tracked punctuation in gap estimates; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (M2, #3601: missing spacing glyphs in non-embedded Japanese CID substitutes draw as blanks while PDF widths and Unicode stay unchanged; estimates unchanged)
 > **Last reviewed:** 2026-10-20 | **Last updated:** 2026-10-20 | **Change:** minor (M11 #3507: image merging preserves content stream boundaries; estimates unchanged)
 > **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (M8, gap 6 #2662: the redaction audit counts a cover over one word of a long line; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -38,7 +51,7 @@
 > **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (M6: calculation scripts read their notation only from a comment, and a regular expression after a condition as one; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** minor (M5, PR #1971: bounded nested FDF export excludes source page/page-tree dictionaries; refreshed against upstream 4db6ac4a; estimates unchanged)
 > **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** patch (M2 #3086: dotted TOC leaders no longer hide word spaces; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** minor (M3, PR #3101: optional gapless page display with translations in all 22 catalogs; organizer and comparison toggles corrected; estimates unchanged)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M14/#2383 GPU-limit candidate; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-20 - **Last updated:** 2026-10-20 - **Change:** minor (M6, #3502: form detection uses the existing content-stream boundary policy; estimates unchanged)
@@ -53,7 +66,7 @@
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M1: raw-deflate fallback preserves decoding-limit errors; refreshed upstream; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-15 · **Change:** minor (M2: objects in one large object stream are read in linear time; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-16; **Last updated:** 2026-10-16; **Change:** minor (M5 #2669, item 5: reply groups and page root counts per frame; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-14 · **Change:** minor (M14: the Italian catalog has every entry the other catalogs had and the code looks up, 2,528 entries; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-16 | **Last updated:** 2026-10-16 | **Change:** minor (M10 #1201 partial: lossless image Decode; estimates unchanged) | **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-13 · **Change:** minor (M2/M6: spot-colour images convert once per pixel value; widget placement and the Fields panel scale with the field count; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -116,7 +129,7 @@ encryption and storage-write retry behavior are unchanged; this does not resolve
 
 ## Alpha gate
 
-The stage standard's gate: Acrobat Pro's everyday core workflows must each work end to end on the
+The alpha gate: Acrobat Pro's everyday core workflows must each work end to end on the
 main platform (macOS), with the work saved and reopened. Any `no`, or a `partial` that blocks the
 workflow, keeps PdfCraft pre-alpha; those rows are the alpha checklist. Assessed 2026-10-10 with the
 rule applied across the Crafting Apps: a row blocks only when a typical user cannot complete the
@@ -161,6 +174,14 @@ Help ▸ Check for updates is manual only.
 
 ## Milestones
 
+M2 update (2026-10-23, #234 / continuation of #1567): the desktop viewer uses installed CJK
+faces for non-embedded CID fonts, including Windows GBK-EUC-H books. Windows Song/Hei/Kai
+families are retained when installed, and reload retains the fallback. This is display-only;
+export, printing, OCR, automation and machines without a candidate retain their limitations.
+Print preview excludes installed faces and isolates its font cache from the viewer, matching
+output font availability even after repeated view/print switching (2026-10-26, PR #4172).
+The M2 readiness and remaining-work estimates below are unchanged.
+
 "Plan size" is the original single-agent sizing. "Done" is the estimated share of that milestone's
 *acceptance criteria* that are met, not lines of code. "Remaining" is re-measured on 2026-10-10 at
 the measured rate (see [target-app-parity.md](target-app-parity.md#effort-and-calibration)); the
@@ -170,7 +191,7 @@ total matches the parity estimate.
 |---|---|---|---|---|---|
 | M0 | Skeleton: workspace, xtask gates, CI | 15–30 | 98% | 1–2 | GitHub workflow, `deny.toml` (licence audit of every dependency), parity checklist (826 features, `xtask parity`) done. Missing: remaining crate stubs, testkit/oracle crates |
 | M1 | COS: filters, crypt, parser, xref, writer | 120–200 | 80% | 20–40 | Done:<br>- filters and crypt: every standard-security revision R2–R6 (RC4, AES-128/256), SASLprep, permissions, creating encryption;<br>- cos: parse and repair (including invalid xref object-number ranges), decoded-stream limits including unfiltered data, decrypt on load, re-encrypt on save, incremental and full writing.<br>Corpus: open/edit/save passes on 958 files, and all 7 password-protected files open.<br>Full saves now pack objects into compressed object streams. An unchanged incremental save of a classic table writes a zero-length cross-reference subsection instead of a section with no subsections (#1339). A full rewrite keeps unknown trailer entries, including objects reachable only from them (#1338). Fuzzing runs nightly (`xtask fuzz`). Raw-deflate fallback preserves decoding-limit errors, including through tolerant COS stream decoding. Done since: #2658: macOS atomic saves retain destination extended attributes, including Finder tags, and reject partial resource-fork reads after size changes. Metadata failures retain the original PDF and unsaved edit. Missing: ≥ 250 tests, own image codecs |
-| M2 | Model, render, text | 200–350 | 15% | 130–230 | hayro bootstrap renderer (vendored patches); inspector predictor scratch is bounded by available input, and JPX sample rescaling handles 1–32 bits safely. Text extraction reaches word-F1 0.98 against pdftotext. Short same-line redraws split before placement rather than interleaving. Missing: model crate, fonts, DisplayList, renderer independent of hayro. Inspector page-label traversal and output are resource-bounded, with physical-number fallback warnings. Packed TIFF-predictor RGB rows retain later rows in decoding and rendering. Page marks, added content and print output retain small page-unit transform coefficients when serialized. Forms without Resources use page Properties for ActualText and layer visibility; own dictionaries stop fallback. Oversized missing inline-image samples, including header and terminator overhead, no longer pin the content window (#3107 / PR #3438); normal large streamed images retain deterministic sample boundaries. Radial luminosity fades have synthetic coverage for the existing #2132 mask guard, including per-pixel references, antialiased clips, previews, scales and tiles; no additional production fix was needed. Dotted TOC leaders no longer inflate letter tracking or hide word spaces (#3086); phrase search and selection are covered. Short tracked ellipses retain their gap samples and remain searchable. Missing spacing glyphs in non-embedded Japanese CID substitutes render blank without changing PDF advances or Unicode (#3601). |
+| M2 | Model, render, text | 200–350 | 15% | 130–230 | hayro bootstrap renderer (vendored patches); inspector predictor scratch is bounded by available input, and JPX sample rescaling handles 1–32 bits safely. Text extraction reaches word-F1 0.98 against pdftotext. Short same-line redraws split before placement rather than interleaving. Missing: model crate, fonts, DisplayList, renderer independent of hayro. Inspector page-label traversal and output are resource-bounded, with physical-number fallback warnings. Packed TIFF-predictor RGB rows retain later rows in decoding and rendering. Page marks, added content and print output retain small page-unit transform coefficients when serialized. Forms without Resources use page Properties for ActualText and layer visibility; own dictionaries stop fallback. Oversized missing inline-image samples, including header and terminator overhead, no longer pin the content window (#3107 / PR #3438); normal large streamed images retain deterministic sample boundaries. Radial luminosity fades have synthetic coverage for the existing #2132 mask guard, including per-pixel references, antialiased clips, previews, scales and tiles; no additional production fix was needed. Dotted TOC leaders no longer inflate letter tracking or hide word spaces (#3086); phrase search and selection are covered. Short tracked ellipses retain their gap samples and remain searchable. Missing spacing glyphs in non-embedded Japanese CID substitutes render blank without changing PDF advances or Unicode (#3601). The desktop viewer can use installed CJK fonts, including Windows GBK Song/Hei/Kai/FangSong and subset-prefixed Founder names; Combine thumbnails and accessibility figure previews use the same display-only fallback, without changing export or print font policy (#234, continuation of #1567, review #4172). Print previews exclude installed faces and isolate their font cache; GBK regressions cover view/print switching for inline and pooled whole-page/tile rendering. Installed-font helpers and their regression contracts have function documentation. GBK regression rasters match explicit-Unicode references with independently selected installed faces; wrong-glyph and wrong-family negative controls fail. Integration with main fa5f9f8c retains viewer fallback across the split engine session modules, renderer tests and Combine thumbnail workers. |
 | M2 | Model, render, text | 200–350 | 15% | 130–230 | hayro bootstrap renderer (vendored patches); inspector predictor scratch is bounded by available input, and JPX sample rescaling handles 1–32 bits safely. Text extraction reaches word-F1 0.98 against pdftotext. Short same-line redraws split before placement rather than interleaving. Missing: model crate, fonts, DisplayList, renderer independent of hayro. Inspector page-label traversal and output are resource-bounded, with physical-number fallback warnings. Packed TIFF-predictor RGB rows retain later rows in decoding and rendering. The renderer keeps its one-point crop-size floor in physical points after UserUnit scaling, with regression coverage for crop origins, rotations and f32 reciprocal rounding. Existing unit policy and nearly-zero fallback are retained. |
 | M2 | Model, render, text | 200–350 | 15% | 130–230 | hayro bootstrap renderer (vendored patches); inspector predictor scratch is bounded by available input, and JPX sample rescaling handles 1–32 bits safely. Text extraction reaches word-F1 0.98 against pdftotext. Short same-line redraws split before placement rather than interleaving. Missing: model crate, fonts, DisplayList, renderer independent of hayro. Inspector page-label traversal and output are resource-bounded, with physical-number fallback warnings |
 | M3 | Viewer app (native + web) | 80–150 | 90% | 10–20 | Acrobat-style shell, find, select, panels, tiles, web build, UI control channel for agents (opt-in). #3808: the Pages inspector offers a 50–150% thumbnail slider and buttons, also available through `ui.set`. Missing: 60 fps test on a 500-page document, snapshot tests of every panel<br>Done since: fit visible, document title in the window; Linux middle-button scrolling; shared three-state theme preferences in the toolbar, View menu and control channel; numeric Linux portal events and idle wakeups completing #881, with native appearance inheritance retained (#446); late browser startup downloads preserve the current document and Save target (#171). Selected-text Copy in Edit and the canvas context menu is covered by focused regressions and native clipboard checks (#1225); document copy restrictions apply to the floating action too. #1364 candidate: absolute local GoToR links ask before target access; headless callers explicitly opt in. Native-opening candidate: chosen tools survive preparation and password retries; startup intake waits for pending preparation. Page-label navigation displays logical labels, retains the current page on unchanged submission and refreshes focused same-document replacements; clean file-watcher reload preserves the chosen scrolling mode, preventing a Single Page reader from jumping to page 1 during replacement. Synthetic control regressions cover these behaviors. #3149: page-list changes discard render demand based on old geometry; actual raster dimensions are checked against the GPU limit before upload. Synthetic crash and continued-rendering regressions cover the replacement path. Save-prompt shortcuts yield to dialogs above them; stacked link-consent UI regression covers Escape and Return. Comment hover follows individual marked lines and original annotation paint order (#3541/#3620), independently of spatial inspection sorting; synthetic rotation, differing-upper-edge overlap and unchanged-document regressions. Optional page gaps join page edges without cropping PDF margins; current-document toggle, persisted default and UI control options are covered by viewer tests. Gap changes in Organize Pages preserve document scroll position, and both comparison panes follow menu and control choices. Repeated window resizes by an edge and moves by the tab strip on GNOME/Wayland work without a click in between. |
@@ -253,11 +274,15 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 
 ## Revision history
 
+**2026-10-26 · patch:** M2/PR #4172: reconcile current main and preserve upstream Japanese serif/weight selection alongside the installed CJK viewer and preview fallback. Estimates unchanged.
+
 **2026-10-25 · minor:** M14 localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build has no Hans face. Estimates unchanged.
 
 **2026-10-23 · minor:** M11: image downsampling uses physical resolution after page-local `/UserUnit` scaling, including shared nested forms.
 Synthetic measurement and optimization regressions cover the change.
 Estimates unchanged.
+
+**2026-10-23 · minor:** M2/PR #4172: display-only CJK fallback covers Combine thumbnails and accessibility figure previews. Windows family matching includes FangSong and subset-prefixed Founder names. Export, print, OCR and automation policy and readiness estimates are unchanged.
 
 **2026-10-20 · minor:** M2/#3601: substitute-font spacing aliases preserve blank ink, original `/W` and `/DW` advances, and Unicode extraction. Synthetic renderer regressions cover the reported Japanese CID fixture. Estimates unchanged.
 
@@ -265,6 +290,9 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | patch | M2, PR #4172: eight GBK font/alias cases compare exact pixels with independent installed-face and explicit-Unicode references; wrong-glyph and wrong-family negative controls fail. Estimates unchanged. |
+| 2026-10-31 | patch | M2, PR #4172: integrate main fa5f9f8c, preserve both raster test groups and restore explicit display_config imports; display-only CJK policy and estimates unchanged. |
+| 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-24 | minor | M11: the PDF Optimizer and Reduce File Size store Group 3 fax images as Group 4 when smaller (`Document::fax_params`), and pack eight-bit `DeviceRGB` of only black and white (as grey) and indexed images of 2, 4 or 8 bits that use only palette entries 0 and 1 (keeping the palette) to one bit, so Monochrome Images compresses and downsamples them. Estimates unchanged. |
 | 2026-10-24 | minor | M11: monochrome downsampling: the PDF Optimizer and Reduce File Size average black-and-white images (1-bit, CCITT fax, eight-bit black-and-white grey) above 450 ppi down to 300 ppi, by area with ties black, as Monochrome Images ▸ Downsample to and `doc_optimize` `mono: { downsample, ppi, above_ppi }`; CCITT decoding moves into `pdfcraft-filters` (`decode_ccitt`) behind `Document::decoded_image`. Estimates unchanged. |
 | 2026-10-24 | minor | M11: Create PDF stores pictures of only black and white at one bit (Group 4 or Flate, whichever is smaller) instead of eight-bit grey; the optimizer packs eight-bit black-and-white grey images to one bit before Monochrome Images compresses them, unless the grey settings make them smaller, as they can a dithered scan, soft mask counted; Export ▸ Images decodes CCITT fax images. Estimates unchanged. |

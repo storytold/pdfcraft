@@ -342,12 +342,10 @@ theme	Appearance	Giao diện
 	Check Again	Kiểm tra lại
 	Check again	Kiểm tra lại
 	Check box is checked by default	Hộp kiểm được chọn theo mặc định
-	Check for updates	Kiểm tra bản cập nhật
 	Check spelling	Kiểm tra chính tả
 	Check the pages	Kiểm tra các trang
 	Check the pages of {name}: {why}	Kiểm tra các trang của {name}: {why}
 	Checking Options ({on} of 32 in all categories)	Tùy chọn kiểm tra ({on} trên 32 ở tất cả danh mục)
-	Checking for a newer version…	Đang kiểm tra phiên bản mới hơn…
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Chọn ảnh PNG hoặc JPEG (tối đa 4 MiB). Độ trong suốt được giữ nguyên.
 	Choose a folder for the exported files	Chọn thư mục cho các tệp đã xuất
 	Choose a folder for the extracted pages	Chọn thư mục cho các trang đã trích xuất
@@ -408,7 +406,6 @@ theme	Appearance	Giao diện
 	Copies:	Số bản sao:
 	Copy selected text	Sao chép văn bản đã chọn
 	Copy text	Sao chép văn bản
-	Couldn't check for updates: {e}	Không thể kiểm tra bản cập nhật: {e}
 	Couldn't open the printer's preferences: {e}	Không thể mở tùy chọn của máy in: {e}
 	Counterclockwise 90 degrees	Ngược chiều kim đồng hồ 90 độ
 	Country/Region	Quốc gia/Khu vực
@@ -910,7 +907,6 @@ theme	Appearance	Giao diện
 	Patterns (graphics objects)	Họa tiết (đối tượng đồ họa)
 	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft không đóng bình thường. Các tài liệu này có thay đổi đã được tự động lưu:
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft hoạt động ngoại tuyến. Không thu thập dữ liệu sử dụng, không cần tài khoản, và không xử lý đám mây trừ khi bạn thêm nhà cung cấp.
-	PdfCraft {c} is up to date.	PdfCraft {c} đã là bản mới nhất.
 	PdfCraft {v} is available.	PdfCraft {v} đã có sẵn.
 	Percentage	Phần trăm
 	Permissions password	Mật khẩu quyền hạn
@@ -1333,7 +1329,6 @@ theme	Appearance	Giao diện
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Biểu mẫu XFA: các trường và dữ liệu XFA của nó được giữ đồng bộ, nên các trình xem khác hiển thị những gì bạn điền.
 	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Bạn sắp áp dụng 1 dấu xóa. Văn bản, hình ảnh và bản vẽ nằm dưới các dấu, cũng như bình luận và trường biểu mẫu chồng lên chúng, sẽ bị xóa vĩnh viễn.
 	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Bạn sắp áp dụng {n} dấu xóa. Văn bản, hình ảnh và bản vẽ nằm dưới các dấu, cũng như bình luận và trường biểu mẫu chồng lên chúng, sẽ bị xóa vĩnh viễn.
-	You have version {c}. All releases are listed at {page}.	Bạn đang dùng phiên bản {c}. Tất cả các bản phát hành được liệt kê tại {page}.
 	You have version {c}. Download the new version from its release page.	Bạn đang dùng phiên bản {c}. Hãy tải phiên bản mới từ trang phát hành của nó.
 	Your changes will be lost if you don't save them.	Các thay đổi của bạn sẽ bị mất nếu bạn không lưu.
 	ZIP	ZIP
