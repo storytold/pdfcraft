@@ -202,6 +202,7 @@ pub const WORDINGS: &[&str] = &[
     "A graphics state uses the {} blend mode",
     "An image has a soft mask",
     "The {} colour space isn't allowed: PDF/X-1a allows only CMYK, gray and spot colour",
+    "A colour space is nested too deeply for the spaces under it to be checked",
     "Content uses DeviceRGB colour: PDF/X-1a allows only CMYK, gray and spot colour",
     "{} colour doesn't match the output intent's colour space",
     "Content uses {} colour, which doesn't match the output intent's colour space",
@@ -768,6 +769,10 @@ fn transparency(doc: &Document, objs: &[(ObjRef, Arc<Object>)], f: &mut Findings
 /// Separation under a pattern is three steps, and a deeper or cyclic chain is malformed.
 const MAX_SPACE_DEPTH: u8 = 4;
 
+/// What [`families`] reports for a chain deeper than [`MAX_SPACE_DEPTH`]: the spaces under the
+/// cut aren't known, so [`colour`] reports the space instead of passing it unchecked.
+const TOO_DEEP: &str = "(nested too deeply)";
+
 const DEVICE: [&str; 3] = ["DeviceGray", "DeviceRGB", "DeviceCMYK"];
 const INDEPENDENT: [&str; 4] = ["ICCBased", "CalGray", "CalRGB", "Lab"];
 
@@ -793,6 +798,7 @@ fn family(name: &[u8]) -> Option<&'static str> {
 /// its colorants (CGATS notes 5.1 applies the colour rules to them too).
 fn families(doc: &Document, cs: &Object, depth: u8, out: &mut Vec<&'static str>) {
     if depth > MAX_SPACE_DEPTH {
+        out.push(TOO_DEEP);
         return;
     }
     let cs = doc.resolve(cs);
@@ -897,6 +903,10 @@ fn colour(doc: &Document, level: Level, objs: &[(ObjRef, Arc<Object>)], pages: &
     let defined = |family: &str| uses.iter().any(|u| u.family == family);
     // Device colour that no definition explains was set by content operators.
     let set_by_content = [("DeviceGray", content.gray), ("DeviceRGB", content.rgb), ("DeviceCMYK", content.cmyk)];
+    // At every level: what such a space draws in can't be checked against any rule below.
+    for u in uses.iter().filter(|u| u.family == TOO_DEEP) {
+        f.add(COLOUR, "A colour space is nested too deeply for the spaces under it to be checked", None, u.page, Some(u.at));
+    }
     if level.cmyk_only() {
         for u in uses.iter().filter(|u| u.family == "DeviceRGB" || INDEPENDENT.contains(&u.family)) {
             f.add(

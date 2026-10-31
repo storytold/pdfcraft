@@ -2030,6 +2030,7 @@ key	Space	Mezerník
 	A graphics state uses the {} blend mode	Grafický stav používá režim prolnutí {}
 	An image has a soft mask	Obrázek má měkkou masku
 	The {} colour space isn't allowed: PDF/X-1a allows only CMYK, gray and spot colour	Barevný prostor {} není povolen: PDF/X-1a povoluje jen CMYK, šedou a přímé barvy
+	A colour space is nested too deeply for the spaces under it to be checked	Barevný prostor je vnořen příliš hluboko, takže prostory pod ním nelze zkontrolovat
 	Content uses DeviceRGB colour: PDF/X-1a allows only CMYK, gray and spot colour	Obsah používá barvu DeviceRGB: PDF/X-1a povoluje jen CMYK, šedou a přímé barvy
 	{} colour doesn't match the output intent's colour space	Barva {} neodpovídá barevnému prostoru výstupního záměru
 	Content uses {} colour, which doesn't match the output intent's colour space	Obsah používá barvu {}, která neodpovídá barevnému prostoru výstupního záměru

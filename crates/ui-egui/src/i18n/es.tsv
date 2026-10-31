@@ -1995,6 +1995,7 @@ action wizard	Start	Iniciar
 	A graphics state uses the {} blend mode	Un estado gráfico usa el modo de fusión {}
 	An image has a soft mask	Una imagen tiene una máscara suave
 	The {} colour space isn't allowed: PDF/X-1a allows only CMYK, gray and spot colour	El espacio de color {} no está permitido: PDF/X-1a solo admite CMYK, gris y tintas planas
+	A colour space is nested too deeply for the spaces under it to be checked	Un espacio de color está anidado a demasiada profundidad para comprobar los espacios que tiene debajo
 	Content uses DeviceRGB colour: PDF/X-1a allows only CMYK, gray and spot colour	El contenido usa color DeviceRGB: PDF/X-1a solo admite CMYK, gris y tintas planas
 	{} colour doesn't match the output intent's colour space	El color {} no coincide con el espacio de color del propósito de salida
 	Content uses {} colour, which doesn't match the output intent's colour space	El contenido usa color {}, que no coincide con el espacio de color del propósito de salida
