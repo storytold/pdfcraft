@@ -214,6 +214,152 @@ fn embedded_widths(doc: &Document, font: &Dict, m: &mut Metrics) {
     }
 }
 
+/// What a glyph draws, from the font's embedded program ([`GlyphInk::ink`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Ink {
+    /// The box its outline's points span (control points included, so it holds every curve), in
+    /// text space per unit of font size: `[x0, y0, x1, y1]` from the glyph origin.
+    Box([f64; 4]),
+    /// The glyph is in the program and draws nothing (a space).
+    Blank,
+    /// Not known: no readable program, or the code maps to no glyph in it.
+    Unknown,
+}
+
+/// Glyph outlines from a font's embedded sfnt program (`FontFile2`, or an OpenType `FontFile3`),
+/// so a caller can tell what a glyph draws rather than estimate it from the font's metrics.
+/// Simple fonts map codes to glyphs the way [`embedded_widths`] does; Type 0 fonts over a
+/// TrueType program go through `/CIDToGIDMap`. Bare CFF, Type 1 and Type 3 programs aren't read:
+/// their glyphs are [`Ink::Unknown`].
+#[derive(Clone, Debug)]
+pub struct GlyphInk {
+    program: Vec<u8>,
+    upem: f64,
+    glyphs: Glyphs,
+}
+
+#[derive(Clone, Debug)]
+enum Glyphs {
+    /// Simple font: the glyph for each code (0: none).
+    Simple(Vec<u32>),
+    /// Type 0: CID = glyph id.
+    Identity,
+    /// Type 0: the glyph id for each CID, from a `/CIDToGIDMap` stream.
+    Map(Vec<u16>),
+}
+
+impl GlyphInk {
+    /// The ink reader for `font` (a font dictionary whose [`Metrics`] are `metrics`), or `None`
+    /// when it has no program this can read. Its program and `/CIDToGIDMap` are decoded from
+    /// `budget`, so a page that names many large fonts can't multiply the work.
+    pub fn from_dict(doc: &Document, font: &Dict, metrics: &Metrics, budget: &mut DecodeBudget) -> Option<Self> {
+        use skrifa::instance::{LocationRef, Size};
+        use skrifa::{GlyphId, MetadataProvider as _, raw::TableProvider as _};
+        let descendant = dict(doc, font.get(b"DescendantFonts").and_then(|o| doc.resolve(o).as_array().and_then(|a| a.first()).cloned()).as_ref());
+        let descriptor = dict(doc, descendant.as_ref().unwrap_or(font).get(b"FontDescriptor"))?;
+        // A composite font's glyphs are only mapped through /CIDToGIDMap, which applies to TrueType.
+        let keys: &[&[u8]] = if metrics.composite { &[b"FontFile2"] } else { &[b"FontFile2", b"FontFile3"] };
+        for key in keys {
+            let Some(object) = descriptor.get(key) else { continue };
+            let object = doc.resolve(object);
+            let Object::Stream(stream) = object.as_ref() else { continue };
+            let Ok(program) = budget.decode_within(stream, MAX_SFNT) else { continue };
+            let Ok(face) = skrifa::FontRef::from_index(&program, 0) else { continue };
+            let upem = f64::from(face.metrics(Size::unscaled(), LocationRef::default()).units_per_em);
+            if upem == 0.0 {
+                continue;
+            }
+            let glyphs = if metrics.composite {
+                match descendant.as_ref()?.get(b"CIDToGIDMap").map(|o| doc.resolve(o)).as_deref() {
+                    None | Some(Object::Name(_)) => Glyphs::Identity,
+                    Some(Object::Stream(map)) => {
+                        Glyphs::Map(budget.decode_within(map, 1 << 17).ok()?.as_chunks::<2>().0.iter().map(|g| u16::from_be_bytes(*g)).collect())
+                    }
+                    Some(_) => return None,
+                }
+            } else {
+                let (charmap, cmap) = (face.charmap(), face.cmap().ok());
+                let found = |g: Option<GlyphId>| g.filter(|g| *g != GlyphId::NOTDEF);
+                Glyphs::Simple(
+                    (0..=255u32)
+                        .map(|code| {
+                            found(metrics.unicode.encoding.get(&code).and_then(|t| only_char(t)).and_then(|c| charmap.map(c)))
+                                .or_else(|| [0, 0xF000, 0xF100, 0xF200].into_iter().find_map(|o| found(cmap.as_ref()?.map_codepoint(code + o))))
+                                .map_or(0, GlyphId::to_u32)
+                        })
+                        .collect(),
+                )
+            };
+            return Some(Self { program, upem, glyphs });
+        }
+        None
+    }
+
+    /// What the glyph for `code` draws. `metrics` are the font's (for its code → CID mapping).
+    pub fn ink(&self, metrics: &Metrics, code: u32) -> Ink {
+        use skrifa::instance::{LocationRef, Size};
+        use skrifa::outline::DrawSettings;
+        use skrifa::{GlyphId, MetadataProvider as _};
+        let glyph = match &self.glyphs {
+            Glyphs::Simple(table) => table.get(code as usize).copied().unwrap_or(0),
+            Glyphs::Identity => metrics.cid(code),
+            Glyphs::Map(map) => map.get(metrics.cid(code) as usize).map_or(0, |g| u32::from(*g)),
+        };
+        if glyph == 0 {
+            return Ink::Unknown;
+        }
+        // ponytail: the program is parsed again for each glyph measured; keep the parsed
+        // outlines if redacting text-heavy pages gets slow.
+        let Ok(face) = skrifa::FontRef::from_index(&self.program, 0) else { return Ink::Unknown };
+        let Some(outline) = face.outline_glyphs().get(GlyphId::new(glyph)) else { return Ink::Unknown };
+        let mut pen = BoundsPen(None);
+        if outline.draw(DrawSettings::unhinted(Size::unscaled(), LocationRef::default()), &mut pen).is_err() {
+            return Ink::Unknown;
+        }
+        match pen.0 {
+            None => Ink::Blank,
+            Some([x0, y0, x1, y1]) => {
+                let s = 1.0 / self.upem;
+                Ink::Box([f64::from(x0) * s, f64::from(y0) * s, f64::from(x1) * s, f64::from(y1) * s])
+            }
+        }
+    }
+}
+
+/// The box an outline's points span, on and off the curve.
+struct BoundsPen(Option<[f32; 4]>);
+
+impl BoundsPen {
+    fn add(&mut self, x: f32, y: f32) {
+        if !(x.is_finite() && y.is_finite()) {
+            return;
+        }
+        self.0 = Some(match self.0 {
+            None => [x, y, x, y],
+            Some([x0, y0, x1, y1]) => [x0.min(x), y0.min(y), x1.max(x), y1.max(y)],
+        });
+    }
+}
+
+impl skrifa::outline::OutlinePen for BoundsPen {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.add(x, y);
+    }
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.add(x, y);
+    }
+    fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
+        self.add(cx0, cy0);
+        self.add(x, y);
+    }
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        self.add(cx0, cy0);
+        self.add(cx1, cy1);
+        self.add(x, y);
+    }
+    fn close(&mut self) {}
+}
+
 /// Replace an existing cmap directory entry with a bounded Unicode format-12 table.
 /// Checked ranges prevent damaged sfnt offsets from indexing outside the source program.
 fn append_editor_cmap(bytes: &mut Vec<u8>, mappings: &std::collections::BTreeMap<u32, u32>) -> Option<()> {
@@ -1505,5 +1651,110 @@ mod encoding_tests {
             assert!(embedded_sfnt_within(&doc, &font, &mut budget).is_none());
         }
         assert_eq!(budget.remaining(), 0);
+    }
+
+    /// A simple TrueType font with Inter embedded as its program, WinAnsi-encoded.
+    fn inter_font(doc: &mut Document) -> Dict {
+        let program = doc.add(pdfcraft_cos::Stream::flate(Dict::new(), crate::INTER_REGULAR));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+        descriptor.set(b"Ascent".to_vec(), Object::Int(969));
+        descriptor.set(b"Descent".to_vec(), Object::Int(-242));
+        let descriptor = doc.add(descriptor);
+        let mut font = Dict::new();
+        font.set(b"Type".to_vec(), Object::name("Font"));
+        font.set(b"Subtype".to_vec(), Object::name("TrueType"));
+        font.set(b"BaseFont".to_vec(), Object::name("Inter"));
+        font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+        font.set(b"FontDescriptor".to_vec(), Object::Ref(descriptor));
+        font
+    }
+
+    #[test]
+    fn glyph_ink_is_read_from_the_embedded_program() {
+        let mut doc = Document::new_empty();
+        let font = inter_font(&mut doc);
+        let metrics = Metrics::from_dict(&doc, &font);
+        let ink = GlyphInk::from_dict(&doc, &font, &metrics, &mut DecodeBudget::page()).expect("Inter's program is readable");
+        let Ink::Box(e) = ink.ink(&metrics, u32::from(b'E')) else { panic!("E draws") };
+        let Ink::Box(e_acute) = ink.ink(&metrics, 0xC9) else { panic!("É (WinAnsi 0xC9) draws") };
+        // Capitals stop below 0.8 em; the accent on É rises above it, past the one-em box.
+        assert!(e[1] > -0.01 && e[3] > 0.6 && e[3] < 0.8, "E spans {e:?}");
+        assert!(e_acute[3] > 0.85, "É reaches {e_acute:?}");
+        assert!(e[0] >= 0.0 && e[2] > e[0], "E sits right of its origin: {e:?}");
+        assert_eq!(ink.ink(&metrics, u32::from(b' ')), Ink::Blank);
+        assert_eq!(ink.ink(&metrics, 0x81), Ink::Unknown, "WinAnsi leaves 0x81 unassigned");
+    }
+
+    /// Inter as the program of a Type 0 font (Identity-H, so code = CID), its CIDs mapped to
+    /// glyphs by `cid_to_gid`: a name (`/Identity`) or a stream object.
+    fn inter_type0(doc: &mut Document, cid_to_gid: Object) -> Dict {
+        let program = doc.add(pdfcraft_cos::Stream::flate(Dict::new(), crate::INTER_REGULAR));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+        let descriptor = doc.add(descriptor);
+        let mut cid_font = Dict::new();
+        cid_font.set(b"Type".to_vec(), Object::name("Font"));
+        cid_font.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+        cid_font.set(b"FontDescriptor".to_vec(), Object::Ref(descriptor));
+        cid_font.set(b"CIDToGIDMap".to_vec(), cid_to_gid);
+        let cid_font = doc.add(cid_font);
+        let mut font = Dict::new();
+        font.set(b"Type".to_vec(), Object::name("Font"));
+        font.set(b"Subtype".to_vec(), Object::name("Type0"));
+        font.set(b"Encoding".to_vec(), Object::name("Identity-H"));
+        font.set(b"DescendantFonts".to_vec(), Object::Array(vec![Object::Ref(cid_font)]));
+        font
+    }
+
+    #[test]
+    fn type0_glyph_ink_goes_through_the_cid_to_gid_map() {
+        use skrifa::MetadataProvider as _;
+        let gid = skrifa::FontRef::new(crate::INTER_REGULAR).expect("Inter parses").charmap().map('E').expect("Inter has E").to_u32();
+        let mut doc = Document::new_empty();
+        let simple = inter_font(&mut doc);
+        let simple_metrics = Metrics::from_dict(&doc, &simple);
+        let e =
+            GlyphInk::from_dict(&doc, &simple, &simple_metrics, &mut DecodeBudget::page()).expect("readable").ink(&simple_metrics, u32::from(b'E'));
+        assert!(matches!(e, Ink::Box(_)), "{e:?}");
+
+        // /Identity: CID = glyph id.
+        let font = inter_type0(&mut doc, Object::name("Identity"));
+        let metrics = Metrics::from_dict(&doc, &font);
+        let ink = GlyphInk::from_dict(&doc, &font, &metrics, &mut DecodeBudget::page()).expect("readable");
+        assert_eq!(ink.ink(&metrics, gid), e);
+
+        // A /CIDToGIDMap stream: CID 1 is E; CID 5 is past the map's end.
+        let hi = u8::try_from(gid >> 8).expect("glyph id fits two bytes");
+        let lo = u8::try_from(gid & 0xFF).expect("low byte");
+        let map = doc.add(pdfcraft_cos::Stream::flate(Dict::new(), &[0, 0, hi, lo]));
+        let font = inter_type0(&mut doc, Object::Ref(map));
+        let metrics = Metrics::from_dict(&doc, &font);
+        let ink = GlyphInk::from_dict(&doc, &font, &metrics, &mut DecodeBudget::page()).expect("readable");
+        assert_eq!(ink.ink(&metrics, 1), e);
+        assert_eq!(ink.ink(&metrics, 5), Ink::Unknown);
+        assert_eq!(ink.ink(&metrics, 0), Ink::Unknown, "CID 0 maps to .notdef");
+    }
+
+    #[test]
+    fn glyph_ink_decodes_from_the_budget() {
+        let mut doc = Document::new_empty();
+        let font = inter_font(&mut doc);
+        let metrics = Metrics::from_dict(&doc, &font);
+        let mut spent = DecodeBudget::new(1 << 24, 8);
+        assert!(GlyphInk::from_dict(&doc, &font, &metrics, &mut spent).is_some());
+        assert!(spent.remaining() < 1 << 24, "the program was charged");
+        assert!(GlyphInk::from_dict(&doc, &font, &metrics, &mut DecodeBudget::new(16, 8)).is_none(), "no allowance, no program read");
+    }
+
+    #[test]
+    fn fonts_without_a_readable_program_have_no_glyph_ink() {
+        let mut doc = Document::new_empty();
+        let mut font = inter_font(&mut doc);
+        font.set(b"Subtype".to_vec(), Object::name("Type1"));
+        let descriptor = doc.add(Dict::new());
+        font.set(b"FontDescriptor".to_vec(), Object::Ref(descriptor));
+        let metrics = Metrics::from_dict(&doc, &font);
+        assert!(GlyphInk::from_dict(&doc, &font, &metrics, &mut DecodeBudget::page()).is_none());
     }
 }
