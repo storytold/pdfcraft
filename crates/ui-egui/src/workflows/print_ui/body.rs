@@ -4,23 +4,36 @@ use super::{
     Subset, Tokens, pos2, print, printer_label, spool, still_looking, theme, vec2, widgets,
 };
 
+/// The panel's own header: "Printer properties" on the left, Done and Reset on the right.
+///
+/// The buttons take their room first, from the right (`shrink_left`), and the title gets what is
+/// left of the row: [`egui::Sides::truncate`] cuts it with an ellipsis instead of letting a label wider than the row
+/// spill over it. Laid out the other way round, the label is placed first at its natural width and
+/// the buttons are painted back over it, which is what a translation of "Reset to printer
+/// defaults" long enough to fill the row did in Italian (#5545).
+fn driver_options_header(ui: &mut egui::Ui, show: &mut bool, can_reset: bool) -> (egui::Response, egui::Response) {
+    egui::Sides::new().shrink_left().truncate().show(
+        ui,
+        |ui| ui.add(egui::Label::new(egui::RichText::new(tl!("Printer properties")).font(theme::semibold(13.0)))),
+        |ui| {
+            if ui.button(tl!("Done")).clicked() {
+                *show = false;
+            }
+            ui.add_enabled(can_reset, egui::Button::new(tl!("Reset to printer defaults")))
+        },
+    )
+}
+
 /// Properties… on CUPS: the driver's options for this print, grouped as the driver groups them.
 /// Only choices away from the printer's defaults are kept, and sent with the job.
 fn driver_options_panel(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
     let PrintDraft { driver_options: Some((_, options)), driver_choices: choices, show_driver_options: show, .. } = d else { return };
     egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tl!("Printer properties")).font(theme::semibold(13.0)));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(tl!("Done")).clicked() {
-                    *show = false;
-                }
-                if ui.add_enabled(!choices.is_empty(), egui::Button::new(tl!("Reset to printer defaults"))).clicked() {
-                    choices.clear();
-                }
-            });
-        });
+        let (_, reset) = driver_options_header(ui, show, !choices.is_empty());
+        if reset.clicked() {
+            choices.clear();
+        }
         if options.is_empty() {
             ui.label(egui::RichText::new(tl!("This printer offers no settings of its own.")).small().color(t.text_muted));
             return;
@@ -545,4 +558,52 @@ pub(crate) fn body(
         }
     });
     (go, cancel)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The two rectangles the header puts in a row `width` wide, drawn in the app's own fonts.
+    fn header_at(lang: &str, width: f32) -> (egui::Rect, egui::Rect) {
+        crate::i18n::set_current(crate::i18n::Lang::from_code(lang).expect("a catalogued language"));
+        let ctx = egui::Context::default();
+        ctx.set_fonts(theme::font_definitions());
+        let row = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 400.0));
+        let rects = std::cell::Cell::new(None);
+        let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(row), ..Default::default() }, |ui| {
+            let mut show = true;
+            let (title, reset) = driver_options_header(ui, &mut show, true);
+            rects.set(Some((title.rect, reset.rect)));
+        });
+        // Nothing draws the frame, but epaint's deltas must be taken anyway.
+        output.textures_delta.clear();
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        rects.take().expect("the header is laid out")
+    }
+
+    /// #5545: in a long locale the reset label is wider than the row, and it used to be painted
+    /// over the title. At every width the header keeps the two in separate rectangles.
+    ///
+    /// The settings column is a fixed 470 px wide (`body`), so this row is about 450 in the app;
+    /// the narrower widths add slack for a longer catalog, down to the point where the two buttons
+    /// alone fill the row (392 px with the Italian labels), which the fixed column never reaches.
+    #[test]
+    fn the_reset_button_never_covers_the_title() {
+        for (lang, width) in [("en", 450.0), ("it", 450.0), ("it", 410.0), ("de", 450.0), ("en", 260.0)] {
+            let (title, reset) = header_at(lang, width);
+            assert!(!title.intersects(reset), "{lang} at {width}px: the title {title:?} is drawn on top of the reset button {reset:?}");
+        }
+    }
+
+    /// The title is what gives way: it truncates in a narrow row while the buttons keep their
+    /// size, and a wide row keeps it whole instead of cutting it for nothing.
+    #[test]
+    fn the_title_truncates_and_leaves_the_buttons_whole() {
+        let (wide_title, wide_reset) = header_at("en", 520.0);
+        let (narrow_title, narrow_reset) = header_at("en", 260.0);
+        assert!(narrow_title.width() < wide_title.width(), "the title shrinks in a narrow row");
+        assert_eq!(narrow_reset.width(), wide_reset.width(), "the buttons keep their size");
+        assert!(narrow_reset.right() <= 261.0, "the reset button stays inside the row");
+    }
 }
