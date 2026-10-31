@@ -588,7 +588,7 @@ pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], view: &Doc
                 Stroke::new(if also { 2.0 } else { 1.0 }, if selected || also { SELECT_BLUE } else { Color32::from_gray(90) }),
                 egui::StrokeKind::Inside,
             );
-            // The name tag: white text on black, clipped to the field.
+            // Selected widgets share the blue name tag; only the primary gets handles.
             // The full name, as Acrobat shows it: MASTER.first, not first (#2696).
             let label = f.name.as_str();
             let font = theme::regular((9.0 * zoom).clamp(7.0, 13.0));
@@ -597,10 +597,12 @@ pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], view: &Doc
             let tag = Rect::from_center_size(r.center(), size);
             let clip = painter.clip_rect().intersect(r);
             let p2 = painter.with_clip_rect(clip);
-            p2.rect_filled(tag, CornerRadius::same(1), if selected { SELECT_BLUE } else { Color32::BLACK });
+            p2.rect_filled(tag, CornerRadius::same(1), if selected || also { SELECT_BLUE } else { Color32::BLACK });
             p2.galley(tag.min + vec2(3.0, 1.0), galley, Color32::WHITE);
-            if selected {
+            if selected || also {
                 painter.rect_stroke(r.expand(1.0), CornerRadius::ZERO, Stroke::new(2.0, SELECT_BLUE), egui::StrokeKind::Outside);
+            }
+            if selected {
                 for (c, ..) in handles(r) {
                     painter.circle(c, 3.5, Color32::WHITE, Stroke::new(1.5, SELECT_BLUE));
                 }
