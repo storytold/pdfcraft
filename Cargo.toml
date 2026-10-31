@@ -74,6 +74,10 @@ hayro-jbig2 = "0.3"
 
 # foundation
 thiserror = "2"
+# Command-line parsing for pdfcraft-cli (RFC-0012); the completion and man-page generators are dev-dependencies of its example only.
+clap = { version = "4", features = ["derive", "string"] }
+clap_complete = "4"
+clap_mangen = "0.2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 log = "0.4"

@@ -181,9 +181,9 @@ mod page_argument_tests {
         for input in [&path, &missing] {
             for args in &invalid {
                 let out = Command::new(BIN).arg("text").arg(input).args(args).output().unwrap();
-                assert_eq!(out.status.code(), Some(1), "{args:?}: {out:?}");
+                assert_eq!(out.status.code(), Some(2), "{args:?}: {out:?}");
                 assert!(out.stdout.is_empty(), "{args:?}: no text may be printed");
-                assert_eq!(String::from_utf8(out.stderr).unwrap().trim(), "pdfcraft-cli: bad --page: expected a positive page number");
+                assert!(String::from_utf8(out.stderr).unwrap().starts_with("error: "), "{args:?}");
                 assert_eq!(std::fs::read(&path).unwrap(), bytes);
                 assert!(!missing.exists());
             }
@@ -201,7 +201,6 @@ mod page_argument_tests {
             (vec!["--page", "1"], vec!["Page 1"]),
             (vec!["--page", "2"], vec!["Page 2"]),
             (vec!["--page", "3"], vec!["Page 3"]),
-            (vec!["--page", "2", "--page", "1"], vec!["Page 2"]),
         ] {
             let out = Command::new(BIN).arg("text").arg(&path).args(args).output().unwrap();
             assert!(out.status.success(), "{out:?}");
@@ -212,6 +211,18 @@ mod page_argument_tests {
         }
     }
 
+    #[test]
+    fn a_repeated_page_is_a_usage_error() {
+        let dir = PageDir::new();
+        let path = dir.0.join("three.pdf");
+        std::fs::write(&path, fixture(3)).unwrap();
+        let out = Command::new(BIN).arg("text").arg(&path).args(["--page", "2", "--page", "1"]).output().unwrap();
+        assert_eq!(out.status.code(), Some(2));
+        assert!(out.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&out.stderr).contains("'--page <N>' cannot be used multiple times"));
+    }
+
+    /// A password that looks like a flag is written `--password=--page` (RFC-0012 §1.4).
     #[test]
     fn an_option_shaped_password_is_not_parsed_as_a_page_flag() {
         let dir = PageDir::new();
@@ -230,9 +241,9 @@ mod page_argument_tests {
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         let protected_bytes = std::fs::read(&protected).unwrap();
         for (args, expected) in [
-            (vec!["--password", "--page"], vec!["Page 1", "Page 2", "Page 3"]),
-            (vec!["--page", "2", "--password", "--page"], vec!["Page 2"]),
-            (vec!["--password", "--page", "--page", "2"], vec!["Page 2"]),
+            (vec!["--password=--page"], vec!["Page 1", "Page 2", "Page 3"]),
+            (vec!["--page", "2", "--password=--page"], vec!["Page 2"]),
+            (vec!["--password=--page", "--page", "2"], vec!["Page 2"]),
         ] {
             let out = Command::new(BIN).arg("text").arg(&protected).args(args).output().unwrap();
             assert!(out.status.success(), "{out:?}");
