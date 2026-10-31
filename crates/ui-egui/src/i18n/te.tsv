@@ -2484,6 +2484,25 @@ animation effects	Off	ఆఫ్
 	Extract the selected pages…	ఎంచుకున్న పేజీలను సంగ్రహించు…
 	Delete the selected pages	ఎంచుకున్న పేజీలను తొలగించు
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	మార్చు
+	Reset	రీసెట్ చేయి
+	Reset all shortcuts	అన్ని షార్ట్‌కట్‌లను రీసెట్ చేయి
+	Back to the default keys	డిఫాల్ట్ కీలకు తిరిగి వెళ్ళు
+	Find a command	ఆదేశాన్ని కనుగొను
+	Keys of the document view	పత్ర వీక్షణ కీలు
+	Choose new keys for {command}	{command} కోసం కొత్త కీలను ఎంచుకోండి
+	Press the new keys (Esc cancels)	కొత్త కీలను నొక్కండి (Esc రద్దు చేస్తుంది)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Alt కలయికలు షార్ట్‌కట్‌లు కాలేవు. Ctrl లేదా Shift ప్రయత్నించండి.
+	This key moves around the interface on its own. Add Ctrl to use it.	ఈ కీ తనంతట తానే ఇంటర్‌ఫేస్‌లో కదులుతుంది. దీనిని ఉపయోగించడానికి Ctrl జోడించండి.
+	This key is used for “{what}” and can't be changed.	ఈ కీ “{what}” కోసం ఉపయోగించబడుతుంది, దీనిని మార్చలేరు.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} “{other}” నుండి తీసుకోబడింది, దానికి ఇప్పుడు షార్ట్‌కట్ లేదు.
+	{key} is already used by “{other}”.	{key} ఇప్పటికే “{other}” కోసం వాడుకలో ఉంది.
+	Reassign	మళ్లీ కేటాయించు
+	Select tool	ఎంపిక సాధనం
+	Hand tool	చేతి సాధనం
+	Scroll the page	పేజీని స్క్రోల్ చేయి
+	Delete the selection	ఎంపికను తొలగించు
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ఈ ప్రత్యుత్తరం ఎంపికలు
 	Export value	ఎగుమతి విలువ

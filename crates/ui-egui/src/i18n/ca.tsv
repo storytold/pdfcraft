@@ -2836,5 +2836,24 @@ theme	Appearance	Aspecte
 	Extract the selected pages…	Extreu les pàgines seleccionades…
 	Delete the selected pages	Suprimeix les pàgines seleccionades
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Canvia
+	Reset	Restableix
+	Reset all shortcuts	Restableix totes les dreceres
+	Back to the default keys	Torna a les tecles per defecte
+	Find a command	Cerca una ordre
+	Keys of the document view	Tecles de la vista del document
+	Choose new keys for {command}	Trieu tecles noves per a {command}
+	Press the new keys (Esc cancels)	Premeu les tecles noves (Esc cancel·la)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Les combinacions amb Alt no poden ser dreceres. Proveu amb Ctrl o Maj.
+	This key moves around the interface on its own. Add Ctrl to use it.	Aquesta tecla mou per la interfície tota sola. Afegiu-hi Ctrl per fer-la servir.
+	This key is used for “{what}” and can't be changed.	Aquesta tecla s'utilitza per a «{what}» i no es pot canviar.
+	{key} was taken from “{other}”, which now has no shortcut.	S'ha pres {key} de «{other}», que ara no té cap drecera.
+	{key} is already used by “{other}”.	{key} ja l'utilitza «{other}».
+	Reassign	Reassigna
+	Select tool	Eina de selecció
+	Hand tool	Eina de mà
+	Scroll the page	Desplaça la pàgina
+	Delete the selection	Suprimeix la selecció
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcions d'aquesta resposta

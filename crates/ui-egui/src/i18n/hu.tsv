@@ -2574,6 +2574,25 @@ animation effects	Off	Ki
 	Extract the selected pages…	A kijelölt oldalak kibontása…
 	Delete the selected pages	A kijelölt oldalak törlése
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Módosítás
+	Reset	Visszaállítás
+	Reset all shortcuts	Az összes billentyűparancs visszaállítása
+	Back to the default keys	Vissza az alapértelmezett billentyűkhöz
+	Find a command	Parancs keresése
+	Keys of the document view	A dokumentumnézet billentyűi
+	Choose new keys for {command}	Válasszon új billentyűket ehhez: {command}
+	Press the new keys (Esc cancels)	Nyomja le az új billentyűket (Esc: mégse)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Az Alt-kombinációk nem lehetnek billentyűparancsok. Próbálja a Ctrl vagy Shift billentyűt.
+	This key moves around the interface on its own. Add Ctrl to use it.	Ez a billentyű önmagában a felületen mozog. Adja hozzá a Ctrl billentyűt a használatához.
+	This key is used for “{what}” and can't be changed.	Ezt a billentyűt ez használja: „{what}”, és nem módosítható.
+	{key} was taken from “{other}”, which now has no shortcut.	A(z) {key} el lett véve ettől: „{other}”, amelynek most nincs billentyűparancsa.
+	{key} is already used by “{other}”.	A(z) {key} már ehhez tartozik: „{other}”.
+	Reassign	Átrendelés
+	Select tool	Kijelölő eszköz
+	Hand tool	Kéz eszköz
+	Scroll the page	Az oldal görgetése
+	Delete the selection	A kijelölés törlése
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	A válasz beállításai
 	Export value	Exportérték

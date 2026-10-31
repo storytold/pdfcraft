@@ -2472,6 +2472,25 @@ animation effects	Off	ປິດ
 	Extract the selected pages…	ແຍກໜ້າທີ່ເລືອກອອກ…
 	Delete the selected pages	ລຶບໜ້າທີ່ເລືອກ
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	ປ່ຽນ
+	Reset	ຕັ້ງຄ່າຄືນ
+	Reset all shortcuts	ຕັ້ງຄ່າປຸ່ມລັດທັງໝົດຄືນ
+	Back to the default keys	ກັບໄປຫາປຸ່ມເລີ່ມຕົ້ນ
+	Find a command	ຊອກຫາຄຳສັ່ງ
+	Keys of the document view	ປຸ່ມຂອງມຸມມອງເອກະສານ
+	Choose new keys for {command}	ເລືອກປຸ່ມໃໝ່ສຳລັບ {command}
+	Press the new keys (Esc cancels)	ກົດປຸ່ມໃໝ່ (Esc ເພື່ອຍົກເລີກ)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	ການປະສົມກັບ Alt ບໍ່ສາມາດເປັນປຸ່ມລັດໄດ້. ລອງ Ctrl ຫຼື Shift.
+	This key moves around the interface on its own. Add Ctrl to use it.	ປຸ່ມນີ້ເຄື່ອນທີ່ໃນສ່ວນຕິດຕໍ່ດ້ວຍຕົວມັນເອງ. ເພີ່ມ Ctrl ເພື່ອໃຊ້ມັນ.
+	This key is used for “{what}” and can't be changed.	ປຸ່ມນີ້ໃຊ້ສຳລັບ “{what}” ແລະ ບໍ່ສາມາດປ່ຽນໄດ້.
+	{key} was taken from “{other}”, which now has no shortcut.	ໄດ້ເອົາ {key} ມາຈາກ “{other}” ເຊິ່ງຕອນນີ້ບໍ່ມີປຸ່ມລັດ.
+	{key} is already used by “{other}”.	{key} ຖືກໃຊ້ຢູ່ແລ້ວໂດຍ “{other}”.
+	Reassign	ກຳນົດໃໝ່
+	Select tool	ເຄື່ອງມືເລືອກ
+	Hand tool	ເຄື່ອງມືມື
+	Scroll the page	ເລື່ອນໜ້າ
+	Delete the selection	ລຶບສິ່ງທີ່ເລືອກ
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	ຕົວເລືອກຂອງການຕອບກັບນີ້
 # Untranslated: English text until a translator fills these in.

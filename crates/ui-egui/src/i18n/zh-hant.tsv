@@ -2525,6 +2525,25 @@ animation effects	Off	關
 	Extract the selected pages…	擷取所選頁面…
 	Delete the selected pages	刪除所選頁面
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	變更
+	Reset	重設
+	Reset all shortcuts	重設所有快速鍵
+	Back to the default keys	回復為預設按鍵
+	Find a command	尋找命令
+	Keys of the document view	文件檢視的按鍵
+	Choose new keys for {command}	為 {command} 選擇新按鍵
+	Press the new keys (Esc cancels)	按下新按鍵（Esc 取消）
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Alt 組合不能作為快速鍵。請嘗試 Ctrl 或 Shift。
+	This key moves around the interface on its own. Add Ctrl to use it.	此鍵單獨使用時用於在介面中移動。加上 Ctrl 後即可使用。
+	This key is used for “{what}” and can't be changed.	此鍵用於「{what}」，無法變更。
+	{key} was taken from “{other}”, which now has no shortcut.	已從「{other}」取走 {key}，該命令現在沒有快速鍵。
+	{key} is already used by “{other}”.	{key} 已被「{other}」使用。
+	Reassign	重新指定
+	Select tool	選取工具
+	Hand tool	手形工具
+	Scroll the page	捲動頁面
+	Delete the selection	刪除所選內容
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	此回覆的選項
 	Export value	匯出值

@@ -2573,6 +2573,25 @@ animation effects	Off	Өшірулі
 	Extract the selected pages…	Таңдалған беттерді шығарып алу…
 	Delete the selected pages	Таңдалған беттерді жою
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Өзгерту
+	Reset	Қалпына келтіру
+	Reset all shortcuts	Барлық пернелер тіркесімін қалпына келтіру
+	Back to the default keys	Әдепкі пернелерге қайту
+	Find a command	Пәрменді іздеу
+	Keys of the document view	Құжат көрінісінің пернелері
+	Choose new keys for {command}	{command} үшін жаңа пернелерді таңдаңыз
+	Press the new keys (Esc cancels)	Жаңа пернелерді басыңыз (Esc бас тартады)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Alt тіркесімдері пернелер тіркесімі бола алмайды. Ctrl немесе Shift қолданып көріңіз.
+	This key moves around the interface on its own. Add Ctrl to use it.	Бұл перне интерфейсте өздігінен жылжиды. Оны қолдану үшін Ctrl қосыңыз.
+	This key is used for “{what}” and can't be changed.	Бұл перне «{what}» үшін қолданылады және оны өзгерту мүмкін емес.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} «{other}» пәрменінен алынды, енді оның пернелер тіркесімі жоқ.
+	{key} is already used by “{other}”.	{key} «{other}» пәрменінде қолданылып тұр.
+	Reassign	Қайта тағайындау
+	Select tool	Таңдау құралы
+	Hand tool	Қол құралы
+	Scroll the page	Бетті айналдыру
+	Delete the selection	Таңдалғанды жою
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Осы жауаптың параметрлері
 	Export value	Экспорт мәні

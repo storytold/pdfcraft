@@ -2580,6 +2580,25 @@ animation effects	Off	Izklopljeni
 	Extract the selected pages…	Izvleci izbrane strani…
 	Delete the selected pages	Izbriši izbrane strani
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Spremeni
+	Reset	Ponastavi
+	Reset all shortcuts	Ponastavi vse bližnjice
+	Back to the default keys	Nazaj na privzete tipke
+	Find a command	Najdi ukaz
+	Keys of the document view	Tipke pogleda dokumenta
+	Choose new keys for {command}	Izberite nove tipke za {command}
+	Press the new keys (Esc cancels)	Pritisnite nove tipke (Esc prekliče)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Kombinacije z Alt ne morejo biti bližnjice. Poskusite Ctrl ali Shift.
+	This key moves around the interface on its own. Add Ctrl to use it.	Ta tipka se sama premika po vmesniku. Dodajte Ctrl, da jo uporabite.
+	This key is used for “{what}” and can't be changed.	Ta tipka se uporablja za »{what}« in je ni mogoče spremeniti.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} je bila vzeta ukazu »{other}«, ki zdaj nima bližnjice.
+	{key} is already used by “{other}”.	{key} že uporablja ukaz »{other}«.
+	Reassign	Dodeli znova
+	Select tool	Orodje za izbiro
+	Hand tool	Orodje roka
+	Scroll the page	Pomikaj stran
+	Delete the selection	Izbriši izbor
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Možnosti tega odgovora
 	Export value	Izvozna vrednost

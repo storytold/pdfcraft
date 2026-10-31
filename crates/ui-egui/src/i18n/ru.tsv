@@ -2488,6 +2488,25 @@ animation effects	Off	Выкл
 	Extract the selected pages…	Извлечь выбранные страницы…
 	Delete the selected pages	Удалить выбранные страницы
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Изменить
+	Reset	Сбросить
+	Reset all shortcuts	Сбросить все сочетания клавиш
+	Back to the default keys	Вернуть клавиши по умолчанию
+	Find a command	Найти команду
+	Keys of the document view	Клавиши просмотра документа
+	Choose new keys for {command}	Выберите новые клавиши для {command}
+	Press the new keys (Esc cancels)	Нажмите новые клавиши (Esc — отмена)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Сочетания с Alt не могут быть сочетаниями клавиш. Попробуйте Ctrl или Shift.
+	This key moves around the interface on its own. Add Ctrl to use it.	Эта клавиша сама по себе перемещает по интерфейсу. Добавьте Ctrl, чтобы использовать её.
+	This key is used for “{what}” and can't be changed.	Эта клавиша используется для «{what}» и не может быть изменена.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} забрано у «{other}», у которой теперь нет сочетания клавиш.
+	{key} is already used by “{other}”.	{key} уже используется командой «{other}».
+	Reassign	Переназначить
+	Select tool	Инструмент выделения
+	Hand tool	Инструмент «Рука»
+	Scroll the page	Прокрутить страницу
+	Delete the selection	Удалить выделенное
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметры этого ответа
 	Export value	Значение экспорта

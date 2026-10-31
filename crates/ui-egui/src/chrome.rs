@@ -645,10 +645,13 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
                 // History is distinct from stepping to the adjacent page, and belongs to this tab.
                 for (forward, icon, label, shortcut, enabled) in [
-                    (true, "chevron-right", tl!("Next view"), crate::commands::NEXT_VIEW, !view.forward.is_empty()),
-                    (false, "chevron-left", tl!("Previous view"), crate::commands::PREV_VIEW, !view.back.is_empty()),
+                    (true, "chevron-right", tl!("Next view"), "view.next_view", !view.forward.is_empty()),
+                    (false, "chevron-left", tl!("Previous view"), "view.previous_view", !view.back.is_empty()),
                 ] {
-                    let tip = format!("{label} ({})", crate::commands::shortcut_label(ui.ctx(), shortcut));
+                    let tip = match crate::commands::command_shortcut_label(ui.ctx(), shortcut) {
+                        key if key.is_empty() => label.to_string(),
+                        key => format!("{label} ({key})"),
+                    };
                     if ui.add_enabled_ui(enabled, |ui| icons::button(ui, icon, 30.0, false, &tip)).inner.clicked() {
                         view.view_history(forward);
                     }

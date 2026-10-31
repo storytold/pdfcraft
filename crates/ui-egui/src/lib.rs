@@ -96,6 +96,7 @@ use dialogs::appearance;
 pub use dialogs::bookmark_styles_ui;
 use dialogs::comment_props;
 use dialogs::credits;
+pub use dialogs::custom_shortcuts;
 use dialogs::marks_ui;
 use dialogs::pageboxes;
 use dialogs::palette;
@@ -343,6 +344,13 @@ pub struct PdfCraftApp {
     /// Restore last view settings when reopening documents (Preferences ▸ Documents and view;
     /// #1767): the page, zoom and page display a file was last shown with. On by default.
     pub restore_last_view: bool,
+    /// Keyboard shortcuts the user changed (Help ▸ Keyboard shortcuts, #4635).
+    pub shortcuts: std::sync::Arc<custom_shortcuts::Overrides>,
+    /// The command whose new shortcut the Keyboard shortcuts dialog is waiting for.
+    pub shortcut_capture: Option<&'static str>,
+    /// Keys pressed for a command that another command runs on: the dialog asks whether to take
+    /// them (Reassign) or leave both as they are (Cancel).
+    pub shortcut_conflict: Option<(&'static str, pdfcraft_engine::commands::Shortcut)>,
     /// How files were last shown, most recent first (see `last_view`).
     pub last_views: Vec<last_view::LastView>,
     /// The files open when PdfCraft last closed, read from the settings for

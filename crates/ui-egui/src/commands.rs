@@ -21,8 +21,6 @@ pub(crate) const ZOOM_IN: Shortcut = Shortcut::cmd("+");
 pub(crate) const ZOOM_OUT: Shortcut = Shortcut::cmd("−");
 pub(crate) const ROTATE_CW: Shortcut = Shortcut::cmd_shift("+");
 pub(crate) const ROTATE_CCW: Shortcut = Shortcut::cmd_shift("−");
-pub(crate) const PREV_VIEW: Shortcut = Shortcut::cmd("[");
-pub(crate) const NEXT_VIEW: Shortcut = Shortcut::cmd("]");
 pub(crate) const FIND_NEXT: Shortcut = Shortcut::cmd("G");
 pub(crate) const FIND_PREV: Shortcut = Shortcut::cmd_shift("G");
 pub(crate) const COPY: Shortcut = Shortcut::cmd("C");
@@ -61,7 +59,7 @@ pub(crate) fn command_modifier_label(ctx: &egui::Context) -> &'static str {
 
 /// How a registered command's shortcut is written on this platform ("" without one).
 pub(crate) fn command_shortcut_label(ctx: &egui::Context, id: &str) -> String {
-    commands::command(id).and_then(|c| c.shortcut).map(|s| shortcut_label(ctx, s)).unwrap_or_default()
+    commands::command(id).and_then(|c| crate::custom_shortcuts::effective(ctx, c)).map(|s| shortcut_label(ctx, s)).unwrap_or_default()
 }
 
 /// A translated tooltip with a `{key}` placeholder, filled with `s` as written on this platform:
@@ -794,10 +792,10 @@ impl PdfCraftApp {
         // Buttons also own keyboard focus for Tab/Enter activation, but they must not
         // suppress document shortcuts. Text editors retain their own undo/redo handling.
         let typing = ctx.text_edit_focused();
-        let mut specs: Vec<&CommandSpec> = COMMANDS.iter().filter(|c| c.shortcut.is_some()).collect();
-        specs.sort_by_key(|c| std::cmp::Reverse(c.shortcut.map(|s| s.modifier_count()).unwrap_or(0)));
-        for spec in specs {
-            let Some(s) = spec.shortcut else { continue };
+        // The user's bindings (#4635): a command they took the key from has none.
+        let mut specs: Vec<(&CommandSpec, Shortcut)> = COMMANDS.iter().filter_map(|c| Some((c, self.shortcuts.get(c)?))).collect();
+        specs.sort_by_key(|(_, s)| std::cmp::Reverse(s.modifier_count()));
+        for (spec, s) in specs {
             // Keep the canvas's silent no-op when there is no previous/next view to visit.
             if matches!(spec.id, "view.previous_view" | "view.next_view") && !self.command_enabled(spec) {
                 continue;
@@ -811,7 +809,10 @@ impl PdfCraftApp {
                 && !self.page_typing_unapplied()
                 && !(spec.id == "edit.redo" && self.page_box_can_redo(ctx))
                 && !(spec.id == "edit.undo" && ctx.input(|i| i.modifiers.shift));
-            if typing && !spec.in_text && !page_box {
+            // A key of the user's own without Ctrl (a letter, F5) is typing while a text field has
+            // the keyboard, whatever the command allows (#4635).
+            let own_plain_key = self.shortcuts.is_custom(spec.id) && !s.command && !s.mac_ctrl;
+            if typing && (!spec.in_text || own_plain_key) && !page_box {
                 continue;
             }
             let Some(key) = Key::from_name(s.key) else { continue };

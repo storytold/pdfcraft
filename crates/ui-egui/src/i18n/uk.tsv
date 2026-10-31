@@ -2597,6 +2597,25 @@ animation effects	Off	Вимкнено
 	Extract the selected pages…	Витягнути вибрані сторінки…
 	Delete the selected pages	Видалити вибрані сторінки
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Змінити
+	Reset	Скинути
+	Reset all shortcuts	Скинути всі сполучення клавіш
+	Back to the default keys	Повернутися до типових клавіш
+	Find a command	Знайти команду
+	Keys of the document view	Клавіші перегляду документа
+	Choose new keys for {command}	Виберіть нові клавіші для {command}
+	Press the new keys (Esc cancels)	Натисніть нові клавіші (Esc — скасувати)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Сполучення з Alt не можуть бути сполученнями клавіш. Спробуйте Ctrl або Shift.
+	This key moves around the interface on its own. Add Ctrl to use it.	Ця клавіша сама по собі переміщує інтерфейсом. Додайте Ctrl, щоб використати її.
+	This key is used for “{what}” and can't be changed.	Ця клавіша використовується для «{what}» і не може бути змінена.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} забрано в «{other}», яка тепер не має сполучення клавіш.
+	{key} is already used by “{other}”.	{key} вже використовує «{other}».
+	Reassign	Перепризначити
+	Select tool	Інструмент виділення
+	Hand tool	Інструмент «Рука»
+	Scroll the page	Прокрутити сторінку
+	Delete the selection	Видалити виділене
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметри цієї відповіді
 	Export value	Значення експорту

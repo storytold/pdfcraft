@@ -81,6 +81,7 @@ impl PdfCraftApp {
             "recent": self.recent,
             "reopen_last_session": self.reopen_last_session,
             "restore_last_view": self.restore_last_view,
+            "shortcuts": self.shortcuts.to_json(),
             "last_views": self.last_views_to_save(),
             // Kept only while the preference is on.
             "last_session": self.reopen_last_session.then(|| self.session_to_save()),
@@ -195,6 +196,7 @@ impl PdfCraftApp {
             self.restore_last_view = on;
         }
         self.restore_last_views(&v["last_views"]);
+        self.shortcuts = std::sync::Arc::new(custom_shortcuts::Overrides::from_json(&v["shortcuts"]));
         self.last_session = last_session::LastSession::from_json(&v["last_session"]);
         if let Some(on) = v["system_title_bar"].as_bool() {
             self.system_title_bar = on;

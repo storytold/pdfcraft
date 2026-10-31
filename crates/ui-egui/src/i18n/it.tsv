@@ -2807,6 +2807,25 @@ certificate	SHA-256 digest	Impronta SHA-256
 	Extract the selected pages…	Estrai le pagine selezionate…
 	Delete the selected pages	Elimina le pagine selezionate
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Modifica
+	Reset	Ripristina
+	Reset all shortcuts	Ripristina tutte le scorciatoie
+	Back to the default keys	Torna ai tasti predefiniti
+	Find a command	Trova un comando
+	Keys of the document view	Tasti della vista del documento
+	Choose new keys for {command}	Scegli nuovi tasti per {command}
+	Press the new keys (Esc cancels)	Premi i nuovi tasti (Esc annulla)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Le combinazioni con Alt non possono essere scorciatoie. Prova Ctrl o Maiusc.
+	This key moves around the interface on its own. Add Ctrl to use it.	Questo tasto da solo si sposta nell'interfaccia. Aggiungi Ctrl per usarlo.
+	This key is used for “{what}” and can't be changed.	Questo tasto è usato per «{what}» e non può essere modificato.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} è stato tolto a «{other}», che ora non ha scorciatoie.
+	{key} is already used by “{other}”.	{key} è già usato da «{other}».
+	Reassign	Riassegna
+	Select tool	Strumento di selezione
+	Hand tool	Strumento mano
+	Scroll the page	Scorri la pagina
+	Delete the selection	Elimina la selezione
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opzioni per questa risposta
 	Export value	Valore di esportazione

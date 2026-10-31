@@ -11,6 +11,7 @@ pub(super) mod appearance;
 pub mod bookmark_styles_ui;
 pub(super) mod comment_props;
 pub(super) mod credits;
+pub mod custom_shortcuts;
 pub(super) mod marks_ui;
 pub(super) mod pageboxes;
 pub(super) mod palette;
@@ -437,7 +438,7 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             }
         }
         Dialog::Shortcuts => {
-            if !dialog_shortcuts(ui) {
+            if !dialog_shortcuts(ui, app) {
                 return false;
             }
         }
@@ -1447,18 +1448,17 @@ fn dialog_recovery(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> bool {
 }
 
 /// `Dialog::Shortcuts` content. Returns `false` when it has its own buttons and no footer is wanted.
-fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
+fn dialog_shortcuts(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> bool {
+    let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(tl!("Keyboard shortcuts")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     use crate::commands::{
         ACTUAL_SIZE, COPY, FIND_NEXT, FIND_PREV, FIT_WIDTH, PAGE_LEVEL, PAGE_NEXT, PAGE_PREV, ROTATE_CCW, ROTATE_CW, SELECT_ALL, ZOOM_IN, ZOOM_OUT,
     };
-    // Registered commands first (always in sync with the real bindings), then the
-    // keys the document view handles itself.
-    let mut rows: Vec<(String, String)> = pdfcraft_engine::commands::COMMANDS
-        .iter()
-        .filter_map(|c| c.shortcut.map(|k| (crate::commands::shortcut_label(ui.ctx(), k), tl!(c.label).trim_end_matches('…').to_string())))
-        .collect();
+    // Registered commands first, each with its keys to change (#4635), then the keys the
+    // document view handles itself, which stay as they are.
+    crate::custom_shortcuts::capture(ui.ctx(), app);
+    let mut rows: Vec<(String, String)> = Vec::new();
     let key = |s: pdfcraft_engine::commands::Shortcut| crate::commands::shortcut_label(ui.ctx(), s);
     let pair = |a, b| format!("{} / {}", key(a), key(b));
     // Key names, translated where a catalog has them (not scanned as UI literals).
@@ -1492,6 +1492,10 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
         rows.push((k, v));
     }
     egui::ScrollArea::vertical().max_height(460.0).show(ui, |ui| {
+        crate::custom_shortcuts::rows_ui(ui, app, &t);
+        ui.add_space(10.0);
+        ui.label(egui::RichText::new(tl!("Keys of the document view")).font(theme::semibold(13.0)));
+        ui.add_space(4.0);
         egui::Grid::new("keys").num_columns(2).spacing([24.0, 6.0]).show(ui, |ui| {
             for (k, v) in &rows {
                 ui.label(egui::RichText::new(k).font(egui::FontId::monospace(12.5)));

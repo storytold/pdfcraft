@@ -2860,6 +2860,25 @@ theme	Appearance	Aparência
 	Extract the selected pages…	Extrair as páginas selecionadas…
 	Delete the selected pages	Excluir as páginas selecionadas
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Alterar
+	Reset	Redefinir
+	Reset all shortcuts	Redefinir todos os atalhos
+	Back to the default keys	Voltar às teclas padrão
+	Find a command	Localizar um comando
+	Keys of the document view	Teclas da visualização do documento
+	Choose new keys for {command}	Escolha novas teclas para {command}
+	Press the new keys (Esc cancels)	Pressione as novas teclas (Esc cancela)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Combinações com Alt não podem ser atalhos. Tente Ctrl ou Shift.
+	This key moves around the interface on its own. Add Ctrl to use it.	Esta tecla se move pela interface sozinha. Adicione Ctrl para usá-la.
+	This key is used for “{what}” and can't be changed.	Esta tecla é usada para “{what}” e não pode ser alterada.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} foi retirada de “{other}”, que agora não tem atalho.
+	{key} is already used by “{other}”.	{key} já é usada por “{other}”.
+	Reassign	Reatribuir
+	Select tool	Ferramenta de seleção
+	Hand tool	Ferramenta mão
+	Scroll the page	Rolar a página
+	Delete the selection	Excluir a seleção
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opções desta resposta
 	Export value	Valor de exportação

@@ -2807,5 +2807,24 @@ theme	Appearance	स्वरूप
 	Extract the selected pages…	चयनित पृष्ठ निकालें…
 	Delete the selected pages	चयनित पृष्ठ हटाएँ
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	बदलें
+	Reset	रीसेट करें
+	Reset all shortcuts	सभी शॉर्टकट रीसेट करें
+	Back to the default keys	डिफ़ॉल्ट कुंजियों पर वापस जाएँ
+	Find a command	कोई कमांड खोजें
+	Keys of the document view	दस्तावेज़ दृश्य की कुंजियाँ
+	Choose new keys for {command}	{command} के लिए नई कुंजियाँ चुनें
+	Press the new keys (Esc cancels)	नई कुंजियाँ दबाएँ (Esc रद्द करता है)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Alt संयोजन शॉर्टकट नहीं हो सकते। Ctrl या Shift आज़माएँ।
+	This key moves around the interface on its own. Add Ctrl to use it.	यह कुंजी अपने आप इंटरफ़ेस में घूमती है। इसका उपयोग करने के लिए Ctrl जोड़ें।
+	This key is used for “{what}” and can't be changed.	यह कुंजी “{what}” के लिए उपयोग होती है और बदली नहीं जा सकती।
+	{key} was taken from “{other}”, which now has no shortcut.	{key} को “{other}” से लिया गया, जिसका अब कोई शॉर्टकट नहीं है।
+	{key} is already used by “{other}”.	{key} पहले से “{other}” के लिए उपयोग में है।
+	Reassign	फिर से असाइन करें
+	Select tool	चयन उपकरण
+	Hand tool	हाथ उपकरण
+	Scroll the page	पृष्ठ स्क्रॉल करें
+	Delete the selection	चयन हटाएँ
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	इस जवाब के विकल्प

@@ -2851,6 +2851,25 @@ certificate	Version	الإصدار
 	Extract the selected pages…	استخراج الصفحات المحددة…
 	Delete the selected pages	حذف الصفحات المحددة
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	تغيير
+	Reset	إعادة تعيين
+	Reset all shortcuts	إعادة تعيين كل الاختصارات
+	Back to the default keys	العودة إلى المفاتيح الافتراضية
+	Find a command	البحث عن أمر
+	Keys of the document view	مفاتيح عرض المستند
+	Choose new keys for {command}	اختر مفاتيح جديدة لـ {command}
+	Press the new keys (Esc cancels)	اضغط المفاتيح الجديدة (Esc للإلغاء)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	لا يمكن أن تكون تركيبات Alt اختصارات. جرّب Ctrl أو Shift.
+	This key moves around the interface on its own. Add Ctrl to use it.	هذا المفتاح يتنقل في الواجهة بمفرده. أضف Ctrl لاستخدامه.
+	This key is used for “{what}” and can't be changed.	هذا المفتاح مستخدم لـ «{what}» ولا يمكن تغييره.
+	{key} was taken from “{other}”, which now has no shortcut.	أُخذ {key} من «{other}»، الذي لم يعد له اختصار.
+	{key} is already used by “{other}”.	{key} مستخدم بالفعل في «{other}».
+	Reassign	إعادة التعيين
+	Select tool	أداة التحديد
+	Hand tool	أداة اليد
+	Scroll the page	تمرير الصفحة
+	Delete the selection	حذف التحديد
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	خيارات هذا الرد
 	Export value	قيمة التصدير

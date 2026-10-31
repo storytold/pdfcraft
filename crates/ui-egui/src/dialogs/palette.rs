@@ -66,8 +66,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 Hit {
                     group: None,
                     label: translated,
-                    detail: spec
-                        .shortcut
+                    detail: crate::custom_shortcuts::effective(ctx, spec)
                         .map(|k| crate::commands::shortcut_label(ctx, k))
                         .unwrap_or_else(|| tl!(spec.menu.unwrap_or("Command")).to_string()),
                     icon: spec.icon,

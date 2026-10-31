@@ -2740,6 +2740,25 @@ key	Space	Mellomrom
 	Extract the selected pages…	Trekk ut de valgte sidene…
 	Delete the selected pages	Slett de valgte sidene
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Endre
+	Reset	Tilbakestill
+	Reset all shortcuts	Tilbakestill alle hurtigtaster
+	Back to the default keys	Tilbake til standardtastene
+	Find a command	Finn en kommando
+	Keys of the document view	Tastene i dokumentvisningen
+	Choose new keys for {command}	Velg nye taster for {command}
+	Press the new keys (Esc cancels)	Trykk de nye tastene (Esc avbryter)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Alt-kombinasjoner kan ikke være hurtigtaster. Prøv Ctrl eller Shift.
+	This key moves around the interface on its own. Add Ctrl to use it.	Denne tasten flytter rundt i grensesnittet alene. Legg til Ctrl for å bruke den.
+	This key is used for “{what}” and can't be changed.	Denne tasten brukes til «{what}» og kan ikke endres.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} ble tatt fra «{other}», som nå ikke har noen hurtigtast.
+	{key} is already used by “{other}”.	{key} brukes allerede av «{other}».
+	Reassign	Tilordne på nytt
+	Select tool	Merkeverktøy
+	Hand tool	Håndverktøy
+	Scroll the page	Rull siden
+	Delete the selection	Slett utvalget
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Alternativer for dette svaret
 # Untranslated: English text until a translator fills these in.

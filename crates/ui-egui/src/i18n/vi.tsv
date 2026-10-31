@@ -2842,6 +2842,25 @@ key	Space	Space
 	Extract the selected pages…	Trích xuất các trang đã chọn…
 	Delete the selected pages	Xóa các trang đã chọn
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Thay đổi
+	Reset	Đặt lại
+	Reset all shortcuts	Đặt lại tất cả phím tắt
+	Back to the default keys	Quay lại phím mặc định
+	Find a command	Tìm lệnh
+	Keys of the document view	Phím của chế độ xem tài liệu
+	Choose new keys for {command}	Chọn phím mới cho {command}
+	Press the new keys (Esc cancels)	Nhấn phím mới (Esc để hủy)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Tổ hợp Alt không thể là phím tắt. Hãy thử Ctrl hoặc Shift.
+	This key moves around the interface on its own. Add Ctrl to use it.	Phím này tự di chuyển trong giao diện. Thêm Ctrl để sử dụng.
+	This key is used for “{what}” and can't be changed.	Phím này được dùng cho “{what}” và không thể thay đổi.
+	{key} was taken from “{other}”, which now has no shortcut.	Đã lấy {key} từ “{other}”, lệnh này giờ không còn phím tắt.
+	{key} is already used by “{other}”.	{key} đã được dùng cho “{other}”.
+	Reassign	Gán lại
+	Select tool	Công cụ chọn
+	Hand tool	Công cụ bàn tay
+	Scroll the page	Cuộn trang
+	Delete the selection	Xóa vùng chọn
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất

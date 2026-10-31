@@ -2671,6 +2671,25 @@ animation effects	Off	Wyłączone
 	Extract the selected pages…	Wyodrębnij zaznaczone strony…
 	Delete the selected pages	Usuń zaznaczone strony
 
+# Keyboard shortcuts dialog: custom shortcuts (#4635) (AI-assisted, not separately native-reviewed)
+	Change	Zmień
+	Reset	Resetuj
+	Reset all shortcuts	Resetuj wszystkie skróty
+	Back to the default keys	Wróć do domyślnych klawiszy
+	Find a command	Znajdź polecenie
+	Keys of the document view	Klawisze widoku dokumentu
+	Choose new keys for {command}	Wybierz nowe klawisze dla {command}
+	Press the new keys (Esc cancels)	Naciśnij nowe klawisze (Esc anuluje)
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Kombinacje z Alt nie mogą być skrótami. Spróbuj Ctrl lub Shift.
+	This key moves around the interface on its own. Add Ctrl to use it.	Ten klawisz sam porusza się po interfejsie. Dodaj Ctrl, aby go użyć.
+	This key is used for “{what}” and can't be changed.	Ten klawisz służy do „{what}” i nie można go zmienić.
+	{key} was taken from “{other}”, which now has no shortcut.	{key} odebrano poleceniu „{other}”, które nie ma już skrótu.
+	{key} is already used by “{other}”.	{key} jest już używany przez „{other}”.
+	Reassign	Przypisz ponownie
+	Select tool	Narzędzie zaznaczania
+	Hand tool	Narzędzie rączka
+	Scroll the page	Przewiń stronę
+	Delete the selection	Usuń zaznaczenie
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcje tej odpowiedzi
 	Export value	Wartość eksportowa
