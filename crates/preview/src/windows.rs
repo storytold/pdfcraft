@@ -14,7 +14,7 @@ use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
-use pdfcraft_thumbnails::{Thumbnail, render_page_fit};
+use crate::{PreviewBitmap, render_page_fit};
 use windows::Win32::Foundation::{
     CLASS_E_CLASSNOTAVAILABLE, CLASS_E_NOAGGREGATION, COLORREF, E_FAIL, E_INVALIDARG, E_OUTOFMEMORY, E_POINTER, ERROR_ALREADY_INITIALIZED, HWND,
     RECT, S_FALSE,
@@ -187,7 +187,7 @@ fn read_all(stream: &IStream) -> windows_core::Result<Vec<u8>> {
 }
 
 /// Paints the thumbnail letterboxed on white inside `dest`.
-fn paint(hwnd: HWND, dest: &RECT, thumb: &Thumbnail) -> windows_core::Result<()> {
+fn paint(hwnd: HWND, dest: &RECT, thumb: &PreviewBitmap) -> windows_core::Result<()> {
     let (dest_w, dest_h) = rect_size(dest)?;
     let (Ok(tw), Ok(th)) = (i32::try_from(thumb.width), i32::try_from(thumb.height)) else {
         return Err(E_OUTOFMEMORY.into());

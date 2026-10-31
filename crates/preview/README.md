@@ -2,8 +2,9 @@
 
 First-page preview of PDF files in the Windows File Explorer preview pane (#3207).
 
-- [`pdfcraft_thumbnails::render_page_fit`] (every platform) renders a document's first page, fitted
-  into a bounded rectangle, onto white, as top-down BGRA pixels. It never panics.
+- [`render_page_fit`] (every platform) renders a document's first page, fitted into a bounded
+  rectangle, onto white, as top-down BGRA pixels. It never panics. Rendering is local to this
+  crate so the preview DLL does not link `pdfcraft_thumbnails` (duplicate COM exports).
 - On Windows the crate also builds `pdfcraft_preview.dll`, an `IPreviewHandler` that Explorer and
   other preview hosts load for files whose type is `PdfCraft.Document`, so PDFs show their first
   page in the preview pane while PdfCraft is the default PDF app. The MSI registers it under HKMU
