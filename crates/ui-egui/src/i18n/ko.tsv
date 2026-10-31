@@ -242,8 +242,8 @@
 	Add a date field	날짜 필드 추가
 	Add a digital signature field	디지털 서명 필드 추가
 	Digitally sign	디지털 서명
-	Certify (visible signature)	인증 (보이는 서명)
-	Certify (invisible signature)	인증 (보이지 않는 서명)
+	Certify (visible signature)	문서 인증(서명 표시)
+	Certify (invisible signature)	문서 인증(서명 표시 안 함)
 	Validate all signatures	모든 서명 유효성 검사
 	Signatures panel	서명 패널
 	Fill & Sign: add text	채우기 및 서명: 텍스트 추가
@@ -396,7 +396,7 @@
 	Redact pages	페이지 내용 제거 대상 표시
 	Find text and redact	텍스트를 찾아 제거 대상으로 표시
 	Set properties	속성 설정
-	Sanitize document	문서 정리
+	Sanitize document	문서에서 숨겨진 정보 제거
 	Compress a PDF	PDF 압축
 	Optimize	최적화
 	Reduce file size	파일 크기 줄이기
@@ -493,8 +493,8 @@
 	Apply	적용
 	Run	실행
 	Clear	지우기
-	Sanitize	정리
-	Mark all	모두 표시
+	Sanitize	숨겨진 정보 제거
+	Mark all	모두 제거 대상으로 표시
 	Save changes to “{name}” before closing?	닫기 전에 “{name}”의 변경 사항을 저장하시겠습니까?
 	Your changes will be lost if you don't save them.	저장하지 않으면 변경 사항이 손실됩니다.
 	Password required	암호 필요
@@ -868,7 +868,7 @@
 	Digital ID	디지털 ID
 	Browse…	찾아보기…
 	{verb} as "{name}"	"{name}"(으)로 {verb}
-	Certify	인증
+	Certify	문서 인증
 	The signature will be invisible.	서명이 보이지 않게 됩니다.
 	The existing action will be preserved.	기존 동작은 유지됩니다.
 	Distinguished name	고유 이름
@@ -877,7 +877,7 @@
 	Signer's name	서명자 이름
 	Fill & Sign signature	채우기 및 서명 서명
 	Choose image…	이미지 선택…
-	Permitted actions after certifying	인증 후 허용되는 동작
+	Permitted actions after certifying	문서 인증 후 허용되는 변경 사항
 	No changes allowed	변경 허용 안 함
 	Annotations, form fill-in, and digital signatures	주석, 양식 채우기 및 디지털 서명
 	Form fill-in and digital signatures	양식 채우기 및 디지털 서명
@@ -2498,11 +2498,11 @@ animation effects	Off	끄기
 	The passwords do not match.	암호가 일치하지 않습니다.
 	The security settings don't allow screen readers to read the text	보안 설정에서 화면 낭독기가 텍스트를 읽는 것을 허용하지 않습니다
 	The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.	서명 알고리즘과 SignerInfo의 다이제스트 알고리즘이 서로 다른 해시를 가리킵니다. 서명은 SignerInfo의 해시로 만들어졌습니다.
-	The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.	서명에 확인되지 않은 타임스탬프({})가 있습니다. 타임스탬프 기관이 신뢰할 수 있는 인증서 목록에 없으므로 서명자가 주장하는 서명 시간을 대신 사용합니다.
+	The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.	서명에 타임스탬프({})가 있지만 신뢰성이 검증되지 않았습니다. 타임스탬프 발급 기관이 신뢰할 수 있는 인증서 목록에 없으므로, 서명자가 주장하는 서명 시간을 대신 사용합니다.
 	The signature contents are not hexadecimal.	서명 내용이 16진수가 아닙니다.
 	The signature could not be checked ({}).	서명을 검사할 수 없습니다({}).
 	The signature could not be read ({}).	서명을 읽을 수 없습니다({}).
-	The signature could not be verified ({}).	서명을 확인할 수 없습니다({}).
+	The signature could not be verified ({}).	서명을 검증할 수 없습니다({}).
 	The signature has no valid byte range.	서명에 유효한 바이트 범위가 없습니다.
 	The signature includes an embedded timestamp.	서명에 포함된 타임스탬프가 있습니다.
 	The signature is BER-encoded (indefinite lengths) rather than DER; it was read leniently.	서명이 DER이 아니라 BER로 인코딩되어 있습니다(길이 미정). 관대하게 읽었습니다.
@@ -2510,7 +2510,7 @@ animation effects	Off	끄기
 	The signature value does not match the signer's certificate: the signature is corrupt.	서명 값이 서명자의 인증서와 일치하지 않습니다. 서명이 손상되었습니다.
 	The signature's byte range does not exclude exactly its contents.	서명의 바이트 범위가 서명 내용만 정확히 제외하지 않습니다.
 	The signature's byte range does not match the file.	서명의 바이트 범위가 파일과 일치하지 않습니다.
-	The signature's timestamp token could not be verified ({}).	서명의 타임스탬프 토큰을 확인할 수 없습니다({}).
+	The signature's timestamp token could not be verified ({}).	서명의 타임스탬프 토큰을 검증할 수 없습니다({}).
 	The signature's timestamp token does not cover the signature value.	서명의 타임스탬프 토큰이 서명 값을 포함하지 않습니다.
 	The signed content is a constructed (segmented) OCTET STRING, as BER allows; it was read anyway.	서명된 콘텐츠가 BER에서 허용하는 구성된(분할된) OCTET STRING입니다. 그래도 읽었습니다.
 	The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation).	서명자의 인증서가 디지털 서명을 허용하지 않습니다(키 용도에 디지털 서명도 부인 방지도 없음).
@@ -2533,8 +2533,8 @@ animation effects	Off	끄기
 	There is no folder to save the digital ID in.	디지털 ID를 저장할 폴더가 없습니다.
 	This document has not been modified since this signature was applied.	이 서명이 적용된 이후 이 문서는 수정되지 않았습니다.
 	This document has not been modified since this timestamp was applied.	이 타임스탬프가 적용된 이후 이 문서는 수정되지 않았습니다.
-	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	이 서명은 서명용으로 더 이상 권장되지 않는 레거시 160비트 해시 알고리즘인 RIPEMD-160을 사용합니다. 여전히 검증되지만 의존해서는 안 됩니다.
-	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	이 서명은 약한 해시 알고리즘인 SHA-1을 사용합니다. 충돌이 실제로 입증되었습니다. 오래전에 서명된 많은 문서가 사용하므로 여전히 검증되지만 의존해서는 안 됩니다.
+	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	이 서명은 더 이상 디지털 서명에 권장되지 않는 기존 160비트 해시 알고리즘 RIPEMD-160을 사용합니다. 유효성 검사를 통과하더라도 이 서명을 신뢰해서는 안 됩니다.
+	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	이 서명은 충돌이 입증된 취약한 해시 알고리즘 SHA-1을 사용합니다. 오래전에 서명된 많은 문서에서도 사용되므로 유효성 검사를 통과할 수 있지만, 이 서명을 신뢰해서는 안 됩니다.
 	Unsigned signature field	서명되지 않은 서명 필드
 	Unsigned signature field: {name}	서명되지 않은 서명 필드: {name}
 	Zoom in (⌘+)	확대 (⌘+)
