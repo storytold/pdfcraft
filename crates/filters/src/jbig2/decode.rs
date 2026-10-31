@@ -137,9 +137,10 @@ mod tests {
         let page = 26 * h as usize;
         assert!(matches!(decode_jbig2(&data, None, w, h, page - 1), Err(FilterError::LimitExceeded(m)) if m == page - 1), "a byte short");
         assert_eq!(decode_jbig2(&data, None, w, h, page).unwrap().len(), page, "the page within max");
-        // 16,384 × 16,384 is 2^28 pixels, and fails only later; a row more is past the cap.
+        // 16,384 × 16,384 is 2^28 pixels, and fails only later; a row more is past the cap, here or
+        // in the decoder, which can refuse it first.
         let large = |rows| decode_jbig2(&page_of(&data, 16_384, rows), None, 16_384, rows, usize::MAX);
-        assert!(matches!(large(16_385), Err(FilterError::Unsupported(_))), "{:?}", large(16_385));
+        assert!(matches!(large(16_385), Err(FilterError::Unsupported(_) | FilterError::Corrupt { .. })), "{:?}", large(16_385));
         assert!(!matches!(large(16_384), Err(FilterError::Unsupported(_))), "{:?}", large(16_384));
 
         // An extension segment (ISO/IEC 14492 7.4.14), which a decoder skips: its 11-byte header
