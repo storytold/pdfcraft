@@ -3135,6 +3135,28 @@ fn copying_cutting_and_pasting_pages() {
     assert_eq!(page_texts(h.state()).len(), 5);
 }
 
+/// #5406: copied pages are on PdfCraft's own clipboard, so ⌘V and Edit ▸ Paste must paste them
+/// whatever the system clipboard holds. egui-winit turns ⌘V into Paste only over text, into
+/// PasteImage over a picture alone, and into nothing over neither.
+#[test]
+fn copied_pages_paste_whatever_the_system_clipboard_holds() {
+    let mut h = organize(3);
+    let first = page_texts(h.state())[0].clone();
+    h.state_mut().views[0].select_pages(&[0]);
+    assert!(h.state_mut().execute("page.copy"));
+    // ⌘V over a screenshot on the system clipboard.
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::new([2, 2], vec![egui::Color32::GRAY; 4]))));
+    h.run_steps(2);
+    let after = page_texts(h.state());
+    assert_eq!(after.len(), 4, "a picture-only clipboard still pastes the copied page");
+    assert_eq!(after[1], first, "after the selected page");
+    // Edit ▸ Paste never reaches the system clipboard: nothing on it, nothing in the way.
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+    h.run_steps(2);
+    assert_eq!(page_texts(h.state()).len(), 5, "Edit ▸ Paste pastes the copied page");
+}
+
 fn source_font_fixture() -> Vec<u8> {
     source_font_fixture_with_text("BT /F1 18 Tf 20 220 Td (Serif) Tj ET BT /F2 18 Tf 20 120 Td (Mono) Tj ET")
 }
