@@ -539,12 +539,22 @@ pub struct Field {
     /// The display picture clause (`<format><picture>`), e.g. `date{YYYYMMDD}`: how the value
     /// shows when not being edited, and what scripts read as `formattedValue`.
     pub display_picture: Option<String>,
+    /// `<keep intact="contentArea">` or `"pageArea"`: a page break doesn't split the field (XFA 3.3
+    /// p. 292). A field's default is `none`.
+    pub keep_intact: bool,
 }
 
 impl Field {
     /// Whether the text can determine this field's height.
     pub(crate) fn grows_with_text(&self) -> bool {
         self.ui == Ui::TextEdit && self.multiline && self.common.h.is_none()
+    }
+
+    /// Whether a page break may split the field (XFA 3.3 pp. 291–292): text splits between its
+    /// lines, and a field's `keep intact` is `none` unless it says otherwise. Only a multi-line
+    /// text field that grows with its text is split.
+    pub(crate) fn splits_at_page_break(&self) -> bool {
+        self.grows_with_text() && !self.keep_intact
     }
 
     /// A choice list's value as saved to the data: an item's shown text becomes its saved

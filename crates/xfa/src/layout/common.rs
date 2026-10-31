@@ -1,4 +1,4 @@
-use super::items::{Action, Item, Rounded};
+use super::items::{Action, BorderShape, Item, Rounded, Widget};
 use super::{HashMap, Layout, MAX_DEPTH, Node, Rect, Script, date_letters, iso_to_pattern};
 
 pub(super) fn collect_values(nodes: &[Node], out: &mut HashMap<String, String>, depth: usize) {
@@ -105,6 +105,50 @@ pub(super) fn divide(item: Item, cut: f64) -> (Option<Item>, Option<Item>) {
         }
         other => (Some(other), None),
     }
+}
+
+/// How much of a widget a page break must leave above it for the field to split there: a line of
+/// its text.
+pub(super) fn split_line(w: &Widget) -> f64 {
+    (w.face.size * 1.2).max(1.0)
+}
+
+/// An empty field's widget cut at `cut`: the widget down to the cut, and below it the rest of
+/// its box (its fill, and its border closed on every side, a border's default `break="close"`,
+/// XFA 3.3 pp. 629–630) to go on in the next content area. A widget the cut doesn't cross stays
+/// whole on its side, as does one with no room above the cut for a line of its text.
+pub(super) fn split_widget(item: Item, cut: f64) -> (Option<Item>, Vec<Item>) {
+    let Item::Widget(mut w) = item else { return (Some(item), Vec::new()) };
+    let line = split_line(&w);
+    if w.rect.bottom() <= cut + 0.01 {
+        return (Some(Item::Widget(w)), Vec::new());
+    }
+    if w.rect.y + line > cut {
+        return (None, vec![Item::Widget(w)]);
+    }
+    let rest = Rect::new(w.rect.x, cut, w.rect.w, w.rect.bottom() - cut);
+    w.rect.h = cut - w.rect.y;
+    let border = &w.border;
+    let mut lower = Vec::new();
+    if let Some(color) = border.fill {
+        lower.push(Item::Fill { rect: rest, color });
+    }
+    if let Some(color) = border.color {
+        let width = border.width.max(0.0);
+        let i = width / 2.0;
+        let (x0, y0, x1, y1) = (rest.x + i, rest.y + i, rest.right() - i, rest.bottom() - i);
+        // The border's corners in drawing order: each edge joins two in a row.
+        let corners: &[(f64, f64)] = match border.shape {
+            BorderShape::Full => &[(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)],
+            BorderShape::Underline => &[(x0, y1), (x1, y1)],
+            BorderShape::None => &[],
+        };
+        lower.extend(corners.windows(2).filter_map(|edge| match *edge {
+            [from, to] => Some(Item::Line { from, to, width, color, dashed: false }),
+            _ => None,
+        }));
+    }
+    (Some(Item::Widget(w)), lower)
 }
 
 /// `item` moved by (`dx`, `dy`).
