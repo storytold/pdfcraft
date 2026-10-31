@@ -245,6 +245,10 @@ pub(crate) fn show(
     // height: laying out hundreds of them every frame put the panel over the frame budget
     // (#5488). Shorter lists are laid out whole, so every card stays in the accessibility tree.
     let virtual_list = roots.len() > LAY_OUT_WHOLE;
+    // A generation is checked as a value, not appended to the cache key: editing, undo,
+    // redo and switching documents remeasure the list without retaining a cache per revision.
+    // A document change conservatively remeasures all cards once, including changed replies.
+    let layout = ui.scope_id().with(("comments-layout", doc.id, doc.edit_generation(), crate::i18n::current().code(), allowed));
     for a in roots {
         if sort != SortBy::Page {
             let g = group_of(a);
@@ -257,11 +261,11 @@ pub(crate) fn show(
         } else if a.page != page {
             page = a.page;
             let header = ui.scope_id().with(("comment-page-header", page));
-            if !(virtual_list && skip_if_hidden(ui, header)) {
+            if !(virtual_list && skip_if_hidden(ui, header, layout)) {
                 let top = ui.cursor().min.y;
                 page_header(ui, t, info, page, page_counts.get(&page).copied().unwrap_or_default(), &mut view.comments.collapsed_pages);
                 if virtual_list {
-                    remember_height(ui, header, top);
+                    remember_height(ui, header, layout, top);
                 }
             }
         }
@@ -269,20 +273,23 @@ pub(crate) fn show(
             continue;
         }
         let key = (a.page, a.index);
-        // The selected card is always drawn, so it can scroll itself into view and keep its menu
-        // and editor.
+        // Selected cards and active editors stay live off screen. After deselection the
+        // compact card must be measured again rather than retaining the reply composer's height.
+        let thread = replies_of(a);
+        let selected = view.comments.selected == Some(key);
+        let editing = view.comments.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == key || thread.iter().any(|r| (r.page, r.index) == (*p, *i)));
+        let stamp = layout.with((selected, editing));
         let id = ui.scope_id().with(("comment-card", key));
-        if virtual_list && view.comments.selected != Some(key) && skip_if_hidden(ui, id) {
+        if virtual_list && !selected && !editing && skip_if_hidden(ui, id, stamp) {
             continue;
         }
-        let thread = replies_of(a);
         let rotation = info.pages.get(a.page).map_or(0, |p| p.rotation);
         let top = ui.cursor().min.y;
         if let Some(e) = card(ui, view, CardContext { theme: t, annotation: a, rotation, thread, doc, prefs, allowed, nav }) {
             edit = Some(e);
         }
         if virtual_list {
-            remember_height(ui, id, top);
+            remember_height(ui, id, stamp, top);
         }
     }
     edit
@@ -322,11 +329,13 @@ fn page_header(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, page: usize, n: us
 /// Comment lists up to this long are laid out whole; longer ones lay out only what is in view.
 const LAY_OUT_WHOLE: usize = 100;
 
-/// For a part of the list (a card or a page header) that was measured at this width and would
-/// fall out of view: takes up its height without laying it out, and returns `true`.
-fn skip_if_hidden(ui: &mut egui::Ui, id: egui::Id) -> bool {
+/// For a part of the list measured at this width and layout stamp that falls out of view:
+/// takes up its height without laying it out, and returns `true`.
+fn skip_if_hidden(ui: &mut egui::Ui, id: egui::Id, stamp: egui::Id) -> bool {
     let width = ui.available_width();
-    let Some(height) = ui.data(|d| d.get_temp::<(f32, f32)>(id)).filter(|(w, _)| (w - width).abs() < 0.5).map(|(_, h)| h) else {
+    let Some(height) =
+        ui.data(|d| d.get_temp::<(f32, f32, egui::Id)>(id)).filter(|(w, _, s)| (w - width).abs() < 0.5 && *s == stamp).map(|(_, h, _)| h)
+    else {
         return false;
     };
     if ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, vec2(width, height))) {
@@ -338,11 +347,11 @@ fn skip_if_hidden(ui: &mut egui::Ui, id: egui::Id) -> bool {
 
 /// Records the height part `id` took since the cursor was at `top`, for [`skip_if_hidden`]: less
 /// the spacing `allocate_space` adds back after it.
-fn remember_height(ui: &egui::Ui, id: egui::Id, top: f32) {
+fn remember_height(ui: &egui::Ui, id: egui::Id, stamp: egui::Id, top: f32) {
     let height = ui.cursor().min.y - top - ui.spacing().item_spacing.y;
     if height.is_finite() && height > 0.0 {
         let width = ui.available_width();
-        ui.data_mut(|d| d.insert_temp(id, (width, height)));
+        ui.data_mut(|d| d.insert_temp(id, (width, height, stamp)));
     }
 }
 
@@ -817,3 +826,6 @@ mod filter {
         assert!(!any_contains(["Ayşe Yılmaz"], "mehmet"));
     }
 }
+
+#[cfg(test)]
+mod layout_tests;
