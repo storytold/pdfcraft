@@ -2845,3 +2845,11 @@ key	Space	Space
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Cửa sổ
+	Move tab to new window	Chuyển thẻ sang cửa sổ mới
+	Merge all windows	Gộp tất cả cửa sổ
+	Close window	Đóng cửa sổ
+	Move to new window	Chuyển sang cửa sổ mới
+	Move to window	Chuyển sang cửa sổ
+	Too many windows are open	Đã mở quá nhiều cửa sổ

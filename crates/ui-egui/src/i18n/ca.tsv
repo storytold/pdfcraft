@@ -2838,3 +2838,11 @@ theme	Appearance	Aspecte
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcions d'aquesta resposta
+# Several windows (M14).
+	Window	Finestra
+	Move tab to new window	Mou la pestanya a una finestra nova
+	Merge all windows	Combina totes les finestres
+	Close window	Tanca la finestra
+	Move to new window	Mou a una finestra nova
+	Move to window	Mou a la finestra
+	Too many windows are open	Hi ha massa finestres obertes

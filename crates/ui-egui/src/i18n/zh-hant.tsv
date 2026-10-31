@@ -2528,3 +2528,11 @@ animation effects	Off	關
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	此回覆的選項
 	Export value	匯出值
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	視窗
+	Move tab to new window	將分頁移至新視窗
+	Merge all windows	合併所有視窗
+	Close window	關閉視窗
+	Move to new window	移至新視窗
+	Move to window	移至視窗
+	Too many windows are open	開啟的視窗過多

@@ -2579,3 +2579,11 @@ animation effects	Off	Aus
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Optionen für diese Antwort
 	Export value	Exportwert
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Fenster
+	Move tab to new window	Tab in neues Fenster verschieben
+	Merge all windows	Alle Fenster zusammenführen
+	Close window	Fenster schließen
+	Move to new window	In neues Fenster verschieben
+	Move to window	In Fenster verschieben
+	Too many windows are open	Es sind zu viele Fenster geöffnet

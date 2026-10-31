@@ -2816,3 +2816,12 @@ theme	Appearance	ظاهر
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	گزینه‌های این پاسخ
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	پنجره
+	Move tab to new window	انتقال زبانه به پنجره جدید
+	Merge all windows	ادغام همه پنجره‌ها
+	Close window	بستن پنجره
+	Move to new window	انتقال به پنجره جدید
+	Move to window	انتقال به پنجره
+	Too many windows are open	پنجره‌های زیادی باز است

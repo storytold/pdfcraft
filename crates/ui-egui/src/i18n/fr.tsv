@@ -2844,3 +2844,11 @@ certificate	Version	Version
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Options de cette réponse
 	Export value	Valeur d’exportation
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Fenêtre
+	Move tab to new window	Déplacer l’onglet dans une nouvelle fenêtre
+	Merge all windows	Fusionner toutes les fenêtres
+	Close window	Fermer la fenêtre
+	Move to new window	Déplacer dans une nouvelle fenêtre
+	Move to window	Déplacer dans la fenêtre
+	Too many windows are open	Trop de fenêtres sont ouvertes

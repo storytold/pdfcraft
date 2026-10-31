@@ -2736,3 +2736,12 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Unchecked reads	Unchecked reads
 	{field} reads fields named as it runs	{field} reads fields named as it runs
 	Some names are built as it runs	Some names are built as it runs
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	หน้าต่าง
+	Move tab to new window	ย้ายแท็บไปหน้าต่างใหม่
+	Merge all windows	รวมหน้าต่างทั้งหมด
+	Close window	ปิดหน้าต่าง
+	Move to new window	ย้ายไปหน้าต่างใหม่
+	Move to window	ย้ายไปหน้าต่าง
+	Too many windows are open	เปิดหน้าต่างมากเกินไป

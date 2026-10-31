@@ -2770,3 +2770,12 @@ certificate	Version	وەشان
 @plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} more formula reads a missing field.|{n} more formulas read missing fields.
 @plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.
 @plural	{fields} is missing|{fields} are missing	{fields} is missing|{fields} are missing
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	پەنجەرە
+	Move tab to new window	گواستنەوەی تاب بۆ پەنجەرەیەکی نوێ
+	Merge all windows	یەکخستنی هەموو پەنجەرەکان
+	Close window	داخستنی پەنجەرە
+	Move to new window	گواستنەوە بۆ پەنجەرەیەکی نوێ
+	Move to window	گواستنەوە بۆ پەنجەرە
+	Too many windows are open	پەنجەرەی زۆر کراونەتەوە

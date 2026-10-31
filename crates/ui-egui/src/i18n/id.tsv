@@ -2810,3 +2810,11 @@ theme	Appearance	Tampilan
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsi untuk balasan ini
+# Several windows (M14).
+	Window	Jendela
+	Move tab to new window	Pindahkan tab ke jendela baru
+	Merge all windows	Gabungkan semua jendela
+	Close window	Tutup jendela
+	Move to new window	Pindahkan ke jendela baru
+	Move to window	Pindahkan ke jendela
+	Too many windows are open	Terlalu banyak jendela terbuka

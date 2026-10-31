@@ -2754,3 +2754,12 @@ key	Space	Mellomrom
 @plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} more formula reads a missing field.|{n} more formulas read missing fields.
 @plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.
 @plural	{fields} is missing|{fields} are missing	{fields} is missing|{fields} are missing
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Vindu
+	Move tab to new window	Flytt fanen til nytt vindu
+	Merge all windows	Slå sammen alle vinduer
+	Close window	Lukk vinduet
+	Move to new window	Flytt til nytt vindu
+	Move to window	Flytt til vindu
+	Too many windows are open	For mange vinduer er åpne

@@ -45,7 +45,8 @@ mod text_scale;
 #[path = "windows_manifest.rs"]
 mod windows_manifest;
 
-/// Freedesktop app id: the `.desktop` file name and the hicolor icon name.
+/// Freedesktop app id: the `.desktop` file name and the hicolor icon name (the macOS bundle id
+/// too, which `xtask` checks against this line). The windows torn off a tab carry the same.
 const APP_ID: &str = "ai.storyteller.pdfcraft";
 
 /// The app icon (assets/app-icon/README.md). macOS gets the version on Apple's icon grid, with a
@@ -416,6 +417,8 @@ fn app_creator<'a>(
         app.window_state = pdfcraft_ui_egui::window_state::WindowState::started_with(cc.storage);
         app.integrated_titlebar = integrated;
         app.window_controls = window_controls;
+        // The windows a tab is dragged out into carry the same icon.
+        app.window_icon = eframe::icon_data::from_png_bytes(APP_ICON_PNG).ok().map(std::sync::Arc::new);
         app.system_text_scale = text_scale::system();
         // Windows' Animation effects setting, which Preferences ▸ Animation effects follows unless
         // it is set to On or Off.

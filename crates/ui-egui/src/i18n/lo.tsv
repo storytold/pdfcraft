@@ -2481,3 +2481,12 @@ animation effects	Off	ປິດ
 	Unchecked reads	Unchecked reads
 	{field} reads fields named as it runs	{field} reads fields named as it runs
 	Some names are built as it runs	Some names are built as it runs
+
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	ໜ້າຕ່າງ
+	Move tab to new window	ຍ້າຍແຖບໄປໜ້າຕ່າງໃໝ່
+	Merge all windows	ລວມໜ້າຕ່າງທັງໝົດ
+	Close window	ປິດໜ້າຕ່າງ
+	Move to new window	ຍ້າຍໄປໜ້າຕ່າງໃໝ່
+	Move to window	ຍ້າຍໄປໜ້າຕ່າງ
+	Too many windows are open	ເປີດໜ້າຕ່າງຫຼາຍເກີນໄປ

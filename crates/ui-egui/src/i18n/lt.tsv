@@ -2839,3 +2839,11 @@ theme	Appearance	Išvaizda
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Šio atsakymo parinktys
 	Export value	Eksporto reikšmė
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Langas
+	Move tab to new window	Perkelti kortelę į naują langą
+	Merge all windows	Sujungti visus langus
+	Close window	Užverti langą
+	Move to new window	Perkelti į naują langą
+	Move to window	Perkelti į langą
+	Too many windows are open	Atverta per daug langų

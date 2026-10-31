@@ -2901,3 +2901,11 @@ theme	Appearance	Aspecto
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opciones de esta respuesta
 	Export value	Valor de exportación
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Ventana
+	Move tab to new window	Mover pestaña a una ventana nueva
+	Merge all windows	Combinar todas las ventanas
+	Close window	Cerrar ventana
+	Move to new window	Mover a una ventana nueva
+	Move to window	Mover a la ventana
+	Too many windows are open	Hay demasiadas ventanas abiertas

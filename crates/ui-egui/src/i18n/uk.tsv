@@ -2600,3 +2600,11 @@ animation effects	Off	Вимкнено
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Параметри цієї відповіді
 	Export value	Значення експорту
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Вікно
+	Move tab to new window	Перемістити вкладку в нове вікно
+	Merge all windows	Об’єднати всі вікна
+	Close window	Закрити вікно
+	Move to new window	Перемістити в нове вікно
+	Move to window	Перемістити у вікно
+	Too many windows are open	Відкрито забагато вікон

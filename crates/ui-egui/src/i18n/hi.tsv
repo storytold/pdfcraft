@@ -2809,3 +2809,11 @@ theme	Appearance	स्वरूप
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	इस जवाब के विकल्प
+# Several windows (M14).
+	Window	विंडो
+	Move tab to new window	टैब को नई विंडो में ले जाएँ
+	Merge all windows	सभी विंडो मिलाएँ
+	Close window	विंडो बंद करें
+	Move to new window	नई विंडो में ले जाएँ
+	Move to window	विंडो में ले जाएँ
+	Too many windows are open	बहुत अधिक विंडो खुली हैं

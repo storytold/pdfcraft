@@ -117,6 +117,7 @@ impl PdfCraftApp {
             after_open: request.after_open,
             recovered: request.recovered,
             then: request.then,
+            window: self.current_window(),
         });
         Ok(token)
     }
@@ -134,8 +135,18 @@ impl PdfCraftApp {
                 waiting.extend(remaining);
                 break;
             }
+            // The open finishes in the window that asked (the current one when that window has
+            // closed); a prompt open there keeps the reply queued too, so it isn't replaced.
+            let window = if self.has_window(pending.window) { pending.window } else { self.current_window() };
+            if self.with_window(window, |app| app.modal_open()).unwrap_or(false) {
+                waiting.push(pending);
+                waiting.extend(remaining);
+                break;
+            }
             match pending.receiver.try_recv() {
-                Ok(result) if result.token == pending.token => self.finish_pending_open(pending, result.kind),
+                Ok(result) if result.token == pending.token => {
+                    self.with_window(window, |app| app.finish_pending_open(pending, result.kind));
+                }
                 Ok(_) => waiting.push(pending),
                 Err(std::sync::mpsc::TryRecvError::Empty) => waiting.push(pending),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -504,17 +515,31 @@ impl PdfCraftApp {
         }
     }
 
-    /// The tab already showing the file at `path` (the same path, or one that names the same
-    /// file once made absolute).
-    pub(crate) fn tab_showing(&self, path: &str) -> Option<usize> {
-        self.views.iter().position(|v| self.session.get(v.id).and_then(|d| d.path.as_deref()).is_some_and(|p| same_file(p, path)))
+    /// The window and document already showing the file at `path`, in any window: one file,
+    /// one tab (#2166) holds across windows.
+    pub(crate) fn window_showing(&self, path: &str) -> Option<(WindowId, DocId)> {
+        self.all_views()
+            .find(|(_, v)| self.session.get(v.id).and_then(|d| d.path.as_deref()).is_some_and(|p| same_file(p, path)))
+            .map(|(w, v)| (w, v.id))
+    }
+
+    /// Bring `doc` to the front in window `window` (and the window to the front).
+    pub(crate) fn show_doc_in(&mut self, window: WindowId, doc: DocId) {
+        self.with_window(window, |a| {
+            if let Some(i) = a.views.iter().position(|v| v.id == doc) {
+                a.active = Some(i);
+            }
+        });
+        if window != self.current_window() {
+            self.queue_window_op(WindowOp::Focus(window));
+        }
     }
 
     /// Open a file from a recent list: focus the tab already showing it, else open it (File ▸
     /// Open Recent and the Home view's list share this).
     pub fn open_recent(&mut self, path: &str) {
-        if let Some(i) = self.tab_showing(path) {
-            self.active = Some(i);
+        if let Some((window, doc)) = self.window_showing(path) {
+            self.show_doc_in(window, doc);
         } else {
             #[cfg(not(target_arch = "wasm32"))]
             self.open_path(path);
@@ -533,13 +558,16 @@ impl PdfCraftApp {
     /// the file opened, focused its tab, was handed to the background worker, or failed.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn open_path_then(&mut self, path: &str, then: Option<&'static str>) -> OpenOutcome {
-        // One file, one tab (#2166): a file that is open already comes to the front instead,
-        // and the tool it was opened for runs on it. One still being opened is left to that.
-        if let Some(i) = self.tab_showing(path) {
+        // One file, one tab (#2166), in whichever window: a file that is open already comes to
+        // the front instead, and the tool it was opened for runs on it there. One still being
+        // opened is left to that.
+        if let Some((window, doc)) = self.window_showing(path) {
             self.startup_superseded = true;
-            self.active = Some(i);
+            self.show_doc_in(window, doc);
             if let Some(command) = then {
-                self.execute(command);
+                self.with_window(window, |a| {
+                    a.execute(command);
+                });
             }
             return OpenOutcome::Focused;
         }

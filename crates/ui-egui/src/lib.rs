@@ -68,6 +68,7 @@ pub use editing::{CloseRequest, SaveTarget};
 pub use files::{ExtractDraft, FilePurpose, FileRequest, RotateDraft, SplitDraft, SplitMode, SplitPlan};
 pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore};
 use theme::{ThemeKind, ThemePreference};
+pub use windows::{WindowId, WindowOp};
 
 mod app;
 mod hooks;
@@ -75,6 +76,7 @@ mod persist;
 mod platform;
 mod state;
 mod tools;
+pub mod windows;
 mod workflows;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -239,6 +241,8 @@ struct PendingOpen {
     after_open: Option<pdfcraft_render::RemoteDestination>,
     recovered: Option<RecoveryMeta>,
     then: Option<&'static str>,
+    /// The window the open was asked in: its tab goes there, whichever window is focused by then.
+    window: WindowId,
 }
 
 pub struct PdfCraftApp {
@@ -392,8 +396,23 @@ pub struct PdfCraftApp {
     /// Preferences ▸ Use system title bar: where `window_controls` is set, give the window back
     /// winit's frame instead of drawing the header bar (#1001).
     pub system_title_bar: bool,
-    /// Whether the window currently has the app's header bar (`None` until the first frame).
-    app_frame_shown: Option<bool>,
+    /// The windows besides the main one, in the order they opened (see [`windows`]).
+    pub(crate) windows: Vec<windows::WindowSlot>,
+    /// The main window's state while another window is current.
+    root_state: Option<windows::WindowState>,
+    /// The window whose state the app fields hold (the one being drawn; the main window
+    /// between frames).
+    current_window: WindowId,
+    /// The window that has the keyboard focus.
+    focused_window: WindowId,
+    next_window_id: u32,
+    window_ops: Vec<WindowOp>,
+    /// Where each window is on screen, for dragging tabs between windows.
+    window_geometry: std::collections::HashMap<WindowId, windows::WindowGeometry>,
+    /// The icon the extra windows open with (the main window's comes from the desktop app).
+    pub window_icon: Option<std::sync::Arc<egui::IconData>>,
+    /// A document tab being dragged out of a strip or between windows.
+    pub(crate) tab_drag: Option<windows::TabDrag>,
     pub password_prompt: Option<PasswordPrompt>,
     /// Copy of a whole document's text (#2639) whose pages are being read off the UI thread.
     document_copy: Option<DocumentCopy>,

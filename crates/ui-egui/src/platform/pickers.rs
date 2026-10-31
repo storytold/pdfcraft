@@ -30,8 +30,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use pdfcraft_engine::DocId;
 
-use crate::PdfCraftApp;
 use crate::files::{FilePurpose, PickTarget};
+use crate::{PdfCraftApp, WindowId};
 
 /// What the chosen files are for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,6 +59,8 @@ type Then = Box<dyn FnOnce(&mut PdfCraftApp, Vec<PathBuf>) + Send>;
 
 /// A finished pick, waiting for the next frame.
 struct Picked {
+    /// The window the picker was asked from: `then` runs with its state.
+    window: WindowId,
     target: Option<PickTarget>,
     /// The chosen paths; empty when the picker was cancelled.
     paths: Vec<PathBuf>,
@@ -73,6 +75,8 @@ impl std::fmt::Debug for Picked {
 
 /// A request that came while another picker was showing (#2150).
 struct Waiting {
+    /// The window that asked: its choice is delivered there.
+    window: WindowId,
     ask: Ask,
     target: Option<PickTarget>,
     then: Then,
@@ -129,15 +133,22 @@ impl Pickers {
     /// Wait for `pick` on a worker thread and queue its result for the next frame. On macOS
     /// `pick` must already have shown the picker (rfd starts the panel when the future is
     /// created, on the main thread). Returns false when the worker couldn't start.
-    fn spawn<F>(&self, target: Option<PickTarget>, ctx: Option<egui::Context>, pick: F, then: Then) -> bool
+    fn spawn<F>(&self, window: WindowId, target: Option<PickTarget>, ctx: Option<egui::Context>, pick: F, then: Then) -> bool
     where
         F: Future<Output = Vec<PathBuf>> + Send + 'static,
     {
-        self.spawn_worker(target, ctx, pick, then).is_some()
+        self.spawn_worker(window, target, ctx, pick, then).is_some()
     }
 
     /// [`Self::spawn`], returning the worker so tests can wait for it instead of polling.
-    fn spawn_worker<F>(&self, target: Option<PickTarget>, ctx: Option<egui::Context>, pick: F, then: Then) -> Option<std::thread::JoinHandle<()>>
+    fn spawn_worker<F>(
+        &self,
+        window: WindowId,
+        target: Option<PickTarget>,
+        ctx: Option<egui::Context>,
+        pick: F,
+        then: Then,
+    ) -> Option<std::thread::JoinHandle<()>>
     where
         F: Future<Output = Vec<PathBuf>> + Send + 'static,
     {
@@ -147,7 +158,7 @@ impl Pickers {
             .name("file-picker".into())
             .spawn(move || {
                 let paths = pollster::block_on(pick);
-                done.lock().unwrap_or_else(PoisonError::into_inner).push(Picked { target, paths, then });
+                done.lock().unwrap_or_else(PoisonError::into_inner).push(Picked { window, target, paths, then });
                 showing.hand_over();
                 if let Some(ctx) = ctx {
                     ctx.request_repaint();
@@ -158,8 +169,8 @@ impl Pickers {
 
     /// Queue a pick that is already known (tests and automation). Like a real pick, it keeps
     /// the flag until the frame uses it.
-    fn deliver(&self, target: Option<PickTarget>, paths: Vec<PathBuf>, then: Then) {
-        self.done.lock().unwrap_or_else(PoisonError::into_inner).push(Picked { target, paths, then });
+    fn deliver(&self, window: WindowId, target: Option<PickTarget>, paths: Vec<PathBuf>, then: Then) {
+        self.done.lock().unwrap_or_else(PoisonError::into_inner).push(Picked { window, target, paths, then });
     }
 
     fn take(&self) -> Vec<Picked> {
@@ -193,26 +204,28 @@ impl PdfCraftApp {
     /// `then` is not called when the picker is cancelled, or when `target` is given and by then
     /// that document is no longer the active one or has been edited (the user is told). Use
     /// `target` whenever `then` edits the active document or refers to its pages or objects by
-    /// position.
+    /// position. `then` runs with the state of the window that asked, whichever window has the
+    /// focus when the choice arrives.
     ///
     /// `pick_override` answers instead of a native panel (tests and automation); the answer
     /// still arrives on a later frame, like a real pick.
     pub(crate) fn ask(&mut self, ask: Ask, target: Option<DocId>, then: impl FnOnce(&mut PdfCraftApp, Vec<PathBuf>) + Send + 'static) -> bool {
         let target = self.pick_target(target);
+        let window = self.current_window();
         let then: Then = Box::new(then);
         if self.pickers.showing.swap(true, Ordering::SeqCst) {
             // Refusing would drop what asked, such as a finished Reduce File Size copy.
-            self.pickers.waiting.push_back(Waiting { ask, target, then });
+            self.pickers.waiting.push_back(Waiting { window, ask, target, then });
             self.notify_tr("Another file dialog is still open. This one will open when it closes.");
             return true;
         }
-        self.show_picker(ask, target, then)
+        self.show_picker(window, ask, target, then)
     }
 
     /// [`Self::ask`] once `showing` is claimed for it.
-    fn show_picker(&mut self, ask: Ask, target: Option<PickTarget>, then: Then) -> bool {
+    fn show_picker(&mut self, window: WindowId, ask: Ask, target: Option<PickTarget>, then: Then) -> bool {
         if let Some(paths) = self.pick_override.clone() {
-            self.pickers.deliver(target, paths.into_iter().map(PathBuf::from).collect(), then);
+            self.pickers.deliver(window, target, paths.into_iter().map(PathBuf::from).collect(), then);
             return true;
         }
         // On macOS creating the future shows the panel; it must happen here, on the main thread.
@@ -221,19 +234,20 @@ impl PdfCraftApp {
         let started = match ask {
             Ask::File(d) => {
                 let pick = d.pick_file();
-                self.pickers.spawn(target, ctx, async move { one(pick.await) }, then)
+                self.pickers.spawn(window, target, ctx, async move { one(pick.await) }, then)
             }
             Ask::Folder(d) => {
                 let pick = d.pick_folder();
-                self.pickers.spawn(target, ctx, async move { one(pick.await) }, then)
+                self.pickers.spawn(window, target, ctx, async move { one(pick.await) }, then)
             }
             Ask::Save(d) => {
                 let pick = d.save_file();
-                self.pickers.spawn(target, ctx, async move { one(pick.await) }, then)
+                self.pickers.spawn(window, target, ctx, async move { one(pick.await) }, then)
             }
             Ask::Files(d) => {
                 let pick = d.pick_files();
                 self.pickers.spawn(
+                    window,
                     target,
                     ctx,
                     async move { pick.await.unwrap_or_default().into_iter().map(|h| h.path().to_path_buf()).collect() },
@@ -259,7 +273,7 @@ impl PdfCraftApp {
 
     /// Use the picks that finished since the last frame. Called every frame.
     pub(crate) fn process_picked(&mut self) {
-        for Picked { target, paths, then } in self.pickers.take() {
+        for Picked { window, target, paths, then } in self.pickers.take() {
             // The pick is in hand: the next picker may show, including one `then` asks for.
             self.pickers.showing.store(false, Ordering::SeqCst);
             // Opens were polled before this pick was consumed. Wake their retained replies
@@ -272,21 +286,26 @@ impl PdfCraftApp {
             if paths.is_empty() {
                 continue;
             }
-            if !self.still_pick_target(target) {
-                continue;
-            }
-            // Last-resort guard (AGENTS.md §4), as for commands: this work used to run inside
-            // the command that asked, and a panic in it must not take the app down.
-            if let Err(m) = pdfcraft_engine::guard(|| then(self, paths)) {
-                self.notify_fmt("That didn't work: an internal error stopped it ({m}).", &[("m", m.as_str())]);
-            }
+            // With the state of the window that asked (its active document is the target), or
+            // the current one's when that window has closed meanwhile.
+            let window = if self.has_window(window) { window } else { self.current_window() };
+            self.with_window(window, |app| {
+                if !app.still_pick_target(target) {
+                    return;
+                }
+                // Last-resort guard (AGENTS.md §4), as for commands: this work used to run inside
+                // the command that asked, and a panic in it must not take the app down.
+                if let Err(m) = pdfcraft_engine::guard(|| then(app, paths)) {
+                    app.notify_fmt("That didn't work: an internal error stopped it ({m}).", &[("m", m.as_str())]);
+                }
+            });
         }
         // After the closures, so a picker one of them asked for comes before the waiting ones.
         if !self.pickers.waiting.is_empty()
             && !self.pickers.showing.swap(true, Ordering::SeqCst)
-            && let Some(Waiting { ask, target, then }) = self.pickers.waiting.pop_front()
+            && let Some(Waiting { window, ask, target, then }) = self.pickers.waiting.pop_front()
         {
-            self.show_picker(ask, target, then);
+            self.show_picker(window, ask, target, then);
         }
     }
 }
@@ -305,7 +324,8 @@ mod tests {
         let mut app = PdfCraftApp::new();
         app.pickers.showing.store(true, Ordering::SeqCst);
         let got = Arc::new(Mutex::new(Vec::new()));
-        let worker = app.pickers.spawn_worker(None, None, async { vec![PathBuf::from("a.pdf")] }, record(&got)).expect("worker starts");
+        let worker =
+            app.pickers.spawn_worker(WindowId::ROOT, None, None, async { vec![PathBuf::from("a.pdf")] }, record(&got)).expect("worker starts");
         // Wait for the worker itself: polling with a deadline was flaky on loaded CI runners.
         assert!(worker.join().is_ok());
         assert!(app.pickers.showing.load(Ordering::SeqCst), "the queued pick still owns the flag");
@@ -333,7 +353,7 @@ mod tests {
             panic!("picker failed")
         }
         let got = Arc::new(Mutex::new(Vec::new()));
-        let worker = pickers.spawn_worker(None, Some(ctx.clone()), async { fail() }, record(&got)).expect("worker starts");
+        let worker = pickers.spawn_worker(WindowId::ROOT, None, Some(ctx.clone()), async { fail() }, record(&got)).expect("worker starts");
         // join returns once the panic has unwound and the drop guard has run.
         assert!(worker.join().is_err());
         assert!(!pickers.showing.load(Ordering::SeqCst));
@@ -346,8 +366,8 @@ mod tests {
     fn the_follow_up_runs_on_a_later_frame_and_not_when_cancelled() {
         let mut app = PdfCraftApp::new();
         let got = Arc::new(Mutex::new(Vec::new()));
-        app.pickers.deliver(None, vec![], record(&got));
-        app.pickers.deliver(None, vec![PathBuf::from("b.pdf")], record(&got));
+        app.pickers.deliver(WindowId::ROOT, None, vec![], record(&got));
+        app.pickers.deliver(WindowId::ROOT, None, vec![PathBuf::from("b.pdf")], record(&got));
         assert!(got.lock().unwrap().is_empty(), "nothing runs until the frame uses the picks");
         app.process_picked();
         assert_eq!(*got.lock().unwrap(), vec![PathBuf::from("b.pdf")], "a cancelled pick runs nothing");
@@ -376,10 +396,11 @@ mod tests {
             after_open: None,
             recovered: None,
             then: None,
+            window: WindowId::ROOT,
         });
         let got = Arc::new(Mutex::new(Vec::new()));
         app.pickers.showing.store(true, Ordering::SeqCst);
-        app.pickers.deliver(None, vec![], record(&got));
+        app.pickers.deliver(WindowId::ROOT, None, vec![], record(&got));
         app.poll_pending_opens();
         assert_eq!(app.pending_opens.len(), 1, "the picker keeps the ready reply queued");
         app.process_picked();
@@ -418,7 +439,7 @@ mod tests {
         assert!(app.ask(Ask::File(rfd::AsyncFileDialog::new()), None, move |_, paths| into.lock().unwrap().extend(paths)));
         app.process_picked();
         assert!(got.lock().unwrap().is_empty(), "the showing picker still owns the flag");
-        app.pickers.deliver(None, vec![], Box::new(|_, _| {}));
+        app.pickers.deliver(WindowId::ROOT, None, vec![], Box::new(|_, _| {}));
         app.process_picked();
         app.process_picked();
         assert_eq!(*got.lock().unwrap(), vec![PathBuf::from("c.pdf")]);
@@ -468,7 +489,7 @@ mod tests {
         // Save As is still open on another tab when the optimizer finishes.
         app.pickers.showing.store(true, Ordering::SeqCst);
         app.save_optimized(doc, crate::optimize_ui::OptimizeKind::Reduce, Ok((reduced.clone(), String::new())));
-        app.pickers.deliver(None, vec![], Box::new(|_, _| {}));
+        app.pickers.deliver(WindowId::ROOT, None, vec![], Box::new(|_, _| {}));
         app.process_picked();
         app.process_picked();
         let written = std::fs::read(&out).unwrap_or_default();
@@ -503,8 +524,8 @@ mod tests {
     fn a_panicking_follow_up_is_reported_and_the_next_pick_still_runs() {
         let mut app = PdfCraftApp::new();
         let got = Arc::new(Mutex::new(Vec::new()));
-        app.pickers.deliver(None, vec![PathBuf::from("x.pdf")], Box::new(|_, _| panic!("follow-up failed")));
-        app.pickers.deliver(None, vec![PathBuf::from("y.pdf")], record(&got));
+        app.pickers.deliver(WindowId::ROOT, None, vec![PathBuf::from("x.pdf")], Box::new(|_, _| panic!("follow-up failed")));
+        app.pickers.deliver(WindowId::ROOT, None, vec![PathBuf::from("y.pdf")], record(&got));
         app.process_picked();
         assert_eq!(*got.lock().unwrap(), vec![PathBuf::from("y.pdf")]);
         let toast = app.toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();

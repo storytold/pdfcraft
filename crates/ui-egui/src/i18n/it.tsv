@@ -2810,3 +2810,11 @@ certificate	SHA-256 digest	Impronta SHA-256
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opzioni per questa risposta
 	Export value	Valore di esportazione
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Finestra
+	Move tab to new window	Sposta scheda in una nuova finestra
+	Merge all windows	Unisci tutte le finestre
+	Close window	Chiudi finestra
+	Move to new window	Sposta in una nuova finestra
+	Move to window	Sposta nella finestra
+	Too many windows are open	Troppe finestre aperte

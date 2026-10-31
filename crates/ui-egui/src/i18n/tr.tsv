@@ -2574,3 +2574,11 @@ animation effects	Off	Kapalı
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Bu yanıtın seçenekleri
 	Export value	Dışa aktarma değeri
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Pencere
+	Move tab to new window	Sekmeyi yeni pencereye taşı
+	Merge all windows	Tüm pencereleri birleştir
+	Close window	Pencereyi kapat
+	Move to new window	Yeni pencereye taşı
+	Move to window	Pencereye taşı
+	Too many windows are open	Çok fazla pencere açık

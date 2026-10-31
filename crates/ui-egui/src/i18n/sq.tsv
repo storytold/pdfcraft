@@ -2564,3 +2564,11 @@ animation effects	Off	Joaktiv
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsionet për këtë përgjigje
+# Several windows (M14).
+	Window	Dritare
+	Move tab to new window	Zhvendos skedën në një dritare të re
+	Merge all windows	Bashko të gjitha dritaret
+	Close window	Mbyll dritaren
+	Move to new window	Zhvendos në një dritare të re
+	Move to window	Zhvendos në dritare
+	Too many windows are open	Janë hapur shumë dritare

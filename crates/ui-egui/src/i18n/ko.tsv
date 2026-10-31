@@ -2809,3 +2809,11 @@ theme	Appearance	모양
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	이 답글의 옵션
+# Several windows (M14).
+	Window	창
+	Move tab to new window	탭을 새 창으로 이동
+	Merge all windows	모든 창 병합
+	Close window	창 닫기
+	Move to new window	새 창으로 이동
+	Move to window	창으로 이동
+	Too many windows are open	열린 창이 너무 많습니다

@@ -2576,3 +2576,11 @@ animation effects	Off	Өшірулі
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Осы жауаптың параметрлері
 	Export value	Экспорт мәні
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Терезе
+	Move tab to new window	Қойындыны жаңа терезеге жылжыту
+	Merge all windows	Барлық терезелерді біріктіру
+	Close window	Терезені жабу
+	Move to new window	Жаңа терезеге жылжыту
+	Move to window	Терезеге жылжыту
+	Too many windows are open	Тым көп терезе ашық

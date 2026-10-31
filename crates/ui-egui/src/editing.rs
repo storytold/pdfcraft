@@ -771,7 +771,17 @@ impl PdfCraftApp {
 
     /// Whether tab `index` has work that isn't saved: edits, or form typing not committed yet.
     pub(crate) fn has_unsaved_work(&self, index: usize) -> bool {
-        let Some(v) = self.views.get(index) else { return false };
+        self.views.get(index).is_some_and(|v| self.view_has_unsaved_work(v))
+    }
+
+    /// Whether any document in any window has unsaved work (the quit guard, the host's dirty
+    /// flag).
+    pub fn any_unsaved_work(&self) -> bool {
+        self.all_views().any(|(_, v)| self.view_has_unsaved_work(v))
+    }
+
+    /// [`Self::has_unsaved_work`] for a view that need not be the current window's.
+    pub(crate) fn view_has_unsaved_work(&self, v: &crate::DocView) -> bool {
         let Some(doc) = self.session.get(v.id) else { return false };
         doc.dirty
             || v.pending_edit.is_some()

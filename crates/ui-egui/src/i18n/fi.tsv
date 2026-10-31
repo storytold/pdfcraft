@@ -2847,3 +2847,11 @@ theme	Appearance	Teema
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tämän vastauksen asetukset
+# Several windows (M14).
+	Window	Ikkuna
+	Move tab to new window	Siirrä välilehti uuteen ikkunaan
+	Merge all windows	Yhdistä kaikki ikkunat
+	Close window	Sulje ikkuna
+	Move to new window	Siirrä uuteen ikkunaan
+	Move to window	Siirrä ikkunaan
+	Too many windows are open	Liian monta ikkunaa on auki

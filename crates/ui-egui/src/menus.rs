@@ -222,7 +222,9 @@ const SIGN: &[&str] = &[
     "sign.validate",
     "sign.panel",
 ];
-const WINDOW: &[&str] = &["view.next_tab", "view.previous_tab"];
+/// The tab commands, then the several-windows ones (M14), which only a desktop build has.
+const WINDOW: &[&str] = &["view.next_tab", "view.previous_tab", SEP, "window.move_tab_new", "window.merge_all", "window.close"];
+const WINDOW_TABS: usize = 2;
 const HELP: &[&str] =
     &["help.shortcuts", SEP, "help.app_page", "help.github", "help.website", "help.discord", SEP, "help.check_updates", SEP, "help.about"];
 
@@ -335,7 +337,7 @@ impl PdfCraftApp {
                 .collect(),
         )];
         sign.extend(list(SIGN, &mut used));
-        let window = list(WINDOW, &mut used);
+        let window = list(if Self::windows_supported() { WINDOW } else { &WINDOW[..WINDOW_TABS] }, &mut used);
         let help = list(HELP, &mut used);
         let mut view = vec![
             Node::submenu(tl!("Zoom"), list(ZOOM, &mut used)),
@@ -582,7 +584,11 @@ impl PdfCraftApp {
             .gate(gate)
             .label(&translate)
             .english(&english)
-            .id(egui::Id::unique("pdfcraft-menu-bar"))
+            // Each window's bar its own (which menu is open, the keyboard's place in it).
+            .id(match self.current_window() {
+                crate::WindowId::ROOT => egui::Id::unique("pdfcraft-menu-bar"),
+                window => egui::Id::unique("pdfcraft-menu-bar").with(window),
+            })
             .shrink_to_fit(fit)
             .show(ui);
         for command in chosen {

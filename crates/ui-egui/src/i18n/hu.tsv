@@ -2577,3 +2577,11 @@ animation effects	Off	Ki
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	A válasz beállításai
 	Export value	Exportérték
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Ablak
+	Move tab to new window	Lap áthelyezése új ablakba
+	Merge all windows	Összes ablak egyesítése
+	Close window	Ablak bezárása
+	Move to new window	Áthelyezés új ablakba
+	Move to window	Áthelyezés ablakba
+	Too many windows are open	Túl sok ablak van nyitva

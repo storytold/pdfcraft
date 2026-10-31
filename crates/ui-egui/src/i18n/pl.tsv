@@ -2674,3 +2674,11 @@ animation effects	Off	Wyłączone
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opcje tej odpowiedzi
 	Export value	Wartość eksportowa
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Okno
+	Move tab to new window	Przenieś kartę do nowego okna
+	Merge all windows	Scal wszystkie okna
+	Close window	Zamknij okno
+	Move to new window	Przenieś do nowego okna
+	Move to window	Przenieś do okna
+	Too many windows are open	Otwarto zbyt wiele okien

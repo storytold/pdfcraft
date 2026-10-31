@@ -2541,3 +2541,11 @@ animation effects	Off	Изключени
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Опции за този отговор
 	Export value	Стойност за експортиране
+# Several windows (M14): the Window menu, the tab context menu, the limit notice.
+	Window	Прозорец
+	Move tab to new window	Преместване на раздела в нов прозорец
+	Merge all windows	Обединяване на всички прозорци
+	Close window	Затваряне на прозореца
+	Move to new window	Преместване в нов прозорец
+	Move to window	Преместване в прозорец
+	Too many windows are open	Отворени са твърде много прозорци
