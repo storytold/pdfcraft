@@ -99,6 +99,11 @@ pub enum XfaEffect {
     MessageBox(Message),
     /// `xfa.host.resetData()`: the named fields, or every field when empty.
     ResetData(Vec<String>),
+    /// `event.target.exportDataObject(…)`: the attached file `name`, to open or to save.
+    OpenAttachment {
+        name: String,
+        open: bool,
+    },
     /// `app.execMenuItem("ShowHide…")`: show or hide a side panel.
     ShowPanel(crate::Panel),
     Print,
@@ -210,6 +215,7 @@ pub(super) fn payload(e: &XfaEffect) -> usize {
             som.len().saturating_add(s.len())
         }
         XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } => som.len(),
+        XfaEffect::OpenAttachment { name, .. } => name.len(),
         XfaEffect::MessageBox(m) => m.bytes(),
         XfaEffect::LaunchUrl(s) | XfaEffect::SetFocus(s) => s.len(),
         XfaEffect::ResetData(names) => names.iter().fold(0usize, |n, s| n.saturating_add(s.len()).saturating_add(std::mem::size_of::<String>())),
