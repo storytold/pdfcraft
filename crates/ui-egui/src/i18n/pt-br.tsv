@@ -8,6 +8,14 @@
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
 # the trailing "…" of dialog commands is kept.
 
+	Dark PDF pages	Páginas PDF escuras
+	Soft dark	Escuro suave
+	Sepia	Sépia
+	Keep opaque images	Manter imagens opacas
+	Keep all images	Manter todas as imagens
+	Recolour images	Recolorir imagens
+	Dark page colours	Cores das páginas escuras
+	Images on dark pages	Imagens em páginas escuras
 	Menu	Menu
 	File	Arquivo
 	Rotation:	Rotação:

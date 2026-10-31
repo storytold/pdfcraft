@@ -1,3 +1,4 @@
+use super::paint::{new_comment, paint_gesture};
 use super::*;
 
 /// A selected line is drawn where it is going: moved by its body (both ends follow the
@@ -459,6 +460,62 @@ fn tools_round_trip_through_their_commands() {
         assert!(pdfcraft_engine::commands::command(t.command()).is_some(), "{} is registered", t.command());
         assert!(icons::exists(t.icon()), "icon {}", t.icon());
         assert!(GROUPS[t.group()].contains(&t));
+    }
+}
+
+#[test]
+fn dark_pages_live_ink_uses_display_colours_without_changing_annotation_style() {
+    use crate::page_colors::PageColors;
+    use pdfcraft_render::ReadingColors;
+    let mut app = crate::PdfCraftApp::new();
+    let bytes = app.session.create_blank(100.0, 50.0, 1).unwrap();
+    app.open_bytes("blank.pdf", None, bytes.as_ref().clone()).unwrap();
+    let info = app.session.get(app.views[0].id).unwrap().info.clone();
+    let view = &mut app.views[0];
+    let points = vec![[10.0, 10.0], [20.0, 20.0]];
+    view.comments.gesture = Some(Gesture::Draw { page: 0, tool: CommentTool::Ink, points: points.clone() });
+    let mut prefs = CommentPrefs::default();
+    prefs.set_color(CommentTool::Ink, [0.0, 0.0, 0.0]);
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(100.0, 50.0)), rot: 0, pw: 100.0, ph: 50.0 };
+    for tool in [CommentTool::Ink, CommentTool::Line, CommentTool::Arrow, CommentTool::Rectangle, CommentTool::Oval] {
+        prefs.set_color(tool, [0.0, 0.0, 0.0]);
+        view.comments.gesture = Some(Gesture::Draw { page: 0, tool, points: points.clone() });
+        let cx = PageCx {
+            page: 0,
+            xf: &xf,
+            info: &info,
+            tool: QuickTool::Comment(CommentTool::Ink),
+            prefs: &prefs,
+            allowed: true,
+            hidden: false,
+            ptr: &crate::page_pointer::PagePointer::default(),
+            redact_mark: ([0.0; 3], 1.0),
+        };
+        for (colors, expected) in [
+            (PageColors::Original, Color32::BLACK),
+            (PageColors::Dark(pdfcraft_render::DarkPalette::Soft), Color32::from_gray(230)),
+            (PageColors::for_reading(Some(Default::default()), ReadingColors::WHITE_ON_BLACK), Color32::WHITE),
+            (PageColors::for_reading(Some(Default::default()), ReadingColors::YELLOW_ON_BLACK), Color32::YELLOW),
+        ] {
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| paint_gesture(ui.painter(), &cx, view, colors));
+            let stroke = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::LineSegment { stroke, .. } => Some(stroke.color),
+                egui::Shape::Rect(rect) => Some(rect.stroke.color),
+                egui::Shape::Ellipse(ellipse) => Some(ellipse.stroke.color),
+                egui::Shape::Path(path) => match &path.stroke.color {
+                    egui::epaint::ColorMode::Solid(color) => Some(*color),
+                    _ => None,
+                },
+                _ => None,
+            });
+            output.textures_delta.clear();
+            assert_eq!(stroke, Some(expected), "the actual preview stroke follows display colours");
+            let shape = drawn_shape(tool, &points).unwrap();
+            let Edit::AddAnnotation(annotation) = new_comment(&cx, tool, shape, String::new()) else { panic!("annotation edit") };
+            assert_eq!(annotation.style.color, [0.0, 0.0, 0.0], "stored ink stays black in every display mode");
+            assert_eq!(prefs.style(CommentTool::Ink).color, [0.0, 0.0, 0.0]);
+        }
     }
 }
 

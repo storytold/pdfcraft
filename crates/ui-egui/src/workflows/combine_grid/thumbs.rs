@@ -386,6 +386,6 @@ fn texture(
     if pixels.len() != bytes {
         return Err("the thumbnail came back incomplete".to_owned());
     }
-    let image = crate::canvas::texture_image([w, h], pixels);
+    let image = crate::canvas::texture_image([w, h], pixels, crate::page_colors::PageColors::Original);
     Ok((ctx.load_texture(format!("combine-thumb-{}-{}", slot.0, slot.1), image, egui::TextureOptions::LINEAR), bytes))
 }

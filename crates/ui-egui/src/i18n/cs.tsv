@@ -19,6 +19,14 @@
 # commands is kept. Messages with a count but no `@plural` entry use count-neutral wording
 # ("Vybráno stránek: {n}"), because Czech has three plural forms.
 
+	Dark PDF pages	Tmavé stránky PDF
+	Soft dark	Jemná tmavá
+	Sepia	Sépie
+	Keep opaque images	Zachovat neprůhledné obrázky
+	Keep all images	Zachovat všechny obrázky
+	Recolour images	Přebarvit obrázky
+	Dark page colours	Barvy tmavých stránek
+	Images on dark pages	Obrázky na tmavých stránkách
 	Menu	Nabídka
 	File	Soubor
 	Rotation:	Otočení:

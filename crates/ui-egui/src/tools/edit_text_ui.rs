@@ -651,7 +651,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
 }
 
 /// The inline editor; returns the edit once the text is applied.
-pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -> Option<Edit> {
+pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, colors: crate::page_colors::PageColors) -> Option<Edit> {
     let view_id = view.id;
     // Clicks outside the document (the Format text panel) keep the paragraph open, as does the
     // keyboard moving there. Where the click landed is `interact_pos`: `latest_pos` is gone on the
@@ -701,7 +701,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     let smallest =
         ed.source.as_ref().and_then(|(block, lines)| block.lines.iter().filter_map(|i| lines.get(*i)).map(|l| l.size as f32).reduce(f32::min));
     let font = editor_font(&ed.look, smallest.map_or(ed.size, |s| (s * scale * 0.5).clamp(1.0, 300.0).min(ed.size)));
-    let text_color = color32(ed.look.color);
+    let text_color = colors.text(color32(ed.look.color));
     let block = ed.block;
     let mut done = None;
     let mut reveal = false;
@@ -731,7 +731,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 ed.rect.width().max(1.0)
             };
             ui.set_width(width);
-            let measured = editor_galley(ui, ed, &ed.text, scale, width);
+            let measured = editor_galley(ui, ed, &ed.text, scale, width, colors);
             ed.overflow = ed.has_changes() && (measured.rect.width() > ed.rect.width() + 1.5 || measured.rect.height() > ed.rect.height() + 1.5);
             let visible = Rect::from_min_size(ed.rect.min, measured.rect.size().max(egui::vec2(1.0, 1.0)));
             // Unsupported source programs use an interface fallback whose glyph advances
@@ -767,9 +767,11 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 };
                 let rows = 1;
                 let snapshot = ed.clone();
+                // Just formatted: the page beneath shows the paragraph without its text.
+                let shown = view.text_background.shows_unchanged_text(page, block);
                 let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
-                    let galley = editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width);
-                    if snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
+                    let galley = editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width, colors);
+                    if shown || snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
                 };
                 let before = ed.text.clone();
                 let input = input_id();
@@ -1132,7 +1134,7 @@ C", &picked
         let ctx = egui::Context::default();
         let mut background = TextBackground::default();
         for _ in 0..100 {
-            background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+            background.prepare(&ctx, doc, Some(&ed), None, 1.0, None);
             if background.ready(0, 0) {
                 break;
             }
@@ -1141,12 +1143,36 @@ C", &picked
         assert!(background.ready(0, 0));
         assert!(!background.pending());
         let texture = background.texture.as_ref().unwrap().id();
-        background.prepare(&ctx, doc, Some(&ed), None, 1.0);
+        background.prepare(&ctx, doc, Some(&ed), None, 1.0, None);
         assert_eq!(background.texture.as_ref().unwrap().id(), texture);
+        // Switching the display colours draws this full-page backdrop again, even at an unchanged
+        // scale, with the same renderer.
+        let requests = background.renderer.as_ref().unwrap().stats().render_requests;
+        for (offset, dark) in [true, false, true].into_iter().enumerate() {
+            for _ in 0..100 {
+                background.prepare(&ctx, doc, Some(&ed), None, 1.0, dark.then_some(crate::page_colors::FILTERING));
+                if !background.pending() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(background.ready(0, 0) && !background.pending());
+            let renderer = background.renderer.as_ref().unwrap();
+            assert_eq!(renderer.stats().render_requests, requests + offset as u64 + 1, "dark toggles reuse the existing renderer");
+            let pixels = crate::page_colors::uploaded_pixels(&ctx, background.texture.as_ref().unwrap());
+            let colors = crate::page_colors::PageColors::for_reading(dark.then_some(crate::page_colors::FILTERING), Default::default());
+            assert_eq!(pixels.first(), Some(&colors.paper()), "the editor's backdrop follows the page");
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let galley = editor_galley(ui, &ed, &ed.text, 1.0, 400.0, colors);
+                assert!(galley.job.sections.iter().all(|section| section.format.color == colors.text(Color32::BLACK)));
+            });
+            output.textures_delta.clear();
+            assert_eq!(ed.look.color, [0.0, 0.0, 0.0], "display colours never change the paragraph's style");
+        }
         assert_eq!(doc.bytes, source);
         assert_eq!(doc.edit_generation(), generation);
         assert!(!doc.dirty && doc.can_undo().is_none());
-        background.prepare(&ctx, doc, None, None, 1.0);
+        background.prepare(&ctx, doc, None, None, 1.0, None);
         assert!(background.texture.is_none() && background.renderer.is_none());
     }
 
@@ -1161,7 +1187,7 @@ C", &picked
         let ctx = egui::Context::default();
         ctx.begin_pass(egui::RawInput { max_texture_side: Some(16384), ..Default::default() });
         let mut background = TextBackground::default();
-        background.prepare(&ctx, doc, Some(&ed), None, 8.0);
+        background.prepare(&ctx, doc, Some(&ed), None, 8.0, None);
         let expected = 8.0f32.min(crate::canvas::TILE_THRESHOLD / page.width.max(page.height));
         assert!(expected > crate::canvas::BASE_SIDE / page.width.max(page.height), "the test page needs the larger side");
         assert_eq!(background.tag, Some((expected * 1000.0) as u64));
@@ -1169,7 +1195,7 @@ C", &picked
         ctx.end_pass().textures_delta.clear();
         ctx.begin_pass(egui::RawInput { max_texture_side: Some(2048), ..Default::default() });
         let mut small = TextBackground::default();
-        small.prepare(&ctx, doc, Some(&ed), None, 8.0);
+        small.prepare(&ctx, doc, Some(&ed), None, 8.0, None);
         assert_eq!(small.tag, Some(((2048.0 / page.width.max(page.height)) * 1000.0) as u64));
         ctx.end_pass().textures_delta.clear();
     }

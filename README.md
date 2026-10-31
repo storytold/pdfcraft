@@ -121,7 +121,7 @@ PdfCraft renders PDFs with care for the details that make a page feel right: ker
 - **Deep zoom stays sharp.** Large pages render in tiles, so text stays crisp at any magnification.
 - **Built to survive bad files.** Every page renders in isolation and damaged documents are repaired. Across the 983-file pdf.js test corpus the result is 0 crashes.
 - **Layouts for every task:** continuous, single page, two-up, view rotation, full screen and a distraction-free Read mode.
-- **Light and dark themes**, both designed to be easy on the eyes for long sessions.
+- **Light and dark themes**, both designed to be easy on the eyes for long sessions. A separate page toggle beside the theme button enables dark reading without changing the document.
 
 <table>
 <tr>

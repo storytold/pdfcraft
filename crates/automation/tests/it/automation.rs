@@ -10190,3 +10190,87 @@ fn simple_rule_scan_drawn(content: &[u8]) -> Vec<u8> {
     }
     write_full(&doc, &SaveOptions::default()).unwrap()
 }
+
+/// Dark pages' palettes and keep-images mode through the tool: keeping images recolours text,
+/// line art and paper in the palette while the picture keeps its colours; filtering every pixel
+/// recolours the picture too; palette and images persist when not given; a preset wins.
+#[test]
+fn dark_pages_palettes_and_keep_images_through_tools() {
+    let dir = workdir("dark-pages-style");
+    std::fs::write(dir.join("a.pdf"), reading_colors_fixture()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // Page 2: paper at (10, 290), the red picture at (140, 80).
+    let at = |a: &mut Automation, x: u32, y: u32| {
+        let png = a.call("page_render", &json!({ "doc": doc, "page": 2, "dpi": 72 })).unwrap();
+        pixel(&png_pixels(&png[0]), x, y)
+    };
+    assert_eq!((at(&mut a, 10, 290), at(&mut a, 140, 80)), ([255, 255, 255, 255], [255, 0, 0, 255]));
+    let reply = ok(&mut a, "view_dark_pages", json!({ "doc": doc, "enabled": true, "palette": "sepia", "images": "keep-opaque" }));
+    assert_eq!(reply, json!({ "enabled": true, "palette": "sepia", "images": "keep-opaque" }));
+    assert_eq!(at(&mut a, 10, 290), [0x2a, 0x24, 0x20, 255], "the page takes the sepia paper");
+    assert_eq!(at(&mut a, 140, 80), [255, 0, 0, 255], "the picture keeps its colours");
+    let reply = ok(&mut a, "view_dark_pages", json!({ "doc": doc, "enabled": true, "palette": "black", "images": "recolour" }));
+    assert_eq!(reply, json!({ "enabled": true, "palette": "black", "images": "recolour" }));
+    assert_eq!(at(&mut a, 10, 290), [0, 0, 0, 255], "the black palette's paper");
+    assert_ne!(at(&mut a, 140, 80), [255, 0, 0, 255], "filtering every pixel changes the picture too");
+    // An embedder's raw pixels show the same page as page_render.
+    let png = a.call("page_render", &json!({ "doc": doc, "page": 2, "dpi": 72 })).unwrap();
+    let (_, _, raw) = a.render_pixels(doc, 2, 1.0).unwrap();
+    assert_eq!(&raw[..], &png_pixels(&png[0])[..], "render_pixels is filtered as page_render is");
+    // Unset arguments keep their values.
+    assert_eq!(
+        ok(&mut a, "view_dark_pages", json!({ "doc": doc, "enabled": false })),
+        json!({ "enabled": false, "palette": "black", "images": "recolour" })
+    );
+    assert_eq!(at(&mut a, 10, 290), [255, 255, 255, 255]);
+    ok(&mut a, "view_dark_pages", json!({ "doc": doc, "enabled": true, "images": "keep-opaque" }));
+    assert_eq!(at(&mut a, 10, 290), [0, 0, 0, 255], "keeping images in the black palette");
+    ok(&mut a, "view_reading_colors", json!({ "doc": doc, "mode": "yellow-on-black" }));
+    assert_eq!(at(&mut a, 140, 80), [255, 0, 0, 255]);
+    let preset = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
+    assert!(png_pixels(&preset[0]).chunks(4).any(|p| p[..3] == [255, 255, 0]), "the explicit preset's yellow text wins");
+    let e = a.call("view_dark_pages", &json!({ "doc": doc, "enabled": true, "palette": "night" }));
+    assert!(matches!(&e, Err(ToolError::InvalidArgs(m)) if m.contains("soft, black, sepia")), "{e:?}");
+}
+
+#[test]
+fn dark_pages_through_tools_preserve_documents_and_reading_presets() {
+    let dir = workdir("dark-pages");
+    std::fs::write(dir.join("a.pdf"), reading_colors_fixture()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let other = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let render = |a: &mut Automation, id| a.call("page_render", &json!({ "doc": id, "page": 1, "dpi": 72 })).unwrap();
+    let original = render(&mut a, doc);
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(
+        ok(&mut a, "view_dark_pages", json!({ "doc": doc, "enabled": true })),
+        json!({ "enabled": true, "palette": "soft", "images": "keep-opaque" })
+    );
+    let dark = render(&mut a, doc);
+    assert_ne!(dark, original);
+    assert_eq!(pixel(&png_pixels(&dark[0]), 10, 290), [25, 25, 25, 255]);
+    assert_eq!(render(&mut a, other), original, "the preference is per document");
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc })), info, "view changes do not alter history or dirty state");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "dark-saved.pdf", "full": false }));
+    assert_eq!(std::fs::read(dir.join("dark-saved.pdf")).unwrap(), std::fs::read(dir.join("a.pdf")).unwrap());
+    // Save As may reserialize the file; it must still retain the original page colours.
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "dark-full.pdf", "full": true }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "dark-full.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(render(&mut a, reopened), original, "saved PDFs contain original colours");
+    ok(&mut a, "view_reading_colors", json!({ "doc": doc, "mode": "white-on-black" }));
+    let preset = render(&mut a, doc);
+    assert_eq!(pixel(&png_pixels(&preset[0]), 10, 290), [0, 0, 0, 255], "explicit preset wins");
+    ok(&mut a, "view_dark_pages", json!({ "doc": doc, "enabled": false }));
+    assert_eq!(render(&mut a, doc), preset);
+    ok(&mut a, "view_dark_pages", json!({ "doc": doc, "enabled": true }));
+    ok(&mut a, "view_reading_colors", json!({ "doc": doc, "mode": "off" }));
+    assert_eq!(render(&mut a, doc), dark, "dark preference resumes after disabling the preset");
+    for args in [json!({ "doc": doc }), json!({ "doc": doc, "enabled": "yes" }), json!({ "doc": 999999, "enabled": true })] {
+        assert!(a.call("view_dark_pages", &args).is_err());
+    }
+    assert_eq!(render(&mut a, doc), dark, "invalid calls leave the setting unchanged");
+    ok(&mut a, "command_run", json!({ "id": "view.dark_pages", "params": { "doc": doc, "enabled": false } }));
+    assert_eq!(render(&mut a, doc), original, "registry dispatch uses the same tool");
+}

@@ -19,6 +19,11 @@ pub(crate) struct TextBackground {
     /// An applied paragraph's last look. The page raster still has the old text until the page
     /// is rendered again, so the textless page and this look stay up until then.
     settling: Option<EditorLook>,
+    /// The display colours the textless page is drawn in.
+    colors: Option<crate::page_colors::PageColors>,
+    /// The open paragraph was formatted and stays open: its textless page is still right, so it
+    /// outlasts the settling look.
+    formatted: bool,
 }
 
 /// A paragraph editor's text as last drawn: its laid-out rows, where they were on the page (in
@@ -34,6 +39,17 @@ struct EditorLook {
 }
 
 impl TextBackground {
+    /// Formatting only changes the paragraph left out of this preview, so its textless page
+    /// stays valid; any other edit still rebuilds it in `prepare`.
+    pub fn formatted(&mut self, before: u64, after: u64, page: usize, block: usize) {
+        if self.key == Some((before, page, TextTarget::Block(block))) {
+            self.key = Some((after, page, TextTarget::Block(block)));
+            self.draft_key = None;
+            self.draft_rect = None;
+            self.formatted = true;
+        }
+    }
+
     pub fn pending(&self) -> bool {
         self.renderer.is_some() && self.received != self.tag
     }
@@ -52,17 +68,23 @@ impl TextBackground {
                 && self.texture.is_some()
         });
         match look {
-            Some(look) => {
-                self.renderer = None;
-                self.settling = Some(look);
-            }
+            // The renderer stays: while the paragraph stays open (formatting it), its textless
+            // page is drawn again from it at another scale or in other display colours.
+            Some(look) => self.settling = Some(look),
             None => *self = Self::default(),
         }
     }
 
+    /// The page's raster arrived. An applied paragraph's settling look ends; its textless page
+    /// goes too unless the paragraph is still open after formatting, where it stays to avoid a
+    /// flash while the editor's text is drawn over it.
     pub fn page_received(&mut self, page: usize) {
         if self.settling.as_ref().is_some_and(|look| look.page == page) {
-            *self = Self::default();
+            if std::mem::take(&mut self.formatted) {
+                self.settling = None;
+            } else {
+                *self = Self::default();
+            }
         }
     }
 
@@ -73,7 +95,9 @@ impl TextBackground {
         editor: Option<&LineEditor>,
         draft: Option<&crate::content_ui::TextDraft>,
         scale: f32,
+        dark: Option<pdfcraft_render::DarkPages>,
     ) {
+        let colors = crate::page_colors::PageColors::for_reading(dark, doc.renderer.reading_colors());
         let key = editor
             .map(|ed| (doc.edit_generation(), ed.page, TextTarget::Block(ed.block)))
             .or_else(|| draft.and_then(|d| d.index.map(|index| (doc.edit_generation(), d.page, TextTarget::Added(index)))));
@@ -108,6 +132,12 @@ impl TextBackground {
         let max_side = ctx.input(|i| i.max_texture_side) as f32;
         let scale = scale.min(crate::canvas::TILE_THRESHOLD.min(max_side) / p.width.max(p.height).max(1.0));
         let tag = (scale * 1000.0) as u64;
+        if self.colors != Some(colors) {
+            // Other display colours: the textless page is drawn again in them.
+            self.colors = Some(colors);
+            self.tag = None;
+            self.received = None;
+        }
         if self.tag != Some(tag) {
             renderer.set_queue(vec![pdfcraft_render::RenderRequest { page, scale, tag, ..Default::default() }]);
             self.tag = Some(tag);
@@ -121,7 +151,7 @@ impl TextBackground {
             if out.request.tag == tag {
                 self.texture = Some(ctx.load_texture(
                     "text-editor-background",
-                    crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba),
+                    crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba, colors),
                     egui::TextureOptions::LINEAR,
                 ));
                 self.received = Some(tag);
@@ -135,6 +165,13 @@ impl TextBackground {
     /// The draft's measured extent, when it was measured for paragraph `block` on `page`.
     pub fn draft_rect_for(&self, page: usize, block: usize) -> Option<[f64; 4]> {
         self.draft_rect.filter(|_| self.key.is_some_and(|(_, p, target)| (p, target) == (page, TextTarget::Block(block))))
+    }
+
+    /// Paragraph `block` on `page` was just formatted and stays open while its page is drawn
+    /// again: under its editor is the textless page, so the editor shows its text even though
+    /// applying left nothing changed.
+    pub fn shows_unchanged_text(&self, page: usize, block: usize) -> bool {
+        self.formatted && self.settling.as_ref().is_some_and(|look| look.page == page) && self.ready(page, block)
     }
 
     pub fn ready(&self, page: usize, block: usize) -> bool {
@@ -167,7 +204,12 @@ impl TextBackground {
         // Font metrics can underestimate the actual glyph ink. Paint the complete textless
         // page so overhanging glyphs cannot remain outside the estimated source rectangle.
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
-        if for_editor {
+        if for_editor && settled.is_some() {
+            // Just formatted, still open: the page raster is being drawn again, so the textless
+            // page stays under the editor (whose own text shows the paragraph, see
+            // `shows_unchanged_text`) until it arrives, rather than a blank page flashing.
+            xf.paint_image(&painter, tex.id(), 0.0, 0.0, 1.0, 1.0);
+        } else if for_editor {
             // Its place under everything drawn on the page later; the editor fills it once the
             // paragraph changes (an unchanged paragraph looks as the page draws it).
             let mut mesh = egui::Mesh::with_texture(tex.id());

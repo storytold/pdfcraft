@@ -408,8 +408,14 @@ impl PdfCraftApp {
     /// Apply the open paragraph's formatting as one change; the paragraph stays open.
     pub(crate) fn apply_line_format(&mut self, index: usize, mut ed: crate::edit_text_ui::LineEditor, ctx: Option<&egui::Context>) {
         let edit = pdfcraft_engine::Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() };
+        let before = self.session.get(self.views[index].id).map(|doc| doc.edit_generation());
         if self.apply_edit(edit) {
             ed.applied();
+            if let Some(before) = before
+                && let Some(doc) = self.session.get(self.views[index].id)
+            {
+                self.views[index].text_background.formatted(before, doc.edit_generation(), ed.page, ed.block);
+            }
             if let Some(doc) = self.session.get(self.views[index].id)
                 && let Some(block) = doc.text_blocks(ed.page).get(ed.block)
             {

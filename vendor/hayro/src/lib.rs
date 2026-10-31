@@ -101,6 +101,16 @@ pub struct ColorReplacement {
     pub only_black: bool,
     /// When `true`, line-art paints are mapped in addition to text paints.
     pub line_art: bool,
+    /// PdfCraft patch (dark pages): dark PDF pages. Instead of by luminance alone, paints are
+    /// mapped with [`dark_rgba_in`] (light and dark exchanged, hues kept) into `background` as the
+    /// paper and `text` as the ink, so coloured text and charts stay coloured. `only_black` doesn't
+    /// apply.
+    pub keep_hue: bool,
+    /// PdfCraft patch (dark pages): with `keep_hue`, raster images with transparency (a soft mask
+    /// or a mask) count as ink too: their colours go through the same mapping (logos, signatures
+    /// and transparent diagrams stay visible on the dark paper), while opaque images (photos,
+    /// scans) keep theirs.
+    pub masked_images: bool,
 }
 
 impl ColorReplacement {
@@ -110,6 +120,77 @@ impl ColorReplacement {
         if !is_text && !self.line_art {
             return rgba8;
         }
+        if self.keep_hue {
+            return dark_rgba_in(rgba8, self.background, self.text);
+        }
+        self.map_luminance(rgba8)
+    }
+
+    /// PdfCraft patch (dark pages): an image with transparency's colours mapped as [`Self::map`]
+    /// maps line art, when `keep_hue` and `masked_images` (and the line-art gate) say so; otherwise
+    /// the image as it is. A grey image becomes RGB, so a coloured paper and ink apply; a run of
+    /// equal pixels is mapped once. Never panics.
+    pub fn map_masked_image(&self, image: hayro_interpret::ImageData) -> hayro_interpret::ImageData {
+        use hayro_interpret::{ImageData, RgbData};
+        if !self.maps_masked_images() {
+            return image;
+        }
+        let mut last: Option<([u8; 3], [u8; 3])> = None;
+        let mut map = |rgb: [u8; 3]| match last {
+            Some((from, to)) if from == rgb => to,
+            _ => {
+                let [r, g, b, _] = dark_rgba_in([rgb[0], rgb[1], rgb[2], 255], self.background, self.text);
+                last = Some((rgb, [r, g, b]));
+                [r, g, b]
+            }
+        };
+        match image {
+            ImageData::Rgb(mut rgb) => {
+                for px in rgb.data.chunks_exact_mut(3) {
+                    let mapped = map([px[0], px[1], px[2]]);
+                    px.copy_from_slice(&mapped);
+                }
+                ImageData::Rgb(rgb)
+            }
+            ImageData::Luma(luma) => ImageData::Rgb(RgbData {
+                data: luma.data.iter().flat_map(|&v| map([v, v, v])).collect(),
+                width: luma.width,
+                height: luma.height,
+                interpolate: luma.interpolate,
+                scale_factors: luma.scale_factors,
+            }),
+        }
+    }
+
+    /// PdfCraft patch (dark pages): with `keep_hue`, a paint drawn with a darkening blend mode (a
+    /// Multiply highlight), which dark pages draw with the lightening one (Screen): what it
+    /// took away from white paper, in its own hue, softened, to add to the dark paper. A yellow
+    /// highlight lights the paper dark yellow; [`Self::map`] would make its light yellow almost
+    /// the paper and the band would vanish. White adds nothing and black a grey; alpha is
+    /// copied. Under the line-art gate as `map`; text keeps `map`'s ink. Never panics.
+    pub fn map_lightening(&self, rgba8: [u8; 4]) -> [u8; 4] {
+        // How strongly the band shows: a full yellow lights black paper to 40% yellow, dark
+        // enough that light text over it keeps its contrast.
+        const STRENGTH: f32 = 0.4;
+        if !self.line_art {
+            return rgba8;
+        }
+        let [r, g, b, a] = rgba8;
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        // The colour above its grey (its hue and saturation), plus what its grey darkened.
+        let grey = f32::from(255 - max);
+        let channel = |v: u8| ((f32::from(v - min) + grey) * STRENGTH).round().clamp(0.0, 255.0) as u8;
+        [channel(r), channel(g), channel(b), a]
+    }
+
+    /// PdfCraft patch (dark pages): whether [`Self::map_masked_image`] maps an image's colours.
+    pub fn maps_masked_images(&self) -> bool {
+        self.keep_hue && self.masked_images && self.line_art
+    }
+
+    /// The reading-colours mapping by luminance alone.
+    fn map_luminance(&self, rgba8: [u8; 4]) -> [u8; 4] {
         let [r, g, b, a] = rgba8;
         // Luminance of the gamma-encoded sRGB bytes, normalized to `0.0..=1.0`.
         let t = (0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b)) / 255.0;
@@ -303,6 +384,49 @@ pub fn render_into<'a>(
     );
 }
 
+/// PdfCraft patch (dark pages): the dark-page filter on one unpremultiplied sRGBA pixel: light and
+/// dark luminance exchanged (white to a dark grey, black to a light grey), hues kept recognisable
+/// (CSS `hue-rotate(180deg)`, softened towards grey), alpha unchanged. Never panics.
+pub fn dark_rgba([r, g, b, a]: [u8; 4]) -> [u8; 4] {
+    let invert = |channel: u8| 0.9 - 0.8 * (f32::from(channel) / 255.0);
+    let [r, g, b] = [invert(r), invert(g), invert(b)];
+    // CSS hue-rotate(180deg), using the filter function's luminance coefficients.
+    let rotated = [
+        -0.574 * r + 1.430 * g + 0.144 * b,
+        0.426 * r + 0.430 * g + 0.144 * b,
+        0.426 * r + 1.430 * g - 0.856 * b,
+    ];
+    let gray = 0.213 * rotated[0] + 0.715 * rotated[1] + 0.072 * rotated[2];
+    let byte = |channel: f32| ((0.4 * channel + 0.6 * gray).clamp(0.0, 1.0) * 255.0).round() as u8;
+    [byte(rotated[0]), byte(rotated[1]), byte(rotated[2]), a]
+}
+
+/// PdfCraft patch (dark pages): [`dark_rgba`] into another paper and ink: each channel's place
+/// between the filter's own paper and ink (what white and black become) is where it goes between
+/// `paper` and `ink`. With the filter's own paper and ink it is [`dark_rgba`]. Never panics.
+pub fn dark_rgba_in(rgba8: [u8; 4], paper: [u8; 3], ink: [u8; 3]) -> [u8; 4] {
+    // The filter's own paper and ink, worked out once.
+    static ENDS: std::sync::OnceLock<[[u8; 4]; 2]> = std::sync::OnceLock::new();
+    let soft = dark_rgba(rgba8);
+    let [from, to] = *ENDS.get_or_init(|| [dark_rgba([255, 255, 255, 255]), dark_rgba([0, 0, 0, 255])]);
+    if paper == [from[0], from[1], from[2]] && ink == [to[0], to[1], to[2]] {
+        return soft;
+    }
+    let channel = |v: u8, p: u8, k: u8, f: u8, t: u8| {
+        let span = (f32::from(t) - f32::from(f)).max(1.0);
+        let place = ((f32::from(v) - f32::from(f)) / span).clamp(0.0, 1.0);
+        (f32::from(p) + (f32::from(k) - f32::from(p)) * place)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    [
+        channel(soft[0], paper[0], ink[0], from[0], to[0]),
+        channel(soft[1], paper[1], ink[1], from[1], to[1]),
+        channel(soft[2], paper[2], ink[2], from[2], to[2]),
+        soft[3],
+    ]
+}
+
 // Just a convenience method for testing.
 #[doc(hidden)]
 pub fn render_pdf(
@@ -361,6 +485,8 @@ mod color_replacement_tests {
         line_art: bool,
     ) -> ColorReplacement {
         ColorReplacement {
+            keep_hue: false,
+            masked_images: false,
             text,
             background,
             only_black,
@@ -416,6 +542,59 @@ mod color_replacement_tests {
         assert_eq!(r.map([0x00, 0x00, 0x00, 255], false), [0x00, 0x00, 0x00, 255]);
         // Text fills/strokes still map.
         assert_eq!(r.map([0x00, 0x00, 0x00, 255], true), [0xff, 0xff, 0xff, 255]);
+    }
+}
+
+// PdfCraft patch (dark pages): unit tests for the hue-keeping dark-page mapping.
+#[cfg(test)]
+mod dark_mapping_tests {
+    use super::{ColorReplacement, dark_rgba, dark_rgba_in};
+
+    const PAPER: [u8; 3] = [0x2a, 0x24, 0x20];
+    const INK: [u8; 3] = [0xea, 0xd8, 0xc4];
+
+    fn dark(keep_hue: bool) -> ColorReplacement {
+        ColorReplacement {
+            text: INK,
+            background: PAPER,
+            only_black: false,
+            line_art: true,
+            keep_hue,
+            masked_images: true,
+        }
+    }
+
+    #[test]
+    fn keeping_hue_maps_white_to_paper_black_to_ink_and_red_stays_red() {
+        let keep = dark(true);
+        assert_eq!(keep.map([255, 255, 255, 255], true), [PAPER[0], PAPER[1], PAPER[2], 255]);
+        assert_eq!(keep.map([0, 0, 0, 90], false), [INK[0], INK[1], INK[2], 90], "alpha copied");
+        let [r, g, b, _] = keep.map([220, 30, 40, 255], false);
+        assert!(r > g + 40 && r > b + 40, "red stays red: {r} {g} {b}");
+        let [r, g, b, _] = dark(false).map([220, 30, 40, 255], false);
+        assert!(r.abs_diff(g) < 30 && g.abs_diff(b) < 30, "by luminance it turns grey: {r} {g} {b}");
+        let no_line_art = ColorReplacement { line_art: false, ..keep };
+        assert_eq!(no_line_art.map([220, 30, 40, 255], false), [220, 30, 40, 255], "the line-art gate holds");
+    }
+
+    #[test]
+    fn darkening_paints_lighten_the_paper_in_their_own_hue() {
+        let keep = dark(true);
+        assert_eq!(keep.map_lightening([255, 255, 255, 255]), [0, 0, 0, 255], "white takes nothing away");
+        assert_eq!(keep.map_lightening([0, 0, 0, 128]), [102, 102, 102, 128], "black a grey; alpha copied");
+        assert_eq!(keep.map_lightening([255, 255, 0, 255]), [102, 102, 0, 255], "yellow stays yellow");
+        let [r, g, b, _] = keep.map_lightening([255, 200, 200, 255]);
+        assert!(r > g && g == b && r < 40, "a pale pink is a faint red: {r} {g} {b}");
+        let no_line_art = ColorReplacement { line_art: false, ..keep };
+        assert_eq!(no_line_art.map_lightening([255, 255, 0, 255]), [255, 255, 0, 255], "the line-art gate holds");
+    }
+
+    #[test]
+    fn the_filters_own_paper_and_ink_give_the_filter_itself() {
+        let [from, to] = [dark_rgba([255; 4]), dark_rgba([0, 0, 0, 255])];
+        for px in [[255, 255, 255, 255], [0, 0, 0, 255], [200, 30, 40, 128], [12, 200, 90, 0], [128, 128, 128, 255]] {
+            assert_eq!(dark_rgba_in(px, [from[0], from[1], from[2]], [to[0], to[1], to[2]]), dark_rgba(px));
+        }
     }
 }
 
@@ -483,6 +662,8 @@ mod color_replacement_render_tests {
 
     fn replacement(line_art: bool) -> ColorReplacement {
         ColorReplacement {
+            keep_hue: false,
+            masked_images: false,
             text: [0xff, 0xff, 0xff],
             background: [0x00, 0x00, 0x00],
             only_black: false,

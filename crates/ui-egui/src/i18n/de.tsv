@@ -9,6 +9,14 @@
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
 # the trailing "…" of dialog commands is kept.
 
+	Dark PDF pages	Dunkle PDF-Seiten
+	Soft dark	Sanftes Dunkel
+	Sepia	Sepia
+	Keep opaque images	Deckende Bilder beibehalten
+	Keep all images	Alle Bilder beibehalten
+	Recolour images	Bilder umfärben
+	Dark page colours	Farben dunkler Seiten
+	Images on dark pages	Bilder auf dunklen Seiten
 	Menu	Menü
 	File	Datei
 	Edit	Bearbeiten
@@ -1227,6 +1235,7 @@
 	Collate	Sortieren
 	Print in grayscale	In Graustufen drucken
 	Two-sided:	Beidseitig:
+	On	Ein
 	Off	Aus
 	Flip on long edge	An langer Kante wenden
 	Flip on short edge	An kurzer Kante wenden
