@@ -31,7 +31,8 @@ pub struct TextBlock {
     /// Byte ranges in `editor_text` and their source line indexes.
     pub spans: Vec<(std::ops::Range<usize>, usize)>,
     /// Every line is invisible text (rendering mode 3): an OCR layer over a scanned image, whose
-    /// pixels show the words. A rewrite draws the new text visibly (see [`BlockStyle::cover`]).
+    /// pixels show the words. A rewrite draws the new text visibly, on top of the page when
+    /// the scan is drawn after it (see [`BlockStyle::cover`]).
     pub invisible: bool,
 }
 
