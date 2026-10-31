@@ -73,6 +73,37 @@ impl Drop for Chunk {
     }
 }
 
+/// Marks its chunk finished when dropped: when the worker returns, and when it unwinds from a
+/// panic (a page that crashes the renderer or the recogniser), so the view never waits for a
+/// chunk that will not finish.
+struct Finished(Arc<Mutex<Shared>>);
+
+impl Drop for Finished {
+    fn drop(&mut self) {
+        // Taken while unwinding, the lock isn't poisoned by it; one poisoned before still holds
+        // the state the view needs to see.
+        let mut s = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        s.finished = true;
+    }
+}
+
+/// A worker's work on one chunk: `read` reads its pages, reporting progress (`false` back means
+/// stop) and handing over each page as soon as it is read.
+fn run_chunk(shared: &Arc<Mutex<Shared>>, read: impl FnOnce(&mut dyn FnMut(usize, usize) -> bool, &mut dyn FnMut(OcrPage))) {
+    let _finished = Finished(shared.clone());
+    let mut progress = |done: usize, _total: usize| {
+        let Ok(mut s) = shared.lock() else { return false };
+        s.done = done;
+        !s.cancel
+    };
+    let mut found = |page: OcrPage| {
+        if let Ok(mut s) = shared.lock() {
+            s.found.push(page);
+        }
+    };
+    read(&mut progress, &mut found);
+}
+
 impl AutoOcr {
     /// Forget everything: the pages may have moved, so it starts again if a page is still empty.
     pub(crate) fn reset(&mut self) {
@@ -217,21 +248,11 @@ impl PdfCraftApp {
         let shared = Arc::new(Mutex::new(Shared::default()));
         let worker = shared.clone();
         let work = move || {
-            if let Ok(ocr) = pdfcraft_engine::ocr::engine() {
-                let progress = |done: usize, _total: usize| {
-                    let Ok(mut s) = worker.lock() else { return false };
-                    s.done = done;
-                    !s.cancel
-                };
-                job.run_each(&ocr, progress, |page| {
-                    if let Ok(mut s) = worker.lock() {
-                        s.found.push(page);
-                    }
-                });
-            }
-            if let Ok(mut s) = worker.lock() {
-                s.finished = true;
-            }
+            run_chunk(&worker, |progress, found| {
+                if let Ok(ocr) = pdfcraft_engine::ocr::engine() {
+                    job.run_each(&ocr, progress, found);
+                }
+            });
         };
         run.chunk = Some(Chunk { shared, pages: pages.len() });
         if self.run_inline {
@@ -340,5 +361,31 @@ mod tests {
         let run = app.views[0].auto_ocr.run.as_ref().expect("reading");
         assert_eq!(run.chunk.as_ref().map(|c| c.pages), Some(1), "only the changed page is handed to the worker");
         assert_eq!(run.handled, 2, "the recognised pages are passed over");
+    }
+
+    /// A page that crashes the renderer or the recogniser panics the worker reading it: its chunk
+    /// still finishes, keeping the pages read before, so the view stops waiting and its progress
+    /// bar goes (CodeRabbit on #3860).
+    #[test]
+    fn a_chunk_finishes_when_its_worker_panics() {
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        let worker = shared.clone();
+        let ran = std::thread::spawn(move || {
+            run_chunk(&worker, |progress, found| {
+                assert!(progress(0, 2));
+                found(read(0, "Read"));
+                panic!("a page crashed the recogniser");
+            });
+        })
+        .join();
+        assert!(ran.is_err(), "the worker panicked");
+        let mut app = scan(2);
+        app.auto_ocr = false;
+        let run = Run { queue: VecDeque::new(), pending: Vec::new(), total: 2, handled: 0, chunk: Some(Chunk { shared, pages: 2 }) };
+        app.views[0].auto_ocr.run = Some(run);
+        app.poll_auto_ocr();
+        let view = &app.views[0];
+        assert_eq!(view.auto_ocr_progress(), None, "the view still waits for the worker");
+        assert_eq!(view.page_plain_text(0).as_deref(), Some("Read"), "the page read before the panic is kept");
     }
 }
