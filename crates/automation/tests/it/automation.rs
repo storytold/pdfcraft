@@ -2749,6 +2749,12 @@ fn headers_watermarks_and_backgrounds_through_tools() {
     ok(&mut a, "doc_header_footer", json!({ "doc": doc, "footer_center": "<<Page 1 of n>>", "header_right": "ACME" }));
     let texts = page_text(&mut a, doc);
     assert!(texts[2].contains("Page 3 of 3") && texts[0].contains("ACME"), "{texts:?}");
+    ok(
+        &mut a,
+        "doc_header_footer",
+        json!({ "doc": doc, "header_left": "Shared template", "font": "Times", "color": [0.2, 0.4, 0.6], "underline": true, "replace": true }),
+    );
+    assert!(page_text(&mut a, doc)[0].contains("Shared template"));
     ok(&mut a, "doc_watermark", json!({ "doc": doc, "pages": [1], "text": "DRAFT", "opacity": 0.2 }));
     assert!(page_text(&mut a, doc)[0].contains("DRAFT"));
     ok(&mut a, "doc_background", json!({ "doc": doc, "color": "yellow" }));

@@ -2548,15 +2548,15 @@ notes = "Remove also turns back on a page backdrop Add replaced, keeping edits m
 
 [[feature]]
 id = "edit.decoration-profiles"
-title = "Saved header/footer and watermark settings"
+title = "Saved header and footer settings"
 area = "C"
 tier = "P2"
 milestone = "M7"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["edit.header_footer"]
+tools = ["doc_header_footer"]
+evidence = ["crates/ui-egui/src/dialogs/marks_ui.rs::saved_header_footers_round_trip_and_damaged_entries_are_read_leniently", "crates/ui-egui/tests/it/marks.rs::header_footer_settings_are_saved_recalled_across_sessions_and_exclude_page_ranges"]
+notes = "The header/footer dialog saves, recalls and deletes up to 64 named text templates in app settings. Each serialized settings object uses doc_header_footer's arguments, so headless callers can apply it with their own document and page range. Watermark profiles are separate."
 
 [[feature]]
 id = "edit.bates-numbering"

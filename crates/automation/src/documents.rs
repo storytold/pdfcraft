@@ -500,7 +500,21 @@ impl Automation {
                         return Err(ToolError::InvalidArgs(format!("font must be \"Helvetica\", \"Times\" or \"Courier\", not {other:?}")));
                     }
                 };
-                hf.color = color("color", hf.color)?;
+                hf.color = match a.get("color") {
+                    None => hf.color,
+                    Some(Value::String(s)) => comments::parse_color(s)?,
+                    Some(Value::Array(values)) if values.len() == 3 => {
+                        let mut rgb = [0.0; 3];
+                        for (slot, value) in rgb.iter_mut().zip(values) {
+                            *slot = value
+                                .as_f64()
+                                .filter(|n| n.is_finite() && (0.0..=1.0).contains(n))
+                                .ok_or_else(|| ToolError::InvalidArgs("color array must contain three numbers from 0 to 1".into()))?;
+                        }
+                        rgb
+                    }
+                    Some(_) => return Err(ToolError::InvalidArgs("color must be #RRGGBB, a colour name, or three numbers from 0 to 1".into())),
+                };
                 if let Some(m) = a.get("margins").and_then(Value::as_array) {
                     let m: Vec<f64> = m.iter().filter_map(Value::as_f64).collect();
                     hf.margins = <[f64; 4]>::try_from(m).map_err(|_| ToolError::InvalidArgs("margins must be 4 numbers".into()))?;
@@ -509,6 +523,7 @@ impl Automation {
                     hf.start_number = s.clamp(1, u32::MAX as i64) as u32;
                 }
                 hf.shrink = a.opt_bool("shrink")?.unwrap_or(false);
+                hf.underline = a.opt_bool("underline")?.unwrap_or(false);
                 Edit::AddHeaderFooter { pages, settings: hf, replace }
             }
             "doc_watermark" => {
