@@ -7744,7 +7744,7 @@ milestone = "M11"
 status = "partial"
 commands = ["preflight.run"]
 tools = ["preflight_run", "preflight_profiles"]
-evidence = ["crates/preflight/src/profiles/tests.rs::commercial_print_runs_every_check_in_order", "crates/preflight/src/profiles/tests.rs::the_walk_is_bounded", "crates/automation/src/standards.rs::preflight_tools_run_report_and_fix", "crates/ui-egui/src/preflight_ui.rs::the_panel_runs_the_profile_and_lists_results_by_severity"]
+evidence = ["crates/preflight/src/profiles/tests.rs::commercial_print_runs_every_check_in_order", "crates/preflight/src/profiles/tests.rs::the_walk_is_bounded", "crates/automation/src/standards.rs::preflight_tools_list_profiles_and_run_them", "crates/ui-egui/src/preflight_ui.rs::the_panel_runs_the_profile_and_lists_results_by_severity"]
 notes = "Print production ▸ Preflight (panel), preflight_run, pdfcraft-cli run: a profile (a named set of checks, each with a severity) runs over the document and returns results by check with each hit's page, object, box and details; nothing is changed. The checks that read page content share one bounded walk (q/Q/cm, form XObjects with their matrix and resources, inline images; depth, operator and record caps; pages not read to the end are listed). Not yet: Acrobat's PDF syntax, font-program and content-stream checks, checks inside annotation appearances, tiling patterns and Type 3 glyphs, a page range, total area coverage (the output-preview branch's Separations could feed one), droplets and batch runs, and no comparison against Acrobat's own Preflight results."
 
 [[feature]]
@@ -7756,7 +7756,7 @@ milestone = "M11"
 status = "partial"
 commands = ["preflight.run"]
 tools = ["preflight_fix"]
-evidence = ["crates/preflight/src/profiles/tests.rs::commercial_print_runs_every_check_in_order", "crates/preflight/src/profiles/tests.rs::the_pdfx_profiles_wrap_the_verifier_and_offer_its_fixups", "crates/automation/src/standards.rs::preflight_tools_run_report_and_fix", "crates/ui-egui/src/preflight_ui.rs::fixups_are_one_undoable_step_and_the_profile_runs_again"]
+evidence = ["crates/preflight/src/profiles/tests.rs::commercial_print_runs_every_check_in_order", "crates/preflight/src/profiles/tests.rs::the_pdfx_profiles_wrap_the_verifier_and_offer_its_fixups", "crates/automation/src/standards.rs::preflight_fixups_are_undoable_steps", "crates/ui-egui/src/preflight_ui.rs::fixups_are_one_undoable_step_and_the_profile_runs_again"]
 notes = "Analyze and fix: the panel's Fix button (and preflight_fix with a profile) applies every fixup that addresses what the results found, as one undoable edit, and runs the profile again. PDF/X results map their trapping, missing-trim and script rules to the fixups. Only three safe fixups exist (see optimize.preflight-single-fixups); no colour conversion, output intents, font embedding, transparency flattening or PDF/A or PDF/X identification here."
 
 [[feature]]
@@ -7768,7 +7768,7 @@ milestone = "M11"
 status = "partial"
 commands = ["preflight.run"]
 tools = ["preflight_profiles", "preflight_run"]
-evidence = ["crates/preflight/src/profiles/tests.rs::profiles_are_data_that_round_trip_through_json", "crates/preflight/src/profiles/tests.rs::the_pdfx_profiles_wrap_the_verifier_and_offer_its_fixups", "crates/preflight/src/profiles/tests.rs::the_pdfa_profiles_wrap_the_verifier", "crates/preflight/src/profiles/tests.rs::accessibility_runs_through_the_host", "crates/automation/src/standards.rs::preflight_tools_run_report_and_fix"]
+evidence = ["crates/preflight/src/profiles/tests.rs::profiles_are_data_that_round_trip_through_json", "crates/preflight/src/profiles/tests.rs::the_pdfx_profiles_wrap_the_verifier_and_offer_its_fixups", "crates/preflight/src/profiles/tests.rs::the_pdfa_profiles_wrap_the_verifier", "crates/preflight/src/profiles/tests.rs::accessibility_runs_through_the_host", "crates/automation/src/standards.rs::preflight_tools_list_profiles_and_run_them"]
 notes = "Nine built-in profiles: Commercial print (CMYK) with thirteen print checks; PDF/X-1a:2001, PDF/X-1a:2003, PDF/X-3:2002, PDF/X-3:2003 and PDF/X-4 (the optimize.pdfx-validate verifier); PDF/A-2b and PDF/A-3b (the optimize.pdfa-validate verifier); Accessibility (the Accessibility Checker's default rules, run by the engine as the preflight crate's host). Profiles are serde data: preflight_run also takes a whole profile object. Not yet: Acrobat's hundreds of profiles (digital printing, newspaper ads, PDF/X-4p/5/6, PDF/A-1/4, PDF/UA, PDF/VT, Ghent Workgroup sets), PDF/UA through the PDF/UA verifier when that lands, and profile groups."
 
 [[feature]]
@@ -7792,7 +7792,7 @@ milestone = "M11"
 status = "partial"
 commands = ["preflight.run"]
 tools = ["preflight_fix"]
-evidence = ["crates/preflight/src/profiles/tests.rs::a_missing_trim_box_is_set_from_the_crop_box", "crates/preflight/src/profiles/tests.rs::setting_trapped_writes_the_information_and_the_metadata", "crates/preflight/src/profiles/tests.rs::removing_scripts_keeps_links_that_only_go_somewhere", "crates/automation/src/standards.rs::preflight_tools_run_report_and_fix", "crates/ui-egui/src/preflight_ui.rs::fixups_are_one_undoable_step_and_the_profile_runs_again"]
+evidence = ["crates/preflight/src/profiles/tests.rs::a_missing_trim_box_is_set_from_the_crop_box", "crates/preflight/src/profiles/tests.rs::setting_trapped_writes_the_information_and_the_metadata", "crates/preflight/src/profiles/tests.rs::removing_scripts_keeps_links_that_only_go_somewhere", "crates/automation/src/standards.rs::preflight_fixups_are_undoable_steps", "crates/ui-egui/src/preflight_ui.rs::fixups_are_one_undoable_step_and_the_profile_runs_again"]
 notes = "Three fixups, each an undoable edit (Edit::PreflightFix) that fails rather than leaving an empty step when there is nothing to fix: set a TrimBox from the CropBox (within the MediaBox, kept inside the BleedBox) on pages with neither a TrimBox nor an ArtBox; set Trapped to /False or /True in the document information (moved to an object of its own if it was written into the trailer) and in the metadata's pdf:Trapped where it has one; remove document JavaScript, additional actions and action chains that run JavaScript, Launch a program or a scripted rendition, emptying the action objects (links to pages and web addresses stay; a chain with a script in it goes whole). Not yet: Acrobat's other fixups (colour conversion and output intents belong to the Save as PDF/X work, removing PDF/A or PDF/X identification to #1830), and XFA scripts are untouched."
 
 [[feature]]
@@ -7828,7 +7828,7 @@ milestone = "M11"
 status = "partial"
 commands = ["preflight.run"]
 tools = ["preflight_run"]
-evidence = ["crates/ui-egui/src/preflight_ui.rs::the_panel_runs_the_profile_and_lists_results_by_severity", "crates/preflight/src/profiles/tests.rs::commercial_print_runs_every_check_in_order", "crates/automation/src/standards.rs::preflight_tools_run_report_and_fix"]
+evidence = ["crates/ui-egui/src/preflight_ui.rs::the_panel_runs_the_profile_and_lists_results_by_severity", "crates/preflight/src/profiles/tests.rs::commercial_print_runs_every_check_in_order", "crates/automation/src/standards.rs::preflight_tools_list_profiles_and_run_them"]
 notes = "The Preflight panel lists results by severity (errors, warnings, information) and then by check, each with its count; selecting a hit turns to its page, flashes its box when it has one (images, annotations, hairlines, form XObjects, link and widget actions) and shows its details (page label, object number with its /Type and /Subtype, the check's details such as pixels, placed size, line width, flags, clause and rule). Passed and skipped checks are listed folded away; pages not read to the end are named. Not yet: snap view (optimize.preflight-snap-view), an object browser for the selected object, filtering, and a box for colour set by content operators."
 
 [[feature]]
@@ -7852,7 +7852,7 @@ milestone = "M11"
 status = "partial"
 commands = ["preflight.run"]
 tools = ["preflight_report"]
-evidence = ["crates/preflight/src/profiles/tests.rs::reports_say_the_results_in_the_interface_language", "crates/automation/src/standards.rs::preflight_tools_run_report_and_fix", "crates/ui-egui/src/preflight_ui.rs::single_checks_and_reports_in_the_interface_language"]
+evidence = ["crates/preflight/src/profiles/tests.rs::reports_say_the_results_in_the_interface_language", "crates/automation/src/standards.rs::preflight_reports_are_written_inside_the_root_and_change_nothing", "crates/ui-egui/src/preflight_ui.rs::single_checks_and_reports_in_the_interface_language"]
 notes = "Reports as plain text, JSON (English, pages from 1, each check's parameters) and PDF (the text written by PdfCraft's own text-to-PDF), in the interface's language from the panel and in English from preflight_report. Not yet: XML, a PDF report with page thumbnails, highlighted objects or comments on the problem objects, and per-object detail sections."
 
 [[feature]]

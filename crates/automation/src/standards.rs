@@ -262,15 +262,21 @@ mod tests {
         r["checks"].as_array().unwrap().iter().find(|c| c["check"] == id).unwrap_or_else(|| panic!("no {id} in {r}"))
     }
 
-    #[test]
-    fn preflight_tools_run_report_and_fix() {
-        let dir = std::env::temp_dir().join(format!("pdfcraft-automation-preflight-{}", std::process::id()));
+    /// The print job opened in a folder of its own named after `test`: the folder, the tools and
+    /// the document's id.
+    fn opened(test: &str) -> (std::path::PathBuf, Automation, Value) {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-automation-preflight-{test}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("job.pdf"), print_job()).unwrap();
         let mut a = Automation::new().with_root(&dir).unwrap();
         let doc = json(&mut a, "doc_open", json!({ "path": "job.pdf" }))["doc"].clone();
+        (dir, a, doc)
+    }
 
+    #[test]
+    fn preflight_tools_list_profiles_and_run_them() {
+        let (dir, mut a, doc) = opened("run");
         // The profiles, as the JSON a custom profile is written in.
         let listed = json(&mut a, "preflight_profiles", json!({}));
         let ids: Vec<&str> = listed["profiles"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap()).collect();
@@ -305,7 +311,12 @@ mod tests {
         for bad in [json!("no-such-profile"), json!({ "id": "x", "name": "x", "checks": [] }), json!(7)] {
             assert!(matches!(a.call("preflight_run", &json!({ "doc": doc, "profile": bad })), Err(ToolError::InvalidArgs(_))), "{bad}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
+    #[test]
+    fn preflight_reports_are_written_inside_the_root_and_change_nothing() {
+        let (dir, mut a, doc) = opened("report");
         // Reports: text, JSON and PDF, inside the root only.
         for (format, file) in [("text", "report.txt"), ("json", "report.json"), ("pdf", "report.pdf")] {
             let r = json(&mut a, "preflight_report", json!({ "doc": doc, "profile": "commercial-print", "format": format, "path": file }));
@@ -326,7 +337,12 @@ mod tests {
         ));
         let listed = json(&mut a, "doc_list", json!({}));
         assert_eq!(listed["documents"][0]["dirty"], false, "analyzing and reporting change nothing: {listed}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
+    #[test]
+    fn preflight_fixups_are_undoable_steps() {
+        let (dir, mut a, doc) = opened("fix");
         // One fixup: an undoable step.
         let r = json(&mut a, "preflight_fix", json!({ "doc": doc, "fixup": "set-trim-box" }));
         assert_eq!(r["applied"], json!([{ "fixup": "set-trim-box" }]));
