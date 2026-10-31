@@ -6,12 +6,14 @@ use pdfcraft_automation::{Automation, Content};
 use pdfcraft_cos::{Dict, Document, Object, PdfString, SaveOptions, Stream, write_incremental};
 use serde_json::{Value, json};
 
+/// Call a JSON-returning automation tool in the synthetic integration fixture.
 fn call(a: &mut Automation, tool: &str, args: Value) -> Value {
     let mut result = a.call(tool, &args).unwrap();
     let Content::Json(value) = result.remove(0) else { panic!("expected JSON from {tool}") };
     value
 }
 
+/// Open a synthetic packet-array PDF through the automation tools and require dynamic layout.
 #[test]
 fn packet_leading_declarations_open_with_dynamic_layout_through_tools() {
     const DECL: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";

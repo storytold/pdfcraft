@@ -129,10 +129,11 @@ pub struct Report {
     pub warnings: Vec<String>,
 }
 
-/// Is this a dynamic XFA form still showing its placeholder pages (one PdfCraft has not laid
-/// out yet)?
+/// Is this an XFA form that the current classifier says still needs layout?
+/// A saved generated layout is never laid out again. The marker predicate is shared with the
+/// malformed-packet diagnostic, while any additional classification policy belongs here.
 pub fn is_dynamic(doc: &Document) -> bool {
-    existing_layout(doc).is_none() && matches!(read_packets(doc), Ok(Some(p)) if p.needs_rendering || !p.has_fields)
+    existing_layout(doc).is_none() && matches!(read_packets(doc), Ok(Some(p)) if packets::wants_layout(p.needs_rendering, p.has_fields))
 }
 
 /// Lay a template packet (or whole XDP, whose datasets then fill the fields) out.
@@ -147,7 +148,10 @@ pub fn layout_xml(xml: &str) -> Result<Form, XfaError> {
 /// Lay a dynamic XFA form out into its own document: its placeholder pages are replaced by the
 /// laid-out pages and its fields join the AcroForm, holding the values of the datasets packet.
 /// The XFA packets stay, so Adobe's viewers keep rendering it their way. Widget appearances are
-/// left for the forms layer to generate.
+/// left for the forms layer to generate. Returns `NotXfa` when classification declines layout,
+/// except that it propagates a `Malformed` error from `read_packets` when no existing layout is
+/// present and the PDF marker predicate independently requests layout. It also propagates parse,
+/// layout, and PDF-writing errors without rewriting packet streams.
 pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
     if !is_dynamic(doc) {
         // Classification remains authoritative for readable packets (including saved forms

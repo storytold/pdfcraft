@@ -10,6 +10,11 @@ use crate::XfaError;
 /// Most decoded packet bytes read in total.
 const MAX_XDP: usize = 64 << 20;
 
+/// Resolve the required document references and read the PDF layout markers without decoding
+/// packet streams. Returns `None` when the root or required catalog/AcroForm dictionary path is
+/// missing or has the wrong shape, or when `/XFA` is absent. The resolved XFA object is returned
+/// without checking whether it is a stream or array; `read_packets` handles that distinction.
+/// A missing or non-array `/Fields` entry counts as having no fields.
 fn packet_markers(doc: &Document) -> Option<(Arc<Object>, bool, bool)> {
     let root = doc.root()?;
     let catalog = doc.get(root);
@@ -27,10 +32,20 @@ fn packet_markers(doc: &Document) -> Option<(Arc<Object>, bool, bool)> {
     Some((xfa, needs_rendering.unwrap_or(false), has_fields))
 }
 
-/// Whether the PDF marks this XFA entry for layout, without decoding its XML packets.
+/// Apply only the PDF marker rule for layout, without decoding XML packets.
+/// `None` means the marker objects could not be resolved; this is not a replacement for the
+/// broader successful-packet classification in [`crate::is_dynamic`].
 pub(crate) fn marked_for_layout(doc: &Document) -> Option<bool> {
     let (_, needs_rendering, has_fields) = packet_markers(doc)?;
-    Some(needs_rendering || !has_fields)
+    Some(wants_layout(needs_rendering, has_fields))
+}
+
+/// Return whether the PDF markers alone request layout.
+/// `/NeedsRendering true` is sufficient; otherwise an empty or absent AcroForm field list is the
+/// existing fallback. This marker-only predicate does not decide configuration-based eligibility
+/// or signature safeguards; those remain separate classification policy.
+pub(crate) fn wants_layout(needs_rendering: bool, has_fields: bool) -> bool {
+    needs_rendering || !has_fields
 }
 
 /// What was found in the XFA entry.
@@ -122,10 +137,11 @@ fn to_text(bytes: &[u8]) -> String {
     }
 }
 
-/// Validate an exact packet-leading XML declaration, returning the text after it.
-/// XML 1.0 §2.8/§4.3.3: ordered pseudo-attributes, XML whitespace and literal values.
-/// Unlike ordinary attributes, declaration values cannot contain entity references.
-/// This borrows the packet and does no allocation or recursive XML parsing.
+/// Validate an exact packet-leading XML declaration and return the text after it.
+/// A non-declaration processing instruction is returned unchanged; an incomplete or malformed
+/// declaration returns `XfaError::Malformed`. The grammar follows XML 1.0 §2.8/§4.3.3: ordered
+/// pseudo-attributes, XML whitespace, and literal values without entity references. This borrows
+/// the input, allocates no declaration buffer, and performs no recursive XML parsing.
 fn after_declaration(text: &str) -> Result<&str, XfaError> {
     const SPACE: [char; 4] = [' ', '\t', '\r', '\n'];
     let Some(mut rest) = text.strip_prefix("<?xml") else { return Ok(text) };
@@ -221,8 +237,14 @@ impl PacketContext {
     }
 }
 
-/// Read the XFA packets, if the document has any. Array assembly omits legal declarations
-/// at later packet boundaries, retaining the initial declaration and all stored stream bytes.
+/// Read the XFA packets, returning `None` if the root, catalog, or AcroForm dictionary is absent
+/// or malformed, or if `/XFA` is absent. A present XFA entry with an unsupported top-level type
+/// returns `Some(Packets)` with empty `xdp` text; array elements that do not resolve to packet
+/// streams are skipped.
+/// Array packets are decoded in order, capped at [`MAX_XDP`] total bytes, and assembled while
+/// omitting legal declarations at later packet boundaries; the initial declaration and stored
+/// PDF stream bytes are preserved. Malformed packet-leading declarations return `Malformed`,
+/// while oversized decoded data returns `TooLarge`.
 pub fn read_packets(doc: &Document) -> Result<Option<Packets>, XfaError> {
     let Some((xfa, needs_rendering, has_fields)) = packet_markers(doc) else { return Ok(None) };
     let mut total = 0usize;

@@ -18,7 +18,9 @@ const TEMPLATE: &str = r#"<template xmlns="http://www.xfa.org/schema/xfa-templat
 const DATA: &str = "<xfa:datasets><xfa:data><form><entry>Zoë &amp; Co</entry></form></xfa:data></xfa:datasets>";
 const CLOSE: &str = "</xdp:xdp>";
 
-/// An actual COS `/XFA` array, with distinct compressed streams in the supplied order.
+/// Build a synthetic COS `/XFA` array with distinct compressed packet streams in supplied order.
+/// Return their references so tests can verify that reads and layout preserve encoded bytes and
+/// stream dictionaries.
 fn array_document(packets: &[(&str, Vec<u8>)]) -> (Document, Vec<ObjRef>) {
     let mut doc = Document::new_empty();
     let mut items = Vec::new();
@@ -42,6 +44,7 @@ fn array_document(packets: &[(&str, Vec<u8>)]) -> (Document, Vec<ObjRef>) {
     (doc, refs)
 }
 
+/// Return the minimal multi-packet XDP used by declaration-assembly and layout regressions.
 fn fixture() -> Vec<(&'static str, Vec<u8>)> {
     vec![
         ("preamble", format!("{DECL}{OPEN}").into_bytes()),
@@ -51,6 +54,17 @@ fn fixture() -> Vec<(&'static str, Vec<u8>)> {
     ]
 }
 
+/// Exercise all marker combinations so the shared PDF marker rule cannot drift between callers.
+#[test]
+fn layout_marker_rule_covers_all_boolean_combinations() {
+    assert!(wants_layout(false, false));
+    assert!(!wants_layout(false, true));
+    assert!(wants_layout(true, false));
+    assert!(wants_layout(true, true));
+}
+
+/// Malformed declarations remain errors for independently marked dynamic forms, while a marked
+/// static form is still rejected by the normal classifier as `NotXfa`.
 #[test]
 fn malformed_packet_declaration_keeps_the_dynamic_layout_error() {
     let mut packets = fixture();
@@ -126,6 +140,7 @@ fn saved_packet_forms_follow_classification_and_keep_static_or_signed_bytes() {
     }
 }
 
+/// Check that a synthetic assembled XDP lays out to one page and two fields with expected values.
 fn assert_layout(xml: &str) {
     let form = crate::layout_xml(xml).expect("assembled XDP lays out");
     assert_eq!(form.pages.len(), 1);
@@ -169,6 +184,7 @@ fn packet_leading_declarations_allow_complete_xdp_layout() {
     assert_layout(&read_packets(&reopened).unwrap().unwrap().xdp);
 }
 
+/// Accept legal XML declaration whitespace and pseudo-attribute order, then verify full layout.
 #[test]
 fn declarations_accept_only_xml_whitespace_and_ordered_literal_values() {
     for decl in [
@@ -190,6 +206,7 @@ fn declarations_accept_only_xml_whitespace_and_ordered_literal_values() {
     }
 }
 
+/// Preserve declaration-free packet text and a standalone template packet without normalization.
 #[test]
 fn packets_without_declarations_and_a_template_alone_keep_their_text() {
     let packets =
@@ -203,6 +220,7 @@ fn packets_without_declarations_and_a_template_alone_keep_their_text() {
     assert_eq!(read_packets(&doc).unwrap().unwrap().xdp, alone + "\n");
 }
 
+/// Keep declaration-shaped text inside comments, CDATA and non-XML processing instructions.
 #[test]
 fn processing_instructions_comments_and_cdata_are_preserved() {
     let extra = format!(
@@ -225,6 +243,7 @@ fn processing_instructions_comments_and_cdata_are_preserved() {
     assert_layout(&xml);
 }
 
+/// Do not remove declaration-shaped prefixes when a packet continues an open lexical section.
 #[test]
 fn declaration_shaped_text_in_continued_lexical_sections_is_preserved() {
     for (start, end) in [("<!--", "-->"), ("<note><![CDATA[", "]]></note>"), ("<?observer", "")] {
@@ -243,6 +262,7 @@ fn declaration_shaped_text_in_continued_lexical_sections_is_preserved() {
     }
 }
 
+/// Keep a boundary declaration inside a quoted attribute and let the XML parser reject bad markup.
 #[test]
 fn a_packet_boundary_in_an_attribute_does_not_repair_invalid_markup() {
     // '>' in the attribute is literal; it must not put the scanner back in XML content.
@@ -259,6 +279,7 @@ fn a_packet_boundary_in_an_attribute_does_not_repair_invalid_markup() {
     assert!(crate::parse(&xml).is_err(), "literal '<' in an attribute is still malformed");
 }
 
+/// Reject inner, repeated, misplaced, or otherwise unrelated malformed XML rather than repairing it.
 #[test]
 fn inner_declarations_and_unrelated_xml_errors_are_not_repaired() {
     for extra in [
@@ -285,6 +306,7 @@ fn inner_declarations_and_unrelated_xml_errors_are_not_repaired() {
     }
 }
 
+/// Reject malformed declaration grammar both in the first packet and at later packet boundaries.
 #[test]
 fn malformed_leading_declarations_are_rejected_in_first_and_later_packets() {
     for decl in [
@@ -322,6 +344,7 @@ fn malformed_leading_declarations_are_rejected_in_first_and_later_packets() {
     }
 }
 
+/// Decode supported UTF-8/UTF-16 byte-order variants and preserve each original stored stream.
 #[test]
 fn packet_decoding_keeps_utf8_utf16_boms_and_original_bytes() {
     for encoding in [
@@ -357,6 +380,7 @@ fn packet_decoding_keeps_utf8_utf16_boms_and_original_bytes() {
     }
 }
 
+/// Assemble independently encoded packets in their declared order after per-packet decoding.
 #[test]
 fn differently_encoded_packets_assemble_in_original_order() {
     let encodings = [Encoding::Utf8 { bom: true }, Encoding::Utf16Le { bom: true }, Encoding::Utf16Be { bom: false }, Encoding::Utf8 { bom: false }];
@@ -375,6 +399,7 @@ fn differently_encoded_packets_assemble_in_original_order() {
     assert_layout(&xml);
 }
 
+/// Leave whole-XDP streams byte-for-text unchanged, including an illegal inner declaration.
 #[test]
 fn whole_xdp_streams_are_not_normalized() {
     for inner in ["", DECL] {
@@ -389,6 +414,7 @@ fn whole_xdp_streams_are_not_normalized() {
     }
 }
 
+/// Exercise every UTF-8 character-boundary truncation without allowing the declaration scanner to panic.
 #[test]
 fn declaration_truncations_and_non_ascii_values_do_not_panic() {
     for input in [DECL, "<?xml version='1.0' encoding='ünicode'?>", "<?xml version='1.0' standalone='日本'?>"] {
