@@ -158,11 +158,12 @@ struct Layouter<'t> {
 }
 
 /// How many instances of a repeating subform to lay out: what the data holds once it holds
-/// any (rows added or removed), else the template's initial count; never below one, never
-/// above the maximum.
+/// any (rows added or removed), else the template's initial count; at least the minimum
+/// whatever the data holds (XFA 3.3, "Repeating Elements using Occurrence Limits", #4744);
+/// never below one, never above the maximum.
 pub fn instance_count(occur: &Occur, from_data: usize) -> usize {
     let n = if from_data > 0 { from_data } else { occur.initial };
-    n.min(occur.max.unwrap_or(usize::MAX)).clamp(1, MAX_INSTANCES)
+    n.max(occur.min).min(occur.max.unwrap_or(usize::MAX)).clamp(1, MAX_INSTANCES)
 }
 
 /// Lay a template out, with the values and repeat counts of `data` (the `xfa:data` element).
@@ -227,4 +228,20 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
 #[cfg(test)]
 thread_local! {
     pub(crate) static EMBED_COPIED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod instance_count_tests {
+    use super::instance_count;
+    use crate::model::Occur;
+
+    /// #4744: `min` is honoured whatever the data holds. A repeating subform with
+    /// `occur min="2" max="2"` keeps two instances even when the data has one.
+    #[test]
+    fn min_is_kept_whatever_the_data_holds() {
+        let occur = Occur { min: 2, max: Some(2), initial: 2 };
+        assert_eq!(instance_count(&occur, 0), 2, "no data: the initial count, at least the minimum");
+        assert_eq!(instance_count(&occur, 1), 2, "one data instance: the minimum still applies");
+        assert_eq!(instance_count(&occur, 3), 2, "more than the maximum: the maximum wins");
+    }
 }
